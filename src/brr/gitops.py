@@ -648,6 +648,32 @@ def is_tracked(path: Path) -> bool:
         return False
 
 
+def is_tracked_in(repo_root: Path, relpath: str) -> bool:
+    """Return True if *relpath* is tracked by Git, resolved against *repo_root*.
+
+    Explicit-repo-root sibling of :func:`is_tracked`, which resolves against
+    ``Path.cwd()`` instead. A daemon-side migration (never the operator's
+    shell) must not depend on process cwd to answer a question this
+    consequential — see ``account._untrack_newly_ignored``.
+    """
+    result = _git(repo_root, "ls-files", "--error-unmatch", relpath, check=False)
+    return result.returncode == 0
+
+
+def untrack_cached(repo_root: Path, relpath: str) -> bool:
+    """``git rm --cached`` *relpath* in *repo_root* — drop it from the index,
+    leave the working-tree file alone. Returns whether the removal succeeded.
+
+    A ``.gitignore`` line never untracks a file the index already knows
+    about (git says so itself); this is the other half a migration needs to
+    actually repair a home created before the rule existed, rather than
+    merely keeping it out of *future* commits. Best-effort: a failure here
+    must not abort whatever bootstrap step triggered it.
+    """
+    result = _git(repo_root, "rm", "--cached", "--quiet", relpath, check=False)
+    return result.returncode == 0
+
+
 def branch_exists(repo_root: Path, branch: str) -> bool:
     """Return True if *branch* exists locally."""
     result = _git(repo_root, "show-ref", "--verify", f"refs/heads/{branch}", check=False)

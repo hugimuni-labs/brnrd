@@ -27,21 +27,45 @@ Two different questions, both answered from the same six-door roster:
   lane, the managed GitHub App) — those read live ``Settings`` fields.
   Slack and Signal never touch brnrd.dev's backend at all (self-hosted
   gates, full stop — see their own module docstrings), so they have no
-  ``cloud_settings`` and this function falls back to the shipped-status
-  answer for them; the web dashboard *is* brnrd.dev, so it is always live
-  by the same fallback. This is deliberately not one global switch: the
-  maintainer's "future things which we enable as I finalise the set up
-  and testing" is true of brnrd.dev's own WhatsApp deployment specifically
-  (Meta business verification, not yet done as of this writing) and does
-  not make WhatsApp any less real for someone who runs their own backend
-  with their own Meta credentials — the docs page is talking to that
-  person, the app landing is talking to a brnrd.dev visitor, and they get
-  different, both-honest answers to the same door.
+  ``cloud_settings``; the web dashboard *is* brnrd.dev, so it is
+  unconditionally live (``is_brnrd_dev=True``). This is deliberately not
+  one global switch: the maintainer's "future things which we enable as I
+  finalise the set up and testing" is true of brnrd.dev's own WhatsApp
+  deployment specifically (Meta business verification, not yet done as of
+  this writing) and does not make WhatsApp any less real for someone who
+  runs their own backend with their own Meta credentials — the docs page
+  is talking to that person, the app landing is talking to a brnrd.dev
+  visitor, and they get different, both-honest answers to the same door.
 
-What this still cannot check: whether a door's *credentials* actually work
-end to end (a bot token can be present and revoked) — ``hosted_status``
-answers "configured", not "healthy". A configured-but-broken hosted gate
-still reads ``live`` here.
+**A third state, ``"ready"``, for "shipped but nobody has vouched for an
+identity yet".** #1072 and #1074 shipped Signal and WhatsApp's gate code a
+day after the docs shelf was hand-tagged ``soon`` for both — and the fix
+for *that* staleness (making ``shipped_status`` mechanical) quietly
+created a second, opposite failure: the instant a door's code lands,
+``hosted_status`` used to jump straight to ``"live"`` for Slack and Signal
+(no ``cloud_settings`` to fail) while still correctly saying ``"soon"``
+for a shipped-but-unconfigured WhatsApp — two different reasons for "no
+confirmed identity on brnrd.dev today", rendered as two different, both
+wrong, answers (one over-promising, one indistinguishable from
+"not shipped"). A reader who sees a live Signal tile reasonably assumes
+there is a Signal address to message; there is not one, and getting one is
+on the maintainer, not the code. ``"ready"`` names that state once,
+uniformly, for both causes: code shipped, no confirmed brnrd.dev identity
+yet. It reads as neither an apology nor a promise with a date attached.
+
+What ``hosted_status`` still cannot check: whether a door's *credentials*
+actually work end to end (a bot token can be present and revoked) —
+``hosted_status`` answers "configured", not "healthy". A configured-but-
+broken hosted gate still reads ``live`` here. And for Slack and Signal
+specifically, ``"ready"`` is a static ceiling under the current
+architecture, not a value in flight toward ``"live"``: there is no
+``cloud_settings`` for either because brnrd.dev's backend does not mediate
+them at all (see their gate module docstrings) — the same mechanism that
+promotes WhatsApp from ``"ready"`` to ``"live"`` the moment its Meta
+credentials land has nothing to read for Slack or Signal until a future
+change decides what a brnrd.dev-hosted lane for them would even mean, and
+gives them ``cloud_settings`` of their own. That is a product decision,
+not a status computation, and this module does not make it.
 """
 
 from __future__ import annotations
@@ -96,9 +120,15 @@ class Door:
     shipped: Callable[[], bool] = lambda: True  # noqa: E731 - trivial default, no lambda gymnastics needed
     # Settings attribute names that must ALL be truthy for brnrd.dev's own
     # backend to consider this door hosted-and-configured. Empty = no
-    # hosted axis exists for this door (self-hosted-only, or the door *is*
-    # brnrd.dev itself) — hosted_status then mirrors shipped_status.
+    # hosted axis exists for this door — either it *is* brnrd.dev
+    # (`is_brnrd_dev=True`, see below) or it is self-hosted-only and
+    # hosted_status has nothing to read for it, so it reads "ready" once
+    # shipped rather than a fabricated "live".
     cloud_settings: tuple[str, ...] = ()
+    # True only for the door that *is* brnrd.dev's own backend (the web
+    # dashboard) — the one legitimate case where "no cloud_settings" means
+    # "trivially always live" rather than "no confirmed identity yet".
+    is_brnrd_dev: bool = False
 
 
 DOORS: tuple[Door, ...] = (
@@ -123,6 +153,7 @@ DOORS: tuple[Door, ...] = (
     Door(
         "dashboard",
         "Web dashboard",
+        is_brnrd_dev=True,
     ),
     Door(
         "whatsapp",
@@ -157,16 +188,27 @@ def shipped_status(target: Door | str) -> str:
 
 def hosted_status(target: Door | str, settings: _SettingsLike) -> str:
     """"Is brnrd.dev's own backend wired up for this today?" — reads live
-    ``Settings`` for doors brnrd.dev's backend actually mediates; falls
-    back to :func:`shipped_status` for doors with no hosted axis at all.
-    This is what the app landing's shelf renders."""
+    ``Settings`` for doors brnrd.dev's backend actually mediates. This is
+    what the app landing's shelf renders.
+
+    Three outcomes, not two: ``"soon"`` means the gate's code does not
+    exist on ``main`` yet — nothing to configure regardless. ``"live"``
+    means brnrd.dev itself is reachable through this door today. Anything
+    shipped short of that — no hosted axis at all (Slack, Signal), or an
+    axis that exists but is not fully configured (WhatsApp pre-Meta-
+    verification) — reads ``"ready"``: the code is done, brnrd.dev just
+    has not vouched for an identity on it yet. Collapsing that case into
+    ``"soon"`` would misreport finished code as unwritten; collapsing it
+    into ``"live"`` (the old behaviour for doors with no ``cloud_settings``)
+    would misreport a door nobody can message yet as one that works today.
+    """
     d = target if isinstance(target, Door) else door(target)
-    if not d.cloud_settings:
-        return shipped_status(d)
     if not d.shipped():
         return "soon"
+    if not d.cloud_settings:
+        return "live" if d.is_brnrd_dev else "ready"
     configured = all(bool(getattr(settings, key, "")) for key in d.cloud_settings)
-    return "live" if configured else "soon"
+    return "live" if configured else "ready"
 
 
 # ---------------------------------------------------------------------------

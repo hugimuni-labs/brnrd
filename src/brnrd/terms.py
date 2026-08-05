@@ -47,16 +47,21 @@ _LEGAL_DIR = Path(__file__).parent / "legal"
 # today). Its pin is therefore the text as of 2026-07-26, and acceptances
 # recorded before that date carry no hash at all — see ``migrations``.
 #
-# ``tos``'s label survives the ``-r2`` repin deliberately. #773 published
+# ``tos``'s label survives both repins deliberately. #773 published
 # /legal-notice and /privacy right after #735 pinned the page, and corrected
-# the two sentences that had called both "not yet published". A corrected
-# cross-reference changes no right or obligation, section 15 re-prompts (and
-# owes thirty days' dashboard notice) only for material changes, and #735
-# gates login on this version — so a bump here would re-prompt every user
-# over two links. The old pin stays beside the new one, and ``sha256`` on the
-# acceptance row says which of the two texts a user actually read.
+# the two sentences that had called both "not yet published" (``-r2``). The
+# ``-r3`` repin removed the preamble's "draft pending review by French
+# counsel" clause at the maintainer's request: it read as pretense once the
+# document was actually being relied on, and the sentence's other half
+# (statements that are a reading rather than a settled position say so)
+# already carries the honesty the preamble needs. None of these three edits
+# changed a right or obligation, section 15 re-prompts (and owes thirty
+# days' dashboard notice) only for material changes, and #735 gates login on
+# this version — so a bump here would re-prompt every user over wording. The
+# old pins stay beside the new one, and ``sha256`` on the acceptance row says
+# which of the three texts a user actually read.
 _CURRENT: dict[str, tuple[str, str]] = {
-    DOC_TOS: ("2026-07-24", "tos-2026-07-24-r2.txt"),
+    DOC_TOS: ("2026-07-24", "tos-2026-07-24-r3.txt"),
     DOC_HOSTED: ("2026-07-08", "hosted-execution-2026-07-08.txt"),
 }
 

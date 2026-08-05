@@ -6765,6 +6765,42 @@ def _queue_spawn_request(
             lifetime="run",
         )
         return False
+    # #574/#640's missing half: until now `branch:`/`report:` went onto
+    # `meta` and nowhere else, so the completion check indicted a child
+    # against two values the child was never shown. Live 2026-08-05,
+    # run-260805-1527-y100: specced `branch: brr/both-doors-named` +
+    # `report: /tmp/brr-report-both-doors.md`, published
+    # `brr/the-fork-that-both-doors-name` with no such file — and its own
+    # report said, correctly, "no `report:` path was declared in this
+    # event's frontmatter or body". It wasn't. The frontmatter is stripped
+    # at this line; the body is the whole of what the child reads. Worse
+    # for the branch clause: the child's wake names its placeholder branch
+    # and tells it to *rename to a descriptive slug* (`prompts.py`
+    # `_build_run_context_bundle`), which is exactly what it did.
+    #
+    # So the contract is rendered into the body itself — appended, where a
+    # dispatch spec's own Contract section already sits, and phrased as the
+    # daemon's own line rather than the parent's prose so a reader can tell
+    # which of the two it is answerable to.
+    if contract_branch or contract_report:
+        declared = ["", "", "## Declared contract (from your dispatcher)", ""]
+        if contract_branch:
+            declared.append(
+                f"- **branch: `{contract_branch}`** — publish on exactly this "
+                "name. Rename your placeholder branch to it before "
+                "committing; the completion check compares this string to "
+                "the branch you end on, and any other name is reported to "
+                "your parent as a contract mismatch."
+            )
+        if contract_report:
+            declared.append(
+                f"- **report: `{contract_report}`** — write that file. It is "
+                "checked by `stat`, not read out of your prose, and a PR "
+                "body is not a substitute. Budget for it early: a run that "
+                "spends its whole window on the work has none left for the "
+                "receipt."
+            )
+        new_body = new_body + "\n".join(declared)
     source = str(fm.get("source") or "spawn")
     meta: dict = {"strand": True}
     # A spawn is the one primitive that deliberately runs concurrently
@@ -8760,10 +8796,12 @@ def _spawn_contract_check(
       what a *scanned* mismatch is allowed to do to the strand's status;
       this function only reports where the contract came from.
 
-    Returns ``None`` when there is nothing to check — no branch declared
-    and none named in the spec prose either. Absence of a contract is not
-    a mismatch (#574's own constraint): a spawn with no branch commitment
-    behaves exactly as it always has.
+    Returns ``None`` when there is nothing to check — neither clause
+    declared, and no branch named in the spec prose either. Absence of a
+    contract is not a mismatch (#574's own constraint): a spawn with no
+    commitment behaves exactly as it always has. Either clause alone is a
+    contract; a declared ``report:`` with no ``branch:`` is checked on the
+    report and left silent on the branch.
 
     Otherwise returns a dict describing the comparison: ``mismatch`` is
     True when the published branch differs from the contract's, or a
@@ -8782,16 +8820,27 @@ def _spawn_contract_check(
     """
     declared_branch = (declared_branch or "").strip() or None
     declared_report = (declared_report or "").strip() or None
-    if declared_branch:
+    # A declaration of *either* clause makes this a declared contract. Until
+    # 2026-08-05 the gate was `if declared_branch:` alone, so a dispatcher
+    # who stated `report:` and no `branch:` had that report silently
+    # discarded — the scan ran instead, and either found no `brr/` token in
+    # the prose (contract dropped entirely, `return None`) or found an
+    # incidental one and enforced a branch nobody committed to, while the
+    # one clause actually declared went unchecked. The two clauses are
+    # independent commitments; either one alone is a contract.
+    if declared_branch or declared_report:
         spec_branch, spec_report = declared_branch, declared_report
         source = "declared"
     else:
         spec_branch, spec_report = _extract_spawn_contract(spec_text or "")
         source = "scanned"
-    if not spec_branch:
+    if not spec_branch and not spec_report:
         return None
     published = str(publish_branch or "").strip() or None
-    branch_ok = published == spec_branch
+    # No branch clause ⇒ nothing to be wrong about. `published == None` would
+    # read a child that published nothing as satisfying a contract it was
+    # never given, which is the same lie in the other direction.
+    branch_ok = published == spec_branch if spec_branch else True
     report_found: bool | None = None
     if spec_report:
         report_found = Path(spec_report).exists()
@@ -8968,11 +9017,15 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
         if contract["source"] == "declared":
             # Exact contract, exact violation — indict.
             status_label = "contract-mismatch"
-            contract_kwargs = {
-                "spawn_contract_mismatch": True,
-                "spawn_contract_spec_branch": contract["spec_branch"],
-                "spawn_contract_published_branch": contract["published_branch"] or "",
-            }
+            contract_kwargs = {"spawn_contract_mismatch": True}
+            # A report-only contract has no branch clause at all; carrying
+            # `spec_branch: None` would put an empty branch accusation on the
+            # completion event for a commitment nobody made.
+            if contract["spec_branch"]:
+                contract_kwargs["spawn_contract_spec_branch"] = contract["spec_branch"]
+                contract_kwargs["spawn_contract_published_branch"] = (
+                    contract["published_branch"] or ""
+                )
             if contract["spec_report"]:
                 contract_kwargs["spawn_contract_spec_report"] = contract["spec_report"]
                 contract_kwargs["spawn_contract_report_found"] = bool(
@@ -8998,7 +9051,7 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
                     "published branch:  "
                     f"{contract['published_branch'] or '(none)'}"
                 )
-            else:
+            elif contract["spec_branch"]:
                 lines.append(
                     f"branch:            {contract['spec_branch']} ✓ as declared"
                 )

@@ -2111,6 +2111,107 @@ def _join_prompt_parts(
     return "\n\n".join(parts)
 
 
+def _extract_markdown_sections(text: str, headings: list[str]) -> str:
+    """Pull named ``##``/``###`` sections out of *text*, verbatim, in source order.
+
+    A *section* runs from a heading line (matched by an exact, stripped string in
+    *headings*) to the line before the next ``## `` / ``### `` heading, or end of
+    text. Deeper headings (``#### ``) don't count as boundaries — they stay inside
+    whichever section they're nested in. A heading not found is silently skipped:
+    the same "smaller honest set over a padded one" instinct :func:`_build_orientation_set`
+    already applies — a doc that renames a section should drop it from this extract
+    rather than raise mid-wake.
+
+    Nothing here is invented text: every byte returned is a literal substring of
+    *text*, so mounting this as a seeded ``Read`` result of the file it came from
+    stays honest even though the result skips the material between sections.
+    """
+    lines = text.splitlines()
+    heading_idxs = [
+        i for i, ln in enumerate(lines)
+        if ln.startswith("## ") or ln.startswith("### ")
+    ]
+    wanted = set(headings)
+    found: list[tuple[int, str]] = []
+    for pos, idx in enumerate(heading_idxs):
+        if lines[idx].strip() not in wanted:
+            continue
+        end = heading_idxs[pos + 1] if pos + 1 < len(heading_idxs) else len(lines)
+        found.append((idx, "\n".join(lines[idx:end]).rstrip()))
+    found.sort(key=lambda pair: pair[0])
+    return "\n\n".join(body for _, body in found)
+
+
+#: The two `docs/portals.md` sections a resident needs to actually use the
+#: verb grammar instead of re-deriving it from an eight-row frontmatter table.
+#: Exact heading text, kept here (not re-derived) so a rename in the manual
+#: makes this extract quietly empty rather than silently wrong — a diff a
+#: reviewer sees, not a drift nobody notices.
+_PORTAL_VERB_GRAMMAR_HEADINGS = [
+    "### `brnrd do` — the verdict rides the act",
+    "### `await:` — a select, not a sleep (#959)",
+]
+
+
+def _build_portal_verb_grammar_block(repo_root: Path) -> str:
+    """The `await:` and `brnrd do` sections of the portals manual, live.
+
+    The gap this closes: `daemon-substrate.md`'s frontmatter verb table names
+    eight rows and points at `brnrd docs portals` for "the reasoning behind each
+    pin" — a sentence about *reasoning*, at the bottom, after the table already
+    reads as the complete grammar. Both `await:` (#959) and `brnrd do` are fully
+    documented there and were invisible to a wake that read the table and
+    stopped, because nothing in the table said *there is more*. A run discovered
+    `brnrd do` by accident.
+
+    Live extract, not a static copy: this calls :func:`brr.docs.read_topic`
+    (the same function `brnrd docs portals` prints from, override-aware) and
+    slices out the two sections at mount time, so an edit to the manual is
+    live here on the next wake instead of drifting from a pasted-in copy that
+    needs its own commit to stay honest — the exact trap `_trim_note`'s own
+    docstring names for `kb/log.md`. The cost is one file read already paid by
+    every doc-topic lookup; there is no subprocess here to measure.
+
+    Returns ``""`` when the manual is absent or has been restructured past
+    recognition (heading text changed) — the same "absent block" shape every
+    other preamble rider already has, not a wake-breaking failure.
+    """
+    from . import docs
+
+    text = docs.read_topic("portals", repo_root)
+    if not text:
+        return ""
+    return _extract_markdown_sections(text, _PORTAL_VERB_GRAMMAR_HEADINGS)
+
+
+#: Block keys whose mountable text is *not* simply "read the file at
+#: ``entry.location``" — a curated extract, not the whole file. The offline
+#: inspection path (``brnrd prompts transcript``, :func:`mountable_block_text`)
+#: has no other way to learn that, so it consults this registry instead of
+#: reading `entry.location` raw; the alternative is that command handing a
+#: resident 754 lines when the live daemon mount only ever seeded ~120 of them.
+_MOUNTABLE_TEXT_BUILDERS: dict[str, Any] = {
+    "portal-verb-grammar": _build_portal_verb_grammar_block,
+}
+
+
+def mountable_block_text(entry: "ContractEntry", repo_root: Path) -> str:
+    """Reconstruct the text a mounted block would carry, straight from disk.
+
+    Most mountable blocks *are* their file's content — ``Path(entry.location).
+    read_text()`` reproduces exactly what a live daemon wake seeded. The one
+    exception so far is a block built from a curated slice of a larger file
+    (see :data:`_MOUNTABLE_TEXT_BUILDERS`); this is the single place that
+    distinction is applied, so the offline reconstruction path
+    (``brnrd prompts transcript``) and the live daemon mount cannot disagree
+    about what a given block_key means.
+    """
+    builder = _MOUNTABLE_TEXT_BUILDERS.get(entry.block_key)
+    if builder is not None:
+        return builder(repo_root)
+    return Path(entry.location).read_text(encoding="utf-8")
+
+
 def _collect_preamble_contracts(
     repo_root: Path,
     *,
@@ -2195,6 +2296,29 @@ def _collect_preamble_contracts(
             block_key="daemon-substrate",
             label="Daemon mechanics (daemon-substrate.md)",
             authority=AUTHORITY_SUBSTRATE,
+        ))
+
+    # Portal verb grammar — a curated extract of `docs/portals.md`, riding
+    # right after daemon-substrate.md on purpose: that file's own frontmatter
+    # verb table is where a resident learns the portal grammar, and the table
+    # read as a *closed* set — `await:` (#959) and `brnrd do` are both real,
+    # fully documented in the manual, and invisible to a wake that read the
+    # table and stopped. See `_build_portal_verb_grammar_block` for why this
+    # is a live extract rather than a static copy.
+    if is_daemon:
+        from . import docs as _docs
+
+        portal_grammar_path = _docs.effective_topic_path("portals", repo_root)
+        portal_grammar_text = _build_portal_verb_grammar_block(repo_root)
+        entries.append(ContractEntry(
+            block_key="portal-verb-grammar",
+            label="Portal verb grammar (`await:` / `brnrd do`, docs portals)",
+            owner=OWNER_PRODUCT,
+            authority=AUTHORITY_SUBSTRATE,
+            freshness=_mtime_iso(portal_grammar_path),
+            location=str(portal_grammar_path),
+            present=bool(portal_grammar_text),
+            bytes=_rendered_bytes(portal_grammar_text),
         ))
 
     # Config-toggle blocks — present only when the toggle is on *and* the
@@ -3088,10 +3212,11 @@ def _read_preamble_with_weave(repo_root: Path) -> str:
 def _preamble_parts(repo_root: Path, *, strand: bool) -> list[tuple[str, str]]:
     """The preamble as ``(block_key, text)`` parts, in read order.
 
-    Same bytes as ``_read_preamble_with_weave`` + ``daemon-substrate.md`` glued
-    together (:func:`_glue_preamble` re-joins them identically) — but *keyed*, so
-    a wake that mounts a block as a seeded perception can take it out of the prose
-    instead of paying for it twice.
+    Same bytes as ``_read_preamble_with_weave`` + ``daemon-substrate.md`` +
+    the portal verb grammar extract, glued together (:func:`_glue_preamble`
+    re-joins them identically) — but *keyed*, so a wake that mounts a block
+    as a seeded perception can take it out of the prose instead of paying
+    for it twice.
 
     These are the blocks that carry the wake's obligations (write the card, branch
     before you edit, own the pending event). They are therefore the blocks the
@@ -3101,9 +3226,10 @@ def _preamble_parts(repo_root: Path, *, strand: bool) -> list[tuple[str, str]]:
     key = "strand-preamble" if strand else "run-preamble"
     parts = [(key, read_prompt("strand.md" if strand else "run.md", repo_root))]
     # Order mirrors read/authority: how you write (weave), you having written
-    # (register — resident only), then who drives (daemon-substrate). Kept in
-    # lockstep with :func:`_collect_preamble_contracts`, which registers the same
-    # blocks in the same order for the manifest and the mount.
+    # (register — resident only), then who drives (daemon-substrate), then the
+    # verb grammar that section's own frontmatter table only gestures at. Kept
+    # in lockstep with :func:`_collect_preamble_contracts`, which registers the
+    # same blocks in the same order for the manifest and the mount.
     riders = [("weave.md", "weave")]
     if not strand:
         riders.append(("register.md", "register"))
@@ -3112,6 +3238,9 @@ def _preamble_parts(repo_root: Path, *, strand: bool) -> list[tuple[str, str]]:
         text = read_prompt(name, repo_root)
         if text.strip():
             parts.append((k, text.strip()))
+    portal_grammar = _build_portal_verb_grammar_block(repo_root)
+    if portal_grammar.strip():
+        parts.append(("portal-verb-grammar", portal_grammar.strip()))
     return parts
 
 
