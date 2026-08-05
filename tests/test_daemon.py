@@ -25,6 +25,15 @@ from _helpers import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _clean_run_controls():
+    with daemon._run_controls_lock:
+        daemon._run_controls.clear()
+    yield
+    with daemon._run_controls_lock:
+        daemon._run_controls.clear()
+
+
 def _stub_env_isolated(monkeypatch, tmp_path):
     """Replace env backends with stand-ins that don't touch git/docker."""
     worktree_path = tmp_path / ".brr" / "worktrees" / "stub"
@@ -1588,6 +1597,51 @@ def test_notify_spawn_parent_lands_pending_event_for_still_running_parent(
     assert "child's answer" in note["body"]
     # Not excluded from the parent's own attention gate.
     assert daemon._pending_events_for_agent(inbox, "some-other-event")
+
+
+def test_notify_spawn_parent_routes_to_adopting_resident(tmp_path):
+    inbox = tmp_path / ".brr" / "inbox"
+    daemon._register_run_control(
+        "evt-child",
+        "run-parent",
+        parent_conversation_key="telegram:42:",
+        repo_label="Gurio/brr",
+    )
+    daemon._bind_run_control("evt-child", "run-child")
+    task = Run(
+        id="run-successor",
+        event_id="evt-successor",
+        body="",
+        source="telegram",
+        conversation_key="telegram:42:",
+        meta={"repo_label": "Gurio/brr"},
+    )
+    assert daemon._find_run_control("run-parent") is None, (
+        "fixture must leave the original parent dead so the notify route below "
+        "proves adoption, not the original dispatch edge"
+    )
+    adopted = daemon._authorize_child_control(
+        task, daemon._find_run_control("evt-child")
+    )
+    assert adopted["adopted"] is True
+
+    child = Run(
+        id="run-child",
+        event_id="evt-child",
+        body="",
+        source="telegram",
+        status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, child)
+
+    [note] = protocol.list_pending(inbox)
+    assert note["spawn_parent_run_id"] == "run-successor"
+    assert note["conversation_key"] == "telegram:42:"
 
 
 def test_notify_spawn_parent_noop_without_parent_linkage(tmp_path):
@@ -6221,6 +6275,45 @@ def test_write_live_portal_state_spawn_pool_active_unknown_when_registry_unreada
     )
     spawn_pool = payload["resources"]["coexisting_runs"]["spawn_pool"]
     assert spawn_pool == {"max_concurrent": 4, "active": None, "available": None}
+
+
+def test_write_live_portal_state_projects_owned_children_from_run_controls(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+    task = Run(id="run-parent", event_id="evt-1", body="", source="telegram")
+
+    daemon._register_run_control(
+        "evt-child-a",
+        "run-parent",
+        parent_conversation_key="telegram:42:",
+        repo_label="Gurio/brr",
+    )
+    daemon._bind_run_control("evt-child-a", "run-child-a")
+    daemon._register_run_control(
+        "evt-child-b",
+        "run-parent",
+        parent_conversation_key="telegram:42:",
+        repo_label="Gurio/brr",
+    )
+    assert daemon._owned_child_controls("run-parent"), (
+        "fixture must produce owned child controls or the portal projection "
+        "below would pass vacuously over an empty set"
+    )
+
+    daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running", brr_dir=brr_dir,
+    )
+
+    payload = json.loads(
+        (outbox_dir / "portal-state.json").read_text(encoding="utf-8")
+    )
+    owned = payload["resources"]["coexisting_runs"]["owned_children"]
+    assert owned == [
+        {"event_id": "evt-child-b", "parent_run_id": "run-parent", "run_id": ""},
+        {"event_id": "evt-child-a", "parent_run_id": "run-parent", "run_id": "run-child-a"},
+    ]
 
 
 def test_resources_facet_level_collector_flips_empty_to_absent():
