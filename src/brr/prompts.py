@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from . import account, card, config as conf, dev_reload, forge_state, menus
+from . import account, card, config as conf, dev_reload, forge_state, menus, protocol
 
 
 _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
@@ -3984,6 +3984,15 @@ def _format_pending_events(
     Each entry shows the event id (the handle the resident names in the
     outbox ``event:`` frontmatter to fold it in), its source, and a
     one-line summary. Returns an empty string when nothing is waiting.
+
+    #1156: a folded-in event's attachment bytes are already on disk
+    (``daemon._pending_event_record`` resolves them), so a sub-bullet names
+    the openable path directly rather than leaving the resident to re-derive
+    it from the bare ``attachments:`` filename. An event that announced
+    attachments but resolved none — the bytes never arrived, or were swept
+    by retention — gets a sub-bullet that says so explicitly: *announced,
+    not fetched* is a different fact than *no attachment*, and rendering
+    neither is how that distinction went missing the first time (#1154).
     """
     if not events:
         return ""
@@ -3999,6 +4008,18 @@ def _format_pending_events(
         src = f" ({source})" if source else ""
         sep = f": {summary}" if summary else ""
         bullets.append(f"- {eid}{src}{sep}")
+        paths = ev.get("attachment_paths")
+        if isinstance(paths, list) and paths:
+            bullets.extend(f"  - attachment: {p}" for p in paths)
+        else:
+            unfetched = ev.get("attachment_unfetched")
+            if isinstance(unfetched, list) and unfetched:
+                names = ", ".join(str(n) for n in unfetched)
+                bullets.append(
+                    f"  - attachment announced, not fetched ({names}) — "
+                    "the bytes never reached this machine or were already "
+                    "swept by retention; this is not the same as no attachment"
+                )
     return "\n".join(bullets)
 
 
@@ -4409,7 +4430,7 @@ def _format_recent_conversation(
             summary = _cap_turn_body(
                 summary, record, limit=turn_max_bytes, brr_dir=brr_dir
             )
-            marker = _attachment_marker(record)
+            marker = _attachment_marker(record, brr_dir=brr_dir)
             if marker:
                 summary = f"{summary} {marker}".strip() if summary else marker
             line = _format_turn(f"{ts} user ({source})", summary)
@@ -4646,7 +4667,44 @@ def _conversation_body(record: dict[str, Any]) -> str:
     return body.strip() if isinstance(body, str) else ""
 
 
-def _attachment_marker(record: dict[str, Any]) -> str:
+def _record_attachment_paths(
+    record: dict[str, Any], brr_dir: Path | None,
+) -> list[Path]:
+    """Resolve a woven conversation record's attachments to local paths.
+
+    #1156: the record only ever carried ``{"kind", "filename"}`` facts (see
+    ``conversations._attachment_facts``), never a path — so a folded-in
+    turn's marker could name a count but never something ``Read`` could
+    open. The record has no ``_path`` of its own (unlike an event dict), so
+    this derives the same ``<inbox>/<event-id>.attachments/`` location
+    ``protocol.event_attachment_paths`` uses, rooted at this run's own
+    ``<brr_dir>/inbox`` drawer. A record from a different drawer (the
+    account dispatch inbox, a sibling repo) or one whose bytes retention
+    already swept resolves to no paths here, same as *genuinely gone* —
+    the caller's job is to fall back to the bare marker in that case, not
+    to claim a path this reader cannot see.
+    """
+    if not brr_dir:
+        return []
+    event_id = str(record.get("event_id") or "").strip()
+    attachments = record.get("attachments")
+    if not event_id or not isinstance(attachments, list) or not attachments:
+        return []
+    names = [
+        str(item.get("filename") or "").strip()
+        for item in attachments
+        if isinstance(item, dict)
+    ]
+    names = [n for n in names if n]
+    if not names:
+        return []
+    adir = protocol.attachments_dir_for_event(Path(brr_dir) / "inbox", event_id)
+    return [p for p in (adir / n for n in names) if p.is_file()]
+
+
+def _attachment_marker(
+    record: dict[str, Any], *, brr_dir: Path | None = None,
+) -> str:
     """``[photo ×2]``-style marker for a woven turn carrying attachments.
 
     Issue #943: a captionless inbound photo/document used to render as a
@@ -4657,6 +4715,15 @@ def _attachment_marker(record: dict[str, Any]) -> str:
     rather than a full describe-the-image pass. One bracket group per kind,
     in first-appearance order, so ``[photo ×2] [document ×1]`` reads left
     to right in the order the kinds arrived on the message.
+
+    #1156: the marker used to be the whole answer — a count with no path,
+    even while the bytes it counted sat on disk in this run's own inbox.
+    When :func:`_record_attachment_paths` resolves at least one local file
+    for this record, the marker now names them too. When it resolves none
+    (a different drawer, retention already swept them, or the attachment
+    was announced but never fetched — #1154's class of drop), the bracket
+    count is still rendered — the announced fact survives even when the
+    bytes do not.
     """
     attachments = record.get("attachments")
     if not isinstance(attachments, list) or not attachments:
@@ -4667,7 +4734,11 @@ def _attachment_marker(record: dict[str, Any]) -> str:
             continue
         kind = str(item.get("kind") or "attachment").strip() or "attachment"
         counts[kind] = counts.get(kind, 0) + 1
-    return " ".join(f"[{kind} ×{n}]" for kind, n in counts.items())
+    marker = " ".join(f"[{kind} ×{n}]" for kind, n in counts.items())
+    paths = _record_attachment_paths(record, brr_dir)
+    if paths:
+        marker += " (local: " + ", ".join(str(p) for p in paths) + ")"
+    return marker
 
 
 def _conversation_source_label(record: dict[str, Any]) -> str:
