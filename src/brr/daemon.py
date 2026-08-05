@@ -8816,6 +8816,59 @@ def _spawn_contract_check(
     }
 
 
+def _unstattable_report_note(spec_report: str) -> list[str]:
+    """Name the ambiguity when a `report:` declaration cannot have been a path.
+
+    ``spec report: … (MISSING)`` renders identically for two failures with
+    opposite owners: a strand that was told a path and never wrote it, and a
+    *dispatcher* who declared prose where the check wants something to
+    ``stat``. The second is the one that hides, because the notice names the
+    strand's run id and the strand is not who got it wrong — ``report:`` is
+    stamped onto the child's meta from the **parent's** ``spawn:``
+    frontmatter by :func:`_queue_spawn_request`.
+
+    Live 2026-08-05: a parent declared ``report: the PR body is the report``
+    and the notice reported ``contract-mismatch … no report written`` for a
+    strand whose commit was pushed, whose PR was open, and whose CI was
+    green. Nothing in the notice pointed at the declaration.
+
+    Two rules from the file this lives in govern the wording:
+
+    - **a guard may only assert something it can be proven wrong about.** A
+      path may legally contain a space, so "that is not a path" is a claim
+      this cannot make. Whitespace with no separator is *evidence*, not a
+      verdict, and the line says so with an ``if``.
+    - **a remedy is part of a diagnostic's truth claim.** Where the case is
+      genuinely ambiguous, name the ambiguity rather than the confident
+      branch — the reader can settle it in one glance and this cannot.
+
+    The unconditional half is not a hedge at all but a fact: whoever wrote
+    the declaration, it was the dispatcher.
+    """
+    note = [
+        "                   ↳ `report:` is the dispatcher's declaration, "
+        "carried onto",
+        "                     this run's meta at spawn — not something the "
+        "strand chose.",
+    ]
+    value = (spec_report or "").strip()
+    if value and (" " in value or "\t" in value) and "/" not in value:
+        note.append(
+            "                     It contains whitespace and no path "
+            "separator: if it"
+        )
+        note.append(
+            "                     was meant as prose, the contract was never "
+            "checkable"
+        )
+        note.append(
+            "                     and the strand's own work is unindicted. "
+            "`report:` takes"
+        )
+        note.append("                     a path this check can `stat`.")
+    return note
+
+
 def _spawn_strand_ran(task: Run) -> bool:
     """True when there's direct evidence the spawned child executed a turn.
 
@@ -8953,6 +9006,7 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
                 lines.append(
                     f"spec report:       {contract['spec_report']} (MISSING)"
                 )
+                lines.extend(_unstattable_report_note(contract["spec_report"]))
             elif contract["spec_report"]:
                 lines.append(
                     f"report:            {contract['spec_report']} ✓ written"

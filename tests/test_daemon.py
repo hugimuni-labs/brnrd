@@ -2026,12 +2026,13 @@ def test_notify_spawn_parent_declared_branch_mismatch_still_indicts(tmp_path):
 def test_a_kept_branch_is_not_printed_as_an_accusation(tmp_path):
     """#1097: the perfect worker indicted for its parent's typo.
 
-    ``report:`` is a filesystem path and no prompt surface says so, making a
-    parent naming a path the child never writes an ordinary, entirely
-    parent-side error. The completion note used to print the branch lines on
-    *any* mismatch — so a child that published exactly the branch it was
-    declared, and only missed a report it was never told to create, was
-    reported under two branch lines that read as the accusation.
+    ``report:`` is a filesystem path — the ``spawn:`` row now says so, after
+    this docstring's own observation that no prompt surface did went on to
+    cost a live run — making a parent naming a path the child never writes an
+    ordinary, entirely parent-side error. The completion note used to print
+    the branch lines on *any* mismatch — so a child that published exactly the
+    branch it was declared, and only missed a report it was never told to
+    create, was reported under two branch lines that read as the accusation.
 
     Both clauses failing still prints both; what stops is a satisfied clause
     standing beside a violated one with nothing to tell them apart.
@@ -2060,6 +2061,68 @@ def test_a_kept_branch_is_not_printed_as_an_accusation(tmp_path):
     # that matched, because that pair *is* the indictment's grammar.
     assert "published branch:" not in body, body
     assert "brr/exactly-as-told" in body  # still stated, as kept
+
+
+def test_a_prose_report_declaration_says_whose_it_was(tmp_path):
+    """The live 2026-08-05 case, end to end: a declaration that was never a path.
+
+    ``report: the PR body is the report`` cannot be ``stat``-ed, so the check
+    reports ``MISSING`` for a strand whose commit was pushed and whose PR was
+    open — and the note names the *strand's* run id, so the reader arrives
+    primed to distrust the child. The declaration is the dispatcher's, carried
+    onto the child's meta at spawn.
+
+    Driven through ``_notify_spawn_parent`` rather than the note builder: what
+    is being pinned is what the reader of the completion event actually sees.
+    """
+    inbox = tmp_path / ".brr" / "inbox"
+    task = Run(
+        id="run-child", event_id="evt-child", body="do the thing",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "spawn_contract_branch": "brr/exactly-as-told",
+            "spawn_contract_report": "the PR body is the report",
+            "publish_branch": "brr/exactly-as-told",
+            "has_new_commit": True,
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+    body = protocol.list_pending(inbox)[0]["body"]
+
+    assert "the PR body is the report" in body and "MISSING" in body
+    # Who declared it — a fact, stated unconditionally.
+    assert "dispatcher's declaration" in body, body
+    # The ambiguity, named rather than resolved: a path may legally contain a
+    # space, so the note may not assert that this one is not a path.
+    assert "meant as prose" in body, body
+    assert "not a path" not in body, body
+
+
+def test_a_missing_but_path_shaped_report_makes_no_prose_guess(tmp_path):
+    """A strand that simply never wrote the file gets no prose accusation."""
+    inbox = tmp_path / ".brr" / "inbox"
+    task = Run(
+        id="run-child", event_id="evt-child", body="do the thing",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "spawn_contract_branch": "brr/exactly-as-told",
+            "spawn_contract_report": str(tmp_path / "never-written.md"),
+            "publish_branch": "brr/exactly-as-told",
+            "has_new_commit": True,
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+    body = protocol.list_pending(inbox)[0]["body"]
+
+    assert "MISSING" in body
+    assert "dispatcher's declaration" in body
+    assert "meant as prose" not in body, body
 
 
 def test_both_clauses_failing_still_names_both(tmp_path):
