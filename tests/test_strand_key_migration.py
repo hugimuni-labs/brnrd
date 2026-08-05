@@ -244,3 +244,38 @@ def test_writers_stamp_only_the_canonical_key():
         "read-only compatibility for records already on disk; stamping it "
         "afresh extends the migration window forever."
     )
+
+
+# ── the notice must not indict a strand for the dispatcher's field ───
+#
+# Same contract as `_is_strand`, one surface over: `report:` is stamped onto
+# the child's meta from the *parent's* frontmatter, and the notice that
+# renders a mismatch names only the child's run id.
+
+
+def test_prose_report_declaration_names_the_dispatcher_and_the_ambiguity():
+    note = "\n".join(daemon._unstattable_report_note("the PR body is the report"))
+    assert "dispatcher's declaration" in note
+    # The ambiguity is named, not resolved: a path may legally contain a
+    # space, so the line may not assert "that is not a path".
+    assert "if" in note and "meant as prose" in note
+    assert "not a path" not in note
+    assert "stat" in note
+
+
+def test_a_plausible_path_gets_the_ownership_line_and_no_prose_guess():
+    note = "\n".join(
+        daemon._unstattable_report_note("/tmp/brr-wt-x/report.md")
+    )
+    assert "dispatcher's declaration" in note
+    # Nothing here is evidence of prose — the strand plausibly just never
+    # wrote the file, and saying otherwise would be the confident branch.
+    assert "meant as prose" not in note
+
+
+def test_a_path_with_a_space_is_not_called_prose():
+    """The whitespace heuristic must not fire on a legal path (#800)."""
+    note = "\n".join(
+        daemon._unstattable_report_note("/tmp/my runs/report.md")
+    )
+    assert "meant as prose" not in note
