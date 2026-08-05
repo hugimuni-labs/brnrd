@@ -44,6 +44,9 @@ export interface ConnectedRepo {
 	// collaborator"; never show it as though it were determined.
 	github_bot_collaborator: boolean | null;
 	github_bot_checked_at: string | null;
+	// Pre-rendered age of the check above ("never" when it hasn't run) — the
+	// lit rendering's timestamp; same convention as `updated_label` etc.
+	github_bot_checked_label: string;
 	// Machine-readable state rendered by MarkerNotice. `null` means either a
 	// successful collaborator check or that no check has run yet.
 	github_bot_status:
