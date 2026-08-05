@@ -78,6 +78,7 @@ function repo(over: Partial<ConnectedRepo> = {}): ConnectedRepo {
 		publish_layers: null,
 		github_bot_collaborator: null,
 		github_bot_checked_at: null,
+		github_bot_checked_label: 'never',
 		github_bot_status: null,
 		github_bot_marker_notice: null,
 		github_bot_notice: null,

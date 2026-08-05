@@ -649,6 +649,8 @@
 										status={repo.github_bot_status}
 										botLogin={data.github_bot_login}
 										repoFullName={repo.repo_full_name}
+										collaborator={repo.github_bot_collaborator}
+										checkedLabel={repo.github_bot_checked_label}
 									/>
 									{#if repo.gates.length > 0}
 										<div class="mt-3 grid gap-1.5 sm:grid-cols-2">

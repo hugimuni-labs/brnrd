@@ -16,9 +16,23 @@
 		// each is guarded on its own truthiness too.
 		botLogin?: string;
 		repoFullName?: string;
+		// #1141 — whether the marker check actually succeeded and found the
+		// bot a collaborator. `status` alone can't drive the lit line: it's
+		// `null` for both "confirmed collaborator" and "never checked", and
+		// those must not render identically (the house's dominant failure
+		// class — a surface that narrows renders as if it hadn't).
+		collaborator?: boolean | null;
+		// Pre-rendered age of the last check ("never" when none has run).
+		checkedLabel?: string;
 	}
 
-	let { status, botLogin = '', repoFullName = '' }: Props = $props();
+	let {
+		status,
+		botLogin = '',
+		repoFullName = '',
+		collaborator = null,
+		checkedLabel = ''
+	}: Props = $props();
 
 	let notice = $derived.by(() => {
 		const login = botLogin || 'the configured GitHub bot';
@@ -32,7 +46,16 @@
 				// cannot hold on its own.
 				return `${login} isn't a collaborator — optional, not required: the brnrd label already summons it. Invite it in Settings → Collaborators to add assignment, review requests, and @ autocomplete.`;
 			case 'permission-missing':
-				return "permission missing — the GitHub App lacks the grant for the collaborators endpoint; grant Administration: read in the App's repository permissions.";
+				// Rewritten 2026-08-05 (#1141): the old copy told the reader to
+				// grant `Administration: read` in the App's repository
+				// permissions — wrong principal (this check never used the
+				// App's grant at all when this text was written), wrong
+				// permission (the check needs only `Metadata: read`, which the
+				// App already holds), and not something any end user can act
+				// on regardless — the App's grants are the brnrd operator's to
+				// change, not a repo-connecting user's. Name the fact and the
+				// owner, not a remedy the reader cannot apply.
+				return "collaborator status unavailable — brnrd's own check against GitHub failed; this is on the brnrd operator to fix, not something to change here.";
 			case 'check-unavailable':
 				return 'collaborator check unavailable — GitHub could not be reached; try again later.';
 			case 'not-configured':
@@ -43,6 +66,14 @@
 				return null;
 		}
 	});
+
+	// Neither state is something the reader must act on right now: an
+	// operator-scope check failure isn't the reader's job, and the marker
+	// being absent is an optional upgrade, not a fault (both re-registered
+	// 2026-08-05, #1141) — so both render at the same quiet weight as the
+	// lit line below, instead of borrowing the urgent amber a real
+	// actionable notice (`check-unavailable`, `not-configured`) still uses.
+	let quiet = $derived(status === 'permission-missing' || status === 'not-a-collaborator');
 
 	let copied = $state(false);
 	let copyTimer: ReturnType<typeof setTimeout> | undefined;
@@ -62,7 +93,7 @@
 </script>
 
 {#if notice}
-	<p class="mt-2 font-mono text-[11px] text-amber-400">
+	<p class="mt-2 font-mono text-[11px] {quiet ? 'text-ink-quiet' : 'text-amber-400'}">
 		<span class="text-ink-mute uppercase tracking-wide">marker</span>
 		— {notice}
 	</p>
@@ -85,4 +116,15 @@
 			{/if}
 		</div>
 	{/if}
+{:else if collaborator === true}
+	<!-- #1141 — the satisfied state. Before this, "invited and accepted" and
+	     "never checked" both rendered nothing: byte-identical to a reader,
+	     the house's dominant failure class. A quiet, non-amber line, same
+	     register as the notices above, never the urgent tone a fault would
+	     get. -->
+	<p class="mt-2 font-mono text-[11px] text-ink-quiet">
+		<span class="text-ink-mute uppercase tracking-wide">marker</span>
+		— {botLogin || 'the configured GitHub bot'} is a collaborator, checked {checkedLabel ||
+			'recently'}.
+	</p>
 {/if}
