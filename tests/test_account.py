@@ -49,6 +49,8 @@ def test_resolve_context_creates_account_home_and_registry(tmp_path):
         "/dispatch/responses/",
         "/knowledge/",
         "/.brr/",
+        "/security.config",
+        "/account/gates/cloud.token",
         "*.tmp",
     ]
 
@@ -82,6 +84,55 @@ def test_gitignore_backfills_missing_rules_on_a_pre_existing_home(tmp_path):
     lines = (home / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert "/knowledge/" in lines
     assert lines.count("/knowledge/") == 1
+
+
+def test_gitignore_migration_untracks_a_previously_tracked_security_config(tmp_path):
+    """A gitignore line alone never untracks a file the index already has.
+
+    Simulates a home that predates the ``/security.config`` rule: the file
+    was committed (issue: ``config.py`` names it "exactly the kind of file
+    that grows [a secret]" — today it holds no credential only by luck).
+    The migration must not just stop committing it going forward — it must
+    remove it from the index on the very next boot, or an existing install
+    stays exposed forever.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    home = tmp_path / "account-home"
+    init_git_repo(home)
+    commit_files(
+        home,
+        {"security.config": "docker.image=old\n"},
+        message="pre-fix: security.config tracked",
+    )
+    before = subprocess.run(
+        ["git", "ls-files"], cwd=home, check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    assert "security.config" in before
+
+    account.resolve_context(
+        repo,
+        {"home.kind": "account", "home.path": str(home), "account.id": "acct-1"},
+    )
+
+    after = subprocess.run(
+        ["git", "ls-files"], cwd=home, check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    assert "security.config" not in after
+    # Untracked, not deleted — the migration repairs the index, not the disk.
+    assert (home / "security.config").read_text(encoding="utf-8") == "docker.image=old\n"
+    assert "/security.config" in (home / ".gitignore").read_text(encoding="utf-8").splitlines()
+
+    # Idempotent: a second boot against the now-untracked file must not
+    # error (``git rm --cached`` on an already-untracked path would).
+    account.resolve_context(
+        repo,
+        {"home.kind": "account", "home.path": str(home), "account.id": "acct-1"},
+    )
+    assert "security.config" not in subprocess.run(
+        ["git", "ls-files"], cwd=home, check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
 
 
 def test_resolve_context_migrates_legacy_authored_roots_into_surface(tmp_path):
