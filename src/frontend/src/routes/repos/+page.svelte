@@ -41,6 +41,23 @@
 	let manualRepo = $state('');
 	let manualBranch = $state('');
 
+	// Clipboard for the "connect this repository" command (no-installation
+	// state, #1084/#1032 steer) — same copy/flash idiom ColdStart.svelte
+	// already uses for its two command boxes; not reinvented.
+	let copied = $state<string | null>(null);
+	let copyTimer: ReturnType<typeof setTimeout> | undefined;
+
+	async function copy(key: string, text: string) {
+		try {
+			await navigator.clipboard.writeText(text);
+			copied = key;
+			clearTimeout(copyTimer);
+			copyTimer = setTimeout(() => (copied = null), 1500);
+		} catch {
+			// Clipboard unavailable or denied — no crash, just no flash.
+		}
+	}
+
 	// The GitHub Setup URL return (#1084): `routers/github_app.py`'s
 	// `github_app_setup` 303s here with `?notice=…` after syncing an
 	// installation. Captured once, at mount, from the raw query-param code —
@@ -440,15 +457,80 @@
 				</p>
 			</div>
 			<div class="subpanel p-3">
+				<!-- Fact, not a control (#1084 finding — "the control lives in the
+				     indicator grid"): the slug used to double as the install link,
+				     inheriting this row's read-only meaning. The actual install CTA
+				     now lives in "connect this repository" below, with its own
+				     position and weight. -->
 				<p class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase">GitHub App</p>
-				<a
-					class="mt-1 block truncate font-mono text-sm text-amber-100 underline hover:text-amber-200"
-					href={data.install_url}
-					rel="external noreferrer"
-					target="_blank">{data.github_app_slug}</a
-				>
+				<p class="mt-1 truncate font-mono text-sm text-amber-100">{data.github_app_slug}</p>
 			</div>
 		</div>
+
+		{#if data.installations.length === 0}
+			<!-- The install action, with its own position and weight (#1084):
+			     no installation ⇒ this is the page's primary act, not a cell in a
+			     readout grid. Steer'd 2026-08-05: lead with the command — "the
+			     terminal drives, the web consents once" (design-onboarding-ladder.md,
+			     direction A) — because execution is local and GitHub's picker is
+			     the only place repo selection can happen (classic-PAT-only add-repo
+			     endpoint; no "brnrd picks for you" alternative exists). -->
+			<section class="panel mt-5 p-4" aria-labelledby="connect-heading">
+				<p class="eyebrow">start here</p>
+				<h2
+					id="connect-heading"
+					class="font-mono text-lg font-semibold tracking-tight text-amber-100"
+				>
+					connect this repository
+				</h2>
+				<p class="mt-2 max-w-2xl text-sm text-stone-400">
+					Two steps, in order: run the pairing command from a checkout, then finish on GitHub.
+				</p>
+
+				<div class="mt-4">
+					<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
+						<span class="text-amber-200/80">1</span> run this in your checkout
+					</p>
+					<div class="mt-1.5 flex items-start gap-2">
+						<pre
+							class="min-w-0 grow border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] wrap-anywhere whitespace-pre-wrap text-stone-300"><code
+								>{data.pairing_command}</code
+							></pre>
+						<button
+							type="button"
+							class="shrink-0 cursor-pointer border border-stone-800 px-2 py-2 font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+							onclick={() => data && copy('connect-cmd', data.pairing_command)}
+							>{copied === 'connect-cmd' ? 'copied' : 'copy'}</button
+						>
+					</div>
+					<p class="mt-1 font-mono text-[11px] text-ink-mute">
+						No <code class="text-stone-400">brnrd</code> on this machine yet?
+						<code class="text-stone-400">npx brnrd account connect …</code> does the whole cold start
+						in one line.
+					</p>
+				</div>
+
+				<div class="mt-5 border-t border-stone-800/70 pt-4">
+					<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
+						<span class="text-amber-200/80">2</span> install the github app
+					</p>
+					<p class="mt-1.5 max-w-2xl text-sm text-stone-400">
+						This trades a personal access token sitting on your laptop for a short-lived,
+						repo-scoped installation token: commits and comments post as a separate account, not
+						you, and revoking access is one click on github.com instead of a credential hunt.
+					</p>
+					<a
+						class="mt-3 inline-flex items-center border border-amber-700 bg-amber-950/40 px-4 py-2 font-mono text-sm tracking-wide text-amber-100 uppercase hover:border-amber-500"
+						href={data.install_url}
+						rel="external noreferrer"
+						target="_blank">install the github app</a
+					>
+					<p class="mt-2 font-mono text-[11px] text-ink-mute">
+						Opens github.com — that's where you choose repositories, not here.
+					</p>
+				</div>
+			</section>
+		{/if}
 
 		<section class="panel mt-6 p-4">
 			<div class="mb-3 flex items-center justify-between gap-3">
@@ -694,25 +776,20 @@
 						</p>
 					{/if}
 				</div>
-				<a
-					class="shrink-0 border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-stone-400 uppercase hover:text-stone-200"
-					href={data.install_url}
-					rel="external noreferrer"
-					target="_blank">{data.installations.length === 0 ? 'install app' : 'manage app'}</a
-				>
+				{#if data.installations.length > 0}
+					<!-- Secondary once installed (#1084): the primary install CTA
+					     only exists above while there is no installation. From here
+					     on this is a maintenance link, worded to what's actually left
+					     — more repos to add, or nothing left but managing the grant. -->
+					<a
+						class="shrink-0 border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-stone-400 uppercase hover:text-stone-200"
+						href={data.install_url}
+						rel="external noreferrer"
+						target="_blank"
+						>{availableInstalled.length > 0 ? 'add more repositories' : 'manage installation'}</a
+					>
+				{/if}
 			</div>
-
-			{#if data.installations.length === 0}
-				<!-- The exchange sentence (2026-08-04): a fresh reader reads the
-				     App as "more setup for the same thing" a personal access token
-				     already does, unless something here says what it buys instead.
-				     Stated once, at the moment it's asked for; not sold. -->
-				<p class="mb-4 max-w-2xl text-sm text-stone-400">
-					This trades a personal access token sitting on your laptop for a short-lived, repo-scoped
-					installation token: commits and comments post as a separate account, not you, and revoking
-					access is one click on github.com instead of a credential hunt.
-				</p>
-			{/if}
 
 			<div class="subpanel mb-4 p-3">
 				<p class="eyebrow">for the next repo you enable</p>
@@ -760,7 +837,9 @@
 			</div>
 
 			{#if data.installations.length === 0}
-				<p class="text-sm text-ink-quiet">No GitHub App installation is connected yet.</p>
+				<p class="text-sm text-ink-quiet">
+					Nothing to enable yet — connect this repository above first.
+				</p>
 			{:else if availableInstalled.length === 0}
 				<p class="text-sm text-ink-quiet">
 					All {connectedInstalled.length} synced repositories are enabled.
