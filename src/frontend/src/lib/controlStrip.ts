@@ -60,7 +60,7 @@ export interface SlotChip {
  * utilization — compressed to a chip beside fuel; the raw config key demotes
  * from caption to tooltip. */
 export function slotChip(activeSpawns: number, maxSpawns: number | null): SlotChip {
-	const title = 'spawn slots — concurrent worker-stack children (spawn.max_concurrent)';
+	const title = 'spawn slots — concurrent strand-stack children (spawn.max_concurrent)';
 	if (maxSpawns === null || maxSpawns <= 0) {
 		return { label: `${activeSpawns}/? slots`, level: null, title };
 	}

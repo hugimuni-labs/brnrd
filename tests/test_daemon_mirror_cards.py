@@ -129,7 +129,7 @@ def test_worker_run_emits_no_mirrors(tmp_path, monkeypatch):
     inbox = tmp_path / ".brr" / "inbox"
     _seed_foreign(inbox)
     task = _task()
-    task.meta["worker"] = True
+    task.meta["strand"] = True
     daemon._emit_mirror_cards(
         _worker_emit(tmp_path), task, "evt-lead", inbox, {},
     )
