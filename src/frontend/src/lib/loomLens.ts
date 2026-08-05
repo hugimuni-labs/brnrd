@@ -102,7 +102,7 @@ function originLabel(source: string): string {
  */
 export function lensMatches(row: RunLedgerRow, lensId: string): boolean {
 	if (lensId === LENS_ALL) return true;
-	if (lensId === 'stack:worker') return row.is_subspawn === true;
+	if (lensId === 'stack:strand') return row.is_subspawn === true;
 	if (lensId.startsWith('origin:')) {
 		return (row.source_system ?? '') === lensId.slice('origin:'.length);
 	}
@@ -133,13 +133,13 @@ export function availableLenses(rows: RunLedgerRow[]): Lens[] {
 
 	const origins = new Map<string, number>();
 	const shapes = new Map<ProduceShape, number>();
-	let workers = 0;
+	let strands = 0;
 	for (const row of rows) {
 		const source = (row.source_system ?? '').trim();
 		if (source) origins.set(source, (origins.get(source) ?? 0) + 1);
 		const shape = produceShape(row.external_refs ?? []);
 		shapes.set(shape, (shapes.get(shape) ?? 0) + 1);
-		if (row.is_subspawn === true) workers += 1;
+		if (row.is_subspawn === true) strands += 1;
 	}
 
 	// Origins sorted by weight, not alphabetically: the busiest dispatch source
@@ -160,10 +160,10 @@ export function availableLenses(rows: RunLedgerRow[]): Lens[] {
 		}
 	}
 
-	if (workers > 0) {
-		// "Strands" is the loom vocabulary for worker sub-spawn runs (the
-		// maintainer's 08-02 naming steer); the id keeps its mechanical name.
-		lenses.push({ id: 'stack:worker', label: '↳ strands', facet: 'stack', count: workers });
+	if (strands > 0) {
+		// "Strands" is the loom vocabulary for daemon-dispatched sub-spawn runs
+		// (the maintainer's 08-02 naming steer, now the id's name too).
+		lenses.push({ id: 'stack:strand', label: '↳ strands', facet: 'stack', count: strands });
 	}
 
 	return lenses;
