@@ -16,8 +16,17 @@
 // a live status for is never rendered as though it were confirmed live —
 // see `doorRows`'s `status: null` branch and `supportMatrix.test.ts`'s
 // "status-drift" cases.
+//
+// Three door states, not two: `'ready'` is shipped code with no confirmed
+// brnrd.dev identity yet — the maintainer's brief, named directly: code
+// shipped, lane wired, and an identity that actually answers are three
+// independent facts, and a two-value status collapses the last two into
+// each other in both directions (an unconfigured hosted axis reading the
+// same as unwritten code; a door with no hosted axis at all reading the
+// same as a working one). See `hosted_status`'s docstring for the full
+// reasoning.
 
-export type DoorStatus = 'live' | 'soon';
+export type DoorStatus = 'live' | 'soon' | 'ready';
 
 export interface DoorMeta {
 	slug: string;
@@ -76,7 +85,7 @@ export async function fetchDoorStatus(
 		const statuses = new Map<string, DoorStatus>();
 		for (const entry of data.doors) {
 			if (typeof entry?.slug !== 'string') continue;
-			if (entry.status !== 'live' && entry.status !== 'soon') continue;
+			if (entry.status !== 'live' && entry.status !== 'soon' && entry.status !== 'ready') continue;
 			statuses.set(entry.slug, entry.status);
 		}
 		return statuses;
