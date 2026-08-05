@@ -151,8 +151,104 @@ def _state_dir(
     return account_mod.context_home_root(ctx) / "account"
 
 
+# ── The bearer token's own location — split out of ``cloud.json`` ─────
+#
+# ``account/gates/cloud.json`` is tracked in the account home's git repo
+# (the account dominion) so the pairing identity survives a restore. The
+# daemon token used to live in that same file, which meant it rode every
+# ``dominion.commit()`` -> ``gitops.commit_all()`` capture: ``git add -A``
+# on the whole home root cannot tell a secret from a note, and the account
+# daemon's own bearer token shipped in 107 commits before this split
+# existed. ``account.CLOUD_TOKEN_FILENAME`` names the same basename
+# (duplicated rather than imported — this module deliberately has no
+# module-level dependency on ``account``, see ``_state_dir``'s deferred
+# import above; ``test_cloud_token_filename_matches_account`` pins the two).
+_TOKEN_FILENAME = "cloud.token"
+
+
+def _token_path(state_dir: Path) -> Path:
+    """Where the live bearer token lives — never inside ``cloud.json``.
+
+    Same directory ``cloud.json`` itself resolves under (``<state_dir>/
+    gates/``); ``account.GITIGNORE`` keeps it out of the tracked tree.
+    Referenced only from :func:`_read_token`, :func:`_write_token`, and
+    :func:`disconnect` (cleanup) — see ``test_cloud_token_split.py`` for the
+    structural guard that keeps it that way.
+    """
+    return state_dir / "gates" / _TOKEN_FILENAME
+
+
+def _write_token(state_dir: Path, token: str) -> None:
+    """THE lawful writer of the bearer token's on-disk location."""
+    _atomic_write_private(_token_path(state_dir), token)
+
+
+def _read_token(state_dir: Path, raw_state: dict) -> str | None:
+    """THE lawful reader of the bearer token's on-disk location.
+
+    New-location-first (:func:`_token_path`) — a hit there is authoritative.
+    Otherwise falls back to *raw_state*'s legacy ``token`` field, which is
+    where every install on disk carries it today, and migrates on the spot
+    through :func:`_save_state_to_dir` — new file written, ``cloud.json``
+    rewritten without the field — so the fallback drains instead of living
+    forever. Called only from :func:`_load_state_from_dir`.
+    """
+    path = _token_path(state_dir)
+    try:
+        token = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        token = ""
+    if token:
+        return token
+    legacy = raw_state.get("token")
+    if not legacy:
+        return None
+    legacy = str(legacy)
+    _save_state_to_dir(state_dir, {**raw_state, "token": legacy})
+    return legacy
+
+
+def _load_state_from_dir(state_dir: Path) -> dict:
+    """THE lawful raw reader of persisted cloud-gate state.
+
+    Every caller in this module that needs the gate's state resolves
+    through here — including the ``migrated`` probe in :func:`connect`,
+    which reads a directory that may differ from the caller's own
+    ``brr_dir`` resolution — so the token merge/migrate step
+    (:func:`_read_token`) runs exactly once per read, in one place. This is
+    the only call to ``runtime.load_state`` for the cloud gate; the merged
+    ``token`` field it returns is what every read call site in this module
+    (``state["token"]`` / ``state.get("token")``) has always consumed, so
+    none of them needed to change for the token to move off disk.
+    """
+    raw = runtime.load_state(state_dir, "cloud")
+    token = _read_token(state_dir, raw)
+    if token:
+        raw["token"] = token
+    else:
+        raw.pop("token", None)
+    return raw
+
+
+def _save_state_to_dir(state_dir: Path, state: dict) -> None:
+    """THE lawful raw writer of persisted cloud-gate state.
+
+    Splits *state* before it touches disk: everything except ``token`` goes
+    to ``cloud.json`` (``gates.runtime.save_state``); ``token`` — when
+    present — goes only to :func:`_write_token`'s sibling file. This is the
+    only call to ``runtime.save_state`` for the cloud gate, so "cloud.json
+    never carries a token key" is a property of this one function's body
+    rather than a promise every future writer has to remember to keep.
+    """
+    token = state.get("token")
+    persisted = {k: v for k, v in state.items() if k != "token"}
+    runtime.save_state(state_dir, "cloud", persisted)
+    if token:
+        _write_token(state_dir, str(token))
+
+
 def _load_state(brr_dir: Path) -> dict:
-    return runtime.load_state(_state_dir(brr_dir), "cloud")
+    return _load_state_from_dir(_state_dir(brr_dir))
 
 
 def _save_state(
@@ -161,9 +257,8 @@ def _save_state(
     *,
     account_id: str | None = None,
 ) -> None:
-    runtime.save_state(
+    _save_state_to_dir(
         _state_dir(brr_dir, account_id=account_id, create=bool(account_id)),
-        "cloud",
         state,
     )
 
@@ -320,7 +415,7 @@ def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON
     # lower one: a cursor that is too high self-heals server-side
     # (`inbox.clamp_since`), one that is too low replays history.
     dest = _state_dir(brr_dir, account_id=account_id, create=True)
-    migrated = runtime.load_state(dest, "cloud")
+    migrated = _load_state_from_dir(dest)
     since = max(int(state.get("since") or 0), int(migrated.get("since") or 0))
     capabilities = dict(migrated.get("capabilities") or state.get("capabilities") or {})
     capabilities.update(_repo_capabilities(brr_dir))
@@ -370,6 +465,7 @@ def disconnect(brr_dir: Path) -> bool:
         for path in (
             runtime.state_path(state_dir, "cloud"),
             runtime.health_path(state_dir, "cloud"),
+            _token_path(state_dir),
         ):
             try:
                 path.unlink()
