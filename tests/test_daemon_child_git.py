@@ -337,7 +337,7 @@ def test_pin_blinds_a_hand_rolled_git_to_every_other_tree(trees, tmp_path):
     blinded = _git(other, "rev-parse", "--show-toplevel", env=env)
     assert blinded.stdout.strip() == str(run_root)  # not `other`
 
-    # The escape `prompts/worker.md` hands the worker.
+    # The escape `prompts/strand.md` hands the worker.
     escaped_env = {
         k: v for k, v in env.items() if k not in ("GIT_DIR", "GIT_WORK_TREE")
     }

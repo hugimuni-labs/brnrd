@@ -865,7 +865,7 @@ class TestBootScore:
         assert not any(a.startswith("answer") for a in actions)  # nothing queued
 
     def test_worker_kernel_omits_resident_only_steps(self, empty_repo):
-        """A worker never writes a card — ``worker.md`` does not grant it one."""
+        """A worker never writes a card — ``strand.md`` does not grant it one."""
         from brr.prompts import build_boot_score
 
         score = build_boot_score(empty_repo, is_worker=True, has_event_body=True)

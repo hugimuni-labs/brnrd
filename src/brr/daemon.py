@@ -2382,7 +2382,7 @@ def _child_git_pin(task: Run, run_root: Path) -> dict[str, str]:
     *separate* git repository beside the checkout — and commits there itself.
     Under a pin those commits would land in the run's worktree instead, so
     the pin would break the resident's one durable write path. A worker has
-    no kb governance and no dominion write (``prompts/worker.md``), so it has
+    no kb governance and no dominion write (``prompts/strand.md``), so it has
     nothing to commit outside the worktree it was handed. Scope follows the
     contract, not the calendar.
 
@@ -2392,7 +2392,7 @@ def _child_git_pin(task: Run, run_root: Path) -> dict[str, str]:
     the pinned worktree, exit 0, no warning. brnrd's own code is immune by
     construction (``gitops.explicit_repo_env`` and
     ``cli._drop_inherited_git_pin``); a worker driving scratch repositories
-    by hand is not, and ``prompts/worker.md`` tells it the escape
+    by hand is not, and ``prompts/strand.md`` tells it the escape
     (``env -u GIT_DIR -u GIT_WORK_TREE git -C …``). Not a silent trade: the
     stray-write check below is fact-based precisely because this readability
     cost means a worker cannot always verify its own containment.
@@ -3377,7 +3377,7 @@ def _run_worker(
         # drift bench, which makes it the cleanest baseline on the board — any
         # non-zero in the armed arm is signal. Measure, then default it on.
         #
-        # Not armed for workers: `worker.md` grants no chat seam, so a worker owes no
+        # Not armed for workers: `strand.md` grants no chat seam, so a worker owes no
         # closeout, and a guard demanding one would block a run for failing to keep a
         # contract it was never given.
         obligations: list[str] = []
@@ -3451,7 +3451,7 @@ def _run_worker(
         # reply-*shape* nudge, it is a claim that was false twice in one day,
         # each time costing the maintainer a wait on a run already `done`.
         #
-        # Not for workers, for the #779 reason: `worker.md` grants no chat seam,
+        # Not for workers, for the #779 reason: `strand.md` grants no chat seam,
         # so a worker owes no closeout and its terminal text is a return value,
         # not a promise to a reader.
         if not task.meta.get("worker"):
