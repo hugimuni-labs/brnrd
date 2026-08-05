@@ -83,6 +83,12 @@ and the reply are yours.
   | `to: <run-or-event-id>` | mid-flight steer to a child this run dispatched | lands as an event only that worker's `inbox.json` / portal-state shows; the child folds it in — not a new contract, not for `event:`-addressing; unconsumed ⇒ dies with the child. Workers are thread-isolated — steer through this verb, never prose in the thread |
   | `runner_policy: propose` | park a policy change for operator approval | |
 
+  Not a closed set: `await:` (#959, a select not a sleep) and `brnrd do`
+  (verdict-checked porcelain over this same grammar) are two more verbs this
+  table doesn't carry a row for — mounted to this wake as their own seeded
+  block when the boot mount is on; unmounted, `brnrd docs portals` is the
+  pull-only full reference for these and everything else in this file.
+
 - **inbox.json / portal-state.json** — daemon-owned, heartbeat-refreshed;
   inspect, don't edit.
   - re-read at plan / todo boundaries + once immediately before a terminal
