@@ -20,7 +20,8 @@ test('parked, the head carries everything — it is the only line there is', () 
 		clock: true,
 		note: true,
 		extra: true,
-		armedTail: true
+		armedTail: true,
+		mood: true
 	});
 });
 
@@ -35,6 +36,16 @@ test('with the lane on screen, the head drops every measurement the body draws',
 	assert.equal(fields.note, false);
 	assert.equal(fields.extra, false);
 	assert.equal(fields.armedTail, false);
+	assert.equal(fields.mood, false);
+});
+
+test('the mood chip is a measurement, not identity — it drops exactly when the clock does', () => {
+	// His 2026-08-05 read: the head's mood glyph repeats the run card's own
+	// `MoodChip` once the lane (or a selected run's node) is on screen. A
+	// feeling turns between beats the same way a clock ticks, so it is
+	// suppressed on the same predicate as `clock`, never on `lead`'s.
+	assert.equal(machineHeadFields(true).mood, machineHeadFields(true).clock);
+	assert.equal(machineHeadFields(false).mood, machineHeadFields(false).clock);
 });
 
 test('identity survives both states — the dock must say which run it is', () => {

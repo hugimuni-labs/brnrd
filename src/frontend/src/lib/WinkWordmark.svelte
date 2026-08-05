@@ -27,8 +27,30 @@
 
 	// The wink (2026-07-22 ask): every few seconds the wordmark glitches
 	// through its other bodies and settles back. Same name, different
-	// shells — which is the product made visible. Every frame is five
-	// mono glyphs, so the mark never changes width mid-wink.
+	// shells — which is the product made visible. Every frame is authored as
+	// five codepoints, meant to hold the mark's width steady mid-wink — and
+	// measured (2026-08-05, both mid-mono directly and independently by the
+	// maintainer against a live screenshot): that is a true fact about the
+	// *string* (`brr/emotes.py`'s own rule, "so the mark never jitters" — 113
+	// emotes, 405 frames, all exactly 5 codepoints, no exceptions) and a false
+	// one about the *rendering*. `layout.css` never actually sets `--font-mono`,
+	// so `font-mono` runs on the browser's raw `ui-monospace, 'SF Mono', …`
+	// fallback list, and at least nine of the glyphs this component is asked to
+	// show (`Я` in the built-in `bRnЯd`; `· ¬ ° ᵕ ‿ ᴗ ˋ ˊ` among the wire
+	// frames) are plausibly missing from any one member of that stack — a
+	// missing glyph free-floats to whatever font a browser substitutes for it,
+	// at whatever width that font gives it. On mobile the observed failure was
+	// worse than jitter: a wider substituted glyph pushed the un-wrapped
+	// content past the header's width, and the browser's own line-breaker
+	// found a legal break at the ASCII `-` inside a frame (`b^n-d` → `b^n-` /
+	// `d` on two lines), shoving the header down. `nowrap` below stops that
+	// outright; the stacked box (see its own comment) stops the reflow between
+	// frames of genuinely different rendered width, which counting codepoints
+	// cannot detect and this SSR-only test harness cannot measure either (no
+	// real layout runs here — the tests below assert the stacked *markup*,
+	// not pixels). The honest fix is a font stack with guaranteed glyph
+	// coverage; `--font-mono` staying unset is a separate, pre-existing gap,
+	// left alone here.
 	//
 	// Choreography per the maintainer's steers (evt-y2em, evt-58bk):
 	// bRnЯd and the face far apart; the eyes open one at a time
@@ -63,10 +85,10 @@
 	let accent = $derived(pitchAccent(pitch));
 
 	// null = at rest (the plain wordmark); otherwise the cycle frame index.
-	// The `?? text` guard matters: the mood can change mid-cycle, and a
-	// shorter new cycle would otherwise index past its own end.
+	// A shorter new cycle arriving mid-wink is handled below (each stacked
+	// frame renders only while `frame` still points at it; nothing is
+	// selected once `frame` runs past the new cycle's end).
 	let frame = $state<number | null>(null);
-	let shown = $derived(frame === null ? text : (cycle[frame]?.[0] ?? text));
 
 	onMount(() => {
 		// Reduced-motion readers get the resting mark, permanently.
@@ -98,4 +120,39 @@
 	});
 </script>
 
-<span class={klass} aria-label={text} style={accent ? `color: ${accent}` : undefined}>{shown}</span>
+<!--
+	Two floors, not one (2026-08-05, the maintainer's own screenshot plus the
+	measurement above). `whitespace-nowrap` stops the worse of the two observed
+	failures outright: content that used to be free to wrap, wrapped mid-frame
+	at the ASCII `-` in `b^n-d`, shoving the header down a line. That alone
+	still leaves the *box* free to change size frame to frame if the rendered
+	widths genuinely differ, so every candidate frame (the resting text plus
+	the whole cycle) is stacked in one grid cell instead of swapped in as a
+	single text node. A `ch`-based reservation was the other option on the
+	table and was rejected: `ch` is itself a monospace-metric assumption, and
+	the whole failure is that assumption being false for some of this
+	component's own glyphs. Stacking sidesteps the metric entirely — the grid
+	measures every frame the browser actually rendered, real substituted font
+	and all, and sizes the cell to the widest one. That also covers a future
+	wire frame (a wider emote, #566) at no extra cost: there is no palette this
+	component has to know about or keep in sync with, only whatever `cycle` it
+	is handed right now.
+-->
+<span
+	class="relative inline-grid whitespace-nowrap {klass}"
+	aria-label={text}
+	style={accent ? `color: ${accent}` : undefined}
+>
+	<span
+		class="[grid-area:1/1]"
+		aria-hidden="true"
+		style={frame === null ? undefined : 'visibility: hidden'}>{text}</span
+	>
+	{#each cycle as [glyphs], i (i)}
+		<span
+			class="[grid-area:1/1]"
+			aria-hidden="true"
+			style={frame === i ? undefined : 'visibility: hidden'}>{glyphs}</span
+		>
+	{/each}
+</span>
