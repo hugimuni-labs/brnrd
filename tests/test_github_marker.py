@@ -15,8 +15,9 @@ pytest.importorskip("sqlalchemy")
 
 from brnrd import create_app, github_marker, ids  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
-from brnrd.models import Account, Repo  # noqa: E402
+from brnrd.models import Account, GitHubInstallation, GitHubInstalledRepo, Repo  # noqa: E402
 from brnrd.platforms import github as gh  # noqa: E402
+from brnrd.platforms import github_app as gh_app  # noqa: E402
 
 
 def _app(**overrides):
@@ -41,6 +42,38 @@ def _make_repo(db, *, account_id: str = "acc-1", full_name: str = "owner/repo") 
     db.commit()
     db.refresh(repo)
     return repo
+
+
+def _bind_installation(db, repo: Repo, *, installation_id: str = "73") -> GitHubInstallation:
+    """Give ``repo`` an App installation covering it — the #1141 precondition
+    for the collaborator check to run on the App token instead of falling
+    back to the bot's own user token. Reuses an existing installation row
+    for the same ``installation_id`` (two repos can share one installation),
+    same upsert shape as `routers.github_app.sync_installation`."""
+    from sqlalchemy import select as _select
+
+    installation = db.execute(
+        _select(GitHubInstallation).where(GitHubInstallation.installation_id == installation_id)
+    ).scalar_one_or_none()
+    if installation is None:
+        installation = GitHubInstallation(
+            id=ids.github_installation_id(),
+            account_id=repo.account_id,
+            installation_id=installation_id,
+            target_login=repo.repo_owner,
+            target_type="User",
+        )
+        db.add(installation)
+        db.flush()
+    db.add(
+        GitHubInstalledRepo(
+            id=ids.github_installed_repo_id(),
+            github_installation_id=installation.id,
+            repo_full_name=repo.repo_full_name,
+        )
+    )
+    db.commit()
+    return installation
 
 
 def test_no_token_is_a_no_op(monkeypatch):
@@ -162,6 +195,151 @@ def test_collaborator_check_covers_true_false_and_unknown(monkeypatch):
     assert result.failed == 1
 
 
+def test_collaborator_check_runs_on_the_app_installation_token_when_one_covers_the_repo(
+    monkeypatch,
+):
+    """#1141 — the principal swap. A repo with an App installation checks on
+    the App's own installation token, not brnrd-bot's user token: the App
+    only needs `Metadata: read` (already granted) and answers definitively,
+    where the user token's 403 is ambiguous with "not a collaborator"."""
+    app = _app(github_bot_token="ghs_bot", github_bot_login="brnrd-bot")
+    monkeypatch.setattr(gh, "list_repository_invitations", lambda *a, **k: [])
+    seen_tokens = []
+
+    def check(token, base, version, repo_name, username):
+        seen_tokens.append(token)
+        return True
+
+    monkeypatch.setattr(gh, "check_repository_collaborator", check)
+    monkeypatch.setattr(
+        gh_app, "installation_access_token", lambda settings, installation_id: "ghs_installation"
+    )
+    with app.state.SessionLocal() as db:
+        repo = _make_repo(db)
+        _bind_installation(db, repo)
+        github_marker.sync_marker_for_repos(db, app.state.settings, [repo])
+        db.refresh(repo)
+        assert repo.github_bot_collaborator is True
+    assert seen_tokens == ["ghs_installation"], "must check with the App token, not the bot's own"
+
+
+def test_collaborator_check_mints_one_installation_token_for_a_shared_installation(monkeypatch):
+    """A batch of repos under the same installation reuses one minted token
+    rather than re-minting per repo."""
+    app = _app(github_bot_token="ghs_bot", github_bot_login="brnrd-bot")
+    monkeypatch.setattr(gh, "list_repository_invitations", lambda *a, **k: [])
+    monkeypatch.setattr(gh, "check_repository_collaborator", lambda *a, **k: True)
+    mints = []
+
+    def mint(settings, installation_id):
+        mints.append(installation_id)
+        return f"ghs_{installation_id}"
+
+    monkeypatch.setattr(gh_app, "installation_access_token", mint)
+    with app.state.SessionLocal() as db:
+        one = _make_repo(db, full_name="owner/one")
+        two = _make_repo(db, full_name="owner/two")
+        _bind_installation(db, one, installation_id="73")
+        _bind_installation(db, two, installation_id="73")
+        github_marker.sync_marker_for_repos(db, app.state.settings, [one, two])
+    assert mints == ["73"], "one installation covering two repos must mint once, not twice"
+
+
+def test_collaborator_check_falls_back_to_the_user_token_without_an_installation(monkeypatch):
+    """A manually-connected repo (no App installation) has nothing to mint an
+    App token from — the check must still run, on the bot's own user token,
+    rather than silently going unchecked."""
+    app = _app(github_bot_token="ghs_bot", github_bot_login="brnrd-bot")
+    monkeypatch.setattr(gh, "list_repository_invitations", lambda *a, **k: [])
+    seen_tokens = []
+
+    def check(token, base, version, repo_name, username):
+        seen_tokens.append(token)
+        return True
+
+    monkeypatch.setattr(gh, "check_repository_collaborator", check)
+    monkeypatch.setattr(
+        gh_app,
+        "installation_access_token",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no installation to mint from")),
+    )
+    with app.state.SessionLocal() as db:
+        repo = _make_repo(db)  # no _bind_installation call — nothing covers it
+        github_marker.sync_marker_for_repos(db, app.state.settings, [repo])
+        db.refresh(repo)
+        assert repo.github_bot_collaborator is True
+    assert seen_tokens == ["ghs_bot"]
+
+
+def test_app_installation_403_is_a_genuine_permission_fault(monkeypatch):
+    """On the App token, `Metadata: read` is already granted, so a 403 from
+    it (suspended installation, revoked grant) is an honest fault — unlike
+    the same status on the user-token fallback (see the sibling test
+    below)."""
+    app = _app(github_bot_token="ghs_bot", github_bot_login="brnrd-bot")
+    monkeypatch.setattr(gh, "list_repository_invitations", lambda *a, **k: [])
+    request = httpx.Request("GET", "https://api.github.com/repos/owner/repo/collaborators/brnrd-bot")
+    response = httpx.Response(403, request=request)
+
+    def forbidden(*_args, **_kwargs):
+        raise httpx.HTTPStatusError("403", request=request, response=response)
+
+    monkeypatch.setattr(gh, "check_repository_collaborator", forbidden)
+    monkeypatch.setattr(gh_app, "installation_access_token", lambda *a, **k: "ghs_installation")
+    with app.state.SessionLocal() as db:
+        repo = _make_repo(db)
+        _bind_installation(db, repo)
+        github_marker.sync_marker_for_repos(db, app.state.settings, [repo])
+        db.refresh(repo)
+        assert repo.github_bot_collaborator is None
+        assert repo.github_bot_notice == github_marker.MarkerCheckState.PERMISSION_MISSING.value
+
+
+def test_user_token_fallback_403_is_not_a_collaborator_not_permission_missing(monkeypatch):
+    """The measured bug (#1141): GitHub's own docs require a user-token
+    caller to already have push access just to *use* the collaborators
+    endpoint, so a bot lacking push access 403s regardless of whether it is
+    itself a collaborator. On the no-installation fallback path that 403 must
+    read as `not-a-collaborator`, not `permission-missing` — the fix this
+    whole change exists for."""
+    app = _app(github_bot_token="ghs_bot", github_bot_login="brnrd-bot")
+    monkeypatch.setattr(gh, "list_repository_invitations", lambda *a, **k: [])
+    request = httpx.Request("GET", "https://api.github.com/repos/owner/repo/collaborators/brnrd-bot")
+    response = httpx.Response(403, request=request)
+    raw = "Client error '403 Forbidden' for url 'https://api.github.com/repos/owner/repo/collaborators/brnrd-bot'"
+
+    def forbidden(*_args, **_kwargs):
+        raise httpx.HTTPStatusError(raw, request=request, response=response)
+
+    monkeypatch.setattr(gh, "check_repository_collaborator", forbidden)
+    with app.state.SessionLocal() as db:
+        repo = _make_repo(db)  # no installation ⇒ the fallback path
+        github_marker.sync_marker_for_repos(db, app.state.settings, [repo])
+        db.refresh(repo)
+        assert repo.github_bot_collaborator is None
+        assert repo.github_bot_notice == github_marker.MarkerCheckState.NOT_A_COLLABORATOR.value
+        assert raw not in repo.github_bot_notice
+
+
+def test_user_token_fallback_401_is_still_permission_missing(monkeypatch):
+    """401 (bad/expired credential) is unambiguous regardless of principal —
+    only 403's push-access quirk is user-token-specific."""
+    app = _app(github_bot_token="ghs_bot", github_bot_login="brnrd-bot")
+    monkeypatch.setattr(gh, "list_repository_invitations", lambda *a, **k: [])
+    request = httpx.Request("GET", "https://api.github.com/repos/owner/repo/collaborators/brnrd-bot")
+    response = httpx.Response(401, request=request)
+
+    def unauthorized(*_args, **_kwargs):
+        raise httpx.HTTPStatusError("401", request=request, response=response)
+
+    monkeypatch.setattr(gh, "check_repository_collaborator", unauthorized)
+    with app.state.SessionLocal() as db:
+        repo = _make_repo(db)
+        github_marker.sync_marker_for_repos(db, app.state.settings, [repo])
+        db.refresh(repo)
+        assert repo.github_bot_notice == github_marker.MarkerCheckState.PERMISSION_MISSING.value
+
+
 def test_empty_bot_login_never_queries_collaborators_and_says_why(monkeypatch):
     """An empty `github_bot_login` would query `/collaborators/` (trailing
     slash, empty username) — GitHub's 404 there would read as a false "not a
@@ -185,6 +363,10 @@ def test_empty_bot_login_never_queries_collaborators_and_says_why(monkeypatch):
 
 
 def test_403_collaborator_check_is_classified_without_persisting_transport_copy(monkeypatch):
+    """Sibling of `test_user_token_fallback_403_is_not_a_collaborator_not_permission_missing`,
+    focused on the never-leak-transport-copy guarantee rather than the
+    classification itself (that fix is #1141; this test predates it and is
+    kept for the transport-copy assertion)."""
     app = _app(github_bot_token="ghs_bot", github_bot_login="brnrd-bot")
     monkeypatch.setattr(gh, "list_repository_invitations", lambda *a, **k: [])
     request = httpx.Request(
@@ -202,11 +384,11 @@ def test_403_collaborator_check_is_classified_without_persisting_transport_copy(
 
     monkeypatch.setattr(gh, "check_repository_collaborator", forbidden)
     with app.state.SessionLocal() as db:
-        repo = _make_repo(db)
+        repo = _make_repo(db)  # no installation ⇒ the user-token fallback path
         github_marker.sync_marker_for_repos(db, app.state.settings, [repo])
         db.refresh(repo)
         assert repo.github_bot_collaborator is None
-        assert repo.github_bot_notice == github_marker.MarkerCheckState.PERMISSION_MISSING.value
+        assert repo.github_bot_notice == github_marker.MarkerCheckState.NOT_A_COLLABORATOR.value
         assert raw not in repo.github_bot_notice
 
 
@@ -221,18 +403,36 @@ def test_403_collaborator_check_is_classified_without_persisting_transport_copy(
         (422, github_marker.MarkerCheckState.UNKNOWN),
     ],
 )
-def test_marker_check_http_failure_map(status, expected):
+@pytest.mark.parametrize(
+    "principal",
+    [
+        github_marker.MarkerCheckPrincipal.APP_INSTALLATION,
+        github_marker.MarkerCheckPrincipal.BOT_USER_INVITATION,
+    ],
+)
+def test_marker_check_http_failure_map(status, expected, principal):
+    """401/403 are a genuine permission fault for both of these principals —
+    only `BOT_USER_COLLABORATOR_CHECK` (see the dedicated tests above) has
+    the push-access-required quirk that turns a 403 into `not-a-collaborator`."""
     request = httpx.Request("GET", "https://api.github.test/check")
     response = httpx.Response(status, request=request)
     exc = httpx.HTTPStatusError("transport copy", request=request, response=response)
-    assert github_marker.classify_marker_check_failure(exc) is expected
+    assert github_marker.classify_marker_check_failure(exc, principal=principal) is expected
 
 
-def test_marker_check_network_failure_is_unavailable():
+@pytest.mark.parametrize(
+    "principal",
+    [
+        github_marker.MarkerCheckPrincipal.APP_INSTALLATION,
+        github_marker.MarkerCheckPrincipal.BOT_USER_INVITATION,
+        github_marker.MarkerCheckPrincipal.BOT_USER_COLLABORATOR_CHECK,
+    ],
+)
+def test_marker_check_network_failure_is_unavailable(principal):
     request = httpx.Request("GET", "https://api.github.test/check")
     exc = httpx.ConnectError("transport copy", request=request)
     assert (
-        github_marker.classify_marker_check_failure(exc)
+        github_marker.classify_marker_check_failure(exc, principal=principal)
         is github_marker.MarkerCheckState.CHECK_UNAVAILABLE
     )
 

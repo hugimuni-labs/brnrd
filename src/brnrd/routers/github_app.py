@@ -396,4 +396,55 @@ async def github_app_webhook(request: Request, x_hub_signature_256: Annotated[st
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail="GitHub App event handling failed",
                 ) from e
+    elif x_github_event == "member":
+        # #1141 §5 — the instant lamp. Without this, brnrd-bot's own marker
+        # only refreshes on repo bind, installation sync, or a 15-minute-
+        # stale dashboard-load recheck (`_session.py`), so inviting the bot
+        # shows nothing for up to 15 minutes plus a reload. GitHub pushes
+        # this the moment a user accepts (or is removed from) an invitation
+        # ("A GitHub user accepted an invitation to a repository") — no App
+        # permission change needed, `Members: read` already covers it (the
+        # same grant `_sync_verified_installations` already uses for
+        # org-admin verification). Requires the App to actually subscribe to
+        # `member` in its webhook config on github.com — a setting this code
+        # cannot see or change; unsubscribed, this branch is simply never
+        # reached (no crash, no partial state).
+        try:
+            action = str((payload or {}).get("action") or "")
+            member_login = str(((payload or {}).get("member") or {}).get("login") or "")
+            bot_login = str(settings.github_bot_login or "").strip().lstrip("@")
+            repo_full_name = str(((payload or {}).get("repository") or {}).get("full_name") or "")
+            installation_id = str(((payload or {}).get("installation") or {}).get("id") or "")
+            if (
+                action in ("added", "removed")
+                and bot_login
+                and member_login
+                and repo_full_name
+                and installation_id
+                and member_login.casefold() == bot_login.casefold()
+            ):
+                installation = db.execute(
+                    select(GitHubInstallation).where(
+                        GitHubInstallation.installation_id == installation_id
+                    )
+                ).scalar_one_or_none()
+                repo = (
+                    next(
+                        (
+                            r
+                            for r in github_marker.account_repos(db, installation.account_id)
+                            if r.repo_full_name.casefold() == repo_full_name.casefold()
+                        ),
+                        None,
+                    )
+                    if installation is not None and installation.account_id
+                    else None
+                )
+                if repo is not None:
+                    repo.github_bot_collaborator = action == "added"
+                    repo.github_bot_notice = None
+                    repo.github_bot_checked_at = datetime.now(timezone.utc)
+                    db.commit()
+        except Exception as e:
+            print(f"[brnrd] github member webhook sync failed: {e}")
     return {"status": "ok", "event": x_github_event}

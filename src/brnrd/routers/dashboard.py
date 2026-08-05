@@ -733,6 +733,12 @@ def _repo_view_out(row: dict[str, Any], *, bot_login: str = "") -> dict[str, Any
         # checked-and-false "not a collaborator", never guess optimistic.
         "github_bot_collaborator": repo.github_bot_collaborator,
         "github_bot_checked_at": _iso(repo.github_bot_checked_at),
+        # Pre-rendered age of the check above, "never" when it hasn't run —
+        # same `_age_label` every other timestamp on this row already uses.
+        # Read by the lit rendering (`MarkerNotice.svelte`): the satisfied
+        # case (`github_bot_collaborator is True`) previously had no line at
+        # all, byte-identical in the UI to "never checked" (#1141).
+        "github_bot_checked_label": _age_label(repo.github_bot_checked_at),
         # The renderer consumes the class, never the stored sentence.  The
         # two notice fields below stay as safe compatibility copy for clients
         # deployed before #969; neither can expose a legacy/raw exception.

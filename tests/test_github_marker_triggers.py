@@ -275,6 +275,12 @@ def test_dashboard_repo_view_never_renders_the_absence_line_for_unknown_state(mo
 
 
 def test_dashboard_repo_view_renders_403_class_without_raw_httpx_copy(monkeypatch):
+    """No App installation is bound for "Gurio/brr" here, so the check falls
+    back to brnrd-bot's own user token — whose 403 on this endpoint is
+    GitHub's documented "caller needs push access to use this endpoint"
+    requirement, not a permission grant gap (#1141). Renamed from
+    `permission-missing` accordingly; the never-leak-transport-copy
+    assertions are what this test still exists to pin."""
     client = _client(github_bot_login="brnrd-bot")
     _login(client)
     monkeypatch.setattr(gh, "list_repository_invitations", lambda *a, **k: [])
@@ -297,7 +303,8 @@ def test_dashboard_repo_view_renders_403_class_without_raw_httpx_copy(monkeypatc
     body = client.get("/v1/dashboard/repos").json()
     row = next(row for row in body["connected_repos"] if row["repo_full_name"] == "Gurio/brr")
     rendered_payload = json.dumps(row)
-    assert row["github_bot_status"] == "permission-missing"
-    assert "Administration: read" in row["github_bot_notice"]
+    assert row["github_bot_status"] == "not-a-collaborator"
+    assert "brnrd-bot isn't a collaborator" in row["github_bot_marker_notice"]
+    assert row["github_bot_notice"] is None
     assert raw not in rendered_payload
     assert "developer.mozilla.org" not in rendered_payload

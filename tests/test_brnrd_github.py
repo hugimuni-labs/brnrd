@@ -2129,6 +2129,148 @@ def test_app_webhook_accepts_a_correctly_signed_request(monkeypatch):
     assert len(called) == 1, "a correctly signed installation event did not sync"
 
 
+# ── the `member` webhook: the instant lamp (#1141 §5) ────────────────
+
+
+def _member_webhook_body(
+    *, action: str, member_login: str, repo_full_name: str, installation_id: str = "73"
+) -> bytes:
+    return json.dumps(
+        {
+            "action": action,
+            "member": {"login": member_login},
+            "repository": {"full_name": repo_full_name},
+            "installation": {"id": installation_id},
+        }
+    ).encode()
+
+
+def _member_webhook_env(monkeypatch):
+    """A signed-webhook client with one repo, bound to one App installation —
+    the shared fixture every `member` webhook test needs."""
+    app, client, _ = _app_env(monkeypatch)
+    acc = _account(client)
+    repo_id = _repo(client, acc)
+    with app.state.SessionLocal() as db:
+        repo = db.get(Repo, repo_id)
+        installation = GitHubInstallation(
+            id=ids.github_installation_id(),
+            account_id=repo.account_id,
+            installation_id="73",
+            target_login="owner",
+            target_type="User",
+        )
+        db.add(installation)
+        db.flush()
+        db.add(
+            GitHubInstalledRepo(
+                id=ids.github_installed_repo_id(),
+                github_installation_id=installation.id,
+                repo_full_name=repo.repo_full_name,
+            )
+        )
+        db.commit()
+    return app, client, repo_id
+
+
+def _post_member_webhook(client, **kwargs) -> object:
+    body = _member_webhook_body(**kwargs)
+    return client.post(
+        "/api/github/webhook",
+        content=body,
+        headers={
+            "X-GitHub-Event": "member",
+            "X-Hub-Signature-256": _app_signature(_SECRET, body),
+            "Content-Type": "application/json",
+        },
+    )
+
+
+def test_member_webhook_added_marks_the_marker_a_collaborator(monkeypatch):
+    app, client, repo_id = _member_webhook_env(monkeypatch)
+
+    r = _post_member_webhook(
+        client, action="added", member_login="brr-bot", repo_full_name="owner/repo"
+    )
+
+    assert r.status_code == 200, r.text
+    with app.state.SessionLocal() as db:
+        repo = db.get(Repo, repo_id)
+        assert repo.github_bot_collaborator is True
+        assert repo.github_bot_notice is None
+        assert repo.github_bot_checked_at is not None
+
+
+def test_member_webhook_removed_clears_the_marker(monkeypatch):
+    app, client, repo_id = _member_webhook_env(monkeypatch)
+
+    r = _post_member_webhook(
+        client, action="removed", member_login="brr-bot", repo_full_name="owner/repo"
+    )
+
+    assert r.status_code == 200, r.text
+    with app.state.SessionLocal() as db:
+        repo = db.get(Repo, repo_id)
+        assert repo.github_bot_collaborator is False
+        assert repo.github_bot_notice is None
+        assert repo.github_bot_checked_at is not None
+
+
+def test_member_webhook_ignores_a_different_login(monkeypatch):
+    """A membership change for someone other than the configured bot must
+    never touch our marker — this webhook has no scoping beyond the login
+    match."""
+    app, client, repo_id = _member_webhook_env(monkeypatch)
+    with app.state.SessionLocal() as db:
+        checked_before = db.get(Repo, repo_id).github_bot_checked_at
+
+    r = _post_member_webhook(
+        client, action="added", member_login="someone-else", repo_full_name="owner/repo"
+    )
+
+    assert r.status_code == 200, r.text
+    with app.state.SessionLocal() as db:
+        repo = db.get(Repo, repo_id)
+        assert repo.github_bot_checked_at == checked_before
+        assert repo.github_bot_collaborator is None
+
+
+def test_member_webhook_ignores_an_unbound_repo(monkeypatch):
+    """The bot's own login joining some *other* repo under the same
+    installation must not touch a repo it wasn't reported for."""
+    app, client, repo_id = _member_webhook_env(monkeypatch)
+    with app.state.SessionLocal() as db:
+        checked_before = db.get(Repo, repo_id).github_bot_checked_at
+
+    r = _post_member_webhook(
+        client, action="added", member_login="brr-bot", repo_full_name="owner/unrelated"
+    )
+
+    assert r.status_code == 200, r.text
+    with app.state.SessionLocal() as db:
+        repo = db.get(Repo, repo_id)
+        assert repo.github_bot_checked_at == checked_before
+        assert repo.github_bot_collaborator is None
+
+
+def test_member_webhook_ignores_an_unrecognized_action(monkeypatch):
+    """Only `added`/`removed` are membership changes; anything else (e.g.
+    `edited`, a future action GitHub adds) is a deliberate no-op, the same
+    "unknown action → no-op" guard the installation branch already has."""
+    app, client, repo_id = _member_webhook_env(monkeypatch)
+    with app.state.SessionLocal() as db:
+        checked_before = db.get(Repo, repo_id).github_bot_checked_at
+
+    r = _post_member_webhook(
+        client, action="edited", member_login="brr-bot", repo_full_name="owner/repo"
+    )
+
+    assert r.status_code == 200, r.text
+    with app.state.SessionLocal() as db:
+        repo = db.get(Repo, repo_id)
+        assert repo.github_bot_checked_at == checked_before
+
+
 # ── expired session cookies, at both routers that accept one ────────
 
 
