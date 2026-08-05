@@ -485,6 +485,10 @@
 				</h2>
 				<p class="mt-2 max-w-2xl text-sm text-stone-400">
 					Two steps, in order: run the pairing command from a checkout, then finish on GitHub.
+					This assumes <code class="text-stone-400">brnrd</code> is already on that machine — no
+					CLI yet? The
+					<a href={resolve('/')} class="text-sky-400 underline hover:text-sky-300">dashboard</a
+					>'s cold-start block starts one rung earlier, with the install command.
 				</p>
 
 				<div class="mt-4">
@@ -779,17 +783,39 @@
 					{/if}
 				</div>
 				{#if data.installations.length > 0}
-					<!-- Secondary once installed (#1084): the primary install CTA
-					     only exists above while there is no installation. From here
-					     on this is a maintenance link, worded to what's actually left
-					     — more repos to add, or nothing left but managing the grant. -->
-					<a
-						class="shrink-0 border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-stone-400 uppercase hover:text-stone-200"
-						href={data.install_url}
-						rel="external noreferrer"
-						target="_blank"
-						>{availableInstalled.length > 0 ? 'add more repositories' : 'manage installation'}</a
-					>
+					<div class="flex shrink-0 flex-wrap items-center gap-2">
+						<!-- Secondary once installed (#1084): the primary install CTA
+						     only exists above while there is no installation. From here
+						     on this is a maintenance link, worded to what's actually left
+						     — more repos to add, or nothing left but managing the grant. -->
+						<a
+							class="border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-stone-400 uppercase hover:text-stone-200"
+							href={data.install_url}
+							rel="external noreferrer"
+							target="_blank"
+							>{availableInstalled.length > 0 ? 'add more repositories' : 'manage installation'}</a
+						>
+						{#if data.github_sync_configured}
+							<!-- #1084's own escape hatch: `POST /api/github/sync` exists,
+							     is tested, and had no button anywhere in the frontend.
+							     A plain form post, not a fetch — the endpoint answers with
+							     a redirect back to this page (`?notice=…`), the same
+							     pattern the GitHub Setup URL return already uses, so a
+							     stale installation is one page load away from a fix
+							     without waiting on the webhook or the background
+							     staleness check to notice on their own. Gated on
+							     `github_sync_configured` (App credentials present
+							     server-side) — offering a control that can only ever
+							     fail closed is worse than no control. -->
+							<form method="POST" action="/api/github/sync">
+								<button
+									type="submit"
+									class="cursor-pointer border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-stone-400 uppercase hover:text-stone-200"
+									>recheck repos on github</button
+								>
+							</form>
+						{/if}
+					</div>
 				{/if}
 			</div>
 

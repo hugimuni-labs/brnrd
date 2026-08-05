@@ -26,9 +26,23 @@
 	// trace — "the repos are not detected/synced… on a new account"), and a
 	// step whose completion is a fact gets marked done. The regression that
 	// forced this: the block used to leave the instant `repos.length` went
-	// non-zero, taking step 03 with it at the exact moment pairing the
-	// daemon was the only thing left — the maintainer's own "connected but
-	// not connected", reborn inside the component built to answer it.
+	// non-zero, taking the pairing step with it at the exact moment pairing
+	// the daemon was the only thing left — the maintainer's own "connected
+	// but not connected", reborn inside the component built to answer it.
+	//
+	// Rung order (2026-08-05, `brr/one-sequence-two-surfaces`): this used to
+	// read install → enable a repository → pair the daemon, while `/repos`
+	// (the page step 02 sent the reader to) opens with run the pairing
+	// command, *then* install the GitHub App — the opposite dependency
+	// graph on the very next screen. design-onboarding-ladder.md's Direction
+	// A settles which one is wrong: the checkout already knows which
+	// repository you mean, the web does not, so the terminal drives — the
+	// account-connect command below is both sign-in and pairing — and the
+	// GitHub App install is the single web consent that follows — never a
+	// prerequisite to it. `pairing_command` (`_session.py`) already builds
+	// with a `<repo>` placeholder and needs no enabled repo to run, so
+	// nothing here waits on step 03. ColdStart now matches `/repos`: install
+	// → pair → enable.
 	interface Props {
 		// `null` = the repos fetch hasn't landed. Render nothing rather than
 		// flashing a cold start at an account that has fifteen repos: the
@@ -54,7 +68,7 @@
 	let appInstalled = $derived((installations?.length ?? 0) > 0);
 	let repoEnabled = $derived((repos?.length ?? 0) > 0);
 	// "Paired" here means the one-time setup act completed, not "currently
-	// online" — `daemon_status` is `missing` only until step 03's own
+	// online" — `daemon_status` is `missing` only until step 02's own
 	// pairing command first registers this repo's daemon; after that it
 	// reads `online` or `offline` depending on whether it is heartbeating
 	// *right now*. This is a setup checklist, not a live health monitor (that job
@@ -129,15 +143,46 @@
 
 			<li>
 				<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
-					<span class="text-amber-200/80">02</span> enable a repository
+					<span class="text-amber-200/80">02</span> pair the daemon
+				</p>
+				{#if pairCommand}
+					<!-- Wrapped, not scrolled (driven on a 390px phone, 2026-08-03):
+					     `overflow-x-auto` clipped the middle line to "brnrd account
+					     connect https://brnrd.de" with no visible tell, which is a
+					     plausible-looking wrong domain on the one command that has
+					     to be right. A soft wrap keeps every character on screen and
+					     the copy button hands over the real string regardless. -->
+					<div class="mt-1.5 flex items-start gap-2">
+						<pre
+							class="min-w-0 grow border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] wrap-anywhere whitespace-pre-wrap text-stone-300"><code
+								>{pairCommand}</code
+							></pre>
+						<button
+							type="button"
+							class="shrink-0 cursor-pointer border border-stone-800 px-2 py-2 font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+							onclick={() => copy('pair', pairCommand ?? '')}
+							>{copied === 'pair' ? 'copied' : 'copy'}</button
+						>
+					</div>
+				{/if}
+				<p class="mt-1.5 text-sm text-stone-400">
+					In the checkout, after 01. It prints a link back here to approve, and this board starts
+					reading the daemon — no enabled repository required yet, this is the account-level pair.
+					Execution never leaves your machine.
+				</p>
+			</li>
+
+			<li>
+				<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
+					<span class="text-amber-200/80">03</span> enable a repository
 					{#if repoEnabled}
 						<span class="text-emerald-400">— done</span>
 					{/if}
 				</p>
 				{#if repoEnabled}
-					<!-- Marked done, not hidden: the block is still up because 03
-					     isn't, and a reader re-reading the ladder should see 02 as
-					     settled rather than wonder if it still applies. -->
+					<!-- Marked done, not hidden: the block is still up because
+					     pairing isn't, and a reader re-reading the ladder should see
+					     03 as settled rather than wonder if it still applies. -->
 					<p class="mt-1.5 text-sm text-stone-400">
 						At least one repository is enabled. Enable another, or change what's enabled, on the
 						<a href={resolve('/repos')} class="text-sky-400 underline hover:text-sky-300"
@@ -173,36 +218,6 @@
 						>enable a repository</a
 					>
 				{/if}
-			</li>
-
-			<li>
-				<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
-					<span class="text-amber-200/80">03</span> pair the daemon
-				</p>
-				{#if pairCommand}
-					<!-- Wrapped, not scrolled (driven on a 390px phone, 2026-08-03):
-					     `overflow-x-auto` clipped the middle line to "brnrd account
-					     connect https://brnrd.de" with no visible tell, which is a
-					     plausible-looking wrong domain on the one command that has
-					     to be right. A soft wrap keeps every character on screen and
-					     the copy button hands over the real string regardless. -->
-					<div class="mt-1.5 flex items-start gap-2">
-						<pre
-							class="min-w-0 grow border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] wrap-anywhere whitespace-pre-wrap text-stone-300"><code
-								>{pairCommand}</code
-							></pre>
-						<button
-							type="button"
-							class="shrink-0 cursor-pointer border border-stone-800 px-2 py-2 font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-							onclick={() => copy('pair', pairCommand ?? '')}
-							>{copied === 'pair' ? 'copied' : 'copy'}</button
-						>
-					</div>
-				{/if}
-				<p class="mt-1.5 text-sm text-stone-400">
-					In the checkout, after 02. It prints a link back here to approve, and this board starts
-					reading the daemon. Execution never leaves your machine.
-				</p>
 			</li>
 		</ol>
 

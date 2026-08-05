@@ -104,15 +104,33 @@ test('an account with nothing connected is told the three things that have to ha
 // This inverts the old pin here ("the block is gone the moment the account
 // has a repo") — that assertion *was* the regression (#1084). An enabled
 // repo with no daemon is "connected but not connected": the block has to
-// survive, step 03 has to stay visible, and step 02 should read done rather
-// than repeat itself.
+// survive, the pairing step has to stay visible, and the enable-a-repository
+// step should read done rather than repeat itself.
 test('the block survives an enabled repo until a daemon has ever paired', async () => {
 	const html = await renderColdStart([repo({ daemon_status: 'missing' })]);
 	ok(html.includes('the cold start'), 'an enabled repo with no daemon is still the cold start');
 	ok(html.includes('nothing is paired yet'));
-	ok(html.includes('pair the daemon'), 'step 03 survives — this is exactly what used to vanish');
+	ok(html.includes('pair the daemon'), 'the pairing step survives — this is exactly what used to vanish');
 	ok(html.includes('brnrd account connect'), 'the pairing command still renders');
-	ok(html.includes('— done'), 'step 02 (enable a repository) reads done, not repeated');
+	ok(html.includes('— done'), 'the enable-a-repository step reads done, not repeated');
+});
+
+// The finding this branch fixes (`brr/one-sequence-two-surfaces`): ColdStart
+// used to read install → enable a repository → pair the daemon, while
+// `/repos` — the very page step 02 sent the reader to — opened with run the
+// pairing command, *then* install the GitHub App. Two ladders, opposite rung
+// order, one reader sent from the first straight into the second. Pinned as
+// a position assertion, not a substring check, because the earlier order
+// also contained every one of these three phrases — only their sequence was
+// wrong.
+test('the ladder reads install → pair → enable, matching /repos rung order', async () => {
+	const html = await renderColdStart([]);
+	const installAt = html.indexOf('install the cli');
+	const pairAt = html.indexOf('pair the daemon');
+	const enableAt = html.indexOf('enable a repository');
+	ok(installAt >= 0 && pairAt >= 0 && enableAt >= 0, 'all three rungs render');
+	ok(installAt < pairAt, 'install precedes pair — the CLI is a prerequisite to the pairing command');
+	ok(pairAt < enableAt, 'pair precedes enable — /repos itself runs the pairing command before the App install');
 });
 
 // The failure mode the old pin was actually guarding, restated correctly:
@@ -132,12 +150,12 @@ for (const daemon_status of ['online', 'offline']) {
 // The predicate must be an allowlist of the two known-paired values, not a
 // blocklist of 'missing' — a value the backend never sends (a future status,
 // a malformed payload) is not evidence of pairing, and must not fail open
-// and hide step 03 the same way `!== 'missing'` used to.
+// and hide the pairing step the same way `!== 'missing'` used to.
 test('an unrecognized daemon_status does not count as paired', async () => {
 	const html = await renderColdStart([repo({ daemon_status: 'weird' })]);
 	ok(html.includes('the cold start'), 'an unknown status is not silently treated as paired');
 	ok(html.includes('nothing is paired yet'));
-	ok(html.includes('pair the daemon'), 'step 03 still renders');
+	ok(html.includes('pair the daemon'), 'the pairing step still renders');
 });
 
 // The other half of the regression: an account that already installed the
