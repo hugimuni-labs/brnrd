@@ -85,3 +85,62 @@ def test_signal_setup_saves_api_url_number_and_paired_sender(tmp_path, monkeypat
             },
         ),
     ]
+
+
+# ── One list of gates, owned by one module (2026-08-05) ──────────────────
+
+
+def test_the_cli_does_not_keep_its_own_list_of_gates():
+    """`gates.BUILTIN_GATES` owns the set; the CLI derives it.
+
+    Both files used to carry the same five-name literal *and* a comment
+    calling itself the single source of truth for it. They agreed only
+    because a human kept them agreeing — the property a derived name does
+    not need. Asks the owning module rather than re-listing the members,
+    so a gate added there and forgotten here fails instead of vanishing.
+    """
+    from brr import cli
+    from brr import gates
+
+    assert cli.GATES is gates.BUILTIN_GATES
+    # Sanity: a rename that emptied the set would make every assertion in
+    # this file pass over nothing.
+    assert len(gates.BUILTIN_GATES) >= 5
+
+
+def test_every_gate_the_cli_offers_can_actually_be_loaded():
+    """The help string and the dispatcher answer for the same population."""
+    from brr import cli
+
+    for name in cli.GATES:
+        module = cli._load_gate(name)
+        assert hasattr(module, "auth"), name
+        assert hasattr(module, "bind"), name
+
+
+def test_a_channel_that_is_not_a_gate_gets_a_pointer_not_a_denial():
+    """WhatsApp is publicly listed as supported and has no gate module.
+
+    `brnrd gate setup whatsapp` is the command a user who reads the support
+    matrix will type. Answering "unknown gate" is true of the code and false
+    of the product.
+    """
+    import pytest
+
+    from brr import cli, support_matrix
+
+    slugs = {door.slug for door in support_matrix.DOORS}
+    # The premise, asserted rather than remembered: whatsapp is advertised.
+    assert "whatsapp" in slugs
+    assert "whatsapp" not in cli.GATES
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli._load_gate("whatsapp")
+    message = str(excinfo.value)
+    assert "cloud" in message
+    assert "unknown gate" not in message
+
+    # A name that is neither a gate nor a known channel still says so plainly.
+    with pytest.raises(SystemExit) as excinfo:
+        cli._load_gate("carrier-pigeon")
+    assert "unknown gate" in str(excinfo.value)

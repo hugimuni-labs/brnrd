@@ -105,7 +105,7 @@ def register(
     *parent_run_id* / *is_subspawn* mirror the same fields already carried
     on the closed-run ledger row (``run_ledger.py``) — a concurrent
     ``spawn:`` child sets both while it's still live, so the live-runs
-    dashboard view can tell a worker-stack child apart from a resident
+    dashboard view can tell a strand-stack child apart from a resident
     thought at the same joining key the ledger already uses, rather than
     only after the run closes (kb/design-multi-workstream-concurrency.md
     "Ranked moves" #1).

@@ -96,28 +96,28 @@ def test_worker_is_never_told_to_answer_the_residents_queue() -> None:
     twelve of the user's messages to the resident, in the resident's thread,
     with no context for any of them.
 
-    ``worker.md`` says the spawning conversation "is not yours to hold or
+    ``strand.md`` says the spawning conversation "is not yours to hold or
     extend" — in prose, *below* the kernel.  The kernel won.  Which is the boot
     thesis confirmed from its ugly end: **the imperative list at the hot slot is
     what gets acted on; the prose contract beneath it is what gets skimmed.**
     """
     from brr.prompts import _build_orientation
 
-    def actions(*, is_worker: bool) -> list[str]:
+    def actions(*, is_strand: bool) -> list[str]:
         return [
             s.action
             for s in _build_orientation(
                 is_daemon=True,
-                is_worker=is_worker,
+                is_strand=is_strand,
                 environment="worktree",
                 pending_count=12,
                 has_event_body=True,
             )
         ]
 
-    assert not any("queued event" in a for a in actions(is_worker=True))
+    assert not any("queued event" in a for a in actions(is_strand=True))
     # …and the resident still gets it: the fix is a gate, not a deletion.
-    assert any("queued event" in a for a in actions(is_worker=False))
+    assert any("queued event" in a for a in actions(is_strand=False))
 
 
 # ── Continuity ────────────────────────────────────────────────────────────────

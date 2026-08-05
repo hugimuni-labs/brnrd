@@ -95,7 +95,7 @@ in this change — named so the gap has one place to live.
 
 ### `await:` — a select, not a sleep (#959)
 
-The measurement this closes: a resident waiting on a dispatched worker or a
+The measurement this closes: a resident waiting on a dispatched strand or a
 background gate wrote `until <condition>; do sleep 25; done` as one shell
 call. By the older liveness contract that "survives the closeout" —
 `.keepalive` was armed, the thought never ended — but it emitted **zero tool
@@ -166,9 +166,10 @@ never the multi-minute blind stretch a hand-rolled shell loop can produce.
 
 **v1 is the verb and the hold path only.** `await:` never ends this run to
 service a wait — it holds the slot, the way `.keepalive` always has. A
-`worker: true` (concurrent spawn) run may not arm one: the hold is a
-resident-level cost decision, and a worker has no business spending its
-parent's slot on its own wait. Malformed input (no `timeout:`, an
+`strand: true` (concurrent spawn; `worker: true` is the honored legacy
+spelling) run may not arm one: the hold is a resident-level cost decision,
+and a strand has no business spending its parent's slot on its own wait.
+Malformed input (no `timeout:`, an
 unrecognised condition) is dropped to `notices`, same as any other verb.
 
 {{BODY verbatim: prompts/identity-core.md}}
@@ -252,7 +253,7 @@ source manifest:
   ✓ Working register (weave.md)                                product      contract     [bytes]  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Working register, worked example (register.md)             product      contract     [bytes]  {PACKAGE_ROOT}/prompts/register.md  [mtime]
   ✓ Daemon mechanics (daemon-substrate.md)                     product      substrate    [bytes]  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
-  ✓ Portal verb grammar (`await:` / `brnrd do`, docs portals)  product      substrate      7,441  {PACKAGE_ROOT}/docs/portals.md  [mtime]
+  ✓ Portal verb grammar (`await:` / `brnrd do`, docs portals)  product      substrate      7,488  {PACKAGE_ROOT}/docs/portals.md  [mtime]
   · diffense review-pack prompt                                product      config             0  {PACKAGE_ROOT}/prompts/diffense.md  [mtime]
   · Introspection dev-mode invitation                          product      config             0  {PACKAGE_ROOT}/prompts/introspection.md  [mtime]
   ✓ Resident identity core                                     product      identity     [bytes]  {PACKAGE_ROOT}/prompts/identity-core.md  [mtime]
@@ -270,8 +271,8 @@ source manifest:
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
 
 cost ledger:
-  contract      [bytes] B  [pct]
   substrate     [bytes] B  [pct]
+  contract      [bytes] B  [pct]
   identity      [bytes] B  [pct]
   runtime       [bytes] B  [pct]
   surface       [bytes] B  [pct]

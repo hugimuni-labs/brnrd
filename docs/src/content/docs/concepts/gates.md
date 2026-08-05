@@ -8,6 +8,13 @@ Slack, GitHub, Signal, and the managed cloud path carry requests in and
 replies out. The dashboard is another way to watch and steer the same local
 work.
 
+**Gate and channel are not the same list.** A gate is a thing brnrd runs — it
+polls, authorizes, and writes events; `brnrd gate list` names the five. A
+channel is what you actually message from, and one gate can carry several:
+the managed cloud gate carries Telegram *and* WhatsApp. So WhatsApp is a
+supported channel with no gate of its own, and Telegram can reach you two
+ways — direct (a bot token on your machine) or managed (through brnrd.dev).
+
 While a run is active, its portals carry the live progress card, interim
 replies, follow-up messages, and final handoffs. That makes a long task
 observable and correctable instead of silent.
@@ -23,7 +30,8 @@ a person; Slack still binds it to the configured channel.
 | Self-hosted Slack | Any member of the polled channel. |
 | Self-hosted Signal | The paired number plus explicitly allowlisted numbers. Any other sender, and every group message, is denied. |
 | GitHub (self-hosted) | Logins with `write`, `maintain`, or `admin` permission, plus explicitly allowlisted logins. Public commenters and read-only users are denied. |
-| GitHub (managed) | Addressed comments require GitHub's signed `OWNER`, `MEMBER`, or `COLLABORATOR` author association, or an explicitly allowlisted login. Applying the `brnrd` label is the universal assignment signal. Assigning an issue or pull request to the optional marker account is also a summon, and so is requesting a review from it on a pull request. |
+| GitHub (managed) | The same population as self-hosted: logins with `write`, `maintain`, or `admin` permission, plus explicitly allowlisted logins. GitHub's signed author association is read first as a cheap refusal — outside `OWNER`, `MEMBER`, `COLLABORATOR` the answer is no without an API call — and `OWNER` is the one association that carries its own answer. A permission lookup that fails is denied, never assumed. Applying the `brnrd` label is the universal assignment signal. Assigning an issue or pull request to the optional marker account is also a summon, and so is requesting a review from it on a pull request. Those three triage signals are not permission-checked; see [Security & privacy](../../security/). |
+| Managed WhatsApp | The paired number. WhatsApp is not a gate you run: it arrives on the managed cloud lane, so `brnrd gate setup whatsapp` has nothing to configure — connect the number on brnrd.dev and pair the repo with `brnrd gate setup cloud`. |
 
 The operating rules follow from that boundary:
 
