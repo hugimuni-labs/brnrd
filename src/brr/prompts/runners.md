@@ -1,6 +1,6 @@
 ---
 claude:
-  cmd: 'claude --print --output-format json --dangerously-skip-permissions --setting-sources local --system-prompt "You are a brnrd runner. Follow the supplied prompt and operate on the files available in the working directory."'
+  cmd: 'claude --print --output-format json --dangerously-skip-permissions --setting-sources local --strict-mcp-config --system-prompt "You are a brnrd runner. Follow the supplied prompt and operate on the files available in the working directory."'
   hooks: claude
   provider: anthropic
   owner: user
@@ -115,6 +115,43 @@ via `runner.clean_runner_environ()`, so hooks fire as they would for a normal
 top-level run. `--setting-sources local` is kept for settings **isolation**: it
 excludes the user's global and the project's committed settings without the
 collateral damage of `--safe-mode`.
+
+## The user's own MCP servers
+
+brnrd owns no MCP code and blocks nothing on principle (`decision-mcp-stance.md`:
+never build, don't block). What each Shell does with the *user's* MCP config is
+still part of the runner contract, because it decides the run's tool surface —
+and the two Shells answer differently.
+
+- **claude — isolated, and now by a flag that says so.**
+  `--strict-mcp-config` ignores every MCP configuration the flags do not name;
+  with no `--mcp-config` beside it, that is all of them. Measured on Claude Code
+  2.1.220: a user-scope server in `.claude.json` and a project-scope `.mcp.json`
+  server each load by default, and neither loads under this flag.
+  `--setting-sources local` happens to exclude both scopes as well — which is
+  exactly why the explicit flag is here. The MCP stance was riding a flag chosen
+  for settings isolation, so editing the settings stance would have silently
+  moved the MCP stance with it. Separated, the two are a clean pair:
+  `--strict-mcp-config` decides *whether* any MCP loads, `--mcp-config <file>`
+  decides *which* — measured to still load its named servers under
+  `--setting-sources local` and under `--strict-mcp-config` both. So a future
+  opt-in names a file; it never has to reopen settings isolation to do it.
+  (`--bare`, on `claude-bare-api-only`, already disables MCP with every other
+  customization.)
+- **codex — inherited, and there is no flag to change that.** `codex exec` reads
+  `~/.codex/config.toml`, `mcp_servers` included, and starts those servers.
+  Measured: `-c mcp_servers={}` merges rather than replaces — the servers still
+  spawn — and `--disable` addresses features, not MCP. The only mechanism that
+  isolates a codex run is a brnrd-owned `CODEX_HOME` (verified working with the
+  real `auth.json` symlinked in and a minimal `config.toml`). That is code, not
+  a flag.
+
+So a run's MCP tool surface currently depends on which body the wake was given.
+That is **known and unresolved**, not a chosen default: #853 carries the
+measured options, and `design-workflow-fabric.md` holds the declare-once /
+project-per-Shell shape that should own the answer. Whichever way it settles,
+a claude run's answer is written in the flags above; a codex run's answer needs
+a `CODEX_HOME` before it can be written at all.
 
 These bundled profiles are defaults, not the operator's source of truth. To
 manage your own, create `runners.md` in the **daemon-owned account home**
