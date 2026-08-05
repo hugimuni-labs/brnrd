@@ -145,31 +145,53 @@
 			<span class="flex min-w-0 items-baseline gap-1.5 text-amber-200">
 				{#if face}<span aria-hidden="true" style={`color: ${face.color}`}>{face.glyph}</span>{/if}
 				<span class="max-w-[26ch] truncate text-[11px]">{headRun.label}</span>
-				{#if restFrame}
-					<!-- THE FACE IN THREE TENSES piece 1: the lead's mood, worn beside
-					     its name. Two glyphs share one grid cell so the swap between
-					     them is a hard cut (`layout.css`'s `steps()` keyframes), never a
-					     cross-fade; with no distinct blink frame this is just the rest
-					     glyph, still. -->
-					<span
-						class="relative inline-grid shrink-0 place-items-center font-mono whitespace-pre"
-						style={moodAccent ? `color: ${moodAccent}` : undefined}
-						title={mood ? `mood: ${mood.name}` : undefined}
-						aria-hidden="true"
-					>
-						<span class="[grid-area:1/1] {blinkFrame ? 'dock-mood-rest' : ''}">{restFrame}</span>
-						{#if blinkFrame}
-							<span class="[grid-area:1/1] dock-mood-blink">{blinkFrame}</span>
-						{/if}
-					</span>
-				{/if}
 			</span>
 			<!-- The tail stays the lead's, never the borrowed run's — these are
 			     true of the machine (what's burning, what else is), not of
 			     whichever run inspection is currently naming, and the machine
 			     must never read as having stopped being the machine underneath
 			     a borrowed face. -->
-			{#if head.clock && lead?.clock}<span class="text-amber-500/80">{lead.clock}</span>{/if}
+			{#if (head.clock && lead?.clock) || (head.mood && restFrame)}
+				<!-- THE FACE IN THREE TENSES piece 1: the lead's mood, paired with
+				     the clock as one unit — not mid-row with the name (his
+				     2026-08-05 read, sharpened against the actual screenshot: the
+				     face used to sit between the ellipsized name and the elapsed
+				     time, stealing width the truncating name needed and reading as
+				     part of it — "not in the middle there too"). A tighter `gap-1`
+				     than the row's own `gap-x-3` between segments is what makes this
+				     read as one paired unit trailing the name rather than two more
+				     entries in the row's list. Mood trails the clock rather than
+				     leading it: every leading glyph elsewhere on this line labels the
+				     text right after it (the identity face above, the lane's own
+				     rows), so a mood glyph in front of the clock would misread as
+				     describing the time instead of the run; placed after, it reads as
+				     a footnote on it instead — the same relationship `note` already
+				     has to `clock` one slot over. Gated on `head.mood`, the same
+				     predicate as `clock`: with the lane on screen (or a run
+				     focused/selected) `RunNodeInline`'s own `MoodChip` already carries
+				     this run's feeling one screen below, and a second reading here
+				     repeated it for no reason he could find one for. -->
+				<span class="flex items-baseline gap-1">
+					{#if head.clock && lead?.clock}<span class="text-amber-500/80">{lead.clock}</span>{/if}
+					{#if head.mood && restFrame}
+						<!-- Two glyphs share one grid cell so the swap between them is a
+						     hard cut (`layout.css`'s `steps()` keyframes), never a
+						     cross-fade; with no distinct blink frame this is just the rest
+						     glyph, still. -->
+						<span
+							class="relative inline-grid shrink-0 place-items-center font-mono whitespace-nowrap"
+							style={moodAccent ? `color: ${moodAccent}` : undefined}
+							title={mood ? `mood: ${mood.name}` : undefined}
+							aria-hidden="true"
+						>
+							<span class="[grid-area:1/1] {blinkFrame ? 'dock-mood-rest' : ''}">{restFrame}</span>
+							{#if blinkFrame}
+								<span class="[grid-area:1/1] dock-mood-blink">{blinkFrame}</span>
+							{/if}
+						</span>
+					{/if}
+				</span>
+			{/if}
 			{#if head.note && lead?.note}<span class="text-ink-quiet">{lead.note}</span>{/if}
 			{#if head.extra && burning.length > 1}<span class="text-amber-500/80"
 					>+{burning.length - 1}</span
