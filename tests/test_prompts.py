@@ -1356,7 +1356,7 @@ class TestPromptBuilding:
         # The fold-in contract names the frontmatter handle.
         assert "event: <id>" in prompt
         assert "Own every" in prompt
-        assert _says(prompt, "worker capacity and quota are healthy")
+        assert _says(prompt, "strand capacity and quota are healthy")
         assert "spawn:" in prompt
         assert "portal-state.json" in prompt
         assert "inbox.json" in prompt
@@ -1953,7 +1953,7 @@ class TestPromptBuilding:
         assert "linger" in prompt
         assert "delivered · attending" in prompt
         assert "backoff 30s → cap 240s" in prompt
-        assert _says(prompt, "worker capacity and quota are healthy")
+        assert _says(prompt, "strand capacity and quota are healthy")
         assert _says(prompt, "queue never starves")
 
 

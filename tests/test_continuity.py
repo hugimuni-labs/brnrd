@@ -96,7 +96,7 @@ def test_worker_is_never_told_to_answer_the_residents_queue() -> None:
     twelve of the user's messages to the resident, in the resident's thread,
     with no context for any of them.
 
-    ``worker.md`` says the spawning conversation "is not yours to hold or
+    ``strand.md`` says the spawning conversation "is not yours to hold or
     extend" — in prose, *below* the kernel.  The kernel won.  Which is the boot
     thesis confirmed from its ugly end: **the imperative list at the hot slot is
     what gets acted on; the prose contract beneath it is what gets skimmed.**
