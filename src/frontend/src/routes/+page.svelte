@@ -407,8 +407,7 @@
 				? machineDockVerdict({
 						home: machineSentinel.getBoundingClientRect().bottom,
 						dockTop: machineDockTop(railHeight, railCondensed),
-						docked: machineDocked,
-						railCondensed
+						docked: machineDocked
 					})
 				: false;
 		};

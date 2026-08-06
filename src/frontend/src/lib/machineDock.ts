@@ -254,13 +254,39 @@ export function machineDockTop(
  * the next tap is an ordinary fold rather than a second trip to where the
  * reader already is.
  *
- * Fixed 2026-08-06 (scroll coordination): The machine and rail scroll thresholds
- * must coordinate to prevent gaps when the rail condenses and to prevent machine
- * content scrolling under the rail when expanded. When rail is NOT condensed, use
- * much smaller slack so the machine docks early. When rail IS condensed, reduce
- * slack further because the rail's height change creates a layout shift that should
- * trigger docking. The coordinate system changes dramatically when the rail
- * condenses and a reserve spacer is inserted, so docking should respond immediately.
+ * #1169, 2026-08-06 — status, not a closed loop. A first pass (same date)
+ * narrowed the dock slack from 24px to 12px, which helped but left a real
+ * ~20px window where a sliver of the machine panel's expanded content
+ * poked out from behind the newly-docked summary bar. `railCondensed` was
+ * added to this function's `state` for a *second* pass at that gap and
+ * never read — an inline comment said as much ("available if
+ * state-specific hysteresis becomes needed") — dropped here as the dead
+ * parameter it was.
+ *
+ * Two follow-up fixes were tried and both were driven with Playwright
+ * against real scroll (mouse-wheel events, not `scrollTo` jumps) rather
+ * than trusted from the diff — and neither moved the measured transient at
+ * all: caching a "settled" height per rail state, then a `tick()` +
+ * `getBoundingClientRect()` read timed to the exact render that flips
+ * `railCondensed`. Both assumed the bug was `railHeight` (a
+ * `bind:clientHeight`, backed by a `ResizeObserver`) reading stale for one
+ * or a few ticks after `railCondensed` flips — a reasonable read of the
+ * reactivity model that turned out not to be what a real scroll gesture
+ * does: A/B screenshots against the pre-fix code showed the *same*
+ * multi-frame transient either way (max measured gap 121px pre-fix, 140px
+ * with the `tick()` version — noise, not a regression, but no fix either).
+ *
+ * The more likely mechanism, not yet tried: `position: sticky` does not
+ * retroactively re-stick an element the instant its `top` value shrinks —
+ * it only engages once continued scroll actually carries the element's
+ * in-flow position past the new threshold. `+page.svelte`'s `railReserve`
+ * spacer (which holds total document height constant across the rail's
+ * height change) is *itself* derived from the same lagging `railHeight`,
+ * so the machine sentinel's in-flow position likely has this same
+ * multi-frame settle baked into it independent of anything this function
+ * or its caller's `dockTop` math does. Worth a look before another attempt
+ * at `dockTop`: `railReserve = max(0, railFullHeight - railHeight)`,
+ * `+page.svelte`, a few lines below where `railHeight` is bound.
  */
 export const MACHINE_DOCK_SLACK_PX = 24;
 
@@ -271,25 +297,18 @@ export function machineDockVerdict(state: {
 	dockTop: number;
 	/** The verdict's own last answer. */
 	docked: boolean;
-	/** Whether the rail is condensed (affects hysteresis). */
-	railCondensed?: boolean;
 }): boolean {
 	if (!Number.isFinite(state.home) || !Number.isFinite(state.dockTop)) return false;
 
-	// Coordinate machine docking with rail's scroll behavior. The rail uses
-	// hysteresis to avoid flicker, and the machine should dock with similar
-	// responsiveness. When already docked, un-dock conservatively (at dockTop).
-	// When not docked, use a single small slack value: the 24px sentinel height
-	// itself. This matches the scale of the form change (head line height ~24px)
-	// and ensures the machine docks before its content scrolls under the rail.
-	//
-	// The railCondensed parameter is available if state-specific hysteresis
-	// becomes needed, but a constant slack matching the sentinel height works
-	// across both rail states because the viewport positions adjust naturally.
-	const dockSlack = MACHINE_DOCK_SLACK_PX / 2; // 12px: half the sentinel height
+	// When already docked, un-dock conservatively (at dockTop). When not
+	// docked, dock at a small slack before `dockTop` — the 12px trigger
+	// stays on before the sentinel edge, matching half the 24px sentinel
+	// height, so the machine docks before its content scrolls under the
+	// rail rather than exactly as it starts to.
+	const dockSlack = MACHINE_DOCK_SLACK_PX / 2;
 
-	if (state.docked) return state.home < state.dockTop; // Un-dock when home rises to dockTop
-	return state.home < state.dockTop - dockSlack; // Dock with reduced but non-zero slack
+	if (state.docked) return state.home < state.dockTop;
+	return state.home < state.dockTop - dockSlack;
 }
 
 /**
