@@ -114,6 +114,15 @@
 						· {seatsLeft} left
 					{/if}
 				</p>
+				<!-- Deliberately not a struck-through "was" price: nobody has ever
+				     been charged {publicMonthly}, so crossing it out would borrow
+				     the discount convention for a number that is a *future*
+				     price for a *different* cohort, not a past one. See
+				     decision-pricing-shape.md → "Early-adopter price step" and
+				     subject-legal-compliance.md → "Price display". -->
+				<p class="mt-1 font-mono text-[11px] text-ink-quiet">
+					public price after this cohort: {publicMonthly}/mo
+				</p>
 				<p class="mt-1 font-mono text-[11px] text-ink-quiet">{TAX_NOTE}</p>
 			{:else}
 				<p class="eyebrow">subscriber</p>
