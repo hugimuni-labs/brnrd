@@ -263,6 +263,31 @@ def _save_state(
     )
 
 
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def local_repo_identity(repo_root: Path) -> str:
+    """Synthesize a forge-shaped identity for a checkout with no forge.
+
+    ``owner/name`` (`_repo_parts` on the backend requires exactly that shape,
+    and ``local`` reads honestly as the owner — this repo's forge *is* the
+    machine it lives on). ``name`` is the folder's own slug plus a 6-hex
+    suffix from the resolved absolute path — always, not only on a
+    collision, because the client has no way to ask the server "does this
+    name already exist under a *different* path" without a round trip, and a
+    suffix that only sometimes appears is a name that silently changes shape
+    out from under a repo that was fine yesterday. Stable across repeated
+    pairings of the same folder (that's the whole point — a reconnect must
+    resolve to the same ``Repo`` row); two folders that happen to share a
+    basename never alias into one (#1167 backchannel follow-up: "local forge
+    is fine" — this is the shape that makes it actually safe to be fine).
+    """
+    resolved = repo_root.resolve()
+    slug = _SLUG_RE.sub("-", resolved.name.lower()).strip("-") or "repo"
+    digest = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:6]
+    return f"local/{slug}-{digest}"
+
+
 def _repo_capabilities(brr_dir: Path) -> dict:
     repo_root = brr_dir.parent
     caps: dict[str, object] = {"repo_root": str(repo_root)}
@@ -275,6 +300,20 @@ def _repo_capabilities(brr_dir: Path) -> dict:
                 repo_full_name = parse_origin_url(url)
                 if repo_full_name:
                     caps["repo_full_name"] = repo_full_name
+                    caps["forge"] = "github"
+        if "repo_full_name" not in caps and gitops.is_working_tree(repo_root):
+            # No remote, or a remote whose URL isn't GitHub-shaped, but this
+            # *is* a real checkout: it still has an identity, just not one
+            # hosted anywhere brnrd knows how to name — synthesize the local
+            # one rather than sending nothing and falling back to the
+            # dropdown-of-already-connected-repos flow (the one genuine dead
+            # end #1167 left open: "Zero code path exists to connect a
+            # bare/no-remote folder right now"). A directory that is not a
+            # git checkout at all gets no synthesized identity — that
+            # fallback is still correct, and still the only path, for a
+            # `brnrd account connect` run outside any repo.
+            caps["repo_full_name"] = local_repo_identity(repo_root)
+            caps["forge"] = "local"
         caps["branch"] = gitops.current_branch(repo_root)
         default_branch = gitops.default_branch(repo_root)
         if default_branch:
@@ -389,7 +428,24 @@ def propose_config_change(
 
 
 def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON_NAME, poll_interval_s: float = 2.0, timeout_s: float = 600.0, out: Callable[[str], None] = print) -> dict:
-    pair = _request(brnrd_url, "POST", "/v1/accounts/pair")
+    # Sent unauthenticated, before any token exists — this is what lets the
+    # approval page lead with "connect <this repo>" instead of a blind
+    # dropdown of everything the account already has enabled (the "enable a
+    # repository" website step this was built to retire). `repo_root` never
+    # leaves this machine: only the fields the server schema accepts.
+    initial_caps = _repo_capabilities(brr_dir)
+    pair_body = {
+        k: v
+        for k, v in {
+            "repo_full_name": initial_caps.get("repo_full_name"),
+            "git_remote": initial_caps.get("git_remote"),
+            "branch": initial_caps.get("branch"),
+            "default_branch": initial_caps.get("default_branch"),
+            "forge": initial_caps.get("forge"),
+        }.items()
+        if isinstance(v, str) and v
+    }
+    pair = _request(brnrd_url, "POST", "/v1/accounts/pair", json=pair_body or None)
     out(f"[brnrd] Approve this daemon at: {pair['pair_url']}")
     deadline = time.monotonic() + timeout_s
     while True:

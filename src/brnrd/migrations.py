@@ -37,6 +37,8 @@ def run_startup_migrations(engine: Engine) -> None:
             _migrate_repos(conn)
         if _table_exists(conn, "terms_acceptances") and _table_exists(conn, "accounts"):
             _migrate_terms_acceptances(conn)
+        if _table_exists(conn, "pair_requests"):
+            _migrate_pair_requests(conn)
 
 
 def _table_exists(conn: Connection, table_name: str) -> bool:
@@ -229,6 +231,15 @@ def _migrate_repos(conn: Connection) -> None:
     conn.execute(text("ALTER TABLE repos ADD COLUMN IF NOT EXISTS github_bot_collaborator BOOLEAN"))
     conn.execute(text("ALTER TABLE repos ADD COLUMN IF NOT EXISTS github_bot_notice TEXT"))
     conn.execute(text("ALTER TABLE repos ADD COLUMN IF NOT EXISTS github_bot_checked_at TIMESTAMP"))
+
+
+def _migrate_pair_requests(conn: Connection) -> None:
+    # See models.PairRequest.capabilities_json — carries the connecting
+    # daemon's own repo detection across the pair handshake so the browser
+    # approval page can bind (or create) the right repo without a dropdown.
+    # NULL on existing/in-flight rows: they predate the column and fall back
+    # to the old pick-from-a-list behaviour, same as always.
+    conn.execute(text("ALTER TABLE pair_requests ADD COLUMN IF NOT EXISTS capabilities_json TEXT"))
 
 
 def _migrate_terms_acceptances(conn: Connection) -> None:
