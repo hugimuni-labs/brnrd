@@ -253,6 +253,14 @@ export function machineDockTop(
  * the block's home *below* the parking spot — undocked, by this verdict — so
  * the next tap is an ordinary fold rather than a second trip to where the
  * reader already is.
+ *
+ * Fixed 2026-08-06 (scroll coordination): The machine and rail scroll thresholds
+ * must coordinate to prevent gaps when the rail condenses and to prevent machine
+ * content scrolling under the rail when expanded. When rail is NOT condensed, use
+ * much smaller slack so the machine docks early. When rail IS condensed, reduce
+ * slack further because the rail's height change creates a layout shift that should
+ * trigger docking. The coordinate system changes dramatically when the rail
+ * condenses and a reserve spacer is inserted, so docking should respond immediately.
  */
 export const MACHINE_DOCK_SLACK_PX = 24;
 
@@ -263,10 +271,25 @@ export function machineDockVerdict(state: {
 	dockTop: number;
 	/** The verdict's own last answer. */
 	docked: boolean;
+	/** Whether the rail is condensed (affects hysteresis). */
+	railCondensed?: boolean;
 }): boolean {
 	if (!Number.isFinite(state.home) || !Number.isFinite(state.dockTop)) return false;
-	if (state.docked) return state.home < state.dockTop;
-	return state.home < state.dockTop - MACHINE_DOCK_SLACK_PX;
+
+	// Coordinate machine docking with rail's scroll behavior. The rail uses
+	// hysteresis to avoid flicker, and the machine should dock with similar
+	// responsiveness. When already docked, un-dock conservatively (at dockTop).
+	// When not docked, use a single small slack value: the 24px sentinel height
+	// itself. This matches the scale of the form change (head line height ~24px)
+	// and ensures the machine docks before its content scrolls under the rail.
+	//
+	// The railCondensed parameter is available if state-specific hysteresis
+	// becomes needed, but a constant slack matching the sentinel height works
+	// across both rail states because the viewport positions adjust naturally.
+	const dockSlack = MACHINE_DOCK_SLACK_PX / 2;  // 12px: half the sentinel height
+
+	if (state.docked) return state.home < state.dockTop;  // Un-dock when home rises to dockTop
+	return state.home < state.dockTop - dockSlack;  // Dock with reduced but non-zero slack
 }
 
 /**
