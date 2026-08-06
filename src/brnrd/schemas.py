@@ -73,6 +73,11 @@ class PairStartRequest(BaseModel):
     git_remote: str = ""
     branch: str = ""
     default_branch: str = ""
+    # "github" (the historical implicit default) or "local" — a checkout
+    # with no forge behind it, `owner/name` synthesized client-side from the
+    # folder (`gates.cloud.local_repo_identity`). Never trusted alone: it
+    # only ever labels a `repo_full_name` sent in the same payload.
+    forge: str = ""
 
 
 class PairStarted(BaseModel):

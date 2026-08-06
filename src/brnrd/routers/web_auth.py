@@ -25,7 +25,7 @@ from brnrd.models import Account, ConfigChangeRequest, PairRequest, Repo, TermsA
 from brnrd.routers.accounts import SESSION_TTL, account_for_github_identity, issue_session_token
 from brnrd.routers.config_approval import decide_core as decide_config_change
 from brnrd.routers.github_app import sync_app_installations_for_account
-from brnrd.routers.pairing import approve_core, pair_suggested_repo_full_name, telegram_pair_core
+from brnrd.routers.pairing import approve_core, pair_suggested_forge, pair_suggested_repo_full_name, telegram_pair_core
 
 from ._session import (
     _account_id,
@@ -389,12 +389,14 @@ def connect_context_api(code: str, request: Request, db: Session = Depends(get_d
     # the frontend falls back to picking from `repos` in every such case,
     # unchanged from before this existed.
     suggested = pair_suggested_repo_full_name(pair) if pair is not None else ""
+    suggested_forge = pair_suggested_forge(pair) if pair is not None else ""
     return JSONResponse(
         {
             "code": code,
             "status": _pair_code_status(db, code, pair),
             "repos": [{"id": repo.id, "repo_full_name": repo.repo_full_name} for repo in repos],
             "suggested_repo_full_name": suggested,
+            "suggested_forge": suggested_forge,
         }
     )
 

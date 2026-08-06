@@ -513,6 +513,18 @@ def shared_brr_dir(repo_root: Path) -> Path:
     return common_dir.parent / ".brr"
 
 
+def is_working_tree(path: Path) -> bool:
+    """Whether *path* sits inside a git working tree at all.
+
+    Public wrapper over :func:`_is_working_tree` — `gates.cloud` needs this
+    predicate to tell "no remote, but still a real checkout" (worth a
+    synthesized local identity) apart from "not a git checkout at all"
+    (nothing to synthesize one from — the pre-existing no-capabilities
+    fallback is correct there, unchanged).
+    """
+    return _is_working_tree(path)
+
+
 def _is_working_tree(path: Path) -> bool:
     """Return True when git considers *path* to sit in a working tree.
 

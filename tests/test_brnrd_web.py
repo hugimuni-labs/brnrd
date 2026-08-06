@@ -640,6 +640,68 @@ def test_connect_approve_with_no_repo_id_and_no_capabilities_is_a_clear_dead_end
     assert "Couldn't tell which repo" in approve.json()["notice"]
 
 
+def test_connect_context_reports_suggested_forge_from_pair_capabilities(client, monkeypatch):
+    """2026-08-06, #1167 backchannel follow-up: a checkout with no GitHub
+    remote pairs with a synthesized `local/<slug>-<hash>` identity
+    (`gates.cloud.local_repo_identity`) and its own `forge` label — the
+    approval page uses this to say "local checkout" instead of letting the
+    synthesized name read as a real GitHub org."""
+    _login_web(client, monkeypatch)
+    pair = client.post(
+        "/v1/accounts/pair", json={"repo_full_name": "local/laptop-a1b2c3", "forge": "local"}
+    ).json()
+    r = client.get(f"/v1/connect/{pair['pair_code']}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["suggested_repo_full_name"] == "local/laptop-a1b2c3"
+    assert body["suggested_forge"] == "local"
+
+
+def test_connect_context_reports_no_forge_for_pairs_that_predate_it(client, monkeypatch):
+    """A pair sent with no `forge` field (the pre-2026-08-06 CLI, or a
+    GitHub-suggested repo, which never set the capability to begin with)
+    reports `""`, never a guessed value."""
+    _login_web(client, monkeypatch)
+    pair = client.post("/v1/accounts/pair", json={"repo_full_name": "Gurio/newbox"}).json()
+    body = client.get(f"/v1/connect/{pair['pair_code']}").json()
+    assert body["suggested_forge"] == ""
+
+
+def test_connect_approve_with_no_repo_id_creates_a_local_forge_repo(client, monkeypatch):
+    """The auto-resolve-and-create path threads `forge` through, not just
+    `repo_full_name` — a repo paired with `forge: "local"` must land in the
+    database that way, not silently default back to "github"."""
+    _login_web(client, monkeypatch)
+    pair = client.post(
+        "/v1/accounts/pair", json={"repo_full_name": "local/laptop-a1b2c3", "forge": "local"}
+    ).json()
+    approve = client.post(f"/v1/connect/{pair['pair_code']}", json={})
+    assert approve.status_code == 200
+    with client.app.state.SessionLocal() as db:
+        repo = db.execute(
+            select(Repo).where(Repo.repo_full_name == "local/laptop-a1b2c3")
+        ).scalar_one()
+        assert repo.forge == "local"
+        assert repo.repo_owner == "local"
+        assert repo.repo_name == "laptop-a1b2c3"
+
+
+def test_connect_approve_rejects_an_unrecognised_forge_label(client, monkeypatch):
+    """A `forge` outside the known vocabulary falls back to "github" rather
+    than persisting an arbitrary word — the shape `_repo_parts` enforces
+    (`owner/name`) is necessary but not sufficient; the label itself is
+    checked against a closed set."""
+    _login_web(client, monkeypatch)
+    pair = client.post(
+        "/v1/accounts/pair", json={"repo_full_name": "Weird/box", "forge": "bitbucket"}
+    ).json()
+    approve = client.post(f"/v1/connect/{pair['pair_code']}", json={})
+    assert approve.status_code == 200
+    with client.app.state.SessionLocal() as db:
+        repo = db.execute(select(Repo).where(Repo.repo_full_name == "Weird/box")).scalar_one()
+        assert repo.forge == "github"
+
+
 def test_connect_context_reports_expired_code(client, monkeypatch):
     _account_and_repo(client)
     _login_web(client, monkeypatch)

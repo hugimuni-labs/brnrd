@@ -19,6 +19,7 @@ function ctx(overrides: Partial<ConnectContext> = {}): ConnectContext {
 		status: 'pending',
 		repos: [REPO],
 		suggested_repo_full_name: '',
+		suggested_forge: '',
 		...overrides
 	};
 }

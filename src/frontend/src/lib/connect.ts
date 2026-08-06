@@ -21,6 +21,12 @@ export interface ConnectContext {
 	// reader to pick one from `repos` — the retired "enable a repository"
 	// website click no longer has to have already happened.
 	suggested_repo_full_name: string;
+	// "github" or "local" for the suggestion above — "" alongside an empty
+	// suggestion, or on a pair code old enough to predate this field. A
+	// local checkout has no forge behind `owner/name`; the page says so
+	// rather than letting a synthesized `local/foo-a1b2c3` read as a real
+	// GitHub org.
+	suggested_forge: string;
 }
 
 export interface TelegramPair {
