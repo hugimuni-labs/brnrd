@@ -1014,11 +1014,21 @@ def add_worktree(
         raise RuntimeError(detail or f"failed to add worktree {worktree_path}")
 
 
-def fetch_branch(repo_root: Path, remote: str, branch: str) -> bool:
-    """Fetch *branch* from *remote*, updating its remote-tracking ref. Best-effort."""
+def fetch_branch(
+    repo_root: Path, remote: str, branch: str,
+    *, env: dict[str, str] | None = None,
+) -> bool:
+    """Fetch *branch* from *remote*, updating its remote-tracking ref. Best-effort.
+
+    *env* overrides the default :func:`explicit_repo_env` passthrough — pass
+    :func:`runner.clean_runner_environ` for a daemon-direct call against a
+    GitHub remote, so it authenticates the same way a run subprocess's git
+    calls already do regardless of the remote's literal URL (2026-08-06:
+    the same-shaped gap in :func:`sync.refresh_before_run`'s fetch call).
+    """
     if not remote or not branch:
         return False
-    result = _git(repo_root, "fetch", remote, branch, check=False)
+    result = _git(repo_root, "fetch", remote, branch, check=False, env=env)
     return result.returncode == 0
 
 
@@ -1028,11 +1038,13 @@ def push_branch(
     branch: str,
     *,
     set_upstream: bool = True,
+    env: dict[str, str] | None = None,
 ) -> PushResult:
     """Push local *branch* to *remote* and classify any failure.
 
     ``PushResult`` keeps the old boolean contract: successful results are
-    truthy and every failure is falsey.
+    truthy and every failure is falsey. *env* overrides the default
+    :func:`explicit_repo_env` passthrough — see :func:`fetch_branch`.
     """
     configured_url = remote_url(repo_root, remote) or remote
     transport = _remote_transport(configured_url)
@@ -1047,7 +1059,7 @@ def push_branch(
     if set_upstream:
         args.append("-u")
     args += [remote, branch]
-    result = _git(repo_root, *args, check=False)
+    result = _git(repo_root, *args, check=False, env=env)
     if result.returncode == 0:
         return PushResult(
             PushStatus.OK,
