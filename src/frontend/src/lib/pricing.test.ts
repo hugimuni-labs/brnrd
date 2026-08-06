@@ -44,6 +44,21 @@ test('every paid tier on /pricing carries a tax disclosure', async () => {
 	ok(html.includes(TAX_NOTE), 'a paid price rendered without the tax note');
 });
 
+test('the supporter tier names the public price without a strikethrough', async () => {
+	// The public price is a real number nobody has been charged yet — it's a
+	// future price for a later cohort, not a past one. Rendering it as
+	// line-through/`<del>` would borrow the "was $X, now $Y" discount
+	// convention for a figure that was never a "was" price. Property, not
+	// wording: assert the number appears and the strikethrough markup
+	// doesn't, so a future redesign can reword this without the guard
+	// firing on prose alone — but a reintroduced `line-through`/`<del>`
+	// still trips it.
+	const html = await renderRoute();
+	ok(html.includes('$7'), 'the public price never rendered — the guard below asserts nothing');
+	ok(!/<del[\s>]/i.test(html), 'the public price rendered inside a <del> element');
+	ok(!/\bline-through\b/.test(html), 'the public price rendered with strikethrough styling');
+});
+
 test('the tax note names both a tax and a rate', () => {
 	// The property, not the wording: copy gets rewritten and a test that pins
 	// a sentence fires on a reflow instead of on a real removal.
