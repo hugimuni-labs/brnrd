@@ -2251,6 +2251,81 @@ def test_request_gives_up_after_retry_budget(monkeypatch):
         cloud._request("http://brnrd", "GET", "/v1/x")
 
 
+def test_request_raised_error_carries_status_code(monkeypatch):
+    """A caller needs to tell *which* non-2xx this was — see the 410
+    pair-expiry handling in ``connect()`` below — without parsing the
+    message text (verify by behaviour, not by string-matching a shape
+    meant for humans)."""
+    class _Resp:
+        status_code = 410
+        text = '{"detail":"pair code expired"}'
+        content = b'{"detail":"pair code expired"}'
+
+    monkeypatch.setattr(cloud._SESSION, "request", lambda *a, **k: _Resp())
+    with pytest.raises(RuntimeError) as exc_info:
+        cloud._request("http://brnrd", "GET", "/v1/x")
+    assert exc_info.value.status_code == 410
+
+
+def test_connect_reports_expired_pair_code_as_a_clean_retry_message(tmp_path, monkeypatch):
+    """Live 2026-08-06: the approval page's own "connect a repository"
+    detour (an old CLI with no repo of its own to suggest, nothing already
+    connected to fall back on) outlasted the server's pair-code TTL before
+    the reader ever got back to clicking approve. The poll loop then hit a
+    bare, uncaught traceback — ``RuntimeError: brnrd GET
+    /v1/accounts/pair/BR-XPWT -> 410: {"detail":"pair code expired"}`` —
+    because ``cmd_brnrd_connect`` only catches ``(CloudUnavailableError,
+    TimeoutError)``. The 410 now surfaces as the same clean, retriable
+    ``TimeoutError`` the client-side deadline below already raises."""
+    init_git_repo(tmp_path)
+    brr_dir = tmp_path / ".brr"
+    calls = []
+
+    def fake_request(base_url, method, path, **kwargs):
+        calls.append((method, path))
+        if method == "POST":
+            return {"pair_code": "BR-XPWT", "pair_url": "u", "poll_secret": "s"}
+        err = RuntimeError(
+            'brnrd GET /v1/accounts/pair/BR-XPWT -> 410: {"detail":"pair code expired"}'
+        )
+        err.status_code = 410
+        raise err
+
+    monkeypatch.setattr(cloud, "_request", fake_request)
+    with pytest.raises(TimeoutError, match="expired"):
+        cloud.connect(
+            brr_dir,
+            brnrd_url="http://brnrd.example",
+            poll_interval_s=0,
+            timeout_s=5,
+            out=lambda _msg: None,
+        )
+    assert ("GET", "/v1/accounts/pair/BR-XPWT") in calls
+
+
+def test_connect_reraises_non_expiry_errors_from_the_poll(tmp_path, monkeypatch):
+    """Only a 410 gets the friendly rewrite — any other failure (a real
+    5xx, say) still surfaces as-is rather than being misdiagnosed as an
+    expired pairing."""
+    init_git_repo(tmp_path)
+    brr_dir = tmp_path / ".brr"
+
+    def fake_request(base_url, method, path, **kwargs):
+        if method == "POST":
+            return {"pair_code": "BR-X", "pair_url": "u", "poll_secret": "s"}
+        raise RuntimeError("brnrd GET /v1/accounts/pair/BR-X -> 500: boom")
+
+    monkeypatch.setattr(cloud, "_request", fake_request)
+    with pytest.raises(RuntimeError, match="500"):
+        cloud.connect(
+            brr_dir,
+            brnrd_url="http://brnrd.example",
+            poll_interval_s=0,
+            timeout_s=5,
+            out=lambda _msg: None,
+        )
+
+
 def test_propose_config_change_reports_mint_failure(tmp_path, monkeypatch):
     """Connected-but-mint-failed returns {'error': ...} (not None): the
     daemon's user-facing park message must not tell a connected account to

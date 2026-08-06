@@ -78,3 +78,39 @@ test('the sync control is gated on github_sync_configured', () => {
 		/\{#if data\.github_sync_configured\}[\s\S]{0,1200}?action="\/api\/github\/sync"/;
 	ok(guardThenForm.test(src), 'the sync form sits inside a github_sync_configured guard');
 });
+
+// THE DEAD END WITH NOWHERE TO REPORT BACK, the /repos half
+// (`connectPage.test.ts` owns the link that sends readers here): a pending
+// daemon pairing that named no repo of its own used to strand the reader
+// on this page once they connected one — nothing pointed back, and the
+// pairing's server-side TTL kept ticking underneath them the whole time.
+test('a validated next= query param is read, and only a /connect/<code> shape is trusted', () => {
+	const src = source();
+	ok(
+		/searchParams\.get\('next'\)/.test(src),
+		'reads next= off the current URL, the same param /login already uses'
+	);
+	ok(
+		/\/\^\\\/connect\\\/\(\[A-Za-z0-9-\]\{1,40\}\)\$\//.test(src),
+		'validates next= against its own path shape before trusting it as a nav target — a query param is reader input, even for a client-side goto'
+	);
+});
+
+test('connecting a repo through the manual form returns to a pending pairing on success', () => {
+	const src = source();
+	const manualFn = src.match(/function connectManual\([\s\S]{0,700}?\n\t\}/);
+	ok(manualFn, 'connectManual exists');
+	ok(
+		/returnOnSuccess:\s*true/.test(manualFn![0]),
+		'the manual connect path opts into the post-success redirect — the one browser-side connect action left after 603d27fc retired the per-repo "enable" buttons'
+	);
+	const runActionStart = src.indexOf('async function runAction(');
+	ok(runActionStart >= 0, 'runAction exists');
+	const runActionFn = src.slice(runActionStart, runActionStart + 1200);
+	ok(
+		/returnOnSuccess && returnCode\)\s*\{\s*\n\s*await goto\(resolve\('\/connect\/\[code\]', \{ code: returnCode \}\)\)/.test(
+			runActionFn
+		),
+		'runAction actually navigates to returnTo on a successful, opted-in action'
+	);
+});

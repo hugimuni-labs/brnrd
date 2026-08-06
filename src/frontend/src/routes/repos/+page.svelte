@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import { goto } from '$app/navigation';
 	import { onMount, tick } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { resolve } from '$app/paths';
@@ -39,6 +40,22 @@
 	let confirmingDisconnect = $state<string | null>(null);
 	let manualRepo = $state('');
 	let manualBranch = $state('');
+
+	// A pending daemon pairing sent us here (`/connect/[code]`'s
+	// "connect a repository" dead end, #the-pairing-that-never-reported-
+	// back): that page's own approve click needs at least one connected
+	// repo to fall back to, and nothing used to point the reader back once
+	// they supplied one — they'd land here, connect a repo, and be
+	// stranded on /repos while the pairing's server-side TTL kept ticking
+	// underneath them. Shape-validated (own path, own alphabet) rather than
+	// trusted as a free-form redirect target — this is a same-origin client
+	// nav (`goto`), not a server 30x, but a query param is still reader
+	// input.
+	let returnCode = $derived.by(() => {
+		const raw = page.url.searchParams.get('next') ?? '';
+		const match = /^\/connect\/([A-Za-z0-9-]{1,40})$/.exec(raw);
+		return match ? match[1] : null;
+	});
 
 	// Clipboard for the "connect this repository" command (no-installation
 	// state, #1084/#1032 steer) — same copy/flash idiom ColdStart.svelte
@@ -212,13 +229,26 @@
 		}
 	}
 
-	async function runAction(label: string, action: () => Promise<RepoActionResponse>) {
+	async function runAction(
+		label: string,
+		action: () => Promise<RepoActionResponse>,
+		{ returnOnSuccess = false }: { returnOnSuccess?: boolean } = {}
+	) {
 		pendingAction = label;
 		try {
 			const result = await action();
 			actionResult = result;
 			if (result.ok) {
 				confirmingDisconnect = null;
+				// A pending pairing sent us here for exactly this: once a repo
+				// exists to connect to, its approval page can fall back off the
+				// "connect a repository" dead end onto the repo-picker path it
+				// always had. Skip the local refresh() in this case — we're
+				// leaving the page.
+				if (returnOnSuccess && returnCode) {
+					await goto(resolve('/connect/[code]', { code: returnCode }));
+					return;
+				}
 				await refresh();
 			}
 		} catch (e) {
@@ -242,18 +272,22 @@
 			actionResult = { ok: false, notice: 'Enter a repo as owner/name.' };
 			return;
 		}
-		runAction('connect:manual', async () => {
-			const result = await connectRepo({
-				repo_full_name: repo,
-				default_branch: manualBranch.trim(),
-				publish_layers: connectPublishLayersValue()
-			});
-			if (result.ok) {
-				manualRepo = '';
-				manualBranch = '';
-			}
-			return result;
-		});
+		runAction(
+			'connect:manual',
+			async () => {
+				const result = await connectRepo({
+					repo_full_name: repo,
+					default_branch: manualBranch.trim(),
+					publish_layers: connectPublishLayersValue()
+				});
+				if (result.ok) {
+					manualRepo = '';
+					manualBranch = '';
+				}
+				return result;
+			},
+			{ returnOnSuccess: true }
+		);
 	}
 
 	function pairTelegram(repo: ConnectedRepo) {
@@ -352,6 +386,17 @@
 	<p class="mt-2 max-w-2xl text-sm text-stone-400">
 		Connect repositories, pair local daemons, and route Telegram chats into brnrd.
 	</p>
+
+	{#if returnCode}
+		<!-- The other half of the fix: name the wait, don't just silently
+		     redirect underneath the reader. A pairing sent them here — connect
+		     a repo below (the manual form is the one path that stays entirely
+		     on this page) and they land back on the approval automatically. -->
+		<div class="subpanel mt-4 p-3 text-sm border-amber-900/60 text-amber-100">
+			A daemon pairing is waiting on a repo to connect to. Connect one below — the manual form
+			furthest down is fastest — and you'll return to approve it.
+		</div>
+	{/if}
 
 	{#if unauthenticated}
 		<p class="mt-6 text-sm text-stone-400">
