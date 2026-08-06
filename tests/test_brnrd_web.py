@@ -560,6 +560,84 @@ def test_connect_context_lists_repos_and_code_status(client, monkeypatch):
     unknown = client.get("/v1/connect/BR-NOPE")
     assert unknown.status_code == 200
     assert unknown.json()["status"] == "unknown"
+    assert unknown.json()["suggested_repo_full_name"] == ""
+
+
+def test_connect_context_reports_suggested_repo_from_pair_capabilities(client, monkeypatch):
+    """2026-08-06: a daemon pairing from inside a git checkout reports its
+    own repo (`gates.cloud._repo_capabilities`) on the initial
+    `POST /v1/accounts/pair` — the approval page leads with that instead of
+    a blind dropdown. The retired website "enable" click is what this
+    replaces; `repos` stays empty here on purpose (nothing connected yet)."""
+    _login_web(client, monkeypatch)
+    pair = client.post(
+        "/v1/accounts/pair", json={"repo_full_name": "Gurio/newbox", "branch": "main"}
+    ).json()
+    r = client.get(f"/v1/connect/{pair['pair_code']}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["repos"] == []
+    assert body["suggested_repo_full_name"] == "Gurio/newbox"
+
+
+def test_connect_approve_with_no_repo_id_creates_and_binds_the_suggested_repo(client, monkeypatch):
+    """The core of the retired "enable a repository" click: approving with
+    no `repo_id` (the primary "connect <repo>" button, not the fallback
+    dropdown) creates the repo from the pair's own capabilities and binds
+    the daemon to it in the same act — no prior website step required."""
+    _login_web(client, monkeypatch)
+    pair = client.post(
+        "/v1/accounts/pair", json={"repo_full_name": "Gurio/newbox"}
+    ).json()
+
+    approve = client.post(f"/v1/connect/{pair['pair_code']}", json={})
+    assert approve.status_code == 200
+    body = approve.json()
+    assert body["ok"] is True
+    assert "Your daemon is connected" in body["notice"]
+
+    with client.app.state.SessionLocal() as db:
+        repo = db.execute(select(Repo).where(Repo.repo_full_name == "Gurio/newbox")).scalar_one()
+        assert repo.account_id is not None
+
+    polled = client.get(
+        f"/v1/accounts/pair/{pair['pair_code']}",
+        params={"poll_secret": pair["poll_secret"]},
+    ).json()
+    assert polled["status"] == "paired"
+    assert polled["daemon_token"]
+    assert polled["repo_id"] == repo.id
+
+
+def test_connect_approve_with_no_repo_id_reuses_an_already_connected_repo(client, monkeypatch):
+    """Pairing a second daemon for a repo this account already connected
+    (by hand, or by an earlier pairing) must bind to the same row, never
+    fork a duplicate — `_resolve_or_create_repo_for_pair` finds-before-it-
+    creates."""
+    repo_id = _account_and_repo(client)  # "Gurio/laptop"
+    _login_web(client, monkeypatch)
+    pair = client.post(
+        "/v1/accounts/pair", json={"repo_full_name": "Gurio/laptop"}
+    ).json()
+    approve = client.post(f"/v1/connect/{pair['pair_code']}", json={})
+    assert approve.status_code == 200
+    with client.app.state.SessionLocal() as db:
+        rows = db.execute(select(Repo).where(Repo.repo_full_name == "Gurio/laptop")).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].id == repo_id
+
+
+def test_connect_approve_with_no_repo_id_and_no_capabilities_is_a_clear_dead_end(client, monkeypatch):
+    """A pairing that reported no repo of its own (older CLI, or run outside
+    a git checkout) and an account with nothing already connected: the one
+    genuine dead end, a clear 422 rather than a 404 "repo not found" that
+    reads like a bug."""
+    _login_web(client, monkeypatch)
+    pair = client.post("/v1/accounts/pair").json()
+    approve = client.post(f"/v1/connect/{pair['pair_code']}", json={})
+    assert approve.status_code == 422
+    assert approve.json()["ok"] is False
+    assert "Couldn't tell which repo" in approve.json()["notice"]
 
 
 def test_connect_context_reports_expired_code(client, monkeypatch):
@@ -582,6 +660,14 @@ def test_connect_context_reports_expired_code(client, monkeypatch):
     )
     assert approve.status_code == 410
     assert approve.json() == {"ok": False, "notice": "pair code expired"}
+
+    # Same code, no repo_id (the primary-button path): must still get the
+    # real "expired" answer, not the auto-resolve dead-end's 422 — a dead
+    # code is not allowed to spend the repo cap trying to auto-create
+    # something for an approve that was always going to fail.
+    approve_no_id = client.post(f"/v1/connect/{pair['pair_code']}", json={})
+    assert approve_no_id.status_code == 410
+    assert approve_no_id.json() == {"ok": False, "notice": "pair code expired"}
 
 
 def test_connect_approve_rejects_unknown_code(client, monkeypatch):

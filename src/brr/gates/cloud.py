@@ -389,7 +389,23 @@ def propose_config_change(
 
 
 def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON_NAME, poll_interval_s: float = 2.0, timeout_s: float = 600.0, out: Callable[[str], None] = print) -> dict:
-    pair = _request(brnrd_url, "POST", "/v1/accounts/pair")
+    # Sent unauthenticated, before any token exists — this is what lets the
+    # approval page lead with "connect <this repo>" instead of a blind
+    # dropdown of everything the account already has enabled (the "enable a
+    # repository" website step this was built to retire). `repo_root` never
+    # leaves this machine: only the four fields the server schema accepts.
+    initial_caps = _repo_capabilities(brr_dir)
+    pair_body = {
+        k: v
+        for k, v in {
+            "repo_full_name": initial_caps.get("repo_full_name"),
+            "git_remote": initial_caps.get("git_remote"),
+            "branch": initial_caps.get("branch"),
+            "default_branch": initial_caps.get("default_branch"),
+        }.items()
+        if isinstance(v, str) and v
+    }
+    pair = _request(brnrd_url, "POST", "/v1/accounts/pair", json=pair_body or None)
     out(f"[brnrd] Approve this daemon at: {pair['pair_url']}")
     deadline = time.monotonic() + timeout_s
     while True:
