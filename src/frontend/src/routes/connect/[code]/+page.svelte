@@ -33,6 +33,10 @@
 	let code = $derived(page.params.code ?? '');
 	let notice = $derived(context ? statusNotice(context) : null);
 	let suggested = $derived(context?.suggested_repo_full_name || '');
+	// "local" ⇒ this checkout has no forge behind `owner/name` — the label
+	// is synthesized from the folder, not a real GitHub org. Said plainly
+	// here rather than letting `local/foo-a1b2c3` read as one.
+	let suggestedIsLocal = $derived(context?.suggested_forge === 'local');
 
 	onMount(async () => {
 		try {
@@ -136,6 +140,11 @@
 							repository
 						</p>
 						<p class="mt-1 font-mono text-sm text-stone-200">{suggested}</p>
+						{#if suggestedIsLocal}
+							<p class="mt-1 font-mono text-[10px] tracking-wide text-ink-quiet">
+								no forge behind this one — a local checkout, named from its folder
+							</p>
+						{/if}
 						<button
 							type="button"
 							class="mt-4 cursor-pointer border border-amber-700 bg-amber-950/40 px-3 py-1.5 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:border-amber-500 disabled:cursor-not-allowed disabled:border-stone-800 disabled:text-ink-mute"
