@@ -101,6 +101,11 @@ export interface InstalledRepo {
 	updated_label: string;
 	last_seen_label: string;
 	connected: boolean;
+	// The retired "enable" button's replacement (2026-08-06): running this
+	// from the checkout is what connects it now — same idiom as
+	// `ConnectedRepo.setup_command`, best-guess local dir name from the
+	// repo's own short name.
+	setup_command: string;
 }
 
 // The capability registry (design-capability-panel.md; backend build step 1,

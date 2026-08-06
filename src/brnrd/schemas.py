@@ -59,6 +59,22 @@ class GitHubInstallationsList(BaseModel):
     installed_repos: list[GitHubInstalledRepoOut]
 
 
+class PairStartRequest(BaseModel):
+    """What the connecting daemon already knows about its own checkout.
+
+    Sent once, unauthenticated (there's no token yet — pairing is how one
+    gets minted), on the initial `POST /v1/accounts/pair`. Every field is
+    optional and best-effort: a daemon run outside a git checkout, or an
+    older CLI that predates this, sends none of it, and the handshake falls
+    back to the pre-existing pick-from-a-list approval flow unchanged.
+    """
+
+    repo_full_name: str = ""
+    git_remote: str = ""
+    branch: str = ""
+    default_branch: str = ""
+
+
 class PairStarted(BaseModel):
     pair_code: str
     pair_url: str

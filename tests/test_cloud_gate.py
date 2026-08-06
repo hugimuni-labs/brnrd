@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import time
 from datetime import datetime, timezone
 
@@ -22,7 +23,7 @@ from brr import protocol  # noqa: E402
 from brr import schedule  # noqa: E402
 from brr import usage_samples  # noqa: E402
 from brr.gates import cloud  # noqa: E402
-from _helpers import PUBLISH_EVERYTHING, brnrd_account_headers, init_git_repo  # noqa: E402
+from _helpers import PUBLISH_EVERYTHING, brnrd_account_headers, commit_files, init_git_repo  # noqa: E402
 
 
 class _StopLoop(BaseException):
@@ -315,6 +316,91 @@ def test_connect_persists_token(tmp_path, monkeypatch):
         "[brnrd] Pair Telegram chat: https://t.me/brnrd_bot?start=TG-TEST",
         "[brnrd] If Telegram only opens the chat, send: /start TG-TEST",
     ]
+
+
+def test_connect_sends_repo_capabilities_on_the_initial_pair_request(tmp_path, monkeypatch):
+    """2026-08-06: the retired website "enable a repository" click is
+    replaced by the connecting daemon naming its own repo up front — parsed
+    from the checkout's own git remote, the same detection
+    `_repo_capabilities` already did (just not sent this early before).
+    Sent unauthenticated, before any token exists, on the initial
+    `POST /v1/accounts/pair` — never on the later polls."""
+    init_git_repo(tmp_path)
+    subprocess.run(
+        ["git", "remote", "add", "origin", "git@github.com:Gurio/newbox.git"],
+        cwd=tmp_path, check=True,
+    )
+    commit_files(tmp_path, {"README.md": "hi"})
+    brr_dir = tmp_path / ".brr"
+    scripted = iter(
+        [
+            {"pair_code": "BR-TEST", "pair_url": "u", "poll_secret": "s"},
+            {
+                "status": "paired",
+                "account_id": "acct_x",
+                "repo_id": "proj_x",
+                "daemon_token": "bd_tok",
+            },
+            {},  # /v1/daemons/register
+        ]
+    )
+    seen = []
+
+    def fake_request(base_url, method, path, **kwargs):
+        seen.append((method, path, kwargs))
+        return next(scripted)
+
+    monkeypatch.setattr(cloud, "_request", fake_request)
+    cloud.connect(
+        brr_dir,
+        brnrd_url="http://brnrd.example",
+        poll_interval_s=0,
+        timeout_s=5,
+        out=lambda _msg: None,
+    )
+    method, path, kwargs = seen[0]
+    assert (method, path) == ("POST", "/v1/accounts/pair")
+    assert kwargs["json"]["repo_full_name"] == "Gurio/newbox"
+    assert kwargs["json"]["branch"] == "main"
+    # `repo_root` is a local filesystem path — it must never leave this
+    # machine, capabilities or not.
+    assert "repo_root" not in kwargs["json"]
+
+
+def test_connect_sends_no_repo_name_outside_a_git_checkout(tmp_path, monkeypatch):
+    """No git remote to detect (or no checkout at all) ⇒ the one field the
+    server trusts as a binding target (`repo_full_name`) is simply absent —
+    the pre-existing dropdown-of-already-connected-repos fallback this steers
+    back to on an old CLI too. (`branch` still rides along as `gitops`'s own
+    "HEAD" fallback for a non-repo directory — harmless, and unrelated to
+    this change: the server never treats anything but `repo_full_name` as
+    identity, see `pairing.pair_suggested_repo_full_name`.)"""
+    brr_dir = tmp_path / ".brr"  # tmp_path itself is not a git repo
+    scripted = iter(
+        [
+            {"pair_code": "BR-TEST", "pair_url": "u", "poll_secret": "s"},
+            {"status": "paired", "account_id": "acct_x", "repo_id": "proj_x", "daemon_token": "bd_tok"},
+            {},
+        ]
+    )
+    seen = []
+
+    def fake_request(base_url, method, path, **kwargs):
+        seen.append((method, path, kwargs))
+        return next(scripted)
+
+    monkeypatch.setattr(cloud, "_request", fake_request)
+    cloud.connect(
+        brr_dir,
+        brnrd_url="http://brnrd.example",
+        poll_interval_s=0,
+        timeout_s=5,
+        out=lambda _msg: None,
+    )
+    method, path, kwargs = seen[0]
+    assert (method, path) == ("POST", "/v1/accounts/pair")
+    assert "repo_full_name" not in (kwargs["json"] or {})
+    assert "git_remote" not in (kwargs["json"] or {})
 
 
 def test_connect_registers_token_for_dashboard_publishes(tmp_path, monkeypatch):

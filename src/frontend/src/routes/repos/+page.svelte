@@ -12,7 +12,6 @@
 		setPublishLayers,
 		telegramPairLabel,
 		type ConnectedRepo,
-		type InstalledRepo,
 		type RepoActionResponse,
 		type ReposResponse
 	} from '$lib/repos';
@@ -82,14 +81,14 @@
 
 	// "Show what just arrived" — the half of #1084's fix that a bare notice
 	// string can't carry: how many repos this installation made visible, and
-	// whether there is still an action left (enabling one).
+	// whether any of them still needs a local daemon pointed at it.
 	function setupArrivalSummary(d: ReposResponse): string {
 		const total = d.installed_repos.length;
 		if (total === 0) return 'No repositories are visible from this installation yet.';
 		const pending = d.installed_repos.filter((repo) => !repo.connected).length;
 		const noun = total === 1 ? 'repository' : 'repositories';
-		if (pending === 0) return `${total} ${noun} visible, already enabled.`;
-		return `${total} ${noun} now visible — ${pending} not yet enabled, below.`;
+		if (pending === 0) return `${total} ${noun} visible, all connected.`;
+		return `${total} ${noun} now visible — ${pending} with no daemon connected yet, below.`;
 	}
 
 	// Publish-scope consent for the *next* repo this page connects (legal
@@ -236,17 +235,6 @@
 		}
 	}
 
-	function connectInstalled(repo: InstalledRepo) {
-		runAction(`connect:${repo.id}`, () =>
-			connectRepo({
-				repo_full_name: repo.repo_full_name,
-				forge_repo_id: repo.forge_repo_id,
-				default_branch: repo.default_branch,
-				publish_layers: connectPublishLayersValue()
-			})
-		);
-	}
-
 	function connectManual(event: Event) {
 		event.preventDefault();
 		const repo = manualRepo.trim();
@@ -362,7 +350,7 @@
 		repository control
 	</h1>
 	<p class="mt-2 max-w-2xl text-sm text-stone-400">
-		Enable GitHub repositories, pair local daemons, and route Telegram chats into brnrd.
+		Connect repositories, pair local daemons, and route Telegram chats into brnrd.
 	</p>
 
 	{#if unauthenticated}
@@ -451,7 +439,7 @@
 				<p class="mt-1 font-mono text-sm text-amber-100">@{data.account.github_login}</p>
 			</div>
 			<div class="subpanel p-3">
-				<p class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase">enabled repos</p>
+				<p class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase">connected repos</p>
 				<p class="mt-1 font-mono text-sm text-amber-100">
 					{data.connected_count} of {data.installed_repos.length} synced
 				</p>
@@ -467,14 +455,33 @@
 			</div>
 		</div>
 
-		{#if data.installations.length === 0}
-			<!-- The install action, with its own position and weight (#1084):
-			     no installation ⇒ this is the page's primary act, not a cell in a
-			     readout grid. Steer'd 2026-08-05: lead with the command — "the
-			     terminal drives, the web consents once" (design-onboarding-ladder.md,
-			     direction A) — because execution is local and GitHub's picker is
-			     the only place repo selection can happen (classic-PAT-only add-repo
-			     endpoint; no "brnrd picks for you" alternative exists). -->
+		{#if data.installations.length === 0 && data.connected_count > 0}
+			<!-- The identity nag (2026-08-06 steer): the GitHub App is a pure
+			     convenience — repo connect and daemon pairing both work fully
+			     without it — but skipping it means every commit and comment
+			     rides *your own* GitHub identity rather than brnrd's bot (#1135
+			     lived this exact gap: a strand committed as the maintainer, not
+			     `brnrd-bot`). Only worth saying once something is actually
+			     connected; an empty account has nothing to nag about yet. -->
+			<div class="subpanel mt-5 p-3 text-sm">
+				<p class="font-mono text-[11px] tracking-wide text-amber-400 uppercase">no github app</p>
+				<p class="mt-1 text-stone-300">
+					Work on {data.connected_count === 1 ? 'this repo' : 'these repos'} pushes under
+					<strong class="text-stone-100">your own</strong> GitHub identity — every commit is you, not
+					brnrd. Install the app below to push as its own bot instead; nothing else here changes.
+				</p>
+			</div>
+		{/if}
+
+		{#if data.connected_count === 0}
+			<!-- The connect action, with its own position and weight (#1084):
+			     nothing connected ⇒ this is the page's primary act, not a cell
+			     in a readout grid. 2026-08-06: the website side of "enable" is
+			     retired — running this command *is* the connect, no separate
+			     click here first or after. GitHub App install is real but
+			     genuinely optional (identity/security convenience, not a rung
+			     this blocks on), so it is offered, not numbered as a required
+			     step 2. -->
 			<section class="panel mt-5 p-4" aria-labelledby="connect-heading">
 				<p class="eyebrow">start here</p>
 				<h2
@@ -484,17 +491,14 @@
 					connect this repository
 				</h2>
 				<p class="mt-2 max-w-2xl text-sm text-stone-400">
-					Two steps, in order: run the pairing command from a checkout, then finish on GitHub. This
-					assumes <code class="text-stone-400">brnrd</code> is already on that machine — no CLI yet?
-					The
+					Run this from a checkout — it registers the repo and pairs a daemon in one shot, no
+					separate step here. This assumes <code class="text-stone-400">brnrd</code> is already on
+					that machine — no CLI yet? The
 					<a href={resolve('/')} class="text-sky-400 underline hover:text-sky-300">dashboard</a>'s
 					cold-start block starts one rung earlier, with the install command.
 				</p>
 
 				<div class="mt-4">
-					<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
-						<span class="text-amber-200/80">1</span> run this in your checkout
-					</p>
 					<div class="mt-1.5 flex items-start gap-2">
 						<pre
 							class="min-w-0 grow border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] wrap-anywhere whitespace-pre-wrap text-stone-300"><code
@@ -513,26 +517,33 @@
 						in one line.
 					</p>
 				</div>
+			</section>
+		{/if}
 
-				<div class="mt-5 border-t border-stone-800/70 pt-4">
-					<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
-						<span class="text-amber-200/80">2</span> install the github app
-					</p>
-					<p class="mt-1.5 max-w-2xl text-sm text-stone-400">
-						This trades a personal access token sitting on your laptop for a short-lived,
-						repo-scoped installation token: commits and comments post as a separate account, not
-						you, and revoking access is one click on github.com instead of a credential hunt.
-					</p>
-					<a
-						class="mt-3 inline-flex items-center border border-amber-700 bg-amber-950/40 px-4 py-2 font-mono text-sm tracking-wide text-amber-100 uppercase hover:border-amber-500"
-						href={data.install_url}
-						rel="external noreferrer"
-						target="_blank">install the github app</a
-					>
-					<p class="mt-2 font-mono text-[11px] text-ink-mute">
-						Opens github.com — that's where you choose repositories, not here.
-					</p>
-				</div>
+		{#if data.installations.length === 0}
+			<section class="panel mt-5 p-4" aria-labelledby="install-heading">
+				<p class="eyebrow">optional</p>
+				<h2
+					id="install-heading"
+					class="font-mono text-lg font-semibold tracking-tight text-amber-100"
+				>
+					install the github app
+				</h2>
+				<p class="mt-1.5 max-w-2xl text-sm text-stone-400">
+					Not required — repos connect and daemons pair fully without it. What it buys: this trades
+					a personal access token sitting on your laptop for a short-lived, repo-scoped installation
+					token, so commits and comments post as a separate bot account instead of you, and revoking
+					access is one click on github.com instead of a credential hunt.
+				</p>
+				<a
+					class="mt-3 inline-flex items-center border border-amber-700 bg-amber-950/40 px-4 py-2 font-mono text-sm tracking-wide text-amber-100 uppercase hover:border-amber-500"
+					href={data.install_url}
+					rel="external noreferrer"
+					target="_blank">install the github app</a
+				>
+				<p class="mt-2 font-mono text-[11px] text-ink-mute">
+					Opens github.com — that's where you choose repositories, not here.
+				</p>
 			</section>
 		{/if}
 
@@ -866,38 +877,47 @@
 
 			{#if data.installations.length === 0}
 				<p class="text-sm text-ink-quiet">
-					Nothing to enable yet — connect this repository above first.
+					Nothing to connect yet — connect this repository above first.
 				</p>
 			{:else if availableInstalled.length === 0}
 				<p class="text-sm text-ink-quiet">
-					All {connectedInstalled.length} synced repositories are enabled.
+					All {connectedInstalled.length} synced repositories are connected.
 				</p>
 			{:else}
+				<!-- No "enable" button (retired 2026-08-06): the website never did
+				     anything GitHub-specific here, it only recorded a name — and
+				     running the command below from that checkout now does the
+				     recording itself, the moment it actually pairs a daemon.
+				     Purely informational: which repos GitHub already shows us,
+				     and the one line to run for each. -->
 				<div class="grid grid-cols-1 gap-2 lg:grid-cols-2">
 					{#each availableInstalled as repo (repo.id)}
-						<div class="subpanel flex items-center justify-between gap-3 p-3">
-							<div class="min-w-0">
-								<p class="truncate font-mono text-sm font-semibold text-amber-100">
-									{repo.repo_full_name}
-								</p>
-								<p class="mt-1 truncate font-mono text-[11px] text-ink-quiet">
-									{branchLabel(repo.default_branch)} · pushed {repo.pushed_label}
-								</p>
-							</div>
-							<button
-								type="button"
-								class="shrink-0 cursor-pointer border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-stone-400 uppercase hover:text-stone-200 disabled:cursor-wait disabled:opacity-50"
-								disabled={pendingAction !== null}
-								onclick={() => connectInstalled(repo)}
-								>{actionBusy(`connect:${repo.id}`) ? 'enabling' : 'enable'}</button
-							>
+						<div class="subpanel p-3">
+							<p class="truncate font-mono text-sm font-semibold text-amber-100">
+								{repo.repo_full_name}
+							</p>
+							<p class="mt-1 truncate font-mono text-[11px] text-ink-quiet">
+								{branchLabel(repo.default_branch)} · pushed {repo.pushed_label}
+							</p>
+							<details class="mt-2">
+								<summary
+									class="cursor-pointer font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+									>connect from a checkout</summary
+								>
+								<pre
+									class="mt-2 overflow-x-auto border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] text-stone-300"><code
+										>{repo.setup_command}</code
+									></pre>
+							</details>
 						</div>
 					{/each}
 				</div>
 			{/if}
 
 			<form class="mt-5 border-t border-stone-800/70 pt-4" onsubmit={connectManual}>
-				<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">manual connect</p>
+				<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
+					advanced: pre-register without running anything locally
+				</p>
 				<div class="mt-2 grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_180px_auto]">
 					<input
 						class="border border-stone-800 bg-stone-950/60 px-2 py-1.5 font-mono text-sm text-stone-200 outline-none focus:border-amber-700"
@@ -915,7 +935,7 @@
 						type="submit"
 						class="cursor-pointer border border-stone-800 px-3 py-1.5 font-mono text-[11px] tracking-wide text-stone-400 uppercase hover:text-stone-200 disabled:cursor-wait disabled:opacity-50"
 						disabled={pendingAction !== null}
-						>{actionBusy('connect:manual') ? 'enabling' : 'enable repo'}</button
+						>{actionBusy('connect:manual') ? 'registering' : 'register repo'}</button
 					>
 				</div>
 			</form>
