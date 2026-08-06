@@ -81,6 +81,7 @@ __all__ = [
     "_repo_parts",
     "_repo_views",
     "_repos",
+    "_resolve_or_create_repo_for_pair",
     "_safe_next",
     "_set_repo_publish_layers_core",
     "_start_github_background_refresh",
@@ -553,6 +554,7 @@ def _connect_repo_core(
     account: Account,
     *,
     repo_full_name: str,
+    forge: str = "github",
     forge_repo_id: str = "",
     default_branch: str = "",
     publish_layers: str | None = None,
@@ -577,7 +579,7 @@ def _connect_repo_core(
         repo = Repo(
             id=ids.repo_id(),
             account_id=account.id,
-            forge="github",
+            forge=forge or "github",
             repo_full_name=repo_full_name,
             repo_owner=owner,
             repo_name=name,
@@ -593,11 +595,69 @@ def _connect_repo_core(
     # #874 — bind is one of the two moments an invite can already be
     # sitting pending (the other is installation sync, `github_app.py`).
     # Best-effort: a marker failure must never fail the connect itself.
-    try:
-        github_marker.sync_marker_for_repos(db, request.app.state.settings, [repo])
-    except Exception as exc:
-        print(f"[brnrd] github marker sync failed for {repo.repo_full_name}: {exc}")
+    # A non-github forge has no GitHub repo behind it to check — calling
+    # this anyway would spend an API round trip probing a name GitHub was
+    # never going to recognise and could leave a "not found"-shaped notice
+    # sitting on a repo row that was never supposed to have an opinion
+    # about GitHub at all.
+    if repo.forge == "github":
+        try:
+            github_marker.sync_marker_for_repos(db, request.app.state.settings, [repo])
+        except Exception as exc:
+            print(f"[brnrd] github marker sync failed for {repo.repo_full_name}: {exc}")
     return "repo-connected"
+
+
+def _resolve_or_create_repo_for_pair(
+    request: Request, db: Session, account: Account, pair: PairRequest
+) -> Repo | None:
+    """Bind a pairing daemon to its own checkout's repo, creating it if this
+    account has never connected it before — the local half of "running the
+    pairing command *is* the enable step" (no more separate website click).
+
+    Returns ``None`` when the pair carries no usable ``repo_full_name``
+    (older CLI, or `brnrd account connect` run outside a git checkout) —
+    the caller falls back to the pre-existing dropdown-of-connected-repos
+    flow in that case, unchanged.
+    """
+    from .pairing import pair_capabilities, pair_suggested_repo_full_name
+
+    repo_full_name = pair_suggested_repo_full_name(pair)
+    if not repo_full_name:
+        return None
+    try:
+        _repo_parts(repo_full_name)
+    except HTTPException:
+        return None
+    existing = db.execute(
+        select(Repo).where(Repo.account_id == account.id, Repo.repo_full_name == repo_full_name)
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing
+    caps = pair_capabilities(pair)
+    default_branch = caps.get("default_branch", "")
+    # The connecting checkout names its own forge ("github" / "local");
+    # anything else sent (an older CLI never will, but a forged payload
+    # could) falls back to "github" rather than persisting an unrecognised
+    # word — `_repo_parts` already requires `owner/name` regardless, so a
+    # bogus forge label is the only thing at stake here.
+    forge = caps.get("forge", "")
+    forge = forge if forge in ("github", "local") else "github"
+    # Same cap check, same default (safe/private) publish scope as the
+    # retired manual "enable" click — creating a repo through the pairing
+    # handshake is not a wider door than creating one by hand ever was.
+    _connect_repo_core(
+        request,
+        db,
+        account,
+        repo_full_name=repo_full_name,
+        forge=forge,
+        default_branch=default_branch if isinstance(default_branch, str) else "",
+        publish_layers=None,
+    )
+    return db.execute(
+        select(Repo).where(Repo.account_id == account.id, Repo.repo_full_name == repo_full_name)
+    ).scalar_one_or_none()
 
 
 def _set_repo_publish_layers_core(db: Session, account_id: str, repo_id: str, publish_layers: str) -> str:
