@@ -43,6 +43,15 @@ def pair_suggested_repo_full_name(pair: PairRequest) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+def pair_suggested_forge(pair: PairRequest) -> str:
+    """``"github"`` or ``"local"`` for the suggested repo above, or ``""``
+    when there is no suggestion at all. Display-only — `_resolve_or_create_
+    repo_for_pair` re-derives and validates its own copy rather than
+    trusting this one back."""
+    value = pair_capabilities(pair).get("forge", "")
+    return value.strip() if isinstance(value, str) else ""
+
+
 def _get_pair(db: Session, code: str) -> PairRequest:
     pair = db.execute(select(PairRequest).where(PairRequest.pair_code == code)).scalar_one_or_none()
     if pair is None:

@@ -554,6 +554,7 @@ def _connect_repo_core(
     account: Account,
     *,
     repo_full_name: str,
+    forge: str = "github",
     forge_repo_id: str = "",
     default_branch: str = "",
     publish_layers: str | None = None,
@@ -578,7 +579,7 @@ def _connect_repo_core(
         repo = Repo(
             id=ids.repo_id(),
             account_id=account.id,
-            forge="github",
+            forge=forge or "github",
             repo_full_name=repo_full_name,
             repo_owner=owner,
             repo_name=name,
@@ -594,10 +595,16 @@ def _connect_repo_core(
     # #874 — bind is one of the two moments an invite can already be
     # sitting pending (the other is installation sync, `github_app.py`).
     # Best-effort: a marker failure must never fail the connect itself.
-    try:
-        github_marker.sync_marker_for_repos(db, request.app.state.settings, [repo])
-    except Exception as exc:
-        print(f"[brnrd] github marker sync failed for {repo.repo_full_name}: {exc}")
+    # A non-github forge has no GitHub repo behind it to check — calling
+    # this anyway would spend an API round trip probing a name GitHub was
+    # never going to recognise and could leave a "not found"-shaped notice
+    # sitting on a repo row that was never supposed to have an opinion
+    # about GitHub at all.
+    if repo.forge == "github":
+        try:
+            github_marker.sync_marker_for_repos(db, request.app.state.settings, [repo])
+        except Exception as exc:
+            print(f"[brnrd] github marker sync failed for {repo.repo_full_name}: {exc}")
     return "repo-connected"
 
 
@@ -627,7 +634,15 @@ def _resolve_or_create_repo_for_pair(
     ).scalar_one_or_none()
     if existing is not None:
         return existing
-    default_branch = pair_capabilities(pair).get("default_branch", "")
+    caps = pair_capabilities(pair)
+    default_branch = caps.get("default_branch", "")
+    # The connecting checkout names its own forge ("github" / "local");
+    # anything else sent (an older CLI never will, but a forged payload
+    # could) falls back to "github" rather than persisting an unrecognised
+    # word — `_repo_parts` already requires `owner/name` regardless, so a
+    # bogus forge label is the only thing at stake here.
+    forge = caps.get("forge", "")
+    forge = forge if forge in ("github", "local") else "github"
     # Same cap check, same default (safe/private) publish scope as the
     # retired manual "enable" click — creating a repo through the pairing
     # handshake is not a wider door than creating one by hand ever was.
@@ -636,6 +651,7 @@ def _resolve_or_create_repo_for_pair(
         db,
         account,
         repo_full_name=repo_full_name,
+        forge=forge,
         default_branch=default_branch if isinstance(default_branch, str) else "",
         publish_layers=None,
     )

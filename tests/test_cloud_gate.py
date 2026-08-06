@@ -403,6 +403,68 @@ def test_connect_sends_no_repo_name_outside_a_git_checkout(tmp_path, monkeypatch
     assert "git_remote" not in (kwargs["json"] or {})
 
 
+def test_connect_synthesizes_a_local_identity_for_a_remoteless_checkout(tmp_path, monkeypatch):
+    """A real git checkout with no `origin` (2026-08-06, #1167 backchannel
+    follow-up) is the genuine dead end the two tests above bracket: it *is*
+    a working tree (unlike the bare-directory case, which stays
+    capability-free), so it earns a synthesized `local/<slug>-<hash>`
+    identity instead of falling back to the dropdown-of-already-connected-
+    repos flow that used to be the only path here."""
+    init_git_repo(tmp_path)
+    commit_files(tmp_path, {"README.md": "hi"})
+    brr_dir = tmp_path / ".brr"
+    scripted = iter(
+        [
+            {"pair_code": "BR-TEST", "pair_url": "u", "poll_secret": "s"},
+            {"status": "paired", "account_id": "acct_x", "repo_id": "proj_x", "daemon_token": "bd_tok"},
+            {},
+        ]
+    )
+    seen = []
+
+    def fake_request(base_url, method, path, **kwargs):
+        seen.append((method, path, kwargs))
+        return next(scripted)
+
+    monkeypatch.setattr(cloud, "_request", fake_request)
+    cloud.connect(
+        brr_dir,
+        brnrd_url="http://brnrd.example",
+        poll_interval_s=0,
+        timeout_s=5,
+        out=lambda _msg: None,
+    )
+    method, path, kwargs = seen[0]
+    sent = kwargs["json"]
+    assert (method, path) == ("POST", "/v1/accounts/pair")
+    assert sent["forge"] == "local"
+    owner, _, name = sent["repo_full_name"].partition("/")
+    assert owner == "local"
+    assert name == cloud.local_repo_identity(tmp_path).partition("/")[2]
+    # Stable across repeated pairings of the same folder — a reconnect must
+    # resolve to the same `Repo` row, so the identity can't be re-rolled
+    # each time.
+    assert cloud._repo_capabilities(brr_dir)["repo_full_name"] == sent["repo_full_name"]
+
+
+def test_local_repo_identity_does_not_alias_same_named_folders(tmp_path):
+    """Two different checkouts that happen to share a folder name must not
+    collide into one `Repo` row — the whole reason the suffix is always
+    appended, not only when a collision is detected (the client has no way
+    to ask the server that without a round trip)."""
+    a = tmp_path / "a" / "myproject"
+    b = tmp_path / "b" / "myproject"
+    a.mkdir(parents=True)
+    b.mkdir(parents=True)
+    ident_a = cloud.local_repo_identity(a)
+    ident_b = cloud.local_repo_identity(b)
+    assert ident_a != ident_b
+    assert ident_a.startswith("local/myproject-")
+    assert ident_b.startswith("local/myproject-")
+    # Deterministic: the same folder always resolves to the same identity.
+    assert cloud.local_repo_identity(a) == ident_a
+
+
 def test_connect_registers_token_for_dashboard_publishes(tmp_path, monkeypatch):
     """The completed pairing handshake must create the Daemon row too.
 
