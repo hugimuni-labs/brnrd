@@ -748,9 +748,15 @@ def publish_default_branch(repo_root: Path, task: Run) -> None:
             f"[brnrd] pushing {branch} ({len(commits)} commit(s)) after "
             f"run {task.id}..."
         )
+        try:
+            push_env = runner.clean_runner_environ()
+        except Exception:
+            # Best-effort, matching the capture net: a broken env build
+            # must not block the push it exists to authenticate.
+            push_env = None
         with _branch_lock(branch):
             pushed = gitops.push_branch(
-                repo_root, remote, branch, set_upstream=False,
+                repo_root, remote, branch, set_upstream=False, env=push_env,
             )
         if not pushed:
             print(

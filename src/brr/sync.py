@@ -183,7 +183,30 @@ def _dedupe(branches: list[str]) -> list[str]:
 
 
 def _fetch(repo_root: Path, remote: str, result: SyncResult) -> bool:
-    """Run ``git fetch <remote>``. Returns True on success."""
+    """Run ``git fetch <remote>``. Returns True on success.
+
+    Runs with :func:`runner.clean_runner_environ` rather than the bare
+    daemon environment. Every git call *inside* a dispatched run already
+    gets that treatment — an ``insteadOf`` rewrite pinning any
+    ``git@github.com:``/``ssh://`` remote to ``https://github.com/`` plus
+    brnrd's own credential helper, so a run authenticates regardless of
+    what the remote's literal URL says. This daemon-owned fetch is the one
+    git network call that ran with neither: on a public repo over the
+    historical ``https://`` origin that was invisible (anonymous read needs
+    no credential), until an operator's own ``git remote set-url origin
+    git@github.com:...`` pointed it at real SSH — which the daemon process
+    has no key for — and every subsequent sync failed with "Permission
+    denied (publickey)" (2026-08-06). Same treatment closes the gap for any
+    remote shape, not just today's.
+    """
+    try:
+        from . import runner
+
+        env = runner.clean_runner_environ()
+    except Exception:
+        # Best-effort, same spirit as the rest of this module: a broken
+        # env build must not block the fetch it exists to authenticate.
+        env = None
     try:
         proc = subprocess.run(
             ["git", "fetch", "--quiet", remote],
@@ -193,6 +216,7 @@ def _fetch(repo_root: Path, remote: str, result: SyncResult) -> bool:
             stderr=subprocess.PIPE,
             text=True,
             timeout=60,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         result.error = f"git fetch {remote}: timed out"

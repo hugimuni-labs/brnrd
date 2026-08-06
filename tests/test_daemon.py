@@ -6831,6 +6831,37 @@ def test_host_publish_fast_forwards_default_branch(tmp_path, capsys):
     assert "pushing main" in capsys.readouterr().out
 
 
+def test_host_publish_authenticates_like_a_run_would(tmp_path, monkeypatch):
+    """Same gap as sync's fetch, on the push side (2026-08-06).
+
+    ``publish_default_branch``'s own docstring claims "the daemon's managed
+    credential setup applies" to this push — but the call it actually made
+    passed no env at all, so it silently rode the bare daemon environment
+    instead. Pin the fix: the env `gitops.push_branch` receives here is
+    whatever `runner.clean_runner_environ` builds, not None.
+    """
+    repo, origin = _host_publish_repo(tmp_path)
+    commit_files(repo, {"work.txt": "merged by host run\n"}, message="host merge")
+
+    sentinel_env = {"MARK_OF_THE_FIX": "1"}
+    monkeypatch.setattr(
+        daemon.runner, "clean_runner_environ", lambda: dict(sentinel_env)
+    )
+
+    real_push_branch = daemon.gitops.push_branch
+    seen_envs = []
+
+    def spy(*args, **kwargs):
+        seen_envs.append(kwargs.get("env"))
+        return real_push_branch(*args, **kwargs)
+
+    monkeypatch.setattr(daemon.gitops, "push_branch", spy)
+
+    daemon.publish_default_branch(repo, _host_task())
+
+    assert seen_envs == [sentinel_env]
+
+
 def test_host_publish_skips_diverged_remote_with_marker(tmp_path, capsys):
     repo, origin = _host_publish_repo(tmp_path)
     # A second machine pushes to origin/main...
