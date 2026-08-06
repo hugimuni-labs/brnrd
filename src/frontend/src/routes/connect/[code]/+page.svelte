@@ -124,7 +124,7 @@
 				     genuinely terminal and gets no affordance it can't honour. -->
 				{#if needsRepoEnable(context)}
 					<a
-						href={resolve('/repos')}
+						href={resolve(`/repos?next=${encodeURIComponent(`/connect/${code}`)}`)}
 						class="mt-3 inline-flex items-center border border-amber-700 bg-amber-950/40 px-3 py-1.5 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:border-amber-500"
 						>connect a repository</a
 					>

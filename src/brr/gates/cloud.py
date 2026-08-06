@@ -120,7 +120,14 @@ def _request(base_url: str, method: str, path: str, *, token: str | None = None,
     if resp.status_code == 401:
         raise BrnrdAuthError(f"brnrd {method} {path} -> 401: {resp.text[:200]} — {_AUTH_HINT}")
     if not 200 <= resp.status_code < 300:
-        raise RuntimeError(f"brnrd {method} {path} -> {resp.status_code}: {resp.text[:200]}")
+        # `.status_code` lets a caller distinguish *which* non-2xx this was
+        # (e.g. connect()'s poll loop treating a 410 pair-expiry as a clean,
+        # retriable stop rather than an unhandled crash) without parsing the
+        # message text — see the pitfall on verifying by behaviour, not by
+        # string-matching a shape meant for humans.
+        err = RuntimeError(f"brnrd {method} {path} -> {resp.status_code}: {resp.text[:200]}")
+        err.status_code = resp.status_code  # type: ignore[attr-defined]
+        raise err
     return resp.json() if resp.content else {}
 
 
@@ -449,7 +456,24 @@ def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON
     out(f"[brnrd] Approve this daemon at: {pair['pair_url']}")
     deadline = time.monotonic() + timeout_s
     while True:
-        status = _request(brnrd_url, "GET", f"/v1/accounts/pair/{pair['pair_code']}", params={"poll_secret": pair["poll_secret"]})
+        try:
+            status = _request(brnrd_url, "GET", f"/v1/accounts/pair/{pair['pair_code']}", params={"poll_secret": pair["poll_secret"]})
+        except RuntimeError as exc:
+            # The server holds its own TTL on the pair code (`pair_ttl_s`,
+            # independent of and not necessarily equal to our own
+            # `timeout_s` deadline below) — a detour on the approval side
+            # (e.g. connecting a repo before a suggested one exists) can
+            # burn past it first. Surfaced as the same clean, retriable
+            # message as our own client-side timeout below, instead of the
+            # raw `brnrd GET … -> 410: {...}` traceback this used to crash
+            # with (observed live: the approval page's own "connect a
+            # repository" detour outlasting the code).
+            if getattr(exc, "status_code", None) == 410:
+                raise TimeoutError(
+                    "the pairing code expired before it was approved. Approve "
+                    f"the pairing link promptly, then re-run `{brnrd_cmd()} account connect`."
+                ) from exc
+            raise
         if status.get("status") == "paired" and status.get("daemon_token"):
             break
         if time.monotonic() > deadline:
