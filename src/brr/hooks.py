@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import Any
 
 from . import card as card_rule
+from . import course
 from . import facets
 from . import gate_receipt
 from . import portals
@@ -443,6 +444,8 @@ def _has_post_tool_obligations(
     surprise: str | None,
     plan_edge: bool,
     portal_unavailable: bool,
+    route: "course.Course | None" = None,
+    route_edge: bool = False,
 ) -> bool:
     """True when this boundary carries at least one obligation.
 
@@ -510,6 +513,11 @@ def _has_post_tool_obligations(
     ):
         return True
     if plan is not None and plan_edge and plan.owed:
+        return True
+    # The course's edge mirrors the blueprint's: the card is a control file
+    # the daemon's portal token never sees, so an edited route can only
+    # reach the boundary through its own latch (#1008's gate-opener rule).
+    if route is not None and route_edge and route.open_rows:
         return True
     return False
 
@@ -1081,6 +1089,23 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         # not manufacture a boundary), which is unchanged; the
         # module's own test pins the chip as the standing fact that
         # rides every boundary while the line speaks on delta.
+        klass=OBLIGATION,
+    ),
+    _BarSegment(
+        "course", "course",
+        "the run's own route — the `## Plan` / `## Course` checkbox section "
+        "of `.card`, read fresh each boundary (`course 2/5` = rows checked "
+        "of rows total; :mod:`brr.course`). Renders only while rows stand "
+        "open; checking a row on the card is the discharge that moves it. "
+        "This one *is* a ratio, unlike `owed`, because both numbers come "
+        "from the same authored list — one population, one denominator. "
+        "The current row rides a detail line on the course's own delta and "
+        "on the boundary a fresh event lands (the derailment moment, where "
+        "the route must be in the loud zone to be decidable).",
+        # Obligation: an open route row is actionable (do it / check it /
+        # rewrite the plan) and turn-off-able by exactly that act. The chip
+        # never opens the bar by itself — the detail line, latched on the
+        # course's own token, is what earns a boundary.
         klass=OBLIGATION,
     ),
     _BarSegment(
@@ -1991,6 +2016,9 @@ def _render_bar(
     plan: "promises.Blueprint | None" = None,
     plan_edge: bool = False,
     ambient_emit: bool = True,
+    route: "course.Course | None" = None,
+    route_edge: bool = False,
+    route_prompt: bool = False,
 ) -> str | None:
     """The mid-run (``post-tool``) status bar: one line + obligation details.
 
@@ -2065,6 +2093,13 @@ def _render_bar(
     owed_chip = promises.chip(plan) if plan is not None else None
     if owed_chip:
         segments.append(("owed", owed_chip))
+    # The route's standing fact, beside the blueprint's: what the run told
+    # itself, next to what it told the world (#1008's two tenses, third
+    # person). Gateless like `owed` — the detail line below earns the
+    # boundary, the chip only rides one.
+    course_chip = course.chip(route)
+    if course_chip:
+        segments.append(("course", course_chip))
     notices_chip = _notices_chip(notices or [])
     if notices_chip:
         segments.append(("notices", notices_chip))
@@ -2123,6 +2158,16 @@ def _render_bar(
         owed = promises.owed_line(plan)
         if owed:
             details.append(owed)
+    # The route reminder: on the course's own delta (the resident edited its
+    # plan — confirm the chip moved) and on the boundary a fresh event landed
+    # (``route_prompt`` — the derailment moment; a steer needs the current
+    # row in the loud zone before "continue or turn" is decidable). Never
+    # per-boundary while merely standing: that is the *fires constantly for
+    # a non-reason* death, and the chip already carries the standing fact.
+    if route_edge or route_prompt:
+        route_line = course.current_line(route)
+        if route_line:
+            details.append(route_line)
     if budget.get("long_running"):
         limit = budget.get("budget_seconds")
         details.append(
@@ -2158,6 +2203,12 @@ def _render_bar(
     # gating this on the portal token would leave the one boundary the
     # signal exists for rendering nothing.
     plan_laden = bool(plan is not None and plan_edge and plan.owed)
+    # A course edge opens the gate for the blueprint edge's exact reason:
+    # `.card` is a control file, so editing the route changes nothing in
+    # portal-state and the one boundary the confirmation exists for would
+    # otherwise render nothing. ``route_prompt`` deliberately does NOT open
+    # the gate — a fresh event already opened it.
+    route_laden = bool(route is not None and route_edge and route.open_rows)
     # A mood edge is laden by definition: something the resident did just came
     # back wrong. Without this clause the caller's gate opens and this one
     # closes again — the ask would still be silent on exactly the boundary it
@@ -2184,7 +2235,7 @@ def _render_bar(
         (not pending_known) or pending > 0 or pending_files > 0
         or any_delivery or card_stale or surprise
         or bool(notices_chip) or bool(finished_spawns) or bool(armed)
-        or plan_laden
+        or plan_laden or route_laden
     )
     if not has_obligations_or_deltas and not resources_laden:
         return None
@@ -2281,6 +2332,9 @@ def format_delta(
     plan: "promises.Blueprint | None" = None,
     plan_edge: bool = False,
     ambient_emit: bool = True,
+    route: "course.Course | None" = None,
+    route_edge: bool = False,
+    route_prompt: bool = False,
 ) -> str | None:
     """Render a compact context delta from the live portal-state payload.
 
@@ -2430,6 +2484,7 @@ def format_delta(
             armed=armed, gate_receipt_data=gate_receipt_data,
             plan=plan, plan_edge=plan_edge,
             ambient_emit=ambient_emit,
+            route=route, route_edge=route_edge, route_prompt=route_prompt,
         )
 
     lines: list[str] = []
@@ -2515,6 +2570,14 @@ def format_delta(
             lines.append(
                 "- blueprint: every promise this run made is in its manifest."
             )
+    # The course's closeout read-back, beside the blueprint's (#1008's two
+    # tenses): every open route row, named, unlatched at stop for the same
+    # reason — the closeout is the moment the surface exists for. Inject-only,
+    # never a block: the course is a self-report, so the honest ask is
+    # disposition, not a wall. Silent at seed (a fresh run has no card yet)
+    # and silent when the route is finished or absent.
+    if stop:
+        lines.extend(course.stop_lines(route))
     # Produce is already attested by relics.py; the briefing only compresses
     # it. It rides hook deltas that are rendering for an existing reason and
     # is intentionally absent from the mid-run gate below, so committing work
@@ -3737,6 +3800,17 @@ def compute_neutral(
     plan_token = promises.token(plan)
     plan_edge = plan.any_promises and plan_token != state.get("plan_token")
     state["plan_token"] = plan_token
+    # The course (`.card` §Plan/§Course), read fresh for the same reason as
+    # the blueprint above — a control file the portal token never sees, so
+    # its only path to the boundary is its own latch. Parsed off the card
+    # body; a card with no checkbox section costs one regex scan and
+    # renders nothing.
+    route = course.parse(_read_card_body(ctx))
+    route_token = course.token(route)
+    route_edge = (
+        route is not None and route_token != state.get("route_token")
+    )
+    state["route_token"] = route_token
 
     if phase == PHASE_SESSION_START:
         inject = format_delta(
@@ -3776,7 +3850,7 @@ def compute_neutral(
                 portal, stop=True, run_body=_read_card_body(ctx), mood=mood,
                 note_routing=note_routing,
                 event_seen=event_decisions, inbox_pointer=inbox_pointer,
-                plan=plan,
+                plan=plan, route=route,
             )
             # Latch on the render, not on the decision: a Stop whose token
             # did not move injects nothing, and burning the one statement on
@@ -3867,13 +3941,27 @@ def compute_neutral(
         has_obligations = _has_post_tool_obligations(
             portal, plan, surprise=edge, plan_edge=plan_edge,
             portal_unavailable=portal_unavailable,
+            route=route, route_edge=route_edge,
         )
         ambient_emit = _ambient_should_emit(state, pt_budget, pt_resources)
+
+        # The derailment prompt: a *fresh* event letter (new, or a changed
+        # body — not a `seen ×N` reminder) is the moment "continue or turn"
+        # has to be decided, so the current route row rides that boundary.
+        # Keyed on the render decisions the event ledger already made; a
+        # standing pending event does not re-prompt.
+        route_prompt = route is not None and any(
+            decision.get("status") in ("new", "changed")
+            for decision in (event_decisions or {}).values()
+        )
 
         # Gate: open when there is something to say.  Obligations bypass the
         # token check; ambient and deltas use it as before.
         token_moved = token is not None and token != state.get("last_token")
-        if has_obligations or ambient_emit or edge or plan_edge or token_moved:
+        if (
+            has_obligations or ambient_emit or edge or plan_edge
+            or route_edge or token_moved
+        ):
             inject = format_delta(
                 portal, mood=mood, mood_prompt=mood_prompt, surprise=edge,
                 orient=orient, census=census,
@@ -3881,6 +3969,7 @@ def compute_neutral(
                 gate_receipt_data=gate_receipt_data,
                 plan=plan, plan_edge=plan_edge,
                 ambient_emit=ambient_emit,
+                route=route, route_edge=route_edge, route_prompt=route_prompt,
             )
             state["last_token"] = token
             if ambient_emit and inject is not None:
