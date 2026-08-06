@@ -801,6 +801,11 @@ def _installed_repo_out(row: GitHubInstalledRepo, *, connected_names: set[str]) 
         "updated_label": _age_label(row.github_updated_at),
         "last_seen_label": _age_label(row.last_seen_at),
         "connected": row.repo_full_name.casefold() in connected_names,
+        # The retired "enable" button's replacement: running this from the
+        # checkout *is* the connect step now — best-guess local dir name from
+        # the repo's own short name, same idiom `setup_command` already uses
+        # on a connected repo below.
+        "setup_command": pairing_command(row.repo_full_name.rsplit("/", 1)[-1] or PAIR_REPO_PLACEHOLDER),
     }
 
 

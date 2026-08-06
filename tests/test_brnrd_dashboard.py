@@ -161,6 +161,10 @@ def test_dashboard_repos_api_returns_repo_management_payload():
     assert installed["Gurio/brr"]["connected"] is True
     assert installed["Gurio/new"]["connected"] is False
     assert installed["Gurio/new"]["default_branch"] == "trunk"
+    # The retired "enable" button's replacement (2026-08-06): an installed,
+    # not-yet-connected repo now carries its own setup command — running it
+    # from that checkout is what connects it, no website click first.
+    assert installed["Gurio/new"]["setup_command"].startswith("cd new\n")
     assert body["github_app_slug"] == "brnrd-dev"
     assert body["oauth_ready"] is True
 
