@@ -500,6 +500,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="the issue's project, when it is not this checkout's origin")
     p.set_defaults(func=cmd_relic_issue, action=None)
 
+    # The second PR self-report front door (#317 follow-up): the ``.pr``
+    # control holds exactly one PR per run, so a run that opens more than
+    # one had no legal way to record the rest until now — this mirrors
+    # `relic issue`'s shape onto the same `{"kind": "pr", "number": N}`
+    # grammar `collect()` already parses (and, after the numberless-pr fix,
+    # normalises from a bare ref/URL).
+    p = relic_sub.add_parser(
+        "pr", help="record a PR this run opened, beyond the `.pr` control")
+    p.add_argument("number", help="PR number, #N, or a full forge URL")
+    p.add_argument(
+        "--summary", default=None, metavar="TEXT",
+        help="one line describing the PR")
+    p.set_defaults(func=cmd_relic_pr)
+
     # The blueprint's front door — `.promises.jsonl`, the opposite tense of
     # the relics manifest (#1008). Its own top-level verb rather than a
     # `relic` subcommand: a promise is not produce, the two live in different
@@ -1652,6 +1666,74 @@ def cmd_relic_issue(args):
         return 1
     where = f" in {repo}" if repo else ""
     print(f"[brnrd relic] issue #{number} {action}{where}")
+    return 0
+
+
+def cmd_relic_pr(args):
+    """Append a ``pr`` relic to this run's produce manifest.
+
+    ``.pr`` (the daemon's own auto-derivation control) holds exactly one
+    PR — the shape assumes a run makes at most one. A run that opens a
+    second PR had no legal front door onto the same
+    ``{"kind": "pr", "number": N}`` grammar :func:`relics.collect` already
+    parses, so it silently under-counted against the promise blueprint.
+    This is that front door, the same shape as :func:`cmd_relic_issue`:
+    parse the number (bare, ``#N``, or a full forge URL, via
+    :func:`forges.parse_pull_request_number`), refuse with the shape it
+    wanted on failure, and confirm the file actually grew rather than
+    reporting the intent — ``relics.append`` is best-effort by design,
+    right at closeout and wrong at a prompt.
+    """
+    import sys
+
+    from . import forges
+    from . import relics
+
+    outbox_dir = _wake_outbox_dir()
+    if outbox_dir is None:
+        print(
+            "[brnrd relic] no run outbox in this environment — `brnrd relic` "
+            "records produce for a live brnrd run, and the daemon names the "
+            "outbox through BRR_OUTBOX_DIR / BRR_PORTAL_STATE. Nothing was "
+            "written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    raw = str(getattr(args, "number", "") or "").strip()
+    parsed = forges.parse_pull_request_number(raw)
+    if not parsed:
+        print(
+            f"[brnrd relic] not a PR number or URL: {raw!r} — want a "
+            "positive integer, `#N`, or a full forge PR URL, e.g. "
+            "`brnrd relic pr 1175` or "
+            "`brnrd relic pr https://github.com/o/r/pull/1175`. Nothing "
+            "was written.",
+            file=sys.stderr,
+        )
+        return 1
+    number = int(parsed)
+
+    summary = str(getattr(args, "summary", None) or "").strip() or None
+
+    control = outbox_dir / relics.CONTROL_NAME
+    try:
+        before = control.stat().st_size
+    except OSError:
+        before = 0
+    relics.append(outbox_dir, "pr", number=number, summary=summary)
+    try:
+        after = control.stat().st_size
+    except OSError:
+        after = before
+    if after <= before:
+        print(
+            f"[brnrd relic] could not append to {control} — nothing was "
+            "written.",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"[brnrd relic] pr #{number}")
     return 0
 
 
