@@ -304,6 +304,64 @@ def test_collect_drops_unverified_reported_kb_url(tmp_path: Path, monkeypatch):
 # ── dedupe ───────────────────────────────────────────────────────────
 
 
+def test_collect_recovers_reported_pr_from_ref_url(tmp_path: Path):
+    """The silent-drop fix (run-260806-2208-y0kf): a reported ``pr`` row
+    with no ``number`` but a full-URL ``ref`` used to be dropped by the
+    numberless-pr filter. It now survives, carries the number parsed out
+    of ``ref``, and collapses with an auto-derived row for the same
+    number instead of doubling."""
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "1"}, message="seed")
+    subprocess.run(
+        ["git", "remote", "add", "origin", "git@github.com:Gurio/brr.git"],
+        cwd=repo, check=True,
+    )
+
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    (outbox / ".pr").write_text("1175\n", encoding="utf-8")
+    relics.append(
+        outbox, "pr",
+        ref="https://github.com/hugimuni-labs/brnrd/pull/1175",
+        summary="self-reported",
+    )
+
+    out = relics.collect(repo, branch=None, seed_ref=None, outbox_dir=outbox)
+    prs = [r for r in out if r["kind"] == "pr"]
+    assert len(prs) == 1
+    assert prs[0]["number"] == 1175
+    assert prs[0]["url"]
+    # the resident's own annotation survives the merge with the auto row
+    assert prs[0]["summary"] == "self-reported"
+
+
+def test_collect_still_drops_pr_relic_with_unparseable_ref(tmp_path: Path):
+    """Only a row where neither ``url`` nor ``ref`` parses stays dropped —
+    unrenderable and undedupable, same as before the fix."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    relics.append(outbox, "pr", ref="not-a-pr-reference")
+    relics.append(outbox, "pr", number=42)
+
+    assert relics.collect(
+        None, branch=None, seed_ref=None, outbox_dir=outbox,
+    ) == [{"kind": "pr", "number": 42}]
+
+
+def test_collect_recovered_pr_counts_toward_counts_by_kind(tmp_path: Path):
+    """`counts_by_kind` over `collect()`'s output is the promise blueprint's
+    denominator (`promises.blueprint`) — a recovered reported-PR row must
+    count as a PR made, not vanish from what the blueprint reads as
+    shipped."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    relics.append(outbox, "pr", ref="https://github.com/o/r/pull/99")
+
+    out = relics.collect(None, branch=None, seed_ref=None, outbox_dir=outbox)
+    assert relics.counts_by_kind(out) == {"pr": 1}
+
+
 def test_collect_dedupes_auto_and_reported_pr(tmp_path: Path):
     """Regression: run-260721-0922-pfqd rendered PR #532 twice — the auto
     row (from ``.pr``, with URL) and the resident-reported row (no URL)."""
