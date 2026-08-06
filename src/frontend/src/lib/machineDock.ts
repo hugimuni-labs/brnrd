@@ -286,10 +286,10 @@ export function machineDockVerdict(state: {
 	// The railCondensed parameter is available if state-specific hysteresis
 	// becomes needed, but a constant slack matching the sentinel height works
 	// across both rail states because the viewport positions adjust naturally.
-	const dockSlack = MACHINE_DOCK_SLACK_PX / 2;  // 12px: half the sentinel height
+	const dockSlack = MACHINE_DOCK_SLACK_PX / 2; // 12px: half the sentinel height
 
-	if (state.docked) return state.home < state.dockTop;  // Un-dock when home rises to dockTop
-	return state.home < state.dockTop - dockSlack;  // Dock with reduced but non-zero slack
+	if (state.docked) return state.home < state.dockTop; // Un-dock when home rises to dockTop
+	return state.home < state.dockTop - dockSlack; // Dock with reduced but non-zero slack
 }
 
 /**
