@@ -1048,16 +1048,23 @@ def test_plan_injected_whole_leaves_the_orientation_walk(
     assert names == ["AGENTS.md", "subject-boot-sequence.md"]
 
 
-def test_dropped_workflow_page_is_named_in_the_walk(tmp_path: Path) -> None:
-    """The measured defect (#1061): the one two-party contract page falls off
-    the surface block's path-order walk and nothing else points at it.
+def test_workflow_reserve_rescues_the_old_starvation_fixture(tmp_path: Path) -> None:
+    """The measured defect (#1061) fixed at the source, proven with the exact
+    fixture that used to reproduce it.
 
-    ``workflow.md`` sorts last under ``surface/``, so on a busy surface the
-    byte budget is spent before the walk reaches it — measured four wakes
-    running on this account, each of them acting on remembered merge
-    permissions. The fixture reproduces exactly that: a page sorting earlier
-    (``aaa.md``) eats the budget, and ``workflow.md`` must come back as a
-    named orientation read rather than as silence.
+    Formerly ``test_dropped_workflow_page_is_named_in_the_walk``: ``aaa.md``
+    sorts before ``workflow.md`` and, whole and untrimmed itself, used to eat
+    the entire (tiny) shared budget before the walk ever reached the
+    contract page — measured four wakes running on this account, each of
+    them acting on remembered merge permissions. #1061's named reserve
+    (``prompts._SURFACE_RESERVE_PAGE_BYTES``) now charges ``workflow.md``'s
+    floor *before* the alphabetical walk starts, so this exact scenario no
+    longer starves it — it rides whole, and the orientation-set fallback
+    this test used to require is correctly silent (#628: already handed over
+    whole must not also be billed as a walk entry). The one case the reserve
+    genuinely cannot rescue — a page bigger than its own floor *and* the
+    whole budget — is
+    ``test_workflow_too_big_for_the_reserve_still_names_the_walk`` below.
     """
     from brr import prompts
     from brr import account as acc_mod
@@ -1078,16 +1085,53 @@ def test_dropped_workflow_page_is_named_in_the_walk(tmp_path: Path) -> None:
     ctx = acc_mod.resolve_context(tmp_path, cfg, create=False)
     workflow = (acc_mod.work_surface_path(ctx) / "workflow.md").resolve()
 
-    # The fixture's own claim: the surface block did NOT hand it over whole.
+    # The fixture's old claim inverted: the reserve now hands it over whole.
+    assert workflow in whole
+    assert "self-merge conditions" in trim.text
+
+    entries = prompts._build_orientation_set(
+        tmp_path, runner_shell="claude", injected_whole=whole,
+    )
+    assert workflow not in {Path(e.path) for e in entries}, (
+        "already injected whole by the reserve — naming it again in the "
+        "walk would bill the wake for a Read of a file it already holds"
+    )
+
+
+def test_workflow_too_big_for_the_reserve_still_names_the_walk(tmp_path: Path) -> None:
+    """The one case #1061's reserve cannot rescue: a page bigger than both
+    its own floor and the entire shared budget. The surface block still
+    can't hand it over whole, so the orientation-set fallback (#628) must
+    still name it — the invariant the pre-reserve starvation fixture used
+    to guard, now reproduced with a fixture the reserve genuinely can't fit.
+    """
+    from brr import prompts
+    from brr import account as acc_mod
+    from brr import config as conf_mod
+
+    home = _seed_account_home_for_orientation(
+        tmp_path, extra_config="dominion.surface_inject_budget_bytes=200\n",
+    )
+    surface = home / "surface"
+    surface.mkdir(exist_ok=True)
+    (surface / "workflow.md").write_text(
+        "# Workflow\n\n" + ("w" * 10_000), encoding="utf-8",
+    )
+
+    trim, whole = prompts._build_work_surface_block_scored(tmp_path)
+    cfg = conf_mod.load_config(tmp_path)
+    ctx = acc_mod.resolve_context(tmp_path, cfg, create=False)
+    workflow = (acc_mod.work_surface_path(ctx) / "workflow.md").resolve()
+
+    # The fixture's own claim: even the reserve's floor can't fit this.
     assert workflow not in whole
-    assert "self-merge conditions" not in trim.text
 
     entries = prompts._build_orientation_set(
         tmp_path, runner_shell="claude", injected_whole=whole,
     )
     assert workflow in {Path(e.path) for e in entries}, (
-        "the contract page was dropped from the injection and must be named "
-        "in the walk — otherwise the wake never learns it went missing"
+        "the contract page still couldn't ride whole and must be named in "
+        "the walk — otherwise the wake never learns it went missing"
     )
 
 
@@ -1147,11 +1191,19 @@ def test_codex_plan_whole_no_hub_match_empties_the_walk(tmp_path: Path) -> None:
     assert "orient:" not in format_kernel(score)
 
 
-def test_budget_exhausted_plan_stays_in_the_walk(tmp_path: Path) -> None:
-    """The load-bearing case option 1 (structural exclusion) would break:
-    when the surface block's shared budget runs out before it reaches the
-    plan, the plan is never handed over whole, so it must stay in the walk —
-    it is the only remaining pointer to it.
+def test_active_plan_reserve_rescues_the_old_starvation_fixture(tmp_path: Path) -> None:
+    """The load-bearing case option 1 (structural exclusion) would break —
+    proven with the exact fixture that used to need the walk fallback.
+
+    Formerly ``test_budget_exhausted_plan_stays_in_the_walk``: ``aaa.md``
+    sorts before ``plans/...`` and, whole and untrimmed itself, used to
+    consume nearly the entire (tiny) shared budget before the walk reached
+    the plan. #1061's named reserve now charges the plan's floor before the
+    alphabetical walk starts, so this exact scenario no longer starves it —
+    it rides whole, and #628's subtraction correctly keeps it out of the
+    orientation-set fallback. The one case the reserve genuinely cannot
+    rescue is
+    ``test_active_plan_too_big_for_the_reserve_still_names_the_walk`` below.
     """
     from brr import prompts
     from brr import account as acc_mod
@@ -1162,8 +1214,8 @@ def test_budget_exhausted_plan_stays_in_the_walk(tmp_path: Path) -> None:
     )
     surface = home / "surface"
     surface.mkdir(exist_ok=True)
-    # Sorts before "plans/..." (a < p) and, whole and untrimmed itself,
-    # consumes nearly the entire (tiny) shared budget.
+    # Sorts before "plans/..." (a < p) — used to consume nearly the entire
+    # (tiny) shared budget before the walk ever reached the plan.
     (surface / "aaa.md").write_text("x" * 180, encoding="utf-8")
     plan_dir = surface / "plans" / "local__default"
     plan_dir.mkdir(parents=True)
@@ -1174,10 +1226,48 @@ def test_budget_exhausted_plan_stays_in_the_walk(tmp_path: Path) -> None:
     ctx = acc_mod.resolve_context(tmp_path, cfg, create=False)
     plan_path = acc_mod.active_plan_path(ctx, "local/default").resolve()
 
-    # The fixture's own claim: the plan did NOT make it into the surface
-    # block whole (budget ran out — trimmed or skipped, either counts).
+    # The fixture's old claim inverted: the reserve now hands it over whole.
+    assert plan_path in whole
+    assert "ship it" in trim.text
+
+    entries = prompts._build_orientation_set(
+        tmp_path, runner_shell="claude", injected_whole=whole,
+    )
+    assert plan_path not in {Path(e.path) for e in entries}, (
+        "already injected whole by the reserve — naming it again in the "
+        "walk would bill the wake for a Read of a file it already holds"
+    )
+
+
+def test_active_plan_too_big_for_the_reserve_still_names_the_walk(tmp_path: Path) -> None:
+    """The one case #1061's reserve cannot rescue: a plan bigger than both
+    its own floor and the entire shared budget still needs the
+    orientation-set fallback (#628) — the invariant the pre-reserve
+    starvation fixture used to guard, reproduced with a fixture the reserve
+    genuinely can't fit.
+    """
+    from brr import prompts
+    from brr import account as acc_mod
+    from brr import config as conf_mod
+
+    home = _seed_account_home_for_orientation(
+        tmp_path, extra_config="dominion.surface_inject_budget_bytes=200\n",
+    )
+    surface = home / "surface"
+    surface.mkdir(exist_ok=True)
+    plan_dir = surface / "plans" / "local__default"
+    plan_dir.mkdir(parents=True)
+    (plan_dir / "active.md").write_text(
+        "# Plan\n\n" + ("p" * 10_000), encoding="utf-8",
+    )
+
+    trim, whole = prompts._build_work_surface_block_scored(tmp_path)
+    cfg = conf_mod.load_config(tmp_path)
+    ctx = acc_mod.resolve_context(tmp_path, cfg, create=False)
+    plan_path = acc_mod.active_plan_path(ctx, "local/default").resolve()
+
+    # The fixture's own claim: even the reserve's floor can't fit this.
     assert plan_path not in whole
-    assert "ship it" not in trim.text
 
     entries = prompts._build_orientation_set(
         tmp_path, runner_shell="claude", injected_whole=whole,
