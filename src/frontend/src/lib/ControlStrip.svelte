@@ -370,7 +370,7 @@
 										     opposite way. -->
 												<svg
 													viewBox="0 0 12 12"
-													class="h-[9px] w-[9px] -rotate-90 {row.stale ? 'opacity-40' : ''}"
+													class="h-[9px] w-[9px] -rotate-90 scale-x-[-1] {row.stale ? 'opacity-40' : ''}"
 													aria-hidden="true"
 												>
 													<circle
