@@ -3277,6 +3277,7 @@ def _run_worker(
         strand=is_strand_run,
         account_context=account_context,
         repo_label=repo_label,
+        observer_run_id=task.id,
     )
     if woven_sibling_ids:
         pending_events_snapshot = [
@@ -3290,6 +3291,7 @@ def _run_worker(
         strand=is_strand_run,
         account_context=account_context,
         repo_label=repo_label,
+        observer_run_id=task.id,
     )
 
     # Other thoughts awake right now (presence registry), excluding this
@@ -3922,6 +3924,7 @@ def _run_worker(
                 strand=is_strand_run,
                 account_context=account_context,
                 repo_label=repo_label,
+                observer_run_id=task.id,
             )
             _write_live_portal_state(
                 outbox_dir,
@@ -3995,6 +3998,7 @@ def _run_worker(
                 strand=is_strand_run,
                 account_context=account_context,
                 repo_label=repo_label,
+                observer_run_id=task.id,
             )
             _write_live_portal_state(
                 outbox_dir,
@@ -4102,6 +4106,7 @@ def _run_worker(
             strand=is_strand_run,
             account_context=account_context,
             repo_label=repo_label,
+            observer_run_id=task.id,
         )
         _write_live_portal_state(
             outbox_dir,
@@ -4838,6 +4843,7 @@ def _pending_events_for_agent(
     strand: bool = False,
     account_context: account.AccountContext | None = None,
     repo_label: str | None = None,
+    observer_run_id: str | None = None,
 ) -> list[dict[str, object]]:
     """Return other waiting events the resident may fold in.
 
@@ -4859,6 +4865,20 @@ def _pending_events_for_agent(
     correctly explained (on ``.card``) that the event was queued on purpose
     (found live, 2026-07-06: a codex-shell respawn stuck a run in a
     fold-in-or-explain loop it had already resolved).
+
+    *observer_run_id*, when given, is **this call's own run id** — this
+    function is the one place a ``spawn_completed`` fact actually reaches a
+    running resident's visible surface (this list feeds the wake prompt,
+    ``inbox.json`` and ``portal-state.json`` — every call site names it).
+    That makes it the observation point (#1146): a ``spawn_completed`` this
+    run is folding in, whose declared parent *is* this run, gets stamped
+    ``observed_by``/``observed_at`` (same idiom as ``_note_event_closed``'s
+    ``noted_by``/``noted_at``) so :func:`_retire_internal_event` can later
+    retire only the completions this parent provably rendered, rather than
+    every completion merely pending-on-disk when the parent happened to end.
+    Scoped to an exact ``spawn_parent_run_id`` match so a *different*
+    resident that can also see this event (e.g. sharing an account dispatch
+    drawer) never stamps a parent it isn't.
     """
     sources: list[tuple[Path, str | None, bool]] = [(inbox_dir, None, False)]
     if account_context is not None and account_context.enabled and repo_label:
@@ -4909,6 +4929,21 @@ def _pending_events_for_agent(
             # thread's pending events belong to its dispatcher, not to it.
             if strand and not edge_target:
                 continue
+            # Observation stamp (#1146): only the declared parent's own
+            # render of its own completion counts. Best-effort — a failed
+            # write here must not drop the event from this wake's own view.
+            if (
+                observer_run_id
+                and ev.get("source") == "spawn_completed"
+                and str(ev.get("spawn_parent_run_id") or "") == observer_run_id
+                and not ev.get("observed_by")
+            ):
+                try:
+                    protocol.update_event_meta(
+                        ev, observed_by=observer_run_id, observed_at=_utc_now(),
+                    )
+                except OSError:
+                    pass
             events.append(ev)
     return [
         _pending_event_record(ev)
@@ -4924,6 +4959,7 @@ def _write_live_inbox(
     strand: bool = False,
     account_context: account.AccountContext | None = None,
     repo_label: str | None = None,
+    observer_run_id: str | None = None,
 ) -> Path | None:
     """Refresh the live inbox view exposed to the running resident.
 
@@ -4934,6 +4970,10 @@ def _write_live_inbox(
     The *writing* moved to :mod:`portals` (#507 L3) so init can produce the
     same file without a daemon; what stays here is the daemon's own
     visibility rule — which pending events this wake is allowed to see.
+
+    *observer_run_id* forwards to :func:`_pending_events_for_agent` — see
+    its docstring (#1146): this is one of the render sites that counts as
+    "observed" for a ``spawn_completed`` fact.
     """
     return portals.write_live_inbox(
         outbox_dir,
@@ -4944,6 +4984,7 @@ def _write_live_inbox(
             strand=strand,
             account_context=account_context,
             repo_label=repo_label,
+            observer_run_id=observer_run_id,
         ),
     )
 
@@ -5492,6 +5533,7 @@ def _write_live_portal_state(
             strand=_is_strand(task.meta) if hasattr(task, "meta") else False,
             account_context=account_context,
             repo_label=repo_label,
+            observer_run_id=task.id,
         )
         await_state = _resolve_await_state(
             task, events,
@@ -8927,21 +8969,31 @@ def _retire_internal_event(
     store and the dispatch event is closed in place, preserving the same audit
     shape as every other target.
 
-    When *inbox_dir* and *run_id* are supplied, also retires all
-    ``spawn_completed`` events in the inbox whose ``spawn_parent_run_id``
-    matches *run_id* — these were observed by the owning (parent) run during
-    its lifetime.  A ``spawn_completed`` is a **fact for the parent**, not a
-    message with a correspondent: the daemon's own refusal text says as much.
-    The parent run ending is the observation point that closes them so they
-    never dispatch a fresh run or appear as an un-clearable obligation.
+    When *inbox_dir* and *run_id* are supplied, also retires every
+    ``spawn_completed`` event in the inbox whose ``spawn_parent_run_id``
+    matches *run_id* **and** carries an ``observed_by`` stamp equal to
+    *run_id* (#1146). A ``spawn_completed`` is a **fact for the parent**, not
+    a message with a correspondent: the daemon's own refusal text says as
+    much — but pending-on-disk is not evidence the parent ever saw it. The
+    stamp is written by :func:`_pending_events_for_agent`, the one place this
+    fact actually reaches a running resident's visible surface (the wake
+    prompt, ``inbox.json``, ``portal-state.json``); it is the strongest fact
+    the daemon can hold without the agent's own cooperation, though it does
+    not strictly prove the resident *read* it, only that it was rendered
+    into a surface the resident could have read. A completion the parent's
+    run never rendered — the child finished after the parent's last tool
+    boundary, the classic tail-of-run race — has no stamp, so it **survives**
+    retirement and stays a pending event a successor (or, since #1147, an
+    adopter) can still act on, instead of silently vanishing.
     """
-    # Retire every spawn_completed event this run observed as the parent.
-    # Best-effort: a failed write on one event must not abort the rest.
+    # Retire every spawn_completed event this run actually rendered as the
+    # parent. Best-effort: a failed write on one event must not abort the rest.
     if inbox_dir is not None and run_id:
         for ev in protocol.list_pending(inbox_dir):
             if (
                 ev.get("source") == "spawn_completed"
                 and ev.get("spawn_parent_run_id") == run_id
+                and ev.get("observed_by") == run_id
                 and ev.get("_path")
             ):
                 try:
