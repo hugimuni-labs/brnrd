@@ -446,6 +446,7 @@ def _has_post_tool_obligations(
     portal_unavailable: bool,
     route: "course.Course | None" = None,
     route_edge: bool = False,
+    bolt_edge: bool = False,
 ) -> bool:
     """True when this boundary carries at least one obligation.
 
@@ -518,6 +519,12 @@ def _has_post_tool_obligations(
     # the daemon's portal token never sees, so an edited route can only
     # reach the boundary through its own latch (#1008's gate-opener rule).
     if route is not None and route_edge and route.open_rows:
+        return True
+    # The bolt gauge's edge, same shape once more: an outstanding promise is
+    # already an obligation (the ``plan_edge`` clause above), and a bolt-token
+    # move while one still stands is worth re-opening the boundary for, even
+    # when the thing that moved the token was only the produce count.
+    if bolt_edge and plan is not None and plan.owed:
         return True
     return False
 
@@ -1109,6 +1116,23 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         klass=OBLIGATION,
     ),
     _BarSegment(
+        "bolt", "bolt",
+        "the run's completion accretion gauge (design-the-bolt.md "
+        "§Accretion): `bolt A/T asks · owed N · produce M` — A/T = asks "
+        "this run has seen that are no longer pending / total distinct asks "
+        "ever seen; owed/produce mirror the `owed`/`⚒` chips (zero parts "
+        "omitted). A derived gauge, not a new obligation to author — it "
+        "reads the same ledgers `owed`/`⚒` already read. Renders only once "
+        "the run has seen ≥1 ask or has any produce/promise; a wake that "
+        "has done nothing renders no `bolt` chip.",
+        # Obligation: an undispositioned ask or an outstanding promise is
+        # actionable and turn-off-able by disposing/shipping it — same test
+        # as `owed`/`course`. The chip itself is gateless (never opens the
+        # bar alone, like `owed`/`course`); the detail line, latched on the
+        # gauge's own token edge or a fresh event, is what earns a boundary.
+        klass=OBLIGATION,
+    ),
+    _BarSegment(
         "mood", "mood",
         "the resident's own `.mood` control file (#566 layer 2), truncated "
         "to 16 chars, with the emote's base-frame glyph prefixed when "
@@ -1626,6 +1650,29 @@ _EVENT_FIRST_LINE_MAX = 160
 # so "already shown" must be persisted, not remembered.
 EVENTS_SEEN_KEY = "events_seen"
 
+# Hook-state key: the bolt gauge's ``T`` (design-the-bolt.md §Accretion) — a
+# sorted list of every distinct action-event id this run has ever carried as
+# pending. Deliberately **not** the same storage as EVENTS_SEEN_KEY above:
+# that ledger is pruned to events still pending (it exists to dedupe letter
+# chrome), so its size *is* the current pending count, not a cumulative
+# total. This key only ever grows — an id, once added, is never removed, so
+# ``len()`` of it is "distinct asks this run has seen", the numerator half
+# of `bolt A/T asks` survives an event's own disposition.
+EVENTS_SEEN_ALL_KEY = "events_seen_all_ids"
+
+# Hook-state key: per-detail-line consecutive-render streak, for the
+# compression-on-repeat rule (#1116 residue, design-the-live-loop.md §1). One
+# entry per compressible OBLIGATION detail line (``notices`` / ``running_long``
+# / ``name_nudge`` / ``card_stale``): incremented every laden boundary the
+# line is due, reset to 0 the moment it is not — so "3rd+ consecutive laden
+# boundary" is a plain counter comparison, not a content diff.
+REPEAT_COUNTS_KEY = "detail_repeat_counts"
+
+#: Below this consecutive-streak count a compressible detail line renders in
+#: full; at and above it, compact. N≥3 per the design ("Nth consecutive laden
+#: boundary (N≥3)").
+_REPEAT_COMPRESS_THRESHOLD = 3
+
 # Source → glyph, first substring match wins. `schedule` before the default
 # so a compound source stays honest; anything unknown reads as a letter.
 _EVENT_GLYPHS = (
@@ -1916,6 +1963,47 @@ def _commit_event_seen(
     state[EVENTS_SEEN_KEY] = out
 
 
+def _commit_events_seen_all(state: dict[str, Any], ids: Any) -> int:
+    """Union *ids* into the bolt gauge's cumulative distinct-asks ledger.
+
+    Unlike :func:`_commit_event_seen` (pruned to currently-pending events,
+    for letter-chrome dedup), this key never prunes: it is ``T`` in
+    ``bolt A/T asks`` (design-the-bolt.md §Accretion), a plain count of every
+    distinct action-event id this run has ever carried, whether or not it is
+    still pending. Called every phase (seed/post-tool/stop) since an ask can
+    arrive on any of them. Returns the total count after the union.
+    """
+    existing = state.get(EVENTS_SEEN_ALL_KEY)
+    seen_ids: set[str] = set(existing) if isinstance(existing, list) else set()
+    for eid in ids:
+        if eid:
+            seen_ids.add(eid)
+    state[EVENTS_SEEN_ALL_KEY] = sorted(seen_ids)
+    return len(seen_ids)
+
+
+def _bump_repeat_streaks(
+    state: dict[str, Any], dues: dict[str, bool]
+) -> dict[str, int]:
+    """Advance the compression-on-repeat counters (#1116 residue).
+
+    *dues* maps each compressible detail-line key to whether it is due to
+    render on **this** boundary. A key that is due gets its streak
+    incremented; a key that is not due resets to 0 — so a line that clears
+    and later reappears starts over at "new", full form. Persisted in hook
+    state (fresh subprocess per hook fire), same discipline as
+    :data:`EVENTS_SEEN_KEY`.
+    """
+    store = state.get(REPEAT_COUNTS_KEY)
+    if not isinstance(store, dict):
+        store = {}
+    updated: dict[str, int] = {}
+    for key, due in dues.items():
+        updated[key] = (int(store.get(key) or 0) + 1) if due else 0
+    state[REPEAT_COUNTS_KEY] = updated
+    return updated
+
+
 def _render_armed_rows(armed: list[Any] | None) -> list[str]:
     """The armed dated-letters block (#904): one line per pending ``at:`` entry.
 
@@ -2019,6 +2107,9 @@ def _render_bar(
     route: "course.Course | None" = None,
     route_edge: bool = False,
     route_prompt: bool = False,
+    bolt_asks_total: int | None = None,
+    bolt_edge: bool = False,
+    repeat_streaks: dict[str, int] | None = None,
 ) -> str | None:
     """The mid-run (``post-tool``) status bar: one line + obligation details.
 
@@ -2100,6 +2191,31 @@ def _render_bar(
     course_chip = course.chip(route)
     if course_chip:
         segments.append(("course", course_chip))
+    # The bolt gauge (design-the-bolt.md §Accretion): a derived reading over
+    # ledgers already read above — never re-derived, never a new obligation
+    # to author. Gateless like `owed`/`course`: the detail line below (on the
+    # gauge's own edge, or a fresh event) earns the boundary, not this chip.
+    bolt_chip = None
+    bolt_owed_total = 0
+    bolt_asks_answered = 0
+    bolt_asks_total_clamped = 0
+    if bolt_asks_total is not None:
+        bolt_asks_total_clamped = max(0, int(bolt_asks_total))
+        bolt_asks_answered = max(0, bolt_asks_total_clamped - pending)
+        bolt_owed_total = sum(plan.owed.values()) if plan is not None else 0
+        bolt_any_promise = bool(plan is not None and plan.any_promises)
+        if bolt_asks_total_clamped or bolt_owed_total or produce_total or bolt_any_promise:
+            parts: list[str] = []
+            if bolt_asks_total_clamped:
+                parts.append(f"{bolt_asks_answered}/{bolt_asks_total_clamped} asks")
+            if bolt_owed_total:
+                parts.append(f"owed {bolt_owed_total}")
+            if produce_total:
+                parts.append(f"produce {produce_total}")
+            if parts:
+                bolt_chip = "bolt " + " · ".join(parts)
+    if bolt_chip:
+        segments.append(("bolt", bolt_chip))
     notices_chip = _notices_chip(notices or [])
     if notices_chip:
         segments.append(("notices", notices_chip))
@@ -2130,19 +2246,32 @@ def _render_bar(
     segments.append(("card", _card_chip(card, card_stale)))
 
     details: list[str] = []
+    repeat_streaks_in = repeat_streaks or {}
     if notices_chip:
         # #1116 residue: every other OBLIGATION-class chip gets a detail
         # line naming the act that clears it — `!N` didn't. Reuse the count
         # already computed for the chip (`!N`) rather than recomputing it.
         notices_count = int(notices_chip[1:])
-        details.append(
-            f"!{notices_count} — {notices_count} directive"
-            + ("s" if notices_count != 1 else "")
-            + " refused/dropped this run. Read `portal-state.json` → "
-            "`notices` for the text; a refused outbox file is deleted "
-            "exactly like an accepted one, so this is the only way to see "
-            "what was lost."
-        )
+        notices_streak = repeat_streaks_in.get("notices", 0)
+        if notices_streak >= _REPEAT_COMPRESS_THRESHOLD:
+            # Compression-on-repeat (#1116 residue, design-the-live-loop.md
+            # §1): the boilerplate sentence is what repeats byte-for-byte
+            # every boundary the count stands unaddressed — the compact form
+            # keeps the live count and the discharge surface, drops the
+            # sentence.
+            details.append(
+                f"- !{notices_count} · seen ×{notices_streak} — "
+                "portal-state.json → notices"
+            )
+        else:
+            details.append(
+                f"!{notices_count} — {notices_count} directive"
+                + ("s" if notices_count != 1 else "")
+                + " refused/dropped this run. Read `portal-state.json` → "
+                "`notices` for the text; a refused outbox file is deleted "
+                "exactly like an accepted one, so this is the only way to see "
+                "what was lost."
+            )
     if not mood and mood_prompt:
         # Same #1116 residue as the notices chip just above: the blank-mood
         # nudge names the ask (`mood?`) but never what discharges it. The
@@ -2191,23 +2320,64 @@ def _render_bar(
         route_line = course.current_line(route)
         if route_line:
             details.append(route_line)
+    # The bolt gauge's detail line: latched on its own token edge (the
+    # accretion moved — an ask got dispositioned, a promise was made/met,
+    # produce landed), and re-rendered on ``route_prompt`` for the same
+    # "fresh event ⇒ re-render your position against it" reason the course
+    # line uses just above — a new ask is exactly the moment the
+    # undispositioned count needs to be in the loud zone. Never latched to
+    # the compression-on-repeat counters below: like `owed`/`course`, it
+    # already speaks only on its own edge, so it never repeats byte-for-byte
+    # in the first place.
+    if bolt_chip and (bolt_edge or route_prompt):
+        bolt_parts: list[str] = []
+        if bolt_asks_total_clamped:
+            bolt_parts.append(
+                f"{bolt_asks_answered}/{bolt_asks_total_clamped} asks dispositioned"
+            )
+        if bolt_owed_total:
+            bolt_parts.append(f"{bolt_owed_total} owed")
+        if produce_total:
+            bolt_parts.append(f"{produce_total} produce")
+        bolt_summary = " · ".join(bolt_parts) if bolt_parts else "the accretion gauge"
+        details.append(
+            f"- bolt: {bolt_summary} — keep the card's `## Bolt` draft "
+            "current and disposition each ask (`event:` / `note:`) as it "
+            "lands; `brnrd cut` is the closing act."
+        )
+    streaks = repeat_streaks_in
     if budget.get("long_running"):
         limit = budget.get("budget_seconds")
-        details.append(
-            f"- running long: past the {limit}s soft budget — extend via "
-            ".keepalive if the work needs it, else wind down."
-        )
+        if streaks.get("running_long", 0) >= _REPEAT_COMPRESS_THRESHOLD:
+            details.append(
+                f"- running long · seen ×{streaks['running_long']} — .keepalive"
+            )
+        else:
+            details.append(
+                f"- running long: past the {limit}s soft budget — extend via "
+                ".keepalive if the work needs it, else wind down."
+            )
     elapsed = budget.get("elapsed_seconds")
     if not run_name.get("written") and isinstance(elapsed, (int, float)) and elapsed >= 240:
-        details.append(
-            "- .name: still unwritten — add a short resident-authored run name "
-            "so the live dashboard can identify this work beyond its waking-message excerpt."
-        )
+        if streaks.get("name_nudge", 0) >= _REPEAT_COMPRESS_THRESHOLD:
+            details.append(
+                f"- .name? · seen ×{streaks['name_nudge']} — write .name"
+            )
+        else:
+            details.append(
+                "- .name: still unwritten — add a short resident-authored run name "
+                "so the live dashboard can identify this work beyond its waking-message excerpt."
+            )
     if card_stale:
         age = card.get("age_seconds")
         age_txt = f"{age}s" if age is not None else "a while"
         moved = card.get("state_moved_seconds")
-        if card.get("active") and moved is not None:
+        if streaks.get("card_stale", 0) >= _REPEAT_COMPRESS_THRESHOLD:
+            details.append(
+                f"- card stale ({age_txt}) · seen ×{streaks['card_stale']} "
+                "— rewrite .card"
+            )
+        elif card.get("active") and moved is not None:
             details.append(
                 f"- card: the run moved {moved}s ago (produce, branch, "
                 "delivery, or pending events) and .card hasn't been rewritten "
@@ -2358,6 +2528,9 @@ def format_delta(
     route: "course.Course | None" = None,
     route_edge: bool = False,
     route_prompt: bool = False,
+    bolt_asks_total: int | None = None,
+    bolt_edge: bool = False,
+    repeat_streaks: dict[str, int] | None = None,
 ) -> str | None:
     """Render a compact context delta from the live portal-state payload.
 
@@ -2508,6 +2681,8 @@ def format_delta(
             plan=plan, plan_edge=plan_edge,
             ambient_emit=ambient_emit,
             route=route, route_edge=route_edge, route_prompt=route_prompt,
+            bolt_asks_total=bolt_asks_total, bolt_edge=bolt_edge,
+            repeat_streaks=repeat_streaks,
         )
 
     lines: list[str] = []
@@ -2606,6 +2781,19 @@ def format_delta(
     # and silent when the route is finished or absent.
     if stop:
         lines.extend(course.stop_lines(route))
+        # The bolt (design-the-bolt.md): the closing act, named. `brnrd cut`
+        # is the porcelain a sibling change is shipping this same evening —
+        # naming it here is correct regardless of merge order, the same way
+        # every other closeout clause above names a verb that already exists.
+        # Everything the declaration needs is already on this page: `asks`
+        # from the pending-event rows, `produce`/`owed` from the sections
+        # just above.
+        lines.append(
+            "- bolt: declare this run's completion with `brnrd cut` before "
+            "closing — asks dispositioned, produce attested (legal-minimal: "
+            "attesting none is fine, declared as such), owed cleared or "
+            "carried."
+        )
     # Produce is already attested by relics.py; the briefing only compresses
     # it. It rides hook deltas that are rendering for an existing reason and
     # is intentionally absent from the mid-run gate below, so committing work
@@ -3894,6 +4082,30 @@ def compute_neutral(
     )
     state["route_token"] = route_token
 
+    # The bolt gauge (design-the-bolt.md §Accretion): T/A over the run's
+    # whole lifetime, so computed once here — before the phase branch, like
+    # `plan`/`route` above — rather than per-phase. The partition is shared
+    # with the Stop branch below rather than re-run there.
+    action_events, _finished_spawn_events, action_pending = (
+        _partition_pending_events(portal)
+    )
+    bolt_asks_total = _commit_events_seen_all(
+        state,
+        (
+            str(ev.get("id") or "")
+            for ev in action_events if isinstance(ev, dict)
+        ),
+    )
+    bolt_owed_total = sum(plan.owed.values()) if plan is not None else 0
+    bolt_produce_total = _produce_total(portal_produce)
+    bolt_asks_answered = max(0, bolt_asks_total - action_pending)
+    bolt_token = json.dumps(
+        [bolt_asks_total, bolt_asks_answered, bolt_owed_total, bolt_produce_total],
+        separators=(",", ":"),
+    )
+    bolt_edge = bolt_token != state.get("bolt_token")
+    state["bolt_token"] = bolt_token
+
     if phase == PHASE_SESSION_START:
         inject = format_delta(
             portal, seed=True, mood=mood,
@@ -4023,7 +4235,7 @@ def compute_neutral(
         has_obligations = _has_post_tool_obligations(
             portal, plan, surprise=edge, plan_edge=plan_edge,
             portal_unavailable=portal_unavailable,
-            route=route, route_edge=route_edge,
+            route=route, route_edge=route_edge, bolt_edge=bolt_edge,
         )
         ambient_emit = _ambient_should_emit(state, pt_budget, pt_resources)
 
@@ -4037,12 +4249,37 @@ def compute_neutral(
             for decision in (event_decisions or {}).values()
         )
 
+        # Compression-on-repeat (#1116 residue, design-the-live-loop.md §1):
+        # advance each compressible detail line's consecutive-laden-boundary
+        # streak, off the exact same "due" reads `_has_post_tool_obligations`
+        # and `_render_bar` use for these four lines — so the streak can
+        # never fall out of step with what actually renders.
+        pt_notices = (
+            portal.get("notices") if isinstance(portal.get("notices"), list) else []
+        )
+        pt_card = portal.get("card") if isinstance(portal.get("card"), dict) else {}
+        pt_run_name = (
+            portal.get("name") if isinstance(portal.get("name"), dict) else {}
+        )
+        pt_elapsed = pt_budget.get("elapsed_seconds")
+        repeat_streaks = _bump_repeat_streaks(state, {
+            "notices": bool(_counted_notices(pt_notices)),
+            "running_long": bool(pt_budget.get("long_running")),
+            "name_nudge": (
+                not pt_run_name.get("written")
+                and isinstance(pt_elapsed, (int, float))
+                and not isinstance(pt_elapsed, bool)
+                and pt_elapsed >= 240
+            ),
+            "card_stale": bool(pt_card.get("stale")),
+        })
+
         # Gate: open when there is something to say.  Obligations bypass the
         # token check; ambient and deltas use it as before.
         token_moved = token is not None and token != state.get("last_token")
         if (
             has_obligations or ambient_emit or edge or plan_edge
-            or route_edge or token_moved
+            or route_edge or bolt_edge or token_moved
         ):
             inject = format_delta(
                 portal, mood=mood, mood_prompt=mood_prompt, surprise=edge,
@@ -4052,6 +4289,8 @@ def compute_neutral(
                 plan=plan, plan_edge=plan_edge,
                 ambient_emit=ambient_emit,
                 route=route, route_edge=route_edge, route_prompt=route_prompt,
+                bolt_asks_total=bolt_asks_total, bolt_edge=bolt_edge,
+                repeat_streaks=repeat_streaks,
             )
             state["last_token"] = token
             if ambient_emit and inject is not None:
@@ -4073,9 +4312,9 @@ def compute_neutral(
         state[MOOD_NUDGE_KEY] = True
 
     if phase == PHASE_STOP:
-        action_events, _finished_spawns, action_pending = (
-            _partition_pending_events(portal)
-        )
+        # `action_events` / `action_pending` were already partitioned above
+        # (shared with the bolt gauge's T/A, unconditionally computed before
+        # the phase branch) — no need to re-run the same pure split here.
         # Token-scoped, not a one-shot boolean: a plain "blocked once ever"
         # latch (the pre-fix shape) never let a *later*, genuinely new
         # follow-up re-block once the run had folded in any earlier one —
