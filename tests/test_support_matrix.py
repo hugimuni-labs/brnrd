@@ -68,11 +68,17 @@ def test_module_shipped_answers_false_for_a_non_import_error_too(monkeypatch):
 # --- hosted_status (brnrd.dev app landing truth) -----------------------------
 
 
-def test_hosted_status_is_soon_when_brnrd_dev_has_no_credentials():
+def test_hosted_status_is_ready_when_brnrd_dev_has_no_credentials():
+    """Shipped code with an unconfigured hosted axis is "ready", not
+    "soon" — "soon" is reserved for code that does not exist yet, and
+    conflating the two misreports finished work as unwritten (the
+    WhatsApp half of the maintainer's brief: #1074 shipped the cloud lane
+    a day before Meta business verification, and the shelf called it
+    "soon" throughout, indistinguishable from code not merged at all)."""
     settings = _settings()
-    assert support_matrix.hosted_status("telegram", settings) == "soon"
-    assert support_matrix.hosted_status("whatsapp", settings) == "soon"
-    assert support_matrix.hosted_status("github", settings) == "soon"
+    assert support_matrix.hosted_status("telegram", settings) == "ready"
+    assert support_matrix.hosted_status("whatsapp", settings) == "ready"
+    assert support_matrix.hosted_status("github", settings) == "ready"
 
 
 def test_hosted_status_is_live_once_brnrd_dev_is_configured():
@@ -88,17 +94,21 @@ def test_hosted_status_is_live_once_brnrd_dev_is_configured():
 
 def test_hosted_status_needs_every_configured_field_not_just_one():
     settings = _settings(telegram_bot_token="t")  # username still empty
-    assert support_matrix.hosted_status("telegram", settings) == "soon"
+    assert support_matrix.hosted_status("telegram", settings) == "ready"
 
 
-def test_hosted_status_never_promotes_a_door_that_has_no_hosted_axis():
+def test_hosted_status_never_claims_live_for_a_door_with_no_hosted_axis():
     """Slack and Signal never touch brnrd.dev's backend at all (self-hosted
-    gates, no Settings fields exist for them) — hosted truth mirrors
-    shipped truth for these regardless of what garbage a settings object
-    might otherwise carry, and the web dashboard is brnrd.dev itself."""
+    gates, no Settings fields exist for them) — shipped code with nothing
+    to configure reads "ready", the same "no confirmed identity yet" state
+    an unconfigured WhatsApp reads, never a fabricated "live" (the Signal/
+    Slack half of the maintainer's brief: a live tile with no gate behind
+    it reads as an address to message, and there isn't one). The web
+    dashboard *is* brnrd.dev, so it is the one door that stays "live" with
+    no cloud_settings at all."""
     settings = _settings()
-    assert support_matrix.hosted_status("slack", settings) == "live"
-    assert support_matrix.hosted_status("signal", settings) == "live"
+    assert support_matrix.hosted_status("slack", settings) == "ready"
+    assert support_matrix.hosted_status("signal", settings) == "ready"
     assert support_matrix.hosted_status("dashboard", settings) == "live"
 
 
@@ -109,6 +119,15 @@ def test_hosted_status_never_claims_live_for_code_that_is_not_shipped():
     unshipped = replace(support_matrix.door("whatsapp"), shipped=lambda: False)
     settings = _settings(whatsapp_access_token="w", whatsapp_phone_number_id="123")
     assert support_matrix.hosted_status(unshipped, settings) == "soon"
+
+
+def test_hosted_status_never_claims_ready_for_a_door_with_no_hosted_axis_and_no_code():
+    """The no-cloud_settings branch must still check `shipped` first — an
+    unshipped self-hosted-only door (no such door exists in DOORS today,
+    but the function must not assume it never will) reads "soon", not a
+    premature "ready"."""
+    unshipped = replace(support_matrix.door("slack"), shipped=lambda: False)
+    assert support_matrix.hosted_status(unshipped, _settings()) == "soon"
 
 
 # --- shells -------------------------------------------------------------

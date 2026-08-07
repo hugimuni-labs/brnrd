@@ -4,14 +4,16 @@ This pack does not duplicate the legal pages. Each page remains in its
 canonical repository location, while this manifest pins the exact bytes
 reviewed with SHA-256. Copies were avoided because the accepted Terms already
 demonstrated the drift risk: the current pin is
-`src/brnrd/legal/tos-2026-07-24-r2.txt`, created after the rendered page changed
-without changing its version label.
+`src/brnrd/legal/tos-2026-07-24-r3.txt`, the second repin after the rendered
+page changed wording without changing its version label (the maintainer's
+2026-08-05 edits — see Question 2's update below — decided the acceptance
+population was empty of third parties, so no re-acceptance was owed).
 
 Hash snapshot:
 
-- Date: 2026-08-04
+- Date: 2026-08-06
 - Source revision (parent of this export-only change):
-  `f8c0cd4cd69e9916c219a18a15cff91523112ac8`
+  `603d27fce22af0e050964c4881acd9c4f3b2d83e`
 - Algorithm: SHA-256 over raw repository file bytes
 - Machine-readable list: [`SHA256SUMS`](SHA256SUMS)
 - Verification from the repository root:
@@ -35,8 +37,8 @@ hashes below remain authoritative for the snapshot if a deployed page changes.
 
 | Document | Canonical source | SHA-256 |
 |---|---|---|
-| Terms of Service — rendered source | [`src/frontend/src/routes/terms/+page.svelte`](../../../src/frontend/src/routes/terms/+page.svelte) | `7fe647c72fd63391cd82c7a99ed0d69f31e8c8164371906d4c4259e1209bdff2` |
-| Terms of Service — exact current acceptance pin | [`src/brnrd/legal/tos-2026-07-24-r2.txt`](../../../src/brnrd/legal/tos-2026-07-24-r2.txt) | `f45b8fb473d3f5f8808b653acf7cb1563ca3ad0d8e640fc928049363421cd5d1` |
+| Terms of Service — rendered source | [`src/frontend/src/routes/terms/+page.svelte`](../../../src/frontend/src/routes/terms/+page.svelte) | `7495dd077ee533cf29159e825a859a1a2ba9b30f5f93263c9bd727eb68352d7a` |
+| Terms of Service — exact current acceptance pin | [`src/brnrd/legal/tos-2026-07-24-r3.txt`](../../../src/brnrd/legal/tos-2026-07-24-r3.txt) | `3a752022d307f241f07a3cc0ff8401b0f66d06124e1bc9d50e9d003db311760b` |
 | Hosted-Execution Beta Terms — rendered source | [`src/frontend/src/routes/beta-hosted-execution/+page.svelte`](../../../src/frontend/src/routes/beta-hosted-execution/+page.svelte) | `c86191bde58adb66cea09c90f0632e899a1bd9ff9f484954f70a3fda4b79a9f1` |
 | Hosted-Execution Beta Terms — exact current acceptance pin | [`src/brnrd/legal/hosted-execution-2026-07-08.txt`](../../../src/brnrd/legal/hosted-execution-2026-07-08.txt) | `4c6b86ba299b9f37b5b1ec5eabe1632919f8a359fea7b6e83408bad70260d94e` |
 | Privacy Notice | [`src/frontend/src/routes/privacy/+page.svelte`](../../../src/frontend/src/routes/privacy/+page.svelte) | `5f32045b90ecdc6b674af82a9f268c172613caafb66b6492be577b7970c7f87b` |
@@ -46,7 +48,7 @@ hashes below remain authoritative for the snapshot if a deployed page changes.
 | Data Processing Agreement | [`docs/legal/dpa.md`](../dpa.md) | `ee366853701826282da0326092fc4ff504aab99f726e6dfcf234f4d9854f43fd` |
 | Article 30 record of processing | [`docs/legal/art-30-record.md`](../art-30-record.md) | `3d23e2289ce10bbb59f9fa1c235dc6f207bfd5b2c6e596c99b1f6ae0768d88b3` |
 | Driven data-flow and trust inventory | [`SECURITY.md`](../../../SECURITY.md) | `2883c0835519ffd0aafed284983b8e5bbe9ef6662aaaa3da476701f0446645a5` |
-| Pricing and offer page | [`src/frontend/src/routes/pricing/+page.svelte`](../../../src/frontend/src/routes/pricing/+page.svelte) | `49d76c4c45cd5c4e1440ca8bd8353eec6f71de7e1adaad60f6cf3abfbabb81a3` |
+| Pricing and offer page | [`src/frontend/src/routes/pricing/+page.svelte`](../../../src/frontend/src/routes/pricing/+page.svelte) | `d5e9feede83d088461ae5873be558a2f37d7a6c6de39dc36a18ce3ffdc7ad242` |
 | MIT license | [`LICENSE`](../../../LICENSE) | `3101d42b24f94e634de450ea11eca86b144900590896948376f67936acf02d92` |
 | License boundary overview | [`LICENSE-OVERVIEW.md`](../../../LICENSE-OVERVIEW.md) | `37ed3bb589c5b2a46bcb4a674548d49d433efdda573c003332f7c13405ada0d8` |
 
@@ -61,8 +63,8 @@ factual statements in the pack.
 | [`src/frontend/src/lib/billing.ts`](../../../src/frontend/src/lib/billing.ts) | Browser sends cadence and follows a Stripe-hosted checkout URL; no brnrd waiver control | `bf459f1629d0c059485cf9f319a3c3ed85abbe5358cd4ab26e5a2f3447898c8a` |
 | [`src/brnrd/routers/billing.py`](../../../src/brnrd/routers/billing.py) | Authenticated checkout endpoint and server-side cohort/price selection | `ed05f548821e11bbee302632ff126e62451621a5529db6bef734d3928b1f474a` |
 | [`src/brnrd/stripe_api.py`](../../../src/brnrd/stripe_api.py) | Stripe Checkout payload and Managed Payments / merchant-of-record behavior | `ed443ac26c9655462bbdf8bc7af5e5a10f60e3f36dd44a0449da2a57a77dd8b8` |
-| [`src/brnrd/terms.py`](../../../src/brnrd/terms.py) | Immutable legal-text pins, versions, and SHA-256 acceptance evidence | `739eeef85ca3b771c50e0024e2233bb27fe4365039d47eb2b988186b3934dea8` |
-| [`src/brnrd/routers/_session.py`](../../../src/brnrd/routers/_session.py) | Per-document acceptance status, re-consent predicate, and mirror deletion on last disconnect | `e3a9a2d61e17c48c78775e49a652d51fcaf681d7cf45179a80e12cf8f3d21416` |
+| [`src/brnrd/terms.py`](../../../src/brnrd/terms.py) | Immutable legal-text pins, versions, and SHA-256 acceptance evidence | `3196627add4fd431e74eafa88ba1a67a6ff5c35fa98f00a910185e015ed60526` |
+| [`src/brnrd/routers/_session.py`](../../../src/brnrd/routers/_session.py) | Per-document acceptance status, re-consent predicate, and mirror deletion on last disconnect | `5a02e9b98c4f07a87e1a50a4f1658fdfe97151ffa48a6a1f32209212dc037bcc` |
 
 ## External context pointers
 

@@ -16,9 +16,12 @@ construction:
   only*, because "a scanned read may flag, only a declared one may indict".
 
 ``core:`` was the same shape one axis over: unset, a child boots on the
-account's configured default, which is the *strongest* local Core — so bounded
-mechanical work silently costs the most, against a ``run.md`` §Orchestration
-line that tells the resident to use economy cores.
+account's configured default, and for a long time nothing said so — bounded
+mechanical work could silently cost the most, against a ``run.md``
+§Orchestration line that tells the resident to use economy cores. Note what
+the row must *not* do about that: naming which Core the default happens to be
+is a fact with a shelf life (see
+``test_the_row_says_where_an_unset_core_is_priced``).
 
 The property pinned here is structural, not a member list: a key added to
 ``_queue_spawn_request`` fails this module unless it is either documented in
@@ -126,17 +129,46 @@ def test_the_cost_and_contract_keys_are_named_specifically():
     )
 
 
-def test_the_row_says_what_an_unset_core_costs():
-    """Naming the key is not the same as pricing it.
+def test_the_row_says_where_an_unset_core_is_priced():
+    """Naming the key is not the same as pricing it — and pricing it from
+    memory is worse than not pricing it at all.
 
     The failure #1086 records was not that `core:` was unknown — it was that
     nothing said what happens when you omit it. A row that lists the key and
     leaves the default unstated re-creates the same silence one step later.
+
+    But the first fix for that silence asserted the *answer*: this test read
+    ``"strongest" in row``, pinning the row to the sentence "the config
+    default, which is the strongest local Core". That was true of one account
+    on one day. On 2026-08-05 the account default moved to ``claude-sonnet``
+    and the always-injected prompt contract began telling every wake that its
+    strands cost the most — with a green test holding the lie in place. A
+    guard that string-matches a value cannot survive the value changing, which
+    is the whole reason the *capacity* clause two sentences earlier says
+    "read it, never memorise a number".
+
+    So the property is the pointer, not the answer: the row must send the
+    reader to a live surface. The Runner catalog is injected into every wake
+    with the selected profile marked, so it is always cheaper to read than to
+    recall.
     """
     row = _spawn_row()
-    assert "default" in row.lower() and "strongest" in row.lower(), (
-        "the spawn row names `core:` but does not say that omitting it means "
-        "the config default, which is the strongest local Core (#1086)"
+    lowered = row.lower()
+    assert "default" in lowered, (
+        "the spawn row names `core:` but never says that omitting it falls "
+        "back to a configured default (#1086)"
+    )
+    assert "read it" in lowered and "never remember it" in lowered, (
+        "the row prices an unset `core:` from memory instead of pointing at "
+        "the injected Runner catalog. A remembered default is always the last "
+        "regime's — this row said 'the strongest local Core' for weeks after "
+        "the account default became a balanced one, and this assertion is the "
+        "thing that kept it there."
+    )
+    assert "strongest" not in lowered, (
+        "the row is naming a specific Core class as the default again. The "
+        "default is whatever `.brr/config` currently resolves to; state where "
+        "to read it, never what it says."
     )
 
 

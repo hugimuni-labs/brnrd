@@ -360,16 +360,19 @@
 									>
 										<span class="truncate">{row.label}</span>
 										<span class="flex items-center gap-1">
-											{#if row.timeFraction !== null}
+											{#if row.timeRemaining !== null}
 												<!-- The window's own clock, drawn as one: a disc
-										     that fills as the window elapses and resets
-										     full-empty. The previous shape — a second bar
-										     under the fuel bar — borrowed the fuel bar's
-										     grammar while meaning time, and nothing on
-										     screen said so. -->
+										     that drains as the window runs down and snaps
+										     back to full at reset. It fills nothing — a
+										     reserve of time empties, and the fuel bar beside
+										     it already reads "what is left"; a filling wedge
+										     borrowed the progress-bar idiom and pointed the
+										     opposite way. -->
 												<svg
 													viewBox="0 0 12 12"
-													class="h-[9px] w-[9px] -rotate-90 {row.stale ? 'opacity-40' : ''}"
+													class="h-[9px] w-[9px] rotate-90 scale-x-[-1] {row.stale
+														? 'opacity-40'
+														: ''}"
 													aria-hidden="true"
 												>
 													<circle
@@ -387,7 +390,7 @@
 														fill="none"
 														stroke-width={DIAL_WEDGE_RADIUS * 2}
 														class="stroke-stone-500"
-														stroke-dasharray={dialDasharray(row.timeFraction)}
+														stroke-dasharray={dialDasharray(row.timeRemaining)}
 													/>
 												</svg>
 											{/if}

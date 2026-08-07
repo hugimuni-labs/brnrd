@@ -18,10 +18,28 @@ import textwrap
 from pathlib import Path
 
 from . import closekeyword
+from . import gates as _gates
 
-#: Every gate brnrd knows how to auth/bind/configure. Single source of truth
-#: for ``_load_gate``, ``brnrd gate list``, and the gate argument help.
-GATES = ("telegram", "slack", "github", "cloud", "signal")
+#: Every gate brnrd knows how to auth/bind/configure — **derived, never
+#: re-listed**. ``gates.BUILTIN_GATES`` owns the set; this was a second copy
+#: of the same literal until 2026-08-05, and both files carried a comment
+#: calling themselves its single source of truth. Signal joining stayed
+#: consistent by hand, which is the property a derived name does not need.
+GATES = _gates.BUILTIN_GATES
+
+#: Platforms that reach brnrd through a gate of a *different* name. A user who
+#: types the channel they actually use is asking a real question and deserves
+#: a pointer, not "unknown gate": WhatsApp is publicly listed as a supported
+#: door (``support_matrix.DOORS``) while being a platform branch inside the
+#: cloud gate rather than a gate of its own.
+GATE_BY_PLATFORM: dict[str, tuple[str, str]] = {
+    "whatsapp": (
+        "cloud",
+        "whatsapp is not a gate: it is a platform on the managed cloud lane, "
+        "so there is nothing to configure locally. Connect the number on "
+        "brnrd.dev, then run `brnrd gate setup cloud` to pair this repo.",
+    ),
+}
 
 #: Top-level spellings retired by the noun consolidation (#49). Pre-release,
 #: these do not survive as silent aliases — each fails with a one-line pointer
@@ -482,6 +500,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="the issue's project, when it is not this checkout's origin")
     p.set_defaults(func=cmd_relic_issue, action=None)
 
+    # The second PR self-report front door (#317 follow-up): the ``.pr``
+    # control holds exactly one PR per run, so a run that opens more than
+    # one had no legal way to record the rest until now — this mirrors
+    # `relic issue`'s shape onto the same `{"kind": "pr", "number": N}`
+    # grammar `collect()` already parses (and, after the numberless-pr fix,
+    # normalises from a bare ref/URL).
+    p = relic_sub.add_parser(
+        "pr", help="record a PR this run opened, beyond the `.pr` control")
+    p.add_argument("number", help="PR number, #N, or a full forge URL")
+    p.add_argument(
+        "--summary", default=None, metavar="TEXT",
+        help="one line describing the PR")
+    p.set_defaults(func=cmd_relic_pr)
+
     # The blueprint's front door — `.promises.jsonl`, the opposite tense of
     # the relics manifest (#1008). Its own top-level verb rather than a
     # `relic` subcommand: a promise is not produce, the two live in different
@@ -783,7 +815,7 @@ def _retired_command(name: str, replacement: str):
 def _drop_inherited_git_pin() -> None:
     """Drop ``GIT_DIR`` / ``GIT_WORK_TREE`` from this process's environment.
 
-    #703 pins both into a worker run's environment so a bare ``git commit``
+    #703 pins both into a strand run's environment so a bare ``git commit``
     from a drifted cwd cannot reach the shared host checkout. Those two
     variables outrank *every* cwd-based discovery mechanism — ``cwd=``,
     ``-C <path>``, an absolute pathspec — so any tool that inherits them
@@ -1049,7 +1081,7 @@ def cmd_prompts_show(args):
     score = prompts.build_boot_score(
         repo_root,
         is_daemon=True,
-        is_worker=False,
+        is_strand=False,
         runner_shell=runner_medium,
         runner_core=runner_core,
         hooks_installed=hooks_installed,
@@ -1144,7 +1176,7 @@ def _default_wake_run(runs_dir: Path) -> Path | None:
     """The run to print when the caller named none.
 
     ``BRR_RUN_ID`` first, most-recent-by-mtime second — and the order matters
-    more than it looks. Called from *inside* a run that has spawned a worker,
+    more than it looks. Called from *inside* a run that has spawned a strand,
     newest-directory-wins resolves to the **child's** run, silently: the
     command answers a different question than the one asked and nothing about
     the output says so. A run asking for "the wake" means its own.
@@ -1261,15 +1293,17 @@ def cmd_prompts_transcript(args):
     score = prompts.build_boot_score(
         repo_root,
         is_daemon=True,
-        is_worker=False,
+        is_strand=False,
         runner_shell=runner_medium,
         runner_core=runner_core,
         hooks_installed=prompts.probe_shell_hook_capability(runner_medium),
         hook_stamps={},
     )
 
-    # Read each file-backed block from disk. For an untrimmed block that is
-    # exactly what the wake received; a trimmed one gets `_trim_note`. Blocks at
+    # Reconstruct each file-backed block from disk via `prompts.mountable_block_text`
+    # — a raw file read for most blocks (exactly what the wake received; a trimmed
+    # one gets `_trim_note`), or a block's own extractor for the few blocks that
+    # mount a curated slice of a larger file rather than the whole thing. Blocks at
     # `location == "computed"` are live state and stay prose — they are not on
     # disk and a Read returning them would be fiction.
     block_text: dict[str, str] = {}
@@ -1277,8 +1311,8 @@ def cmd_prompts_transcript(args):
         if not entry.present or entry.location == tx.COMPUTED:
             continue
         try:
-            block_text[entry.block_key] = Path(entry.location).read_text(
-                encoding="utf-8"
+            block_text[entry.block_key] = prompts.mountable_block_text(
+                entry, repo_root
             )
         except OSError:
             continue
@@ -1632,6 +1666,74 @@ def cmd_relic_issue(args):
         return 1
     where = f" in {repo}" if repo else ""
     print(f"[brnrd relic] issue #{number} {action}{where}")
+    return 0
+
+
+def cmd_relic_pr(args):
+    """Append a ``pr`` relic to this run's produce manifest.
+
+    ``.pr`` (the daemon's own auto-derivation control) holds exactly one
+    PR — the shape assumes a run makes at most one. A run that opens a
+    second PR had no legal front door onto the same
+    ``{"kind": "pr", "number": N}`` grammar :func:`relics.collect` already
+    parses, so it silently under-counted against the promise blueprint.
+    This is that front door, the same shape as :func:`cmd_relic_issue`:
+    parse the number (bare, ``#N``, or a full forge URL, via
+    :func:`forges.parse_pull_request_number`), refuse with the shape it
+    wanted on failure, and confirm the file actually grew rather than
+    reporting the intent — ``relics.append`` is best-effort by design,
+    right at closeout and wrong at a prompt.
+    """
+    import sys
+
+    from . import forges
+    from . import relics
+
+    outbox_dir = _wake_outbox_dir()
+    if outbox_dir is None:
+        print(
+            "[brnrd relic] no run outbox in this environment — `brnrd relic` "
+            "records produce for a live brnrd run, and the daemon names the "
+            "outbox through BRR_OUTBOX_DIR / BRR_PORTAL_STATE. Nothing was "
+            "written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    raw = str(getattr(args, "number", "") or "").strip()
+    parsed = forges.parse_pull_request_number(raw)
+    if not parsed:
+        print(
+            f"[brnrd relic] not a PR number or URL: {raw!r} — want a "
+            "positive integer, `#N`, or a full forge PR URL, e.g. "
+            "`brnrd relic pr 1175` or "
+            "`brnrd relic pr https://github.com/o/r/pull/1175`. Nothing "
+            "was written.",
+            file=sys.stderr,
+        )
+        return 1
+    number = int(parsed)
+
+    summary = str(getattr(args, "summary", None) or "").strip() or None
+
+    control = outbox_dir / relics.CONTROL_NAME
+    try:
+        before = control.stat().st_size
+    except OSError:
+        before = 0
+    relics.append(outbox_dir, "pr", number=number, summary=summary)
+    try:
+        after = control.stat().st_size
+    except OSError:
+        after = before
+    if after <= before:
+        print(
+            f"[brnrd relic] could not append to {control} — nothing was "
+            "written.",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"[brnrd relic] pr #{number}")
     return 0
 
 
@@ -3544,19 +3646,16 @@ def _read_portal_state(path: Path | None):
 
 
 def _load_gate(name: str):
-    if name == "github":
-        from .gates import github
-        return github
-    if name == "cloud":
-        from .gates import cloud
-        return cloud
-    if name == "telegram":
-        from .gates import telegram
-        return telegram
-    if name == "slack":
-        from .gates import slack
-        return slack
-    if name == "signal":
-        from .gates import signal
-        return signal
+    """Import a gate module by name, or exit with a pointer.
+
+    Was an if-chain naming each gate twice (once in the test, once in the
+    import) beside a ``GATES`` literal that was itself a copy of
+    ``gates.BUILTIN_GATES``. Three spellings of one list, and a new gate had
+    to touch all three to exist. Now the owning module answers.
+    """
+    if name in GATES:
+        return _gates.import_gate(name)
+    redirect = GATE_BY_PLATFORM.get(name)
+    if redirect is not None:
+        raise SystemExit(redirect[1])
     raise SystemExit(f"unknown gate: {name} (known: {', '.join(GATES)})")

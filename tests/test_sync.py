@@ -233,6 +233,62 @@ def test_refresh_records_fetch_failure(monkeypatch, tmp_path):
     assert result.ff_branches == {}
 
 
+def test_fetch_uses_runner_credential_env(monkeypatch, tmp_path):
+    """The daemon's own fetch must authenticate like a run's git calls do.
+
+    2026-08-06: this call ran with the bare daemon environment while every
+    git call *inside* a dispatched run got `runner.clean_runner_environ`'s
+    ``insteadOf`` rewrite + credential helper. A public repo over the
+    historical ``https://`` origin hid the gap (anonymous read needs no
+    credential); pointing origin at a real ``git@github.com:`` remote the
+    daemon process has no key for turned it into "Permission denied
+    (publickey)" on every sync. Pin the fix structurally: whatever
+    ``runner.clean_runner_environ`` returns is what reaches the fetch
+    subprocess, not ``None``/the inherited environment.
+    """
+    from brr import runner as runner_mod
+
+    _, local = _setup_remote_and_local(tmp_path)
+    sentinel_env = {"MARK_OF_THE_FIX": "1"}
+    monkeypatch.setattr(runner_mod, "clean_runner_environ", lambda: dict(sentinel_env))
+
+    real_run = subprocess.run
+    seen_envs = []
+
+    def spy(args, *rest, **kwargs):
+        if isinstance(args, list) and args[:2] == ["git", "fetch"]:
+            seen_envs.append(kwargs.get("env"))
+        return real_run(args, *rest, **kwargs)
+
+    monkeypatch.setattr(sync.subprocess, "run", spy)
+
+    result = sync.refresh_before_run(local, target_branches=["main"])
+
+    assert result.fetched is True
+    assert seen_envs == [sentinel_env]
+
+
+def test_fetch_survives_broken_credential_env_builder(monkeypatch, tmp_path):
+    """A broken env build degrades to the inherited environment, not a crash.
+
+    Matches the module's own best-effort discipline: nothing about
+    authenticating the fetch may be allowed to block the fetch itself.
+    """
+    from brr import runner as runner_mod
+
+    _, local = _setup_remote_and_local(tmp_path)
+
+    def boom():
+        raise RuntimeError("no cloud gate in this process")
+
+    monkeypatch.setattr(runner_mod, "clean_runner_environ", boom)
+
+    result = sync.refresh_before_run(local, target_branches=["main"])
+
+    assert result.fetched is True
+    assert result.error is None
+
+
 def test_refresh_disabled_via_config(tmp_path):
     _, local = _setup_remote_and_local(tmp_path)
     _push_new_commit(tmp_path, local.parent / "remote.git", branch="main")

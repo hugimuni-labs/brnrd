@@ -19,8 +19,9 @@ const generated = join(here, '.controlStrip.generated.mjs');
 // compile with stubbed children, assert on the produced markup.
 async function renderStrip(props: {
 	runners: null;
-	shells: null;
+	shells: null | Array<Record<string, unknown>>;
 	condensed?: boolean;
+	now?: number;
 }): Promise<string> {
 	const source = readFileSync(componentPath, 'utf8');
 	const compiled = compile(source, {
@@ -95,4 +96,39 @@ test('the slim bar is the scroll-away collapsed form and wears the collapsed chr
 test('the full strip\'s resting header carries no collapsed chrome — his "already liked" steer', async () => {
 	const body = await renderStrip({ runners: null, shells: null });
 	ok(!body.includes('panel--collapsed'), 'the everyday view renders exactly as it did before');
+});
+
+// #1168 shipped `-rotate-90 scale-x-[-1]` on the reasoning that a mirror
+// alone fixes "the wedge drains counter-clockwise" — verified by walking
+// the CSS transform math, never by rendering it. Driven live (Playwright,
+// this fix's own PR): that class anchors the dial's start point at 6
+// o'clock, not 12 — the mirror was right, the rotation sign that goes with
+// it was not. `rotate-90 scale-x-[-1]` is the pair that renders correctly.
+// A dasharray-only test (`controlStrip.test.ts`) cannot see this class of
+// bug at all — it never reads the transform, only the numeric fraction —
+// which is exactly how the wrong sign shipped to prod once already.
+test('the quota dial anchors at 12 and drains clockwise, not the #1168 shape', async () => {
+	const nowS = Math.floor(Date.now() / 1000);
+	const shells = [
+		{
+			shell: 'claude',
+			status: 'ok',
+			windows: [
+				{
+					label: '5h window',
+					used: null,
+					limit: null,
+					percent: 40,
+					reset: 'resets soon',
+					resets_at: nowS + 2 * 3600 + 30 * 60 // timeRemaining !== null ⇒ the dial renders at all
+				}
+			]
+		}
+	];
+	const body = await renderStrip({ runners: null, shells });
+	ok(
+		body.includes('rotate-90 scale-x-[-1]'),
+		'dial svg carries the clockwise-from-12 transform (positive rotate + mirror)'
+	);
+	ok(!body.includes('-rotate-90'), "the #1168 transform (anchors at 6 o'clock) is gone");
 });

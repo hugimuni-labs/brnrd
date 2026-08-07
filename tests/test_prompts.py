@@ -11,6 +11,7 @@ from brr.prompts import (
     RECENT_TURN_MAX_BYTES,
     SCHEDULE_TURN_DEDUP_RATIO,
     TrimResult,
+    _backchannel_handles_only,
     _build_context_block,
     _build_identity_core_block,
     _build_injected_blocks_with_contracts,
@@ -21,6 +22,7 @@ from brr.prompts import (
     _format_recent_conversation,
     _read_recent_log,
     _MAX_ACCRETING_BLOCK_BYTES,
+    _SURFACE_RESERVE_PAGE_BYTES,
     _page_is_chronological,
     _trim_sectioned_page,
     _worst_trim,
@@ -930,7 +932,7 @@ class TestPromptBuilding:
             "rebuild the docker image and ship", "evt-1", "/tmp/resp.md",
             tmp_path,
             run_id="task-9",
-            worker=True,
+            strand=True,
         )
         assert "Resident Identity Core" not in prompt
         assert "Pitfalls that match this task" not in prompt
@@ -1003,7 +1005,7 @@ class TestPromptBuilding:
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
             run_id="task-9",
-            worker=True,
+            strand=True,
             runner_shell="codex",
         )
         assert "- Web research: native via web.run" in prompt
@@ -1356,11 +1358,43 @@ class TestPromptBuilding:
         # The fold-in contract names the frontmatter handle.
         assert "event: <id>" in prompt
         assert "Own every" in prompt
-        assert _says(prompt, "worker capacity and quota are healthy")
+        assert _says(prompt, "strand capacity and quota are healthy")
         assert "spawn:" in prompt
         assert "portal-state.json" in prompt
         assert "inbox.json" in prompt
         assert "snapshot from when you woke" not in prompt
+
+    def test_daemon_prompt_lists_pending_event_attachment_path(self, tmp_path):
+        """#1156: a folded-in event's already-downloaded attachment renders
+        an openable path in the inbox block, not just the bare summary."""
+        image_path = tmp_path / "evt-B.attachments" / "photo.jpg"
+        prompt = build_daemon_prompt(
+            "work on A", "evt-A", "/tmp/resp.md", tmp_path,
+            outbox_path="/repo/.brr/outbox/evt-A",
+            run_id="task-A",
+            pending_events=[
+                {"id": "evt-B", "source": "telegram", "summary": "a photo",
+                 "attachment_paths": [str(image_path)]},
+            ],
+        )
+        assert "evt-B" in prompt
+        assert str(image_path) in prompt
+
+    def test_daemon_prompt_flags_unfetched_pending_event_attachment(self, tmp_path):
+        """An announced-but-never-downloaded attachment on a folded-in event
+        renders as a distinguishable "announced, not fetched" line rather
+        than being silently indistinguishable from no attachment at all."""
+        prompt = build_daemon_prompt(
+            "work on A", "evt-A", "/tmp/resp.md", tmp_path,
+            outbox_path="/repo/.brr/outbox/evt-A",
+            run_id="task-A",
+            pending_events=[
+                {"id": "evt-B", "source": "telegram", "summary": "a photo",
+                 "attachment_unfetched": ["ghost.png"]},
+            ],
+        )
+        assert "announced, not fetched" in prompt
+        assert "ghost.png" in prompt
 
     def test_daemon_prompt_omits_inbox_when_no_pending_events(self, tmp_path):
         prompt = build_daemon_prompt(
@@ -1953,7 +1987,7 @@ class TestPromptBuilding:
         assert "linger" in prompt
         assert "delivered · attending" in prompt
         assert "backoff 30s → cap 240s" in prompt
-        assert _says(prompt, "worker capacity and quota are healthy")
+        assert _says(prompt, "strand capacity and quota are healthy")
         assert _says(prompt, "queue never starves")
 
 
@@ -2085,6 +2119,50 @@ def test_recent_conversation_no_marker_without_attachments():
     ]
     block = _format_recent_conversation(recent)
     assert "[" not in block
+
+
+def test_recent_conversation_marker_names_local_path_when_resolvable(tmp_path):
+    """#1156: the bracket count used to be the whole answer even when the
+    bytes it counted sat right there on disk. When this run's own inbox
+    drawer still has the file (``<brr_dir>/inbox/<event_id>.attachments/``),
+    the marker names it so the resident doesn't have to re-derive the path
+    from a bare count."""
+    adir = tmp_path / "inbox" / "evt-photo.attachments"
+    adir.mkdir(parents=True)
+    (adir / "photo.jpg").write_bytes(b"fake-jpeg-bytes")
+    recent = [
+        {
+            "ts": "2026-08-05T21:44:00Z",
+            "kind": "event",
+            "source": "telegram",
+            "event_id": "evt-photo",
+            "body": "",
+            "attachments": [{"kind": "photo", "filename": "photo.jpg"}],
+        },
+    ]
+    block = _format_recent_conversation(recent, brr_dir=tmp_path)
+    assert "[photo ×1]" in block
+    assert str(adir / "photo.jpg") in block
+
+
+def test_recent_conversation_marker_falls_back_when_bytes_not_local(tmp_path):
+    """A record whose bytes never reached this drawer (a different account
+    dispatch inbox, or already swept by retention) keeps the bare count —
+    the marker never claims a path this reader cannot see."""
+    (tmp_path / "inbox").mkdir()
+    recent = [
+        {
+            "ts": "2026-08-05T21:44:00Z",
+            "kind": "event",
+            "source": "telegram",
+            "event_id": "evt-ghost",
+            "body": "",
+            "attachments": [{"kind": "photo", "filename": "photo.jpg"}],
+        },
+    ]
+    block = _format_recent_conversation(recent, brr_dir=tmp_path)
+    assert "[photo ×1]" in block
+    assert "local:" not in block
 
 
 def _read_bundled_agents_md() -> str:
@@ -3166,6 +3244,10 @@ class TestWorkSurfaceInjection:
         cannot see that a page is absent cannot know to go read it. The
         amendment makes this live rather than theoretical — an authored page
         now takes the budget it needs, so it can crowd the pages after it.
+
+        Uses a generic filename rather than `workflow.md` — that name is now
+        reserve-protected (#1061) and would never hit this placeholder path;
+        the mechanism under test here is the generic budget-exhaustion one.
         """
         home = _seed_account_home(tmp_path)
         surface = home / "surface"
@@ -3176,13 +3258,13 @@ class TestWorkSurfaceInjection:
             encoding="utf-8",
         )
         (surface / "index.md").write_text("# Start here\n\n" + ("i" * 700), encoding="utf-8")
-        (surface / "workflow.md").write_text(
-            "# Workflow\n\n" + ("w" * 4000), encoding="utf-8"
+        (surface / "zzz-other.md").write_text(
+            "# Other page\n\n" + ("w" * 4000), encoding="utf-8"
         )
 
         result, _whole = _build_work_surface_block_scored(tmp_path)
 
-        assert "### workflow.md" in result.text, "the skipped page is named"
+        assert "### zzz-other.md" in result.text, "the skipped page is named"
         assert "page omitted" in result.text
         assert "wwww" not in result.text, "and its content really was skipped"
 
@@ -3193,6 +3275,10 @@ class TestWorkSurfaceInjection:
         trimmer therefore returns over budget deliberately; the renderer used
         to conflate that case with ordinary no-room and replace the section
         with a placeholder.
+
+        Uses a generic filename for the page that trails the overflow — not
+        `workflow.md`, which is now reserve-protected (#1061) and would
+        survive this budget regardless.
         """
         home = _seed_account_home(tmp_path)
         surface = home / "surface"
@@ -3209,7 +3295,7 @@ class TestWorkSurfaceInjection:
             "## Later work\n\nThis section may be cut.\n",
             encoding="utf-8",
         )
-        (surface / "workflow.md").write_text(
+        (surface / "zzz-other.md").write_text(
             "## Delivery\n\nLater page content.\n", encoding="utf-8"
         )
 
@@ -3231,7 +3317,10 @@ class TestWorkSurfaceInjection:
         the one path that reported its losses as a bare integer. Measured on
         `run-260802-2128-913s`: `workflow.md`, the signed agreement about
         gating and merges that the waking schedule entry quotes by name, left
-        the wake as ``2 further surface pages omitted``.
+        the wake as ``2 further surface pages omitted``. `workflow.md` is now
+        reserve-protected (#1061) and would survive this exact scenario — see
+        ``TestSurfaceReserve`` — so this test stands in a differently-named
+        page to keep exercising the generic naming mechanism.
 
         The trailing line is not charged against the budget, so naming is
         free; the count it replaces was the part carrying no information.
@@ -3251,7 +3340,7 @@ class TestWorkSurfaceInjection:
             + "\n",
             encoding="utf-8",
         )
-        (surface / "workflow.md").write_text(
+        (surface / "zzz-other.md").write_text(
             "## Gating and merges\n\nThe signed clause.\n", encoding="utf-8"
         )
         (surface / "zzz-last.md").write_text("## Tail\n\nAlso dropped.\n", encoding="utf-8")
@@ -3259,7 +3348,7 @@ class TestWorkSurfaceInjection:
         result, _whole = _build_work_surface_block_scored(tmp_path)
 
         assert "2 further surface pages omitted" in result.text
-        assert "`workflow.md`" in result.text, "the dropped contract is named"
+        assert "`zzz-other.md`" in result.text, "the dropped contract is named"
         assert "`zzz-last.md`" in result.text, "every dropped page, not just the first"
         assert "The signed clause" not in result.text, "and they really were dropped"
 
@@ -3268,6 +3357,8 @@ class TestWorkSurfaceInjection:
 
         Guards the shape, not just the plural join: a one-page loss is the
         common case and the easiest place for a count to survive a rewrite.
+        Uses a generic filename — `workflow.md` is reserve-protected
+        (#1061) and would not hit this path; see ``TestSurfaceReserve``.
         """
         home = _seed_account_home(tmp_path)
         surface = home / "surface"
@@ -3284,14 +3375,14 @@ class TestWorkSurfaceInjection:
             + "\n",
             encoding="utf-8",
         )
-        (surface / "workflow.md").write_text(
+        (surface / "zzz-other.md").write_text(
             "## Gating and merges\n\nThe signed clause.\n", encoding="utf-8"
         )
 
         result, _whole = _build_work_surface_block_scored(tmp_path)
 
         assert "1 further surface page omitted" in result.text
-        assert "`workflow.md`" in result.text
+        assert "`zzz-other.md`" in result.text
 
     def test_headingless_no_room_still_uses_the_page_placeholder(self, tmp_path):
         """#918 — an over-budget result without a section floor is no-room."""
@@ -3334,6 +3425,226 @@ class TestWorkSurfaceInjection:
         # Every other, non-chronological block stays untouched — defaults.
         assert by_key["identity-core"].stale is False
         assert by_key["identity-core"].newest_item is None
+
+
+# ── #1061 rec 1 — the named surface reserve ────────────────────────────
+
+
+class TestSurfaceReserve:
+    """`workflow.md` and `plans/<repo-slug>/active.md` must reach the wake
+    regardless of what an earlier page's mandatory-section floor does to the
+    alphabetical walk's shared `remaining` — the exact failure #1061 measured
+    twice live (a starved trim, then a hard zero)."""
+
+    def test_workflow_survives_an_earlier_floor_overflow(self, tmp_path):
+        """The bug's own shape: `aaa-hog.md` sorts before `workflow.md`, its
+        one mandatory section alone exceeds the whole budget, and the old
+        `remaining = 0` branch used to zero everything sorted after it —
+        including the signed gating contract, which is exactly what #1061
+        measured live.
+        """
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        budget = 8_000
+        (tmp_path / ".brr" / "config").write_text(
+            f"home.path={home}\nrepo.label=local/default\n"
+            f"dominion.surface_inject_budget_bytes={budget}\n",
+            encoding="utf-8",
+        )
+        (surface / "aaa-hog.md").write_text(
+            "## Everything\n\n" + ("h" * 20_000), encoding="utf-8"
+        )
+        (surface / "workflow.md").write_text(
+            "## Gating and merges\n\nThe signed clause survives.\n",
+            encoding="utf-8",
+        )
+
+        result, _whole = _build_work_surface_block_scored(tmp_path)
+
+        assert "### workflow.md" in result.text
+        assert "The signed clause survives" in result.text
+        assert "workflow.md" not in "\n".join(
+            line for line in result.text.splitlines() if "omitted" in line
+        )
+
+    def test_active_plan_survives_an_earlier_floor_overflow(self, tmp_path):
+        """Same measurement, the other reserved page: the resident's own
+        ranked queue at `plans/<repo-slug>/active.md`.
+        """
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        plan_dir = surface / "plans" / "local__default"
+        plan_dir.mkdir(parents=True)
+        budget = 8_000
+        (tmp_path / ".brr" / "config").write_text(
+            f"home.path={home}\nrepo.label=local/default\n"
+            f"dominion.surface_inject_budget_bytes={budget}\n",
+            encoding="utf-8",
+        )
+        (surface / "aaa-hog.md").write_text(
+            "## Everything\n\n" + ("h" * 20_000), encoding="utf-8"
+        )
+        (plan_dir / "active.md").write_text(
+            "## Open, ranked\n\nShip the reserve.\n", encoding="utf-8"
+        )
+
+        result, _whole = _build_work_surface_block_scored(tmp_path)
+
+        assert "### plans/local__default/active.md" in result.text
+        assert "Ship the reserve" in result.text
+
+    def test_reserve_still_rides_whole_with_room_to_spare(self, tmp_path):
+        """The floor is a guarantee, not a ceiling (#688 must not regress):
+        on the real 48,000 B default budget a `workflow.md` well over the
+        6 KB reserve slice, but comfortably under the shared total, still
+        rides whole rather than being capped at the reserve size.
+        """
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        big = "## Section one\n\n" + ("a" * (_SURFACE_RESERVE_PAGE_BYTES + 4_000))
+        (surface / "workflow.md").write_text(big, encoding="utf-8")
+
+        result, whole = _build_work_surface_block_scored(tmp_path)
+
+        assert "cut to fit the wake budget" not in result.text
+        assert "reserved allocation" not in result.text
+        assert (surface / "workflow.md").resolve() in whole
+
+    def test_reserve_names_its_own_floor_overflow(self, tmp_path):
+        """When even the reserved page's *own* mandatory section outgrows
+        both its 6 KB floor and whatever the rest of the walk left behind,
+        the render says so — the same honesty discipline as the ordinary
+        walk's floor-overflow notice, just scoped to the reserve.
+
+        `aaa-hog.md` sorts *before* `workflow.md`, so by the time the walk
+        reaches workflow.md's own turn it has already spent everything the
+        reserve's floor carve-out left behind — the topup collapses back to
+        the bare floor, and the bare floor is itself over its own allowance.
+        """
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        budget = 10_000
+        (tmp_path / ".brr" / "config").write_text(
+            f"home.path={home}\nrepo.label=local/default\n"
+            f"dominion.surface_inject_budget_bytes={budget}\n",
+            encoding="utf-8",
+        )
+        (surface / "workflow.md").write_text(
+            "## Huge\n\n" + ("x" * 9_000), encoding="utf-8"
+        )
+        (surface / "aaa-hog.md").write_text(
+            "## Everything else\n\n" + ("y" * 2_000), encoding="utf-8"
+        )
+
+        result, _whole = _build_work_surface_block_scored(tmp_path)
+
+        assert "### workflow.md" in result.text
+        assert "mandatory section floor exceeded this page's reserved allocation" in (
+            result.text
+        )
+
+
+# ── #1061 rec 3 — backchannel injected as handles only ─────────────────
+
+
+class TestBackchannelHandles:
+    """`backchannel.md` compresses to one heading + schema-row handle per
+    item before its size enters the surface budget walk — the free-text
+    body under each item is authored for the dashboard reader, not the wake
+    (measured 08-05: 68% of a live 48,000 B budget)."""
+
+    def test_compresses_item_to_heading_and_schema_rows(self, tmp_path):
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        (surface / "backchannel.md").write_text(
+            "## Ship the migration\n\n"
+            "kind: decide\n"
+            "refs: hugimuni-labs/brnrd#1061\n"
+            "prompt: pick a reserve size\n\n"
+            "This is the free-text body, written for the maintainer reading "
+            "it in a browser. It goes on for a while and none of it should "
+            "reach the wake.\n",
+            encoding="utf-8",
+        )
+
+        result, _whole = _build_work_surface_block_scored(tmp_path)
+
+        assert "## Ship the migration" in result.text
+        assert "kind: decide" in result.text
+        assert "refs: hugimuni-labs/brnrd#1061" in result.text
+        assert "prompt: pick a reserve size" in result.text
+        assert "free-text body" not in result.text
+        assert "injected as handles only" in result.text
+        assert "full page: `surface/backchannel.md`" in result.text
+
+    def test_preserves_state_needs_and_taken_rows(self, tmp_path):
+        """The compression keeps every recognized schema row, not just the
+        three the ticket names as the common case — a warp item's
+        `state:`/`needs:` or a welded `taken:` back-pointer (#972) must
+        survive too.
+        """
+        content, dropped = _backchannel_handles_only(
+            "## An item with the full schema\n\n"
+            "kind: act\n"
+            "state: ember\n"
+            "needs: a decision from the maintainer\n"
+            "refs: some-page.md\n"
+            "prompt: do the thing\n"
+            "taken: run-260807-0100-aaaa\n\n"
+            "Free text body that should not survive.\n"
+        )
+
+        assert dropped > 0
+        assert "kind: act" in content
+        assert "state: ember" in content
+        assert "needs: a decision from the maintainer" in content
+        assert "refs: some-page.md" in content
+        assert "prompt: do the thing" in content
+        assert "taken: run-260807-0100-aaaa" in content
+        assert "Free text body" not in content
+
+    def test_untouched_backchannel_rides_whole(self, tmp_path):
+        """A page already handle-shaped (no free-text body under any item)
+        compresses to itself — nothing dropped, no marker, and it still
+        counts as a whole injection for #628's accounting.
+        """
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        page = surface / "backchannel.md"
+        page.write_text(
+            "## Already a handle\n\nkind: review\nprompt: just look at it\n",
+            encoding="utf-8",
+        )
+
+        result, whole = _build_work_surface_block_scored(tmp_path)
+
+        assert "injected as handles only" not in result.text
+        assert page.resolve() in whole
+
+    def test_only_the_named_page_is_compressed(self, tmp_path):
+        """A different page using the same `## ` + prose shape is untouched
+        — the compression is scoped to `backchannel.md` by name, not to
+        every page that happens to look like it.
+        """
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        (surface / "other.md").write_text(
+            "## Some item\n\nkind: decide\n\n"
+            "This free-text body must survive on a non-backchannel page.\n",
+            encoding="utf-8",
+        )
+
+        result, _whole = _build_work_surface_block_scored(tmp_path)
+
+        assert "This free-text body must survive" in result.text
+        assert "injected as handles only" not in result.text
 
 
 # ── CS6 — runner policy injection ─────────────────────────────────────
@@ -3655,7 +3966,7 @@ def test_kb_ownership_signal_zero_orphans_size_pressure_byte_identical():
         "pages to trim: a byte count cannot tell a load-bearing page from bloat — you "
         "can. The graph is 10 pages, log 5,000 B over 100 entries. Read this as the kb "
         "asking for a maintenance *round* — promote what's load-bearing, breadcrumb "
-        "what's spent, cut what's dead, relink the orphans. Worker-delegable; worth a "
+        "what's spent, cut what's dead, relink the orphans. Strand-delegable; worth a "
         "dedicated pass, not a per-wake reflex to shorten the longest file. Full graph "
         "shape on demand: `brnrd kb`."
     )
