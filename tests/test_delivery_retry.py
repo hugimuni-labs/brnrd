@@ -21,7 +21,7 @@ import json
 
 import pytest
 
-from brr import protocol
+from brr import account, message_store, protocol
 from brr.gates import delivery, runtime
 
 
@@ -160,6 +160,45 @@ def test_an_unaddressable_event_is_closed_not_retried(tmp_path):
     # And a second pass finds nothing to do — the loop is over, not paused.
     runtime.deliver_stream(inbox, responses, "cloud", deliver, brr_dir=tmp_path)
     assert len(calls) == 1
+
+
+def test_a_permanent_failure_retires_the_stranded_message_row(tmp_path):
+    """The durable message row must not outlive the event it belongs to.
+
+    Before this, ``PermanentDeliveryError`` closed the *event* ``error`` but
+    never transitioned the *message* row that ``message_store`` tracks
+    separately — it stayed ``pending`` forever, and ``resolve_stranded``
+    will not sweep it either (it only claims rows whose ``target_gate`` is
+    not gate-owned; ``cloud`` is). The one message a delivery is provably
+    impossible for is the one message that must reach
+    ``message_store.UNDELIVERABLE``, or a reader of that status (the sweep,
+    the dashboard, ``brnrd do``) can never see it.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    ctx = account.resolve_context(
+        repo, {"home.path": str(tmp_path / "home"), "repo.label": "Gurio/brr"},
+    )
+    inbox, responses, event = _event(tmp_path, "short reply", cloud_event_id="ev_1")
+    message = message_store.stage(
+        ctx,
+        repo_label="Gurio/brr",
+        run_id="run-1",
+        body="short reply",
+        kind="terminal",
+        target_event=event["id"],
+        target_gate="cloud",
+    )
+    protocol.attach_message_path(protocol.response_path(responses, event["id"]), message)
+
+    def deliver(_event, _body):
+        raise runtime.PermanentDeliveryError("no cloud_event_id")
+
+    runtime.deliver_stream(inbox, responses, "cloud", deliver, brr_dir=tmp_path)
+
+    stored = message_store.read(message)
+    assert stored["status"] == "undeliverable"
+    assert "no cloud_event_id" in stored["reason"]
 
 
 def test_a_transient_failure_backs_off_instead_of_retrying_every_poll(tmp_path):
