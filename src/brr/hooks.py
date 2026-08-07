@@ -2791,8 +2791,8 @@ def format_delta(
         lines.append(
             "- bolt: declare this run's completion with `brnrd cut` before "
             "closing — asks dispositioned, produce attested (legal-minimal: "
-            "attesting none is fine, declared as such), owed cleared or "
-            "carried."
+            "attesting none is fine, declared as such), no promise left "
+            "unaccounted for."
         )
     # Produce is already attested by relics.py; the briefing only compresses
     # it. It rides hook deltas that are rendering for an existing reason and
