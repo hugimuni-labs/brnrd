@@ -2243,8 +2243,17 @@ def _build_injected_blocks_with_contracts(
     if runner_policy:
         keyed.append(("runner-policy", runner_policy))
 
-    # 5. Pitfalls matching the task
-    pitfalls_block = _build_pitfalls_block(repo_root, task_text) if task_text else ""
+    # 5. Pitfalls matching the task — trigger-gated on task_text. No task_text
+    # means the block was never weighed (bytes=None), not weighed-and-empty
+    # (bytes=0): those are different facts about the *invocation*, and
+    # ContractEntry.bytes is documented as three-state precisely so this
+    # distinction survives. See #1181.
+    if task_text:
+        pitfalls_block = _build_pitfalls_block(repo_root, task_text)
+        pitfalls_bytes = _rendered_bytes(pitfalls_block)
+    else:
+        pitfalls_block = ""
+        pitfalls_bytes = None
     contracts.append(ContractEntry(
         block_key="pitfalls",
         label="Task-matched pitfalls",
@@ -2253,7 +2262,7 @@ def _build_injected_blocks_with_contracts(
         freshness=None,
         location="computed",
         present=bool(pitfalls_block),
-        bytes=_rendered_bytes(pitfalls_block),
+        bytes=pitfalls_bytes,
     ))
     if pitfalls_block:
         keyed.append(("pitfalls", pitfalls_block))
