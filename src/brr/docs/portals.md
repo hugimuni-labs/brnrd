@@ -50,7 +50,7 @@ other so they don't drift.
 | `<name>.md` with `stop: <run-or-event-id>` frontmatter | concurrent ✕ strand stop | Stop a concurrent child **this run** dispatched, addressed by its spawn event id or child run id (wyrd §3: a run controls only its own dispatchees — the daemon enforces the ownership check and does the kill; nothing depends on the child reading anything). A child still queued is cancelled before it ever starts; a running child's runner process is killed, its partial branch work is salvaged, and it finalizes as `stopped` — the completion note (`status=stopped`) returns to this run as a pending event. Optional `reason:` (or the body) is recorded on the child. A refused stop (unknown id, not your dispatchee, already finished) lands in `portal-state.json` → `notices`. |
 | `<name>.md` with `to: <run-or-event-id>` frontmatter | concurrent ▸ strand steer | Message a concurrent child **this run** dispatched (same ownership check as `stop:`). The body lands as a `dispatch_message` event that **only the addressed strand's** `inbox.json` / portal-state surfaces — it never dispatches a run of its own, other runs never see it, and whatever the child has not folded in is retired when the child ends. A steer, not a new contract: the child folds it into its existing work and should not `event:`-address it. Strands are thread-isolated (they get their contract and these edge messages, not the user thread's recent turns or pending events), so this verb is the *only* way words reach a running strand. Refusals land in `notices`. |
 | `<name>.md` with `runner_policy: propose` frontmatter | parked ⏸ policy approval | Park a proposed runner-policy edit in the account dominion instead of mutating policy directly. The body is the proposed policy markdown. Optional `scope: account` applies account-wide; the default is repo-scoped, with optional `repo:` / `repo_label:` override. The daemon sends an approval prompt; a later `approve runner-policy <id>` reply applies it, while `reject runner-policy <id>` closes it unchanged. |
-| `<name>.md` with `await: <condition> \| ...` + `timeout: <duration>` frontmatter | inbound ◂ armed hold | **A select, not a sleep** (#959). Declare what you're waiting on once; the daemon evaluates it on its own heartbeat, not on your say-so. See §`await:` below. |
+| `brnrd await` (stages `await: true` + `timeout:`) | inbound ◂ armed hold | **A select, not a sleep** (#959). No arguments: hold until the daemon has something. It evaluates on its own heartbeat, not on your say-so. See §`brnrd await` below. |
 | `.keepalive` | slot control | **Hold the single-flight slot** past your budget. First line is an ISO-8601 time ("busy until T") or `+<duration>` like `+30m`. Rewrite to extend. A control file, never delivered. (Not world-facing — it steers the slot, not a surface.) |
 | `.card` | outbound ▸ desired-state | **Maintain the run body** — resident-owned Markdown, reconciled in place. Keep `## Now` current; only that section projects onto the compact live card. Preserve the arc, findings, and decisions in later sections. At closeout the daemon copies the full write-head to `runs/<repo>/<run>/body.md` beside its separately attested `state.md`; empty/delete leaves a frame-only run. |
 | `menu.json` | outbound ▸ desired-state | **Maintain the thread's one live menu.** Write one JSON object atomically with `menu_id`, `thread`, and `options` (`handle`, `label`, optional `detail`, optional `rec: true`); `expires_at` is optional. The daemon validates and archives the generation, supersedes the prior one, and renders the same stored menu at gates and at the next resident boundary. Malformed menus land in `portal-state.json` → `notices`. A strand child has no v1 menu transport; its parent composes. |
@@ -144,7 +144,7 @@ field threaded from each call site's own `fpath.name`, so a reader could
 join on identity instead of text. Not done here — no daemon-side changes
 in this change — named so the gap has one place to live.
 
-### `await:` — a select, not a sleep (#959)
+### `brnrd await` — the wait with nothing to forget (#959, #1187)
 
 The measurement this closes: a resident waiting on a dispatched strand or a
 background gate wrote `until <condition>; do sleep 25; done` as one shell
@@ -156,72 +156,85 @@ wait that was doing exactly what it was told. **A wait a correspondent
 cannot interrupt is not a wait. It is a gap.**
 
 ```
----
-await: <condition> [| <condition> ...]
-timeout: <duration>          # required — a wait with no ceiling is a hang
----
+brnrd await [--timeout <duration>] [--file <path>] [--json]
 ```
 
-**Conditions** (`|`-separated; the fenced form is required — the value has
-spaces, so the unfenced lenient shortcut other verbs get doesn't apply):
+**No positional arguments. No condition flags.** `brnrd await`, bare, is the
+whole documented shape: *hold this run until the daemon has something for
+me.* A message, a dispatched child finishing, a schedule firing — all of
+them reach a run as pending events, so all of them resolve the wait without
+being named.
 
-- `file:<path>` — the path exists.
-- `pid:<n>` — the process has exited.
-- `spawn:<run-or-event-id>` — a concurrent child **this run** dispatched has
-  finished (matched against either the child's eventual run id or the
-  `spawn: true` dispatch's own event id — you may only have one of the two
-  on hand, depending on when you wrote the `await:`).
-- `event` — **a new pending event arrived.** Always a member of the set,
-  whether or not you name it — parsing appends it structurally. You cannot
-  construct a blind wait by forgetting to mention "did a message arrive",
-  because forgetting is no longer an available state.
+- `--timeout` — the ceiling. Defaults to **this run's own remaining budget**;
+  the daemon already knows it, and asking you to restate it is the same
+  mistake `spawn:<id>` was. The daemon caps the arming again on its side
+  against the hard budget ceiling and announces that as an `advisory` notice.
+- `--file <path>` — **also** resolve when that path appears. A footnote, for
+  the one thing the daemon genuinely cannot observe: an external CI run, a
+  human dropping a file. It *adds* a trigger; it can never narrow the wait to
+  only that file.
+- `--json` — the outcome as JSON instead of a line.
 
-**The condition set is evaluated by the daemon on its own heartbeat tick**
-(every ~10s, independent of whether you call anything at all) — that is
-what makes this a *listening* wait rather than a *sleeping* one. The outcome
-lands in `portal-state.json` → `await`:
+**The asymmetry is the design.** Omitting `--file` gives you the correct
+default. Omitting a `spawn:` id used to give you a broken wait — v1 asked you
+to enumerate what the daemon already tracks, and #1187 measured the price:
+five child ids, one typo, the whole directive silently discarded. So the
+condition grammar is gone. `event` is not a condition you can forget; it is
+the semantics. `spawn:<id>` filtered out exactly what a dispatcher usually
+wants — *whichever* child finishes first — and a strand finishing already
+creates a `spawn_completed` event, so it never added capability. `pid:`
+duplicated the Shell's own background-process notification.
+
+One call does three things in one boundary: stages the directive, **reports
+its own arming verdict** (the `notices` diff `brnrd do` already does — a
+directive that fails to arm fails in the call that made it, instead of
+leaving a stale `resolved: true` looking like an answer), then blocks until
+the daemon resolves the wait. **The daemon evaluates on its own heartbeat
+tick** (every ~10s, whether or not anything is calling) — that is what makes
+this a *listening* wait rather than a *sleeping* one. The outcome lands in
+`portal-state.json` → `await`:
 
 ```jsonc
-{"armed": true, "conditions": ["file:/tmp/gate.log", "event"],
+{"armed": true, "file": "/tmp/gate.log", "generation": "…",
  "timeout_seconds": 1200, "deadline": "…", "capped": false,
- "resolved": true, "outcome": "condition", "which": "file:/tmp/gate.log"}
+ "resolved": true, "outcome": "event", "which": null}
 ```
 
-`resolved` flips to `true` on exactly one of three outcomes — never
-silence:
+`resolved` flips to `true` on exactly one of three outcomes — never silence:
 
-- `"condition"` — a named `file:`/`pid:`/`spawn:` term fired; `which` names it.
-- `"event"` — some other pending event arrived that no named condition
-  already explains.
+- `"event"` — the daemon has something pending for you.
+- `"condition"` — the optional `--file` path appeared; `which` names it.
+  Pending events outrank it deliberately: when both would fire, the
+  correspondent is the answer.
 - `"timeout"` — the deadline passed with nothing else firing.
 
+A call that reaches **its own** ceiling first returns `{"outcome":
+"pending"}`, and *call again* is the entire instruction. That ceiling is not
+a brnrd contract and not a number to reason about: what bounds one call is
+the Shell's per-tool-call cap (claude's Bash tool ends at 10 minutes; codex
+differs), and the CLI sits under it. The old 15s bound is gone with the
+argument that justified it — the only things that would want to interrupt
+this run are the very things that *resolve* the wait, so a blocking call
+returns the moment one arrives.
+
 **`.keepalive` is extended for you**, to the timeout deadline (never
-shortened below an existing one you wrote yourself) — you do not also have
-to remember a separate keepalive write on top of the `await:`. If the
-requested `timeout:` would outlive this run's remaining hard budget
-ceiling, the hold is armed for the capped duration instead of the full
-request — silently truncating a promised wait is worse than warning about
-one, so the cap is announced once as an `advisory` notice, not swallowed.
+shortened below an existing one you wrote yourself) — no separate keepalive
+write on top of the wait.
 
-**Poll it with `brnrd portal await`** (or read `portal-state.json` →
-`await` yourself, e.g. from §linger's own poll loop). One call blocks for
-at most **15 seconds** — a small, code-level bound, not a documentation
-convention — before returning `{"outcome": "pending", ...}`; call it again.
-Because the daemon's own evaluation tick runs independently of this call,
-a resolution that lands mid-sleep is still reported the moment you wake up
-and re-read, with no extra round trip. This is the structural fix for the
-measured failure: a wait built from a sequence of short, separately
-boundary-visible tool calls gives the daemon (and anything it wants to
-inject) a seam at least every 15 seconds, for as long as the wait runs —
-never the multi-minute blind stretch a hand-rolled shell loop can produce.
+**Strands arm this too.** The old refusal reasoned about the wrong slot: a
+strand does not spend the resident's single-flight slot, it occupies one in
+the spawn pool (`spawn.max_concurrent`) and already holds it by existing.
+Refusing left a strand blocked on a subprocess with nothing but a shell
+sleep loop — the exact boundary-free stretch this verb exists to end, forced
+by rule onto the runs least able to recover from it.
 
-**v1 is the verb and the hold path only.** `await:` never ends this run to
-service a wait — it holds the slot, the way `.keepalive` always has. A
-`strand: true` (concurrent spawn; `worker: true` is the honored legacy
-spelling) run may not arm one: the hold is a resident-level cost decision,
-and a strand has no business spending its parent's slot on its own wait.
-Malformed input (no `timeout:`, an
-unrecognised condition) is dropped to `notices`, same as any other verb.
+Under the porcelain it is still one outbox directive (`await: true` +
+`timeout:`, optional `file:`), and `brnrd await` stages it for you. A
+directive still carrying v1's conditions is **refused with a notice naming
+`brnrd await`** — never silently, and never by ignoring the extra terms.
+Malformed input (no `timeout:`) drops to `notices`, same as any other verb.
+`await:` still never ends the run to service a wait: it holds the slot, the
+way `.keepalive` always has.
 
 ## The blueprint — `.promises.jsonl`
 
@@ -563,13 +576,13 @@ thought; it becomes the next run instead. That next run is an **unblock,
 not a restart** — it reads the same conversation history, dominion, and kb
 the first run did; nothing resets, only the process does.
 
-**Waiting on a specific named condition** — a gate log file, a pid, a
-concurrent `spawn:` child — is `await:`'s job (above), not this recipe's:
-`await:` gives the daemon's own heartbeat the condition to evaluate and
-bounds each of *your* poll calls at 15s, where the recipe below bounds one
-call at up to 240s. Reach for linger's own backoff only for the generic
-"tell me if *anything at all* changes" case with no specific condition to
-name.
+**Waiting for the daemon to have something** — a dispatched child, a
+gate log file, any pending message — is `brnrd await`'s job (above), not
+this recipe's: it hands the wait to the daemon's own heartbeat and blocks
+one call until something actually resolves it, where the backoff below
+re-reads on a schedule of your own. Reach for linger's backoff when you are
+attending a live conversation and want the tempo; reach for `brnrd await`
+when you are waiting on something to *happen*.
 
 Runner-owned linger is a named contract, not an improvised while-loop:
 
