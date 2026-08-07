@@ -4381,6 +4381,25 @@ class TestInertPitfallReachesTheWake:
         (repo / ".brr" / "config").write_text(
             f"home.path={tmp_path / 'home'}\n", encoding="utf-8"
         )
+        # Materialise the three durable roots *with something in each*.
+        # Since 2026-08-07 the scan reports a root it could not read
+        # (`notes_preflight.check_roots`), and "resolved but holds none of
+        # its registered surfaces" counts — that is the #1193 fingerprint.
+        # A blank home would therefore drown the pitfall finding this class
+        # is about; `tests/test_notes.py` owns that guard's own cases.
+        dom = repo / ".brr" / "dominion"
+        dom.mkdir(parents=True, exist_ok=True)
+        (dom / "thread-of-record.md").write_text("seed\n", encoding="utf-8")
+        surface = tmp_path / "home" / "surface"
+        surface.mkdir(parents=True, exist_ok=True)
+        (surface / "index.md").write_text("# Surface\n", encoding="utf-8")
+        (tmp_path / "home" / "knowledge").mkdir(parents=True, exist_ok=True)
+        from brr import knowledge as _knowledge
+
+        _kb = _knowledge.active_kb_dir(repo)
+        if _kb is not None:
+            Path(_kb).mkdir(parents=True, exist_ok=True)
+            (Path(_kb) / "index.md").write_text("# kb\n", encoding="utf-8")
         monkeypatch.setattr(kb_preflight, "scan", lambda _root, _kb=None: [])
         monkeypatch.setattr(
             kb_health, "compute_graph_stats",
