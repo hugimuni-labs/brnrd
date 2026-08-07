@@ -2382,3 +2382,179 @@ def test_parked_proposal_counts_as_promoted_but_not_as_delivered(
     assert stats["runner_policy"] == 1
     # ...but only the reply reached a reader.
     assert stats["delivered"] == 1
+
+
+# ── strand isolation, the write side ─────────────────────────────────────
+#
+# Inbound is closed at one chokepoint (`_pending_events_for_agent`), and
+# that chokepoint is complete. But the outbox's *address* union
+# (`_outbox_address_sources`) was built from the full dispatchable inbox
+# with no strand predicate, so a strand that learned a pending event id
+# out of band could answer — and retire — a letter belonging to a thread
+# it is structurally forbidden to read. These pin the far side of the same
+# wall. The rule: a run may only address what its own inbox view shows it.
+
+
+def _strand_drain_fixture(tmp_path):
+    """(brr_dir, inbox, responses, outbox, own_event_id) for a strand run."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    inbox.mkdir(parents=True)
+    own = protocol.create_event(inbox, "spawn", "do the thing", status="processing")
+    outbox = brr_dir / "outbox" / own.stem
+    outbox.mkdir(parents=True)
+    return brr_dir, inbox, responses, outbox, own.stem
+
+
+def test_strand_reply_to_another_threads_event_is_refused(tmp_path, monkeypatch):
+    """A strand may not answer someone else's mail.
+
+    The correspondent's pending event is invisible to the strand by
+    construction; replying to it by id would retire it, deliver into a
+    conversation the strand cannot read, and break inbound isolation from
+    the far side.
+    """
+    brr_dir, inbox, responses, outbox, own_id = _strand_drain_fixture(tmp_path)
+    theirs = protocol.create_event(inbox, "telegram", "what's the ETA?")
+    (outbox / "reply.md").write_text(
+        f"---\nevent: {theirs.stem}\n---\nabout two hours\n", encoding="utf-8")
+    monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+    emit = daemon._WorkerEmit(brr_dir=brr_dir, conversation_key="", event_id=own_id)
+    task = Run(id="run-strand", event_id=own_id, body="do the thing",
+               source="spawn", meta={"strand": True})
+
+    promoted = daemon._drain_outbox(
+        emit, task, responses, own_id, outbox, inbox)
+
+    assert promoted == 0
+    # The letter is untouched — still pending, still its dispatcher's to close.
+    assert theirs.stem in {ev["id"] for ev in protocol.list_pending(inbox)}
+    # Nothing was delivered into the correspondent's thread.
+    assert protocol.list_partials(responses, theirs.stem) == []
+    notices = daemon._read_outbox_notices(outbox)
+    assert len(notices) == 1
+    assert notices[0]["kind"] == "refused"
+    # The notice teaches the verb the strand actually wanted.
+    assert "gate:" in notices[0]["text"]
+    assert "strand-stack run" in notices[0]["text"]
+
+
+def test_strand_note_of_another_threads_event_is_refused(tmp_path, monkeypatch):
+    """`note:` is the same breach, quieter: it retires the letter and
+    sends nothing, so nobody would ever see it happen."""
+    brr_dir, inbox, responses, outbox, own_id = _strand_drain_fixture(tmp_path)
+    theirs = protocol.create_event(inbox, "telegram", "still waiting")
+    (outbox / "note.md").write_text(
+        f"---\nnote: {theirs.stem}\n---\n", encoding="utf-8")
+    monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+    emit = daemon._WorkerEmit(brr_dir=brr_dir, conversation_key="", event_id=own_id)
+    task = Run(id="run-strand", event_id=own_id, body="do the thing",
+               source="spawn", meta={"strand": True})
+
+    promoted = daemon._drain_outbox(
+        emit, task, responses, own_id, outbox, inbox)
+
+    assert promoted == 0
+    assert theirs.stem in {ev["id"] for ev in protocol.list_pending(inbox)}
+    notices = daemon._read_outbox_notices(outbox)
+    assert len(notices) == 1
+    assert notices[0]["kind"] == "refused"
+
+
+def test_strand_may_answer_its_own_waking_event(tmp_path, monkeypatch):
+    """The guard narrows the addressable set; it does not close it.
+
+    A strand's own waking event is the default `event:` target (the drain
+    fills it in when the frontmatter names none), and that path must stay
+    open or every strand reply would be refused.
+    """
+    brr_dir, inbox, responses, outbox, own_id = _strand_drain_fixture(tmp_path)
+    (outbox / "reply.md").write_text("done — 3 files changed\n", encoding="utf-8")
+    monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+    emit = daemon._WorkerEmit(brr_dir=brr_dir, conversation_key="", event_id=own_id)
+    task = Run(id="run-strand", event_id=own_id, body="do the thing",
+               source="spawn", meta={"strand": True})
+
+    promoted = daemon._drain_outbox(
+        emit, task, responses, own_id, outbox, inbox)
+
+    # Nothing refused it — the whole point. (`promoted` is 0 and the body
+    # stages undeliverable only because no *gate* owns a spawn-source event:
+    # a strand's answer travels the dispatch edge, not a chat.)
+    assert not [n for n in daemon._read_outbox_notices(outbox)
+                if n["kind"] == "refused"]
+
+
+def test_strand_may_answer_a_parent_steer_addressed_to_it(tmp_path, monkeypatch):
+    """A `to:` steer is the strand's one inbound, and it is addressable.
+
+    It is stamped ``spawn_message_for_event: <the strand's own event>`` —
+    exactly the predicate `_pending_events_for_agent` uses to let the
+    strand *see* it. Read side and write side agree, or a strand could
+    read a steer it may never close.
+    """
+    brr_dir, inbox, responses, outbox, own_id = _strand_drain_fixture(tmp_path)
+    steer = protocol.create_event(
+        inbox, "spawn", "also check the codex path",
+        spawn_message_for_event=own_id,
+    )
+    (outbox / "reply.md").write_text(
+        f"---\nevent: {steer.stem}\n---\nchecked — clean\n", encoding="utf-8")
+    monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+    emit = daemon._WorkerEmit(brr_dir=brr_dir, conversation_key="", event_id=own_id)
+    task = Run(id="run-strand", event_id=own_id, body="do the thing",
+               source="spawn", meta={"strand": True})
+
+    promoted = daemon._drain_outbox(
+        emit, task, responses, own_id, outbox, inbox)
+
+    assert steer.stem not in {ev["id"] for ev in protocol.list_pending(inbox)}
+    assert not [n for n in daemon._read_outbox_notices(outbox)
+                if n["kind"] == "refused"]
+
+
+def test_resident_still_answers_across_the_inbox_union(tmp_path, monkeypatch):
+    """The guard is strand-only: #936's cross-inbox addressing is untouched
+    for a resident, which is the whole reason the union is wide."""
+    brr_dir, inbox, responses, outbox, own_id = _strand_drain_fixture(tmp_path)
+    theirs = protocol.create_event(inbox, "telegram", "what's the ETA?")
+    (outbox / "reply.md").write_text(
+        f"---\nevent: {theirs.stem}\n---\nabout two hours\n", encoding="utf-8")
+    monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+    emit = daemon._WorkerEmit(brr_dir=brr_dir, conversation_key="", event_id=own_id)
+    task = Run(id="run-resident", event_id=own_id, body="do the thing",
+               source="telegram")
+
+    promoted = daemon._drain_outbox(
+        emit, task, responses, own_id, outbox, inbox)
+
+    assert promoted == 1
+    assert daemon._read_outbox_notices(outbox) == []
+
+
+def test_strand_gate_message_stays_unguarded(tmp_path, monkeypatch):
+    """Outbound is open — the point of the whole change.
+
+    A strand escalating to a human via `gate:` must pass untouched; if a
+    future guard ever generalises 'a strand may not speak', this fails.
+    """
+    brr_dir, inbox, responses, outbox, own_id = _strand_drain_fixture(tmp_path)
+    (outbox / "escalate.md").write_text(
+        "---\ngate: telegram\ntelegram_chat_id: 999\n---\n"
+        "blocked: the migration needs a credential I do not have\n",
+        encoding="utf-8")
+    monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
+    monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+    emit = daemon._WorkerEmit(brr_dir=brr_dir, conversation_key="", event_id=own_id)
+    task = Run(id="run-strand", event_id=own_id, body="do the thing",
+               source="spawn", meta={"strand": True})
+
+    promoted = daemon._drain_outbox(
+        emit, task, responses, own_id, outbox, inbox)
+
+    assert promoted == 1
+    done = protocol.list_done(inbox, "telegram")
+    assert len(done) == 1
+    assert "blocked" in protocol.read_response(responses, done[0]["id"])
+    assert daemon._read_outbox_notices(outbox) == []
