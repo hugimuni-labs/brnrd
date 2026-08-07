@@ -6006,6 +6006,136 @@ def test_scm_facet_reports_dirty_unpushed_tree(tmp_path):
     assert facet["modified_files"] == 1
 
 
+# ── delivery: — "would my reply reach a human if I ended right now?" ──
+
+
+def test_delivery_projection_unknown_without_a_source(tmp_path):
+    task = Run(id="run-1", event_id="evt-1", body="", source="")
+    assert daemon._live_delivery_projection(task, {}, tmp_path, already_delivered=False) == {
+        "known": False,
+    }
+
+
+def test_delivery_projection_gate_owned_source_lands_sole(tmp_path):
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    projection = daemon._live_delivery_projection(
+        task, {}, tmp_path, already_delivered=False,
+    )
+    assert projection["known"] is True
+    assert projection["would_land"] is True
+    assert projection["route"] == "gate-sole"
+    assert projection["gate"] == "telegram"
+    assert projection["reason"] is None
+
+
+def test_delivery_projection_gate_owned_source_already_delivered_is_extra(tmp_path):
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    projection = daemon._live_delivery_projection(
+        task, {}, tmp_path, already_delivered=True,
+    )
+    assert projection["route"] == "gate-extra"
+    assert projection["already_delivered"] is True
+
+
+def test_delivery_projection_dispatch_edge_for_a_spawned_strand(tmp_path):
+    task = Run(id="run-1", event_id="evt-1", body="", source="spawn")
+    task.meta["spawn_parent_run_id"] = "run-parent"
+    projection = daemon._live_delivery_projection(
+        task, {}, tmp_path, already_delivered=False,
+    )
+    assert projection["would_land"] is True
+    assert projection["route"] == "dispatch-edge"
+    assert projection["gate"] is None
+
+
+def test_delivery_projection_unowned_source_no_candidates_names_the_source(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(daemon, "_gate_can_deliver", lambda _brr, _gate: False)
+    task = Run(id="run-1", event_id="evt-1", body="", source="schedule")
+    projection = daemon._live_delivery_projection(
+        task, {}, tmp_path, already_delivered=False,
+    )
+    assert projection["would_land"] is False
+    assert projection["route"] == "undeliverable"
+    assert projection["gate"] is None
+    assert projection["reason"] == "no gate owns schedule events"
+
+
+def test_delivery_projection_unowned_source_resolves_via_notify_gate(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(
+        daemon, "_gate_can_deliver", lambda _brr, gate: gate == "telegram",
+    )
+    task = Run(id="run-1", event_id="evt-1", body="", source="schedule")
+    projection = daemon._live_delivery_projection(
+        task, {}, tmp_path, already_delivered=False,
+    )
+    assert projection["would_land"] is True
+    assert projection["route"] == "gate-fallback"
+    assert projection["gate"] == "telegram"
+    assert projection["reason"] is None
+
+
+def test_delivery_projection_ambiguous_candidates_names_the_count(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(
+        daemon, "_gate_can_deliver",
+        lambda _brr, gate: gate in ("telegram", "slack"),
+    )
+    task = Run(id="run-1", event_id="evt-1", body="", source="schedule")
+    projection = daemon._live_delivery_projection(
+        task, {}, tmp_path, already_delivered=False,
+    )
+    assert projection["would_land"] is False
+    assert projection["reason"] == "notify.gate unresolved: 2 candidate gate(s)"
+
+
+def test_delivery_projection_explicit_notify_gate_not_deliverable(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(daemon, "_gate_can_deliver", lambda _brr, _gate: False)
+    task = Run(id="run-1", event_id="evt-1", body="", source="schedule")
+    projection = daemon._live_delivery_projection(
+        task, {"notify.gate": "slack"}, tmp_path, already_delivered=False,
+    )
+    assert projection["would_land"] is False
+    assert projection["reason"] == "explicit notify.gate='slack' not deliverable here"
+
+
+def test_delivery_projection_without_brr_dir_stays_conservative(monkeypatch):
+    # An ad-hoc caller that omits brr_dir gets no filesystem-backed
+    # notify.gate resolution — same "no crash, no guess" contract as the
+    # schedule facet's brr_dir-less path above.
+    task = Run(id="run-1", event_id="evt-1", body="", source="schedule")
+    projection = daemon._live_delivery_projection(
+        task, {}, None, already_delivered=False,
+    )
+    assert projection["would_land"] is False
+    assert projection["route"] == "undeliverable"
+    assert projection["reason"] == "no gate owns schedule events"
+
+
+def test_write_live_portal_state_wires_the_delivery_facet(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        brr_dir=brr_dir,
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["delivery"]["known"] is True
+    assert payload["delivery"]["route"] == "gate-sole"
+    assert payload["delivery"]["gate"] == "telegram"
+
+
 def test_write_live_portal_state_wires_produce_inputs(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     outbox_dir = brr_dir / "outbox" / "evt-1"
