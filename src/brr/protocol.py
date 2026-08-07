@@ -3,6 +3,18 @@
 All writes use atomic temp-file-then-rename to prevent races between
 gate threads and the daemon main thread.  Reads silently skip files
 that fail to parse (transient state during rename).
+
+An inbox event's ``status:`` field belongs to exactly one state machine:
+the letter's own lifecycle (``pending`` -> ``processing`` -> ``done`` ->
+``delivered``/``noted`` — see :data:`LETTER_STATUSES`). A run's *outcome*
+(``run.py``'s ``STATUSES`` plus the daemon's ``stopped`` result) is a
+different machine and is not a letter state; ``daemon.py`` records it in
+the event's own ``run_outcome:`` key instead of writing it here (see
+``daemon.py``'s ``_set_event_run_outcome``). Event files written before
+this split still carry ``error``/``conflict``/``stopped``/``cancelled`` in
+``status`` — they stay readable and terminal (:data:`TERMINAL_EVENT_STATUSES`
+below still names them so retention keeps collecting them) but nothing
+writes those values into ``status`` anymore.
 """
 
 from __future__ import annotations
@@ -66,6 +78,7 @@ def frontmatter_body(text: str) -> str:
 # ``parse_outbox_message``.
 _OUTBOX_ROUTING_KEYS = (
     "event", "gate", "respawn", "spawn", "stop", "to", "runner_policy",
+    "config_change", "note", "await",
 )
 
 
@@ -476,35 +489,53 @@ def _event_sort_key(entry: os.DirEntry) -> tuple[int, str]:
     return (mtime, entry.name)
 
 
-#: Statuses under which an event's lifecycle is over — a run outcome or a
-#: completed delivery — so it is safe to collect once it also ages past a
-#: retention window. Derived from every site that writes an event's
-#: ``status:`` field (there is no enum; this is that vocabulary, gathered):
+#: The letter's own lifecycle — the one state machine ``status:`` belongs
+#: to (module docstring above). Every value a current writer puts in an
+#: event's ``status:`` field:
 #:
-#: * ``"done"`` — the daemon's own closeout, and the birth-state a gate uses
-#:   for an outbound-only event (``create_event(..., status="done")``,
-#:   ``daemon.py``'s ``_set_event_status_if_present`` at closeout).
+#: * ``"pending"`` — arrived, nobody has picked it up.
+#: * ``"processing"`` — a wake holds it (``protocol.set_status(event,
+#:   "processing")`` at dispatch).
+#: * ``"done"`` — the daemon's own closeout: a successful run, the
+#:   birth-state a gate uses for an outbound-only event (``create_event(...,
+#:   status="done")``), and — since the split this set documents — where a
+#:   run's outcome settles too (``daemon.py``'s ``_set_event_run_outcome``,
+#:   which records the outcome itself in the sibling ``run_outcome:`` key
+#:   instead of here).
 #: * ``"delivered"`` — a gate, after a successful send
 #:   (``gates/runtime.py``'s poll loop, ``protocol.set_status(event,
 #:   "delivered")``).
-#: * ``"error"`` / ``"conflict"`` / ``"stopped"`` — the *run's* own outcome
-#:   (``run.py``'s ``STATUSES`` plus the ``stopped`` outcome
-#:   ``update_status`` writes), copied onto the waking event by
-#:   ``_set_event_status_if_present(event, task.status)``.
-#: * ``"cancelled"`` — a parent- or dashboard-initiated stop
-#:   (``_set_event_status_if_present(event, "cancelled")`` in the
-#:   stopped-run finalizer).
 #: * ``"noted"`` — the resident retired the event deliberately, no reply
 #:   owed (the ``note:`` outbox verb — ``daemon.py``'s drain sets it with
 #:   ``noted_by``/``noted_at`` provenance; no gate ever delivers one).
 #:
-#: ``"pending"`` and ``"processing"`` are excluded on purpose — they are
-#: exactly the two statuses ``list_pending`` (above) and every
-#: still-eligible-work check still treat as unhandled. A status-less or
-#: unparseable event is likewise never assumed terminal.
-TERMINAL_EVENT_STATUSES = frozenset({
-    "done", "delivered", "error", "conflict", "stopped", "cancelled", "noted",
+#: A status-less or unparseable event is never assumed terminal.
+LETTER_STATUSES = frozenset({
+    "pending", "processing", "done", "delivered", "noted",
 })
+
+#: Values a run's *outcome* used to write straight into ``status:`` before
+#: the split above — ``run.py``'s ``STATUSES`` (``error``/``conflict``) plus
+#: the daemon's own ``stopped`` result and its retired ``cancelled``
+#: translation for a parent- or dashboard-initiated stop. No current writer
+#: puts these in ``status:`` (see ``daemon.py``'s ``_set_event_run_outcome``
+#: — the outcome lands in ``run_outcome:`` and the letter settles at
+#: ``"done"`` instead), but event files written before the split still carry
+#: them, and they must stay terminal for retention and every "already
+#: handled?" reader.
+_LEGACY_RUN_OUTCOME_STATUSES = frozenset({
+    "error", "conflict", "stopped", "cancelled",
+})
+
+#: Statuses under which an event's lifecycle is over, so it is safe to
+#: collect once it also ages past a retention window. Derived from
+#: :data:`LETTER_STATUSES` (the terminal ones — ``"pending"`` and
+#: ``"processing"`` are exactly the two statuses ``list_pending`` above and
+#: every still-eligible-work check still treat as unhandled) plus the
+#: legacy run-outcome values above, kept for on-disk compatibility.
+TERMINAL_EVENT_STATUSES = frozenset(
+    (LETTER_STATUSES - {"pending", "processing"}) | _LEGACY_RUN_OUTCOME_STATUSES
+)
 
 
 def list_pending(inbox_dir: Path) -> list[dict[str, Any]]:
