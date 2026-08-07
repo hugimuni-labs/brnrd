@@ -1,7 +1,11 @@
 """Tests for protocol module — event/response CRUD and frontmatter parsing."""
 
+import ast
+from pathlib import Path
+
 import pytest
 
+from brr import daemon as daemon_mod
 from brr import protocol
 
 
@@ -550,3 +554,170 @@ class TestCreateEventMetaValidation:
         ev = protocol.list_pending(inbox)[0]
         assert ev["telegram_chat_id"] == 42
         assert ev["telegram_user"] == "Alice"
+
+
+# ── THE FIELD TWO MACHINES WRITE: one letter-status authority ───────────
+# design-the-post.md — the letter's own lifecycle (LETTER_STATUSES) is the
+# one state machine `status:` belongs to; TERMINAL_EVENT_STATUSES is
+# derived from it, reconciled with the legacy run-outcome values old event
+# files still carry.
+
+
+def test_terminal_event_statuses_is_derived_from_letter_statuses():
+    """`TERMINAL_EVENT_STATUSES` must stay a reconciliation of
+    `LETTER_STATUSES`'s terminal members and the legacy run-outcome values
+    — not a second, independently hand-kept set that can drift from the
+    authority it is supposed to be derived from."""
+    assert protocol.LETTER_STATUSES == {
+        "pending", "processing", "done", "delivered", "noted",
+    }
+    letter_terminal = protocol.LETTER_STATUSES - {"pending", "processing"}
+    assert letter_terminal <= protocol.TERMINAL_EVENT_STATUSES
+    # The legacy run-outcome words still on disk from before the split —
+    # never written by current code, but still terminal for old files.
+    assert {"error", "conflict", "stopped", "cancelled"} <= (
+        protocol.TERMINAL_EVENT_STATUSES
+    )
+    assert protocol.TERMINAL_EVENT_STATUSES == letter_terminal | {
+        "error", "conflict", "stopped", "cancelled",
+    }
+
+
+# ── _OUTBOX_ROUTING_KEYS: derived from the drain's actual dispatch ───────
+
+
+def _outbox_verbs_the_drain_handles() -> set[str]:
+    """The outbox verb vocabulary `daemon._drain_outbox` actually dispatches
+    on, read from its own source rather than hand-listed a second time.
+
+    `_drain_outbox` is a flat sequence of ``if <verb check>: ... continue``
+    statements inside one ``for fpath in entries:`` loop (no elif chain).
+    A verb check is either inline in the ``If.test`` (``if
+    str(fm.get("to") or "").strip():``), or a preceding sibling ``Assign``
+    whose target the ``If.test`` then names (``note_target = str(fm.get(
+    "note") or "").strip()`` / ``if note_target:``), or — for ``event:``,
+    the unconditional fallback once nothing else matched — a sibling
+    ``Assign`` with no gating ``if`` at all. Two verbs
+    (``runner_policy``, ``config_change``) hide their own ``fm.get(...)``
+    behind a same-module predicate function called as the bare ``If.test``
+    (``_runner_policy_proposal_requested(fm)``); one level of recursion
+    into such a *bare-`fm`-argument* call picks those up too.
+
+    Deliberately restricted to this **top level of the dispatch loop's own
+    body** — not a blanket ``ast.walk`` of the whole function — because a
+    verb's own *branch body* can legitimately read further ``fm`` sub-fields
+    once that verb is already chosen (the ``gate:`` branch's own
+    ``target_thread=str(fm.get("thread") or "")``, the respawn/spawn
+    `_queue_*` helpers' `shell`/`core`/`at`/`scope`), and those are not
+    routing selectors — ``_OUTBOX_ROUTING_KEYS`` gates the lenient parse's
+    *leading* key, not everything a message body may later contain.
+    """
+    tree = ast.parse(Path(daemon_mod.__file__).read_text(encoding="utf-8"))
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+    }
+    drain = functions.get("_drain_outbox")
+    # Sanity: a rename must break this loudly rather than pass over nothing.
+    assert drain is not None, (
+        "_drain_outbox not found in daemon.py — this guard has been "
+        "silently disarmed by a rename"
+    )
+    dispatch_loop = next(
+        (node for node in drain.body if isinstance(node, ast.For)), None,
+    )
+    assert dispatch_loop is not None, (
+        "_drain_outbox no longer wraps its dispatch in one `for` loop — "
+        "this guard's top-level-only scan needs re-deriving, not widening "
+        "back to a blanket ast.walk (that is what let `thread` — a "
+        "gate: sub-field, not a verb — slip in)"
+    )
+
+    verbs: set[str] = set()
+    visited: set[str] = set()
+
+    def bare_fm_callee(node: ast.AST) -> str | None:
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and not node.keywords
+            and len(node.args) == 1
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id == "fm"
+        ):
+            return node.func.id
+        return None
+
+    def scan_expr(expr: ast.AST) -> None:
+        for node in ast.walk(expr):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "fm"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+            ):
+                verbs.add(node.args[0].value)
+            elif (
+                isinstance(node, ast.Compare)
+                and len(node.ops) == 1
+                and isinstance(node.ops[0], ast.In)
+                and isinstance(node.left, ast.Constant)
+                and isinstance(node.left.value, str)
+                and len(node.comparators) == 1
+                and isinstance(node.comparators[0], ast.Name)
+                and node.comparators[0].id == "fm"
+            ):
+                verbs.add(node.left.value)
+            else:
+                callee_name = bare_fm_callee(node)
+                if (
+                    callee_name
+                    and callee_name in functions
+                    and callee_name not in visited
+                ):
+                    visited.add(callee_name)
+                    scan_expr(functions[callee_name])
+
+    for stmt in dispatch_loop.body:
+        if isinstance(stmt, ast.If):
+            scan_expr(stmt.test)
+        elif isinstance(stmt, ast.Assign):
+            scan_expr(stmt.value)
+
+    return verbs
+
+
+def test_outbox_routing_keys_cover_every_verb_the_drain_handles():
+    """`_OUTBOX_ROUTING_KEYS` (the lenient no-fence outbox parse's gate) is a
+    hand-kept list that has drifted before: `config_change` shipped as a
+    documented verb (#1202) and nobody added it here, and `note`/`await`
+    never joined either (design-the-post.md's "a class defined by listing
+    its members met the member nobody listed"). Derive the expected set
+    from `_drain_outbox`'s own dispatch instead of parametrizing the same
+    hand list a second time, so the next verb the drain grows cannot be
+    silently unlisted.
+
+    Drive red: delete one verb (e.g. `"note"`) from `_OUTBOX_ROUTING_KEYS`,
+    or add a new `fm.get("thing")` verb branch to `_drain_outbox` without
+    listing `"thing"` here.
+    """
+    derived = _outbox_verbs_the_drain_handles()
+
+    # Sanity: an accidentally-empty derived set would make the equality
+    # assertion below vacuously pass a set of leftover keys through — this
+    # guard exists specifically to catch a removed member.
+    assert len(derived) >= 8, (
+        f"only {sorted(derived)} verb(s) derived from _drain_outbox — the "
+        "AST walk likely broke, not the drain"
+    )
+    configured = set(protocol._OUTBOX_ROUTING_KEYS)
+    assert configured == derived, (
+        "protocol._OUTBOX_ROUTING_KEYS has drifted from _drain_outbox's "
+        f"actual dispatch — missing: {sorted(derived - configured)}, "
+        f"stale: {sorted(configured - derived)}"
+    )
