@@ -9,6 +9,8 @@ the check-in. See ``kb/design-multi-response.md``.
 from __future__ import annotations
 
 import json
+import os
+import time
 import types
 
 from brr import (
@@ -1943,6 +1945,88 @@ def test_resolve_notify_gate_never_infers_github(tmp_path, monkeypatch):
     assert daemon._resolve_notify_gate({}, tmp_path) == ""
     assert daemon._resolve_notify_gate(
         {"notify.gate": "github"}, tmp_path) == "github"
+
+
+# ── ambiguous candidates: the conversation-ownership tiebreak ─────────
+
+
+def test_notify_gate_for_conversation_key_is_the_leading_field():
+    # Every native key's first ``:``-field *is* its owning gate name — no
+    # lookup table to keep in sync with conversations.gate_thread_key.
+    assert daemon._notify_gate_for_conversation_key("telegram:555:0") == "telegram"
+    assert daemon._notify_gate_for_conversation_key("slack:general:0") == "slack"
+    assert daemon._notify_gate_for_conversation_key("cloud:telegram:1:0") == "cloud"
+    # Non-gate keys resolve to a prefix that is simply never in the
+    # candidate set — the caller filters it out, this makes no exception.
+    assert daemon._notify_gate_for_conversation_key("schedule:director-tick") == "schedule"
+    assert daemon._notify_gate_for_conversation_key("") == ""
+
+
+def test_resolve_notify_gate_ambiguous_prefers_the_runs_own_conversation(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(
+        daemon, "_gate_can_deliver",
+        lambda _brr, gate: gate in ("telegram", "slack"),
+    )
+    assert daemon._resolve_notify_gate(
+        {}, tmp_path, conversation_key="slack:general:0") == "slack"
+
+
+def test_resolve_notify_gate_ambiguous_ignores_a_conversation_key_neither_owns(
+    tmp_path, monkeypatch,
+):
+    # The run's own conversation belongs to a gate that isn't even one of
+    # the ambiguous candidates (github is excluded from inference) — falls
+    # through to the recent-activity tiebreak, which also finds nothing on
+    # an empty account, so it stays unresolved rather than guessing.
+    monkeypatch.setattr(
+        daemon, "_gate_can_deliver",
+        lambda _brr, gate: gate in ("telegram", "slack"),
+    )
+    assert daemon._resolve_notify_gate(
+        {}, tmp_path, conversation_key="github:owner/repo:42") == ""
+
+
+def test_resolve_notify_gate_ambiguous_prefers_most_recently_active_thread(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(
+        daemon, "_gate_can_deliver",
+        lambda _brr, gate: gate in ("telegram", "slack"),
+    )
+    brr_dir = tmp_path / ".brr"
+    for key, seconds_ago in (("telegram:1:0", 600), ("slack:general:0", 30)):
+        conversations.append_event(
+            brr_dir, key, {"id": f"evt-{key}", "source": key.split(":", 1)[0], "body": "hi"},
+        )
+        log_path = conversations.event_log_path(brr_dir, key, f"evt-{key}")
+        stamp = time.time() - seconds_ago
+        os.utime(log_path, (stamp, stamp))
+
+    # No conversation_key of the run's own — only the repo-history signal.
+    assert daemon._resolve_notify_gate({}, brr_dir, conversation_key="") == "slack"
+
+
+def test_resolve_notify_gate_ambiguous_activity_ignores_non_candidate_threads(
+    tmp_path, monkeypatch,
+):
+    # A github thread is the most recent in the repo, but github is not a
+    # notify-fallback candidate — it must not win by recency either.
+    monkeypatch.setattr(
+        daemon, "_gate_can_deliver",
+        lambda _brr, gate: gate in ("telegram", "slack"),
+    )
+    brr_dir = tmp_path / ".brr"
+    for key, seconds_ago in (("telegram:1:0", 600), ("github:o/r:9", 5)):
+        conversations.append_event(
+            brr_dir, key, {"id": f"evt-{key}", "source": key.split(":", 1)[0], "body": "hi"},
+        )
+        log_path = conversations.event_log_path(brr_dir, key, f"evt-{key}")
+        stamp = time.time() - seconds_ago
+        os.utime(log_path, (stamp, stamp))
+
+    assert daemon._resolve_notify_gate({}, brr_dir, conversation_key="") == "telegram"
 
 
 def test_portal_state_marks_schedule_event_not_replyable(tmp_path):
