@@ -178,7 +178,7 @@ class PushResult:
 # pathspec — so a process that inherits them cannot address any repository
 # but the pinned one.
 #
-# #703 pins these into a worker run's environment on purpose (see
+# #703 pins these into a strand run's environment on purpose (see
 # `daemon._child_git_pin`), which makes the inheritance a hazard for brnrd's
 # own code: every git call in this module names the repository it means, and
 # under an inherited pin each one would silently report the pinned worktree
@@ -477,7 +477,7 @@ def absolute_git_dir(repo_root: Path) -> Path | None:
     For a linked worktree this is the worktree's own administrative dir
     (``<main>/.git/worktrees/<name>``), *not* the shared common dir — which
     is exactly the distinction ``GIT_DIR`` needs: pointing it at the common
-    dir would put a worker on the main checkout's HEAD (#703).
+    dir would put a strand on the main checkout's HEAD (#703).
     """
     try:
         result = _git(repo_root, "rev-parse", "--absolute-git-dir", check=False)
@@ -511,6 +511,18 @@ def shared_brr_dir(repo_root: Path) -> Path:
     if not common_dir.is_absolute():
         common_dir = (repo_root / common_dir).resolve()
     return common_dir.parent / ".brr"
+
+
+def is_working_tree(path: Path) -> bool:
+    """Whether *path* sits inside a git working tree at all.
+
+    Public wrapper over :func:`_is_working_tree` — `gates.cloud` needs this
+    predicate to tell "no remote, but still a real checkout" (worth a
+    synthesized local identity) apart from "not a git checkout at all"
+    (nothing to synthesize one from — the pre-existing no-capabilities
+    fallback is correct there, unchanged).
+    """
+    return _is_working_tree(path)
 
 
 def _is_working_tree(path: Path) -> bool:
@@ -646,6 +658,32 @@ def is_tracked(path: Path) -> bool:
         return True
     except subprocess.CalledProcessError:
         return False
+
+
+def is_tracked_in(repo_root: Path, relpath: str) -> bool:
+    """Return True if *relpath* is tracked by Git, resolved against *repo_root*.
+
+    Explicit-repo-root sibling of :func:`is_tracked`, which resolves against
+    ``Path.cwd()`` instead. A daemon-side migration (never the operator's
+    shell) must not depend on process cwd to answer a question this
+    consequential — see ``account._untrack_newly_ignored``.
+    """
+    result = _git(repo_root, "ls-files", "--error-unmatch", relpath, check=False)
+    return result.returncode == 0
+
+
+def untrack_cached(repo_root: Path, relpath: str) -> bool:
+    """``git rm --cached`` *relpath* in *repo_root* — drop it from the index,
+    leave the working-tree file alone. Returns whether the removal succeeded.
+
+    A ``.gitignore`` line never untracks a file the index already knows
+    about (git says so itself); this is the other half a migration needs to
+    actually repair a home created before the rule existed, rather than
+    merely keeping it out of *future* commits. Best-effort: a failure here
+    must not abort whatever bootstrap step triggered it.
+    """
+    result = _git(repo_root, "rm", "--cached", "--quiet", relpath, check=False)
+    return result.returncode == 0
 
 
 def branch_exists(repo_root: Path, branch: str) -> bool:
@@ -976,11 +1014,21 @@ def add_worktree(
         raise RuntimeError(detail or f"failed to add worktree {worktree_path}")
 
 
-def fetch_branch(repo_root: Path, remote: str, branch: str) -> bool:
-    """Fetch *branch* from *remote*, updating its remote-tracking ref. Best-effort."""
+def fetch_branch(
+    repo_root: Path, remote: str, branch: str,
+    *, env: dict[str, str] | None = None,
+) -> bool:
+    """Fetch *branch* from *remote*, updating its remote-tracking ref. Best-effort.
+
+    *env* overrides the default :func:`explicit_repo_env` passthrough — pass
+    :func:`runner.clean_runner_environ` for a daemon-direct call against a
+    GitHub remote, so it authenticates the same way a run subprocess's git
+    calls already do regardless of the remote's literal URL (2026-08-06:
+    the same-shaped gap in :func:`sync.refresh_before_run`'s fetch call).
+    """
     if not remote or not branch:
         return False
-    result = _git(repo_root, "fetch", remote, branch, check=False)
+    result = _git(repo_root, "fetch", remote, branch, check=False, env=env)
     return result.returncode == 0
 
 
@@ -990,11 +1038,13 @@ def push_branch(
     branch: str,
     *,
     set_upstream: bool = True,
+    env: dict[str, str] | None = None,
 ) -> PushResult:
     """Push local *branch* to *remote* and classify any failure.
 
     ``PushResult`` keeps the old boolean contract: successful results are
-    truthy and every failure is falsey.
+    truthy and every failure is falsey. *env* overrides the default
+    :func:`explicit_repo_env` passthrough — see :func:`fetch_branch`.
     """
     configured_url = remote_url(repo_root, remote) or remote
     transport = _remote_transport(configured_url)
@@ -1009,7 +1059,7 @@ def push_branch(
     if set_upstream:
         args.append("-u")
     args += [remote, branch]
-    result = _git(repo_root, *args, check=False)
+    result = _git(repo_root, *args, check=False, env=env)
     if result.returncode == 0:
         return PushResult(
             PushStatus.OK,
@@ -1274,7 +1324,7 @@ def dirty_paths(worktree_path: Path) -> set[str]:
 
     The path-set sibling of :func:`worktree_dirty`, for callers that need to
     compare two readings rather than ask a yes/no. Used by #703's stray-write
-    check: a worker whose deliverable landed in the *shared* checkout leaves
+    check: a strand whose deliverable landed in the *shared* checkout leaves
     new entries here that were not present when the run was dispatched.
 
     Paths only — the two-character status prefix is dropped, because the
@@ -1312,7 +1362,7 @@ def commits_owned_by_run(
     That second path is what makes this an *attribution* primitive rather
     than a time window, and #703 leans on it: the hook lives in the shared
     ``.git/hooks`` (a linked worktree resolves to the same file), so a
-    worker whose cwd drifted into the host checkout stamped its stray
+    strand whose cwd drifted into the host checkout stamped its stray
     commits there with its own run id. Driven against a real checkout —
     ``test_gitops.py::test_commits_owned_by_run_*``.
 

@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import Any
 
 from . import card as card_rule
+from . import course
 from . import facets
 from . import gate_receipt
 from . import portals
@@ -443,6 +444,8 @@ def _has_post_tool_obligations(
     surprise: str | None,
     plan_edge: bool,
     portal_unavailable: bool,
+    route: "course.Course | None" = None,
+    route_edge: bool = False,
 ) -> bool:
     """True when this boundary carries at least one obligation.
 
@@ -510,6 +513,11 @@ def _has_post_tool_obligations(
     ):
         return True
     if plan is not None and plan_edge and plan.owed:
+        return True
+    # The course's edge mirrors the blueprint's: the card is a control file
+    # the daemon's portal token never sees, so an edited route can only
+    # reach the boundary through its own latch (#1008's gate-opener rule).
+    if route is not None and route_edge and route.open_rows:
         return True
     return False
 
@@ -1081,6 +1089,23 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         # not manufacture a boundary), which is unchanged; the
         # module's own test pins the chip as the standing fact that
         # rides every boundary while the line speaks on delta.
+        klass=OBLIGATION,
+    ),
+    _BarSegment(
+        "course", "course",
+        "the run's own route — the `## Plan` / `## Course` checkbox section "
+        "of `.card`, read fresh each boundary (`course 2/5` = rows checked "
+        "of rows total; :mod:`brr.course`). Renders only while rows stand "
+        "open; checking a row on the card is the discharge that moves it. "
+        "This one *is* a ratio, unlike `owed`, because both numbers come "
+        "from the same authored list — one population, one denominator. "
+        "The current row rides a detail line on the course's own delta and "
+        "on the boundary a fresh event lands (the derailment moment, where "
+        "the route must be in the loud zone to be decidable).",
+        # Obligation: an open route row is actionable (do it / check it /
+        # rewrite the plan) and turn-off-able by exactly that act. The chip
+        # never opens the bar by itself — the detail line, latched on the
+        # course's own token, is what earns a boundary.
         klass=OBLIGATION,
     ),
     _BarSegment(
@@ -1991,6 +2016,9 @@ def _render_bar(
     plan: "promises.Blueprint | None" = None,
     plan_edge: bool = False,
     ambient_emit: bool = True,
+    route: "course.Course | None" = None,
+    route_edge: bool = False,
+    route_prompt: bool = False,
 ) -> str | None:
     """The mid-run (``post-tool``) status bar: one line + obligation details.
 
@@ -2065,6 +2093,13 @@ def _render_bar(
     owed_chip = promises.chip(plan) if plan is not None else None
     if owed_chip:
         segments.append(("owed", owed_chip))
+    # The route's standing fact, beside the blueprint's: what the run told
+    # itself, next to what it told the world (#1008's two tenses, third
+    # person). Gateless like `owed` — the detail line below earns the
+    # boundary, the chip only rides one.
+    course_chip = course.chip(route)
+    if course_chip:
+        segments.append(("course", course_chip))
     notices_chip = _notices_chip(notices or [])
     if notices_chip:
         segments.append(("notices", notices_chip))
@@ -2123,6 +2158,16 @@ def _render_bar(
         owed = promises.owed_line(plan)
         if owed:
             details.append(owed)
+    # The route reminder: on the course's own delta (the resident edited its
+    # plan — confirm the chip moved) and on the boundary a fresh event landed
+    # (``route_prompt`` — the derailment moment; a steer needs the current
+    # row in the loud zone before "continue or turn" is decidable). Never
+    # per-boundary while merely standing: that is the *fires constantly for
+    # a non-reason* death, and the chip already carries the standing fact.
+    if route_edge or route_prompt:
+        route_line = course.current_line(route)
+        if route_line:
+            details.append(route_line)
     if budget.get("long_running"):
         limit = budget.get("budget_seconds")
         details.append(
@@ -2158,6 +2203,12 @@ def _render_bar(
     # gating this on the portal token would leave the one boundary the
     # signal exists for rendering nothing.
     plan_laden = bool(plan is not None and plan_edge and plan.owed)
+    # A course edge opens the gate for the blueprint edge's exact reason:
+    # `.card` is a control file, so editing the route changes nothing in
+    # portal-state and the one boundary the confirmation exists for would
+    # otherwise render nothing. ``route_prompt`` deliberately does NOT open
+    # the gate — a fresh event already opened it.
+    route_laden = bool(route is not None and route_edge and route.open_rows)
     # A mood edge is laden by definition: something the resident did just came
     # back wrong. Without this clause the caller's gate opens and this one
     # closes again — the ask would still be silent on exactly the boundary it
@@ -2184,7 +2235,7 @@ def _render_bar(
         (not pending_known) or pending > 0 or pending_files > 0
         or any_delivery or card_stale or surprise
         or bool(notices_chip) or bool(finished_spawns) or bool(armed)
-        or plan_laden
+        or plan_laden or route_laden
     )
     if not has_obligations_or_deltas and not resources_laden:
         return None
@@ -2281,6 +2332,9 @@ def format_delta(
     plan: "promises.Blueprint | None" = None,
     plan_edge: bool = False,
     ambient_emit: bool = True,
+    route: "course.Course | None" = None,
+    route_edge: bool = False,
+    route_prompt: bool = False,
 ) -> str | None:
     """Render a compact context delta from the live portal-state payload.
 
@@ -2430,6 +2484,7 @@ def format_delta(
             armed=armed, gate_receipt_data=gate_receipt_data,
             plan=plan, plan_edge=plan_edge,
             ambient_emit=ambient_emit,
+            route=route, route_edge=route_edge, route_prompt=route_prompt,
         )
 
     lines: list[str] = []
@@ -2520,6 +2575,14 @@ def format_delta(
             lines.append(
                 "- blueprint: every promise this run made is in its manifest."
             )
+    # The course's closeout read-back, beside the blueprint's (#1008's two
+    # tenses): every open route row, named, unlatched at stop for the same
+    # reason — the closeout is the moment the surface exists for. Inject-only,
+    # never a block: the course is a self-report, so the honest ask is
+    # disposition, not a wall. Silent at seed (a fresh run has no card yet)
+    # and silent when the route is finished or absent.
+    if stop:
+        lines.extend(course.stop_lines(route))
     # Produce is already attested by relics.py; the briefing only compresses
     # it. It rides hook deltas that are rendering for an existing reason and
     # is intentionally absent from the mid-run gate below, so committing work
@@ -3796,6 +3859,17 @@ def compute_neutral(
     plan_token = promises.token(plan)
     plan_edge = plan.any_promises and plan_token != state.get("plan_token")
     state["plan_token"] = plan_token
+    # The course (`.card` §Plan/§Course), read fresh for the same reason as
+    # the blueprint above — a control file the portal token never sees, so
+    # its only path to the boundary is its own latch. Parsed off the card
+    # body; a card with no checkbox section costs one regex scan and
+    # renders nothing.
+    route = course.parse(_read_card_body(ctx))
+    route_token = course.token(route)
+    route_edge = (
+        route is not None and route_token != state.get("route_token")
+    )
+    state["route_token"] = route_token
 
     if phase == PHASE_SESSION_START:
         inject = format_delta(
@@ -3835,7 +3909,7 @@ def compute_neutral(
                 portal, stop=True, run_body=_read_card_body(ctx), mood=mood,
                 note_routing=note_routing,
                 event_seen=event_decisions, inbox_pointer=inbox_pointer,
-                plan=plan,
+                plan=plan, route=route,
             )
             # Latch on the render, not on the decision: a Stop whose token
             # did not move injects nothing, and burning the one statement on
@@ -3855,6 +3929,15 @@ def compute_neutral(
         # otherwise be told "something broke" at every boundary of the
         # debugging, which is the habituation this whole change exists to
         # avoid; the interesting moment is clean → broken, once.
+        # Count subagent dispatches as they happen, so the Stop boundary can
+        # tell whether the discriminator this run depends on actually fired
+        # (see `_discriminator_drift_line`). Cheap, and the only place the
+        # parent ever sees the dispatch.
+        dispatched = _count_subagent_dispatches(payload)
+        if dispatched:
+            state[SUBAGENT_DISPATCH_KEY] = (
+                int(state.get(SUBAGENT_DISPATCH_KEY) or 0) + dispatched
+            )
         surprise = _tool_surprise(payload) if mood else None
         was_surprised = bool(state.get("mood_surprised"))
         edge = surprise if (surprise and not was_surprised) else None
@@ -3917,13 +4000,27 @@ def compute_neutral(
         has_obligations = _has_post_tool_obligations(
             portal, plan, surprise=edge, plan_edge=plan_edge,
             portal_unavailable=portal_unavailable,
+            route=route, route_edge=route_edge,
         )
         ambient_emit = _ambient_should_emit(state, pt_budget, pt_resources)
+
+        # The derailment prompt: a *fresh* event letter (new, or a changed
+        # body — not a `seen ×N` reminder) is the moment "continue or turn"
+        # has to be decided, so the current route row rides that boundary.
+        # Keyed on the render decisions the event ledger already made; a
+        # standing pending event does not re-prompt.
+        route_prompt = route is not None and any(
+            decision.get("status") in ("new", "changed")
+            for decision in (event_decisions or {}).values()
+        )
 
         # Gate: open when there is something to say.  Obligations bypass the
         # token check; ambient and deltas use it as before.
         token_moved = token is not None and token != state.get("last_token")
-        if has_obligations or ambient_emit or edge or plan_edge or token_moved:
+        if (
+            has_obligations or ambient_emit or edge or plan_edge
+            or route_edge or token_moved
+        ):
             inject = format_delta(
                 portal, mood=mood, mood_prompt=mood_prompt, surprise=edge,
                 orient=orient, census=census,
@@ -3931,6 +4028,7 @@ def compute_neutral(
                 gate_receipt_data=gate_receipt_data,
                 plan=plan, plan_edge=plan_edge,
                 ambient_emit=ambient_emit,
+                route=route, route_edge=route_edge, route_prompt=route_prompt,
             )
             state["last_token"] = token
             if ambient_emit and inject is not None:
@@ -3998,6 +4096,11 @@ def compute_neutral(
             if reason is not None:
                 block = True
                 block_reason = reason
+
+        # Last: did the seam this run's isolation rests on actually fire?
+        drift = _discriminator_drift_line(ctx, state)
+        if drift is not None:
+            inject = f"{inject}\n{drift}" if inject else drift
 
     # Commit the seen ledger for exactly what this boundary rendered: every
     # rendered delta (bar, seed, closeout) carries the whole pending list, so
@@ -4223,6 +4326,226 @@ def install_hook_config(
     return settings_path
 
 
+# ── The in-process subagent boundary (#1095) ─────────────────────────────
+#
+# A Shell's own subagent (claude's `Agent` tool) runs *inside* the runner
+# process. It inherits the runner's environment and `.claude/settings.local.json`
+# wholesale, so every hook subprocess it spawns resolves the parent's
+# `BRR_*` handles — the parent's portal state, the parent's outbox, the
+# parent's hook state. Until this seam existed, a subagent's tool boundaries
+# were therefore decorated with the *parent's* correspondence: pending
+# events, the correspondent's name and handle, message bodies, and the
+# instruction to answer them. Found live on run-260804-1017-mlcm, where a
+# research worker read the maintainer's chat messages, correctly classified
+# them as prompt injection, and said so in its report. From inside a child,
+# brnrd's control channel is indistinguishable from an attack.
+#
+# The isolation this restores is about *addressing*, not secrecy: one message
+# to one run must not make every limb of that run act on it. brnrd's own
+# `spawn:` children — separate daemon runs — have answered this since
+# 2026-07-18 (`daemon._pending_events_for_agent(strand=True)`: a strand sees
+# only its own dispatch-edge traffic). This is the same rule, finally applied
+# to the in-process lane.
+#
+# The discriminator is measured, not assumed. Captured from live claude
+# `PostToolBatch` payloads on 2026-08-05:
+#
+#   parent:   cwd effort hook_event_name permission_mode prompt_id
+#             session_id tool_calls transcript_path
+#   subagent: cwd agent_id agent_type hook_event_name permission_mode
+#             prompt_id session_id tool_calls transcript_path
+#
+# `session_id`, `transcript_path` and every `BRR_*` variable are *identical*
+# across the two — the child shares the parent's session. `agent_id` /
+# `agent_type` are the only fields that appear on one and not the other, so
+# they are what this keys on. A payload that carries neither is the resident's
+# own boundary and takes the ordinary path.
+
+#: Per-run directory of first-boundary latches, one file per `agent_id`.
+SUBAGENT_LATCH_DIR_NAME = "subagents"
+
+#: Hook-state key: how many subagent dispatches this run has made.
+SUBAGENT_DISPATCH_KEY = "subagent_dispatches"
+
+#: Hook-state key: the drift annotation below has been said once.
+SUBAGENT_DRIFT_KEY = "subagent_drift_said"
+
+#: Tool names that dispatch an in-process subagent. This *is* a list of
+#: members, with the failure mode that implies — a Shell that renames its
+#: subagent tool goes unnoticed here. It is kept anyway, and kept honest by
+#: its remedy tier: this set only ever feeds an *annotation*, never a block
+#: and never a suppression decision. The suppression itself keys on
+#: `subagent_identity`, which reads the child's own payload and needs no
+#: list at all.
+SUBAGENT_DISPATCH_TOOLS = frozenset({"Agent", "Task"})
+
+
+def _count_subagent_dispatches(payload: dict[str, Any]) -> int:
+    """How many subagent dispatches are in this tool batch."""
+    calls = payload.get("tool_calls")
+    if not isinstance(calls, list):
+        return 0
+    count = 0
+    for call in calls:
+        if not isinstance(call, dict):
+            continue
+        if str(call.get("tool_name") or "") in SUBAGENT_DISPATCH_TOOLS:
+            count += 1
+    return count
+
+
+def _discriminator_drift_line(ctx: HookContext, state: dict) -> str | None:
+    """Say so when this run dispatched subagents and none was ever recognised.
+
+    The isolation in :func:`subagent_identity` keys on `agent_id` /
+    `agent_type` — *the Shell's* fields, not brnrd's. brnrd deliberately fails
+    **open**: a payload carrying neither is treated as the resident, because
+    reading the resident as a child would silently starve the run of its own
+    correspondence, and a starved run renders identically to a quiet one.
+
+    The cost of that choice is that a Shell which renames those fields
+    restores the leak in silence — the "a surface that narrows renders as if
+    it hadn't" class, turned on the fix for it. This is the second source that
+    should agree: the parent counts its own dispatches, the children leave
+    latch files, and the two disagreeing is evidence the seam stopped working.
+
+    Annotation only, and once. The signal is real but not exact — a subagent
+    that makes no tool call at all produces no boundary and therefore no latch
+    — so the remedy matches the confidence: it names what it saw and what that
+    would mean, and decides nothing.
+    """
+    if state.get(SUBAGENT_DRIFT_KEY):
+        return None
+    dispatched = int(state.get(SUBAGENT_DISPATCH_KEY) or 0)
+    if dispatched <= 0:
+        return None
+    directory = ctx.run_dir
+    if directory is None:
+        return None
+    latch_dir = directory / SUBAGENT_LATCH_DIR_NAME
+    try:
+        recognised = sum(1 for _ in latch_dir.glob("*.claimed"))
+    except OSError:  # pragma: no cover - defensive
+        return None
+    if recognised:
+        return None
+    state[SUBAGENT_DRIFT_KEY] = True
+    return (
+        f"⚠ subagent isolation unverified: this run dispatched {dispatched} "
+        "subagent(s) and brnrd recognised none of their boundaries. Either "
+        "they made no tool calls, or the payload fields the isolation keys on "
+        "(`agent_id` / `agent_type`) have changed — in which case their "
+        "boundaries carried your correspondence. Worth one check before "
+        "dispatching more (#1095)."
+    )
+
+
+def subagent_identity(payload: dict[str, Any]) -> dict[str, str] | None:
+    """The `agent_id` / `agent_type` of an in-process subagent, or ``None``.
+
+    ``None`` means "this is the resident's own boundary" — the ordinary path.
+    Absence is the common case and must stay cheap and total: any payload
+    shape that is not a dict carrying at least one of the two fields resolves
+    to the resident, because the failure this guards against is *starving the
+    resident*, which is far more expensive than one un-suppressed child.
+    """
+    if not isinstance(payload, dict):
+        return None
+    agent_id = str(payload.get("agent_id") or "").strip()
+    agent_type = str(payload.get("agent_type") or "").strip()
+    if not agent_id and not agent_type:
+        return None
+    return {
+        "agent_id": agent_id or "unknown",
+        "agent_type": agent_type or "subagent",
+    }
+
+
+def _subagent_latch(ctx: HookContext, agent_id: str) -> bool:
+    """Claim the first boundary for *agent_id*. ``True`` exactly once.
+
+    The latch lives in its own per-agent file under the run directory rather
+    than in `.hook-state.json`: the whole point of this seam is that a child
+    neither reads nor writes the parent's state, and subagents run
+    concurrently, so a shared JSON document would be both a violation and a
+    race. ``O_CREAT | O_EXCL`` makes the claim atomic between siblings.
+
+    No run directory (an older daemon, an ad-hoc hook run) ⇒ ``False``: the
+    child stays silent. Silence is the honest default here — brnrd knows
+    nothing about a child it did not dispatch, and a line that cannot be
+    latched is a line that repeats at every boundary forever.
+    """
+    directory = ctx.run_dir
+    if directory is None or not directory.is_dir():
+        return False
+    safe = "".join(c for c in agent_id if c.isalnum() or c in "-_")[:64]
+    if not safe:
+        return False
+    latch_dir = directory / SUBAGENT_LATCH_DIR_NAME
+    try:
+        latch_dir.mkdir(parents=True, exist_ok=True)
+        fd = os.open(
+            str(latch_dir / f"{safe}.claimed"),
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            0o600,
+        )
+    except FileExistsError:
+        return False
+    except OSError:
+        return False
+    try:
+        os.write(fd, _utc_now_iso().encode("utf-8") + b"\n")
+    except OSError:  # pragma: no cover - defensive
+        pass
+    finally:
+        os.close(fd)
+    return True
+
+
+def subagent_neutral(
+    phase: str, ctx: HookContext, identity: dict[str, str]
+) -> dict[str, Any]:
+    """The neutral result for an in-process subagent's boundary.
+
+    Carries the child's own state and nothing of the parent's. Deliberately
+    *not* a filtered :func:`compute_neutral`: the portal is never read, the
+    hook state is never read or written, no latch of the parent's is spent, no
+    seen-ledger advances, and no Stop can ever be blocked — a child owes the
+    parent's correspondents nothing, and cannot be held at a closeout it does
+    not own.
+
+    What is left is what brnrd actually knows about an in-process child: who
+    it is, whose limb it is, and the one fact that costs work when it is
+    unknown — that it dies with the parent's stream (#996). Said once, on the
+    child's first boundary, then silence.
+    """
+    result: dict[str, Any] = {
+        "inject": None,
+        "block": False,
+        "block_reason": None,
+        "subagent": dict(identity),
+    }
+    if phase != PHASE_POST_TOOL:
+        # Stop / session-start for a child: nothing to say, and nothing of the
+        # parent's to say it with.
+        return result
+    if not _subagent_latch(ctx, identity["agent_id"]):
+        return result
+    run_label = f" of {ctx.run_id}" if ctx.run_id else ""
+    short = identity["agent_id"][:8]
+    result["inject"] = (
+        f"[brnrd] subagent · {identity['agent_type']} · {short} — "
+        f"a limb{run_label}.\n"
+        "This boundary carries your own state. The run's correspondence and "
+        "closeout obligations belong to the parent and are not shown here; "
+        "you have no outbox of your own, and your final message is the return "
+        "value the parent collects.\n"
+        "You die when the parent's stream ends — land or report your work "
+        "rather than holding it."
+    )
+    return result
+
+
 # ── Entry point ──────────────────────────────────────────────────────────
 
 
@@ -4243,7 +4566,15 @@ def run_hook(
     if phase not in PHASES:
         return {}, 0
     ctx = HookContext(env)
-    neutral = compute_neutral(phase, ctx, _safe_json(stdin_text))
+    payload = _safe_json(stdin_text)
+    # An in-process subagent shares every env handle with the resident, so the
+    # payload is the only place the two differ (#1095). Branch before anything
+    # reads the portal or the hook state — the isolation is the point.
+    identity = subagent_identity(payload)
+    if identity is not None:
+        neutral = subagent_neutral(phase, ctx, identity)
+    else:
+        neutral = compute_neutral(phase, ctx, payload)
     # Record the *neutral* result, not the rendered native JSON: the neutral
     # shape is the one thing every Shell flavour shares, so a transcript
     # written from here reads the same whether the run was claude or codex.
@@ -4286,6 +4617,13 @@ def record_boundary(
         "block": bool(neutral.get("block")),
         "block_reason": neutral.get("block_reason"),
     }
+    # An in-process subagent's boundary is recorded (it happened, and a reader
+    # asking "what did this run's environment say" wants it) but tagged, so
+    # `derive_boundaries_summary` can keep the run's own verdict — which is
+    # about the *resident's* closeout — free of a child's fires (#1095).
+    subagent = neutral.get("subagent")
+    if isinstance(subagent, dict) and subagent:
+        record["subagent"] = subagent
     try:
         line = json.dumps(record, sort_keys=True)
     except (TypeError, ValueError):  # pragma: no cover - defensive
@@ -4388,6 +4726,13 @@ def derive_boundaries_summary(path: Path) -> dict[str, Any] | None:
             continue
         if not isinstance(record, dict) or not isinstance(record.get("phase"), str):
             skipped += 1
+            continue
+        if record.get("subagent"):
+            # A limb's boundary, not the run's (#1095). Skipped rather than
+            # counted: this summary answers "did *this run* end over a live
+            # objection", and a child — which can never be blocked, and whose
+            # Stop is not the resident's — would only dilute the count and, at
+            # Stop, overwrite the resident's own final verdict.
             continue
         total += 1
         at = record.get("at")

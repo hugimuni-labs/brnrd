@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import hmac
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -16,6 +17,39 @@ from ..models import PairRequest, Repo, TgPairCode, Token
 from ..security import hash_token
 
 router = APIRouter(prefix="/v1/accounts/pair", tags=["pairing"])
+
+
+def pair_capabilities(pair: PairRequest) -> dict[str, str]:
+    """Decode ``pair.capabilities_json`` — ``{}`` for any pair predating the
+    column, sent with none, or holding unparseable JSON (never raise on a
+    field that was always advisory)."""
+    if not pair.capabilities_json:
+        return {}
+    try:
+        data = json.loads(pair.capabilities_json)
+    except (TypeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def pair_suggested_repo_full_name(pair: PairRequest) -> str:
+    """The repo name the connecting checkout reported, or ``""``.
+
+    Only ``repo_full_name`` (already ``owner/name``, parsed locally from the
+    git remote — see ``gates/cloud._repo_capabilities``) is trusted as a
+    binding target; the other capability fields are context, not identity.
+    """
+    value = pair_capabilities(pair).get("repo_full_name", "")
+    return value.strip() if isinstance(value, str) else ""
+
+
+def pair_suggested_forge(pair: PairRequest) -> str:
+    """``"github"`` or ``"local"`` for the suggested repo above, or ``""``
+    when there is no suggestion at all. Display-only — `_resolve_or_create_
+    repo_for_pair` re-derives and validates its own copy rather than
+    trusting this one back."""
+    value = pair_capabilities(pair).get("forge", "")
+    return value.strip() if isinstance(value, str) else ""
 
 
 def _get_pair(db: Session, code: str) -> PairRequest:
@@ -31,7 +65,11 @@ def _get_pair(db: Session, code: str) -> PairRequest:
 
 
 @router.post("", response_model=schemas.PairStarted)
-def start_pair(request: Request, db: Session = Depends(get_db)):
+def start_pair(
+    request: Request,
+    payload: schemas.PairStartRequest | None = Body(None),
+    db: Session = Depends(get_db),
+):
     settings = request.app.state.settings
     for _ in range(8):
         code = ids.pair_code()
@@ -42,7 +80,31 @@ def start_pair(request: Request, db: Session = Depends(get_db)):
 
     secret = ids.poll_secret()
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.pair_ttl_s)
-    db.add(PairRequest(id=ids.pair_request_id(), pair_code=code, poll_secret_hash=hash_token(secret), status=PairRequest.STATUS_PENDING, expires_at=expires_at))
+    # No auth yet at this point in the handshake (that's what pairing mints)
+    # — capabilities ride in unauthenticated, exactly like the pair code
+    # itself, and are trusted no further than "a repo name to suggest on the
+    # approval page", never as a binding claim on their own (the approving
+    # human's own account is still what `approve_core` scopes the lookup
+    # to).
+    capabilities_json = None
+    if payload is not None:
+        caps = {
+            k: v
+            for k, v in payload.model_dump().items()
+            if isinstance(v, str) and v.strip()
+        }
+        if caps:
+            capabilities_json = json.dumps(caps)
+    db.add(
+        PairRequest(
+            id=ids.pair_request_id(),
+            pair_code=code,
+            poll_secret_hash=hash_token(secret),
+            status=PairRequest.STATUS_PENDING,
+            expires_at=expires_at,
+            capabilities_json=capabilities_json,
+        )
+    )
     db.commit()
     return schemas.PairStarted(pair_code=code, pair_url=f"{settings.public_base_url.rstrip()}/connect/{code}", poll_secret=secret, expires_at=expires_at)
 

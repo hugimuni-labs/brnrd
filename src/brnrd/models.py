@@ -414,6 +414,17 @@ class PairRequest(Base):
     account_id: Mapped[str | None] = mapped_column(nullable=True)
     repo_id: Mapped[str | None] = mapped_column(nullable=True)
     minted_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # What the connecting daemon already knows about its own checkout
+    # (repo_full_name / git_remote / branch / default_branch — see
+    # `gates/cloud._repo_capabilities`), JSON-encoded, sent once on the
+    # initial `POST /v1/accounts/pair` and read back by the browser approval
+    # page. The web "enable a repository" click used to be the only thing
+    # that could name which repo a new daemon belongs to; a daemon pairing
+    # from a real checkout already knows — this carries that fact across the
+    # handshake so the approval page can bind (and, if needed, create) the
+    # right repo without a human picking it from a dropdown. `None` for any
+    # pairing that predates this column or ran outside a git checkout.
+    capabilities_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime)
 

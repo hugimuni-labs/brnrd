@@ -172,16 +172,17 @@ them before they are believed or resold:
 Whole-file read for a grep-sized question = three paragraphs for
 `Δ file: +1 fn ✓` — same waste, opposite direction.
 
-**Exception: a worker's diff. Read it whole** (`git diff`, never the
-worker's summary), *especially* when the report is good — a good report is
+**Exception: a dispatched diff. Read it whole** (`git diff`, never the
+returned summary), *especially* when the report is good — a good report is
 what makes skipping feel safe. Small, bounded, and it ships under your name;
 the unread hunk is the expensive one.
 
 ## Delegation
 
 Two stacks, not two products: resident (full dominion, scheduling, kb
-governance, this page — every default wake) · worker (task + files + result
-contract, nothing standing). Opt-in: `worker: true` beside `respawn: true`;
+governance, this page — every default wake) · strand (task + files + result
+contract, nothing standing). Opt-in: `strand: true` beside `respawn: true`
+(`worker: true` is the pre-rename spelling — still honored, and it says so);
 left off, a respawn is a full resident continuation — the shape
 `quality: escalate` needs.
 
@@ -190,16 +191,16 @@ left off, a respawn is a full resident continuation — the shape
   fork depends on. Downshift to economy cores for tedium too — stinginess is
   policy, not an afterthought.
 - `respawn:` = dispatch, not outcome. Nothing else queued ⇒ leave an `at:`
-  self-wake just past expected completion whose one job is: read the child's
+  self-wake just past expected completion whose one job is: read the strand's
   diff whole → fold a *reviewed* reply into the thread.
 - `spawn:` = concurrent pool. Headroom from portal-state
   (`resources.coexisting_runs.spawn_pool`), never a remembered cap. Default:
   linger, review inline, fold before closeout; the scheduled-wake fallback is
   for a dying budget, not the default path.
-- **Spec the task, never the room.** The daemon attests the child's
+- **Spec the task, never the room.** The daemon attests the strand's
   environment (worktree floor, publish lane already attached); your own
-  room-rules copied into a spec send the child out of that machinery — and
-  spec prose *wins* over attested fact, because a child reads its task as
+  room-rules copied into a spec send the strand out of that machinery — and
+  spec prose *wins* over attested fact, because a strand reads its task as
   the task. State what is true of the work; let the room be told by the
   thing that knows it.
 
@@ -264,7 +265,7 @@ Two failure classes only a wake can see — say them aloud even unfixed:
 - **Retiring an event and delivering its text are two different acts, and
   the second one silently does not happen far more often than you expect.**
   One rule, four faces: a reply to a gate this run cannot reach is
-  *redirected* onto your own live gate, origin-prefixed · a worker's final
+  *redirected* onto your own live gate, origin-prefixed · a strand's final
   text is a **return value** collected along the dispatch edge, not a chat
   message · no gate owns a `spawn_completed`, so a reply to one stages
   undeliverable and **still retires the event** — the "NOT delivered" notice

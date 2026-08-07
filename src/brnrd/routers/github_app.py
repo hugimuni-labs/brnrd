@@ -278,23 +278,42 @@ def github_app_callback(code: str | None = None, state: str | None = None, error
 @router.get("/setup")
 def github_app_setup(request: Request, installation_id: str | None = None, setup_action: str | None = None, db: Session = Depends(get_db)) -> RedirectResponse:
     account_id = account_id_from_session_cookie(request, db)
-    notice = "github-installed"
-    if installation_id:
-        try:
-            if account_id is None:
-                sync_installation(
-                    db, request.app.state.settings, installation_id, None
-                )
-                notice = "github-synced"
-            else:
-                result = sync_app_installation_for_account(
-                    db, request.app.state.settings, account_id, installation_id
-                )
-                notice = github_sync_notice(result)
-        except Exception as e:
-            print(f"[brnrd] github installation sync failed: {e}")
-            notice = "github-sync-failed"
-    params = {k: v for k, v in {"installation_id": installation_id, "setup_action": setup_action, "notice": notice}.items() if v}
+    if setup_action == "request":
+        # GitHub's own setup_action vocabulary is install / update / request
+        # (docs: "about the setup URL"; confirmed against community
+        # discussion #134189) — "request" fires when a non-admin asked for
+        # the installation and an org admin has not approved it yet. Nothing
+        # was installed, no repos will appear, and installation_id is
+        # typically absent for this case — so without this branch running
+        # unconditionally, the sync block below is skipped entirely and
+        # falls through to the default "github-installed", a false positive
+        # at exactly the moment the user most needs a true negative (#1084's
+        # own reported symptom: "repos not detected/synced on a new
+        # account"). Runs whether or not installation_id is present.
+        notice = "github-install-requested"
+    else:
+        notice = "github-installed"
+        if installation_id:
+            try:
+                if account_id is None:
+                    sync_installation(
+                        db, request.app.state.settings, installation_id, None
+                    )
+                    notice = "github-synced"
+                else:
+                    result = sync_app_installation_for_account(
+                        db, request.app.state.settings, account_id, installation_id
+                    )
+                    notice = github_sync_notice(result)
+            except Exception as e:
+                print(f"[brnrd] github installation sync failed: {e}")
+                notice = "github-sync-failed"
+    # setup_action itself is dropped from the redirect: grep -rn setup_action
+    # over the repo (before this fix) found only this handler's own two lines
+    # reading it — a param no reader consumes is noise on a URL a human
+    # sees. installation_id stays: routes/repos/+page.svelte forwards it to
+    # refresh().
+    params = {k: v for k, v in {"installation_id": installation_id, "notice": notice}.items() if v}
     # Land on /repos, not the bare dashboard (#1084): /repos is the screen
     # that reads `installations` / `installed_repos` and can act on what a
     # GitHub App install just produced (enable a repo) — the dashboard's own
@@ -310,7 +329,10 @@ def github_app_setup(request: Request, installation_id: str | None = None, setup
 def github_installation_sync(request: Request, db: Session = Depends(get_db)) -> RedirectResponse:
     account_id = account_id_from_session_cookie(request, db)
     if account_id is None:
-        return RedirectResponse(url="/login?next=/", status_code=303)
+        # Same reasoning as /setup's anonymous-arrival branch: /repos is the
+        # page that can act on a sync outcome, so that's the post-login
+        # landing too, not the bare dashboard.
+        return RedirectResponse(url="/login?next=/repos", status_code=303)
     try:
         result = sync_app_installations_for_account(
             db, request.app.state.settings, account_id
@@ -319,7 +341,11 @@ def github_installation_sync(request: Request, db: Session = Depends(get_db)) ->
     except Exception as e:
         print(f"[brnrd] github manual installation sync failed: {e}")
         notice = "github-sync-failed"
-    return RedirectResponse(url=f"/?notice={notice}", status_code=303)
+    # Land on /repos, not the bare dashboard root (#1084 / this fix's sibling
+    # defect): the root `+page.svelte` reads no `notice` param at all, so
+    # every outcome of a manual re-sync rendered identically — nothing. Same
+    # target and param spelling as /setup below.
+    return RedirectResponse(url=f"/repos?notice={notice}", status_code=303)
 
 
 @router.post("/webhook")
@@ -396,4 +422,55 @@ async def github_app_webhook(request: Request, x_hub_signature_256: Annotated[st
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail="GitHub App event handling failed",
                 ) from e
+    elif x_github_event == "member":
+        # #1141 §5 — the instant lamp. Without this, brnrd-bot's own marker
+        # only refreshes on repo bind, installation sync, or a 15-minute-
+        # stale dashboard-load recheck (`_session.py`), so inviting the bot
+        # shows nothing for up to 15 minutes plus a reload. GitHub pushes
+        # this the moment a user accepts (or is removed from) an invitation
+        # ("A GitHub user accepted an invitation to a repository") — no App
+        # permission change needed, `Members: read` already covers it (the
+        # same grant `_sync_verified_installations` already uses for
+        # org-admin verification). Requires the App to actually subscribe to
+        # `member` in its webhook config on github.com — a setting this code
+        # cannot see or change; unsubscribed, this branch is simply never
+        # reached (no crash, no partial state).
+        try:
+            action = str((payload or {}).get("action") or "")
+            member_login = str(((payload or {}).get("member") or {}).get("login") or "")
+            bot_login = str(settings.github_bot_login or "").strip().lstrip("@")
+            repo_full_name = str(((payload or {}).get("repository") or {}).get("full_name") or "")
+            installation_id = str(((payload or {}).get("installation") or {}).get("id") or "")
+            if (
+                action in ("added", "removed")
+                and bot_login
+                and member_login
+                and repo_full_name
+                and installation_id
+                and member_login.casefold() == bot_login.casefold()
+            ):
+                installation = db.execute(
+                    select(GitHubInstallation).where(
+                        GitHubInstallation.installation_id == installation_id
+                    )
+                ).scalar_one_or_none()
+                repo = (
+                    next(
+                        (
+                            r
+                            for r in github_marker.account_repos(db, installation.account_id)
+                            if r.repo_full_name.casefold() == repo_full_name.casefold()
+                        ),
+                        None,
+                    )
+                    if installation is not None and installation.account_id
+                    else None
+                )
+                if repo is not None:
+                    repo.github_bot_collaborator = action == "added"
+                    repo.github_bot_notice = None
+                    repo.github_bot_checked_at = datetime.now(timezone.utc)
+                    db.commit()
+        except Exception as e:
+            print(f"[brnrd] github member webhook sync failed: {e}")
     return {"status": "ok", "event": x_github_event}

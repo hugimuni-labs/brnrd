@@ -49,6 +49,24 @@ OOMPolicy=continue
 # fence entirely). See `resolve_memory_limits` in daemon_install/linux.py.
 MemoryHigh={memory_high}
 MemoryMax={memory_max}
+# THE THIRD KILLER. Everything above answers the *kernel* OOM-killer, which
+# fires on allocation failure and picks a victim *process* by oom_score.
+# `systemd-oomd` is a separate mechanism with separate rules: it fires on the
+# PSI memory-pressure of an ancestor slice and kills a whole descendant
+# *cgroup*, and it never reads MemoryMax=. So a daemon well inside its fence
+# is still an eligible victim of a browser's memory storm two cgroups over.
+# Measured 2026-08-05 on the reference host: oomd killed brr.service at
+# 176 MB RSS -- three orders of magnitude under MemoryMax -- because
+# user@1000.service crossed 50% pressure under an editor, six Electron
+# windows and two browsers. It took a live run with it (#1160).
+# `omit` removes this cgroup from oomd's candidate list. It is the honest
+# setting for a supervisor: the daemon is not the memory hog (its runner
+# children are, and MemoryHigh/MemoryMax above already fence those), and it
+# is the one process that has to survive to salvage, finalize and
+# re-dispatch whatever the pressure did kill. A supervisor scored as
+# disposable as gnome-software is a supervisor that stops supervising
+# exactly when supervision is needed.
+ManagedOOMPreference=omit
 Environment=BRR_INSTALL_MANAGED=1
 Environment="PATH={path_env}"
 
@@ -439,11 +457,89 @@ def stop_service() -> int:
     return result.returncode
 
 
+#: `[Service]` directives whose value is pinned to *this machine* at install
+#: time (binary path, PATH, repo root) and therefore legitimately differs from
+#: whatever ``render_systemd_unit()`` would produce in the current shell.
+#: Everything else in the template is a *policy* line — the hardening the
+#: project ships — and its absence from an installed unit is real drift.
+_MACHINE_PINNED_DIRECTIVES = ("ExecStart", "WorkingDirectory", "Environment")
+
+
+def missing_policy_directives() -> list[str]:
+    """Template `[Service]` policy lines absent from the *installed* unit.
+
+    An installed unit is written once and never revisited: ``install()``
+    rewrites it, nothing else does, and nothing compares them.  So every
+    hardening line added after a user's install — ``OOMPolicy=continue``,
+    ``MemoryMax=``, ``ManagedOOMPreference=omit`` — reaches exactly the
+    machines whose owner happened to re-run ``brnrd daemon install`` for an
+    unrelated reason.  The 2026-08-05 oomd kill landed on a host whose unit
+    predated the setting that would have prevented it.
+
+    Compared by directive *name*, not by full text: ``ExecStart=``/``PATH=``/
+    ``WorkingDirectory=`` are install-time machine pins, and diffing those
+    would report drift in every shell with a different PATH — an alarm that
+    fires constantly stops being read.  Returns the directives this version
+    declares and the installed unit does not mention at all, so a deliberate
+    operator override (a different ``MemoryMax=``) is not accused.
+    """
+    path = unit_path()
+    if not path.exists():
+        return []
+    try:
+        installed = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    installed_keys = {
+        line.split("=", 1)[0].strip()
+        for line in installed.splitlines()
+        if "=" in line and not line.lstrip().startswith("#")
+    }
+    missing: list[str] = []
+    for key in template_service_directives():
+        if key not in installed_keys:
+            missing.append(key)
+    return missing
+
+
+def template_service_directives() -> list[str]:
+    """Policy directive names this version's `[Service]` section declares.
+
+    Section-scoped on purpose: `[Unit]`'s `After=`/`Wants=` and `[Install]`'s
+    `WantedBy=` are not hardening and an older unit that spells them
+    differently is not drifted.  Machine pins are dropped here rather than at
+    the comparison, so both the check and its sanity test read the same list.
+    """
+    keys: list[str] = []
+    section = ""
+    for line in SYSTEMD_UNIT.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped
+            continue
+        if section != "[Service]" or "=" not in stripped:
+            continue
+        key = stripped.split("=", 1)[0].strip()
+        if key in _MACHINE_PINNED_DIRECTIVES or key in keys:
+            continue
+        keys.append(key)
+    return keys
+
+
 def status() -> int:
     result = _run(
         ["systemctl", "--user", "status", SERVICE_UNIT, "--no-pager"],
         check=False,
     )
+    missing = missing_policy_directives()
+    if missing:
+        print(
+            "[brnrd] the installed unit predates this version's hardening — "
+            f"missing {', '.join(missing)}. Re-run `brnrd daemon install` "
+            "to refresh it (the unit is rewritten, the service restarted)."
+        )
     return result.returncode
 
 

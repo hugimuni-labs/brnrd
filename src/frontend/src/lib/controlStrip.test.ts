@@ -115,7 +115,7 @@ test('fuel rows derive compact shell and model labels from every reported window
 	assert.match(rows[3].tooltip, /unknown · resets 2026-/u);
 });
 
-test('fuelRows derives countdown and window-elapsed fraction from resets_at', () => {
+test('fuelRows derives countdown and remaining-window fraction from resets_at', () => {
 	const nowMs = 1_784_400_000_000; // epoch seconds 1_784_400_000
 	const shells = [
 		{
@@ -152,15 +152,19 @@ test('fuelRows derives countdown and window-elapsed fraction from resets_at', ()
 
 	const rows = fuelRows(shells, nowMs);
 	assert.equal(rows[0].resetShort, '2h30m');
-	assert.ok(Math.abs((rows[0].timeFraction ?? 0) - 0.5) < 0.001);
-	assert.match(rows[0].tooltip, /window 50% elapsed$/u);
-	assert.ok(!rows[2].tooltip.includes('elapsed'));
+	// The dial DRAINS: 2h30m left of a 5h window is half the wedge still
+	// standing, not half of it spent. A test asserting 0.5 here would pass
+	// under either reading, so the week row below carries the direction —
+	// 4d2h left of 7d is most of the window remaining, and only the draining
+	// reading puts it above a half.
+	assert.ok(Math.abs((rows[0].timeRemaining ?? 0) - 0.5) < 0.001);
+	assert.match(rows[0].tooltip, /50% of window left$/u);
+	assert.ok(!rows[2].tooltip.includes('of window left'));
 	assert.equal(rows[1].resetShort, '4d2h');
-	assert.ok(
-		Math.abs((rows[1].timeFraction ?? 0) - (1 - (4 * 86400 + 2 * 3600) / (7 * 86400))) < 0.001
-	);
+	assert.ok(Math.abs((rows[1].timeRemaining ?? 0) - (4 * 86400 + 2 * 3600) / (7 * 86400)) < 0.001);
+	assert.ok((rows[1].timeRemaining ?? 0) > 0.5);
 	assert.equal(rows[2].resetShort, null);
-	assert.equal(rows[2].timeFraction, null);
+	assert.equal(rows[2].timeRemaining, null);
 });
 
 test('stale fuel rows render the last-known value with its scrape time', () => {
@@ -218,7 +222,7 @@ test('quota window count names the rows in the fuel grid, not their shells', () 
 	assert.equal(quotaWindowCountLabel(shells), '4 quota windows');
 });
 
-test('fuelRows clamps an already-passed reset to zero, full window', () => {
+test('fuelRows clamps an already-passed reset to zero, empty dial', () => {
 	const nowMs = 1_784_400_000_000;
 	const shells = [
 		{
@@ -239,10 +243,12 @@ test('fuelRows clamps an already-passed reset to zero, full window', () => {
 
 	const rows = fuelRows(shells, nowMs);
 	assert.equal(rows[0].resetShort, '0m');
-	assert.equal(rows[0].timeFraction, 1);
+	// A window already past its reset has nothing left to run: the wedge is
+	// empty, not full. Under the old filling reading this same case asserted 1.
+	assert.equal(rows[0].timeRemaining, 0);
 });
 
-test('dialDasharray draws the elapsed wedge proportionally and clamps', () => {
+test('dialDasharray draws the remaining wedge proportionally and clamps', () => {
 	const circumference = 2 * Math.PI * DIAL_WEDGE_RADIUS;
 	assert.equal(dialDasharray(0), `0.000 ${circumference.toFixed(3)}`);
 	assert.equal(dialDasharray(1), `${circumference.toFixed(3)} ${circumference.toFixed(3)}`);

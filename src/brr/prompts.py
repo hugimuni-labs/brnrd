@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from . import account, card, config as conf, dev_reload, forge_state, menus
+from . import account, card, config as conf, dev_reload, forge_state, menus, protocol
 
 
 _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
@@ -97,6 +97,39 @@ _MAX_LOG_BYTES = 4096
 # dwarfing the capped self-inject digest (~12KB) several times over.
 # Same default for both; independently overridable per repo.
 _MAX_ACCRETING_BLOCK_BYTES = 8192
+
+# Named, not inline — #1061's reserve below asserts against this rather than
+# a bare `48_000` repeated in two places, so bumping the default and bumping
+# the reserve stay two visibly separate edits.
+_DEFAULT_SURFACE_INJECT_BUDGET_BYTES = 48_000
+
+# #1061 rec 1: two pages decide what a run may do — `workflow.md` (the
+# signed two-party gating contract) and this repo's own
+# `plans/<repo-slug>/active.md` (the resident's own ranked queue) — and the
+# plain path-order walk below sorts both of them last (`p`, `w`). Measured
+# twice losing them outright: once trimmed to 363 B of a 6,580 B page, once
+# to zero when an *earlier* page's one-section floor overflowed its own
+# allowance and collapsed the walk's shared `remaining` to 0 in a single
+# step (see the walk's own comment on that line) — a page's mandatory
+# content can crowd out everything sorted after it, however small or
+# important. A reserve fixes this differently from a bigger budget: a floor
+# for each page is carved out of the existing total below, before the
+# alphabetical walk spends anything (#919's law — an existing total does not
+# grow to make room for a new priority). The floor alone is what survives an
+# earlier page's floor overflow; when the walk reaches a reserved page's own
+# turn with real room still unspent it tops the floor back up, so the page
+# still rides whole on a healthy budget rather than being capped at this
+# size regardless of how much room the shared pool actually has (see
+# `_build_work_surface_block_scored`'s topup). Sizing follows the ticket's
+# own fallback shape (no fixed number was specified): min(actual page size,
+# this many bytes) per page, out of the same shared total.
+_SURFACE_RESERVE_PAGE_BYTES = 6 * 1024
+
+assert 2 * _SURFACE_RESERVE_PAGE_BYTES < _DEFAULT_SURFACE_INJECT_BUDGET_BYTES, (
+    "the reserve (workflow.md + plans/<repo>/active.md) must leave the "
+    "alphabetical walk real room, or it only relocates #1061's starvation "
+    "onto every other page instead of fixing it"
+)
 
 _H2_RE = re.compile(r"(?m)^## ")
 _H2_SPLIT_RE = re.compile(r"(?m)(?=^## )")
@@ -265,6 +298,69 @@ def _page_is_chronological(content: str) -> bool:
 def _heading_title(entry: str) -> str:
     """The ``## `` heading's own text, markers stripped — for naming a cut."""
     return entry.split("\n", 1)[0].lstrip("#").strip()
+
+
+# #1061 rec 3: mirrors ``frontend/src/lib/backchannelPage.ts``'s ``ROW_RE`` —
+# the recognized-row grammar for one backchannel/warp item. A contiguous
+# block of these ``key: value`` lines immediately after the ``## `` heading
+# is schema; the first line that doesn't match ends the block, and
+# everything from there is the item's free markdown body. Both sides parse
+# the same six keys so an item authored against one reads correctly by the
+# other.
+_BACKCHANNEL_ROW_RE = re.compile(r"^(kind|state|needs|refs|prompt|taken):[ \t]*")
+
+
+def _backchannel_item_handle(entry: str) -> str:
+    """One ``## `` backchannel/warp entry, reduced to heading + schema rows.
+
+    The free markdown body under an item is authored for the maintainer, on
+    a surface read in a browser; a wake acts on the heading and the handful
+    of ``key: value`` rows, never the prose (issue #1061's own framing: one
+    page, two audiences, and injection was serving the wrong one). Keeps
+    every recognized row present, in document order — not just
+    ``kind:``/``prompt:``/``refs:`` — so a ``state:``/``needs:`` warp item or
+    a ``taken:`` back-pointer (THE WELD, #972) survives the compression too;
+    the ticket names three rows as the common case, not an exhaustive list.
+
+    Reconstructs the conventional single blank line between heading and rows
+    (never more, whatever the source had) — an item with rows but no body
+    then compresses to a string byte-identical to its own entry, so a
+    backchannel already in handle shape shows no drop and no marker.
+    """
+    lines = entry.split("\n")
+    heading = lines[0]
+    i = 1
+    if i < len(lines) and lines[i].strip() == "":
+        i += 1  # the conventional blank line between heading and rows
+    rows = []
+    while i < len(lines) and _BACKCHANNEL_ROW_RE.match(lines[i]):
+        rows.append(lines[i])
+        i += 1
+    return f"{heading}\n\n{chr(10).join(rows)}" if rows else heading
+
+
+def _backchannel_handles_only(content: str) -> tuple[str, int]:
+    """*content* reduced to one handle per ``## `` item (#1061 rec 3).
+
+    Returns ``(rendered, dropped_bytes)``. ``dropped_bytes`` is ``0`` and
+    ``rendered is content`` (the same object) when nothing changed — no
+    ``## `` headings to compress (an empty or freshly-scaffolded page), or
+    every item was already handle-shaped with no body to drop — so a caller
+    comparing for a byte-identical "whole" injection (#628) can use either
+    side of the pair without a second check.
+    """
+    entries = _split_h2_entries(content)
+    if not entries:
+        return content, 0
+    preamble = content[: _H2_RE.search(content).start()].strip()
+    pieces = ([preamble] if preamble else []) + [
+        _backchannel_item_handle(e) for e in entries
+    ]
+    rendered = "\n\n".join(pieces).strip()
+    if rendered == content:
+        return content, 0
+    dropped = len(content.encode("utf-8")) - len(rendered.encode("utf-8"))
+    return rendered, max(dropped, 0)
 
 
 def _entries_attestation(
@@ -557,6 +653,20 @@ def _preamble_cut_marker(cut_bytes: int, source_hint: str) -> str:
     return (
         f"_({cut_bytes:,} B of this page's opening cut to fit the wake budget "
         f"· full page: {source_hint})_"
+    )
+
+
+def _handles_only_marker(dropped_bytes: int, source_hint: str) -> str:
+    """The notice for a page injected as schema-only handles (#1061 rec 3).
+
+    Same honesty discipline as every other trim marker in this module: a
+    page that reaches the wake in a shape that differs from what's on disk
+    says so, in bytes, with a path back to the full text.
+    """
+    return (
+        f"_(injected as handles only — heading + kind/state/needs/refs/prompt "
+        f"rows per item, free text dropped: {dropped_bytes:,} B · full page: "
+        f"{source_hint})_"
     )
 
 
@@ -1102,6 +1212,21 @@ def _build_pitfalls_block(repo_root: Path, task_text: str) -> str:
     return pitfalls.format_block(matched)
 
 
+class _ReserveFloor(NamedTuple):
+    """One reserved page's pre-charged floor render (#1061 rec 1).
+
+    ``content`` is cached alongside the render so the topup in
+    :func:`_build_work_surface_block_scored` can re-trim against a bigger
+    allowance without a second disk read; ``size`` is what was actually
+    carved out of the shared budget for this floor, in bytes.
+    """
+
+    content: str
+    block: str
+    trimmed: TrimResult
+    size: int
+
+
 def _worst_trim(results: list[TrimResult]) -> TrimResult:
     """Pick one ``TrimResult`` to represent a block made of several trimmed pages.
 
@@ -1127,6 +1252,23 @@ def _worst_trim(results: list[TrimResult]) -> TrimResult:
     return max(trimmed, key=lambda r: r.dropped)
 
 
+def _reserved_surface_page_paths(repo_root: Path, ctx: Any, cfg: dict) -> list[Path]:
+    """The two pages :data:`_SURFACE_RESERVE_PAGE_BYTES` reserves room for.
+
+    ``workflow.md`` and this repo's own ``plans/<repo-slug>/active.md`` — the
+    same two paths ``account.workflow_doc_path`` / ``account.active_plan_path``
+    already resolve for ``_build_orientation_set``'s fallback pointer, reused
+    here rather than re-deriving the surface-relative path by hand.
+    """
+    from . import account as acc
+
+    label = acc.repo_label(repo_root, cfg)
+    return [
+        acc.workflow_doc_path(ctx),
+        acc.active_plan_path(ctx, label),
+    ]
+
+
 def _build_work_surface_block_scored(
     repo_root: Path,
 ) -> tuple[TrimResult, "frozenset[Path]"]:
@@ -1149,7 +1291,29 @@ def _build_work_surface_block_scored(
     regardless of whether the page has dated ``## `` headings to attest
     (a headingless page that got tail-cut has no ``dropped`` count to key
     off, so comparing rendered text, not just the attestation fields, is
-    what a headingless page's cut cannot hide from).
+    what a headingless page's cut cannot hide from). A reserved page (see
+    below) counts as whole under the same rule when its final render matched
+    the page on disk exactly, same as any other page.
+
+    Two refinements over the plain alphabetical walk, both from #1061:
+
+    - **A named reserve** (rec 1, :func:`_reserved_surface_page_paths`) —
+      ``workflow.md`` and this repo's ``plans/<repo-slug>/active.md`` each get
+      a small guaranteed **floor** — ``min(page size, `` :data:`_SURFACE_RESERVE_PAGE_BYTES`
+      ``)`` — carved out of the shared budget *before* the alphabetical walk
+      spends anything, so an unrelated page's mandatory-floor overflow later
+      in the walk (the ``remaining = 0`` branch below) can never zero them
+      out just because they happen to sort last. The floor is a guarantee,
+      not a ceiling: when the walk reaches a reserved page's own path-order
+      turn with real room still unspent, it re-renders using that page's
+      floor *plus* whatever is still left — so it still rides whole on a
+      healthy budget (#688's invariant), and only falls back to the bare
+      floor when an earlier page has already spent everything else.
+    - **Backchannel as handles** (rec 3, :func:`_backchannel_handles_only`) —
+      ``backchannel.md`` is compressed to one heading + schema-row handle per
+      item before its size enters the budget walk at all; the free-text body
+      under each item is dropped (it's authored for the dashboard reader, not
+      the wake) and the page says so in place, same as any other trim marker.
     """
     from . import account as acc
     from . import config as conf
@@ -1168,7 +1332,10 @@ def _build_work_surface_block_scored(
     budget = int(
         cfg.get(
             "dominion.surface_inject_budget_bytes",
-            cfg.get("dominion_surface_inject_budget_bytes", 48_000),
+            cfg.get(
+                "dominion_surface_inject_budget_bytes",
+                _DEFAULT_SURFACE_INJECT_BUDGET_BYTES,
+            ),
         )
     )
     blocks: list[str] = []
@@ -1181,11 +1348,94 @@ def _build_work_surface_block_scored(
     # open. This list is the last thing standing between a dropped page and
     # silence, so it holds paths (#1020).
     unannounced: list[str] = []
-    for path in acc.work_surface_files(ctx):
-        relative = path.relative_to(surface).as_posix()
+
+    # #1061 rec 1 — the named reserve, floor pre-pass. For each load-bearing
+    # page, render once against `min(page size, _SURFACE_RESERVE_PAGE_BYTES)`
+    # and carve that rendered size out of `remaining` *before* the
+    # alphabetical walk below spends anything. This is a **guarantee**, not
+    # where the page ends up: the walk still gives it a fair shot at more
+    # room when it reaches that page's own path-order turn (see the topup
+    # below) — this pre-pass only fixes the worst case, where an *earlier*
+    # page's floor overflow has already zeroed `remaining` by the time the
+    # walk gets there (the `remaining = 0` branch two screens down).
+    reserve_floor: dict[Path, _ReserveFloor] = {}
+    for path in _reserved_surface_page_paths(repo_root, ctx, cfg):
+        if not path.is_file() or path.is_symlink():
+            continue
+        resolved = path.resolve()
+        if resolved in reserve_floor:
+            continue  # workflow.md and a repo's active.md never collide,
+            # but a degenerate config could point both at the same file
         content = path.read_text(encoding="utf-8").strip()
         if not content:
             continue
+        relative = path.relative_to(surface).as_posix()
+        allowance = min(_SURFACE_RESERVE_PAGE_BYTES, remaining)
+        trimmed = _trim_sectioned_page(content, allowance, f"`surface/{relative}`")
+        block = f"### {relative}\n\n{trimmed.text}"
+        if trimmed.floor_overflow_section is not None:
+            trimmed_bytes = len(trimmed.text.encode("utf-8"))
+            notice = (
+                "_(mandatory section floor exceeded this page's reserved "
+                f"allocation — trimmed page: {trimmed_bytes:,} B · reserve: "
+                f"{allowance:,} B · overflowing section: "
+                f"`{trimmed.floor_overflow_section}` · full page: "
+                f"`surface/{relative}`)_"
+            )
+            block = f"{block}\n\n{notice}"
+        size = len(block.encode("utf-8"))
+        remaining = max(0, remaining - size)
+        reserve_floor[resolved] = _ReserveFloor(content, block, trimmed, size)
+
+    for path in acc.work_surface_files(ctx):
+        resolved = path.resolve()
+        relative = path.relative_to(surface).as_posix()
+        floor = reserve_floor.get(resolved)
+        if floor is not None:
+            # The topup: this page's own floor, spent above, plus whatever
+            # of the shared pool is still unclaimed *now* — mathematically
+            # the same allowance this page would see if it had never been
+            # pre-charged at all, unless an earlier page's floor overflow
+            # already zeroed `remaining`, in which case topup == floor and
+            # the pre-rendered block below is exactly what re-rendering
+            # would produce anyway.
+            topup_allowance = remaining + floor.size
+            if topup_allowance <= floor.size:
+                block, trimmed = floor.block, floor.trimmed
+            else:
+                trimmed = _trim_sectioned_page(
+                    floor.content, topup_allowance, f"`surface/{relative}`"
+                )
+                block = f"### {relative}\n\n{trimmed.text}"
+                if trimmed.floor_overflow_section is not None:
+                    trimmed_bytes = len(trimmed.text.encode("utf-8"))
+                    notice = (
+                        "_(mandatory section floor exceeded this page's "
+                        f"budget — trimmed page: {trimmed_bytes:,} B · "
+                        f"budget: {topup_allowance:,} B · overflowing "
+                        f"section: `{trimmed.floor_overflow_section}` · "
+                        f"full page: `surface/{relative}`)_"
+                    )
+                    block = f"{block}\n\n{notice}"
+            size = len(block.encode("utf-8"))
+            remaining = max(0, topup_allowance - size)
+            blocks.append(block)
+            trims.append(trimmed)
+            if trimmed.text == floor.content:
+                whole_paths.add(resolved)
+            continue
+        raw_content = path.read_text(encoding="utf-8").strip()
+        if not raw_content:
+            continue
+        content = raw_content
+        handles_dropped = 0
+        if relative == _BACKCHANNEL_PAGE:
+            # #1061 rec 3 — the backchannel's free-text body is written for
+            # the maintainer reading it in a browser; a wake needs the
+            # heading and the item's schema rows. Compress *before* the
+            # budget arithmetic below, same as any other page's real size —
+            # this is what shrank 68% of a live budget to a fraction of it.
+            content, handles_dropped = _backchannel_handles_only(raw_content)
         page_bytes = len(content.encode("utf-8"))
         if remaining <= 0:
             unannounced.append(relative)
@@ -1206,7 +1456,13 @@ def _build_work_surface_block_scored(
         else:
             allowance = remaining
         trimmed = _trim_sectioned_page(content, allowance, f"`surface/{relative}`")
-        block = f"### {relative}\n\n{trimmed.text}"
+        block_body = trimmed.text
+        if handles_dropped:
+            block_body = (
+                f"{block_body}\n\n"
+                f"{_handles_only_marker(handles_dropped, f'`surface/{relative}`')}"
+            )
+        block = f"### {relative}\n\n{block_body}"
         size = len(block.encode("utf-8"))
         if size > remaining:
             if trimmed.floor_overflow_section is not None:
@@ -1229,7 +1485,8 @@ def _build_work_surface_block_scored(
                 # flow through `unannounced` below because not even a
                 # placeholder can fit in a zero remainder — so the closing
                 # line names them, which is the only reason a hard zero is
-                # survivable.
+                # survivable. The reserve above is exactly the escape hatch
+                # for the two pages that must not depend on that survival.
                 remaining = 0
                 continue
             # Heading overhead can push a budget-trimmed page just past the
@@ -1253,8 +1510,8 @@ def _build_work_surface_block_scored(
         blocks.append(block)
         trims.append(trimmed)
         remaining -= size
-        if trimmed.text == content:
-            whole_paths.add(path.resolve())
+        if trimmed.text == raw_content:
+            whole_paths.add(resolved)
 
     if unannounced:
         # The budget ran out before even a placeholder fit. One line, not
@@ -1372,8 +1629,8 @@ def _build_web_capability_block(runner_shell: str | None) -> str:
     """Declare this wake's native web-research capability (issue #411 L0).
 
     Renders 1–2 ``- Web research:`` lines for the bundle's Mode section —
-    the one place both resident and worker wakes read runner facts (the
-    resident-only injected-block stack is skipped for workers, and a worker
+    the one place both resident and strand wakes read runner facts (the
+    resident-only injected-block stack is skipped for strands, and a strand
     needs this fact just as much).  The declaration itself lives in the
     packaged capabilities data (:mod:`brr.runner_capabilities`), keyed by
     Shell: whether a wake can verify a changing fact is a property of the
@@ -1645,7 +1902,7 @@ def _kb_ownership_signal(size_findings: list, stats) -> str:
         f"The graph is {stats.total_pages} pages, log {stats.log_bytes:,} B over "
         f"{stats.log_entry_count} entries. Read this as the kb asking for a "
         "maintenance *round* — promote what's load-bearing, breadcrumb what's "
-        "spent, cut what's dead, relink the orphans. Worker-delegable; worth a "
+        "spent, cut what's dead, relink the orphans. Strand-delegable; worth a "
         "dedicated pass, not a per-wake reflex to shorten the longest file. Full "
         "graph shape on demand: `brnrd kb`."
     )
@@ -2072,9 +2329,9 @@ def _join_prompt_parts(
     ``inject_blocks=False`` skips the resident stack entirely — the base
     injected blocks (identity core, dominion digest, work surface, runner
     policy, pitfalls, knowledge sources, kb health) and the
-    introspection dev-mode block. That's the B4 worker trim: a bounded
-    worker wake gets its task and files, not the standing resident context.
-    The ``diffense`` review-pack step is independent of that trim (a worker
+    introspection dev-mode block. That's the B4 strand trim: a bounded
+    strand wake gets its task and files, not the standing resident context.
+    The ``diffense`` review-pack step is independent of that trim (a strand
     wake asking for diffense is out of scope for now; whatever the caller
     passes is honored as-is).
     """
@@ -2111,10 +2368,111 @@ def _join_prompt_parts(
     return "\n\n".join(parts)
 
 
+def _extract_markdown_sections(text: str, headings: list[str]) -> str:
+    """Pull named ``##``/``###`` sections out of *text*, verbatim, in source order.
+
+    A *section* runs from a heading line (matched by an exact, stripped string in
+    *headings*) to the line before the next ``## `` / ``### `` heading, or end of
+    text. Deeper headings (``#### ``) don't count as boundaries — they stay inside
+    whichever section they're nested in. A heading not found is silently skipped:
+    the same "smaller honest set over a padded one" instinct :func:`_build_orientation_set`
+    already applies — a doc that renames a section should drop it from this extract
+    rather than raise mid-wake.
+
+    Nothing here is invented text: every byte returned is a literal substring of
+    *text*, so mounting this as a seeded ``Read`` result of the file it came from
+    stays honest even though the result skips the material between sections.
+    """
+    lines = text.splitlines()
+    heading_idxs = [
+        i for i, ln in enumerate(lines)
+        if ln.startswith("## ") or ln.startswith("### ")
+    ]
+    wanted = set(headings)
+    found: list[tuple[int, str]] = []
+    for pos, idx in enumerate(heading_idxs):
+        if lines[idx].strip() not in wanted:
+            continue
+        end = heading_idxs[pos + 1] if pos + 1 < len(heading_idxs) else len(lines)
+        found.append((idx, "\n".join(lines[idx:end]).rstrip()))
+    found.sort(key=lambda pair: pair[0])
+    return "\n\n".join(body for _, body in found)
+
+
+#: The two `docs/portals.md` sections a resident needs to actually use the
+#: verb grammar instead of re-deriving it from an eight-row frontmatter table.
+#: Exact heading text, kept here (not re-derived) so a rename in the manual
+#: makes this extract quietly empty rather than silently wrong — a diff a
+#: reviewer sees, not a drift nobody notices.
+_PORTAL_VERB_GRAMMAR_HEADINGS = [
+    "### `brnrd do` — the verdict rides the act",
+    "### `await:` — a select, not a sleep (#959)",
+]
+
+
+def _build_portal_verb_grammar_block(repo_root: Path) -> str:
+    """The `await:` and `brnrd do` sections of the portals manual, live.
+
+    The gap this closes: `daemon-substrate.md`'s frontmatter verb table names
+    eight rows and points at `brnrd docs portals` for "the reasoning behind each
+    pin" — a sentence about *reasoning*, at the bottom, after the table already
+    reads as the complete grammar. Both `await:` (#959) and `brnrd do` are fully
+    documented there and were invisible to a wake that read the table and
+    stopped, because nothing in the table said *there is more*. A run discovered
+    `brnrd do` by accident.
+
+    Live extract, not a static copy: this calls :func:`brr.docs.read_topic`
+    (the same function `brnrd docs portals` prints from, override-aware) and
+    slices out the two sections at mount time, so an edit to the manual is
+    live here on the next wake instead of drifting from a pasted-in copy that
+    needs its own commit to stay honest — the exact trap `_trim_note`'s own
+    docstring names for `kb/log.md`. The cost is one file read already paid by
+    every doc-topic lookup; there is no subprocess here to measure.
+
+    Returns ``""`` when the manual is absent or has been restructured past
+    recognition (heading text changed) — the same "absent block" shape every
+    other preamble rider already has, not a wake-breaking failure.
+    """
+    from . import docs
+
+    text = docs.read_topic("portals", repo_root)
+    if not text:
+        return ""
+    return _extract_markdown_sections(text, _PORTAL_VERB_GRAMMAR_HEADINGS)
+
+
+#: Block keys whose mountable text is *not* simply "read the file at
+#: ``entry.location``" — a curated extract, not the whole file. The offline
+#: inspection path (``brnrd prompts transcript``, :func:`mountable_block_text`)
+#: has no other way to learn that, so it consults this registry instead of
+#: reading `entry.location` raw; the alternative is that command handing a
+#: resident 754 lines when the live daemon mount only ever seeded ~120 of them.
+_MOUNTABLE_TEXT_BUILDERS: dict[str, Any] = {
+    "portal-verb-grammar": _build_portal_verb_grammar_block,
+}
+
+
+def mountable_block_text(entry: "ContractEntry", repo_root: Path) -> str:
+    """Reconstruct the text a mounted block would carry, straight from disk.
+
+    Most mountable blocks *are* their file's content — ``Path(entry.location).
+    read_text()`` reproduces exactly what a live daemon wake seeded. The one
+    exception so far is a block built from a curated slice of a larger file
+    (see :data:`_MOUNTABLE_TEXT_BUILDERS`); this is the single place that
+    distinction is applied, so the offline reconstruction path
+    (``brnrd prompts transcript``) and the live daemon mount cannot disagree
+    about what a given block_key means.
+    """
+    builder = _MOUNTABLE_TEXT_BUILDERS.get(entry.block_key)
+    if builder is not None:
+        return builder(repo_root)
+    return Path(entry.location).read_text(encoding="utf-8")
+
+
 def _collect_preamble_contracts(
     repo_root: Path,
     *,
-    is_worker: bool = False,
+    is_strand: bool = False,
     is_daemon: bool = True,
     has_diffense: bool = False,
     has_introspection: bool = False,
@@ -2158,11 +2516,11 @@ def _collect_preamble_contracts(
             bytes=_rendered_bytes(text),
         )
 
-    # Preamble: run.md / worker.md
+    # Preamble: run.md / strand.md
     entries.append(_file_entry(
-        "worker.md" if is_worker else "run.md",
-        block_key="worker-preamble" if is_worker else "run-preamble",
-        label="Worker preamble (worker.md)" if is_worker
+        "strand.md" if is_strand else "run.md",
+        block_key="strand-preamble" if is_strand else "run-preamble",
+        label="Strand preamble (strand.md)" if is_strand
               else "Operational preamble (run.md)",
         authority=AUTHORITY_CONTRACT,
     ))
@@ -2177,10 +2535,10 @@ def _collect_preamble_contracts(
 
     # register.md — a *worked example* of the register (weave.md is the rules;
     # this is a being mid-wake, written in them). Resident path only: a bounded
-    # worker gets the register contract but not the personality exemplar, which
+    # strand gets the register contract but not the personality exemplar, which
     # is orientation for a light that has to sustain a whole run, not labour.
     # Rides right after weave.md so a mounted wake reads the rule then the hand.
-    if not is_worker:
+    if not is_strand:
         entries.append(_file_entry(
             "register.md",
             block_key="register",
@@ -2195,6 +2553,29 @@ def _collect_preamble_contracts(
             block_key="daemon-substrate",
             label="Daemon mechanics (daemon-substrate.md)",
             authority=AUTHORITY_SUBSTRATE,
+        ))
+
+    # Portal verb grammar — a curated extract of `docs/portals.md`, riding
+    # right after daemon-substrate.md on purpose: that file's own frontmatter
+    # verb table is where a resident learns the portal grammar, and the table
+    # read as a *closed* set — `await:` (#959) and `brnrd do` are both real,
+    # fully documented in the manual, and invisible to a wake that read the
+    # table and stopped. See `_build_portal_verb_grammar_block` for why this
+    # is a live extract rather than a static copy.
+    if is_daemon:
+        from . import docs as _docs
+
+        portal_grammar_path = _docs.effective_topic_path("portals", repo_root)
+        portal_grammar_text = _build_portal_verb_grammar_block(repo_root)
+        entries.append(ContractEntry(
+            block_key="portal-verb-grammar",
+            label="Portal verb grammar (`await:` / `brnrd do`, docs portals)",
+            owner=OWNER_PRODUCT,
+            authority=AUTHORITY_SUBSTRATE,
+            freshness=_mtime_iso(portal_grammar_path),
+            location=str(portal_grammar_path),
+            present=bool(portal_grammar_text),
+            bytes=_rendered_bytes(portal_grammar_text),
         ))
 
     # Config-toggle blocks — present only when the toggle is on *and* the
@@ -2236,7 +2617,7 @@ def _collect_preamble_contracts(
 def _build_orientation(
     *,
     is_daemon: bool,
-    is_worker: bool,
+    is_strand: bool,
     environment: str | None,
     pending_count: int,
     has_event_body: bool,
@@ -2262,7 +2643,7 @@ def _build_orientation(
             reason="the verbatim event body is the last block below",
         ))
 
-    if is_daemon and not is_worker:
+    if is_daemon and not is_strand:
         steps.append(OrientationStep(
             action="write .card",
             reason="the card is the surface the user watches while you think",
@@ -2272,17 +2653,17 @@ def _build_orientation(
     #
     # This was gated on ``pending_count`` alone, and it caused a live incident on
     # 2026-07-13. ``pending_count`` is the **parent's** queue — events addressed
-    # to the resident, in the resident's gate thread. A spawned worker inherited
+    # to the resident, in the resident's gate thread. A spawned strand inherited
     # it and was handed, at position 1, in the imperative:
     #
     #     next:
     #       2. answer 12 queued events — one outbox file each, `event: <id>`
     #
-    # Two workers (claude-haiku, codex-mini) did exactly that: they answered
+    # Two strands (claude-haiku, codex-mini) did exactly that: they answered
     # twelve of the user's messages to the resident, in the resident's thread,
     # with no context for any of them.
     #
-    # ``worker.md`` states plainly that the spawning conversation "is not yours
+    # ``strand.md`` states plainly that the dispatching conversation "is not yours
     # to hold or extend" — and it states it in *prose*, *below* this list. The
     # kernel overrode it. That is the whole thesis of the boot work confirmed
     # from the wrong end: **the imperative action-list at the hot slot is what
@@ -2290,9 +2671,9 @@ def _build_orientation(
     # kernel did not misfire. It worked perfectly, and carried a wrong
     # instruction with total authority.
     #
-    # A worker has no gate authority, no `event:` disposition to make, and no
+    # A strand has no gate authority, no `event:` disposition to make, and no
     # standing in that thread. It must never see this step.
-    if pending_count and not is_worker:
+    if pending_count and not is_strand:
         plural = "s" if pending_count != 1 else ""
         steps.append(OrientationStep(
             action=f"answer {pending_count} queued event{plural}",
@@ -2316,6 +2697,28 @@ def _build_orientation(
 #: cost; the *floor* is deliberately zero — a set the derivation cannot prove
 #: is a set it does not pad ("the set is 3 files, not 5 with two guesses").
 _ORIENTATION_SET_MAX = 5
+
+#: The two-party contract page on the work surface — the third structural
+#: role in the orientation set, beside the repo's ``AGENTS.md`` (the project's
+#: contract) and ``plans/<repo>/active.md`` (the resident's own queue).  Not a
+#: member of a list of nice-to-read pages: it is the file that says what a run
+#: may merge, what it owes the maintainer, and what shape a reply takes, so a
+#: wake that cannot cite it is a wake acting on remembered permissions.
+#:
+#: It earns a named slot because the work-surface block cannot be relied on to
+#: carry it.  That block walks ``account.work_surface_files`` in **path
+#: order** and stops at the byte budget (#1020/#1061), and ``workflow.md``
+#: sorts last under ``surface/`` — so on a busy surface it is the first page
+#: dropped and the wake never learns it went missing.  Naming it here is not a
+#: second copy: ``injected_whole`` (#628) removes it from the walk on every
+#: wake the surface block *did* hand it over whole, so the slot is spent only
+#: on the wakes that would otherwise have had nothing.
+_WORKFLOW_PAGE = "workflow.md"
+
+#: The account-wide backchannel queue's home-relative surface path (#1061
+#: rec 3) — the one page ``_build_work_surface_block_scored`` compresses to
+#: handles-only before it enters the budget walk.
+_BACKCHANNEL_PAGE = "backchannel.md"
 
 
 def _kb_hub_matches(slug: str, task_text: str) -> bool:
@@ -2368,6 +2771,9 @@ def _build_orientation_set(
     - the repo's ``AGENTS.md`` — **unless the Shell already read it**, see
       :func:`shell_reads_agents_md_natively`;
     - the active inter-run plan (``account.active_plan_path``);
+    - the work surface's two-party contract page (:data:`_WORKFLOW_PAGE`),
+      which sorts last in the surface block's path-order walk and is
+      therefore the page a busy surface drops first;
     - every ``subject-*.md`` kb hub whose slug the task text provably touches
       (:func:`_kb_hub_matches`), from the same home-knowledge dir the recent-
       activity tail reads (:func:`_home_knowledge_log_path`), in sorted-name
@@ -2409,6 +2815,7 @@ def _build_orientation_set(
         ctx = account.resolve_context(repo_root, cfg, create=False)
         label = account.repo_label(repo_root, cfg)
         candidates.append(account.active_plan_path(ctx, label))
+        candidates.append(account.work_surface_path(ctx) / _WORKFLOW_PAGE)
     except Exception:  # noqa: BLE001 — orientation must never fail a wake
         pass
 
@@ -2532,7 +2939,7 @@ def build_boot_score(
     repo_root: Path | None = None,
     *,
     is_daemon: bool = True,
-    is_worker: bool = False,
+    is_strand: bool = False,
     runner_name: str | None = None,
     runner_shell: str | None = None,
     runner_core: str | None = None,
@@ -2601,14 +3008,14 @@ def build_boot_score(
         # Preamble + substrate + toggle blocks
         preamble_contracts = _collect_preamble_contracts(
             effective_root,
-            is_worker=is_worker,
+            is_strand=is_strand,
             is_daemon=is_daemon,
             has_diffense=has_diffense,
             has_introspection=has_introspection,
         )
 
-        # Inject-stack blocks (skipped for workers)
-        if not is_worker:
+        # Inject-stack blocks (skipped for strands)
+        if not is_strand:
             _, inject_contracts, block_whole = _build_injected_blocks_with_contracts(
                 effective_root, task_text=task_text
             )
@@ -2634,13 +3041,13 @@ def build_boot_score(
             # full inject-stack scan ``contracts=`` was chosen to avoid.
             injected_whole = (
                 frozenset()
-                if is_worker
+                if is_strand
                 else _build_work_surface_block_scored(effective_root)[1]
             )
 
     # Host kind
     kind = "daemon" if is_daemon else "ad-hoc"
-    pub_owner = "resident-owned" if not is_worker else "worker"
+    pub_owner = "resident-owned" if not is_strand else "strand"
 
     hooks_info = _collect_hooks_info(
         installed=hooks_installed, hook_stamps=hook_stamps
@@ -2695,7 +3102,7 @@ def build_boot_score(
         ),
         orientation=_build_orientation(
             is_daemon=is_daemon,
-            is_worker=is_worker,
+            is_strand=is_strand,
             environment=environment,
             pending_count=pending_count,
             has_event_body=has_event_body,
@@ -2743,7 +3150,7 @@ def build_daemon_prompt_with_score(
     source_gate = kwargs.get("source_gate")
     continuity = kwargs.get("continuity")
     environment = kwargs.get("environment")
-    worker = bool(kwargs.get("worker", False))
+    strand = bool(kwargs.get("strand", False))
     diffense = bool(kwargs.get("diffense", False))
     event_body = kwargs.get("event_body", "")
     pending_events = kwargs.get("pending_events") or []
@@ -2761,7 +3168,7 @@ def build_daemon_prompt_with_score(
 
     mount_sink: dict[str, str] | None = kwargs.pop("_mount_sink", None)
 
-    if worker:
+    if strand:
         injected_keyed: list[tuple[str, str]] = []
         inject_contracts: list[Any] = []
         injected_whole: frozenset[Path] = frozenset()
@@ -2774,7 +3181,7 @@ def build_daemon_prompt_with_score(
 
     preamble_contracts = _collect_preamble_contracts(
         repo_root,
-        is_worker=worker,
+        is_strand=strand,
         is_daemon=True,
         has_diffense=has_diff,
         has_introspection=bool(introspection_block),
@@ -2838,7 +3245,7 @@ def build_daemon_prompt_with_score(
     score = build_boot_score(
         repo_root,
         is_daemon=True,
-        is_worker=worker,
+        is_strand=strand,
         runner_name=str(runner_name) if runner_name else None,
         runner_shell=str(runner_shell) if runner_shell else None,
         runner_core=str(runner_core) if runner_core else None,
@@ -2996,7 +3403,7 @@ def build_init_wake_prompt(
     is *not* a special mode. What init supplies is only what is genuinely
     different: the Stage line, the playbook as the task, and a facts block.
 
-    Resident stack (``worker=False``, F3): the user meets the being they
+    Resident stack (``strand=False``, F3): the user meets the being they
     will be working with, not a bounded thought that opens by disclaiming
     residency. The injected resident blocks must therefore degrade on a
     repo with no connected account — the normal state at minute zero.
@@ -3017,7 +3424,7 @@ def build_init_wake_prompt(
     kwargs.setdefault("stage", INIT_WAKE_STAGE)
     kwargs.setdefault("source", "init")
     kwargs.setdefault("environment", "host")
-    kwargs.setdefault("worker", False)
+    kwargs.setdefault("strand", False)
     kwargs.setdefault("outbox_path", outbox_path)
     return build_daemon_prompt_with_score(
         task, event_id, response_path, repo_root, **kwargs,
@@ -3085,33 +3492,38 @@ def _read_preamble_with_weave(repo_root: Path) -> str:
     return preamble
 
 
-def _preamble_parts(repo_root: Path, *, worker: bool) -> list[tuple[str, str]]:
+def _preamble_parts(repo_root: Path, *, strand: bool) -> list[tuple[str, str]]:
     """The preamble as ``(block_key, text)`` parts, in read order.
 
-    Same bytes as ``_read_preamble_with_weave`` + ``daemon-substrate.md`` glued
-    together (:func:`_glue_preamble` re-joins them identically) — but *keyed*, so
-    a wake that mounts a block as a seeded perception can take it out of the prose
-    instead of paying for it twice.
+    Same bytes as ``_read_preamble_with_weave`` + ``daemon-substrate.md`` +
+    the portal verb grammar extract, glued together (:func:`_glue_preamble`
+    re-joins them identically) — but *keyed*, so a wake that mounts a block
+    as a seeded perception can take it out of the prose instead of paying
+    for it twice.
 
     These are the blocks that carry the wake's obligations (write the card, branch
     before you edit, own the pending event). They are therefore the blocks the
     transcript experiment most needs to be able to move, and an unkeyed preamble
     string is precisely what made that impossible.
     """
-    key = "worker-preamble" if worker else "run-preamble"
-    parts = [(key, read_prompt("worker.md" if worker else "run.md", repo_root))]
+    key = "strand-preamble" if strand else "run-preamble"
+    parts = [(key, read_prompt("strand.md" if strand else "run.md", repo_root))]
     # Order mirrors read/authority: how you write (weave), you having written
-    # (register — resident only), then who drives (daemon-substrate). Kept in
-    # lockstep with :func:`_collect_preamble_contracts`, which registers the same
-    # blocks in the same order for the manifest and the mount.
+    # (register — resident only), then who drives (daemon-substrate), then the
+    # verb grammar that section's own frontmatter table only gestures at. Kept
+    # in lockstep with :func:`_collect_preamble_contracts`, which registers the
+    # same blocks in the same order for the manifest and the mount.
     riders = [("weave.md", "weave")]
-    if not worker:
+    if not strand:
         riders.append(("register.md", "register"))
     riders.append(("daemon-substrate.md", "daemon-substrate"))
     for name, k in riders:
         text = read_prompt(name, repo_root)
         if text.strip():
             parts.append((k, text.strip()))
+    portal_grammar = _build_portal_verb_grammar_block(repo_root)
+    if portal_grammar.strip():
+        parts.append(("portal-verb-grammar", portal_grammar.strip()))
     return parts
 
 
@@ -3125,17 +3537,17 @@ def _glue_preamble(parts: list[str]) -> str:
     return out
 
 
-def _build_worker_preamble(repo_root: Path) -> str:
-    """Read ``worker.md`` plus the working-register contract (``weave.md``).
+def _build_strand_preamble(repo_root: Path) -> str:
+    """Read ``strand.md`` plus the working-register contract (``weave.md``).
 
-    The slim counterpart to :func:`_read_preamble_with_weave`: a worker wake
+    The slim counterpart to :func:`_read_preamble_with_weave`: a strand wake
     (B4, ``kb/design-director-loop.md`` §orchestrator/worker) gets the bounded
     task preamble instead of the resident's ``run.md`` — no dominion write,
     no kb governance, no "reconsider intent" stewardship framing, none of
     which apply to a bounded handoff. ``weave.md`` still rides: it governs
-    *how* any wake writes to its working surfaces, resident or worker alike.
+    *how* any wake writes to its working surfaces, resident or strand alike.
     """
-    preamble = read_prompt("worker.md", repo_root)
+    preamble = read_prompt("strand.md", repo_root)
     weave = read_prompt("weave.md", repo_root)
     if weave.strip():
         preamble = f"{preamble.rstrip()}\n\n{weave.strip()}"
@@ -3189,7 +3601,7 @@ def build_daemon_prompt(
     continuity: Any | None = None,
     hooks_installed: bool | None = None,
     diffense: bool = False,
-    worker: bool = False,
+    strand: bool = False,
     _prepared_injected_keyed: list[tuple[str, str]] | None = None,
     _mountable: frozenset[str] = frozenset(),
     _mount_sink: dict[str, str] | None = None,
@@ -3208,12 +3620,12 @@ def build_daemon_prompt(
     host-agnostic playbook deliberately leaves out. ``brnrd run`` skips it:
     a one-shot has no daemon to fire schedules or drain an outbox.
 
-    ``worker=True`` (B4, ``kb/design-director-loop.md`` §orchestrator/worker)
-    swaps in the slim worker stack: ``worker.md`` + ``weave.md`` instead of
+    ``strand=True`` (B4, ``kb/design-director-loop.md`` §orchestrator/worker)
+    swaps in the slim child stack: ``strand.md`` + ``weave.md`` instead of
     the resident's ``run.md``, and the resident-only injected blocks
     (identity core, dominion digest, work surface, runner policy, pitfalls,
     knowledge sources, kb health, introspection) are
-    skipped entirely — a worker wake still gets ``daemon-substrate.md`` (it
+    skipped entirely — a strand wake still gets ``daemon-substrate.md`` (it
     still runs under the daemon and needs the delivery/portal mechanics) and
     the full Run Context Bundle (its actual task). Default ``False`` is
     byte-identical to the prior behavior.
@@ -3231,7 +3643,7 @@ def build_daemon_prompt(
 
     preamble = _glue_preamble([
         kept
-        for key, text in _preamble_parts(repo_root, worker=worker)
+        for key, text in _preamble_parts(repo_root, strand=strand)
         if (kept := _take(key, text)) is not None
     ])
     bundle = _build_run_context_bundle(
@@ -3310,7 +3722,7 @@ def build_daemon_prompt(
     kernel = format_kernel(build_boot_score(
         repo_root,
         is_daemon=True,
-        is_worker=worker,
+        is_strand=strand,
         runner_name=runner_name,
         runner_shell=runner_shell,
         runner_core=runner_core,
@@ -3348,7 +3760,7 @@ def build_daemon_prompt(
     prompt = _join_prompt_parts(
         preamble, repo_root, trailer, kernel=kernel,
         task_text=pitfall_text, diffense=diffense,
-        inject_blocks=not worker,
+        inject_blocks=not strand,
         prepared_injected_blocks=prepared_blocks,
         prepared_introspection_block=_prepared_introspection_block,
     )
@@ -3750,7 +4162,7 @@ def _build_run_context_bundle(
         sections.append("### Also awake right now")
         sections.append(
             "Other thoughts are active in this repo (ad-hoc sessions, or "
-            "another worker). You share one dominion, so if one is on the "
+            "another strand). You share one dominion, so if one is on the "
             "same stream or files, expect its edits to land alongside yours "
             "— don't fight it. Contradictions in shared memory are normal "
             "and get reconciled by judgement, not locks (see your playbook)."
@@ -3834,6 +4246,15 @@ def _format_pending_events(
     Each entry shows the event id (the handle the resident names in the
     outbox ``event:`` frontmatter to fold it in), its source, and a
     one-line summary. Returns an empty string when nothing is waiting.
+
+    #1156: a folded-in event's attachment bytes are already on disk
+    (``daemon._pending_event_record`` resolves them), so a sub-bullet names
+    the openable path directly rather than leaving the resident to re-derive
+    it from the bare ``attachments:`` filename. An event that announced
+    attachments but resolved none — the bytes never arrived, or were swept
+    by retention — gets a sub-bullet that says so explicitly: *announced,
+    not fetched* is a different fact than *no attachment*, and rendering
+    neither is how that distinction went missing the first time (#1154).
     """
     if not events:
         return ""
@@ -3849,6 +4270,18 @@ def _format_pending_events(
         src = f" ({source})" if source else ""
         sep = f": {summary}" if summary else ""
         bullets.append(f"- {eid}{src}{sep}")
+        paths = ev.get("attachment_paths")
+        if isinstance(paths, list) and paths:
+            bullets.extend(f"  - attachment: {p}" for p in paths)
+        else:
+            unfetched = ev.get("attachment_unfetched")
+            if isinstance(unfetched, list) and unfetched:
+                names = ", ".join(str(n) for n in unfetched)
+                bullets.append(
+                    f"  - attachment announced, not fetched ({names}) — "
+                    "the bytes never reached this machine or were already "
+                    "swept by retention; this is not the same as no attachment"
+                )
     return "\n".join(bullets)
 
 
@@ -4259,7 +4692,7 @@ def _format_recent_conversation(
             summary = _cap_turn_body(
                 summary, record, limit=turn_max_bytes, brr_dir=brr_dir
             )
-            marker = _attachment_marker(record)
+            marker = _attachment_marker(record, brr_dir=brr_dir)
             if marker:
                 summary = f"{summary} {marker}".strip() if summary else marker
             line = _format_turn(f"{ts} user ({source})", summary)
@@ -4496,7 +4929,44 @@ def _conversation_body(record: dict[str, Any]) -> str:
     return body.strip() if isinstance(body, str) else ""
 
 
-def _attachment_marker(record: dict[str, Any]) -> str:
+def _record_attachment_paths(
+    record: dict[str, Any], brr_dir: Path | None,
+) -> list[Path]:
+    """Resolve a woven conversation record's attachments to local paths.
+
+    #1156: the record only ever carried ``{"kind", "filename"}`` facts (see
+    ``conversations._attachment_facts``), never a path — so a folded-in
+    turn's marker could name a count but never something ``Read`` could
+    open. The record has no ``_path`` of its own (unlike an event dict), so
+    this derives the same ``<inbox>/<event-id>.attachments/`` location
+    ``protocol.event_attachment_paths`` uses, rooted at this run's own
+    ``<brr_dir>/inbox`` drawer. A record from a different drawer (the
+    account dispatch inbox, a sibling repo) or one whose bytes retention
+    already swept resolves to no paths here, same as *genuinely gone* —
+    the caller's job is to fall back to the bare marker in that case, not
+    to claim a path this reader cannot see.
+    """
+    if not brr_dir:
+        return []
+    event_id = str(record.get("event_id") or "").strip()
+    attachments = record.get("attachments")
+    if not event_id or not isinstance(attachments, list) or not attachments:
+        return []
+    names = [
+        str(item.get("filename") or "").strip()
+        for item in attachments
+        if isinstance(item, dict)
+    ]
+    names = [n for n in names if n]
+    if not names:
+        return []
+    adir = protocol.attachments_dir_for_event(Path(brr_dir) / "inbox", event_id)
+    return [p for p in (adir / n for n in names) if p.is_file()]
+
+
+def _attachment_marker(
+    record: dict[str, Any], *, brr_dir: Path | None = None,
+) -> str:
     """``[photo ×2]``-style marker for a woven turn carrying attachments.
 
     Issue #943: a captionless inbound photo/document used to render as a
@@ -4507,6 +4977,15 @@ def _attachment_marker(record: dict[str, Any]) -> str:
     rather than a full describe-the-image pass. One bracket group per kind,
     in first-appearance order, so ``[photo ×2] [document ×1]`` reads left
     to right in the order the kinds arrived on the message.
+
+    #1156: the marker used to be the whole answer — a count with no path,
+    even while the bytes it counted sat on disk in this run's own inbox.
+    When :func:`_record_attachment_paths` resolves at least one local file
+    for this record, the marker now names them too. When it resolves none
+    (a different drawer, retention already swept them, or the attachment
+    was announced but never fetched — #1154's class of drop), the bracket
+    count is still rendered — the announced fact survives even when the
+    bytes do not.
     """
     attachments = record.get("attachments")
     if not isinstance(attachments, list) or not attachments:
@@ -4517,7 +4996,11 @@ def _attachment_marker(record: dict[str, Any]) -> str:
             continue
         kind = str(item.get("kind") or "attachment").strip() or "attachment"
         counts[kind] = counts.get(kind, 0) + 1
-    return " ".join(f"[{kind} ×{n}]" for kind, n in counts.items())
+    marker = " ".join(f"[{kind} ×{n}]" for kind, n in counts.items())
+    paths = _record_attachment_paths(record, brr_dir)
+    if paths:
+        marker += " (local: " + ", ".join(str(p) for p in paths) + ")"
+    return marker
 
 
 def _conversation_source_label(record: dict[str, Any]) -> str:

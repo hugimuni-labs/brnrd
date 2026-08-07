@@ -20,7 +20,7 @@
 	//
 	// The document itself is delimited by the LEGAL-TEXT markers below and
 	// pinned to the file `brnrd.terms._CURRENT` names (currently
-	// `src/brnrd/legal/tos-2026-07-24-r2.txt`); the sha256 of that file is
+	// `src/brnrd/legal/tos-2026-07-24-r3.txt`); the sha256 of that file is
 	// what the acceptance row stores, so the record can reproduce what was
 	// accepted rather than merely naming a version.
 	const TERMS_VERSION = '2026-07-24';
@@ -67,8 +67,8 @@
 	<section class="panel mt-6 p-5">
 		<p class="text-sm text-stone-400">
 			Version {TERMS_VERSION}. These terms are an agreement between you and HugiMuni SAS about the
-			hosted service at brnrd.dev. They are a draft pending review by French counsel; where a
-			statement below is a reading rather than a settled position, it says so.
+			hosted service at brnrd.dev. Where a statement below is a reading rather than a settled
+			position, it says so.
 		</p>
 
 		<div class="mt-6 space-y-5 text-sm leading-6 text-stone-300">
@@ -316,8 +316,8 @@
 					What the mirror contains, and for how long, is set out on the
 					<a class="text-sky-400 underline" href={resolve('/beta-hosted-execution')}
 						>hosted-execution page</a
-					>. Read it before you enable publishing: it is measured, and it is more than people
-					assume.
+					>. Read it before you enable publishing: it is measured, and it runs to whole pages your
+					agent wrote, quoted code included, and a fingerprint of your local tooling.
 				</p>
 			</section>
 
@@ -346,14 +346,14 @@
 				<!-- /privacy (#569 document 3) published 2026-07-24
 				     (src/frontend/src/routes/privacy/+page.svelte); linked below rather
 				     than named as pending. A DPA also exists (docs/legal/dpa.md, #706),
-				     available to any Customer on request. Art 17 erasure *is* self-service
+				     available to any user on request. Art 17 erasure *is* self-service
 				     as of 2026-07-25: dashboard settings, "danger zone" button,
 				     POST /v1/accounts/delete (src/brnrd/account_deletion.py). -->
 				<p class="mt-2">
 					The
 					<a class="text-sky-400 underline" href={resolve('/privacy')}>privacy notice</a>
 					states what personal data the service holds, why, and for how long; a data-processing agreement
-					exists and is available to any Customer on request. Operational detail beyond the notice's scope
+					exists and is available to any user on request. Operational detail beyond the notice's scope
 					is on the
 					<a class="text-sky-400 underline" href={resolve('/beta-hosted-execution')}
 						>hosted-execution page</a
@@ -465,17 +465,16 @@
 					fitness for a particular purpose, or non-infringement.
 				</p>
 				<p class="mt-2">
-					In particular, we do not warrant that the service will be uninterrupted or error-free,
-					that agent output will be correct, safe, secure, or fit for your purpose, or that the
-					execution environments constitute a sandbox, a containment boundary, or a defence against
-					prompt injection, malicious code, supply-chain compromise, data loss, or a third-party
-					tool your run can reach. The
+					In particular, we do not warrant that the service will be uninterrupted or error-free, or
+					that agent output will be correct, safe, secure, or fit for your purpose. Section 5 above
+					already states, as fact rather than disclaimer, what the execution environments do and do
+					not isolate; the
 					<a
 						class="text-sky-400 underline"
 						href="https://github.com/hugimuni-labs/brnrd/blob/main/SECURITY.md"
 						rel="external">trust and execution model</a
-					> states what each control does and does not do; that document, not an assumption, is the description
-					of what you are getting.
+					> states what each control does and does not do, and that document, not an assumption, is the
+					description of what you are getting.
 				</p>
 				<!-- LAWYER: this carve-out is placed inside section 12 and repeated
 				     in 13 on purpose, so that a strike-through of the disclaimer
@@ -530,9 +529,13 @@
 				         section-level. Please confirm this is the right formulation
 				         for a French court, and set the actual figures. -->
 				<p class="mt-2">
+					You keep the responsibilities described in sections 5 and 6: the agent runs with your
+					authority on your machine, and reviewing its output before you rely on it is your job, not
+					ours. This section is written against that backdrop.
+				</p>
+				<p class="mt-2">
 					<strong class="text-amber-100">First, what is never limited.</strong> Nothing in these
-					terms excludes or limits our liability for death or personal injury caused by our
-					negligence, for fraud or fraudulent misrepresentation, for
+					terms excludes or limits our liability for fraud or fraudulent misrepresentation, for
 					<em>dol</em>
 					or <em>faute lourde</em>, or for any other liability that the law does not permit us to
 					exclude or limit. If you are a consumer, your mandatory rights under French and European
@@ -555,11 +558,6 @@
 					and each limitation within them, is separate. If one is held unenforceable — in general, or
 					against a particular user — it is severed to the minimum extent needed and the remaining paragraphs
 					continue to apply.
-				</p>
-				<p class="mt-2">
-					You keep the responsibilities described in sections 5 and 6: the agent runs with your
-					authority on your machine, and reviewing its output before you rely on it is your job, not
-					ours.
 				</p>
 			</section>
 
@@ -655,8 +653,10 @@
 				<p class="mt-2">
 					Contact: <a class="text-sky-400 underline" href="mailto:security@hugimuni.fr"
 						>security@hugimuni.fr</a
-					>. For a security issue, use that address and please report it privately rather than in a
-					public issue.
+					>. This is the address for anything in these terms — a data-protection request under
+					section 9, a billing question under section 10, or anything else — and if what you are
+					writing about is a security issue, please also keep it private rather than filing a public
+					issue.
 				</p>
 			</section>
 		</div>

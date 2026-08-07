@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from brnrd import github_marker, publish_scope, run_stop_requests, wake_requests
 from brnrd.activity_records import dedupe_activity_records, fresh_activity_records
 from brnrd.auth import get_db
+from brnrd.capabilities import evaluate_capabilities
 from brnrd.models import Account, ActivityRecord, ConfigChangeRequest, Daemon, Event, GitHubInstalledRepo, Repo
 
 from ._session import (
@@ -721,6 +722,19 @@ def _repo_view_out(row: dict[str, Any], *, bot_login: str = "") -> dict[str, Any
         "environment_default": row.get("environment_default"),
         "environments": row.get("environments", []),
         "setup_command": row["setup_command"],
+        # The channel directory, whole (brr/the-directory-reaches-the-wire).
+        # This line is the point of that branch and it was the one place the
+        # branch did not reach: `_repo_views` assembled `channels` and this
+        # serializer, which builds an explicit dict, dropped it — the fix
+        # stopping one layer below the lie (#786's class). A reader can tell
+        # three states apart here: a platform absent from the list (never
+        # attempted on this repo), present with `paired: false` (attempted,
+        # no principal — #885's rule), present with `paired: true`.
+        "channels": row.get("channels", []),
+        # DEPRECATED, superseded by `channels` above. Derived from it in
+        # `_repo_views`, so the two cannot drift. Still read by
+        # `src/frontend/src/lib/repos.ts` and `/repos/+page.svelte`; it goes
+        # when the directory list replaces the per-transport button.
         "telegram_paired": bool(row.get("telegram_paired")),
         # None = no consent recorded (legacy repo, connected before the
         # publish-scope consent step shipped) — the settings UI renders that
@@ -732,6 +746,12 @@ def _repo_view_out(row: dict[str, Any], *, bot_login: str = "") -> dict[str, Any
         # checked-and-false "not a collaborator", never guess optimistic.
         "github_bot_collaborator": repo.github_bot_collaborator,
         "github_bot_checked_at": _iso(repo.github_bot_checked_at),
+        # Pre-rendered age of the check above, "never" when it hasn't run —
+        # same `_age_label` every other timestamp on this row already uses.
+        # Read by the lit rendering (`MarkerNotice.svelte`): the satisfied
+        # case (`github_bot_collaborator is True`) previously had no line at
+        # all, byte-identical in the UI to "never checked" (#1141).
+        "github_bot_checked_label": _age_label(repo.github_bot_checked_at),
         # The renderer consumes the class, never the stored sentence.  The
         # two notice fields below stay as safe compatibility copy for clients
         # deployed before #969; neither can expose a legacy/raw exception.
@@ -781,6 +801,11 @@ def _installed_repo_out(row: GitHubInstalledRepo, *, connected_names: set[str]) 
         "updated_label": _age_label(row.github_updated_at),
         "last_seen_label": _age_label(row.last_seen_at),
         "connected": row.repo_full_name.casefold() in connected_names,
+        # The retired "enable" button's replacement: running this from the
+        # checkout *is* the connect step now — best-guess local dir name from
+        # the repo's own short name, same idiom `setup_command` already uses
+        # on a connected repo below.
+        "setup_command": pairing_command(row.repo_full_name.rsplit("/", 1)[-1] or PAIR_REPO_PLACEHOLDER),
     }
 
 
@@ -826,6 +851,11 @@ def dashboard_repos_api(
                 _installed_repo_out(row, connected_names=connected_names)
                 for row in installed
             ],
+            # design-capability-panel.md build step 1: one server-evaluated
+            # registry, additive to this response — no existing field
+            # changes, nothing removed. Flat (each row carries its own
+            # `scope`/`subject`); grouping is the renderer's job, not ours.
+            "capabilities": [cap.to_wire() for cap in evaluate_capabilities(db, account, settings)],
             "github_sync_configured": _github_sync_configured(request),
             "oauth_ready": _github_oauth_ready(request),
             "install_url": settings.github_install_url,

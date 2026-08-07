@@ -95,7 +95,7 @@ FACETS: tuple[FacetSpec, ...] = (
         "coexisting_runs", "coexisting-runs", STATE, False,
         "live sibling runs sharing this dominion, read from the presence "
         "registry (brr stays single-flight per dominion for durable-memory "
-        "writes, but a spawn: worker-stack child or an ad-hoc session can "
+        "writes, but a spawn: strand-stack child or an ad-hoc session can "
         "coexist); unimplemented on call sites with no presence collector "
         "wired",
     ),

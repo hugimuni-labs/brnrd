@@ -413,6 +413,27 @@ def create_event(
     return path
 
 
+def event_attachment_names(event: dict[str, Any]) -> list[str]:
+    """Announced attachment filenames for *event*, whether or not the bytes
+    are still on disk.
+
+    Companion to :func:`event_attachment_paths`, which silently drops a
+    name with no local file (a cleanup race, a hand-edited event file,
+    retention, or — for a run that only ever saw this event *folded in*
+    rather than as its own waking event — a source drawer this reader never
+    downloaded into in the first place). That silence is correct for a
+    caller that only wants openable paths, but it collapses two different
+    facts into the same empty list: *no attachment was ever announced* and
+    *one was announced and never became bytes*. A caller that needs to tell
+    those apart — render "announced, not fetched" instead of nothing — reads
+    this one first.
+    """
+    raw = event.get("attachments")
+    if not raw:
+        return []
+    return [n.strip() for n in str(raw).split(",") if n.strip()]
+
+
 def event_attachment_paths(event: dict[str, Any]) -> list[Path]:
     """Resolve an event's ``attachments:`` field to local file paths.
 
@@ -424,13 +445,12 @@ def event_attachment_paths(event: dict[str, Any]) -> list[Path]:
     longer on disk (a cleanup race, a hand-edited event file) instead of
     handing back a dangling path for ``Read`` to fail on.
     """
-    raw = event.get("attachments")
+    names = event_attachment_names(event)
     event_path = event.get("_path")
     eid = event.get("id")
-    if not raw or not event_path or not eid:
+    if not names or not event_path or not eid:
         return []
     adir = attachments_dir_for_event(Path(event_path).parent, str(eid))
-    names = [n.strip() for n in str(raw).split(",") if n.strip()]
     return [p for p in (adir / n for n in names) if p.is_file()]
 
 

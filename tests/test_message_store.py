@@ -379,7 +379,7 @@ def test_collected_transition_stamps_a_dispatch_edge_receipt(tmp_path):
     assert collected["delivered_at"]
 
 
-def test_worker_report_is_collected_when_the_parent_is_notified(tmp_path):
+def test_strand_report_is_collected_when_the_parent_is_notified(tmp_path):
     """The parent reads the report via the completion event's message_path."""
     repo, _home, ctx = _context(tmp_path)
     brr_dir = repo / ".brr"
