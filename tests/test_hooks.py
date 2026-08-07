@@ -4831,11 +4831,14 @@ def test_an_accepted_bolt_collapses_the_closeout_capsule(tmp_path):
     )
     assert out.get("decision") == "block"
 
-    # Cut: same reply, same guard armed — the capsule stands down.
+    # Cut: a *distinct* bad closeout (a second identical reply would be
+    # eaten by the guard's own reply-digest latch and pass vacuously —
+    # measured, not hypothesized), guard still armed — the capsule stands
+    # down because the bolt is accepted, not because the latch spent.
     _portal(tmp_path, token="t1", pending=0)
     _add_bolt_facet(tmp_path)
     out, _ = hooks.run_hook(
-        hooks.PHASE_STOP, _stdin("done, I guess"), env,
+        hooks.PHASE_STOP, _stdin("finished, or whatever"), env,
     )
     assert out.get("decision") != "block"
 
