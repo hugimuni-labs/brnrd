@@ -90,11 +90,13 @@ and the reply are yours.
   run end to the waking thread and captured to the bundle-named response
   path — **never write that file yourself**.
   - reaches nobody in exactly two cases: **exact duplicate** of an outbox
-    delivery (never double-posted) · **no gate owns the waking event** →
-    staged `undeliverable`. The second is every self-woken run's standing
-    shape: the capture *is* the delivery, readable on the run node only ⇒
-    something a person must read must be routed yourself (`gate: <name>`)
-    before you close.
+    delivery (never double-posted) · **nothing took the reply** → staged
+    `undeliverable` — no gate owns the waking event and no `notify.gate`
+    fallback resolved (own conversation, then the repo's most recently
+    active thread, then give up), or a gate *tried* and permanently
+    failed. The self-woken shape is the common one: the capture *is* the
+    delivery, readable on the run node only ⇒ something a person must
+    read must be routed yourself (`gate: <name>`) before you close.
   - the Stop boundary fires only on a run about to end with *nothing*
     communicated anywhere. A mid-run reply buys no warning about a closeout
     landing in a file, and nobody re-runs you to extract a sentence.

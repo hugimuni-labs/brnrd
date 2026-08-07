@@ -4252,7 +4252,10 @@ def _run_worker(
                 # the single-delivery invariant lives in that ordering, not
                 # in a check inside this block.
                 notify_gate = (
-                    _resolve_notify_gate(cfg, emit.brr_dir)
+                    _resolve_notify_gate(
+                        cfg, emit.brr_dir,
+                        conversation_key=str(task.conversation_key or ""),
+                    )
                     if unowned and not terminal_duplicate
                     else ""
                 )
@@ -5490,6 +5493,130 @@ def _resolve_await_state(
     return result
 
 
+_notify_gate_cache_lock = threading.Lock()
+# run id -> resolved notify.gate for that run. See
+# :func:`_live_delivery_projection`'s docstring for why this exists; dropped
+# by :func:`_forget_notify_gate` when the run's control is retired, so a
+# long-lived daemon does not accumulate one entry per run it has ever seen.
+_notify_gate_cache: dict[str, str] = {}
+
+
+def _cached_notify_gate(
+    task: Run, cfg: dict, brr_dir: Path, *, conversation_key: str = "",
+) -> str:
+    """:func:`_resolve_notify_gate`, resolved once per run id.
+
+    A run with no id (a synthetic task in a test, an ad-hoc caller) is not
+    cacheable and pays the full resolution — correctness is unchanged
+    either way, only how often it is paid.
+    """
+    run_id = str(getattr(task, "id", "") or "")
+    if not run_id:
+        return _resolve_notify_gate(
+            cfg, brr_dir, conversation_key=conversation_key,
+        )
+    with _notify_gate_cache_lock:
+        hit = _notify_gate_cache.get(run_id)
+    if hit is not None:
+        return hit
+    resolved = _resolve_notify_gate(
+        cfg, brr_dir, conversation_key=conversation_key,
+    )
+    with _notify_gate_cache_lock:
+        _notify_gate_cache[run_id] = resolved
+    return resolved
+
+
+def _forget_notify_gate(run_id: str) -> None:
+    """Drop a finished run's cached notify gate."""
+    if not run_id:
+        return
+    with _notify_gate_cache_lock:
+        _notify_gate_cache.pop(run_id, None)
+
+
+def _live_delivery_projection(
+    task: Run, cfg: dict | None, brr_dir: Path | None, *, already_delivered: bool,
+) -> dict[str, object]:
+    """"If I ended right now, would my reply reach a human?" — live.
+
+    A *projection*, not a new decision: every predicate here is one the
+    dispatch path (``_run_worker``, around ``_terminal_route``) already
+    computes after the run ends — ``_terminal_reply_lands``,
+    ``_resolve_notify_gate``, ``_gate_can_deliver``, ``_terminal_route``
+    itself for the route vocabulary. This calls the same functions early,
+    from the heartbeat, so a run that would end ``undeliverable`` can see
+    that *before* it ends rather than only in a ledger nobody reads (the
+    measurement behind #undeliverable-means-nobody-took-it: 25 of 276 runs,
+    9%, found this out only after the fact). No new classification: the
+    ``route`` values are exactly :func:`_terminal_route`'s.
+
+    ``{"known": False}`` when the run has no event source yet (an ad-hoc
+    caller, or a source-less synthetic task) — nothing to project.
+
+    **Resolved once per run, then cached.** This function runs on every
+    heartbeat, and for the run type it exists to serve — a ``schedule``
+    fire, whose ``conversation_key`` is ``schedule:<name>`` and therefore
+    owned by no chat gate — ``_resolve_notify_gate`` falls all the way
+    through to :func:`_notify_gate_by_recent_activity`, which stats every
+    file under every conversation key. That scan's own docstring calls
+    itself rare and per-run; calling it per *heartbeat* would make it
+    2,829 ``stat()`` calls every ~10s on this account today (65
+    conversation dirs, 29 MB), growing without bound with the store —
+    roughly 4 million syscalls over a four-hour wake. The answer can only
+    change if a gate is configured mid-run, which is not worth that, so
+    the resolution is memoised per run id and the cache is dropped when
+    the run's control is retired.
+    """
+    source = str(getattr(task, "source", "") or "")
+    if not source:
+        return {"known": False}
+    meta = task.meta if hasattr(task, "meta") else {}
+    spawn_parent_run_id = str(meta.get("spawn_parent_run_id") or "")
+    owned = _gate_owns_source(source)
+    notify_gate = ""
+    if not owned and not spawn_parent_run_id and brr_dir is not None:
+        notify_gate = _cached_notify_gate(
+            task, cfg or {}, brr_dir,
+            conversation_key=str(getattr(task, "conversation_key", "") or ""),
+        )
+    undeliverable = not owned and not spawn_parent_run_id and not notify_gate
+    route = _terminal_route(
+        source,
+        spawn_parent_run_id=spawn_parent_run_id,
+        undeliverable=undeliverable,
+        delivered_elsewhere=already_delivered,
+        gate_fallback=bool(notify_gate),
+    )
+    gate = (
+        _delivery_source_for_gate(source) if owned
+        else notify_gate if notify_gate
+        else None
+    )
+    reason = None
+    if route == _TERMINAL_ROUTE_UNDELIVERABLE:
+        explicit = str((cfg or {}).get("notify.gate") or "").strip()
+        if explicit:
+            reason = f"explicit notify.gate={explicit!r} not deliverable here"
+        else:
+            candidate_count = sum(
+                1 for g in _NOTIFY_GATE_FALLBACK_CANDIDATES
+                if brr_dir is not None and _gate_can_deliver(brr_dir, g)
+            )
+            reason = (
+                f"no gate owns {source} events" if candidate_count == 0
+                else f"notify.gate unresolved: {candidate_count} candidate gate(s)"
+            )
+    return {
+        "known": True,
+        "would_land": route != _TERMINAL_ROUTE_UNDELIVERABLE,
+        "route": route,
+        "gate": gate,
+        "already_delivered": already_delivered,
+        "reason": reason,
+    }
+
+
 def _write_live_portal_state(
     outbox_dir: Path | None,
     inbox_dir: Path,
@@ -5689,6 +5816,13 @@ def _write_live_portal_state(
                 ),
                 "pending_outbox_files": pending_files,
             },
+            "delivery": _live_delivery_projection(
+                task, cfg, brr_dir,
+                already_delivered=bool(
+                    stats.get("current") or stats.get("other")
+                    or stats.get("outbound")
+                ),
+            ),
             "card": {
                 "active": bool(card_text),
                 "text": card_text,
@@ -7934,7 +8068,62 @@ def _configured_gate_names(brr_dir: Path) -> list[str]:
 _NOTIFY_GATE_FALLBACK_CANDIDATES = tuple(g for g in _BUILTIN_GATES if g != "github")
 
 
-def _resolve_notify_gate(cfg: dict, brr_dir: Path) -> str:
+def _notify_gate_for_conversation_key(key: str) -> str:
+    """Best-effort gate name owning *key*, or ``""``.
+
+    Every native gate's conversation key starts with its own gate name as
+    the first ``:``-separated field (:func:`conversations.gate_thread_key`:
+    ``telegram:<chat>:<topic>``, ``slack:<channel>:<thread>``,
+    ``cloud:<platform>:<chat>:<topic>``, and a bare ``<source>:default``
+    fallback for anything else) — the prefix *is* the gate name, no lookup
+    required. A non-gate key (``schedule:<name>``, ``run:<id>``) yields a
+    prefix that is not in :data:`_NOTIFY_GATE_FALLBACK_CANDIDATES` and is
+    filtered out by the caller like any other non-candidate.
+    """
+    return key.split(":", 1)[0] if key else ""
+
+
+def _conversation_activity(brr_dir: Path, key: str) -> float:
+    """Best-effort last-write time for conversation *key*'s log directory.
+
+    0.0 (never wins a max-comparison) when the directory is missing or
+    unreadable — a filesystem race or a key with no store yet is "no
+    signal", not an error worth surfacing on this best-effort tiebreak.
+    """
+    path = conversations.conversation_path(brr_dir, key)
+    try:
+        return max(
+            (child.stat().st_mtime for child in path.iterdir() if child.is_file()),
+            default=0.0,
+        )
+    except OSError:
+        return 0.0
+
+
+def _notify_gate_by_recent_activity(brr_dir: Path, candidates: list[str]) -> str:
+    """The candidate gate that owns this repo's most recently active thread.
+
+    Scans every known conversation key (:func:`conversations.list_conversations`)
+    for the newest last-write among those whose owning gate is in
+    *candidates*, and returns that gate. Read-only, best-effort: a repo
+    with thousands of conversations pays one directory listing per key, but
+    this path only runs on the rare "ambiguous notify.gate" fallback, never
+    per-message.
+    """
+    best_gate, best_ts = "", -1.0
+    for key in conversations.list_conversations(brr_dir):
+        gate = _notify_gate_for_conversation_key(key)
+        if gate not in candidates:
+            continue
+        ts = _conversation_activity(brr_dir, key)
+        if ts > best_ts:
+            best_gate, best_ts = gate, ts
+    return best_gate
+
+
+def _resolve_notify_gate(
+    cfg: dict, brr_dir: Path, *, conversation_key: str = "",
+) -> str:
     """Resolve the ``notify.gate`` fallback target, or ``""`` when none applies.
 
     This is the "no run left unheard" config surface: which gate carries a
@@ -7950,13 +8139,21 @@ def _resolve_notify_gate(cfg: dict, brr_dir: Path) -> str:
        would surprise an operator who deliberately named a gate.
     2. **Single-gate inference**, only when unset: exactly *one* user-chat
        gate (:data:`_NOTIFY_GATE_FALLBACK_CANDIDATES` — telegram / slack /
-       cloud) is configured on this account. Zero or several configured
-       candidates is ambiguous or already covered, so it keeps the prior
-       behavior (undeliverable) rather than guessing which correspondent
-       the operator meant. This is what kills the "toxic segregation"
-       between schedule-woken runs and everything else with no config
-       migration required for the overwhelmingly common one-chat-gate
-       account.
+       cloud) is configured on this account, no guessing needed.
+    3. **Conversation ownership**, only when several candidates are
+       configured (the case (2) calls "ambiguous"): the run usually is not
+       ambiguous at all — it carries its own *conversation_key*, and some
+       gate owns that conversation. Prefer that gate
+       (:func:`_notify_gate_for_conversation_key`); a run with no
+       conversation of its own (or one none of the candidates own — a bare
+       ``schedule:<name>``) prefers the candidate gate that owns this
+       repo's most recently active thread instead
+       (:func:`_notify_gate_by_recent_activity`). Only when *neither*
+       resolves — a fresh account with several gates configured and no
+       thread history yet — does this stay ``""`` (undeliverable). Ambiguity
+       by raw candidate count was the wrong tiebreak whenever the run or the
+       repo's own history already carries the answer; explicit
+       ``notify.gate`` still wins outright over all of this, unchanged.
     """
     explicit = str(cfg.get("notify.gate") or "").strip()
     if explicit:
@@ -7965,7 +8162,14 @@ def _resolve_notify_gate(cfg: dict, brr_dir: Path) -> str:
         gate for gate in _NOTIFY_GATE_FALLBACK_CANDIDATES
         if _gate_can_deliver(brr_dir, gate)
     ]
-    return candidates[0] if len(candidates) == 1 else ""
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) < 2:
+        return ""
+    owning = _notify_gate_for_conversation_key(conversation_key)
+    if owning in candidates:
+        return owning
+    return _notify_gate_by_recent_activity(brr_dir, candidates)
 
 
 def _gate_owns_source(source: str) -> bool:
@@ -12205,6 +12409,12 @@ def _run_worker_and_finalize(
             _attribute_schedule_entries(
                 task, brr_dir, repo_root, cfg, account_context,
             )
+        # The run is over; its resolved notify gate cannot be asked for
+        # again. Dropped here rather than left to a sweep because the cache
+        # is keyed by run id and a long-lived daemon would otherwise hold
+        # one entry per run it has ever executed.
+        if task is not None:
+            _forget_notify_gate(str(task.id or ""))
         # Leave the presence registry — the thought is no longer awake.
         # The registry self-prunes on read too, but an explicit deregister
         # keeps it tidy and immediate.
