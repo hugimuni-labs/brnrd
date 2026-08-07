@@ -61,6 +61,16 @@ other so they don't drift.
 | `inbox.json` | inbound ◂ | **Daemon-owned**, refreshed each heartbeat: the live list of other pending events. Read it at plan/todo boundaries and once more before terminal closeout; every event gets an inline, spawn, or explicit-defer disposition. Never edit or remove it. |
 | `portal-state.json` | inbound ◂ | **Daemon-owned**, refreshed each heartbeat: the broader live daemon-state capsule for this run. It includes pending events, delivered/drained reply counts, pending outbox files, current card text, budget/keepalive posture, strand headroom (`resources.coexisting_runs.spawn_pool`), attested live produce (`produce`: counts plus the latest commit, branch, and PR), a stable `change_token` for attention-relevant changes, and **`notices`** — see below. The runner also receives `BRR_PORTAL_STATE` pointing at it. Inspect with `brnrd portal state`; never edit or remove it. |
 
+**The table above is prose; `brnrd notes` is the same facts as data.** Every
+control file here is one row of the durable-surface registry (`brr/notes.py`),
+which also covers the dominion, the work surface, and the kb — each with its
+role, **who reads it** as a code coordinate, its grammar, its budget rule, and
+which wake block carries it. `brnrd notes` prints the map, `brnrd notes
+<surface>` one surface, `brnrd notes check` the deterministic findings that
+also ride the wake as the `notes health` block. Reach for it when you are about
+to write into a surface you half-remember: a resident that writes the wrong key
+gets silence, not an error, and the registry is the one reader that will say so.
+
 ### `notices` — the directives brnrd refused
 
 An outbox file is deleted from the directory **whether it was accepted or
