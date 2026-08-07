@@ -5408,8 +5408,13 @@ def _resolve_await_state(
     anything, is what makes this a listening wait rather than a sleeping
     one. Mutates ``task.meta["await"]`` in place so the outcome, once
     reached, is sticky across later ticks instead of being re-derived (a
-    ``pid:`` condition's target may be reused by a new process by the next
-    tick; the first exit is the one that counted).
+    pending event this tick may be answered by the next one; the first
+    resolution is the one that counted).
+
+    ``armed_at`` rides the projection because ``brnrd await`` re-arms on
+    every call: without a generation stamp the CLI cannot tell a freshly
+    armed wait from the *previous* call's sticky-resolved outcome sitting in
+    a portal-state file the heartbeat has not rewritten yet.
 
     Returns the projection this tick's ``portal-state.json`` should carry.
     ``{"armed": False}`` when no ``await:`` was ever staged this run.
@@ -5420,7 +5425,9 @@ def _resolve_await_state(
     if armed.get("resolved"):
         return {
             "armed": True,
-            "conditions": armed.get("conditions", []),
+            "file": armed.get("file"),
+            "armed_at": _iso_utc(float(armed["armed_at"])),
+            "generation": armed.get("generation"),
             "timeout_seconds": armed.get("timeout_seconds"),
             "capped": bool(armed.get("capped")),
             "resolved": True,
@@ -5450,16 +5457,16 @@ def _resolve_await_state(
 
     _extend_keepalive(keepalive_path, effective_deadline)
 
-    outcome, which = await_verb.evaluate(
-        armed.get("conditions_detail", []), pending_events,
-    )
+    outcome, which = await_verb.evaluate(armed.get("file"), pending_events)
     if outcome is None and now >= effective_deadline:
         outcome = "timeout"
         which = None
 
     result: dict[str, object] = {
         "armed": True,
-        "conditions": armed.get("conditions", []),
+        "file": armed.get("file"),
+        "armed_at": _iso_utc(float(armed["armed_at"])),
+        "generation": armed.get("generation"),
         "timeout_seconds": armed.get("timeout_seconds"),
         "deadline": _iso_utc(effective_deadline),
         "capped": bool(armed.get("capped")),
@@ -7600,23 +7607,22 @@ def _drain_outbox(
             _retire_outbox_staging(fpath)
             continue
         if "await" in fm:
-            # A select, not a sleep (#959): declare the condition set once
-            # instead of hand-rolling a poll loop that can collapse into one
-            # boundary-free shell call. Refusals below are deliberately
-            # `kind="refused"` (a well-formed directive brnrd declines) except
-            # the malformed-input cases, which are `"dropped"` (nothing
-            # resolvable was there to refuse).
-            if _is_strand(task.meta):
-                _record_outbox_notice(
-                    outbox_dir,
-                    "await refused: a strand-stack run cannot arm a wait — "
-                    "hold happens in the resident that dispatched it.",
-                    kind="refused",
-                    lifetime="run",
-                )
-                _retire_outbox_staging(fpath)
-                continue
-            conditions, timeout_seconds, error = await_verb.parse_await(fm)
+            # A select, not a sleep (#959), with nothing left for the caller
+            # to get wrong (#1187): the directive carries a ceiling and, at
+            # most, one optional `file:` trigger. `brnrd await` is the front
+            # door and stages this file itself.
+            #
+            # Strands arm this too, and the reasoning that used to refuse
+            # them was simply wrong. It called the hold "a resident-level
+            # cost decision" — but a strand does not spend the resident's
+            # single-flight slot; it occupies a slot in the *spawn pool*
+            # (`spawn.max_concurrent`), and it already holds that slot by
+            # existing. Awaiting costs nothing the strand is not already
+            # paying, while refusing it left the runs least able to recover —
+            # a strand blocked on a subprocess — with only a shell sleep
+            # loop, which is the exact boundary-free stretch #959 exists to
+            # end.
+            file_path, timeout_seconds, error = await_verb.parse_await(fm)
             if error:
                 _record_outbox_notice(
                     outbox_dir, f"await dropped: {error}", kind="dropped",
@@ -7625,10 +7631,15 @@ def _drain_outbox(
                 _retire_outbox_staging(fpath)
                 continue
             task.meta["await"] = {
-                "conditions": [c["raw"] for c in conditions],
-                "conditions_detail": conditions,
+                "file": file_path,
                 "timeout_seconds": timeout_seconds,
                 "armed_at": time.time(),
+                # An exact generation stamp, not a timestamp: `armed_at`
+                # renders to whole seconds, and `brnrd await` re-arms on
+                # every call — two calls inside one second would otherwise
+                # be indistinguishable, and the CLI would read the *previous*
+                # call's sticky-resolved outcome as this call's answer.
+                "generation": str(time.time_ns()),
                 "resolved": False,
                 "capped": False,
             }
@@ -7639,7 +7650,7 @@ def _drain_outbox(
                 "await_armed",
                 run_id=task.id,
                 event_id=event_id,
-                conditions=[c["raw"] for c in conditions],
+                file=file_path,
                 timeout_seconds=timeout_seconds,
             )
             _retire_outbox_staging(fpath)
@@ -9846,12 +9857,17 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
             summary,
             conversation_key=conv,
             spawned_by_run=task.id,
-            # Carried alongside the run id (#959): a resident's `await:
-            # spawn:<id>` may only have the *dispatch* event id on hand (the
+            # Carried alongside the run id: a parent with several children
+            # in flight may only have the *dispatch* event id on hand (the
             # `spawn_event_id` its own `spawn: true` write was told), not the
             # run id this child was eventually assigned — the other two
             # spawn_completed sites (stop-cancelled, crashed) already only
-            # ever have the event id, never a run id.
+            # ever have the event id, never a run id. This is provenance a
+            # reader joins on, not a wait's filter: `await:` used to take a
+            # `spawn:<id>` term and no longer does (#1187 — enumerating what
+            # the daemon already tracks is what broke), so nothing in the
+            # daemon matches on this field; the resident reading the
+            # completion does.
             spawned_by_event=str(getattr(task, "event_id", "") or ""),
             spawn_parent_run_id=parent_run_id,
             # The completion note wakes the *parent*, and the child

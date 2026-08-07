@@ -490,110 +490,259 @@ def test_portal_state_errors_without_file(capsys, monkeypatch):
     assert "no live portal-state.json" in capsys.readouterr().err
 
 
-# ── portal await (#959) ────────────────────────────────────────────────
+# ── brnrd await (#959, collapsed by #1187) ────────────────────────────
 
 
-def test_portal_await_errors_without_file(capsys, monkeypatch):
+class _FakeClock:
+    """A monotonic clock that only moves when something sleeps.
+
+    ``cmd_await``'s slice ceiling and ``do.await_verdict``'s staging wait are
+    both real wall-clock loops; driving them from a fake clock keeps the
+    tests instant while still exercising the true loop bodies.
+    """
+
+    def __init__(self, on_sleep=None):
+        self.now = 0.0
+        self.slept = []
+        self._on_sleep = on_sleep
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+        self.slept.append(seconds)
+        if self._on_sleep is not None:
+            self._on_sleep()
+
+
+def _await_outbox(tmp_path, *, budget=None, await_state=None, notices=None):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir(exist_ok=True)
+    payload = {"version": 1}
+    if budget is not None:
+        payload["budget"] = budget
+    if await_state is not None:
+        payload["await"] = await_state
+    if notices is not None:
+        payload["notices"] = notices
+    (outbox / "portal-state.json").write_text(
+        json.dumps(payload), encoding="utf-8",
+    )
+    return outbox
+
+
+def _staged_await(outbox):
+    return [p for p in outbox.glob("do-*-await-*.md")]
+
+
+def test_await_takes_no_positional_arguments():
+    """The point of the collapse: nothing to supply means nothing to typo.
+
+    A resident reaching for the old ``spawn:<id>`` grammar gets a parse
+    error, not a wait that silently filters on a mistyped id (#1187).
+    """
+    with pytest.raises(SystemExit):
+        main(["await", "spawn:evt-abcd"])
+
+
+def test_await_errors_without_an_outbox(capsys, monkeypatch):
     monkeypatch.delenv("BRR_PORTAL_STATE", raising=False)
+    monkeypatch.delenv("BRR_OUTBOX_DIR", raising=False)
     monkeypatch.setattr("brr.cli._maybe_brr_dir", lambda: None)
 
-    assert main(["portal", "await"]) == 1
+    assert main(["await"]) == 1
+    assert "no run outbox" in capsys.readouterr().err
+
+
+def test_await_errors_without_live_portal_state(tmp_path, capsys):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+
+    assert main(["await", "--outbox", str(outbox)]) == 1
     assert "no live portal-state.json" in capsys.readouterr().err
 
 
-def test_portal_await_errors_when_nothing_armed(tmp_path, capsys):
-    state = tmp_path / "portal-state.json"
-    state.write_text(
-        json.dumps({"version": 1, "await": {"armed": False}}), encoding="utf-8",
-    )
+def test_await_rejects_an_unparseable_timeout(tmp_path, capsys):
+    outbox = _await_outbox(tmp_path)
 
-    assert main(["portal", "await", "--path", str(state)]) == 1
-    assert "no await:" in capsys.readouterr().err
+    assert main(["await", "--outbox", str(outbox), "--timeout", "banana"]) == 1
+    assert "not a positive duration" in capsys.readouterr().err
+    assert _staged_await(outbox) == [], "nothing may be staged on a bad ceiling"
 
 
-def test_portal_await_returns_resolved_outcome_without_sleeping(tmp_path, capsys):
-    state = tmp_path / "portal-state.json"
-    state.write_text(
-        json.dumps({
-            "version": 1,
-            "await": {
-                "armed": True, "resolved": True, "outcome": "condition",
-                "which": "file:/tmp/gate.log", "deadline": "2026-08-03T10:00:00Z",
-                "capped": False,
-            },
-        }),
-        encoding="utf-8",
-    )
-
-    assert main(["portal", "await", "--path", str(state)]) == 0
-
-    payload = json.loads(capsys.readouterr().out)
-    assert payload == {
-        "outcome": "condition", "which": "file:/tmp/gate.log",
-        "deadline": "2026-08-03T10:00:00Z", "capped": False,
-    }
-
-
-def test_portal_await_pending_sleeps_at_most_the_hard_cap_then_reports(
+def test_await_defaults_the_ceiling_from_the_runs_remaining_budget(
     tmp_path, capsys, monkeypatch,
 ):
-    """The structural bound (#959): whatever ``--tick-seconds`` asks for, one
-    call never blocks past ``_AWAIT_POLL_HARD_CAP_SECONDS``."""
-    from brr import cli
+    """The daemon already knows how long this run has left (#1187's lesson).
 
-    state = tmp_path / "portal-state.json"
-    state.write_text(
-        json.dumps({
-            "version": 1,
-            "await": {"armed": True, "resolved": False, "capped": False},
-        }),
-        encoding="utf-8",
+    Asking the resident to restate it is the same mistake ``spawn:<id>`` was,
+    so an argument-free call arms ``budget_seconds - elapsed_seconds``.
+    """
+    outbox = _await_outbox(
+        tmp_path, budget={"budget_seconds": 600, "elapsed_seconds": 60},
     )
-    slept = []
-    monkeypatch.setattr(time, "sleep", lambda s: slept.append(s))
+    staged_text = {}
+
+    def drain():
+        for path in _staged_await(outbox):
+            staged_text["body"] = path.read_text(encoding="utf-8")
+            path.unlink()
+
+    clock = _FakeClock(on_sleep=drain)
+    monkeypatch.setattr(time, "sleep", clock.sleep)
+    monkeypatch.setattr(time, "monotonic", clock.monotonic)
+
+    assert main(["await", "--outbox", str(outbox), "--json"]) == 0
+    assert "timeout: 540s" in staged_text["body"]
+    assert "await: true" in staged_text["body"]
+    assert "file:" not in staged_text["body"]
+
+
+def test_await_file_flag_rides_along_as_an_extra_trigger(
+    tmp_path, capsys, monkeypatch,
+):
+    """``--file`` composes; it never becomes the wait's only condition.
+
+    The staged directive still says nothing about *which* events count —
+    the daemon's own "anything pending resolves this" semantics are
+    structural, so the file can only ever add a trigger.
+    """
+    outbox = _await_outbox(tmp_path)
+    staged_text = {}
+
+    def drain():
+        for path in _staged_await(outbox):
+            staged_text["body"] = path.read_text(encoding="utf-8")
+            path.unlink()
+
+    clock = _FakeClock(on_sleep=drain)
+    monkeypatch.setattr(time, "sleep", clock.sleep)
+    monkeypatch.setattr(time, "monotonic", clock.monotonic)
 
     assert main([
-        "portal", "await", "--path", str(state), "--tick-seconds", "999",
+        "await", "--outbox", str(outbox), "--file", "/tmp/gate.log", "--json",
     ]) == 0
-
-    assert slept == [cli._AWAIT_POLL_HARD_CAP_SECONDS]
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["outcome"] == "pending"
+    assert "file: /tmp/gate.log" in staged_text["body"]
 
 
-def test_portal_await_reports_a_resolution_that_landed_during_the_sleep(
-    tmp_path, capsys, monkeypatch,
-):
-    """The daemon's own heartbeat can resolve the wait *during* one poll
-    tick's sleep — the re-read after waking must see it, not the stale
-    pre-sleep snapshot."""
-    state = tmp_path / "portal-state.json"
-    state.write_text(
-        json.dumps({
-            "version": 1,
-            "await": {"armed": True, "resolved": False, "capped": False},
-        }),
-        encoding="utf-8",
-    )
+def test_await_reports_the_daemons_resolution(tmp_path, capsys, monkeypatch):
+    outbox = _await_outbox(tmp_path, await_state={"armed": False})
+    state = outbox / "portal-state.json"
 
-    def _resolve_during_sleep(_seconds):
+    def drain():
+        if not _staged_await(outbox):
+            return
+        for path in _staged_await(outbox):
+            path.unlink()
         state.write_text(
             json.dumps({
                 "version": 1,
                 "await": {
-                    "armed": True, "resolved": True, "outcome": "timeout",
-                    "which": None, "capped": False,
+                    "armed": True, "generation": "222", "resolved": True,
+                    "outcome": "event", "which": None,
+                    "deadline": "2026-08-07T12:00:00Z", "capped": False,
                 },
             }),
             encoding="utf-8",
         )
 
-    monkeypatch.setattr(time, "sleep", _resolve_during_sleep)
+    clock = _FakeClock(on_sleep=drain)
+    monkeypatch.setattr(time, "sleep", clock.sleep)
+    monkeypatch.setattr(time, "monotonic", clock.monotonic)
 
-    assert main(["portal", "await", "--path", str(state)]) == 0
-
+    assert main(["await", "--outbox", str(outbox), "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["outcome"] == "timeout"
+    assert payload["outcome"] == "event"
+    assert payload["deadline"] == "2026-08-07T12:00:00Z"
+
+
+def test_await_reports_its_own_arming_verdict(tmp_path, capsys, monkeypatch):
+    """#1187, killed by construction: a directive that fails to arm says so
+    *in the call that armed it*, instead of leaving the previous wait's
+    ``resolved: true`` in place looking like an answer."""
+    outbox = _await_outbox(tmp_path, notices=[])
+    state = outbox / "portal-state.json"
+
+    def drain():
+        if not _staged_await(outbox):
+            return
+        for path in _staged_await(outbox):
+            path.unlink()
+        state.write_text(
+            json.dumps({
+                "version": 1,
+                "notices": [{
+                    "at": "2026-08-07T11:20:00Z", "kind": "dropped",
+                    "text": "await dropped: timeout: must be positive",
+                }],
+            }),
+            encoding="utf-8",
+        )
+
+    clock = _FakeClock(on_sleep=drain)
+    monkeypatch.setattr(time, "sleep", clock.sleep)
+    monkeypatch.setattr(time, "monotonic", clock.monotonic)
+
+    assert main(["await", "--outbox", str(outbox), "--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["outcome"] == "failed"
+    assert "await dropped" in payload["detail"]
+
+
+def test_await_never_reports_a_previous_calls_resolution(
+    tmp_path, capsys, monkeypatch,
+):
+    """The stale-answer guard. ``brnrd await`` re-arms on every call, and a
+    resolved outcome is sticky in ``portal-state.json`` until the daemon's
+    next heartbeat rewrites it — so a portal-state file written *before* this
+    call's arming still carries the previous wait's answer.
+
+    Neuter check (do this by hand, don't ship it): drop the ``fresh``
+    generation comparison in ``cli.cmd_await``'s poll loop and rerun — this
+    test goes red with ``outcome == "timeout"``, i.e. the command answering
+    a wait it never actually waited on.
+    """
+    outbox = _await_outbox(tmp_path, await_state={
+        "armed": True, "generation": "111", "resolved": True,
+        "outcome": "timeout", "which": None, "capped": False,
+    })
+
+    def drain():
+        for path in _staged_await(outbox):
+            path.unlink()
+
+    clock = _FakeClock(on_sleep=drain)
+    monkeypatch.setattr(time, "sleep", clock.sleep)
+    monkeypatch.setattr(time, "monotonic", clock.monotonic)
+
+    assert main(["await", "--outbox", str(outbox), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["outcome"] == "pending"
+
+
+def test_await_slice_returns_pending_at_its_own_ceiling(
+    tmp_path, capsys, monkeypatch,
+):
+    """The call ends by answering, never by being killed mid-wait: it returns
+    ``pending`` at its own ceiling, which sits under the tightest Shell
+    per-tool-call cap. "Call again" is then the whole instruction."""
+    from brr import cli
+
+    outbox = _await_outbox(tmp_path)
+
+    def drain():
+        for path in _staged_await(outbox):
+            path.unlink()
+
+    clock = _FakeClock(on_sleep=drain)
+    monkeypatch.setattr(time, "sleep", clock.sleep)
+    monkeypatch.setattr(time, "monotonic", clock.monotonic)
+
+    assert main(["await", "--outbox", str(outbox), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["outcome"] == "pending"
+    assert clock.now >= cli._AWAIT_SLICE_CEILING_SECONDS
 
 
 def test_run_requires_instruction():
