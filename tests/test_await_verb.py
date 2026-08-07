@@ -1,8 +1,6 @@
-"""``await:`` parsing and condition evaluation (#959)."""
+"""``await:`` parsing and evaluation — the wait with nothing to forget (#1187)."""
 
 from __future__ import annotations
-
-import os
 
 from brr import await_verb
 
@@ -11,194 +9,135 @@ from brr import await_verb
 
 
 def test_parse_await_requires_timeout():
-    conditions, timeout, error = await_verb.parse_await({"await": "file:/tmp/x"})
-    assert conditions is None
+    file_path, timeout, error = await_verb.parse_await({"await": "true"})
+    assert file_path is None
     assert timeout is None
     assert "timeout" in error
 
 
 def test_parse_await_rejects_unparseable_timeout():
-    conditions, timeout, error = await_verb.parse_await(
-        {"await": "event", "timeout": "banana"}
+    _file, timeout, error = await_verb.parse_await(
+        {"await": "true", "timeout": "banana"}
     )
-    assert conditions is None
+    assert timeout is None
     assert "not a parseable duration" in error
 
 
 def test_parse_await_rejects_non_positive_timeout():
-    conditions, timeout, error = await_verb.parse_await(
-        {"await": "event", "timeout": "0s"}
+    _file, timeout, error = await_verb.parse_await(
+        {"await": "true", "timeout": "0s"}
     )
-    assert conditions is None
+    assert timeout is None
     assert "positive" in error
 
 
-def test_parse_await_rejects_unknown_condition():
-    conditions, timeout, error = await_verb.parse_await(
-        {"await": "carrier-pigeon:42", "timeout": "5m"}
-    )
-    assert conditions is None
-    assert timeout is None
-    assert "unrecognised condition" in error
-
-
-def test_parse_await_rejects_malformed_pid():
-    conditions, timeout, error = await_verb.parse_await(
-        {"await": "pid:notanumber", "timeout": "5m"}
-    )
-    assert conditions is None
-    assert "not a numeric pid" in error
-
-
-def test_parse_await_rejects_empty_file_path():
-    conditions, timeout, error = await_verb.parse_await(
-        {"await": "file:", "timeout": "5m"}
-    )
-    assert conditions is None
-    assert "names no path" in error
-
-
-def test_parse_await_parses_file_pid_spawn_and_appends_event():
-    conditions, timeout, error = await_verb.parse_await(
-        {"await": "file:/tmp/gate.log | pid:4242 | spawn:evt-abcd", "timeout": "20m"}
+def test_parse_await_bare_marker_arms_a_plain_wait():
+    """The whole documented shape: a ceiling and nothing else."""
+    file_path, timeout, error = await_verb.parse_await(
+        {"await": "true", "timeout": "20m"}
     )
     assert error is None
     assert timeout == 1200.0
-    kinds = [c["kind"] for c in conditions]
-    assert kinds == ["file", "pid", "spawn", "event"]
-    assert conditions[0]["value"] == "/tmp/gate.log"
-    assert conditions[1]["value"] == 4242
-    assert conditions[2]["value"] == "evt-abcd"
+    assert file_path is None
 
 
-def test_parse_await_structurally_always_includes_event():
-    """#959's central guarantee: a resident cannot forget the message condition.
+def test_parse_await_accepts_an_empty_marker():
+    file_path, timeout, error = await_verb.parse_await(
+        {"await": "", "timeout": "5m"}
+    )
+    assert (file_path, timeout, error) == (None, 300.0, None)
 
-    Neuter check (do this by hand, don't ship it): comment out the
-    "append EVENT_CONDITION when absent" block in ``parse_await`` and rerun
-    this test — it goes red, because a bare ``file:`` await would then parse
-    to exactly one condition with no ``event`` member at all. That is the
-    guard #959 asks to be neutered and watched fail.
+
+def test_parse_await_takes_an_optional_file_trigger():
+    file_path, timeout, error = await_verb.parse_await(
+        {"await": "true", "timeout": "5m", "file": "/tmp/gate.log"}
+    )
+    assert error is None
+    assert file_path == "/tmp/gate.log"
+    assert timeout == 300.0
+
+
+def test_parse_await_refuses_a_retired_spawn_condition():
+    """#1187's actual failure: five child ids, one typo, the whole directive
+    silently discarded. A directive still carrying v1's condition grammar is
+    refused *by name*, never ignored-with-the-extra-terms-dropped — and the
+    refusal points at the verb that replaced it.
+
+    Neuter check (do this by hand, don't ship it): make ``parse_await``
+    ignore the ``await:`` value instead of validating it against
+    ``_MARKER_VALUES`` and rerun — this test goes red, because a stale
+    ``await: spawn:evt-x`` would then arm a *silently different* wait than
+    the one its author typed.
     """
-    conditions, _timeout, error = await_verb.parse_await(
-        {"await": "file:/tmp/only-this", "timeout": "5m"}
+    file_path, timeout, error = await_verb.parse_await(
+        {"await": "spawn:evt-abcd", "timeout": "5m"}
     )
-    assert error is None
-    assert any(c["kind"] == "event" for c in conditions)
+    assert (file_path, timeout) == (None, None)
+    assert "brnrd await" in error
+    assert "no longer takes conditions" in error
 
 
-def test_parse_await_with_no_conditions_still_gets_event():
-    conditions, _timeout, error = await_verb.parse_await({"timeout": "5m"})
-    assert error is None
-    assert conditions == [dict(await_verb.EVENT_CONDITION)]
-
-
-def test_parse_await_explicit_event_is_not_duplicated():
-    conditions, _timeout, error = await_verb.parse_await(
-        {"await": "event", "timeout": "5m"}
+def test_parse_await_refuses_a_retired_pid_condition():
+    _file, _timeout, error = await_verb.parse_await(
+        {"await": "pid:4242", "timeout": "5m"}
     )
-    assert error is None
-    assert conditions == [dict(await_verb.EVENT_CONDITION)]
+    assert "brnrd await" in error
 
 
-def test_parse_await_rejects_empty_token_in_pipe_list():
-    conditions, _timeout, error = await_verb.parse_await(
-        {"await": "file:/tmp/x || pid:1", "timeout": "5m"}
+def test_parse_await_refuses_the_old_pipe_list():
+    _file, _timeout, error = await_verb.parse_await(
+        {"await": "file:/tmp/x | event", "timeout": "5m"}
     )
-    assert conditions is None
-    assert "empty condition" in error
+    assert "brnrd await" in error
 
 
-# ── pid_alive ────────────────────────────────────────────────────────
-
-
-def test_pid_alive_true_for_own_process():
-    assert await_verb.pid_alive(os.getpid()) is True
-
-
-def test_pid_alive_false_for_a_pid_that_cannot_exist():
-    # PID 1 always exists on a real system; use an absurdly large, almost
-    # certainly-unassigned pid instead of assuming a fixed dead pid number.
-    assert await_verb.pid_alive(2**30) is False
+def test_parse_await_refuses_a_file_value_still_wearing_the_condition_prefix():
+    """``file: file:/tmp/x`` would otherwise arm a wait on a path that cannot
+    exist — a silent never-fires, which is the failure mode, not a typo."""
+    _file, _timeout, error = await_verb.parse_await(
+        {"await": "true", "timeout": "5m", "file": "file:/tmp/x"}
+    )
+    assert "brnrd await" in error
 
 
 # ── evaluate ─────────────────────────────────────────────────────────
 
 
-def test_evaluate_file_condition_fires(tmp_path):
+def test_evaluate_resolves_on_any_pending_event():
+    """``event`` is the semantics now, not a condition someone can omit."""
+    outcome, which = await_verb.evaluate(None, [{"id": "evt-x", "source": "telegram"}])
+    assert (outcome, which) == ("event", None)
+
+
+def test_evaluate_resolves_on_a_spawn_completion_with_no_id_named():
+    """A strand finishing already creates an event, so a dispatcher waiting on
+    "whichever child finishes first" needs to name nothing at all."""
+    pending = [{"source": "spawn_completed", "spawned_by_run": "run-child"}]
+    assert await_verb.evaluate(None, pending) == ("event", None)
+
+
+def test_evaluate_file_trigger_fires(tmp_path):
     target = tmp_path / "gate.log"
-    conditions = [{"kind": "file", "raw": f"file:{target}", "value": str(target)}]
-    outcome, which = await_verb.evaluate(conditions, [])
-    assert (outcome, which) == (None, None)
+    assert await_verb.evaluate(str(target), []) == (None, None)
     target.write_text("done", encoding="utf-8")
-    outcome, which = await_verb.evaluate(conditions, [])
-    assert outcome == "condition"
-    assert which == f"file:{target}"
+    assert await_verb.evaluate(str(target), []) == ("condition", f"file:{target}")
 
 
-def test_evaluate_pid_condition_fires_on_exit():
-    dead_pid = 2**30
-    conditions = [{"kind": "pid", "raw": f"pid:{dead_pid}", "value": dead_pid}]
-    outcome, which = await_verb.evaluate(conditions, [])
-    assert outcome == "condition"
-    assert which == f"pid:{dead_pid}"
+def test_evaluate_pending_events_outrank_the_file_trigger(tmp_path):
+    """A wait a correspondent cannot interrupt is the failure #959 exists to
+    end — so when both would fire, the message is the answer, never the file.
 
-
-def test_evaluate_pid_condition_does_not_fire_while_alive():
-    conditions = [{"kind": "pid", "raw": f"pid:{os.getpid()}", "value": os.getpid()}]
-    outcome, which = await_verb.evaluate(conditions, [])
-    assert (outcome, which) == (None, None)
-
-
-def test_evaluate_spawn_condition_matches_run_id():
-    conditions = [{"kind": "spawn", "raw": "spawn:run-child", "value": "run-child"}]
-    pending = [{"source": "spawn_completed", "spawned_by_run": "run-child"}]
-    outcome, which = await_verb.evaluate(conditions, pending)
-    assert (outcome, which) == ("condition", "spawn:run-child")
-
-
-def test_evaluate_spawn_condition_matches_dispatch_event_id():
-    conditions = [{"kind": "spawn", "raw": "spawn:evt-orig", "value": "evt-orig"}]
-    pending = [{"source": "spawn_completed", "spawned_by_event": "evt-orig"}]
-    outcome, which = await_verb.evaluate(conditions, pending)
-    assert (outcome, which) == ("condition", "spawn:evt-orig")
-
-
-def test_evaluate_spawn_condition_ignores_unrelated_completions():
-    """The named ``spawn:`` term doesn't fire for a *different* child's
-    completion — but the structural ``event`` outcome still does, because an
-    unrelated pending event is exactly what that outcome is for."""
-    conditions = [{"kind": "spawn", "raw": "spawn:run-child", "value": "run-child"}]
-    pending = [{"source": "spawn_completed", "spawned_by_run": "run-other"}]
-    outcome, which = await_verb.evaluate(conditions, pending)
-    assert (outcome, which) == ("event", None)
-
-
-def test_evaluate_falls_back_to_event_outcome_for_unrelated_pending():
-    conditions = [dict(await_verb.EVENT_CONDITION)]
-    pending = [{"id": "evt-unrelated", "source": "telegram"}]
-    outcome, which = await_verb.evaluate(conditions, pending)
-    assert (outcome, which) == ("event", None)
-
-
-def test_evaluate_prefers_named_condition_over_event_when_both_true():
-    """A pending event that *is* the spawn completion names the condition.
-
-    Ordering matters: a resident named ``spawn:run-child`` specifically, and
-    the only pending event is exactly that completion — the three-outcome
-    contract says the *specific* answer, not the generic "a message showed
-    up" one, when both would technically be true.
+    Neuter check (do this by hand, don't ship it): move the ``file_path``
+    branch above the ``pending_events`` branch in ``evaluate`` and rerun —
+    this test goes red, and the verb starts masking correspondents behind a
+    trigger the caller added as a *composing* one.
     """
-    conditions = [
-        {"kind": "spawn", "raw": "spawn:run-child", "value": "run-child"},
-        dict(await_verb.EVENT_CONDITION),
-    ]
-    pending = [{"source": "spawn_completed", "spawned_by_run": "run-child"}]
-    outcome, which = await_verb.evaluate(conditions, pending)
-    assert (outcome, which) == ("condition", "spawn:run-child")
+    target = tmp_path / "gate.log"
+    target.write_text("done", encoding="utf-8")
+    pending = [{"id": "evt-maintainer", "source": "telegram"}]
+    assert await_verb.evaluate(str(target), pending) == ("event", None)
 
 
 def test_evaluate_nothing_pending_stays_unresolved():
-    conditions = [dict(await_verb.EVENT_CONDITION)]
-    outcome, which = await_verb.evaluate(conditions, [])
-    assert (outcome, which) == (None, None)
+    assert await_verb.evaluate(None, []) == (None, None)
+    assert await_verb.evaluate("/tmp/definitely-not-here-4242", []) == (None, None)

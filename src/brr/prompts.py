@@ -2501,17 +2501,17 @@ def _extract_markdown_sections(text: str, headings: list[str]) -> str:
 #: reviewer sees, not a drift nobody notices.
 _PORTAL_VERB_GRAMMAR_HEADINGS = [
     "### `brnrd do` — the verdict rides the act",
-    "### `await:` — a select, not a sleep (#959)",
+    "### `brnrd await` — the wait with nothing to forget (#959, #1187)",
 ]
 
 
 def _build_portal_verb_grammar_block(repo_root: Path) -> str:
-    """The `await:` and `brnrd do` sections of the portals manual, live.
+    """The `brnrd await` and `brnrd do` sections of the portals manual, live.
 
     The gap this closes: `daemon-substrate.md`'s frontmatter verb table names
     eight rows and points at `brnrd docs portals` for "the reasoning behind each
     pin" — a sentence about *reasoning*, at the bottom, after the table already
-    reads as the complete grammar. Both `await:` (#959) and `brnrd do` are fully
+    reads as the complete grammar. Both `brnrd await` (#959) and `brnrd do` are fully
     documented there and were invisible to a wake that read the table and
     stopped, because nothing in the table said *there is more*. A run discovered
     `brnrd do` by accident.
@@ -2653,7 +2653,7 @@ def _collect_preamble_contracts(
     # Portal verb grammar — a curated extract of `docs/portals.md`, riding
     # right after daemon-substrate.md on purpose: that file's own frontmatter
     # verb table is where a resident learns the portal grammar, and the table
-    # read as a *closed* set — `await:` (#959) and `brnrd do` are both real,
+    # read as a *closed* set — `brnrd await` (#959) and `brnrd do` are both real,
     # fully documented in the manual, and invisible to a wake that read the
     # table and stopped. See `_build_portal_verb_grammar_block` for why this
     # is a live extract rather than a static copy.
@@ -2664,7 +2664,7 @@ def _collect_preamble_contracts(
         portal_grammar_text = _build_portal_verb_grammar_block(repo_root)
         entries.append(ContractEntry(
             block_key="portal-verb-grammar",
-            label="Portal verb grammar (`await:` / `brnrd do`, docs portals)",
+            label="Portal verb grammar (`brnrd await` / `brnrd do`, docs portals)",
             owner=OWNER_PRODUCT,
             authority=AUTHORITY_SUBSTRATE,
             freshness=_mtime_iso(portal_grammar_path),
