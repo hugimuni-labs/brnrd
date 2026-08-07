@@ -3407,9 +3407,18 @@ def _run_worker(
         # drift bench, which makes it the cleanest baseline on the board — any
         # non-zero in the armed arm is signal. Measure, then default it on.
         #
-        # Not armed for strands: `strand.md` grants no chat seam, so a strand owes no
-        # closeout, and a guard demanding one would block a run for failing to keep a
-        # contract it was never given.
+        # Not armed for strands — and the reason has been restated, because the
+        # one it used to give ("`strand.md` grants no chat seam") is no longer
+        # true. A strand *can* reach a human: `gate:` carries no strand
+        # predicate anywhere on its path, and `strand.md` now teaches that seam
+        # explicitly. The skip survives the correction on a different footing:
+        # `next_move` enforces the shape of a *chat turn* (a menu, or a bare
+        # `done`/`continuing`/`blocked` state), and a strand's terminal stream
+        # is not a chat turn — it is a return value collected on the dispatch
+        # edge by whoever spawned it (`terminal_route: dispatch-edge`). Demanding
+        # a menu of a return value would block a run for failing a contract it
+        # was never given. A strand's *deliberate* `gate:` escalation is a
+        # different artifact and is not what this guard reads.
         obligations: list[str] = []
         if cfg.get("hooks.next_move", False) and not _is_strand(task.meta):
             env["BRR_NEXT_MOVE_GUARD"] = "1"
@@ -3481,9 +3490,17 @@ def _run_worker(
         # reply-*shape* nudge, it is a claim that was false twice in one day,
         # each time costing the maintainer a wait on a run already `done`.
         #
-        # Not for strands, for the #779 reason: `strand.md` grants no chat seam,
-        # so a strand owes no closeout and its terminal text is a return value,
-        # not a promise to a reader.
+        # Not for strands — same correction as `next_move` above: the old reason
+        # ("`strand.md` grants no chat seam") is false; `gate:` was always open
+        # to a strand and is now documented as open. What still holds is the
+        # narrower half of the #779 reasoning: this guard reads the *terminal
+        # reply*, and a strand's terminal reply is a return value the parent
+        # collects, not a promise made to a waiting reader. "continuing" in a
+        # return value is a sentence the dispatcher reads with full knowledge
+        # that the strand is already dead — not a wait it was tricked into.
+        # Nor does the skip open a hole on the new seam: `vigil` never read
+        # outbox messages, so a strand's `gate:` escalation was outside its
+        # scope before and after.
         if not _is_strand(task.meta):
             obligations.append("vigil")
 
@@ -5779,6 +5796,42 @@ def _short_id_tail(target: str) -> str:
     return raw.lstrip(".…")
 
 
+def _strand_may_address(event: dict | None, current_event_id: str) -> bool:
+    """Whether a strand-stack run may ``event:``/``note:`` this event.
+
+    The addressable set is *exactly* the set ``_pending_events_for_agent``
+    shows a strand: its own waking event, plus its own dispatch-edge
+    traffic (a parent's ``to:`` steer, stamped
+    ``spawn_message_for_event: <this run's event>``). One rule, stated
+    once: **a run may only address what its own inbox view shows it.**
+
+    Why this needs a guard of its own. Strand isolation is enforced on the
+    *read* side at one chokepoint (``_pending_events_for_agent``:
+    ``if strand and not edge_target: continue``), and that chokepoint is
+    complete — no strand-visible surface leaks the correspondent's pending
+    events. But ``_outbox_address_sources`` builds the *write* side from
+    the full dispatchable inbox union (#936, deliberately wide so a
+    telegram-woken run can close a cloud letter). A strand that learns a
+    pending event id out of band — a parent quoting one in its spec, a
+    branch name, a log line — could therefore reply *into the
+    correspondent's thread as an answer to that event* and retire it.
+    That is not the strand choosing to speak; that is a strand answering
+    someone else's mail, invisibly, breaking the inbound isolation from
+    the far side.
+
+    Outbound is deliberately open — ``gate: <name>`` reaches a human with
+    no strand predicate anywhere on its path, and that stays true. The
+    distinction this helper draws is between *speaking* (own voice, own
+    provenance, ``gate:``) and *answering* (consuming another thread's
+    letter, retiring it, standing in for its owner).
+    """
+    if event is None:
+        return False
+    if str(event.get("id") or "") == current_event_id:
+        return True
+    return str(event.get("spawn_message_for_event") or "") == current_event_id
+
+
 def _outbox_address_sources(
     inbox_dir: Path | None,
     responses_dir: Path | None,
@@ -5929,6 +5982,7 @@ def _note_event_closed(
     raw_target: str,
     body: str,
     outbox_dir: Path | None,
+    current_event_id: str = "",
 ) -> str | None:
     """Retire a pending event deliberately, with no outbound message.
 
@@ -5970,6 +6024,19 @@ def _note_event_closed(
         cause = _event_refusal_cause(address_sources, raw_target, raw_target)
         _record_outbox_notice(
             outbox_dir, f"note dropped: {cause} — nothing was retired",
+            kind="refused",
+            lifetime="run",
+        )
+        return None
+    if _is_strand(task.meta) and not _strand_may_address(
+        resolved_event, current_event_id,
+    ):
+        _record_outbox_notice(
+            outbox_dir,
+            f"note refused: event {raw_target} belongs to another thread — "
+            "a strand-stack run may only retire its own waking event or a "
+            "parent's `to:` steer. Nothing was retired; the letter is its "
+            "dispatcher's to close.",
             kind="refused",
             lifetime="run",
         )
@@ -7361,6 +7428,7 @@ def _drain_outbox(
             # union resolution as ``event:``; refusals land in notices.
             noted_id = _note_event_closed(
                 task, address_sources, note_target, body, outbox_dir,
+                current_event_id=event_id,
             )
             if noted_id:
                 promoted += 1
@@ -7491,6 +7559,44 @@ def _drain_outbox(
                 source_ref=str(fpath),
                 status=message_store.UNDELIVERABLE,
                 reason=f"event {raw_target} is ambiguous ({candidates})",
+            )
+            _retire_outbox_staging(fpath)
+            continue
+        if (
+            resolved_event is not None
+            and _is_strand(task.meta)
+            and not _strand_may_address(resolved_event, event_id)
+        ):
+            # The mail-reading hole, closed. Inbound isolation is enforced
+            # on the read side (`_pending_events_for_agent`); this is the
+            # same boundary on the write side. `gate:` is deliberately NOT
+            # guarded — a strand may speak to a human whenever the work
+            # demands it — but it may not *answer another thread's letter*,
+            # which would retire someone else's pending event under the
+            # strand's hand and land in a conversation it cannot even read.
+            short = hooks_mod._short_event_id(resolved_event.get("id"))
+            _record_outbox_notice(
+                outbox_dir,
+                f"reply refused: event {short} belongs to another thread — a "
+                "strand-stack run may only answer its own waking event or a "
+                "parent's `to:` steer. To reach a human directly, use "
+                "`gate: <name>`; to report back, your terminal stream is "
+                "already the return value your dispatcher collects. The "
+                "message was NOT delivered.",
+                kind="refused",
+                lifetime="run",
+            )
+            _stage_outbound(
+                task,
+                account_context,
+                body=body,
+                kind="interim",
+                target_event=raw_target,
+                source_ref=str(fpath),
+                status=message_store.UNDELIVERABLE,
+                reason=(
+                    f"event {short} is not addressable by a strand-stack run"
+                ),
             )
             _retire_outbox_staging(fpath)
             continue
