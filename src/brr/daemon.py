@@ -10092,7 +10092,13 @@ def _finalize_stopped_run(
     if control.get("stop_reason"):
         task.meta["stop_reason"] = str(control["stop_reason"])
     task.update_status("stopped", runs_dir)
-    _set_event_status_if_present(event, "cancelled")
+    # Was `_set_event_status_if_present(event, "cancelled")` — a bespoke
+    # letter-flavored word for the run's "stopped" outcome, and one the
+    # general finalize path below used to clobber back to the raw
+    # "stopped" anyway (`event.get("status") != "done"` was still true, so
+    # it fired). `_set_event_run_outcome` settles the letter at "done" here
+    # instead, so that guard no-ops, and records "stopped" once, honestly.
+    _set_event_run_outcome(event, task.status)
     _capture_worktree(task, env_ctx, branch_plan, cfg, runs_dir)
     emit("finalizing", run_id=task.id, stage="stopped")
     with _branch_lock(branch_plan.target_branch):
@@ -11722,7 +11728,7 @@ def _reconcile_orphaned_spawn_dispatches(
         # strand thread resolves the event before the reap block notifies).
         # A crash between the two loses one notification; the reverse order
         # would double-notify on every restart that hits the window.
-        protocol.set_status(event, "error")
+        _set_event_run_outcome(event, "error")
         try:
             protocol.update_event_meta(
                 event,
@@ -12097,7 +12103,11 @@ def _write_terminal_failure_response(
     """Queue a terminal failure note for addressed events.
 
     The run record still stays ``error``; only the inbox event moves to
-    ``done`` so the gate has a message to deliver and a cleanup signal.
+    ``done`` so the gate has a message to deliver and a cleanup signal — and
+    carries ``run_outcome: <task.status>`` alongside it, so the letter
+    records what actually happened without the run's own vocabulary
+    overwriting its lifecycle field (design-the-post.md §THE FIELD TWO
+    MACHINES WRITE).
     """
     if not _event_requires_thread_delivery(event) and not _crash_requires_notice(event):
         return False
@@ -12111,7 +12121,7 @@ def _write_terminal_failure_response(
     task.terminal_reply = body
     protocol.write_response(responses_dir, event["id"], body)
     _record_response_artifact(emit, task, response_path)
-    _set_event_status_if_present(event, "done")
+    _set_event_run_outcome(event, task.status)
     return True
 
 
@@ -12167,6 +12177,32 @@ def _set_event_status_if_present(event: dict, status: str) -> bool:
         return False
     event["status"] = status
     return True
+
+
+def _set_event_run_outcome(event: dict, outcome: str) -> bool:
+    """Record a run's terminal outcome without letting it overwrite the
+    letter's own ``status:`` (design-the-post.md §THE FIELD TWO MACHINES
+    WRITE).
+
+    The letter's lifecycle (``protocol.LETTER_STATUSES`` —
+    pending/processing/done/delivered/noted) and a run's outcome
+    (``run.py``'s ``STATUSES`` plus the daemon's ``stopped`` result) are two
+    different state machines that used to share one field. This writes the
+    outcome to its own ``run_outcome:`` key and settles the letter at
+    ``"done"`` instead of the raw outcome word. ``"done"`` is correct, not
+    just less wrong: none of this function's call sites ever re-dispatch the
+    event afterwards (``list_dispatchable`` only reconsiders
+    ``pending``/``processing``), so the letter's lifecycle really is over —
+    and a gate that later polls a ``"done"`` event with no response body on
+    disk already no-ops safely straight to ``"delivered"``
+    (``gates/runtime.py``'s poll loop).
+    """
+    try:
+        protocol.update_event_meta(event, run_outcome=outcome)
+    except OSError:
+        return False
+    event["run_outcome"] = outcome
+    return _set_event_status_if_present(event, "done")
 
 
 # ── Worker-tail housekeeping ────────────────────────────────────────
@@ -12233,7 +12269,7 @@ def _run_worker_and_finalize(
                 f"[brnrd] run for {eid}: crashed before producing a Run:\n"
                 f"{traceback.format_exc()}"
             )
-            _set_event_status_if_present(event, "error")
+            _set_event_run_outcome(event, "error")
             try:
                 protocol.update_event_meta(
                     event,
@@ -12244,7 +12280,14 @@ def _run_worker_and_finalize(
                 pass
             raise
         if event.get("status") != "done":
-            _set_event_status_if_present(event, task.status)
+            # A run outcome (error/conflict/stopped) must not overwrite the
+            # letter's own status — see `_set_event_run_outcome`. "done" is
+            # the one value that is *both* a valid run outcome and the
+            # letter's own terminal word, so it needs no translation.
+            if task.status == "done":
+                _set_event_status_if_present(event, "done")
+            else:
+                _set_event_run_outcome(event, task.status)
         if task.status == "error":
             print(f"[brnrd] run {task.id}: failed")
 

@@ -645,7 +645,9 @@ def test_run_worker_crash_retires_event_instead_of_infinite_retry_loop(
     tick re-dispatched the *same* event, crashed again, and repeated with
     no backoff: a live incident produced 26+ runs in ~50 minutes, one fresh
     run-id per attempt, before manual intervention. The event must come out
-    of "processing" limbo (here: "error") so it stops being immediately
+    of "processing" limbo (here: "done", with the crash recorded in
+    `run_outcome:` instead — design-the-post.md §THE FIELD TWO MACHINES
+    WRITE) so it stops being immediately
     re-dispatchable, regardless of what actually crashed.
     """
     write_repo_scaffold(tmp_path)
@@ -662,9 +664,13 @@ def test_run_worker_crash_retires_event_instead_of_infinite_retry_loop(
             event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
         )
 
-    assert event["status"] == "error"
+    # design-the-post.md §THE FIELD TWO MACHINES WRITE: the crash outcome
+    # lands in `run_outcome:`, not `status:` — the letter settles at "done".
+    assert event["status"] == "done"
+    assert event.get("run_outcome") == "error"
     reread = protocol._read_event(tmp_path / ".brr" / "inbox" / "evt-crash.md")
-    assert reread["status"] == "error"
+    assert reread["status"] == "done"
+    assert reread.get("run_outcome") == "error"
     assert reread["status"] not in ("pending", "processing")
 
 
@@ -854,6 +860,9 @@ def test_run_worker_marks_error_on_env_setup_failure(tmp_path, monkeypatch):
 
     assert task.status == "error"
     assert event["status"] == "done"
+    # design-the-post.md §THE FIELD TWO MACHINES WRITE: the run's outcome
+    # goes in its own key now — the letter's own status stays "done".
+    assert event.get("run_outcome") == "error"
     response = protocol.read_response(tmp_path / ".brr" / "responses", "evt-2")
     assert response is not None
     assert "environment setup failed: boom" in response
@@ -3288,7 +3297,10 @@ def test_orphaned_spawn_reconciled_to_parent_on_restart(tmp_path, monkeypatch):
     # just been told died.
     refreshed = protocol.parse_frontmatter(
         Path(spawn_event["_path"]).read_text(encoding="utf-8"))
-    assert refreshed.get("status") == "error"
+    # design-the-post.md §THE FIELD TWO MACHINES WRITE: the outcome lands
+    # in `run_outcome:` now; the letter itself settles at "done".
+    assert refreshed.get("status") == "done"
+    assert refreshed.get("run_outcome") == "error"
     assert "spawn reconciliation" in str(refreshed.get("reconcile_reason"))
 
 
@@ -3381,6 +3393,13 @@ def test_spawn_reconciliation_accepts_closed_ledger_as_proof(tmp_path):
     notes = [e for e in protocol.list_pending(inbox) if e.get("spawn_failed")]
     assert len(notes) == 1
     assert notes[0]["conversation_key"] == "telegram:92:"
+    # design-the-post.md §THE FIELD TWO MACHINES WRITE: the orphaned
+    # dispatch's own letter settles at "done" with its outcome in
+    # `run_outcome:`, not the raw "error" written to `status:`.
+    resolved = protocol.parse_frontmatter(
+        Path(spawn_event["_path"]).read_text(encoding="utf-8"))
+    assert resolved.get("status") == "done"
+    assert resolved.get("run_outcome") == "error"
 
 
 # ── #316: boot-time interrupted-run marker ───────────────────────────
@@ -4370,10 +4389,64 @@ def test_run_worker_writes_terminal_failure_response_on_runner_error(
 
     assert task.status == "error"
     assert event["status"] == "done"
+    # design-the-post.md §THE FIELD TWO MACHINES WRITE: the run's outcome
+    # goes in its own key now — the letter's own status stays "done".
+    assert event.get("run_outcome") == "error"
     response = protocol.read_response(tmp_path / ".brr" / "responses", "evt-run-fail")
     assert response is not None
     assert "runner failed after 1 attempt(s): connection dropped" in response
     assert task.terminal_reply == response
+
+
+def test_finalize_stopped_run_settles_letter_done_with_run_outcome(
+    tmp_path, monkeypatch,
+):
+    """A dispatched-then-stopped run: `_finalize_stopped_run` must settle
+    the letter's `status:` at "done" and carry `run_outcome: stopped" — not
+    the run's raw word (design-the-post.md §THE FIELD TWO MACHINES WRITE).
+
+    Before this cut the function wrote the letter-flavored "cancelled" to
+    `status`, but the general finalize guard in `_run_worker_and_finalize`
+    (`event.get("status") != "done"`) then clobbered it right back to the
+    raw "stopped" — so "cancelled" never actually survived to disk for a
+    run that had been dispatched. Fixed as a side effect of the split:
+    `_set_event_run_outcome` settles `status` at "done" here, so that later
+    guard now no-ops instead of overwriting.
+    """
+    brr_dir = tmp_path / ".brr"
+    runs_dir = brr_dir / "runs"
+    runs_dir.mkdir(parents=True)
+    inbox = brr_dir / "inbox"
+    inbox.mkdir(parents=True)
+    event_path = inbox / "evt-stop.md"
+    event_path.write_text(
+        "---\nid: evt-stop\nstatus: processing\n---\nhelp\n", encoding="utf-8",
+    )
+    event = protocol._read_event(event_path)
+    assert event is not None
+    task = Run(id="task-stop", event_id="evt-stop", body="help", status="running")
+    task.save(runs_dir)
+    branch_plan = types.SimpleNamespace(target_branch="brr/task-stop")
+
+    class FakeEnvBackend:
+        def finalize(self, _ctx, task, _runs_dir):
+            return task
+
+    monkeypatch.setattr(daemon, "_capture_worktree", lambda *_a, **_k: None)
+    emit = daemon._WorkerEmit(brr_dir, "", "evt-stop")
+
+    result = daemon._finalize_stopped_run(
+        emit, task, event, "evt-stop", runs_dir,
+        FakeEnvBackend(), object(), branch_plan, {},
+        {"stopped_by": "run-parent"}, 1, [],
+    )
+
+    assert result.status == "stopped"
+    assert event["status"] == "done"
+    assert event.get("run_outcome") == "stopped"
+    # The general finalize guard reads status off the event directly, so
+    # confirm it will see "done" and no-op rather than re-write it.
+    assert event.get("status") == "done"
 
 
 def test_interrupted_terminal_failure_omits_stderr_detail(tmp_path, monkeypatch):
@@ -4895,7 +4968,14 @@ def test_branches_to_refresh_includes_default_and_structured(monkeypatch, tmp_pa
     assert "auto" not in targets
 
 
-def test_start_preserves_error_event_status(tmp_path, monkeypatch):
+def test_start_settles_event_done_and_records_run_outcome_on_error(
+    tmp_path, monkeypatch,
+):
+    """Was `test_start_preserves_error_event_status`, pinning the pre-split
+    defect this cut fixes: a run ending `error` used to overwrite the
+    letter's own `status:` with the run's outcome word
+    (design-the-post.md §THE FIELD TWO MACHINES WRITE). Now the letter
+    settles at `done` and the outcome lands in its own `run_outcome:` key."""
     write_repo_scaffold(tmp_path)
     event = {"id": "evt-err", "status": "pending", "_path": tmp_path / ".brr" / "inbox" / "evt-err.md"}
     event["_path"].write_text(
@@ -4940,7 +5020,8 @@ def test_start_preserves_error_event_status(tmp_path, monkeypatch):
     with pytest.raises(StopIteration):
         daemon.start(tmp_path)
 
-    assert statuses == ["processing", "error"]
+    assert statuses == ["processing", "done"]
+    assert event.get("run_outcome") == "error"
 
 
 def _seed_trace_dir(brr_dir: Path, rel: str) -> Path:
