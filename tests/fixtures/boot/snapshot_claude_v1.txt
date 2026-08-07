@@ -279,6 +279,7 @@ source manifest:
   · Recent activity (kb/log.md tail)                                daemon-live  activity           0  computed
   · Your last run (node frame + Now + shape)                        resident     memory             0  computed
   · kb health (deterministic preflight)                             daemon-live  health             0  computed
+  · notes health (deterministic preflight)                          daemon-live  health             0  computed
   ✓ Run Context Bundle (runtime facts)                              daemon-live  runtime        4,240  computed
 
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
