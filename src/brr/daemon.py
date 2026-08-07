@@ -5742,6 +5742,7 @@ def _write_live_portal_state(
             "active": spawn_active,
             "available": spawn_available,
         }
+        coexisting_facet["owned_children"] = _owned_child_controls(task.id)
         payload["change_token"] = _change_token(payload)
         path = outbox_dir / _LIVE_PORTAL_STATE_NAME
         protocol._atomic_write(
@@ -6415,11 +6416,19 @@ _run_controls_lock = threading.Lock()
 _run_controls: dict[str, dict] = {}
 
 
-def _register_run_control(spawn_event_id: str, parent_run_id: str | None) -> None:
+def _register_run_control(
+    spawn_event_id: str,
+    parent_run_id: str | None,
+    *,
+    parent_conversation_key: str = "",
+    repo_label: str = "",
+) -> None:
     with _run_controls_lock:
         _run_controls[spawn_event_id] = {
             "event_id": spawn_event_id,
             "parent_run_id": parent_run_id,
+            "parent_conversation_key": parent_conversation_key,
+            "repo_label": repo_label,
             "run_id": None,
             "stopped": False,
         }
@@ -6472,6 +6481,140 @@ def _retire_child_messages(inbox_dir: Path | None, spawn_event_id: str) -> None:
             protocol.set_status(ev, "done")
 
 
+def _owned_child_controls(run_id: str) -> list[dict[str, str]]:
+    """Return the live child edges the current run still owns."""
+    owner = str(run_id or "").strip()
+    if not owner:
+        return []
+    rows: list[dict[str, str]] = []
+    with _run_controls_lock:
+        for control in _run_controls.values():
+            if str(control.get("parent_run_id") or "").strip() != owner:
+                continue
+            if control.get("stopped"):
+                continue
+            event_id = str(control.get("event_id") or "").strip()
+            child_run_id = str(control.get("run_id") or "").strip()
+            if not event_id and not child_run_id:
+                continue
+            row = {
+                "parent_run_id": owner,
+                "event_id": event_id,
+                "run_id": child_run_id,
+            }
+            adopted_from = str(control.get("adopted_from_run_id") or "").strip()
+            if adopted_from:
+                row["adopted_from_run_id"] = adopted_from
+            rows.append(row)
+    rows.sort(key=lambda row: (row.get("run_id") or "", row.get("event_id") or ""))
+    return rows
+
+
+def _authorize_child_control(task: Run, control: dict) -> dict[str, object]:
+    """Return whether *task* may command *control*, adopting dead parents."""
+    task_id = str(getattr(task, "id", "") or "").strip()
+    task_meta = getattr(task, "meta", None) or {}
+    task_conv = str(getattr(task, "conversation_key", "") or "").strip()
+    task_repo = str(task_meta.get("repo_label") or "").strip()
+    task_is_resident = not str(task_meta.get("spawn_parent_run_id") or "").strip()
+    with _run_controls_lock:
+        parent_run_id = str(control.get("parent_run_id") or "").strip()
+        if parent_run_id == task_id:
+            return {"allowed": True, "adopted": False}
+        if not parent_run_id:
+            return {"allowed": False, "reason": "resident-target"}
+        parent_live = any(
+            str(entry.get("run_id") or "").strip() == parent_run_id
+            for entry in _run_controls.values()
+        )
+        if parent_live:
+            return {
+                "allowed": False,
+                "reason": "live-parent",
+                "parent_run_id": parent_run_id,
+            }
+        child_conv = str(control.get("parent_conversation_key") or "").strip()
+        child_repo = str(control.get("repo_label") or "").strip()
+        if not task_is_resident or not child_conv:
+            return {
+                "allowed": False,
+                "reason": "foreign-parent",
+                "parent_run_id": parent_run_id,
+            }
+        same_conv = bool(task_conv) and task_conv == child_conv
+        same_repo = not task_repo or not child_repo or task_repo == child_repo
+        if not same_conv or not same_repo:
+            return {
+                "allowed": False,
+                "reason": "orphan-out-of-scope",
+                "parent_run_id": parent_run_id,
+            }
+        control["parent_run_id"] = task_id
+        control["parent_conversation_key"] = task_conv
+        if task_repo:
+            control["repo_label"] = task_repo
+        control["adopted_from_run_id"] = parent_run_id
+        return {
+            "allowed": True,
+            "adopted": True,
+            "previous_parent_run_id": parent_run_id,
+        }
+
+
+def _child_owner_route(
+    spawn_event_id: str,
+    *,
+    fallback_parent_run_id: str = "",
+    fallback_conversation_key: str = "",
+) -> tuple[str, str]:
+    """Resolve the live owner route for a child edge, honoring adoption."""
+    parent_run_id = str(fallback_parent_run_id or "").strip()
+    conversation_key = str(fallback_conversation_key or "").strip()
+    control = _find_run_control(spawn_event_id) if spawn_event_id else None
+    if control is not None:
+        parent_run_id = str(control.get("parent_run_id") or parent_run_id).strip()
+        conversation_key = str(
+            control.get("parent_conversation_key") or conversation_key
+        ).strip()
+    if not conversation_key and parent_run_id:
+        conversation_key = f"run:{parent_run_id}"
+    return parent_run_id, conversation_key
+
+
+def _emit_child_adoption(
+    emit: _WorkerEmit,
+    task: Run,
+    event_id: str,
+    control: dict,
+    *,
+    target: str,
+    previous_parent_run_id: str,
+    outbox_dir: Path | None,
+) -> None:
+    """Surface a dead-parent adoption as both a receipt and a live notice."""
+    spawn_event_id = str(control.get("event_id") or target or "")
+    notice = (
+        f"adopted orphaned child edge {target!r}: dispatched by "
+        f"{previous_parent_run_id!r}, whose run is no longer live; this "
+        "resident now owns steer/stop for it"
+    )
+    _record_outbox_notice(
+        outbox_dir, notice, kind="advisory", lifetime="run",
+    )
+    print(
+        f"[brnrd] outbox: adopted orphaned child {target} "
+        f"({spawn_event_id}) from {previous_parent_run_id} by {task.id}"
+    )
+    emit(
+        "spawn_adopted",
+        run_id=task.id,
+        event_id=event_id,
+        spawn_event_id=spawn_event_id,
+        target=target,
+        adopted_from_run_id=previous_parent_run_id,
+    )
+
+
 def _queue_child_message(
     emit: _WorkerEmit,
     task: Run,
@@ -6513,15 +6656,39 @@ def _queue_child_message(
             lifetime="run",
         )
         return False
-    if str(control.get("parent_run_id")) != task.id:
+    auth = _authorize_child_control(task, control)
+    if not auth.get("allowed"):
+        reason = auth.get("reason")
+        if reason == "resident-target":
+            notice = (
+                f"message refused: {target!r} is a resident run; no run "
+                "dispatched it, so there is no child edge to steer"
+            )
+        elif reason == "orphan-out-of-scope":
+            notice = (
+                f"message refused: {target!r} was dispatched by "
+                f"{auth.get('parent_run_id')!r}, whose run is no longer live; "
+                "only the resident thought on that same conversation may adopt it"
+            )
+        else:
+            notice = (
+                f"message refused: {target!r} was not dispatched by this run — "
+                "a run messages only its own dispatchees (kb/design-wyrd.md §3)"
+            )
         _record_outbox_notice(
-            outbox_dir,
-            f"message refused: {target!r} was not dispatched by this run — "
-            "a run messages only its own dispatchees (kb/design-wyrd.md §3)",
-            kind="refused",
-            lifetime="run",
+            outbox_dir, notice, kind="refused", lifetime="run",
         )
         return False
+    if auth.get("adopted"):
+        _emit_child_adoption(
+            emit,
+            task,
+            event_id,
+            control,
+            target=target,
+            previous_parent_run_id=str(auth.get("previous_parent_run_id") or ""),
+            outbox_dir=outbox_dir,
+        )
     if control.get("stopped"):
         _record_outbox_notice(
             outbox_dir,
@@ -6611,14 +6778,19 @@ def _apply_run_stop(
                 # completion note; a resident thought cancelled before it
                 # started has nobody to notify.
                 try:
+                    owner_run_id, owner_conv = _child_owner_route(
+                        spawn_event_id,
+                        fallback_parent_run_id=stopped_by,
+                        fallback_conversation_key=conversation_key or f"run:{stopped_by}",
+                    )
                     protocol.create_event(
                         inbox_dir,
                         "spawn_completed",
                         f"concurrent spawn {spawn_event_id} stopped before "
                         f"it started (cancelled by {stopped_by})",
-                        conversation_key=conversation_key or f"run:{stopped_by}",
+                        conversation_key=owner_conv,
                         spawned_by_event=spawn_event_id,
-                        spawn_parent_run_id=stopped_by,
+                        spawn_parent_run_id=owner_run_id,
                         spawn_stopped=True,
                         # Third of the three backwards edges (#1118): the
                         # cancelled child never ran, but its dispatch event
@@ -6673,13 +6845,21 @@ def _queue_stop_request(
             lifetime="run",
         )
         return False
-    parent_run_id = control.get("parent_run_id")
-    if str(parent_run_id) != task.id:
-        if parent_run_id is None:
+    auth = _authorize_child_control(task, control)
+    if not auth.get("allowed"):
+        reason = auth.get("reason")
+        parent_run_id = auth.get("parent_run_id")
+        if reason == "resident-target":
             notice = (
                 f"stop refused: {target!r} is a resident run; no run dispatched "
                 "it. Only the account owner may stop it through the "
                 "account-scoped dashboard run controls"
+            )
+        elif reason == "orphan-out-of-scope":
+            notice = (
+                f"stop refused: {target!r} was dispatched by {parent_run_id!r}, "
+                "whose run is no longer live; only the resident thought on "
+                "that same conversation may adopt it"
             )
         else:
             notice = (
@@ -6688,6 +6868,16 @@ def _queue_stop_request(
             )
         _record_outbox_notice(outbox_dir, notice, kind="refused", lifetime="run")
         return False
+    if auth.get("adopted"):
+        _emit_child_adoption(
+            emit,
+            task,
+            event_id,
+            control,
+            target=target,
+            previous_parent_run_id=str(auth.get("previous_parent_run_id") or ""),
+            outbox_dir=outbox_dir,
+        )
     reason = str(fm.get("reason") or "").strip() or body.strip()
     spawn_event_id = str(control["event_id"])
     stage = _apply_run_stop(
@@ -6903,7 +7093,12 @@ def _queue_spawn_request(
     # Dispatch-edge ownership (wyrd §3): record who dispatched this child so
     # the `stop:` verb can enforce parent-only control from the first moment
     # the spawn exists — before it has a run id, before it has a process.
-    _register_run_control(new_path.stem, task.id)
+    _register_run_control(
+        new_path.stem,
+        task.id,
+        parent_conversation_key=task.conversation_key or "",
+        repo_label=str(task.meta.get("repo_label") or ""),
+    )
     print(f"[brnrd] outbox: queued concurrent spawn ({new_path.stem})")
     # A schedule entry can opt in (`reset_on: spawn`) to treat this dispatch
     # as if it had just fired itself, rather than firing redundantly right
@@ -8999,11 +9194,18 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
     """
     if inbox_dir is None:
         return
+    spawn_event_id = str(task.event_id or "")
     parent_run_id = task.meta.get("spawn_parent_run_id")
     if not parent_run_id:
         return
     conv = str(task.meta.get("spawn_parent_conversation_key") or "").strip()
-    conv = conv or f"run:{parent_run_id}"
+    parent_run_id, conv = _child_owner_route(
+        spawn_event_id,
+        fallback_parent_run_id=str(parent_run_id or ""),
+        fallback_conversation_key=conv,
+    )
+    if not parent_run_id:
+        return
 
     # #574: does what the child actually published match the contract it
     # was given? ``task.body`` is the spec text as the child saw it — never
@@ -9371,12 +9573,18 @@ def _notify_spawn_parent_of_crash(
     """
     if inbox_dir is None:
         return
+    spawn_event_id = str(event.get("id") or "?")
     parent_run_id = event.get("spawn_parent_run_id")
     if not parent_run_id:
         return
     conv = str(event.get("spawn_parent_conversation_key") or "").strip()
-    conv = conv or f"run:{parent_run_id}"
-    spawn_event_id = str(event.get("id") or "?")
+    parent_run_id, conv = _child_owner_route(
+        spawn_event_id,
+        fallback_parent_run_id=str(parent_run_id or ""),
+        fallback_conversation_key=conv,
+    )
+    if not parent_run_id:
+        return
     summary = f"concurrent spawn {spawn_event_id} crashed before finishing: {error}"
     try:
         protocol.create_event(
@@ -12593,7 +12801,14 @@ def start(
                         # it is airborne (#476). `parent_run_id=None`: no run
                         # dispatched this, so no run may stop it — only the
                         # account owner, through the dashboard.
-                        _register_run_control(eid, None)
+                        _register_run_control(
+                            eid,
+                            None,
+                            parent_conversation_key=str(
+                                event.get("conversation_key") or ""
+                            ),
+                            repo_label=str(target.repo_label or ""),
+                        )
                         current_eid = eid
                         current = pool.submit(
                             _run_worker_and_finalize,
