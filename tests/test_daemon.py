@@ -6009,6 +6009,96 @@ def test_scm_facet_reports_dirty_unpushed_tree(tmp_path):
 # ── delivery: — "would my reply reach a human if I ended right now?" ──
 
 
+@pytest.fixture(autouse=True)
+def _clear_notify_gate_cache():
+    """Drop the per-run notify-gate memo around every test in this module.
+
+    :func:`daemon._cached_notify_gate` is a process-global keyed by run id,
+    and the fixtures below all use ``run-1`` — without this, the first test
+    to resolve a gate would answer for every later one. Production drops an
+    entry in ``_run_worker_and_finalize``'s ``finally``; a test never
+    reaches that, so it clears here.
+    """
+    daemon._notify_gate_cache.clear()
+    yield
+    daemon._notify_gate_cache.clear()
+
+
+def test_notify_gate_is_resolved_once_per_run_not_once_per_heartbeat(
+    tmp_path, monkeypatch,
+):
+    """The heartbeat may not pay the conversation-store scan every tick.
+
+    ``_live_delivery_projection`` runs on every heartbeat. For the run type
+    it exists to serve — a ``schedule`` fire, whose conversation key no chat
+    gate owns — ``_resolve_notify_gate`` falls through to
+    ``_notify_gate_by_recent_activity``, which stats every file under every
+    conversation key. That scan's own docstring calls itself rare and
+    per-run.
+
+    Drive red: delete the memo in ``_cached_notify_gate`` (call
+    ``_resolve_notify_gate`` directly) and this fails with calls == 3.
+    """
+    monkeypatch.setattr(
+        daemon, "_gate_can_deliver",
+        lambda _brr, gate: gate in ("telegram", "cloud"),
+    )
+    calls = []
+    real_scan = daemon._notify_gate_by_recent_activity
+
+    def counting_scan(brr_dir, candidates):
+        calls.append(tuple(candidates))
+        return real_scan(brr_dir, candidates)
+
+    monkeypatch.setattr(daemon, "_notify_gate_by_recent_activity", counting_scan)
+    task = Run(id="run-heartbeat", event_id="evt-1", body="", source="schedule")
+    task.conversation_key = "schedule:nightly"
+    for _ in range(3):
+        daemon._live_delivery_projection(
+            task, {}, tmp_path, already_delivered=False,
+        )
+    # Sanity: the expensive path must actually be reached, or this test
+    # passes over a branch it never entered.
+    assert calls, (
+        "fixture must reach the recent-activity scan — two candidate gates "
+        "and a conversation key no candidate owns"
+    )
+    assert len(calls) == 1, f"scan ran {len(calls)}x across 3 heartbeats"
+
+
+def test_forget_notify_gate_drops_the_entry_so_the_daemon_does_not_accumulate(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(
+        daemon, "_gate_can_deliver", lambda _brr, gate: gate == "telegram",
+    )
+    task = Run(id="run-forget", event_id="evt-1", body="", source="schedule")
+    daemon._live_delivery_projection(task, {}, tmp_path, already_delivered=False)
+    assert "run-forget" in daemon._notify_gate_cache, (
+        "the projection must populate the cache, or the next assertion is vacuous"
+    )
+    daemon._forget_notify_gate("run-forget")
+    assert "run-forget" not in daemon._notify_gate_cache
+
+
+def test_an_uncacheable_run_still_resolves(tmp_path, monkeypatch):
+    """A task with no id pays the full resolution rather than caching under "".
+
+    Correctness is unchanged either way; this pins that the id-less path
+    answers at all, so a future refactor cannot make "no id" mean "no gate".
+    """
+    monkeypatch.setattr(
+        daemon, "_gate_can_deliver", lambda _brr, gate: gate == "telegram",
+    )
+    task = Run(id="", event_id="evt-1", body="", source="schedule")
+    projection = daemon._live_delivery_projection(
+        task, {}, tmp_path, already_delivered=False,
+    )
+    assert projection["gate"] == "telegram"
+    assert daemon._notify_gate_cache == {}
+
+
+
 def test_delivery_projection_unknown_without_a_source(tmp_path):
     task = Run(id="run-1", event_id="evt-1", body="", source="")
     assert daemon._live_delivery_projection(task, {}, tmp_path, already_delivered=False) == {
