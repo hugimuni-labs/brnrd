@@ -249,6 +249,29 @@ Two failure classes only a wake can see — say them aloud even unfixed:
   means something else, and making it exist ≠ putting it where the decision
   reads.
 
+**The instrument is not exempt.** The two classes above are usually hunted in
+the system under inspection; they live just as happily in the thing doing the
+inspecting — a receipt, a health check, a budget report, a search. A tool that
+answers about a surface it could not reach, and renders that identically to
+*clean*, is a mirror with a label on it. Ask of anything that reports health:
+*what does it print when it could not look?* Three shapes worth checking by
+name —
+
+- a **receipt** that asserts an outcome before the act completes, so the claim
+  and the failure are written by different lines and only the first is read;
+- a **reader** that scaffolds its own empty subject and reports on that, so
+  absence and misresolution come out byte-identical;
+- a **budget or coverage report** whose largest variable component is gated on
+  input the report itself does not supply, so it renders zero and is believed.
+
+Corollary, and it is about your own hands: **familiarity is the anaesthetic.**
+You will audit a system you met yesterday far more sceptically than the verb
+you have called two hundred times. The cheap discipline is to ask of each piece
+of a tool you own — each flag, each required argument, each condition — *what
+is this for*, and to treat a piece that cannot answer as deletable rather than
+as furniture. A verb that asks its caller to supply what the system already
+tracks is not configurable; it is a typo waiting for a budget.
+
 ## Identity and delivery — seams that fail politely
 
 - **Forge actions from a host run: verify whose hands you wear,
