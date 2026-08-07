@@ -4799,3 +4799,71 @@ def test_stop_phase_is_exempt_from_compression(tmp_path):
     ctx = stop["hookSpecificOutput"]["additionalContext"]
     assert "running long: past the 3600s soft budget" in ctx
     assert "seen ×" not in ctx
+
+
+def _add_bolt_facet(tmp_path, accepted=True, annotated=0):
+    """Splice the daemon's `bolt` portal facet into an already-written portal
+    state — the shape `_write_live_portal_state` emits after an accepted
+    `cut:` (absent entirely when the run was never cut)."""
+    path = tmp_path / "portal-state.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["bolt"] = {
+        "accepted": accepted,
+        "annotated": annotated,
+        "accepted_at": "2026-08-08T00:00:00Z",
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_an_accepted_bolt_collapses_the_closeout_capsule(tmp_path):
+    """The polarity flip (design-the-bolt.md): once the daemon accepted the
+    declaration, the negative capsule ('did you forget anything?') stands
+    down — the same bad closeout that blocks an un-cut run passes a cut one."""
+    (tmp_path / "outbox").mkdir()
+    env = _env(tmp_path)
+    env["BRR_OUTBOX_DIR"] = str(tmp_path / "outbox")
+    env["BRR_NEXT_MOVE_GUARD"] = "1"
+
+    # Un-cut: the next-move guard blocks this closeout shape.
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(
+        hooks.PHASE_STOP, _stdin("done, I guess"), env,
+    )
+    assert out.get("decision") == "block"
+
+    # Cut: same reply, same guard armed — the capsule stands down.
+    _portal(tmp_path, token="t1", pending=0)
+    _add_bolt_facet(tmp_path)
+    out, _ = hooks.run_hook(
+        hooks.PHASE_STOP, _stdin("done, I guess"), env,
+    )
+    assert out.get("decision") != "block"
+
+
+def test_an_accepted_bolt_still_blocks_on_a_pending_event(tmp_path):
+    """Deliberately NOT collapsed: a message that lands after the cut is real
+    attention, bolt or no bolt."""
+    _portal(
+        tmp_path, token="t1", pending=1,
+        events=[{"id": "evt-9", "source": "telegram", "summary": "late ask"}],
+    )
+    _add_bolt_facet(tmp_path)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin("bye"), _env(tmp_path))
+    assert out.get("decision") == "block"
+
+
+def test_stop_affirms_an_accepted_bolt_instead_of_nagging(tmp_path):
+    _portal(tmp_path, token="t1", pending=0)
+    _add_bolt_facet(tmp_path)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "bolt: accepted — the cut stands." in ctx
+    assert "declare this run's completion" not in ctx
+
+
+def test_stop_names_the_annotated_count_on_a_forced_accept(tmp_path):
+    _portal(tmp_path, token="t1", pending=0)
+    _add_bolt_facet(tmp_path, annotated=2)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "bolt: accepted, annotated — 2 check(s) unresolved" in ctx
