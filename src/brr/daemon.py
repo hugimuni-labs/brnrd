@@ -4230,7 +4230,10 @@ def _run_worker(
                 # the single-delivery invariant lives in that ordering, not
                 # in a check inside this block.
                 notify_gate = (
-                    _resolve_notify_gate(cfg, emit.brr_dir)
+                    _resolve_notify_gate(
+                        cfg, emit.brr_dir,
+                        conversation_key=str(task.conversation_key or ""),
+                    )
                     if unowned and not terminal_duplicate
                     else ""
                 )
@@ -7588,7 +7591,62 @@ def _configured_gate_names(brr_dir: Path) -> list[str]:
 _NOTIFY_GATE_FALLBACK_CANDIDATES = tuple(g for g in _BUILTIN_GATES if g != "github")
 
 
-def _resolve_notify_gate(cfg: dict, brr_dir: Path) -> str:
+def _notify_gate_for_conversation_key(key: str) -> str:
+    """Best-effort gate name owning *key*, or ``""``.
+
+    Every native gate's conversation key starts with its own gate name as
+    the first ``:``-separated field (:func:`conversations.gate_thread_key`:
+    ``telegram:<chat>:<topic>``, ``slack:<channel>:<thread>``,
+    ``cloud:<platform>:<chat>:<topic>``, and a bare ``<source>:default``
+    fallback for anything else) — the prefix *is* the gate name, no lookup
+    required. A non-gate key (``schedule:<name>``, ``run:<id>``) yields a
+    prefix that is not in :data:`_NOTIFY_GATE_FALLBACK_CANDIDATES` and is
+    filtered out by the caller like any other non-candidate.
+    """
+    return key.split(":", 1)[0] if key else ""
+
+
+def _conversation_activity(brr_dir: Path, key: str) -> float:
+    """Best-effort last-write time for conversation *key*'s log directory.
+
+    0.0 (never wins a max-comparison) when the directory is missing or
+    unreadable — a filesystem race or a key with no store yet is "no
+    signal", not an error worth surfacing on this best-effort tiebreak.
+    """
+    path = conversations.conversation_path(brr_dir, key)
+    try:
+        return max(
+            (child.stat().st_mtime for child in path.iterdir() if child.is_file()),
+            default=0.0,
+        )
+    except OSError:
+        return 0.0
+
+
+def _notify_gate_by_recent_activity(brr_dir: Path, candidates: list[str]) -> str:
+    """The candidate gate that owns this repo's most recently active thread.
+
+    Scans every known conversation key (:func:`conversations.list_conversations`)
+    for the newest last-write among those whose owning gate is in
+    *candidates*, and returns that gate. Read-only, best-effort: a repo
+    with thousands of conversations pays one directory listing per key, but
+    this path only runs on the rare "ambiguous notify.gate" fallback, never
+    per-message.
+    """
+    best_gate, best_ts = "", -1.0
+    for key in conversations.list_conversations(brr_dir):
+        gate = _notify_gate_for_conversation_key(key)
+        if gate not in candidates:
+            continue
+        ts = _conversation_activity(brr_dir, key)
+        if ts > best_ts:
+            best_gate, best_ts = gate, ts
+    return best_gate
+
+
+def _resolve_notify_gate(
+    cfg: dict, brr_dir: Path, *, conversation_key: str = "",
+) -> str:
     """Resolve the ``notify.gate`` fallback target, or ``""`` when none applies.
 
     This is the "no run left unheard" config surface: which gate carries a
@@ -7604,13 +7662,21 @@ def _resolve_notify_gate(cfg: dict, brr_dir: Path) -> str:
        would surprise an operator who deliberately named a gate.
     2. **Single-gate inference**, only when unset: exactly *one* user-chat
        gate (:data:`_NOTIFY_GATE_FALLBACK_CANDIDATES` — telegram / slack /
-       cloud) is configured on this account. Zero or several configured
-       candidates is ambiguous or already covered, so it keeps the prior
-       behavior (undeliverable) rather than guessing which correspondent
-       the operator meant. This is what kills the "toxic segregation"
-       between schedule-woken runs and everything else with no config
-       migration required for the overwhelmingly common one-chat-gate
-       account.
+       cloud) is configured on this account, no guessing needed.
+    3. **Conversation ownership**, only when several candidates are
+       configured (the case (2) calls "ambiguous"): the run usually is not
+       ambiguous at all — it carries its own *conversation_key*, and some
+       gate owns that conversation. Prefer that gate
+       (:func:`_notify_gate_for_conversation_key`); a run with no
+       conversation of its own (or one none of the candidates own — a bare
+       ``schedule:<name>``) prefers the candidate gate that owns this
+       repo's most recently active thread instead
+       (:func:`_notify_gate_by_recent_activity`). Only when *neither*
+       resolves — a fresh account with several gates configured and no
+       thread history yet — does this stay ``""`` (undeliverable). Ambiguity
+       by raw candidate count was the wrong tiebreak whenever the run or the
+       repo's own history already carries the answer; explicit
+       ``notify.gate`` still wins outright over all of this, unchanged.
     """
     explicit = str(cfg.get("notify.gate") or "").strip()
     if explicit:
@@ -7619,7 +7685,14 @@ def _resolve_notify_gate(cfg: dict, brr_dir: Path) -> str:
         gate for gate in _NOTIFY_GATE_FALLBACK_CANDIDATES
         if _gate_can_deliver(brr_dir, gate)
     ]
-    return candidates[0] if len(candidates) == 1 else ""
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) < 2:
+        return ""
+    owning = _notify_gate_for_conversation_key(conversation_key)
+    if owning in candidates:
+        return owning
+    return _notify_gate_by_recent_activity(brr_dir, candidates)
 
 
 def _gate_owns_source(source: str) -> bool:

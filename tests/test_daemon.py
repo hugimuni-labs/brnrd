@@ -4454,6 +4454,7 @@ class TestNotifyGateFallback:
     def _run(
         self, tmp_path, monkeypatch, *, cfg_extra=None, configured_gates=(),
         eid="evt-tick", body="director tick note\n", duplicate=False,
+        event_conversation_key=None, seed_conversations=None,
     ):
         # A real git repo, not just ``write_repo_scaffold``'s directory
         # shape: an account-attached run stays on the ``worktree`` env
@@ -4470,7 +4471,24 @@ class TestNotifyGateFallback:
             **(cfg_extra or {}),
         }
         ctx = daemon.account.resolve_context(tmp_path, cfg)
-        event = make_event(tmp_path, eid=eid, source="schedule", body="tick")
+        event_kwargs = {}
+        if event_conversation_key is not None:
+            event_kwargs["conversation_key"] = event_conversation_key
+        event = make_event(
+            tmp_path, eid=eid, source="schedule", body="tick", **event_kwargs,
+        )
+        # Seed prior conversation activity so the recent-activity tiebreak has
+        # something to read: (key, seconds_ago) — smaller seconds_ago is more
+        # recent. Explicit mtimes, not write order, because two fast writes
+        # can land in the same filesystem-mtime tick.
+        brr_dir = tmp_path / ".brr"
+        for key, seconds_ago in seed_conversations or []:
+            daemon.conversations.append_event(
+                brr_dir, key, {"id": f"evt-seed-{key}", "source": key.split(":", 1)[0], "body": "hi"},
+            )
+            log_path = daemon.conversations.event_log_path(brr_dir, key, f"evt-seed-{key}")
+            stamp = time.time() - seconds_ago
+            os.utime(log_path, (stamp, stamp))
         monkeypatch.setattr(
             daemon.runner, "resolve_runner_profile",
             lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root),
@@ -4559,6 +4577,47 @@ class TestNotifyGateFallback:
 
         [row] = self._message_rows(ctx, task)
         assert row["status"] == daemon.message_store.UNDELIVERABLE
+
+    def test_ambiguous_gates_resolve_via_the_runs_own_conversation(
+        self, tmp_path, monkeypatch,
+    ):
+        # Two candidates would otherwise be ambiguous — but this run's own
+        # conversation_key names a thread telegram owns, so it is not
+        # actually ambiguous: the run carries the answer.
+        task, ctx, event, inbox_dir, responses_dir = self._run(
+            tmp_path, monkeypatch, configured_gates=("telegram", "slack"),
+            event_conversation_key="telegram:555:0",
+        )
+
+        assert task.meta["terminal_route"] == "gate-fallback"
+        [fallback] = protocol.list_done(inbox_dir, "telegram")
+        fallback_body = protocol.read_response(responses_dir, fallback["id"])
+        assert fallback_body.strip() == "director tick note"
+
+        [row] = self._message_rows(ctx, task)
+        assert row["platform_gate"] == "telegram"
+
+    def test_ambiguous_gates_resolve_via_the_repos_most_recent_thread(
+        self, tmp_path, monkeypatch,
+    ):
+        # The run's own conversation (schedule:default) owns neither
+        # candidate — but the repo's most recently active thread is a slack
+        # one, so that is who hears it rather than nobody.
+        task, ctx, event, inbox_dir, responses_dir = self._run(
+            tmp_path, monkeypatch, configured_gates=("telegram", "slack"),
+            seed_conversations=[
+                ("telegram:1:0", 600),  # older
+                ("slack:general:0", 30),  # newer — this one wins
+            ],
+        )
+
+        assert task.meta["terminal_route"] == "gate-fallback"
+        [fallback] = protocol.list_done(inbox_dir, "slack")
+        fallback_body = protocol.read_response(responses_dir, fallback["id"])
+        assert fallback_body.strip() == "director tick note"
+
+        [row] = self._message_rows(ctx, task)
+        assert row["platform_gate"] == "slack"
 
     def test_explicit_notify_gate_wins_over_single_gate_inference(
         self, tmp_path, monkeypatch,
