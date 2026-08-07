@@ -91,9 +91,16 @@ PUBLIC_COMMANDS = (
 # front door onto `.mood`, same shape as ``relic``/``promise``: it only does
 # anything inside a live wake, and it collapses the lookup-then-write
 # round-trip ``brnrd emotes`` used to leave to the resident by hand.
+#
+# ``notes`` (2026-08-07) is the same shape once more: the map of the
+# *resident's* own durable writing surfaces — where each lives, who parses
+# it, what grammar it wants, and what the deterministic preflight found.
+# An operator browsing ``--help`` has no use for it; a resident about to
+# write into a half-remembered surface does, and the substrate points at
+# the spelling.
 HIDDEN_COMMANDS = (
     "prompts", "hook", "statusline", "worktree-hygiene", "config", "emotes",
-    "relic", "gate-run", "close-check", "promise", "mood", "do",
+    "relic", "gate-run", "close-check", "promise", "mood", "do", "notes",
 )
 
 #: What ``brnrd promise`` accepts, spelled here so building the parser costs
@@ -626,10 +633,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="maximum matching lines to print")
     p.set_defaults(func=cmd_kb)
 
-    p = sub.add_parser(
-        "notes",
-        help="the map of your durable note surfaces — where each lives, who "
-             "reads it, what grammar it wants, and what the preflight found")
+    # Hidden, like `relic` / `promise` / `mood`, and for the same reason:
+    # it is the *resident's* front door onto its own note surfaces, not the
+    # operator's. `daemon-substrate.md` and `brnrd docs portals` point a
+    # resident at the spelling. The public list is also at its 19-verb
+    # ceiling, and this verb has not earned a slot off another one.
+    p = sub.add_parser("notes")
     p.add_argument(
         "surface", nargs="?", default=None,
         help="a surface key (see `brnrd notes`) for its grammar, readers and "
@@ -2345,23 +2354,38 @@ def cmd_notes(args):
     target = args.surface
 
     if target == "check":
-        findings = notes_preflight.scan(repo_root, cfg)
+        findings, scope = notes_preflight.scan_scoped(repo_root, cfg)
         if args.json:
-            print(json_mod.dumps([
-                {"type": f.type, "target": f.target, "severity": f.severity,
-                 "description": f.description}
-                for f in findings
-            ], indent=2))
+            # The scope rides the JSON too. A consumer reading a bare `[]`
+            # cannot tell "healthy" from "read nothing", and that is the
+            # whole defect this shape exists to close.
+            print(json_mod.dumps({
+                "scope": {
+                    "located": scope.located,
+                    "registered": scope.registered,
+                    "unresolved_roots": list(scope.unresolved_roots),
+                },
+                "findings": [
+                    {"type": f.type, "target": f.target,
+                     "severity": f.severity, "description": f.description}
+                    for f in findings
+                ],
+            }, indent=2))
             return 0 if not findings else 1
+        # **Never a bare "clean".** A clean verdict is a claim about the
+        # surfaces that were actually read, so it always carries how many
+        # that was — and it is not clean at all when a root went missing,
+        # which `check_roots` has already turned into a finding above.
+        print(f"[brnrd notes] {scope.line()}")
         if not findings:
-            print("[brnrd notes] all registered surfaces clean")
+            print("[brnrd notes] no findings on the surfaces above")
             return 0
         for finding in findings:
             print(finding.render())
         return 1
 
-    resolved = notes.resolve(repo_root, cfg)
-    findings = notes_preflight.scan(repo_root, cfg)
+    resolved, _roots = notes.resolve_with_roots(repo_root, cfg)
+    findings, scope = notes_preflight.scan_scoped(repo_root, cfg)
     verdicts = _notes_verdicts(findings)
 
     if target:
@@ -2375,7 +2399,8 @@ def cmd_notes(args):
                                   json_mod, as_json=args.json)
 
     return _print_notes_map(
-        repo_root, resolved, verdicts, findings, json_mod, as_json=args.json,
+        repo_root, resolved, verdicts, findings, scope, json_mod,
+        as_json=args.json,
     )
 
 
@@ -2426,12 +2451,17 @@ def _print_one_surface(row, hits, json_mod, *, as_json: bool) -> int:
 
 
 def _print_notes_map(
-    repo_root, resolved, verdicts, findings, json_mod, *, as_json: bool,
+    repo_root, resolved, verdicts, findings, scope, json_mod, *, as_json: bool,
 ) -> int:
     from . import notes
 
     if as_json:
         print(json_mod.dumps({
+            "scope": {
+                "located": scope.located,
+                "registered": scope.registered,
+                "unresolved_roots": list(scope.unresolved_roots),
+            },
             "surfaces": [
                 {
                     "key": r.surface.key, "root": r.surface.root,
@@ -2514,9 +2544,13 @@ def _print_notes_map(
             if key in costs:
                 print(f"  {key:<20} {costs[key]:>9,} B")
 
+    # The denominator, always. A row rendered `—` is a surface that did not
+    # resolve, and a reader who takes the absence of a mark for health has
+    # been misled by a table that looked complete.
     print(
-        f"\n{len(findings)} finding(s) — `brnrd notes check` for detail, "
-        "`brnrd notes <surface>` for one surface's grammar and readers"
+        f"\n{scope.line()} · {len(findings)} finding(s) — "
+        "`brnrd notes check` for detail, `brnrd notes <surface>` for one "
+        "surface's grammar and readers"
     )
     return 1 if findings else 0
 

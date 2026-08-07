@@ -1767,9 +1767,13 @@ def _build_notes_health_block(repo_root: Path) -> str:
     cfg = conf.load_config(repo_root)
     if str(cfg.get("kb_maintenance", "auto")).strip().lower() == "never":
         return ""
-    findings = notes_preflight.scan(repo_root, cfg)
+    findings, scope = notes_preflight.scan_scoped(repo_root, cfg)
     if not findings:
         return ""
+    # The scope line rides *above* the findings, not below them. A findings
+    # list read without its denominator is a report of unknown coverage,
+    # and the one thing a reader must know before triaging the list is how
+    # much of the registry it is a claim about.
     return (
         "## notes health (deterministic preflight)\n\n"
         "Your own note surfaces — dominion, work surface, run controls. Each "
@@ -1777,6 +1781,7 @@ def _build_notes_health_block(repo_root: Path) -> str:
         "come apart, so the surface renders as filed and behaves as absent. "
         "Every finding names the code that decided it; check it before you "
         "act on it.\n\n"
+        f"_Scope: {scope.line()}._\n\n"
         + notes_preflight.format_findings(findings)
     )
 

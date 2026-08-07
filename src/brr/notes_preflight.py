@@ -6,7 +6,8 @@ when not, zero model cost.** Where the kb preflight reads the shared
 knowledge graph, this reads the surfaces :mod:`brr.notes` registers — the
 run's control files, the dominion, the work surface.
 
-Three checks, one per measured failure, and deliberately no fourth:
+Three checks, one per measured failure, and deliberately no speculative
+fourth:
 
 - ``inert-pitfall`` / ``unindexed-pitfall-section`` — a ``## `` section in
   ``pitfalls.md`` that the matcher will never fire on. (#985: a lesson
@@ -21,6 +22,17 @@ Three checks, one per measured failure, and deliberately no fourth:
   declares a staleness predicate *and its own enforcement* ("checked the
   same way: deterministically, differentially, silent when clean") and
   nothing implemented it. This is that.
+
+And one that is about the *scan*, not about any surface —
+``home-unresolved`` / ``surface-root-empty`` (:func:`check_roots`). It
+exists because the discipline below was, on the first day it shipped,
+collected on its author: ``brnrd notes check`` printed "all registered
+surfaces clean" about an account it had measured at five findings minutes
+earlier, because 17 of 22 surfaces had never resolved and every check had
+iterated over nothing. **A clean verdict is a claim about the surfaces
+that were actually read**, so it now always carries how many that was
+(:class:`Scope`), and a root the scan could not read is a finding rather
+than a silence.
 
 **Two disciplines the checks are built to, not decorated with.**
 
@@ -83,6 +95,82 @@ _UNANNOUNCED_RE = re.compile(
     r"exhausted: (?P<pages>.+?) · read them under",
     re.MULTILINE | re.DOTALL,
 )
+
+
+# ── 0. The scan's own scope ──────────────────────────────────────────
+
+
+def check_roots(roots, rows=None) -> list[Finding]:
+    """A durable root that did not resolve — the scan's own blind spot.
+
+    **This one is about the checks, not about a surface.** Every check
+    below iterates over what a resolver found; a resolver that found
+    nothing produces no findings, and no findings renders as *clean*. So
+    ``brnrd notes check`` could answer "all registered surfaces clean"
+    about a dominion, a work surface and a kb it never located — the exact
+    shape of the failures the other three checks exist to catch, collected
+    on their author one layer out. Measured 2026-08-07: a real account with
+    five live findings reported clean, because a bare read command had
+    resolved a freshly-scaffolded empty project home instead of the real
+    one (#1193, upstream and not fixed here — the honesty is what belongs
+    here, and it is the guard that would have made #1193 visible long ago).
+
+    Silent when brnrd is not configured for this repo: there is no claim
+    to fall short of, and a repo that never adopted brnrd does not want a
+    line every wake saying it has no dominion.
+
+    An **error**, ranking above every finding it invalidates, because a
+    reader triaging the list below needs to know first that the list may
+    be a report about the wrong directory.
+    """
+    from . import notes as notes_mod
+
+    unread = notes_mod.unresolved_roots(roots, rows)
+    if not unread:
+        return []
+    home = str(roots.home_root) if roots.home_root else "unresolved"
+    if len(unread) == len(notes_mod.DURABLE_ROOTS):
+        return [Finding(
+            type="home-unresolved",
+            target=home,
+            description=(
+                "**every** durable root under the home this invocation "
+                "resolved is missing or empty — no dominion, no work surface, "
+                "no kb. Every check below therefore ran over an empty set, and "
+                "any clean verdict here is a claim about nothing. Either brnrd "
+                "has not been set up for this repo yet, or this process "
+                "resolved a different home than the one you mean (#1193: a "
+                "bare read command can scaffold a fresh project home keyed on "
+                "`sha1(repo_root)` — one per worktree — and then answer about "
+                "it). Check the path in this line against `brnrd account` "
+                "before believing anything below it."
+            ),
+            severity="error",
+        )]
+    return [
+        Finding(
+            type=(
+                "surface-root-unresolved" if state == notes_mod.ROOT_MISSING
+                else "surface-root-empty"
+            ),
+            target=root,
+            description=(
+                (
+                    f"this root did not resolve (looked for: {where}), "
+                    if state == notes_mod.ROOT_MISSING else
+                    f"this root resolved to `{where}` and holds **none** of "
+                    "its registered surfaces, "
+                )
+                + f"so every registered {root} surface was skipped and no "
+                "check below covers one. Not a clean verdict — an unread "
+                "one. If you expected content here, this process resolved a "
+                "different home than you mean (#1193); `brnrd account` names "
+                "the one it should be."
+            ),
+            severity="error",
+        )
+        for root, state, where in unread
+    ]
 
 
 # ── 1. The pitfall store ─────────────────────────────────────────────
@@ -727,15 +815,51 @@ def check_signatures(
 # ── The scan ─────────────────────────────────────────────────────────
 
 
+@dataclass(frozen=True)
+class Scope:
+    """What a scan's verdict is a claim *about*.
+
+    A findings list with no denominator is unreadable: an empty one means
+    "everything I read was healthy", and only this says how much that was.
+    Returned beside the findings by :func:`scan_scoped` so no caller has to
+    reconstruct it, and so "clean" can never be printed without it.
+    """
+
+    located: int
+    registered: int
+    unresolved_roots: tuple[str, ...] = ()
+
+    @property
+    def whole(self) -> bool:
+        return not self.unresolved_roots
+
+    def line(self) -> str:
+        """One line naming the scope, for a clean verdict or a block header."""
+        head = f"{self.located} of {self.registered} registered surfaces located"
+        if self.unresolved_roots:
+            head += f" · unresolved roots: {', '.join(self.unresolved_roots)}"
+        return head
+
+
 def scan(repo_root: Path, cfg: dict[str, Any] | None = None) -> list[Finding]:
     """Every notes-surface finding for *repo_root*, ordered for rendering.
 
-    Silent — an empty list — when every registered surface is healthy, and
-    empty rather than raising when a root does not resolve at all. Ordered
-    ``error`` → ``warning`` → ``info``, then by type and target, matching
-    :func:`brr.kb_preflight.scan` so a reader triages one list the same way
-    in either block.
+    Silent — an empty list — when every registered surface is healthy.
+    **Not** silent when a durable root failed to resolve: see
+    :func:`check_roots`. A scan that cannot see a surface says so instead
+    of counting it clean.
+
+    Ordered ``error`` → ``warning`` → ``info``, then by type and target,
+    matching :func:`brr.kb_preflight.scan` so a reader triages one list the
+    same way in either block.
     """
+    return scan_scoped(repo_root, cfg)[0]
+
+
+def scan_scoped(
+    repo_root: Path, cfg: dict[str, Any] | None = None,
+) -> tuple[list[Finding], Scope]:
+    """:func:`scan`, plus the :class:`Scope` its verdict is a claim about."""
     from . import notes as notes_mod
 
     if cfg is None:
@@ -747,6 +871,21 @@ def scan(repo_root: Path, cfg: dict[str, Any] | None = None) -> list[Finding]:
             cfg = {}
 
     out: list[Finding] = []
+
+    # Resolve once, and keep the roots: they are what turns "no findings"
+    # from a verdict into a *scoped* verdict. Everything below runs over
+    # what these located.
+    rows, roots = notes_mod.resolve_with_roots(repo_root, cfg)
+    out.extend(check_roots(roots, rows))
+    located, registered = notes_mod.located_counts(rows)
+    scope = Scope(
+        located=located,
+        registered=registered,
+        unresolved_roots=tuple(
+            f"{root} ({state})"
+            for root, state, _where in notes_mod.unresolved_roots(roots, rows)
+        ),
+    )
 
     try:
         from . import dominion as dominion_mod
@@ -767,8 +906,10 @@ def scan(repo_root: Path, cfg: dict[str, Any] | None = None) -> list[Finding]:
     # page enrols itself in this check by declaring the trait, with no
     # edit here. Today the trait selects exactly `workflow.md`.
     try:
-        signed_keys = [s.key for s in notes_mod.with_trait("signatures")]
-        for resolved in notes_mod.resolve(repo_root, cfg, keys=signed_keys):
+        signed = {s.key for s in notes_mod.with_trait("signatures")}
+        for resolved in rows:
+            if resolved.surface.key not in signed:
+                continue
             for path in resolved.paths:
                 repo_dir, rel = _git_location(path)
                 out.extend(check_signatures(
@@ -782,7 +923,7 @@ def scan(repo_root: Path, cfg: dict[str, Any] | None = None) -> list[Finding]:
     out.sort(key=lambda f: (
         _SEVERITY_RANK.get(f.severity, 99), f.type, f.target,
     ))
-    return out
+    return out, scope
 
 
 def _git_location(path: Path) -> tuple[Path | None, str | None]:

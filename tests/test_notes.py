@@ -33,25 +33,62 @@ from brr import dominion, notes, notes_preflight
 # ── fixtures ─────────────────────────────────────────────────────────
 
 
-def _repo(tmp_path: Path) -> Path:
-    """A repo whose account home points somewhere empty under tmp_path.
+def _repo(tmp_path: Path, *, seed_roots: bool = True) -> Path:
+    """A repo with its own account home under tmp_path.
 
-    Without the home pin, ``resident_dominion_candidates`` resolves the
-    operator's real dominion and these tests would read live resident
-    memory — which is both wrong and unstable.
+    Two reasons for the home pin. Without it,
+    ``resident_dominion_candidates`` resolves the *operator's* real
+    dominion and these tests read live resident memory — wrong and
+    unstable. And since 2026-08-07 the scan reports a durable root it
+    could not read (:func:`notes_preflight.check_roots`). *seed_roots*
+    materialises the three durable roots **with a registered surface in
+    each** — an empty directory is not a populated root, since that is the
+    #1193 fingerprint — which is what most tests here mean by clean. Pass
+    ``False`` for an account nothing has ever written to, which reports as
+    a *denominator* rather than as a finding.
     """
     repo = tmp_path / "repo"
     (repo / ".brr").mkdir(parents=True)
     (repo / ".brr" / "config").write_text(
         f"home.path={tmp_path / 'home'}\n", encoding="utf-8"
     )
+    if seed_roots:
+        # Each durable root gets one *registered* surface with content in
+        # it. An empty directory is not a populated root — `check_roots`
+        # reports "resolved and holds none of its surfaces" as loudly as a
+        # missing one, because that is the #1193 fingerprint. So a fixture
+        # that means "a healthy account" has to actually put something in
+        # each root, and the surfaces chosen here are the inert ones no
+        # check reads.
+        dom = repo / ".brr" / "dominion"
+        dom.mkdir(parents=True, exist_ok=True)
+        (dom / "thread-of-record.md").write_text("seed\n", encoding="utf-8")
+        surface = tmp_path / "home" / "surface"
+        surface.mkdir(parents=True, exist_ok=True)
+        (surface / "index.md").write_text("# Surface\n\nseed\n", encoding="utf-8")
+        (tmp_path / "home" / "knowledge").mkdir(parents=True, exist_ok=True)
+        from brr import knowledge
+
+        kb = knowledge.active_kb_dir(repo)
+        if kb is not None:
+            Path(kb).mkdir(parents=True, exist_ok=True)
+            (Path(kb) / "index.md").write_text("# kb\n", encoding="utf-8")
     return repo
 
 
 def _dominion(repo: Path) -> Path:
-    path = dominion.dominion_path(repo)
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    """The dominion directory *the resolver actually picks* for this repo.
+
+    Not ``dominion.dominion_path`` unconditionally: with an account home
+    present, ``resident_dominion_candidates`` prefers the account-scoped
+    path over the legacy repo-local one, and a test that seeds the loser
+    is testing a directory the code will never read — the exact
+    write-into-the-void this module exists to catch, committed by its own
+    fixture.
+    """
+    legacy = dominion.dominion_path(repo)
+    legacy.mkdir(parents=True, exist_ok=True)
+    return notes.resolve_roots(repo).dominion or legacy
 
 
 def _git(cwd: Path, *args: str) -> None:
@@ -742,6 +779,154 @@ class TestSignatureFindings:
 
 
 # ── the scan and its wake block ──────────────────────────────────────
+
+
+class TestTheScanKnowsWhatItCouldNotSee:
+    """The guard the other three checks needed, turned on their author.
+
+    Measured 2026-08-07 on a live account: `brnrd notes check` printed
+    *"all registered surfaces clean"* and `--json` printed `[]`, against an
+    account the same code had measured at five findings minutes earlier —
+    because 17 of 22 surfaces had not resolved and the checks had iterated
+    over nothing. A clean verdict about an empty set is exactly the
+    silent-narrowing every check here exists to catch, and it happened one
+    layer out, in the scan itself.
+    """
+
+    def test_an_unconfigured_repo_says_nothing(self, tmp_path):
+        """No brnrd here ⇒ no claim to fall short of ⇒ no line."""
+        repo = tmp_path / "bare"
+        (repo / ".brr").mkdir(parents=True)
+        (repo / ".brr" / "config").write_text(
+            "dominion.enabled=false\n", encoding="utf-8",
+        )
+        roots = notes.resolve_roots(repo)
+        if roots.account_enabled:
+            pytest.skip("this environment resolves an account for a bare repo")
+        assert notes_preflight.check_roots(roots) == []
+
+    def test_a_fresh_account_is_a_denominator_not_an_accusation(self, tmp_path):
+        """Nothing written anywhere yet is not a blind spot.
+
+        A fresh adopter's first wake has no dominion, no surface, no kb —
+        because it has not written one, not because the scan failed. An
+        `error` on day one is a guard firing for a non-reason on the wake
+        least able to judge it. The honest report there is the *scope
+        line*, which is unconditional.
+        """
+        repo = _repo(tmp_path, seed_roots=False)
+        findings, scope = notes_preflight.scan_scoped(repo)
+        assert findings == []
+        assert scope.unresolved_roots == ()
+        assert scope.located < scope.registered
+
+    def test_every_root_missing_under_a_used_account_names_the_home(
+        self, tmp_path,
+    ):
+        """`home-unresolved` is reachable for a caller holding only roots.
+
+        `scan` always passes rows, so on that path the per-root findings
+        below carry the report; this pins that the blanket form still
+        renders, and still names #1193, for anything that cannot.
+        """
+        repo = _repo(tmp_path, seed_roots=False)
+        roots = notes.resolve_roots(repo)
+        findings = notes_preflight.check_roots(roots)
+        assert [f.type for f in findings] == ["home-unresolved"]
+        assert findings[0].severity == "error"
+        assert str(tmp_path / "home") in findings[0].target
+        assert "#1193" in findings[0].description
+
+    def test_one_missing_root_names_that_root(self, tmp_path):
+        """A partial blind spot is per-root, not the blanket finding.
+
+        Seeding ``home/surface`` also resolves the dominion root — the
+        account-root candidate *is* the home directory, same as the wake's
+        own ``_build_dominion_block`` resolves it — so what is left missing
+        is the kb, and that is what must be named.
+        """
+        repo = _repo(tmp_path, seed_roots=False)
+        surface = tmp_path / "home" / "surface"
+        surface.mkdir(parents=True)
+        (surface / "index.md").write_text("# Surface\n", encoding="utf-8")
+        (repo / ".brr" / "dominion").mkdir(parents=True)
+        (repo / ".brr" / "dominion" / "playbook.md").write_text(
+            "## One\nbody\n", encoding="utf-8",
+        )
+        findings = notes_preflight.scan(repo)
+        types = [f.type for f in findings]
+        assert "home-unresolved" not in types
+        named = [f for f in findings if f.type.startswith("surface-root-")]
+        assert [f.target for f in named] == [notes.ROOT_KNOWLEDGE]
+
+    def test_the_clean_path_still_carries_its_denominator(self, tmp_path):
+        """`scan` can return `[]`; `scan_scoped` can never return no scope."""
+        repo = _repo(tmp_path)
+        findings, scope = notes_preflight.scan_scoped(repo)
+        assert findings == []
+        assert scope.registered == len(notes.registry())
+        assert scope.whole
+        assert f"of {scope.registered} registered surfaces" in scope.line()
+
+    def test_an_unread_root_on_a_used_account_says_so_in_its_scope(
+        self, tmp_path,
+    ):
+        """The #1193 shape: the account is in use, and a root came back empty."""
+        repo = _repo(tmp_path, seed_roots=False)
+        surface = tmp_path / "home" / "surface"
+        surface.mkdir(parents=True)
+        (surface / "index.md").write_text("# Surface\n", encoding="utf-8")
+        _findings, scope = notes_preflight.scan_scoped(repo)
+        assert not scope.whole
+        assert {r.split(" ")[0] for r in scope.unresolved_roots} == {
+            notes.ROOT_DOMINION, notes.ROOT_KNOWLEDGE,
+        }
+        assert "unresolved roots" in scope.line()
+
+    def test_the_cli_never_prints_a_bare_clean(self, tmp_path, capsys):
+        from brr import cli
+
+        repo = _repo(tmp_path, seed_roots=False)
+        surface = tmp_path / "home" / "surface"
+        surface.mkdir(parents=True)
+        (surface / "index.md").write_text("# Surface\n", encoding="utf-8")
+        _git(repo, "init", "-q", "-b", "main")
+        args = cli.build_parser().parse_args(["notes", "check"])
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(cli, "_repo_root", lambda: repo)
+            assert args.func(args) == 1
+        out = capsys.readouterr().out
+        assert "registered surfaces located" in out
+        assert "surface-root-" in out
+
+    def test_the_json_check_shape_carries_scope(self, tmp_path, capsys):
+        """A consumer reading a bare `[]` cannot tell healthy from unread."""
+        import json
+
+        from brr import cli
+
+        repo = _repo(tmp_path)
+        _git(repo, "init", "-q", "-b", "main")
+        args = cli.build_parser().parse_args(["notes", "check", "--json"])
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(cli, "_repo_root", lambda: repo)
+            assert args.func(args) == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["findings"] == []
+        assert payload["scope"]["registered"] == len(notes.registry())
+        assert payload["scope"]["unresolved_roots"] == []
+
+    def test_the_wake_block_leads_with_its_scope(self, tmp_path):
+        from brr.prompts import _build_notes_health_block
+
+        repo = _repo(tmp_path, seed_roots=False)
+        surface = tmp_path / "home" / "surface"
+        surface.mkdir(parents=True)
+        (surface / "index.md").write_text("# Surface\n", encoding="utf-8")
+        block = _build_notes_health_block(repo)
+        scope_at = block.index("_Scope:")
+        findings_at = block.index("## Findings")
+        assert scope_at < findings_at, "the denominator must precede the list"
 
 
 class TestScanAndBlock:
