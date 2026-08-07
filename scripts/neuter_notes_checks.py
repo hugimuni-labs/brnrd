@@ -194,13 +194,65 @@ MUTATIONS: list[tuple[str, str, str, str, str, str]] = [
 ]
 
 
-def run(label: str, selector: str) -> bool:
+def drop_bytecode(path: Path) -> None:
+    """Delete the cached ``.pyc`` for *path*.
+
+    Not hygiene — correctness. A rewrite of the source can land inside the
+    same mtime tick the cached bytecode was stamped with, and Python then
+    imports the *previous* version while the file on disk reads as the new
+    one. Both directions were measured on this box: a restored file whose
+    mutation kept running (two budget tests failing on a "clean" baseline),
+    and a mutated file whose clean bytecode kept running (a real check
+    reported as a no-op). Either way the verdict is about the wrong code,
+    which is the one thing this script must not produce.
+    """
+    for pyc in (path.parent / "__pycache__").glob(f"{path.stem}.*.pyc"):
+        pyc.unlink(missing_ok=True)
+
+
+def restore(rel: str, marker: str) -> None:
+    """``git checkout --`` the file, and wait until the mutation is gone.
+
+    Not paranoia: on a contended box (#1195) the next pytest subprocess can
+    start before the restored bytes are what the next import reads, and the
+    following mutation's *clean* run then fails for a reason that has
+    nothing to do with the check under test — reported as ``RED clean``,
+    which is a false accusation of a check that is fine. The verdict this
+    script exists to produce has to be about the mutation, so the restore
+    is confirmed rather than assumed.
+    """
+    path = ROOT / rel
+    for _ in range(40):
+        subprocess.run(["git", "checkout", "--", rel], cwd=ROOT, check=True)
+        drop_bytecode(path)
+        if marker not in path.read_text(encoding="utf-8"):
+            return
+    raise SystemExit(f"could not restore {rel} — mutation still present")
+
+
+def run(selector: str) -> tuple[bool, str]:
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "tests/test_notes.py",
          "tests/test_prompts.py", "-k", selector],
         cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
-    return proc.returncode == 0
+    return proc.returncode == 0, proc.stdout
+
+
+def run_clean(selector: str) -> tuple[bool, str]:
+    """The pre-mutation run, retried once before it is believed.
+
+    A RED *clean* run is an accusation against a check that may be fine,
+    and this box is contended enough (#1195) that one selective pytest
+    invocation can fail for reasons the mutation had nothing to do with.
+    So the clean baseline gets a second chance, and if it still fails the
+    output is printed rather than collapsed into a verdict column — the
+    reader needs to see *why* before treating it as a finding.
+    """
+    ok, out = run(selector)
+    if ok:
+        return ok, out
+    return run(selector)
 
 
 def main() -> int:
@@ -222,12 +274,13 @@ def main() -> int:
             print(f"{label:<58} {'—':<7} {'—':<9} MUTATION NO LONGER APPLIES")
             failures += 1
             continue
-        before = run(label, selector)
+        before, before_out = run_clean(selector)
         path.write_text(source.replace(old, new, 1), encoding="utf-8")
+        drop_bytecode(path)  # symmetric with `restore` — see there
         try:
-            after = run(label, selector)
+            after, _out = run(selector)
         finally:
-            subprocess.run(["git", "checkout", "--", rel], cwd=ROOT, check=True)
+            restore(rel, "NEUTERED")
         ok = before and not after
         failures += 0 if ok else 1
         print(
@@ -237,6 +290,10 @@ def main() -> int:
         )
         if not ok:
             print(f"{'':<58} removed: {removes}")
+            if not before:
+                print(f"{'':<58} clean run failed — output follows:")
+                for line in before_out.strip().splitlines()[-12:]:
+                    print(f"{'':<60} {line}")
 
     print()
     print(f"{len(MUTATIONS) - failures}/{len(MUTATIONS)} checks proved they can fail")
