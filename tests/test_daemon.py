@@ -4603,8 +4603,53 @@ class TestNotifyGateFallback:
         assert fallback_body.strip() == "director tick note"
 
         [row] = self._message_rows(ctx, task)
-        assert row["status"] == daemon.message_store.DELIVERED
-        assert row["platform_gate"] == "telegram"
+        # #1205: queuing to the fallback gate is not a platform receipt —
+        # this row must read `carried`, never `delivered`, until the gate's
+        # own delivery loop (not exercised by this unit test) actually
+        # posts it and reconciles a real receipt back.
+        assert row["status"] == daemon.message_store.CARRIED
+        assert not row.get("platform_gate")
+        assert "telegram" in row["reason"]
+
+    def test_incapable_sole_gate_resolves_undeliverable_not_a_dead_drawer(
+        self, tmp_path, monkeypatch,
+    ):
+        # #1205: cloud is "configured" (``_gate_can_deliver`` says yes) but
+        # structurally cannot originate an unaddressed send — a schedule
+        # wake carries no ``cloud_event_id`` for it to reply against. Before
+        # the fix this synthesized a `done` cloud event nothing would ever
+        # read (the drawer the courier never opens); now it must resolve
+        # exactly like "no candidate at all" — honest, not silent.
+        task, ctx, event, inbox_dir, responses_dir = self._run(
+            tmp_path, monkeypatch, configured_gates=("cloud",),
+        )
+
+        assert task.meta["terminal_route"] == "undeliverable"
+        assert list(inbox_dir.glob("*.md")) == [event["_path"]]
+
+        [row] = self._message_rows(ctx, task)
+        assert row["status"] == daemon.message_store.UNDELIVERABLE
+
+    def test_incapable_gate_is_skipped_in_favour_of_a_capable_one(
+        self, tmp_path, monkeypatch,
+    ):
+        # cloud and telegram are both configured — cloud is filtered out by
+        # capability before single-gate inference ever runs, so telegram is
+        # the (unambiguous) survivor rather than a second "several
+        # candidates" ambiguity.
+        task, ctx, event, inbox_dir, responses_dir = self._run(
+            tmp_path, monkeypatch, configured_gates=("cloud", "telegram"),
+        )
+
+        assert task.meta["terminal_route"] == "gate-fallback"
+        assert protocol.list_done(inbox_dir, "cloud") == []
+        [fallback] = protocol.list_done(inbox_dir, "telegram")
+        fallback_body = protocol.read_response(responses_dir, fallback["id"])
+        assert fallback_body.strip() == "director tick note"
+
+        [row] = self._message_rows(ctx, task)
+        assert row["status"] == daemon.message_store.CARRIED
+        assert "telegram" in row["reason"]
 
     def test_zero_configured_gates_stays_undeliverable(self, tmp_path, monkeypatch):
         task, ctx, event, inbox_dir, responses_dir = self._run(
@@ -4649,7 +4694,8 @@ class TestNotifyGateFallback:
         assert fallback_body.strip() == "director tick note"
 
         [row] = self._message_rows(ctx, task)
-        assert row["platform_gate"] == "telegram"
+        assert row["status"] == daemon.message_store.CARRIED
+        assert "telegram" in row["reason"]
 
     def test_ambiguous_gates_resolve_via_the_repos_most_recent_thread(
         self, tmp_path, monkeypatch,
@@ -4671,7 +4717,8 @@ class TestNotifyGateFallback:
         assert fallback_body.strip() == "director tick note"
 
         [row] = self._message_rows(ctx, task)
-        assert row["platform_gate"] == "slack"
+        assert row["status"] == daemon.message_store.CARRIED
+        assert "slack" in row["reason"]
 
     def test_explicit_notify_gate_wins_over_single_gate_inference(
         self, tmp_path, monkeypatch,
@@ -4692,7 +4739,8 @@ class TestNotifyGateFallback:
         assert fallback_body.strip() == "director tick note"
 
         [row] = self._message_rows(ctx, task)
-        assert row["platform_gate"] == "slack"
+        assert row["status"] == daemon.message_store.CARRIED
+        assert "slack" in row["reason"]
 
     def test_duplicate_terminal_never_fires_the_fallback(self, tmp_path, monkeypatch):
         # Single-delivery invariant: a terminal stream that exactly
@@ -6115,7 +6163,7 @@ def test_notify_gate_is_resolved_once_per_run_not_once_per_heartbeat(
     """
     monkeypatch.setattr(
         daemon, "_gate_can_deliver",
-        lambda _brr, gate: gate in ("telegram", "cloud"),
+        lambda _brr, gate: gate in ("telegram", "slack"),
     )
     calls = []
     real_scan = daemon._notify_gate_by_recent_activity

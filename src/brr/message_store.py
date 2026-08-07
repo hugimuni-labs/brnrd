@@ -4,6 +4,20 @@ The runtime outbox and response files remain compatibility/staging seams.  A
 message's durable identity and delivery state live here, under the run that
 produced it; a successful or impossible delivery rewrites frontmatter in
 place instead of deleting the only copy.
+
+Terminal statuses (:data:`PENDING` moves to exactly one, once):
+
+- ``delivered`` / ``collected`` (:data:`_RECEIPTED`) — a platform (or the
+  dispatch edge) actually acknowledged this row; ``platform_gate`` /
+  ``platform_message_id`` / ``delivered_at`` name the receipt.
+- ``undeliverable`` — no configured gate could ever carry it.
+- ``carried`` (:data:`CARRIED`, #1205) — this row's content left custody
+  without this row earning its own receipt: a duplicate of text a
+  *different* row already delivered, or a fallback send queued toward a
+  gate whose own delivery loop, not this transition, is what may later
+  confirm it. Never stamp ``delivered`` for either shape — that word must
+  stay reserved for an actual platform acknowledgement, or a reader
+  (ledger, dashboard, the next wake) trusts a claim nothing checked.
 """
 
 from __future__ import annotations
@@ -25,11 +39,24 @@ PENDING = "pending"
 DELIVERED = "delivered"
 COLLECTED = "collected"
 UNDELIVERABLE = "undeliverable"
+# #1205: a row whose own content was never independently handed to a
+# platform — either it is an exact duplicate of text a *different* message
+# row already delivered (the single-delivery dedupe), or it was queued
+# toward a gate out-of-bound and the queueing itself is not a receipt (the
+# gate's own delivery loop, not this transition, is what may earn one
+# later). Neither shape may read ``delivered``: that word is reserved for a
+# row carrying an actual platform acknowledgement (see ``_RECEIPTED``
+# below), and stamping it here at synthesis time is exactly the false
+# receipt #1205 documents — a reader (ledger, dashboard, the next wake)
+# trusts ``delivered`` at face value, and nothing then verifies the claim.
+# ``carried`` is honest instead: the content left this row's custody, one
+# way or another, without this row itself being handed a receipt.
+CARRIED = "carried"
 # ``collected`` is the dispatch-edge counterpart of ``delivered``: a strand's
 # terminal report is consumed by the parent run that spawned it, not by a
 # gate. Both carry a receipt, so both stamp the same receipt fields.
 _RECEIPTED = {DELIVERED, COLLECTED}
-_TERMINAL = _RECEIPTED | {UNDELIVERABLE}
+_TERMINAL = _RECEIPTED | {UNDELIVERABLE, CARRIED}
 _SAFE = re.compile(r"[^A-Za-z0-9_.-]+")
 _WRITE_LOCK = threading.Lock()
 
@@ -164,7 +191,10 @@ def transition(
             meta["platform_message_id"] = platform_message_id
             meta["delivered_at"] = delivered_at or _now()
         else:
-            meta["reason"] = reason or "no configured gate owns this target"
+            meta["reason"] = reason or (
+                "no configured gate owns this target"
+                if status == UNDELIVERABLE else ""
+            )
         protocol._atomic_write(path, _render(meta, str(message.get("body") or "")))
         return True
 

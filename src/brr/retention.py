@@ -371,6 +371,7 @@ def _plan_messages(
         message_store.DELIVERED,
         message_store.COLLECTED,
         message_store.UNDELIVERABLE,
+        message_store.CARRIED,
     }
     for messages_dir in sorted(runs_root.glob(f"*/*/{message_store.MESSAGES_PATH}")):
         run_id = messages_dir.parent.name
