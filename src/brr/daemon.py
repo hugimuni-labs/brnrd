@@ -5435,6 +5435,74 @@ def _resolve_await_state(
     return result
 
 
+def _live_delivery_projection(
+    task: Run, cfg: dict | None, brr_dir: Path | None, *, already_delivered: bool,
+) -> dict[str, object]:
+    """"If I ended right now, would my reply reach a human?" — live.
+
+    A *projection*, not a new decision: every predicate here is one the
+    dispatch path (``_run_worker``, around ``_terminal_route``) already
+    computes after the run ends — ``_terminal_reply_lands``,
+    ``_resolve_notify_gate``, ``_gate_can_deliver``, ``_terminal_route``
+    itself for the route vocabulary. This calls the same functions early,
+    from the heartbeat, so a run that would end ``undeliverable`` can see
+    that *before* it ends rather than only in a ledger nobody reads (the
+    measurement behind #undeliverable-means-nobody-took-it: 25 of 276 runs,
+    9%, found this out only after the fact). No new classification: the
+    ``route`` values are exactly :func:`_terminal_route`'s.
+
+    ``{"known": False}`` when the run has no event source yet (an ad-hoc
+    caller, or a source-less synthetic task) — nothing to project.
+    """
+    source = str(getattr(task, "source", "") or "")
+    if not source:
+        return {"known": False}
+    meta = task.meta if hasattr(task, "meta") else {}
+    spawn_parent_run_id = str(meta.get("spawn_parent_run_id") or "")
+    owned = _gate_owns_source(source)
+    notify_gate = ""
+    if not owned and not spawn_parent_run_id and brr_dir is not None:
+        notify_gate = _resolve_notify_gate(
+            cfg or {}, brr_dir,
+            conversation_key=str(getattr(task, "conversation_key", "") or ""),
+        )
+    undeliverable = not owned and not spawn_parent_run_id and not notify_gate
+    route = _terminal_route(
+        source,
+        spawn_parent_run_id=spawn_parent_run_id,
+        undeliverable=undeliverable,
+        delivered_elsewhere=already_delivered,
+        gate_fallback=bool(notify_gate),
+    )
+    gate = (
+        _delivery_source_for_gate(source) if owned
+        else notify_gate if notify_gate
+        else None
+    )
+    reason = None
+    if route == _TERMINAL_ROUTE_UNDELIVERABLE:
+        explicit = str((cfg or {}).get("notify.gate") or "").strip()
+        if explicit:
+            reason = f"explicit notify.gate={explicit!r} not deliverable here"
+        else:
+            candidate_count = sum(
+                1 for g in _NOTIFY_GATE_FALLBACK_CANDIDATES
+                if brr_dir is not None and _gate_can_deliver(brr_dir, g)
+            )
+            reason = (
+                f"no gate owns {source} events" if candidate_count == 0
+                else f"notify.gate unresolved: {candidate_count} candidate gate(s)"
+            )
+    return {
+        "known": True,
+        "would_land": route != _TERMINAL_ROUTE_UNDELIVERABLE,
+        "route": route,
+        "gate": gate,
+        "already_delivered": already_delivered,
+        "reason": reason,
+    }
+
+
 def _write_live_portal_state(
     outbox_dir: Path | None,
     inbox_dir: Path,
@@ -5633,6 +5701,13 @@ def _write_live_portal_state(
                 ),
                 "pending_outbox_files": pending_files,
             },
+            "delivery": _live_delivery_projection(
+                task, cfg, brr_dir,
+                already_delivered=bool(
+                    stats.get("current") or stats.get("other")
+                    or stats.get("outbound")
+                ),
+            ),
             "card": {
                 "active": bool(card_text),
                 "text": card_text,
