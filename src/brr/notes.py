@@ -522,7 +522,16 @@ def _one(root: Path | None, name: str) -> list[Path]:
 
 @dataclass
 class _Roots:
-    """The four resolved roots, each ``None`` when not available here."""
+    """The four resolved roots, each ``None`` when not available here.
+
+    ``None`` is load-bearing, not a shrug. A check that runs over a root
+    it never located reports *clean* about surfaces it never read — and a
+    clean verdict about an empty set is the exact silent-narrowing this
+    module exists to end, one layer out. :func:`unresolved_roots` is how
+    that state gets said; :attr:`account_enabled` and :attr:`home_root`
+    are what let it be said *precisely*, naming the home this invocation
+    actually resolved rather than the one the reader assumes.
+    """
 
     outbox: Path | None = None
     dominion: Path | None = None
@@ -530,6 +539,113 @@ class _Roots:
     surface: Path | None = None
     kb: Path | None = None
     repo_label: str = ""
+    account_enabled: bool = False
+    home_root: Path | None = None
+
+
+#: The roots whose absence is worth reporting. ``intra-run`` is excluded on
+#: purpose: it resolves from ``BRR_PORTAL_STATE``, which exists only inside
+#: a wake, so a CLI invocation legitimately has no outbox and saying so
+#: every time would be a guard firing for a non-reason.
+DURABLE_ROOTS: tuple[str, ...] = (ROOT_DOMINION, ROOT_SURFACE, ROOT_KNOWLEDGE)
+
+
+#: A durable root reported by :func:`unresolved_roots`.
+ROOT_MISSING = "missing"   # the directory itself did not resolve
+ROOT_EMPTY = "empty"       # it resolved, and holds none of its surfaces
+
+
+def unresolved_roots(
+    roots: _Roots, rows: list["Resolved"] | None = None,
+) -> list[tuple[str, str, str]]:
+    """``(root, state, where it looked)`` for each durable root the scan
+    could not actually read.
+
+    Two states, because a root fails to be readable in two ways and only
+    one of them looks like an error from the filesystem:
+
+    - :data:`ROOT_MISSING` — the directory is not there.
+    - :data:`ROOT_EMPTY` — it *is* there and holds **none** of its
+      registered surfaces. This is the one that matters, and it is the
+      fingerprint of #1193: a bare read command scaffolds a fresh project
+      home keyed on ``sha1(repo_root)``, every root resolves inside it, and
+      every check then runs over an empty directory and reports clean.
+      Measured 2026-08-07 — a run inside a worktree resolved
+      ``projects/…-fc376f3ff6/home`` instead of the account home, located 6
+      of 22 surfaces, and said nothing about it.
+
+    Zero, not a threshold: "this root holds none of the five things it is
+    defined by" is provable, and a resident can check it with one ``ls``.
+    A ratio would be a guess about how empty is too empty, and a guard
+    built on a guess is one that fires for a non-reason.
+
+    Empty when brnrd is not configured for this repo at all — there is no
+    claim to fall short of, and a repo that never adopted brnrd does not
+    want a line about its missing dominion. *rows* is optional so a caller
+    that only has roots can still get the ``missing`` half.
+    """
+    if not roots.account_enabled:
+        return []
+    home = str(roots.home_root) if roots.home_root else "<unresolved home>"
+    resolved_dir = {
+        ROOT_DOMINION: roots.dominion,
+        ROOT_SURFACE: roots.surface,
+        ROOT_KNOWLEDGE: roots.kb,
+    }
+    populated: set[str] = set()
+    if rows is not None:
+        populated = {r.surface.root for r in rows if r.exists}
+        # **Nothing written anywhere yet is not a blind spot.** A fresh
+        # adopter's first wake has no dominion, no surface, no kb — because
+        # it has not written one, not because this scan failed to find one
+        # — and an `error` on day one is a guard firing for a non-reason on
+        # the one wake least able to judge it. The honest report in that
+        # state is the *denominator* (``N of M surfaces located``), which
+        # `Scope` carries unconditionally, not an accusation.
+        #
+        # What discriminates #1193 is that the account is demonstrably in
+        # use — at least one durable root holds real material — while
+        # another comes back empty. That is the account whose clean
+        # verdict is a lie.
+        if not (populated & set(DURABLE_ROOTS)):
+            return []
+
+    out: list[tuple[str, str, str]] = []
+    for root in DURABLE_ROOTS:
+        where = resolved_dir[root]
+        if where is None:
+            expected = {
+                ROOT_DOMINION: f"no resident dominion directory under {home}",
+                ROOT_SURFACE: f"{home}/surface",
+                ROOT_KNOWLEDGE: f"no kb resolved for this repo (home: {home})",
+            }[root]
+            out.append((root, ROOT_MISSING, expected))
+        elif rows is not None and root not in populated:
+            out.append((root, ROOT_EMPTY, str(where)))
+    return out
+
+
+def _dominion_filenames() -> tuple[str, ...]:
+    """The basenames of every registered ``dominion`` surface.
+
+    Derived from the table rather than listed twice, so a surface added
+    there enrols in the dominion-candidate preference automatically —
+    a second list would drift, and a drifted list here means resolving
+    the wrong dominion silently.
+    """
+    return tuple(
+        s.path_hint.rsplit("/", 1)[-1]
+        for s in _REGISTRY if s.root == ROOT_DOMINION
+    )
+
+
+def located_counts(resolved: list["Resolved"]) -> tuple[int, int]:
+    """``(surfaces with something on disk, surfaces registered)``.
+
+    The denominator behind every clean verdict. A "clean" that does not
+    carry it is a claim about surfaces that may never have been read.
+    """
+    return sum(1 for r in resolved if r.exists), len(resolved)
 
 
 def resolve_roots(
@@ -559,11 +675,33 @@ def resolve_roots(
     try:
         from . import dominion as dominion_mod
 
+        # The first candidate that holds a **registered dominion surface**,
+        # falling back to the first that merely exists. The readers this
+        # mirrors do the same: the wake's `_build_dominion_block` walks
+        # candidates until one yields a digest — not until one is a
+        # directory — and the pitfall block walks all of them. Stopping at
+        # the first directory points this registry at an empty
+        # account-root (which is a real candidate, and on a live account
+        # holds `repos/` and `surface/` without holding a single dominion
+        # file) while the store the wake actually reads sits one candidate
+        # down: a map of the wrong dominion, which is the failure it
+        # exists to report.
+        #
+        # The filenames come from the registry itself, so a surface added
+        # to the table enrols in this preference with no edit here.
+        wanted = _dominion_filenames()
+        fallback = None
         for candidate in dominion_mod.resident_dominion_candidates(repo_root, cfg):
-            if candidate.path.is_dir():
-                roots.dominion = candidate.path
-                roots.dominion_label = candidate.label
+            if not candidate.path.is_dir():
+                continue
+            if fallback is None:
+                fallback = candidate
+            if any((candidate.path / name).exists() for name in wanted):
+                fallback = candidate
                 break
+        if fallback is not None:
+            roots.dominion = fallback.path
+            roots.dominion_label = fallback.label
     except Exception:
         pass
 
@@ -572,7 +710,9 @@ def resolve_roots(
 
         roots.repo_label = acc.repo_label(repo_root, cfg)
         ctx = acc.resolve_context(repo_root, cfg, create=False)
+        roots.account_enabled = bool(ctx.enabled)
         if ctx.enabled:
+            roots.home_root = acc.context_home_root(ctx)
             surface = acc.work_surface_path(ctx)
             if surface.is_dir():
                 roots.surface = surface
@@ -661,6 +801,25 @@ def resolve(
     carrying an explicit ``note`` rather than an empty path list that
     reads identically to "the file isn't there".
     """
+    return resolve_with_roots(
+        repo_root, cfg, outbox_dir=outbox_dir, keys=keys,
+    )[0]
+
+
+def resolve_with_roots(
+    repo_root: Path,
+    cfg: dict[str, Any] | None = None,
+    *,
+    outbox_dir: Path | None = None,
+    keys: Iterable[str] | None = None,
+) -> tuple[list[Resolved], _Roots]:
+    """:func:`resolve`, plus the roots it resolved against.
+
+    Callers that need to say *what the rows are a claim about* — a clean
+    verdict's denominator, an unresolved root — need the roots, not just
+    the rows. Handing back only the rows is how "nothing on disk" and
+    "nowhere to look" become the same empty answer.
+    """
     roots = resolve_roots(repo_root, cfg, outbox_dir=outbox_dir)
     wanted = set(keys) if keys is not None else None
     out: list[Resolved] = []
@@ -691,7 +850,7 @@ def resolve(
         out.append(Resolved(
             surface=surface, paths=paths, bytes=total, mtime=newest,
         ))
-    return out
+    return out, roots
 
 
 def unresolvable_keys() -> tuple[str, ...]:
