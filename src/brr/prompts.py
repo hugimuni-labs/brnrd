@@ -1052,15 +1052,10 @@ def _build_dominion_block(repo_root: Path) -> str:
     cfg = conf.load_config(repo_root)
     if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
         return ""
-    budget = int(
-        cfg.get(
-            "dominion.inject_budget_bytes",
-            cfg.get(
-                "dominion_inject_budget_bytes",
-                dominion.DEFAULT_INJECT_BUDGET_BYTES,
-            ),
-        )
-    )
+    # One resolver, shared with the eviction preview — see
+    # `dominion.inject_budget_bytes` for why two readers of this number
+    # must not be allowed to drift.
+    budget = dominion.inject_budget_bytes(cfg)
     chosen = None
     digest = ""
     for candidate in dominion.resident_dominion_candidates(repo_root, cfg):
@@ -1779,14 +1774,12 @@ def _build_kb_health_block(repo_root: Path) -> str:
     # maintenance round is due, not a list of pages to trim.
     integrity = [f for f in findings if f.type not in _KB_SIZE_FINDINGS]
     size_pressure = [f for f in findings if f.type in _KB_SIZE_FINDINGS]
-    # Dominion findings ride the same rendered block (#985). They are not kb
-    # pages, but they are the same *kind* of thing the Integrity section is
-    # for — a specific inconsistency with a specific fix — and this is the
-    # one deterministic notice channel a resident already reads on wake.
-    # Appended after the sorted kb findings rather than merged into the sort:
-    # they are all `info`, so the errors → warnings → info order still holds,
-    # and "kb first, then dominion" is a legible grouping in its own right.
-    integrity.extend(_inert_pitfall_findings(repo_root, cfg))
+    # Dominion pitfall findings used to ride this block (#985) under an
+    # explicit apology — "they are not kb pages, but this is the one
+    # deterministic notice channel a resident already reads on wake." They
+    # now have their own: `_build_notes_health_block`, which owns every
+    # *note surface* the resident writes, the pitfall store included. This
+    # block is about the shared kb again, and only that.
     stats = kb_health.compute_graph_stats(repo_root, kb_dir)
     ownership = _kb_ownership_signal(size_pressure, stats)
     # `cfg` rather than a bare `repo_root`: the mirror's identity check asks
@@ -1827,44 +1820,50 @@ def _build_kb_health_block(repo_root: Path) -> str:
 _KB_SIZE_FINDINGS = frozenset({"oversized-page", "recent-log-budget-exceeded"})
 
 
-def _inert_pitfall_findings(repo_root: Path, cfg: dict) -> list:
-    """One ``info`` finding per dominion pitfall that has no ``trigger:`` line.
+def _build_notes_health_block(repo_root: Path) -> str:
+    """Render the note-surface preflight as a wake-time block.
 
-    A triggerless entry parses, renders in the file, reads as filed — and
-    matches nothing, forever (:func:`brr.pitfalls.inert`). Nothing said so
-    until #985; this is where it gets said. A *notice*, never a refusal:
-    ``parse_pitfalls`` still accepts the entry, so a resident drafting a body
-    before its triggers can save the file and see one line about it next wake.
+    The sibling of :func:`_build_kb_health_block`, and deliberately its
+    sibling rather than a section inside it. That block is about the shared
+    ``kb/``, which many readers own; this one is about the surfaces the
+    *resident* writes and the *resident* is narrowed by — the dominion's
+    pitfall store and self-inject manifest, the account work surface, the
+    two-party ``workflow.md``. #985's inert-pitfall notice used to ride the
+    kb block under an explicit apology for being there; it rides here now,
+    with the two checks that had nowhere to live at all.
 
-    Every candidate dominion is reported, not just the first one carrying a
-    store. ``_build_pitfalls_block`` walks the whole candidate list looking
-    for a match, so an inert entry in *any* of them is a real miss there;
-    stopping at the first store would narrow the report without saying it —
-    and the label in each description keeps two stores distinguishable.
+    Same contract as every deterministic preflight on this path:
+    **silent when clean** (returns ``""``), one findings block when not,
+    zero model cost. Silenced by ``kb_maintenance=never`` too — one switch
+    for "no deterministic maintenance nagging on this repo", rather than a
+    second knob a reader has to discover after turning the first one off.
 
-    Silent when every entry carries a trigger, when the dominion is disabled,
-    and when there is no ``pitfalls.md`` at all.
+    See :mod:`brr.notes` for the registry these checks read, and
+    :mod:`brr.notes_preflight` for what each check can and cannot prove.
     """
-    from . import dominion, kb_preflight, pitfalls
+    from . import config as conf
+    from . import notes_preflight
 
-    out = []
-    for candidate in dominion.resident_dominion_candidates(repo_root, cfg):
-        if not candidate.path.is_dir():
-            continue
-        for entry in pitfalls.inert(pitfalls.parse_pitfalls(candidate.path)):
-            out.append(kb_preflight.Finding(
-                type="inert-pitfall",
-                target=f"{pitfalls.PITFALLS_FILE} § {entry.title}",
-                description=(
-                    "entry has no `trigger:` line, so it matches no task and "
-                    "has never been injected — it reads as filed and behaves "
-                    f"as deleted (dominion `{candidate.label}`). Add a "
-                    "`trigger: <keyword>, <keyword>` line under the heading, "
-                    "or delete the entry if the lesson is spent."
-                ),
-                severity="info",
-            ))
-    return out
+    cfg = conf.load_config(repo_root)
+    if str(cfg.get("kb_maintenance", "auto")).strip().lower() == "never":
+        return ""
+    findings, scope = notes_preflight.scan_scoped(repo_root, cfg)
+    if not findings:
+        return ""
+    # The scope line rides *above* the findings, not below them. A findings
+    # list read without its denominator is a report of unknown coverage,
+    # and the one thing a reader must know before triaging the list is how
+    # much of the registry it is a claim about.
+    return (
+        "## notes health (deterministic preflight)\n\n"
+        "Your own note surfaces — dominion, work surface, run controls. Each "
+        "line is a place where what you wrote and what the reader parses have "
+        "come apart, so the surface renders as filed and behaves as absent. "
+        "Every finding names the code that decided it; check it before you "
+        "act on it.\n\n"
+        f"_Scope: {scope.line()}._\n\n"
+        + notes_preflight.format_findings(findings)
+    )
 
 
 def _kb_mirror_signal(state) -> str:
@@ -2325,6 +2324,21 @@ def _build_injected_blocks_with_contracts(
     if kb_health_block:
         keyed.append(("kb-health", kb_health_block))
 
+    # 9b. notes health — the resident's own surfaces, beside the shared kb's
+    notes_health_block = _build_notes_health_block(repo_root)
+    contracts.append(ContractEntry(
+        block_key="notes-health",
+        label="notes health (deterministic preflight)",
+        owner=OWNER_DAEMON_LIVE,
+        authority=AUTHORITY_HEALTH,
+        freshness=None,
+        location="computed",
+        present=bool(notes_health_block),
+        bytes=_rendered_bytes(notes_health_block),
+    ))
+    if notes_health_block:
+        keyed.append(("notes-health", notes_health_block))
+
     return keyed, contracts, work_surface_whole
 
 
@@ -2342,6 +2356,7 @@ def _build_injected_blocks(
     5. Pitfalls matching the task
     6. Recent-activity log tail
     7. kb health note
+    8. notes health note — the resident's own surfaces (:mod:`brr.notes`)
 
     The ordering puts the product identity contract before the resident-owned
     state (dominion + work surface + policy), then the shared project
