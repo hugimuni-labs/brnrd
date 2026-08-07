@@ -73,7 +73,15 @@ class TestProcRegistry:
 # ── daemon: the stop: drain verb ────────────────────────────────────
 
 
-def _drain_stop(tmp_path, monkeypatch, files, *, task_id="run-parent"):
+def _drain_stop(
+    tmp_path,
+    monkeypatch,
+    files,
+    *,
+    task_id="run-parent",
+    conversation_key="cloud:1:",
+    task_meta=None,
+):
     brr_dir = tmp_path / ".brr"
     responses = brr_dir / "responses"
     inbox = brr_dir / "inbox"
@@ -87,7 +95,11 @@ def _drain_stop(tmp_path, monkeypatch, files, *, task_id="run-parent"):
                         lambda brr, pkt: emitted.append(pkt))
     emit = daemon._WorkerEmit(
         brr_dir=brr_dir, conversation_key="", event_id="evt-1")
-    task = types.SimpleNamespace(id=task_id, conversation_key="cloud:1:")
+    task = types.SimpleNamespace(
+        id=task_id,
+        conversation_key=conversation_key,
+        meta={} if task_meta is None else dict(task_meta),
+    )
     stats: dict[str, int] = {}
     n = daemon._drain_outbox(
         emit, task, responses, "evt-1", outbox, inbox, stats=stats)
@@ -102,6 +114,10 @@ class TestStopVerb:
         monkeypatch.setattr(
             daemon.runner, "kill_matching",
             lambda prefix: killed.append(prefix) or True)
+        assert daemon._find_run_control("run-dead-parent") is None, (
+            "fixture must leave the original parent dead so adoption, not the "
+            "ordinary own-child path, is what turns this green"
+        )
 
         n, inbox, outbox, emitted, stats = _drain_stop(
             tmp_path, monkeypatch,
@@ -222,6 +238,39 @@ class TestStopVerb:
         assert len(completed) == 1
         assert "stopped before" in completed[0]["body"]
         assert completed[0].get("spawn_stopped") is True
+
+    def test_stop_adopts_orphaned_child_for_same_conversation_resident(
+        self, tmp_path, monkeypatch,
+    ):
+        daemon._register_run_control(
+            "evt-child",
+            "run-dead-parent",
+            parent_conversation_key="cloud:1:",
+            repo_label="Gurio/brr",
+        )
+        daemon._bind_run_control("evt-child", "run-child")
+        killed = []
+        monkeypatch.setattr(
+            daemon.runner, "kill_matching",
+            lambda prefix: killed.append(prefix) or True)
+
+        n, inbox, outbox, emitted, stats = _drain_stop(
+            tmp_path, monkeypatch,
+            [("stop.md", "---\nstop: run-child\nreason: take the new branch\n---\n")],
+            task_id="run-successor",
+            task_meta={"repo_label": "Gurio/brr", "trust_tier": "collaborator"},
+        )
+
+        assert n == 1
+        assert killed == ["evt-child-attempt-"]
+        control = daemon._find_run_control("evt-child")
+        assert control["parent_run_id"] == "run-successor"
+        assert control["adopted_from_run_id"] == "run-dead-parent"
+        notices = daemon._read_outbox_notices(outbox)
+        assert any("adopted orphaned child edge" in n["text"] for n in notices)
+        packet_types = [p.type for p in emitted]
+        assert "spawn_adopted" in packet_types
+        assert "spawn_stop_requested" in packet_types
 
     def test_stop_without_target_is_dropped(self, tmp_path, monkeypatch):
         # Unreachable via the drain (the branch requires a non-empty value);
@@ -365,6 +414,68 @@ class TestMessageVerb:
         assert n == 0
         notices = daemon._read_outbox_notices(outbox)
         assert any("not dispatched by this run" in x["text"] for x in notices)
+
+    def test_message_adopts_orphaned_child_uses_adopters_tier(
+        self, tmp_path, monkeypatch,
+    ):
+        daemon._register_run_control(
+            "evt-child",
+            "run-owner-parent",
+            parent_conversation_key="cloud:1:",
+            repo_label="Gurio/brr",
+        )
+        daemon._bind_run_control("evt-child", "run-child")
+        assert daemon._find_run_control("run-owner-parent") is None, (
+            "fixture must leave the original parent dead so the adopted-tier "
+            "assertion below is exercising adoption, not ordinary ownership"
+        )
+
+        n, inbox, outbox, emitted, stats = _drain_stop(
+            tmp_path, monkeypatch,
+            [("msg.md", "---\nto: run-child\n---\nsteer toward the new branch\n")],
+            task_id="run-successor",
+            task_meta={"repo_label": "Gurio/brr", "trust_tier": "collaborator"},
+        )
+
+        assert n == 1
+        assert stats.get("spawn_message") == 1
+        assert daemon._find_run_control("evt-child")["parent_run_id"] == "run-successor"
+        msgs = [
+            ev for ev in protocol.list_pending(inbox)
+            if ev.get("source") == "dispatch_message"
+        ]
+        assert len(msgs) == 1
+        assert msgs[0]["trust_tier"] == "collaborator"
+        notices = daemon._read_outbox_notices(outbox)
+        assert any("adopted orphaned child edge" in x["text"] for x in notices)
+        packet_types = [p.type for p in emitted]
+        assert "spawn_adopted" in packet_types
+        assert "spawn_message" in packet_types
+
+    def test_message_refused_for_orphan_outside_conversation_scope(
+        self, tmp_path, monkeypatch,
+    ):
+        daemon._register_run_control(
+            "evt-child",
+            "run-dead-parent",
+            parent_conversation_key="telegram:other:",
+            repo_label="Gurio/brr",
+        )
+        assert daemon._find_run_control("run-dead-parent") is None, (
+            "fixture must produce a dead parent or this refusal would be the "
+            "ordinary live-parent rule, not the conversation-scope guard"
+        )
+
+        n, inbox, outbox, emitted, stats = _drain_stop(
+            tmp_path, monkeypatch,
+            [("msg.md", "---\nto: evt-child\n---\nsteer\n")],
+            task_id="run-successor",
+            task_meta={"repo_label": "Gurio/brr"},
+        )
+
+        assert n == 0
+        notices = daemon._read_outbox_notices(outbox)
+        assert any("same conversation may adopt it" in x["text"] for x in notices)
 
     def test_message_refused_for_stopped_child(self, tmp_path, monkeypatch):
         daemon._register_run_control("evt-child", "run-parent")
