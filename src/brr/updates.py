@@ -40,7 +40,6 @@ PACKET_TYPES = (
     "heartbeat",
     "hooks_installed",
     "finalizing",
-    "attending",
     "container_preserved",
     "push_started",
     "push_done",
