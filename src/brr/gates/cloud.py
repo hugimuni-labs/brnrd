@@ -26,6 +26,17 @@ from ..gates.github.parse import parse_origin_url
 from ..run import Run, list_runs, run_manifest_path
 from . import delivery, runtime
 
+#: #1205: the relay API is reply-shaped (``POST /v1/daemons/responses``,
+#: keyed on an inbound event's ``cloud_event_id`` — see ``post()`` in
+#: ``_deliver_responses`` below, which raises ``PermanentDeliveryError`` with
+#: no address to post against). There is no fresh-send primitive yet, so an
+#: *unaddressed* cloud send is structurally impossible today — the daemon
+#: reads this declaration (never a hardcoded gate-name check) to refuse the
+#: attempt loudly at synthesis instead of queueing it into a drawer this
+#: gate's own delivery loop will never open. Absent on every other built-in
+#: gate, which defaults to capable and is unaffected by this module.
+CAN_SEND_UNADDRESSED = False
+
 _POLL_WAIT_S = 25
 _HTTP_TIMEOUT_S = 60
 _DEFAULT_DAEMON_NAME = "daemon"
@@ -337,6 +348,16 @@ def is_configured(brr_dir: Path) -> bool:
         and state.get("brnrd_url")
         and (state.get("account_id") or state.get("repo_id"))
     )
+
+
+def addressed(fm: Mapping[str, object]) -> bool:
+    """True when *fm* carries what an out-of-bound cloud send needs.
+
+    Consulted only when :data:`CAN_SEND_UNADDRESSED` is False (i.e. always,
+    for this gate) — ``post()``'s own address key, named once here rather
+    than as a string a caller in ``daemon.py`` has to remember matches it.
+    """
+    return bool(fm.get("cloud_event_id"))
 
 
 def read_server_fingerprint(brr_dir: Path) -> dict | None:

@@ -258,6 +258,78 @@ def test_transition_noop_on_already_delivered(tmp_path):
     assert message_store.read(path)["platform_gate"] == "g1"
 
 
+# ── #1205: `carried` — queued/duplicated, never a fabricated receipt ──
+
+
+def test_carried_transition_records_a_reason_not_a_platform_receipt(tmp_path):
+    """`carried` must never look like `delivered` did anything to earn it.
+
+    No ``platform_gate`` / ``platform_message_id`` — those fields claim a
+    platform actually acknowledged this exact row, and a `carried` row
+    never received one.
+    """
+    _repo, _home, ctx = _context(tmp_path)
+    path = message_store.stage(
+        ctx, repo_label="Gurio/brr", run_id="run-carried", body="x", kind="terminal",
+    )
+    assert message_store.transition(
+        path, message_store.CARRIED,
+        reason="delivered out-of-bound via notify.gate='telegram'",
+    )
+    row = message_store.read(path)
+    assert row["status"] == message_store.CARRIED
+    assert row["reason"] == "delivered out-of-bound via notify.gate='telegram'"
+    assert not row.get("platform_gate")
+    assert not row.get("platform_message_id")
+
+
+def test_carried_is_terminal_and_idempotent(tmp_path):
+    _repo, _home, ctx = _context(tmp_path)
+    path = message_store.stage(
+        ctx, repo_label="Gurio/brr", run_id="run-carried2", body="x", kind="terminal",
+    )
+    assert message_store.transition(path, message_store.CARRIED, reason="dup")
+    # Same terminal: idempotent True; a different terminal is refused.
+    assert message_store.transition(path, message_store.CARRIED, reason="dup again") is True
+    assert message_store.transition(path, message_store.DELIVERED, gate="g1") is False
+    assert message_store.read(path)["status"] == message_store.CARRIED
+
+
+def test_carried_row_is_never_picked_up_for_a_second_send(tmp_path):
+    """The no-double-send invariant (#1205), proven at the delivery seam.
+
+    A `carried` row is not `pending` — ``deliver_stream``'s own guard
+    (``message.get("status") != message_store.PENDING`` for partials,
+    the mirrored check for the terminal) must skip it exactly the way it
+    already skips a `delivered` row, so a gate that happens to poll the
+    same response file a `carried` row is attached to never re-sends it.
+    """
+    _repo, _home, ctx = _context(tmp_path)
+    inbox, responses = tmp_path / "inbox", tmp_path / "responses"
+    event = _event(inbox, status="done")
+    message = message_store.stage(
+        ctx, repo_label="Gurio/brr", run_id="run-carried3", body="already carried",
+        kind="terminal", target_event=event["id"],
+    )
+    protocol.write_response(
+        responses, event["id"], "already carried", message_path=message,
+    )
+    assert message_store.transition(
+        path=message, status=message_store.CARRIED, reason="duplicate of a delivered reply",
+    )
+
+    sent: list[str] = []
+
+    def deliver(_event, body):
+        sent.append(body)
+        return {"message_id": "should-not-happen"}
+
+    runtime.deliver_stream(inbox, responses, "telegram", deliver)
+
+    assert sent == []
+    assert message_store.read(message)["status"] == message_store.CARRIED
+
+
 # ── corpus layer path shape ───────────────────────────────────────────
 
 
