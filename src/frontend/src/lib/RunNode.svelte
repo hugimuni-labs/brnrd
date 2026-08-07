@@ -65,6 +65,11 @@
 	// so it is lifted out of the frame's prose into its own section rather than
 	// reading as a footnote under the request summary.
 	let produce = $derived(frame ? bodySection(frame.body, 'Produce') : '');
+	// The bolt heads the node (design-the-bolt.md §The cloth side): pulled
+	// from the *body* (the resident's own card), same source `## Now` reads,
+	// not the attested frame — the frame's own `bolt:` field already renders
+	// as a row in the fields grid above via `FRAME_FIELDS`.
+	let boltLead = $derived(node.body ? bodySection(node.body.markdown, 'Bolt') : '');
 	// Frame prose starts at the first `## ` section. Everything before it —
 	// the `# Run <id>` heading and, on nodes written before 2026-07-19, a
 	// bullet list restating the frontmatter — duplicates what this page
@@ -240,6 +245,30 @@
 				</p>
 			{/if}
 		</section>
+
+		<!-- ── Bolt: the completion declaration ───────────────────────────── -->
+		<!-- Heads the node, ahead of the woven body it summarizes
+		     (design-the-bolt.md §The cloth side). Absent for a run that
+		     hasn't been cut, or predates the bolt entirely — no section at
+		     all, rather than an empty one. -->
+		{#if boltLead}
+			<section class="panel mt-4 p-4" aria-labelledby="bolt-heading">
+				<div class="flex items-baseline justify-between gap-3 border-b border-amber-900/40 pb-2">
+					<h2 id="bolt-heading" class="font-mono text-xs tracking-wide text-amber-200 uppercase">
+						⚡ bolt
+					</h2>
+					<span class="shrink-0 font-mono text-[10px] text-ink-mute">resident-owned</span>
+				</div>
+				<div class="text-sm text-amber-100">
+					<MarkdownContent
+						markdown={boltLead}
+						sourcePath={node.body?.path ?? ''}
+						{knownPaths}
+						reveal
+					/>
+				</div>
+			</section>
+		{/if}
 
 		<!-- ── Body: what the resident wove ───────────────────────────────── -->
 		<section class="panel mt-4 p-4" aria-labelledby="body-heading">

@@ -265,6 +265,21 @@
 			</div>
 		{/if}
 
+		{#if digest.boltLead}
+			<!-- The bolt heads the node (design-the-bolt.md §The cloth side):
+			     the completion declaration, ahead of `## Now`, set off by its
+			     own rule so it reads as the run's lead rather than more of the
+			     same card. -->
+			<div class="mt-2 border-b border-amber-900/40 pb-2 text-sm text-amber-100">
+				<MarkdownContent
+					markdown={digest.boltLead}
+					sourcePath={node?.body?.path ?? ''}
+					{knownPaths}
+					reveal
+				/>
+			</div>
+		{/if}
+
 		{#if digest.now}
 			<div class="text-sm text-stone-300">
 				<MarkdownContent
