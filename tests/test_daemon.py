@@ -6081,6 +6081,46 @@ def test_forget_notify_gate_drops_the_entry_so_the_daemon_does_not_accumulate(
     assert "run-forget" not in daemon._notify_gate_cache
 
 
+def test_the_finalizer_actually_drops_the_cached_notify_gate():
+    """`_forget_notify_gate` must be *called* from the run finalizer.
+
+    Written after the direct-call test above stayed green when the call
+    site was deleted — it guarded the function, not its use, which is a
+    check with no teeth. Driving the real `_run_worker_and_finalize` to
+    prove this would mean standing up a runner; an AST assertion on the
+    call site is the cheap guard that can still fail, and this repo
+    already uses that idiom (`tests/test_spawn_row_contract.py`).
+
+    Drive red: delete the `_forget_notify_gate(...)` call in
+    `_run_worker_and_finalize`'s `finally:` block.
+    """
+    import ast
+
+    tree = ast.parse(Path(daemon.__file__).read_text(encoding="utf-8"))
+    finalizer = next(
+        (
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_run_worker_and_finalize"
+        ),
+        None,
+    )
+    # Sanity: a rename must break this loudly rather than pass over nothing.
+    assert finalizer is not None, (
+        "_run_worker_and_finalize not found in daemon.py — this guard has "
+        "been silently disarmed by a rename"
+    )
+    called = {
+        node.func.id
+        for node in ast.walk(finalizer)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "_forget_notify_gate" in called, (
+        "_run_worker_and_finalize must drop the run's cached notify gate; "
+        "without it a long-lived daemon holds one entry per run it ever ran"
+    )
+
+
 def test_an_uncacheable_run_still_resolves(tmp_path, monkeypatch):
     """A task with no id pays the full resolution rather than caching under "".
 
