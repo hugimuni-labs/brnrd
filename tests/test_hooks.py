@@ -3333,6 +3333,56 @@ def test_notices_chip_position_is_after_produce_before_card():
     assert bar.index("⚒") < bar.index("!1") < bar.index("mood") < bar.index("card ok")
 
 
+def test_notices_chip_carries_a_discharge_detail_line():
+    """#1116 residue: `!N` is an OBLIGATION-class chip like pending events,
+    but unlike pending events it rendered bare — no line saying what to do
+    about it. A refused outbox file is deleted exactly like an accepted
+    one, so `portal-state.json` → `notices` is the only way to recover the
+    text; the detail line must say so.
+    """
+    notices = [{"at": "2026-07-24T03:36:00Z", "text": "reply NOT delivered"}]
+    rendered = hooks.format_delta(_bar_payload(notices=notices))
+    lines = rendered.splitlines()
+    assert "!1" in lines[0]
+    detail = "\n".join(lines[1:])
+    assert "!1" in detail
+    assert "1 directive" in detail
+    assert "directives" not in detail  # singular at N=1
+    assert "portal-state.json" in detail
+    assert "notices" in detail
+
+    notices_plural = notices + [
+        {"at": "2026-07-24T03:37:00Z", "text": "spawn dropped: no inbox"}
+    ]
+    rendered_plural = hooks.format_delta(_bar_payload(notices=notices_plural))
+    detail_plural = "\n".join(rendered_plural.splitlines()[1:])
+    assert "2 directives" in detail_plural  # plural at N>1
+
+
+def test_mood_prompt_chip_carries_a_discharge_detail_line():
+    """#1116 residue: `mood?` is the other bare OBLIGATION-class chip — the
+    blank-mood nudge names the ask but never what silences it. The latch
+    itself (fires once, only in `mood`'s absence) is untouched; this only
+    checks the accompanying line renders whenever the chip does.
+    """
+    rendered = hooks.format_delta(_bar_payload(), mood_prompt=True)
+    lines = rendered.splitlines()
+    assert "mood?" in lines[0]
+    detail = "\n".join(lines[1:])
+    assert "mood?" in detail
+    assert ".mood" in detail
+    assert "brnrd emotes" in detail
+
+    # A run already wearing a face never needs the ask — same as the chip
+    # itself (`mood` takes the `if` branch, `mood_prompt` never reaches the
+    # `elif`) — so no detail line either.
+    rendered_with_mood = hooks.format_delta(
+        _bar_payload(), mood="smug_", mood_prompt=True
+    )
+    detail_with_mood = "\n".join(rendered_with_mood.splitlines()[1:])
+    assert "mood?" not in detail_with_mood
+
+
 # ── #1002: a notice carries a `kind`, and only `refused`/`dropped` count ─────
 
 

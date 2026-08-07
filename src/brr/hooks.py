@@ -2130,6 +2130,29 @@ def _render_bar(
     segments.append(("card", _card_chip(card, card_stale)))
 
     details: list[str] = []
+    if notices_chip:
+        # #1116 residue: every other OBLIGATION-class chip gets a detail
+        # line naming the act that clears it — `!N` didn't. Reuse the count
+        # already computed for the chip (`!N`) rather than recomputing it.
+        notices_count = int(notices_chip[1:])
+        details.append(
+            f"!{notices_count} — {notices_count} directive"
+            + ("s" if notices_count != 1 else "")
+            + " refused/dropped this run. Read `portal-state.json` → "
+            "`notices` for the text; a refused outbox file is deleted "
+            "exactly like an accepted one, so this is the only way to see "
+            "what was lost."
+        )
+    if not mood and mood_prompt:
+        # Same #1116 residue as the notices chip just above: the blank-mood
+        # nudge names the ask (`mood?`) but never what discharges it. The
+        # once-per-run latch itself is untouched — this only adds the line
+        # that rides alongside the chip whenever the caller's latch fires.
+        details.append(
+            "- mood?: no .mood written yet — a short line naming how the "
+            "run feels (see brnrd emotes) rides the dashboard for free; "
+            "one write silences this for good."
+        )
     if pending:
         # Same framing fix as the prose form (2026-07-05): a bare count reads
         # as ambient telemetry, so non-zero pending gets an explicit verb —
