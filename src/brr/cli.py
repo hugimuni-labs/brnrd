@@ -626,6 +626,18 @@ def build_parser() -> argparse.ArgumentParser:
                    help="maximum matching lines to print")
     p.set_defaults(func=cmd_kb)
 
+    p = sub.add_parser(
+        "notes",
+        help="the map of your durable note surfaces — where each lives, who "
+             "reads it, what grammar it wants, and what the preflight found")
+    p.add_argument(
+        "surface", nargs="?", default=None,
+        help="a surface key (see `brnrd notes`) for its grammar, readers and "
+             "findings; or `check` to run the checks with full detail")
+    p.add_argument("--json", action="store_true",
+                   help="emit machine-readable JSON instead of text")
+    p.set_defaults(func=cmd_notes)
+
     portal_p = sub.add_parser("portal", help="inspect daemon portal state")
     portal_sub = portal_p.add_subparsers(dest="portal_command", required=True)
 
@@ -2246,6 +2258,254 @@ def cmd_kb(args):
             pass
         print(f"{hit.source}: {rel}:{hit.line_no}: {hit.line}")
     return 0
+
+
+def _notes_age(mtime: float | None) -> str:
+    """``mtime`` as a coarse "how long since anyone wrote here"."""
+    import time
+
+    if not mtime:
+        return "—"
+    delta = max(0.0, time.time() - mtime)
+    for size, unit in ((86400.0, "d"), (3600.0, "h"), (60.0, "m")):
+        if delta >= size:
+            return f"{int(delta // size)}{unit} ago"
+    return "just now"
+
+
+def _notes_verdicts(findings: list) -> dict[str, list]:
+    """Group findings by the surface filename they name.
+
+    A finding's ``target`` leads with the file it is about
+    (``pitfalls.md § …``, ``workflow.md §Autonomy``, ``surface/``), so the
+    map can put a verdict on the row it belongs to without the checks
+    having to know the registry's key names. Anything that matches no row
+    is still printed — under ``unattributed``, never dropped, because a
+    finding filtered out of a map reads exactly like a clean surface.
+    """
+    out: dict[str, list] = {}
+    for finding in findings:
+        head = str(finding.target).split(" ")[0].split("§")[0].strip()
+        out.setdefault(Path(head).name, []).append(finding)
+    return out
+
+
+def _notes_match_verdicts(resolved, verdicts: dict[str, list]) -> list:
+    """The findings belonging to one resolved surface row."""
+    names = {p.name for p in resolved.paths}
+    names.add(Path(resolved.surface.path_hint).name)
+    hits: list = []
+    for head, findings in verdicts.items():
+        if head in names:
+            hits.extend(findings)
+    return hits
+
+
+def cmd_notes(args):
+    """``brnrd notes`` — the map, one surface, or the checks in full.
+
+    Three shapes, one verb, matching the three questions a resident
+    actually asks about its own note surfaces:
+
+    - bare — **the map**: every registered surface, what is on disk for
+      it, how it rides a wake, and its check verdict. The answer to
+      "which of these am I even maintaining, and is any of it broken?"
+    - ``<surface>`` — that surface's grammar, its readers, its budget
+      rule, and its current findings. The answer to "what shape does this
+      file want *before* I write into it" — which is the whole problem
+      this verb exists for: a resident that writes the wrong key gets
+      silence, not an error.
+    - ``check`` — the same checks the wake preflight runs, printed in
+      full rather than wake-sized.
+
+    ``--json`` on any of the three. The map's per-block byte costs come
+    from the same contract manifest the wake builds, so a cost printed
+    here is the cost a wake pays, not an estimate of one.
+    """
+    import json as json_mod
+
+    from . import config as conf
+    from . import notes, notes_preflight
+
+    repo_root = _repo_root()
+    cfg = conf.load_config(repo_root)
+    target = args.surface
+
+    if target == "check":
+        findings = notes_preflight.scan(repo_root, cfg)
+        if args.json:
+            print(json_mod.dumps([
+                {"type": f.type, "target": f.target, "severity": f.severity,
+                 "description": f.description}
+                for f in findings
+            ], indent=2))
+            return 0 if not findings else 1
+        if not findings:
+            print("[brnrd notes] all registered surfaces clean")
+            return 0
+        for finding in findings:
+            print(finding.render())
+        return 1
+
+    resolved = notes.resolve(repo_root, cfg)
+    findings = notes_preflight.scan(repo_root, cfg)
+    verdicts = _notes_verdicts(findings)
+
+    if target:
+        row = next((r for r in resolved if r.surface.key == target), None)
+        if row is None:
+            keys = ", ".join(r.surface.key for r in resolved)
+            print(f"[brnrd notes] no surface named {target!r}")
+            print(f"[brnrd notes] known: {keys}")
+            return 1
+        return _print_one_surface(row, _notes_match_verdicts(row, verdicts),
+                                  json_mod, as_json=args.json)
+
+    return _print_notes_map(
+        repo_root, resolved, verdicts, findings, json_mod, as_json=args.json,
+    )
+
+
+def _print_one_surface(row, hits, json_mod, *, as_json: bool) -> int:
+    surface = row.surface
+    if as_json:
+        print(json_mod.dumps({
+            "key": surface.key, "root": surface.root,
+            "role": surface.role, "grammar": surface.grammar,
+            "parser": surface.parser, "readers": list(surface.readers),
+            "lifetime": surface.lifetime, "budget": surface.budget,
+            "rides": surface.rides, "traits": list(surface.traits),
+            "paths": [str(p) for p in row.paths], "bytes": row.bytes,
+            "findings": [
+                {"type": f.type, "severity": f.severity,
+                 "target": f.target, "description": f.description}
+                for f in hits
+            ],
+        }, indent=2))
+        return 1 if hits else 0
+
+    print(f"{surface.key} — {surface.role}")
+    print(f"  root      {surface.root} ({surface.lifetime})")
+    print(f"  path      {surface.path_hint}")
+    for path in row.paths:
+        print(f"            {path}")
+    if row.note:
+        print(f"  note      {row.note}")
+    if not row.paths:
+        print("            (nothing on disk here — not itself a finding)")
+    print(f"  bytes     {row.bytes:,}   last write {_notes_age(row.mtime)}")
+    print(f"  grammar   {surface.grammar}")
+    if surface.parser:
+        print(f"  parsed by {surface.parser}")
+    print(f"  readers   {', '.join(surface.readers)}")
+    print(f"  budget    {surface.budget or '—  (no ceiling)'}")
+    print(f"  rides     {surface.rides or '—  (read on demand, never injected)'}")
+    if surface.traits:
+        print(f"  traits    {', '.join(surface.traits)}")
+    print()
+    if not hits:
+        print("  verdict   clean")
+        return 0
+    print("  verdict   " + f"{len(hits)} finding(s)")
+    for finding in hits:
+        print(f"  {finding.render()}")
+    return 1
+
+
+def _print_notes_map(
+    repo_root, resolved, verdicts, findings, json_mod, *, as_json: bool,
+) -> int:
+    from . import notes
+
+    if as_json:
+        print(json_mod.dumps({
+            "surfaces": [
+                {
+                    "key": r.surface.key, "root": r.surface.root,
+                    "path_hint": r.surface.path_hint,
+                    "paths": [str(p) for p in r.paths],
+                    "bytes": r.bytes, "mtime": r.mtime,
+                    "rides": r.surface.rides,
+                    "grammar": r.surface.grammar,
+                    "parser": r.surface.parser,
+                    "findings": len(_notes_match_verdicts(r, verdicts)),
+                }
+                for r in resolved
+            ],
+            "findings": [
+                {"type": f.type, "severity": f.severity, "target": f.target}
+                for f in findings
+            ],
+        }, indent=2))
+        return 1 if findings else 0
+
+    # The block costs, measured once from the manifest the wake itself
+    # builds. Reported per *block* rather than smeared across the rows that
+    # feed it — several surfaces share one budget, and splitting a shared
+    # number between them would invent precision nobody measured.
+    costs: dict[str, int] = {}
+    try:
+        from . import prompts
+
+        _keyed, contracts, _whole = prompts._build_injected_blocks_with_contracts(
+            repo_root
+        )
+        costs = {c.block_key: c.bytes for c in contracts if c.present}
+    except Exception:
+        pass
+
+    unresolved = notes.unresolvable_keys()
+    if unresolved:
+        print(f"[brnrd notes] registry entries with no resolver: "
+              f"{', '.join(unresolved)}")
+
+    attributed: set[int] = set()
+    header = f"{'surface':<18} {'bytes':>9}  {'last write':<11} {'rides':<18} {'?':<3} grammar"
+    for root in notes.ROOT_ORDER:
+        rows = [r for r in resolved if r.surface.root == root]
+        if not rows:
+            continue
+        print(f"\n── {root} — {notes.ROOT_BLURBS.get(root, '')}")
+        print(header)
+        for row in rows:
+            hits = _notes_match_verdicts(row, verdicts)
+            attributed.update(id(f) for f in hits)
+            worst = ""
+            if hits:
+                rank = {"error": "!!", "warning": "!", "info": "?"}
+                worst = min(
+                    (rank.get(f.severity, "?") for f in hits),
+                    key=lambda mark: {"!!": 0, "!": 1, "?": 2}[mark],
+                )
+            size = f"{row.bytes:,}" if row.paths else "—"
+            print(
+                f"{row.surface.key:<18} {size:>9}  "
+                f"{_notes_age(row.mtime):<11} {row.surface.rides or '—':<18} "
+                f"{worst:<3} {row.surface.grammar.splitlines()[0][:70]}"
+            )
+
+    # A finding that matched no row is printed here rather than dropped.
+    # Filtered out, it would read exactly like a clean surface — which is
+    # the failure this whole verb exists to end.
+    orphans = [f for f in findings if id(f) not in attributed]
+    if orphans:
+        print("\n── findings not attributable to a registered surface")
+        for finding in orphans:
+            print(f"  {finding.render()}")
+
+    if costs:
+        print("\n── what those blocks cost this wake (shared per block, "
+              "not per surface)")
+        for key in ("dominion", "work-surface", "recent-activity",
+                    "knowledge-sources", "kb-health", "notes-health"):
+            if key in costs:
+                print(f"  {key:<20} {costs[key]:>9,} B")
+
+    print(
+        f"\n{len(findings)} finding(s) — `brnrd notes check` for detail, "
+        "`brnrd notes <surface>` for one surface's grammar and readers"
+    )
+    return 1 if findings else 0
 
 
 def _fmt_duration(seconds: object) -> str:
