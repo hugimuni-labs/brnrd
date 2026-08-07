@@ -6028,7 +6028,7 @@ def _note_event_closed(
             lifetime="run",
         )
         return None
-    if _is_strand(task.meta) and not _strand_may_address(
+    if _is_strand(getattr(task, "meta", None)) and not _strand_may_address(
         resolved_event, current_event_id,
     ):
         _record_outbox_notice(
@@ -7564,7 +7564,10 @@ def _drain_outbox(
             continue
         if (
             resolved_event is not None
-            and _is_strand(task.meta)
+            # ``getattr``: this is the hot path every reply drain walks, and
+            # an AttributeError here would break replies wholesale. A record
+            # without ``meta`` is not a strand.
+            and _is_strand(getattr(task, "meta", None))
             and not _strand_may_address(resolved_event, event_id)
         ):
             # The mail-reading hole, closed. Inbound isolation is enforced
