@@ -5726,149 +5726,169 @@ def test_result_satisfied_delivery_missing_artifact_fails():
     assert signal == ""
 
 
-def test_post_delivery_attend_skips_when_gate_not_configured(tmp_path, monkeypatch):
-    """The daemon dwell is a real gate behavior, not a unit-test tax.
+def test_status_done_race_still_dispatches_follow_up_promptly(tmp_path, monkeypatch):
+    """#post-delivery-attend-removal: does killing the daemon-owned attend
+    dwell (and its ``inbox_wake()`` re-arm) reopen a race where a follow-up
+    landing right as a run wraps up sits until some later poll tick instead
+    of dispatching promptly?
 
-    A direct worker test has no configured Telegram gate, so even with the
-    default-positive seconds knob the helper returns before sleeping.
+    Forces the worst case deterministically instead of hoping for lucky
+    thread scheduling: the primary worker is paused inside
+    ``_emit_preserved_containers`` — the last real hook that still runs
+    before the (now-deleted) attend call site, so it fires at the same
+    point ``update_status("done")`` already ran. The follow-up event is
+    created while the primary is still paused there, and release is
+    withheld until at least one full main-loop iteration has cleared
+    ``protocol.inbox_wake()`` while ``current`` was still busy — exactly the
+    seam the removed re-arm existed to close (see the deleted comment this
+    test used to pin, kept here in spirit: "by the time attendance ends the
+    wake can already be consumed"). If nothing re-signals the loop on
+    release, the follow-up can only be noticed on the next poll tick.
     """
-    brr_dir = tmp_path / ".brr"
-    inbox = brr_dir / "inbox"
-    inbox.mkdir(parents=True)
-    event = {"id": "evt-a", "source": "telegram", "status": "done"}
-    task = Run(
-        id="run-a",
-        event_id="evt-a",
-        body="answer",
-        source="telegram",
-        conversation_key="telegram:42:",
+    write_repo_scaffold(tmp_path)
+    inbox = tmp_path / ".brr" / "inbox"
+    make_event(tmp_path, eid="evt-primary", source="telegram")
+
+    _stub_env_isolated(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        daemon.runner, "resolve_runner_profile",
+        lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root),
+    )
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts, "build_daemon_prompt",
+        lambda task, eid, rp, root, **kw: "PROMPT",
     )
     monkeypatch.setattr(
-        daemon.time,
-        "sleep",
-        lambda _seconds: (_ for _ in ()).throw(AssertionError("slept")),
+        daemon.sync, "refresh_before_run",
+        lambda _repo, *, target_branches, cfg=None: daemon.sync.SyncResult(),
     )
 
-    result = daemon._post_delivery_attend(
-        daemon._WorkerEmit(brr_dir, "telegram:42:", "evt-a"),
-        task,
-        event,
-        inbox,
-        {"delivery.post_delivery_attend_seconds": 30},
-        signal="current_reply",
-        attempt=1,
-    )
+    base_env = envs.get_env("worktree")
 
-    assert result == "skipped"
+    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("ok\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="ok\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
+        )
 
+    monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
 
-def test_post_delivery_attend_emits_phase_and_yields_on_pending_event(
-    tmp_path, monkeypatch,
-):
-    brr_dir = tmp_path / ".brr"
-    inbox = brr_dir / "inbox"
-    protocol.create_event(
-        inbox,
-        "telegram",
-        "one more thing",
-        conversation_key="telegram:42:",
-    )
-    event = {"id": "evt-a", "source": "telegram", "status": "done"}
-    task = Run(
-        id="run-a",
-        event_id="evt-a",
-        body="answer",
-        source="telegram",
-        conversation_key="telegram:42:",
-    )
-    monkeypatch.setattr(daemon, "_gate_can_deliver", lambda _brr, _gate: True)
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
+    monkeypatch.setattr(daemon.conf, "load_config", lambda _root: {})
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
+    # Generous relative to the synchronization timeouts below (not tuned to
+    # a bare-metal quiet box) so "waited out a poll tick" (~1x this value)
+    # and "prompt" (scheduling overhead only) stay cleanly separated even
+    # on a loaded host running many tests concurrently.
+    monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 2.0)
+
+    # `_run_worker_and_finalize` does real capture/ledger/publish/dominion
+    # work *after* `_run_worker` returns and *before* its own return (see
+    # its `finally` block) — that tail is real production surface this test
+    # deliberately exercises (the fix under test lives at the very end of
+    # it), but none of these individual steps are what's under test here,
+    # and against a scaffold with no real git repo they are slow, flaky, or
+    # both. Neutered to fast no-ops so the only variable left is the wake
+    # race itself.
+    for name in (
+        "_stray_host_write", "_capture_knowledge", "_weld_capture",
+        "publish", "publish_default_branch", "_persist_run_body",
+        "_persist_run_state_doc", "_persist_boundaries_summary",
+        "_capture_control_files", "_capture_dominion",
+        "_attribute_schedule_entries",
+    ):
+        monkeypatch.setattr(daemon, name, lambda *_a, **_k: None)
+    monkeypatch.setattr(daemon.run_ledger, "append_closed_run", lambda *_a, **_k: None)
+
+    reached_tail = threading.Event()
+    release_worker = threading.Event()
+
+    def paused_emit_preserved_containers(_emit, _task):
+        reached_tail.set()
+        release_worker.wait(timeout=30)
+
     monkeypatch.setattr(
-        daemon.time,
-        "sleep",
-        lambda _seconds: (_ for _ in ()).throw(AssertionError("slept")),
+        daemon, "_emit_preserved_containers", paused_emit_preserved_containers,
     )
 
-    result = daemon._post_delivery_attend(
-        daemon._WorkerEmit(brr_dir, "telegram:42:", "evt-a"),
-        task,
-        event,
-        inbox,
-        {"delivery.post_delivery_attend_seconds": 30},
-        signal="current_reply",
-        attempt=1,
+    scan_calls = {"n": 0}
+    stop_flag = {"go": False}
+    real_dispatchable_targets = daemon._dispatchable_targets
+
+    def counting_dispatchable_targets(account_context, repo_root, cfg):
+        scan_calls["n"] += 1
+        if stop_flag["go"]:
+            raise StopIteration
+        return real_dispatchable_targets(account_context, repo_root, cfg)
+
+    monkeypatch.setattr(daemon, "_dispatchable_targets", counting_dispatchable_targets)
+
+    dispatch_times: dict[str, float] = {}
+    real_set_status = daemon.protocol.set_status
+
+    def tracking_set_status(event, status):
+        if status == "processing":
+            dispatch_times.setdefault(event.get("id"), time.monotonic())
+        return real_set_status(event, status)
+
+    monkeypatch.setattr(daemon.protocol, "set_status", tracking_set_status)
+
+    result: dict[str, object] = {}
+
+    def controller():
+        if not reached_tail.wait(timeout=30):
+            result["error"] = "primary worker never reached the finalize tail"
+            stop_flag["go"] = True
+            return
+        pre_count = scan_calls["n"]
+        follow_up_path = protocol.create_event(
+            inbox, "telegram", "oh wait, also this", trust_tier="owner",
+        )
+        follow_up_id = protocol._read_event(follow_up_path)["id"]
+        # Force at least one full main-loop iteration to clear the wake
+        # while `current` (the primary) is still busy — the exact seam the
+        # removed re-arm existed to close.
+        deadline = time.monotonic() + 30
+        while scan_calls["n"] < pre_count + 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        result["forced_extra_iteration"] = scan_calls["n"] >= pre_count + 2
+        release_at = time.monotonic()
+        release_worker.set()
+        deadline2 = time.monotonic() + 30
+        while follow_up_id not in dispatch_times and time.monotonic() < deadline2:
+            time.sleep(0.005)
+        result["dispatched"] = follow_up_id in dispatch_times
+        if result["dispatched"]:
+            result["delay"] = dispatch_times[follow_up_id] - release_at
+        stop_flag["go"] = True
+
+    thread = threading.Thread(target=controller)
+    thread.start()
+
+    with pytest.raises(StopIteration):
+        daemon.start(tmp_path)
+    thread.join(timeout=30)
+
+    assert "error" not in result, result.get("error")
+    assert result.get("forced_extra_iteration"), (
+        "test setup failed to force the race window: the loop never "
+        "re-cleared the wake while the primary was still busy"
     )
-
-    assert result == "pending"
-    records = [
-        r for r in daemon.conversations.read_records(brr_dir, "telegram:42:")
-        if r.get("kind") == "update"
-    ]
-    assert [r.get("type") for r in records] == ["attending"]
-    assert records[0]["reason"] == "watching for follow-up after delivery"
-
-
-def test_post_delivery_attend_enqueues_follow_up_that_lands_during_dwell(
-    tmp_path, monkeypatch,
-):
-    """#351 interim guarantee: a follow-up arriving during the attendance
-    dwell must reach the normal dispatch path — never be polled-and-dropped.
-
-    Pins the failure mode, not the implementation: after the dwell yields on
-    the pending follow-up, the event must still be *dispatchable* (it becomes
-    the next enqueued run, not a silent drop) and the inbox wake must be
-    re-armed so the single-flight loop rescans promptly instead of the
-    follow-up being eaten. Models the live loss the maintainer hit: a
-    same-thread message sent during the post-run window vanished.
-    """
-    brr_dir = tmp_path / ".brr"
-    inbox = brr_dir / "inbox"
-    follow_up_path = protocol.create_event(
-        inbox,
-        "telegram",
-        "oh wait, also Y",
-        conversation_key="telegram:42:",
+    assert result.get("dispatched"), "follow-up was never dispatched at all"
+    # "Promptly" = well inside one poll tick, not "eventually, after
+    # waiting out a whole extra _SCAN_INTERVAL because the wake signal that
+    # arrived during the busy window was consumed for nothing."
+    assert result["delay"] < daemon._SCAN_INTERVAL / 2, (
+        f"follow-up dispatch took {result['delay']:.3f}s after release "
+        f"(scan interval {daemon._SCAN_INTERVAL}s) — it waited out a poll "
+        "tick instead of being picked up promptly"
     )
-    follow_up = protocol._read_event(follow_up_path)
-    event = {"id": "evt-a", "source": "telegram", "status": "done"}
-    task = Run(
-        id="run-a",
-        event_id="evt-a",
-        body="answer",
-        source="telegram",
-        conversation_key="telegram:42:",
-    )
-    monkeypatch.setattr(daemon, "_gate_can_deliver", lambda _brr, _gate: True)
-    monkeypatch.setattr(
-        daemon.time,
-        "sleep",
-        lambda _seconds: (_ for _ in ()).throw(AssertionError("slept")),
-    )
-    # The main loop clears the wake at the top of every iteration; while the
-    # attending run is still the in-flight `current` it cannot dispatch the
-    # follow-up (single-flight). Simulate that consumed signal so the test
-    # exercises the seam where the follow-up would otherwise be missed.
-    protocol.inbox_wake().clear()
-
-    result = daemon._post_delivery_attend(
-        daemon._WorkerEmit(brr_dir, "telegram:42:", "evt-a"),
-        task,
-        event,
-        inbox,
-        {"delivery.post_delivery_attend_seconds": 30},
-        signal="current_reply",
-        attempt=1,
-    )
-
-    assert result == "pending"
-    # The follow-up was not consumed by attendance: it is still on the normal
-    # dispatch path and will become an enqueued run.
-    dispatchable_ids = {
-        ev.get("id") for ev in protocol.list_dispatchable(inbox)
-    }
-    assert follow_up["id"] in dispatchable_ids
-    # And the loop is woken to pick it up on the next tick rather than waiting
-    # out the poll — detecting it during attendance *is* its enqueue.
-    assert protocol.inbox_wake().is_set()
 
 
 def test_run_worker_writes_prompt_to_run_dir(tmp_path, monkeypatch):

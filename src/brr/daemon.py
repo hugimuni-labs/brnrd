@@ -174,13 +174,6 @@ _HEARTBEAT_INTERVAL = 10.0
 # and drains the outbox in response, so a mid-thought reply lands promptly
 # instead of waiting out the tick. See kb/design-runner-back-channel.md.
 _FLUSH_POLL_INTERVAL = 1.0
-# Daemon-owned floor under the prompt-level post-delivery linger. The runner
-# can still keep the same thought alive with outbox + .keepalive; this dwell
-# covers the common failure where the runner exits after a reply. It holds the
-# single-flight slot briefly, renders an explicit attending card phase, and
-# yields the moment any pending event appears.
-_POST_DELIVERY_ATTEND_SECONDS_DEFAULT = 90.0
-_POST_DELIVERY_ATTEND_POLL_INTERVAL = 1.0
 # Quota-aware pacing floors (kb/design-director-loop.md §B1, refined
 # 2026-07-28): below the low floor, `every:` schedule entries stretch their
 # interval. The critical floor remains a resident-facing scarcity signal; it
@@ -4326,17 +4319,6 @@ def _run_worker(
             task.terminal_reply = terminal_reply
             _cleanup_traces_on_success(brr_dir, runs_dir, task)
             _emit_preserved_containers(emit, task)
-            attend_result = _post_delivery_attend(
-                emit,
-                task,
-                event,
-                inbox_dir,
-                cfg,
-                signal=signal,
-                attempt=attempt,
-                account_context=account_context,
-                repo_label=repo_label,
-            )
             # Payload carries the multi-thread delivery shape so the card
             # can reflect "delivered to N threads" / "sent N out-of-bound"
             # / "no reply — committed work" instead of collapsing
@@ -4353,7 +4335,6 @@ def _run_worker(
                 outbound_messages=output_stats.get("outbound", 0),
                 respawn_requests=output_stats.get("respawn", 0),
                 committed=has_new_commit,
-                post_delivery_attend=attend_result,
             )
             return task
 
@@ -11256,30 +11237,6 @@ def _spawn_pool_accepted_count() -> int:
         return len(_spawn_pool_accepted)
 
 
-def _post_delivery_attend_seconds(cfg: dict) -> float:
-    """Configured daemon-owned dwell after a current-thread delivery.
-
-    ``delivery.post_delivery_linger_seconds`` is accepted as an alias because
-    the docs and older discussion called the whole behavior "linger". The code
-    uses "attend" for the daemon floor so it does not overclaim same-thought
-    runner residency.
-    """
-    return _seconds_config(
-        cfg,
-        "delivery.post_delivery_attend_seconds",
-        "delivery.post_delivery_linger_seconds",
-        default=_POST_DELIVERY_ATTEND_SECONDS_DEFAULT,
-    )
-
-
-def _post_delivery_attend_poll_interval(cfg: dict) -> float:
-    return _seconds_config(
-        cfg,
-        "delivery.post_delivery_attend_poll_seconds",
-        default=_POST_DELIVERY_ATTEND_POLL_INTERVAL,
-    )
-
-
 def _quota_low_floor_pct(cfg: dict) -> float:
     """Below this remaining-percent, `every:` entries stretch their interval."""
     return _seconds_config(
@@ -11348,111 +11305,6 @@ def _quota_pacing_status(
     if thin:
         status["excluded_thin"] = thin
     return status
-
-
-def _should_post_delivery_attend(
-    brr_dir: Path,
-    task: Run,
-    event: dict,
-    *,
-    signal: str,
-    seconds: float,
-) -> bool:
-    if seconds <= 0:
-        return False
-    if signal != "current_reply":
-        return False
-    if not _event_requires_thread_delivery(event):
-        return False
-    if not task.conversation_key:
-        return False
-    source = str(event.get("source") or task.source or "").strip()
-    if not source:
-        return False
-    return _gate_can_deliver(brr_dir, source)
-
-
-def _post_delivery_attend(
-    emit: _WorkerEmit,
-    task: Run,
-    event: dict,
-    inbox_dir: Path,
-    cfg: dict,
-    *,
-    signal: str,
-    attempt: int,
-    account_context: account.AccountContext | None = None,
-    repo_label: str | None = None,
-) -> str:
-    """Hold the daemon slot briefly after a delivered current-thread reply.
-
-    This is deliberately weaker than runner-owned linger: the runner process has
-    already returned, so a same-thread follow-up will become the next run rather
-    than being answered inside the same thought. The value is still real: the
-    card says "delivered · attending", the slot stays warm-ish for provider
-    cache reuse, and unrelated work is not starved because any pending event
-    ends the dwell immediately.
-
-    Returns ``skipped | pending | quiet`` for tests and packet metadata.
-    """
-    seconds = _post_delivery_attend_seconds(cfg)
-    if not _should_post_delivery_attend(
-        emit.brr_dir, task, event, signal=signal, seconds=seconds,
-    ):
-        return "skipped"
-
-    poll = _post_delivery_attend_poll_interval(cfg)
-    if poll <= 0:
-        poll = _POST_DELIVERY_ATTEND_POLL_INTERVAL
-    poll = min(poll, max(seconds, 0.001))
-    event_id = str(event.get("id") or task.event_id or emit.event_id)
-    emit(
-        "attending",
-        run_id=task.id,
-        event_id=event_id,
-        seconds=int(seconds),
-        reason="watching for follow-up after delivery",
-    )
-    started = time.monotonic()
-    deadline = started + seconds
-    next_heartbeat = started + _HEARTBEAT_INTERVAL
-    while True:
-        if _pending_events_for_agent(
-            inbox_dir,
-            event_id,
-            account_context=account_context,
-            repo_label=repo_label,
-        ):
-            # #351 interim guarantee: a follow-up that lands *during* the
-            # attendance dwell must reach the normal dispatch path — never be
-            # polled here and then silently dropped (the loss the maintainer
-            # hit live: a same-thread message eaten on the one channel he
-            # watches). The runner process has already exited, so this event
-            # cannot fold into the current thought; it becomes the next run.
-            #
-            # The subtle seam this closes: ``create_event`` sets the inbox
-            # wake when the follow-up arrives, but the main loop clears that
-            # wake at the top of every iteration (protocol.inbox_wake()), and
-            # while the attending run is still the in-flight ``current`` the
-            # loop can't dispatch it (single-flight). By the time attendance
-            # ends the wake can already be consumed, so nothing guarantees the
-            # follow-up is re-scanned promptly. Re-arm it here so detecting the
-            # event during attendance *is* its enqueue: the loop rescans and
-            # dispatches on the next tick rather than waiting out the poll.
-            protocol.inbox_wake().set()
-            return "pending"
-        now = time.monotonic()
-        if now >= deadline:
-            return "quiet"
-        if now >= next_heartbeat:
-            emit(
-                "heartbeat",
-                run_id=task.id,
-                attempt=attempt,
-                elapsed_seconds=int(now - started),
-            )
-            next_heartbeat = now + _HEARTBEAT_INTERVAL
-        time.sleep(min(poll, max(0.0, deadline - now)))
 
 
 def _failure_reason(
@@ -11854,6 +11706,24 @@ def _run_worker_and_finalize(
             # is rendered during the run, not after it.
             _capture_pr_handle(task, Path(str(task.meta["outbox_path"])))
             _remove_outbox(Path(str(task.meta["outbox_path"])))
+        # The main loop clears the inbox wake at the top of every iteration
+        # and only reaps `current` (freeing the single-flight slot) once
+        # this function — the one actually submitted to the pool — has
+        # returned. A follow-up that lands anywhere in the finalize/capture
+        # work above sets the wake too, but an intervening loop iteration
+        # can clear it while `current` is still busy, and nothing else
+        # re-signals the loop afterward — so the follow-up would only be
+        # noticed on the next timed poll tick instead of promptly. This is
+        # the true tail (last line of `finally`, right before the Future
+        # resolves — see the #648 comment above this block for why even
+        # `_notify_spawn_parent` cannot run any earlier); re-arming here,
+        # unconditionally, closes that gap regardless of whether anything is
+        # actually pending (a spurious set just costs one cheap extra scan).
+        # Driven-test proof: tests/test_daemon.py::
+        # test_status_done_race_still_dispatches_follow_up_promptly forces
+        # the race without this line (dispatch lands roughly a full poll
+        # tick late) and confirms it closes with this line restored.
+        protocol.inbox_wake().set()
 
 
 def _capture_pr_handle(task: Run, outbox_dir: Path) -> None:

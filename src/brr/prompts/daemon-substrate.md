@@ -170,9 +170,8 @@ and the reply are yours.
     capacity and quota are healthy, or defer with a reason; the queue never
     starves
   - horizon ~10–15m past last delivery; longer vigils are scheduled wakes
-  - post-delivery the daemon holds a short `delivered · attending` floor:
-    runner exited, card and slot warm — a follow-up becomes the **next run**,
-    same conversation, only the process resets
+  - once the runner exits, nothing holds the slot for you — a follow-up
+    becomes the **next run**, same conversation, only the process resets
 - **receipts** — wrote files ⇒ **commit on the current branch; uncommitted
   work disappears.**
   - `worktree` environment ⇒ the daemon publishes the branch you end on ·

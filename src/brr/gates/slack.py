@@ -251,7 +251,6 @@ _RENDERABLE_PACKETS = {
     "artifact_created",
     "heartbeat",
     "finalizing",
-    "attending",
     "push_started",
     "push_done",
     "done",
