@@ -45,8 +45,10 @@ cannot read is the same wall breached from the far side. (`spawn:`,
   thirty messages nobody asked for, arriving in a thread you cannot hear
   the reply from. The test before you stage one — *does this change what a
   person does in the next hour, and is it lost if I hand it to my parent
-  instead?* Both yes ⇒ send. Either no ⇒ it is your return value, and the
-  `.card` already carries progress for anyone watching.
+  instead?* Both yes ⇒ send. Either no ⇒ it is your return value. Progress has a
+  surface already: your `.card` (run node and dashboard, no chat echo —
+  mirror cards are refused for you precisely so a fleet cannot flood a
+  thread), and `title:` names your row from the first heartbeat.
 
 Task → bounded work → stop. The work surfaces something past the task
 (wrong spec assumption · fork worth a human · durable lesson) ⇒ say it
