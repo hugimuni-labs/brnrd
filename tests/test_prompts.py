@@ -4352,7 +4352,7 @@ class TestSyncMarkerBannerSpeaksItsClass:
 
 # ── an inert pitfall on the wake surface (#985) ──────────────────────
 #
-# Driven through `_build_kb_health_block` — the function that actually
+# Driven through `_build_notes_health_block` — the function that actually
 # renders `## Findings (deterministic preflight)` into a wake — and not
 # through `pitfalls.inert` alone. The defect #985 names is that nothing
 # *says* a triggerless entry is inert; a detector whose finding never
@@ -4361,6 +4361,11 @@ class TestSyncMarkerBannerSpeaksItsClass:
 # `kb_preflight.scan` and the graph stats are stubbed flat so the only
 # thing that can put the block on screen is the pitfall store. The
 # dominion resolution, the parse, and the rendering stay real end to end.
+#
+# The block moved out of `kb health` and into its own `notes health`
+# (2026-08-07): a pitfall store is not a kb page, and the old code said so
+# in an apology comment. The *finding* is unchanged — same type, same
+# severity, same rendered line — only the block that carries it.
 
 
 class TestInertPitfallReachesTheWake:
@@ -4389,7 +4394,7 @@ class TestInertPitfallReachesTheWake:
         self, tmp_path, monkeypatch
     ):
         """The headline case: the entry title and the file, on screen."""
-        from brr.prompts import _build_kb_health_block
+        from brr.prompts import _build_notes_health_block
 
         repo = self._repo(tmp_path, monkeypatch)
         _seed_pitfalls(
@@ -4398,7 +4403,7 @@ class TestInertPitfallReachesTheWake:
             "Read the probe before trusting the screenshot.\n",
         )
 
-        block = _build_kb_health_block(repo)
+        block = _build_notes_health_block(repo)
 
         assert "inert-pitfall" in block
         assert "Seeing unshipped frontend — the probe config" in block
@@ -4412,7 +4417,7 @@ class TestInertPitfallReachesTheWake:
         line, no empty section, no block at all — #623: a guard that fires
         every wake for a non-reason stops being read, and takes the wakes
         where it *is* a reason down with it."""
-        from brr.prompts import _build_kb_health_block
+        from brr.prompts import _build_notes_health_block
 
         repo = self._repo(tmp_path, monkeypatch)
         _seed_pitfalls(
@@ -4421,16 +4426,16 @@ class TestInertPitfallReachesTheWake:
             "## Quota flicker\ntrigger: quota, budget\nCheck the provider.\n",
         )
 
-        assert _build_kb_health_block(repo) == ""
+        assert _build_notes_health_block(repo) == ""
 
     def test_no_pitfalls_file_at_all_renders_nothing(
         self, tmp_path, monkeypatch
     ):
-        from brr.prompts import _build_kb_health_block
+        from brr.prompts import _build_notes_health_block
 
         repo = self._repo(tmp_path, monkeypatch)
 
-        assert _build_kb_health_block(repo) == ""
+        assert _build_notes_health_block(repo) == ""
 
     def test_it_is_a_notice_not_a_refusal(self, tmp_path, monkeypatch):
         """A resident drafting a body before its triggers must still be able
@@ -4438,7 +4443,7 @@ class TestInertPitfallReachesTheWake:
         the store keeps working: its neighbour still fires, and the inert
         entry itself is still parsed rather than dropped."""
         from brr import pitfalls
-        from brr.prompts import _build_kb_health_block, _build_pitfalls_block
+        from brr.prompts import _build_notes_health_block, _build_pitfalls_block
 
         repo = self._repo(tmp_path, monkeypatch)
         _seed_pitfalls(
@@ -4447,7 +4452,7 @@ class TestInertPitfallReachesTheWake:
             "## Docker rebuild\ntrigger: docker\nRebuild before you test.\n",
         )
 
-        assert "Half-drafted" in _build_kb_health_block(repo)
+        assert "Half-drafted" in _build_notes_health_block(repo)
 
         fired = _build_pitfalls_block(repo, "rebuild the docker image")
         assert "Docker rebuild" in fired
