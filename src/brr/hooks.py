@@ -2786,7 +2786,7 @@ def format_delta(
         # flip: the declaration was validated at `cut:` time); the annotated
         # count rides the line so a forced accept is never mistaken for a
         # clean one.
-        stop_bolt = portal.get("bolt") if isinstance(portal.get("bolt"), dict) else {}
+        stop_bolt = payload.get("bolt") if isinstance(payload.get("bolt"), dict) else {}
         if stop_bolt.get("accepted"):
             annotated_n = int(stop_bolt.get("annotated") or 0)
             lines.append(
