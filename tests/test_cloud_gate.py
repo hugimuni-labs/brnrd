@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import time
 from datetime import datetime, timezone
 
@@ -22,7 +23,7 @@ from brr import protocol  # noqa: E402
 from brr import schedule  # noqa: E402
 from brr import usage_samples  # noqa: E402
 from brr.gates import cloud  # noqa: E402
-from _helpers import PUBLISH_EVERYTHING, brnrd_account_headers, init_git_repo  # noqa: E402
+from _helpers import PUBLISH_EVERYTHING, brnrd_account_headers, commit_files, init_git_repo  # noqa: E402
 
 
 class _StopLoop(BaseException):
@@ -315,6 +316,153 @@ def test_connect_persists_token(tmp_path, monkeypatch):
         "[brnrd] Pair Telegram chat: https://t.me/brnrd_bot?start=TG-TEST",
         "[brnrd] If Telegram only opens the chat, send: /start TG-TEST",
     ]
+
+
+def test_connect_sends_repo_capabilities_on_the_initial_pair_request(tmp_path, monkeypatch):
+    """2026-08-06: the retired website "enable a repository" click is
+    replaced by the connecting daemon naming its own repo up front — parsed
+    from the checkout's own git remote, the same detection
+    `_repo_capabilities` already did (just not sent this early before).
+    Sent unauthenticated, before any token exists, on the initial
+    `POST /v1/accounts/pair` — never on the later polls."""
+    init_git_repo(tmp_path)
+    subprocess.run(
+        ["git", "remote", "add", "origin", "git@github.com:Gurio/newbox.git"],
+        cwd=tmp_path, check=True,
+    )
+    commit_files(tmp_path, {"README.md": "hi"})
+    brr_dir = tmp_path / ".brr"
+    scripted = iter(
+        [
+            {"pair_code": "BR-TEST", "pair_url": "u", "poll_secret": "s"},
+            {
+                "status": "paired",
+                "account_id": "acct_x",
+                "repo_id": "proj_x",
+                "daemon_token": "bd_tok",
+            },
+            {},  # /v1/daemons/register
+        ]
+    )
+    seen = []
+
+    def fake_request(base_url, method, path, **kwargs):
+        seen.append((method, path, kwargs))
+        return next(scripted)
+
+    monkeypatch.setattr(cloud, "_request", fake_request)
+    cloud.connect(
+        brr_dir,
+        brnrd_url="http://brnrd.example",
+        poll_interval_s=0,
+        timeout_s=5,
+        out=lambda _msg: None,
+    )
+    method, path, kwargs = seen[0]
+    assert (method, path) == ("POST", "/v1/accounts/pair")
+    assert kwargs["json"]["repo_full_name"] == "Gurio/newbox"
+    assert kwargs["json"]["branch"] == "main"
+    # `repo_root` is a local filesystem path — it must never leave this
+    # machine, capabilities or not.
+    assert "repo_root" not in kwargs["json"]
+
+
+def test_connect_sends_no_repo_name_outside_a_git_checkout(tmp_path, monkeypatch):
+    """No git remote to detect (or no checkout at all) ⇒ the one field the
+    server trusts as a binding target (`repo_full_name`) is simply absent —
+    the pre-existing dropdown-of-already-connected-repos fallback this steers
+    back to on an old CLI too. (`branch` still rides along as `gitops`'s own
+    "HEAD" fallback for a non-repo directory — harmless, and unrelated to
+    this change: the server never treats anything but `repo_full_name` as
+    identity, see `pairing.pair_suggested_repo_full_name`.)"""
+    brr_dir = tmp_path / ".brr"  # tmp_path itself is not a git repo
+    scripted = iter(
+        [
+            {"pair_code": "BR-TEST", "pair_url": "u", "poll_secret": "s"},
+            {"status": "paired", "account_id": "acct_x", "repo_id": "proj_x", "daemon_token": "bd_tok"},
+            {},
+        ]
+    )
+    seen = []
+
+    def fake_request(base_url, method, path, **kwargs):
+        seen.append((method, path, kwargs))
+        return next(scripted)
+
+    monkeypatch.setattr(cloud, "_request", fake_request)
+    cloud.connect(
+        brr_dir,
+        brnrd_url="http://brnrd.example",
+        poll_interval_s=0,
+        timeout_s=5,
+        out=lambda _msg: None,
+    )
+    method, path, kwargs = seen[0]
+    assert (method, path) == ("POST", "/v1/accounts/pair")
+    assert "repo_full_name" not in (kwargs["json"] or {})
+    assert "git_remote" not in (kwargs["json"] or {})
+
+
+def test_connect_synthesizes_a_local_identity_for_a_remoteless_checkout(tmp_path, monkeypatch):
+    """A real git checkout with no `origin` (2026-08-06, #1167 backchannel
+    follow-up) is the genuine dead end the two tests above bracket: it *is*
+    a working tree (unlike the bare-directory case, which stays
+    capability-free), so it earns a synthesized `local/<slug>-<hash>`
+    identity instead of falling back to the dropdown-of-already-connected-
+    repos flow that used to be the only path here."""
+    init_git_repo(tmp_path)
+    commit_files(tmp_path, {"README.md": "hi"})
+    brr_dir = tmp_path / ".brr"
+    scripted = iter(
+        [
+            {"pair_code": "BR-TEST", "pair_url": "u", "poll_secret": "s"},
+            {"status": "paired", "account_id": "acct_x", "repo_id": "proj_x", "daemon_token": "bd_tok"},
+            {},
+        ]
+    )
+    seen = []
+
+    def fake_request(base_url, method, path, **kwargs):
+        seen.append((method, path, kwargs))
+        return next(scripted)
+
+    monkeypatch.setattr(cloud, "_request", fake_request)
+    cloud.connect(
+        brr_dir,
+        brnrd_url="http://brnrd.example",
+        poll_interval_s=0,
+        timeout_s=5,
+        out=lambda _msg: None,
+    )
+    method, path, kwargs = seen[0]
+    sent = kwargs["json"]
+    assert (method, path) == ("POST", "/v1/accounts/pair")
+    assert sent["forge"] == "local"
+    owner, _, name = sent["repo_full_name"].partition("/")
+    assert owner == "local"
+    assert name == cloud.local_repo_identity(tmp_path).partition("/")[2]
+    # Stable across repeated pairings of the same folder — a reconnect must
+    # resolve to the same `Repo` row, so the identity can't be re-rolled
+    # each time.
+    assert cloud._repo_capabilities(brr_dir)["repo_full_name"] == sent["repo_full_name"]
+
+
+def test_local_repo_identity_does_not_alias_same_named_folders(tmp_path):
+    """Two different checkouts that happen to share a folder name must not
+    collide into one `Repo` row — the whole reason the suffix is always
+    appended, not only when a collision is detected (the client has no way
+    to ask the server that without a round trip)."""
+    a = tmp_path / "a" / "myproject"
+    b = tmp_path / "b" / "myproject"
+    a.mkdir(parents=True)
+    b.mkdir(parents=True)
+    ident_a = cloud.local_repo_identity(a)
+    ident_b = cloud.local_repo_identity(b)
+    assert ident_a != ident_b
+    assert ident_a.startswith("local/myproject-")
+    assert ident_b.startswith("local/myproject-")
+    # Deterministic: the same folder always resolves to the same identity.
+    assert cloud.local_repo_identity(a) == ident_a
 
 
 def test_connect_registers_token_for_dashboard_publishes(tmp_path, monkeypatch):
@@ -2103,6 +2251,81 @@ def test_request_gives_up_after_retry_budget(monkeypatch):
         cloud._request("http://brnrd", "GET", "/v1/x")
 
 
+def test_request_raised_error_carries_status_code(monkeypatch):
+    """A caller needs to tell *which* non-2xx this was — see the 410
+    pair-expiry handling in ``connect()`` below — without parsing the
+    message text (verify by behaviour, not by string-matching a shape
+    meant for humans)."""
+    class _Resp:
+        status_code = 410
+        text = '{"detail":"pair code expired"}'
+        content = b'{"detail":"pair code expired"}'
+
+    monkeypatch.setattr(cloud._SESSION, "request", lambda *a, **k: _Resp())
+    with pytest.raises(RuntimeError) as exc_info:
+        cloud._request("http://brnrd", "GET", "/v1/x")
+    assert exc_info.value.status_code == 410
+
+
+def test_connect_reports_expired_pair_code_as_a_clean_retry_message(tmp_path, monkeypatch):
+    """Live 2026-08-06: the approval page's own "connect a repository"
+    detour (an old CLI with no repo of its own to suggest, nothing already
+    connected to fall back on) outlasted the server's pair-code TTL before
+    the reader ever got back to clicking approve. The poll loop then hit a
+    bare, uncaught traceback — ``RuntimeError: brnrd GET
+    /v1/accounts/pair/BR-XPWT -> 410: {"detail":"pair code expired"}`` —
+    because ``cmd_brnrd_connect`` only catches ``(CloudUnavailableError,
+    TimeoutError)``. The 410 now surfaces as the same clean, retriable
+    ``TimeoutError`` the client-side deadline below already raises."""
+    init_git_repo(tmp_path)
+    brr_dir = tmp_path / ".brr"
+    calls = []
+
+    def fake_request(base_url, method, path, **kwargs):
+        calls.append((method, path))
+        if method == "POST":
+            return {"pair_code": "BR-XPWT", "pair_url": "u", "poll_secret": "s"}
+        err = RuntimeError(
+            'brnrd GET /v1/accounts/pair/BR-XPWT -> 410: {"detail":"pair code expired"}'
+        )
+        err.status_code = 410
+        raise err
+
+    monkeypatch.setattr(cloud, "_request", fake_request)
+    with pytest.raises(TimeoutError, match="expired"):
+        cloud.connect(
+            brr_dir,
+            brnrd_url="http://brnrd.example",
+            poll_interval_s=0,
+            timeout_s=5,
+            out=lambda _msg: None,
+        )
+    assert ("GET", "/v1/accounts/pair/BR-XPWT") in calls
+
+
+def test_connect_reraises_non_expiry_errors_from_the_poll(tmp_path, monkeypatch):
+    """Only a 410 gets the friendly rewrite — any other failure (a real
+    5xx, say) still surfaces as-is rather than being misdiagnosed as an
+    expired pairing."""
+    init_git_repo(tmp_path)
+    brr_dir = tmp_path / ".brr"
+
+    def fake_request(base_url, method, path, **kwargs):
+        if method == "POST":
+            return {"pair_code": "BR-X", "pair_url": "u", "poll_secret": "s"}
+        raise RuntimeError("brnrd GET /v1/accounts/pair/BR-X -> 500: boom")
+
+    monkeypatch.setattr(cloud, "_request", fake_request)
+    with pytest.raises(RuntimeError, match="500"):
+        cloud.connect(
+            brr_dir,
+            brnrd_url="http://brnrd.example",
+            poll_interval_s=0,
+            timeout_s=5,
+            out=lambda _msg: None,
+        )
+
+
 def test_propose_config_change_reports_mint_failure(tmp_path, monkeypatch):
     """Connected-but-mint-failed returns {'error': ...} (not None): the
     daemon's user-facing park message must not tell a connected account to
@@ -2622,6 +2845,69 @@ def test_drain_downloads_attachment_pointers_into_local_files(tmp_path, monkeypa
     paths = protocol.event_attachment_paths(event)
     assert [p.name for p in paths] == ["photo.jpg"]
     assert paths[0].read_bytes() == b"JPEG!"
+
+
+def test_log_raw_attachments_observation_is_type_and_bounded_repr(capsys):
+    """#1156 §2 — the measurement #1155 named and did not build: every
+    inbound event's raw ``attachments`` field, as it actually arrived on
+    the wire, not the parser's inference about it. Type name plus a
+    size-bounded repr, so an oversized or hostile payload can't blow up
+    the log line."""
+    cloud._log_raw_attachments_observation(
+        {"event_id": "evt-9", "attachments": "x" * 500}
+    )
+    out = capsys.readouterr().out
+    assert "evt-9" in out
+    assert "type=str" in out
+    # Bounded: the 500-char value must not appear in full.
+    assert "x" * 500 not in out
+    assert len(out) < 400
+
+
+def test_log_raw_attachments_observation_fires_even_without_attachments(capsys):
+    """Logged for every inbound event, not only ones carrying attachments —
+    the absence of the field is itself part of the measurement."""
+    cloud._log_raw_attachments_observation({"event_id": "evt-plain"})
+    out = capsys.readouterr().out
+    assert "evt-plain" in out
+    assert "type=NoneType" in out
+
+
+def test_drain_logs_raw_attachment_wire_shape_for_every_event(tmp_path, monkeypatch, capsys):
+    """#1156 §2 wired into the real ingest loop: the next occurrence of a
+    drop like #1154 must leave a trace of what actually arrived, not just
+    an inference about it after the fact."""
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    client, _forwarder = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+    monkeypatch.setattr(cloud, "_download_attachment", lambda *a, **kw: False)
+
+    client.post(
+        "/v1/_dev/enqueue",
+        json={
+            "repo_id": pid,
+            "body": "look at this",
+            "source": "telegram",
+            "reply_to": {"platform": "telegram", "chat_id": "555"},
+            "attachments": [
+                {"file_id": "photo-big", "filename": "photo.jpg", "kind": "photo"}
+            ],
+        },
+        headers=acc,
+    )
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+
+    out = capsys.readouterr().out
+    assert "attachments wire shape: type=list" in out
+    assert "photo.jpg" in out
 
 
 def test_attachment_fetch_failure_annotates_body(tmp_path, monkeypatch):
@@ -3201,3 +3487,110 @@ def test_schedule_activity_omits_links_when_nothing_is_served(tmp_path, monkeypa
     record = cloud._schedule_activity_records(brr_dir)[0]
 
     assert record["links"] == {}
+
+
+# ── #1154: an announced attachment that never becomes bytes ───────────────────
+#
+# The measured failure: four screenshots reached the resident as
+# ``attachments: "photo.jpg"`` with no local file anywhere on the machine, no
+# error, and no annotation. The cause was a *filter* standing in for a parser —
+# ``[p for p in (ev.get("attachments") or []) if isinstance(p, dict)]`` — which
+# answers "a shape I don't recognise" with ``[]``, the same value it returns for
+# "no attachments at all". Every surface a reader can see rendered the drop
+# identically to a no-op.
+
+
+def test_a_bare_string_attachment_field_is_one_attachment_not_zero():
+    """The shape the wire actually showed, and the one iteration destroyed.
+
+    ``"photo.jpg"`` is iterable, so the old filter walked its *characters* and
+    kept none of them — zero pointers, zero downloads, silence.
+    """
+    from brr.gates import cloud
+
+    assert cloud._attachment_names("photo.jpg") == ["photo.jpg"]
+    assert cloud._attachment_names(b"photo.jpg") == ["photo.jpg"]
+
+
+def test_attachment_names_accepts_every_shape_that_carries_a_count():
+    """The bytes are fetched by *index*, so a name is all a pointer owes us."""
+    from brr.gates import cloud
+
+    assert cloud._attachment_names([{"filename": "a.png"}, {"filename": "b.png"}]) == [
+        "a.png", "b.png",
+    ]
+    assert cloud._attachment_names(["a.png", "b.png"]) == ["a.png", "b.png"]
+    # A shape with no name in it still has a *count*, which is the part that
+    # decides whether the download loop runs at all.
+    assert cloud._attachment_names([1, 2, 3]) == [
+        "attachment-00", "attachment-01", "attachment-02",
+    ]
+    # A path is never smuggled through a name.
+    assert cloud._attachment_names(["../../etc/passwd"]) == ["passwd"]
+
+
+def test_no_attachments_and_an_unreadable_shape_are_different_answers():
+    """The whole defect in one assertion.
+
+    ``[]`` means *this event had none*; ``None`` means *this event announced
+    some and I could not count them*. Collapsing the second into the first is
+    what made a drop invisible — so a test that only checked the happy shapes
+    would have gone green on the bug it exists to prevent.
+    """
+    from brr.gates import cloud
+
+    assert cloud._attachment_names(None) == []
+    assert cloud._attachment_names([]) == []
+    assert cloud._attachment_names(0) == []
+
+    assert cloud._attachment_names(42) is None
+    assert cloud._attachment_names({"unexpected"}) is None
+
+
+def test_an_unreadable_shape_is_announced_in_the_body(tmp_path):
+    """The durable half: the next shape change reports itself.
+
+    Half one fixes the shape we measured. This is the half that matters — the
+    annotation names the observed type and value, so the parser for the *next*
+    shape can be written from the message the resident was handed instead of
+    from another round trip to the wire.
+    """
+    from brr.gates import cloud
+
+    files, failed, unrecognised = cloud._ingest_event_attachments(
+        {"brnrd_url": "https://example.invalid", "token": "t"},
+        {"event_id": "ev_x", "attachments": 42},
+        tmp_path,
+    )
+    assert files == [] and failed == []
+    assert unrecognised is not None and "int" in unrecognised and "42" in unrecognised
+
+    body = cloud._annotate_failures("look at this", [], unrecognised)
+    assert "look at this" in body
+    assert "could not read" in body
+    assert "The bytes did not arrive" in body
+    # An honest annotation must not read as "there were no images" — that is
+    # the reading that cost two days.
+    assert "int: 42" in body
+
+
+def test_a_readable_shape_annotates_nothing(tmp_path, monkeypatch):
+    """The guard's own sanity check: silence stays available for the good path.
+
+    Without this, an annotation bug that fired on *every* event would leave the
+    test above green while making the body unreadable.
+    """
+    from brr.gates import cloud
+
+    monkeypatch.setattr(
+        cloud, "_download_attachment",
+        lambda base, token, eid, i, dest: (dest.write_bytes(b"x"), True)[1],
+    )
+    files, failed, unrecognised = cloud._ingest_event_attachments(
+        {"brnrd_url": "https://example.invalid", "token": "t"},
+        {"event_id": "ev_x", "attachments": "photo.jpg"},
+        tmp_path,
+    )
+    assert [p.name for p in files] == ["photo.jpg"]
+    assert failed == [] and unrecognised is None
+    assert cloud._annotate_failures("hi", failed, unrecognised) == "hi"

@@ -56,7 +56,13 @@ list answers "can I self-host this" — every entry ships on `main` (checked by
 disagree, after the tags above went stale for a full day the first time). brnrd.dev's
 own hosted convenience layer answers a narrower question — has *this* deployment been
 configured for a given door yet — and can legitimately show fewer doors live than this
-page while a gate is finalizing setup on the hosted side.
+page while a gate is finalizing setup on the hosted side. Every self-hosted door still
+needs your own credentials regardless of this list (a bot token, a linked device, an
+app registration) — that per-operator cost isn't what "live" answers here. The
+landing's own shelf goes one step further for brnrd.dev's *own* deployment: a door can
+ship and still read `ready` there — code done, no confirmed identity behind it yet (no
+Signal number, no WhatsApp Business number, no Slack app) — which is the maintainer's
+setup to finish, not yours to chase for self-hosting.
 
 ## The loop
 

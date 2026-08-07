@@ -18,12 +18,14 @@ test('fetchDoorStatus parses a well-formed payload into a slug -> status map', a
 		fakeFetch(200, {
 			doors: [
 				{ slug: 'telegram', status: 'soon' },
-				{ slug: 'slack', status: 'live' }
+				{ slug: 'slack', status: 'live' },
+				{ slug: 'signal', status: 'ready' }
 			]
 		})
 	);
 	assert.equal(statuses?.get('telegram'), 'soon');
 	assert.equal(statuses?.get('slack'), 'live');
+	assert.equal(statuses?.get('signal'), 'ready', '"ready" is a real status, not garbage to drop');
 });
 
 test('fetchDoorStatus degrades to null on a non-2xx response, never throws', async () => {
@@ -78,6 +80,16 @@ test('a door the backend confirms live renders live', () => {
 	const statuses = new Map([['signal', 'live' as const]]);
 	const rows = doorRows(statuses);
 	assert.equal(rows.find((row) => row.slug === 'signal')?.status, 'live');
+});
+
+test('a door the backend reports as ready renders ready, never promoted to live', () => {
+	// The maintainer's brief, in one row: shipped code with no confirmed
+	// brnrd.dev identity (no Signal number, no Slack app, no WhatsApp
+	// Business number) must never render the same as a door someone can
+	// actually message today.
+	const statuses = new Map([['slack', 'ready' as const]]);
+	const rows = doorRows(statuses);
+	assert.equal(rows.find((row) => row.slug === 'slack')?.status, 'ready');
 });
 
 test('a slug the roster does not know about is ignored, not crashed on', () => {

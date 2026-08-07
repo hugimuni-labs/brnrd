@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import { goto } from '$app/navigation';
 	import { onMount, tick } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { resolve } from '$app/paths';
@@ -12,7 +13,6 @@
 		setPublishLayers,
 		telegramPairLabel,
 		type ConnectedRepo,
-		type InstalledRepo,
 		type RepoActionResponse,
 		type ReposResponse
 	} from '$lib/repos';
@@ -41,6 +41,39 @@
 	let manualRepo = $state('');
 	let manualBranch = $state('');
 
+	// A pending daemon pairing sent us here (`/connect/[code]`'s
+	// "connect a repository" dead end, #the-pairing-that-never-reported-
+	// back): that page's own approve click needs at least one connected
+	// repo to fall back to, and nothing used to point the reader back once
+	// they supplied one — they'd land here, connect a repo, and be
+	// stranded on /repos while the pairing's server-side TTL kept ticking
+	// underneath them. Shape-validated (own path, own alphabet) rather than
+	// trusted as a free-form redirect target — this is a same-origin client
+	// nav (`goto`), not a server 30x, but a query param is still reader
+	// input.
+	let returnCode = $derived.by(() => {
+		const raw = page.url.searchParams.get('next') ?? '';
+		const match = /^\/connect\/([A-Za-z0-9-]{1,40})$/.exec(raw);
+		return match ? match[1] : null;
+	});
+
+	// Clipboard for the "connect this repository" command (no-installation
+	// state, #1084/#1032 steer) — same copy/flash idiom ColdStart.svelte
+	// already uses for its two command boxes; not reinvented.
+	let copied = $state<string | null>(null);
+	let copyTimer: ReturnType<typeof setTimeout> | undefined;
+
+	async function copy(key: string, text: string) {
+		try {
+			await navigator.clipboard.writeText(text);
+			copied = key;
+			clearTimeout(copyTimer);
+			copyTimer = setTimeout(() => (copied = null), 1500);
+		} catch {
+			// Clipboard unavailable or denied — no crash, just no flash.
+		}
+	}
+
 	// The GitHub Setup URL return (#1084): `routers/github_app.py`'s
 	// `github_app_setup` 303s here with `?notice=…` after syncing an
 	// installation. Captured once, at mount, from the raw query-param code —
@@ -65,14 +98,14 @@
 
 	// "Show what just arrived" — the half of #1084's fix that a bare notice
 	// string can't carry: how many repos this installation made visible, and
-	// whether there is still an action left (enabling one).
+	// whether any of them still needs a local daemon pointed at it.
 	function setupArrivalSummary(d: ReposResponse): string {
 		const total = d.installed_repos.length;
 		if (total === 0) return 'No repositories are visible from this installation yet.';
 		const pending = d.installed_repos.filter((repo) => !repo.connected).length;
 		const noun = total === 1 ? 'repository' : 'repositories';
-		if (pending === 0) return `${total} ${noun} visible, already enabled.`;
-		return `${total} ${noun} now visible — ${pending} not yet enabled, below.`;
+		if (pending === 0) return `${total} ${noun} visible, all connected.`;
+		return `${total} ${noun} now visible — ${pending} with no daemon connected yet, below.`;
 	}
 
 	// Publish-scope consent for the *next* repo this page connects (legal
@@ -196,13 +229,26 @@
 		}
 	}
 
-	async function runAction(label: string, action: () => Promise<RepoActionResponse>) {
+	async function runAction(
+		label: string,
+		action: () => Promise<RepoActionResponse>,
+		{ returnOnSuccess = false }: { returnOnSuccess?: boolean } = {}
+	) {
 		pendingAction = label;
 		try {
 			const result = await action();
 			actionResult = result;
 			if (result.ok) {
 				confirmingDisconnect = null;
+				// A pending pairing sent us here for exactly this: once a repo
+				// exists to connect to, its approval page can fall back off the
+				// "connect a repository" dead end onto the repo-picker path it
+				// always had. Skip the local refresh() in this case — we're
+				// leaving the page.
+				if (returnOnSuccess && returnCode) {
+					await goto(resolve('/connect/[code]', { code: returnCode }));
+					return;
+				}
 				await refresh();
 			}
 		} catch (e) {
@@ -219,17 +265,6 @@
 		}
 	}
 
-	function connectInstalled(repo: InstalledRepo) {
-		runAction(`connect:${repo.id}`, () =>
-			connectRepo({
-				repo_full_name: repo.repo_full_name,
-				forge_repo_id: repo.forge_repo_id,
-				default_branch: repo.default_branch,
-				publish_layers: connectPublishLayersValue()
-			})
-		);
-	}
-
 	function connectManual(event: Event) {
 		event.preventDefault();
 		const repo = manualRepo.trim();
@@ -237,18 +272,22 @@
 			actionResult = { ok: false, notice: 'Enter a repo as owner/name.' };
 			return;
 		}
-		runAction('connect:manual', async () => {
-			const result = await connectRepo({
-				repo_full_name: repo,
-				default_branch: manualBranch.trim(),
-				publish_layers: connectPublishLayersValue()
-			});
-			if (result.ok) {
-				manualRepo = '';
-				manualBranch = '';
-			}
-			return result;
-		});
+		runAction(
+			'connect:manual',
+			async () => {
+				const result = await connectRepo({
+					repo_full_name: repo,
+					default_branch: manualBranch.trim(),
+					publish_layers: connectPublishLayersValue()
+				});
+				if (result.ok) {
+					manualRepo = '';
+					manualBranch = '';
+				}
+				return result;
+			},
+			{ returnOnSuccess: true }
+		);
 	}
 
 	function pairTelegram(repo: ConnectedRepo) {
@@ -345,8 +384,19 @@
 		repository control
 	</h1>
 	<p class="mt-2 max-w-2xl text-sm text-stone-400">
-		Enable GitHub repositories, pair local daemons, and route Telegram chats into brnrd.
+		Connect repositories, pair local daemons, and route Telegram chats into brnrd.
 	</p>
+
+	{#if returnCode}
+		<!-- The other half of the fix: name the wait, don't just silently
+		     redirect underneath the reader. A pairing sent them here — connect
+		     a repo below (the manual form is the one path that stays entirely
+		     on this page) and they land back on the approval automatically. -->
+		<div class="subpanel mt-4 p-3 text-sm border-amber-900/60 text-amber-100">
+			A daemon pairing is waiting on a repo to connect to. Connect one below — the manual form
+			furthest down is fastest — and you'll return to approve it.
+		</div>
+	{/if}
 
 	{#if unauthenticated}
 		<p class="mt-6 text-sm text-stone-400">
@@ -434,21 +484,113 @@
 				<p class="mt-1 font-mono text-sm text-amber-100">@{data.account.github_login}</p>
 			</div>
 			<div class="subpanel p-3">
-				<p class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase">enabled repos</p>
+				<p class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase">connected repos</p>
 				<p class="mt-1 font-mono text-sm text-amber-100">
 					{data.connected_count} of {data.installed_repos.length} synced
 				</p>
 			</div>
 			<div class="subpanel p-3">
+				<!-- Fact, not a control (#1084 finding — "the control lives in the
+				     indicator grid"): the slug used to double as the install link,
+				     inheriting this row's read-only meaning. The actual install CTA
+				     now lives in "connect this repository" below, with its own
+				     position and weight. -->
 				<p class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase">GitHub App</p>
-				<a
-					class="mt-1 block truncate font-mono text-sm text-amber-100 underline hover:text-amber-200"
-					href={data.install_url}
-					rel="external noreferrer"
-					target="_blank">{data.github_app_slug}</a
-				>
+				<p class="mt-1 truncate font-mono text-sm text-amber-100">{data.github_app_slug}</p>
 			</div>
 		</div>
+
+		{#if data.installations.length === 0 && data.connected_count > 0}
+			<!-- The identity nag (2026-08-06 steer): the GitHub App is a pure
+			     convenience — repo connect and daemon pairing both work fully
+			     without it — but skipping it means every commit and comment
+			     rides *your own* GitHub identity rather than brnrd's bot (#1135
+			     lived this exact gap: a strand committed as the maintainer, not
+			     `brnrd-bot`). Only worth saying once something is actually
+			     connected; an empty account has nothing to nag about yet. -->
+			<div class="subpanel mt-5 p-3 text-sm">
+				<p class="font-mono text-[11px] tracking-wide text-amber-400 uppercase">no github app</p>
+				<p class="mt-1 text-stone-300">
+					Work on {data.connected_count === 1 ? 'this repo' : 'these repos'} pushes under
+					<strong class="text-stone-100">your own</strong> GitHub identity — every commit is you, not
+					brnrd. Install the app below to push as its own bot instead; nothing else here changes.
+				</p>
+			</div>
+		{/if}
+
+		{#if data.connected_count === 0}
+			<!-- The connect action, with its own position and weight (#1084):
+			     nothing connected ⇒ this is the page's primary act, not a cell
+			     in a readout grid. 2026-08-06: the website side of "enable" is
+			     retired — running this command *is* the connect, no separate
+			     click here first or after. GitHub App install is real but
+			     genuinely optional (identity/security convenience, not a rung
+			     this blocks on), so it is offered, not numbered as a required
+			     step 2. -->
+			<section class="panel mt-5 p-4" aria-labelledby="connect-heading">
+				<p class="eyebrow">start here</p>
+				<h2
+					id="connect-heading"
+					class="font-mono text-lg font-semibold tracking-tight text-amber-100"
+				>
+					connect this repository
+				</h2>
+				<p class="mt-2 max-w-2xl text-sm text-stone-400">
+					Run this from a checkout — it registers the repo and pairs a daemon in one shot, no
+					separate step here. This assumes <code class="text-stone-400">brnrd</code> is already on
+					that machine — no CLI yet? The
+					<a href={resolve('/')} class="text-sky-400 underline hover:text-sky-300">dashboard</a>'s
+					cold-start block starts one rung earlier, with the install command.
+				</p>
+
+				<div class="mt-4">
+					<div class="mt-1.5 flex items-start gap-2">
+						<pre
+							class="min-w-0 grow border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] wrap-anywhere whitespace-pre-wrap text-stone-300"><code
+								>{data.pairing_command}</code
+							></pre>
+						<button
+							type="button"
+							class="shrink-0 cursor-pointer border border-stone-800 px-2 py-2 font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+							onclick={() => data && copy('connect-cmd', data.pairing_command)}
+							>{copied === 'connect-cmd' ? 'copied' : 'copy'}</button
+						>
+					</div>
+					<p class="mt-1 font-mono text-[11px] text-ink-mute">
+						No <code class="text-stone-400">brnrd</code> on this machine yet?
+						<code class="text-stone-400">npx brnrd account connect …</code> does the whole cold start
+						in one line.
+					</p>
+				</div>
+			</section>
+		{/if}
+
+		{#if data.installations.length === 0}
+			<section class="panel mt-5 p-4" aria-labelledby="install-heading">
+				<p class="eyebrow">optional</p>
+				<h2
+					id="install-heading"
+					class="font-mono text-lg font-semibold tracking-tight text-amber-100"
+				>
+					install the github app
+				</h2>
+				<p class="mt-1.5 max-w-2xl text-sm text-stone-400">
+					Not required — repos connect and daemons pair fully without it. What it buys: this trades
+					a personal access token sitting on your laptop for a short-lived, repo-scoped installation
+					token, so commits and comments post as a separate bot account instead of you, and revoking
+					access is one click on github.com instead of a credential hunt.
+				</p>
+				<a
+					class="mt-3 inline-flex items-center border border-amber-700 bg-amber-950/40 px-4 py-2 font-mono text-sm tracking-wide text-amber-100 uppercase hover:border-amber-500"
+					href={data.install_url}
+					rel="external noreferrer"
+					target="_blank">install the github app</a
+				>
+				<p class="mt-2 font-mono text-[11px] text-ink-mute">
+					Opens github.com — that's where you choose repositories, not here.
+				</p>
+			</section>
+		{/if}
 
 		<section class="panel mt-6 p-4">
 			<div class="mb-3 flex items-center justify-between gap-3">
@@ -567,6 +709,8 @@
 										status={repo.github_bot_status}
 										botLogin={data.github_bot_login}
 										repoFullName={repo.repo_full_name}
+										collaborator={repo.github_bot_collaborator}
+										checkedLabel={repo.github_bot_checked_label}
 									/>
 									{#if repo.gates.length > 0}
 										<div class="mt-3 grid gap-1.5 sm:grid-cols-2">
@@ -694,25 +838,42 @@
 						</p>
 					{/if}
 				</div>
-				<a
-					class="shrink-0 border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-stone-400 uppercase hover:text-stone-200"
-					href={data.install_url}
-					rel="external noreferrer"
-					target="_blank">{data.installations.length === 0 ? 'install app' : 'manage app'}</a
-				>
+				{#if data.installations.length > 0}
+					<div class="flex shrink-0 flex-wrap items-center gap-2">
+						<!-- Secondary once installed (#1084): the primary install CTA
+						     only exists above while there is no installation. From here
+						     on this is a maintenance link, worded to what's actually left
+						     — more repos to add, or nothing left but managing the grant. -->
+						<a
+							class="border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-stone-400 uppercase hover:text-stone-200"
+							href={data.install_url}
+							rel="external noreferrer"
+							target="_blank"
+							>{availableInstalled.length > 0 ? 'add more repositories' : 'manage installation'}</a
+						>
+						{#if data.github_sync_configured}
+							<!-- #1084's own escape hatch: `POST /api/github/sync` exists,
+							     is tested, and had no button anywhere in the frontend.
+							     A plain form post, not a fetch — the endpoint answers with
+							     a redirect back to this page (`?notice=…`), the same
+							     pattern the GitHub Setup URL return already uses, so a
+							     stale installation is one page load away from a fix
+							     without waiting on the webhook or the background
+							     staleness check to notice on their own. Gated on
+							     `github_sync_configured` (App credentials present
+							     server-side) — offering a control that can only ever
+							     fail closed is worse than no control. -->
+							<form method="POST" action="/api/github/sync">
+								<button
+									type="submit"
+									class="cursor-pointer border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-stone-400 uppercase hover:text-stone-200"
+									>recheck repos on github</button
+								>
+							</form>
+						{/if}
+					</div>
+				{/if}
 			</div>
-
-			{#if data.installations.length === 0}
-				<!-- The exchange sentence (2026-08-04): a fresh reader reads the
-				     App as "more setup for the same thing" a personal access token
-				     already does, unless something here says what it buys instead.
-				     Stated once, at the moment it's asked for; not sold. -->
-				<p class="mb-4 max-w-2xl text-sm text-stone-400">
-					This trades a personal access token sitting on your laptop for a short-lived, repo-scoped
-					installation token: commits and comments post as a separate account, not you, and revoking
-					access is one click on github.com instead of a credential hunt.
-				</p>
-			{/if}
 
 			<div class="subpanel mb-4 p-3">
 				<p class="eyebrow">for the next repo you enable</p>
@@ -760,37 +921,48 @@
 			</div>
 
 			{#if data.installations.length === 0}
-				<p class="text-sm text-ink-quiet">No GitHub App installation is connected yet.</p>
+				<p class="text-sm text-ink-quiet">
+					Nothing to connect yet — connect this repository above first.
+				</p>
 			{:else if availableInstalled.length === 0}
 				<p class="text-sm text-ink-quiet">
-					All {connectedInstalled.length} synced repositories are enabled.
+					All {connectedInstalled.length} synced repositories are connected.
 				</p>
 			{:else}
+				<!-- No "enable" button (retired 2026-08-06): the website never did
+				     anything GitHub-specific here, it only recorded a name — and
+				     running the command below from that checkout now does the
+				     recording itself, the moment it actually pairs a daemon.
+				     Purely informational: which repos GitHub already shows us,
+				     and the one line to run for each. -->
 				<div class="grid grid-cols-1 gap-2 lg:grid-cols-2">
 					{#each availableInstalled as repo (repo.id)}
-						<div class="subpanel flex items-center justify-between gap-3 p-3">
-							<div class="min-w-0">
-								<p class="truncate font-mono text-sm font-semibold text-amber-100">
-									{repo.repo_full_name}
-								</p>
-								<p class="mt-1 truncate font-mono text-[11px] text-ink-quiet">
-									{branchLabel(repo.default_branch)} · pushed {repo.pushed_label}
-								</p>
-							</div>
-							<button
-								type="button"
-								class="shrink-0 cursor-pointer border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-stone-400 uppercase hover:text-stone-200 disabled:cursor-wait disabled:opacity-50"
-								disabled={pendingAction !== null}
-								onclick={() => connectInstalled(repo)}
-								>{actionBusy(`connect:${repo.id}`) ? 'enabling' : 'enable'}</button
-							>
+						<div class="subpanel p-3">
+							<p class="truncate font-mono text-sm font-semibold text-amber-100">
+								{repo.repo_full_name}
+							</p>
+							<p class="mt-1 truncate font-mono text-[11px] text-ink-quiet">
+								{branchLabel(repo.default_branch)} · pushed {repo.pushed_label}
+							</p>
+							<details class="mt-2">
+								<summary
+									class="cursor-pointer font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+									>connect from a checkout</summary
+								>
+								<pre
+									class="mt-2 overflow-x-auto border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] text-stone-300"><code
+										>{repo.setup_command}</code
+									></pre>
+							</details>
 						</div>
 					{/each}
 				</div>
 			{/if}
 
 			<form class="mt-5 border-t border-stone-800/70 pt-4" onsubmit={connectManual}>
-				<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">manual connect</p>
+				<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
+					advanced: pre-register without running anything locally
+				</p>
 				<div class="mt-2 grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_180px_auto]">
 					<input
 						class="border border-stone-800 bg-stone-950/60 px-2 py-1.5 font-mono text-sm text-stone-200 outline-none focus:border-amber-700"
@@ -808,7 +980,7 @@
 						type="submit"
 						class="cursor-pointer border border-stone-800 px-3 py-1.5 font-mono text-[11px] tracking-wide text-stone-400 uppercase hover:text-stone-200 disabled:cursor-wait disabled:opacity-50"
 						disabled={pendingAction !== null}
-						>{actionBusy('connect:manual') ? 'enabling' : 'enable repo'}</button
+						>{actionBusy('connect:manual') ? 'registering' : 'register repo'}</button
 					>
 				</div>
 			</form>

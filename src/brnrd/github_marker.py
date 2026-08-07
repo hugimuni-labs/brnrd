@@ -12,6 +12,21 @@ the dashboard can render it honestly (see ``routers.dashboard._repo_view_out``).
 Token unset ⇒ the whole feature is a no-op; callers still surface that
 plainly (the repo view renders "unknown" rather than a checked-and-false
 state — see ``marker_absence_text``).
+
+Two different credentials, on purpose (#1141 — "the lamp that blamed the
+app"). Accepting an invitation can only ever be done as the invited user, so
+that stays on ``settings.github_bot_token`` (brnrd-bot's own PAT). But the
+*collaborator check* (``GET /repos/{owner}/{repo}/collaborators/{username}``)
+only needs ``Metadata: read``, which the GitHub App already holds, and an
+App-token answer is definitive (204/404) — a 403 from the App genuinely means
+a grant gap. The same call on the bot's *user* token is not definitive: GitHub
+documents that a user-authenticated caller needs push access just to *use*
+this endpoint, so a bot with no push access 403s regardless of whether it is
+itself a collaborator — the "not a collaborator" answer wearing a permission
+fault's clothes. So the check runs on the App installation token covering the
+repo whenever one exists, and only falls back to the user token (with the
+403 misread corrected — see ``MarkerCheckPrincipal.BOT_USER_COLLABORATOR_CHECK``)
+for a manually-connected repo with no App installation.
 """
 
 from __future__ import annotations
@@ -26,8 +41,9 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .models import Repo
+from .models import GitHubInstallation, GitHubInstalledRepo, Repo
 from .platforms import github as gh
+from .platforms import github_app as gh_app
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +61,33 @@ class MarkerCheckState(str, Enum):
     CHECK_UNAVAILABLE = "check-unavailable"
     NOT_CONFIGURED = "not-configured"
     UNKNOWN = "unknown"
+
+
+class MarkerCheckPrincipal(str, Enum):
+    """Which credential (and therefore which documented 401/403 contract)
+    produced the exception ``classify_marker_check_failure`` is classifying.
+
+    Not a guess from the exception, and never a string match on its prose
+    (see that function's own docstring) — the caller always knows which of
+    these three calls it just made, so it says so explicitly.
+    """
+
+    # GitHub App installation token, collaborators endpoint. Only needs
+    # ``Metadata: read``, which the App already holds — a 401/403 here is a
+    # genuine grant gap.
+    APP_INSTALLATION = "app_installation"
+    # brnrd-bot's own user token, ``PATCH /user/repository_invitations/{id}``.
+    # A 401/403 here is a genuine token/scope problem — this endpoint has no
+    # "caller needs push access" quirk, that's specific to the collaborators
+    # endpoint below.
+    BOT_USER_INVITATION = "bot_user_invitation"
+    # brnrd-bot's own user token, collaborators endpoint — only reached when
+    # no App installation covers the repo (see ``_resolve_installation``).
+    # GitHub's documented contract for a user-authenticated caller requires
+    # push access just to *use* this endpoint, so a bot with no push access
+    # 403s regardless of whether it is itself a collaborator. A 403 here is
+    # the "not a collaborator" answer, not a permission fault.
+    BOT_USER_COLLABORATOR_CHECK = "bot_user_collaborator_check"
 
 
 @dataclass(frozen=True)
@@ -78,15 +121,22 @@ def marker_absence_text(bot_login: str) -> str:
     )
 
 
-def classify_marker_check_failure(exc: Exception) -> MarkerCheckState:
+def classify_marker_check_failure(
+    exc: Exception, *, principal: MarkerCheckPrincipal
+) -> MarkerCheckState:
     """Collapse transport failures at the catch site, while details are typed.
 
-    Authentication/authorization failures have a permission remedy.  Retryable
-    HTTP and network failures mean the check is unavailable.  Everything else
-    is explicitly unknown; no classifier matches exception prose.
+    Authentication/authorization failures have a permission remedy — except a
+    403 from ``BOT_USER_COLLABORATOR_CHECK``, whose documented contract makes
+    that status ambiguous with "not a collaborator" rather than a grant fault
+    (see ``MarkerCheckPrincipal``). Retryable HTTP and network failures mean
+    the check is unavailable. Everything else is explicitly unknown; no
+    classifier matches exception prose.
     """
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
+        if status == 403 and principal is MarkerCheckPrincipal.BOT_USER_COLLABORATOR_CHECK:
+            return MarkerCheckState.NOT_A_COLLABORATOR
         if status in (401, 403):
             return MarkerCheckState.PERMISSION_MISSING
         if status in (408, 429) or status >= 500:
@@ -115,10 +165,13 @@ def marker_state_text(state: MarkerCheckState, bot_login: str) -> str:
     if state is MarkerCheckState.NOT_A_COLLABORATOR:
         return marker_absence_text(bot_login)
     if state is MarkerCheckState.PERMISSION_MISSING:
+        # Rewritten 2026-08-05 (#1141): operator-scope fact, not a user task —
+        # whichever credential produced this, no end user can act on it. See
+        # `MarkerNotice.svelte`'s matching copy and the module docstring.
         return (
-            "collaborator status unavailable — the GitHub App lacks the grant "
-            "for the collaborators endpoint; grant Administration: read in the "
-            "App's repository permissions."
+            "collaborator status unavailable — brnrd's own check against "
+            "GitHub failed; this is on the brnrd operator to fix, not "
+            "something to change here."
         )
     if state is MarkerCheckState.CHECK_UNAVAILABLE:
         return "collaborator status unavailable — GitHub could not be reached; try again later."
@@ -128,6 +181,41 @@ def marker_state_text(state: MarkerCheckState, bot_login: str) -> str:
             "set it in the server settings."
         )
     return "collaborator status unknown — the check failed for an unclassified reason."
+
+
+def _resolve_installation(db: Session, repo: Repo) -> GitHubInstallation | None:
+    """The App installation covering ``repo``, or ``None`` when none does.
+
+    ``None`` is the normal shape for a manually-connected repo (the
+    "connect this repository" manual form, no App install at all) — not an
+    error. Same match-by-forge-id-then-name shape as
+    ``routers.daemons.publishing_credential`` (forge id survives transfers/
+    renames, name does not); unlike that endpoint this never self-heals the
+    ``Repo`` row or raises — it is a best-effort lookup for a background
+    sync, not a request that owes the caller a definitive answer.
+    """
+    base_query = (
+        select(GitHubInstalledRepo, GitHubInstallation)
+        .join(
+            GitHubInstallation,
+            GitHubInstallation.id == GitHubInstalledRepo.github_installation_id,
+        )
+        .where(GitHubInstallation.account_id == repo.account_id)
+        .order_by(GitHubInstalledRepo.last_seen_at.desc())
+    )
+    installed = None
+    if repo.forge_repo_id:
+        installed = db.execute(
+            base_query.where(GitHubInstalledRepo.forge_repo_id == repo.forge_repo_id)
+        ).first()
+    if installed is None:
+        installed = db.execute(
+            base_query.where(GitHubInstalledRepo.repo_full_name == repo.repo_full_name)
+        ).first()
+    if installed is None:
+        return None
+    _installed_repo, installation = installed
+    return installation
 
 
 def sync_marker_for_repos(db: Session, settings, repos: list[Repo]) -> MarkerSyncResult:
@@ -182,13 +270,19 @@ def sync_marker_for_repos(db: Session, settings, repos: list[Repo]) -> MarkerSyn
                 logger.warning(
                     "brnrd-bot invitation accept failed for %s: %s", repo.repo_full_name, exc
                 )
-                repo.github_bot_notice = classify_marker_check_failure(exc).value
+                repo.github_bot_notice = classify_marker_check_failure(
+                    exc, principal=MarkerCheckPrincipal.BOT_USER_INVITATION
+                ).value
                 repo.github_bot_collaborator = None
                 failed += 1
             repo.github_bot_checked_at = now
 
     bot_login = str(settings.github_bot_login or "").strip().lstrip("@")
     checked = 0
+    # Minted at most once per installation per call, not once per repo — a
+    # batch of repos sharing one installation reuses the same short-lived
+    # credential instead of re-minting it per row.
+    installation_tokens: dict[str, str] = {}
     for repo in repos:
         if repo.id in processed:
             continue  # already got a definitive, specific answer above
@@ -202,9 +296,31 @@ def sync_marker_for_repos(db: Session, settings, repos: list[Repo]) -> MarkerSyn
             repo.github_bot_notice = MarkerCheckState.NOT_CONFIGURED.value
             repo.github_bot_checked_at = now
             continue
+        # #1141 — the check runs on the App installation token when one
+        # covers this repo: it needs only `Metadata: read` (already granted)
+        # and answers definitively (204/404), so a 403 from it is an honest
+        # permission fault. Only a manually-connected repo with no App
+        # installation falls back to the bot's own user token — whose 403 on
+        # this endpoint is reclassified below rather than silently
+        # recreating the original bug (see `MarkerCheckPrincipal`).
+        installation = _resolve_installation(db, repo)
+        principal = (
+            MarkerCheckPrincipal.APP_INSTALLATION
+            if installation is not None
+            else MarkerCheckPrincipal.BOT_USER_COLLABORATOR_CHECK
+        )
         try:
+            if installation is not None:
+                check_token = installation_tokens.get(installation.id)
+                if check_token is None:
+                    check_token = gh_app.installation_access_token(
+                        settings, installation.installation_id
+                    )
+                    installation_tokens[installation.id] = check_token
+            else:
+                check_token = token
             repo.github_bot_collaborator = gh.check_repository_collaborator(
-                token,
+                check_token,
                 settings.github_api_base_url,
                 settings.github_api_version,
                 repo.repo_full_name,
@@ -215,7 +331,9 @@ def sync_marker_for_repos(db: Session, settings, repos: list[Repo]) -> MarkerSyn
             logger.warning(
                 "brnrd-bot collaborator check failed for %s: %s", repo.repo_full_name, exc
             )
-            repo.github_bot_notice = classify_marker_check_failure(exc).value
+            repo.github_bot_notice = classify_marker_check_failure(
+                exc, principal=principal
+            ).value
             repo.github_bot_collaborator = None
             failed += 1
         repo.github_bot_checked_at = now

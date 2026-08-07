@@ -21,11 +21,11 @@ from sqlalchemy.orm import Session
 
 from brnrd import ids, oauth, terms
 from brnrd.auth import get_db
-from brnrd.models import Account, ConfigChangeRequest, Repo, TermsAcceptance
+from brnrd.models import Account, ConfigChangeRequest, PairRequest, Repo, TermsAcceptance
 from brnrd.routers.accounts import SESSION_TTL, account_for_github_identity, issue_session_token
 from brnrd.routers.config_approval import decide_core as decide_config_change
 from brnrd.routers.github_app import sync_app_installations_for_account
-from brnrd.routers.pairing import approve_core, telegram_pair_core
+from brnrd.routers.pairing import approve_core, pair_suggested_forge, pair_suggested_repo_full_name, telegram_pair_core
 
 from ._session import (
     _account_id,
@@ -37,6 +37,7 @@ from ._session import (
     _needs_terms,
     _oauth_redirect_uri,
     _repos,
+    _resolve_or_create_repo_for_pair,
     _safe_next,
     _terms_status,
 )
@@ -338,18 +339,23 @@ def github_login_callback(request: Request, code: str | None = None, state: str 
     return resp
 
 
-def _pair_code_status(db: Session, code: str) -> str:
+def _get_pair_row(db: Session, code: str) -> PairRequest | None:
+    from sqlalchemy import select
+
+    return db.execute(select(PairRequest).where(PairRequest.pair_code == code)).scalar_one_or_none()
+
+
+def _pair_code_status(db: Session, code: str, pair: PairRequest | None = None) -> str:
     """Classify a pair code the way ``pairing._get_pair`` + ``approve_core`` would.
 
     Mirrors the exact check order of the POST path (unknown → expired →
     consumed → live status) so the GET context and a subsequent approve
-    can never disagree about the same code.
+    can never disagree about the same code. ``pair`` lets a caller that
+    already fetched the row (the GET context handler, to also read its
+    capabilities) pass it straight through instead of a second query.
     """
-    from sqlalchemy import select
-
-    from brnrd.models import PairRequest
-
-    pair = db.execute(select(PairRequest).where(PairRequest.pair_code == code)).scalar_one_or_none()
+    if pair is None:
+        pair = _get_pair_row(db, code)
     if pair is None:
         return "unknown"
     expires = pair.expires_at
@@ -373,12 +379,24 @@ def connect_context_api(code: str, request: Request, db: Session = Depends(get_d
     account_id = _account_id(request, db)
     if account_id is None:
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    pair = _get_pair_row(db, code)
     repos = _repos(db, account_id)
+    # The repo the connecting checkout already named (#the-enable-button-that-
+    # never-enabled-anything): a daemon paired from inside a git checkout
+    # reports its own remote, and the approval page leads with "connect
+    # *this* repo" instead of a blind dropdown. `""` when the pair predates
+    # capabilities, ran with none detected, or the code is already dead —
+    # the frontend falls back to picking from `repos` in every such case,
+    # unchanged from before this existed.
+    suggested = pair_suggested_repo_full_name(pair) if pair is not None else ""
+    suggested_forge = pair_suggested_forge(pair) if pair is not None else ""
     return JSONResponse(
         {
             "code": code,
-            "status": _pair_code_status(db, code),
+            "status": _pair_code_status(db, code, pair),
             "repos": [{"id": repo.id, "repo_full_name": repo.repo_full_name} for repo in repos],
+            "suggested_repo_full_name": suggested,
+            "suggested_forge": suggested_forge,
         }
     )
 
@@ -404,6 +422,39 @@ def connect_approve_api(
     repo_id = str((payload or {}).get("repo_id") or "")
     from fastapi import HTTPException
 
+    if not repo_id:
+        # No explicit pick — the reader clicked the primary "connect <repo>"
+        # button rather than choosing from the fallback dropdown. Bind (and,
+        # first time, create) the repo the pairing daemon itself reported;
+        # this is the one place a website click used to be required before
+        # any of this could happen ("enable a repository"). Only attempted
+        # on a *live* code: an expired/consumed/unknown one must not have
+        # the side effect of materializing a repo (and spending the repo
+        # cap) for an approve that is about to fail anyway — falling
+        # through with `repo_id` still empty lets `approve_core` below give
+        # its own accurate 410/409/404 for those, unchanged from before
+        # this existed.
+        account = db.get(Account, account_id)
+        pair = _get_pair_row(db, code)
+        live = pair is not None and _pair_code_status(db, code, pair) in (
+            PairRequest.STATUS_PENDING,
+            PairRequest.STATUS_APPROVED,
+        )
+        if live:
+            repo = _resolve_or_create_repo_for_pair(request, db, account, pair) if account is not None else None
+            if repo is None:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "notice": (
+                            "Couldn't tell which repo this is — this pairing code carries no "
+                            "repo name (an older CLI, or `brnrd account connect` run outside a "
+                            "git checkout). Pick one below, or connect a repo manually first."
+                        ),
+                    },
+                    status_code=422,
+                )
+            repo_id = repo.id
     try:
         approve_core(db, account_id, code, repo_id)
     except HTTPException as exc:

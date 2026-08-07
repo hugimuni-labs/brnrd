@@ -120,7 +120,14 @@ def _request(base_url: str, method: str, path: str, *, token: str | None = None,
     if resp.status_code == 401:
         raise BrnrdAuthError(f"brnrd {method} {path} -> 401: {resp.text[:200]} — {_AUTH_HINT}")
     if not 200 <= resp.status_code < 300:
-        raise RuntimeError(f"brnrd {method} {path} -> {resp.status_code}: {resp.text[:200]}")
+        # `.status_code` lets a caller distinguish *which* non-2xx this was
+        # (e.g. connect()'s poll loop treating a 410 pair-expiry as a clean,
+        # retriable stop rather than an unhandled crash) without parsing the
+        # message text — see the pitfall on verifying by behaviour, not by
+        # string-matching a shape meant for humans.
+        err = RuntimeError(f"brnrd {method} {path} -> {resp.status_code}: {resp.text[:200]}")
+        err.status_code = resp.status_code  # type: ignore[attr-defined]
+        raise err
     return resp.json() if resp.content else {}
 
 
@@ -151,8 +158,104 @@ def _state_dir(
     return account_mod.context_home_root(ctx) / "account"
 
 
+# ── The bearer token's own location — split out of ``cloud.json`` ─────
+#
+# ``account/gates/cloud.json`` is tracked in the account home's git repo
+# (the account dominion) so the pairing identity survives a restore. The
+# daemon token used to live in that same file, which meant it rode every
+# ``dominion.commit()`` -> ``gitops.commit_all()`` capture: ``git add -A``
+# on the whole home root cannot tell a secret from a note, and the account
+# daemon's own bearer token shipped in 107 commits before this split
+# existed. ``account.CLOUD_TOKEN_FILENAME`` names the same basename
+# (duplicated rather than imported — this module deliberately has no
+# module-level dependency on ``account``, see ``_state_dir``'s deferred
+# import above; ``test_cloud_token_filename_matches_account`` pins the two).
+_TOKEN_FILENAME = "cloud.token"
+
+
+def _token_path(state_dir: Path) -> Path:
+    """Where the live bearer token lives — never inside ``cloud.json``.
+
+    Same directory ``cloud.json`` itself resolves under (``<state_dir>/
+    gates/``); ``account.GITIGNORE`` keeps it out of the tracked tree.
+    Referenced only from :func:`_read_token`, :func:`_write_token`, and
+    :func:`disconnect` (cleanup) — see ``test_cloud_token_split.py`` for the
+    structural guard that keeps it that way.
+    """
+    return state_dir / "gates" / _TOKEN_FILENAME
+
+
+def _write_token(state_dir: Path, token: str) -> None:
+    """THE lawful writer of the bearer token's on-disk location."""
+    _atomic_write_private(_token_path(state_dir), token)
+
+
+def _read_token(state_dir: Path, raw_state: dict) -> str | None:
+    """THE lawful reader of the bearer token's on-disk location.
+
+    New-location-first (:func:`_token_path`) — a hit there is authoritative.
+    Otherwise falls back to *raw_state*'s legacy ``token`` field, which is
+    where every install on disk carries it today, and migrates on the spot
+    through :func:`_save_state_to_dir` — new file written, ``cloud.json``
+    rewritten without the field — so the fallback drains instead of living
+    forever. Called only from :func:`_load_state_from_dir`.
+    """
+    path = _token_path(state_dir)
+    try:
+        token = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        token = ""
+    if token:
+        return token
+    legacy = raw_state.get("token")
+    if not legacy:
+        return None
+    legacy = str(legacy)
+    _save_state_to_dir(state_dir, {**raw_state, "token": legacy})
+    return legacy
+
+
+def _load_state_from_dir(state_dir: Path) -> dict:
+    """THE lawful raw reader of persisted cloud-gate state.
+
+    Every caller in this module that needs the gate's state resolves
+    through here — including the ``migrated`` probe in :func:`connect`,
+    which reads a directory that may differ from the caller's own
+    ``brr_dir`` resolution — so the token merge/migrate step
+    (:func:`_read_token`) runs exactly once per read, in one place. This is
+    the only call to ``runtime.load_state`` for the cloud gate; the merged
+    ``token`` field it returns is what every read call site in this module
+    (``state["token"]`` / ``state.get("token")``) has always consumed, so
+    none of them needed to change for the token to move off disk.
+    """
+    raw = runtime.load_state(state_dir, "cloud")
+    token = _read_token(state_dir, raw)
+    if token:
+        raw["token"] = token
+    else:
+        raw.pop("token", None)
+    return raw
+
+
+def _save_state_to_dir(state_dir: Path, state: dict) -> None:
+    """THE lawful raw writer of persisted cloud-gate state.
+
+    Splits *state* before it touches disk: everything except ``token`` goes
+    to ``cloud.json`` (``gates.runtime.save_state``); ``token`` — when
+    present — goes only to :func:`_write_token`'s sibling file. This is the
+    only call to ``runtime.save_state`` for the cloud gate, so "cloud.json
+    never carries a token key" is a property of this one function's body
+    rather than a promise every future writer has to remember to keep.
+    """
+    token = state.get("token")
+    persisted = {k: v for k, v in state.items() if k != "token"}
+    runtime.save_state(state_dir, "cloud", persisted)
+    if token:
+        _write_token(state_dir, str(token))
+
+
 def _load_state(brr_dir: Path) -> dict:
-    return runtime.load_state(_state_dir(brr_dir), "cloud")
+    return _load_state_from_dir(_state_dir(brr_dir))
 
 
 def _save_state(
@@ -161,11 +264,35 @@ def _save_state(
     *,
     account_id: str | None = None,
 ) -> None:
-    runtime.save_state(
+    _save_state_to_dir(
         _state_dir(brr_dir, account_id=account_id, create=bool(account_id)),
-        "cloud",
         state,
     )
+
+
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def local_repo_identity(repo_root: Path) -> str:
+    """Synthesize a forge-shaped identity for a checkout with no forge.
+
+    ``owner/name`` (`_repo_parts` on the backend requires exactly that shape,
+    and ``local`` reads honestly as the owner — this repo's forge *is* the
+    machine it lives on). ``name`` is the folder's own slug plus a 6-hex
+    suffix from the resolved absolute path — always, not only on a
+    collision, because the client has no way to ask the server "does this
+    name already exist under a *different* path" without a round trip, and a
+    suffix that only sometimes appears is a name that silently changes shape
+    out from under a repo that was fine yesterday. Stable across repeated
+    pairings of the same folder (that's the whole point — a reconnect must
+    resolve to the same ``Repo`` row); two folders that happen to share a
+    basename never alias into one (#1167 backchannel follow-up: "local forge
+    is fine" — this is the shape that makes it actually safe to be fine).
+    """
+    resolved = repo_root.resolve()
+    slug = _SLUG_RE.sub("-", resolved.name.lower()).strip("-") or "repo"
+    digest = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:6]
+    return f"local/{slug}-{digest}"
 
 
 def _repo_capabilities(brr_dir: Path) -> dict:
@@ -180,6 +307,20 @@ def _repo_capabilities(brr_dir: Path) -> dict:
                 repo_full_name = parse_origin_url(url)
                 if repo_full_name:
                     caps["repo_full_name"] = repo_full_name
+                    caps["forge"] = "github"
+        if "repo_full_name" not in caps and gitops.is_working_tree(repo_root):
+            # No remote, or a remote whose URL isn't GitHub-shaped, but this
+            # *is* a real checkout: it still has an identity, just not one
+            # hosted anywhere brnrd knows how to name — synthesize the local
+            # one rather than sending nothing and falling back to the
+            # dropdown-of-already-connected-repos flow (the one genuine dead
+            # end #1167 left open: "Zero code path exists to connect a
+            # bare/no-remote folder right now"). A directory that is not a
+            # git checkout at all gets no synthesized identity — that
+            # fallback is still correct, and still the only path, for a
+            # `brnrd account connect` run outside any repo.
+            caps["repo_full_name"] = local_repo_identity(repo_root)
+            caps["forge"] = "local"
         caps["branch"] = gitops.current_branch(repo_root)
         default_branch = gitops.default_branch(repo_root)
         if default_branch:
@@ -294,11 +435,45 @@ def propose_config_change(
 
 
 def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON_NAME, poll_interval_s: float = 2.0, timeout_s: float = 600.0, out: Callable[[str], None] = print) -> dict:
-    pair = _request(brnrd_url, "POST", "/v1/accounts/pair")
+    # Sent unauthenticated, before any token exists — this is what lets the
+    # approval page lead with "connect <this repo>" instead of a blind
+    # dropdown of everything the account already has enabled (the "enable a
+    # repository" website step this was built to retire). `repo_root` never
+    # leaves this machine: only the fields the server schema accepts.
+    initial_caps = _repo_capabilities(brr_dir)
+    pair_body = {
+        k: v
+        for k, v in {
+            "repo_full_name": initial_caps.get("repo_full_name"),
+            "git_remote": initial_caps.get("git_remote"),
+            "branch": initial_caps.get("branch"),
+            "default_branch": initial_caps.get("default_branch"),
+            "forge": initial_caps.get("forge"),
+        }.items()
+        if isinstance(v, str) and v
+    }
+    pair = _request(brnrd_url, "POST", "/v1/accounts/pair", json=pair_body or None)
     out(f"[brnrd] Approve this daemon at: {pair['pair_url']}")
     deadline = time.monotonic() + timeout_s
     while True:
-        status = _request(brnrd_url, "GET", f"/v1/accounts/pair/{pair['pair_code']}", params={"poll_secret": pair["poll_secret"]})
+        try:
+            status = _request(brnrd_url, "GET", f"/v1/accounts/pair/{pair['pair_code']}", params={"poll_secret": pair["poll_secret"]})
+        except RuntimeError as exc:
+            # The server holds its own TTL on the pair code (`pair_ttl_s`,
+            # independent of and not necessarily equal to our own
+            # `timeout_s` deadline below) — a detour on the approval side
+            # (e.g. connecting a repo before a suggested one exists) can
+            # burn past it first. Surfaced as the same clean, retriable
+            # message as our own client-side timeout below, instead of the
+            # raw `brnrd GET … -> 410: {...}` traceback this used to crash
+            # with (observed live: the approval page's own "connect a
+            # repository" detour outlasting the code).
+            if getattr(exc, "status_code", None) == 410:
+                raise TimeoutError(
+                    "the pairing code expired before it was approved. Approve "
+                    f"the pairing link promptly, then re-run `{brnrd_cmd()} account connect`."
+                ) from exc
+            raise
         if status.get("status") == "paired" and status.get("daemon_token"):
             break
         if time.monotonic() > deadline:
@@ -320,7 +495,7 @@ def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON
     # lower one: a cursor that is too high self-heals server-side
     # (`inbox.clamp_since`), one that is too low replays history.
     dest = _state_dir(brr_dir, account_id=account_id, create=True)
-    migrated = runtime.load_state(dest, "cloud")
+    migrated = _load_state_from_dir(dest)
     since = max(int(state.get("since") or 0), int(migrated.get("since") or 0))
     capabilities = dict(migrated.get("capabilities") or state.get("capabilities") or {})
     capabilities.update(_repo_capabilities(brr_dir))
@@ -370,6 +545,7 @@ def disconnect(brr_dir: Path) -> bool:
         for path in (
             runtime.state_path(state_dir, "cloud"),
             runtime.health_path(state_dir, "cloud"),
+            _token_path(state_dir),
         ):
             try:
                 path.unlink()
@@ -947,37 +1123,125 @@ def _safe_attachment_name(pointer: dict, index: int) -> str:
     return raw[:128]
 
 
-def _ingest_event_attachments(state: dict, ev: dict, workdir: Path) -> tuple[list[Path], list[str]]:
-    """Pull *ev*'s attachment pointers down into local files under *workdir*.
+def _attachment_names(raw: object) -> list[str] | None:
+    """One best-effort filename per attachment on the wire, or ``None``.
 
-    Returns ``(downloaded_paths, failed_names)``. Downloaded files land in
-    the exact ``attachment_files`` shape the telegram and github gates
-    produce (one convention, three gates — see
-    ``gates/github/attachments.py``); failures come back by name for an
-    honest #553-style annotation in the event body.
+    The bytes are fetched **by index** (``/attachments/{i}``), never by any
+    field of the pointer — so all this has to recover is *how many* and *what
+    to call them*. That makes it worth being generous about shape and strict
+    about silence.
+
+    ``None`` is the load-bearing return: *the event announced attachments and
+    no count could be derived from them*. The predecessor of this function was
+    a filter —
+
+        pointers = [p for p in (ev.get("attachments") or []) if isinstance(p, dict)]
+
+    — which answered that case with ``[]``, the same value it returns for an
+    event that simply has no attachments. Zero pointers, zero downloads, zero
+    failures, zero annotation: a drop byte-identical to a no-op at every
+    surface a reader can see, including the resident's. It cost two days and a
+    direct user question (#1154). **A filter is not a parser** — it cannot say
+    "I did not understand this", and a shape it does not understand is
+    precisely the shape that arrives after the other end changes.
+    """
+    if not raw:
+        return []
+    if isinstance(raw, (str, bytes)):
+        # A bare filename, not an iterable of pointers. Iterating it yields
+        # characters, which is how this shape used to vanish.
+        name = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+        return [_safe_attachment_name({"filename": name}, 0)]
+    if isinstance(raw, dict):
+        return [_safe_attachment_name(raw, 0)]
+    if isinstance(raw, (list, tuple)):
+        names: list[str] = []
+        for i, item in enumerate(raw):
+            if isinstance(item, dict):
+                names.append(_safe_attachment_name(item, i))
+            elif isinstance(item, str):
+                names.append(_safe_attachment_name({"filename": item}, i))
+            else:
+                names.append(f"attachment-{i:02d}")
+        return names
+    return None
+
+
+def _log_raw_attachments_observation(ev: dict) -> None:
+    """Unconditional wire-shape trace for one inbound event (#1156 §2).
+
+    #1155 hardened ``_attachment_names`` so an unparseable shape is loud
+    instead of silent — but its own incident report named a *cause*
+    ("the wire sent a bare string") that was inferred from a filename
+    convention, never actually observed on the wire: nothing recorded what
+    ``attachments`` looked like before the parser ran. That gap survives
+    #1155 intact for the case that matters most — a shape the parser
+    accepts without complaint but that still doesn't end in bytes, which
+    is silent by construction on the unrecognised-only path #1155 shipped.
+    Logged for every inbound event, not only ones that carry attachments,
+    through the same ``print`` channel this gate already narrates failures
+    on (stdout, captured to the daemon's own log — never the wake response).
+    Type name plus a size-bounded ``repr`` only: an attachment pointer is
+    ``{"file_id", "filename", "kind", "file_size"}`` (``schemas.py``), never
+    a bearer token, but the bound is unconditional regardless of what the
+    field actually holds.
+    """
+    raw = ev.get("attachments")
+    print(
+        f"[brnrd:cloud] event {ev.get('event_id')} attachments wire shape: "
+        f"type={type(raw).__name__} repr={repr(raw)[:200]}"
+    )
+
+
+def _ingest_event_attachments(
+    state: dict, ev: dict, workdir: Path,
+) -> tuple[list[Path], list[str], str | None]:
+    """Pull *ev*'s attachments down into local files under *workdir*.
+
+    Returns ``(downloaded_paths, failed_names, unrecognised)``. Downloaded
+    files land in the exact ``attachment_files`` shape the telegram and github
+    gates produce (one convention, three gates — see
+    ``gates/github/attachments.py``); failures come back by name for an honest
+    #553-style annotation in the event body, and ``unrecognised`` carries a
+    description of an announced-but-unparseable ``attachments`` field so the
+    drop can be announced too (#1154).
     """
     files: list[Path] = []
     failed: list[str] = []
-    pointers = [p for p in (ev.get("attachments") or []) if isinstance(p, dict)]
-    for i, pointer in enumerate(pointers):
-        name = _safe_attachment_name(pointer, i)
-        dest = workdir / f"{i:02d}-{name}" if len(pointers) > 1 else workdir / name
+    raw = ev.get("attachments")
+    names = _attachment_names(raw)
+    if names is None:
+        # Name the observed shape, not just the fact — the next occurrence
+        # should hand back enough to write the parser without another round
+        # trip to the wire.
+        return files, failed, f"{type(raw).__name__}: {str(raw)[:160]}"
+    for i, name in enumerate(names):
+        dest = workdir / f"{i:02d}-{name}" if len(names) > 1 else workdir / name
         if _download_attachment(state["brnrd_url"], state["token"], str(ev.get("event_id") or ""), i, dest):
             files.append(dest)
         else:
             failed.append(name)
-    return files, failed
+    return files, failed, None
 
 
-def _annotate_failures(body: str, failed: list[str]) -> str:
-    if not failed:
-        return body
-    notes = "\n".join(
+def _annotate_failures(
+    body: str, failed: list[str], unrecognised: str | None = None,
+) -> str:
+    notes = [
         f"[attachment \"{name}\" could not be fetched — the telegram file link may have "
         "expired or the file exceeds the size cap; ask the sender to re-send it]"
         for name in failed
-    )
-    return f"{body}\n\n{notes}" if body else notes
+    ]
+    if unrecognised:
+        notes.append(
+            "[this event announced attachments in a shape this daemon could not read, "
+            f"so none were fetched — observed {unrecognised}. The bytes did not arrive; "
+            "report this shape rather than assuming the message had no images]"
+        )
+    if not notes:
+        return body
+    joined = "\n".join(notes)
+    return f"{body}\n\n{joined}" if body else joined
 
 
 def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
@@ -1008,15 +1272,26 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
             # what makes a cursor reset cost nothing.
             replayed += 1
             continue
+        _log_raw_attachments_observation(ev)
         # #525 — pointers become local files *now*, at ingestion time: the
         # server holds no bytes, telegram links expire, and the wake's Read
         # tool wants a plain local path (``attachment_files`` convention).
         with tempfile.TemporaryDirectory() as tmpdir:
-            attachment_files, failed = _ingest_event_attachments(state, ev, Path(tmpdir))
+            attachment_files, failed, unrecognised = _ingest_event_attachments(
+                state, ev, Path(tmpdir)
+            )
+            if unrecognised:
+                # Loud, not silent: an announced attachment that never became
+                # bytes is a drop, and the operator is the only one who can
+                # act on the shape (#1154).
+                print(
+                    f"[brnrd:cloud] event {ev.get('event_id')} announced attachments "
+                    f"this daemon could not read — {unrecognised}"
+                )
             protocol.create_event(
                 inbox_dir,
                 source="cloud",
-                body=_annotate_failures(ev.get("body") or "", failed),
+                body=_annotate_failures(ev.get("body") or "", failed, unrecognised),
                 attachment_files=attachment_files or None,
                 cloud_event_id=ev["event_id"],
                 repo_label=ev.get("repo_label") or "",

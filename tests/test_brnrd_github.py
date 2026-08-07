@@ -2129,6 +2129,148 @@ def test_app_webhook_accepts_a_correctly_signed_request(monkeypatch):
     assert len(called) == 1, "a correctly signed installation event did not sync"
 
 
+# ── the `member` webhook: the instant lamp (#1141 §5) ────────────────
+
+
+def _member_webhook_body(
+    *, action: str, member_login: str, repo_full_name: str, installation_id: str = "73"
+) -> bytes:
+    return json.dumps(
+        {
+            "action": action,
+            "member": {"login": member_login},
+            "repository": {"full_name": repo_full_name},
+            "installation": {"id": installation_id},
+        }
+    ).encode()
+
+
+def _member_webhook_env(monkeypatch):
+    """A signed-webhook client with one repo, bound to one App installation —
+    the shared fixture every `member` webhook test needs."""
+    app, client, _ = _app_env(monkeypatch)
+    acc = _account(client)
+    repo_id = _repo(client, acc)
+    with app.state.SessionLocal() as db:
+        repo = db.get(Repo, repo_id)
+        installation = GitHubInstallation(
+            id=ids.github_installation_id(),
+            account_id=repo.account_id,
+            installation_id="73",
+            target_login="owner",
+            target_type="User",
+        )
+        db.add(installation)
+        db.flush()
+        db.add(
+            GitHubInstalledRepo(
+                id=ids.github_installed_repo_id(),
+                github_installation_id=installation.id,
+                repo_full_name=repo.repo_full_name,
+            )
+        )
+        db.commit()
+    return app, client, repo_id
+
+
+def _post_member_webhook(client, **kwargs) -> object:
+    body = _member_webhook_body(**kwargs)
+    return client.post(
+        "/api/github/webhook",
+        content=body,
+        headers={
+            "X-GitHub-Event": "member",
+            "X-Hub-Signature-256": _app_signature(_SECRET, body),
+            "Content-Type": "application/json",
+        },
+    )
+
+
+def test_member_webhook_added_marks_the_marker_a_collaborator(monkeypatch):
+    app, client, repo_id = _member_webhook_env(monkeypatch)
+
+    r = _post_member_webhook(
+        client, action="added", member_login="brr-bot", repo_full_name="owner/repo"
+    )
+
+    assert r.status_code == 200, r.text
+    with app.state.SessionLocal() as db:
+        repo = db.get(Repo, repo_id)
+        assert repo.github_bot_collaborator is True
+        assert repo.github_bot_notice is None
+        assert repo.github_bot_checked_at is not None
+
+
+def test_member_webhook_removed_clears_the_marker(monkeypatch):
+    app, client, repo_id = _member_webhook_env(monkeypatch)
+
+    r = _post_member_webhook(
+        client, action="removed", member_login="brr-bot", repo_full_name="owner/repo"
+    )
+
+    assert r.status_code == 200, r.text
+    with app.state.SessionLocal() as db:
+        repo = db.get(Repo, repo_id)
+        assert repo.github_bot_collaborator is False
+        assert repo.github_bot_notice is None
+        assert repo.github_bot_checked_at is not None
+
+
+def test_member_webhook_ignores_a_different_login(monkeypatch):
+    """A membership change for someone other than the configured bot must
+    never touch our marker — this webhook has no scoping beyond the login
+    match."""
+    app, client, repo_id = _member_webhook_env(monkeypatch)
+    with app.state.SessionLocal() as db:
+        checked_before = db.get(Repo, repo_id).github_bot_checked_at
+
+    r = _post_member_webhook(
+        client, action="added", member_login="someone-else", repo_full_name="owner/repo"
+    )
+
+    assert r.status_code == 200, r.text
+    with app.state.SessionLocal() as db:
+        repo = db.get(Repo, repo_id)
+        assert repo.github_bot_checked_at == checked_before
+        assert repo.github_bot_collaborator is None
+
+
+def test_member_webhook_ignores_an_unbound_repo(monkeypatch):
+    """The bot's own login joining some *other* repo under the same
+    installation must not touch a repo it wasn't reported for."""
+    app, client, repo_id = _member_webhook_env(monkeypatch)
+    with app.state.SessionLocal() as db:
+        checked_before = db.get(Repo, repo_id).github_bot_checked_at
+
+    r = _post_member_webhook(
+        client, action="added", member_login="brr-bot", repo_full_name="owner/unrelated"
+    )
+
+    assert r.status_code == 200, r.text
+    with app.state.SessionLocal() as db:
+        repo = db.get(Repo, repo_id)
+        assert repo.github_bot_checked_at == checked_before
+        assert repo.github_bot_collaborator is None
+
+
+def test_member_webhook_ignores_an_unrecognized_action(monkeypatch):
+    """Only `added`/`removed` are membership changes; anything else (e.g.
+    `edited`, a future action GitHub adds) is a deliberate no-op, the same
+    "unknown action → no-op" guard the installation branch already has."""
+    app, client, repo_id = _member_webhook_env(monkeypatch)
+    with app.state.SessionLocal() as db:
+        checked_before = db.get(Repo, repo_id).github_bot_checked_at
+
+    r = _post_member_webhook(
+        client, action="edited", member_login="brr-bot", repo_full_name="owner/repo"
+    )
+
+    assert r.status_code == 200, r.text
+    with app.state.SessionLocal() as db:
+        repo = db.get(Repo, repo_id)
+        assert repo.github_bot_checked_at == checked_before
+
+
 # ── expired session cookies, at both routers that accept one ────────
 
 
@@ -2189,14 +2331,14 @@ def test_github_sync_refuses_an_expired_session_cookie(monkeypatch):
     # about expiry and not about the cookie never having been accepted.
     r = client.post("/api/github/sync", follow_redirects=False)
     assert r.status_code == 303
-    assert r.headers["location"] == "/?notice=github-synced"
+    assert r.headers["location"] == "/repos?notice=github-synced"
     assert len(synced) == 1
 
     _expire_sessions(app, account_id)
 
     r = client.post("/api/github/sync", follow_redirects=False)
     assert r.status_code == 303
-    assert r.headers["location"] == "/login?next=/", "expired cookie still authenticated"
+    assert r.headers["location"] == "/login?next=/repos", "expired cookie still authenticated"
     assert len(synced) == 1, "sync ran for an expired session"
 
 
@@ -2363,7 +2505,7 @@ def test_github_sync_notice_refuses_all_skipped_installations(monkeypatch):
     response = client.post("/api/github/sync", follow_redirects=False)
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/?notice=github-sync-refused"
+    assert response.headers["location"] == "/repos?notice=github-sync-refused"
 
 
 def test_github_setup_does_not_attribute_an_install_to_an_expired_session(monkeypatch):
@@ -2408,7 +2550,71 @@ def test_github_setup_lands_on_repos_not_the_bare_dashboard(monkeypatch):
     assert location.startswith("/repos?"), location
     assert "notice=github-synced" in location
     assert "installation_id=42" in location
-    assert "setup_action=install" in location
+    # setup_action is read by nobody downstream (grep -rn setup_action over
+    # the whole repo, pre-fix, found only this handler's own two lines) — a
+    # param no reader consumes is noise on a URL a human sees.
+    assert "setup_action" not in location
+
+
+def test_github_setup_classifies_a_pending_admin_approval(monkeypatch):
+    """GitHub sends `setup_action=request` when a non-admin asked for the
+    install and an org admin has not approved it yet — nothing was
+    installed, no repos will appear. Before this fix the handler forwarded
+    `setup_action` unread and defaulted to `github-installed`, a false
+    positive at exactly the moment the user most needs a true negative.
+
+    The common shape for this case has **no** `installation_id` (GitHub
+    docs: "about the setup URL"), which used to make the sync block skip
+    entirely and fall through to the same false-positive default — so the
+    classification must run whether or not `installation_id` is present.
+    """
+    synced = []
+    monkeypatch.setattr(
+        "brnrd.routers.github_app.sync_installation",
+        lambda *a, **k: synced.append(a),
+    )
+    monkeypatch.setattr(
+        "brnrd.routers.github_app.sync_app_installation_for_account",
+        lambda *a, **k: synced.append(a),
+    )
+    app, client, _acc, _account_id = _session_cookie_client(monkeypatch)
+
+    r = client.get(
+        "/api/github/setup",
+        params={"setup_action": "request"},
+        follow_redirects=False,
+    )
+
+    assert r.status_code == 303
+    location = r.headers["location"]
+    assert location.startswith("/repos?"), location
+    assert "notice=github-install-requested" in location
+    assert synced == [], "a pending-approval request must not run a sync"
+
+
+def test_github_setup_classifies_a_pending_admin_approval_even_with_an_installation_id(
+    monkeypatch,
+):
+    """Same as above, but covering the edge case where GitHub did send an
+    `installation_id` alongside `setup_action=request` — classification must
+    still win over the sync branch; nothing was actually installed."""
+    synced = []
+    monkeypatch.setattr(
+        "brnrd.routers.github_app.sync_app_installation_for_account",
+        lambda *a, **k: synced.append(a),
+    )
+    app, client, _acc, _account_id = _session_cookie_client(monkeypatch)
+
+    r = client.get(
+        "/api/github/setup",
+        params={"installation_id": "42", "setup_action": "request"},
+        follow_redirects=False,
+    )
+
+    assert r.status_code == 303
+    location = r.headers["location"]
+    assert "notice=github-install-requested" in location
+    assert synced == [], "setup_action=request must not run the sync block"
 
 
 def test_github_setup_refuses_an_unproven_installation(
@@ -2441,6 +2647,26 @@ def test_github_setup_refuses_an_unproven_installation(
     assert response.status_code == 303
     assert response.headers["location"].endswith("notice=github-sync-refused")
     assert attached == []
+
+
+def test_notice_text_states_pending_approval_and_next_action():
+    """`github-install-requested` says the install is pending an org admin's
+    approval (not a generic "received"); `github-sync-empty` reads as the
+    user's next action ("install the App"), not a diagnosis of the server —
+    #1084's own reported symptom fires this exact code on a brand-new
+    account that has simply not installed the App yet.
+    """
+    from brnrd.routers import _session
+
+    requested = _session._notice_text("github-install-requested")
+    assert requested is not None
+    assert "admin" in requested.lower()
+    assert "approv" in requested.lower()
+
+    empty = _session._notice_text("github-sync-empty")
+    assert empty is not None
+    assert "install" in empty.lower()
+    assert "no github app installations were found for this app" not in empty.lower()
 
 
 def test_dashboard_json_refuses_an_expired_session_cookie(monkeypatch):

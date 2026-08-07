@@ -44,6 +44,9 @@ export interface ConnectedRepo {
 	// collaborator"; never show it as though it were determined.
 	github_bot_collaborator: boolean | null;
 	github_bot_checked_at: string | null;
+	// Pre-rendered age of the check above ("never" when it hasn't run) — the
+	// lit rendering's timestamp; same convention as `updated_label` etc.
+	github_bot_checked_label: string;
 	// Machine-readable state rendered by MarkerNotice. `null` means either a
 	// successful collaborator check or that no check has run yet.
 	github_bot_status:
@@ -98,6 +101,32 @@ export interface InstalledRepo {
 	updated_label: string;
 	last_seen_label: string;
 	connected: boolean;
+	// The retired "enable" button's replacement (2026-08-06): running this
+	// from the checkout is what connects it now — same idiom as
+	// `ConnectedRepo.setup_command`, best-guess local dir name from the
+	// repo's own short name.
+	setup_command: string;
+}
+
+// The capability registry (design-capability-panel.md; backend build step 1,
+// `src/brnrd/capabilities.py`). Mirrored here typed, unconsumed — no
+// component reads this field yet; the Panel component that renders it is a
+// later strand. `scope`/`heat`/`state`/`act.kind` are written as open string
+// unions rather than the backend's closed literal sets on purpose: a wire
+// contract that adds a fifth state or a new scope should not need a
+// frontend type edit merely to stop erroring on an unrecognised value the
+// renderer already has to have a fallback row for (design doc §Implications:
+// "a fallback row for an id it has no copy for, visible, not swallowed").
+export interface Capability {
+	id: string;
+	scope: 'account' | 'machine' | 'repo' | string;
+	subject: string | null;
+	state: 'lit' | 'dark' | 'waiting' | 'unobservable' | string;
+	evidence: { source: string; as_of: string | null };
+	requires: string[];
+	heat: 'required' | 'recommended' | 'optional' | string;
+	act: { kind: 'post' | 'deep-link' | 'command' | 'none' | string; target: string | null };
+	frontier: boolean;
 }
 
 export interface ReposResponse {
@@ -120,6 +149,10 @@ export interface ReposResponse {
 	// dashboard's cold-start block) renders exactly when `connected_repos`
 	// is empty. One source, backend-owned: see `_session.pairing_command`.
 	pairing_command: string;
+	// Additive, optional: present once the backend ships it, absent on any
+	// client/response that predates it. No component reads this yet — see
+	// the `Capability` doc comment above.
+	capabilities?: Capability[];
 }
 
 export interface ConnectRepoPayload {

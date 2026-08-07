@@ -678,6 +678,48 @@ def dedupe(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _normalise_reported_pr(record: dict[str, Any]) -> dict[str, Any]:
+    """Recover a numberless self-reported ``pr`` row before it can be dropped.
+
+    A surface that narrows renders as if it hadn't: :func:`collect`'s
+    numberless-``pr`` filter existed to drop unrenderable rows, but a
+    resident reporting ``{"kind": "pr", "ref":
+    "https://github.com/.../pull/1175", ...}`` has a perfectly good
+    identity, just not in the ``number`` field the filter checks — so it
+    was silently dropped, and the promise blueprint
+    (:func:`counts_by_kind`, which counts *this* list) read "still owed"
+    on a kept promise (observed live, run-260806-2208-y0kf: 3 PRs made,
+    only 1 reached the run node's Produce).
+
+    Tries :func:`forges.parse_pull_request_number` on ``url`` first, then
+    ``ref`` — it already accepts a bare number, ``#N``, or a full forge
+    URL. On success, sets ``number``; if the row still has no ``url`` and
+    ``ref`` is itself an http(s) URL, copies it to ``url`` too — an
+    explicit URL is honoured as-is, same contract :func:`link_reported`
+    already extends to a resident-supplied ``url``. A row where neither
+    field parses is returned unchanged, still numberless — that one stays
+    dropped: unrenderable and undedupable.
+
+    Mutates and returns *record* in place, matching this module's other
+    single-record normalisers (:func:`link_reported`'s loop body).
+    """
+    if record.get("kind") != "pr" or record.get("number"):
+        return record
+    parsed = None
+    url = record.get("url")
+    if url:
+        parsed = forges.parse_pull_request_number(str(url))
+    ref = record.get("ref")
+    if parsed is None and ref:
+        parsed = forges.parse_pull_request_number(str(ref))
+    if parsed is None:
+        return record
+    record["number"] = int(parsed)
+    if not record.get("url") and isinstance(ref, str) and ref.startswith(("http://", "https://")):
+        record["url"] = ref
+    return record
+
+
 def collect(
     repo_root: Path | None,
     *,
@@ -698,8 +740,11 @@ def collect(
     this run's produce (#575); a worktree run's isolated branch needs no
     filter and passes ``None``.
     """
+    reported_raw = read_reported(outbox_dir)
+    for record in reported_raw:
+        _normalise_reported_pr(record)
     reported = [
-        record for record in read_reported(outbox_dir)
+        record for record in reported_raw
         if record.get("kind") != "pr" or record.get("number")
     ]
     summary = [r for r in reported if r.get("kind") == "summary"][:1]

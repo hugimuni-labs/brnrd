@@ -179,17 +179,24 @@ def test_deployed_version_pre_fix_two_line_file_reads_as_unknown(tmp_path, monke
 # --- Shells-and-doors support matrix (#1070 follow-up) ----------------------
 
 
-def test_support_matrix_reads_soon_when_deployment_is_unconfigured():
+def test_support_matrix_reads_ready_when_deployment_is_unconfigured():
+    """"soon" means the gate's code does not exist yet — every door here is
+    shipped, so an unconfigured deployment reads "ready" (shipped, no
+    confirmed brnrd.dev identity), never "soon" and never a fabricated
+    "live". Slack and Signal have no hosted axis at all (self-hosted
+    gates, full stop) and land on "ready" the same way an unconfigured
+    WhatsApp does — one state for "no confirmed identity", regardless of
+    which of the two reasons caused it."""
     client = _client()
     payload = client.get("/v1/stats/support").json()
     by_slug = {door["slug"]: door["status"] for door in payload["doors"]}
-    assert by_slug["telegram"] == "soon"
-    assert by_slug["whatsapp"] == "soon"
-    assert by_slug["github"] == "soon"
-    # No hosted axis at all for these — always mirrors shipped code, not
-    # this deployment's Settings.
-    assert by_slug["slack"] == "live"
-    assert by_slug["signal"] == "live"
+    assert by_slug["telegram"] == "ready"
+    assert by_slug["whatsapp"] == "ready"
+    assert by_slug["github"] == "ready"
+    assert by_slug["slack"] == "ready"
+    assert by_slug["signal"] == "ready"
+    # The one door with no cloud_settings that stays live regardless: it
+    # *is* brnrd.dev.
     assert by_slug["dashboard"] == "live"
 
 
@@ -207,7 +214,7 @@ def test_support_matrix_reads_live_once_this_deployment_is_configured():
     by_slug = {door["slug"]: door["status"] for door in payload["doors"]}
     assert by_slug["telegram"] == "live"
     # Unaffected by an unrelated door's configuration.
-    assert by_slug["whatsapp"] == "soon"
+    assert by_slug["whatsapp"] == "ready"
 
 
 # --- Stripe-derived pricing (#831) -------------------------------------------

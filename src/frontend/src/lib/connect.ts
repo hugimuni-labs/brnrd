@@ -14,6 +14,19 @@ export interface ConnectContext {
 	code: string;
 	status: PairCodeStatus;
 	repos: ConnectRepo[];
+	// The repo the connecting checkout itself reported (`owner/name`, parsed
+	// from its git remote) — `""` when this pair code predates the
+	// capability, ran with none detected, or is already dead. When present,
+	// the page leads with "connect *this* repo" instead of asking the
+	// reader to pick one from `repos` — the retired "enable a repository"
+	// website click no longer has to have already happened.
+	suggested_repo_full_name: string;
+	// "github" or "local" for the suggestion above — "" alongside an empty
+	// suggestion, or on a pair code old enough to predate this field. A
+	// local checkout has no forge behind `owner/name`; the page says so
+	// rather than letting a synthesized `local/foo-a1b2c3` read as a real
+	// GitHub org.
+	suggested_forge: string;
 }
 
 export interface TelegramPair {
@@ -42,16 +55,20 @@ export async function fetchConnectContext(
 	return (await res.json()) as ConnectContext;
 }
 
+// `repoId` omitted (or empty) tells the backend to bind — creating it on
+// first use — the repo the pairing daemon itself reported, instead of one
+// the reader picked from a list. The primary "connect <repo>" button calls
+// this with no id; the fallback dropdown always passes one explicitly.
 export async function approveConnect(
 	code: string,
-	repoId: string,
+	repoId: string = '',
 	fetchImpl: typeof fetch = fetch
 ): Promise<ApproveResult> {
 	const res = await fetchImpl(`/v1/connect/${encodeURIComponent(code)}`, {
 		method: 'POST',
 		credentials: 'include',
 		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify({ repo_id: repoId })
+		body: JSON.stringify(repoId ? { repo_id: repoId } : {})
 	});
 	if (res.status === 401) throw new ConnectAuthError('not signed in');
 	const body = (await res.json().catch(() => ({}))) as Partial<ApproveResult>;
@@ -65,22 +82,26 @@ export async function approveConnect(
 	};
 }
 
-// The one state the page can act in: a live code and at least one repo to
-// bind it to. Everything else renders a terminal notice.
+// The states the page can act in: a live code, and either a repo the
+// checkout itself already named or at least one existing repo to fall back
+// to picking from. Everything else renders a terminal notice.
 export function canApprove(context: ConnectContext): boolean {
 	return (
-		(context.status === 'pending' || context.status === 'approved') && context.repos.length > 0
+		(context.status === 'pending' || context.status === 'approved') &&
+		(context.repos.length > 0 || context.suggested_repo_full_name !== '')
 	);
 }
 
-// The zero-repo dead end (2026-08-03): a live code and an account with
-// nothing to bind it to. Its notice below is true and was also the end of
-// the road — no link, no command, on a page reached by a reader who is
-// mid-setup by definition. The predicate is here rather than inline in the
-// route so the one state that earns a way out is named once and testable.
+// The true dead end (2026-08-03, narrowed 2026-08-06 once pairing could
+// name its own repo): a live code, an account with nothing already
+// connected, *and* a pairing that reported no repo of its own — an older
+// CLI, or `brnrd account connect` run outside a git checkout. Every other
+// shape of "nothing enabled yet" now self-resolves on approve.
 export function needsRepoEnable(context: ConnectContext): boolean {
 	return (
-		(context.status === 'pending' || context.status === 'approved') && context.repos.length === 0
+		(context.status === 'pending' || context.status === 'approved') &&
+		context.repos.length === 0 &&
+		context.suggested_repo_full_name === ''
 	);
 }
 
@@ -95,8 +116,10 @@ export function statusNotice(context: ConnectContext): string | null {
 		case 'consumed':
 			return 'This pair code was already used. Your daemon should be connected.';
 		default:
-			return context.repos.length === 0
-				? 'No repos connected yet. Connect a repo first, then reload this approval page.'
+			return needsRepoEnable(context)
+				? "This pairing didn't report a repo (older CLI, or run outside a git checkout), " +
+						'and this account has nothing connected to fall back to. Connect a repo, then ' +
+						'reload this approval page.'
 				: null;
 	}
 }
