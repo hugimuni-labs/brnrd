@@ -916,6 +916,32 @@ class TestBootScore:
         # But the file-backed blocks it *can* weigh, it does.
         assert by_key["identity-core"].bytes > 0
 
+    def test_pitfalls_bytes_unmeasured_without_task_text(self, empty_repo):
+        """#1181: no ``task_text`` means the pitfalls block was never weighed.
+
+        Pitfalls are trigger-gated on ``task_text`` — with none given, the
+        block cannot fire, and that is a fact about *this invocation*, not a
+        measurement that it fired and found nothing.  ``bytes`` must stay
+        ``None`` (unweighed), never collapse to ``0`` (weighed-and-empty) —
+        the same three-state discipline ``ContractEntry.bytes`` documents.
+        """
+        from brr.prompts import build_boot_score
+
+        no_task = build_boot_score(empty_repo, is_daemon=True)
+        by_key = {c.block_key: c for c in no_task.contracts}
+        assert by_key["pitfalls"].present is False
+        assert by_key["pitfalls"].bytes is None
+
+        # task_text given but matching nothing (no dominion/pitfalls store in
+        # empty_repo at all) *is* a real measurement: the block rendered
+        # empty, so bytes == 0, distinct from the unmeasured case above.
+        matched_nothing = build_boot_score(
+            empty_repo, is_daemon=True, task_text="rebuild the docker image",
+        )
+        by_key = {c.block_key: c for c in matched_nothing.contracts}
+        assert by_key["pitfalls"].present is False
+        assert by_key["pitfalls"].bytes == 0
+
     def test_boot_score_json_carries_attention_and_posture(self, empty_repo):
         """``to_dict`` serializes what the text view shows — no silent drops."""
         from brr.bootscore import to_dict
