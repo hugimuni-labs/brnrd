@@ -4291,7 +4291,6 @@ def _run_worker(
                     resp_path,
                     suppressed_reason=suppression_reason,
                     undeliverable=undeliverable,
-                    delivered_gate=notify_gate if gate_fallback_delivered else "",
                 )
                 if terminal_duplicate:
                     # Static dispatch call: the terminal stream is an exact
@@ -5589,7 +5588,9 @@ def _live_delivery_projection(
         else:
             candidate_count = sum(
                 1 for g in _NOTIFY_GATE_FALLBACK_CANDIDATES
-                if brr_dir is not None and _gate_can_deliver(brr_dir, g)
+                if brr_dir is not None
+                and _gate_can_deliver(brr_dir, g)
+                and _gate_can_send_unaddressed(g)
             )
             reason = (
                 f"no gate owns {source} events" if candidate_count == 0
@@ -6558,7 +6559,6 @@ def _stage_terminal_response(
     *,
     suppressed_reason: str = "",
     undeliverable: bool = False,
-    delivered_gate: str = "",
 ) -> Path | None:
     # The terminal stream is always *captured* here, deliverability aside.
     # When *undeliverable* (no gate owns the source — a ``schedule`` wake
@@ -6570,10 +6570,15 @@ def _stage_terminal_response(
     # the gap for the run that never got the chance to (#562's residual —
     # the terminal reply of a run that produced no other output).
     #
-    # *delivered_gate* names the fallback gate when the caller already
-    # queued this text there via `_deliver_out_of_bound` — the capture
-    # record below must not *also* sit pending, or the two would double-
-    # send the same text down two channels.
+    # *suppressed_reason* names why this row is not the primary carrier of
+    # the text — a duplicate of a reply already delivered elsewhere, or a
+    # copy queued out-of-bound via `_deliver_out_of_bound` — and either way
+    # this record must not *also* sit `pending`, or something could read it
+    # as still needing its own send. #1205: it must also not read
+    # `delivered` — a queued-out-of-bound copy has no platform receipt yet,
+    # and stamping one here at synthesis time is the false receipt the gate
+    # never actually posted. `carried` says the honest thing: the content
+    # left this row's custody, but this row itself was never acknowledged.
     body = protocol.read_response(response_path.parent, str(event.get("id") or "")) or ""
     status = (
         message_store.UNDELIVERABLE if undeliverable else message_store.PENDING
@@ -6595,9 +6600,8 @@ def _stage_terminal_response(
         if suppressed_reason and status == message_store.PENDING:
             message_store.transition(
                 path,
-                message_store.DELIVERED,
-                gate=delivered_gate or "deduplicated",
-                platform_message_id="already-delivered",
+                message_store.CARRIED,
+                reason=suppressed_reason,
             )
     if suppressed_reason:
         protocol.update_event_meta(event, terminal_suppressed=True)
@@ -8032,6 +8036,53 @@ def _gate_can_deliver(brr_dir: Path, gate: str) -> bool:
     return _gate_is_configured(brr_dir, _delivery_source_for_gate(gate))
 
 
+def _gate_can_send_unaddressed(gate: str) -> bool:
+    """True unless *gate*'s owning module declares it structurally cannot.
+
+    #1205: derived from the module's own ``CAN_SEND_UNADDRESSED`` attribute
+    — never a name list in this file, which is the failure mode this repo
+    has shipped before (a gate added later silently inheriting the wrong
+    default because nobody updated a hardcoded set here). Absent attribute
+    -> True, preserving every existing gate's behavior; a module unresolved
+    (bad alias, import failure) also defaults True — this predicate is
+    about *capability*, and :func:`_gate_can_deliver` already answers
+    whether the gate is configured/reachable at all.
+    """
+    delivery_gate = _delivery_source_for_gate(gate)
+    if delivery_gate not in _BUILTIN_GATES:
+        return True
+    try:
+        from .gates import import_gate
+        mod = import_gate(delivery_gate)
+    except ImportError:
+        return True
+    return bool(getattr(mod, "CAN_SEND_UNADDRESSED", True))
+
+
+def _gate_addressed(gate: str, fm: dict) -> bool:
+    """True when *fm* carries addressing an unaddressed-incapable *gate* can use.
+
+    Only consulted once :func:`_gate_can_send_unaddressed` has already said
+    "no" — a capable gate never needs this. The predicate itself lives on
+    the gate module (``addressed(fm)``, mirroring the ``is_configured``
+    hook), so a second incapable gate in the future declares its own
+    address key instead of teaching this function a new name. A module
+    with no such hook, or one that fails to import, has no way to prove
+    addressing and is treated as unaddressed — fail closed, same direction
+    as the capability check it follows.
+    """
+    delivery_gate = _delivery_source_for_gate(gate)
+    if delivery_gate not in _BUILTIN_GATES:
+        return False
+    try:
+        from .gates import import_gate
+        mod = import_gate(delivery_gate)
+    except ImportError:
+        return False
+    addressed_fn = getattr(mod, "addressed", None)
+    return bool(addressed_fn(fm)) if addressed_fn else False
+
+
 def _configured_gate_names(brr_dir: Path) -> list[str]:
     """Delivery-loop gate names deliverable on this account.
 
@@ -8128,10 +8179,16 @@ def _resolve_notify_gate(
        (typo, not configured) resolves to ``""`` — the caller then treats
        it exactly like "nothing resolved" (current undeliverable staging),
        never a crash and never a silent fall-through to inference, which
-       would surprise an operator who deliberately named a gate.
-    2. **Single-gate inference**, only when unset: exactly *one* user-chat
-       gate (:data:`_NOTIFY_GATE_FALLBACK_CANDIDATES` — telegram / slack /
-       cloud) is configured on this account, no guessing needed.
+       would surprise an operator who deliberately named a gate. A gate
+       that *is* configured but structurally cannot originate an
+       unaddressed send (:func:`_gate_can_send_unaddressed` — today, only
+       ``cloud``, #1205) resolves the same way: this fallback never carries
+       addressing of its own, so an incapable gate here can never work,
+       explicit or not.
+    2. **Single-gate inference**, only when unset: exactly *one* capable
+       user-chat gate (:data:`_NOTIFY_GATE_FALLBACK_CANDIDATES` — telegram /
+       slack / cloud, filtered to those that can send unaddressed) is
+       configured on this account, no guessing needed.
     3. **Conversation ownership**, only when several candidates are
        configured (the case (2) calls "ambiguous"): the run usually is not
        ambiguous at all — it carries its own *conversation_key*, and some
@@ -8149,10 +8206,15 @@ def _resolve_notify_gate(
     """
     explicit = str(cfg.get("notify.gate") or "").strip()
     if explicit:
-        return explicit if _gate_can_deliver(brr_dir, explicit) else ""
+        return (
+            explicit
+            if _gate_can_deliver(brr_dir, explicit)
+            and _gate_can_send_unaddressed(explicit)
+            else ""
+        )
     candidates = [
         gate for gate in _NOTIFY_GATE_FALLBACK_CANDIDATES
-        if _gate_can_deliver(brr_dir, gate)
+        if _gate_can_deliver(brr_dir, gate) and _gate_can_send_unaddressed(gate)
     ]
     if len(candidates) == 1:
         return candidates[0]
@@ -8389,6 +8451,34 @@ def _deliver_out_of_bound(
                 kind="dropped",
                 lifetime="run",
             )
+        return False
+    if not _gate_can_send_unaddressed(gate) and not _gate_addressed(gate, fm):
+        # #1205: the drawer the courier never opens. A gate that declares
+        # it cannot originate a fresh send (today: cloud — its relay API is
+        # reply-shaped) and a message that carries none of that gate's own
+        # addressing would synthesize an already-`done` event no delivery
+        # loop can ever complete — silent, structurally impossible, and
+        # invisible until someone audits the drawer by hand. Refuse here,
+        # loudly, instead: the resident is still alive to read `notices` and
+        # pick one of the two lanes that actually work.
+        if message_path is not None:
+            message_store.transition(
+                message_path,
+                message_store.UNDELIVERABLE,
+                reason=f"{gate} cannot originate an unaddressed send",
+            )
+        _record_outbox_notice(
+            outbox_dir,
+            f"gate message dropped: {gate!r} cannot originate an unaddressed "
+            f"send and this message carries no addressing it can use; the "
+            f"message was NOT delivered. Two lanes work instead: a plain "
+            f"outbox file posts as an interim on the current event, or "
+            f"`event: <id>` replies to a pending one.",
+            # A well-formed, resolvable target refused by structural
+            # policy, same shape as the PR-body close-keyword refusal below.
+            kind="refused",
+            lifetime="run",
+        )
         return False
     refusal = _pr_body_close_keyword_refusal(gate, fm, body)
     if refusal:
