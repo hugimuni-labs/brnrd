@@ -74,13 +74,14 @@ def test_portals_manual_defines_next_move_contract():
 def test_portals_manual_defines_post_delivery_linger():
     # B5/#216: the linger is a named contract — outbox delivery first,
     # keepalive-held slot, TTL-aware exponential backoff, dispatch-or-explicit-
-    # defer ownership for unrelated pending work, bounded horizon — plus the daemon-owned
-    # attending floor for post-return safety.
+    # defer ownership for unrelated pending work, bounded horizon. The
+    # daemon-owned post-delivery attend dwell (a separate, weaker safety net)
+    # was removed — it held the single-flight slot after the runner process
+    # had already exited, which could only ever push a follow-up into the
+    # next run, never fold it into the current thought.
     text = docs.read_topic("portals")
     assert text is not None
     assert "post-delivery linger" in text
-    assert "delivered · attending" in text
-    assert "delivery.post_delivery_attend_seconds" in text
     assert "cap at ~240s" in text
     assert "Any other pending event ends" in text
     assert "spawn.max_concurrent" in text
