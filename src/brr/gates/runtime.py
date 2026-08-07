@@ -457,8 +457,14 @@ def deliver_stream(
     A failure also costs the event its next few turns: transient failures back
     off exponentially (see the module note above), and a
     :class:`PermanentDeliveryError` closes the event ``error`` rather than
-    being retried at the poll cadence forever. Pass *brr_dir* to have the
-    outcome recorded in the gate's health file, where a wake can read it.
+    being retried at the poll cadence forever — and terminates the durable
+    message row that was in flight to ``message_store.UNDELIVERABLE``, so
+    the one case a delivery is provably impossible is the one case that
+    actually reaches that status, instead of sitting ``pending`` forever
+    (a genuinely undeliverable message used to be invisible to every reader
+    of that status — the sweep, the dashboard, ``brnrd do``). Pass *brr_dir*
+    to have the outcome recorded in the gate's health file, where a wake can
+    read it.
     """
     if deliver_terminal is None:
         deliver_terminal = deliver_partial
@@ -467,6 +473,7 @@ def deliver_stream(
         eid = event["id"]
         if not _delivery_due(source, eid, now=now):
             continue
+        message_path = None
         try:
             for ppath in protocol.list_partials(responses_dir, eid):
                 body = protocol.read_partial(ppath)
@@ -508,12 +515,19 @@ def deliver_stream(
             _delivery_settled(source, eid)
             record_delivery_health(brr_dir, source, event_id=eid, error=None)
         except PermanentDeliveryError as e:
-            # Nothing about a future attempt would differ. Close it, say why.
+            # Nothing about a future attempt would differ. Close it, say why —
+            # and retire the durable message row that was in flight, or it
+            # sits ``pending`` forever wearing a status nothing will ever
+            # read as failed (#undeliverable-means-nobody-took-it).
             print(f"[brnrd:{source}] delivery impossible for {eid}: {e}")
             _delivery_settled(source, eid)
             record_delivery_health(
                 brr_dir, source, event_id=eid, error=f"undeliverable: {e}"
             )
+            if message_path:
+                message_store.transition(
+                    message_path, message_store.UNDELIVERABLE, reason=str(e),
+                )
             try:
                 protocol.set_status(event, "error")
             except OSError as exc:

@@ -4508,6 +4508,7 @@ class TestNotifyGateFallback:
     def _run(
         self, tmp_path, monkeypatch, *, cfg_extra=None, configured_gates=(),
         eid="evt-tick", body="director tick note\n", duplicate=False,
+        event_conversation_key=None, seed_conversations=None,
     ):
         # A real git repo, not just ``write_repo_scaffold``'s directory
         # shape: an account-attached run stays on the ``worktree`` env
@@ -4524,7 +4525,24 @@ class TestNotifyGateFallback:
             **(cfg_extra or {}),
         }
         ctx = daemon.account.resolve_context(tmp_path, cfg)
-        event = make_event(tmp_path, eid=eid, source="schedule", body="tick")
+        event_kwargs = {}
+        if event_conversation_key is not None:
+            event_kwargs["conversation_key"] = event_conversation_key
+        event = make_event(
+            tmp_path, eid=eid, source="schedule", body="tick", **event_kwargs,
+        )
+        # Seed prior conversation activity so the recent-activity tiebreak has
+        # something to read: (key, seconds_ago) — smaller seconds_ago is more
+        # recent. Explicit mtimes, not write order, because two fast writes
+        # can land in the same filesystem-mtime tick.
+        brr_dir = tmp_path / ".brr"
+        for key, seconds_ago in seed_conversations or []:
+            daemon.conversations.append_event(
+                brr_dir, key, {"id": f"evt-seed-{key}", "source": key.split(":", 1)[0], "body": "hi"},
+            )
+            log_path = daemon.conversations.event_log_path(brr_dir, key, f"evt-seed-{key}")
+            stamp = time.time() - seconds_ago
+            os.utime(log_path, (stamp, stamp))
         monkeypatch.setattr(
             daemon.runner, "resolve_runner_profile",
             lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root),
@@ -4613,6 +4631,47 @@ class TestNotifyGateFallback:
 
         [row] = self._message_rows(ctx, task)
         assert row["status"] == daemon.message_store.UNDELIVERABLE
+
+    def test_ambiguous_gates_resolve_via_the_runs_own_conversation(
+        self, tmp_path, monkeypatch,
+    ):
+        # Two candidates would otherwise be ambiguous — but this run's own
+        # conversation_key names a thread telegram owns, so it is not
+        # actually ambiguous: the run carries the answer.
+        task, ctx, event, inbox_dir, responses_dir = self._run(
+            tmp_path, monkeypatch, configured_gates=("telegram", "slack"),
+            event_conversation_key="telegram:555:0",
+        )
+
+        assert task.meta["terminal_route"] == "gate-fallback"
+        [fallback] = protocol.list_done(inbox_dir, "telegram")
+        fallback_body = protocol.read_response(responses_dir, fallback["id"])
+        assert fallback_body.strip() == "director tick note"
+
+        [row] = self._message_rows(ctx, task)
+        assert row["platform_gate"] == "telegram"
+
+    def test_ambiguous_gates_resolve_via_the_repos_most_recent_thread(
+        self, tmp_path, monkeypatch,
+    ):
+        # The run's own conversation (schedule:default) owns neither
+        # candidate — but the repo's most recently active thread is a slack
+        # one, so that is who hears it rather than nobody.
+        task, ctx, event, inbox_dir, responses_dir = self._run(
+            tmp_path, monkeypatch, configured_gates=("telegram", "slack"),
+            seed_conversations=[
+                ("telegram:1:0", 600),  # older
+                ("slack:general:0", 30),  # newer — this one wins
+            ],
+        )
+
+        assert task.meta["terminal_route"] == "gate-fallback"
+        [fallback] = protocol.list_done(inbox_dir, "slack")
+        fallback_body = protocol.read_response(responses_dir, fallback["id"])
+        assert fallback_body.strip() == "director tick note"
+
+        [row] = self._message_rows(ctx, task)
+        assert row["platform_gate"] == "slack"
 
     def test_explicit_notify_gate_wins_over_single_gate_inference(
         self, tmp_path, monkeypatch,
@@ -5999,6 +6058,266 @@ def test_scm_facet_reports_dirty_unpushed_tree(tmp_path):
     assert facet["branch"] == "brr/run-x"
     assert facet["unpushed_commits"] == 1
     assert facet["modified_files"] == 1
+
+
+# ── delivery: — "would my reply reach a human if I ended right now?" ──
+
+
+@pytest.fixture(autouse=True)
+def _clear_notify_gate_cache():
+    """Drop the per-run notify-gate memo around every test in this module.
+
+    :func:`daemon._cached_notify_gate` is a process-global keyed by run id,
+    and the fixtures below all use ``run-1`` — without this, the first test
+    to resolve a gate would answer for every later one. Production drops an
+    entry in ``_run_worker_and_finalize``'s ``finally``; a test never
+    reaches that, so it clears here.
+    """
+    daemon._notify_gate_cache.clear()
+    yield
+    daemon._notify_gate_cache.clear()
+
+
+def test_notify_gate_is_resolved_once_per_run_not_once_per_heartbeat(
+    tmp_path, monkeypatch,
+):
+    """The heartbeat may not pay the conversation-store scan every tick.
+
+    ``_live_delivery_projection`` runs on every heartbeat. For the run type
+    it exists to serve — a ``schedule`` fire, whose conversation key no chat
+    gate owns — ``_resolve_notify_gate`` falls through to
+    ``_notify_gate_by_recent_activity``, which stats every file under every
+    conversation key. That scan's own docstring calls itself rare and
+    per-run.
+
+    Drive red: delete the memo in ``_cached_notify_gate`` (call
+    ``_resolve_notify_gate`` directly) and this fails with calls == 3.
+    """
+    monkeypatch.setattr(
+        daemon, "_gate_can_deliver",
+        lambda _brr, gate: gate in ("telegram", "cloud"),
+    )
+    calls = []
+    real_scan = daemon._notify_gate_by_recent_activity
+
+    def counting_scan(brr_dir, candidates):
+        calls.append(tuple(candidates))
+        return real_scan(brr_dir, candidates)
+
+    monkeypatch.setattr(daemon, "_notify_gate_by_recent_activity", counting_scan)
+    task = Run(id="run-heartbeat", event_id="evt-1", body="", source="schedule")
+    task.conversation_key = "schedule:nightly"
+    for _ in range(3):
+        daemon._live_delivery_projection(
+            task, {}, tmp_path, already_delivered=False,
+        )
+    # Sanity: the expensive path must actually be reached, or this test
+    # passes over a branch it never entered.
+    assert calls, (
+        "fixture must reach the recent-activity scan — two candidate gates "
+        "and a conversation key no candidate owns"
+    )
+    assert len(calls) == 1, f"scan ran {len(calls)}x across 3 heartbeats"
+
+
+def test_forget_notify_gate_drops_the_entry_so_the_daemon_does_not_accumulate(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(
+        daemon, "_gate_can_deliver", lambda _brr, gate: gate == "telegram",
+    )
+    task = Run(id="run-forget", event_id="evt-1", body="", source="schedule")
+    daemon._live_delivery_projection(task, {}, tmp_path, already_delivered=False)
+    assert "run-forget" in daemon._notify_gate_cache, (
+        "the projection must populate the cache, or the next assertion is vacuous"
+    )
+    daemon._forget_notify_gate("run-forget")
+    assert "run-forget" not in daemon._notify_gate_cache
+
+
+def test_the_finalizer_actually_drops_the_cached_notify_gate():
+    """`_forget_notify_gate` must be *called* from the run finalizer.
+
+    Written after the direct-call test above stayed green when the call
+    site was deleted — it guarded the function, not its use, which is a
+    check with no teeth. Driving the real `_run_worker_and_finalize` to
+    prove this would mean standing up a runner; an AST assertion on the
+    call site is the cheap guard that can still fail, and this repo
+    already uses that idiom (`tests/test_spawn_row_contract.py`).
+
+    Drive red: delete the `_forget_notify_gate(...)` call in
+    `_run_worker_and_finalize`'s `finally:` block.
+    """
+    import ast
+
+    tree = ast.parse(Path(daemon.__file__).read_text(encoding="utf-8"))
+    finalizer = next(
+        (
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_run_worker_and_finalize"
+        ),
+        None,
+    )
+    # Sanity: a rename must break this loudly rather than pass over nothing.
+    assert finalizer is not None, (
+        "_run_worker_and_finalize not found in daemon.py — this guard has "
+        "been silently disarmed by a rename"
+    )
+    called = {
+        node.func.id
+        for node in ast.walk(finalizer)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "_forget_notify_gate" in called, (
+        "_run_worker_and_finalize must drop the run's cached notify gate; "
+        "without it a long-lived daemon holds one entry per run it ever ran"
+    )
+
+
+def test_an_uncacheable_run_still_resolves(tmp_path, monkeypatch):
+    """A task with no id pays the full resolution rather than caching under "".
+
+    Correctness is unchanged either way; this pins that the id-less path
+    answers at all, so a future refactor cannot make "no id" mean "no gate".
+    """
+    monkeypatch.setattr(
+        daemon, "_gate_can_deliver", lambda _brr, gate: gate == "telegram",
+    )
+    task = Run(id="", event_id="evt-1", body="", source="schedule")
+    projection = daemon._live_delivery_projection(
+        task, {}, tmp_path, already_delivered=False,
+    )
+    assert projection["gate"] == "telegram"
+    assert daemon._notify_gate_cache == {}
+
+
+
+def test_delivery_projection_unknown_without_a_source(tmp_path):
+    task = Run(id="run-1", event_id="evt-1", body="", source="")
+    assert daemon._live_delivery_projection(task, {}, tmp_path, already_delivered=False) == {
+        "known": False,
+    }
+
+
+def test_delivery_projection_gate_owned_source_lands_sole(tmp_path):
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    projection = daemon._live_delivery_projection(
+        task, {}, tmp_path, already_delivered=False,
+    )
+    assert projection["known"] is True
+    assert projection["would_land"] is True
+    assert projection["route"] == "gate-sole"
+    assert projection["gate"] == "telegram"
+    assert projection["reason"] is None
+
+
+def test_delivery_projection_gate_owned_source_already_delivered_is_extra(tmp_path):
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    projection = daemon._live_delivery_projection(
+        task, {}, tmp_path, already_delivered=True,
+    )
+    assert projection["route"] == "gate-extra"
+    assert projection["already_delivered"] is True
+
+
+def test_delivery_projection_dispatch_edge_for_a_spawned_strand(tmp_path):
+    task = Run(id="run-1", event_id="evt-1", body="", source="spawn")
+    task.meta["spawn_parent_run_id"] = "run-parent"
+    projection = daemon._live_delivery_projection(
+        task, {}, tmp_path, already_delivered=False,
+    )
+    assert projection["would_land"] is True
+    assert projection["route"] == "dispatch-edge"
+    assert projection["gate"] is None
+
+
+def test_delivery_projection_unowned_source_no_candidates_names_the_source(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(daemon, "_gate_can_deliver", lambda _brr, _gate: False)
+    task = Run(id="run-1", event_id="evt-1", body="", source="schedule")
+    projection = daemon._live_delivery_projection(
+        task, {}, tmp_path, already_delivered=False,
+    )
+    assert projection["would_land"] is False
+    assert projection["route"] == "undeliverable"
+    assert projection["gate"] is None
+    assert projection["reason"] == "no gate owns schedule events"
+
+
+def test_delivery_projection_unowned_source_resolves_via_notify_gate(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(
+        daemon, "_gate_can_deliver", lambda _brr, gate: gate == "telegram",
+    )
+    task = Run(id="run-1", event_id="evt-1", body="", source="schedule")
+    projection = daemon._live_delivery_projection(
+        task, {}, tmp_path, already_delivered=False,
+    )
+    assert projection["would_land"] is True
+    assert projection["route"] == "gate-fallback"
+    assert projection["gate"] == "telegram"
+    assert projection["reason"] is None
+
+
+def test_delivery_projection_ambiguous_candidates_names_the_count(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(
+        daemon, "_gate_can_deliver",
+        lambda _brr, gate: gate in ("telegram", "slack"),
+    )
+    task = Run(id="run-1", event_id="evt-1", body="", source="schedule")
+    projection = daemon._live_delivery_projection(
+        task, {}, tmp_path, already_delivered=False,
+    )
+    assert projection["would_land"] is False
+    assert projection["reason"] == "notify.gate unresolved: 2 candidate gate(s)"
+
+
+def test_delivery_projection_explicit_notify_gate_not_deliverable(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(daemon, "_gate_can_deliver", lambda _brr, _gate: False)
+    task = Run(id="run-1", event_id="evt-1", body="", source="schedule")
+    projection = daemon._live_delivery_projection(
+        task, {"notify.gate": "slack"}, tmp_path, already_delivered=False,
+    )
+    assert projection["would_land"] is False
+    assert projection["reason"] == "explicit notify.gate='slack' not deliverable here"
+
+
+def test_delivery_projection_without_brr_dir_stays_conservative(monkeypatch):
+    # An ad-hoc caller that omits brr_dir gets no filesystem-backed
+    # notify.gate resolution — same "no crash, no guess" contract as the
+    # schedule facet's brr_dir-less path above.
+    task = Run(id="run-1", event_id="evt-1", body="", source="schedule")
+    projection = daemon._live_delivery_projection(
+        task, {}, None, already_delivered=False,
+    )
+    assert projection["would_land"] is False
+    assert projection["route"] == "undeliverable"
+    assert projection["reason"] == "no gate owns schedule events"
+
+
+def test_write_live_portal_state_wires_the_delivery_facet(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        brr_dir=brr_dir,
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["delivery"]["known"] is True
+    assert payload["delivery"]["route"] == "gate-sole"
+    assert payload["delivery"]["gate"] == "telegram"
 
 
 def test_write_live_portal_state_wires_produce_inputs(tmp_path, monkeypatch):
