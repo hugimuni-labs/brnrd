@@ -98,10 +98,14 @@ PUBLIC_COMMANDS = (
 # An operator browsing ``--help`` has no use for it; a resident about to
 # write into a half-remembered surface does, and the substrate points at
 # the spelling.
+#
+# ``cut`` (design-the-bolt.md, 2026-08-07) is the resident's own front door
+# onto the bolt — the run-completion declaration, sibling of ``do``/``await``
+# in shape and reasoning: a live-wake verb, not an operator's terminal.
 HIDDEN_COMMANDS = (
     "prompts", "hook", "statusline", "worktree-hygiene", "config", "emotes",
     "relic", "gate-run", "close-check", "promise", "mood", "do", "notes",
-    "await",
+    "await", "cut",
 )
 
 #: What ``brnrd promise`` accepts, spelled here so building the parser costs
@@ -647,6 +651,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="outbox dir to act on (default: this run's own, via "
              "BRR_OUTBOX_DIR / BRR_PORTAL_STATE)")
     await_p.set_defaults(func=cmd_await)
+
+    # Hidden per HIDDEN_COMMANDS, same shape as `do`/`await`: the resident's
+    # own front door onto the bolt (design-the-bolt.md), not an operator's
+    # terminal. Positional FILE is the resident-authored declaration —
+    # frontmatter (`asks:`/`produce:`/`owed:`/...) plus a woven body.
+    cut_p = sub.add_parser("cut")
+    cut_p.add_argument(
+        "file", metavar="FILE",
+        help="the declaration to stage: frontmatter + woven body")
+    cut_p.add_argument(
+        "--outbox", default=None, metavar="DIR",
+        help="outbox dir to act on (default: this run's own, via "
+             "BRR_OUTBOX_DIR / BRR_PORTAL_STATE)")
+    cut_p.add_argument(
+        "--timeout", type=float, default=None, metavar="SECONDS",
+        help="how long to wait for the daemon's verdict (default 30s)")
+    cut_p.set_defaults(func=cmd_cut)
 
     p = sub.add_parser("kb", help="search home/repo knowledge; omit query to print graph shape")
     p.add_argument("query", nargs="?", default=None,
@@ -3084,6 +3105,55 @@ def cmd_await(args):
         if time.monotonic() >= deadline:
             return _emit(state, "pending")
         time.sleep(_AWAIT_POLL_INTERVAL_SECONDS)
+
+
+def cmd_cut(args):
+    """``brnrd cut FILE`` — stage the bolt, read the daemon's verdict back.
+
+    Sibling of ``do``/``await`` in shape: stage the declaration, wait for
+    the daemon's own drain to consume it, and report the verdict in the
+    same call — ``accepted`` / ``bounced — <named diff>`` / ``queued``.
+    Exit 0 only on ``accepted``, matching the porcelain contract in
+    ``docs/portals.md``.
+    """
+    import sys
+
+    from . import do as do_mod
+
+    outbox_dir = Path(args.outbox) if args.outbox else _wake_outbox_dir()
+    if outbox_dir is None:
+        print(
+            "[brnrd cut] no run outbox in this environment — `brnrd cut` "
+            "stages this run's completion declaration; pass --outbox, or "
+            "run inside a daemon wake. Nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    file_path = Path(args.file)
+    if not file_path.is_file():
+        print(f"[brnrd cut] {args.file!r} is not a file", file=sys.stderr)
+        return 1
+
+    timeout = args.timeout if args.timeout is not None else do_mod.DEFAULT_TIMEOUT_SECONDS
+    before = do_mod.notices_of(do_mod.read_portal_state(outbox_dir))
+    staged, stage_error = do_mod.stage_cut(outbox_dir, file_path)
+    if staged is None:
+        print(f"[brnrd cut] ✗ {stage_error}", file=sys.stderr)
+        return 1
+
+    status, detail = do_mod.await_verdict(
+        outbox_dir, staged, before, ("cut",),
+        timeout_seconds=timeout, source_file=staged.name,
+    )
+    if status == do_mod.OK:
+        print("[brnrd cut] accepted")
+        return 0
+    if status == do_mod.QUEUED:
+        print("[brnrd cut] ? still queued", file=sys.stderr)
+        return 1
+    print(f"[brnrd cut] bounced — {detail}", file=sys.stderr)
+    return 1
 
 
 def cmd_hook(args):
