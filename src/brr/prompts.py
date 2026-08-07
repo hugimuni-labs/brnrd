@@ -1052,15 +1052,10 @@ def _build_dominion_block(repo_root: Path) -> str:
     cfg = conf.load_config(repo_root)
     if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
         return ""
-    budget = int(
-        cfg.get(
-            "dominion.inject_budget_bytes",
-            cfg.get(
-                "dominion_inject_budget_bytes",
-                dominion.DEFAULT_INJECT_BUDGET_BYTES,
-            ),
-        )
-    )
+    # One resolver, shared with the eviction preview — see
+    # `dominion.inject_budget_bytes` for why two readers of this number
+    # must not be allowed to drift.
+    budget = dominion.inject_budget_bytes(cfg)
     chosen = None
     digest = ""
     for candidate in dominion.resident_dominion_candidates(repo_root, cfg):

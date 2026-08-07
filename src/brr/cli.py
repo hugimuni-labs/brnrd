@@ -2277,26 +2277,39 @@ def _notes_verdicts(findings: list) -> dict[str, list]:
     """Group findings by the surface filename they name.
 
     A finding's ``target`` leads with the file it is about
-    (``pitfalls.md § …``, ``workflow.md §Autonomy``, ``surface/``), so the
-    map can put a verdict on the row it belongs to without the checks
-    having to know the registry's key names. Anything that matches no row
-    is still printed — under ``unattributed``, never dropped, because a
-    finding filtered out of a map reads exactly like a clean surface.
+    (``pitfalls.md § …``, ``workflow.md §Autonomy``,
+    ``surface/ledger/decisions.md``), so the map can put a verdict on the
+    row it belongs to without the checks having to know the registry's key
+    names. Anything that matches no row is still printed — under
+    ``unattributed``, never dropped, because a finding filtered out of a
+    map reads exactly like a clean surface.
+
+    The key is the target's **path suffix**, not its basename. Two
+    registered surfaces are called ``index.md`` (``surface/index.md`` and
+    the kb's), so a basename key paints one surface's finding onto the
+    other's row and makes a healthy surface exit non-zero.
     """
     out: dict[str, list] = {}
     for finding in findings:
         head = str(finding.target).split(" ")[0].split("§")[0].strip()
-        out.setdefault(Path(head).name, []).append(finding)
+        out.setdefault(head.strip("/"), []).append(finding)
     return out
 
 
 def _notes_match_verdicts(resolved, verdicts: dict[str, list]) -> list:
-    """The findings belonging to one resolved surface row."""
-    names = {p.name for p in resolved.paths}
-    names.add(Path(resolved.surface.path_hint).name)
+    """The findings belonging to one resolved surface row.
+
+    A target matches when a resolved path *ends with* it as a whole path
+    segment — ``surface/index.md`` matches
+    ``…/home/surface/index.md`` and not ``…/knowledge/repos/x/index.md``.
+    """
+    candidates = [p.as_posix() for p in resolved.paths]
+    candidates.append(resolved.surface.path_hint)
     hits: list = []
     for head, findings in verdicts.items():
-        if head in names:
+        if not head:
+            continue
+        if any(c == head or c.endswith("/" + head) for c in candidates):
             hits.extend(findings)
     return hits
 

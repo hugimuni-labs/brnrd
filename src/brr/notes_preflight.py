@@ -68,8 +68,14 @@ _COLLAPSE_BANNER_RE = re.compile(r"^> collapsed bottom-up: (.+)$", re.MULTILINE)
 #: not fit. Both forms name their pages; that naming is the whole point of
 #: #1020, and reading it back is how this check reports the same fact one
 #: wake earlier.
+#: ``(?P<page>.+)``, not ``\S+``: the assembler renders ``### {relative}``
+#: from the raw home-relative path, and a page named ``zzz other.md`` is a
+#: legal surface page. ``\S+`` matched the first word and then failed the
+#: newline, so exactly the pages with a space in the name went unreported —
+#: the silent kind of miss. ``_UNANNOUNCED_RE`` never had the bug because
+#: its names arrive back-ticked; the two markers must agree.
 _PAGE_OMITTED_RE = re.compile(
-    r"^### (?P<page>\S+)\n\n_\(page omitted — (?P<bytes>[\d,]+) B would not fit",
+    r"^### (?P<page>.+)\n\n_\(page omitted — (?P<bytes>[\d,]+) B would not fit",
     re.MULTILINE,
 )
 _UNANNOUNCED_RE = re.compile(
@@ -174,6 +180,7 @@ def check_self_inject_eviction(
     dominion_dir: Path,
     *,
     budget_bytes: int | None = None,
+    cfg: dict[str, Any] | None = None,
     label: str = "",
 ) -> list[Finding]:
     """What the *current* self-inject budget will drop, before it drops it.
@@ -188,6 +195,16 @@ def check_self_inject_eviction(
     its return value against the source text passes silently on the wrong
     object; the overflow record is the thing to read, and ``None`` there is
     the only definition of "everything fit".
+
+    **The budget comes from the same resolver the wake uses**
+    (:func:`brr.dominion.inject_budget_bytes`), never from the module
+    constant. ``adopt.py`` writes ``dominion.inject_budget_bytes`` into
+    every fresh install, so a preview measured against the default while
+    the wake spends a configured budget is the normal case, not an edge
+    one — and it reports "everything fits" about a digest that is losing
+    sections every wake. That is #1020 reproduced inside the check written
+    to prevent it. *budget_bytes* stays available for tests that want to
+    name a budget directly.
     """
     from . import dominion as dominion_mod
 
@@ -204,7 +221,7 @@ def check_self_inject_eviction(
         return []
 
     if budget_bytes is None:
-        budget_bytes = dominion_mod.DEFAULT_INJECT_BUDGET_BYTES
+        budget_bytes = dominion_mod.inject_budget_bytes(cfg)
     digest, overflow = dominion_mod.resolve_self_inject_digest(
         dominion_dir, budget_bytes=budget_bytes,
     )
@@ -467,6 +484,44 @@ class _Rewrite:
     """
 
 
+def _head_section_ranges(
+    repo_dir: Path, rel_path: str,
+) -> dict[str, tuple[int, int]] | None:
+    """Section line ranges as they are **at HEAD**, keyed by normalised title.
+
+    ``git log -L<start>,<end>:<path>`` resolves its range against HEAD, not
+    against the working tree — and it *clamps* an out-of-range end instead
+    of erroring, so a mismatch produces a confident wrong answer with no
+    signal. Feeding it line numbers counted from the file on disk is
+    therefore only correct while the file is committed, and an uncommitted
+    maintainer edit to ``workflow.md`` is that file's normal state between
+    capture commits: one added six-line section at the top shifts every
+    range down, and the walk reports a rewrite in §Autonomy that happened
+    in §Gating and merges.
+
+    So the ranges come from HEAD's own blob. A section that exists on disk
+    but not at HEAD (freshly added, uncommitted) is simply absent from this
+    map, and the caller reports it as undetermined rather than clean.
+    """
+    from . import gitops
+
+    try:
+        proc = subprocess.run(
+            ["git", "show", f"HEAD:{rel_path}"],
+            cwd=repo_dir, check=False,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+            env=gitops.explicit_repo_env(),
+        )
+    except (OSError, ValueError):
+        return None
+    if proc.returncode != 0 or not proc.stdout:
+        return None
+    return {
+        _normalise_section(title): (start, end)
+        for title, start, end in _section_ranges(proc.stdout)
+    }
+
+
 def _last_rewrite(
     repo_dir: Path, rel_path: str, start: int, end: int,
 ) -> _Rewrite | None:
@@ -581,6 +636,13 @@ def check_signatures(
 
     by_norm = {_normalise_section(title): (title, start, end)
                for title, start, end in sections}
+    # The history walk's ranges are HEAD's, never the working tree's — see
+    # `_head_section_ranges`. `None` here means "no history available",
+    # which suppresses the staleness half entirely; the content-only
+    # findings below do not depend on git at all.
+    head_ranges: dict[str, tuple[int, int]] | None = None
+    if repo_dir is not None and rel_path is not None:
+        head_ranges = _head_section_ranges(repo_dir, rel_path)
     out: list[Finding] = []
 
     # ── the sanity assertion ──
@@ -628,9 +690,12 @@ def check_signatures(
                 severity="info",
             ))
             continue
-        if repo_dir is None or rel_path is None:
+        if repo_dir is None or rel_path is None or not head_ranges:
             continue
-        rewrite = _last_rewrite(repo_dir, rel_path, start, end)
+        head_range = head_ranges.get(norm)
+        if head_range is None:
+            continue  # section not at HEAD yet — undetermined, never clean
+        rewrite = _last_rewrite(repo_dir, rel_path, *head_range)
         if rewrite is None or not _ISO_DATE_RE.match(rewrite.date):
             continue
         stale = [
@@ -691,7 +756,7 @@ def scan(repo_root: Path, cfg: dict[str, Any] | None = None) -> list[Finding]:
                 continue
             out.extend(check_pitfall_store(candidate.path, candidate.label))
             out.extend(check_self_inject_eviction(
-                candidate.path, label=candidate.label,
+                candidate.path, cfg=cfg, label=candidate.label,
             ))
     except Exception:
         pass

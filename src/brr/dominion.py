@@ -35,6 +35,35 @@ SYNC_MARKER_FILE = "dominion.needs-sync"
 # smaller again, but the guard test keeps the budget honest.
 DEFAULT_INJECT_BUDGET_BYTES = 20480
 
+
+def inject_budget_bytes(cfg: dict | None) -> int:
+    """The self-inject budget *this* config actually spends.
+
+    One resolver, because two readers of the same number that disagree is a
+    silent-narrowing bug rather than a discrepancy anyone notices. The wake
+    (``prompts._build_dominion_block``) and the eviction preview
+    (``notes_preflight.check_self_inject_eviction``) must agree exactly: a
+    preview measured against the *default* while the wake spends a
+    *configured* budget reports "everything fits" about a digest that is
+    losing sections — which is #1020 again, reproduced inside the check
+    written to prevent it.
+
+    ``adopt.py`` writes ``dominion.inject_budget_bytes`` into every fresh
+    install, so the configured path is the normal case, not an edge one.
+    ``dominion_inject_budget_bytes`` is the honoured legacy spelling. A
+    non-numeric value falls back to the default rather than raising: this
+    runs on the wake path, where an exception costs the whole block.
+    """
+    cfg = cfg or {}
+    raw = cfg.get(
+        "dominion.inject_budget_bytes",
+        cfg.get("dominion_inject_budget_bytes", DEFAULT_INJECT_BUDGET_BYTES),
+    )
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_INJECT_BUDGET_BYTES
+
 # #919: this single total used to answer two different questions at once —
 # *how much fits in a wake* and *how much of that is the product's* — so the
 # first product-generic rule any resident derived was unlandable without an

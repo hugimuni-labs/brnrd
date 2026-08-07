@@ -323,6 +323,53 @@ class TestSelfInjectEviction:
         assert [f.type for f in findings] == ["self-inject-empty"]
         assert findings[0].severity == "error"
 
+    def test_the_budget_is_the_one_the_wake_actually_spends(self, tmp_path):
+        """The preview must not measure against a budget nobody spends.
+
+        `adopt.py` writes `dominion.inject_budget_bytes` into every fresh
+        install, so a check reading `DEFAULT_INJECT_BUDGET_BYTES` instead
+        reports "everything fits" about a digest that is losing sections
+        every wake — #1020, reproduced inside the check written to prevent
+        it. Both the current key and its legacy spelling resolve, and a
+        junk value falls back rather than raising on the wake path.
+        """
+        body = "preamble\n\n## Keep\n" + ("x " * 300) + "\n\n## Drop\n" + ("y " * 300)
+        dom = self._dom_with_manifest(tmp_path, body)
+        repo = dom.parent.parent.parent  # .brr/dominion -> .brr -> repo
+
+        assert dominion.inject_budget_bytes({}) == \
+            dominion.DEFAULT_INJECT_BUDGET_BYTES
+        assert dominion.inject_budget_bytes(
+            {"dominion.inject_budget_bytes": 900}) == 900
+        assert dominion.inject_budget_bytes(
+            {"dominion_inject_budget_bytes": "900"}) == 900
+        assert dominion.inject_budget_bytes(
+            {"dominion.inject_budget_bytes": "not a number"}
+        ) == dominion.DEFAULT_INJECT_BUDGET_BYTES
+
+        # Default budget: the digest fits, so nothing to report.
+        assert notes_preflight.check_self_inject_eviction(dom, cfg={}) == []
+        # The configured budget the wake would actually spend: it does not.
+        findings = notes_preflight.check_self_inject_eviction(
+            dom, cfg={"dominion.inject_budget_bytes": 500},
+        )
+        assert [f.type for f in findings] == ["eviction-preview"]
+        assert "500 B ceiling" in findings[0].description
+        assert repo.is_dir()
+
+    def test_scan_threads_the_configured_budget_through(self, tmp_path):
+        body = "preamble\n\n## Keep\n" + ("x " * 300) + "\n\n## Drop\n" + ("y " * 300)
+        dom = self._dom_with_manifest(tmp_path, body)
+        repo = tmp_path / "repo"
+        (repo / ".brr" / "config").write_text(
+            f"home.path={tmp_path / 'home'}\n"
+            "dominion.inject_budget_bytes=500\n",
+            encoding="utf-8",
+        )
+        assert dom.is_dir()
+        types = [f.type for f in notes_preflight.scan(repo)]
+        assert "eviction-preview" in types
+
     def test_an_empty_manifest_is_not_a_finding(self, tmp_path):
         repo = _repo(tmp_path)
         dom = _dominion(repo)
@@ -385,6 +432,25 @@ class TestWorkSurfaceEviction:
         assert findings
         assert all(f.type == "eviction-preview" for f in findings)
         assert any("zzz-other.md" in f.target for f in findings)
+
+    def test_a_page_name_with_a_space_is_not_silently_missed(self, tmp_path):
+        """``### {relative}`` carries the raw path, spaces included.
+
+        A `\\S+` page group matched the first word and then failed the
+        newline, so exactly the pages with a space in the name went
+        unreported — silently, which is the class of miss this whole
+        module exists to end.
+        """
+        surface = self._home(tmp_path, 900)
+        (surface / "index.md").write_text(
+            "# Index\n\n" + ("the opening page's content " * 60),
+            encoding="utf-8",
+        )
+        (surface / "zzz other.md").write_text(
+            "## Delivery\n\n" + ("later page content " * 40), encoding="utf-8",
+        )
+        findings = notes_preflight.check_work_surface_eviction(tmp_path)
+        assert any("zzz other.md" in f.target for f in findings)
 
 
 # ── check 3: signatures ──────────────────────────────────────────────
@@ -603,6 +669,68 @@ class TestSignatureFindings:
         ]
         assert [f.target for f in stale] == ["workflow.md §Autonomy"]
 
+    def test_an_uncommitted_edit_cannot_shift_the_walk(self, tmp_path):
+        """The working tree's line numbers are not HEAD's.
+
+        ``git log -L<start>,<end>`` resolves its range against HEAD and
+        *clamps* an out-of-range end rather than erroring — so feeding it
+        numbers counted from the file on disk produces a confident wrong
+        answer with no signal at all. An uncommitted maintainer edit to
+        ``workflow.md`` is that file's normal state between capture
+        commits: one added section at the top shifts every range down, and
+        the rewrite in §Gating and merges gets reported against §Autonomy.
+
+        Here the rewrite is in §Gating and merges, and an uncommitted
+        6-line preface sits above it. The finding must still name §Gating
+        and merges, and must not name §Autonomy.
+        """
+        repo = tmp_path / "home"
+        repo.mkdir()
+        _git(repo, "init", "-q", "-b", "main")
+        path = repo / "workflow.md"
+        _commit(repo, path, _SIGNED_PAGE, "2026-07-16", "sign it")
+        rewritten = _SIGNED_PAGE.replace(
+            "- PRs stay the delivery vehicle.",
+            "- PRs stay the delivery vehicle, reworded.",
+        )
+        _commit(repo, path, rewritten, "2026-07-20", "reword a signed clause")
+
+        # …and now an uncommitted six-line section above everything.
+        path.write_text(
+            "# Workflow\n\n## Preface\n\nnew\nlines\nhere\nuncommitted\n\n"
+            + rewritten.split("# Workflow\n", 1)[1],
+            encoding="utf-8",
+        )
+
+        stale = [
+            f for f in notes_preflight.check_signatures(
+                path, repo_dir=repo, rel_path="workflow.md",
+            )
+            if f.type == "stale-signature"
+        ]
+        assert [f.target for f in stale] == ["workflow.md §Gating and merges"]
+
+    def test_a_section_not_yet_at_head_is_undetermined(self, tmp_path):
+        """An uncommitted new section has no history to judge it by."""
+        repo = tmp_path / "home"
+        repo.mkdir()
+        _git(repo, "init", "-q", "-b", "main")
+        path = repo / "workflow.md"
+        _commit(repo, path, _SIGNED_PAGE, "2026-07-16", "sign it")
+        path.write_text(
+            _SIGNED_PAGE + "\n## Brand new\n\nnever committed\n",
+            encoding="utf-8",
+        )
+        findings = notes_preflight.check_signatures(
+            path, repo_dir=repo, rel_path="workflow.md",
+        )
+        assert [f for f in findings if f.type == "stale-signature"] == []
+        # …but it is still reported as binding nobody, which needs no git.
+        assert any(
+            f.type == "unsigned-clause" and "Brand new" in f.target
+            for f in findings
+        )
+
     def test_no_git_means_undetermined_never_clean(self, tmp_path):
         """A staleness verdict with no history behind it is not produced."""
         path = tmp_path / "workflow.md"
@@ -720,6 +848,34 @@ class TestNotesCommand:
             mp.setattr(cli, "_repo_root", lambda: repo)
             assert args.func(args) == 1
         assert "inert-pitfall" in capsys.readouterr().out
+
+    def test_two_surfaces_named_index_md_do_not_share_a_verdict(self):
+        """Attribution is by path suffix, not basename.
+
+        ``surface/index.md`` and the kb's ``index.md`` are two registered
+        surfaces with one basename. Keyed by basename, one surface's
+        finding paints a severity mark on the other's row and makes a
+        healthy surface exit non-zero — a false alarm on a page nobody
+        touched, which is how a map stops being read.
+        """
+        from brr import cli, kb_preflight
+
+        finding = kb_preflight.Finding(
+            type="eviction-preview", target="surface/index.md",
+            description="dropped", severity="warning",
+        )
+        verdicts = cli._notes_verdicts([finding])
+
+        surface_row = notes.Resolved(
+            surface=notes.get("surface-index"),
+            paths=(Path("/home/acct/surface/index.md"),),
+        )
+        kb_row = notes.Resolved(
+            surface=notes.get("kb-index"),
+            paths=(Path("/home/acct/knowledge/repos/x/index.md"),),
+        )
+        assert cli._notes_match_verdicts(surface_row, verdicts) == [finding]
+        assert cli._notes_match_verdicts(kb_row, verdicts) == []
 
     def test_json_is_machine_readable(self, tmp_path, capsys):
         import json
