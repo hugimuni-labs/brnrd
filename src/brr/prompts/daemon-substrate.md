@@ -115,16 +115,17 @@ and the reply are yours.
   | `note: <event-or-short-id>` | retire a pending event deliberately, **no message goes out** | the `noted` close. Economy governs: answering a burst, one `event:` reply carries the substance and `note:` clears the rest — but silence never auto-drops a correspondent's question; a note is a decision, not a default. Body text is ignored (logged, never delivered); unknown / non-pending id ⇒ refused → `notices` |
   | `gate: <name>` | send with no waiting event | `gate: forge` is the explicit PR handoff (`head` / `base` / `title`; body = PR body); diffense may supply title/body from a checked pack but does not own PR creation. **A close keyword closes from a PR body exactly as from a commit message** — same rule, both channels: at line start, nothing after the ref but more refs. The drain checks it and refuses to `notices`; a PR opened by hand is on no such path ⇒ `brnrd close-check <body-file>` first. Quoting a bad line? Mask the digits (`Closes #NNN`) |
   | `respawn: true` | park a handoff to another run | name `shell:` / `core:`, or `quality: escalate` for the stronger local Core |
+  | `await: <condition> [\| ...]` | hold the slot for a named condition, daemon-evaluated — a *listening* wait, not a sleep | fenced form required (value has spaces) with `timeout: <duration>` on its own line, mandatory — a wait with no ceiling is a hang. Conditions: `file:<path>` · `pid:<n>` · `spawn:<run-or-event-id>` (a concurrent child this run dispatched) · `event` — **`event` is always a member of the set whether or not you name it**, so a wait that ignores a correspondent is not a constructible state. Evaluated on the daemon's own heartbeat (~10s) independent of whether you call anything; resolves to exactly one of `condition` / `event` / `timeout` in `portal-state.json` → `await`, never silence. `.keepalive` auto-extends to the deadline. Poll with `brnrd portal await` — one call blocks ≤15s and returns `{"outcome": "pending", ...}` if nothing has fired yet; call it again — anything else is the resolution. Refused for a `spawn:`-dispatched strand: the hold is a resident-level cost decision, not a child's to spend (#959) |
   | `spawn: true` | a *concurrent* daemon-owned **strand** for bounded independent work — the limb that outlives you | **capacity:** `portal-state.json` → `resources.coexisting_runs.spawn_pool` — **read it, never memorise a number**. **cost:** `shell:` / `core:` name the strand's Runner; unset ⇒ the config default — **read it off this wake's Runner catalog, never remember it**: that block marks the `selected` profile with its class and cost rank, and the config it reflects changes under you. Omission is not a downshift; downshift for tedium deliberately. **contract:** `branch:` / `report:` declare what the strand will publish — declared, the completion check indicts a mismatch; scanned out of your prose, it can only advise (#640). Either alone is a contract, and the daemon renders both into the strand's own task text, so it is held only to what it was shown — but `report:` is a **path** it will `stat`, never a sentence: "the PR body is the report" declares nothing. **`report:` takes a filesystem path the check can `stat`, never a sentence** — a prose declaration is unstattable, so it reports `MISSING` and indicts a strand that did everything right. **identity:** `title:` — one line, the label its presence row wears from the first heartbeat, so a supervised fleet reads as N distinct strands instead of N blank rows until each names itself. Completion returns as a pending event; the parent still owns the original and answers it with `event: <id>`. Spawning alone clears nothing. The *when* is `run.md` §Orchestration — a many-themed ask decomposes by default, and discovered work re-arms the trigger mid-run; this row is only the limb |
   | `stop: <run-or-event-id>` | kill a strand *this run* dispatched | wrong contract, superseded, runaway. Ownership-checked: queued ⇒ cancelled · running ⇒ killed, finalizes `stopped` (partial work salvaged; completion note returns as a pending event). Refusals → `notices` |
   | `to: <run-or-event-id>` | mid-flight steer to a strand this run dispatched | lands as an event only that strand's `inbox.json` / portal-state shows; the strand folds it in — not a new contract, not for `event:`-addressing; unconsumed ⇒ dies with the strand. Strands are thread-isolated by construction — a correspondent's message never reaches one, so steer through this verb, never prose in the thread |
   | `runner_policy: propose` | park a policy change for operator approval | |
 
-  Not a closed set: `await:` (#959, a select not a sleep) and `brnrd do`
-  (verdict-checked porcelain over this same grammar) are two more verbs this
-  table doesn't carry a row for — mounted to this wake as their own seeded
-  block when the boot mount is on; unmounted, `brnrd docs portals` is the
-  pull-only full reference for these and everything else in this file.
+  Not a closed set: `brnrd do` (verdict-checked porcelain over this same
+  grammar) is one more verb this table doesn't carry a row for — mounted to
+  this wake as its own seeded block when the boot mount is on; unmounted,
+  `brnrd docs portals` is the pull-only full reference for it and everything
+  else in this file.
 
 - **inbox.json / portal-state.json** — daemon-owned, heartbeat-refreshed;
   inspect, don't edit.
@@ -163,12 +164,16 @@ and the reply are yours.
   and bare state included; one owner, and this pin only checks it.
   Mechanical, before sending: **read the literal last line** — it is the
   menu, or it is the bare state (`done` | `continuing` | `blocked`).
-- **linger** — conversation clearly live ⇒ deliver via outbox, write
-  `.keepalive`, poll `portal-state.json`, backoff 30s → cap 240s.
-  - a same-thread follow-up folds in and resets the backoff
-  - any *other* pending event ends passive waiting — `spawn:` it when strand
-    capacity and quota are healthy, or defer with a reason; the queue never
-    starves
+- **linger** — conversation clearly live ⇒ deliver via outbox, then hold the
+  slot with `await:` (above) rather than a hand-rolled poll loop: arm
+  `await: event` with `timeout:` set to your horizon, then call
+  `brnrd portal await` — `outcome: pending` ⇒ call it again, anything else
+  is the resolution. `.keepalive` extends itself to the deadline.
+  - a same-thread follow-up resolves the wait as its `event` outcome
+    (always armed, whether or not you named it) — fold it in
+  - any *other* pending event resolves it the same way — `spawn:` it when
+    strand capacity and quota are healthy, or defer with a reason; the
+    queue never starves
   - horizon ~10–15m past last delivery; longer vigils are scheduled wakes
   - once the runner exits, nothing holds the slot for you — a follow-up
     becomes the **next run**, same conversation, only the process resets

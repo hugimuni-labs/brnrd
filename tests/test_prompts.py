@@ -1963,10 +1963,11 @@ class TestPromptBuilding:
     def test_daemon_prompt_carries_next_move_and_linger(self, tmp_path):
         # A1/#211 + B5/#216: the delivery-portals block carries the compact
         # next-move rule (four closeout states, manufactured options named
-        # as the failure mode) and the post-delivery linger contract
-        # (backoff inside the provider cache window, dispatch-or-explicit-
-        # defer ownership for unrelated pending work). Full contracts live
-        # in the portals manual (pinned in test_docs.py).
+        # as the failure mode) and the post-delivery linger contract (hold
+        # the slot with `await:`/`brnrd portal await` rather than a
+        # hand-rolled poll loop, dispatch-or-explicit-defer ownership for
+        # unrelated pending work). Full contracts live in the portals
+        # manual (pinned in test_docs.py).
         prompt = build_daemon_prompt(
             "ship it",
             "evt-1",
@@ -1984,7 +1985,8 @@ class TestPromptBuilding:
             assert state in prompt
         assert "Manufactured options are the failure mode" in prompt
         assert "linger" in prompt
-        assert "backoff 30s → cap 240s" in prompt
+        assert "await:" in prompt
+        assert "brnrd portal await" in prompt
         assert _says(prompt, "strand capacity and quota are healthy")
         assert _says(prompt, "queue never starves")
 
