@@ -556,6 +556,53 @@ class TestSignatureFindings:
         )
         assert [f for f in findings if f.type == "stale-signature"] == []
 
+    def test_an_inherited_git_pin_cannot_redirect_the_history_walk(
+        self, tmp_path, monkeypatch,
+    ):
+        """The wake-path hazard, held.
+
+        Under a brnrd wake ``GIT_DIR`` / ``GIT_WORK_TREE`` are pinned to the
+        run's own worktree, and a bare ``git`` obeys the pin over ``cwd=``.
+        This check asks a *different* repository — the account home — for a
+        section's history, so an unscrubbed subprocess would confidently
+        answer for the wrong tree: `git log -L` on a path that does not
+        exist there returns nothing, and "nothing was ever rewritten" is
+        indistinguishable from "everything is signed and current".
+
+        ``gitops.explicit_repo_env()`` is the scrub. This pins that it is
+        actually applied, by setting the pin and asserting the finding
+        still lands.
+        """
+        pin = tmp_path / "elsewhere"
+        pin.mkdir()
+        _git(pin, "init", "-q", "-b", "main")
+
+        repo = tmp_path / "home"
+        repo.mkdir()
+        _git(repo, "init", "-q", "-b", "main")
+        path = repo / "workflow.md"
+        _commit(repo, path, _SIGNED_PAGE, "2026-07-16", "sign it")
+        _commit(
+            repo, path,
+            _SIGNED_PAGE.replace(
+                "- reversible calls are the resident's to take.",
+                "- reversible calls are the maintainer's to take.",
+            ),
+            "2026-07-20", "reword the signed clause",
+        )
+
+        monkeypatch.setenv("GIT_DIR", str(pin / ".git"))
+        monkeypatch.setenv("GIT_WORK_TREE", str(pin))
+
+        assert notes_preflight._git_location(path)[0] == repo
+        stale = [
+            f for f in notes_preflight.check_signatures(
+                path, repo_dir=repo, rel_path="workflow.md",
+            )
+            if f.type == "stale-signature"
+        ]
+        assert [f.target for f in stale] == ["workflow.md §Autonomy"]
+
     def test_no_git_means_undetermined_never_clean(self, tmp_path):
         """A staleness verdict with no history behind it is not produced."""
         path = tmp_path / "workflow.md"

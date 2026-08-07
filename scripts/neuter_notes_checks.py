@@ -119,6 +119,14 @@ MUTATIONS: list[tuple[str, str, str, str, str, str]] = [
         "the retraction marker — a withdrawn clause read as agreed",
     ),
     (
+        "signatures: the git-pin scrub on the history walk",
+        "src/brr/notes_preflight.py",
+        '            env=gitops.explicit_repo_env(),\n        )\n    except (OSError, ValueError):\n        return None, None',
+        "            env=None,  # NEUTERED: obey an inherited GIT_DIR pin\n        )\n    except (OSError, ValueError):\n        return None, None",
+        "TestSignatureFindings",
+        "the scrub that stops a wake's GIT_DIR pin answering for the wrong repo",
+    ),
+    (
         "registry: every entry can be located",
         "src/brr/notes.py",
         '    "pitfalls": lambda r: _one(r.dominion, "pitfalls.md"),',
