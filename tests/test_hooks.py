@@ -2118,7 +2118,7 @@ def test_gate_a_receipt_for_a_different_tree_does_not_satisfy_this_one(tmp_path)
 # on a run that was already `done`.
 
 
-def _coexisting(*, status="absent", siblings=None):
+def _coexisting(*, status="absent", siblings=None, owned_children=None):
     """The presence projection the daemon writes into portal-state.
 
     Three states, all reachable in production: `known` (siblings live),
@@ -2128,6 +2128,8 @@ def _coexisting(*, status="absent", siblings=None):
     facet = {"status": status, "kind": "state", "required": False}
     if siblings is not None:
         facet["siblings"] = siblings
+    if owned_children is not None:
+        facet["owned_children"] = owned_children
     return {"coexisting_runs": facet}
 
 
@@ -2218,6 +2220,23 @@ def test_vigil_accepts_a_running_spawn_child(tmp_path):
         siblings=[{"run_id": "run-2", "parent_run_id": "run-1",
                    "is_subspawn": True}],
     ))
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_CONTINUING), env)
+    assert out.get("decision") != "block"
+
+
+def test_vigil_accepts_adopted_running_spawn_child_from_owned_children(tmp_path):
+    env = _armed_vigil(tmp_path, resources=_coexisting(
+        status="known",
+        siblings=[{"run_id": "run-2", "parent_run_id": "run-old-parent",
+                   "is_subspawn": True}],
+        owned_children=[{"run_id": "run-2", "parent_run_id": "run-1",
+                         "adopted_from_run_id": "run-old-parent"}],
+    ))
+    portal = json.loads((tmp_path / "portal-state.json").read_text(encoding="utf-8"))
+    assert portal["resources"]["coexisting_runs"]["owned_children"][0]["parent_run_id"] == "run-1", (
+        "fixture must mark the child as owned by this run or the guard below "
+        "would not be asserting the adopted-edge path"
+    )
     out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_CONTINUING), env)
     assert out.get("decision") != "block"
 
@@ -3624,6 +3643,33 @@ def test_closeout_still_shows_action_events_alongside_finished_spawns():
     # Finished spawn reported separately.
     assert "1 finished spawn(s)" in rendered
     assert "evt-done" in rendered
+
+
+def test_closeout_names_live_children_handed_to_next_run():
+    run_id = "run-parent"
+    payload = {
+        "run": {"id": run_id},
+        "attention": {"pending_event_count": 0, "pending_outbox_file_count": 0},
+        "inbound": {"events": []},
+        "resources": _coexisting(
+            status="known",
+            owned_children=[
+                {"run_id": "run-child-a", "parent_run_id": run_id},
+                {"event_id": "evt-child-b", "parent_run_id": run_id, "run_id": ""},
+            ],
+        ),
+        "outbound": {"replies_current": 1, "replies_other": 0, "outbound_messages": 0},
+        "budget": {"elapsed_seconds": 10, "budget_seconds": 3600},
+    }
+    assert payload["resources"]["coexisting_runs"]["owned_children"][1]["parent_run_id"] == run_id, (
+        "fixture must carry this run's live children or the handover line "
+        "below would pass over someone else's edges"
+    )
+    rendered = hooks.format_delta(payload, stop=True)
+    assert "2 child run(s) still live" in rendered
+    assert "evt-child-b" in rendered
+    assert "run-child-a" in rendered
+    assert "passes to the next run on this thread" in rendered
 
 
 def test_finished_spawn_outcomes_render_identically_at_both_boundaries():

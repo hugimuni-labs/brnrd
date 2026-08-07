@@ -2525,6 +2525,11 @@ def format_delta(
             lines.append(
                 f"  · {ev.get('id') or '-'}: {summary[:200]}"
             )
+    live_children = _live_child_handover_line(
+        {"run": run, "resources": resources}
+    )
+    if live_children:
+        lines.append(live_children)
     lines.extend(_render_armed_rows(armed))
     elapsed = budget.get("elapsed_seconds")
     limit = budget.get("budget_seconds")
@@ -3133,9 +3138,19 @@ def _spawn_child_armed(portal: dict[str, Any], run_id: str | None) -> bool | Non
     resources = portal.get("resources") if isinstance(portal, dict) else None
     facet = (resources or {}).get("coexisting_runs")
     facet = facet if isinstance(facet, dict) else None
-    if facet is None or facet.get("status") not in ("known", "absent"):
-        return None
     if not run_id:
+        return None
+    if facet is None:
+        return None
+    owned = facet.get("owned_children")
+    if isinstance(owned, list):
+        for entry in owned:
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("parent_run_id") or "").strip() == run_id:
+                return True
+        return False
+    if facet.get("status") not in ("known", "absent"):
         return None
     siblings = facet.get("siblings")
     for entry in siblings if isinstance(siblings, list) else []:
@@ -3144,6 +3159,50 @@ def _spawn_child_armed(portal: dict[str, Any], run_id: str | None) -> bool | Non
         if str(entry.get("parent_run_id") or "").strip() == run_id:
             return True
     return False
+
+
+def _live_child_handover_line(payload: dict[str, Any]) -> str | None:
+    """Render the advisory closeout handover when child edges remain live."""
+    run = payload.get("run") if isinstance(payload.get("run"), dict) else {}
+    run_id = str(run.get("id") or "").strip()
+    if not run_id:
+        return None
+    resources = (
+        payload.get("resources")
+        if isinstance(payload.get("resources"), dict) else {}
+    )
+    facet = (
+        resources.get("coexisting_runs")
+        if isinstance(resources.get("coexisting_runs"), dict) else {}
+    )
+    rows: list[str] = []
+    owned = facet.get("owned_children")
+    if isinstance(owned, list):
+        for entry in owned:
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("parent_run_id") or "").strip() != run_id:
+                continue
+            child_id = str(entry.get("run_id") or entry.get("event_id") or "").strip()
+            if child_id:
+                rows.append(child_id)
+    elif facet.get("status") == "known":
+        siblings = facet.get("siblings")
+        for entry in siblings if isinstance(siblings, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("parent_run_id") or "").strip() != run_id:
+                continue
+            child_id = str(entry.get("run_id") or entry.get("id") or "").strip()
+            if child_id:
+                rows.append(child_id)
+    if not rows:
+        return None
+    rows = sorted(dict.fromkeys(rows))
+    return (
+        f"- ▷ {len(rows)} child run(s) still live — {', '.join(rows)} — "
+        "steering them passes to the next run on this thread."
+    )
 
 
 def _vigil_closeout_clause(
