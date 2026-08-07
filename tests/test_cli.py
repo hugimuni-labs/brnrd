@@ -216,6 +216,71 @@ def test_relic_issue_resolves_the_outbox_from_the_portal_path(tmp_path, monkeypa
     ]
 
 
+# ── brnrd relic pr ───────────────────────────────────────────────────────────
+#
+# The second-PR front door: `.pr` holds exactly one PR per run, so a run
+# that opens more than one had no legal way to self-report the rest onto
+# the same `{"kind": "pr", "number": N}` grammar `collect()` parses.
+
+
+def test_relic_pr_writes_the_grammar_record(tmp_path, monkeypatch, capsys):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    assert main(["relic", "pr", "1175", "--summary", "fixed the thing"]) == 0
+    assert _relic_lines(outbox) == [
+        {"kind": "pr", "number": 1175, "summary": "fixed the thing"},
+    ]
+    assert "pr #1175" in capsys.readouterr().out
+
+
+def test_relic_pr_accepts_a_hash_prefix_and_a_url(tmp_path, monkeypatch):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    assert main(["relic", "pr", "#42"]) == 0
+    assert main(["relic", "pr", "https://github.com/o/r/pull/43"]) == 0
+    numbers = [r["number"] for r in _relic_lines(outbox)]
+    assert numbers == [42, 43]
+
+
+def test_relic_pr_refuses_unparseable_input(tmp_path, monkeypatch, capsys):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    assert main(["relic", "pr", "not-a-pr"]) == 1
+    err = capsys.readouterr().err
+    assert "not a PR number or URL" in err
+    assert "nothing was written" in err.lower()
+    assert not (outbox / ".relics.jsonl").exists()
+
+
+def test_relic_pr_outside_a_run_says_why(monkeypatch, capsys):
+    """No outbox in the environment ⇒ a reason, not a traceback."""
+    monkeypatch.delenv("BRR_OUTBOX_DIR", raising=False)
+    monkeypatch.delenv("BRR_PORTAL_STATE", raising=False)
+
+    assert main(["relic", "pr", "42"]) == 1
+    err = capsys.readouterr().err
+    assert "no run outbox" in err
+    assert "BRR_OUTBOX_DIR" in err
+
+
+def test_relic_pr_reports_a_failed_append(tmp_path, monkeypatch, capsys):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    from brr import relics as relics_mod
+
+    monkeypatch.setattr(relics_mod, "append", lambda *a, **k: None)
+    assert main(["relic", "pr", "1175"]) == 1
+    assert "could not append" in capsys.readouterr().err
+
+
 # ── brnrd relic item (#972, THE WELD) ────────────────────────────────────────
 #
 # The warp-item half of the manifest: the run's ancestry address
