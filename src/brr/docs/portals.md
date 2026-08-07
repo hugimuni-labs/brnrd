@@ -291,8 +291,11 @@ relic. Delivery changes its frontmatter from `pending` to one of three terminal
 states, stamping the receipt when one exists: `delivered` (a gate carried it to
 a platform), `collected` (a strand's terminal report, read by the parent run
 along the dispatch edge — no gate owns `spawn`, and none should), or
-`undeliverable` (nothing claims the target; the reason says what). The message
-is never unlinked, so the run's full edge traffic remains durable.
+`undeliverable` — a delivery was attempted or attemptable and no channel
+took it: no gate owns the target and no `notify.gate` fallback resolved, or
+a gate *tried* and hit a `PermanentDeliveryError` (the reason says which).
+The message is never unlinked, so the run's full edge traffic remains
+durable.
 
 A reply addressed to a dispatch-tree event — `spawn`, `spawn_completed`,
 `dispatch_message`, `schedule` — is recorded `undeliverable` immediately, with
