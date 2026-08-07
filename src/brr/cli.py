@@ -101,6 +101,7 @@ PUBLIC_COMMANDS = (
 HIDDEN_COMMANDS = (
     "prompts", "hook", "statusline", "worktree-hygiene", "config", "emotes",
     "relic", "gate-run", "close-check", "promise", "mood", "do", "notes",
+    "await",
 )
 
 #: What ``brnrd promise`` accepts, spelled here so building the parser costs
@@ -626,6 +627,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="overwrite .card with this file's contents")
     do_p.set_defaults(func=cmd_do)
 
+    # Hidden per HIDDEN_COMMANDS, same reason as `do`: a resident's own verb
+    # inside a live wake, not an operator's terminal. The whole surface is
+    # `brnrd await` with nothing after it — every flag below is optional, and
+    # omitting all of them is the shape the prose teaches (#959, #1187).
+    await_p = sub.add_parser("await")
+    await_p.add_argument(
+        "--timeout", default=None, metavar="DURATION",
+        help="ceiling on the wait (30m, 1h30m, or seconds); default: this "
+             "run's own remaining budget")
+    await_p.add_argument(
+        "--file", default=None, metavar="PATH",
+        help="also resolve when this path appears — an extra trigger for "
+             "what the daemon cannot see; never narrows the wait")
+    await_p.add_argument(
+        "--json", action="store_true", help="emit the outcome as JSON")
+    await_p.add_argument(
+        "--outbox", default=None, metavar="DIR",
+        help="outbox dir to act on (default: this run's own, via "
+             "BRR_OUTBOX_DIR / BRR_PORTAL_STATE)")
+    await_p.set_defaults(func=cmd_await)
+
     p = sub.add_parser("kb", help="search home/repo knowledge; omit query to print graph shape")
     p.add_argument("query", nargs="?", default=None,
                    help="search term (omit to print the kb graph shape)")
@@ -667,22 +689,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--path", default=None,
                    help="read this portal-state.json path for live status")
     p.set_defaults(func=cmd_portal_facets)
-
-    p = portal_sub.add_parser(
-        "await",
-        help="one bounded poll tick against an armed `await:` (#959) — "
-             "call again while the outcome is 'pending'")
-    p.add_argument("--path", default=None,
-                   help="read this portal-state.json path instead of auto-detecting")
-    p.add_argument(
-        "--tick-seconds", type=float, default=None,
-        help=(
-            "how long this one call may block before returning 'pending' "
-            f"(clamped to {_AWAIT_POLL_HARD_CAP_SECONDS}s regardless — see "
-            "cmd_portal_await)"
-        ),
-    )
-    p.set_defaults(func=cmd_portal_await)
 
     # Machine-facing endpoints: called by the runner's native lifecycle hooks
     # and by Claude's TUI footer, never typed. They stay parseable and keep
@@ -2897,97 +2903,187 @@ def cmd_portal_facets(args):
     return 0
 
 
-#: The maximum blind interval one ``brnrd portal await`` call may spend
-#: sleeping before it must return control to the caller (#959). This is the
-#: concrete, code-level number the ticket demands — not a documentation
-#: convention a resident might collapse into one long shell call. Slightly
-#: above ``daemon._HEARTBEAT_INTERVAL`` (10s) so a call this long has
-#: overlapped at least one independent daemon evaluation tick, but still
-#: small: nothing waiting on a reply is ever more than this many seconds
-#: from the next chance for a message to reach the caller (the return
-#: itself is the boundary; the *next* call is the one after that).
-_AWAIT_POLL_HARD_CAP_SECONDS = 15.0
+#: How long one ``brnrd await`` call may block before it returns
+#: ``pending`` on its own terms. **Not a brnrd protocol number** — the older
+#: 15s ceiling was justified by "a long blocking call is a blind stretch",
+#: and that argument dies with the collapsed verb: the only things that
+#: would want to interrupt this run are the very things that *resolve* the
+#: wait, so a blocking call returns the moment one arrives. What actually
+#: bounds a call is the Shell's own per-tool-call cap (claude's Bash tool
+#: ends at 10 minutes; codex differs), which is the CLI's problem, not
+#: something a resident should reason about. This sits under the tightest of
+#: those with margin so the call ends by returning an answer rather than by
+#: being killed mid-wait.
+_AWAIT_SLICE_CEILING_SECONDS = 480.0
+
+#: How often the slice re-reads ``portal-state.json``. Cheap: a local file
+#: read. The daemon's own evaluation tick runs independently, so a
+#: resolution landing mid-sleep is reported on the next read with no extra
+#: round trip.
+_AWAIT_POLL_INTERVAL_SECONDS = 1.0
+
+#: The ceiling used when the run's remaining budget can't be read at all
+#: (an ad-hoc ``--outbox`` caller, a portal-state file without a budget
+#: block). Deliberately finite: a wait with no ceiling is a hang.
+_AWAIT_FALLBACK_TIMEOUT_SECONDS = 1800.0
+
+#: Floor for the budget-derived default, so a run in its last seconds still
+#: arms something the daemon can evaluate at least once.
+_AWAIT_MIN_TIMEOUT_SECONDS = 30.0
 
 
-def cmd_portal_await(args):
-    """One bounded poll tick against this run's armed ``await:`` (#959).
+def _await_default_timeout(payload: dict) -> float:
+    """The run's own remaining budget, as the default ceiling.
 
-    Deliberately not a loop: a single call blocks for at most
-    ``_AWAIT_POLL_HARD_CAP_SECONDS`` (clamped, regardless of ``--tick-seconds``)
-    and returns one of four JSON outcomes —
+    The daemon already knows how long this run has left; asking the resident
+    to restate it is the same mistake ``spawn:<id>`` was — enumerating what
+    the daemon already tracks. The daemon caps the arming again on its side
+    against the hard budget ceiling (and says so via an ``advisory`` notice),
+    so this is a default, not a promise.
+    """
+    budget = payload.get("budget") if isinstance(payload.get("budget"), dict) else {}
+    total = budget.get("budget_seconds")
+    elapsed = budget.get("elapsed_seconds")
+    try:
+        remaining = float(total) - float(elapsed)
+    except (TypeError, ValueError):
+        return _AWAIT_FALLBACK_TIMEOUT_SECONDS
+    return max(_AWAIT_MIN_TIMEOUT_SECONDS, remaining)
 
-    - ``condition`` — a named ``file:``/``pid:``/``spawn:`` term fired (``which``
-      names it)
-    - ``event`` — some other pending event arrived
-    - ``timeout`` — the declared ``timeout:`` deadline passed
-    - ``pending`` — none of the above yet; call again
 
-    The daemon evaluates the armed conditions on its own heartbeat tick
-    (every ``daemon._HEARTBEAT_INTERVAL``, independent of whether anything
-    calls this command at all) and writes the outcome into
-    ``portal-state.json``; this command only reads that file, sleeps a
-    small bounded amount if nothing has resolved yet, and re-reads once
-    more before returning — so a resolution that lands *during* the sleep
-    is still reported without an extra round trip.
+def _await_parse_timeout(raw: str) -> float | None:
+    """``30m`` / ``1h30m`` / a bare number of seconds → seconds, or ``None``."""
+    from . import schedule as schedule_mod
 
-    This is the structural fix for the measured failure: a resident that
-    used to write ``until <cond>; do sleep 25; done`` as one shell call
-    emitted zero tool boundaries for the whole wait. Calling this command in
-    a loop instead means every wait is a sequence of short, separately
-    boundary-visible tool calls — the daemon (and anything it wants to
-    inject) gets a seam at least every ``_AWAIT_POLL_HARD_CAP_SECONDS``.
+    parsed = schedule_mod.parse_duration(raw)
+    if parsed is not None:
+        return parsed
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def cmd_await(args):
+    """``brnrd await`` — block until the daemon has something for this run.
+
+    The whole surface, and deliberately: no positional arguments, no
+    condition flags, nothing to forget and nothing to typo. "Wake me when
+    something arrives" is the entire meaning — a message, a dispatched child
+    finishing, a schedule firing; all of them reach a run as pending events.
+    ``--file`` is a footnote for the one thing the daemon genuinely cannot
+    observe (an external CI run, a human dropping a file); it *adds* a
+    resolution trigger and can never narrow the wait, so omitting it gives
+    the correct default rather than a broken wait. That asymmetry is why it
+    survives where ``spawn:<id>`` did not (#959, #1187).
+
+    One call does three things in one boundary:
+
+    1. stages the ``await:`` directive — porcelain over the same outbox
+       grammar ``brnrd do`` already wraps, not a second channel;
+    2. **reports its own arming verdict**, by diffing ``notices`` exactly the
+       way ``brnrd do`` does. That is what kills #1187 by construction: a
+       directive that fails to arm fails in the call that made it, instead of
+       leaving a stale ``resolved: true`` in place looking like an answer;
+    3. slice-polls ``portal-state.json`` until the daemon resolves the wait
+       (``event`` / ``condition`` / ``timeout``) or the call hits its own
+       Shell-safe ceiling, in which case the outcome is ``pending`` and
+       *call again* is the entire instruction.
+
+    The daemon does the evaluating, on its own heartbeat, whether or not
+    this command is running — that is what makes this a listening wait
+    rather than a sleeping one.
     """
     import json
     import sys
     import time
 
-    path = _portal_state_path(args.path)
-    payload, _token, error = _read_portal_state(path)
-    if payload is None:
-        if error and path is not None:
+    from . import do as do_mod
+
+    outbox_dir = Path(args.outbox) if args.outbox else _wake_outbox_dir()
+    if outbox_dir is None:
+        print(
+            "[brnrd await] no run outbox in this environment — `brnrd await` "
+            "holds a live run; pass --outbox, or run inside a daemon wake.",
+            file=sys.stderr,
+        )
+        return 1
+
+    payload = do_mod.read_portal_state(outbox_dir)
+    if not payload:
+        print(
+            f"[brnrd await] no live portal-state.json under {outbox_dir}",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.timeout is not None:
+        timeout_seconds = _await_parse_timeout(str(args.timeout))
+        if timeout_seconds is None or timeout_seconds <= 0:
             print(
-                f"[brnrd portal await] could not read {path}: {error}",
+                f"[brnrd await] --timeout {args.timeout!r} is not a positive "
+                "duration (e.g. 30m, 1h30m, 90s, or a bare number of seconds)",
                 file=sys.stderr,
             )
-            return 2
-        print(
-            "[brnrd portal await] no live portal-state.json found "
-            "(run inside a daemon wake or pass --path)",
-            file=sys.stderr,
-        )
+            return 1
+    else:
+        timeout_seconds = _await_default_timeout(payload)
+
+    previous = payload.get("await") if isinstance(payload.get("await"), dict) else {}
+    previous_generation = previous.get("generation")
+
+    before = do_mod.notices_of(payload)
+    staged = do_mod.stage_await(
+        outbox_dir, timeout_seconds=timeout_seconds, file_path=args.file,
+    )
+    status, detail = do_mod.await_verdict(
+        outbox_dir, staged, before, ("await",),
+        timeout_seconds=do_mod.DEFAULT_TIMEOUT_SECONDS,
+    )
+    if status != do_mod.OK:
+        # The arming verdict, in the call that armed it. `failed` = the
+        # daemon refused/dropped the directive and named it in a notice;
+        # `unarmed` = the drain never consumed the file, so nothing is
+        # waiting on anything. Neither is a wait, and neither is reported as
+        # one.
+        outcome = "failed" if status == do_mod.FAILED else "unarmed"
+        result = {"outcome": outcome, "detail": detail or "still queued"}
+        if args.json:
+            print(json.dumps(result))
+        else:
+            print(f"[brnrd await] ✗ not armed — {result['detail']}", file=sys.stderr)
         return 1
 
-    await_state = payload.get("await") if isinstance(payload, dict) else None
-    if not isinstance(await_state, dict) or not await_state.get("armed"):
-        print(
-            "[brnrd portal await] no await: is armed for this run — write an "
-            "`await:` + `timeout:` outbox message first",
-            file=sys.stderr,
-        )
-        return 1
-
-    def _emit(state: dict) -> int:
-        print(json.dumps({
-            "outcome": state.get("outcome", "pending"),
+    def _emit(state: dict, outcome: str) -> int:
+        result = {
+            "outcome": outcome,
             "which": state.get("which"),
             "deadline": state.get("deadline"),
             "capped": bool(state.get("capped")),
-        }))
+        }
+        if args.json:
+            print(json.dumps(result))
+        else:
+            tail = f" ({result['which']})" if result["which"] else ""
+            note = " — call again" if outcome == "pending" else ""
+            print(f"[brnrd await] {outcome}{tail}{note}")
         return 0
 
-    if await_state.get("resolved"):
-        return _emit(await_state)
-
-    requested = args.tick_seconds if args.tick_seconds is not None else _AWAIT_POLL_HARD_CAP_SECONDS
-    tick = max(0.0, min(float(requested), _AWAIT_POLL_HARD_CAP_SECONDS))
-    if tick:
-        time.sleep(tick)
-
-    payload, _token, error = _read_portal_state(path)
-    await_state = (payload or {}).get("await") if isinstance(payload, dict) else None
-    if not isinstance(await_state, dict):
-        await_state = {}
-    return _emit(await_state if await_state.get("resolved") else {**await_state, "outcome": "pending"})
+    deadline = time.monotonic() + _AWAIT_SLICE_CEILING_SECONDS
+    while True:
+        state = do_mod.read_portal_state(outbox_dir).get("await")
+        if not isinstance(state, dict):
+            state = {}
+        # Generation-gated: a portal-state file written *before* this tick's
+        # drain still carries the previous call's sticky-resolved outcome,
+        # and reporting that as this wait's answer is the very stale-answer
+        # failure this command exists to end.
+        fresh = state.get("generation") != previous_generation
+        if fresh and state.get("resolved"):
+            return _emit(state, str(state.get("outcome") or "event"))
+        if time.monotonic() >= deadline:
+            return _emit(state, "pending")
+        time.sleep(_AWAIT_POLL_INTERVAL_SECONDS)
 
 
 def cmd_hook(args):
