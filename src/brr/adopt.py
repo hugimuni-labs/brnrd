@@ -31,6 +31,7 @@ from . import dominion
 from . import gitops
 from . import prompts
 from . import runner
+from . import style
 from .cli import brnrd_cmd
 
 
@@ -61,7 +62,7 @@ def _timed_input(prompt: str, default: str, timeout: int = 10) -> str:
         return value.strip() or default
     except (TimeoutError, EOFError):
         signal.alarm(0)
-        print(f"\n[brnrd] no input — using default: {default}")
+        print(f"\n{style.dim('[brnrd] no input — using default:')} {style.accent(default)}")
         return default
     finally:
         signal.signal(signal.SIGALRM, old)
@@ -73,13 +74,15 @@ def _pick_option(
     default: str,
     timeout: int = 10,
 ) -> str:
-    """Present numbered options and return the chosen one."""
-    print(f"\n  {label}")
+    """Present numbered options and return the chosen one — a ``gh``-style
+    question: a green ``?``, a bold label, the default called out in accent
+    rather than left for the reader to spot among a wall of options."""
+    print(f"\n  {style.qmark()} {style.bold(label)}")
     for i, opt in enumerate(options, 1):
-        marker = " ←" if opt == default else ""
+        marker = style.accent(" ←") if opt == default else ""
         print(f"    {i}) {opt}{marker}")
     choice = _timed_input(
-        f"  choice [default: {default}] ({timeout}s): ",
+        f"  {style.dim('choice')} [default: {style.accent(default)}] ({timeout}s): ",
         default,
         timeout,
     )
@@ -92,15 +95,15 @@ def _pick_option(
         pass
     if choice in options:
         return choice
-    print(f"  [brnrd] unrecognised — using default: {default}")
+    print(f"  {style.dim('[brnrd] unrecognised — using default:')} {style.accent(default)}")
     return default
 
 
 def _confirm(label: str, default: bool = True, timeout: int = 10) -> bool:
-    """Yes/no confirmation with timeout."""
+    """Yes/no confirmation with timeout, same question shape as ``_pick_option``."""
     hint = "Y/n" if default else "y/N"
     choice = _timed_input(
-        f"  {label} [{hint}] ({timeout}s): ",
+        f"  {style.qmark()} {style.bold(label)} {style.dim('[' + hint + ']')} ({timeout}s): ",
         "y" if default else "n",
         timeout,
     )
@@ -128,7 +131,7 @@ def _state_identity() -> str | None:
 
     identity = home_link.detect_identity()
     if identity:
-        print(f"[brnrd] you: @{identity} (from `gh`)")
+        print(f"[brnrd] you: {style.accent('@' + identity)} (from `gh`)")
     else:
         # Never open on a negation of the person. The old line read
         # "you: not detected", which is a sentence about `gh` wearing a
@@ -136,8 +139,11 @@ def _state_identity() -> str | None:
         # reads from this product. State the tool, not the human, and say
         # it costs nothing, because it doesn't.
         print(
-            "[brnrd] `gh` isn't signed in here — nothing in this setup "
-            "needs it; you can link GitHub later"
+            "[brnrd] "
+            + style.dim(
+                "`gh` isn't signed in here — nothing in this setup "
+                "needs it; you can link GitHub later"
+            )
         )
     return identity
 
@@ -156,7 +162,7 @@ def bootstrap(url: str | None = None) -> tuple[Path, list[str]]:
     """
     if url:
         name = url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
-        print(f"[brnrd] cloning {url}")
+        print(f"[brnrd] cloning {style.accent(url)}")
         try:
             subprocess.run(["git", "clone", url, name], check=True)
         except FileNotFoundError:
@@ -236,7 +242,7 @@ def _init_via_wake(
     configured = str(cfg.get("runner") or "auto")
     if configured != "auto" and configured in available:
         runner_name = configured
-    print(f"[brnrd] runner: {runner_name}")
+    print(f"[brnrd] runner: {style.accent(runner_name)}")
     # No stage-manager line here. It used to read "handing this session to
     # the agent — talk to it below", which announces the actor instead of
     # letting them speak: the resident's own first message already knows
@@ -263,13 +269,13 @@ def _init_via_wake(
 
     if result.aborted:
         print(
-            "\n[brnrd] interrupted. Nothing was rolled back — every artifact "
-            "already written is independently useful.\n"
+            f"\n[brnrd] {style.warn_glyph()} interrupted. Nothing was rolled back — "
+            "every artifact already written is independently useful.\n"
             f"        Re-run `{brnrd_cmd()} init` to continue where this left off."
         )
         return
     if result.error:
-        print(f"\n[brnrd] the init wake did not finish: {result.error}\n")
+        print(f"\n[brnrd] {style.cross()} the init wake did not finish: {result.error}\n")
         print(
             runner_mod_doctor(repo_root, attempted=runner_name, error=result.error)
         )
@@ -278,7 +284,7 @@ def _init_via_wake(
     shells = _detect_shells()
     written = constitution.write_bridges(repo_root, shells)
     if written:
-        print(f"[brnrd] shell bridges written: {', '.join(sorted(written))}")
+        print(f"[brnrd] {style.check()} shell bridges written: {', '.join(sorted(written))}")
     # F5(a): the shape was chosen *inside* the interview, so brnrd reads it
     # back off the tree rather than pretending it decided. A wake that
     # scaffolded no `kb/` chose home knowledge; verifying against "repo"
@@ -309,13 +315,13 @@ def _print_channel_menu() -> None:
         f"[brnrd] next: `{cmd} account connect` or `{cmd} gate setup telegram` "
         "— give the resident a door that reaches it without a terminal open."
     )
-    print("[brnrd] optional, any combination, any time:")
+    print(f"[brnrd] {style.bold('optional, any combination, any time:')}")
     print(
-        f"  · a mailbox (`{cmd} account connect`) — reach it from your phone, "
+        f"  {style.dot()} a mailbox (`{cmd} account connect`) — reach it from your phone, "
         "watch it from anywhere"
     )
     print(
-        "  · an identity that isn't you — install the brnrd GitHub App from "
+        f"  {style.dot()} an identity that isn't you — install the brnrd GitHub App from "
         "brnrd.dev for short-lived repo-scoped tokens instead of your PAT on"
     )
     print(
@@ -323,7 +329,7 @@ def _print_channel_menu() -> None:
         "is one click on github.com"
     )
     print(
-        f"  · more doors (`{cmd} gate setup telegram`, `slack`, or `signal`, "
+        f"  {style.dot()} more doors (`{cmd} gate setup telegram`, `slack`, or `signal`, "
         f"then `{cmd} daemon install` to keep listening) — additively, any"
     )
     print("    number, any time")
@@ -352,7 +358,7 @@ def _init_auto(
         runner_name = available[0]
         cfg_overrides = {}
 
-    print(f"[brnrd] runner: {runner_name}")
+    print(f"[brnrd] runner: {style.accent(runner_name)}")
 
     if cfg_overrides:
         # Split by trust domain (issue #533 / #413 §7 S4): security keys
@@ -384,7 +390,7 @@ def _init_auto(
     shells = _detect_shells()
     written = constitution.write_bridges(repo_root, shells)
     if written:
-        print(f"[brnrd] shell bridges written: {', '.join(sorted(written))}")
+        print(f"[brnrd] {style.check()} shell bridges written: {', '.join(sorted(written))}")
 
     _verify(repo_root, knowledge_shape=knowledge_shape, shells=shells)
 
@@ -432,12 +438,12 @@ def _resolve_knowledge_shape(interactive: bool) -> str:
 
 def _interactive_configure(available: list[str]) -> tuple[str, dict]:
     """Ask the user a few setup questions. Returns (runner, config_overrides)."""
-    print("[brnrd] interactive setup")
+    print(f"[brnrd] {style.bold('interactive setup')}")
     cfg: dict = {}
 
     if len(available) == 1:
         runner_name = available[0]
-        print(f"\n  runner: {runner_name} (only one found)")
+        print(f"\n  runner: {style.accent(runner_name)} (only one found)")
     else:
         runner_name = _pick_option("Which runner?", available, available[0])
 
@@ -457,7 +463,7 @@ def _configure_environment() -> dict:
     config records what the user actually picked.
     """
     if shutil.which("docker") is None:
-        print("\n  docker: not on PATH — using worktree environment")
+        print(f"\n  {style.dim('docker: not on PATH — using worktree environment')}")
         return {"environment": "worktree"}
 
     print()
@@ -506,12 +512,12 @@ def _narrate_home_repos(repo_root: Path) -> None:
         return
 
     print()
-    print("[brnrd] two repos now hold what this resident is — both yours:")
-    print(f"  memory    → {ctx.dominion_repo}")
+    print(f"[brnrd] {style.bold('two repos now hold what this resident is')} — both yours:")
+    print(f"  memory    {style.dim('→')} {style.accent(str(ctx.dominion_repo))}")
     print("              the dominion: the agent's working memory; it commits")
     print("              here after every thought")
-    suffix = "" if knowledge_root.exists() else "  (created on first use)"
-    print(f"  knowledge → {knowledge_root}{suffix}")
+    suffix = style.dim("  (created on first use)") if not knowledge_root.exists() else ""
+    print(f"  knowledge {style.dim('→')} {style.accent(str(knowledge_root))}{suffix}")
     print("              the pages your projects teach it")
     print("  Plain git repos on this machine; each carries a README deed —")
     print("  what it is, who writes it, where it lives, and how to leave.")
@@ -547,7 +553,10 @@ def _offer_home_link(repo_root: Path) -> None:
 
     for result in results:
         state = "pushed" if result.pushed else "already up to date"
-        print(f"[brnrd] {result.slot}: {result.action} → {result.remote_url} ({state})")
+        print(
+            f"[brnrd] {style.check()} {result.slot}: {result.action} → "
+            f"{style.accent(result.remote_url)} ({style.dim(state)})"
+        )
 
 
 def _dockerfile_logical_lines(text: str) -> list[str]:
@@ -737,7 +746,7 @@ def _setup_brr_dir(repo_root: Path) -> None:
     else:
         gi.write_text(f"# brr runtime\n{marker}\n", encoding="utf-8")
 
-    print("[brnrd] made room: `.brr/` for the runtime")
+    print(f"[brnrd] {style.check()} made room: `.brr/` for the runtime")
 
 
 def _bootstrap_dominion(repo_root: Path) -> None:
@@ -759,8 +768,8 @@ def _bootstrap_dominion(repo_root: Path) -> None:
         # first-timer has no way to hold yet. Say what it *is* here; the
         # resident teaches the word later, when it means something.
         print(
-            f"[brnrd] made room: a memory branch (`{branch}`) — this is "
-            "what lets the next conversation start where this one ends"
+            f"[brnrd] {style.check()} made room: a memory branch (`{branch}`) — "
+            "this is what lets the next conversation start where this one ends"
         )
     except Exception as exc:  # noqa: BLE001
         print(f"[brnrd] dominion setup skipped: {exc}")
@@ -791,12 +800,12 @@ def _run_setup(
         ],
     )
 
-    print("[brnrd] running setup...")
+    print(f"[brnrd] {style.dim('running setup…')}")
     result = runner.invoke_runner(runner_name, invocation, cfg=cfg)
     try:
         result.raise_for_error()
     except RuntimeError as e:
-        print(f"[brnrd] setup failed: {e}")
+        print(f"[brnrd] {style.cross()} setup failed: {e}")
         # Same ladder the zero-runner branch prints (spec §2.1/§6): a runner
         # that vanished between detection and launch, or died on auth/quota,
         # is the same user problem as one that was never there — and it used
@@ -805,7 +814,7 @@ def _run_setup(
         raise SystemExit(1)
     if not result.validation_ok:
         missing = ", ".join(artifact.label for artifact in result.missing_artifacts)
-        print(f"[brnrd] setup failed: missing required output(s): {missing}")
+        print(f"[brnrd] {style.cross()} setup failed: missing required output(s): {missing}")
         print(f"[brnrd] re-run `{brnrd_cmd()} init` to retry")
         raise SystemExit(1)
 
@@ -819,8 +828,8 @@ def _run_setup(
         problems = _agents_structure_problems(agents)
         if problems:
             print(
-                "[brnrd] setup failed: AGENTS.md is present but incomplete "
-                f"({'; '.join(problems)})"
+                f"[brnrd] {style.cross()} setup failed: AGENTS.md is present but "
+                f"incomplete ({'; '.join(problems)})"
             )
             print(f"[brnrd] re-run `{brnrd_cmd()} init` to retry")
             raise SystemExit(1)
@@ -876,30 +885,30 @@ def _verify(
     if agents.exists():
         problems = _agents_structure_problems(agents)
         if problems:
-            print(f"[brnrd] ⚠ AGENTS.md incomplete: {'; '.join(problems)}")
+            print(f"[brnrd] {style.warn_glyph()} AGENTS.md incomplete: {'; '.join(problems)}")
             ok = False
         else:
-            print("[brnrd] ✓ AGENTS.md")
+            print(f"[brnrd] {style.check()} AGENTS.md")
     else:
-        print("[brnrd] ✗ AGENTS.md missing — the runner may not have created it")
+        print(f"[brnrd] {style.cross()} AGENTS.md missing — the runner may not have created it")
         ok = False
 
     if knowledge_shape == "repo":
         for label in ("kb/index.md", "kb/log.md"):
             if (repo_root / label).exists():
-                print(f"[brnrd] ✓ {label}")
+                print(f"[brnrd] {style.check()} {label}")
             else:
-                print(f"[brnrd] · {label} not created (optional)")
+                print(f"[brnrd] {style.dot()} {label} not created (optional)")
 
     for shell in shells:
         reach = constitution.verify_reachability(repo_root, shell)
         if reach.reachable:
-            print(f"[brnrd] ✓ {shell}: {reach.detail}")
+            print(f"[brnrd] {style.check()} {shell}: {reach.detail}")
         else:
-            print(f"[brnrd] ✗ {shell}: {reach.detail}")
+            print(f"[brnrd] {style.cross()} {shell}: {reach.detail}")
             ok = False
 
     if ok:
-        print("[brnrd] init complete")
+        print(f"[brnrd] {style.check()} {style.bold('init complete')}")
     else:
         print(f"[brnrd] init incomplete — re-run `{brnrd_cmd()} init` to retry")
