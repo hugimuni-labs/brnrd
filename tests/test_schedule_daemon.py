@@ -571,13 +571,23 @@ def test_retire_internal_event_closes_spawn_completed_waking_source(tmp_path):
 
 
 def test_retire_internal_event_retires_observed_spawn_completeds_for_parent(tmp_path):
-    """Passing inbox_dir + run_id retires all spawn_completed events whose
-    spawn_parent_run_id matches run_id, even when the waking event is a gate
-    event (the common case: parent woke from user message, child finishes
-    mid-run).
+    """Passing inbox_dir + run_id retires every spawn_completed event whose
+    spawn_parent_run_id matches run_id *and* was actually rendered to that
+    parent's wake surface — even when the waking event is a gate event (the
+    common case: parent woke from user message, child finishes mid-run).
 
-    Drive red: comment out the inbox-scan block in _retire_internal_event and
-    confirm this fails; restore to keep.
+    Rewritten 2026-08-07 (#1146): the original fixture retired c1/c2 without
+    ever simulating a render, matching only on spawn_parent_run_id — the
+    exact "pending-on-disk is not evidence of observation" bug the issue
+    closes. This version renders the parent's own view
+    (`_pending_events_for_agent`) once, as a real run's heartbeat would,
+    before retiring — c1/c2 pick up the `observed_by` stamp and retire;
+    c_other belongs to a different parent, is never rendered to this one,
+    and stays pending on both counts.
+
+    Drive red: comment out the `observed_by` check in `_retire_internal_event`
+    (or the stamp in `_pending_events_for_agent`) and confirm this fails;
+    restore to keep.
     """
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
@@ -601,6 +611,12 @@ def test_retire_internal_event_retires_observed_spawn_completeds_for_parent(tmp_
     gate_path = protocol.create_event(inbox, "telegram", "hello", chat_id="42")
     gate_event = {"source": "telegram", "id": gate_path.stem, "_path": gate_path}
 
+    # Parent A renders its own view at least once during its run — the
+    # observation point (#1146). Parent B never does, in this fixture.
+    daemon._pending_events_for_agent(
+        inbox, gate_event["id"], observer_run_id="run-parent-A",
+    )
+
     result = daemon._retire_internal_event(
         gate_event, responses,
         inbox_dir=inbox,
@@ -608,24 +624,33 @@ def test_retire_internal_event_retires_observed_spawn_completeds_for_parent(tmp_
     )
     # Returns False because the waking event is a telegram event, not internal.
     assert result is False
-    # But our two spawn_completed events are now delivered.
+    # Our two observed spawn_completed events are now delivered.
     assert protocol._read_event(c1)["status"] == "delivered"
     assert protocol._read_event(c2)["status"] == "delivered"
-    # The unrelated spawn_completed is untouched.
+    # The unrelated (unobserved, different-parent) spawn_completed is untouched.
     assert protocol._read_event(c_other)["status"] == "pending"
     # The gate event itself is untouched (gate owns it).
     assert protocol._read_event(gate_path)["status"] == "pending"
 
 
 def test_spawn_completed_not_dispatched_after_parent_observed(tmp_path):
-    """A spawn_completed event whose parent has ended is retired and must not
-    appear in _dispatchable_targets after the parent run finishes.
+    """A spawn_completed event the parent actually *rendered* to its own
+    wake surface (inbox.json / portal-state.json / prompt — all three read
+    `_pending_events_for_agent`) is retired at parent closeout and must not
+    reappear in list_dispatchable.
 
-    Drive red: remove the inbox-scan block in _retire_internal_event and
-    confirm that spawn_completed events survive the run-end path and reappear
-    in list_dispatchable; restore to keep.
+    Rewritten 2026-08-07 (#1146). The original fixture asserted retirement
+    unconditionally, without ever simulating observation — which exercised
+    exactly the bug this issue closes: pending-on-disk was being treated as
+    proof the parent saw the completion. The old assertion was not merely
+    inconvenient, it was checking the wrong invariant, despite the test's
+    own name already promising "after_parent_observed". This version drives
+    the real render path (`_pending_events_for_agent`) with the parent's own
+    run id before retiring, so it exercises the stamp-then-retire contract.
 
-    Behaviour test — does not grep source for any token.
+    Drive red: remove the `observed_by` stamp in `_pending_events_for_agent`
+    (or the `observed_by` check in `_retire_internal_event`) and confirm the
+    completion survives retirement / never gets stamped; restore to keep.
     """
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
@@ -649,6 +674,19 @@ def test_spawn_completed_not_dispatched_after_parent_observed(tmp_path):
         "fixture must produce a pending spawn_completed before the fix runs"
     )
 
+    # The parent renders its own inbox at least once during its lifetime —
+    # this is the observation point (#1146). Address a different waking
+    # event id so the completion isn't excluded as "the current event".
+    daemon._pending_events_for_agent(
+        inbox, gate_event["id"], observer_run_id="run-parent-X",
+    )
+    observed = next(
+        e for e in protocol.list_pending(inbox) if e.get("id") == completion.stem
+    )
+    assert observed.get("observed_by") == "run-parent-X", (
+        "the render path must stamp observed_by for the declared parent"
+    )
+
     # Parent run ends — retire_internal_event retires the completion.
     daemon._retire_internal_event(
         gate_event, responses,
@@ -659,8 +697,50 @@ def test_spawn_completed_not_dispatched_after_parent_observed(tmp_path):
     # The spawn_completed is no longer dispatchable.
     remaining = [e for e in protocol.list_pending(inbox) if e.get("status") == "pending"]
     assert not any(e.get("source") == "spawn_completed" for e in remaining), (
-        "spawn_completed must not remain pending after parent run's retire step"
+        "an observed spawn_completed must not remain pending after the "
+        "parent run's retire step"
     )
+
+
+def test_spawn_completed_survives_retirement_when_never_observed(tmp_path):
+    """The other half of #1146: a completion the parent's run never rendered
+    to any wake surface — the child finishing after the parent's last tool
+    boundary, the tail-of-run race the issue names — must NOT be retired at
+    the parent's closeout. It stays pending so a successor (or, since
+    #1147, an adopter) can still see and act on it, instead of the fact
+    silently disappearing under `_retire_internal_event`'s unconditional
+    match on `spawn_parent_run_id` alone.
+    """
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+
+    gate_path = protocol.create_event(
+        inbox, "telegram", "parent task", chat_id="99",
+    )
+    gate_event = {"source": "telegram", "id": gate_path.stem, "_path": gate_path}
+    protocol.set_status(gate_event, "processing")
+
+    completion = protocol.create_event(
+        inbox, "spawn_completed", "child run-x done: status=done",
+        spawn_parent_run_id="run-parent-X",
+    )
+
+    # No call to `_pending_events_for_agent` here — the parent's run ends
+    # without ever having folded this completion into its own view.
+    daemon._retire_internal_event(
+        gate_event, responses,
+        inbox_dir=inbox,
+        run_id="run-parent-X",
+    )
+
+    remaining = [e for e in protocol.list_pending(inbox) if e.get("status") == "pending"]
+    assert any(e.get("id") == completion.stem for e in remaining), (
+        "an unobserved spawn_completed must survive the parent's retire step"
+    )
+    assert any(
+        e.get("id") == completion.stem for e in protocol.list_dispatchable(inbox)
+    ), "a surviving completion must stay dispatchable for a successor/adopter"
 
 
 def test_spawn_completed_still_pending_until_parent_retires(tmp_path):
