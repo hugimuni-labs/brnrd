@@ -151,6 +151,34 @@ def stage_gate(
     )
 
 
+def stage_await(
+    outbox_dir: Path,
+    *,
+    timeout_seconds: float,
+    file_path: str | None = None,
+    index: int = 0,
+) -> Path:
+    """Stage an ``await:`` directive — hold this run until the daemon has something.
+
+    ``brnrd await`` is the front door (`cli.cmd_await`); this is the same
+    stage-then-read-back shape every other verb here uses, so an `await:`
+    that fails to arm fails *in the call that armed it* rather than leaving
+    a stale resolution in `portal-state.json` looking like an answer (#1187).
+
+    The frontmatter is deliberately the smallest thing the daemon can act
+    on: ``await: true`` is a marker with no grammar, ``timeout:`` is the
+    ceiling the CLI already defaulted from the run's own budget, and
+    ``file:`` rides along only when the caller named one.
+    """
+    meta = {"await": "true", "timeout": f"{int(max(1, round(timeout_seconds)))}s"}
+    if file_path:
+        meta["file"] = file_path
+    return stage_message(
+        outbox_dir, stage_filename("await", index), meta=meta,
+        body="armed via `brnrd await`\n",
+    )
+
+
 def write_mood(
     outbox_dir: Path, emote_name: str, note: str | None = None,
 ) -> Path:
