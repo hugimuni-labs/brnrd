@@ -1965,9 +1965,8 @@ class TestPromptBuilding:
         # next-move rule (four closeout states, manufactured options named
         # as the failure mode) and the post-delivery linger contract
         # (backoff inside the provider cache window, dispatch-or-explicit-
-        # defer ownership for unrelated pending work), including the daemon-owned attending
-        # floor. Full contracts live in the portals manual (pinned in
-        # test_docs.py).
+        # defer ownership for unrelated pending work). Full contracts live
+        # in the portals manual (pinned in test_docs.py).
         prompt = build_daemon_prompt(
             "ship it",
             "evt-1",
@@ -1985,7 +1984,6 @@ class TestPromptBuilding:
             assert state in prompt
         assert "Manufactured options are the failure mode" in prompt
         assert "linger" in prompt
-        assert "delivered · attending" in prompt
         assert "backoff 30s → cap 240s" in prompt
         assert _says(prompt, "strand capacity and quota are healthy")
         assert _says(prompt, "queue never starves")
