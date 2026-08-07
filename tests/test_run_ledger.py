@@ -37,6 +37,7 @@ _ROW_FIELDS = {
     "usd_subscription_attributed",
     "usd_credits_equivalent",
     "estimate_vs_actual",
+    "bolt",
 }
 
 
@@ -91,6 +92,43 @@ def test_closed_run_row_carries_the_terminal_route(tmp_path, monkeypatch):
     assert row["terminal_route"] == "gate-sole"
 
 
+def test_closed_run_row_bolt_absent_when_never_cut(tmp_path, monkeypatch):
+    """design-the-bolt.md, fork 4 (signed): the ledger's forward success
+    signal — absent for a run that never declared completion, not a
+    fabricated default."""
+    (tmp_path / ".brr").mkdir()
+    monkeypatch.setattr(run_ledger.codex_status, "load_levels", lambda: _levels())
+
+    path = run_ledger.append_closed_run(tmp_path, _task(), {})
+
+    row = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+    assert row["bolt"] is None
+
+
+def test_closed_run_row_bolt_accepted(tmp_path, monkeypatch):
+    (tmp_path / ".brr").mkdir()
+    monkeypatch.setattr(run_ledger.codex_status, "load_levels", lambda: _levels())
+
+    task = _task()
+    task.meta["bolt"] = {"accepted_at": "2026-08-08T00:00:00Z", "annotated": 0}
+    path = run_ledger.append_closed_run(tmp_path, task, {})
+
+    row = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+    assert row["bolt"] == "accepted"
+
+
+def test_closed_run_row_bolt_annotated(tmp_path, monkeypatch):
+    (tmp_path / ".brr").mkdir()
+    monkeypatch.setattr(run_ledger.codex_status, "load_levels", lambda: _levels())
+
+    task = _task()
+    task.meta["bolt"] = {"accepted_at": "2026-08-08T00:00:00Z", "annotated": 2}
+    path = run_ledger.append_closed_run(tmp_path, task, {})
+
+    row = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+    assert row["bolt"] == "annotated"
+
+
 def test_closed_run_appends_one_well_formed_jsonl_row(tmp_path, monkeypatch):
     (tmp_path / ".brr").mkdir()
     snapshots = iter([
@@ -143,6 +181,7 @@ def test_closed_run_appends_one_well_formed_jsonl_row(tmp_path, monkeypatch):
     assert row["terminal_route"] is None
     assert row["name"] == ""
     assert row["estimate_vs_actual"] == "actual"
+    assert row["bolt"] is None
 
 
 def test_external_refs_carry_item_relics_with_no_new_field(tmp_path, monkeypatch):
