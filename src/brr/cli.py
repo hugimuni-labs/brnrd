@@ -101,7 +101,7 @@ PUBLIC_COMMANDS = (
 HIDDEN_COMMANDS = (
     "prompts", "hook", "statusline", "worktree-hygiene", "config", "emotes",
     "relic", "gate-run", "close-check", "promise", "mood", "do", "notes",
-    "await",
+    "await", "legend",
 )
 
 #: What ``brnrd promise`` accepts, spelled here so building the parser costs
@@ -486,6 +486,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--all", action="store_true", help="every face, not the top matches")
     p.add_argument("--telemetry", action="store_true", help="the daemon's derived set too")
     p.set_defaults(func=cmd_emotes)
+
+    # Hidden per HIDDEN_COMMANDS, same reasoning as `emotes`: the boot-time
+    # legend question design-the-live-loop.md §Round 2026-08-07 left open
+    # ("render it once at boot… or purely on-demand") answered on the
+    # cheap, pull-not-push side — a resident opaque on what a chip means
+    # calls this instead of grepping `hooks.py` for `BAR_SEGMENTS`.
+    p = sub.add_parser("legend")
+    p.set_defaults(func=cmd_legend)
 
     # Hidden per HIDDEN_COMMANDS — the resident's front door onto the
     # `.relics.jsonl` produce manifest, the same "control file with a command
@@ -1495,6 +1503,40 @@ def cmd_emotes(args):
         print(f"           {e.trigger}")
     if not args.all and len(rows) >= 12:
         print("[brnrd emotes] top matches only — narrow the query, or --all")
+    return 0
+
+
+#: The hand-declared row for the one chip `BAR_SEGMENTS` cannot carry itself
+#: (design-the-live-loop.md §Round 2026-08-07): `pending_unknown` renders
+#: inline in `_render_bar` when the pending count is unreadable, so it has a
+#: `SEGMENT_CLASS` entry but no `_BarSegment` vocabulary row to read a
+#: `meaning` off. Declared once, here, rather than left for `cmd_legend` to
+#: invent prose at print time.
+_PENDING_UNKNOWN_MEANING = (
+    "the pending-event count is unreadable this boundary — the portal "
+    "capsule did not provide one. Never rendered as a false zero: this "
+    "chip stands in for the unknown until a real count comes back."
+)
+
+
+def cmd_legend(args):
+    """Print the boundary bar's fixed chip vocabulary — `brnrd legend`.
+
+    One source of truth, read out rather than restated: every row here is a
+    live field off :data:`brr.hooks.BAR_SEGMENTS`, so the command can never
+    drift from what the bar actually renders (design-the-live-loop.md's
+    "#1200 is not new design work — it is a specific gap inside a shape
+    already built" — `BAR_SEGMENTS.meaning` was always ready to print, only
+    the wire didn't carry it). Read-only, no options, no state: the cheapest
+    of the three shapes that round left open (full-at-boot /
+    first-seen-only / on-demand) — a resident opaque on `!N` or `mood?`
+    calls this instead of grepping `hooks.py`.
+    """
+    from . import hooks
+
+    for segment in hooks.BAR_SEGMENTS:
+        print(f"{segment.glyph} · {segment.key} · {segment.klass} — {segment.meaning}")
+    print(f"✉? · pending_unknown · {hooks.OBLIGATION} — {_PENDING_UNKNOWN_MEANING}")
     return 0
 
 
