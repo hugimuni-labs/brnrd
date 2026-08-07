@@ -32,8 +32,10 @@ SYNC_MARKER_FILE = "dominion.needs-sync"
 # (recent pain, current focus); the agent can re-tune what it injects, and a
 # repo can override via `dominion.inject_budget_bytes`. Bumped 8192 → 12288 →
 # 20480 as the old fused seed grew; the identity-core split made the seed
-# smaller again, but the guard test keeps the budget honest.
-DEFAULT_INJECT_BUDGET_BYTES = 20480
+# smaller again, but the guard test keeps the budget honest. Bumped again to
+# 22528 (2026-08: "the instrument is not exempt" §Environment shaping grew
+# the seed to 19204 bytes, past the prior 18393-byte ceiling).
+DEFAULT_INJECT_BUDGET_BYTES = 22528
 
 
 def inject_budget_bytes(cfg: dict | None) -> int:
@@ -85,7 +87,7 @@ def inject_budget_bytes(cfg: dict | None) -> int:
 # time, rather than a resident discovering the gap by hitting it while trying
 # to write.
 RESIDENT_RESERVE_BYTES = 2048
-SEED_CEILING_BYTES = 18_393
+SEED_CEILING_BYTES = 20_441
 
 assert SEED_CEILING_BYTES + RESIDENT_RESERVE_BYTES <= DEFAULT_INJECT_BUDGET_BYTES, (
     "SEED_CEILING_BYTES + RESIDENT_RESERVE_BYTES must not exceed "
