@@ -4570,3 +4570,232 @@ def test_a_run_that_dispatched_nothing_is_never_warned(tmp_path):
     stop, _ = hooks.run_hook(hooks.PHASE_STOP, json.dumps(_PARENT_PAYLOAD), env)
     text = stop.get("hookSpecificOutput", {}).get("additionalContext") or ""
     assert "subagent isolation unverified" not in text
+
+
+# ── The bolt (design-the-bolt.md §Accretion): the boundary gauge ─────────────
+
+
+def test_bolt_chip_absent_when_the_run_has_done_nothing():
+    """A wake that has seen no ask, made no promise, and produced nothing
+    renders no `bolt` chip — even when the caller opts in with T=0."""
+    rendered = hooks.format_delta(
+        _bar_payload(produce={"known": False, "counts": {}}),
+        mood="smug_", bolt_asks_total=0,
+    )
+    assert "bolt" not in rendered.splitlines()[0]
+
+
+def test_bolt_chip_requires_caller_opt_in():
+    """Every existing call site that never passes `bolt_asks_total` (the
+    default) must never grow a `bolt` chip — backward compatibility for the
+    dozens of `format_delta` call sites already in this file."""
+    rendered = hooks.format_delta(_bar_payload(), mood="smug_")
+    assert "bolt" not in rendered.splitlines()[0]
+
+
+def test_bolt_chip_renders_asks_owed_produce_omitting_zero_parts():
+    from brr import promises
+
+    plan = promises.blueprint([{"what": "commit", "count": 2}], {"commit": 1})
+    payload = _bar_payload(
+        attention={"pending_event_count": 1, "pending_outbox_file_count": 0},
+        inbound={"events": [
+            {"id": "evt-9", "source": "telegram", "summary": "ping"},
+        ]},
+        produce={"known": True, "counts": {"commit": 1, "kb": 1}},
+    )
+    rendered = hooks.format_delta(
+        payload, mood="smug_", plan=plan, bolt_asks_total=3, bolt_edge=True,
+    )
+    bar = rendered.splitlines()[0]
+    # T=3 asks ever seen, 1 still pending ⇒ A=2 dispositioned. owed 1 (2
+    # promised commits, 1 landed). produce 2 (1 commit + 1 kb).
+    assert "bolt 2/3 asks · owed 1 · produce 2" in bar
+    assert "- bolt: 2/3 asks dispositioned · 1 owed · 2 produce —" in rendered
+    assert "`brnrd cut`" in rendered
+
+
+def test_bolt_chip_omits_the_asks_part_when_t_is_zero():
+    """Only produce/promise triggered it this boundary — no asks part."""
+    rendered = hooks.format_delta(
+        _bar_payload(produce={"known": True, "counts": {"commit": 2}}),
+        mood="smug_", bolt_asks_total=0,
+    )
+    bar = rendered.splitlines()[0]
+    assert "bolt produce 2" in bar
+    assert "asks" not in bar
+
+
+def test_bolt_detail_line_silent_off_its_own_edge_and_route_prompt():
+    """The chip is gateless (`owed`/`course`'s pattern); the detail line is
+    latched — it must not repeat every boundary just because the chip is
+    showing."""
+    payload = _bar_payload(produce={"known": True, "counts": {"commit": 2}})
+    rendered = hooks.format_delta(
+        payload, mood="smug_", bolt_asks_total=2, bolt_edge=False,
+    )
+    assert "bolt 2/2 asks · produce 2" in rendered.splitlines()[0]
+    assert "- bolt:" not in rendered
+
+
+def test_bolt_detail_line_rerenders_on_a_fresh_event():
+    """"fresh event ⇒ re-render your position against it" — the same trigger
+    `route_prompt` already carries for the course line."""
+    payload = _bar_payload(produce={"known": True, "counts": {"commit": 2}})
+    rendered = hooks.format_delta(
+        payload, mood="smug_", bolt_asks_total=2, bolt_edge=False,
+        route_prompt=True,
+    )
+    assert "- bolt:" in rendered
+
+
+def test_bolt_stop_closeout_names_brnrd_cut(tmp_path):
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "`brnrd cut`" in ctx
+
+
+def test_bolt_asks_total_accumulates_across_boundaries_and_survives_disposition(
+    tmp_path,
+):
+    """T (distinct asks ever seen) only grows; A (dispositioned) tracks the
+    current pending count against it — an answered ask keeps counting
+    toward T even after it drops off the pending list."""
+    env = _env(tmp_path)
+    ev1 = {"id": "evt-1001", "source": "telegram", "summary": "first"}
+    ev2 = {"id": "evt-1002", "source": "telegram", "summary": "second"}
+
+    _portal(tmp_path, token="t1", pending=1, events=[ev1])
+    first, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    ctx1 = first["hookSpecificOutput"]["additionalContext"]
+    assert "bolt 0/1 asks" in ctx1
+
+    # ev1 answered (no longer pending), ev2 arrives fresh.
+    _portal(tmp_path, token="t2", pending=1, events=[ev2])
+    second, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    ctx2 = second["hookSpecificOutput"]["additionalContext"]
+    # T=2 (ev1 and ev2, ever seen), A=1 (ev1 dispositioned; ev2 still
+    # pending) — T survived ev1 leaving the pending list.
+    assert "bolt 1/2 asks" in ctx2
+
+
+# ── Compression-on-repeat (#1116 residue, design-the-live-loop.md §1) ────────
+
+
+def test_notices_detail_compresses_on_the_third_consecutive_boundary():
+    notices = [{"at": "2026-07-24T03:36:00Z", "text": "reply NOT delivered"}]
+    payload = _bar_payload(notices=notices)
+    full = hooks.format_delta(payload, repeat_streaks={"notices": 2})
+    compact = hooks.format_delta(payload, repeat_streaks={"notices": 3})
+    assert "refused/dropped this run" in full
+    assert "refused/dropped this run" not in compact
+    assert "- !1 · seen ×3 — portal-state.json → notices" in compact
+
+
+def test_running_long_detail_compresses_on_the_third_consecutive_boundary():
+    payload = _bar_payload(
+        budget={"elapsed_seconds": 4000, "budget_seconds": 3600,
+                "long_running": True},
+    )
+    full = hooks.format_delta(payload, repeat_streaks={"running_long": 2})
+    compact = hooks.format_delta(payload, repeat_streaks={"running_long": 4})
+    assert "extend via .keepalive if the work needs it" in full
+    assert "extend via .keepalive if the work needs it" not in compact
+    assert "- running long · seen ×4 — .keepalive" in compact
+
+
+def test_name_nudge_detail_compresses_on_the_third_consecutive_boundary():
+    payload = _bar_payload(
+        budget={"elapsed_seconds": 300, "budget_seconds": 7200},
+        card={"active": True, "stale": False},
+    )
+    full = hooks.format_delta(payload, repeat_streaks={"name_nudge": 1})
+    compact = hooks.format_delta(payload, repeat_streaks={"name_nudge": 3})
+    assert "still unwritten" in full
+    assert "still unwritten" not in compact
+    assert "- .name? · seen ×3 — write .name" in compact
+
+
+def test_card_stale_detail_compresses_on_the_third_consecutive_boundary():
+    payload = _bar_payload(
+        card={"active": True, "stale": True, "age_seconds": 900,
+              "state_moved_seconds": 500},
+    )
+    full = hooks.format_delta(payload, repeat_streaks={"card_stale": 2})
+    compact = hooks.format_delta(payload, repeat_streaks={"card_stale": 3})
+    assert "hasn't been rewritten" in full
+    assert "hasn't been rewritten" not in compact
+    assert "- card stale (900s) · seen ×3 — rewrite .card" in compact
+
+
+def test_repeat_streak_resets_when_the_obligation_clears():
+    """A line that clears and later reappears starts over at "new" (streak
+    0, next bump 1) — the streak is per-*consecutive* laden boundary, not a
+    lifetime count. Unit-level on `_bump_repeat_streaks` itself (the
+    persisted-counter primitive `compute_neutral` calls every post-tool
+    boundary), independent of whatever else does or doesn't open the bar on
+    a given boundary."""
+    state: dict = {}
+    assert hooks._bump_repeat_streaks(state, {"running_long": True}) == {
+        "running_long": 1
+    }
+    assert hooks._bump_repeat_streaks(state, {"running_long": True}) == {
+        "running_long": 2
+    }
+    assert hooks._bump_repeat_streaks(state, {"running_long": True}) == {
+        "running_long": 3
+    }
+    # The obligation clears — reset to 0, not held or decremented.
+    assert hooks._bump_repeat_streaks(state, {"running_long": False}) == {
+        "running_long": 0
+    }
+    # It reappears — starts over at 1, not "seen ×4".
+    assert hooks._bump_repeat_streaks(state, {"running_long": True}) == {
+        "running_long": 1
+    }
+
+
+def test_repeat_streaks_are_tracked_independently_per_key():
+    state: dict = {}
+    hooks._bump_repeat_streaks(state, {"notices": True, "card_stale": False})
+    hooks._bump_repeat_streaks(state, {"notices": True, "card_stale": True})
+    result = hooks._bump_repeat_streaks(
+        state, {"notices": True, "card_stale": True}
+    )
+    assert result == {"notices": 3, "card_stale": 2}
+
+
+def test_long_running_alone_reaches_the_resident_end_to_end(tmp_path):
+    """One integration pin, combined with a pending event so the boundary
+    actually opens (a bare `long_running` with nothing else pending/
+    delivered/notice-worthy does not by itself open `_render_bar`'s own
+    ladenness gate — a pre-existing, unrelated gap between that gate and
+    `_has_post_tool_obligations`, out of this change's scope). Confirms the
+    wiring from `compute_neutral` through to the rendered detail line."""
+    env = _env(tmp_path)
+    ev = {"id": "evt-2001", "source": "telegram", "summary": "hi"}
+    budget_on = {"elapsed_seconds": 4000, "budget_seconds": 3600,
+                 "long_running": True}
+    _portal(tmp_path, token="t1", pending=1, events=[ev], budget=budget_on)
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "running long: past the 3600s soft budget" in ctx
+
+
+def test_stop_phase_is_exempt_from_compression(tmp_path):
+    """The closeout channel is exempt from dedupe by law (hooks.py test at
+    #963's pin) — running long must render in full at Stop even after many
+    post-tool boundaries already compressed it."""
+    env = _env(tmp_path)
+    budget_on = {"elapsed_seconds": 4000, "budget_seconds": 3600,
+                 "long_running": True}
+    for i in range(4):
+        _portal(tmp_path, token=f"t{i}", pending=0, budget=budget_on)
+        hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+
+    _portal(tmp_path, token="tstop", pending=0, budget=budget_on)
+    stop, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+    ctx = stop["hookSpecificOutput"]["additionalContext"]
+    assert "running long: past the 3600s soft budget" in ctx
+    assert "seen ×" not in ctx
