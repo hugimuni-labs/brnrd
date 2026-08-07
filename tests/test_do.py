@@ -612,3 +612,26 @@ def test_cut_still_queued_when_never_consumed(tmp_path, monkeypatch, capsys):
     assert main(["cut", str(declaration), "--timeout", "0.2"]) == 1
     assert capsys.readouterr().err.strip() == "[brnrd cut] ? still queued"
     assert ticks
+
+
+def test_cut_reports_the_annotated_count_on_a_forced_accept(
+    tmp_path, monkeypatch, capsys,
+):
+    """A cap-3 forced accept exits 0 — the bolt stands — but the daemon's
+    dissent must be visible in the same call, not only in the delivered
+    body: the portal's `bolt` facet carries `annotated`, and the porcelain
+    reads it back after the drain consumed the file."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(
+        outbox,
+        bolt={"accepted": True, "annotated": 2, "accepted_at": "2026-08-08T00:00:00Z"},
+    )
+    declaration = tmp_path / "bolt.md"
+    declaration.write_text("---\n---\nAs far as it wove.\n", encoding="utf-8")
+    monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-cut-*.md"))
+
+    assert main(["cut", str(declaration)]) == 0
+    out = capsys.readouterr().out
+    assert "accepted, annotated — 2 check(s) unresolved" in out
