@@ -5435,6 +5435,48 @@ def _resolve_await_state(
     return result
 
 
+_notify_gate_cache_lock = threading.Lock()
+# run id -> resolved notify.gate for that run. See
+# :func:`_live_delivery_projection`'s docstring for why this exists; dropped
+# by :func:`_forget_notify_gate` when the run's control is retired, so a
+# long-lived daemon does not accumulate one entry per run it has ever seen.
+_notify_gate_cache: dict[str, str] = {}
+
+
+def _cached_notify_gate(
+    task: Run, cfg: dict, brr_dir: Path, *, conversation_key: str = "",
+) -> str:
+    """:func:`_resolve_notify_gate`, resolved once per run id.
+
+    A run with no id (a synthetic task in a test, an ad-hoc caller) is not
+    cacheable and pays the full resolution — correctness is unchanged
+    either way, only how often it is paid.
+    """
+    run_id = str(getattr(task, "id", "") or "")
+    if not run_id:
+        return _resolve_notify_gate(
+            cfg, brr_dir, conversation_key=conversation_key,
+        )
+    with _notify_gate_cache_lock:
+        hit = _notify_gate_cache.get(run_id)
+    if hit is not None:
+        return hit
+    resolved = _resolve_notify_gate(
+        cfg, brr_dir, conversation_key=conversation_key,
+    )
+    with _notify_gate_cache_lock:
+        _notify_gate_cache[run_id] = resolved
+    return resolved
+
+
+def _forget_notify_gate(run_id: str) -> None:
+    """Drop a finished run's cached notify gate."""
+    if not run_id:
+        return
+    with _notify_gate_cache_lock:
+        _notify_gate_cache.pop(run_id, None)
+
+
 def _live_delivery_projection(
     task: Run, cfg: dict | None, brr_dir: Path | None, *, already_delivered: bool,
 ) -> dict[str, object]:
@@ -5453,6 +5495,20 @@ def _live_delivery_projection(
 
     ``{"known": False}`` when the run has no event source yet (an ad-hoc
     caller, or a source-less synthetic task) — nothing to project.
+
+    **Resolved once per run, then cached.** This function runs on every
+    heartbeat, and for the run type it exists to serve — a ``schedule``
+    fire, whose ``conversation_key`` is ``schedule:<name>`` and therefore
+    owned by no chat gate — ``_resolve_notify_gate`` falls all the way
+    through to :func:`_notify_gate_by_recent_activity`, which stats every
+    file under every conversation key. That scan's own docstring calls
+    itself rare and per-run; calling it per *heartbeat* would make it
+    2,829 ``stat()`` calls every ~10s on this account today (65
+    conversation dirs, 29 MB), growing without bound with the store —
+    roughly 4 million syscalls over a four-hour wake. The answer can only
+    change if a gate is configured mid-run, which is not worth that, so
+    the resolution is memoised per run id and the cache is dropped when
+    the run's control is retired.
     """
     source = str(getattr(task, "source", "") or "")
     if not source:
@@ -5462,8 +5518,8 @@ def _live_delivery_projection(
     owned = _gate_owns_source(source)
     notify_gate = ""
     if not owned and not spawn_parent_run_id and brr_dir is not None:
-        notify_gate = _resolve_notify_gate(
-            cfg or {}, brr_dir,
+        notify_gate = _cached_notify_gate(
+            task, cfg or {}, brr_dir,
             conversation_key=str(getattr(task, "conversation_key", "") or ""),
         )
     undeliverable = not owned and not spawn_parent_run_id and not notify_gate
@@ -11984,6 +12040,12 @@ def _run_worker_and_finalize(
             _attribute_schedule_entries(
                 task, brr_dir, repo_root, cfg, account_context,
             )
+        # The run is over; its resolved notify gate cannot be asked for
+        # again. Dropped here rather than left to a sweep because the cache
+        # is keyed by run id and a long-lived daemon would otherwise hold
+        # one entry per run it has ever executed.
+        if task is not None:
+            _forget_notify_gate(str(task.id or ""))
         # Leave the presence registry — the thought is no longer awake.
         # The registry self-prunes on read too, but an explicit deregister
         # keeps it tidy and immediate.
