@@ -179,6 +179,62 @@ def stage_await(
     )
 
 
+def stage_cut(
+    outbox_dir: Path, file_path: Path, *, index: int = 0,
+) -> tuple[Path | None, str | None]:
+    """Stage a ``cut:`` declaration read from *file_path*.
+
+    ``brnrd cut FILE`` (``cli.cmd_cut``) is the front door: *file_path* is a
+    resident-authored declaration — its own frontmatter (``asks:``,
+    ``produce:``, ``owed:``, ...) plus a woven body. This function's only
+    job is to guarantee the ``cut: true`` marker is present without
+    disturbing anything else in the file:
+
+    - **Already has a frontmatter block with its own ``cut:`` line** — the
+      file is staged byte for byte. Whatever the resident wrote (including
+      a non-``true`` value, which ``cut_verb.parse_cut`` will refuse by
+      name) reaches the drain unchanged.
+    - **Has a frontmatter block, no ``cut:`` line** — ``cut: true`` is
+      spliced in as the line right after the opening fence, and every
+      other line — including nested ``asks:``/``owed:`` blocks — is left
+      untouched. Re-parsing and re-rendering the frontmatter here (the way
+      :func:`stage_message`'s flat ``meta`` dict works for every other
+      verb) would need a YAML-list-capable grammar ``protocol.py`` doesn't
+      have (see ``cut_verb.py``'s module docstring for why); a text splice
+      needs none.
+    - **No frontmatter at all** — a legal minimal bolt: the whole file is
+      the woven body, and this reduces to the same flat-``meta`` shape
+      every sibling verb in this module already uses
+      (:func:`stage_note`/:func:`stage_gate`).
+
+    Returns ``(path, error)`` — *path* is ``None`` only when *file_path*
+    itself could not be read; a malformed declaration still stages (the
+    drain reports the refusal in ``notices``, exactly like every other
+    verb here).
+    """
+    try:
+        text = Path(file_path).read_text(encoding="utf-8")
+    except OSError as exc:
+        return None, f"could not read {file_path}: {exc}"
+    filename = stage_filename("cut", index)
+    if text.startswith("---\n"):
+        fm = protocol.parse_frontmatter(text)
+        if "cut" in fm:
+            path = outbox_dir / filename
+            protocol._atomic_write(path, text if text.endswith("\n") else text + "\n")
+            return path, None
+        lines = text.split("\n")
+        lines.insert(1, "cut: true")
+        spliced = "\n".join(lines)
+        path = outbox_dir / filename
+        protocol._atomic_write(
+            path, spliced if spliced.endswith("\n") else spliced + "\n",
+        )
+        return path, None
+    path = stage_message(outbox_dir, filename, meta={"cut": "true"}, body=text)
+    return path, None
+
+
 def write_mood(
     outbox_dir: Path, emote_name: str, note: str | None = None,
 ) -> Path:
@@ -247,8 +303,23 @@ def _notice_matches(notice: dict[str, Any], needles: tuple[str, ...]) -> bool:
 
 def find_matching_notice(
     notices: list[dict[str, Any]], needles: tuple[str, ...],
+    *, source_file: str | None = None,
 ) -> dict[str, Any] | None:
-    """The first fresh notice that plausibly names this directive, or ``None``."""
+    """The first fresh notice that plausibly names this directive, or ``None``.
+
+    *source_file*, when given, is tried first as an **identity** join
+    against a notice's own ``source_file`` field (``daemon.py``'s
+    ``_record_outbox_notice``, threaded today only from the ``cut:``
+    branch's call sites — see that function's docstring) — an exact match
+    beats the text-substring heuristic below outright, closing the
+    correlation gap this module's own docstring names. Every other verb
+    passes no *source_file*, so their notices — which carry no
+    ``source_file`` field — keep matching purely on *needles*, unchanged.
+    """
+    if source_file:
+        for notice in notices:
+            if notice.get("source_file") == source_file:
+                return notice
     for notice in notices:
         if _notice_matches(notice, needles):
             return notice
@@ -268,6 +339,7 @@ def await_verdict(
     poll_seconds: float = POLL_INTERVAL_SECONDS,
     sleep=None,
     clock=None,
+    source_file: str | None = None,
 ) -> tuple[str, str]:
     """Poll until *staged_path* is consumed, or *timeout_seconds* elapses.
 
@@ -286,6 +358,11 @@ def await_verdict(
     caller didn't inject its own, keeps both paths working: a direct-unit
     test can pass a fake explicitly, and a CLI-level test can monkeypatch
     ``time.sleep`` the same way the rest of this codebase already does.
+
+    *source_file*, when given, is forwarded to :func:`find_matching_notice`
+    as its identity-join key (``cmd_cut`` is the one caller that passes it
+    today, since ``cut:`` notices are the one kind that currently carries
+    ``source_file``).
     """
     sleep = sleep or time.sleep
     clock = clock or time.monotonic
@@ -294,7 +371,7 @@ def await_verdict(
         if not staged_path.exists():
             payload = read_portal_state(outbox_dir)
             fresh = new_notices(before_notices, notices_of(payload))
-            hit = find_matching_notice(fresh, needles)
+            hit = find_matching_notice(fresh, needles, source_file=source_file)
             if hit is not None:
                 kind = hit.get("kind") or "refused"
                 return FAILED, f"{kind}: {hit.get('text')}"

@@ -68,6 +68,10 @@ _ROW_FIELDS = (
     "usd_subscription_attributed",
     "usd_credits_equivalent",
     "estimate_vs_actual",
+    # design-the-bolt.md, fork 4 (signed): the one success signal going
+    # forward — "accepted" / "annotated" / absent. `terminal_route`'s
+    # five-value zoo demotes to debug detail as a follow-up, not this diff.
+    "bolt",
 )
 
 
@@ -270,8 +274,21 @@ def build_closed_run_row(
         "usd_subscription_attributed": usd_subscription,
         "usd_credits_equivalent": usd_credits_equivalent(after_levels),
         "estimate_vs_actual": ESTIMATE_ACTUAL,
+        "bolt": _bolt_value(task.meta.get("bolt")),
     }
     return {field: row.get(field) for field in _ROW_FIELDS}
+
+
+def _bolt_value(bolt_meta: Any) -> str | None:
+    """``"accepted"`` / ``"annotated"`` / ``None`` — the ledger's bolt column.
+
+    ``None`` when this run was never cut (``task.meta["bolt"]`` unset — a
+    run that ended without ever declaring completion, whether by closing
+    another way or dying mid-flight), not a fabricated default.
+    """
+    if not isinstance(bolt_meta, dict):
+        return None
+    return "annotated" if bolt_meta.get("annotated") else "accepted"
 
 
 def core_mismatch(expected: str | None, observed: str | None) -> bool | None:
