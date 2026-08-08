@@ -63,6 +63,95 @@ def gh_available() -> bool:
     return shutil.which("gh") is not None
 
 
+def _noninteractive_git_env() -> dict[str, str]:
+    """Env for every git subprocess this module runs directly.
+
+    Two problems, one fix. First, every call here names its own repo via
+    ``cwd=``, so the ``GIT_DIR``/``GIT_WORK_TREE`` overrides a strand run
+    inherits (#703) must not steer it at some other tree —
+    :func:`gitops.explicit_repo_env` is the established scrub for exactly
+    that. Second, and the reason this function exists (#1241): an unset
+    ``GIT_TERMINAL_PROMPT`` lets git write a credential prompt
+    (``Username for 'https://github.com':``) straight to the real
+    ``/dev/tty`` — invisible to ``capture_output=True`` — and hang the
+    whole run waiting on a human who isn't watching, with the actual
+    failure captured and never shown. ``GIT_TERMINAL_PROMPT=0`` plus a
+    no-op ``GIT_ASKPASS`` close the HTTPS side; ``GIT_SSH_COMMAND``'s
+    ``BatchMode=yes`` closes the equivalent SSH-side hang (a passphrase or
+    host-key prompt) so neither transport is silently exempt.
+    """
+    env = gitops.explicit_repo_env()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_ASKPASS"] = shutil.which("true") or "/bin/true"
+    ssh_command = env.get("GIT_SSH_COMMAND") or "ssh"
+    if "batchmode" not in ssh_command.lower():
+        env["GIT_SSH_COMMAND"] = f"{ssh_command} -o BatchMode=yes"
+    return env
+
+
+def _is_ssh_url(url: str) -> bool:
+    return url.startswith("git@") or url.startswith("ssh://")
+
+
+def _project_origin_is_ssh(repo_root: Path) -> bool:
+    """Whether *repo_root*'s own ``origin`` (or first remote) is SSH.
+
+    The signal #1241 asks for: a machine whose HTTPS credential helper is
+    broken can still have a perfectly working SSH identity — the project
+    the operator is standing in already proves it by using one. Any
+    resolution failure (no origin, not a git repo yet, a git call that
+    raises) reads as False, same as "no signal either way" — falls through
+    to the HTTPS-first default rather than guessing.
+    """
+    try:
+        remote = gitops.default_remote(repo_root)
+        if not remote:
+            return False
+        url = gitops.remote_url(repo_root, remote)
+    except Exception:
+        return False
+    return bool(url) and _is_ssh_url(url)
+
+
+def _try_gh_setup_git() -> None:
+    """Best-effort: wire git's credential helper to gh's stored token.
+
+    Called once per :func:`link_home` call, before the first HTTPS push,
+    when the SSH-preferred path isn't in play (#1241) — makes a bare ``gh
+    auth login`` (no separate git credential config) *just work* for the
+    HTTPS remote instead of leaving git to fall back to an interactive
+    prompt this module has just gone to the trouble of disabling. Never
+    raises: an unauthenticated or absent ``gh`` just leaves git exactly as
+    it was, and the push after this surfaces its own actionable error.
+    """
+    if not gh_available():
+        return
+    try:
+        _run_gh(["auth", "setup-git"])
+    except HomeLinkError:
+        pass
+
+
+def _push_remedy(*, ssh: bool) -> str:
+    """The one-line next step for a failed push, not a generic shrug."""
+    if ssh:
+        return (
+            "origin is wired over SSH — verify your SSH identity for "
+            "github.com (`ssh -T git@github.com`), then re-run `brnrd home link`."
+        )
+    if gh_available():
+        return (
+            "origin is wired — run `gh auth setup-git` (or `gh auth login` "
+            "again) to give git a working GitHub credential, then re-run "
+            "`brnrd home link`."
+        )
+    return (
+        "origin is wired — install gh (https://cli.github.com/) or "
+        "configure a git credential helper for github.com, then re-run "
+        "`brnrd home link`."
+    )
+
+
 def _run_gh(args: list[str]) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(
@@ -172,6 +261,7 @@ def _ensure_git_repo(path: Path) -> bool:
         capture_output=True,
         text=True,
         check=False,
+        env=_noninteractive_git_env(),
     )
     return result.returncode == 0
 
@@ -193,6 +283,7 @@ def _current_or_symbolic_branch(repo_path: Path) -> str:
         capture_output=True,
         text=True,
         check=False,
+        env=_noninteractive_git_env(),
     )
     resolved = result.stdout.strip() if result.returncode == 0 else ""
     return resolved or "main"
@@ -205,6 +296,7 @@ def _ensure_has_commit(repo_path: Path, message: str) -> None:
         capture_output=True,
         text=True,
         check=False,
+        env=_noninteractive_git_env(),
     )
     if check.returncode == 0:
         return
@@ -220,7 +312,7 @@ def _ensure_has_commit(repo_path: Path, message: str) -> None:
         capture_output=True,
         text=True,
         check=False,
-        env=gitops.bot_identity_env(),
+        env=gitops.bot_identity_env(_noninteractive_git_env()),
     )
 
 
@@ -233,9 +325,14 @@ def _push_current(repo_path: Path, remote: str, *, founding_message: str) -> tup
         capture_output=True,
         text=True,
         check=False,
+        env=_noninteractive_git_env(),
     )
     if result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip() or "git push failed"
+        raw = result.stderr.strip() or result.stdout.strip() or "git push failed"
+        # One meaningful line, not the whole captured blob — same
+        # first-line convention ``sync._fetch`` already uses for a git
+        # failure surfaced to a human.
+        detail = raw.splitlines()[0] if raw else raw
         return False, detail
     return True, ""
 
@@ -244,7 +341,19 @@ def _clone_url(owner: str, name: str) -> str:
     return f"https://github.com/{owner}/{name}.git"
 
 
-def _link_one(*, slot: str, repo_path: Path, owner: str, name: str) -> RepoLinkResult:
+def _clone_url_ssh(owner: str, name: str) -> str:
+    return f"git@github.com:{owner}/{name}.git"
+
+
+def _link_one(
+    *,
+    slot: str,
+    repo_path: Path,
+    owner: str,
+    name: str,
+    ssh: bool = False,
+    prepare_push: Callable[[], None] | None = None,
+) -> RepoLinkResult:
     info = _repo_view(owner, name)
     if info is not None:
         # Explicit PRIVATE or nothing: an unreadable visibility is not a
@@ -264,13 +373,14 @@ def _link_one(*, slot: str, repo_path: Path, owner: str, name: str) -> RepoLinkR
         url = _repo_create(owner, name)
         action = "created"
 
-    clone_url = _clone_url(owner, name)
+    clone_url = _clone_url_ssh(owner, name) if ssh else _clone_url(owner, name)
     add = subprocess.run(
         ["git", "remote", "add", "origin", clone_url],
         cwd=repo_path,
         capture_output=True,
         text=True,
         check=False,
+        env=_noninteractive_git_env(),
     )
     if add.returncode != 0:
         raise HomeLinkError(
@@ -286,14 +396,17 @@ def _link_one(*, slot: str, repo_path: Path, owner: str, name: str) -> RepoLinkR
     # the deed-write-failed edge.
     repo_deed.ensure_deed(repo_path, slot)
 
+    if not ssh and prepare_push is not None:
+        prepare_push()
+
     ok, detail = _push_current(
         repo_path, "origin",
         founding_message=repo_deed.founding_commit_message(slot),
     )
     if not ok:
         raise HomeLinkError(
-            f"{slot}: origin set to {url} but the initial push failed ({detail}) — "
-            f"origin is wired; re-run `brnrd home link` once fixed."
+            f"{slot}: origin set to {url} but the initial push failed: {detail} — "
+            f"{_push_remedy(ssh=ssh)}"
         )
     return RepoLinkResult(slot=slot, path=repo_path, remote_url=url, action=action, pushed=True)
 
@@ -331,6 +444,14 @@ def link_home(
     *on_result* fires immediately after each repo finishes, so a caller
     that then hits a HomeLinkError on the second repo still knows the
     first repo's outcome.
+
+    **Remote scheme (#1241).** When *repo_root*'s own ``origin`` is an SSH
+    remote, both home repos are wired SSH too — the trace this fix answers
+    had a working SSH identity the whole time while HTTPS died, so the
+    project's own choice is the strongest signal available. Otherwise
+    HTTPS, with a best-effort ``gh auth setup-git`` tried once (not per
+    repo) before the first push, so a bare ``gh auth login`` is enough to
+    authenticate the push without a separate ``git credential`` dance.
     """
     cfg = cfg or {}
     ctx = account.resolve_context(repo_root, cfg)
@@ -348,6 +469,16 @@ def link_home(
         ("knowledge", knowledge_root, knowledge_name),
     ]
 
+    use_ssh = _project_origin_is_ssh(repo_root)
+    setup_git_tried = False
+
+    def _prepare_https_push() -> None:
+        nonlocal setup_git_tried
+        if setup_git_tried:
+            return
+        setup_git_tried = True
+        _try_gh_setup_git()
+
     resolved_owner = owner
     results: list[RepoLinkResult] = []
     for slot, path, name in plan:
@@ -361,7 +492,11 @@ def link_home(
             if resolved_owner is None:
                 _require_gh_auth()
                 resolved_owner = resolve_owner(owner)
-            result = _link_one(slot=slot, repo_path=path, owner=resolved_owner, name=name)
+            result = _link_one(
+                slot=slot, repo_path=path, owner=resolved_owner, name=name,
+                ssh=use_ssh,
+                prepare_push=None if use_ssh else _prepare_https_push,
+            )
         results.append(result)
         if on_result is not None:
             on_result(result)
