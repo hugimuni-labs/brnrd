@@ -33,6 +33,7 @@ from ..platforms import whatsapp as wa
 
 router = APIRouter(prefix="/v1/webhooks", tags=["webhooks"])
 logger = logging.getLogger(__name__)
+_WA_AUDIT_LOGGER = logging.getLogger("uvicorn.error")
 
 # #408 — associations that count as "trusted" for the default-closed
 # authorization gate. Everything else (NONE, CONTRIBUTOR,
@@ -69,11 +70,16 @@ def _wa_audit(trace: str, stage: str, detail: str = "") -> None:
     only ``POST ... 200`` and every decision inside that response disappears.
     """
     suffix = f" {detail}" if detail else ""
-    # Uvicorn's production config filters this module's INFO logger. Its
-    # visible access handler writes to stdout; Scaleway captures that stream,
-    # but Python buffers ordinary prints in the container. Use the captured
-    # stream and flush at the decision boundary.
-    print(f"[brnrd] whatsapp ingress: trace={trace} stage={stage}{suffix}", flush=True)
+    # Production config filters this module's INFO logger and Scaleway does
+    # not ingest raw process prints. Uvicorn's own error logger is the
+    # configured operational stream whose startup/shutdown rows are visible
+    # in the same log API as its access records.
+    _WA_AUDIT_LOGGER.info(
+        "[brnrd] whatsapp ingress: trace=%s stage=%s%s",
+        trace,
+        stage,
+        suffix,
+    )
 
 
 def _reply(settings, parsed: tg.ParsedMessage, text: str) -> None:
