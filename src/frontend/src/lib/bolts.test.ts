@@ -3,7 +3,10 @@ import test from 'node:test';
 
 import {
 	BOLT_TAKEN_CAP,
+	boltCardDataFromLedgerRows,
+	boltCardSections,
 	boltSummonsLabel,
+	boltVerdictLabel,
 	boltsTakenStorageKey,
 	parseBoltState,
 	readTakenBolts,
@@ -154,4 +157,100 @@ test('boltSummonsLabel is singular at one, plural otherwise', () => {
 	assert.equal(boltSummonsLabel(1), '1 bolt awaits taking');
 	assert.equal(boltSummonsLabel(2), '2 bolts await taking');
 	assert.equal(boltSummonsLabel(0), '0 bolts await taking');
+});
+
+test('unackedBolts carries measured spend through, latest non-null value wins', () => {
+	const rows = [
+		row({
+			run_id: 'run-1',
+			bolt: 'accepted',
+			ended_at: '2026-08-07T22:00:00Z',
+			wall_clock_seconds: 120,
+			tokens_input: 100,
+			usd_subscription_attributed: 1.5
+		}),
+		row({
+			run_id: 'run-1',
+			bolt: 'accepted',
+			ended_at: '2026-08-07T22:05:00Z',
+			// This re-report leaves wall_clock_seconds/usd null — must not
+			// blank out the earlier measurement.
+			tokens_input: 140,
+			tokens_output: 60
+		})
+	];
+	const [bolt] = unackedBolts(rows, []);
+	assert.equal(bolt.wallClockSeconds, 120);
+	assert.equal(bolt.tokensInput, 140);
+	assert.equal(bolt.tokensOutput, 60);
+	assert.equal(bolt.usdSubscriptionAttributed, 1.5);
+	assert.equal(bolt.usdCreditsEquivalent, null);
+});
+
+test('boltVerdictLabel names the daemon dissent case, not just the raw value', () => {
+	assert.equal(boltVerdictLabel('accepted'), 'accepted');
+	assert.equal(boltVerdictLabel('annotated'), 'accepted — with dissent');
+});
+
+test('boltCardSections: asks/decisions/owed are unconditionally absent — no wire carries them', () => {
+	const sections = boltCardSections({
+		relics: [],
+		wallClockSeconds: null,
+		tokensInput: null,
+		tokensOutput: null,
+		usdSubscriptionAttributed: null,
+		usdCreditsEquivalent: null
+	});
+	assert.equal(sections.asks, 'absent');
+	assert.equal(sections.decisions, 'absent');
+	assert.equal(sections.owed, 'absent');
+});
+
+test('boltCardSections: produce and spend distinguish empty (real, honest) from absent (unlabeled)', () => {
+	const nothing = boltCardSections({
+		relics: [],
+		wallClockSeconds: null,
+		tokensInput: null,
+		tokensOutput: null,
+		usdSubscriptionAttributed: null,
+		usdCreditsEquivalent: null
+	});
+	assert.equal(nothing.produce, 'empty');
+	assert.equal(nothing.spend, 'empty');
+
+	const something = boltCardSections({
+		relics: [{ kind: 'commit' }],
+		wallClockSeconds: 90,
+		tokensInput: null,
+		tokensOutput: null,
+		usdSubscriptionAttributed: null,
+		usdCreditsEquivalent: null
+	});
+	assert.equal(something.produce, 'present');
+	assert.equal(something.spend, 'present');
+});
+
+test('boltCardDataFromLedgerRows returns null when no row carries a recognised bolt', () => {
+	assert.equal(boltCardDataFromLedgerRows([]), null);
+	assert.equal(boltCardDataFromLedgerRows([row({ bolt: null })]), null);
+	assert.equal(boltCardDataFromLedgerRows([row({ bolt: 'something-future' })]), null);
+});
+
+test('boltCardDataFromLedgerRows merges every row for one run — relics accumulate, spend/bolt latest-wins', () => {
+	const rows = [
+		row({ bolt: 'accepted', external_refs: [{ kind: 'commit' }], wall_clock_seconds: 60 }),
+		row({ bolt: 'annotated', external_refs: [{ kind: 'pr' }], usd_subscription_attributed: 2 })
+	];
+	const data = boltCardDataFromLedgerRows(rows);
+	assert.ok(data);
+	// The later row's bolt state wins — a re-report reflects the run's
+	// current disposition, not its first.
+	assert.equal(data?.bolt, 'annotated');
+	assert.deepEqual(
+		data?.relics.map((r) => r.kind),
+		['commit', 'pr']
+	);
+	// Spend not reset by the second row's nulls.
+	assert.equal(data?.wallClockSeconds, 60);
+	assert.equal(data?.usdSubscriptionAttributed, 2);
 });
