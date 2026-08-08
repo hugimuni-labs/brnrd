@@ -174,6 +174,7 @@ export function runNodeFromSurface(
 export const FRAME_FIELDS: Array<{ key: string; label: string }> = [
 	{ key: 'status', label: 'status' },
 	{ key: 'stage', label: 'stage' },
+	{ key: 'bolt', label: 'bolt' },
 	{ key: 'started_at', label: 'started' },
 	{ key: 'ended_at', label: 'ended' },
 	{ key: 'source', label: 'source' },
@@ -523,6 +524,19 @@ export interface NodeDigest {
 	status: string;
 	stage: string;
 	runner: string;
+	/**
+	 * The frame's own `bolt:` field (`accepted <iso>` | `annotated <iso>`),
+	 * '' when the run hasn't been cut yet or predates the bolt — same rule
+	 * `mood` follows: a text record, nothing here resolves it further.
+	 */
+	bolt: string;
+	/**
+	 * The body's `## Bolt` section (design-the-bolt.md §The cloth side: "the
+	 * accepted bolt becomes the node's lead body"), '' when the resident
+	 * wrote no such section. Rendered ahead of `now` — the bolt heads the
+	 * node, the rest of the card scroll stays below.
+	 */
+	boltLead: string;
 	/** The `## Now` projection of the body; '' when no body exists yet. */
 	now: string;
 	/**
@@ -592,11 +606,14 @@ export function nodeDigest(node: RunNode): NodeDigest {
 	const frame = node.state ? frontmatterDocument(node.state.markdown) : null;
 	const body = node.body ? node.body.markdown : '';
 	const now = body ? nowProjection(body) : '';
+	const boltLead = body ? bodySection(body, 'Bolt') : '';
 	return {
 		mirrored: node.mirrored,
 		status: frame?.metadata.status ?? '',
 		stage: frame?.metadata.stage ?? '',
 		runner: frame?.metadata.runner_name ?? '',
+		bolt: frame?.metadata.bolt ?? '',
+		boltLead,
 		now,
 		produce: frame ? bodySection(frame.body, 'Produce') : '',
 		mood: frame?.metadata.mood ?? '',
