@@ -150,6 +150,11 @@ def _fake_created_link(tmp_path, monkeypatch):
     def fake_run_gh(args):
         if args[:2] == ["auth", "status"]:
             return _cp(0)
+        if args[:2] == ["auth", "setup-git"]:
+            # #1241: link_home now best-effort wires gh's credential helper
+            # once before the first HTTPS push — a legitimate new call, not
+            # an unexpected one.
+            return _cp(0)
         if args[:2] == ["repo", "view"]:
             return _cp(1, stderr="not found")
         if args[:2] == ["repo", "create"]:
