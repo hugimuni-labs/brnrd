@@ -12,6 +12,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
+import re
 import time
 
 import pytest
@@ -180,6 +182,26 @@ def test_webhook_rejects_bad_signature(env):
     assert r.status_code == 403
 
 
+def test_webhook_audit_names_rejection_without_sender_or_body(env, caplog):
+    _, client, _ = env
+    sender = "15551234567"
+    body = "private pairing attempt"
+    raw = json.dumps(_message(sender, body)).encode("utf-8")
+    with caplog.at_level(logging.INFO, logger="brnrd.routers.webhooks"):
+        r = client.post(
+            "/v1/webhooks/whatsapp",
+            content=raw,
+            headers={"Content-Type": "application/json", "X-Hub-Signature-256": "sha256=nope"},
+        )
+    assert r.status_code == 403
+    audit = "\n".join(record.getMessage() for record in caplog.records)
+    assert "stage=received" in audit
+    assert "stage=rejected reason=bad_signature" in audit
+    assert sender not in audit
+    assert body not in audit
+    assert len(set(re.findall(r"trace=([0-9a-f]{8})", audit))) == 1
+
+
 def test_webhook_rejects_missing_signature(env):
     _, client, _ = env
     r = client.post("/v1/webhooks/whatsapp", json=_message("15551234567", "hi"))
@@ -236,6 +258,25 @@ def test_pair_code_binds_chat_and_confirms(env):
     assert len(sends) == 1
     assert sends[0]["to"] == "15551234567"
     assert "myrepo" in sends[0]["text"]
+
+
+def test_pairing_audit_joins_decisions_without_sender_or_code(env, caplog):
+    _, client, _ = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    code = _pair_code(client, acc, rid)
+    sender = "15551234567"
+
+    with caplog.at_level(logging.INFO, logger="brnrd.routers.webhooks"):
+        r = _post(client, _message(sender, code))
+
+    assert r.status_code == 200
+    audit = "\n".join(record.getMessage() for record in caplog.records)
+    for stage in ("received", "message_parsed", "pair_attempt", "paired"):
+        assert f"stage={stage}" in audit
+    assert sender not in audit
+    assert code not in audit
+    assert len(set(re.findall(r"trace=([0-9a-f]{8})", audit))) == 1
 
 
 def test_pair_code_is_case_insensitive_and_whitespace_tolerant(env):

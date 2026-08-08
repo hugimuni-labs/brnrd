@@ -148,6 +148,10 @@ def _telegram_pair_response(settings: Any, repo: Repo, code: str) -> schemas.Tel
             f"Send `/start {code}` to your brnrd Telegram bot to bind this "
             f"chat to repo '{repo.repo_full_name}'."
         )
+    instructions += (
+        f" For WhatsApp, text `{code}` by itself — no `/start` and no other "
+        "words — to your brnrd WhatsApp number."
+    )
     return schemas.TelegramPairStarted(
         pair_code=code,
         instructions=instructions,

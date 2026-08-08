@@ -7,6 +7,7 @@ import hmac
 import json
 import logging
 import re
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -57,6 +58,18 @@ _UNPAIRED_TEXT = "This chat is not paired to a brnrd account yet. Pair a repo fr
 _WA_UNPAIRED_TEXT = "This chat is not paired to a brnrd account yet. Pair a repo from the dashboard, then text the pair code here."
 _UNBOUND_REPO_TEXT = "This repository is not connected to brnrd yet. Open brnrd.dev, connect the repo, then call the bot again."
 _BACKLOG_GRACE = timedelta(seconds=1)
+
+
+def _wa_audit(trace: str, stage: str, detail: str = "") -> None:
+    """Emit one privacy-safe, grep-ready WhatsApp ingress decision.
+
+    A random request-local handle joins the stages without logging the
+    sender, message body, pair code, or raw payload.  Meta delivery failures
+    otherwise look exactly like a quiet channel: the generic access log says
+    only ``POST ... 200`` and every decision inside that response disappears.
+    """
+    suffix = f" {detail}" if detail else ""
+    logger.info("[brnrd] whatsapp ingress: trace=%s stage=%s%s", trace, stage, suffix)
 
 
 def _reply(settings, parsed: tg.ParsedMessage, text: str) -> None:
@@ -649,16 +662,25 @@ def _enqueue_whatsapp_event(db: Session, parsed: "wa.ParsedMessage", *, repo_id:
     )
 
 
-def _handle_whatsapp_pair(db: Session, settings, parsed: "wa.ParsedMessage", code: str) -> None:
+def _handle_whatsapp_pair(
+    db: Session,
+    settings,
+    parsed: "wa.ParsedMessage",
+    code: str,
+    *,
+    trace: str,
+) -> None:
     pc = db.execute(select(TgPairCode).where(TgPairCode.code == code)).scalar_one_or_none()
     expires = pc.expires_at if pc else None
     if expires is not None and expires.tzinfo is None:
         expires = expires.replace(tzinfo=timezone.utc)
     if pc is None or pc.consumed or (expires and expires < datetime.now(timezone.utc)):
+        _wa_audit(trace, "pair_rejected", "reason=invalid_or_expired")
         _wa_reply(settings, parsed, "Invalid or expired pair code.")
         return
     existing = _wa_channel_route(db, parsed)
     if existing is not None and existing.account_id != pc.account_id:
+        _wa_audit(trace, "pair_rejected", "reason=bound_elsewhere")
         _wa_reply(settings, parsed, "This chat is already paired to another account.")
         return
     if existing is None:
@@ -670,6 +692,7 @@ def _handle_whatsapp_pair(db: Session, settings, parsed: "wa.ParsedMessage", cod
     pc.consumed = True
     repo = db.get(Repo, pc.repo_id)
     db.commit()
+    _wa_audit(trace, "paired")
     _wa_reply(settings, parsed, f"Paired with repo '{repo.repo_full_name if repo else pc.repo_id}'. Send me tasks anytime.")
 
 
@@ -688,21 +711,32 @@ def whatsapp_webhook_verify(request: Request):
         configured_verify_token=settings.whatsapp_verify_token,
     )
     if challenge is None:
+        _wa_audit(secrets.token_hex(4), "verify_rejected")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="bad verify token")
+    _wa_audit(secrets.token_hex(4), "verify_accepted")
     return PlainTextResponse(challenge)
 
 
 @router.post("/whatsapp")
 async def whatsapp_webhook(request: Request, x_hub_signature_256: str | None = Header(default=None)):
     settings = request.app.state.settings
+    trace = secrets.token_hex(4)
     raw = await request.body()
+    _wa_audit(
+        trace,
+        "received",
+        f"bytes={len(raw)} signature={'present' if x_hub_signature_256 else 'missing'}",
+    )
     if not _hub_signature_ok(settings.whatsapp_app_secret, raw, x_hub_signature_256):
+        _wa_audit(trace, "rejected", "reason=bad_signature")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="bad signature")
     try:
         payload = await request.json()
     except Exception:
+        _wa_audit(trace, "ignored", "reason=invalid_json")
         return {"ok": True}
     if not isinstance(payload, dict):
+        _wa_audit(trace, "ignored", "reason=non_object_payload")
         return {"ok": True}
     # ``statuses`` deliveries (sent/delivered/read receipts for our own
     # outbound sends) and any payload with no inbound message parse to
@@ -710,26 +744,33 @@ async def whatsapp_webhook(request: Request, x_hub_signature_256: str | None = H
     # Telegram update falling out of ``tg.parse_update``.
     parsed = wa.parse_update(payload)
     if parsed is None:
+        _wa_audit(trace, "ignored", "reason=no_inbound_message")
         return {"ok": True}
+    _wa_audit(trace, "message_parsed", f"kind={'media' if parsed.has_media else 'text'}")
     with request.app.state.SessionLocal() as db:
         code = _wa_pair_code_from_text(parsed.text)
         if code:
-            _handle_whatsapp_pair(db, settings, parsed, code)
+            _wa_audit(trace, "pair_attempt")
+            _handle_whatsapp_pair(db, settings, parsed, code, trace=trace)
             return {"ok": True}
         route = _wa_channel_route(db, parsed)
         if route is not None and _message_precedes_route(parsed, route):
+            _wa_audit(trace, "ignored", "reason=predates_route")
             return {"ok": True}
         if route is None:
+            _wa_audit(trace, "unpaired")
             _wa_reply(settings, parsed, _WA_UNPAIRED_TEXT)
             return {"ok": True}
         repo = db.get(Repo, route.repo_id)
         if repo is None:
+            _wa_audit(trace, "rejected", "reason=missing_repo")
             _wa_reply(settings, parsed, "This chat's active repo no longer exists. Pair again from the dashboard.")
             return {"ok": True}
         if not parsed.text and not parsed.attachments:
             # v1 doesn't ingest WhatsApp media at all (no attachment
             # pointers, unlike Telegram's image path) — a media message
             # with no text carries nothing brnrd can act on.
+            _wa_audit(trace, "rejected", "reason=media_without_text")
             _wa_reply(settings, parsed, "I can't see attached media yet — that message had no text I can read. Send it as words.")
             return {"ok": True}
         body = parsed.text
@@ -742,9 +783,11 @@ async def whatsapp_webhook(request: Request, x_hub_signature_256: str | None = H
             body=body,
         )
         if not decision.allowed:
+            _wa_audit(trace, "rejected", f"reason=limit:{decision.reason}")
             _wa_reply(settings, parsed, decision.message)
             return {"ok": True}
         _enqueue_whatsapp_event(db, parsed, repo_id=route.repo_id, body=body)
+        _wa_audit(trace, "enqueued")
     return {"ok": True}
 
 

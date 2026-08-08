@@ -692,6 +692,8 @@ def test_telegram_pair_returns_deep_link_when_username_set():
     # @-prefix stripped; the pair code rides as the tap-to-open start= param.
     assert body["deep_link"] == f"https://t.me/brnrd_bot?start={code}"
     assert body["deep_link"] in body["instructions"]
+    assert f"For WhatsApp, text `{code}` by itself" in body["instructions"]
+    assert "no `/start`" in body["instructions"]
 
 
 def test_telegram_pair_omits_deep_link_without_username(env):
@@ -703,6 +705,7 @@ def test_telegram_pair_omits_deep_link_without_username(env):
     ).json()
     assert body["deep_link"] is None
     assert f"/start {body['pair_code']}" in body["instructions"]
+    assert f"For WhatsApp, text `{body['pair_code']}` by itself" in body["instructions"]
 
 
 def test_startup_registers_hosted_telegram_webhook(monkeypatch):
