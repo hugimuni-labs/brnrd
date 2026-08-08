@@ -292,3 +292,61 @@ def test_claim_without_a_connected_account_never_calls_out(tmp_path, monkeypatch
     monkeypatch.setattr(cloud, "_request", _never)
     assert cloud.claim_wake_request(brr_dir, request_id="w1") is None
     assert cloud.claim_wake_request(brr_dir, request_id="") is None
+
+
+# ── #932 made visible: live_sticky_view + release_sticky (2026-08-08) ────
+
+
+def _bind(brr_dir, **overrides):
+    wake_request.store_sticky(
+        brr_dir,
+        request_id=overrides.get("request_id", "w1"),
+        profile=overrides.get("profile", "claude-haiku"),
+        correspondent_key=overrides.get("correspondent_key", "telegram:user-id:1"),
+        claimed_at=overrides.get("claimed_at", "2026-08-08T10:00:00+00:00"),
+    )
+
+
+def test_live_sticky_view_renders_a_live_record_with_expiry(tmp_path):
+    from datetime import datetime, timezone
+
+    brr_dir = _brr(tmp_path)
+    _bind(brr_dir)
+    view = wake_request.live_sticky_view(
+        brr_dir, 7200, now=datetime(2026, 8, 8, 11, 0, tzinfo=timezone.utc)
+    )
+    assert view is not None
+    assert view["profile"] == "claude-haiku"
+    assert view["expires_at"] == "2026-08-08T12:00:00+00:00"
+    assert view["correspondent_key"] == "telegram:user-id:1"
+
+
+def test_live_sticky_view_is_none_for_absent_expired_or_malformed(tmp_path):
+    from datetime import datetime, timezone
+
+    brr_dir = _brr(tmp_path)
+    at_expiry = datetime(2026, 8, 8, 12, 0, tzinfo=timezone.utc)
+    assert wake_request.live_sticky_view(brr_dir, 7200) is None  # absent
+    _bind(brr_dir)
+    assert wake_request.live_sticky_view(brr_dir, 7200, now=at_expiry) is None
+    # Malformed: garble the stamp on disk; the view declines, and — unlike
+    # dispatch — leaves the file alone (lifecycle is dispatch's).
+    _bind(brr_dir, claimed_at="not-a-stamp")
+    assert wake_request.live_sticky_view(brr_dir, 7200) is None
+    assert wake_request.sticky_record(brr_dir) is not None
+
+
+def test_release_sticky_drops_only_records_claimed_at_or_before_the_ask(tmp_path):
+    brr_dir = _brr(tmp_path)
+    _bind(brr_dir)
+    # A newer record survives an older ask.
+    assert wake_request.release_sticky(brr_dir, "2026-08-08T09:59:59+00:00") is False
+    assert wake_request.sticky_record(brr_dir) is not None
+    # An ask at/after the claim releases.
+    assert wake_request.release_sticky(brr_dir, "2026-08-08T10:00:00+00:00") is True
+    assert wake_request.sticky_record(brr_dir) is None
+    # Nothing to release, unparsable ask: both decline without error.
+    assert wake_request.release_sticky(brr_dir, "2026-08-08T10:00:00+00:00") is False
+    _bind(brr_dir)
+    assert wake_request.release_sticky(brr_dir, "garbage") is False
+    assert wake_request.sticky_record(brr_dir) is not None

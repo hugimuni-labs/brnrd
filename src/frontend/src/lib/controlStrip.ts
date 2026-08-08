@@ -6,15 +6,18 @@ import {
 	type QuotaWindow
 } from './quota.ts';
 import { isCollapsed } from './collapse.ts';
-import type { RunnerProfile, WakeRequest } from './runners';
+import { liveSticky, type RunnerProfile, type RunnerSticky, type WakeRequest } from './runners.ts';
 
-export type RunnerBlockKind = 'requested' | 'default';
+export type RunnerBlockKind = 'requested' | 'sticky' | 'default';
 
 export interface RunnerBlock {
 	profile: RunnerProfile;
 	kind: RunnerBlockKind;
-	badge: 'requested · next wake' | 'default';
+	badge: string;
 	active: boolean;
+	/** ISO expiry stamp, present only on the sticky block — the header's
+	 *  countdown re-derives from it on every clock tick. */
+	until?: string;
 }
 
 export interface FuelRow {
@@ -104,13 +107,19 @@ function shortDelta(seconds: number): string {
 
 /**
  * Reduces the rack to the one answer the header needs. A parked request is
- * foreground intent; the default remains visible only when it is genuinely a
- * different fallback, so duplicate blocks cannot imply two competing wakes.
+ * foreground intent; a live conversation-sticky (#932) is the standing
+ * truth for the bound thread and outranks the pin — until it rode here the
+ * header showed the config default while the sticky decided every wake
+ * (the 2026-08-08 "core tap is lying" defect). The default remains visible
+ * only when it is genuinely a different fallback, so duplicate blocks
+ * cannot imply two competing wakes.
  */
 export function runnerBlocks(
 	profiles: RunnerProfile[],
 	defaultProfile: string | null,
-	wakeRequest: WakeRequest | null
+	wakeRequest: WakeRequest | null,
+	sticky: RunnerSticky | null = null,
+	nowMs: number = Date.now()
 ): RunnerBlock[] {
 	const fallback =
 		profiles.find((profile) => profile.name === defaultProfile) ??
@@ -129,7 +138,37 @@ export function runnerBlocks(
 		return blocks;
 	}
 
+	const live = liveSticky(sticky, nowMs);
+	const stuck = live ? profiles.find((profile) => profile.name === live.profile) : undefined;
+	if (live && stuck) {
+		const blocks: RunnerBlock[] = [
+			{
+				profile: stuck,
+				kind: 'sticky',
+				badge: `riding thread · ${stickyCountdown(live, nowMs) ?? 'until released'}`,
+				active: true,
+				...(live.expires_at ? { until: live.expires_at } : {})
+			}
+		];
+		if (fallback && fallback.name !== stuck.name) {
+			blocks.push({ profile: fallback, kind: 'default', badge: 'default', active: false });
+		}
+		return blocks;
+	}
+
 	return fallback ? [{ profile: fallback, kind: 'default', badge: 'default', active: true }] : [];
+}
+
+/** Compact time left on a sticky (`47m`, `1h13m`), or null without an
+ *  expiry stamp. Same grammar as the fuel dials' reset column. */
+export function stickyCountdown(
+	sticky: RunnerSticky | null | undefined,
+	nowMs: number = Date.now()
+): string | null {
+	if (!sticky?.expires_at) return null;
+	const expires = Date.parse(sticky.expires_at);
+	if (Number.isNaN(expires)) return null;
+	return shortDelta((expires - nowMs) / 1000);
 }
 
 function compactWindowName(window: QuotaWindow): { owner: string | null; window: string } {

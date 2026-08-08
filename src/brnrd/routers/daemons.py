@@ -449,6 +449,26 @@ def put_runners(payload: schemas.RunnersReport, principal: Principal = Depends(r
         [option.model_dump(exclude_none=True) for option in environments],
         separators=(",", ":"),
     )
+    # #932 conversation-sticky mirror. The daemon owns the record; this is
+    # the rack's read of it. The release ask (`runner_sticky_release_at`)
+    # clears once the reported sticky is gone or postdates the ask — either
+    # way the ask is spent.
+    sticky = payload.sticky if permitted else None
+    daemon.runner_sticky_json = (
+        json.dumps(sticky.model_dump(mode="json", exclude_none=True), separators=(",", ":"))
+        if sticky is not None
+        else None
+    )
+    release_at = daemon.runner_sticky_release_at
+    if release_at is not None:
+        claimed = sticky.claimed_at if sticky is not None else None
+        if sticky is None or (
+            claimed is not None
+            and claimed.replace(tzinfo=claimed.tzinfo or timezone.utc)
+            > release_at.replace(tzinfo=release_at.tzinfo or timezone.utc)
+        ):
+            daemon.runner_sticky_release_at = None
+            release_at = None
     daemon.runners_updated_at = now
     daemon.online = True
     daemon.last_seen_at = now
@@ -469,6 +489,7 @@ def put_runners(payload: schemas.RunnersReport, principal: Principal = Depends(r
             if pending is not None
             else None
         ),
+        sticky_release_at=release_at,
     )
 
 
