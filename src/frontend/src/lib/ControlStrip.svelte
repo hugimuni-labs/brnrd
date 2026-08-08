@@ -282,9 +282,26 @@
 						class="mb-1 flex items-center justify-between gap-2 font-mono text-[9px] tracking-[0.13em] text-ink-quiet uppercase"
 					>
 						<span>next pick</span>
-						<span class="text-ink-mute group-hover:text-stone-400" aria-hidden="true"
-							>{expanded ? '▾' : '▸'} rack</span
-						>
+						<span class="flex items-center gap-1.5">
+							{#if expanded && condensed}
+								<!-- Invisible sticky state, named (2026-08-08, his steer: "the
+								     rack block was just never collapsing after a few scrolls
+								     and random presses"). The rack's own `open` rightly
+								     outranks the scroll verdict forever (#1011, THE PICKER YOU
+								     CANNOT REACH) — but a tap that opened it left no trace, so
+								     a reader who scrolled through it never learned *why*
+								     scrolling stopped doing anything. This chip is the trace:
+								     same badge grammar the rack's other chips already wear. -->
+								<span
+									class="border border-amber-800/60 bg-amber-950/40 px-1.5 py-0.5 text-[8px] text-amber-300 normal-case"
+									title="you opened this — scrolling won't fold it until you tap it closed"
+									>pinned open</span
+								>
+							{/if}
+							<span class="text-ink-mute group-hover:text-stone-400" aria-hidden="true"
+								>{expanded ? '▾' : '▸'} rack</span
+							>
+						</span>
 					</div>
 					{#if runners === null}
 						<div class="font-mono text-xs text-ink-quiet">next wake · loading…</div>
