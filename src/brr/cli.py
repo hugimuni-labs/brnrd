@@ -4056,7 +4056,8 @@ def cmd_brnrd_connect(args):
 
     from .gates import cloud
 
-    brr_dir = _brr_dir()
+    repo_root = _repo_root()
+    brr_dir = _brr_dir_for_repo(repo_root)
     url = args.url_option or args.url or os.environ.get("BRNRD_URL", "https://brnrd.dev")
     daemon_name = args.daemon_name or socket.gethostname()
     try:
@@ -4070,14 +4071,40 @@ def cmd_brnrd_connect(args):
         )
         return
 
+    brnrd = brnrd_cmd()
+    if not (repo_root / "AGENTS.md").exists():
+        # `daemon.start` hard-exits before it ever writes a pidfile when the
+        # repo has no AGENTS.md (daemon.py, the `run brnrd init first` guard
+        # ~L13015). Installing and kickstarting the service anyway would
+        # hand launchd/systemd a job whose first line is that exit — under
+        # `KeepAlive: {SuccessfulExit: False}` / `Restart=on-failure` that is
+        # a throttled crash loop, "loaded" forever, never a pidfile, and
+        # nothing here proving otherwise (#1238). Pairing above is already
+        # valid without AGENTS.md, so skip the install rather than claim a
+        # service is listening that cannot start; the daemon starts the
+        # moment this repo has one.
+        print(
+            "[brnrd] Paired. This repo has no AGENTS.md yet, so the "
+            f"background service isn't installed — run `{brnrd} init` first, "
+            f"then `{brnrd} daemon install` to start listening in the "
+            "background."
+        )
+        return
+
     from . import daemon_install
 
-    daemon_install.install(
+    result = daemon_install.install(
         no_start=False,
         prompt_linger=not args.no_linger,
         assume_yes_linger=args.yes_linger,
     )
-    print("[brnrd] Connected and listening in the background.")
+    if result == 0:
+        print("[brnrd] Connected and listening in the background.")
+    else:
+        print(
+            "[brnrd] Paired, but the background service did not come up — "
+            "see the diagnosis above."
+        )
 
 
 def cmd_brnrd_disconnect(args):
