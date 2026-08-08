@@ -274,6 +274,19 @@ class Daemon(Base):
         default="[]",
         info=_publish_store("runners", "repo"),
     )
+    # #932 conversation-sticky mirror: the profile a claimed tap bound to a
+    # conversation, with its expiry — the rack's "who actually answers this
+    # thread's wakes" chip. Null when none is in force.
+    runner_sticky_json: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        info=_publish_store("runners", "repo"),
+    )
+    # The dashboard's "release the sticky" ask, as a timestamp the daemon
+    # compares against its record's claimed_at (a sticky claimed *after* the
+    # ask survives it). The daemon owns the record; this column only carries
+    # the ask until the daemon's next publish shows it honoured or obsolete.
+    runner_sticky_release_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class ActivityRecord(Base):

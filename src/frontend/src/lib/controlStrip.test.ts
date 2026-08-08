@@ -9,11 +9,12 @@ import {
 	railIsSlim,
 	railScrollVerdict,
 	runnerBlocks,
-	slotChip
+	slotChip,
+	stickyCountdown
 } from './controlStrip.ts';
 import { isCollapsed } from './collapse.ts';
 import type { QuotaShell } from './quota.ts';
-import type { RunnerProfile, WakeRequest } from './runners.ts';
+import type { RunnerProfile, RunnerSticky, WakeRequest } from './runners.ts';
 
 const profiles: RunnerProfile[] = [
 	{ name: 'codex', shell: 'codex', model: 'default', selected: true },
@@ -51,6 +52,54 @@ test('a request matching the default never renders duplicate runner blocks', () 
 test('selected profile backstops a report without an explicit default name', () => {
 	assert.equal(runnerBlocks(profiles, null, null)[0]?.profile.name, 'codex');
 	assert.deepEqual(runnerBlocks([], null, null), []);
+});
+
+// #932 made visible (2026-08-08): the conversation-sticky is the standing
+// truth for its bound thread, and the header must foreground it — until
+// this landed the header showed the config pin while the sticky decided
+// every wake in the thread.
+const sticky: RunnerSticky = {
+	profile: 'codex-full',
+	claimed_at: '2026-07-18T12:00:00Z',
+	expires_at: '2026-07-18T14:00:00Z',
+	correspondent_key: 'telegram:user-id:1'
+};
+const duringSticky = Date.parse('2026-07-18T13:13:00Z');
+
+test('a live sticky foregrounds the riding profile with a countdown badge', () => {
+	assert.deepEqual(runnerBlocks(profiles, 'codex', null, sticky, duringSticky), [
+		{
+			profile: profiles[1],
+			kind: 'sticky',
+			badge: 'riding thread · 47m',
+			active: true,
+			until: '2026-07-18T14:00:00Z'
+		},
+		{ profile: profiles[0], kind: 'default', badge: 'default', active: false }
+	]);
+});
+
+test('an expired or unmatched sticky falls back to the default block', () => {
+	const afterExpiry = Date.parse('2026-07-18T14:00:01Z');
+	assert.deepEqual(runnerBlocks(profiles, 'codex', null, sticky, afterExpiry), [
+		{ profile: profiles[0], kind: 'default', badge: 'default', active: true }
+	]);
+	// A sticky naming a profile this rack doesn't carry cannot render.
+	assert.deepEqual(
+		runnerBlocks(profiles, 'codex', null, { ...sticky, profile: 'gone' }, duringSticky),
+		[{ profile: profiles[0], kind: 'default', badge: 'default', active: true }]
+	);
+});
+
+test('a parked request outranks the sticky in the header', () => {
+	const blocks = runnerBlocks(profiles, 'codex', request, sticky, duringSticky);
+	assert.equal(blocks[0]?.kind, 'requested');
+});
+
+test('stickyCountdown speaks the fuel dial reset grammar', () => {
+	assert.equal(stickyCountdown(sticky, duringSticky), '47m');
+	assert.equal(stickyCountdown(sticky, Date.parse('2026-07-18T12:10:00Z')), '1h50m');
+	assert.equal(stickyCountdown({ ...sticky, expires_at: null }, duringSticky), null);
 });
 
 test('fuel rows derive compact shell and model labels from every reported window', () => {

@@ -545,3 +545,133 @@ def test_wake_request_claim_skips_availability_when_the_rack_is_blank():
         headers=daemon_headers,
     ).json()
     assert verdict["apply"] is True
+
+
+# ── #932 conversation-sticky mirror + the exit tap (2026-08-08) ──────────
+
+
+_STICKY = {
+    "profile": "claude-haiku",
+    "claimed_at": "2026-08-08T10:00:00+00:00",
+    # Far future: these tests pin mirroring and lifecycle, not the clock.
+    "expires_at": "2126-08-08T12:00:00+00:00",
+    "correspondent_key": "telegram:user-id:1",
+    "request_id": "wake_abc",
+}
+
+
+def test_sticky_rides_the_runners_mirror_to_the_dashboard():
+    client = _client()
+    _, daemon_headers, _repo_id = _repo_and_daemon(client)
+    assert client.post(
+        "/v1/daemons/register", json={"daemon_name": "laptop"}, headers=daemon_headers,
+    ).status_code == 200
+    assert client.put(
+        "/v1/daemons/runners",
+        json={**_CATALOG_PAYLOAD, "sticky": _STICKY},
+        headers=daemon_headers,
+    ).status_code == 200
+
+    _login_cookie(client)
+    body = client.get("/v1/dashboard/runners").json()
+    assert body["sticky"]["profile"] == "claude-haiku"
+    assert body["sticky"]["expires_at"].startswith("2126-08-08T12:00:00")
+
+    # A sticky past its expiry never renders, even off a stale mirror.
+    assert client.put(
+        "/v1/daemons/runners",
+        json={**_CATALOG_PAYLOAD, "sticky": {**_STICKY, "expires_at": "2020-01-01T00:00:00+00:00"}},
+        headers=daemon_headers,
+    ).status_code == 200
+    late = client.get("/v1/dashboard/runners").json()
+    assert late["sticky"] is None
+
+    # A publish with no sticky clears the mirror.
+    assert client.put(
+        "/v1/daemons/runners",
+        json={**_CATALOG_PAYLOAD, "sticky": _STICKY},
+        headers=daemon_headers,
+    ).status_code == 200
+    assert client.put(
+        "/v1/daemons/runners", json=_CATALOG_PAYLOAD, headers=daemon_headers,
+    ).status_code == 200
+    cleared = client.get("/v1/dashboard/runners").json()
+    assert cleared["sticky"] is None
+
+
+def test_sticky_release_parks_an_ask_and_the_publish_tick_retires_it():
+    client = _client()
+    _, daemon_headers, _repo_id = _repo_and_daemon(client)
+    assert client.post(
+        "/v1/daemons/register", json={"daemon_name": "laptop"}, headers=daemon_headers,
+    ).status_code == 200
+    assert client.put(
+        "/v1/daemons/runners",
+        json={**_CATALOG_PAYLOAD, "sticky": _STICKY},
+        headers=daemon_headers,
+    ).status_code == 200
+
+    _login_cookie(client)
+    # No sticky ⇒ 404 later; with one in force the ask parks.
+    released = client.post("/v1/dashboard/runners/sticky-release")
+    assert released.status_code == 200, released.text
+    asked_at = released.json()["requested_at"]
+
+    # The ask rides back on the daemon's next catalog publish...
+    still_stuck = client.put(
+        "/v1/daemons/runners",
+        json={**_CATALOG_PAYLOAD, "sticky": _STICKY},
+        headers=daemon_headers,
+    ).json()
+    assert still_stuck["sticky_release_at"] is not None
+    assert still_stuck["sticky_release_at"][:19] == asked_at[:19]
+
+    # ...and retires once the daemon reports the sticky gone.
+    honoured = client.put(
+        "/v1/daemons/runners", json=_CATALOG_PAYLOAD, headers=daemon_headers,
+    ).json()
+    assert honoured["sticky_release_at"] is None
+    after = client.put(
+        "/v1/daemons/runners", json=_CATALOG_PAYLOAD, headers=daemon_headers,
+    ).json()
+    assert after["sticky_release_at"] is None
+
+
+def test_sticky_release_spares_a_record_claimed_after_the_ask():
+    client = _client()
+    _, daemon_headers, _repo_id = _repo_and_daemon(client)
+    assert client.post(
+        "/v1/daemons/register", json={"daemon_name": "laptop"}, headers=daemon_headers,
+    ).status_code == 200
+    assert client.put(
+        "/v1/daemons/runners",
+        json={**_CATALOG_PAYLOAD, "sticky": _STICKY},
+        headers=daemon_headers,
+    ).status_code == 200
+
+    _login_cookie(client)
+    assert client.post("/v1/dashboard/runners/sticky-release").status_code == 200
+
+    # A *newer* tap (claimed after the ask) reports in: the ask is obsolete
+    # and must clear without touching the new record.
+    fresh = {**_STICKY, "claimed_at": "2030-01-01T00:00:00+00:00",
+             "expires_at": "2030-01-01T02:00:00+00:00"}
+    body = client.put(
+        "/v1/daemons/runners",
+        json={**_CATALOG_PAYLOAD, "sticky": fresh},
+        headers=daemon_headers,
+    ).json()
+    assert body["sticky_release_at"] is None
+
+
+def test_sticky_release_without_a_sticky_is_a_named_404():
+    client = _client()
+    _, daemon_headers, _repo_id = _repo_and_daemon(client)
+    assert client.post(
+        "/v1/daemons/register", json={"daemon_name": "laptop"}, headers=daemon_headers,
+    ).status_code == 200
+    assert client.put(
+        "/v1/daemons/runners", json=_CATALOG_PAYLOAD, headers=daemon_headers,
+    ).status_code == 200
+    _login_cookie(client)
+    assert client.post("/v1/dashboard/runners/sticky-release").status_code == 404

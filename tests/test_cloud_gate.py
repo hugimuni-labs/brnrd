@@ -1804,6 +1804,22 @@ def test_runners_snapshot_reads_local_catalog(tmp_path, monkeypatch):
     assert snapshot["default"] is None
     assert snapshot["profiles"] == catalog
 
+    # #932 made visible: no sticky record => sticky is None; a live one
+    # rides the snapshot with its computed expiry.
+    assert snapshot["sticky"] is None
+    from brr import wake_request as wake_request_mod
+
+    wake_request_mod.store_sticky(
+        brr_dir,
+        request_id="w1",
+        profile="claude-haiku",
+        correspondent_key="telegram:user-id:1",
+        claimed_at="2126-08-08T10:00:00+00:00",
+    )
+    snapshot = cloud._runners_snapshot(brr_dir)
+    assert snapshot["sticky"]["profile"] == "claude-haiku"
+    assert snapshot["sticky"]["expires_at"] == "2126-08-08T12:00:00+00:00"
+
 
 def test_dashboard_publish_tick_noop_without_configured_state(tmp_path):
     """No token/URL yet (not paired) → skip quietly, don't raise — this runs
