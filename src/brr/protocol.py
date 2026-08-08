@@ -78,7 +78,7 @@ def frontmatter_body(text: str) -> str:
 # ``parse_outbox_message``.
 _OUTBOX_ROUTING_KEYS = (
     "event", "gate", "respawn", "spawn", "stop", "to", "runner_policy",
-    "config_change", "note", "await",
+    "config_change", "note", "await", "cut",
 )
 
 

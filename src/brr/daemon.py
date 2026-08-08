@@ -83,7 +83,9 @@ from . import presence
 from . import prompts
 from . import codex_status
 from . import codex_usage
+from . import cut_verb
 from . import protocol
+from . import promises
 from . import relics
 from . import run_context
 from . import run_ledger
@@ -5675,6 +5677,23 @@ def _write_live_portal_state(
             hard_cap_seconds=hard_cap_seconds,
             start_monotonic=start_monotonic,
         )
+        # The bolt (design-the-bolt.md): absent until a `cut:` is accepted
+        # this run — sibling work reads exactly this shape, so the key
+        # itself is omitted rather than carrying a `None`/`accepted: false`
+        # placeholder for a run that was never cut.
+        bolt_meta = (
+            task.meta.get("bolt")
+            if hasattr(task, "meta") and isinstance(task.meta.get("bolt"), dict)
+            else None
+        )
+        bolt_state = (
+            {
+                "accepted": True,
+                "annotated": int(bolt_meta.get("annotated") or 0),
+                "accepted_at": bolt_meta.get("accepted_at"),
+            }
+            if bolt_meta else None
+        )
         stats = output_stats or {}
         card_text = (card_state or {}).get("last", "")
         pending_files = _outbox_message_files(outbox_dir)
@@ -5885,6 +5904,8 @@ def _write_live_portal_state(
                 wake_request=task.meta.get("wake_request"),
             ),
         }
+        if bolt_state is not None:
+            payload["bolt"] = bolt_state
         if task.meta.get("root_kind") == "home":
             remote_scm = payload["resources"]["remote_scm"]
             remote_scm.update(
@@ -6449,9 +6470,17 @@ _NOTICE_KINDS = frozenset({"refused", "dropped", "advisory", "redirected"})
 # two independent reasons to be FYI-only, not one collapsed into the other.
 _NOTICE_LIFETIMES = frozenset({"run", "standing"})
 
+#: How many times one run's ``cut:`` may bounce before the daemon accepts it
+#: anyway, annotated with its own dissent (design-the-bolt.md, fork 3,
+#: signed: "Cap 3 on bounce makes sense"). Bounded like the closeout latch
+#: learned to be — a guard may only assert what an artifact proves, and it
+#: must not be able to hold a run hostage forever.
+_CUT_BOUNCE_CAP = 3
+
 
 def _record_outbox_notice(
-    outbox_dir: Path | None, text: str, *, kind: str, lifetime: str
+    outbox_dir: Path | None, text: str, *, kind: str, lifetime: str,
+    source_file: str = "",
 ) -> None:
     """Tell the *running resident* brr refused/dropped a directive, or FYI.
 
@@ -6481,6 +6510,14 @@ def _record_outbox_notice(
     Notices land in the run's own outbox dir and are surfaced in
     ``portal-state.json`` (``notices``), which residents re-read at plan
     boundaries and before closeout. Control file, never delivered.
+
+    *source_file*, when given, is the staged directive's own filename
+    (``fpath.name``) — the identity a reader can join on instead of the
+    text-substring heuristic ``do.find_matching_notice`` otherwise has to
+    fall back to (the correlation gap ``do.py``'s module docstring names).
+    Threaded today only from the ``cut:`` branch's own call sites; every
+    other verb's notices carry no ``source_file`` and keep matching on
+    text, unchanged.
     """
     if kind not in _NOTICE_KINDS:
         raise ValueError(f"_record_outbox_notice: invalid kind {kind!r}")
@@ -6491,15 +6528,15 @@ def _record_outbox_notice(
         return
     try:
         outbox_dir.mkdir(parents=True, exist_ok=True)
-        line = json.dumps(
-            {
-                "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "text": text,
-                "kind": kind,
-                "lifetime": lifetime,
-            },
-            ensure_ascii=False,
-        )
+        record = {
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "text": text,
+            "kind": kind,
+            "lifetime": lifetime,
+        }
+        if source_file:
+            record["source_file"] = source_file
+        line = json.dumps(record, ensure_ascii=False)
         with (outbox_dir / NOTICES_FILE).open("a", encoding="utf-8") as fh:
             fh.write(line + "\n")
     except OSError:
@@ -7375,6 +7412,106 @@ def _short_event_summary(event: dict, *, limit: int = 80) -> str:
     return text if len(text) <= limit else text[: limit - 3].rstrip() + "..."
 
 
+def _cut_mismatches(
+    task: Run,
+    declaration: cut_verb.CutDeclaration,
+    *,
+    pending_events: list[dict[str, Any]],
+    repo_root: Path | None,
+    outbox_dir: Path | None,
+) -> list[str]:
+    """Cross-reference a ``cut:`` declaration against what the daemon itself
+    attests. Returns named diff strings, empty when clean
+    (``design-the-bolt.md`` §What the daemon validates).
+
+    Three checks — the ones this build step scoped. The design's own table
+    lists five; SCM posture and the verified-delivery-lane row are not
+    checked here: the SCM facet is already visible to the resident on every
+    boundary without needing a cut-time guard, and the delivery-lane check
+    is a hard dependency on #1205's fresh-send primitive, which does not
+    exist yet (named in the design doc's own "Edges" section).
+
+    - **asks** vs pending events: every event :func:`_pending_events_for_agent`
+      still shows this run must have a disposition row; a row claiming
+      ``answered`` for an event that is *still* pending is itself a
+      mismatch (the daemon's own state disagrees with the claim). Rows for
+      events no longer pending — replied, noted, folded elsewhere — pass
+      regardless of what they claim, because the event is provably closed
+      either way.
+    - **produce**: ``relics.collect`` (git + ``.relics.jsonl`` + auto-derived
+      commits/branch/PR/kb, exactly what the live ``produce`` facet
+      computes) — ``none`` declared while it is non-empty, or ``attested``
+      declared while it is empty, are both named. Skipped entirely when
+      *repo_root* is unavailable (an ad-hoc caller, a test with no
+      checkout) — best-effort, like every other relics reader.
+    - **owed**: :func:`promises.blueprint` joined against the same relics
+      collection's counts — an outstanding, labelled promise with no
+      carried row naming it (case-insensitive substring match on ``ref``)
+      is named; an outstanding, label-less promise (a bare
+      ``brnrd promise pr --count 2``) requires only that at least one
+      carried row exists, since there is nothing to name it against.
+    """
+    mismatches: list[str] = []
+
+    # ── asks vs pending events ──────────────────────────────────────
+    declared_by_ref: dict[str, cut_verb.AskDisposition] = {}
+    for row in declaration.asks:
+        declared_by_ref.setdefault(row.event, row)
+        tail = _short_id_tail(row.event)
+        if tail:
+            declared_by_ref.setdefault(tail, row)
+
+    for ev in pending_events:
+        eid = str(ev.get("id") or "")
+        if not eid:
+            continue
+        tail = eid.rsplit("-", 1)[-1]
+        row = declared_by_ref.get(eid) or declared_by_ref.get(tail)
+        short = hooks_mod._short_event_id(eid)
+        if row is None:
+            mismatches.append(f"{short} undispositioned")
+            continue
+        if row.disposition == "answered":
+            mismatches.append(f"{short} declared answered but is still pending")
+
+    # ── produce, and the shipped counts owed needs too ──────────────
+    relics_list: list[dict[str, Any]] | None = None
+    if repo_root is not None:
+        live_branch, live_seed = relics.collection_scope(task.meta, Path(repo_root))
+        commit_run_id = task.id if not task.meta.get("branch_name") else None
+        relics_list = relics.collect(
+            Path(repo_root), branch=live_branch, seed_ref=live_seed,
+            outbox_dir=outbox_dir, commit_run_id=commit_run_id,
+        )
+        if declaration.produce == "none" and relics_list:
+            counts = relics.counts_by_kind(relics_list)
+            phrase = ", ".join(f"{v} {k}" for k, v in sorted(counts.items()))
+            mismatches.append(f"produce: none declared but {phrase} exist")
+        elif declaration.produce == "attested" and not relics_list:
+            mismatches.append(
+                "produce: attested declared but the manifest is empty and "
+                "nothing auto-derived"
+            )
+
+    # ── owed ──────────────────────────────────────────────────────────
+    shipped = relics.counts_by_kind(relics_list) if relics_list is not None else {}
+    plan = promises.blueprint(promises.read(outbox_dir), shipped)
+    if plan.owed:
+        declared_refs = [row.ref.strip().lower() for row in declaration.owed if row.ref]
+        for what, count in sorted(plan.owed.items()):
+            labels = plan.labels.get(what) or []
+            if not labels:
+                if not declaration.owed:
+                    mismatches.append(f"owed {count} {what}(s) with no carried row")
+                continue
+            for label in labels:
+                norm = label.strip().lower()
+                if not any(norm in ref or ref in norm for ref in declared_refs):
+                    mismatches.append(f"owed: {label!r} has no carried row naming it")
+
+    return mismatches
+
+
 def _drain_outbox(
     emit: _WorkerEmit,
     task: Run,
@@ -7659,6 +7796,103 @@ def _drain_outbox(
             )
             _retire_outbox_staging(fpath)
             continue
+        if "cut" in fm:
+            # The bolt (kb/design-the-bolt.md): a run's completion,
+            # declared by the resident and checked against what the daemon
+            # itself attests — the positive artifact the closeout guard's
+            # negative machinery never had. ``cut_verb`` is pure parse/
+            # validate; this branch owns the cross-reference against
+            # pending events / relics / the blueprint, and the
+            # cap-3-then-accept-annotated bounce ladder the maintainer
+            # signed (design doc, forks 1/3/4). The daemon acts on nothing
+            # in ``asks`` itself — dispositions are recorded intent;
+            # ``note:``/``event:`` remain the only verbs that actually
+            # retire or reply to an event.
+            declaration, parse_error = cut_verb.parse_cut(fm)
+            if parse_error:
+                _record_outbox_notice(
+                    outbox_dir, f"cut dropped: {parse_error}",
+                    kind="dropped", lifetime="run", source_file=fpath.name,
+                )
+                _retire_outbox_staging(fpath)
+                continue
+            pending_events = (
+                _pending_events_for_agent(
+                    inbox_dir, event_id,
+                    strand=(
+                        _is_strand(task.meta) if hasattr(task, "meta") else False
+                    ),
+                    account_context=account_context,
+                    repo_label=(
+                        task.meta.get("repo_label")
+                        if hasattr(task, "meta") else None
+                    ),
+                    observer_run_id=task.id,
+                )
+                if inbox_dir is not None else []
+            )
+            mismatches = _cut_mismatches(
+                task, declaration,
+                pending_events=pending_events,
+                repo_root=repo_root,
+                outbox_dir=outbox_dir,
+            )
+            if mismatches:
+                bounces_so_far = int(
+                    (task.meta.get("cut_bounces") or 0)
+                    if hasattr(task, "meta") else 0
+                )
+                if bounces_so_far + 1 < _CUT_BOUNCE_CAP:
+                    if hasattr(task, "meta"):
+                        task.meta["cut_bounces"] = bounces_so_far + 1
+                    _record_outbox_notice(
+                        outbox_dir,
+                        "cut bounced: " + " · ".join(mismatches),
+                        kind="refused", lifetime="run", source_file=fpath.name,
+                    )
+                    _retire_outbox_staging(fpath)
+                    continue
+                # Cap reached: accept anyway rather than hold the run
+                # hostage — a guard may only assert what an artifact
+                # proves, and remedy severity matches signal confidence.
+                if hasattr(task, "meta"):
+                    task.meta["cut_bounces"] = bounces_so_far + 1
+            annotated = len(mismatches)
+            accepted_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            if hasattr(task, "meta"):
+                task.meta["bolt"] = {
+                    "accepted_at": accepted_at,
+                    "annotated": annotated,
+                    "spend_declared": declaration.spend,
+                }
+            if stats is not None:
+                stats["cut"] = stats.get("cut", 0) + 1
+            emit(
+                "cut_accepted",
+                run_id=task.id,
+                event_id=event_id,
+                annotated=annotated,
+            )
+            if annotated:
+                # Machine-spoken, never the resident's voice (the design's
+                # own rule) — a trailing block the daemon appends, never
+                # folded into the woven body it did not write.
+                plural = "s" if annotated != 1 else ""
+                body = (
+                    (body.rstrip("\n") + "\n\n" if body.strip() else "")
+                    + "---\n"
+                    + f"daemon: {annotated} check{plural} unresolved — "
+                    + " · ".join(mismatches)
+                )
+            # Deliver on the current event through the existing `event:`
+            # lane — the verified lane until #1205's fresh-send primitive
+            # exists (design doc §The porcelain). Falling through (no
+            # `continue`) reuses the general reply block below verbatim —
+            # its cross-inbox/redirect/stats machinery, unduplicated.
+            # Force-address the current event regardless of what the
+            # declaration file happened to also carry.
+            fm.pop("event", None)
+            fm.pop("gate", None)
         gate = str(fm.get("gate") or "").strip()
         if gate:
             # Gate-addressed: an agent-initiated message to a destination
@@ -10778,6 +11012,14 @@ def _persist_run_state_doc(
     mood = run_ledger.read_run_mood_control(outbox_dir)
     if mood:
         lines.append(f"mood: {mood}")
+    # The bolt (design-the-bolt.md): the ledger's forward success signal —
+    # "accepted" for a clean `cut:`, "annotated" when the daemon's own
+    # dissent rides the delivered body. Absent when this run was never cut,
+    # same discipline as ``mood`` above.
+    bolt_meta = task.meta.get("bolt")
+    if isinstance(bolt_meta, dict) and bolt_meta.get("accepted_at"):
+        bolt_label = "annotated" if bolt_meta.get("annotated") else "accepted"
+        lines.append(f"bolt: {bolt_label} {bolt_meta['accepted_at']}")
     # The body used to restate status/stage/repo/source/event/runner as a
     # bullet list — every fact a verbatim copy of the frontmatter one screen
     # up, and the node renderer showed both (maintainer, 2026-07-19: the ask
