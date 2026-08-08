@@ -377,7 +377,7 @@ def install(
     no_start: bool = False,
     prompt_linger: bool = True,
     assume_yes_linger: bool = False,
-) -> None:
+) -> int:
     if not supported():
         raise SystemExit("[brnrd] daemon install on this platform is not implemented yet")
 
@@ -388,15 +388,23 @@ def install(
 
     _run(["systemctl", "--user", "daemon-reload"])
     _run(["systemctl", "--user", "enable", SERVICE_UNIT])
+    alive = True
     if not no_start:
         _run(["systemctl", "--user", "start", SERVICE_UNIT])
-        verify_started()
+        # `systemctl start` on a Type=simple unit returns the moment the
+        # process forks, not once it has survived — `verify_started`'s own
+        # `is-active` probe a beat later already prints the honest
+        # crash-looked-vs-alive message; propagate it as the exit code too,
+        # the same "never claim what the kickstart call itself can't prove"
+        # fix `daemon_install.install()` needed on macOS (issue #1238).
+        alive = verify_started()
 
     brnrd = brnrd_cmd()
     print(
         f"[brnrd] next: `{brnrd} daemon status`, `{brnrd} daemon logs`, "
         f"`{brnrd} daemon uninstall`"
     )
+    return 0 if alive else 1
 
 
 def uninstall(
