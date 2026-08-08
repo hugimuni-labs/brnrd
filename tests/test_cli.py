@@ -75,6 +75,26 @@ def test_docs_unknown_topic_errors(capsys):
     assert main(["docs", "does-not-exist"]) == 1
 
 
+def test_legend_lists_every_bar_segment_key(capsys):
+    """One source of truth: every `BAR_SEGMENTS` key must show up in the
+    legend's output, or the command has drifted from what the bar actually
+    renders."""
+    from brr import hooks
+
+    assert main(["legend"]) == 0
+    out = capsys.readouterr().out
+    for segment in hooks.BAR_SEGMENTS:
+        assert segment.key in out, segment.key
+    # The hand-declared row this vocabulary cannot carry itself.
+    assert "pending_unknown" in out
+
+
+def test_legend_is_hidden_but_still_parses():
+    from brr.cli import HIDDEN_COMMANDS
+
+    assert "legend" in HIDDEN_COMMANDS
+
+
 # ── brnrd relic issue (#686) ─────────────────────────────────────────────────
 #
 # The front door onto `.relics.jsonl`. Issue produce is the one relic kind
