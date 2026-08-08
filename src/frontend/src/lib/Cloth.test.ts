@@ -13,7 +13,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 // the away lane for unacked bolts, rendered between the head row and the
 // lens rail. Same compile-server-side dance as WarpBand.test.ts — the real
 // Cloth compiled in, its Svelte children (MoodChip, RunNodeInline,
-// Crossing) stubbed, since this harness has no bundler to resolve them.
+// Crossing, BoltCompletionCard) stubbed, since this harness has no bundler
+// to resolve them.
 
 const CLOTH_GEN = '.cloth.cloth.generated.mjs';
 const generatedFiles = [CLOTH_GEN].map((name) => join(here, name));
@@ -28,6 +29,10 @@ function compileCloth(): void {
 			'const RunNodeInline = () => {};'
 		)
 		.replace(/import\s+Crossing\s+from\s*'\.\/Crossing\.svelte';/, 'const Crossing = () => {};')
+		.replace(
+			/import\s+BoltCompletionCard\s+from\s*'\.\/BoltCompletionCard\.svelte';/,
+			'const BoltCompletionCard = () => {};'
+		)
 		.replace(/'(\.\/[A-Za-z0-9_-]+)'/g, "'$1.ts'");
 	writeFileSync(join(here, CLOTH_GEN), runnable);
 }
@@ -64,6 +69,11 @@ function bolt(overrides: Partial<BoltRow> = {}): BoltRow {
 		repoLabel: 'Gurio/brr',
 		endedAt: Date.parse('2026-08-07T22:00:00Z'),
 		relics: [],
+		wallClockSeconds: null,
+		tokensInput: null,
+		tokensOutput: null,
+		usdSubscriptionAttributed: null,
+		usdCreditsEquivalent: null,
 		...overrides
 	};
 }
