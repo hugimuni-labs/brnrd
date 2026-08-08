@@ -60,6 +60,7 @@ accepted the directive", not "the gate has sent it yet".
 from __future__ import annotations
 
 import json
+import math
 import time
 from pathlib import Path
 from typing import Any
@@ -76,6 +77,32 @@ DEFAULT_TIMEOUT_SECONDS = 30.0
 #: How often to re-check the staged file / re-read portal-state.json while
 #: waiting. Cheap: both are local filesystem reads.
 POLL_INTERVAL_SECONDS = 0.5
+
+#: Once the staged file is observed gone, how much longer (wall-clock, in
+#: production) to keep re-reading `portal-state.json` for a matching notice
+#: before trusting a notice-less read as a clean accept (#1219).
+#:
+#: `daemon.py`'s drain does not retire the file and rewrite
+#: `portal-state.json` as one atomic act: `_emit_flush`/`_emit_heartbeat`
+#: call `_drain_outbox` first (which both deletes/renames the staged file
+#: *and* appends any refusal notice to `.notices.jsonl`, in that order —
+#: see `_retire_outbox_staging` / `_record_outbox_notice`), then run several
+#: more steps with real I/O (`_drain_agent_card`, `_drain_live_menu`,
+#: `_emit_mirror_cards`, `_write_live_inbox`) before `_write_live_portal_state`
+#: finally re-reads `.notices.jsonl` and rewrites `portal-state.json` for
+#: this tick. A poll from `await_verdict` landing in that window sees the
+#: file already gone but the notice not yet reflected — the exact hole
+#: #1219 measured live (three grammar-refused `cut:` directives, each
+#: reported `accepted`). Sized the same way `DEFAULT_TIMEOUT_SECONDS`
+#: already is: comfortably longer than one heartbeat tick, with margin.
+NOTICE_GRACE_SECONDS = 12.0
+
+#: Same race, a different facet: after `await_verdict` returns OK for a
+#: `cut:`, `cmd_cut` still has to see `task.meta["bolt"]` (set inside the
+#: same `_drain_outbox` accept branch) land in `portal-state.json` — and
+#: that's the same delayed `_write_live_portal_state` rewrite
+#: `NOTICE_GRACE_SECONDS` already accounts for (#1221).
+BOLT_GRACE_SECONDS = 12.0
 
 #: Outcomes a per-verb wait can resolve to.
 OK = "ok"
@@ -326,6 +353,21 @@ def find_matching_notice(
     return None
 
 
+def _grace_poll_count(grace_seconds: float, poll_seconds: float) -> int:
+    """How many extra poll iterations *grace_seconds* is worth at *poll_seconds*
+    cadence — a count, not a `clock()`-gated deadline.
+
+    Driving the grace window by iteration count (bounded, as a *second*
+    line of defence, by the caller's own overall deadline via `clock()`)
+    rather than purely by wall-clock time means a test that fakes `sleep`
+    to a no-op — the pattern every test in this module's test file already
+    uses — finishes in a handful of fast iterations instead of actually
+    blocking for `grace_seconds` of real time. Production, where `sleep`
+    really sleeps, gets the intended real-time grace window either way.
+    """
+    return max(1, math.ceil(grace_seconds / max(poll_seconds, 1e-6)))
+
+
 # ── The wait ─────────────────────────────────────────────────────────
 
 
@@ -344,10 +386,24 @@ def await_verdict(
     """Poll until *staged_path* is consumed, or *timeout_seconds* elapses.
 
     Returns ``(status, detail)`` — ``status`` is one of :data:`OK` (consumed,
-    no matching fresh notice), :data:`FAILED` (consumed, and a fresh notice
-    names this directive — *detail* is that notice's `kind: text`), or
-    :data:`QUEUED` (still sitting in the outbox when the timeout hit — never
-    hangs forever, per the task's own "30s, flag-tunable, never hang" rule).
+    no matching fresh notice — including after the grace window below),
+    :data:`FAILED` (consumed, and a fresh notice names this directive —
+    *detail* is that notice's `kind: text`), or :data:`QUEUED` (still
+    sitting in the outbox when the timeout hit — never hangs forever, per
+    the task's own "30s, flag-tunable, never hang" rule).
+
+    **The file-gone-but-notice-not-yet-visible race (#1219).** The instant
+    *staged_path* is observed gone is not proof the daemon's own
+    `portal-state.json` rewrite for that same tick has landed yet — see
+    :data:`NOTICE_GRACE_SECONDS` for the exact call sequence in
+    `daemon.py` that opens this window. So the first notice-less read
+    after the file disappears is not trusted outright: this keeps
+    re-polling `portal-state.json` for up to :data:`NOTICE_GRACE_SECONDS`
+    (as an iteration count at *poll_seconds* cadence, never past *this
+    call's own* `timeout_seconds` deadline — no unbounded wait stacked on
+    top of the existing contract) before concluding :data:`OK`. A fresh
+    notice found at any point during the grace window still returns
+    :data:`FAILED` immediately, same as before.
 
     *sleep*/*clock* default to ``None`` rather than binding ``time.sleep`` /
     ``time.monotonic`` as early-evaluated default values — a default
@@ -367,6 +423,7 @@ def await_verdict(
     sleep = sleep or time.sleep
     clock = clock or time.monotonic
     deadline = clock() + max(0.0, timeout_seconds)
+    grace_polls_left: int | None = None
     while True:
         if not staged_path.exists():
             payload = read_portal_state(outbox_dir)
@@ -375,9 +432,58 @@ def await_verdict(
             if hit is not None:
                 kind = hit.get("kind") or "refused"
                 return FAILED, f"{kind}: {hit.get('text')}"
-            return OK, ""
+            if grace_polls_left is None:
+                grace_polls_left = _grace_poll_count(NOTICE_GRACE_SECONDS, poll_seconds)
+            if grace_polls_left <= 0 or clock() >= deadline:
+                return OK, ""
+            grace_polls_left -= 1
+            sleep(min(poll_seconds, max(0.0, deadline - clock())))
+            continue
         if clock() >= deadline:
             return QUEUED, "still queued"
+        sleep(min(poll_seconds, max(0.0, deadline - clock())))
+
+
+def await_bolt_facet(
+    outbox_dir: Path,
+    *,
+    timeout_seconds: float = BOLT_GRACE_SECONDS,
+    poll_seconds: float = POLL_INTERVAL_SECONDS,
+    sleep=None,
+    clock=None,
+) -> dict[str, Any] | None:
+    """Poll `portal-state.json` for the `bolt` facet; ``None`` if it never lands.
+
+    Call this only *after* :func:`await_verdict` has already returned
+    :data:`OK` for a `cut:` directive — an OK drain verdict means the
+    directive was consumed with no refusal notice naming it, which is not
+    the same fact as "the accept branch's own state reached this run's
+    `portal-state.json`". `daemon.py`'s `_drain_outbox` sets
+    `task.meta["bolt"]` synchronously when it accepts a `cut:`, but that
+    dict only reaches `portal-state.json` on the same later
+    `_write_live_portal_state` call `NOTICE_GRACE_SECONDS` already accounts
+    for — same race, a different facet (#1221). `cmd_cut`'s accept path
+    uses this instead of a single `read_portal_state` call so a bolt the
+    daemon genuinely accepted isn't reported as absent just because this
+    poll landed before that write.
+
+    Bounded exactly like :func:`await_verdict`'s grace window — an
+    iteration count at *poll_seconds* cadence, capped by *timeout_seconds*
+    via `clock()` as a second line of defence — so a caller with `sleep`
+    faked to a no-op (this module's whole test file) resolves in a handful
+    of fast iterations rather than *timeout_seconds* of real waiting.
+    """
+    sleep = sleep or time.sleep
+    clock = clock or time.monotonic
+    deadline = clock() + max(0.0, timeout_seconds)
+    polls_left = _grace_poll_count(timeout_seconds, poll_seconds)
+    while True:
+        bolt = read_portal_state(outbox_dir).get("bolt")
+        if isinstance(bolt, dict):
+            return bolt
+        if polls_left <= 0 or clock() >= deadline:
+            return None
+        polls_left -= 1
         sleep(min(poll_seconds, max(0.0, deadline - clock())))
 
 
