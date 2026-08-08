@@ -419,3 +419,73 @@ test('nodeDigest carries the frame mood as a bare handle (#566)', () => {
 	// A run that set no mood reports none — and '' renders nothing at all.
 	assert.equal(node('status: done\n').mood, '');
 });
+
+test('bolt renders as a named frame row instead of falling to the catch-all', () => {
+	// A named FRAME_FIELDS row and the catch-all can render an identical
+	// label/value pair for a plain key like `bolt` — the distinguishing
+	// behaviour is *position*: a named row sits in FRAME_FIELDS's own order,
+	// ahead of `started_at`, while the catch-all always appends after every
+	// named field, in whatever order the raw metadata iterates. `some_key`
+	// here is deliberately unknown, so it can only ever land via the
+	// catch-all — bolt must not land after it.
+	const fields = frameFields({
+		status: 'done',
+		some_key: 'unrecognised',
+		bolt: 'accepted 2026-08-07T22:00:00Z',
+		started_at: '2026-08-07T21:00:00Z'
+	});
+	const labels = fields.map((field) => field.label);
+	assert.deepEqual(labels, ['status', 'bolt', 'started', 'some_key']);
+});
+
+test('nodeDigest carries the frame bolt state as a bare handle, the mood precedent', () => {
+	const node = (frontmatter: string) =>
+		nodeDigest(
+			runNodeFromSurface(
+				surface([
+					{
+						path: 'runs/Gurio__brr/run-1/state.md',
+						markdown: `---\n${frontmatter}---\n`,
+						layer: 'runs'
+					}
+				]),
+				'Gurio__brr',
+				'run-1'
+			)
+		);
+
+	assert.equal(
+		node('status: done\nbolt: annotated 2026-08-07T22:00:00Z\n').bolt,
+		'annotated 2026-08-07T22:00:00Z'
+	);
+	// A run that hasn't been cut, or predates the bolt, reports none.
+	assert.equal(node('status: done\n').bolt, '');
+});
+
+test("the body's ## Bolt section heads the node, ahead of ## Now", () => {
+	const node = (body: string) =>
+		nodeDigest(
+			runNodeFromSurface(
+				surface([
+					{
+						path: 'runs/Gurio__brr/run-1/state.md',
+						markdown: '---\nstatus: done\n---\n',
+						layer: 'runs'
+					},
+					{ path: 'runs/Gurio__brr/run-1/body.md', markdown: body, layer: 'runs' }
+				]),
+				'Gurio__brr',
+				'run-1'
+			)
+		);
+
+	const withBolt = node('## Bolt\n\nShipped the thing.\n\n## Now\n\nwrapping up');
+	assert.equal(withBolt.boltLead, 'Shipped the thing.');
+	assert.equal(withBolt.now, 'wrapping up');
+
+	// A card that never wrote a ## Bolt section carries none — no invented
+	// lead, and the ordinary Now projection is unaffected.
+	const withoutBolt = node('## Now\n\nstill going');
+	assert.equal(withoutBolt.boltLead, '');
+	assert.equal(withoutBolt.now, 'still going');
+});
