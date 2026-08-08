@@ -3209,12 +3209,23 @@ def cmd_cut(args):
         timeout_seconds=timeout, source_file=staged.name,
     )
     if status == do_mod.OK:
+        # An OK drain verdict only means the directive was consumed with no
+        # refusal notice naming it — it is not proof the accept branch's own
+        # `task.meta["bolt"]` write has reached this run's portal-state.json
+        # yet (the same intra-tick race `await_verdict` already grace-polls
+        # for, applied to a different facet — #1221). Confirm the bolt
+        # facet actually landed before ever printing "accepted".
+        bolt_facet = do_mod.await_bolt_facet(outbox_dir)
+        if bolt_facet is None:
+            print(
+                "[brnrd cut] ? unconfirmed — no bolt facet after "
+                f"{int(do_mod.BOLT_GRACE_SECONDS)}s; check notices",
+                file=sys.stderr,
+            )
+            return 1
         # An annotated accept (cap-3 forced) exits 0 like a clean one — the
         # bolt stands either way — but the daemon's dissent must be visible
         # in the same call, not only in the delivered body.
-        bolt_facet = (
-            do_mod.read_portal_state(outbox_dir).get("bolt") or {}
-        )
         annotated = int(bolt_facet.get("annotated") or 0)
         # Name where the bolt lands (his 2026-08-08 ask: the interface must
         # explain itself) — a resident reading "accepted" otherwise has no
