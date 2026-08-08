@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import secrets
+import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -69,11 +70,15 @@ def _wa_audit(trace: str, stage: str, detail: str = "") -> None:
     only ``POST ... 200`` and every decision inside that response disappears.
     """
     suffix = f" {detail}" if detail else ""
-    # Operational audit lines use stdout in this module (`_audit_reject`
-    # below does too).  A module logger's INFO records do not survive
-    # uvicorn's production logging configuration, which makes a green test
-    # and an invisible live trace the same failure we are instrumenting.
-    print(f"[brnrd] whatsapp ingress: trace={trace} stage={stage}{suffix}")
+    # Uvicorn's production config filters this module's INFO logger, and the
+    # container buffers stdout long past the useful diagnostic window.  Its
+    # visible access log rides stderr, so use that same stream and flush at
+    # the decision boundary.
+    print(
+        f"[brnrd] whatsapp ingress: trace={trace} stage={stage}{suffix}",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def _reply(settings, parsed: tg.ParsedMessage, text: str) -> None:
