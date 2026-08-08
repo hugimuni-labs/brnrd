@@ -421,6 +421,25 @@ class EnvironmentOptionIn(BaseModel):
     reason: str | None = Field(default=None, max_length=255)
 
 
+class RunnerStickyIn(BaseModel):
+    """#932's conversation-sticky, mirrored so the rack can render it.
+
+    A claimed tap binds its profile to the claiming conversation for a TTL
+    (daemon-owned, `src/brr/wake_request.py`). Until this rode the runners
+    lane the record decided every wake in the bound thread while the rack
+    kept showing the config pin as `selected` — the 2026-08-08 "the core tap
+    is lying" defect. ``expires_at`` is computed daemon-side from the same
+    TTL dispatch honours, so the dashboard's timer and dispatch agree.
+    """
+
+    profile: str = Field(min_length=1, max_length=64)
+    claimed_at: datetime | None = None
+    expires_at: datetime | None = None
+    correspondent_key: str | None = Field(default=None, max_length=255)
+    conversation_key: str | None = Field(default=None, max_length=255)
+    request_id: str | None = Field(default=None, max_length=64)
+
+
 class RunnersReport(BaseModel):
     """Runner-catalog snapshot a daemon pushes for itself (#328 spool rack).
 
@@ -434,6 +453,8 @@ class RunnersReport(BaseModel):
     default: str | None = Field(default=None, max_length=64)
     environment_default: str | None = Field(default=None, max_length=32)
     environments: list[EnvironmentOptionIn] = Field(default_factory=list)
+    # #932: the live conversation-sticky, or None when none is in force.
+    sticky: RunnerStickyIn | None = None
     # No `consumed_wake_request_ids` here any more (#733). Retiring a tap was
     # a piggybacked *ack* — the daemon deciding locally that a row was spent
     # and telling the server one publish tick later. The claim endpoint
@@ -507,6 +528,10 @@ class RunnersOut(BaseModel):
     # Piggyback channel: the account's pending wake request, if any, rides
     # back on the daemon's own catalog publish tick — no extra polling loop.
     pending_wake_request: RunnerWakeRequestOut | None = None
+    # #932 release ask piggyback: the dashboard asked, at this stamp, for
+    # the conversation-sticky to be dropped. The daemon honours it only
+    # against a record claimed at or before the stamp — a newer tap wins.
+    sticky_release_at: datetime | None = None
 
 
 # The visible mark a truncated display value ends with (#685 ask 2). Mirrors
@@ -968,6 +993,27 @@ class RunLedgerRowIn(BaseModel):
     usd_subscription_attributed: float | None = None
     usd_credits_equivalent: float | None = None
     estimate_vs_actual: str | None = None
+    # Which Runner substitution happened at dispatch and why — the rack's
+    # substitution display reads this (`runLedger.ts`); a row without it
+    # renders as "dispatched as asked" even when it wasn't.
+    substitution_reason: str | None = None
+    # #743's five-value channel attribution ("gate-sole" / "dispatch-edge" /
+    # …) — debug detail, mirrored so the receipt a human drills into agrees
+    # with the local ledger.
+    terminal_route: str | None = None
+    # The bolt (design-the-bolt.md, fork 4 signed): "accepted" / "annotated"
+    # / absent. The dashboard's summons strip and cloth-head lane key on
+    # this field — a model that drops it renders every cut run as boltless
+    # (the 2026-08-08 defect: writer and reader both shipped, this schema
+    # silently stripped the field at the PUT).
+    bolt: str | None = None
+
+    # Deliberately NOT mirrored from the local row (tests/test_run_ledger_
+    # mirror_parity.py enforces that this omission stays a decision, not a
+    # hole):
+    #   reply_archive — a host-local filesystem path; no cloud reader, and
+    #   mirroring host paths into the dashboard store leaks layout for
+    #   nothing.
 
 
 class RunLedgerReport(BaseModel):

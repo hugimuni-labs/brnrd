@@ -28,6 +28,7 @@
 		RunnersAuthError,
 		cancelWake,
 		fetchRunners,
+		releaseSticky,
 		requestWake,
 		type RunnersResponse
 	} from '$lib/runners';
@@ -190,6 +191,25 @@
 					: e instanceof Error
 						? e.message
 						: 'wake request failed';
+		}
+	}
+
+	// #932's exit tap. The daemon owns the record and honours the ask on its
+	// next publish tick — so the note says "releasing", and the chip clears
+	// when the mirror catches up rather than pretending it already did.
+	async function releaseStickyRunner() {
+		try {
+			await releaseSticky();
+			runnersError = null;
+			runnersNote = 'sticky releasing — this thread goes back to the default within a publish tick';
+		} catch (e) {
+			runnersNote = null;
+			runnersError =
+				e instanceof RunnersAuthError
+					? 'session expired — sign in again, then re-tap'
+					: e instanceof Error
+						? e.message
+						: 'sticky release failed';
 		}
 	}
 
@@ -1123,6 +1143,7 @@
 				{runnersError}
 				{runnersNote}
 				onTap={tapWakeRunner}
+				onReleaseSticky={releaseStickyRunner}
 				ledgerRows={runLedgerRows}
 				{scheduledWakes}
 				{now}
