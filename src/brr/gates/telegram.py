@@ -23,6 +23,7 @@ from typing import Any
 import requests
 
 from .. import conversations, menus, protocol, run_progress, trust
+from ..channels import telegram as transport
 from ..run import Run, run_manifest_path
 from . import delivery, runtime
 
@@ -32,18 +33,7 @@ _POLL_TIMEOUT = 30
 _DELIVERY_INTERVAL = 1.0
 
 
-def _sanitize_meta_str(value: str) -> str:
-    """Flatten newlines in a sender-controlled string before it enters frontmatter.
-
-    Telegram display names and usernames are sender-controlled and may
-    contain embedded newlines that would otherwise forge extra frontmatter
-    fields via ``create_event``'s meta injection path (#413 §7 S3).
-    Replace ``\\n`` and ``\\r`` with a space.  This must happen at the
-    gate, before the seam call, so ``protocol.create_event``'s ValueError
-    guard is never reached from live traffic — a raise inside the poll
-    loop stalls offset advancement and creates an ingest DoS.
-    """
-    return value.replace("\r", " ").replace("\n", " ")
+_sanitize_meta_str = transport.sanitize_meta_str
 
 # Telegram long-polling can hold one HTTP request open for up to
 # _POLL_TIMEOUT seconds. Keep it on a separate session from outbound
@@ -125,21 +115,18 @@ def _send_message(
     reply_to_message_id: int | None = None,
     reply_markup: dict[str, Any] | None = None,
 ) -> dict:
-    params: dict = {"chat_id": chat_id, "text": text}
-    if topic_id:
-        params["message_thread_id"] = topic_id
-    if parse_mode:
-        params["parse_mode"] = parse_mode
-    if reply_to_message_id:
-        # ``allow_sending_without_reply`` keeps delivery resilient when
-        # the originating message has been deleted by the user before
-        # the runner finished — Telegram would otherwise return a 400
-        # and the response would be dropped.
-        params["reply_to_message_id"] = reply_to_message_id
-        params["allow_sending_without_reply"] = True
-    if reply_markup is not None:
-        params["reply_markup"] = reply_markup
-    return _api_call(token, "sendMessage", params)
+    results = transport.send_message(
+        lambda method, params, timeout: _api_call(token, method, params),
+        chat_id,
+        text,
+        policy=transport.MessagePolicy(limit=None),
+        topic_id=topic_id,
+        parse_mode=parse_mode,
+        reply_to_message_id=reply_to_message_id,
+        reply_markup=reply_markup,
+        timeout=90,
+    )
+    return results[0]
 
 
 def _edit_message(
@@ -151,16 +138,15 @@ def _edit_message(
     parse_mode: str | None = None,
     reply_markup: dict[str, Any] | None = None,
 ) -> dict:
-    params: dict = {
-        "chat_id": chat_id,
-        "message_id": message_id,
-        "text": text,
-    }
-    if parse_mode:
-        params["parse_mode"] = parse_mode
-    if reply_markup is not None:
-        params["reply_markup"] = reply_markup
-    return _api_call(token, "editMessageText", params)
+    return transport.edit_message(
+        lambda method, params, timeout: _api_call(token, method, params),
+        chat_id,
+        message_id,
+        text,
+        parse_mode=parse_mode,
+        reply_markup=reply_markup,
+        timeout=90,
+    )
 
 
 def _answer_callback(token: str, callback_id: str, text: str = "") -> None:
@@ -218,20 +204,11 @@ def _pick_image_file_id(msg: dict) -> tuple[str, str] | None:
     Anything else (voice, video, sticker, a non-image document) returns
     ``None``: this is image support, not a general attachment pipeline.
     """
-    photo = msg.get("photo")
-    if isinstance(photo, list) and photo:
-        largest = photo[-1]
-        file_id = largest.get("file_id") if isinstance(largest, dict) else None
-        if file_id:
-            return str(file_id), "photo.jpg"
-    document = msg.get("document")
-    if isinstance(document, dict):
-        mime = str(document.get("mime_type") or "")
-        if mime.startswith("image/"):
-            file_id = document.get("file_id")
-            if file_id:
-                return str(file_id), str(document.get("file_name") or "image")
-    return None
+    attachments = transport.extract_attachments(msg)
+    if not attachments:
+        return None
+    pointer = attachments[0]
+    return str(pointer["file_id"]), str(pointer["filename"])
 
 
 def _download_telegram_file(token: str, file_id: str, dest: Path) -> bool:
@@ -609,11 +586,9 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
         # going silently stale. Two shapes arrive, one per chat:
         # ``migrate_to_chat_id`` on the old chat, ``migrate_from_chat_id``
         # on the new one.
-        migrate_to = msg.get("migrate_to_chat_id")
-        migrate_from = msg.get("migrate_from_chat_id")
-        if migrate_to is not None or migrate_from is not None:
-            old_id = chat_id if migrate_to is not None else migrate_from
-            new_id = migrate_to if migrate_to is not None else chat_id
+        migration = transport.parse_migration(update)
+        if migration is not None:
+            old_id, new_id = (int(value) for value in migration)
             if configured_chat_id is not None and configured_chat_id == old_id:
                 state["chat_id"] = new_id
                 configured_chat_id = new_id
@@ -637,52 +612,30 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
         topic_id = msg.get("message_thread_id")
         if configured_topic_id and topic_id != configured_topic_id:
             continue
-        # A caption rides on a photo/document message where ``text``
-        # never appears; either one is the event body. An image with no
-        # caption at all still becomes an event (empty body, the image
-        # carries the content) — only a message with neither is skipped.
-        text = str(msg.get("text") or msg.get("caption") or "").strip()
-        image = _pick_image_file_id(msg)
-        if not text and not image:
+        parsed = transport.parse_update(update)
+        # The hosted home annotates unsupported media so it can answer it;
+        # the local file protocol only carries downloaded images. Keep that
+        # home policy here while sharing the normalization and qualification.
+        if parsed is None or (not parsed.text and not parsed.attachments):
             continue
 
-        sender = msg.get("from") or {}
-        user = sender.get("first_name", "?")
-        user_id = sender.get("id")
-        # #409 — an anonymous group admin or a channel post carries
-        # ``sender_chat`` instead of a personal identity; even if Telegram
-        # also populated ``from`` with a generic service account, treat it
-        # as unattributable (default-closed) rather than authorizing off
-        # a shared/spoofable id. The sender is always this verified
-        # ``from.id`` — never text parsed from the message, and never a
-        # forwarded message's origin (``forward_from``/``forward_origin``),
-        # which is deliberately never read for identity.
-        if msg.get("sender_chat") is not None:
-            user_id = None
-        username = sender.get("username") or ""
-        message_id = msg.get("message_id")
-        # Telegram's own send-time (`date`, Unix epoch seconds) — captured
-        # separately from the event's ingestion-time id. A burst sent while
-        # the daemon was offline lands in one getUpdates batch with
-        # near-identical ingestion timestamps, which reads as
-        # misfiring/reordering unless something carries the real send time
-        # (2026-07-04 maintainer report, #53 comment 4883341517; dominion
-        # pitfall "Telegram event-id timestamps are ingestion time, not send
-        # time" only shallowly verified this, didn't yet capture the fix).
-        sent_at = msg.get("date")
-
-        sender_tier = _sender_tier(state, user_id)
+        sender_tier = _sender_tier(state, parsed.user_id)
         if sender_tier is None:
             # #409 — default-closed gate audit trail. No reply is sent:
             # telling an unauthorized sender why would let them probe for
             # a valid principal.
-            print(f"[brnrd] telegram authz denied: chat={chat_id} user={user_id}")
+            print(
+                f"[brnrd] telegram authz denied: "
+                f"chat={chat_id} user={parsed.user_id}"
+            )
             continue
 
         attachment_files: list[Path] = []
         image_tmpdir: tempfile.TemporaryDirectory | None = None
-        if image is not None:
-            file_id, suggested_name = image
+        if parsed.attachments:
+            pointer = parsed.attachments[0]
+            file_id = str(pointer["file_id"])
+            suggested_name = str(pointer["filename"])
             image_tmpdir = tempfile.TemporaryDirectory()
             dest = Path(image_tmpdir.name) / suggested_name
             if _download_telegram_file(token, file_id, dest):
@@ -691,18 +644,20 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
         protocol.create_event(
             inbox_dir,
             source="telegram",
-            body=text,
+            body=parsed.text,
             attachment_files=attachment_files or None,
             telegram_chat_id=chat_id,
             telegram_topic_id=topic_id or "",
             # Sanitize sender-controlled strings: display name and username
             # are attacker-reachable and may contain embedded newlines that
             # would forge extra frontmatter fields (#413 §7 S3).
-            telegram_user=_sanitize_meta_str(user),
-            telegram_user_id=user_id if user_id is not None else "",
-            telegram_username=_sanitize_meta_str(username),
-            telegram_message_id=message_id if message_id is not None else "",
-            telegram_sent_at=sent_at if sent_at is not None else "",
+            telegram_user=parsed.user,
+            telegram_user_id=parsed.user_id if parsed.user_id is not None else "",
+            telegram_username=parsed.username,
+            telegram_message_id=(
+                parsed.message_id if parsed.message_id is not None else ""
+            ),
+            telegram_sent_at=parsed.sent_at if parsed.sent_at is not None else "",
             trust_tier=sender_tier,
         )
         if image_tmpdir is not None:
