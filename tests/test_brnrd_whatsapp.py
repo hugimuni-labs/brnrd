@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import re
 import time
 
@@ -181,8 +182,9 @@ def test_webhook_rejects_bad_signature(env):
     assert r.status_code == 403
 
 
-def test_webhook_audit_names_rejection_without_sender_or_body(env, capsys):
+def test_webhook_audit_names_rejection_without_sender_or_body(env, caplog):
     _, client, _ = env
+    caplog.set_level(logging.INFO, logger="uvicorn.error")
     sender = "15551234567"
     body = "private pairing attempt"
     raw = json.dumps(_message(sender, body)).encode("utf-8")
@@ -192,9 +194,7 @@ def test_webhook_audit_names_rejection_without_sender_or_body(env, capsys):
         headers={"Content-Type": "application/json", "X-Hub-Signature-256": "sha256=nope"},
     )
     assert r.status_code == 403
-    captured = capsys.readouterr()
-    audit = captured.out
-    assert captured.err == ""
+    audit = "\n".join(record.getMessage() for record in caplog.records)
     assert "stage=received" in audit
     assert "stage=rejected reason=bad_signature" in audit
     assert sender not in audit
@@ -260,8 +260,9 @@ def test_pair_code_binds_chat_and_confirms(env):
     assert "myrepo" in sends[0]["text"]
 
 
-def test_pairing_audit_joins_decisions_without_sender_or_code(env, capsys):
+def test_pairing_audit_joins_decisions_without_sender_or_code(env, caplog):
     _, client, _ = env
+    caplog.set_level(logging.INFO, logger="uvicorn.error")
     acc = _account(client)
     rid = _repo(client, acc)
     code = _pair_code(client, acc, rid)
@@ -270,9 +271,7 @@ def test_pairing_audit_joins_decisions_without_sender_or_code(env, capsys):
     r = _post(client, _message(sender, code))
 
     assert r.status_code == 200
-    captured = capsys.readouterr()
-    audit = captured.out
-    assert captured.err == ""
+    audit = "\n".join(record.getMessage() for record in caplog.records)
     for stage in ("received", "message_parsed", "pair_attempt", "paired"):
         assert f"stage={stage}" in audit
     assert sender not in audit
