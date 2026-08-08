@@ -2281,12 +2281,21 @@ def cmd_do(args):
 
 
 def cmd_kb(args):
+    from . import account as account_mod
     from . import config as conf
     from . import knowledge
 
     repo_root = _repo_root()
     cfg = conf.load_config(repo_root)
-    checkout = knowledge.ensure_checkout(repo_root, cfg)
+    # Resolve read-only first: `brnrd kb` is a read, never an act that means
+    # to create a home. `create=False` never scaffolds a project/account
+    # home (nor the `.brnrd-kb` checkout below), only reports which one
+    # `resolve_context` would pick and why (#1193) — a read that used to
+    # silently mint an empty project home and then report cleanly on it,
+    # indistinguishable from a genuinely empty, real kb.
+    resolved_ctx = account_mod.resolve_context(repo_root, cfg, create=False)
+    reason = account_mod.resolution_reason(resolved_ctx, repo_root)
+    checkout = knowledge.ensure_checkout(repo_root, cfg, create=False)
 
     if not args.query:
         from . import kb_health
@@ -2300,7 +2309,7 @@ def cmd_kb(args):
         # report about a different directory. Refuse instead.
         if kb_dir is None:
             print("[brnrd kb] no kb resolved for this root — nothing to report")
-            print(f"[brnrd kb] repo root: {repo_root}")
+            print(f"[brnrd kb] repo root: {repo_root} — {reason}")
             print(f"[brnrd kb] checkout: {checkout}")
             return 1
         stats = kb_health.compute_graph_stats(repo_root, kb_dir)
@@ -2309,7 +2318,7 @@ def cmd_kb(args):
         # returning 0 is a silent success — strictly worse than the `exit 2`
         # this command replaced, which at least said something was wrong.
         if not report.strip():
-            print(f"[brnrd kb] kb dir holds no pages: {kb_dir}")
+            print(f"[brnrd kb] kb dir holds no pages: {kb_dir} — {reason}")
             return 1
         # Name the directory that was walked. There are several plausible
         # knowledge roots for one repo — the account-scoped home, a
@@ -2318,15 +2327,16 @@ def cmd_kb(args):
         # from. A wake comparing this report against the page counts in its own
         # kb-health block cannot reconcile the two unless the report says which
         # corpus it walked. One line, and the ambiguity stops being a
-        # twenty-minute investigation.
-        print(f"[brnrd kb] graph for: {kb_dir}")
+        # twenty-minute investigation. The reason (account-linked vs. project
+        # fallback) says *why* that corpus, not just which (#1193).
+        print(f"[brnrd kb] graph for: {kb_dir} — {reason}")
         print(report)
         return 0
 
     hits = knowledge.search(repo_root, args.query, cfg, limit=args.limit)
     if not hits:
         print(f"[brnrd kb] no matches for {args.query!r}")
-        print(f"[brnrd kb] checkout: {checkout}")
+        print(f"[brnrd kb] checkout: {checkout} — {reason}")
         return 1
     for hit in hits:
         rel = hit.path
@@ -2415,6 +2425,7 @@ def cmd_notes(args):
     """
     import json as json_mod
 
+    from . import account as account_mod
     from . import config as conf
     from . import notes, notes_preflight
 
@@ -2423,6 +2434,14 @@ def cmd_notes(args):
     target = args.surface
 
     if target == "check":
+        # Read-only resolution, same contract as `brnrd kb` (#1193):
+        # `create=False` never scaffolds a home, and the reason names
+        # whether the surfaces below are an account-linked home's or a
+        # project-path fallback's — the two render identically otherwise,
+        # and a freshly-would-be-created fallback answering "no findings"
+        # is not the same claim as an account's "no findings".
+        resolved_ctx = account_mod.resolve_context(repo_root, cfg, create=False)
+        reason = account_mod.resolution_reason(resolved_ctx, repo_root)
         findings, scope = notes_preflight.scan_scoped(repo_root, cfg)
         if args.json:
             # The scope rides the JSON too. A consumer reading a bare `[]`
@@ -2434,6 +2453,7 @@ def cmd_notes(args):
                     "registered": scope.registered,
                     "unresolved_roots": list(scope.unresolved_roots),
                 },
+                "resolution": reason,
                 "findings": [
                     {"type": f.type, "target": f.target,
                      "severity": f.severity, "description": f.description}
@@ -2445,7 +2465,7 @@ def cmd_notes(args):
         # surfaces that were actually read, so it always carries how many
         # that was — and it is not clean at all when a root went missing,
         # which `check_roots` has already turned into a finding above.
-        print(f"[brnrd notes] {scope.line()}")
+        print(f"[brnrd notes] {scope.line()} — {reason}")
         if not findings:
             print("[brnrd notes] no findings on the surfaces above")
             return 0
