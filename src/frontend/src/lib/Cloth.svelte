@@ -15,7 +15,7 @@
 		type ClothLine,
 		type ClothTree
 	} from './cloth';
-	import type { BoltRow } from './bolts';
+	import { boltSummonsLabel, type BoltRow } from './bolts';
 	import { LENS_ALL, applyLens, availableLenses, reconcileLens } from './loomLens';
 	import type { RunLedgerRow } from './runLedger';
 	import RunNodeInline from './RunNodeInline.svelte';
@@ -420,7 +420,7 @@
 		>
 			<div class="mb-1.5 flex items-baseline justify-between gap-2">
 				<span class="tracking-[0.14em] text-amber-200 uppercase">
-					⚡ {unackedBolts.length} bolt{unackedBolts.length === 1 ? '' : 's'} waiting
+					⚡ {boltSummonsLabel(unackedBolts.length)}
 				</span>
 				<button
 					type="button"
