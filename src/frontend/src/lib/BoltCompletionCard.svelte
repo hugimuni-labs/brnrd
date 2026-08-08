@@ -85,7 +85,9 @@
 	<!-- 2. Asks ledger — unconditionally absent on the wire, see module note -->
 	<div>
 		<p class="text-[10px] tracking-[0.14em] text-ink-quiet uppercase">asks ledger</p>
-		<p class="mt-0.5 text-ink-mute">declaration not carried — no row persists per-ask disposition</p>
+		<p class="mt-0.5 text-ink-mute">
+			declaration not carried — no row persists per-ask disposition
+		</p>
 	</div>
 
 	<!-- 3. Produce -->
@@ -121,7 +123,9 @@
 	<!-- 4. Owed — unconditionally absent on the wire, see module note -->
 	<div>
 		<p class="text-[10px] tracking-[0.14em] text-ink-quiet uppercase">owed</p>
-		<p class="mt-0.5 text-ink-mute">declaration not carried — no row persists a carried-owed line</p>
+		<p class="mt-0.5 text-ink-mute">
+			declaration not carried — no row persists a carried-owed line
+		</p>
 	</div>
 
 	<!-- 5. Spend — measured stamp only; the resident's declared estimate is
@@ -137,7 +141,9 @@
 					? usdLabel(usdSubscriptionAttributed)
 					: usdLabel(usdCreditsEquivalent)}
 			</p>
-			<p class="mt-0.5 text-ink-mute">declared estimate not carried — the ledger keeps the measured figure only</p>
+			<p class="mt-0.5 text-ink-mute">
+				declared estimate not carried — the ledger keeps the measured figure only
+			</p>
 		{:else}
 			<p class="mt-0.5 text-ink-mute">no measured spend on this row</p>
 		{/if}
