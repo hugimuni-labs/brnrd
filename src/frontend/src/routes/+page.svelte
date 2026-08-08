@@ -94,7 +94,7 @@
 		fetchConfigRequests,
 		type ConfigChangeRequestItem
 	} from '$lib/configRequests';
-	import { railScrollVerdict } from '$lib/controlStrip';
+	import { railScrollVerdict, scrollClockTick, type ScrollClock } from '$lib/collapse';
 	import { machineDockTop, machineDockVerdict, machineTapVerdict } from '$lib/machineDock';
 
 	// Slice 2 (kb/design-dashboard-live-surface.md): the window-track
@@ -460,52 +460,108 @@
 	// nothing while idle, and ignition *reveals* the machine in place instead
 	// of moving sections around the reader.
 
-	// The sticky rail's scroll verdict, with hysteresis (THE BOUNDARY THAT
-	// FLICKERED — the rule and its history live on `railScrollVerdict`).
-	// Condense only once the reader has scrolled past the whole full rail;
-	// un-condense only back near its natural top. A slow touchpad scroll can
-	// sit between the two thresholds for as long as it likes — there is
-	// nothing there to toggle.
+	// The shared scroll/settle clock (2026-08-08, his steer: "the behaviour
+	// of both rails is a bit buggy because they behave differently … I just
+	// think it should behave more uniformly and clearly and like collapse
+	// not immediately but soon after the scroll happens so that the elements
+	// do not congest"). `collapse.ts` `scrollClockTick` owns the timing rule
+	// — hysteresis (THE BOUNDARY THAT FLICKERED), then a settle debounce —
+	// and this one effect is the one JS timer that steps *both* the rail's
+	// and the dock's clock together, every tick, so they can never answer on
+	// two different schedules again (#1169's actual defect).
 	let railSentinel = $state<HTMLElement | null>(null);
-	let railCondensed = $state(false);
+	let railClock = $state<ScrollClock>({ settled: false, pendingAt: null });
+	let dockClock = $state<ScrollClock>({ settled: false, pendingAt: null });
+	let railCondensed = $derived(railClock.settled);
 	// Whether the machine's one line is stuck to the top with the lane it
 	// belongs to left behind at the block's home. Measured off the block's own
 	// sentinel rather than inferred from `railCondensed`: the two boundaries sit
-	// about sixteen pixels apart, and this one decides what the head *says* and
-	// what a tap on it *does*, so it has to be the geometric fact and not a
+	// about sixteen pixels apart, and a travel trip (tap the docked head, land
+	// at the block) can decouple them further even while the rail stays
+	// condensed the whole time — it has to be the geometric fact and not a
 	// neighbour's proxy. Verdict, dead band, and why travel terminates against
 	// it: `machineDock.machineDockVerdict`.
-	let machineDocked = $state(false);
+	let machineDocked = $derived(dockClock.settled);
+	let settleTimer: ReturnType<typeof setTimeout> | null = null;
 	$effect(() => {
 		const sentinel = railSentinel;
 		if (!sentinel || typeof window === 'undefined') return;
-		const read = () => {
+		const tick = () => {
+			if (settleTimer !== null) {
+				clearTimeout(settleTimer);
+				settleTimer = null;
+			}
+			const now = Date.now();
 			const railTop = sentinel.getBoundingClientRect().top + window.scrollY;
-			railCondensed = railScrollVerdict({
+			const railRaw = railScrollVerdict({
 				scrollY: window.scrollY,
 				railTop,
 				railFullHeight,
-				condensed: railCondensed
+				condensed: railClock.settled
 			});
 			// The sentinel's *bottom*: it carries the seam above the block as a
 			// real box, so its bottom edge and the dock's in-flow top are the
 			// same line. Its top is 24px higher, and that gap is the trip's
 			// landing margin below — two different numbers off one element, so
-			// neither is a constant nudged until it looked right.
-			machineDocked = machineSentinel
+			// neither is a constant nudged until it looked right. Computed
+			// locally rather than read off the top-level `dockTop` derived:
+			// that derived depends on `railClock` (via `railCondensed`), and
+			// this effect *writes* `railClock` below — reading a derived of
+			// your own write inside the same effect is a real cycle in Svelte
+			// 5 (`effect_update_depth_exceeded`, driven and caught live), not
+			// just a style preference. Same formula either way; `dockTop`
+			// stays the template's single source of truth for the rendered
+			// position.
+			// Settled rail heights, never `railHeight`'s live `clientHeight`
+			// binding — that live read, paired with a same-tick
+			// `railCondensed` flip, is #1169's actual defect: the binding
+			// updates a frame after the DOM it measures, so the dock's target
+			// moved out from under its own reader for the one frame that
+			// mattered.
+			const dockRaw = machineSentinel
 				? machineDockVerdict({
 						home: machineSentinel.getBoundingClientRect().bottom,
-						dockTop: machineDockTop(railHeight, railCondensed),
-						docked: machineDocked
+						dockTop: machineDockTop(
+							railClock.settled ? railSlimHeight || railHeight : railFullHeight,
+							railClock.settled
+						),
+						docked: dockClock.settled
 					})
 				: false;
+			const nextRail = scrollClockTick(railClock, railRaw, now);
+			const nextDock = scrollClockTick(dockClock, dockRaw, now);
+			// Reassign only on an actual change: `scrollClockTick` returns a
+			// fresh object every call, and Svelte's `$state` dirties on
+			// reference identity — reassigning an object-shaped value that is
+			// only *shallowly equal* still notifies every reader, which is
+			// the other half of the same cycle (this effect reads
+			// `railClock.settled` above, so an unconditional reassignment
+			// below reschedules the effect against itself every tick, settled
+			// or not).
+			if (nextRail.settled !== railClock.settled || nextRail.pendingAt !== railClock.pendingAt) {
+				railClock = nextRail;
+			}
+			if (nextDock.settled !== dockClock.settled || nextDock.pendingAt !== dockClock.pendingAt) {
+				dockClock = nextDock;
+			}
+			// Both clocks stepped in the one tick above — "applied to both in
+			// the same frame". Reschedule against whichever settles first;
+			// `tick()` re-derives everything live, so a clock that isn't due
+			// yet just re-arms itself with fresh geometry next call.
+			const deadlines = [nextRail.pendingAt, nextDock.pendingAt].filter(
+				(deadline): deadline is number => deadline !== null
+			);
+			if (deadlines.length > 0) {
+				settleTimer = setTimeout(tick, Math.max(0, Math.min(...deadlines) - now));
+			}
 		};
-		read();
-		window.addEventListener('scroll', read, { passive: true });
-		window.addEventListener('resize', read, { passive: true });
+		tick();
+		window.addEventListener('scroll', tick, { passive: true });
+		window.addEventListener('resize', tick, { passive: true });
 		return () => {
-			window.removeEventListener('scroll', read);
-			window.removeEventListener('resize', read);
+			window.removeEventListener('scroll', tick);
+			window.removeEventListener('resize', tick);
+			if (settleTimer !== null) clearTimeout(settleTimer);
 		};
 	});
 
@@ -527,12 +583,29 @@
 	// resting full form: an expanded rack is a panel, not the rail's own height.
 	let railHeight = $state(0);
 	let railFullHeight = $state(0);
+	// The condensed rail's own settled height, sampled the same way
+	// `railFullHeight` is (resting, not mid-transition) so `dockTop` below
+	// never has to read the live `clientHeight` binding once the page has
+	// condensed at least once. The `|| railHeight` fallback in `dockTop` only
+	// ever fires for the very first condense on a fresh load, before this has
+	// a sample to give.
+	let railSlimHeight = $state(0);
 	let machineSentinel = $state<HTMLDivElement | null>(null);
 	let railOpen = $state(false);
 	$effect(() => {
 		if (!railCondensed && !railOpen && railHeight > 0) railFullHeight = railHeight;
 	});
+	$effect(() => {
+		if (railCondensed && !railOpen && railHeight > 0) railSlimHeight = railHeight;
+	});
 	let railReserve = $derived(Math.max(0, railFullHeight - railHeight));
+	// The one target both the dock's actual CSS position (template below) and
+	// the tick's own raw threshold (`dockRaw` above) read — a single number,
+	// computed once, never two call sites each deriving their own version of
+	// "where the dock belongs".
+	let dockTop = $derived(
+		machineDockTop(railCondensed ? railSlimHeight || railHeight : railFullHeight, railCondensed)
+	);
 
 	// His proposal, verbatim: "when it's expanded, it should just somehow go to
 	// the top of the page. And when it's collapsed, go back if it's possible."
@@ -1190,10 +1263,14 @@
 			     docking is visual, and the reader's expansion survives every
 			     offset.
 
-			     `top` is the rail's *live* height because the rail changes form
-			     as it condenses; a pinned constant would either gap or hide the
-			     head behind it, and a head hidden behind the rail reads as the
-			     block having vanished, which is the complaint this answers. -->
+			     `top` (`dockTop` above) tracks the rail's *settled* height
+			     because the rail changes form as it condenses; a pinned
+			     constant would either gap or hide the head behind it, and a
+			     head hidden behind the rail reads as the block having
+			     vanished, which is the complaint this answers. Settled, not
+			     live: reading the live `clientHeight` binding mid-transition
+			     is #1169's own defect (`collapse.ts`'s `railScrollVerdict`
+			     doc has the full account). -->
 		<!-- Sticky travels only inside its own parent's box, so this dock is a
 		     direct child of the page column — a sibling of the rail, exactly as
 		     the rail is. Nested one level into the machine's own `<section>` it
@@ -1211,7 +1288,7 @@
 		<div bind:this={machineSentinel} class="h-6" aria-hidden="true"></div>
 		<div
 			class="ignite machine-dock sticky z-30 -mx-6 bg-stone-950/95 px-6 backdrop-blur-sm"
-			style={`--ignite-delay: 250ms; top: ${machineDockTop(railHeight, railCondensed)}px`}
+			style={`--ignite-delay: 250ms; top: ${dockTop}px`}
 			aria-label="the machine"
 		>
 			<!-- Keyed on the dock verdict, not the rail's: docking is what changes
