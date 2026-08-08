@@ -128,6 +128,16 @@ def _model_usage_ids(model_usage: Any) -> list[str] | None:
 
 
 def _model_usage_tokens(model_usage: Any) -> dict[str, Any] | None:
+    """Sum ``modelUsage``'s per-model token counts into session-lifetime totals.
+
+    These totals are the right shape for spend/volume accounting (they sit
+    next to ``total_cost_usd``, which Claude Code's own ``/cost`` describes as
+    the *cumulative* expense "for the current session" — and a brnrd resident
+    session is resumed across many separate daemon wakes, potentially over
+    days, so "session" here can span far more than the run being measured).
+    They are **not** a context-window occupancy reading — see
+    ``_instantaneous_context_used_percent`` for that (#1178).
+    """
     if not isinstance(model_usage, dict):
         return None
     totals = {
@@ -137,7 +147,6 @@ def _model_usage_tokens(model_usage: Any) -> dict[str, Any] | None:
         "cache_creation_input_tokens": 0,
     }
     found = False
-    highest_used: float | None = None
     for usage in model_usage.values():
         if not isinstance(usage, dict):
             continue
@@ -157,22 +166,149 @@ def _model_usage_tokens(model_usage: Any) -> dict[str, Any] | None:
                 continue
             totals[key] += int(value)
             found = True
-        window = _num(_camel_or_snake(usage, "contextWindow", "context_window"))
-        if window and window > 0:
-            used_parts = [
-                fields["input_tokens"],
-                fields["cache_read_input_tokens"],
-                fields["cache_creation_input_tokens"],
-            ]
-            used = sum(v for v in (_num(part) for part in used_parts) if v is not None)
-            used_pct = max(0.0, min(100.0, 100.0 * used / window))
-            if highest_used is None or used_pct > highest_used:
-                highest_used = used_pct
     if not found:
         return None
-    if highest_used is not None:
-        totals["context_window_used_percent"] = round(highest_used, 6)
     return totals
+
+
+# --- Context-window occupancy (#1178) -----------------------------------
+# ``modelUsage[model].{inputTokens,cacheReadInputTokens,cacheCreationInputTokens}``
+# is a cumulative total for the whole *resumed* session — the same object
+# that backs ``total_cost_usd`` (unambiguously a running total: Claude
+# Code's own ``/cost`` calls it "cumulative API call expenses ... for the
+# current session"). Dividing that running total by a single ``contextWindow``
+# compares two different quantities: on ~139 of 182 real run-ledger rows
+# sampled 2026-08-07 it read exactly 100.0, including short, clean runs that
+# cannot plausibly have filled a context window — the field saturates the
+# moment a long-lived resumed session's *lifetime* token sum first crosses
+# the window, and then stays pinned at 100 on every later wake regardless of
+# that wake's own size.
+#
+# The session transcript's per-message ``usage`` (already read by
+# ``session_refusal`` above, for a different purpose) is *not* cumulative in
+# this way: each row is that one API call's own prompt accounting.
+# ``cache_read_input_tokens`` climbs turn over turn because the cached
+# prefix genuinely grows turn over turn — that is instantaneous occupancy,
+# not a running sum, confirmed against a real multi-turn transcript on this
+# machine (cache_read_input_tokens: 20432 -> 81785 -> 113576 -> 116996 ->
+# 117498 across five consecutive assistant turns of one session — growing
+# with the conversation, not summing every turn's own count on top of the
+# last). The *last* assistant row's usage is therefore the honest "how much
+# of the window is occupied right now" reading.
+def _last_turn_usage(
+    session_id: str | None,
+    projects_root: str | os.PathLike[str] | None = None,
+) -> dict[str, Any] | None:
+    """Return the most recent assistant turn's own ``usage`` + resolved model.
+
+    ``None`` when there is no session id, no matching transcript, or the
+    transcript carries no assistant ``usage`` row — every case collapses to
+    "no instantaneous reading available" for the caller.
+    """
+    path = session_transcript_path(session_id, projects_root)
+    if path is None:
+        return None
+    last_usage: dict[str, Any] | None = None
+    last_model: str | None = None
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line or '"usage"' not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(row, dict) or row.get("type") != "assistant":
+                    continue
+                message = row.get("message")
+                if not isinstance(message, dict):
+                    continue
+                usage = message.get("usage")
+                if not isinstance(usage, dict):
+                    continue
+                last_usage = usage
+                model = message.get("model")
+                if isinstance(model, str) and model.strip():
+                    last_model = model.strip()
+    except OSError:
+        return None
+    if last_usage is None:
+        return None
+    return {
+        "input_tokens": _num(
+            _camel_or_snake(last_usage, "inputTokens", "input_tokens")
+        ),
+        "cache_read_input_tokens": _num(
+            _camel_or_snake(
+                last_usage, "cacheReadInputTokens", "cache_read_input_tokens"
+            )
+        ),
+        "cache_creation_input_tokens": _num(
+            _camel_or_snake(
+                last_usage, "cacheCreationInputTokens", "cache_creation_input_tokens"
+            )
+        ),
+        "model": last_model,
+    }
+
+
+def _context_window_for_model(model_usage: Any, model: str | None) -> float | None:
+    """``contextWindow`` for *model*, tolerant of the two ids not matching exactly.
+
+    ``modelUsage`` keys the resolved model id from the CLI's result envelope
+    (e.g. ``claude-sonnet-4-6``); the transcript's ``message.model`` is the
+    same family but not guaranteed byte-identical. Prefix-tolerant in both
+    directions, same convention as ``run_ledger.core_mismatch``. Falls back
+    to the smallest known window when *model* is absent or matches nothing —
+    the more conservative (higher used%) denominator, rather than guessing.
+    """
+    if not isinstance(model_usage, dict):
+        return None
+    windows: dict[str, float] = {}
+    for key, usage in model_usage.items():
+        if not isinstance(key, str) or not isinstance(usage, dict):
+            continue
+        window = _num(_camel_or_snake(usage, "contextWindow", "context_window"))
+        if window and window > 0:
+            windows[key] = window
+    if not windows:
+        return None
+    if model:
+        for key, window in windows.items():
+            if key == model or key.startswith(model) or model.startswith(key):
+                return window
+    return min(windows.values())
+
+
+def _instantaneous_context_used_percent(
+    model_usage: Any,
+    session_id: str | None,
+    projects_root: str | os.PathLike[str] | None = None,
+) -> float | None:
+    """The honest "% of the context window occupied right now" reading.
+
+    ``None`` when no per-turn snapshot is available (no session transcript,
+    or no ``contextWindow`` to divide it by) — a pessimistic absence beats a
+    cumulative-total number that happens to look plausible (#1178).
+    """
+    last = _last_turn_usage(session_id, projects_root)
+    if last is None:
+        return None
+    window = _context_window_for_model(model_usage, last.get("model"))
+    if not window or window <= 0:
+        return None
+    used = sum(
+        value
+        for value in (
+            last.get("input_tokens"),
+            last.get("cache_read_input_tokens"),
+            last.get("cache_creation_input_tokens"),
+        )
+        if value is not None
+    )
+    return round(max(0.0, min(100.0, 100.0 * used / window)), 6)
 
 
 # --- Substitution-reason capture (2026-07-16) --------------------------------
@@ -412,6 +548,15 @@ def parse_result(
             "remaining_percentage": remaining,
         }
     tokens = _model_usage_tokens(payload.get("modelUsage"))
+    # Instantaneous occupancy is a *different* reading than the cumulative
+    # totals above (#1178) — sourced from the session transcript, keyed off
+    # the same ``session_id`` used for refusal detection below.
+    instantaneous_pct = _instantaneous_context_used_percent(
+        payload.get("modelUsage"), payload.get("session_id"), projects_root,
+    )
+    if instantaneous_pct is not None:
+        tokens = dict(tokens) if tokens else {}
+        tokens["context_window_used_percent"] = instantaneous_pct
     if tokens:
         levels["tokens"] = tokens
 
