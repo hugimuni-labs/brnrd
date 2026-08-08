@@ -834,14 +834,45 @@ class _Session:
     # scattered at the point of use, so a future re-skin has one function
     # per concern to replace.
 
+    #: Structural colour, sparingly (#1240: "right direction, nowhere near"
+    #: — plain, consistent, line-oriented; colour only to tell question from
+    #: status, never animation). Dim rather than a hue: it has to read on
+    #: both light and dark terminals, and the one thing worth marking is
+    #: "this line is brnrd's own machinery," not the model's voice.
+    _DIM = "\x1b[2m"
+    _RESET = "\x1b[0m"
+
+    def _colorizes(self) -> bool:
+        """Whether ANSI structure may render here.
+
+        Same discipline the removed ``_animates`` used: a rendering surface
+        renders only where a person is looking, or the codes are mojibake
+        in a pipe/CI log/``TERM=dumb`` session, not colour. Also honours
+        ``NO_COLOR`` (no-color.org), the standing opt-out.
+        """
+        if not self.interactive or os.environ.get("NO_COLOR"):
+            return False
+        try:
+            if not sys.stdout.isatty():
+                return False
+        except (AttributeError, ValueError):
+            return False
+        return os.environ.get("TERM", "") not in ("", "dumb")
+
     def _status(self, text: str) -> None:
         """One plain, un-repainted line: visible state, not an animation.
 
         No carriage return, no frame, no write competing with a line the
         user might be typing on — the whole point of #1240. Shown once per
-        state change (see call sites), never on a fixed cadence.
+        state change (see call sites), never on a fixed cadence. Dimmed
+        when the terminal can take it, so brnrd's own status is legible as
+        *structure* — distinct from the model's own voice — without being
+        loud about it.
         """
-        self.writer(f"[brnrd] {text}")
+        line = f"[brnrd] {text}"
+        if self._colorizes():
+            line = f"{self._DIM}{line}{self._RESET}"
+        self.writer(line)
 
     def _show_course(self) -> None:
         """Surface the model's own `.card` course rows as they change.
@@ -949,11 +980,11 @@ class _Session:
         """Take the terminal back, run the ceremony, tell the wake what happened."""
         self.result.controls.append(verb)
         self.refresh_portals(f"control:{verb}")
-        self.writer(f"[brnrd] {verb} — taking the terminal for this step")
+        self._status(f"{verb} — taking the terminal for this step")
         outcome = self.control(self.repo_root, verb)
         if outcome.ok and outcome.verb.startswith("gate-setup "):
             self.result.gates_configured.append(outcome.verb.split()[-1])
-        self.writer(f"[brnrd] {outcome.verb}: {outcome.detail}")
+        self._status(f"{outcome.verb}: {outcome.detail}")
         self.post_event(
             f"control outcome — {outcome.verb}: "
             f"{'ok' if outcome.ok else 'failed'}\n\n{outcome.detail}",
@@ -1049,13 +1080,16 @@ class _Session:
         Idempotent: once ``interactive`` is False, ``_offer_reply`` returns
         before it can reach here again.
         """
+        # `_status` reads `self.interactive` to decide whether to colour the
+        # line; called before the flag flips, so the line still renders with
+        # whatever structure this terminal already had.
+        self._status(
+            f"{EMPTY_READS_BEFORE_DEGRADING} empty replies in a row — "
+            "reading this as a pipe rather than a person. Taking defaults "
+            "for the rest of the interview."
+        )
         self.interactive = False
         self.result.degraded_to_defaults = True
-        self.writer(
-            f"[brnrd] {EMPTY_READS_BEFORE_DEGRADING} empty replies in a row — "
-            "reading this as a pipe rather than a person. Taking defaults for "
-            "the rest of the interview."
-        )
         self.post_event(
             "The terminal stopped answering: "
             f"{EMPTY_READS_BEFORE_DEGRADING} consecutive empty reads, which "
@@ -1199,6 +1233,11 @@ class _Session:
         self.result.aborted = True
         self._abort.set()
         self._kill_runner()
+        # Not routed through `_status`: this is the last thing the terminal
+        # shows and the one line in this whole contract that should read as
+        # emphasis, not routine structure — and the leading newline (a
+        # blocked `you> ` prompt has no trailing one of its own) matters
+        # more here than the dim treatment would.
         self.writer(
             "\n[brnrd] interrupted — parked, nothing lost. Run `brnrd "
             "init` again to resume, or edit AGENTS.md by hand."

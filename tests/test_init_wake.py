@@ -603,6 +603,43 @@ class TestTerminalLoop:
         out = capsys.readouterr().out
         assert out == "", f"_wait_a_beat wrote to stdout: {out!r}"
 
+    def test_status_lines_dim_only_on_a_real_colour_capable_tty(
+        self, tmp_path, monkeypatch,
+    ):
+        """#1240: "right direction, nowhere near" — plain, consistent,
+        colour only for structure. Sparing: `_status` dims itself when the
+        terminal can take it, and stays plain everywhere the removed
+        animation used to stay silent (piped, `TERM=dumb`, `NO_COLOR`,
+        non-interactive)."""
+        repo = _repo(tmp_path)
+        printed: list[str] = []
+        session = _session(repo, writer=printed.append, reader=lambda: "")
+
+        monkeypatch.setattr(init_wake.sys.stdout, "isatty", lambda: True, raising=False)
+        monkeypatch.setenv("TERM", "xterm-256color")
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        session._status("hello")
+        assert printed[-1] == f"{session._DIM}[brnrd] hello{session._RESET}"
+
+        monkeypatch.setenv("TERM", "dumb")
+        session._status("plain on dumb")
+        assert printed[-1] == "[brnrd] plain on dumb"
+
+        monkeypatch.setenv("TERM", "xterm-256color")
+        monkeypatch.setenv("NO_COLOR", "1")
+        session._status("plain on NO_COLOR")
+        assert printed[-1] == "[brnrd] plain on NO_COLOR"
+
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.setattr(init_wake.sys.stdout, "isatty", lambda: False, raising=False)
+        session._status("plain when piped")
+        assert printed[-1] == "[brnrd] plain when piped"
+
+        monkeypatch.setattr(init_wake.sys.stdout, "isatty", lambda: True, raising=False)
+        session.interactive = False
+        session._status("plain when non-interactive")
+        assert printed[-1] == "[brnrd] plain when non-interactive"
+
     def test_thinking_is_shown_once_per_gap_not_repainted(self, tmp_path):
         """#1240, the maintainer's live steer: every prompt says whether the
         wake is waiting for you or thinking — said once per stretch of dead
