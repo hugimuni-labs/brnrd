@@ -992,7 +992,6 @@ class RunLedgerRowIn(BaseModel):
     five_hour_pct_delta: float | None = None
     usd_subscription_attributed: float | None = None
     usd_credits_equivalent: float | None = None
-    estimate_vs_actual: str | None = None
     # Which Runner substitution happened at dispatch and why — the rack's
     # substitution display reads this (`runLedger.ts`); a row without it
     # renders as "dispatched as asked" even when it wasn't.
@@ -1007,6 +1006,10 @@ class RunLedgerRowIn(BaseModel):
     # (the 2026-08-08 defect: writer and reader both shipped, this schema
     # silently stripped the field at the PUT).
     bolt: str | None = None
+    # The bounded declaration accepted by ``cut:``.  Absent on legacy rows;
+    # an explicit ``{"omitted": true, ...}`` means the source declaration
+    # exceeded persistence caps and was skipped whole, never truncated.
+    bolt_declaration: dict[str, Any] | None = None
 
     # Deliberately NOT mirrored from the local row (tests/test_run_ledger_
     # mirror_parity.py enforces that this omission stays a decision, not a

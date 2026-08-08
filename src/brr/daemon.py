@@ -7899,7 +7899,10 @@ def _drain_outbox(
                 task.meta["bolt"] = {
                     "accepted_at": accepted_at,
                     "annotated": annotated,
-                    "spend_declared": declaration.spend,
+                    **cut_verb.durable_declaration(
+                        declaration,
+                        dissent=mismatches if annotated else (),
+                    ),
                 }
             if stats is not None:
                 stats["cut"] = stats.get("cut", 0) + 1
@@ -11089,6 +11092,17 @@ def _persist_run_state_doc(
         if len(summary) > 240:
             summary = summary[:239].rstrip() + "..."
         lines.extend(["", "## Request", "", summary])
+    # The complete bounded declaration lives on the durable run node as one
+    # JSON value.  Keeping the object whole makes omission detectable and
+    # avoids inventing a second, lossy Markdown grammar.  ``produce`` is not
+    # duplicated here; the section immediately below is its canonical record.
+    bolt_declaration = run_ledger.bolt_declaration_value(bolt_meta)
+    if bolt_declaration is not None:
+        lines.extend([
+            "", "## Bolt Declaration", "", "```json",
+            json.dumps(bolt_declaration, ensure_ascii=False, indent=2, sort_keys=True),
+            "```",
+        ])
     # Produce, on the node itself (maintainer, 2026-07-19: "the idea of the run
     # weld was that you maintain the relics as the run goes, and then at stop
     # the run file *with relics* is presented as the main summarized inspection

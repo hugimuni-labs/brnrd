@@ -110,6 +110,44 @@ def test_parse_cut_asks_nested_dict_form_also_works():
     assert declaration.asks[0].disposition == "answered"
 
 
+def test_parse_cut_asks_nested_dict_carries_optional_reader_label():
+    declaration, error = cut_verb.parse_cut(
+        {
+            "cut": "true",
+            "asks": {
+                "evt-1": {
+                    "disposition": "answered",
+                    "label": "Which lane owns the reply?",
+                }
+            },
+        }
+    )
+
+    assert error is None
+    assert declaration.asks[0].label == "Which lane owns the reply?"
+
+
+def test_durable_declaration_skips_whole_payload_when_a_text_cap_is_exceeded():
+    declaration = cut_verb.CutDeclaration(
+        asks=(cut_verb.AskDisposition(
+            event="evt-1",
+            disposition="answered",
+            label="x" * (cut_verb.PERSISTENCE_MAX_TEXT_CHARS + 1),
+        ),),
+        decisions=("keep the wire honest",),
+        spend="~$2",
+    )
+
+    persisted = cut_verb.durable_declaration(declaration)
+
+    assert persisted == {
+        "declaration_version": 1,
+        "omitted": True,
+        "reason": "persistence text cap exceeded",
+    }
+    assert "asks" not in persisted
+
+
 def test_parse_cut_asks_nested_dict_form_round_trips_through_the_real_parser():
     """The prior test only constructs the already-parsed ``fm`` dict by
     hand; this one drives actual frontmatter *text* through

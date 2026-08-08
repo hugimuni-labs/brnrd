@@ -486,7 +486,7 @@ def test_run_worker_finalize_appends_run_ledger_row(tmp_path, monkeypatch):
     assert rows[0]["weekly_pct_delta"] == 5.0
     assert rows[0]["five_hour_pct_delta"] == 2.0
     assert rows[0]["usd_subscription_attributed"] == 1.0
-    assert rows[0]["estimate_vs_actual"] == "actual"
+    assert rows[0]["bolt_declaration"] is None
     assert task.terminal_reply == "ledger done"
     assert not (tmp_path / ".brr" / "outbox" / "evt-ledger").exists()
 
@@ -9727,6 +9727,50 @@ def test_run_state_doc_carries_produce_and_preserves_it(tmp_path, monkeypatch):
     assert "stage: finished" in text
 
 
+def test_run_state_doc_carries_the_complete_bounded_bolt_declaration(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    task = Run(
+        id="run-bolt-frame",
+        event_id="evt-bolt-frame",
+        body="finish",
+        source="telegram",
+        status="done",
+        meta={
+            "bolt": {
+                "accepted_at": "2026-08-08T00:00:00Z",
+                "annotated": 1,
+                "declaration_version": 1,
+                "asks": [{"event": "evt-ask", "disposition": "answered"}],
+                "owed": [],
+                "decisions": ["wire: kept"],
+                "spend_declared": "~$2",
+                "next": None,
+                "dissent": ["evt-ask still pending"],
+            }
+        },
+    )
+
+    text = daemon._persist_run_state_doc(
+        ctx, task, repo_label="Gurio/brr", stage="finished",
+    ).read_text(encoding="utf-8")
+
+    assert "bolt: annotated 2026-08-08T00:00:00Z" in text
+    assert "## Bolt Declaration" in text
+    declaration_json = text.split("## Bolt Declaration\n\n```json\n", 1)[1].split(
+        "\n```", 1,
+    )[0]
+    declaration = json.loads(declaration_json)
+    assert declaration["asks"] == [{"event": "evt-ask", "disposition": "answered"}]
+    assert declaration["dissent"] == ["evt-ask still pending"]
+    assert "produce" not in declaration
+
+
 def test_run_state_produce_change_detection(tmp_path, monkeypatch):
     """The node is rewritten when produce moves, never on a timer."""
     task = Run(
@@ -10269,6 +10313,62 @@ def test_drain_outbox_cut_bounce_cap_then_accept_annotated(tmp_path):
     assert "undispositioned" in body
 
 
+def test_drain_outbox_cut_persists_declaration_and_daemon_dissent(tmp_path):
+    """The real drain seam keeps what it validated when cap-3 accepts with
+    dissent; produce remains canonical in relics rather than duplicated."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    ask = protocol.create_event(
+        inbox, source="telegram", body="which lane?", status="pending",
+    ).stem
+    current = protocol.create_event(
+        inbox, "telegram", "original", status="processing",
+    ).stem
+    task = Run(
+        id="run-parent", event_id=current, body="original", source="telegram",
+        meta={"cut_bounces": 2},
+    )
+    (outbox / "cut.md").write_text(
+        "---\ncut: true\n"
+        f"asks:\n  {ask}:\n    disposition: answered\n    label: Which lane\n"
+        "decisions:\n  storage: kept\n"
+        "produce: none\n"
+        "owed:\n  frontend:\n    ref: card widening\n"
+        "    why: separate surface\n    where: sibling PR\n"
+        "spend: ~$2, 20m\nnext: sibling PR\n---\nDone.\n",
+        encoding="utf-8",
+    )
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, None, current),
+        task, responses, current, outbox, inbox,
+    )
+
+    assert promoted == 1
+    bolt = task.meta["bolt"]
+    assert bolt["asks"] == [{
+        "event": ask,
+        "disposition": "answered",
+        "label": "Which lane",
+    }]
+    assert bolt["owed"] == [{
+        "label": "frontend",
+        "ref": "card widening",
+        "why": "separate surface",
+        "where": "sibling PR",
+    }]
+    assert bolt["decisions"] == ["storage: kept"]
+    assert bolt["spend_declared"] == "~$2, 20m"
+    assert bolt["next"] == "sibling PR"
+    assert bolt["dissent"] == [
+        f"{daemon.hooks_mod._short_event_id(ask)} declared answered but is still pending"
+    ]
+    assert "produce" not in bolt
+
+
 def test_drain_outbox_cut_unknown_key_is_refused_with_a_notice(tmp_path):
     promoted, task, outbox, _inbox, _responses, _event_id = _drain_cut(
         tmp_path, "---\ncut: true\ndecision: kept\n---\nDone.\n",
@@ -10449,4 +10549,3 @@ def test_portal_state_bolt_projects_annotated_count(tmp_path):
     )
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["bolt"]["annotated"] == 2
-
