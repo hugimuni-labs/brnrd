@@ -456,6 +456,236 @@ def test_two_concurrent_gate_runs_on_one_tree_serialize(tmp_path):
     )
 
 
+# ── #1195 rec 2: --changed-only skips legs the diff provably cannot touch ──
+
+_CI_LIKE_WORKFLOW = {
+    "jobs": {
+        "backend": {"steps": [{"run": "python -m pytest -q"}]},
+        "frontend": {
+            "defaults": {"run": {"working-directory": "src/frontend"}},
+            "steps": [{"run": "npm test"}],
+        },
+        "launcher": {
+            "defaults": {"run": {"working-directory": "packaging/npm"}},
+            "steps": [{"run": "npm pack --dry-run"}],
+        },
+    }
+}
+
+
+def test_jobs_to_run_skips_frontend_when_only_backend_files_changed():
+    gate = _gate()
+    run_jobs = gate.jobs_to_run(_CI_LIKE_WORKFLOW, ["src/brr/daemon.py"])
+    assert run_jobs == {"backend"}
+
+
+def test_jobs_to_run_never_skips_the_catch_all_job_on_an_all_frontend_diff():
+    """The issue's own phrasing suggests this direction too ("skip the
+    frontend leg... and vice versa"), but it is not safe in *this* repo and
+    is deliberately not implemented: `tests/test_spa_serving.py`,
+    `tests/test_brnrd_legal_pinning.py`, and `tests/test_privacy_notice.py`
+    (all backend-job pytest files) read real content out of
+    `src/frontend/src/routes/` and `src/frontend/src/lib/`, and
+    `tests/test_npm_launcher.py` executes the real
+    `packaging/npm/bin/brnrd.js`. A job with no `working-directory` of its
+    own (backend) is therefore never dropped by inference, regardless of how
+    exclusively the diff looks confined to another job's tree — see the
+    report for the concrete evidence this was not a guess."""
+    gate = _gate()
+    run_jobs = gate.jobs_to_run(_CI_LIKE_WORKFLOW, ["src/frontend/src/lib/foo.ts"])
+    assert run_jobs == {"backend", "frontend"}
+
+
+def test_jobs_to_run_never_skips_the_catch_all_job_on_an_all_launcher_diff():
+    """Same reasoning, the launcher direction: `tests/test_npm_launcher.py`
+    reads `packaging/npm/uv-assets.json` and runs `packaging/npm/bin/brnrd.js`
+    for real, so backend cannot be ruled out for a launcher-only diff either."""
+    gate = _gate()
+    run_jobs = gate.jobs_to_run(_CI_LIKE_WORKFLOW, ["packaging/npm/bin/brnrd.js"])
+    assert run_jobs == {"backend", "launcher"}
+
+
+def test_jobs_to_run_unions_jobs_for_a_mixed_diff():
+    gate = _gate()
+    run_jobs = gate.jobs_to_run(
+        _CI_LIKE_WORKFLOW, ["src/brr/daemon.py", "src/frontend/src/lib/foo.ts"]
+    )
+    assert run_jobs == {"backend", "frontend"}
+
+
+def test_jobs_to_run_never_drops_the_catch_all_job_for_an_unrecognised_path():
+    """A path under neither exclusive directory (root-level, `tests/`,
+    `docs/`) cannot be ruled out for the job with no `working-directory` of
+    its own — that job reads from everywhere CI didn't scope elsewhere."""
+    gate = _gate()
+    run_jobs = gate.jobs_to_run(_CI_LIKE_WORKFLOW, ["tests/test_gate_runner.py"])
+    assert run_jobs == {"backend"}
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        ["pyproject.toml"],
+        ["scripts/gate.py"],
+        [".github/workflows/ci.yml"],
+        ["src/frontend/package.json"],
+        ["docs/package.json"],
+    ],
+)
+def test_jobs_to_run_forces_every_job_on_shared_config(changed):
+    """A touch to config every leg's inputs depend on is not attributable to
+    one job's directory — the conservative call is "cannot rule out any of
+    them," not "guess which one."""
+    gate = _gate()
+    assert gate.jobs_to_run(_CI_LIKE_WORKFLOW, changed) is None
+
+
+def test_jobs_to_run_runs_everything_on_an_empty_or_unreadable_diff():
+    """No evidence to skip on is not evidence that nothing changed — the
+    failure this guards is a false negative (skipping a leg that should run),
+    so "unknown" must resolve the same way as "touches everything."""
+    gate = _gate()
+    assert gate.jobs_to_run(_CI_LIKE_WORKFLOW, []) is None
+
+
+def _branch_repo(tmp_path):
+    """A repo with a `main` at one commit and a feature branch one commit
+    ahead, so `diff_base` has a real merge-base to find (unlike `_repo()`
+    above, which never branches)."""
+    repo = tmp_path / "branch_repo"
+    repo.mkdir()
+    for args in (
+        ["init", "-q", "-b", "main"],
+        ["config", "user.email", "t@t"],
+        ["config", "user.name", "t"],
+    ):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+    (repo / "base.py").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-qm", "seed"], check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "checkout", "-qb", "feature"],
+        check=True, capture_output=True,
+    )
+    return repo
+
+
+def test_diff_base_and_changed_paths_against_a_real_branch(tmp_path):
+    gate = _gate()
+    repo = _branch_repo(tmp_path)
+    seed = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "main"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+    (repo / "src").mkdir()
+    (repo / "src" / "brr.py").write_text("changed\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-qm", "touch backend"],
+        check=True, capture_output=True,
+    )
+    (repo / "untracked.py").write_text("new\n", encoding="utf-8")
+
+    base = gate.diff_base(repo)
+    assert base == seed
+
+    changed = gate.changed_paths(repo, base)
+    assert changed == ["src/brr.py", "untracked.py"]
+
+
+def test_diff_base_falls_back_to_head_minus_one_with_no_named_branch(tmp_path):
+    """A repo with no `main`/`master` at all (a detached scratch checkout, a
+    default-branch name this repo doesn't use) still gets a base — the last
+    commit — rather than refusing to compute one."""
+    gate = _gate()
+    repo = tmp_path / "no_named_branch"
+    repo.mkdir()
+    for args in (
+        ["init", "-q", "-b", "trunk"],
+        ["config", "user.email", "t@t"],
+        ["config", "user.name", "t"],
+    ):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+    (repo / "a.py").write_text("one\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-qm", "first"], check=True, capture_output=True
+    )
+    first = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    (repo / "a.py").write_text("two\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-qm", "second"], check=True, capture_output=True
+    )
+
+    assert gate.diff_base(repo) == first
+
+
+def test_changed_only_end_to_end_skips_the_frontend_leg(tmp_path, monkeypatch, capfd):
+    """The flag, driven through `main()`: a backend-only diff must not run
+    the frontend leg, and must say so where a human (or a strand's own
+    status narration) can see it."""
+    gate = _gate()
+    repo = tmp_path / "e2e_repo"
+    repo.mkdir()
+    for args in (
+        ["init", "-q", "-b", "main"],
+        ["config", "user.email", "t@t"],
+        ["config", "user.name", "t"],
+    ):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+    workflow = repo / ".github" / "workflows" / "ci.yml"
+    workflow.parent.mkdir(parents=True, exist_ok=True)
+    workflow.write_text(
+        "jobs:\n"
+        "  backend:\n"
+        "    steps:\n"
+        "      - name: backend leg\n"
+        "        run: exit 0\n"
+        "  frontend:\n"
+        "    defaults:\n"
+        "      run:\n"
+        "        working-directory: src/frontend\n"
+        "    steps:\n"
+        "      - name: frontend leg\n"
+        "        run: touch must-not-run\n",
+        encoding="utf-8",
+    )
+    (repo / "src" / "frontend").mkdir(parents=True)
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-qm", "seed"], check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "checkout", "-qb", "feature"],
+        check=True, capture_output=True,
+    )
+
+    (repo / "src" / "brr.py").write_text("changed\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-qm", "backend only"],
+        check=True, capture_output=True,
+    )
+
+    monkeypatch.setattr(gate, "REPO_ROOT", repo)
+    monkeypatch.setattr(gate, "WORKFLOW", workflow)
+    monkeypatch.delenv("BRR_OUTBOX_DIR", raising=False)
+
+    rc = gate.main(["--changed-only"])
+    assert rc == 0
+    assert not (repo / "src" / "frontend" / "must-not-run").exists()
+    err_or_out = capfd.readouterr()
+    combined = err_or_out.out + err_or_out.err
+    assert "skipping" in combined and "frontend" in combined
+
+
 def test_a_queued_run_names_the_holder_and_the_wait(tmp_path, monkeypatch, capfd):
     """rec 4: a queued run must say so, not sit silently.
 
