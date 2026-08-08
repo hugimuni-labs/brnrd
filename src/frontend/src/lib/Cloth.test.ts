@@ -99,7 +99,10 @@ test('the lane lists unacked bolts newest first, with a take control on each and
 			bolt({ runId: 'run-2', name: 'run-2' })
 		]
 	});
-	ok(body.includes('2 bolts await taking'), 'the lane header counts — the strip’s own phrase, one copy source');
+	ok(
+		body.includes('2 bolts await taking'),
+		'the lane header counts — the strip’s own phrase, one copy source'
+	);
 	ok(body.includes('the-cutting'), 'a named run renders its name');
 	ok(body.includes('run-2'), 'an unnamed run falls back to its id');
 	ok(body.includes('take all'), 'the lane-head take-all control renders');
