@@ -510,3 +510,105 @@ def test_do_without_dashdash_is_unaffected(tmp_path, monkeypatch, capsys):
     assert main(["do"]) == 0
     out = capsys.readouterr().out
     assert "run=run-1" in out
+
+
+# ── brnrd cut (design-the-bolt.md) — the porcelain over cut: ────────
+
+
+def test_cut_errors_without_an_outbox(monkeypatch, capsys, tmp_path):
+    monkeypatch.delenv("BRR_OUTBOX_DIR", raising=False)
+    monkeypatch.delenv("BRR_PORTAL_STATE", raising=False)
+    declaration = tmp_path / "bolt.md"
+    declaration.write_text("---\n---\nDone.\n", encoding="utf-8")
+
+    assert main(["cut", str(declaration)]) == 1
+    assert "no run outbox" in capsys.readouterr().err
+
+
+def test_cut_errors_for_a_missing_file(tmp_path, monkeypatch, capsys):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+
+    assert main(["cut", str(tmp_path / "nope.md")]) == 1
+    assert "is not a file" in capsys.readouterr().err
+
+
+def test_cut_reports_accepted_when_consumed_cleanly(tmp_path, monkeypatch, capsys):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    declaration = tmp_path / "bolt.md"
+    declaration.write_text("---\n---\nAll done.\n", encoding="utf-8")
+    monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-cut-*.md"))
+
+    assert main(["cut", str(declaration)]) == 0
+    assert capsys.readouterr().out.strip() == "[brnrd cut] accepted"
+
+
+def test_cut_splices_the_marker_into_an_existing_frontmatter_block(
+    tmp_path, monkeypatch, capsys,
+):
+    """The declaration keeps its own frontmatter (``asks:``/``produce:``/
+    ...); the porcelain only guarantees the ``cut: true`` marker line."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    declaration = tmp_path / "bolt.md"
+    declaration.write_text(
+        "---\nproduce: none\nowed: none\n---\nAll done.\n", encoding="utf-8",
+    )
+
+    staged = {}
+
+    def _sleep(_seconds):
+        matches = list(outbox.glob("do-*-cut-*.md"))
+        if matches:
+            staged["text"] = matches[0].read_text(encoding="utf-8")
+            matches[0].unlink()
+
+    monkeypatch.setattr(time, "sleep", _sleep)
+
+    assert main(["cut", str(declaration)]) == 0
+    assert staged["text"] == (
+        "---\ncut: true\nproduce: none\nowed: none\n---\nAll done.\n"
+    )
+
+
+def test_cut_reports_bounced_with_the_named_diff(tmp_path, monkeypatch, capsys):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    declaration = tmp_path / "bolt.md"
+    declaration.write_text("---\n---\nDone.\n", encoding="utf-8")
+    notice = {
+        "at": "2026-08-08T00:00:00Z", "kind": "refused",
+        "text": "cut bounced: evt-…-4e17 undispositioned",
+    }
+    monkeypatch.setattr(
+        time, "sleep", _consume_after_one_sleep(outbox, "do-*-cut-*.md", notice=notice),
+    )
+
+    assert main(["cut", str(declaration)]) == 1
+    err = capsys.readouterr().err.strip()
+    assert err == "[brnrd cut] bounced — refused: cut bounced: evt-…-4e17 undispositioned"
+
+
+def test_cut_still_queued_when_never_consumed(tmp_path, monkeypatch, capsys):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    declaration = tmp_path / "bolt.md"
+    declaration.write_text("---\n---\nDone.\n", encoding="utf-8")
+
+    ticks = []
+    monkeypatch.setattr(time, "sleep", lambda s: ticks.append(s))
+
+    assert main(["cut", str(declaration), "--timeout", "0.2"]) == 1
+    assert capsys.readouterr().err.strip() == "[brnrd cut] ? still queued"
+    assert ticks

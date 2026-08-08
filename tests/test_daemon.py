@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from brr import daemon, envs, presence, protocol, release_availability
+from brr import daemon, envs, presence, promises, protocol, release_availability
 from brr import schedule as schedule_mod
 from brr.run import Run
 from brr.runner import RunnerResult
@@ -9906,4 +9906,336 @@ def test_drain_outbox_await_key_present_with_empty_value_still_arms(tmp_path):
     assert promoted == 1
     assert task.meta["await"]["file"] is None
     assert task.meta["await"]["timeout_seconds"] == 600.0
+
+
+# ── cut: / the bolt (design-the-bolt.md) ─────────────────────────────
+
+
+def _drain_cut(
+    tmp_path, frontmatter, *, meta=None, stats=None, repo_root=None, filename="cut.md",
+):
+    """Stage one ``cut:`` directive and drain it.
+
+    Returns ``(promoted, task, outbox, inbox, responses, event_id)``. Model:
+    ``_drain_await`` above — the current event is born ``processing`` (a
+    live wake holding it), so a cut targeting "the current event" never
+    also has to dispose of itself.
+    """
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True, exist_ok=True)
+    path = protocol.create_event(inbox, "telegram", "original", status="processing")
+    event_id = path.stem
+    (outbox / filename).write_text(frontmatter, encoding="utf-8")
+    task = Run(
+        id="run-parent", event_id=event_id, body="original", source="telegram",
+        meta=dict(meta or {}),
+    )
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, None, event_id),
+        task, responses, event_id, outbox, inbox,
+        repo_root=repo_root,
+        stats=stats,
+    )
+    return promoted, task, outbox, inbox, responses, event_id
+
+
+def test_drain_outbox_cut_minimal_bolt_is_accepted(tmp_path):
+    """A bare ``cut: true`` with a woven body and nothing declared is a
+    legal bolt — stopping is a result."""
+    stats: dict[str, int] = {}
+    promoted, task, outbox, _inbox, responses, event_id = _drain_cut(
+        tmp_path, "---\ncut: true\n---\nAll done here.\n", stats=stats,
+    )
+
+    assert stats.get("cut") == 1
+    bolt = task.meta["bolt"]
+    assert bolt["annotated"] == 0
+    assert bolt["accepted_at"]
+    assert daemon._read_outbox_notices(outbox) == []
+    # Delivered through the existing `event:` lane, on the current event.
+    [partial_path] = protocol.list_partials(responses, event_id)
+    assert "All done here." in protocol.read_partial(partial_path)
+    assert promoted == 1
+    assert not (outbox / "cut.md").exists()
+
+
+def test_drain_outbox_cut_undispositioned_pending_event_bounces(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    protocol.create_event(inbox, source="telegram", body="a question", status="pending")
+
+    promoted, task, outbox, _inbox, responses, event_id = _drain_cut(
+        tmp_path, "---\ncut: true\n---\nDone.\n",
+    )
+
+    assert promoted == 0
+    assert "bolt" not in task.meta
+    assert task.meta["cut_bounces"] == 1
+    [notice] = daemon._read_outbox_notices(outbox)
+    assert notice["kind"] == "refused"
+    assert "cut bounced:" in notice["text"]
+    assert "undispositioned" in notice["text"]
+    assert protocol.list_partials(responses, event_id) == []
+
+
+def test_drain_outbox_cut_answered_row_for_still_pending_event_bounces(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    ask_path = protocol.create_event(
+        inbox, source="telegram", body="a question", status="pending",
+    )
+    ask_id = ask_path.stem
+
+    promoted, task, outbox, _inbox, _responses, _event_id = _drain_cut(
+        tmp_path, f"---\ncut: true\nasks:\n  {ask_id}: answered\n---\nDone.\n",
+    )
+
+    assert promoted == 0
+    [notice] = daemon._read_outbox_notices(outbox)
+    assert "declared answered but is still pending" in notice["text"]
+
+
+def test_drain_outbox_cut_asks_row_for_a_resolved_event_passes_regardless(tmp_path):
+    """An event no longer pending is provably closed either way — the
+    disposition claimed for it is not re-checked."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    resolved = protocol.create_event(
+        inbox, source="telegram", body="handled elsewhere", status="pending",
+    )
+    resolved_id = resolved.stem
+    ev = protocol.list_pending(inbox)[0]
+    protocol.set_status(ev, "done")
+
+    promoted, task, outbox, _inbox, _responses, _event_id = _drain_cut(
+        tmp_path, "---\ncut: true\n---\nDone.\n",
+    )
+
+    assert promoted == 1
+    assert daemon._read_outbox_notices(outbox) == []
+    assert task.meta["bolt"]["annotated"] == 0
+
+
+def test_drain_outbox_cut_bounce_cap_then_accept_annotated(tmp_path):
+    """Cap 3 (design doc, fork 3, signed): bounces 1 and 2 refuse; the 3rd
+    accepts anyway, annotated with the daemon's own dissent."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    protocol.create_event(inbox, source="telegram", body="a question", status="pending")
+    path = protocol.create_event(inbox, "telegram", "original", status="processing")
+    event_id = path.stem
+    task = Run(
+        id="run-parent", event_id=event_id, body="original", source="telegram",
+        meta={},
+    )
+    emit = daemon._WorkerEmit(brr_dir, None, event_id)
+
+    for i in range(1, 3):
+        (outbox / f"cut{i}.md").write_text("---\ncut: true\n---\nDone.\n")
+        promoted = daemon._drain_outbox(
+            emit, task, responses, event_id, outbox, inbox,
+        )
+        assert promoted == 0
+        assert task.meta["cut_bounces"] == i
+        assert "bolt" not in task.meta
+
+    (outbox / "cut3.md").write_text("---\ncut: true\n---\nDone.\n")
+    promoted = daemon._drain_outbox(emit, task, responses, event_id, outbox, inbox)
+
+    assert promoted == 1
+    assert task.meta["cut_bounces"] == 3
+    bolt = task.meta["bolt"]
+    assert bolt["annotated"] == 1
+    [partial_path] = protocol.list_partials(responses, event_id)
+    body = protocol.read_partial(partial_path)
+    assert "daemon: 1 check unresolved" in body
+    assert "undispositioned" in body
+
+
+def test_drain_outbox_cut_unknown_key_is_refused_with_a_notice(tmp_path):
+    promoted, task, outbox, _inbox, _responses, _event_id = _drain_cut(
+        tmp_path, "---\ncut: true\ndecision: kept\n---\nDone.\n",
+    )
+
+    assert promoted == 0
+    assert "bolt" not in task.meta
+    assert "cut_bounces" not in task.meta
+    [notice] = daemon._read_outbox_notices(outbox)
+    assert notice["kind"] == "dropped"
+    assert "cut dropped:" in notice["text"]
+    assert "decision" in notice["text"]
+
+
+def test_drain_outbox_cut_produce_none_declared_but_commits_exist_bounces(tmp_path):
+    repo_root = tmp_path / "repo"
+    init_git_repo(repo_root)
+    commit_files(repo_root, {"a.txt": "1"}, message="seed")
+    subprocess.run(["git", "checkout", "-b", "feature"], cwd=repo_root, check=True)
+    commit_files(repo_root, {"b.txt": "2"}, message="add b")
+
+    promoted, task, outbox, _inbox, _responses, _event_id = _drain_cut(
+        tmp_path, "---\ncut: true\nproduce: none\n---\nDone.\n",
+        meta={"branch_name": "feature", "seed_ref": "main"},
+        repo_root=repo_root,
+    )
+
+    assert promoted == 0
+    [notice] = daemon._read_outbox_notices(outbox)
+    assert "produce: none declared but" in notice["text"]
+    assert "commit" in notice["text"]
+
+
+def test_drain_outbox_cut_produce_attested_but_empty_bounces(tmp_path):
+    repo_root = tmp_path / "repo"
+    init_git_repo(repo_root)
+    commit_files(repo_root, {"a.txt": "1"}, message="seed")
+    subprocess.run(["git", "checkout", "-b", "feature"], cwd=repo_root, check=True)
+
+    promoted, task, outbox, _inbox, _responses, _event_id = _drain_cut(
+        tmp_path, "---\ncut: true\nproduce: attested\n---\nDone.\n",
+        meta={"branch_name": "feature", "seed_ref": "main"},
+        repo_root=repo_root,
+    )
+
+    assert promoted == 0
+    [notice] = daemon._read_outbox_notices(outbox)
+    assert "manifest is empty" in notice["text"]
+
+
+def test_drain_outbox_cut_produce_attested_with_commits_is_clean(tmp_path):
+    repo_root = tmp_path / "repo"
+    init_git_repo(repo_root)
+    commit_files(repo_root, {"a.txt": "1"}, message="seed")
+    subprocess.run(["git", "checkout", "-b", "feature"], cwd=repo_root, check=True)
+    commit_files(repo_root, {"b.txt": "2"}, message="add b")
+
+    promoted, task, outbox, _inbox, _responses, _event_id = _drain_cut(
+        tmp_path, "---\ncut: true\nproduce: attested\n---\nDone.\n",
+        meta={"branch_name": "feature", "seed_ref": "main"},
+        repo_root=repo_root,
+    )
+
+    assert promoted == 1
+    assert daemon._read_outbox_notices(outbox) == []
+
+
+def test_drain_outbox_cut_owed_promise_with_no_carried_row_bounces(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    responses = brr_dir / "responses"
+    path = protocol.create_event(inbox, "telegram", "original", status="processing")
+    event_id = path.stem
+    promises.append(outbox, "pr", count=1, ref="the rollout")
+
+    (outbox / "cut.md").write_text("---\ncut: true\nowed: none\n---\nDone.\n")
+    task = Run(
+        id="run-parent", event_id=event_id, body="original", source="telegram",
+        meta={},
+    )
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, None, event_id),
+        task, responses, event_id, outbox, inbox,
+    )
+
+    assert promoted == 0
+    [notice] = daemon._read_outbox_notices(outbox)
+    assert "the rollout" in notice["text"]
+    assert "no carried row" in notice["text"]
+
+
+def test_drain_outbox_cut_owed_carried_row_matching_ref_is_clean(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    responses = brr_dir / "responses"
+    path = protocol.create_event(inbox, "telegram", "original", status="processing")
+    event_id = path.stem
+    promises.append(outbox, "pr", count=1, ref="the rollout")
+
+    frontmatter = (
+        "---\ncut: true\nowed:\n  x:\n    ref: the rollout\n"
+        "    why: still open\n    where: next run\n---\nDone.\n"
+    )
+    (outbox / "cut.md").write_text(frontmatter)
+    task = Run(
+        id="run-parent", event_id=event_id, body="original", source="telegram",
+        meta={},
+    )
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, None, event_id),
+        task, responses, event_id, outbox, inbox,
+    )
+
+    assert promoted == 1
+    assert daemon._read_outbox_notices(outbox) == []
+
+
+def test_drain_outbox_cut_notice_carries_source_file_for_identity_join(tmp_path):
+    """do.py's ``find_matching_notice`` prefers this over the text
+    substring heuristic when present."""
+    promoted, task, outbox, _inbox, _responses, _event_id = _drain_cut(
+        tmp_path, "---\ncut: true\ndecision: kept\n---\nDone.\n", filename="cut-abc.md",
+    )
+    assert promoted == 0
+    [notice] = daemon._read_outbox_notices(outbox)
+    assert notice["source_file"] == "cut-abc.md"
+
+
+# ── portal-state `bolt` projection ───────────────────────────────────
+
+
+def test_portal_state_bolt_absent_when_never_cut(tmp_path):
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-1"
+    inbox_dir = tmp_path / ".brr" / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert "bolt" not in payload
+
+
+def test_portal_state_bolt_projects_accepted(tmp_path):
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-1"
+    inbox_dir = tmp_path / ".brr" / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    task.meta["bolt"] = {
+        "accepted_at": "2026-08-08T00:00:00Z", "annotated": 0, "spend_declared": None,
+    }
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["bolt"] == {
+        "accepted": True, "annotated": 0, "accepted_at": "2026-08-08T00:00:00Z",
+    }
+
+
+def test_portal_state_bolt_projects_annotated_count(tmp_path):
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-1"
+    inbox_dir = tmp_path / ".brr" / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    task.meta["bolt"] = {
+        "accepted_at": "2026-08-08T00:00:00Z", "annotated": 2, "spend_declared": "~$1",
+    }
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["bolt"]["annotated"] == 2
 

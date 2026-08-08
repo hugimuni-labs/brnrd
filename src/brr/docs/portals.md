@@ -53,6 +53,7 @@ other so they don't drift.
 | `<name>.md` with `runner_policy: propose` frontmatter | parked ⏸ policy approval | Park a proposed runner-policy edit in the account dominion instead of mutating policy directly. The body is the proposed policy markdown. Optional `scope: account` applies account-wide; the default is repo-scoped, with optional `repo:` / `repo_label:` override. The daemon sends an approval prompt; a later `approve runner-policy <id>` reply applies it, while `reject runner-policy <id>` closes it unchanged. |
 | `<name>.md` with `config_change: <key>` frontmatter | parked ⏸ policy approval | Propose raising an allowlisted, user-tunable config ceiling in `.brr/config` instead of editing it directly — today `spawn.max_concurrent`, `dominion.inject_budget_bytes`, `dominion.plan_inject_budget_bytes`, `dominion.ledger_inject_budget_bytes` (all integer-valued; off-allowlist keys are dropped with an explanation). Required `value:` frontmatter carries the requested value; the body is the reason recorded on the proposal. Optional `repo:` / `repo_label:` overrides which repo the proposal is scoped to (default: this run's). Needs an account context (cross-repo dominion) to park at all — without one, or a missing/invalid `value:`, the proposal is dropped instead of queued. The daemon parks the proposal and, when cloud-connected, mints a brnrd.dev approve/reject link; no config changes until the account owner decides there. The resolving `approve config-change <id>` / `reject config-change <id>` reply is normally synthesized by that click, not typed by hand — unlike `runner_policy:` above, this one isn't meant to be answered from chat — and is owner-tier gated either way. |
 | `brnrd await` (stages `await: true` + `timeout:`) | inbound ◂ armed hold | **A select, not a sleep** (#959). No arguments: hold until the daemon has something. It evaluates on its own heartbeat, not on your say-so. See §`brnrd await` below. |
+| `brnrd cut FILE` (stages `cut: true` + the file's own frontmatter/body) | outbound ▸ the run's completion | **The bolt** — a run's completion, declared and checked against what the daemon already attests (pending events, produce, the blueprint). Bounded like the closeout latch: bounce with a named diff, cap 3, then accept anyway, annotated. See §`brnrd cut` below. |
 | `.keepalive` | slot control | **Hold the single-flight slot** past your budget. First line is an ISO-8601 time ("busy until T") or `+<duration>` like `+30m`. Rewrite to extend. A control file, never delivered. (Not world-facing — it steers the slot, not a surface.) |
 | `.card` | outbound ▸ desired-state | **Maintain the run body** — resident-owned Markdown, reconciled in place. Keep `## Now` current; only that section projects onto the compact live card. Preserve the arc, findings, and decisions in later sections. At closeout the daemon copies the full write-head to `runs/<repo>/<run>/body.md` beside its separately attested `state.md`; empty/delete leaves a frame-only run. |
 | `menu.json` | outbound ▸ desired-state | **Maintain the thread's one live menu.** Write one JSON object atomically with `menu_id`, `thread`, and `options` (`handle`, `label`, optional `detail`, optional `rec: true`); `expires_at` is optional. The daemon validates and archives the generation, supersedes the prior one, and renders the same stored menu at gates and at the next resident boundary. Malformed menus land in `portal-state.json` → `notices`. A strand child has no v1 menu transport; its parent composes. |
@@ -237,6 +238,80 @@ directive still carrying v1's conditions is **refused with a notice naming
 Malformed input (no `timeout:`) drops to `notices`, same as any other verb.
 `await:` still never ends the run to service a wait: it holds the slot, the
 way `.keepalive` always has.
+
+### `brnrd cut` — the bolt (kb `design-the-bolt.md`)
+
+The closeout guard's machinery is entirely negative: latches that spend,
+warnings that dedupe into silence. Nothing in it is the *positive*
+artifact — "this run is complete, here is what it wove, checked against
+what it owed." `cut:` is that artifact: a resident-authored declaration,
+diffed by the daemon against what it already attests, accepted or bounced
+with a named reason.
+
+```
+brnrd cut FILE [--outbox DIR] [--timeout SECONDS]
+```
+
+`FILE` is a declaration you author: your own frontmatter plus a woven body
+— the level-completion card as you'd play it, no template beyond the
+frontmatter fields below. A bare file with no frontmatter at all is a
+**legal minimal bolt**: `brnrd cut` merges `cut: true` in for you (as a
+flat marker, sibling of `note:`/`gate:`), the whole file becomes the woven
+body, and stopping is a result. Declared fields, all optional:
+
+- `asks:` — every pending event this run carried, keyed by event id, each
+  mapped to `answered` / `deferred:<where>` / `noted:<why>`. Recorded
+  intent only — the daemon acts on nothing here; `note:`/`event:` remain
+  the verbs that actually retire or reply to an event.
+- `decisions:` — free-form, reader-facing, never validated.
+- `produce:` — `attested` (stand by `.relics.jsonl` + auto-derived
+  commits/branch/PR/kb) or `none` (declared, and legal).
+- `owed:` — `none`, or a mapping of carried rows (`ref:`/`why:`/`where:`)
+  naming a promise you're not shipping this run.
+- `spend:` / `next:` — free text, carried verbatim.
+
+(`asks`/`owed` are keyed mappings, not YAML lists — `protocol.py`'s
+frontmatter grammar has no list syntax; see `cut_verb.py`'s module
+docstring for why that's a deliberate scope decision, not an oversight.)
+An unrecognised top-level field is refused by name — the #1187 lesson: a
+typo'd key silently doing nothing is worse than a parse error.
+
+**What the daemon checks**, at drain time, against what it already
+attests:
+
+- **asks** vs `_pending_events_for_agent` — an event with no disposition
+  row is named; a row claiming `answered` for an event still pending is
+  itself a mismatch. An event no longer pending passes regardless of what
+  its row claims — it's provably closed either way.
+- **produce** vs `relics.collect` (git + `.relics.jsonl` + auto-derived) —
+  `none` declared while it's non-empty, or `attested` declared while it's
+  empty, are both named.
+- **owed** vs the blueprint (`.promises.jsonl`) — an outstanding, labelled
+  promise with no carried row naming it is named.
+
+Mismatch ⇒ **bounce**: a notice named `cut bounced: <diff>`, the file
+retired, nothing delivered. Bounded like the closeout latch learned to be:
+**cap 3** — the 1st and 2nd mismatched `cut:` bounce; the 3rd is **accepted
+anyway, annotated** with the daemon's own dissent as a trailing
+machine-spoken block (`daemon: N checks unresolved — <diff>`) appended to
+the delivered body, never the resident's voice. A guard may only assert
+what an artifact proves, and it must not be able to hold a run hostage.
+
+Accept (clean or annotated) ⇒ stamped into `task.meta["bolt"]`
+(`accepted_at` / `annotated` / `spend_declared`), projected in
+`portal-state.json` → `bolt` (`{"accepted": true, "annotated": N,
+"accepted_at": "…"}`, absent when never cut), written into `state.md`
+(`bolt: accepted <ts>` / `bolt: annotated <ts>`) and the run-ledger row's
+`bolt` column (`"accepted"` / `"annotated"` / absent) — the ledger's one
+success signal going forward. The woven body is delivered as the reply on
+the current event, through the existing `event:` lane (the verified lane
+until a fresh-send primitive exists).
+
+`brnrd cut` reports the same verdict shape `brnrd do`/`brnrd await` use:
+`accepted` (exit 0) / `bounced — <named diff>` / `? still queued` — never a
+hang, `--timeout` defaults to 30s. A malformed declaration (an
+unrecognised marker or field) is dropped to `notices` immediately, outside
+the bounce ladder — there's nothing valid there to accept-annotated.
 
 ## The blueprint — `.promises.jsonl`
 
