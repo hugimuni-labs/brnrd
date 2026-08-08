@@ -7258,6 +7258,30 @@ def _queue_spawn_request(
     # the same way it already reads `publish_branch`.
     contract_branch = str(fm.get("branch") or "").strip()
     contract_report = str(fm.get("report") or "").strip()
+    # #1136: `report:` is a path the completion check will `stat` later
+    # (`daemon-substrate.md`'s ``spawn:`` row says so in as many words) —
+    # but nothing stopped a dispatcher from typing prose instead. Live
+    # 2026-08-05: `report: the PR body is the report` rode a child's meta
+    # all the way to its completion note, which correctly found nothing to
+    # `stat` and read as an indictment of a strand whose commit was pushed
+    # and whose PR was open. Refuse the unambiguous case here, at the
+    # moment it's typed, the same way a malformed ``event:`` id is refused
+    # rather than silently carried to a check that can only fail it later.
+    # Not a strict path validator — a legal path may contain spaces — so
+    # this only asserts what it can prove: no leading ``/`` is a claim no
+    # absolute path can satisfy.
+    if contract_report and not contract_report.startswith("/"):
+        _record_outbox_notice(
+            outbox_dir,
+            f"spawn refused: report: {contract_report!r} does not look "
+            "like a path — it must start with `/` so the completion "
+            "check can `stat` it later. A prose description (e.g. \"the "
+            "PR body is the report\") can never be checked; state the "
+            "absolute path the strand will write instead.",
+            kind="refused",
+            lifetime="run",
+        )
+        return False
     # #880 §1b: a short, dispatcher-declared label for this child — read
     # back as its presence ``label`` (``_presence_label_for_event``) so a
     # parent supervising several siblings can tell their rows apart from
