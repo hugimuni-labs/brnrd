@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 
 import pytest
@@ -21,8 +22,7 @@ _SECRET = "webhook-secret"
 _HDR = {"X-Telegram-Bot-Api-Secret-Token": _SECRET}
 
 
-@pytest.fixture()
-def env(monkeypatch):
+def _make_client(monkeypatch, **overrides):
     sends: list[dict] = []
 
     def fake_send(token, chat_id, text, *, topic_id=None, reply_to_message_id=None,
@@ -43,9 +43,15 @@ def env(monkeypatch):
         telegram_webhook_secret=_SECRET,
         inbox_long_poll_max_s=0.2,
         inbox_poll_interval_s=0.02,
+        **overrides,
     )
     app = create_app(settings)
     return app, TestClient(app), sends
+
+
+@pytest.fixture()
+def env(monkeypatch):
+    return _make_client(monkeypatch)
 
 
 def _account(client):
@@ -146,6 +152,126 @@ def test_invalid_start_code_is_reported(env):
     )
     assert r.status_code == 200
     assert sends and "Invalid" in sends[0]["text"]
+
+
+# ── #1242: the rescue loop, bare-code parity, username shape ──────────
+
+
+def test_unpaired_repos_reply_names_the_rescue_command(env):
+    """The old text pointed an unpaired chat at /repos, whose own unpaired
+    reply is this same message — a closed loop. The reply must instead name
+    /start, the command that actually works."""
+    _, client, sends = env
+    r = client.post(
+        "/v1/webhooks/telegram", json=_message(7, "/repos"), headers=_HDR
+    )
+    assert r.status_code == 200
+    assert sends and "/start" in sends[0]["text"]
+
+
+def test_unpaired_plain_message_reply_names_the_rescue_command(env):
+    _, client, sends = env
+    r = client.post(
+        "/v1/webhooks/telegram", json=_message(7, "hello"), headers=_HDR
+    )
+    assert r.status_code == 200
+    assert sends and "/start" in sends[0]["text"]
+
+
+def test_bare_pair_code_binds_chat_like_start(env):
+    """Telegram accepts a bare TG-XXXX exactly like WhatsApp does — a user
+    who pastes just the code, no /start prefix, still pairs."""
+    app, client, sends = env
+    acc = _account(client)
+    rid = _repo(client, acc, name="myrepo")
+    code = _tg_pair_code(client, acc, rid)
+
+    r = client.post("/v1/webhooks/telegram", json=_message(555, code), headers=_HDR)
+    assert r.status_code == 200
+
+    with app.state.SessionLocal() as db:
+        binding = db.execute(
+            select(ChannelRoute).where(ChannelRoute.channel_id == "555")
+        ).scalar_one()
+        assert binding.repo_id == rid
+    assert len(sends) == 1
+    assert "myrepo" in sends[0]["text"]
+
+
+def test_bare_pair_code_is_case_insensitive_and_whitespace_tolerant(env):
+    app, client, sends = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    code = _tg_pair_code(client, acc, rid)
+
+    r = client.post(
+        "/v1/webhooks/telegram", json=_message(555, f"  {code.lower()}  "), headers=_HDR
+    )
+    assert r.status_code == 200
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(ChannelRoute)).scalars().all()[0].repo_id == rid
+
+
+def test_bare_shaped_but_unknown_code_reports_invalid(env):
+    _, client, sends = env
+    r = client.post(
+        "/v1/webhooks/telegram", json=_message(7, "TG-ZZZZ"), headers=_HDR
+    )
+    assert r.status_code == 200
+    assert sends and "Invalid" in sends[0]["text"]
+
+
+def test_invalid_bot_username_mints_no_deep_link(monkeypatch):
+    """config.py:78 / routers/pairing.py's `_telegram_pair_response`: an
+    invalid-shape username (the hyphenated GitHub-login spelling, e.g.)
+    must never reach a deep link — no entity resolves at t.me/<name> with a
+    hyphen in it, so a link built on it is a link to nowhere."""
+    app, client, _ = _make_client(monkeypatch, telegram_bot_username="brnrd-bot")
+    acc = _account(client)
+    rid = _repo(client, acc, name="myrepo")
+
+    r = client.post(
+        "/v1/accounts/pair/telegram", json={"repo_id": rid}, headers=acc
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["deep_link"] is None
+    # The manual path leads the instructions instead of a dead t.me link.
+    assert body["instructions"].startswith("Send `/start")
+    assert "t.me" not in body["instructions"]
+
+
+def test_valid_bot_username_still_mints_deep_link(monkeypatch):
+    app, client, _ = _make_client(monkeypatch, telegram_bot_username="brnrd_bot")
+    acc = _account(client)
+    rid = _repo(client, acc, name="myrepo")
+
+    r = client.post(
+        "/v1/accounts/pair/telegram", json={"repo_id": rid}, headers=acc
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["deep_link"] == f"https://t.me/brnrd_bot?start={body['pair_code']}"
+
+
+def test_invalid_bot_username_warns_loudly_at_settings_construction(caplog):
+    caplog.set_level(logging.WARNING, logger="brnrd.config")
+    Settings(database_url="sqlite:///:memory:", telegram_bot_username="brnrd-bot")
+    assert any(
+        "not a valid Telegram username" in r.getMessage() for r in caplog.records
+    )
+
+
+def test_valid_bot_username_construction_is_quiet(caplog):
+    caplog.set_level(logging.WARNING, logger="brnrd.config")
+    Settings(database_url="sqlite:///:memory:", telegram_bot_username="brnrd_bot")
+    assert caplog.records == []
+
+
+def test_unset_bot_username_construction_is_quiet(caplog):
+    caplog.set_level(logging.WARNING, logger="brnrd.config")
+    Settings(database_url="sqlite:///:memory:")
+    assert caplog.records == []
 
 
 def test_bound_chat_message_enqueues_with_reply_to(env):
