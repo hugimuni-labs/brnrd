@@ -375,16 +375,209 @@ def held_gate_lock():
         os.close(fd)
 
 
+# ── #1195 rec 2: --changed-only skips legs the diff provably cannot touch ─
+#
+# Rec 1 (above) serializes the gate; this is the other half the issue named
+# and explicitly deferred out of PR #1215 — real throughput, at the cost of
+# a coverage claim that has to be provably right, not merely usually right.
+#
+# The rule looked simpler at first: skip a job when every changed path falls
+# under some *other* job's own `working-directory`. That direction is safe
+# one way — nothing under `src/frontend/`'s own toolchain (`npm test`,
+# `eslint`, `svelte-check`) ever reads a Python file — but *not* the other:
+# `backend`'s own pytest suite reads real content out of other jobs' trees
+# by design, not by accident, e.g. `tests/test_spa_serving.py` /
+# `tests/test_brnrd_legal_pinning.py` / `tests/test_privacy_notice.py` parse
+# real `.svelte` files under `src/frontend/src/routes/` and
+# `src/frontend/src/lib/`, and `tests/test_npm_launcher.py` executes the real
+# `packaging/npm/bin/brnrd.js` and reads `packaging/npm/uv-assets.json`. A
+# diff confined to `src/frontend/` or `packaging/npm/` can still break
+# `backend`, and there is no bounded way to enumerate every such coupling
+# from here — the pattern ("read the real file, don't duplicate it") is this
+# repo's own stated preference (AGENTS.md's "two implementations... wrong
+# together"), so it will keep recurring, not shrink to a fixed list.
+#
+# So: only a job that *has* its own `defaults.run.working-directory` — CI's
+# own claim that this job's inputs are scoped to a directory — is eligible
+# to be skipped by inference, and only when nothing in the diff falls under
+# that directory. A job with no such claim (`backend`: no
+# `working-directory`, i.e. "wherever CI didn't scope it") is never skipped
+# by this function, full stop — proven necessary above, not merely assumed.
+# Per the task's own instruction to leave a direction undispatched rather
+# than trust an unbounded guess, that half of the issue's own phrasing
+# ("skip the frontend leg... and vice versa") is deliberately not
+# implemented; see the report this shipped with. Opt-in (`--changed-only`);
+# CI itself never passes the flag, so the leg list a merge must pass is
+# unchanged.
+
+#: Basenames whose presence in the diff forces every job — inputs the
+#: whole gate depends on, not one job's tree (`pyproject.toml`'s deps and
+#: testpaths, any `package.json`'s scripts/deps, this script's own logic).
+_FORCE_ALL_BASENAMES = {"package.json", "pyproject.toml"}
+#: Exact repo-relative paths with the same effect, named rather than
+#: pattern-matched because there is exactly one of each and a prefix match
+#: would be broader than intended.
+_FORCE_ALL_EXACT_PATHS = {"scripts/gate.py"}
+
+
+def _forces_every_job(path: str) -> bool:
+    """A changed *path* whose effect can't be scoped to one job's tree."""
+    if path in _FORCE_ALL_EXACT_PATHS:
+        return True
+    if path.startswith(".github/workflows/"):
+        return True
+    return path.rsplit("/", 1)[-1] in _FORCE_ALL_BASENAMES
+
+
+def _job_working_dirs(workflow: dict) -> dict[str, str]:
+    """job_id -> its own ``defaults.run.working-directory``, ``"."`` when unset.
+
+    The same field `legs()` already reads into `job_wd` for a different
+    purpose (where a step's command runs) — reused here for what it also
+    happens to mean: a job with a `working-directory` is one CI itself
+    already scoped to a directory; one without it has never made that claim
+    about its own inputs.
+    """
+    return {
+        job_id: ((job.get("defaults") or {}).get("run") or {}).get("working-directory", ".")
+        for job_id, job in (workflow.get("jobs") or {}).items()
+    }
+
+
+def jobs_to_run(workflow: dict, changed: list[str]) -> set[str] | None:
+    """Job ids `--changed-only` would run, given *changed* repo-relative paths.
+
+    ``None`` means "run every job" — the safe answer for every case this
+    can't reason about: an empty/unreadable diff, or any path
+    `_forces_every_job` flags. Never the reverse: an empty *result set*
+    would mean "skip everything," which this function must not produce from
+    ambiguity, only from a changed list that is provably confined to jobs
+    that then get returned.
+
+    Only a job with its own `working-directory` (`_job_working_dirs`) is
+    ever left out of the result — and only when no changed path falls under
+    it. Every job *without* one (the "." catch-all — `backend` in this
+    repo's own `ci.yml`) is unconditionally in the result: see the block
+    above for the concrete, repeated evidence that such a job reads real
+    content out of other jobs' trees, which makes "not under my own
+    directory" too weak a proof of "cannot affect me."
+    """
+    if not changed:
+        return None
+    if any(_forces_every_job(path) for path in changed):
+        return None
+    job_dirs = _job_working_dirs(workflow)
+    exclusive = {jid: wd for jid, wd in job_dirs.items() if wd not in (".", "")}
+    catch_all = {jid for jid, wd in job_dirs.items() if wd in (".", "")}
+    run: set[str] = set(catch_all)
+    for path in changed:
+        run.update(
+            jid for jid, wd in exclusive.items()
+            if path == wd or path.startswith(wd.rstrip("/") + "/")
+        )
+    return run
+
+
+#: Default-branch names tried, in order, when looking for a merge-base.
+#: `origin/*` first — the remote-tracking ref reflects the branch's actual
+#: state even when the local `main` is stale or absent (a fresh worktree
+#: checkout, per AGENTS.md, may never have checked `main` out at all).
+_BASE_BRANCH_CANDIDATES = ("origin/main", "main", "origin/master", "master")
+
+
+def diff_base(repo_root: Path) -> str | None:
+    """The ref `--changed-only` diffs against.
+
+    The merge-base with the repo's own default branch when one is
+    reachable, else `HEAD~1` — a detached checkout, or one whose default
+    branch isn't named `main`/`master` locally or on `origin`. ``None``
+    when neither resolves (a one-commit repo with nothing before it, or no
+    `HEAD` at all); callers must treat that exactly like an unreadable
+    diff — run everything, never guess a base to compare against.
+    """
+    if gate_receipt.git_out(repo_root, ["rev-parse", "--verify", "-q", "HEAD"]) is None:
+        return None
+    for candidate in _BASE_BRANCH_CANDIDATES:
+        if gate_receipt.git_out(repo_root, ["rev-parse", "--verify", "-q", candidate]) is None:
+            continue
+        base = gate_receipt.git_out(repo_root, ["merge-base", "HEAD", candidate])
+        if base:
+            return base.strip()
+    fallback = gate_receipt.git_out(repo_root, ["rev-parse", "--verify", "-q", "HEAD~1"])
+    return fallback.strip() if fallback else None
+
+
+def changed_paths(repo_root: Path, base: str) -> list[str] | None:
+    """Repo-relative paths touched since *base*: committed diff plus untracked.
+
+    A single ref to `git diff` compares it against the working tree — index
+    and worktree both — so a strand's own uncommitted edits are covered
+    without a second ref to name. Untracked files never appear in `git
+    diff` regardless, so they are unioned in separately: dropping them would
+    treat a brand-new file as "no change," the wrong direction to be wrong
+    in for a check whose job is to avoid false negatives.
+    """
+    tracked = gate_receipt.git_out(repo_root, ["diff", "--name-only", base])
+    if tracked is None:
+        return None
+    files = {line.strip() for line in tracked.splitlines() if line.strip()}
+    untracked = gate_receipt.git_out(repo_root, ["ls-files", "--others", "--exclude-standard"])
+    if untracked:
+        files.update(line.strip() for line in untracked.splitlines() if line.strip())
+    return sorted(files)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the CI gate, as CI defines it.")
     parser.add_argument("--list", action="store_true", help="show the legs and exit")
     parser.add_argument("--job", help="run only this job id")
+    parser.add_argument(
+        "--changed-only", action="store_true",
+        help=(
+            "skip legs whose job cannot be affected by the diff since the "
+            "merge-base with main (or HEAD~1) — opt-in; CI still runs everything"
+        ),
+    )
     args = parser.parse_args(argv)
 
     if not WORKFLOW.exists():
         sys.exit(f"no workflow at {WORKFLOW}")
 
-    all_legs = legs(_load_workflow(), args.job)
+    workflow = _load_workflow()
+    all_legs = legs(workflow, args.job)
+
+    skip_jobs: set[str] = set()
+    base = None
+    if args.changed_only:
+        base = diff_base(REPO_ROOT)
+        changed = changed_paths(REPO_ROOT, base) if base else None
+        if changed is None:
+            print(
+                "gate: --changed-only could not read a diff (no merge-base, no "
+                "HEAD~1, or git failed) — running every leg, unaffected either way"
+            )
+        else:
+            run_jobs = jobs_to_run(workflow, changed)
+            if run_jobs is None:
+                print(
+                    f"gate: --changed-only vs {base}: shared config touched, or "
+                    "nothing changed — running every leg"
+                )
+            else:
+                all_job_ids = {leg["job"] for leg in all_legs}
+                skip_jobs = all_job_ids - run_jobs
+                shown = ", ".join(changed[:8]) + (" …" if len(changed) > 8 else "")
+                if skip_jobs:
+                    print(
+                        f"gate: --changed-only vs {base}: diff touches [{shown}] — "
+                        f"skipping {', '.join(sorted(skip_jobs))} (provably unaffected)"
+                    )
+                else:
+                    print(
+                        f"gate: --changed-only vs {base}: diff touches [{shown}] — "
+                        "no job provably unaffected, running everything"
+                    )
+
     runnable = [leg for leg in all_legs if leg["kind"] == "run"]
     provided = [leg for leg in all_legs if leg["kind"] == "uses"]
 
@@ -394,7 +587,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     if args.list:
         for leg in runnable:
-            mark = "refused" if refusal(leg["command"]) else "run"
+            if leg["job"] in skip_jobs:
+                mark = "skip Δ"
+            elif refusal(leg["command"]):
+                mark = "refused"
+            else:
+                mark = "run"
             print(f"  [{mark:>7}] {leg['job']}: {leg['name']}  (cwd {leg['cwd']})")
         return 0
 
@@ -402,6 +600,13 @@ def main(argv: list[str] | None = None) -> int:
         results: list[tuple[str, str, float]] = []
         for leg in runnable:
             label = f"{leg['job']}: {leg['name']}"
+            if leg["job"] in skip_jobs:
+                print(
+                    f"\n=== SKIP  {label}\n    --changed-only vs {base}: "
+                    f"{leg['job']} not touched by the diff"
+                )
+                results.append((label, "SKIPPED", 0.0))
+                continue
             reason = refusal(leg["command"])
             if reason:
                 print(f"\n=== SKIP  {label}\n    {reason}")
