@@ -9,7 +9,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -366,3 +370,144 @@ def test_two_trees_gated_via_the_real_runner_both_survive(tmp_path, monkeypatch)
     data = json.loads((outbox / gate.RECEIPT_NAME).read_text(encoding="utf-8"))
     assert data[gate_receipt.tree_key(first)]["verdict"] == "GREEN"
     assert data[gate_receipt.tree_key(second)]["verdict"] == "RED"
+
+
+# ── #1195 rec 1 + rec 4: one gate at a time, and say so while queued ──────
+
+
+def test_two_concurrent_gate_runs_on_one_tree_serialize(tmp_path):
+    """The bug, driven for real: two genuinely separate `python
+    scripts/gate.py` processes gating the *same* tree, launched together.
+
+    Each leg spends ~0.5s inside a marked critical section. Unlocked, both
+    processes' legs run at once and the section sees 2 processes present at
+    once — the shape #1195 measured as "five strands, five concurrent full
+    suites, CPU/IO thrashing". Locked, the second process's leg cannot start
+    until the first finishes and releases, so neither leg ever observes more
+    than 1 process in the section.
+
+    Out-of-process on purpose, not `gate.main()` called twice from two
+    threads of one test process: `fcntl.flock` is scoped to a real
+    process's own open file description, and rec 4's "name the holder"
+    ('s PID) means nothing if both sides share one PID. This test is what
+    was run, unlocked, to confirm it fails before the lock landed — see
+    `/tmp/brr-gate-lock-report.md` for the captured red run.
+    """
+    repo = _repo(tmp_path)
+    markers = tmp_path / "markers"
+    markers.mkdir()
+    max_seen_path = tmp_path / "max_seen.txt"
+
+    # A leg that marks its own presence, sleeps, records the highest
+    # concurrent-marker count it observed (itself flock-guarded — a
+    # deliberately different lock file from the one under test, so this
+    # detector's own correctness does not depend on the thing it measures),
+    # then clears its marker.
+    leg = (
+        "python3 -c \""
+        "import os, time, fcntl, pathlib;"
+        f"markers = pathlib.Path(r'{markers}');"
+        "mine = markers / str(os.getpid());"
+        "mine.write_text('1');"
+        "time.sleep(0.5);"
+        "seen = len(list(markers.iterdir()));"
+        f"maxp = pathlib.Path(r'{max_seen_path}');"
+        "f = open(maxp, 'a+');"
+        "fcntl.flock(f, fcntl.LOCK_EX);"
+        "f.seek(0);"
+        "prev = f.read().strip();"
+        "prevn = int(prev) if prev else 0;"
+        "f.seek(0); f.truncate(); f.write(str(max(prevn, seen)));"
+        "fcntl.flock(f, fcntl.LOCK_UN); f.close();"
+        "mine.unlink()"
+        "\""
+    )
+    _fake_ci(repo, leg)
+
+    # Same trick `_gate()` already uses (spec_from_file_location on the
+    # *real* GATE_PATH), just wrapped for a subprocess: `sys.path` gets the
+    # real `REPO_ROOT/src` at import time, so `from brr import ...` resolves
+    # correctly even though REPO_ROOT is monkeypatched to the fake repo
+    # afterward, before `main()` runs.
+    bootstrap = (
+        "import importlib.util, pathlib, sys\n"
+        f"spec = importlib.util.spec_from_file_location('g', r'{GATE_PATH}')\n"
+        "m = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(m)\n"
+        f"m.REPO_ROOT = pathlib.Path(r'{repo}')\n"
+        f"m.WORKFLOW = pathlib.Path(r'{repo}') / '.github' / 'workflows' / 'ci.yml'\n"
+        "sys.exit(m.main([]))\n"
+    )
+    procs = [
+        subprocess.Popen(
+            [sys.executable, "-c", bootstrap],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        for _ in range(2)
+    ]
+    outs = [p.communicate(timeout=30) for p in procs]
+    for p, (out, err) in zip(procs, outs):
+        assert p.returncode == 0, f"stdout:\n{out}\nstderr:\n{err}"
+
+    assert max_seen_path.exists(), "neither leg ever ran"
+    assert int(max_seen_path.read_text().strip()) == 1, (
+        "two gate.py runs on the same tree overlapped inside the leg — "
+        "the lock did not serialize them"
+    )
+
+
+def test_a_queued_run_names_the_holder_and_the_wait(tmp_path, monkeypatch, capfd):
+    """rec 4: a queued run must say so, not sit silently.
+
+    Holds the lock directly (standing in for a sibling's `gate.py`),
+    starts a waiter through `held_gate_lock()` on a background thread, and
+    checks both surfaces the spec asks for: the run's own outbox status
+    file (what a strand's status narration, or its dispatcher, can read
+    without scraping stderr) and the stderr line itself.
+    """
+    import fcntl
+
+    gate = _gate()
+    repo = _repo(tmp_path)
+    monkeypatch.setattr(gate, "REPO_ROOT", repo)
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    monkeypatch.setenv("BRR_OUTBOX_DIR", str(outbox))
+
+    lock_path = gate.gate_lock_path()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    holder_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    fcntl.flock(holder_fd, fcntl.LOCK_EX)
+    gate._write_lock_status(
+        gate._lock_status_path(lock_path),
+        pid=999999, since="2026-08-08T00:00:00+00:00",
+    )
+
+    entered = threading.Event()
+
+    def _waiter():
+        with gate.held_gate_lock():
+            entered.set()
+
+    thread = threading.Thread(target=_waiter)
+    thread.start()
+    try:
+        wait_file = outbox / ".gate-wait.json"
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not wait_file.exists():
+            time.sleep(0.02)
+        assert wait_file.exists(), "the waiting run never wrote its own status"
+        payload = json.loads(wait_file.read_text(encoding="utf-8"))
+        assert payload["holder_pid"] == 999999
+        assert payload["holder_since"] == "2026-08-08T00:00:00+00:00"
+        assert payload["waited_seconds"] >= 0
+    finally:
+        fcntl.flock(holder_fd, fcntl.LOCK_UN)
+        os.close(holder_fd)
+        thread.join(timeout=5)
+        assert not thread.is_alive(), "waiter never acquired the lock after release"
+        assert entered.is_set()
+
+    err = capfd.readouterr().err
+    assert "999999" in err
+    assert "queued" in err

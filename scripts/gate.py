@@ -56,12 +56,19 @@ Exit:   0 iff every executed leg exited 0.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime
+import json
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+try:  # pragma: no cover - POSIX only, and every supported host is POSIX
+    import fcntl
+except ImportError:  # pragma: no cover
+    fcntl = None  # type: ignore[assignment]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
@@ -72,7 +79,7 @@ WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 # would have this script gating one tree with another tree's rules.
 if str(REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "src"))
-from brr import gate_receipt  # noqa: E402
+from brr import gate_receipt, gitops  # noqa: E402
 
 # Written beside the run's other control dotfiles; the daemon's outbox drain
 # skips dotfiles, so it is never delivered to chat. Same idiom as `.card`.
@@ -191,6 +198,183 @@ def write_receipt(
     return gate_receipt.merge_entry(path.parent, REPO_ROOT, entry)
 
 
+# ── #1195 rec 1 + rec 4: one gate at a time per machine, and say where you
+# stand while queued ────────────────────────────────────────────────────
+#
+# The contention #1195 measured was never memory — it was CPU/IO: five
+# strands, five full pytest suites plus five `npm ci`/`svelte-check`/`eslint`
+# runs, concurrently, on one developer machine. `spawn.max_concurrent` admits
+# N *runs*; nothing admits N *gates*, and a run is cheap while its gate is
+# not. The fix accepted here (rec 1) is the cheap one: serialize the gate
+# itself, machine-wide, and make a queued run say so instead of silently
+# burning its window (rec 4). Rec 2 (skip unaffected legs) and rec 3
+# (reprice the spawn pool by gate cost) are explicitly out of scope — see
+# the issue's own ranking.
+
+#: The lock file's name, in the *shared* `.brr` dir — see `gate_lock_path`.
+GATE_LOCK_NAME = "gate.lock"
+#: How long between non-blocking flock attempts while queued.
+_LOCK_POLL_SECONDS = 2.0
+#: How often (in poll ticks) a queued run repeats its status, so a long wait
+#: does not spam stderr once per poll but still narrates within a minute.
+_LOCK_REPORT_EVERY = 15.0
+
+
+def gate_lock_path() -> Path:
+    """The machine-wide gate lock's path, in the *shared* `.brr` dir.
+
+    Not `REPO_ROOT / ".gate.lock"` — that is exactly the bug #1195 reports.
+    Every worktree gate.py runs from (`.brr/worktrees/run-*`, a scratch
+    `/tmp/brr-wt-*` checkout) has its *own* `REPO_ROOT`, so a lock file
+    anchored there would give every worktree its own lock and never contend,
+    the same way `.gate-receipts.json` would if it were not already keyed
+    off the outbox instead.
+
+    `gitops.shared_brr_dir` is the resolver `_child_git_pin` (`daemon.py`)
+    already relies on to find the one location every dispatch mode treats as
+    shared: a plain checkout's own `.brr`, or — from a linked worktree —
+    `git rev-parse --git-common-dir`'s parent, which is the *host*
+    checkout's `.brr` regardless of which worktree asks. That covers the
+    host checkout, `.brr/worktrees/run-*`, and a scratch
+    `/tmp/brr-wt-*` worktree alike, because all three are `git worktree`
+    checkouts of the same repository and resolve the same common git dir.
+    A containerized strand reaches the identical path for a different
+    reason: the docker backend bind-mounts `repo_root` (the host checkout)
+    at the same absolute path inside the container
+    (`src/brr/envs/__init__.py`, `_docker_git_config_env_args`'s docstring:
+    "the repo is bind-mounted at the same absolute path it has on the
+    host"), so `.brr` — and this lock file under it — rides the mount
+    unchanged. One physical file, four dispatch shapes, no configuration.
+    """
+    return gitops.shared_brr_dir(REPO_ROOT) / GATE_LOCK_NAME
+
+
+def _lock_status_path(lock: Path) -> Path:
+    """The small sidecar naming who holds *lock* and since when."""
+    return lock.with_name(lock.name + ".status")
+
+
+def _write_lock_status(path: Path, **fields: object) -> None:
+    """Best-effort, atomic write (`.tmp` + `replace`, `merge_entry`'s own
+    idiom in `gate_receipt.py`): a reader of this file is never itself
+    holding the gate lock — it got here *because* the flock failed — so
+    nothing serializes a concurrent write against a concurrent read, and a
+    non-atomic write could hand a truncated read. A status file that fails
+    to write at all is silence, not a crash — the flock is still the real
+    mechanism; this is narration on top of it."""
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(fields), encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        pass
+
+
+def _read_lock_status(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def queue_status_path() -> Path | None:
+    """Where *this* invocation's own "I am queued" status goes, or None.
+
+    Mirrors `receipt_path()`'s own `BRR_OUTBOX_DIR` detection on purpose —
+    same guard, same idiom, so a caller who already knows how the receipt
+    surfaces knows how this does too. Written into the run's own outbox
+    (never the shared lock dir) so a strand's own status narration, or
+    a dispatcher reading its child's outbox, can see "waiting on the gate"
+    without reaching into another tree's `.brr`.
+    """
+    outbox = (os.environ.get("BRR_OUTBOX_DIR") or "").strip()
+    if not outbox:
+        return None
+    directory = Path(outbox)
+    return directory / ".gate-wait.json" if directory.is_dir() else None
+
+
+@contextlib.contextmanager
+def held_gate_lock():
+    """Hold the machine-wide gate lock for the duration of the block.
+
+    Blocks — via a non-blocking `flock` retried on a short poll, not a
+    single blocking call — because the poll is what lets a queued run
+    *say* it is queued (rec 4) instead of vanishing into an opaque wait.
+    Every few polls it prints who holds the lock and for how long, and
+    (under a brnrd run) mirrors that into the run's own outbox as
+    `.gate-wait.json` so a caller does not have to scrape stderr.
+
+    No timeout: unlike `gitops.file_lock` (a short, skip-on-timeout lock
+    guarding a git-index commit), giving up here would mean the run
+    silently never gates, which is worse than any wait. A run that needs a
+    ceiling on the wait owns that decision itself (kill it, or hand the
+    gate back to its dispatcher per the issue's rec 4 framing) rather than
+    having this function decide it invisibly.
+
+    Degrades to a no-op (still yields, still runs the block) when `fcntl`
+    is unavailable or the lock file cannot be opened — this project targets
+    Linux, but a gate that cannot lock should still gate, same posture as
+    `gitops.file_lock`.
+    """
+    if fcntl is None:  # pragma: no cover - non-POSIX
+        yield
+        return
+    lock = gate_lock_path()
+    try:
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(lock), os.O_CREAT | os.O_RDWR, 0o644)
+    except OSError:
+        yield
+        return
+    status = _lock_status_path(lock)
+    queue_path = queue_status_path()
+    waited = 0.0
+    ticks = 0
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                pass
+            holder = _read_lock_status(status)
+            if ticks % max(1, int(_LOCK_REPORT_EVERY / _LOCK_POLL_SECONDS)) == 0:
+                held_since = holder.get("since", "unknown")
+                held_pid = holder.get("pid", "unknown")
+                print(
+                    f"gate: queued — pid {held_pid} has held the lock since "
+                    f"{held_since}; waited {waited:.0f}s so far",
+                    file=sys.stderr, flush=True,
+                )
+                if queue_path is not None:
+                    _write_lock_status(
+                        queue_path,
+                        waiting_pid=os.getpid(),
+                        waited_seconds=round(waited, 1),
+                        holder_pid=held_pid,
+                        holder_since=held_since,
+                    )
+            time.sleep(_LOCK_POLL_SECONDS)
+            waited += _LOCK_POLL_SECONDS
+            ticks += 1
+        _write_lock_status(
+            status,
+            pid=os.getpid(),
+            since=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        )
+        if queue_path is not None:
+            with contextlib.suppress(OSError):
+                queue_path.unlink()
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the CI gate, as CI defines it.")
     parser.add_argument("--list", action="store_true", help="show the legs and exit")
@@ -240,7 +424,12 @@ def main(argv: list[str] | None = None) -> int:
     # Sampling only after the last leg is what let a file written *during* the
     # gate be certified as gated (#917) — the first leg's tree is the one the
     # receipt has to be about.
-    results, tree = gate_receipt.gated_run(REPO_ROOT, run_legs)
+    #
+    # The gate lock (#1195 rec 1) wraps this same span and nothing wider: it
+    # is the leg loop that contends for CPU/IO, not argument parsing or
+    # `--list`, so only this block queues behind a sibling's gate.
+    with held_gate_lock():
+        results, tree = gate_receipt.gated_run(REPO_ROOT, run_legs)
     failed = any(verdict.startswith("FAIL") for _, verdict, _ in results)
 
     print("\n" + "=" * 66)
