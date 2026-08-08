@@ -2189,6 +2189,72 @@ def test_queue_spawn_request_undeclared_contract_leaves_the_body_alone(tmp_path)
     assert protocol._read_event(spawned[0])["body"].strip() == "bounded side task"
 
 
+def test_queue_spawn_request_refuses_a_prose_report_at_dispatch_time(tmp_path):
+    """#1136: a `report:` that was never a path is refused the moment it's
+    typed, the same way a malformed `event:` id is refused — instead of
+    riding a child's meta all the way to a completion check that can only
+    discover the problem later (the live 2026-08-05 case:
+    `report: the PR body is the report`, pinned separately by
+    `test_a_prose_report_declaration_says_whose_it_was`). No child is
+    queued at all: the whole directive is malformed input, same severity
+    as no body / bad environment / nested spawn elsewhere in this
+    function."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "original task", status="processing")
+    event_id = path.stem
+    task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
+
+    accepted = daemon._queue_spawn_request(
+        daemon._WorkerEmit(brr_dir, "", event_id),
+        task,
+        inbox,
+        event_id,
+        {
+            "spawn": True,
+            "branch": "brr/declared-slug",
+            "report": "the PR body is the report",
+        },
+        "bounded side task",
+        outbox,
+    )
+
+    assert accepted is False
+    spawned = [p for p in inbox.glob("*.md") if p.stem != event_id]
+    assert spawned == []
+    notices = daemon._read_outbox_notices(outbox)
+    assert len(notices) == 1
+    assert "the PR body is the report" in notices[0]["text"]
+    assert "start with" in notices[0]["text"]
+
+
+def test_queue_spawn_request_accepts_an_absolute_report_path(tmp_path):
+    """Guard the guard: an ordinary absolute path is unaffected — the
+    shape check refuses only the unambiguous non-path case."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "original task", status="processing")
+    event_id = path.stem
+    task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
+
+    accepted = daemon._queue_spawn_request(
+        daemon._WorkerEmit(brr_dir, "", event_id),
+        task,
+        inbox,
+        event_id,
+        {"spawn": True, "report": "/tmp/brr-report-with a space.md"},
+        "bounded side task",
+        outbox,
+    )
+
+    assert accepted is True
+    assert daemon._read_outbox_notices(outbox) == []
+
+
 def test_queue_spawn_request_carries_title_into_child_meta(tmp_path):
     """#880 §1b: ``title:`` in the spawn frontmatter carries onto the
     child's own meta as ``title`` — the field `_presence_label_for_event`
