@@ -23,7 +23,6 @@ from . import runner_select
 from .run import Run
 
 LEDGER_NAME = "run-ledger.jsonl"
-ESTIMATE_ACTUAL = "actual"
 RUN_NAME_CONTROL_NAME = ".name"
 _RUN_NAME_MAX_BYTES = 240
 _RUN_NAME_MAX_CHARS = 60
@@ -67,11 +66,13 @@ _ROW_FIELDS = (
     "five_hour_pct_delta",
     "usd_subscription_attributed",
     "usd_credits_equivalent",
-    "estimate_vs_actual",
     # design-the-bolt.md, fork 4 (signed): the one success signal going
     # forward — "accepted" / "annotated" / absent. `terminal_route`'s
     # five-value zoo demotes to debug detail as a follow-up, not this diff.
     "bolt",
+    # The bounded resident declaration plus daemon dissent.  ``produce`` is
+    # deliberately represented once, by ``external_refs`` above.
+    "bolt_declaration",
 )
 
 
@@ -273,8 +274,8 @@ def build_closed_run_row(
         "five_hour_pct_delta": five_hour_delta,
         "usd_subscription_attributed": usd_subscription,
         "usd_credits_equivalent": usd_credits_equivalent(after_levels),
-        "estimate_vs_actual": ESTIMATE_ACTUAL,
         "bolt": _bolt_value(task.meta.get("bolt")),
+        "bolt_declaration": bolt_declaration_value(task.meta.get("bolt")),
     }
     return {field: row.get(field) for field in _ROW_FIELDS}
 
@@ -289,6 +290,29 @@ def _bolt_value(bolt_meta: Any) -> str | None:
     if not isinstance(bolt_meta, dict):
         return None
     return "annotated" if bolt_meta.get("annotated") else "accepted"
+
+
+def bolt_declaration_value(bolt_meta: Any) -> dict[str, Any] | None:
+    """The durable cut declaration, absent on pre-declaration bolt metadata.
+
+    Older rows and frames carry only ``accepted_at`` / ``annotated`` (and
+    sometimes ``spend_declared``).  Do not manufacture empty asks or owed
+    rows for those runs: absence means the writer did not retain them.
+    """
+    if not isinstance(bolt_meta, dict):
+        return None
+    # Pre-change metadata retained ``spend_declared`` alone.  The explicit
+    # marker prevents that one surviving field from masquerading as a full
+    # declaration with invented empty siblings.
+    if bolt_meta.get("declaration_version") != 1:
+        return None
+    if bolt_meta.get("omitted") is True:
+        return {
+            "omitted": True,
+            "reason": str(bolt_meta.get("reason") or "persistence limits exceeded"),
+        }
+    fields = ("asks", "owed", "decisions", "spend_declared", "next", "dissent")
+    return {field: bolt_meta.get(field) for field in fields}
 
 
 def core_mismatch(expected: str | None, observed: str | None) -> bool | None:

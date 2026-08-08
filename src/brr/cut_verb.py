@@ -69,6 +69,7 @@ nothing was ever declared.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -91,6 +92,18 @@ _KNOWN_KEYS = frozenset({
 #: ``noted:<why>``). ``answered`` is the one disposition with no tail.
 _DISPOSITION_PREFIXES = ("deferred:", "noted:")
 
+# The declaration is reader-authored and therefore unbounded at the parse
+# layer.  Persistence is deliberately narrower: a declaration either fits
+# these limits whole or is replaced by an explicit omission marker.  Never
+# clip individual strings or rows — a syntactically valid half-declaration is
+# a more dangerous record than an honest absence.
+PERSISTENCE_MAX_ASKS = 64
+PERSISTENCE_MAX_OWED = 64
+PERSISTENCE_MAX_DECISIONS = 64
+PERSISTENCE_MAX_DISSENT = 64
+PERSISTENCE_MAX_TEXT_CHARS = 1024
+PERSISTENCE_MAX_JSON_BYTES = 65_536
+
 
 @dataclass(frozen=True)
 class AskDisposition:
@@ -98,6 +111,7 @@ class AskDisposition:
 
     event: str
     disposition: str
+    label: str = ""
 
 
 @dataclass(frozen=True)
@@ -151,15 +165,19 @@ def _parse_asks(raw: Any) -> tuple[tuple[AskDisposition, ...], str | None]:
                 return (), "asks: an empty event key names nothing"
             if isinstance(value, dict):
                 disposition = str(value.get("disposition") or "").strip()
+                label = str(value.get("label") or "").strip()
             else:
                 disposition = str(value if value is not None else "").strip()
+                label = ""
             if not _valid_disposition(disposition):
                 return (), (
                     f"asks: {event} has an unrecognised disposition "
                     f"{disposition!r} — use answered, deferred:<where>, or "
                     "noted:<why>"
                 )
-            rows.append(AskDisposition(event=event, disposition=disposition))
+            rows.append(AskDisposition(
+                event=event, disposition=disposition, label=label,
+            ))
         return tuple(rows), None
     if isinstance(raw, (list, tuple)):
         # Forward-compatible: accepted when a caller constructs `fm` with a
@@ -171,6 +189,7 @@ def _parse_asks(raw: Any) -> tuple[tuple[AskDisposition, ...], str | None]:
                 return (), f"asks: entry {item!r} is not an event/disposition pair"
             event = str(item.get("event") or "").strip()
             disposition = str(item.get("disposition") or "").strip()
+            label = str(item.get("label") or "").strip()
             if not event:
                 return (), f"asks: entry {item!r} is missing its event"
             if not _valid_disposition(disposition):
@@ -179,7 +198,9 @@ def _parse_asks(raw: Any) -> tuple[tuple[AskDisposition, ...], str | None]:
                     f"{disposition!r} — use answered, deferred:<where>, or "
                     "noted:<why>"
                 )
-            rows.append(AskDisposition(event=event, disposition=disposition))
+            rows.append(AskDisposition(
+                event=event, disposition=disposition, label=label,
+            ))
         return tuple(rows), None
     return (), f"asks: {raw!r} is neither a mapping nor a list of rows"
 
@@ -290,3 +311,85 @@ def parse_cut(fm: dict[str, Any]) -> tuple[CutDeclaration | None, str | None]:
         spend=spend,
         next=next_step,
     ), None
+
+
+def durable_declaration(
+    declaration: CutDeclaration,
+    *,
+    dissent: tuple[str, ...] | list[str] = (),
+) -> dict[str, Any]:
+    """Return the bounded declaration subset safe to persist.
+
+    ``produce`` is intentionally absent: the relic manifest and ledger's
+    ``external_refs`` are its canonical record.  The parser remains lenient;
+    an oversized declaration may still be validated and accepted.  At the
+    persistence boundary it becomes one explicit omission marker rather than
+    a clipped collection whose valid JSON shape would conceal missing facts.
+    """
+    counts = (
+        ("asks", len(declaration.asks), PERSISTENCE_MAX_ASKS),
+        ("owed", len(declaration.owed), PERSISTENCE_MAX_OWED),
+        ("decisions", len(declaration.decisions), PERSISTENCE_MAX_DECISIONS),
+        ("dissent", len(dissent), PERSISTENCE_MAX_DISSENT),
+    )
+    exceeded = [name for name, count, limit in counts if count > limit]
+    if exceeded:
+        return {
+            "declaration_version": 1,
+            "omitted": True,
+            "reason": "persistence row cap exceeded: " + ", ".join(exceeded),
+        }
+
+    asks = [
+        {
+            "event": row.event,
+            "disposition": row.disposition,
+            **({"label": row.label} if row.label else {}),
+        }
+        for row in declaration.asks
+    ]
+    owed = [
+        {
+            "label": row.label,
+            "ref": row.ref,
+            "why": row.why,
+            **({"where": row.where} if row.where else {}),
+        }
+        for row in declaration.owed
+    ]
+    payload: dict[str, Any] = {
+        "asks": asks,
+        "owed": owed,
+        "decisions": list(declaration.decisions),
+        "spend_declared": declaration.spend,
+        "next": declaration.next,
+        "dissent": list(dissent),
+    }
+    texts = [
+        value
+        for value in (
+            *(field for row in asks for field in row.values()),
+            *(field for row in owed for field in row.values()),
+            *payload["decisions"],
+            payload["spend_declared"],
+            payload["next"],
+            *payload["dissent"],
+        )
+        if isinstance(value, str)
+    ]
+    if any(len(value) > PERSISTENCE_MAX_TEXT_CHARS for value in texts):
+        return {
+            "declaration_version": 1,
+            "omitted": True,
+            "reason": "persistence text cap exceeded",
+        }
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    if len(encoded) > PERSISTENCE_MAX_JSON_BYTES:
+        return {
+            "declaration_version": 1,
+            "omitted": True,
+            "reason": "persistence JSON byte cap exceeded",
+        }
+    return {"declaration_version": 1, **payload}
