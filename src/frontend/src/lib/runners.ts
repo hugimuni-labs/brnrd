@@ -38,6 +38,34 @@ export interface WakeRequest {
 	status: string;
 }
 
+/** #932's conversation-sticky, mirrored up the runners lane: a claimed tap
+ * binds its profile to the claiming conversation for a TTL, and until it
+ * expires it — not the pin, not a parked tap — answers that thread's wakes.
+ * Rendering it (timer included) is what stops the rack lying about who
+ * wakes next (2026-08-08). */
+export interface RunnerSticky {
+	profile: string;
+	claimed_at?: string | null;
+	expires_at?: string | null;
+	correspondent_key?: string | null;
+	conversation_key?: string | null;
+	request_id?: string | null;
+}
+
+/** The sticky, if it decides anything right now — expiry checked against
+ * the caller's clock so a stale mirror can't render a dead promise. */
+export function liveSticky(
+	sticky: RunnerSticky | null | undefined,
+	nowMs: number = Date.now()
+): RunnerSticky | null {
+	if (!sticky || !sticky.profile) return null;
+	if (sticky.expires_at) {
+		const expires = Date.parse(sticky.expires_at);
+		if (!Number.isNaN(expires) && nowMs >= expires) return null;
+	}
+	return sticky;
+}
+
 export interface RunnersResponse {
 	generated_at: string;
 	/** Newest daemon report time — the rack's own clock, distinct from
@@ -51,6 +79,9 @@ export interface RunnersResponse {
 	/** The account's pending tap, if any — supersedes `default` as the
 	 *  answer to "who wakes next". */
 	wake_request: WakeRequest | null;
+	/** #932: the conversation-sticky in force, if any — the answer to "who
+	 *  wakes next *in the bound thread*", outranking `default` there. */
+	sticky?: RunnerSticky | null;
 	withheld?: WithheldLane;
 }
 
@@ -92,6 +123,23 @@ export async function requestWake(
 		throw new Error(`wake request failed: ${res.status}`);
 	}
 	return ((await res.json()) as { wake_request: WakeRequest }).wake_request;
+}
+
+/** #932's exit tap: ask the daemon to drop its conversation-sticky now.
+ * The server parks a timestamped ask; the daemon honours it on its next
+ * publish tick (a sticky claimed *after* the ask survives it), so expect
+ * the chip to clear within one tick, not instantly. */
+export async function releaseSticky(fetchImpl: typeof fetch = fetch): Promise<void> {
+	const res = await fetchImpl('/v1/dashboard/runners/sticky-release', {
+		method: 'POST',
+		credentials: 'include'
+	});
+	if (res.status === 401) {
+		throw new RunnersAuthError('not signed in');
+	}
+	if (!res.ok) {
+		throw new Error(`sticky release failed: ${res.status}`);
+	}
 }
 
 /** Cancel a pending tap. Returns the row's final state — `consumed`

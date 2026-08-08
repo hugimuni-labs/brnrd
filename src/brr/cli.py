@@ -3216,13 +3216,21 @@ def cmd_cut(args):
             do_mod.read_portal_state(outbox_dir).get("bolt") or {}
         )
         annotated = int(bolt_facet.get("annotated") or 0)
+        # Name where the bolt lands (his 2026-08-08 ask: the interface must
+        # explain itself) — a resident reading "accepted" otherwise has no
+        # way to know what surface should change, and the first bolt night
+        # produced a misdiagnosis for exactly that reason.
+        where = (
+            "bolt rides state.md + the run ledger; the dashboard's summons "
+            "strip and cloth lane pick it up on the next mirror tick"
+        )
         if annotated:
             print(
                 f"[brnrd cut] accepted, annotated — {annotated} check(s) "
-                "unresolved; the daemon's dissent rides the delivered body"
+                f"unresolved; the daemon's dissent rides the delivered body. {where}"
             )
         else:
-            print("[brnrd cut] accepted")
+            print(f"[brnrd cut] accepted — {where}")
         return 0
     if status == do_mod.QUEUED:
         print("[brnrd cut] ? still queued", file=sys.stderr)

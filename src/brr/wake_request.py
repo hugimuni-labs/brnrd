@@ -42,7 +42,7 @@ request, upon which the mirror file is removed.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -250,6 +250,95 @@ def sticky_record(brr_dir: Path) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+def sticky_ttl_seconds(cfg: dict | None) -> float:
+    """#932: the sticky record's lifetime, config-overridable per repo.
+
+    One resolver for every reader — dispatch
+    (`daemon._apply_sticky_wake_profile`) and the dashboard publish tick
+    (`gates/cloud._runners_snapshot`) must agree on when a sticky dies, or
+    the rack renders a promise dispatch no longer honours (the #733 class:
+    two staleness horizons, the invisible one deciding).
+    """
+    try:
+        return float(
+            (cfg or {}).get("wake_request.sticky_ttl_seconds", STICKY_TTL_SECONDS)
+        )
+    except (TypeError, ValueError):
+        return float(STICKY_TTL_SECONDS)
+
+
+def _parse_stamp(raw: Any) -> datetime | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def live_sticky_view(
+    brr_dir: Path,
+    ttl_seconds: float,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
+    """The sticky record as a renderable claim, or None when it decides nothing.
+
+    Returns ``{profile, claimed_at, expires_at, correspondent_key,
+    conversation_key, request_id}`` (stamps ISO-8601, seconds precision) for
+    a well-formed, unexpired record; ``None`` for absent, malformed, or
+    expired. Read-only on purpose: dropping a dead record is dispatch's job
+    (`daemon._apply_sticky_wake_profile`), because a publish tick must never
+    race the dispatcher for the file's lifecycle.
+    """
+    record = sticky_record(brr_dir)
+    if record is None:
+        return None
+    profile = str(record.get("profile") or "").strip()
+    claimed_at = _parse_stamp(record.get("claimed_at"))
+    if not profile or claimed_at is None:
+        return None
+    expires_at = claimed_at + timedelta(seconds=ttl_seconds)
+    if (now or datetime.now(timezone.utc)) >= expires_at:
+        return None
+    view: dict[str, Any] = {
+        "profile": profile,
+        "claimed_at": claimed_at.isoformat(timespec="seconds"),
+        "expires_at": expires_at.isoformat(timespec="seconds"),
+    }
+    for key in ("correspondent_key", "conversation_key", "request_id"):
+        value = str(record.get(key) or "").strip()
+        if value:
+            view[key] = value
+    return view
+
+
 def drop_sticky(brr_dir: Path) -> None:
     """Forget the sticky record (expiry, or an unbindable replacement)."""
     _sticky_path(brr_dir).unlink(missing_ok=True)
+
+
+def release_sticky(brr_dir: Path, requested_at_raw: Any) -> bool:
+    """Honour a dashboard release ask (#932's exit tap), guarded by tense.
+
+    Drops the record only when it was claimed at or before the ask — a tap
+    claimed *after* the user pressed release is a newer decision and wins.
+    Returns True when a record was dropped. An unparsable ask releases
+    nothing (a guard may only assert what the run can be proven wrong
+    about; a garbled stamp proves nothing).
+    """
+    requested_at = _parse_stamp(requested_at_raw)
+    if requested_at is None:
+        return False
+    record = sticky_record(brr_dir)
+    if record is None:
+        return False
+    claimed_at = _parse_stamp(record.get("claimed_at"))
+    if claimed_at is not None and claimed_at > requested_at:
+        return False
+    drop_sticky(brr_dir)
+    return True

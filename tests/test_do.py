@@ -545,7 +545,12 @@ def test_cut_reports_accepted_when_consumed_cleanly(tmp_path, monkeypatch, capsy
     monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-cut-*.md"))
 
     assert main(["cut", str(declaration)]) == 0
-    assert capsys.readouterr().out.strip() == "[brnrd cut] accepted"
+    out = capsys.readouterr().out.strip()
+    # The verdict names its render surface (2026-08-08, his ask): a resident
+    # reading "accepted" must learn what should visibly change, or the next
+    # bolt night produces another misdiagnosis.
+    assert out.startswith("[brnrd cut] accepted — ")
+    assert "summons strip" in out
 
 
 def test_cut_splices_the_marker_into_an_existing_frontmatter_block(
