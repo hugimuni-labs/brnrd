@@ -668,6 +668,25 @@ def resolve_context(
     )
 
 
+def resolution_reason(ctx: HomeContext, repo_root: Path) -> str:
+    """Say *why* ``ctx`` is the home a read command is about to answer from.
+
+    An account-linked home and a freshly-would-be-created project-path
+    fallback render identically to a caller that only looks at *where* —
+    both are "some directory with a kb in it" until something names *why*
+    that directory was chosen. #1193: a ``brnrd kb`` read scaffolded an
+    empty project home (no account link found from this ``repo_root``) and
+    reported on it exactly as it would a real, populated account home.
+    This is the label only — it never decides ``kind``, only states the
+    one ``resolve_context`` already picked.
+    """
+
+    if ctx.kind == "account":
+        label = ctx.account_id or "(unknown id)"
+        return f"account {label} (linked)"
+    return f"project fallback (no account link found from {repo_root})"
+
+
 def slug_repo_label(label: str) -> str:
     """Filesystem-safe repo label for account-store paths."""
 
