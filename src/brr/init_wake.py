@@ -32,7 +32,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+try:
+    import readline  # noqa: F401 — imported for its `input()` side effect
+    # (line editing, history, arrow keys). POSIX-only in the stdlib; a
+    # terminal without it just keeps the plain `input()` behaviour it
+    # already had, which is why this is a soft dependency and not a guard
+    # anything downstream branches on.
+except ImportError:  # pragma: no cover - platform-dependent (no readline on Windows)
+    pass
+
+from . import await_verb
 from . import config as conf
+from . import course as course_mod
 from . import gitops
 from . import portals
 from . import prompts
@@ -229,25 +240,49 @@ def dispatch_control(repo_root: Path, verb: str) -> ControlOutcome:
 # ── The terminal portal loop ────────────────────────────────────────
 
 
-#: The submit rule, stated where the rule applies. The reply reader ends on
-#: a blank line, and a bare ``you> `` never said so: a user who typed two
-#: lines and pressed Enter saw nothing happen and had to "press enter double
-#: time to unblock it". Full sentence on the first beat only — this prompt is
-#: printed on every message of the interview, and a paragraph each time is
-#: noise on a terminal.
+#: The submit rule, stated where the rule applies (#1240). One Enter sends a
+#: single-line answer — the shape of nearly every reply this interview asks
+#: for, and the one every other terminal prompt already trained the user to
+#: expect. The old contract required a *second*, blank-line Enter even for a
+#: one-line answer ("press enter double time to unblock it"); multi-line is
+#: still there for the rare case that needs it, opted into explicitly (a
+#: trailing ``\`` — unambiguous, never guessed at) rather than assumed by
+#: default. Full sentence on the first beat only — this prompt is printed on
+#: every message of the interview, and a paragraph each time is noise on a
+#: terminal.
 FIRST_PROMPT = (
-    "[reply] type as many lines as you like — a blank line (Enter twice) "
-    "sends it; sending nothing skips the question.\nyou> "
+    "[reply] press Enter to send; end a line with `\\` to keep typing on "
+    "the next one (the first line without `\\` sends everything so far); "
+    "sending nothing skips the question.\nyou> "
 )
-#: Every beat after the first: the rule survives as a parenthetical, because
-#: the one thing a first-timer must never do is wonder whether it hung.
-NEXT_PROMPT = "you (blank line sends)> "
+#: Every beat after the first: the rule survives as a short parenthetical,
+#: because the one thing a first-timer must never do is wonder whether it
+#: hung — but a paragraph every message is its own kind of noise.
+NEXT_PROMPT = "you (\\ continues)> "
+
+#: The explicit multi-line opt-in (#1240). A line ending in this is not yet
+#: the reply — it is "more is coming" — so a one-line answer that happens to
+#: contain nothing surprising never has to fight a heuristic for what it
+#: meant; the signal is spelled, not inferred.
+_CONTINUE_MARK = "\\"
 
 
 def _default_reader(prompt: str = FIRST_PROMPT) -> str:
-    """Read a multi-line reply from the TTY; a blank line ends it."""
+    """Read one reply from the TTY. One Enter sends; a trailing ``\\`` on a
+    line opts into multi-line — the *next* line, whatever it is (blank or
+    not), ends it. A blank line still works as the terminator (typing more
+    then abandoning it with a bare Enter), but it is no longer the only way:
+    requiring one after an already-unmarked line would reintroduce the exact
+    double-Enter cost this contract exists to remove.
+    """
     print(prompt, end="", flush=True)
-    lines: list[str] = []
+    try:
+        first = input()
+    except (EOFError, KeyboardInterrupt):
+        return ""
+    if not first.endswith(_CONTINUE_MARK):
+        return first.strip()
+    lines = [first[: -len(_CONTINUE_MARK)]]
     while True:
         try:
             line = input()
@@ -255,7 +290,11 @@ def _default_reader(prompt: str = FIRST_PROMPT) -> str:
             break
         if not line.strip():
             break
+        if line.endswith(_CONTINUE_MARK):
+            lines.append(line[: -len(_CONTINUE_MARK)])
+            continue
         lines.append(line)
+        break
     return "\n".join(lines).strip()
 
 
@@ -385,9 +424,30 @@ class _Session:
         #: The last emote face shown to the terminal, so a face renders on
         #: *change* and never on repeat.
         self._last_face: str | None = None
-        #: Beat counter — the only source of variety in which breath the
-        #: waiting face takes, so a recorded terminal stays reproducible.
-        self._beats = 0
+        #: #1239: an armed ``await:`` directive — the same shape
+        #: ``daemon.py``'s ``task.meta["await"]`` carries (``file``,
+        #: ``timeout_seconds``, ``armed_at``, ``generation``, ``resolved``,
+        #: ``outcome``, ``which``), evaluated on this session's own tick
+        #: instead of a daemon heartbeat since init *is* the heartbeat here.
+        #: ``None`` until the model first writes ``await:``.
+        self._await_state: dict[str, Any] | None = None
+        #: #1239: notices this run has recorded for itself — the same shape
+        #: ``daemon.py``'s ``_record_outbox_notice`` writes (``at`` /
+        #: ``text`` / ``kind`` / ``lifetime``), rendered straight into
+        #: ``portal-state.json`` → ``notices`` rather than a separate
+        #: ``.jsonl`` file, since init has exactly one run to remember them
+        #: for.
+        self._notices: list[dict[str, Any]] = []
+        #: #1240: whether a "thinking…" status line has already been shown
+        #: for the dead-air stretch currently in progress — shown once per
+        #: gap, never repainted, so silence reads as "still working" rather
+        #: than jitter.
+        self._thinking_shown = False
+        #: #1240: the last ``.card`` course token surfaced to the terminal
+        #: (`course.token`) — latched the same way the boundary bar in
+        #: ``hooks.py`` latches it, so a static course costs nothing and a
+        #: checked row says so exactly once.
+        self._course_token: str | None = None
 
         brr_dir = gitops.shared_brr_dir(repo_root)
         self.brr_dir = brr_dir
@@ -441,15 +501,20 @@ class _Session:
         """
         events = self._pending_for_wake()
         portals.write_live_inbox(self.outbox_dir, self.event_id, events)
-        portals.write_portal_state(
-            self.outbox_dir,
-            portals.init_portal_state(
-                current_event_id=self.event_id,
-                events=events,
-                phase=phase,
-                awaiting_reply=awaiting_reply,
-            ),
+        state = portals.init_portal_state(
+            current_event_id=self.event_id,
+            events=events,
+            phase=phase,
+            awaiting_reply=awaiting_reply,
+            notices=self._notices,
         )
+        # #1239: the ``await:`` facet ``brnrd await`` (cli.py's
+        # ``cmd_await``) polls once its directive is armed. Injected here
+        # rather than threaded through ``init_portal_state`` — that
+        # function's shape is shared with the daemon extraction and knows
+        # nothing about a single-run wait; the facet is init's own to add.
+        state["await"] = self._await_projection()
+        portals.write_portal_state(self.outbox_dir, state)
 
     def post_event(self, body: str, **meta: object) -> str:
         """Put a user reply (or a control outcome) into the wake's inbox."""
@@ -503,8 +568,28 @@ class _Session:
     # ── the drain ───────────────────────────────────────────────
 
     def drain_once(self) -> int:
-        """Print/handle every outbox file waiting right now. Returns count."""
+        """Handle every outbox file waiting right now — one beat. Returns count.
+
+        #1239: the daemon's own drain (``daemon._drain_outbox``) understands
+        a dozen directives; this one used to understand exactly one
+        (``control:``) and treated everything else — prose, a ``note:``
+        closing a pending letter, an ``await:`` the model armed to hold its
+        own turn — as a chat message. A ``note:`` printed its raw
+        frontmatter and left the event it meant to retire pending forever;
+        an ``await:`` did the same and left ``brnrd await`` polling a facet
+        nobody ever wrote. Teaching the three the interview actually
+        produces (``note:`` / ``event:`` / ``await:``) closes both holes.
+
+        One beat, one floor offer. The model may drop several files in a
+        single pass — prose, a reply closing out the human's last turn, an
+        ``await:`` to hold the next one — and each used to cost its own
+        blocking ``_offer_reply()`` call: three consecutive ``you>``
+        prompts for one beat of thinking. The floor opens at most once,
+        after every file in this pass is handled, and only when a message
+        actually printed something worth answering.
+        """
         handled = 0
+        spoke = False
         for path in _outbox_messages(self.outbox_dir):
             try:
                 text = path.read_text(encoding="utf-8")
@@ -513,122 +598,294 @@ class _Session:
             meta, body = protocol.parse_outbox_message(text)
             _retire(path)
             handled += 1
-            verb = str(meta.get("control") or "").strip()
-            if verb:
-                self._handle_control(verb)
+
+            control_verb = str(meta.get("control") or "").strip()
+            if control_verb:
+                self._handle_control(control_verb)
                 continue
+
+            note_target = str(meta.get("note") or "").strip()
+            if note_target:
+                self._handle_note(note_target, body)
+                continue
+
+            if "await" in meta:
+                self._handle_await(meta)
+                continue
+
+            # Everything left is a message: the interview's ordinary voice,
+            # or an `event:`-addressed reply to a specific pending letter
+            # (its own contract event — the default, same as no target — or
+            # another one the human's last turn opened).
             self.result.messages += 1
-            self._clear_line()
             self._show_face()
             self.writer(body.strip())
+            self._show_course()
+            spoke = True
+            event_target = str(meta.get("event") or "").strip()
+            if event_target and event_target != self.event_id:
+                self._deliver_to(event_target)
+
+        if spoke:
+            self._thinking_shown = False
             self._offer_reply()
         return handled
 
-    #: Frame cadence and the pause between breaths, in seconds. Slow on
-    #: purpose: this is a face, not a spinner. A spinner says "I am busy" at
-    #: whatever speed makes the machine look fast; a face at rest that takes
-    #: a breath every few seconds says "someone is here", which is the true
-    #: thing and the one worth saying.
-    _FRAME_SECONDS = 0.16
-    _REST_SECONDS = 3.0
+    def _resolve_pending(
+        self, target: str,
+    ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+        """Resolve a ``note:``/``event:`` target against this wake's own inbox.
 
-    def _animates(self) -> bool:
-        """Whether this terminal should be breathed at.
-
-        The same discipline that keeps `.card` out of chat: a rendering
-        surface renders only where a person is looking. A pipe, a CI log or
-        a ``TERM=dumb`` session would get carriage returns and frame litter
-        instead of a face, so it gets nothing.
+        Exact id first, then an unambiguous short-id tail — the same
+        two-step ``daemon.py``'s ``_resolve_event_target`` uses, narrowed to
+        init's single inbox: one repo, one terminal, one thread, so there is
+        no cross-drawer union to build. Returns ``(event, ambiguous)`` —
+        ``ambiguous`` is non-empty only when the short tail matches more
+        than one pending event, in which case *event* is ``None`` and the
+        caller must refuse rather than guess.
         """
-        if not self.interactive:
-            return False
+        pending = protocol.list_pending(self.inbox_dir)
+        for ev in pending:
+            if str(ev.get("id") or "") == target:
+                return ev, []
+        tail = target.strip()
+        if tail.startswith("evt-"):
+            tail = tail[len("evt-"):]
+        tail = tail.lstrip(".…")
+        if not tail:
+            return None, []
+        matches = [
+            ev for ev in pending
+            if str(ev.get("id") or "").rsplit("-", 1)[-1] == tail
+        ]
+        if len(matches) == 1:
+            return matches[0], []
+        if len(matches) > 1:
+            return None, matches
+        return None, []
+
+    def _add_notice(self, text: str, *, kind: str) -> None:
+        """Record a notice the way ``daemon._record_outbox_notice`` does —
+        surfaced in ``portal-state.json`` → ``notices`` for the model to
+        re-read, never delivered as chat. Kept in memory (not a
+        ``.jsonl`` file): init has exactly one run to remember them for.
+        """
+        self._notices.append({
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "text": text,
+            "kind": kind,
+            "lifetime": "run",
+        })
+        # Bounded the same way the daemon's own tail is — a runaway
+        # interview must not grow this file-in-memory without limit.
+        self._notices = self._notices[-50:]
+
+    def _handle_note(self, target: str, body: str) -> None:
+        """``note: <id>`` — retire a pending event deliberately, no reply.
+
+        The interview posts a fresh pending event per human turn
+        (``post_event``) and per control outcome — visible to the model in
+        its own ``inbox.json`` so it can close one the same way a resident
+        closes any other letter. Unhandled, these piled up pending forever;
+        this is the daemon's ``noted`` state (``_note_event_closed``),
+        narrowed to init's one inbox.
+        """
+        event, ambiguous = self._resolve_pending(target)
+        if ambiguous:
+            self._add_notice(
+                f"note dropped: event {target} is ambiguous — matches "
+                f"{len(ambiguous)} pending events; address the full id — "
+                "nothing was retired",
+                kind="refused",
+            )
+            return
+        if event is None:
+            self._add_notice(
+                f"note dropped: event {target} not found among pending "
+                "events — nothing was retired",
+                kind="refused",
+            )
+            return
         try:
-            if not sys.stdout.isatty():
-                return False
-        except (AttributeError, ValueError):
-            return False
-        return os.environ.get("TERM", "") not in ("", "dumb")
+            protocol.set_status(event, "noted")
+        except OSError:
+            self._add_notice(
+                f"note dropped: event {event.get('id')} vanished before it "
+                "could be marked noted",
+                kind="dropped",
+            )
+            return
+        if body.strip():
+            self._add_notice(
+                f"note: body text ignored — a note closes event "
+                f"{event.get('id')} without speaking; use event: to reply",
+                kind="advisory",
+            )
+
+    def _deliver_to(self, target: str) -> None:
+        """``event: <id>`` addressed at a *different* pending letter.
+
+        The message already printed to the terminal — init has exactly one
+        delivery surface — so this only keeps the pending list honest by
+        retiring the letter the reply was actually addressed to, the same
+        way the daemon's ``event:`` branch marks a foreign target ``done``.
+        Left unhandled, ``inbox.json`` would grow one never-closed entry per
+        human turn regardless of what the model said back.
+        """
+        event, ambiguous = self._resolve_pending(target)
+        if ambiguous:
+            self._add_notice(
+                f"event dropped: event {target} is ambiguous — matches "
+                f"{len(ambiguous)} pending events; address the full id",
+                kind="refused",
+            )
+            return
+        if event is None:
+            self._add_notice(
+                f"event dropped: event {target} not found among pending "
+                "events — the reply above still reached the terminal",
+                kind="refused",
+            )
+            return
+        try:
+            protocol.set_status(event, "done")
+        except OSError:
+            pass
+
+    def _handle_await(self, meta: dict[str, Any]) -> None:
+        """``await: true`` (+ ``timeout:``, optional ``file:``) — arm the hold.
+
+        There is no daemon reaching this run between beats; the model *is*
+        the only thing driving its own turn forward, so where a resident
+        would end a turn and let the daemon re-wake it, this model calls
+        `brnrd await` itself (a real subprocess, reading the very
+        ``portal-state.json`` this session writes) to hold its process
+        rather than exit mid-interview. Parsed with the same
+        :func:`await_verb.parse_await` the daemon's drain uses, so the
+        grammar (and its refusals) match exactly.
+        """
+        file_path, timeout_seconds, error = await_verb.parse_await(meta)
+        if error:
+            self._add_notice(f"await dropped: {error}", kind="dropped")
+            return
+        self._await_state = {
+            "file": file_path,
+            "timeout_seconds": timeout_seconds,
+            "armed_at": time.time(),
+            "generation": str(time.time_ns()),
+            "resolved": False,
+        }
+
+    def _await_projection(self) -> dict[str, Any]:
+        """This tick's ``portal-state.json`` → ``await`` facet.
+
+        Narrowed from ``daemon._resolve_await_state``: init has no hard
+        budget cap to fold in (no other run competes for this process), so
+        this is the same event-or-timeout evaluation with the capping
+        branch left out. Called from :meth:`refresh_portals`, which runs
+        every loop tick while an await is armed and unresolved (see
+        :meth:`run`) — that per-tick call *is* the heartbeat that makes
+        this a listening wait instead of ``brnrd await`` burning its full
+        poll ceiling every call.
+        """
+        armed = self._await_state
+        if not armed:
+            return {"armed": False}
+        if armed.get("resolved"):
+            return {
+                "armed": True,
+                "file": armed.get("file"),
+                "generation": armed.get("generation"),
+                "timeout_seconds": armed.get("timeout_seconds"),
+                "resolved": True,
+                "outcome": armed.get("outcome"),
+                "which": armed.get("which"),
+            }
+        outcome, which = await_verb.evaluate(
+            armed.get("file"), self._pending_for_wake(),
+        )
+        if outcome is None:
+            deadline = float(armed["armed_at"]) + float(armed["timeout_seconds"])
+            if time.time() >= deadline:
+                outcome, which = "timeout", None
+        result: dict[str, Any] = {
+            "armed": True,
+            "file": armed.get("file"),
+            "generation": armed.get("generation"),
+            "timeout_seconds": armed.get("timeout_seconds"),
+            "resolved": outcome is not None,
+        }
+        if outcome is not None:
+            armed["resolved"] = True
+            armed["outcome"] = outcome
+            armed["which"] = which
+            result["outcome"] = outcome
+            result["which"] = which
+        return result
+
+    # ── plain writer functions (#1240) ────────────────────────────
+    #
+    # The maintainer's live steer on this contract (2026-08-08): strip the
+    # animation now, but keep style/emotes reachable *later*, properly —
+    # "structure the output code so a future renderer can re-skin it (plain
+    # writer functions, not scattered prints), without building that
+    # renderer now." Every terminal write below goes through one of these
+    # named seams rather than an inline ``print``/``self.writer`` call
+    # scattered at the point of use, so a future re-skin has one function
+    # per concern to replace.
+
+    def _status(self, text: str) -> None:
+        """One plain, un-repainted line: visible state, not an animation.
+
+        No carriage return, no frame, no write competing with a line the
+        user might be typing on — the whole point of #1240. Shown once per
+        state change (see call sites), never on a fixed cadence.
+        """
+        self.writer(f"[brnrd] {text}")
+
+    def _show_course(self) -> None:
+        """Surface the model's own `.card` course rows as they change.
+
+        The model, booted with the same daemon-substrate context any
+        resident gets (``prompts.build_init_wake_prompt`` is the same
+        assembler), may keep a ``## Plan``/``## Course`` checkbox section on
+        its ``.card`` exactly as any daemon-hosted run does — reusing
+        :mod:`brr.course` rather than re-parsing the checkboxes here. Rendered
+        on the course's own delta only (the same latch ``hooks.py`` already
+        uses for the boundary bar), so a static course costs nothing and a
+        checked row says so exactly once. The maintainer's steer named this
+        directly: "progress is visible (question N, or the course rows init
+        already writes — surface them)".
+        """
+        try:
+            body = (self.outbox_dir / _CARD_NAME).read_text(encoding="utf-8")
+        except OSError:
+            return
+        route = course_mod.parse(body)
+        token = course_mod.token(route)
+        if token == self._course_token:
+            return
+        self._course_token = token
+        if route is None or not route.rows:
+            return
+        current = route.current
+        detail = f" — {current.text}" if current else ""
+        self._status(f"course {route.done_count}/{route.total}{detail}")
 
     def _wait_a_beat(self, thread: threading.Thread) -> None:
-        """Wait one poll interval — breathing, when someone is watching.
+        """Wait one poll interval for the runner thread — plainly.
 
-        The interview's dead air is the model thinking: five seconds, or
-        forty, with a terminal showing nothing at all. ``emotes`` is not a
-        glyph table but an animation format — ``frames`` (base → expression
-        → base), ``sequences`` so one mood can breathe more than one way, a
-        ``pitch``, and frame rules so a mark never jitters — and every
-        surface that has rendered a face so far threw all of it away. This
-        is the place it was designed for.
-
-        **The cycle lives on the session, not on the call.** Driving it
-        found the obvious-looking version — build a breath, play it,
-        clear — never animated at all: one poll interval is a second, the
-        rest between breaths is three, so the rest consumed every beat, the
-        expression frames never played, and the clear at the end of each
-        call made the resting face flicker once a second. The animation is
-        longer than the tick that renders it, so its position has to
-        outlive the tick.
-
-        Honest by construction: it breathes only while the runner thread is
-        genuinely working, so it is a liveness signal and not a spinner
-        pretending. The line is cleared when the wait ends because the
-        thread died, and by :meth:`_drain_once` before anything prints.
+        #1240: this used to breathe a face at whoever was watching — frame
+        by frame, carriage-return in place, "someone is here" said by
+        animation. The maintainer's signed priority is zero jitter: nothing
+        may write to a line the user might be typing on, however careful
+        the framing. A plain sleep says nothing while nothing is happening,
+        which is exactly what should happen — the "someone is here" job now
+        belongs to :meth:`_status` (called once per gap from :meth:`run`,
+        never repainted), a plain writer function a future re-skin can
+        replace without touching this loop at all.
         """
-        if not self._animates():
-            thread.join(self.poll_interval)
-            return
-        face = self._current_emote()
-        if face is None:
-            thread.join(self.poll_interval)
-            return
-        cycle = self._breath_cycle(face)
-        deadline = time.monotonic() + self.poll_interval
-        while time.monotonic() < deadline and thread.is_alive():
-            self._paint(cycle[self._beats % len(cycle)])
-            self._beats += 1
-            remaining = min(deadline, time.monotonic() + self._FRAME_SECONDS)
-            wait = remaining - time.monotonic()
-            if wait > 0:
-                thread.join(wait)
-        if not thread.is_alive():
-            self._clear_line()
-
-    def _breath_cycle(self, face) -> tuple[str, ...]:
-        """Rest, held, then one breath — as a flat list of frames.
-
-        Flattened rather than played as a nested loop because the caller
-        renders *one frame per tick* and must be resumable at any index:
-        the whole point is that the cycle survives the poll interval that
-        interrupts it.
-
-        Which breath follows the rest comes off the beat counter rather
-        than a random draw, so a recorded terminal stays reproducible and
-        two runs of the same length animate the same way.
-        """
-        sequences = face.sequences or ((face.resting_frame,),)
-        sequence = sequences[
-            (self._beats // max(len(sequences), 1)) % len(sequences)
-        ]
-        rest_ticks = max(1, int(self._REST_SECONDS / self._FRAME_SECONDS))
-        return (face.resting_frame,) * rest_ticks + tuple(sequence)
-
-    def _paint(self, frame: str) -> None:
-        """One frame, in place. Carriage return only — no escape codes, so
-        a terminal that lies about its capabilities still degrades to
-        legible text rather than to mojibake."""
-        try:
-            sys.stdout.write("\r  " + frame + "  ")
-            sys.stdout.flush()
-        except (OSError, ValueError):
-            pass
-
-    def _clear_line(self) -> None:
-        """Take the line back before anything else claims it."""
-        try:
-            sys.stdout.write("\r" + " " * 24 + "\r")
-            sys.stdout.flush()
-        except (OSError, ValueError):
-            pass
+        thread.join(self.poll_interval)
 
     def _current_emote(self):
         """The resident's own face, or the telemetry face for a working run.
@@ -719,7 +976,10 @@ class _Session:
         work, so ``run`` excludes it from the budget deadline and separately
         watches it against ``abandoned_prompt_seconds``.
         """
-        if not self.interactive:
+        if not self.interactive or self._abort.is_set():
+            # #1240: ^C already killed the runner and printed the resume
+            # note (`_on_sigint`) — no further question may reach the
+            # terminal after that, or the interrupt reads as ignored.
             return
         self.refresh_portals("interview", awaiting_reply=True)
         self._awaiting_started = time.monotonic()
@@ -761,6 +1021,12 @@ class _Session:
             return
         self._empty_reads = 0
         self.result.replies += 1
+        # The maintainer's live steer (2026-08-08): "every received answer
+        # gets an immediate one-line ack" — otherwise the terminal goes
+        # dark the instant they hit Enter, with nothing to say whether it
+        # landed, right up until the model's next message (which may be
+        # tens of seconds out).
+        self._status("got it — thinking…")
         self.post_event(reply.strip(), reply_to=self.event_id)
 
     def _degrade_to_defaults(self) -> None:
@@ -815,59 +1081,101 @@ class _Session:
         thread.start()
         start = time.monotonic()
         try:
-            while thread.is_alive():
-                replies_before = self.result.replies
+            try:
+                while thread.is_alive():
+                    replies_before = self.result.replies
+                    handled = self.drain_once()
+                    if self._abort.is_set():
+                        break
+                    just_replied = self.result.replies > replies_before
+                    if handled or just_replied:
+                        self._thinking_shown = False
+                    elif (
+                        self.interactive
+                        and self.result.messages
+                        and not self._thinking_shown
+                    ):
+                        # #1240, the maintainer's live steer: "every prompt
+                        # says whether it's waiting for you or thinking" —
+                        # this is the thinking half, said once per stretch
+                        # of dead air, never repainted (the animation it
+                        # replaces was). Gated on at least one message
+                        # having shown already: there is no "still thinking"
+                        # to report before the interview has said its first
+                        # word, only ordinary startup latency.
+                        self._status("thinking…")
+                        self._thinking_shown = True
+                    self._show_course()
+                    if self._await_state and not self._await_state.get("resolved"):
+                        # #1239: this tick *is* the heartbeat that keeps
+                        # `brnrd await`'s portal-state facet current —
+                        # nothing else re-evaluates an armed wait between
+                        # beats.
+                        self.refresh_portals("interview")
+                    self._wait_a_beat(thread)
+                    if just_replied:
+                        # Rec 3 (#1036): a reply that has just landed is
+                        # always processed. Skip the deadline entirely on
+                        # this tick — not "compute it more carefully" but
+                        # "do not ask" — so no accounting subtlety can
+                        # reproduce the cruelty of killing the runner in the
+                        # same breath as the answer. The accounting below is
+                        # still what keeps every *other* tick honest about
+                        # what the budget measures.
+                        continue
+                    # Recomputed each tick rather than carried:
+                    # ``.keepalive`` is wall-clock and can be rewritten
+                    # mid-wake, so the extension is translated into this
+                    # loop's monotonic clock every time instead of being
+                    # frozen at one reading.
+                    #
+                    # Rec 1 (#1036): the deadline is pushed out by however
+                    # long this wake has spent with a human holding the
+                    # floor (``self._awaiting_elapsed``, accrued in
+                    # ``_offer_reply``) — that time is the human's, not the
+                    # wake's work.
+                    deadline = (
+                        start + self.timeout_seconds + self._awaiting_elapsed
+                    )
+                    extended = _keepalive_deadline(self.outbox_dir, 0.0)
+                    if extended:
+                        deadline = max(
+                            deadline,
+                            time.monotonic() + (extended - time.time()),
+                        )
+                    if time.monotonic() >= deadline:
+                        self.result.error = (
+                            f"the init wake outlived its "
+                            f"{self.timeout_seconds}s budget"
+                        )
+                        self._kill_runner()
+                        break
+                    if self._awaiting_elapsed >= self.abandoned_prompt_seconds:
+                        # The cost rec 1 named: excluding thinking time from
+                        # the budget removes the only ceiling on a terminal
+                        # nobody ever comes back to. This is that ceiling,
+                        # firing on its own clock — independent of, and much
+                        # longer than, the wake budget above.
+                        self.result.error = (
+                            "the init wake was abandoned at a prompt for "
+                            f"over {self.abandoned_prompt_seconds}s"
+                        )
+                        self._kill_runner()
+                        break
+            except KeyboardInterrupt:
+                # #1240: `_on_sigint` already recorded the abort and printed
+                # the resume note before raising — this only keeps that
+                # exception from surfacing as a bare traceback, whichever
+                # blocked call PEP 475 happened to interrupt (most of the
+                # time a blocked ``input()`` inside ``_offer_reply``, which
+                # already catches it locally; this is the net for anywhere
+                # else in the loop, e.g. a blocked ``thread.join``).
+                pass
+            if not self._abort.is_set():
+                # Whatever the wake said on its way out still counts —
+                # unless #1240's ^C contract already claimed the terminal:
+                # "no further drain-printed prose, no further questions."
                 self.drain_once()
-                if self._abort.is_set():
-                    break
-                just_replied = self.result.replies > replies_before
-                self._wait_a_beat(thread)
-                if just_replied:
-                    # Rec 3 (#1036): a reply that has just landed is always
-                    # processed. Skip the deadline entirely on this tick —
-                    # not "compute it more carefully" but "do not ask" —
-                    # so no accounting subtlety can reproduce the cruelty of
-                    # killing the runner in the same breath as the answer.
-                    # The accounting below is still what keeps every *other*
-                    # tick honest about what the budget measures.
-                    continue
-                # Recomputed each tick rather than carried: ``.keepalive`` is
-                # wall-clock and can be rewritten mid-wake, so the extension
-                # is translated into this loop's monotonic clock every time
-                # instead of being frozen at one reading.
-                #
-                # Rec 1 (#1036): the deadline is pushed out by however long
-                # this wake has spent with a human holding the floor
-                # (``self._awaiting_elapsed``, accrued in ``_offer_reply``)
-                # — that time is the human's, not the wake's work.
-                deadline = start + self.timeout_seconds + self._awaiting_elapsed
-                extended = _keepalive_deadline(self.outbox_dir, 0.0)
-                if extended:
-                    deadline = max(
-                        deadline,
-                        time.monotonic() + (extended - time.time()),
-                    )
-                if time.monotonic() >= deadline:
-                    self.result.error = (
-                        f"the init wake outlived its {self.timeout_seconds}s "
-                        "budget"
-                    )
-                    self._kill_runner()
-                    break
-                if self._awaiting_elapsed >= self.abandoned_prompt_seconds:
-                    # The cost rec 1 named: excluding thinking time from the
-                    # budget removes the only ceiling on a terminal nobody
-                    # ever comes back to. This is that ceiling, firing on
-                    # its own clock — independent of, and much longer than,
-                    # the wake budget above.
-                    self.result.error = (
-                        "the init wake was abandoned at a prompt for over "
-                        f"{self.abandoned_prompt_seconds}s"
-                    )
-                    self._kill_runner()
-                    break
-            # Whatever the wake said on its way out still counts.
-            self.drain_once()
         finally:
             if previous_sigint is not None:
                 try:
@@ -877,9 +1185,25 @@ class _Session:
         return self._closeout()
 
     def _on_sigint(self, _signum, _frame) -> None:
+        """#1240: kill the runner, say so once, stop — no further prose.
+
+        PEP 475 restarts an interrupted syscall around a handler that
+        returns normally, so a bare flag-set here would leave a blocked
+        ``input()`` (inside :func:`_default_reader`) silently retrying —
+        the ^C would be *handled* and the terminal would still look hung.
+        Raising is what stops the retry: the exception replaces it and
+        propagates out of the interrupted call immediately, exactly as the
+        default SIGINT handler's own ``KeyboardInterrupt`` already does —
+        installing a custom handler here otherwise forfeits that property.
+        """
         self.result.aborted = True
         self._abort.set()
         self._kill_runner()
+        self.writer(
+            "\n[brnrd] interrupted — parked, nothing lost. Run `brnrd "
+            "init` again to resume, or edit AGENTS.md by hand."
+        )
+        raise KeyboardInterrupt()
 
     def _kill_runner(self) -> None:
         try:

@@ -82,6 +82,28 @@ def _write_outbox(outbox: Path, name: str, text: str) -> None:
     tmp.rename(outbox / name)
 
 
+def _write_outbox_paced(outbox: Path, name: str, text: str, *, timeout: float = 5.0) -> None:
+    """Write one outbox file, then wait for the harness to drain it.
+
+    #1239 collapsed ``_offer_reply()`` to once per drained *beat* rather
+    than once per file (the fix for "prose+reply+await" costing three
+    consecutive ``you>`` prompts for one turn) — so a script that dumps N
+    questions into the outbox in one tight loop, with no pacing, now lands
+    as *one* beat and one reader() call, not N. That collapsing is correct
+    once-per-turn behaviour, but it makes a tight write-loop the wrong way
+    to simulate N *separate* exchanges — a real interview waits for the
+    terminal to catch up between questions, same as this does.
+    """
+    _write_outbox(outbox, name, text)
+    deadline = time.monotonic() + timeout
+    processed = outbox / ".processed" / name
+    while time.monotonic() < deadline:
+        if processed.exists():
+            return
+        time.sleep(0.005)
+    raise AssertionError(f"{name} was never drained")
+
+
 def _outbox_dir(repo: Path) -> Path:
     root = repo / ".brr" / "outbox"
     dirs = [p for p in root.iterdir() if p.is_dir()]
@@ -448,6 +470,14 @@ class TestTerminalLoop:
 
         The read here is unbounded on purpose, exactly like the pipe. What
         is asserted is that it stops being *called*.
+
+        Paced one file at a time (`_write_outbox_paced`) rather than dumped
+        in one tight loop: #1239 made ``_offer_reply()`` fire once per
+        drained *beat*, not once per file, so a dozen files written before
+        the harness ever looks would land as one beat and one read — a real
+        flooded pipe instead produces a dozen *separate* exchanges, each
+        answered (instantly) before the next question is asked, which is
+        what this now simulates.
         """
         repo = _repo(tmp_path)
         reads = itertools.count()
@@ -455,7 +485,7 @@ class TestTerminalLoop:
         def script(invocation):
             outbox = Path(invocation.env["BRR_OUTBOX_DIR"])
             for index in range(12):
-                _write_outbox(outbox, f"{index:02d}.md", f"question {index}?")
+                _write_outbox_paced(outbox, f"{index:02d}.md", f"question {index}?")
 
         result = init_wake.run_init_wake(
             repo, "mock-runner", cfg={},
@@ -489,7 +519,8 @@ class TestTerminalLoop:
         The sleep here is above ``EMPTY_READ_HUMAN_FLOOR`` and nothing else
         about this test differs from the flood test, which is the point:
         same empties, same count, opposite verdict, decided by how fast
-        they came back.
+        they came back. Paced the same way (`_write_outbox_paced`), for the
+        same reason: six *separate* exchanges, not one six-part beat.
         """
         repo = _repo(tmp_path)
 
@@ -500,7 +531,7 @@ class TestTerminalLoop:
         def script(invocation):
             outbox = Path(invocation.env["BRR_OUTBOX_DIR"])
             for index in range(6):
-                _write_outbox(outbox, f"{index:02d}.md", f"question {index}?")
+                _write_outbox_paced(outbox, f"{index:02d}.md", f"question {index}?")
 
         result = init_wake.run_init_wake(
             repo, "mock-runner", cfg={},
@@ -522,7 +553,10 @@ class TestTerminalLoop:
         nothing skips the question" is the documented affordance, and three
         skips spread across a conversation are a person using it, not a
         pipe. Neutering the reset makes this go red while the test above
-        stays green — which is the pair that pins the distinction.
+        stays green — which is the pair that pins the distinction. Paced
+        one question at a time (`_write_outbox_paced`), so each of the six
+        replies below answers its own exchange rather than all six landing
+        in one beat with one reader() call.
         """
         repo = _repo(tmp_path)
         replies = iter(["", "yes", "", "no", "", "sure"])
@@ -530,7 +564,7 @@ class TestTerminalLoop:
         def script(invocation):
             outbox = Path(invocation.env["BRR_OUTBOX_DIR"])
             for index in range(6):
-                _write_outbox(outbox, f"{index:02d}.md", f"question {index}?")
+                _write_outbox_paced(outbox, f"{index:02d}.md", f"question {index}?")
 
         result = init_wake.run_init_wake(
             repo, "mock-runner", cfg={},
@@ -546,65 +580,99 @@ class TestTerminalLoop:
         )
         assert result.replies == 3
 
-    def test_the_breath_cycle_outlives_the_tick(self, tmp_path):
-        """The bug the first version shipped, pinned.
+    def test_no_animation_machinery_survives(self, tmp_path, capsys):
+        """#1240: the maintainer's signed priority is zero jitter.
 
-        A poll interval is one second; the rest between breaths is three.
-        Built per call, the rest consumed every beat, the expression frames
-        never played at all, and the clear at the end of each call made the
-        resting face flicker once a second. The cycle is longer than the
-        tick that renders it, so its *position* has to live on the session.
-
-        Asserted structurally rather than by driving a terminal: the cycle
-        must contain frames the rest does not, and stepping through it by
-        beat must reach them.
+        Pinned structurally rather than by capturing a terminal: the
+        breathing-frame machinery (`_paint`/`_clear_line`/`_breath_cycle`/
+        `_animates`, all carriage-return-driven) must not exist to reappear
+        by accident, and `_wait_a_beat` must be a plain sleep with no
+        stdout write of its own.
         """
         repo = _repo(tmp_path)
         session = _session(repo, writer=lambda _t: None, reader=lambda: "")
-        face = emotes.lookup("fo.cus")
 
-        cycle = session._breath_cycle(face)
-        assert len(cycle) > int(
-            session._REST_SECONDS / session._FRAME_SECONDS
-        ), "the cycle is all rest — no breath would ever play"
-        assert set(cycle) - {face.resting_frame}, "no expression frames in the cycle"
+        for gone in ("_paint", "_clear_line", "_breath_cycle", "_animates"):
+            assert not hasattr(session, gone), f"{gone} should have been removed"
 
-        # One poll interval's worth of ticks must not exhaust the rest, or
-        # the expression is unreachable by construction.
-        ticks_per_interval = int(session.poll_interval / session._FRAME_SECONDS)
-        assert ticks_per_interval < len(cycle), (
-            "a single interval covers the whole cycle — position need not persist"
+        capsys.readouterr()  # clear anything import-time machinery printed
+        thread = threading.Thread(target=lambda: time.sleep(0.03))
+        thread.start()
+        session._wait_a_beat(thread)
+        thread.join()
+        out = capsys.readouterr().out
+        assert out == "", f"_wait_a_beat wrote to stdout: {out!r}"
+
+    def test_thinking_is_shown_once_per_gap_not_repainted(self, tmp_path):
+        """#1240, the maintainer's live steer: every prompt says whether the
+        wake is waiting for you or thinking — said once per stretch of dead
+        air, not on a cadence (that would be the animation again)."""
+        repo = _repo(tmp_path)
+        printed: list[str] = []
+
+        def script(invocation):
+            outbox = Path(invocation.env["BRR_OUTBOX_DIR"])
+            _write_outbox(outbox, "01.md", "what should memory look like?")
+            for _ in range(200):
+                events = json.loads((outbox / "inbox.json").read_text())["events"]
+                if events:
+                    break
+                time.sleep(0.01)
+            # A real gap — several poll ticks of the model genuinely
+            # thinking before its next message, the case #1240 names.
+            time.sleep(0.08)
+            _write_outbox(outbox, "02.md", "and how should it be checked?")
+
+        result = init_wake.run_init_wake(
+            repo, "mock-runner", cfg={},
+            invoke=_scripted_runner(script),
+            writer=printed.append,
+            reader=lambda: "kb/ in the repo",
+            poll_interval=0.01,
         )
-        seen = {cycle[i % len(cycle)] for i in range(len(cycle))}
-        assert seen == set(cycle)
+        assert result.ok, result.error
+        thinking = [p for p in printed if p == "[brnrd] thinking…"]
+        assert len(thinking) == 1, printed
 
-    def test_nothing_breathes_where_nobody_is_looking(self, tmp_path, monkeypatch):
-        """The wait animates only for a person at a terminal.
-
-        Same discipline that keeps `.card` out of chat. A pipe, a CI log or
-        a ``TERM=dumb`` session would get carriage returns and frame litter
-        where a face was meant, so it gets nothing — and the *only* thing
-        that keeps that true is this predicate, since everything downstream
-        of it writes escape-free bytes that look fine right up until they
-        are in a log someone greps.
-        """
+    def test_a_received_answer_gets_an_immediate_ack(self, tmp_path):
+        """#1240, the maintainer's live steer: every received answer gets an
+        immediate one-line ack, rather than the terminal going dark until
+        the model's next message lands."""
         repo = _repo(tmp_path)
-        session = _session(repo, writer=lambda _t: None, reader=lambda: "")
+        printed: list[str] = []
 
-        monkeypatch.setattr(init_wake.sys.stdout, "isatty", lambda: True, raising=False)
-        monkeypatch.setenv("TERM", "xterm-256color")
-        assert session._animates() is True
+        def script(invocation):
+            outbox = Path(invocation.env["BRR_OUTBOX_DIR"])
+            _write_outbox(outbox, "01.md", "what should memory look like?")
 
-        monkeypatch.setenv("TERM", "dumb")
-        assert session._animates() is False
+        result = init_wake.run_init_wake(
+            repo, "mock-runner", cfg={},
+            invoke=_scripted_runner(script),
+            writer=printed.append,
+            reader=lambda: "kb/ in the repo",
+            poll_interval=0.01,
+        )
+        assert result.ok, result.error
+        assert any("got it" in p for p in printed), printed
 
-        monkeypatch.setenv("TERM", "xterm-256color")
-        monkeypatch.setattr(init_wake.sys.stdout, "isatty", lambda: False, raising=False)
-        assert session._animates() is False
+    def test_course_rows_surface_on_change_only(self, tmp_path):
+        """#1240, the maintainer's live steer: progress is visible — the
+        course rows the model already writes to `.card`, surfaced, latched
+        on the course's own delta the same way the boundary bar is."""
+        repo = _repo(tmp_path)
+        printed: list[str] = []
+        session = _session(repo, writer=printed.append, reader=lambda: "")
 
-        monkeypatch.setattr(init_wake.sys.stdout, "isatty", lambda: True, raising=False)
-        session.interactive = False
-        assert session._animates() is False
+        card = session.outbox_dir / ".card"
+        card.write_text("## Plan\n- [ ] read the ticket\n- [ ] fix it\n")
+        session._show_course()
+        session._show_course()  # unchanged — silent
+        card.write_text("## Plan\n- [x] read the ticket\n- [ ] fix it\n")
+        session._show_course()  # a row checked — renders
+
+        course_lines = [p for p in printed if "course" in p]
+        assert len(course_lines) == 2, printed
+        assert "0/2" in course_lines[0] and "1/2" in course_lines[1]
 
     def test_the_waiting_face_is_the_residents_own(self, tmp_path):
         """It breathes the mood the wake wrote, and falls back honestly.
@@ -868,7 +936,7 @@ class TestAwaitingReply:
         assert _portal(session.outbox_dir)["awaiting_reply"] is False
 
     def test_the_prompt_states_how_to_send(self, tmp_path, monkeypatch, capsys):
-        """He pressed Enter, nothing happened, and pressed Enter again."""
+        """#1240: one Enter sends; the multi-line escape is spelled, not guessed."""
         repo = _repo(tmp_path)
         monkeypatch.setattr("builtins.input", lambda: "")
 
@@ -882,12 +950,46 @@ class TestAwaitingReply:
         first = out.index(init_wake.FIRST_PROMPT)
         later = out.index(init_wake.NEXT_PROMPT)
         assert first < later, "the full rule belongs on the first beat"
-        # The rule itself: a blank line sends, i.e. Enter twice.
-        assert "blank line" in init_wake.FIRST_PROMPT
-        assert "Enter twice" in init_wake.FIRST_PROMPT
-        # Every later beat still carries it, without becoming a paragraph.
-        assert "blank line" in init_wake.NEXT_PROMPT
+        # The rule itself: one Enter sends; the escape into multi-line is
+        # spelled explicitly rather than inferred.
+        assert "press Enter to send" in init_wake.FIRST_PROMPT
+        assert init_wake._CONTINUE_MARK in init_wake.FIRST_PROMPT
+        # Every later beat still carries the escape, without becoming a
+        # paragraph.
+        assert init_wake._CONTINUE_MARK in init_wake.NEXT_PROMPT
         assert len(init_wake.NEXT_PROMPT) <= 32
+
+    def test_one_enter_submits_a_single_line_answer(self, tmp_path, monkeypatch):
+        """#1240: the common case costs exactly one Enter, not two."""
+        repo = _repo(tmp_path)
+        answers = iter(["kb/ in the repo"])
+        monkeypatch.setattr("builtins.input", lambda: next(answers))
+
+        assert init_wake._default_reader() == "kb/ in the repo"
+        with pytest.raises(StopIteration):
+            next(answers)  # only one input() call — no second Enter needed
+
+    def test_trailing_backslash_opts_into_multi_line(self, tmp_path, monkeypatch):
+        """The escape ends as soon as a line doesn't carry the marker —
+        not only on a blank line, or the escape would cost the same second
+        Enter the default case no longer does."""
+        repo = _repo(tmp_path)
+        lines = iter(["kb/ in the repo, \\", "and pytest is the gate"])
+        monkeypatch.setattr("builtins.input", lambda: next(lines))
+
+        assert (
+            init_wake._default_reader()
+            == "kb/ in the repo, \nand pytest is the gate"
+        )
+
+    def test_multi_line_escape_can_still_be_abandoned_with_a_blank_line(
+        self, tmp_path, monkeypatch,
+    ):
+        repo = _repo(tmp_path)
+        lines = iter(["typing more\\", ""])
+        monkeypatch.setattr("builtins.input", lambda: next(lines))
+
+        assert init_wake._default_reader() == "typing more"
 
 
 # ── the clock that stops for a human (#1036) ────────────────────────
@@ -1103,6 +1205,197 @@ class TestControlVerbs:
         repo = _repo(tmp_path)
         outcome = init_wake.dispatch_control(repo, "gate-setup smoke-signals")
         assert not outcome.ok and "telegram" in outcome.detail
+
+
+# ── the directive grammar (#1239) ───────────────────────────────────
+#
+# `drain_once` used to understand exactly one directive (`control:`) and
+# treated everything else — including `note:`/`event:`/`await:` — as a chat
+# message: a `note:` printed its raw frontmatter and left the event it meant
+# to retire pending forever; an `await:` did the same and left
+# `portal-state.json` never carrying the facet `brnrd await` polls. These
+# pin the three the interview actually produces (tests/test_init_wake.py
+# carried zero coverage for any non-control directive before this).
+
+
+class TestDirectiveGrammar:
+    def test_note_retires_the_targeted_event_silently(self, tmp_path):
+        repo = _repo(tmp_path)
+        printed: list[str] = []
+        session = _session(repo, writer=printed.append, reader=lambda: "")
+        target_id = session.post_event(
+            "the human said something", reply_to=session.event_id,
+        )
+
+        _write_outbox(
+            session.outbox_dir, "01.md",
+            f"---\nnote: {target_id}\n---\nacknowledged, nothing to add\n",
+        )
+        handled = session.drain_once()
+
+        assert handled == 1
+        assert printed == [], "a note must never print — it closes silently"
+        pending_ids = {e["id"] for e in session._pending_for_wake()}
+        assert target_id not in pending_ids, "the noted event is still pending"
+
+    def test_note_on_an_unknown_event_is_refused_not_swallowed(self, tmp_path):
+        repo = _repo(tmp_path)
+        session = _session(repo, writer=lambda _t: None, reader=lambda: "")
+
+        _write_outbox(
+            session.outbox_dir, "01.md", "---\nnote: evt-doesnotexist-zzzz\n---\n",
+        )
+        session.drain_once()
+        session.refresh_portals("interview")
+
+        state = _portal(session.outbox_dir)
+        assert any("note dropped" in n["text"] for n in state["notices"]), state
+
+    def test_note_leaves_no_trace_when_the_id_is_ambiguous(self, tmp_path):
+        """A short-id tail matching more than one pending event must never
+        guess — the daemon's own `_resolve_event_target` refuses the same
+        way, and init's narrower resolver owes the same guarantee."""
+        repo = _repo(tmp_path)
+        session = _session(repo, writer=lambda _t: None, reader=lambda: "")
+        a = session.post_event("first", reply_to=session.event_id)
+        # Force a collision on the short-id tail deliberately.
+        short = a.rsplit("-", 1)[-1]
+        b_id = f"evt-0000000000000000000-{short}"
+        b_path = session.inbox_dir / f"{b_id}.md"
+        b_path.write_text(
+            f"---\nid: {b_id}\nstatus: pending\nsource: init\n---\ncollide\n",
+        )
+
+        _write_outbox(session.outbox_dir, "01.md", f"---\nnote: {short}\n---\n")
+        session.drain_once()
+        session.refresh_portals("interview")
+
+        pending_ids = {e["id"] for e in session._pending_for_wake()}
+        assert a in pending_ids, "an ambiguous short id must retire nothing"
+        state = _portal(session.outbox_dir)
+        assert any("ambiguous" in n["text"] for n in state["notices"])
+
+    def test_event_reply_to_a_foreign_event_prints_and_retires_it(self, tmp_path):
+        repo = _repo(tmp_path)
+        printed: list[str] = []
+        session = _session(repo, writer=printed.append, reader=lambda: "")
+        target_id = session.post_event("earlier answer", reply_to=session.event_id)
+
+        _write_outbox(
+            session.outbox_dir, "01.md",
+            f"---\nevent: {target_id}\n---\nthanks — got it\n",
+        )
+        session.drain_once()
+
+        assert "thanks — got it" in printed
+        pending_ids = {e["id"] for e in session._pending_for_wake()}
+        assert target_id not in pending_ids, "the answered foreign event is still pending"
+
+    def test_event_targeting_the_current_contract_is_the_ordinary_reply_path(
+        self, tmp_path,
+    ):
+        """`event: <self.event_id>` — the wake's own contract — behaves
+        exactly like an untargeted message: no special foreign-event
+        handling, still offers the floor."""
+        repo = _repo(tmp_path)
+        printed: list[str] = []
+        session = _session(repo, writer=printed.append, reader=lambda: "sure")
+
+        _write_outbox(
+            session.outbox_dir, "01.md",
+            f"---\nevent: {session.event_id}\n---\nshall I proceed?\n",
+        )
+        session.drain_once()
+
+        assert "shall I proceed?" in printed
+        assert session.result.replies == 1
+
+    def test_await_arms_and_resolves_when_a_reply_lands(self, tmp_path):
+        repo = _repo(tmp_path)
+        session = _session(repo, writer=lambda _t: None, reader=lambda: "")
+
+        _write_outbox(
+            session.outbox_dir, "01.md", "---\nawait: true\ntimeout: 30s\n---\n",
+        )
+        session.drain_once()
+        session.refresh_portals("interview")
+        state = _portal(session.outbox_dir)
+        assert state["await"]["armed"] is True
+        assert state["await"]["resolved"] is False
+
+        session.post_event("a reply landed", reply_to=session.event_id)
+        session.refresh_portals("interview")
+        state = _portal(session.outbox_dir)
+        assert state["await"]["resolved"] is True
+        assert state["await"]["outcome"] == "event"
+
+    def test_await_without_a_timeout_is_dropped_with_a_notice(self, tmp_path):
+        repo = _repo(tmp_path)
+        session = _session(repo, writer=lambda _t: None, reader=lambda: "")
+
+        _write_outbox(session.outbox_dir, "01.md", "---\nawait: true\n---\n")
+        session.drain_once()
+        session.refresh_portals("interview")
+
+        assert session._await_state is None
+        state = _portal(session.outbox_dir)
+        assert any("await dropped" in n["text"] for n in state["notices"]), state
+        assert state["await"] == {"armed": False}
+
+    def test_prose_reply_and_await_in_one_beat_cost_one_offer(self, tmp_path):
+        """The issue's own named bug: 3 consecutive `you>` prompts for
+        prose+reply+await, down to one — the model asks a real question
+        *and* closes the previous event *and* arms an await, all in the
+        same beat."""
+        repo = _repo(tmp_path)
+        calls: list[int] = []
+        session = _session(
+            repo, writer=lambda _t: None, reader=lambda: (calls.append(1), "sure")[1],
+        )
+        target_id = session.post_event("earlier answer", reply_to=session.event_id)
+
+        _write_outbox(
+            session.outbox_dir, "01-reply.md", f"---\nevent: {target_id}\n---\nthanks\n",
+        )
+        _write_outbox(
+            session.outbox_dir, "02-prose.md", "what should memory look like?",
+        )
+        _write_outbox(
+            session.outbox_dir, "03-await.md", "---\nawait: true\ntimeout: 30s\n---\n",
+        )
+
+        handled = session.drain_once()
+
+        assert handled == 3
+        assert len(calls) == 1, "the floor was offered more than once for one beat"
+        assert session.result.replies == 1
+
+
+# ── ^C (#1240) ───────────────────────────────────────────────────────
+
+
+class TestInterrupt:
+    def test_sigint_prints_the_resume_note_and_stops_asking(self, tmp_path):
+        repo = _repo(tmp_path)
+        printed: list[str] = []
+
+        def _boom():
+            raise AssertionError(
+                "no further question may reach the terminal after ^C",
+            )
+
+        session = _session(repo, writer=printed.append, reader=_boom)
+
+        with pytest.raises(KeyboardInterrupt):
+            session._on_sigint(None, None)
+
+        assert session._abort.is_set()
+        assert session.result.aborted is True
+        assert any("interrupted" in p for p in printed), printed
+
+        # #1240: "no further drain-printed prose, no further questions" —
+        # `_offer_reply` must refuse outright rather than reaching `_boom`.
+        session._offer_reply()
 
 
 # ── degradation and resume ──────────────────────────────────────────
