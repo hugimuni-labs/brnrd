@@ -43,7 +43,23 @@ there. This is the one shape ``brnrd cut`` and a hand-authored file can both
 produce reliably; it is documented here as a deliberate scope decision, not
 an oversight. A value under ``asks`` may be the bare disposition string
 (``evt-...: answered`` — the "flow-scalar form" the task named) or a
-one-key dict (``evt-...: {disposition: answered}``); both are accepted.
+one-key dict reached through the grammar's *nested-indentation* form:
+
+    asks:
+      evt-...-txwl:
+        disposition: answered
+
+Both are accepted. **Inline flow-mapping syntax is not** — writing the
+one-key dict on a single line (``evt-...-txwl: {disposition: answered}``)
+does not produce a dict at all: ``protocol._parse_block`` has no brace
+grammar, so that line parses as the literal string
+``"{disposition: answered}"``, which then fails
+:func:`_valid_disposition` and the whole declaration is refused. This is
+not hypothetical — it is the exact drop #1219 measured live (``asks: …
+unrecognised disposition '{disposition: answered}'``), traced back to this
+docstring's own inline example reading as literal syntax when it was only
+ever meant to describe the resulting shape. Only the indented nested-block
+form above reaches the parser as a real nested dict.
 
 Unknown top-level keys are refused by name — the #1187 lesson applied here
 too: a caller who typos ``decision:`` for ``decisions:`` gets a parse error
