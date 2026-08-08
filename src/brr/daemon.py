@@ -4349,12 +4349,28 @@ def _run_worker(
             # can reflect "delivered to N threads" / "sent N out-of-bound"
             # / "no reply — committed work" instead of collapsing
             # everything to a single current-thread reply (§8 re-alignment).
+            #
+            # #1192: ``env_backend.finalize`` (just above) only classifies
+            # the *local* worktree state — "ready" means "has commits queued
+            # to publish", not "was published". The actual push
+            # (``daemon.publish``) is invoked by this run's caller
+            # (``_run_worker_and_finalize``), strictly after this packet is
+            # emitted — measured 18s late in the incident that opened #1192,
+            # by which time the parent, the ledger row, and this very packet
+            # had already asserted ``publish_status=ready``. Forward the
+            # honest "not settled yet" word instead and let the later
+            # ``push_done`` / ``conflict`` packets say what actually
+            # happened; ``nothing``/``detached``/``conflict`` are already
+            # accurate at this point and pass through unchanged.
+            done_publish_status = task.meta.get("publish_status")
+            if done_publish_status == "ready":
+                done_publish_status = "pending"
             emit(
                 "done",
                 run_id=task.id,
                 event_id=eid,
                 publish_branch=task.meta.get("publish_branch"),
-                publish_status=task.meta.get("publish_status"),
+                publish_status=done_publish_status,
                 success_signal=signal,
                 replies_current=output_stats.get("current", 0),
                 replies_other=output_stats.get("other", 0),
