@@ -90,10 +90,17 @@ _ROW = {
     "five_hour_pct_delta": 4.5,
     "usd_subscription_attributed": 0.25,
     "usd_credits_equivalent": None,
-    "estimate_vs_actual": "actual",
     "substitution_reason": None,
     "terminal_route": "gate-sole",
     "bolt": "accepted",
+    "bolt_declaration": {
+        "asks": [{"event": "evt-ask", "disposition": "answered"}],
+        "owed": [],
+        "decisions": ["wire: kept"],
+        "spend_declared": "~$2",
+        "next": None,
+        "dissent": [],
+    },
 }
 
 
@@ -255,6 +262,7 @@ def test_bolt_and_receipt_fields_survive_the_put_get_roundtrip():
     assert row["bolt"] == "annotated"
     assert row["terminal_route"] == "gate-sole"
     assert row["substitution_reason"] == "quota floor"
+    assert row["bolt_declaration"] == _ROW["bolt_declaration"]
 
 
 def test_dashboard_run_ledger_serves_and_reports_thirty_day_span():

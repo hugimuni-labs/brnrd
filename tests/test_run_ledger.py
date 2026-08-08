@@ -36,8 +36,8 @@ _ROW_FIELDS = {
     "five_hour_pct_delta",
     "usd_subscription_attributed",
     "usd_credits_equivalent",
-    "estimate_vs_actual",
     "bolt",
+    "bolt_declaration",
 }
 
 
@@ -129,6 +129,49 @@ def test_closed_run_row_bolt_annotated(tmp_path, monkeypatch):
     assert row["bolt"] == "annotated"
 
 
+def test_closed_run_row_carries_the_bounded_bolt_declaration(tmp_path, monkeypatch):
+    (tmp_path / ".brr").mkdir()
+    monkeypatch.setattr(run_ledger.codex_status, "load_levels", lambda: _levels())
+
+    task = _task()
+    task.meta["bolt"] = {
+        "accepted_at": "2026-08-08T00:00:00Z",
+        "annotated": 1,
+        "declaration_version": 1,
+        "asks": [{
+            "event": "evt-ask",
+            "disposition": "answered",
+            "label": "The wire question",
+        }],
+        "owed": [{
+            "label": "follow-up",
+            "ref": "issue #1",
+            "why": "separate surface",
+            "where": "next run",
+        }],
+        "decisions": ["produce: canonical in relics"],
+        "spend_declared": "~$2, 20m",
+        "next": "issue #1",
+        "dissent": ["evt-ask declared answered but is still pending"],
+    }
+    path = run_ledger.append_closed_run(tmp_path, task, {})
+
+    row = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+    assert row["bolt_declaration"] == {
+        key: task.meta["bolt"][key]
+        for key in ("asks", "owed", "decisions", "spend_declared", "next", "dissent")
+    }
+    assert "produce" not in row["bolt_declaration"]
+
+
+def test_legacy_bolt_spend_does_not_invent_a_declaration():
+    assert run_ledger.bolt_declaration_value({
+        "accepted_at": "2026-08-08T00:00:00Z",
+        "annotated": 0,
+        "spend_declared": "~$1",
+    }) is None
+
+
 def test_closed_run_appends_one_well_formed_jsonl_row(tmp_path, monkeypatch):
     (tmp_path / ".brr").mkdir()
     snapshots = iter([
@@ -180,8 +223,8 @@ def test_closed_run_appends_one_well_formed_jsonl_row(tmp_path, monkeypatch):
     # it", or counting the second one silently includes the first.
     assert row["terminal_route"] is None
     assert row["name"] == ""
-    assert row["estimate_vs_actual"] == "actual"
     assert row["bolt"] is None
+    assert row["bolt_declaration"] is None
 
 
 def test_context_window_used_is_none_not_zero_when_collector_has_no_reading(
