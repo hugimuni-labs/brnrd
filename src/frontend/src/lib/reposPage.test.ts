@@ -114,3 +114,52 @@ test('connecting a repo through the manual form returns to a pending pairing on 
 		'runAction actually navigates to returnTo on a successful, opted-in action'
 	);
 });
+
+// #1243 — "1 of 0 synced": `connected_count` counts `Repo` rows (CLI
+// pairing), `installed_repos.length` counts `GitHubInstalledRepo` rows (App
+// sync). Unrelated sets with no subset relation, so rendering them as a
+// ratio makes "1 of 0" a representable state on the normal, App-less
+// Direction-A path. Pinned as an absence (no ratio pattern survives) plus a
+// presence (the two numbers still both render, independently labeled).
+test('the header tile never renders connected repos as a ratio of App-visible repos', () => {
+	const src = source();
+	ok(
+		!/\{data\.connected_count\}\s+of\s+\{data\.installed_repos\.length\}/.test(src),
+		'no "N of M synced" ratio remains — the two counts share no denominator'
+	);
+	const tile = src.match(/connected repos<\/p>[\s\S]{0,400}/);
+	ok(tile, 'the "connected repos" tile exists');
+	ok(
+		/\{data\.connected_count\}/.test(tile![0]),
+		'the connected-repo count still renders, on its own'
+	);
+	ok(
+		/installed_repos\.length/.test(tile![0]) && /visible to the GitHub App/.test(tile![0]),
+		'the App-visible count still renders, but separately labeled rather than as a shared fraction'
+	);
+});
+
+// #1243 — a daemon that registered and crash-looped without ever completing
+// a publish cycle is `never_started`, not `offline`: `offline` copy says
+// "Last heartbeat Xm ago", which would claim a heartbeat this daemon never
+// actually sent (`last_seen_at` is stamped at registration). Pinned as a
+// distinct branch with its own copy, not a fallthrough into either
+// `offline` or the true `missing` "pair a local daemon" prompt (which would
+// tell an already-paired reader to redo a step they already did).
+test("a daemon that registered and never started gets its own copy, not offline's or missing's", () => {
+	const src = source();
+	ok(
+		/daemon_status === 'never_started'/.test(src),
+		'a never_started branch exists in the daemon-pairing card'
+	);
+	const branch = src.match(/daemon_status === 'never_started'\}[\s\S]{0,400}/);
+	ok(branch, 'the never_started branch body exists');
+	ok(
+		!/Last heartbeat/.test(branch![0]),
+		'never_started copy does not claim a heartbeat that never happened'
+	);
+	ok(
+		!/Pair a local daemon from a checkout/.test(branch![0]),
+		'never_started copy does not tell an already-paired reader to pair again'
+	);
+});

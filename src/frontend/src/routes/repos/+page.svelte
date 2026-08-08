@@ -300,7 +300,9 @@
 
 	function daemonColor(status: string): string {
 		if (status === 'online') return STATUS_GOOD;
-		if (status === 'offline') return STATUS_WARN;
+		// 'never_started' reads warn like 'offline' — both are "paired,
+		// needs a look", not the neutral "nothing paired yet" of 'missing'.
+		if (status === 'offline' || status === 'never_started') return STATUS_WARN;
 		return STATUS_UNKNOWN;
 	}
 
@@ -319,7 +321,7 @@
 
 	function daemonLevel(status: string): string {
 		if (status === 'online') return 'ample';
-		if (status === 'offline') return 'low';
+		if (status === 'offline' || status === 'never_started') return 'low';
 		return 'unknown';
 	}
 
@@ -484,10 +486,23 @@
 				<p class="mt-1 font-mono text-sm text-amber-100">@{data.account.github_login}</p>
 			</div>
 			<div class="subpanel p-3">
+				<!-- #1243: was "{connected_count} of {installed_repos.length}
+				     synced" — N counts `Repo` rows (CLI pairing), M counts
+				     `GitHubInstalledRepo` rows (App sync). Unrelated sets, no
+				     subset relation: under Direction A the first connect is
+				     App-less, so M stays 0 forever on the normal path and the
+				     tile reads "1 of 0". Two independently labeled numbers
+				     instead — never a ratio, so there is no denominator left
+				     for a connected repo to be missing from. -->
 				<p class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase">connected repos</p>
 				<p class="mt-1 font-mono text-sm text-amber-100">
-					{data.connected_count} of {data.installed_repos.length} synced
+					{data.connected_count}
 				</p>
+				{#if data.installed_repos.length > 0}
+					<p class="mt-1 font-mono text-[10px] text-ink-mute">
+						{data.installed_repos.length} visible to the GitHub App
+					</p>
+				{/if}
 			</div>
 			<div class="subpanel p-3">
 				<!-- Fact, not a control (#1084 finding — "the control lives in the
@@ -644,6 +659,17 @@
 										<p class="mt-2 text-sm text-stone-400">
 											Last heartbeat {repo.daemon_last_seen}. Start the local daemon to drain queued
 											work.
+										</p>
+									{:else if repo.daemon_status === 'never_started'}
+										<!-- #1243: distinct from 'offline' on purpose. `last_seen_at` is
+										     stamped at registration, so this daemon has never actually
+										     completed a publish cycle — "last heartbeat" would claim a
+										     heartbeat that never happened. Paired {repo.daemon_last_seen}
+										     ago names what is actually known (when it registered), not a
+										     heartbeat that isn't real. -->
+										<p class="mt-2 text-sm text-stone-400">
+											Paired {repo.daemon_last_seen}, never started — run
+											<code>brnrd daemon status</code> in the checkout to see why.
 										</p>
 									{:else}
 										<p class="mt-2 text-sm text-stone-400">

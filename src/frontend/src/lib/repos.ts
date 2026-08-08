@@ -20,7 +20,10 @@ export interface ConnectedRepo {
 	created_label: string;
 	updated_label: string;
 	daemon_count: number;
-	daemon_status: 'online' | 'offline' | 'missing' | string;
+	// 'never_started' (#1243): registered but has never completed a publish
+	// cycle — distinct from 'offline' (was alive, went quiet) so a crash-
+	// looping daemon doesn't get called a heartbeat it never sent.
+	daemon_status: 'online' | 'offline' | 'never_started' | 'missing' | string;
 	daemon_label: string;
 	daemon_last_seen: string;
 	daemon_last_seen_at: string | null;
