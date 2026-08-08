@@ -8,7 +8,6 @@ import json
 import logging
 import re
 import secrets
-import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -70,15 +69,11 @@ def _wa_audit(trace: str, stage: str, detail: str = "") -> None:
     only ``POST ... 200`` and every decision inside that response disappears.
     """
     suffix = f" {detail}" if detail else ""
-    # Uvicorn's production config filters this module's INFO logger, and the
-    # container buffers stdout long past the useful diagnostic window.  Its
-    # visible access log rides stderr, so use that same stream and flush at
-    # the decision boundary.
-    print(
-        f"[brnrd] whatsapp ingress: trace={trace} stage={stage}{suffix}",
-        file=sys.stderr,
-        flush=True,
-    )
+    # Uvicorn's production config filters this module's INFO logger. Its
+    # visible access handler writes to stdout; Scaleway captures that stream,
+    # but Python buffers ordinary prints in the container. Use the captured
+    # stream and flush at the decision boundary.
+    print(f"[brnrd] whatsapp ingress: trace={trace} stage={stage}{suffix}", flush=True)
 
 
 def _reply(settings, parsed: tg.ParsedMessage, text: str) -> None:

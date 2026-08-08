@@ -193,8 +193,8 @@ def test_webhook_audit_names_rejection_without_sender_or_body(env, capsys):
     )
     assert r.status_code == 403
     captured = capsys.readouterr()
-    audit = captured.err
-    assert captured.out == ""
+    audit = captured.out
+    assert captured.err == ""
     assert "stage=received" in audit
     assert "stage=rejected reason=bad_signature" in audit
     assert sender not in audit
@@ -271,8 +271,8 @@ def test_pairing_audit_joins_decisions_without_sender_or_code(env, capsys):
 
     assert r.status_code == 200
     captured = capsys.readouterr()
-    audit = captured.err
-    assert captured.out == ""
+    audit = captured.out
+    assert captured.err == ""
     for stage in ("received", "message_parsed", "pair_attempt", "paired"):
         assert f"stage={stage}" in audit
     assert sender not in audit
