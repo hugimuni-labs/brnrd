@@ -594,9 +594,27 @@ def derive_auto(
             else:
                 out.append({"kind": "commit", "sha": sha, "subject": subject, "url": commit_url})
         if commits:
-            out.append(
-                {"kind": "branch", "name": branch, "url": links.branch(branch)}
+            # #1192: a branch relic with a live URL is a claim about the
+            # *remote*, not about this checkout's local ref — minting one
+            # from "this branch has commits beyond seed" assumes the push
+            # succeeded rather than checking it. A failed/pending push then
+            # ships a relic whose URL 404s the moment it is written (measured
+            # live: the branch didn't exist on the remote for another 35
+            # minutes). One cheap `git ls-remote --heads` settles it —
+            # best-effort like everything else here: any git/network failure
+            # reads as "not confirmed" and the relic renders unlinked rather
+            # than fabricating a link, same posture as every other resolver
+            # in this module.
+            remote_name = gitops.default_remote(repo_root)
+            confirmed = bool(
+                remote_name
+                and gitops.remote_branch_exists(repo_root, remote_name, branch)
             )
+            out.append({
+                "kind": "branch",
+                "name": branch,
+                "url": links.branch(branch) if confirmed else None,
+            })
 
     pr_number = _read_pr_control(outbox_dir)
     if pr_number:
