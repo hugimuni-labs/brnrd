@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from .. import ids, schemas
 from ..auth import Principal, get_db, require_account
+from ..config import telegram_username_is_valid
 from ..models import PairRequest, Repo, TgPairCode, Token
 from ..security import hash_token
 
@@ -136,7 +137,11 @@ def approve_pair(code: str, payload: schemas.PairApprove, principal: Principal =
 
 def _telegram_pair_response(settings: Any, repo: Repo, code: str) -> schemas.TelegramPairStarted:
     username = settings.telegram_bot_username.lstrip("@")
-    deep_link = f"https://t.me/{username}?start={code}" if username else None
+    # #1242 — an invalid-shape username (e.g. the hyphenated GitHub login
+    # spelling) resolves to no Telegram entity at all; a deep link built on
+    # it is worse than no link, so mint none and let the `else` branch
+    # below lead with the manual `/start <code>` path instead.
+    deep_link = f"https://t.me/{username}?start={code}" if username and telegram_username_is_valid(username) else None
     if deep_link:
         instructions = (
             f"Open {deep_link}, then press Start if Telegram prompts. "

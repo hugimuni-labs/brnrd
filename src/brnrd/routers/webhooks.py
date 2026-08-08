@@ -51,12 +51,20 @@ _AUTHORIZED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 # read-only invited collaborator and any member of the owning org.
 _AUTHORIZED_PERMISSIONS = frozenset({"admin", "write", "maintain"})
 
-_UNPAIRED_TEXT = "This chat is not paired to a brnrd account yet. Pair a repo from the dashboard, then send /repos or /repo owner/name."
+# #1242 — the old text ("...then send /repos or /repo owner/name") was a
+# closed loop: /repos and /repo from an unpaired chat hit this same reply
+# (`_handle_command` requires a route before either does anything), so the
+# one command that actually works — /start <code>, or the bare code once
+# it's typed — never appeared anywhere in the bot's own replies. Name it
+# here instead of only in the dashboard-side instructions.
+_UNPAIRED_TEXT = "This chat is not paired to a brnrd account yet. Get a pair code from the dashboard, then send /start <code> (or just paste the code) here to pair."
 # WhatsApp has no slash-command surface (`_handle_command`'s /repo, /repos,
 # /status are Telegram-only, see the WhatsApp section below) — pointing a
 # WhatsApp user at commands that don't work on this channel would be a
-# worse answer than a plain one.
-_WA_UNPAIRED_TEXT = "This chat is not paired to a brnrd account yet. Pair a repo from the dashboard, then text the pair code here."
+# worse answer than a plain one. Already names its one working action
+# (text the code), so #1242's loop fix above doesn't apply here — kept in
+# sync in tone only.
+_WA_UNPAIRED_TEXT = "This chat is not paired to a brnrd account yet. Get a pair code from the dashboard, then text it here to pair."
 _UNBOUND_REPO_TEXT = "This repository is not connected to brnrd yet. Open brnrd.dev, connect the repo, then call the bot again."
 _BACKLOG_GRACE = timedelta(seconds=1)
 
@@ -622,6 +630,12 @@ def _handle_command(db: Session, settings, parsed: tg.ParsedMessage, command: st
 #    match already proves the sender is the one who paired it. Adding a
 #    second principal check would be a check with nothing left to catch.
 
+# #1242 — shared with the Telegram dispatch below (bare-code parity): a
+# bare pair code is recognized the same way on both channels, against the
+# one shape ``ids.tg_pair_code`` actually mints. Not renamed off the `TG-`
+# spelling here — #1237 owns de-hardcoding the channel-branded prefix;
+# this only reuses the existing constant instead of adding a second,
+# independent hardcoding of it for the new Telegram lane.
 _WA_PAIR_CODE_RE = re.compile(r"^TG-[A-Z0-9]{4}$")
 
 
@@ -642,8 +656,11 @@ def _wa_reply(settings, parsed: "wa.ParsedMessage", text: str) -> None:
         print(f"[brnrd] whatsapp reply failed: {e}")
 
 
-def _wa_pair_code_from_text(text: str) -> str | None:
-    """The bare pair code a WhatsApp user texts in, or None.
+def _bare_pair_code_from_text(text: str) -> str | None:
+    """The bare pair code a user texts in with no other command syntax, or
+    None. Shared by WhatsApp (its only pairing lane) and Telegram (#1242 —
+    parity with the ``/start <code>`` lane, for a user who pastes just the
+    code).
 
     Matched against the exact shape ``ids.tg_pair_code`` produces
     (``TG-`` + 4 alphabet chars), case-insensitively — anything else is an
@@ -758,7 +775,7 @@ async def whatsapp_webhook(request: Request, x_hub_signature_256: str | None = H
         return {"ok": True}
     _wa_audit(trace, "message_parsed", f"kind={'media' if parsed.has_media else 'text'}")
     with request.app.state.SessionLocal() as db:
-        code = _wa_pair_code_from_text(parsed.text)
+        code = _bare_pair_code_from_text(parsed.text)
         if code:
             _wa_audit(trace, "pair_attempt")
             _handle_whatsapp_pair(db, settings, parsed, code, trace=trace)
@@ -823,7 +840,11 @@ def telegram_webhook(request: Request, payload: dict, x_telegram_bot_api_secret_
         _audit_reject(parsed, reason="edited_message")
         return {"ok": True}
     with request.app.state.SessionLocal() as db:
-        code = tg.pair_code_from_text(parsed.text)
+        # #1242 — bare-code parity with WhatsApp: `/start <code>` first
+        # (the deep-link-driven shape), then a bare `TG-XXXX` typed with no
+        # command syntax at all — same fallback order as the WhatsApp lane
+        # below, same handler either way once a code is found.
+        code = tg.pair_code_from_text(parsed.text) or _bare_pair_code_from_text(parsed.text)
         if code:
             _handle_start(db, settings, parsed, code)
             return {"ok": True}
