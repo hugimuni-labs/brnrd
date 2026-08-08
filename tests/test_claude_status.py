@@ -43,7 +43,9 @@ def test_parse_result_spend_and_context_but_no_quota():
     assert levels["tokens"]["output_tokens"] == 95
     assert levels["tokens"]["cache_read_input_tokens"] == 0
     assert levels["tokens"]["cache_creation_input_tokens"] == 10892
-    assert 5 < levels["tokens"]["context_window_used_percent"] < 6
+    # #1178: no ``session_id`` on this payload -> no transcript -> no
+    # instantaneous reading to report. Absent, not a fabricated percentage.
+    assert "context_window_used_percent" not in levels["tokens"]
     assert "quota" not in levels
 
 
@@ -475,6 +477,139 @@ def test_substitution_reason_stays_none_when_the_run_was_clean(tmp_path):
         dict(_RESULT, session_id="sess-8"), projects_root=tmp_path
     )
     assert claude_status.substitution_reason(levels) is None
+
+
+# --- context_window_used_percent: cumulative vs instantaneous (#1178) ----
+
+def _assistant_row(model, usage):
+    return {"type": "assistant", "message": {"model": model, "usage": usage}}
+
+
+def test_cumulative_model_usage_alone_saturates_wrongly():
+    """Pin down the bug this issue reports, red against the pre-fix formula.
+
+    A 40-turn resumed session's ``modelUsage`` sums every turn's own cache
+    reads into one running total (mirrors ``total_cost_usd``, which Claude
+    Code's own ``/cost`` describes as cumulative "for the current session").
+    That total trivially exceeds a 200k window after a handful of turns —
+    this is the exact 100.0-on-a-short-clean-run shape #1178 reports. The
+    *sum of the model's own cumulative tokens* is what the old formula (and
+    ``_model_usage_cost``/spend accounting, which legitimately wants this
+    same cumulative total) would divide by the window and clamp to 100.
+    """
+    cumulative = {
+        "claude-sonnet-4-6": {
+            "inputTokens": 80,
+            "outputTokens": 12000,
+            "cacheReadInputTokens": 4_800_000,  # 40 turns x ~120k reads, summed
+            "cacheCreationInputTokens": 50_000,
+            "contextWindow": 200_000,
+        }
+    }
+    used = 80 + 4_800_000 + 50_000
+    wrongly_saturated = max(0.0, min(100.0, 100.0 * used / 200_000))
+    assert wrongly_saturated == 100.0  # the shape #1178 measured on real rows
+
+    # The fixed collector no longer derives the field from this cumulative
+    # sum at all (no session transcript here -> no instantaneous fallback
+    # either) -> absent, not a re-clamped 100.0.
+    tokens = claude_status.parse_result({"modelUsage": cumulative})["tokens"]
+    assert "context_window_used_percent" not in tokens
+    # The cumulative totals remain -- they are legitimate session-lifetime
+    # spend/volume accounting, just not a context-occupancy reading.
+    assert tokens["cache_read_input_tokens"] == 4_800_000
+
+
+def test_instantaneous_reading_uses_the_last_turn_not_the_running_total(tmp_path):
+    """The fix: read the transcript's last assistant turn, not the sum.
+
+    Same blown-up cumulative ``modelUsage`` as above, but now a session
+    transcript exists whose *last* turn's own usage is modest -- the honest
+    reading is that turn's occupancy, not the session-lifetime sum.
+    """
+    _transcript(
+        tmp_path,
+        "sess-instant",
+        [
+            _assistant_row(
+                "claude-sonnet-4-6",
+                {
+                    "inputTokens": 2,
+                    "cacheReadInputTokens": 20000,
+                    "cacheCreationInputTokens": 1000,
+                    "outputTokens": 300,
+                },
+            ),
+            # Growth turn over turn is real occupancy growth, not a sum --
+            # the *last* row is what is currently occupying the window.
+            _assistant_row(
+                "claude-sonnet-4-6",
+                {
+                    "inputTokens": 2,
+                    "cacheReadInputTokens": 60000,
+                    "cacheCreationInputTokens": 2000,
+                    "outputTokens": 150,
+                },
+            ),
+        ],
+    )
+    cumulative = {
+        "claude-sonnet-4-6": {
+            "inputTokens": 80,
+            "outputTokens": 12000,
+            "cacheReadInputTokens": 4_800_000,
+            "cacheCreationInputTokens": 50_000,
+            "contextWindow": 200_000,
+        }
+    }
+    payload = {"modelUsage": cumulative, "session_id": "sess-instant"}
+    levels = claude_status.parse_result(payload, projects_root=tmp_path)
+    pct = levels["tokens"]["context_window_used_percent"]
+    # (2 + 60000 + 2000) / 200000 * 100 = 31.001 -- the last turn's own
+    # occupancy, nowhere near the cumulative sum's forced 100.0.
+    assert 30 < pct < 32
+
+
+def test_instantaneous_reading_absent_when_no_transcript_matches():
+    payload = {
+        "modelUsage": {
+            "claude-sonnet-4-6": {
+                "inputTokens": 10,
+                "cacheReadInputTokens": 10,
+                "contextWindow": 200_000,
+            }
+        },
+        "session_id": "no-such-session",
+    }
+    levels = claude_status.parse_result(payload, projects_root="/nonexistent/path")
+    assert "context_window_used_percent" not in levels["tokens"]
+
+
+def test_instantaneous_reading_absent_when_transcript_has_no_usage(tmp_path):
+    _transcript(tmp_path, "sess-empty", [{"type": "user"}, {"type": "assistant"}])
+    payload = dict(_RESULT, session_id="sess-empty")
+    levels = claude_status.parse_result(payload, projects_root=tmp_path)
+    assert "context_window_used_percent" not in levels["tokens"]
+
+
+def test_instantaneous_reading_matches_context_window_by_model_prefix(tmp_path):
+    """The transcript's model id and ``modelUsage``'s key need not match exactly."""
+    _transcript(
+        tmp_path,
+        "sess-prefix",
+        [
+            _assistant_row(
+                "claude-haiku-4-5-20251001",  # dated id, like the real CLI emits
+                {"inputTokens": 2, "cacheReadInputTokens": 998, "outputTokens": 10},
+            )
+        ],
+    )
+    payload = {
+        "modelUsage": {"claude-haiku-4-5": {"contextWindow": 1000}},  # catalog id
+        "session_id": "sess-prefix",
+    }
+    levels = claude_status.parse_result(payload, projects_root=tmp_path)
+    assert levels["tokens"]["context_window_used_percent"] == 100.0
 
 
 def test_runner_facet_exposes_the_substitution_reason():
