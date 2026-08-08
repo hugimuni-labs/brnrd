@@ -5426,6 +5426,83 @@ def test_max_concurrent_spawns_config_parsing():
     assert daemon._max_concurrent_spawns({"spawn.max_concurrent": True}) == 4
 
 
+# ── #1195 rec 3: a cpu-informed default, opt-in behind `spawn.max_concurrent_auto` ──
+#
+# The flat default above (4) is pinned by `test_max_concurrent_spawns_config_parsing`
+# as machine-independent — asserted with no `os.cpu_count()` dependency at all. #1195
+# rec 3 asks whether the *default* should instead scale with the box (measured: 5
+# concurrent strands each running a full gate drove a 16-core box to a 15-minute load
+# average of 14.97). Swapping the unset-default itself would break that pinned test on
+# any host whose core count isn't 16 — most CI runners included — so the computed
+# default is wired in as an *opt-in* (`spawn.max_concurrent_auto`), never as a silent
+# change to what `{}` resolves to. See the #1195 rec 3 report section for why this
+# reconciliation was made instead of wiring the formula in as the unconditional
+# default, and the formula itself flagged there as a recommendation, not a decision.
+
+
+def test_cpu_scaled_max_concurrent_spawns_follows_the_recommended_formula(monkeypatch):
+    """`max(2, cpu_count() // 4)` — the formula #1195 rec 3 names as a starting
+    point. Pinned here as what the mechanism computes today; the report leaves
+    the formula itself as a recommendation for the maintainer to confirm."""
+    monkeypatch.setattr(daemon.os, "cpu_count", lambda: 16)
+    assert daemon._cpu_scaled_max_concurrent_spawns() == 4
+    monkeypatch.setattr(daemon.os, "cpu_count", lambda: 8)
+    assert daemon._cpu_scaled_max_concurrent_spawns() == 2
+    monkeypatch.setattr(daemon.os, "cpu_count", lambda: 4)
+    assert daemon._cpu_scaled_max_concurrent_spawns() == 2  # floor, not 1
+    monkeypatch.setattr(daemon.os, "cpu_count", lambda: 1)
+    assert daemon._cpu_scaled_max_concurrent_spawns() == 2  # floor, not 0
+
+
+def test_cpu_scaled_max_concurrent_spawns_falls_back_when_cpu_count_is_unknown(
+    monkeypatch,
+):
+    """`os.cpu_count()` is documented to return `None` when the count can't be
+    determined (containers with a restricted `/proc`, some sandboxes) — the
+    computed path degrades to the flat constant rather than crashing on
+    `None // 4`."""
+    monkeypatch.setattr(daemon.os, "cpu_count", lambda: None)
+    assert daemon._cpu_scaled_max_concurrent_spawns() == daemon._MAX_CONCURRENT_SPAWNS_DEFAULT
+
+
+def test_max_concurrent_spawns_auto_opt_in_uses_the_cpu_scaled_default(monkeypatch):
+    """Unset + the opt-in flag ⇒ the computed default, not the flat constant —
+    the mechanism rec 3 asks for, reachable without disturbing what `{}}` alone
+    (no opt-in) resolves to."""
+    monkeypatch.setattr(daemon.os, "cpu_count", lambda: 8)
+    assert daemon._max_concurrent_spawns({"spawn.max_concurrent_auto": True}) == 2
+    # The flag alone changes nothing when absent or false — same flat default
+    # `test_max_concurrent_spawns_config_parsing` already pins for `{}`.
+    assert daemon._max_concurrent_spawns({"spawn.max_concurrent_auto": False}) == 4
+
+
+def test_max_concurrent_spawns_explicit_value_always_wins_over_auto(monkeypatch):
+    """"Never overriding an explicit config value" — rec 3's own wording — holds
+    even with the opt-in flag set."""
+    monkeypatch.setattr(daemon.os, "cpu_count", lambda: 8)
+    assert (
+        daemon._max_concurrent_spawns(
+            {"spawn.max_concurrent": 6, "spawn.max_concurrent_auto": True}
+        )
+        == 6
+    )
+
+
+def test_max_concurrent_spawns_invalid_explicit_value_with_auto_falls_back_to_computed(
+    monkeypatch,
+):
+    """A non-numeric or boolean explicit value is not a deliberate choice —
+    with the opt-in flag set, it degrades to the *computed* default, the same
+    way it degrades to the flat one without the flag."""
+    monkeypatch.setattr(daemon.os, "cpu_count", lambda: 8)
+    assert (
+        daemon._max_concurrent_spawns(
+            {"spawn.max_concurrent": "bogus", "spawn.max_concurrent_auto": True}
+        )
+        == 2
+    )
+
+
 def test_concurrent_spawn_pool_respects_configured_width(tmp_path, monkeypatch):
     """Multiple `spawn:` events dispatch up to `spawn.max_concurrent` at
     once — the old shape allowed exactly one concurrent spawn no matter how
