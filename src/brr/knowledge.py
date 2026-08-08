@@ -364,7 +364,9 @@ def search(
     return hits
 
 
-def ensure_checkout(repo_root: Path, cfg: dict | None = None) -> Path:
+def ensure_checkout(
+    repo_root: Path, cfg: dict | None = None, *, create: bool = True,
+) -> Path:
     """Materialize the writable home-knowledge checkout beside *repo_root*.
 
     Re-clones when a checkout already exists but its ``origin`` no longer
@@ -382,11 +384,23 @@ def ensure_checkout(repo_root: Path, cfg: dict | None = None) -> Path:
     best-effort fast-forwarded — before it is returned, so "origin still
     matches" is never read as "checkout is current" either (#613); see
     :func:`_refresh_checkout` for the skip posture.
+
+    ``create=False`` is the read path's contract (#1193): resolve the
+    account/project home without ``resolve_context`` minting it, and never
+    mkdir/git-init the home-knowledge repo or clone the checkout as a side
+    effect of a read that found nothing there. A checkout that already
+    exists is still refreshed and returned — this only stops a read from
+    *originating* a home or a clone, not from using ones that are already
+    real. Every existing writer keeps the default ``create=True``, unchanged.
     """
 
     cfg = cfg if cfg is not None else conf.load_config(repo_root)
-    ctx = account.resolve_context(repo_root, cfg)
+    ctx = account.resolve_context(repo_root, cfg, create=create)
     home_knowledge = account.knowledge_path(ctx)
+    checkout = repo_root / CHECKOUT_DIRNAME
+    if not create and not home_knowledge.is_dir():
+        # Nothing to check anything out from, and a read must not mint it.
+        return checkout
     home_knowledge.mkdir(parents=True, exist_ok=True)
     if _init_git_repo(home_knowledge):
         # Born just now — seed and *commit* the deed README (the founding
@@ -400,7 +414,6 @@ def ensure_checkout(repo_root: Path, cfg: dict | None = None) -> Path:
     _allow_push_to_checkout(home_knowledge)
     gitops.ensure_run_id_hook(home_knowledge)
 
-    checkout = repo_root / CHECKOUT_DIRNAME
     gitops.exclude_from_git(repo_root, f"{CHECKOUT_DIRNAME}/")
     if checkout.exists():
         if _checkout_origin_matches(checkout, home_knowledge):
@@ -408,6 +421,12 @@ def ensure_checkout(repo_root: Path, cfg: dict | None = None) -> Path:
             gitops.ensure_run_id_hook(checkout)
             return checkout
         shutil.rmtree(checkout, ignore_errors=True)
+
+    if not create:
+        # The home was real (we passed the early-return above) but no
+        # checkout has ever been cloned from it. A read reports the path
+        # a clone would occupy; only a create-intending caller originates it.
+        return checkout
 
     result = subprocess.run(
         ["git", "clone", str(home_knowledge), str(checkout)],
