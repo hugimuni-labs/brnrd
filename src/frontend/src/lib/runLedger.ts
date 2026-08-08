@@ -189,6 +189,12 @@ export interface RunLedgerRow {
 	mood_frames?: string[][] | null;
 	mood_rest?: string | null;
 	mood_pitch?: number | null;
+	// The bolt (design-the-bolt.md §Data contract): `"accepted"` |
+	// `"annotated"` (annotated = accepted with daemon dissent), absent on
+	// rows that predate the field or on a run that hasn't been cut yet.
+	// Parsed tolerantly (`bolts.ts`'s `parseBoltState`) — an unrecognised
+	// value reads as "no bolt", never an error.
+	bolt?: string | null;
 	external_refs: RelicRecord[] | null;
 	parent_run_id: string | null;
 	is_subspawn: boolean | null;
