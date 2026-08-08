@@ -421,6 +421,7 @@ def _runners_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     profiles: dict[str, dict[str, Any]] = {}
     default: str | None = None
+    sticky: dict[str, Any] | None = None
     newest: datetime | None = None
     daemons = db.execute(select(Daemon).where(Daemon.repo_id.in_(repo_ids))).scalars()
     for daemon in daemons:
@@ -436,6 +437,7 @@ def _runners_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
         if newest is None or reported_at > newest:
             newest = reported_at
             default = daemon.runners_default
+            sticky = _live_sticky(daemon.runner_sticky_json, now)
         for row in rows:
             if not isinstance(row, dict):
                 continue
@@ -462,9 +464,39 @@ def _runners_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
     return {
         "profiles": out,
         "default": default,
+        "sticky": sticky,
         "stale": stale,
         "reported_at": newest.isoformat() if newest else None,
     }
+
+
+def _live_sticky(raw: str | None, now: datetime) -> dict[str, Any] | None:
+    """Parse a mirrored #932 sticky, dropping one already past its expiry.
+
+    The daemon publishes only live records, but the mirror outlives a daemon
+    that stops publishing — without this check a dead promise would sit on
+    the rack looking current for as long as the daemon stays offline.
+    """
+    if not raw:
+        return None
+    try:
+        record = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(record, dict) or not str(record.get("profile") or "").strip():
+        return None
+    expires = record.get("expires_at")
+    if isinstance(expires, str):
+        try:
+            expires_dt = datetime.fromisoformat(expires.replace("Z", "+00:00"))
+        except ValueError:
+            expires_dt = None
+        if expires_dt is not None:
+            if expires_dt.tzinfo is None:
+                expires_dt = expires_dt.replace(tzinfo=timezone.utc)
+            if now >= expires_dt:
+                return None
+    return record
 
 
 _LIVE_RUNS_STALE_SECONDS = 300
@@ -953,6 +985,34 @@ async def dashboard_runners_wake_request(
         environment=environment,
     )
     return JSONResponse({"wake_request": wake_requests.view(row)})
+
+
+@router.post("/v1/dashboard/runners/sticky-release")
+def dashboard_runners_sticky_release(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """Ask the daemon to drop its #932 conversation-sticky (the exit tap).
+
+    The daemon owns the record; this parks a timestamped ask that rides
+    back on its next catalog publish tick. Tense-guarded on the daemon's
+    side: a sticky claimed after this stamp survives it.
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    repos = _repos(db, account_id)
+    repo_ids = {repo.id for repo in repos}
+    if not repo_ids:
+        return JSONResponse({"detail": "no connected repos"}, status_code=404)
+    now = datetime.now(timezone.utc)
+    asked = 0
+    daemons = db.execute(select(Daemon).where(Daemon.repo_id.in_(repo_ids))).scalars()
+    for daemon in daemons:
+        if daemon.runner_sticky_json:
+            daemon.runner_sticky_release_at = now
+            asked += 1
+    db.commit()
+    if not asked:
+        return JSONResponse({"detail": "no sticky in force"}, status_code=404)
+    return JSONResponse({"requested_at": now.isoformat(), "daemons": asked})
 
 
 @router.delete("/v1/dashboard/runners/wake-request/{request_id}")

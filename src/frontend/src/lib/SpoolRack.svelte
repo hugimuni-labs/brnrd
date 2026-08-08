@@ -1,5 +1,6 @@
 <script lang="ts">
-	import type { RunnerProfile, WakeRequest } from './runners';
+	import { liveSticky, type RunnerProfile, type RunnerSticky, type WakeRequest } from './runners';
+	import { stickyCountdown } from './controlStrip';
 
 	// #328 spool rack. You don't set a being's body with a dropdown; the
 	// rack shows who *can* wake and which spool is threaded (the pin).
@@ -19,10 +20,41 @@
 		defaultProfile: string | null;
 		stale: boolean;
 		wakeRequest: WakeRequest | null;
+		/** #932's conversation-sticky: the profile that actually answers the
+		 *  bound thread's wakes until it expires. Rendered as a timered chip
+		 *  — the rack must not show the pin as the whole truth while this
+		 *  record decides (the 2026-08-08 "core tap is lying" defect). */
+		sticky?: RunnerSticky | null;
+		now?: number;
 		onTap?: (profileName: string) => void;
+		/** The sticky's exit: drop it now instead of waiting out the TTL. */
+		onReleaseSticky?: () => void;
 	}
 
-	let { profiles, defaultProfile, stale, wakeRequest, onTap }: Props = $props();
+	let {
+		profiles,
+		defaultProfile,
+		stale,
+		wakeRequest,
+		sticky = null,
+		now = Date.now(),
+		onTap,
+		onReleaseSticky
+	}: Props = $props();
+
+	let stickyLive = $derived(liveSticky(sticky, now));
+
+	function isSticky(profile: RunnerProfile): boolean {
+		return stickyLive !== null && stickyLive.profile === profile.name;
+	}
+
+	/** Which platform the sticky's thread lives on (`telegram`, `slack`) —
+	 *  the human-scale half of its correspondent key; never the raw id. */
+	function stickyThreadLabel(): string {
+		const key = stickyLive?.correspondent_key ?? stickyLive?.conversation_key ?? '';
+		const platform = key.split(':').filter(Boolean)[key.startsWith('cloud:') ? 1 : 0];
+		return platform ? `${platform} thread` : 'thread';
+	}
 
 	const CLASS_LABEL: Record<string, string> = {
 		economy: 'economy',
@@ -116,6 +148,38 @@
 						>
 					</div>
 					<div class="flex items-baseline gap-3 font-mono text-[11px]">
+						{#if isSticky(profile)}
+							<!-- #932: the claimed tap riding its conversation. Timer is the
+							     contract made visible (his 08-08 ask); ✕ is the early exit. -->
+							<span
+								class="flex items-baseline gap-1.5 border border-amber-600/80 bg-amber-950/60 px-1.5 py-0.5 text-[10px] tracking-wide text-amber-200 uppercase"
+								title={`a tapped core rides its conversation until the timer runs out — wakes in that thread dispatch here, not on the default${stickyLive?.expires_at ? ` (until ${stickyLive.expires_at})` : ''}`}
+							>
+								riding {stickyThreadLabel()}
+								{#if stickyCountdown(stickyLive, now)}
+									· {stickyCountdown(stickyLive, now)}
+								{/if}
+								{#if onReleaseSticky}
+									<span
+										role="button"
+										tabindex="0"
+										title="release now — this thread's wakes go back to the default"
+										class="cursor-pointer px-0.5 text-amber-300 hover:text-amber-100"
+										onclick={(e) => {
+											e.stopPropagation();
+											onReleaseSticky?.();
+										}}
+										onkeydown={(e) => {
+											if (e.key === 'Enter' || e.key === ' ') {
+												e.stopPropagation();
+												e.preventDefault();
+												onReleaseSticky?.();
+											}
+										}}>✕</span
+									>
+								{/if}
+							</span>
+						{/if}
 						{#if requested}
 							<!-- The parked tap: one wake, then back to the pin.
 							     Cancel = tap the default row, not this one. -->
