@@ -483,27 +483,52 @@
 			// real box, so its bottom edge and the dock's in-flow top are the
 			// same line. Its top is 24px higher, and that gap is the trip's
 			// landing margin below — two different numbers off one element, so
-			// neither is a constant nudged until it looked right. `dockTop`
-			// reads the *settled* rail heights, never `railHeight`'s live
-			// `clientHeight` binding — that live read, paired with a
-			// same-tick `railCondensed` flip, is #1169's actual defect: the
-			// binding updates a frame after the DOM it measures, so the dock's
-			// target moved out from under its own reader for the one frame
-			// that mattered.
+			// neither is a constant nudged until it looked right. Computed
+			// locally rather than read off the top-level `dockTop` derived:
+			// that derived depends on `railClock` (via `railCondensed`), and
+			// this effect *writes* `railClock` below — reading a derived of
+			// your own write inside the same effect is a real cycle in Svelte
+			// 5 (`effect_update_depth_exceeded`, driven and caught live), not
+			// just a style preference. Same formula either way; `dockTop`
+			// stays the template's single source of truth for the rendered
+			// position.
+			// Settled rail heights, never `railHeight`'s live `clientHeight`
+			// binding — that live read, paired with a same-tick
+			// `railCondensed` flip, is #1169's actual defect: the binding
+			// updates a frame after the DOM it measures, so the dock's target
+			// moved out from under its own reader for the one frame that
+			// mattered.
 			const dockRaw = machineSentinel
 				? machineDockVerdict({
 						home: machineSentinel.getBoundingClientRect().bottom,
-						dockTop,
+						dockTop: machineDockTop(
+							railClock.settled ? railSlimHeight || railHeight : railFullHeight,
+							railClock.settled
+						),
 						docked: dockClock.settled
 					})
 				: false;
-			railClock = scrollClockTick(railClock, railRaw, now);
-			dockClock = scrollClockTick(dockClock, dockRaw, now);
+			const nextRail = scrollClockTick(railClock, railRaw, now);
+			const nextDock = scrollClockTick(dockClock, dockRaw, now);
+			// Reassign only on an actual change: `scrollClockTick` returns a
+			// fresh object every call, and Svelte's `$state` dirties on
+			// reference identity — reassigning an object-shaped value that is
+			// only *shallowly equal* still notifies every reader, which is
+			// the other half of the same cycle (this effect reads
+			// `railClock.settled` above, so an unconditional reassignment
+			// below reschedules the effect against itself every tick, settled
+			// or not).
+			if (nextRail.settled !== railClock.settled || nextRail.pendingAt !== railClock.pendingAt) {
+				railClock = nextRail;
+			}
+			if (nextDock.settled !== dockClock.settled || nextDock.pendingAt !== dockClock.pendingAt) {
+				dockClock = nextDock;
+			}
 			// Both clocks stepped in the one tick above — "applied to both in
 			// the same frame". Reschedule against whichever settles first;
 			// `tick()` re-derives everything live, so a clock that isn't due
 			// yet just re-arms itself with fresh geometry next call.
-			const deadlines = [railClock.pendingAt, dockClock.pendingAt].filter(
+			const deadlines = [nextRail.pendingAt, nextDock.pendingAt].filter(
 				(deadline): deadline is number => deadline !== null
 			);
 			if (deadlines.length > 0) {
