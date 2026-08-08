@@ -1790,7 +1790,7 @@ def test_cmd_kb_no_query_exits_0_and_prints_graph_header(tmp_path, capsys, monke
     """brnrd kb with no query prints the graph report and exits 0."""
     repo, kb = _kb_repo(tmp_path)
     monkeypatch.setattr("brr.cli._repo_root", lambda: repo)
-    monkeypatch.setattr("brr.knowledge.ensure_checkout", lambda root, cfg=None: kb)
+    monkeypatch.setattr("brr.knowledge.ensure_checkout", lambda root, cfg=None, **_: kb)
     monkeypatch.setattr("brr.knowledge.active_kb_dir", lambda root, cfg=None: kb)
 
     rc = main(["kb"])
@@ -1822,7 +1822,7 @@ def test_cmd_kb_no_query_on_unresolvable_kb_is_not_a_silent_success(
     """
     repo, kb = _kb_repo(tmp_path)
     monkeypatch.setattr("brr.cli._repo_root", lambda: repo)
-    monkeypatch.setattr("brr.knowledge.ensure_checkout", lambda root, cfg=None: kb)
+    monkeypatch.setattr("brr.knowledge.ensure_checkout", lambda root, cfg=None, **_: kb)
     monkeypatch.setattr("brr.knowledge.active_kb_dir", lambda root, cfg=None: None)
 
     rc = main(["kb"])
@@ -1850,7 +1850,7 @@ def test_cmd_kb_no_query_on_empty_kb_dir_is_not_a_silent_success(
     empty = tmp_path / "empty-kb"
     empty.mkdir()
     monkeypatch.setattr("brr.cli._repo_root", lambda: repo)
-    monkeypatch.setattr("brr.knowledge.ensure_checkout", lambda root, cfg=None: empty)
+    monkeypatch.setattr("brr.knowledge.ensure_checkout", lambda root, cfg=None, **_: empty)
     monkeypatch.setattr("brr.knowledge.active_kb_dir", lambda root, cfg=None: empty)
 
     rc = main(["kb"])
@@ -1875,7 +1875,7 @@ def test_cmd_kb_no_query_names_the_directory_it_walked(
     """
     repo, kb = _kb_repo(tmp_path)
     monkeypatch.setattr("brr.cli._repo_root", lambda: repo)
-    monkeypatch.setattr("brr.knowledge.ensure_checkout", lambda root, cfg=None: kb)
+    monkeypatch.setattr("brr.knowledge.ensure_checkout", lambda root, cfg=None, **_: kb)
     monkeypatch.setattr("brr.knowledge.active_kb_dir", lambda root, cfg=None: kb)
 
     rc = main(["kb"])
@@ -1884,12 +1884,87 @@ def test_cmd_kb_no_query_names_the_directory_it_walked(
     assert str(kb) in out, "the report must name the directory it walked"
 
 
+# ── #1193 — never answer from a home you just made ──────────────────────
+
+
+def test_cmd_kb_project_fallback_names_the_reason_and_scaffolds_nothing(
+    tmp_path, capsys, monkeypatch
+):
+    """No account link resolvable ⇒ the read names the fallback and why.
+
+    The bug: `cmd_kb` resolved through `resolve_context()`'s default
+    `create=True`, which silently mints a fresh, empty project home
+    (mkdir + git init) whenever no account link is found, then reported on
+    it exactly as it would a real, populated home — nothing distinguished
+    "genuinely empty" from "just invented for this call". Real
+    `ensure_checkout`/`resolve_context` run here (not mocked): the
+    assertion that matters is that neither the reason nor the absence of a
+    scaffolded home is a mock artifact.
+    """
+    from brr import account as account_mod
+
+    repo, kb = _kb_repo(tmp_path)
+    monkeypatch.setattr("brr.cli._repo_root", lambda: repo)
+    monkeypatch.setattr("brr.knowledge.active_kb_dir", lambda root, cfg=None: kb)
+
+    # Where a project-fallback home would land for this repo, computed the
+    # same read-only way the fix does it — never created ahead of the call.
+    project_home = account_mod.resolve_context(repo, {}, create=False).dominion_repo
+    assert not project_home.exists(), "fixture must start with no home minted"
+
+    rc = main(["kb"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "project fallback" in out
+    assert "no account link found" in out
+    assert str(repo) in out
+    # The whole point: reading must not have originated the thing it reports
+    # having not found linked.
+    assert not project_home.exists(), "a read must not scaffold a home to report on"
+
+
+def test_cmd_kb_account_linked_read_reports_cleanly(tmp_path, capsys, monkeypatch):
+    """An account-resolved read still reports cleanly — no regression (#1193).
+
+    Most wakes on this machine do have an account link; the common case
+    must render exactly as before, now carrying the (correct) reason.
+    """
+    repo, kb = _kb_repo(tmp_path)
+    (repo / ".brr").mkdir(exist_ok=True)
+    (repo / ".brr" / "config").write_text(
+        "account.id=acct-test\n", encoding="utf-8",
+    )
+    monkeypatch.setattr("brr.cli._repo_root", lambda: repo)
+    monkeypatch.setattr("brr.knowledge.active_kb_dir", lambda root, cfg=None: kb)
+
+    rc = main(["kb"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "account acct-test (linked)" in out
+    assert "project fallback" not in out
+
+
+def test_cmd_notes_check_names_the_resolution_reason(tmp_path, capsys, monkeypatch):
+    """``brnrd notes check`` carries the same account/fallback reason (#1193)."""
+    from brr import cli
+
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    monkeypatch.setattr(cli, "_repo_root", lambda: repo)
+
+    rc = main(["notes", "check"])
+    out = capsys.readouterr().out
+    assert rc in (0, 1)
+    assert "project fallback" in out
+    assert "no account link found" in out
+
+
 def test_cmd_kb_with_query_hit_exits_0(tmp_path, capsys, monkeypatch):
     """brnrd kb <query> with a match exits 0 and prints the hit — unchanged."""
     repo, kb = _kb_repo(tmp_path)
     (kb / "needle-page.md").write_text("the needle is here\n", encoding="utf-8")
     monkeypatch.setattr("brr.cli._repo_root", lambda: repo)
-    monkeypatch.setattr("brr.knowledge.ensure_checkout", lambda root, cfg=None: kb)
+    monkeypatch.setattr("brr.knowledge.ensure_checkout", lambda root, cfg=None, **_: kb)
 
     rc = main(["kb", "needle"])
     out = capsys.readouterr().out
@@ -1901,7 +1976,7 @@ def test_cmd_kb_with_query_no_match_exits_1(tmp_path, capsys, monkeypatch):
     """brnrd kb <query> with no match exits 1 — unchanged behaviour."""
     repo, kb = _kb_repo(tmp_path)
     monkeypatch.setattr("brr.cli._repo_root", lambda: repo)
-    monkeypatch.setattr("brr.knowledge.ensure_checkout", lambda root, cfg=None: kb)
+    monkeypatch.setattr("brr.knowledge.ensure_checkout", lambda root, cfg=None, **_: kb)
 
     rc = main(["kb", "xyzzy-no-such-term-8675309"])
     assert rc == 1
