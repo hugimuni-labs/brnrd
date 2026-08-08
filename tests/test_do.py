@@ -158,23 +158,39 @@ def test_do_mood_note_without_mood_is_rejected(tmp_path, monkeypatch, capsys):
 # ── --note / --reply / --gate: the verdict-observation contract ────────
 
 
-def _consume_after_one_sleep(outbox, glob, *, notice=None):
+def _consume_after_one_sleep(outbox, glob, *, notice=None, bolt=None):
     """A ``time.sleep`` replacement: on first call, retire the one staged
     file matching *glob* (mirroring ``_retire_outbox_staging`` — the file
     just needs to stop existing at the path this module wrote), optionally
-    dropping a matching notice into ``portal-state.json`` first."""
+    dropping a matching notice into ``portal-state.json`` first, and/or
+    stamping the ``bolt`` facet ``cmd_cut``'s accept path reads back
+    (``daemon.py`` sets ``task.meta["bolt"]`` in the same drain branch that
+    accepts a ``cut:`` — a real accepted cut always produces one)."""
 
     def _sleep(_seconds):
         matches = list(outbox.glob(glob))
         if not matches:
             return
-        if notice is not None:
+        if notice is not None or bolt is not None:
             payload = json.loads((outbox / "portal-state.json").read_text(encoding="utf-8"))
-            payload.setdefault("notices", []).append(notice)
+            if notice is not None:
+                payload.setdefault("notices", []).append(notice)
+            if bolt is not None:
+                payload["bolt"] = bolt
             (outbox / "portal-state.json").write_text(json.dumps(payload), encoding="utf-8")
         matches[0].unlink()
 
     return _sleep
+
+
+#: A minimal "the daemon really did accept this" bolt facet — the shape
+#: ``daemon.py`` stamps into ``task.meta["bolt"]`` (and, next tick,
+#: ``portal-state.json``) the instant a ``cut:`` clears ``_cut_mismatches``
+#: with nothing to annotate. Fixtures for a *clean* accepted cut pass this
+#: so ``cmd_cut``'s post-#1221 bolt-facet confirmation has something real to
+#: find — a fixture with no ``bolt`` key models a cut the daemon never
+#: actually recorded (see ``test_cut_reports_unconfirmed_when_the_bolt_facet_never_appears``).
+_CLEAN_BOLT = {"accepted": True, "annotated": 0, "accepted_at": "2026-08-08T00:00:00Z"}
 
 
 def test_do_note_ok_when_consumed_cleanly(tmp_path, monkeypatch, capsys):
@@ -294,6 +310,62 @@ def test_do_note_ignores_a_stale_pre_existing_notice(tmp_path, monkeypatch, caps
 
     assert main(["do", "--note", "evt-1"]) == 0
     assert capsys.readouterr().out.strip() == "note evt-1 ✓"
+
+
+def _consume_then_notice_after_delay(outbox, glob, notice, *, delay_calls=3):
+    """Simulate the #1219 timing hole without a real wait: the daemon
+    retires the staged file and appends the drop notice as two *separate*
+    writes within the same drain tick (``daemon.py``'s ``_drain_outbox``
+    runs first — deletes the file, writes ``.notices.jsonl`` — then several
+    more steps, then ``_write_live_portal_state`` finally rewrites
+    ``portal-state.json`` with that notice folded in). A poll landing
+    between those two writes sees the file already gone but the notice not
+    yet reflected. Here: the file vanishes on the first ``sleep`` call: the
+    notice reaches ``portal-state.json`` only a couple of calls later."""
+
+    calls = {"n": 0}
+
+    def _sleep(_seconds):
+        calls["n"] += 1
+        matches = list(outbox.glob(glob))
+        if matches:
+            matches[0].unlink()
+        if calls["n"] == delay_calls:
+            payload = json.loads(
+                (outbox / "portal-state.json").read_text(encoding="utf-8"),
+            )
+            payload.setdefault("notices", []).append(notice)
+            (outbox / "portal-state.json").write_text(
+                json.dumps(payload), encoding="utf-8",
+            )
+
+    return _sleep
+
+
+def test_do_note_catches_a_notice_that_lands_after_the_file_is_already_gone(
+    tmp_path, monkeypatch, capsys,
+):
+    """#1219: a fresh notice that reaches ``portal-state.json`` a couple of
+    daemon ticks *after* the staged file was already retired must still be
+    read as the verdict — trusting "file gone, no notice (yet)" as proof of
+    a clean accept is exactly the timing hole #1219 measured live (three
+    grammar-refused ``cut:`` directives, each reported ``accepted``)."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    notice = {
+        "at": "2026-08-08T00:00:00Z", "kind": "dropped",
+        "text": "note dropped: event evt-1 not found in any inbox",
+    }
+    monkeypatch.setattr(
+        time, "sleep",
+        _consume_then_notice_after_delay(outbox, "do-*-note-*.md", notice),
+    )
+
+    assert main(["do", "--note", "evt-1"]) == 1
+    out = capsys.readouterr().out.strip()
+    assert out.startswith("note evt-1 ✗ dropped: note dropped: event evt-1")
 
 
 def test_do_note_still_queued_when_never_consumed(tmp_path, monkeypatch, capsys):
@@ -542,7 +614,10 @@ def test_cut_reports_accepted_when_consumed_cleanly(tmp_path, monkeypatch, capsy
     _portal_state(outbox)
     declaration = tmp_path / "bolt.md"
     declaration.write_text("---\n---\nAll done.\n", encoding="utf-8")
-    monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-cut-*.md"))
+    monkeypatch.setattr(
+        time, "sleep",
+        _consume_after_one_sleep(outbox, "do-*-cut-*.md", bolt=_CLEAN_BOLT),
+    )
 
     assert main(["cut", str(declaration)]) == 0
     out = capsys.readouterr().out.strip()
@@ -573,6 +648,13 @@ def test_cut_splices_the_marker_into_an_existing_frontmatter_block(
         matches = list(outbox.glob("do-*-cut-*.md"))
         if matches:
             staged["text"] = matches[0].read_text(encoding="utf-8")
+            payload = json.loads(
+                (outbox / "portal-state.json").read_text(encoding="utf-8"),
+            )
+            payload["bolt"] = _CLEAN_BOLT
+            (outbox / "portal-state.json").write_text(
+                json.dumps(payload), encoding="utf-8",
+            )
             matches[0].unlink()
 
     monkeypatch.setattr(time, "sleep", _sleep)
@@ -581,6 +663,29 @@ def test_cut_splices_the_marker_into_an_existing_frontmatter_block(
     assert staged["text"] == (
         "---\ncut: true\nproduce: none\nowed: none\n---\nAll done.\n"
     )
+
+
+def test_cut_reports_unconfirmed_when_the_bolt_facet_never_appears(
+    tmp_path, monkeypatch, capsys,
+):
+    """#1221: an OK drain verdict (the directive was consumed, no refusal
+    notice named it) is not proof of an accepted bolt — ``task.meta["bolt"]``
+    is a separate write the *accept* branch of the same drain makes, folded
+    into ``portal-state.json`` on a later tick. If that facet never shows up,
+    the porcelain must say so plainly rather than print ``accepted`` for a
+    run the daemon never actually recorded a bolt for."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)  # no `bolt` key, and nothing below ever adds one
+    declaration = tmp_path / "bolt.md"
+    declaration.write_text("---\n---\nDone.\n", encoding="utf-8")
+    monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-cut-*.md"))
+
+    assert main(["cut", str(declaration)]) == 1
+    err = capsys.readouterr().err.strip()
+    assert err.startswith("[brnrd cut] ? unconfirmed")
+    assert "check notices" in err
 
 
 def test_cut_reports_bounced_with_the_named_diff(tmp_path, monkeypatch, capsys):
