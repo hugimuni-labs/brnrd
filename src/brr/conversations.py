@@ -67,6 +67,8 @@ import re
 import shutil
 import time
 from datetime import datetime, timedelta, timezone
+
+from .channels import registry as channel_registry
 from pathlib import Path
 from typing import Any, Iterator, TypedDict
 
@@ -96,49 +98,53 @@ def gate_thread_key(meta: dict[str, Any]) -> str | None:
     """Return a stable conversation key for the gate thread, or None.
 
     The key threads repeat events from the same conversational source
-    (Telegram chat+topic, Slack channel+thread, GitHub repo+issue/PR)
-    onto the same conversation directory. Returns None when an event
-    carries no gate context that can serve as a stable thread anchor.
+    (Telegram chat+topic, Slack channel+thread, GitHub repo+issue/PR,
+    Signal sender, a relay-carried origin chat) onto the same
+    conversation directory. Returns None when an event carries no gate
+    context that can serve as a stable thread anchor.
+
+    The per-channel facts live in ``brr.channels.registry.THREAD_RULES``
+    — this function is only the rendering engine. A source with no
+    registry row threads onto ``{source}:default`` (schedule, spawn, and
+    any future carrier before it earns a row).
     """
     source = (meta.get("source") or "").strip()
-    if source == "telegram":
-        chat = meta.get("telegram_chat_id")
-        topic = meta.get("telegram_topic_id") or ""
-        if chat:
-            return f"telegram:{chat}:{topic}"
+    if not source:
         return None
-    if source == "slack":
-        channel = meta.get("slack_channel") or ""
-        thread = meta.get("slack_thread_ts") or meta.get("slack_ts") or ""
-        if channel:
-            return f"slack:{channel}:{thread}"
-        return None
-    if source == "github":
-        repo = (meta.get("github_repo") or "").strip()
-        raw_n = meta.get("github_issue_number")
-        if isinstance(raw_n, int):
-            num = raw_n
-        elif isinstance(raw_n, str) and raw_n.strip().isdigit():
-            num = int(raw_n.strip())
-        else:
-            num = None
-        if repo and num is not None:
-            return f"github:{repo}:{num}"
-        return None
-    if source == "cloud":
-        # Managed mode: the cloud gate carries the origin platform's
-        # routing as discrete fields so back-and-forth in the same origin
-        # chat threads onto one conversation, like a native gate.
-        platform = (meta.get("cloud_platform") or "").strip()
-        chat = meta.get("cloud_chat_id")
-        topic = meta.get("cloud_topic_id") or ""
-        if platform and chat not in (None, ""):
-            return f"cloud:{platform}:{chat}:{topic}"
-        return "cloud:default"
-    if source:
+    rule = channel_registry.THREAD_RULES.get(source)
+    if rule is None:
         return f"{source}:default"
+    return _render_thread_key(rule, meta)
+
+
+def _thread_part_value(part: "channel_registry.Part", meta: dict[str, Any]) -> str | None:
+    """First present, non-empty value for *part*, rendered; None if absent."""
+    for field in part.fields:
+        raw = meta.get(field)
+        if part.as_int:
+            if isinstance(raw, int):
+                return str(raw)
+            if isinstance(raw, str) and raw.strip().isdigit():
+                return str(int(raw.strip()))
+            continue
+        if raw in (None, ""):
+            continue
+        text = str(raw).strip() if isinstance(raw, str) else str(raw)
+        if text:
+            return text
     return None
 
+
+def _render_thread_key(rule: "channel_registry.ThreadRule", meta: dict[str, Any]) -> str | None:
+    parts: list[str] = [rule.channel]
+    for part in rule.parts:
+        value = _thread_part_value(part, meta)
+        if value is None:
+            if part.required:
+                return rule.fallback
+            value = ""
+        parts.append(value)
+    return ":".join(parts)
 
 def _clean_identity(value: Any) -> str:
     text = str(value or "").strip()
@@ -166,6 +172,11 @@ def correspondent_key_for_event(meta: dict[str, Any]) -> str | None:
     above gate-thread keys, so a local Telegram gate and a brnrd-relayed
     Telegram gate can be recognised as the same person without merging
     their delivery channels.
+
+    The per-channel facts live in ``brr.channels.registry`` (
+    ``IDENTITY_RULES`` for native gates, ``CLOUD_IDENTITY`` /
+    ``CLOUD_GENERIC_FIELDS`` for relay-carried origins) — this function
+    is only the rendering engine.
     """
     explicit = _clean_identity(meta.get("correspondent_key"))
     if explicit:
@@ -174,62 +185,34 @@ def correspondent_key_for_event(meta: dict[str, Any]) -> str | None:
     source = _clean_identity(meta.get("source"))
     if source == "cloud":
         platform = _clean_identity(meta.get("cloud_platform"))
-        if platform == "telegram":
-            ident = _identity_value(
-                meta, "cloud_user_id", "cloud_username", "cloud_user",
-            )
-            if ident is None:
-                return None
-            field, value = ident
-            if field == "cloud_username":
-                return f"telegram:username:{_identity_component(value, fold=True)}"
-            if field == "cloud_user_id":
-                return f"telegram:user-id:{_identity_component(value)}"
-            return f"telegram:user:{_identity_component(value, fold=True)}"
-        if platform == "github":
-            ident = _identity_value(meta, "github_author", "cloud_user")
-            if ident is None:
-                return None
-            return f"github:login:{_identity_component(ident[1], fold=True)}"
-        if platform:
-            ident = _identity_value(
-                meta, "cloud_user_id", "cloud_username", "cloud_user",
-            )
-            if ident is None:
-                return None
-            return (
-                f"{_identity_component(platform, fold=True)}:"
-                f"user:{_identity_component(ident[1], fold=True)}"
-            )
-        return None
-
-    if source == "telegram":
-        ident = _identity_value(
-            meta, "telegram_user_id", "telegram_username", "telegram_user",
+        if not platform:
+            return None
+        rule = channel_registry.CLOUD_IDENTITY.get(platform)
+        if rule is not None:
+            return _render_identity(rule.platform, rule.fields, meta)
+        return _render_identity(
+            _identity_component(platform, fold=True),
+            channel_registry.CLOUD_GENERIC_FIELDS,
+            meta,
         )
-        if ident is None:
-            return None
-        field, value = ident
-        if field == "telegram_username":
-            return f"telegram:username:{_identity_component(value, fold=True)}"
-        if field == "telegram_user_id":
-            return f"telegram:user-id:{_identity_component(value)}"
-        return f"telegram:user:{_identity_component(value, fold=True)}"
 
-    if source == "slack":
-        ident = _identity_value(meta, "slack_user")
-        if ident is None:
-            return None
-        return f"slack:user:{_identity_component(ident[1], fold=True)}"
+    rule = channel_registry.IDENTITY_RULES.get(source)
+    if rule is None:
+        return None
+    return _render_identity(rule.platform, rule.fields, meta)
 
-    if source == "github":
-        ident = _identity_value(meta, "github_author")
-        if ident is None:
-            return None
-        return f"github:login:{_identity_component(ident[1], fold=True)}"
 
+def _render_identity(
+    platform: str,
+    fields: tuple["channel_registry.IdentityField", ...],
+    meta: dict[str, Any],
+) -> str | None:
+    for spec in fields:
+        value = _clean_identity(meta.get(spec.field))
+        if not value:
+            continue
+        return f"{platform}:{spec.label}:{_identity_component(value, fold=spec.fold)}"
     return None
-
 
 def origin_message_key_for_event(meta: dict[str, Any]) -> str | None:
     """Return a canonical source-message key for exact duplicate detection."""
