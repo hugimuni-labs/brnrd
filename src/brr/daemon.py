@@ -9904,6 +9904,14 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
     if not parent_run_id:
         return
 
+    # #1136: read once, ahead of the contract logic below, so the report-
+    # missing branch can consult it. `.pr` is daemon-read state already
+    # (`remote_scm` resolves from it) — captured onto `task.meta["pr_number"]`
+    # by `_capture_pr_handle` before the child's outbox is torn down, the
+    # only point at which `.pr` is still readable (see
+    # `test_notify_spawn_parent_pr_survives_outbox_teardown`).
+    pr_num = str(task.meta.get("pr_number") or "").strip()
+
     # #574: does what the child actually published match the contract it
     # was given? ``task.body`` is the spec text as the child saw it — never
     # rewoven for a strand run (the burst-sibling weave at the top of the
@@ -9983,9 +9991,18 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
                     f"branch:            {contract['spec_branch']} ✓ as declared"
                 )
             if not report_ok:
+                pr_suffix = f" — PR #{pr_num} shipped, no report file" if pr_num else ""
                 lines.append(
-                    f"spec report:       {contract['spec_report']} (MISSING)"
+                    f"spec report:       {contract['spec_report']} "
+                    f"(MISSING){pr_suffix}"
                 )
+                # #1136: a strand that spent its whole context window may
+                # still have shipped a PR before running out — `pr_suffix`
+                # above already says so, a true "something's missing"
+                # sentence a parent can act on, rather than one that reads
+                # as if nothing happened at all. The prose-shape note below
+                # is a separate concern (was `spec_report` ever a checkable
+                # path?) and stays regardless of PR status.
                 lines.extend(_unstattable_report_note(contract["spec_report"]))
             elif contract["spec_report"]:
                 lines.append(
@@ -10177,8 +10194,9 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
     # ``.pr`` control *here* cannot work: this function runs after the child's
     # future resolves, and that future's `finally` has already rmtree'd the
     # outbox the control lives in. Driven, not assumed — see
-    # ``test_notify_spawn_parent_pr_survives_outbox_teardown``.
-    pr_num = str(task.meta.get("pr_number") or "").strip()
+    # ``test_notify_spawn_parent_pr_survives_outbox_teardown``. (``pr_num``
+    # itself was read earlier, ahead of the contract block above, so the
+    # report-missing branch could reference it too.)
     if pr_num:
         produce_kwargs["spawn_pr_number"] = pr_num
     # #703: structured alongside the prose block, same "absent stays absent"

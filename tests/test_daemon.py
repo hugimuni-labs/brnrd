@@ -2367,6 +2367,74 @@ def test_a_prose_report_declaration_says_whose_it_was(tmp_path):
     assert "not a path" not in body, body
 
 
+def test_missing_report_with_a_shipped_pr_names_the_pr(tmp_path):
+    """#1136: the live 2026-08-05 case's other half — the durable artefact
+    sits in `.pr` while the check says only "MISSING". A strand that spent
+    its whole context window may legitimately have a PR open and no report
+    file left to write. The parent should read "PR #N shipped, no report
+    file" — a true sentence it can act on — not a bare accusation that
+    reads as if nothing happened.
+
+    Production order, not a convenient one: `.pr` is captured onto
+    ``task.meta`` and the outbox torn down *before* the parent's reap loop
+    calls ``_notify_spawn_parent`` (mirrors
+    ``test_notify_spawn_parent_clean_reap_carries_produce_handles``).
+    """
+    inbox = tmp_path / ".brr" / "inbox"
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-child"
+    outbox_dir.mkdir(parents=True, exist_ok=True)
+    (outbox_dir / ".pr").write_text("1134\n", encoding="utf-8")
+    task = Run(
+        id="run-child", event_id="evt-child", body="do the thing",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "spawn_contract_report": str(tmp_path / "never-written.md"),
+            "publish_branch": "brr/exactly-as-told",
+            "has_new_commit": True,
+            "outbox_path": str(outbox_dir),
+        },
+    )
+
+    daemon._capture_pr_handle(task, outbox_dir)
+    daemon._remove_outbox(outbox_dir)
+    assert not outbox_dir.exists()
+
+    daemon._notify_spawn_parent(inbox, task)
+    note = protocol.list_pending(inbox)[0]
+    body = note["body"]
+
+    assert "MISSING" in body
+    assert "PR #1134" in body and "no report file" in body
+    assert str(note.get("spawn_pr_number")) == "1134"
+
+
+def test_missing_report_without_a_pr_is_unchanged(tmp_path):
+    """The negative twin: no `.pr` ⇒ no PR-aware sentence, and the existing
+    MISSING/prose-ambiguity wording is untouched — 'absent stays absent'
+    (#648 rule 1) applies to this new fact exactly like every other one."""
+    inbox = tmp_path / ".brr" / "inbox"
+    task = Run(
+        id="run-child", event_id="evt-child", body="do the thing",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "spawn_contract_report": str(tmp_path / "never-written.md"),
+            "publish_branch": "brr/exactly-as-told",
+            "has_new_commit": True,
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+    body = protocol.list_pending(inbox)[0]["body"]
+
+    assert "MISSING" in body
+    assert "PR #" not in body
+    assert "no report file" not in body
+
+
 def test_a_missing_but_path_shaped_report_makes_no_prose_guess(tmp_path):
     """A strand that simply never wrote the file gets no prose accusation."""
     inbox = tmp_path / ".brr" / "inbox"
