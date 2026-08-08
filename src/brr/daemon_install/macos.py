@@ -6,6 +6,7 @@ import os
 import plistlib
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -15,12 +16,24 @@ PLIST_NAME = f"{LABEL}.plist"
 
 RunFn = Callable[..., subprocess.CompletedProcess]
 
+#: Post-kickstart liveness poll ceiling, seconds. `launchctl kickstart`
+#: returns the moment the job forks — a job that hard-exits before
+#: `_write_pid` (no `AGENTS.md`, a crashed import) still reports a clean
+#: kickstart, so `install()` must read the pidfile back before claiming
+#: anything survived (issue #1238).
+DEFAULT_POLL_TIMEOUT = 5.0
+
 
 @dataclass(frozen=True)
 class InstallResult:
     plist_path: Path
     log_dir: Path
     started: bool
+    #: Confirmed alive by reading the daemon's own pidfile back within the
+    #: poll window. ``None`` when ``no_start`` skipped the kickstart
+    #: entirely — there was nothing to confirm.
+    alive: bool | None = None
+    pid: int | None = None
 
 
 @dataclass(frozen=True)
@@ -132,6 +145,8 @@ def install(
     home: Path | None = None,
     workdir: str | Path | None = None,
     run: RunFn = subprocess.run,
+    poll_timeout: float = DEFAULT_POLL_TIMEOUT,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> InstallResult:
     brr_bin = str(brr_path or shutil.which("brnrd") or "")
     if not brr_bin:
@@ -141,23 +156,67 @@ def install(
     logs = log_dir(home=home)
     logs.mkdir(parents=True, exist_ok=True)
 
+    workdir_value = Path(workdir) if workdir else resolve_workdir()
+
     path = plist_path(home=home)
     path.write_text(
-        render_plist(brr_bin, home=home, workdir=workdir), encoding="utf-8"
+        render_plist(brr_bin, home=home, workdir=workdir_value), encoding="utf-8"
     )
 
     started = False
+    alive: bool | None = None
+    pid: int | None = None
     if not no_start:
         _bootout(run=run, check=False)
         _run_launchctl(["bootstrap", _gui_domain(), str(path)], run=run)
         _run_launchctl(["kickstart", _gui_service()], run=run)
         started = True
+        pid = _poll_for_pid(workdir_value, timeout=poll_timeout, sleep=sleep)
+        alive = pid is not None
 
     return InstallResult(
         plist_path=path,
         log_dir=logs,
         started=started,
+        alive=alive,
+        pid=pid,
     )
+
+
+def _poll_for_pid(
+    workdir: Path,
+    *,
+    timeout: float,
+    sleep: Callable[[float], None],
+    poll_interval: float = 0.25,
+) -> int | None:
+    """Poll the daemon's own pidfile for up to *timeout* seconds.
+
+    Reads the exact file `daemon.read_pid` / `brnrd daemon status` read
+    (``daemon.py:330`` — the launchd-managed process and a plain foreground
+    one write the same path), so a ``True`` here means the same thing a
+    later ``status`` call would report. A *workdir* that turns out not to
+    be a usable git checkout (a test double, a repo torn down mid-call)
+    fails the first read rather than raising — this is a liveness probe,
+    not a checkout validator.
+    """
+    from brr import daemon as daemon_mod
+    from brr import gitops
+
+    try:
+        brr_dir = gitops.shared_brr_dir(Path(workdir))
+    except OSError:
+        return None
+
+    elapsed = 0.0
+    while True:
+        pid = daemon_mod.read_pid(brr_dir)
+        if pid is not None:
+            return pid
+        if elapsed >= timeout:
+            return None
+        sleep(poll_interval)
+        elapsed += poll_interval
 
 
 def uninstall(
