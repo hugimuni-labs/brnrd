@@ -63,3 +63,117 @@ export function tapVerdict(open: boolean, scrolledPast: boolean): TapVerdict {
 	if (!scrolledPast) return { open: !open, travel: false };
 	return { open: open ? null : true, travel: true };
 }
+
+/**
+ * The shared scroll/settle clock (2026-08-08, his steer: "the behaviour of
+ * both rails is a bit buggy because they behave differently… I just think
+ * it should behave more uniformly and clearly and like collapse not
+ * immediately but soon after the scroll happens so that the elements do not
+ * congest").
+ *
+ * Unifies #1169's diagnosis: the rail's `railScrollVerdict` and the machine
+ * dock's own threshold ran as two independent verdicts, on two independent
+ * `$effect` reads, coupled only through `machineDockTop(railHeight, …)` — a
+ * target computed off the rail's own *live* `clientHeight` binding. That
+ * binding updates asynchronously (a ResizeObserver-backed reactive value)
+ * relative to the scroll handler that flips `condensed` in the same
+ * synchronous tick, so for at least one frame the dock's target position was
+ * built from the *previous* rail height paired with the *new* condensed
+ * state — a threshold that moved out from under its own reader. Both blocks
+ * now compute their verdicts in the one `tick()` in `+page.svelte`, from
+ * settled/cached height constants rather than the live binding, and both run
+ * through *this* one clock — same rules, same timing, every time.
+ *
+ * The clock is deliberately generic (`raw` in, `settled` out) rather than
+ * rail- or dock-specific: the rail and the dock each keep their own
+ * geometric threshold (`railScrollVerdict` below; the dock's own
+ * `machineDockVerdict`) because they answer genuinely different questions —
+ * "has the rail scrolled past its own dead band" vs. "has the machine's own
+ * section scrolled past where the rail's bottom now sits", which a travel
+ * trip (tap the docked head, land at the block) can decouple even while the
+ * rail stays condensed the whole time. What both share, and what used to
+ * differ, is the *timing*: this function is the one clock both feed their
+ * own raw verdict through.
+ *
+ * Expansion is immediate (`raw === false` clears the clock outright) —
+ * nothing "congests" by un-collapsing sooner than asked, and #1011 (THE
+ * PICKER YOU CANNOT REACH) is about a reader's `open` surviving scroll, not
+ * about slowing down the reader's path back to the top. Collapsing is
+ * debounced `settleMs` past the *last* qualifying tick (a trailing debounce,
+ * rescheduled on every call while still short of the deadline) so a reader
+ * mid-scroll never watches the page reflow under their cursor — it happens
+ * once, after they stop.
+ */
+export interface ScrollClock {
+	/** The settled, debounced verdict every renderer reads. */
+	settled: boolean;
+	/** ms epoch a pending collapse will commit at, or `null`: nothing is
+	 *  pending (already settled, or currently on the "stay open" side of the
+	 *  threshold). Caller-owned timer state — this function only computes
+	 *  it, never schedules anything itself. */
+	pendingAt: number | null;
+}
+
+export const SCROLL_SETTLE_MS = 300;
+
+/**
+ * One tick of the shared clock. Called with this instant's raw geometric
+ * verdict (`railScrollVerdict`, `machineDockVerdict` — see each) and again,
+ * unchanged but for `now`, from the settle timer once scrolling has been
+ * quiet for `settleMs`. Both call sites read the same rules from the same
+ * place.
+ */
+export function scrollClockTick(
+	clock: ScrollClock,
+	raw: boolean,
+	now: number,
+	settleMs: number = SCROLL_SETTLE_MS
+): ScrollClock {
+	if (!raw) return { settled: false, pendingAt: null };
+	if (clock.settled) return { settled: true, pendingAt: null };
+	if (clock.pendingAt !== null && now >= clock.pendingAt) return { settled: true, pendingAt: null };
+	return { settled: false, pendingAt: now + settleMs };
+}
+
+/**
+ * The rail's raw condense verdict, with hysteresis — moved here from
+ * `controlStrip.ts` (2026-08-08) so the geometry and the clock that debounces
+ * it live in one file, the unified verdict's home. Geometry unchanged from
+ * its own measured history:
+ *
+ * THE BOUNDARY THAT FLICKERED (2026-08-02, his touchpad report: "it glitches
+ * real hard between the collapsed and normal unless I scroll fast enough to
+ * go past the head of the warp"). The old verdict was a single
+ * IntersectionObserver threshold on the sentinel above the rail: one shared
+ * boundary for condensing and un-condensing. A slow touchpad scroll sits *at*
+ * that boundary for many frames, and every 1px of jitter toggled a ~140px
+ * layout change plus a 260ms glitch reveal — the flicker was the trigger's
+ * geometry, not the animation's.
+ *
+ * Second defect, same boundary: the spacer that holds the rail's flow
+ * footprint is documented as "only ever non-zero while off-screen", but at
+ * the old threshold the rail condensed the moment its *top* left the
+ * viewport — inflating the spacer while the freed area was still on screen,
+ * a visible blank band exactly where the rail had been.
+ *
+ * The rule: a form change earns a dead band at least as tall as the form
+ * change itself. Condense only once the reader has scrolled past the whole
+ * full rail (the freed space is then provably off-screen; the sticky slim
+ * bar takes over seamlessly). Un-condense only back near the rail's natural
+ * top, where the full form belongs. Between the two thresholds the verdict
+ * holds its last state — jitter has nothing to toggle.
+ */
+export const RAIL_UNCONDENSE_SLACK_PX = 8;
+export const RAIL_CONDENSE_FLOOR_PX = 48;
+
+export function railScrollVerdict(state: {
+	scrollY: number;
+	railTop: number;
+	railFullHeight: number;
+	condensed: boolean;
+}): boolean {
+	const condenseAt = state.railTop + Math.max(state.railFullHeight, RAIL_CONDENSE_FLOOR_PX);
+	const releaseAt = state.railTop + RAIL_UNCONDENSE_SLACK_PX;
+	if (!state.condensed) return state.scrollY > condenseAt;
+	return state.scrollY >= releaseAt;
+}
