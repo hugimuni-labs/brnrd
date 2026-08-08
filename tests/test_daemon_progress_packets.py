@@ -72,6 +72,51 @@ def test_success_emits_full_progress_lifecycle(tmp_path, monkeypatch):
     assert types.index("finalizing") < types.index("done")
 
 
+def test_done_packet_reports_pending_not_ready_before_push(tmp_path, monkeypatch):
+    """#1192: ``env_backend.finalize``'s "ready" is a local classification —
+    "has commits queued to publish" — not a confirmed push outcome. The
+    actual push (``daemon.publish``) is invoked by this run's caller,
+    strictly after this packet is emitted (measured 18s late in the
+    incident that opened #1192, by which point the parent, the ledger row,
+    and this very packet had already asserted ``publish_status=ready``).
+    The ``done`` packet must say the honest "not settled yet" thing
+    instead and let the later ``push_done``/``conflict`` packets settle it.
+    """
+    write_repo_scaffold(tmp_path)
+    event = make_event(
+        tmp_path, eid="evt-ready", body="ship it",
+        telegram_chat_id=10, telegram_topic_id=1,
+    )
+    _patch_runner(monkeypatch)
+
+    class _ReadyEnv(StubWorktreeEnv):
+        def finalize(self, _ctx, task, _tasks_dir):
+            # Mirrors what WorktreeEnv._resolve_outcome stamps for a run
+            # that ended with commits on a branch — a local read of the
+            # worktree, made before any push is attempted.
+            task.meta["publish_status"] = "ready"
+            task.meta["publish_branch"] = "brr/ship-it"
+            return task
+
+    monkeypatch.setattr(
+        daemon.envs, "get_env",
+        lambda _name: _ReadyEnv(invoke_fn=succeed_invoke()),
+    )
+
+    task = daemon._run_worker(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+
+    assert task.status == "done"
+    # task.meta keeps the real local classification — daemon.publish (this
+    # run's caller) still reads "ready" to decide whether there is
+    # something to push at all.
+    assert task.meta.get("publish_status") == "ready"
+    records = _update_records(tmp_path / ".brr", task.conversation_key)
+    done = next(r for r in records if r.get("type") == "done")
+    assert done.get("publish_status") == "pending"
+
+
 def test_sync_packet_is_scoped_to_run(tmp_path, monkeypatch):
     """The sync card line belongs to a run, not to the whole thread.
 

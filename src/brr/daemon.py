@@ -4349,12 +4349,28 @@ def _run_worker(
             # can reflect "delivered to N threads" / "sent N out-of-bound"
             # / "no reply — committed work" instead of collapsing
             # everything to a single current-thread reply (§8 re-alignment).
+            #
+            # #1192: ``env_backend.finalize`` (just above) only classifies
+            # the *local* worktree state — "ready" means "has commits queued
+            # to publish", not "was published". The actual push
+            # (``daemon.publish``) is invoked by this run's caller
+            # (``_run_worker_and_finalize``), strictly after this packet is
+            # emitted — measured 18s late in the incident that opened #1192,
+            # by which time the parent, the ledger row, and this very packet
+            # had already asserted ``publish_status=ready``. Forward the
+            # honest "not settled yet" word instead and let the later
+            # ``push_done`` / ``conflict`` packets say what actually
+            # happened; ``nothing``/``detached``/``conflict`` are already
+            # accurate at this point and pass through unchanged.
+            done_publish_status = task.meta.get("publish_status")
+            if done_publish_status == "ready":
+                done_publish_status = "pending"
             emit(
                 "done",
                 run_id=task.id,
                 event_id=eid,
                 publish_branch=task.meta.get("publish_branch"),
-                publish_status=task.meta.get("publish_status"),
+                publish_status=done_publish_status,
                 success_signal=signal,
                 replies_current=output_stats.get("current", 0),
                 replies_other=output_stats.get("other", 0),
@@ -7242,6 +7258,30 @@ def _queue_spawn_request(
     # the same way it already reads `publish_branch`.
     contract_branch = str(fm.get("branch") or "").strip()
     contract_report = str(fm.get("report") or "").strip()
+    # #1136: `report:` is a path the completion check will `stat` later
+    # (`daemon-substrate.md`'s ``spawn:`` row says so in as many words) —
+    # but nothing stopped a dispatcher from typing prose instead. Live
+    # 2026-08-05: `report: the PR body is the report` rode a child's meta
+    # all the way to its completion note, which correctly found nothing to
+    # `stat` and read as an indictment of a strand whose commit was pushed
+    # and whose PR was open. Refuse the unambiguous case here, at the
+    # moment it's typed, the same way a malformed ``event:`` id is refused
+    # rather than silently carried to a check that can only fail it later.
+    # Not a strict path validator — a legal path may contain spaces — so
+    # this only asserts what it can prove: no leading ``/`` is a claim no
+    # absolute path can satisfy.
+    if contract_report and not contract_report.startswith("/"):
+        _record_outbox_notice(
+            outbox_dir,
+            f"spawn refused: report: {contract_report!r} does not look "
+            "like a path — it must start with `/` so the completion "
+            "check can `stat` it later. A prose description (e.g. \"the "
+            "PR body is the report\") can never be checked; state the "
+            "absolute path the strand will write instead.",
+            kind="refused",
+            lifetime="run",
+        )
+        return False
     # #880 §1b: a short, dispatcher-declared label for this child — read
     # back as its presence ``label`` (``_presence_label_for_event``) so a
     # parent supervising several siblings can tell their rows apart from
@@ -9888,6 +9928,14 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
     if not parent_run_id:
         return
 
+    # #1136: read once, ahead of the contract logic below, so the report-
+    # missing branch can consult it. `.pr` is daemon-read state already
+    # (`remote_scm` resolves from it) — captured onto `task.meta["pr_number"]`
+    # by `_capture_pr_handle` before the child's outbox is torn down, the
+    # only point at which `.pr` is still readable (see
+    # `test_notify_spawn_parent_pr_survives_outbox_teardown`).
+    pr_num = str(task.meta.get("pr_number") or "").strip()
+
     # #574: does what the child actually published match the contract it
     # was given? ``task.body`` is the spec text as the child saw it — never
     # rewoven for a strand run (the burst-sibling weave at the top of the
@@ -9967,9 +10015,18 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
                     f"branch:            {contract['spec_branch']} ✓ as declared"
                 )
             if not report_ok:
+                pr_suffix = f" — PR #{pr_num} shipped, no report file" if pr_num else ""
                 lines.append(
-                    f"spec report:       {contract['spec_report']} (MISSING)"
+                    f"spec report:       {contract['spec_report']} "
+                    f"(MISSING){pr_suffix}"
                 )
+                # #1136: a strand that spent its whole context window may
+                # still have shipped a PR before running out — `pr_suffix`
+                # above already says so, a true "something's missing"
+                # sentence a parent can act on, rather than one that reads
+                # as if nothing happened at all. The prose-shape note below
+                # is a separate concern (was `spec_report` ever a checkable
+                # path?) and stays regardless of PR status.
                 lines.extend(_unstattable_report_note(contract["spec_report"]))
             elif contract["spec_report"]:
                 lines.append(
@@ -10161,8 +10218,9 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
     # ``.pr`` control *here* cannot work: this function runs after the child's
     # future resolves, and that future's `finally` has already rmtree'd the
     # outbox the control lives in. Driven, not assumed — see
-    # ``test_notify_spawn_parent_pr_survives_outbox_teardown``.
-    pr_num = str(task.meta.get("pr_number") or "").strip()
+    # ``test_notify_spawn_parent_pr_survives_outbox_teardown``. (``pr_num``
+    # itself was read earlier, ahead of the contract block above, so the
+    # report-missing branch could reference it too.)
     if pr_num:
         produce_kwargs["spawn_pr_number"] = pr_num
     # #703: structured alongside the prose block, same "absent stays absent"

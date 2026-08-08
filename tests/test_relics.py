@@ -96,7 +96,7 @@ def test_read_pr_control_accepts_only_explicit_pr_forms(tmp_path: Path):
 # ── derive_auto ──────────────────────────────────────────────────────
 
 
-def test_derive_auto_lists_commits_branch_and_pr(tmp_path: Path):
+def test_derive_auto_lists_commits_branch_and_pr(tmp_path: Path, monkeypatch):
     repo = tmp_path / "repo"
     init_git_repo(repo)
     commit_files(repo, {"a.txt": "1"}, message="seed")
@@ -109,6 +109,14 @@ def test_derive_auto_lists_commits_branch_and_pr(tmp_path: Path):
     outbox = tmp_path / "outbox"
     outbox.mkdir()
     (outbox / ".pr").write_text("319\n", encoding="utf-8")
+
+    # #1192: the branch relic's URL is only minted once the branch is
+    # confirmed on the remote (`git ls-remote --heads`) — this test's local
+    # checkout never actually pushed to the fake `origin` above, so stand
+    # in for a push that genuinely landed rather than exercising the real
+    # network. The "not confirmed" arm is
+    # ``test_derive_auto_omits_branch_url_when_not_confirmed_on_remote``.
+    monkeypatch.setattr(relics.gitops, "remote_branch_exists", lambda *a, **k: True)
 
     out = relics.derive_auto(repo, branch="brr/work", seed_ref="main", outbox_dir=outbox)
     kinds = [r["kind"] for r in out]
@@ -164,6 +172,35 @@ def test_derive_auto_no_remote_still_lists_commits_without_urls(tmp_path: Path):
         {"kind": "commit", "sha": out[0]["sha"], "subject": "add b", "url": None},
         {"kind": "branch", "name": "brr/work", "url": None},
     ]
+
+
+def test_derive_auto_omits_branch_url_when_not_confirmed_on_remote(
+    tmp_path: Path, monkeypatch,
+):
+    """#1192: a branch relic must not carry a URL nobody checked.
+
+    A remote is configured (so a URL *could* be templated) and the branch
+    has commits beyond seed (so the old code would have minted one) — but
+    `git ls-remote` says the branch isn't there, standing in for a push
+    that failed or hasn't landed yet. The relic still names the branch —
+    something happened, worth a mention — but the URL stays absent rather
+    than pointing at a page that 404s. Same fixture shape as the confirmed
+    case in `test_derive_auto_lists_commits_branch_and_pr`, opposite
+    verdict from the ls-remote check.
+    """
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "1"}, message="seed")
+    subprocess.run(["git", "remote", "add", "origin", "git@github.com:Gurio/brr.git"],
+                    cwd=repo, check=True)
+    subprocess.run(["git", "checkout", "-b", "brr/work"], cwd=repo, check=True)
+    commit_files(repo, {"b.txt": "2"}, message="add b")
+
+    monkeypatch.setattr(relics.gitops, "remote_branch_exists", lambda *a, **k: False)
+
+    out = relics.derive_auto(repo, branch="brr/work", seed_ref="main", outbox_dir=None)
+    branch = next(r for r in out if r["kind"] == "branch")
+    assert branch == {"kind": "branch", "name": "brr/work", "url": None}
 
 
 # ── live_summary / collect / counts_by_kind ──────────────────────────
