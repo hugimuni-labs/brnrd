@@ -201,8 +201,7 @@
 		try {
 			await releaseSticky();
 			runnersError = null;
-			runnersNote =
-				'sticky releasing — this thread goes back to the default within a publish tick';
+			runnersNote = 'sticky releasing — this thread goes back to the default within a publish tick';
 		} catch (e) {
 			runnersNote = null;
 			runnersError =
