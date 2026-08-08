@@ -41,8 +41,17 @@
 	// GitHub App install is the single web consent that follows — never a
 	// prerequisite to it. `pairing_command` (`_session.py`) already builds
 	// with a `<repo>` placeholder and needs no enabled repo to run, so
-	// nothing here waits on step 03. ColdStart now matches `/repos`: install
-	// → pair → enable.
+	// nothing here waits on the App.
+	//
+	// Second trace, 2026-08-08 (design-onboarding-second-trace.md, #1243):
+	// step 03 still rendered the pre-Direction-A "install the App, then
+	// enable the repository" copy — the repo had already bound at pairing,
+	// so that instruction described a rung that no longer exists, and the
+	// one rung that does exist here (`brnrd init` — `daemon.start` hard-
+	// exits without it, #1238) appeared on no web surface at all. Step 03
+	// is now that command; the App becomes what it actually is, an optional
+	// identity upgrade named once in the footer, never a gate. ColdStart
+	// now matches Direction A: install → pair → init.
 	interface Props {
 		// `null` = the repos fetch hasn't landed. Render nothing rather than
 		// flashing a cold start at an account that has fifteen repos: the
@@ -64,19 +73,37 @@
 	let { repos, installations = null, pairCommand = null }: Props = $props();
 
 	const INSTALL_COMMAND = 'npm install -g brnrd';
+	// Step 03 (2026-08-08 trace, #1243): the rung the trace proved fatal.
+	// `daemon.start` refuses to run without an `AGENTS.md` in the checkout
+	// (`run brnrd init first`, `daemon.py`) — every account that paired
+	// without ever seeing this line got a daemon that registers, crash-
+	// loops under its service manager, and never breathes. Docs already
+	// teach install → init → connect; this board taught install → connect
+	// → App and guaranteed the trace. One line, added.
+	const INIT_COMMAND = 'brnrd init';
 
 	let appInstalled = $derived((installations?.length ?? 0) > 0);
-	let repoEnabled = $derived((repos?.length ?? 0) > 0);
 	// "Paired" here means the one-time setup act completed, not "currently
 	// online" — `daemon_status` is `missing` only until step 02's own
 	// pairing command first registers this repo's daemon; after that it
-	// reads `online` or `offline` depending on whether it is heartbeating
-	// *right now*. This is a setup checklist, not a live health monitor (that job
-	// belongs to the daemon-status dot elsewhere on the page) — a laptop
-	// that's asleep must not resurrect "nothing is paired yet" for an
-	// account that has already done this step once.
+	// reads `online`, `offline`, or `never_started` depending on whether
+	// it is heartbeating *right now* (#1243: `never_started` is a daemon
+	// that registered and never completed a publish cycle — still very
+	// much paired, just crash-looping — so it belongs in this set exactly
+	// like `offline` does; leaving it out would resurrect the vanishing-
+	// ladder regression this gate exists to prevent, for the one account
+	// shape the 08-08 trace actually hit). This is a setup checklist, not a
+	// live health monitor (that job belongs to the daemon-status dot
+	// elsewhere on the page) — a laptop that's asleep must not resurrect
+	// "nothing is paired yet" for an account that has already done this
+	// step once.
 	let daemonEverPaired = $derived(
-		(repos ?? []).some((r) => r.daemon_status === 'online' || r.daemon_status === 'offline')
+		(repos ?? []).some(
+			(r) =>
+				r.daemon_status === 'online' ||
+				r.daemon_status === 'offline' ||
+				r.daemon_status === 'never_started'
+		)
 	);
 
 	// The block survives until the last *observable* step is done. That is
@@ -174,54 +201,54 @@
 
 			<li>
 				<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
-					<span class="text-amber-200/80">03</span> enable a repository
-					{#if repoEnabled}
-						<span class="text-emerald-400">— done</span>
-					{/if}
+					<span class="text-amber-200/80">03</span> run <code>brnrd init</code>
 				</p>
-				{#if repoEnabled}
-					<!-- Marked done, not hidden: the block is still up because
-					     pairing isn't, and a reader re-reading the ladder should see
-					     03 as settled rather than wonder if it still applies. -->
-					<p class="mt-1.5 text-sm text-stone-400">
-						At least one repository is enabled. Enable another, or change what's enabled, on the
-						<a href={resolve('/repos')} class="text-sky-400 underline hover:text-sky-300"
-							>repos screen</a
-						>.
-					</p>
-				{:else if appInstalled}
-					<!-- The other half of the reported bug: an account that has
-					     already installed the App must not be told to install it
-					     again — that was step 05 of the trace ("connected but not
-					     connected"), one level up. -->
-					<p class="mt-1.5 text-sm text-stone-400">
-						The brnrd GitHub App is installed. Enable the repository on a separate screen. Nothing
-						on this board fills in until you do.
-					</p>
-					<a
-						href={resolve('/repos')}
-						class="mt-2 inline-flex items-center border border-amber-700 bg-amber-950/40 px-3 py-1.5 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:border-amber-500"
-						>enable a repository</a
+				<div class="mt-1.5 flex items-start gap-2">
+					<pre
+						class="min-w-0 grow border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] wrap-anywhere whitespace-pre-wrap text-stone-300"><code
+							>{INIT_COMMAND}</code
+						></pre>
+					<button
+						type="button"
+						class="shrink-0 cursor-pointer border border-stone-800 px-2 py-2 font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+						onclick={() => copy('init', INIT_COMMAND)}
+						>{copied === 'init' ? 'copied' : 'copy'}</button
 					>
-				{:else}
-					<!-- Named as the reported confusion, in the first clause: "the
-					     actual repo enablement is the repos screen (another page)".
-					     Say that it is another page rather than let the reader
-					     discover it. -->
-					<p class="mt-1.5 text-sm text-stone-400">
-						A separate screen. Install the brnrd GitHub App where the repository lives, then enable
-						the repository there. Nothing on this board fills in until you do.
-					</p>
-					<a
-						href={resolve('/repos')}
-						class="mt-2 inline-flex items-center border border-amber-700 bg-amber-950/40 px-3 py-1.5 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:border-amber-500"
-						>enable a repository</a
-					>
-				{/if}
+				</div>
+				<!-- The rung the 08-08 trace proved fatal (design-onboarding-
+				     second-trace.md, #1243): step 02 already bound this repo —
+				     nothing left to "enable" on a separate screen — but the
+				     daemon still refuses to start without this. Unobservable
+				     from here exactly like step 01 (no wire fact says "init has
+				     run"), so no done-marker, on purpose — a checkmark that
+				     guessed would be the same lie the header comment above
+				     refuses for step 01. -->
+				<p class="mt-1.5 text-sm text-stone-400">
+					Same checkout, once 02 has paired — your repo connected the moment you paired above, so
+					there is nothing to enable on a separate screen. This writes what the resident reads
+					before it can act; skip it and the daemon stays paired with nothing to run.
+				</p>
 			</li>
 		</ol>
 
 		<p class="mt-4 border-t border-stone-800 pt-3 font-mono text-[11px] text-ink-mute">
+			{#if appInstalled}
+				GitHub App installed — commits and comments already post as <code>brnrd-dev[bot]</code>, not
+				your own identity. Manage it on the
+				<a class="text-sky-400 underline hover:text-sky-300" href={resolve('/repos')}
+					>repos screen</a
+				>.
+			{:else}
+				Optional: install the GitHub App so commits and comments post as
+				<code>brnrd-dev[bot]</code> instead of your own identity — one click to revoke, any time, on
+				the
+				<a class="text-sky-400 underline hover:text-sky-300" href={resolve('/repos')}
+					>repos screen</a
+				>. Nothing here waits on it.
+			{/if}
+		</p>
+
+		<p class="mt-2 font-mono text-[11px] text-ink-mute">
 			Self-hosting, gates, and the agent CLIs brnrd drives —
 			<a class="text-sky-400 underline hover:text-sky-300" href={DOCS_URL} rel="external">docs</a>.
 		</p>
