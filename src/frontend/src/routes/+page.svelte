@@ -919,11 +919,18 @@
 	// this poll) has to keep watching past "a repo exists" and up to "a
 	// daemon actually registered" (#1084): the old `repos.length === 0` gate
 	// stopped polling the instant a repo was enabled, which is exactly the
-	// state that used to hide the pairing step for good.
+	// state that used to hide the pairing step for good. `never_started`
+	// (#1243) belongs in this set for the same reason `offline` does — a
+	// crash-looping daemon is still a daemon that registered.
 	function daemonNotYetPaired(repos: ConnectedRepo[] | null): boolean {
 		return (
 			repos === null ||
-			!repos.some((r) => r.daemon_status === 'online' || r.daemon_status === 'offline')
+			!repos.some(
+				(r) =>
+					r.daemon_status === 'online' ||
+					r.daemon_status === 'offline' ||
+					r.daemon_status === 'never_started'
+			)
 		);
 	}
 
