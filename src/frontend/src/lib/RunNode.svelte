@@ -12,6 +12,8 @@
 	import { resolve } from '$app/paths';
 	import MarkdownContent from './MarkdownContent.svelte';
 	import RunLedgerReceipt from './RunLedgerReceipt.svelte';
+	import BoltCompletionCard from './BoltCompletionCard.svelte';
+	import { boltCardDataFromLedgerRows } from './bolts';
 	import type { RunLedgerRow } from './runLedger';
 	import {
 		bodySection,
@@ -70,6 +72,12 @@
 	// not the attested frame — the frame's own `bolt:` field already renders
 	// as a row in the fields grid above via `FRAME_FIELDS`.
 	let boltLead = $derived(node.body ? bodySection(node.body.markdown, 'Bolt') : '');
+	// The completion card (design-the-bolt.md §The completion card): the
+	// same merge `bolts.ts`'s `unackedBolts` does for the lane, here over
+	// every ledger row already scoped to this run — collapsed by default,
+	// tap to expand, same as the cloth-head lane's row.
+	let boltCard = $derived(boltCardDataFromLedgerRows(ledgerRows ?? []));
+	let boltCardOpen = $state(false);
 	// Frame prose starts at the first `## ` section. Everything before it —
 	// the `# Run <id>` heading and, on nodes written before 2026-07-19, a
 	// bullet list restating the frontmatter — duplicates what this page
@@ -251,7 +259,7 @@
 		     (design-the-bolt.md §The cloth side). Absent for a run that
 		     hasn't been cut, or predates the bolt entirely — no section at
 		     all, rather than an empty one. -->
-		{#if boltLead}
+		{#if boltLead || boltCard}
 			<section class="panel mt-4 p-4" aria-labelledby="bolt-heading">
 				<div class="flex items-baseline justify-between gap-3 border-b border-amber-900/40 pb-2">
 					<h2 id="bolt-heading" class="font-mono text-xs tracking-wide text-amber-200 uppercase">
@@ -259,14 +267,43 @@
 					</h2>
 					<span class="shrink-0 font-mono text-[10px] text-ink-mute">resident-owned</span>
 				</div>
-				<div class="text-sm text-amber-100">
-					<MarkdownContent
-						markdown={boltLead}
-						sourcePath={node.body?.path ?? ''}
-						{knownPaths}
-						reveal
-					/>
-				</div>
+				{#if boltLead}
+					<div class="mt-3 text-sm text-amber-100">
+						<MarkdownContent
+							markdown={boltLead}
+							sourcePath={node.body?.path ?? ''}
+							{knownPaths}
+							reveal
+						/>
+					</div>
+				{/if}
+				<!-- The completion card: collapsed by default, tap to expand
+				     (design-the-bolt.md §The completion card). Absent, not just
+				     collapsed, when no ledger row for this run carries a
+				     recognised `bolt` value — the receipt section above already
+				     says why (no row / API window miss). -->
+				{#if boltCard}
+					<button
+						type="button"
+						class="mt-3 flex w-full items-center justify-between gap-2 border-t border-amber-900/30 pt-2 text-left font-mono text-[10px] tracking-wide text-amber-300 uppercase hover:text-amber-100"
+						onclick={() => (boltCardOpen = !boltCardOpen)}
+						aria-expanded={boltCardOpen}
+					>
+						<span>completion card</span>
+						<span>{boltCardOpen ? '▲ collapse' : '▼ expand'}</span>
+					</button>
+					{#if boltCardOpen}
+						<BoltCompletionCard
+							bolt={boltCard.bolt}
+							relics={boltCard.relics}
+							wallClockSeconds={boltCard.wallClockSeconds}
+							tokensInput={boltCard.tokensInput}
+							tokensOutput={boltCard.tokensOutput}
+							usdSubscriptionAttributed={boltCard.usdSubscriptionAttributed}
+							usdCreditsEquivalent={boltCard.usdCreditsEquivalent}
+						/>
+					{/if}
+				{/if}
 			</section>
 		{/if}
 

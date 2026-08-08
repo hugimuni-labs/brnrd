@@ -16,6 +16,7 @@
 		type ClothTree
 	} from './cloth';
 	import { boltSummonsLabel, type BoltRow } from './bolts';
+	import BoltCompletionCard from './BoltCompletionCard.svelte';
 	import { LENS_ALL, applyLens, availableLenses, reconcileLens } from './loomLens';
 	import type { RunLedgerRow } from './runLedger';
 	import RunNodeInline from './RunNodeInline.svelte';
@@ -163,6 +164,11 @@
 	// fold keys by the day instead: one quiet line per day, opened per day.
 	let expanded = new SvelteSet<string>();
 	let unfolded = new SvelteSet<string>();
+	// The completion card (design-the-bolt.md §The completion card): a bolt
+	// row's own expand state, separate from `expanded` above (root-run
+	// trees) — a lane row and a cloth row are different objects with
+	// different open/closed lives.
+	let boltCardOpen = new SvelteSet<string>();
 
 	function toggle(set: SvelteSet<string>, id: string) {
 		if (set.has(id)) set.delete(id);
@@ -433,17 +439,30 @@
 			<div class="space-y-1">
 				{#each unackedBolts as bolt (bolt.runId)}
 					{@const chips = produceChips(bolt.relics)}
+					{@const cardOpen = boltCardOpen.has(bolt.runId)}
 					<div
 						class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 border-t border-amber-900/25 pt-1"
 						role="listitem"
 					>
-						<span class="min-w-[9ch] flex-1 break-words text-amber-100">{bolt.name}</span>
-						{#if chips.length > 0}
-							<span class="shrink-0 text-stone-300"
-								>{chips.map((chip) => chip.label).join(' ')}</span
-							>
-						{/if}
-						<span class="shrink-0 text-ink-mute">{clothAgeLabel(now - bolt.endedAt)}</span>
+						<!-- Tapping the row expands the completion card
+						     (design-the-bolt.md §The completion card); TAKE stays
+						     its own control, a sibling, and stops carrying the
+						     whole render. -->
+						<button
+							type="button"
+							class="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-left"
+							onclick={() => toggle(boltCardOpen, bolt.runId)}
+							aria-expanded={cardOpen}
+						>
+							<span class="shrink-0 text-ink-mute">{cardOpen ? '▾' : '▸'}</span>
+							<span class="min-w-[9ch] flex-1 break-words text-amber-100">{bolt.name}</span>
+							{#if chips.length > 0}
+								<span class="shrink-0 text-stone-300"
+									>{chips.map((chip) => chip.label).join(' ')}</span
+								>
+							{/if}
+							<span class="shrink-0 text-ink-mute">{clothAgeLabel(now - bolt.endedAt)}</span>
+						</button>
 						<button
 							type="button"
 							class="shrink-0 cursor-pointer tracking-wide text-amber-300 uppercase hover:text-amber-100"
@@ -451,6 +470,19 @@
 						>
 							take
 						</button>
+						{#if cardOpen}
+							<div class="w-full">
+								<BoltCompletionCard
+									bolt={bolt.bolt}
+									relics={bolt.relics}
+									wallClockSeconds={bolt.wallClockSeconds}
+									tokensInput={bolt.tokensInput}
+									tokensOutput={bolt.tokensOutput}
+									usdSubscriptionAttributed={bolt.usdSubscriptionAttributed}
+									usdCreditsEquivalent={bolt.usdCreditsEquivalent}
+								/>
+							</div>
+						{/if}
 					</div>
 				{/each}
 			</div>
