@@ -2,8 +2,30 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import re
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
+
+# Telegram bot usernames: `[A-Za-z0-9_]{5,32}` — no hyphens, no other
+# punctuation (https://core.telegram.org/method/account.checkUsername).
+# `BRNRD_TELEGRAM_BOT_USERNAME=brnrd-bot` (the GitHub bot login spelling,
+# hyphenated) fails this shape; `t.me/brnrd-bot` resolves to no Telegram
+# entity, so a deep link built on it is a link to nowhere (#1242).
+_TELEGRAM_USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{5,32}$")
+
+
+def telegram_username_is_valid(username: str) -> bool:
+    """Shape-check a Telegram bot username, leading ``@`` already stripped.
+
+    Empty is deliberately *not* "invalid" here — an unset username is the
+    legitimate "Telegram integration disabled" state, distinct from a
+    configured-but-malformed one. Callers that care about the difference
+    check emptiness themselves.
+    """
+    return bool(_TELEGRAM_USERNAME_RE.match(username))
 
 
 def _env_float(name: str, default: float) -> float:
@@ -170,6 +192,22 @@ class Settings:
     oauth_pkce_cookie: str = os.environ.get("BRNRD_OAUTH_PKCE_COOKIE", "brnrd_oauth_pkce")
     oauth_next_cookie: str = os.environ.get("BRNRD_OAUTH_NEXT_COOKIE", "brnrd_oauth_next")
     oauth_state_ttl_s: int = _env_int("BRNRD_OAUTH_STATE_TTL_S", 600)
+
+    def __post_init__(self) -> None:
+        # #1242 — loud at construction (app startup calls `get_settings()`
+        # exactly once; every `Settings(...)` call in tests re-checks its
+        # own fixture value) rather than only at the pairing mint, so a
+        # misconfigured deploy is visible in the boot log before the first
+        # user ever hits the broken deep link.
+        username = self.telegram_bot_username.lstrip("@")
+        if username and not telegram_username_is_valid(username):
+            logger.warning(
+                "BRNRD_TELEGRAM_BOT_USERNAME=%r is not a valid Telegram "
+                "username (must match [A-Za-z0-9_]{5,32}, no hyphens) — "
+                "no Telegram deep link will be minted until this is fixed; "
+                "pairing falls back to manual /start instructions.",
+                self.telegram_bot_username,
+            )
 
 
 def get_settings() -> Settings:
