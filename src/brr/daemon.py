@@ -12097,6 +12097,44 @@ def _seconds_config(
 _MAX_CONCURRENT_SPAWNS_DEFAULT = 4
 
 
+# ── #1195 rec 3: a cpu-informed default, opt-in behind `spawn.max_concurrent_auto` ──
+#
+# The flat default above admits N *runs* without regard to what a run's own gate
+# costs — measured live in #1195: 5 concurrent strands, each running the full
+# `scripts/gate.py` suite, drove a 16-core box to a 15-minute load average of
+# 14.97 (CPU/IO bound, not memory) and the same suite took 3-4x its solo wall-clock.
+# A pool sized by core count is the natural fix, but the *right* divisor/floor is a
+# judgment call about how many full gates one core can carry, not a derivation this
+# file can settle on its own — see the report this shipped with for the formula
+# named explicitly as a recommendation, not a decision.
+#
+# It is **not** wired in as the literal default `_max_concurrent_spawns({})`
+# resolves to, because that path is pinned by
+# `test_max_concurrent_spawns_config_parsing` to a flat, machine-independent 4
+# (`assert _max_concurrent_spawns({}) == 4`) — swapping the default would make
+# that assertion fail on any host whose core count isn't 16, which is most CI
+# runners. Rewriting that test to fit this change is exactly what this task's own
+# constraints forbid, so the mechanism is reachable instead through an explicit
+# opt-in (`spawn.max_concurrent_auto=true` in `.brr/config`): nothing changes for
+# a config that doesn't ask for it, and `spawn.max_concurrent` itself — set —
+# still always wins, auto or not.
+
+
+def _cpu_scaled_max_concurrent_spawns() -> int:
+    """The computed default `spawn.max_concurrent_auto` opts into.
+
+    ``max(2, cpu_count() // 4)`` — the formula #1195 rec 3 names as a starting
+    point ("something like"), not a settled constant. Falls back to the flat
+    constant when ``os.cpu_count()`` can't determine a count at all (some
+    containers/sandboxes return ``None`` here, per the stdlib's own docs),
+    rather than raising on ``None // 4``.
+    """
+    cpu = os.cpu_count()
+    if not cpu:
+        return _MAX_CONCURRENT_SPAWNS_DEFAULT
+    return max(2, cpu // 4)
+
+
 def _max_concurrent_spawns(cfg: dict) -> int:
     """Configured strand-stack ``spawn:`` pool width.
 
@@ -12107,14 +12145,25 @@ def _max_concurrent_spawns(cfg: dict) -> int:
     already"). ``spawn.max_concurrent`` in ``.brr/config``; clamped to at
     least 1 so a misconfigured 0/negative value can't silently wedge every
     ``spawn:`` request back into the ordinary sequential queue.
+
+    Unset (or an invalid explicit value) resolves to the flat
+    ``_MAX_CONCURRENT_SPAWNS_DEFAULT`` unless ``spawn.max_concurrent_auto`` is
+    also set, in which case it resolves to ``_cpu_scaled_max_concurrent_spawns()``
+    instead (#1195 rec 3) — see that function and the block above it for why
+    this is opt-in rather than the unconditional default the issue itself
+    proposed. A set ``spawn.max_concurrent`` always wins over both defaults.
     """
-    raw = cfg.get("spawn.max_concurrent", _MAX_CONCURRENT_SPAWNS_DEFAULT)
+    if cfg.get("spawn.max_concurrent_auto"):
+        fallback = _cpu_scaled_max_concurrent_spawns()
+    else:
+        fallback = _MAX_CONCURRENT_SPAWNS_DEFAULT
+    raw = cfg.get("spawn.max_concurrent", fallback)
     if isinstance(raw, bool):
-        return _MAX_CONCURRENT_SPAWNS_DEFAULT
+        return fallback
     try:
         value = int(raw)
     except (TypeError, ValueError):
-        return _MAX_CONCURRENT_SPAWNS_DEFAULT
+        return fallback
     return max(1, value)
 
 
