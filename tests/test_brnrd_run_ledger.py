@@ -91,6 +91,9 @@ _ROW = {
     "usd_subscription_attributed": 0.25,
     "usd_credits_equivalent": None,
     "estimate_vs_actual": "actual",
+    "substitution_reason": None,
+    "terminal_route": "gate-sole",
+    "bolt": "accepted",
 }
 
 
@@ -225,6 +228,33 @@ def test_dashboard_run_ledger_api_returns_rows():
     assert body["rows"][0]["usd_subscription_attributed"] == 0.25
     assert body["stale"] is False
     assert body["span_seconds_served"] is None
+
+
+def test_bolt_and_receipt_fields_survive_the_put_get_roundtrip():
+    """The 2026-08-08 defect, as a chain test: the daemon PUTs a row carrying
+    ``bolt`` / ``terminal_route``, and the dashboard GET must still carry
+    them — the PUT schema is the one stripper on this path, and pydantic
+    strips silently. (The structural guard is
+    tests/test_run_ledger_mirror_parity.py; this pins the wire.)"""
+    client = _client()
+    _, daemon_headers, _repo_id = _repo_and_daemon(client)
+    assert client.post(
+        "/v1/daemons/register", json={"daemon_name": "laptop"}, headers=daemon_headers,
+    ).status_code == 200
+
+    posted = client.put(
+        "/v1/daemons/run-ledger",
+        json={"rows": [{**_ROW, "bolt": "annotated", "substitution_reason": "quota floor"}]},
+        headers=daemon_headers,
+    )
+    assert posted.status_code == 200, posted.text
+
+    _login(client)
+    body = client.get("/v1/dashboard/run-ledger?limit=10").json()
+    row = body["rows"][0]
+    assert row["bolt"] == "annotated"
+    assert row["terminal_route"] == "gate-sole"
+    assert row["substitution_reason"] == "quota floor"
 
 
 def test_dashboard_run_ledger_serves_and_reports_thirty_day_span():

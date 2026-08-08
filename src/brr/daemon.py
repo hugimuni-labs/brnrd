@@ -2077,16 +2077,13 @@ def _apply_dashboard_wake_request(
 
 
 def _sticky_ttl_seconds(cfg: dict | None) -> float:
-    """#932: the sticky record's lifetime, config-overridable per repo."""
-    try:
-        return float(
-            (cfg or {}).get(
-                "wake_request.sticky_ttl_seconds",
-                wake_request_mod.STICKY_TTL_SECONDS,
-            )
-        )
-    except (TypeError, ValueError):
-        return float(wake_request_mod.STICKY_TTL_SECONDS)
+    """#932: the sticky record's lifetime, config-overridable per repo.
+
+    Thin alias — `wake_request.sticky_ttl_seconds` owns the resolution so
+    dispatch and the dashboard publish tick cannot disagree about when a
+    sticky dies.
+    """
+    return wake_request_mod.sticky_ttl_seconds(cfg)
 
 
 def _parse_utc_stamp(raw: object) -> datetime | None:
@@ -2147,20 +2144,19 @@ def _apply_sticky_wake_profile(
     record = wake_request_mod.sticky_record(brr_dir)
     if record is None:
         return target
-    profile = str(record.get("profile") or "").strip()
-    claimed_at = _parse_utc_stamp(record.get("claimed_at"))
-    if not profile or claimed_at is None:
+    # Liveness is `live_sticky_view`'s single verdict (shared with the
+    # dashboard publish tick, so the rack and dispatch cannot disagree);
+    # dropping a dead record stays here, because lifecycle is dispatch's.
+    view = wake_request_mod.live_sticky_view(brr_dir, _sticky_ttl_seconds(cfg))
+    if view is None:
         wake_request_mod.drop_sticky(brr_dir)
         return target
-    expires_at = claimed_at + timedelta(seconds=_sticky_ttl_seconds(cfg))
-    if datetime.now(timezone.utc) >= expires_at:
-        wake_request_mod.drop_sticky(brr_dir)
-        return target
+    profile = view["profile"]
 
     correspondent = conversations.correspondent_key_for_event(event) or ""
     conversation = conversations.conversation_key_for_event(event) or ""
-    record_correspondent = str(record.get("correspondent_key") or "").strip()
-    record_conversation = str(record.get("conversation_key") or "").strip()
+    record_correspondent = str(view.get("correspondent_key") or "").strip()
+    record_conversation = str(view.get("conversation_key") or "").strip()
     # When both sides name a human, that comparison is the whole answer:
     # the conversation key is a *thread* address, and two people in one
     # group thread share it. Falling through to it on a correspondent
@@ -2175,8 +2171,8 @@ def _apply_sticky_wake_profile(
     if not matched:
         return target
 
-    claimed_iso = claimed_at.isoformat(timespec="seconds")
-    expires_iso = expires_at.isoformat(timespec="seconds")
+    claimed_iso = view["claimed_at"]
+    expires_iso = view["expires_at"]
     updates: dict[str, object] = {
         "runner": profile,
         "dashboard_wake_sticky_profile": profile,
@@ -2185,7 +2181,7 @@ def _apply_sticky_wake_profile(
     }
     protocol.update_event_meta(event, **updates)
     event.update(updates)
-    record_id = str(record.get("request_id") or "").strip() or "unknown"
+    record_id = str(view.get("request_id") or "").strip() or "unknown"
     print(
         f"[brnrd] wake request {record_id} conversation-sticky: "
         f"{event.get('id') or 'an unnamed event'} inherits profile "

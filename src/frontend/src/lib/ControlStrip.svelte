@@ -30,6 +30,9 @@
 		runnersError?: string | null;
 		runnersNote?: string | null;
 		onTap?: (profileName: string, repoLabel: string | null, environment: string | null) => void;
+		/** #932's exit tap: release the conversation-sticky early. Wired to
+		 *  the rack chip's ✕; absent ⇒ the chip renders without an exit. */
+		onReleaseSticky?: () => void;
 		repos?: ConnectedRepo[] | null;
 		/** Slice 2 inputs. Both optional: the strip's first two regions must
 		 *  keep working on a page (or a test) that has no ledger or schedule. */
@@ -79,6 +82,7 @@
 		runnersError = null,
 		runnersNote = null,
 		onTap,
+		onReleaseSticky,
 		repos = null,
 		ledgerRows = null,
 		scheduledWakes = null,
@@ -113,7 +117,13 @@
 				: 'default')
 	);
 	let blocks = $derived(
-		runnerBlocks(runners?.profiles ?? [], runners?.default ?? null, runners?.wake_request ?? null)
+		runnerBlocks(
+			runners?.profiles ?? [],
+			runners?.default ?? null,
+			runners?.wake_request ?? null,
+			runners?.sticky ?? null,
+			now
+		)
 	);
 	let fuel = $derived(fuelRows(shells ?? []));
 	let slots = $derived(activeSpawns === null ? null : slotChip(activeSpawns, maxSpawns));
@@ -314,9 +324,9 @@
 									<span class="block truncate text-[11px] font-medium">{block.profile.name}</span>
 									<span
 										class="mt-0.5 block truncate text-[8px] tracking-[0.11em] uppercase {block.kind ===
-										'requested'
-											? 'text-amber-300'
-											: 'text-sky-300'}">{block.badge} ▾</span
+										'default'
+											? 'text-sky-300'
+											: 'text-amber-300'}">{block.badge} ▾</span
 									>
 								</span>
 							{/each}
@@ -612,7 +622,10 @@
 						defaultProfile={runners.default}
 						stale={runners.stale}
 						wakeRequest={runners.wake_request ?? null}
+						sticky={runners.sticky ?? null}
+						{now}
 						onTap={tapRunner}
+						{onReleaseSticky}
 					/>
 				{/if}
 			</div>

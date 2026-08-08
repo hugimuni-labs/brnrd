@@ -2265,11 +2265,20 @@ def _runners_snapshot(brr_dir: Path) -> dict[str, Any]:
         {"name": "docker", "available": docker_reason is None, "reason": docker_reason},
         {"name": "solitary", "available": docker_reason is None, "reason": docker_reason},
     ]
+    # #932's conversation-sticky, made visible: the record that actually
+    # answers "who wakes next" for the bound conversation. Same liveness
+    # verdict dispatch uses (`wake_request.live_sticky_view`), so the rack
+    # can never advertise a promise dispatch no longer honours. None when
+    # absent/expired — the mirror clears on the next publish tick.
+    sticky = wake_request.live_sticky_view(
+        brr_dir, wake_request.sticky_ttl_seconds(cfg)
+    )
     return {
         "profiles": profiles,
         "default": default,
         "environment_default": environment_default,
         "environments": environments,
+        "sticky": sticky,
     }
 
 
@@ -2298,6 +2307,13 @@ def _publish_runners(brr_dir: Path, inbox_dir: Path | None, state: dict) -> None
     wake_request.store_pending(
         brr_dir, pending if isinstance(pending, dict) else None,
     )
+    # #932's exit tap: the dashboard asked for the conversation-sticky to be
+    # dropped. Tense-guarded (a sticky claimed after the ask survives it);
+    # the next publish tick reports sticky=None, which is what retires the
+    # ask server-side — no second ack channel.
+    release_at = body.get("sticky_release_at") if isinstance(body, dict) else None
+    if release_at and wake_request.release_sticky(brr_dir, release_at):
+        print("[brnrd:cloud] conversation-sticky released by dashboard ask")
 
 
 # #733: the one bound on dispatch's one server call. Dispatch already spends
