@@ -2781,19 +2781,27 @@ def format_delta(
     # and silent when the route is finished or absent.
     if stop:
         lines.extend(course.stop_lines(route))
-        # The bolt (design-the-bolt.md): the closing act, named. `brnrd cut`
-        # is the porcelain a sibling change is shipping this same evening —
-        # naming it here is correct regardless of merge order, the same way
-        # every other closeout clause above names a verb that already exists.
-        # Everything the declaration needs is already on this page: `asks`
-        # from the pending-event rows, `produce`/`owed` from the sections
-        # just above.
-        lines.append(
-            "- bolt: declare this run's completion with `brnrd cut` before "
-            "closing — asks dispositioned, produce attested (legal-minimal: "
-            "attesting none is fine, declared as such), no promise left "
-            "unaccounted for."
-        )
+        # The bolt (design-the-bolt.md): the closing act, named — or, once
+        # cut, affirmed. An accepted bolt collapses the ask (the polarity
+        # flip: the declaration was validated at `cut:` time); the annotated
+        # count rides the line so a forced accept is never mistaken for a
+        # clean one.
+        stop_bolt = payload.get("bolt") if isinstance(payload.get("bolt"), dict) else {}
+        if stop_bolt.get("accepted"):
+            annotated_n = int(stop_bolt.get("annotated") or 0)
+            lines.append(
+                "- bolt: accepted — the cut stands."
+                if not annotated_n else
+                f"- bolt: accepted, annotated — {annotated_n} check(s) "
+                "unresolved rode the delivered body."
+            )
+        else:
+            lines.append(
+                "- bolt: declare this run's completion with `brnrd cut` before "
+                "closing — asks dispositioned, produce attested (legal-minimal: "
+                "attesting none is fine, declared as such), no promise left "
+                "unaccounted for."
+            )
     # Produce is already attested by relics.py; the briefing only compresses
     # it. It rides hook deltas that are rendering for an existing reason and
     # is intentionally absent from the mid-run gate below, so committing work
@@ -4353,7 +4361,15 @@ def compute_neutral(
         # message outranks the shape of a reply that is about to be rewritten
         # anyway. Only when nothing is pending does "how does this reply end"
         # become the last question of the run.
-        if not block:
+        #
+        # The polarity flip (design-the-bolt.md §The polarity flip): an
+        # accepted bolt IS the completion artifact — the daemon already
+        # validated the declaration at `cut:` time, so the negative capsule
+        # ("did you forget anything?") stands down. Pending events above are
+        # deliberately NOT collapsed: a message that lands after the cut is
+        # real attention, bolt or no bolt.
+        bolt_facet = portal.get("bolt") if isinstance(portal.get("bolt"), dict) else {}
+        if not block and not bolt_facet.get("accepted"):
             reason = _armed_closeout_block(ctx, payload, state, portal)
             if reason is not None:
                 block = True

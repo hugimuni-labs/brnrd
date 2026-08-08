@@ -76,7 +76,7 @@ test('no lane renders when there are no unacked bolts, or the feed has not resol
 		stale: false,
 		unackedBolts: []
 	});
-	ok(!empty.includes('bolt waiting'), 'zero unacked — no lane markup');
+	ok(!empty.includes('await taking'), 'zero unacked — no lane markup');
 
 	const unresolved = await renderCloth({
 		rows: [],
@@ -85,7 +85,7 @@ test('no lane renders when there are no unacked bolts, or the feed has not resol
 		stale: false,
 		unackedBolts: null
 	});
-	ok(!unresolved.includes('bolt waiting'), 'unresolved feed — count doctrine, no partial lane');
+	ok(!unresolved.includes('await taking'), 'unresolved feed — count doctrine, no partial lane');
 });
 
 test('the lane lists unacked bolts newest first, with a take control on each and a take-all', async () => {
@@ -99,7 +99,10 @@ test('the lane lists unacked bolts newest first, with a take control on each and
 			bolt({ runId: 'run-2', name: 'run-2' })
 		]
 	});
-	ok(body.includes('2 bolts waiting'), 'the lane header counts');
+	ok(
+		body.includes('2 bolts await taking'),
+		'the lane header counts — the strip’s own phrase, one copy source'
+	);
 	ok(body.includes('the-cutting'), 'a named run renders its name');
 	ok(body.includes('run-2'), 'an unnamed run falls back to its id');
 	ok(body.includes('take all'), 'the lane-head take-all control renders');

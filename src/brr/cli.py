@@ -3189,7 +3189,20 @@ def cmd_cut(args):
         timeout_seconds=timeout, source_file=staged.name,
     )
     if status == do_mod.OK:
-        print("[brnrd cut] accepted")
+        # An annotated accept (cap-3 forced) exits 0 like a clean one — the
+        # bolt stands either way — but the daemon's dissent must be visible
+        # in the same call, not only in the delivered body.
+        bolt_facet = (
+            do_mod.read_portal_state(outbox_dir).get("bolt") or {}
+        )
+        annotated = int(bolt_facet.get("annotated") or 0)
+        if annotated:
+            print(
+                f"[brnrd cut] accepted, annotated — {annotated} check(s) "
+                "unresolved; the daemon's dissent rides the delivered body"
+            )
+        else:
+            print("[brnrd cut] accepted")
         return 0
     if status == do_mod.QUEUED:
         print("[brnrd cut] ? still queued", file=sys.stderr)
