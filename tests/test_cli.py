@@ -926,6 +926,10 @@ def test_account_connect_pairs_installs_and_starts_service(
 ):
     repo = tmp_path / "repo"
     init_git_repo(repo)
+    # AGENTS.md must already exist for connect to proceed to install — the
+    # no-AGENTS.md path is covered separately by
+    # test_account_connect_skips_install_without_agents_md below (#1238).
+    (repo / "AGENTS.md").write_text("# Project\n", encoding="utf-8")
     monkeypatch.chdir(repo)
     calls = []
 
@@ -935,7 +939,7 @@ def test_account_connect_pairs_installs_and_starts_service(
     )
     monkeypatch.setattr(
         "brr.daemon_install.install",
-        lambda **kwargs: calls.append(("install", kwargs)),
+        lambda **kwargs: calls.append(("install", kwargs)) or 0,
     )
 
     assert main([
@@ -966,6 +970,54 @@ def test_account_connect_pairs_installs_and_starts_service(
         ),
     ]
     assert "Connected and listening in the background" in capsys.readouterr().out
+
+
+def test_account_connect_reports_when_the_service_does_not_come_up(
+    monkeypatch, tmp_path, capsys,
+):
+    """A liveness-probe failure from `daemon_install.install()` (#1238) must
+    not be papered over with the same claim a healthy install prints."""
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    (repo / "AGENTS.md").write_text("# Project\n", encoding="utf-8")
+    monkeypatch.chdir(repo)
+
+    monkeypatch.setattr("brr.gates.cloud.connect", lambda *_a, **_kw: {})
+    monkeypatch.setattr("brr.daemon_install.install", lambda **_kw: 1)
+
+    assert main(["account", "connect", "https://brnrd.example"]) is None
+
+    out = capsys.readouterr().out
+    assert "Connected and listening in the background" not in out
+    assert "did not come up" in out
+
+
+def test_account_connect_skips_install_without_agents_md(
+    monkeypatch, tmp_path, capsys,
+):
+    """Preflight for #1238: `connect` before `init` must not install a
+    service that `daemon.start` will immediately hard-exit out of (no
+    AGENTS.md ⇒ a launchd/systemd crash loop with nothing proving it)."""
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    assert not (repo / "AGENTS.md").exists()
+    monkeypatch.chdir(repo)
+    installed = []
+
+    monkeypatch.setattr("brr.gates.cloud.connect", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        "brr.daemon_install.install",
+        lambda **kwargs: installed.append(kwargs),
+    )
+
+    assert main(["account", "connect", "https://brnrd.example"]) is None
+
+    assert installed == []
+    out = capsys.readouterr().out
+    assert "Connected and listening in the background" not in out
+    assert "Paired." in out
+    assert "brnrd init" in out
+    assert "brnrd daemon install" in out
 
 
 def test_account_connect_no_service_keeps_foreground_escape(

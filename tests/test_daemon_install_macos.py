@@ -135,6 +135,75 @@ def test_install_no_start_skips_launchctl(tmp_path):
     assert calls == []
 
 
+def test_install_confirms_liveness_by_reading_the_pidfile_back(tmp_path):
+    """``launchctl kickstart`` returns the moment the job forks — a job
+    that hard-exits before ``_write_pid`` (no ``AGENTS.md``) still reports
+    a clean kickstart there. ``install()`` must read the pidfile the
+    daemon itself writes before claiming anything survived (#1238)."""
+    workdir = tmp_path / "proj"
+    (workdir / ".brr").mkdir(parents=True)
+    (workdir / ".brr" / "daemon.pid").write_text(str(os.getpid()), encoding="utf-8")
+
+    def fail_if_slept(_seconds):
+        pytest.fail("should not sleep when the pidfile is already there")
+
+    result = macos.install(
+        brr_path="/opt/homebrew/bin/brnrd",
+        home=tmp_path / "home",
+        workdir=workdir,
+        run=_ok,
+        sleep=fail_if_slept,
+    )
+
+    assert result.started is True
+    assert result.alive is True
+    assert result.pid == os.getpid()
+
+
+def test_install_reports_not_alive_when_the_pidfile_never_appears(tmp_path):
+    """The crash-loop case: the job forks, hard-exits before
+    ``_write_pid``, and no pidfile ever lands. ``install()`` must say so
+    rather than reporting the kickstart call's own success (#1238)."""
+    workdir = tmp_path / "proj"
+    (workdir / ".brr").mkdir(parents=True)
+    slept = []
+
+    result = macos.install(
+        brr_path="/opt/homebrew/bin/brnrd",
+        home=tmp_path / "home",
+        workdir=workdir,
+        run=_ok,
+        poll_timeout=0.5,
+        sleep=slept.append,
+    )
+
+    assert result.started is True
+    assert result.alive is False
+    assert result.pid is None
+    assert slept, "must actually poll, not fail fast on the first miss"
+
+
+def test_install_no_start_never_polls_for_liveness(tmp_path):
+    """Nothing was kickstarted, so there is nothing to confirm — ``alive``
+    stays ``None`` rather than reporting a verdict about a job that was
+    never asked to start."""
+    workdir = tmp_path / "proj"
+    (workdir / ".brr").mkdir(parents=True)
+
+    result = macos.install(
+        no_start=True,
+        brr_path="/opt/homebrew/bin/brnrd",
+        home=tmp_path / "home",
+        workdir=workdir,
+        run=_ok,
+        sleep=lambda _s: pytest.fail("no_start must skip the liveness poll"),
+    )
+
+    assert result.started is False
+    assert result.alive is None
+    assert result.pid is None
+
+
 def test_uninstall_boots_out_and_removes_plist(tmp_path):
     calls = []
     home = tmp_path / "home"
