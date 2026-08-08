@@ -236,6 +236,84 @@ def test_dashboard_repos_api_returns_latest_daemon_gate_health():
     assert response.json()["connected_repos"][0]["gates"] == gates
 
 
+def test_dashboard_repos_api_reports_offline_for_a_daemon_that_has_really_run():
+    """A daemon that completed a publish cycle and went quiet reads `offline`.
+
+    "Local daemon not running" is an accurate claim about a real heartbeat
+    that stopped, not a lie about one that never happened (#1243, the
+    counterpart to the `never_started` test below).
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd.models import Daemon
+
+    client = _client()
+    token = _login(client, login="Gurio")
+    repo_id = _create_repo(client, token, repo="Gurio/brr")
+    stale = datetime.now(timezone.utc) - timedelta(minutes=10)
+    with client.app.state.SessionLocal() as db:
+        db.add(
+            Daemon(
+                id="dmn-offline-real",
+                repo_id=repo_id,
+                token_id="tok-offline-real",
+                daemon_name="laptop",
+                online=True,
+                last_seen_at=stale,
+                runners_updated_at=stale,
+            )
+        )
+        db.commit()
+
+    body = client.get("/v1/dashboard/repos").json()
+
+    row = body["connected_repos"][0]
+    assert row["daemon_status"] == "offline"
+    assert row["daemon_label"] == "Local daemon not running"
+
+
+def test_dashboard_repos_api_distinguishes_a_daemon_that_registered_and_never_ran():
+    """#1243 — `last_seen_at` is stamped at registration, not at a daemon's
+
+    first successful publish cycle (``daemons.py``'s ``register()``). A
+    daemon that paired and then crash-looped without ever completing one
+    (`daemon.start` refuses without `AGENTS.md`, #1238's exact trace) must
+    not read as `offline` — that label's copy ("Local daemon not running"
+    beside "Last heartbeat Xm ago") would claim a heartbeat this daemon
+    never actually sent. `runners_updated_at` (written only from inside the
+    publish loop a crash-looping process never reaches) is the fact that
+    tells the two states apart.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd.models import Daemon
+
+    client = _client()
+    token = _login(client, login="Gurio")
+    repo_id = _create_repo(client, token, repo="Gurio/brr")
+    registered = datetime.now(timezone.utc) - timedelta(minutes=3)
+    with client.app.state.SessionLocal() as db:
+        db.add(
+            Daemon(
+                id="dmn-never-started",
+                repo_id=repo_id,
+                token_id="tok-never-started",
+                daemon_name="laptop",
+                online=True,
+                last_seen_at=registered,
+                runners_updated_at=None,
+            )
+        )
+        db.commit()
+
+    body = client.get("/v1/dashboard/repos").json()
+
+    row = body["connected_repos"][0]
+    assert row["daemon_status"] == "never_started"
+    assert row["daemon_label"] != "Local daemon not running"
+    assert row["daemon_label"] == "Paired, never started"
+
+
 def test_dashboard_repos_api_never_syncs_installations_inline(monkeypatch):
     """#885: installation sync used to run inline on this GET — a paginated
     App-API repo listing plus per-repo collaborator checks, the reported

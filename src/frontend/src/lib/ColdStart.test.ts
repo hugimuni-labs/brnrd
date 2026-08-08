@@ -88,66 +88,73 @@ function repo(over: Partial<ConnectedRepo> = {}): ConnectedRepo {
 
 // The reported gap (2026-08-03 signup): six empty sections and no install
 // line, no pointer at the page where a repo is enabled, no docs link.
+// #1243 updated the third rung from "enable a repository" (retired —
+// Direction A binds the repo at pairing) to `brnrd init`, the 08-08 trace's
+// missing rung.
 test('an account with nothing connected is told the three things that have to happen', async () => {
 	const html = await renderColdStart([]);
 	ok(html.includes('install the cli'), 'names the install step');
 	ok(html.includes('npm install -g brnrd'), 'prints the headline install command');
 	ok(html.includes('uv tool install brnrd'), 'offers the uv alternate');
 	ok(html.includes('pipx install brnrd'), 'offers the pipx alternate');
-	ok(html.includes('enable a repository'), 'names the repo-enablement step');
-	ok(html.includes('href="/repos"'), 'links the page that step lives on');
 	ok(html.includes('pair the daemon'), 'names the pairing step');
 	ok(html.includes('brnrd account connect'), 'prints the pairing command');
+	ok(html.includes('brnrd init'), "names the init step, the 08-08 trace's missing rung");
 	ok(html.includes(`href="${DOCS_URL}"`), 'carries a docs link');
 });
 
 // This inverts the old pin here ("the block is gone the moment the account
-// has a repo") — that assertion *was* the regression (#1084). An enabled
+// has a repo") — that assertion *was* the regression (#1084). A connected
 // repo with no daemon is "connected but not connected": the block has to
-// survive, the pairing step has to stay visible, and the enable-a-repository
-// step should read done rather than repeat itself.
-test('the block survives an enabled repo until a daemon has ever paired', async () => {
+// survive and the pairing step has to stay visible.
+test('the block survives a connected repo until a daemon has ever paired', async () => {
 	const html = await renderColdStart([repo({ daemon_status: 'missing' })]);
-	ok(html.includes('the cold start'), 'an enabled repo with no daemon is still the cold start');
+	ok(html.includes('the cold start'), 'a connected repo with no daemon is still the cold start');
 	ok(html.includes('nothing is paired yet'));
 	ok(
 		html.includes('pair the daemon'),
 		'the pairing step survives — this is exactly what used to vanish'
 	);
 	ok(html.includes('brnrd account connect'), 'the pairing command still renders');
-	ok(html.includes('— done'), 'the enable-a-repository step reads done, not repeated');
+});
+
+// #1243: step 03 is unobservable exactly like step 01 — no wire fact says
+// "init has run" — so, unlike the old repo-enablement step it replaced, it
+// must never claim done. The component's own header comment states this
+// model; this pins the rendered strings actually agree with it.
+test('the init step never claims done — it is unobservable like step 01', async () => {
+	const html = await renderColdStart([repo({ daemon_status: 'missing' })]);
+	ok(!html.includes('— done'), 'no step in this ladder renders a done-marker');
 });
 
 // The finding this branch fixes (`brr/one-sequence-two-surfaces`): ColdStart
 // used to read install → enable a repository → pair the daemon, while
 // `/repos` — the very page step 02 sent the reader to — opened with run the
-// pairing command, *then* install the GitHub App. Two ladders, opposite rung
-// order, one reader sent from the first straight into the second. Pinned as
-// a position assertion, not a substring check, because the earlier order
-// also contained every one of these three phrases — only their sequence was
+// pairing command, *then* install the GitHub App. #1243 replaces the third
+// rung again, this time with the 08-08 trace's missing command — pinned as
+// a position assertion, not a substring check, since an earlier ordering
+// bug also contained every one of these phrases and only their sequence was
 // wrong.
-test('the ladder reads install → pair → enable, matching /repos rung order', async () => {
+test('the ladder reads install → pair → init', async () => {
 	const html = await renderColdStart([]);
 	const installAt = html.indexOf('install the cli');
 	const pairAt = html.indexOf('pair the daemon');
-	const enableAt = html.indexOf('enable a repository');
-	ok(installAt >= 0 && pairAt >= 0 && enableAt >= 0, 'all three rungs render');
+	const initAt = html.indexOf('brnrd init');
+	ok(installAt >= 0 && pairAt >= 0 && initAt >= 0, 'all three rungs render');
 	ok(
 		installAt < pairAt,
 		'install precedes pair — the CLI is a prerequisite to the pairing command'
 	);
-	ok(
-		pairAt < enableAt,
-		'pair precedes enable — /repos itself runs the pairing command before the App install'
-	);
+	ok(pairAt < initAt, 'pair precedes init — 02 has to bind the repo before 03 can act on it');
 });
 
 // The failure mode the old pin was actually guarding, restated correctly:
 // a first-run panel that never leaves is worse than the blank page it
-// replaced. It leaves once a daemon has *ever* registered — 'offline' counts
-// (a laptop that's asleep already did this setup step once) — not only
-// 'online'; this is a setup checklist, not a live health monitor.
-for (const daemon_status of ['online', 'offline']) {
+// replaced. It leaves once a daemon has *ever* registered — 'offline' and
+// 'never_started' both count (a laptop that's asleep, or a daemon crash-
+// looping post-registration, both already did this setup step once) — not
+// only 'online'; this is a setup checklist, not a live health monitor.
+for (const daemon_status of ['online', 'offline', 'never_started']) {
 	test(`the block leaves once a daemon has registered (daemon_status=${daemon_status})`, async () => {
 		const html = await renderColdStart([repo({ daemon_status })]);
 		ok(!html.includes('the cold start'));
@@ -156,7 +163,7 @@ for (const daemon_status of ['online', 'offline']) {
 	});
 }
 
-// The predicate must be an allowlist of the two known-paired values, not a
+// The predicate must be an allowlist of the three known-paired values, not a
 // blocklist of 'missing' — a value the backend never sends (a future status,
 // a malformed payload) is not evidence of pairing, and must not fail open
 // and hide the pairing step the same way `!== 'missing'` used to.
@@ -167,28 +174,29 @@ test('an unrecognized daemon_status does not count as paired', async () => {
 	ok(html.includes('pair the daemon'), 'the pairing step still renders');
 });
 
-// The other half of the regression: an account that already installed the
-// GitHub App must not be told to install it again (#1084's "instructing a
-// user who just installed it to install it").
-test('an installed-but-unenabled App is not told to install the App again', async () => {
+// #1243: the GitHub App is an optional identity upgrade, named once in the
+// footer — never a gate, and never told to an account that already has it.
+test('an installed App is named as already done, in the footer, not as a step', async () => {
 	const html = await renderColdStart([], undefined, [installation()]);
 	ok(html.includes('the cold start'));
-	ok(html.includes('GitHub App is installed'), 'names the fact already true');
+	ok(html.includes('GitHub App installed'), 'names the fact already true');
 	ok(
-		!html.includes('Install the brnrd GitHub App where the repository lives'),
+		!html.includes('Optional: install the GitHub App'),
 		'does not re-ask for an install that already happened'
 	);
-	ok(html.includes('enable a repository'), 'still points at the one thing left to do');
+	ok(html.includes('brnrd-dev[bot]'), 'says what the App actually buys — commits post as the bot');
 });
 
-// No installation at all still gets the original two-part instruction —
-// this is the branch the very first test in this file also exercises with
-// `installations` defaulted to `null`, pinned again here explicitly against
-// the same fixture the "already installed" case above uses.
-test('no installation at all still asks to install the App', async () => {
+// No installation at all still gets pointed at the App, but as an optional
+// upgrade rather than a blocking step — this is the branch the very first
+// test in this file also exercises with `installations` defaulted to
+// `null`, pinned again here explicitly against the same fixture the
+// "already installed" case above uses.
+test('no installation at all still names the App as optional, not required', async () => {
 	const html = await renderColdStart([], undefined, []);
-	ok(html.includes('Install the brnrd GitHub App where the repository lives'));
-	ok(!html.includes('GitHub App is installed'));
+	ok(html.includes('Optional: install the GitHub App'));
+	ok(html.includes('Nothing here waits on it'));
+	ok(!html.includes('GitHub App installed'));
 });
 
 // `null` is "the repos fetch has not landed", not "this account is empty".

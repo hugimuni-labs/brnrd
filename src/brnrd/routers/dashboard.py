@@ -291,6 +291,10 @@ def _activity_stats(
         "synced_repos": len(installed),
         "daemons_online": sum(1 for row in repo_views if row["daemon_status"] == "online"),
         "daemons_stale": sum(1 for row in repo_views if row["daemon_status"] == "offline"),
+        # #1243: a distinct bucket from "stale" — this daemon registered and
+        # never completed a publish cycle, so it never had a heartbeat to go
+        # stale from. See `_repo_views`' own `ever_ran` comment.
+        "daemons_never_started": sum(1 for row in repo_views if row["daemon_status"] == "never_started"),
         "daemons_waiting": sum(1 for row in repo_views if row["daemon_status"] == "missing"),
         "active_runs": buckets.get("running", 0),
         "pending_runs": buckets.get("pending", 0),

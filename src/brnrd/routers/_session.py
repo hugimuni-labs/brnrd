@@ -300,12 +300,28 @@ def _repo_views(db: Session, repos: list[Repo]) -> list[dict]:
         daemons = daemons_by_repo.get(repo.id, [])
         latest = max(daemons, key=lambda d: _dt(d.last_seen_at) or datetime.min.replace(tzinfo=timezone.utc), default=None)
         online = any(d.online and _dt(d.last_seen_at) and now - _dt(d.last_seen_at) <= _DAEMON_ONLINE_AFTER for d in daemons)
+        # #1243 — `last_seen_at` is stamped at *registration* (`daemons.py`
+        # `register()`), not at a daemon's first successful publish cycle,
+        # so a daemon that paired and then crash-looped without ever
+        # breathing (`daemon.start` refuses without `AGENTS.md`, #1238's
+        # exact trace) reads no differently from one that ran fine and went
+        # quiet: both show `latest is not None`, and the label below would
+        # call registration a "heartbeat" it never sent. `runners_updated_at`
+        # is only ever written by `PUT /v1/daemons/runners`, from inside the
+        # publish loop that a crash-looping process never reaches (same
+        # signal `dispatch_default_repo_id` above already trusts for "has
+        # this daemon ever really run") — so its presence is the fact that
+        # tells the two states apart.
+        ever_ran = latest is not None and _dt(latest.runners_updated_at) is not None
         if online:
             daemon_status = "online"
             daemon_label = "Local daemon online"
-        elif latest is not None:
+        elif latest is not None and ever_ran:
             daemon_status = "offline"
             daemon_label = "Local daemon not running"
+        elif latest is not None:
+            daemon_status = "never_started"
+            daemon_label = "Paired, never started"
         else:
             daemon_status = "missing"
             daemon_label = "Waiting for local daemon"
