@@ -184,6 +184,38 @@ def test_closed_run_appends_one_well_formed_jsonl_row(tmp_path, monkeypatch):
     assert row["bolt"] is None
 
 
+def test_context_window_used_is_none_not_zero_when_collector_has_no_reading(
+    tmp_path, monkeypatch
+):
+    """#1178: a collector that could not honestly measure occupancy reports
+    no ``context_window_used_percent`` key at all (see claude_status.py) —
+    the ledger row must carry that through as ``None``, not coerce it to a
+    fabricated 0 or 100."""
+    (tmp_path / ".brr").mkdir()
+    monkeypatch.setattr(
+        run_ledger.codex_status,
+        "load_levels",
+        lambda: _levels(
+            tokens={
+                "input_tokens": 515,
+                "output_tokens": 95,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 10892,
+                # no "context_window_used_percent" key
+            }
+        ),
+    )
+
+    task = _task()
+    path = run_ledger.append_closed_run(tmp_path, task, {})
+
+    row = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+    assert row["context_window_used"] is None
+    # The rest of the token accounting still comes through unaffected.
+    assert row["tokens_input"] == 515
+    assert row["tokens_cache_creation"] == 10892
+
+
 def test_external_refs_carry_item_relics_with_no_new_field(tmp_path, monkeypatch):
     """#972, THE WELD: an `item` relic reported at ignition reaches the
     ledger row through the collected relic manifest (`external_refs`) — the
