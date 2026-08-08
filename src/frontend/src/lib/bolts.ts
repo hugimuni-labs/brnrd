@@ -86,6 +86,16 @@ export interface BoltRow {
 	/** Epoch ms the run ended — what "newest first" sorts on. */
 	endedAt: number;
 	relics: RelicRecord[];
+	/** The ledger's *measured* spend for this run — carried through for the
+	 *  completion card's spend section (design-the-bolt.md §The completion
+	 *  card). Nulls when the ledger row never carried them (a re-report
+	 *  before the measurement lane populated, or a row that predates it) —
+	 *  the card renders that as an honest absence, never a zero. */
+	wallClockSeconds: number | null;
+	tokensInput: number | null;
+	tokensOutput: number | null;
+	usdSubscriptionAttributed: number | null;
+	usdCreditsEquivalent: number | null;
 }
 
 /**
@@ -120,6 +130,28 @@ export function unackedBolts(
 			existing.bolt = bolt;
 			existing.relics.push(...(row.external_refs ?? []));
 			existing.repoLabel ??= row.repo_label;
+			// Spend, like bolt state, is this re-report's own measurement — a
+			// later row that actually carries a value wins, same as `bolt`
+			// itself; a re-report that leaves a field null must not blank
+			// out a figure an earlier row already measured.
+			if (row.wall_clock_seconds !== null && row.wall_clock_seconds !== undefined) {
+				existing.wallClockSeconds = row.wall_clock_seconds;
+			}
+			if (row.tokens_input !== null && row.tokens_input !== undefined) {
+				existing.tokensInput = row.tokens_input;
+			}
+			if (row.tokens_output !== null && row.tokens_output !== undefined) {
+				existing.tokensOutput = row.tokens_output;
+			}
+			if (
+				row.usd_subscription_attributed !== null &&
+				row.usd_subscription_attributed !== undefined
+			) {
+				existing.usdSubscriptionAttributed = row.usd_subscription_attributed;
+			}
+			if (row.usd_credits_equivalent !== null && row.usd_credits_equivalent !== undefined) {
+				existing.usdCreditsEquivalent = row.usd_credits_equivalent;
+			}
 			if (!existing.named && name) {
 				existing.name = name;
 				existing.named = true;
@@ -132,7 +164,12 @@ export function unackedBolts(
 				bolt,
 				repoLabel: row.repo_label,
 				endedAt,
-				relics: [...(row.external_refs ?? [])]
+				relics: [...(row.external_refs ?? [])],
+				wallClockSeconds: row.wall_clock_seconds ?? null,
+				tokensInput: row.tokens_input ?? null,
+				tokensOutput: row.tokens_output ?? null,
+				usdSubscriptionAttributed: row.usd_subscription_attributed ?? null,
+				usdCreditsEquivalent: row.usd_credits_equivalent ?? null
 			});
 		}
 	}
@@ -143,4 +180,134 @@ export function unackedBolts(
  *  otherwise — the only two shapes the strip ever renders. */
 export function boltSummonsLabel(count: number): string {
 	return count === 1 ? '1 bolt awaits taking' : `${count} bolts await taking`;
+}
+
+// ── The completion card (design-the-bolt.md §The completion card) ─────────
+//
+// Data honesty is the constraint the design doc names as this account's
+// dominant defect class: render only what actually arrives on the wire, and
+// say plainly when a section's data does not. The audit behind these two
+// exports (see the report at the declared path): `cut_verb.py` parses a
+// full declaration — `asks`, `decisions`, `owed`, a declared `spend`
+// estimate, `next` — but `daemon.py`'s `_drain_outbox` only ever keeps
+// `{accepted_at, annotated, spend_declared}` in `task.meta["bolt"]`, and
+// both `state.md` (`_write_run_frame`) and `run_ledger.py`'s `_bolt_value`
+// narrow that further to a bare `"accepted" | "annotated"` string. Nothing
+// past that flag — not the mismatch text, not one `asks` row, not a single
+// `owed` line, not the declared spend string — is written anywhere this
+// frontend reads. Only two things the design's mockup describes actually
+// reach the wire: the verdict flag itself, and produce (`external_refs`) +
+// measured spend, which were already ledger columns before this feature.
+
+/** The verdict head's label — `bolt.ts`'s two-value contract, worded for
+ *  the card's first line. */
+export function boltVerdictLabel(bolt: BoltState): string {
+	return bolt === 'annotated' ? 'accepted — with dissent' : 'accepted';
+}
+
+/** Sections the completion card is prepared to render honestly, each tagged
+ *  with whether real data reached the wire for it. `present` sections get
+ *  the design's rendering; `absent` ones render as a labeled absence
+ *  (design doc: "render a labeled absence... do not render empty-as-clean")
+ *  rather than being skipped — a skipped section reads as "nothing to
+ *  report" when the true state is "never carried here at all", which is
+ *  exactly the distinction the constraint exists to keep visible.
+ *
+ *  `produce` and `spend` are conditioned on whether *this row* actually
+ *  carries anything (an empty produce list or a null spend figure is a
+ *  real, honest state, not a missing wire); `asks`, `decisions`, and `owed`
+ *  are unconditionally absent — no code path persists them past the
+ *  daemon's own validation pass, for any row, ever (see the module note
+ *  above). Both are "absence", worded differently: a row with no relics
+ *  says "this run made nothing"; `asks` says "this declaration was never
+ *  carried past the daemon's own check". */
+export interface BoltCardSections {
+	asks: 'absent';
+	decisions: 'absent';
+	produce: 'present' | 'empty';
+	owed: 'absent';
+	spend: 'present' | 'empty';
+}
+
+/** The completion card's own data shape — the subset of `BoltRow` the card
+ *  actually renders, decoupled from the strip/lane's ack-filtering. */
+export interface BoltCardData {
+	bolt: BoltState;
+	relics: RelicRecord[];
+	wallClockSeconds: number | null;
+	tokensInput: number | null;
+	tokensOutput: number | null;
+	usdSubscriptionAttributed: number | null;
+	usdCreditsEquivalent: number | null;
+}
+
+/** Merge every ledger row already known to belong to *one* run
+ *  (`runNode.ts`'s `runLedgerRowsForNode`) into the card's data shape. Unlike
+ *  `unackedBolts` (many runs, ack-filtered, keyed by id) this needs no key
+ *  and no dedup — every row in the list is this run's own re-report history,
+ *  latest-value-wins per field, same rule `unackedBolts` merges by. Null
+ *  when no row carries a recognised bolt value: mirrors `parseBoltState`'s
+ *  own contract that an absent/unrecognised value is "no bolt", never an
+ *  error — the run node's "no `## Bolt` section" case, not a wire failure. */
+export function boltCardDataFromLedgerRows(rows: RunLedgerRow[]): BoltCardData | null {
+	let bolt: BoltState | null = null;
+	const relics: RelicRecord[] = [];
+	let wallClockSeconds: number | null = null;
+	let tokensInput: number | null = null;
+	let tokensOutput: number | null = null;
+	let usdSubscriptionAttributed: number | null = null;
+	let usdCreditsEquivalent: number | null = null;
+	for (const row of rows) {
+		const rowBolt = parseBoltState(row.bolt);
+		if (rowBolt) bolt = rowBolt;
+		relics.push(...(row.external_refs ?? []));
+		if (row.wall_clock_seconds !== null && row.wall_clock_seconds !== undefined) {
+			wallClockSeconds = row.wall_clock_seconds;
+		}
+		if (row.tokens_input !== null && row.tokens_input !== undefined) {
+			tokensInput = row.tokens_input;
+		}
+		if (row.tokens_output !== null && row.tokens_output !== undefined) {
+			tokensOutput = row.tokens_output;
+		}
+		if (row.usd_subscription_attributed !== null && row.usd_subscription_attributed !== undefined) {
+			usdSubscriptionAttributed = row.usd_subscription_attributed;
+		}
+		if (row.usd_credits_equivalent !== null && row.usd_credits_equivalent !== undefined) {
+			usdCreditsEquivalent = row.usd_credits_equivalent;
+		}
+	}
+	if (!bolt) return null;
+	return {
+		bolt,
+		relics,
+		wallClockSeconds,
+		tokensInput,
+		tokensOutput,
+		usdSubscriptionAttributed,
+		usdCreditsEquivalent
+	};
+}
+
+export function boltCardSections(row: {
+	relics: RelicRecord[];
+	wallClockSeconds: number | null;
+	tokensInput: number | null;
+	tokensOutput: number | null;
+	usdSubscriptionAttributed: number | null;
+	usdCreditsEquivalent: number | null;
+}): BoltCardSections {
+	const hasSpend =
+		row.wallClockSeconds !== null ||
+		row.tokensInput !== null ||
+		row.tokensOutput !== null ||
+		row.usdSubscriptionAttributed !== null ||
+		row.usdCreditsEquivalent !== null;
+	return {
+		asks: 'absent',
+		decisions: 'absent',
+		produce: row.relics.length > 0 ? 'present' : 'empty',
+		owed: 'absent',
+		spend: hasSpend ? 'present' : 'empty'
+	};
 }
