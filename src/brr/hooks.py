@@ -101,6 +101,20 @@ _BOUNDARIES_MAX_BYTES = 4_000_000
 # obligation. Everything else there (scm, card staleness, pending events) goes
 # quiet when the resident acts, and so re-renders freely.
 GATELESS_ROUTING_KEY = "gateless_routing_noted"
+# The Stop "no reply yet" delivery line's consecutive-firing streak (#1142):
+# same idiom as REPEAT_COUNTS_KEY below, but scoped to a single Stop-only
+# line rather than the post-tool bar's four compressible details, because
+# its due-ness and its reset condition are both Stop-specific (see
+# `_stop_no_reply_due`). Incremented every Stop firing the line is due,
+# reset to 0 the moment it isn't (``replied_current`` turns true, the run
+# goes gate-less, or nothing is pending) — persisted because hooks are
+# fresh subprocesses each boundary.
+STOP_NO_REPLY_STREAK_KEY = "stop_no_reply_streak"
+# The waking event id the streak above was last counted against — a streak
+# must restart at a new waking thread (a fresh follow-up event replacing
+# the one that never got a reply is not the same unanswered wait
+# continuing) rather than keep climbing across unrelated events.
+STOP_NO_REPLY_EVENT_KEY = "stop_no_reply_event"
 # The blank-mood boundary nudge (greenlit 2026-08-03, evts w67h/6i1w/2wnq):
 # `card stale`, one tier softer. Unlike `card stale` it never keeps the bar
 # alive (ambient — see `_render_bar`'s `mood_prompt`) and unlike a repeating
@@ -403,6 +417,55 @@ def _stop_is_gate_less(portal: dict[str, Any]) -> bool:
     return bool(inbound.get("current_event")) and (
         inbound.get("current_event_replyable") is False
     )
+
+
+def _stop_no_reply_due(portal: dict[str, Any]) -> bool:
+    """True when the closeout will render the "no reply yet" line (#1142).
+
+    The exact predicate ``format_delta``'s delivery block uses for its
+    ``elif not replied_current and not gate_less`` arm, kept here — same
+    discipline as :func:`_stop_is_gate_less` just above — so the firing
+    streak this gates and the sentence it counts cannot drift apart. An
+    addressed run with something delivered *somewhere* (``any_delivery``)
+    but nothing on its own waking thread yet, and not gate-less (that case
+    can never clear, so it is not a repeat-firing loop, just the permanent
+    routing fact).
+    """
+    inbound = portal.get("inbound") if isinstance(portal.get("inbound"), dict) else {}
+    if not inbound.get("current_event"):
+        return False
+    if _stop_is_gate_less(portal):
+        return False
+    outbound = portal.get("outbound") if isinstance(portal.get("outbound"), dict) else {}
+    replied_current = outbound.get("replies_current")
+    any_delivery = bool(
+        replied_current
+        or outbound.get("replies_other")
+        or outbound.get("outbound_messages")
+    )
+    return bool(any_delivery and not replied_current)
+
+
+def _bump_stop_no_reply_streak(state: dict[str, Any], portal: dict[str, Any]) -> int:
+    """Advance :data:`STOP_NO_REPLY_STREAK_KEY` for this Stop firing.
+
+    Same increment/reset discipline as :func:`_bump_repeat_streaks`
+    (persisted hook state, since hooks are fresh subprocesses): due this
+    firing ⇒ +1, not due ⇒ reset to 0. Also resets on a waking-event change
+    (:data:`STOP_NO_REPLY_EVENT_KEY`) — a fresh follow-up replacing the
+    unanswered event is a new wait, not a continuation of the old one.
+    """
+    inbound = portal.get("inbound") if isinstance(portal.get("inbound"), dict) else {}
+    current_event_id = str(inbound.get("current_event") or "")
+    if state.get(STOP_NO_REPLY_EVENT_KEY) != current_event_id:
+        state[STOP_NO_REPLY_STREAK_KEY] = 0
+        state[STOP_NO_REPLY_EVENT_KEY] = current_event_id
+    streak = (
+        int(state.get(STOP_NO_REPLY_STREAK_KEY) or 0) + 1
+        if _stop_no_reply_due(portal) else 0
+    )
+    state[STOP_NO_REPLY_STREAK_KEY] = streak
+    return streak
 
 
 def _write_hook_state(ctx: HookContext, state: dict[str, Any]) -> None:
@@ -1697,6 +1760,19 @@ REPEAT_COUNTS_KEY = "detail_repeat_counts"
 #: boundary (N≥3)").
 _REPEAT_COMPRESS_THRESHOLD = 3
 
+#: Below this consecutive-streak count the Stop "no reply yet" delivery line
+#: (#1142) renders as state description; at and above it, as a verdict.
+#: Deliberately N=2, not :data:`_REPEAT_COMPRESS_THRESHOLD` (N=3): that
+#: threshold buys three renders of *display* breathing room for a
+#: repeat-render-is-noise concern (four post-tool bar lines whose harm is
+#: habituation). Here the sentence's own claim — "your final message will be
+#: dispatched" — is a promise about a *specific future event*, and that
+#: event demonstrably did not happen between firing #1 and firing #2 (the
+#: same waking thread, still replied_current=0). The promise is already
+#: false one firing sooner than a mere-repetition threshold would wait for,
+#: so the wording has to turn a firing earlier too.
+_STOP_NO_REPLY_ESCALATE_THRESHOLD = 2
+
 # Source → glyph, first substring match wins. `schedule` before the default
 # so a compound source stays honest; anything unknown reads as a letter.
 _EVENT_GLYPHS = (
@@ -2555,6 +2631,7 @@ def format_delta(
     bolt_asks_total: int | None = None,
     bolt_edge: bool = False,
     repeat_streaks: dict[str, int] | None = None,
+    no_reply_streak: int = 0,
 ) -> str | None:
     """Render a compact context delta from the live portal-state payload.
 
@@ -2947,11 +3024,45 @@ def format_delta(
             # Gate-less runs can never clear this: the router refuses
             # ``event:`` replies to an unowned source, so silence is the
             # success state once anything was delivered anywhere.
-            lines.append(
-                "- delivery: the waking thread itself has no reply yet — "
-                "your final message will be dispatched there by the daemon; "
-                "end on the reply, not on scratch."
-            )
+            #
+            # #1142: this arm re-fires unbounded on a run whose waking
+            # thread never accrues a reply (e.g. a gate delivers the
+            # substance instead) — a Stop hook is a fresh subprocess, so
+            # without a persisted counter each firing reads exactly like the
+            # first: "will be dispatched" is correct and reassuring on
+            # firing #1, actively misleading by firing #2 (the same promise,
+            # still unresolved). ``no_reply_streak`` is that counter — the
+            # caller's own per-firing tally (:func:`_bump_stop_no_reply_streak`),
+            # threaded in like ``note_routing``/``repeat_streaks`` because
+            # this renderer is a pure function of the snapshot and "how many
+            # times has this exact thing already been said" is run state,
+            # not snapshot state.
+            prior = max(0, no_reply_streak - 1)
+            if no_reply_streak >= _STOP_NO_REPLY_ESCALATE_THRESHOLD:
+                # Past the threshold the state-description sentence itself
+                # is now a false promise (it already failed to resolve
+                # ``prior`` times), so this reads as a verdict instead —
+                # pointing at the one delivery path confirmed to work from
+                # inside this same loop: an outbox ``gate:`` file (#1142's
+                # own "workaround that worked" section).
+                lines.append(
+                    f"- delivery: stop boundary #{no_reply_streak} · {prior} "
+                    f"prior terminal message{'s' if prior != 1 else ''} "
+                    "consumed, current=0 — recurring, not pre-dispatch: this "
+                    "promise has now failed to resolve "
+                    f"{prior} time{'s' if prior != 1 else ''} in a row. "
+                    "Probable delivery-path problem — report through "
+                    "`gate: <name>` instead; an outbox gate delivers mid-run "
+                    "and does not depend on this line ever clearing."
+                )
+            else:
+                lines.append(
+                    f"- delivery: stop boundary #{no_reply_streak} · {prior} "
+                    f"prior terminal message{'s' if prior != 1 else ''} "
+                    "consumed, current=0 — the waking thread itself has no "
+                    "reply yet; your final message will be dispatched there "
+                    "by the daemon; end on the reply, not on scratch."
+                )
         elif gate_less and note_routing:
             # The fourth cell (#728). ``gate_less`` was computed above and
             # then consumed only inside the silence arm, so the one fact that
@@ -4171,12 +4282,19 @@ def compute_neutral(
         # division of labour as ``orient`` and ``surprise``.
         gate_less_run = _stop_is_gate_less(portal)
         note_routing = gate_less_run and not state.get(GATELESS_ROUTING_KEY)
+        # #1142: bumped on every Stop firing this is due, independent of the
+        # ``stop_token`` render gate just below — a hook fires as a fresh
+        # subprocess whether or not its content happened to dedupe against
+        # the prior one, and the counter's job is to say how many times the
+        # *firing* has happened, not how many times it rendered.
+        no_reply_streak = _bump_stop_no_reply_streak(state, portal)
         if stop_token != state.get("stop_last_token"):
             inject = format_delta(
                 portal, stop=True, run_body=_read_card_body(ctx), mood=mood,
                 note_routing=note_routing,
                 event_seen=event_decisions, inbox_pointer=inbox_pointer,
                 plan=plan, route=route,
+                no_reply_streak=no_reply_streak,
             )
             # Latch on the render, not on the decision: a Stop whose token
             # did not move injects nothing, and burning the one statement on
