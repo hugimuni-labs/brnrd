@@ -5,6 +5,14 @@ import type { RelicRecord, RunLedgerRow } from './runLedger';
 // cloth-head lane → the lane glows on arrival — moving sections,
 // force-scroll, and a modal are all explicitly rejected).
 //
+// Superseded 2026-08-09 (#1256, the digest — `digest.ts`/`Digest.svelte`):
+// both consumers named above (the strip, the cloth-head lane) are retired —
+// "TAKE-per-row and the growing counter die" was the signed direction. The
+// ack-store exports below (`unackedBolts` aside — the digest reuses it
+// purely as a merge-by-run-id projection over an empty taken set) have no
+// remaining caller; left in place rather than pulled mid-swap, named here
+// as a known follow-up rather than silently carried.
+//
 // Per-viewer is the design requirement itself (the teams curveball: an
 // away-ack must never be account-global), and localStorage satisfies that
 // for the single-user pre-release. Server-side per-viewer state is the
