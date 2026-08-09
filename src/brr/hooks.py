@@ -537,10 +537,16 @@ def _has_post_tool_obligations(
 ) -> bool:
     """True when this boundary carries at least one obligation.
 
-    Obligations — pending events, stale card, refused directives, overdue
-    armed letters, unmet blueprint promise edge, running long — all have a
-    discharge condition: the resident can *act* to make them go away.  Pure
-    ambient content (quota %, elapsed time, orientation progress) has none.
+    "Obligation" here means *this boundary must not be silently dropped*,
+    which is a coarser axis than the bar segments' own OBLIGATION/DELTA/
+    VITAL/AMBIENT class (see `SEGMENT_CLASS`) — most of the list below do
+    have a discharge condition the resident can act on (pending events,
+    stale card, overdue armed letters, unmet blueprint promise edge, running
+    long); refused directives are the counted exception (#1266 audit: `!N`
+    is DELTA-classed precisely because reading `notices` cannot clear it,
+    yet a fresh refusal still must not go silent, so it stays listed here).
+    Pure ambient content (quota %, elapsed time, orientation progress) opens
+    nothing on its own.
 
     An unavailable portal counts as an obligation: the unknown count cannot
     be reported as zero, so the resident must not mistake silence for all-clear.
@@ -749,8 +755,9 @@ ORIENTATION_READ_RANGES_KEY = "orientation_read_ranges"
 _ORIENTATION_READ_DEFAULT_LIMIT = 2000
 
 # What counts as a declared skip. Two forms, both *declarations*: a terse
-# `orient: skip` heading the line (list/quote/heading markers tolerated), or
-# the canonical sentence. A first-class outcome, not a failure state.
+# `orient: skip` heading the line (list/quote/heading markers tolerated,
+# arbitrary content before the word `skip`/`skipped`/`skipping`), or the
+# canonical sentence. A first-class outcome, not a failure state.
 #
 # The first shape was `^(?=.*orient)(?=.*skip).*$` — line-scoped, which the
 # comment claimed and the regex delivered. But **line-scoped is not
@@ -765,9 +772,36 @@ _ORIENTATION_READ_DEFAULT_LIMIT = 2000
 # So: narrow, and lean false-negative on purpose. A meter that renders when it
 # should have hidden costs one segment; a meter that hides when the walk never
 # happened costs the whole feature.
+#
+# #1266: narrowed too far. The next real declaration this shipped against —
+#
+#     "orientation: AGENTS.md skim skipped — assuming prior knowledge
+#      (contract carried in playbook + continuity; surface pages injected
+#      this wake)"
+#
+# — is exactly the field-prefixed idiom the first shape was meant to catch
+# (weave.md's own `key: value` convention), but natural phrasing put the
+# subject clause *between* the separator and the word "skipped", and used
+# the past-tense form. A 145-minute run rendered `orient 0/3` at every
+# boundary despite a legal declaration on a legal path. So: keep the same
+# structural anchor (a line that *leads* with `orient(ation)` + a separator —
+# still a deliberate field, not incidental prose) but allow arbitrary text
+# between the separator and the word, and accept skip/skipped/skipping. The
+# declaration-scoping this whole guard exists for still holds: a bare mention
+# of "skip" deep in an unrelated sentence never starts the line with
+# `orient(ation):`, so the two false positives above stay excluded (driven in
+# the tests). One narrow safety net kept from the same false-negative-leaning
+# doctrine: a negated value on the same declared line ("orientation: not
+# skipped, read AGENTS.md") must not discharge the meter — the exact
+# reporting-its-own-value trap this guard was first narrowed against, one
+# clause shape over.
 _ORIENT_SKIP_RE = re.compile(
-    # `orient: skip` / `orientation = skip`, at the head of a line
-    r"^[\s>*\-#]*orient(?:ation)?\s*[:=-]\s*skip\b"
+    # `orient: skip` / `orientation: <whatever> skipped …`, at the head of a
+    # line, arbitrary content between the separator and the word, unless that
+    # content negates it first.
+    r"^[\s>*\-#]*orient(?:ation)?\s*[:=-]\s*"
+    r"(?!.*(?:\bnot\b|n't).*\bskip)"
+    r".*\bskip(?:s|ped|ping)?\b"
     # …or the canonical sentence, specific enough to be intentional anywhere
     r"|assuming prior knowledge[,\s]+skipping orientation\b",
     re.IGNORECASE | re.MULTILINE,
@@ -1245,8 +1279,21 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         "is the resident opening `portal-state.json → notices`. This segment "
         "surfaces a non-zero count without demanding a read. Absent at zero so "
         "it earns its ink the same way every other differential segment does.",
-        # a refused directive is undone work.
-        klass=OBLIGATION,
+        # #1266 audit: this was OBLIGATION ("an act turns it off"), but no
+        # such act exists. `.notices.jsonl` (daemon.py) is append-only — no
+        # prune, no ack, no read-tracking anywhere in the codebase — so `!N`
+        # can never reach zero within a run once tripped, however many times
+        # the resident opens `portal-state.json` and reads every entry. That
+        # is DELTA's own definition ("records something that changed... has
+        # no discharge, but earns its bytes by being new"), not OBLIGATION's.
+        # Relabeling only — both classes already sit in `_KEPT_WHEN_QUIET`,
+        # so the bar's own rendering/gating is unchanged; `brnrd legend`
+        # (cli.py's cmd_legend) does print this field verbatim, so its `!`
+        # row now correctly says `delta`, which is the fix, not a side
+        # effect. The change that would make this a genuine OBLIGATION (a
+        # mark-as-seen verb) is bigger than a class label and is proposed,
+        # not built, here.
+        klass=DELTA,
     ),
     _BarSegment(
         "card", "card",

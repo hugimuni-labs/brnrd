@@ -3544,6 +3544,55 @@ def test_orient_skip_accepts_the_terse_declaration(tmp_path):
     assert "orient" not in _inject_text(out)
 
 
+def test_orient_skip_accepts_a_field_prefixed_declaration_with_prose_between(
+    tmp_path,
+):
+    """#1266: the real declaration that shipped this fix, verbatim.
+
+    A 145-minute live run wrote this exact line on `.card`, per the boot's
+    own "declare the skip" instruction, and the meter rendered `orient 0/3`
+    at every boundary anyway — the narrowed guard only accepted "skip"
+    immediately after the separator, and natural phrasing put the subject
+    clause in between and used the past tense.
+    """
+    a, b = _orient_files(tmp_path)
+    _boot_score(tmp_path, [a, b])
+    (tmp_path / hooks.CARD_NAME).write_text(
+        "## Now\n"
+        "orientation: AGENTS.md skim skipped — assuming prior knowledge "
+        "(contract carried in playbook + continuity; surface pages "
+        "injected this wake)\n",
+        encoding="utf-8",
+    )
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    out, _ = hooks.run_hook(
+        hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
+    )
+    assert "orient" not in _inject_text(out)
+
+
+def test_orient_skip_field_prefix_still_rejects_a_negated_value(tmp_path):
+    """The widened form must not reopen the reporting-its-own-value trap.
+
+    "orientation: not skipped" is the field-prefixed idiom's own negation —
+    the same class #614 narrowed the original regex against, one clause
+    shape over. It must keep the meter rendering.
+    """
+    a, b = _orient_files(tmp_path)
+    _boot_score(tmp_path, [a, b])
+    (tmp_path / hooks.CARD_NAME).write_text(
+        "## Now\norientation: not skipped, read AGENTS.md and the plan\n",
+        encoding="utf-8",
+    )
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    out, _ = hooks.run_hook(
+        hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
+    )
+    assert "orient 0/2" in _inject_text(out)
+
+
 def test_orient_is_unassertable_without_an_armed_boot_score(tmp_path):
     a, b = _orient_files(tmp_path)
     _boot_score(tmp_path, [a, b])  # on disk, but the daemon never armed it
