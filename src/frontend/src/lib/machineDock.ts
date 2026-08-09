@@ -208,6 +208,47 @@ export function machineTapVerdict(open: boolean, docked: boolean): MachineTapVer
  */
 export const RAIL_BOTTOM_PADDING_PX = 8;
 
+/**
+ * Which settled rail-height sample feeds `machineDockTop` (#1258: expanded,
+ * the rack panel painted over this dock and its bottom was unreachable).
+ *
+ * `full`/`slim` are sampled at rest only (never while the rack is open —
+ * "an expanded rack is a panel, not the rail's own height" is the page's own
+ * comment on why) precisely so a *closed* rail's dock position never reads a
+ * stray tall sample. That guard left nothing tracking the rack's own settled
+ * height, so an open rack's dock kept the small resting offset while the
+ * rail itself rendered up to `max-h-[100svh]` tall — laid out correctly,
+ * painted under the rail the entire time. `expanded` is that missing sample,
+ * gathered the same way (settled, not read live inside a scroll tick — see
+ * the page's own #1169 comment for why that specific read is the one banned
+ * one) and given the same priority `railIsSlim` already gives an open rack
+ * over `condensed` for the rail's own rendered form: the rack renders its
+ * full body regardless of the page's scroll-condensed verdict, so the
+ * height that positions the dock has to follow that, not the scroll verdict.
+ * `live` is `railHeight`'s own live `clientHeight` — the fallback every
+ * settled sample already uses for the one tick before it has a value to
+ * give (first paint, or the very first time a state is reached).
+ */
+export interface RailHeightSamples {
+	/** Settled height at rest, not condensed, not open. */
+	full: number;
+	/** Settled height at rest, condensed, not open. */
+	slim: number;
+	/** Settled height while the rack is open (any `condensed` value). */
+	expanded: number;
+	/** The rail's own live `clientHeight` — the pre-settle fallback. */
+	live: number;
+}
+
+export function railDockHeight(
+	samples: RailHeightSamples,
+	open: boolean,
+	condensed: boolean
+): number {
+	if (open) return samples.expanded || samples.live;
+	return condensed ? samples.slim || samples.live : samples.full;
+}
+
 export function machineDockTop(
 	railHeight: number | null | undefined,
 	condensed: boolean = false
