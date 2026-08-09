@@ -1,0 +1,13 @@
+## Now
+
+Release 0.6.1 prep **complete** → PR #1289 ready for dispatcher
+
+## Summary
+
+✓ PR #1289: release: brnrd 0.6.1
+✓ Branch: brr/release-0-6-1 (published)
+✓ Commit: b5fe0e4d (version bump)
+✓ Verifications: all green (version check, tests 12/12, legal manifest)
+✓ Report: `/tmp/brr-release-0-6-1-report.md`
+
+Security patch — diffense XSS hardening. Dashboard/onboarding improvements from today are server-side, already live on brnrd.dev. Ready for dispatcher merge + GitHub release cut.
