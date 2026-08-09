@@ -319,6 +319,15 @@
     return n;
   }
   const T = s => document.createTextNode(s == null ? "" : String(s));
+  // A pack is caller-supplied data (relayed from a producer's daemon, or
+  // fetched client-side from an arbitrary `?pack=<url>`), so any pack field
+  // that reaches `el(..., { html })` must be escaped first — `el`'s `html`
+  // prop is a deliberate innerHTML sink for the handful of call sites below
+  // that need to mix markup (a highlight `<span>`, the blinking cursor) with
+  // pack-derived text, and escaping is what keeps that text inert.
+  const escapeHtml = s => String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 
   // ---- kind families (colour + label) -----------------------------------
   function family(kind) {
@@ -364,7 +373,12 @@
       else if (v && typeof v === "object") v = JSON.stringify(v);
       box.appendChild(el("div", { class: "row" }, [
         el("span", { class: "key" }, T(k.replace(/_/g, " "))),
-        el("span", { class: "val", html: String(v)
+        // Escape first, highlight second: `v` is pack-controlled, and the
+        // `+N` / `-N` highlighting below only ever matches digits/commas/
+        // signs, none of which HTML-escaping touches — so escaping first
+        // cannot break a legitimate highlight, and skipping it would let a
+        // pack value like `<img src=x onerror=...>` execute as markup.
+        el("span", { class: "val", html: escapeHtml(v)
           .replace(/(\+\d[\d,]*\+?)/g, '<span class="add">$1</span>')
           .replace(/(-\d[\d,]*−?|−)/g, '<span class="del">$1</span>') }),
       ]));
@@ -388,10 +402,23 @@
     });
     return box;
   }
+  // `href` reaches the DOM via `setAttribute`, not `innerHTML` — a different
+  // sink than the escaping above, but the same pack-controlled input, and a
+  // `javascript:` URL there runs on click just as surely as an `onerror`
+  // attribute would on render. Belt + braces: only a real http(s) link ships.
+  function safeHref(url) {
+    try {
+      const u = new URL(url, location.href);
+      return (u.protocol === "http:" || u.protocol === "https:") ? u.href : null;
+    } catch (e) { return null; }
+  }
   function openBtn(loc, label) {
     if (!loc) return null;
     const wrap = el("div", { class: "locator" });
-    if (loc.forge) wrap.appendChild(el("a", { class: "open", href: loc.forge, target: "_blank", rel: "noopener" }, T((label || "open") + " ↗")));
+    if (loc.forge) {
+      const href = safeHref(loc.forge);
+      if (href) wrap.appendChild(el("a", { class: "open", href: href, target: "_blank", rel: "noopener" }, T((label || "open") + " ↗")));
+    }
     if (loc.local) wrap.appendChild(el("span", {}, T(loc.local)));
     return wrap;
   }
@@ -659,6 +686,16 @@
   }
 
   // ---- main render ------------------------------------------------------
+  // `meta.repo` / `meta.number` come straight off the loaded pack
+  // (`PACK.metadata.pr`) — for the token-relay route that pack is whatever
+  // the producer's daemon sent, and for `?pack=<url>` it's whatever the
+  // named URL returned, so neither is trusted input. Escaped before joining
+  // the markup fragments below; the markup itself (the blink cursor, the
+  // `#<number>` bold) stays literal since it never varies with pack content.
+  function chromeTitleHtml(meta) {
+    const number = meta.number != null ? " <b>#" + escapeHtml(meta.number) + "</b>" : "";
+    return "diffense <span class=blink>▮</span> " + escapeHtml(meta.repo || "") + number;
+  }
   function render() {
     const app = document.getElementById("app");
     app.textContent = "";
@@ -667,7 +704,7 @@
       el("span", { class: "dot", style: "background:var(--red)" }),
       el("span", { class: "dot", style: "background:var(--amber)" }),
       el("span", { class: "dot", style: "background:var(--green)" }),
-      el("span", { class: "title", html: "diffense <span class=blink>▮</span> " + (meta.repo || "") + (meta.number ? " <b>#" + meta.number + "</b>" : "") }),
+      el("span", { class: "title", html: chromeTitleHtml(meta) }),
       el("span", { class: "spacer" }),
       el("span", { class: "hint" }, T("click to dive · bars to climb back · Esc up")),
     ]);
