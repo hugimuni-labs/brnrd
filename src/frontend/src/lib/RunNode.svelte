@@ -257,59 +257,72 @@
 			{/if}
 		</section>
 
-		<!-- ── Bolt: the completion declaration ───────────────────────────── -->
-		<!-- Heads the node, ahead of the woven body it summarizes
-		     (design-the-bolt.md §The cloth side). Absent for a run that
-		     hasn't been cut, or predates the bolt entirely — no section at
-		     all, rather than an empty one. -->
-		{#if boltLead || boltCard}
-			<section class="panel mt-4 p-4" aria-labelledby="bolt-heading">
-				<div class="flex items-baseline justify-between gap-3 border-b border-amber-900/40 pb-2">
-					<h2 id="bolt-heading" class="font-mono text-xs tracking-wide text-amber-200 uppercase">
-						⚡ bolt
-					</h2>
-					<span class="shrink-0 font-mono text-[10px] text-ink-mute">resident-owned</span>
+		<!-- ── Receipt: the completion declaration ──────────────────────────── -->
+		<!-- design-run-route.md §The target shape: "the receipt is universal —
+		     every run mints one, the place where the headline happened." Heads
+		     the node, ahead of the woven body it summarizes
+		     (design-the-bolt.md §The cloth side). `#receipt` is the stable
+		     anchor a digest/cloth row links to (rung 2) — always present for a
+		     mirrored node, even before the run has cut a bolt, so a link to it
+		     never lands on a missing id. Only the *unmirrored* node case (no
+		     `runs/<slug>/<run>/` files at all) skips this — that whole branch
+		     already reads "node not mirrored" above; rung 3 is what teaches a
+		     live, not-yet-mirrored run to answer here instead. -->
+		<section id="receipt" class="panel mt-4 p-4" aria-labelledby="bolt-heading">
+			<div class="flex items-baseline justify-between gap-3 border-b border-amber-900/40 pb-2">
+				<h2 id="bolt-heading" class="font-mono text-xs tracking-wide text-amber-200 uppercase">
+					⚡ receipt
+				</h2>
+				<span class="shrink-0 font-mono text-[10px] text-ink-mute">resident-owned</span>
+			</div>
+			{#if boltLead}
+				<div class="mt-3 text-sm text-amber-100">
+					<MarkdownContent
+						markdown={boltLead}
+						sourcePath={node.body?.path ?? ''}
+						{knownPaths}
+						reveal
+					/>
 				</div>
-				{#if boltLead}
-					<div class="mt-3 text-sm text-amber-100">
-						<MarkdownContent
-							markdown={boltLead}
-							sourcePath={node.body?.path ?? ''}
-							{knownPaths}
-							reveal
-						/>
-					</div>
+			{/if}
+			<!-- The completion card: collapsed by default, tap to expand
+			     (design-the-bolt.md §The completion card). Absent, not just
+			     collapsed, when no ledger row for this run carries a
+			     recognised `bolt` value — the receipt section above already
+			     says why (no row / API window miss). -->
+			{#if boltCard}
+				<button
+					type="button"
+					class="mt-3 flex w-full items-center justify-between gap-2 border-t border-amber-900/30 pt-2 text-left font-mono text-[10px] tracking-wide text-amber-300 uppercase hover:text-amber-100"
+					onclick={() => (boltCardOpen = !boltCardOpen)}
+					aria-expanded={boltCardOpen}
+				>
+					<span>completion card</span>
+					<span>{boltCardOpen ? '▲ collapse' : '▼ expand'}</span>
+				</button>
+				{#if boltCardOpen}
+					<BoltCompletionCard
+						bolt={boltCard.bolt}
+						relics={boltCard.relics}
+						wallClockSeconds={boltCard.wallClockSeconds}
+						tokensInput={boltCard.tokensInput}
+						tokensOutput={boltCard.tokensOutput}
+						usdSubscriptionAttributed={boltCard.usdSubscriptionAttributed}
+						usdCreditsEquivalent={boltCard.usdCreditsEquivalent}
+						declaration={boltCard.declaration}
+					/>
 				{/if}
-				<!-- The completion card: collapsed by default, tap to expand
-				     (design-the-bolt.md §The completion card). Absent, not just
-				     collapsed, when no ledger row for this run carries a
-				     recognised `bolt` value — the receipt section above already
-				     says why (no row / API window miss). -->
-				{#if boltCard}
-					<button
-						type="button"
-						class="mt-3 flex w-full items-center justify-between gap-2 border-t border-amber-900/30 pt-2 text-left font-mono text-[10px] tracking-wide text-amber-300 uppercase hover:text-amber-100"
-						onclick={() => (boltCardOpen = !boltCardOpen)}
-						aria-expanded={boltCardOpen}
-					>
-						<span>completion card</span>
-						<span>{boltCardOpen ? '▲ collapse' : '▼ expand'}</span>
-					</button>
-					{#if boltCardOpen}
-						<BoltCompletionCard
-							bolt={boltCard.bolt}
-							relics={boltCard.relics}
-							wallClockSeconds={boltCard.wallClockSeconds}
-							tokensInput={boltCard.tokensInput}
-							tokensOutput={boltCard.tokensOutput}
-							usdSubscriptionAttributed={boltCard.usdSubscriptionAttributed}
-							usdCreditsEquivalent={boltCard.usdCreditsEquivalent}
-							declaration={boltCard.declaration}
-						/>
-					{/if}
-				{/if}
-			</section>
-		{/if}
+			{:else if !boltLead}
+				<!-- Universal ≠ retroactive: a run that hasn't been cut, or one
+				     that closed before the bolt existed, gets an honest "not yet"
+				     rather than a missing section a #receipt link 404s into. -->
+				<p class="mt-3 text-sm text-ink-quiet">
+					{running
+						? 'This run is still going — no completion receipt yet.'
+						: 'No completion receipt for this run — it closed without a bolt, or predates the bolt entirely.'}
+				</p>
+			{/if}
+		</section>
 
 		<!-- ── Body: what the resident wove ───────────────────────────────── -->
 		<section class="panel mt-4 p-4" aria-labelledby="body-heading">

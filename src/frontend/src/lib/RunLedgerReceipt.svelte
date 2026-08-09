@@ -17,6 +17,7 @@
 		type RunLedgerRow,
 		usdLabel
 	} from './runLedger';
+	import { runNodeHref } from './runNode';
 
 	interface Props {
 		rows: RunLedgerRow[];
@@ -207,8 +208,10 @@
 													<span class="shrink-0 text-ink-quiet">{familySuffix(fam)}</span>
 												{/if}
 												{#if fam.head._from_run_id}
-													<span class="shrink-0 text-[10px] text-ink-mute"
-														>↳ via {fam.head._from_run_id}</span
+													<a
+														class="shrink-0 text-[10px] text-ink-mute underline decoration-stone-700 hover:text-ink-quiet"
+														href={runNodeHref(row.repo_label, fam.head._from_run_id)}
+														>↳ via {fam.head._from_run_id}</a
 													>
 												{/if}
 											</div>
@@ -216,8 +219,11 @@
 												<p class="ml-5 truncate text-[11px] text-ink-quiet">
 													<span use:typeReveal={{ text: relicLabel(m) }}>{relicLabel(m)}</span
 													>{#if m._from_run_id && m._from_run_id !== fam.head._from_run_id}
-														<span class="text-[10px] text-ink-mute">
-															↳ via {m._from_run_id}</span
+														<a
+															class="text-[10px] text-ink-mute underline decoration-stone-700 hover:text-ink-quiet"
+															href={runNodeHref(row.repo_label, m._from_run_id)}
+														>
+															↳ via {m._from_run_id}</a
 														>{/if}
 												</p>
 											{/each}
