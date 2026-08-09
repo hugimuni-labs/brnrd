@@ -493,15 +493,60 @@ def absolute_git_dir(repo_root: Path) -> Path | None:
     return Path(value) if value else None
 
 
+# Written inside a clone's own ``.git`` dir (never the checked-out working
+# tree — see ``shared_brr_dir``) by ``worktree.create_clone``, naming the
+# host checkout it was cloned from. Lives in ``.git/`` specifically so nesting
+# it under a *test's* throwaway repo can never happen by construction — a
+# repo nobody ran ``create_clone`` against simply has no such file, unlike an
+# ambient env var, which a test process inherits right along with everything
+# else in its parent's environment (found the hard way: an earlier version of
+# this fix kept the fact in ``BRR_HOST_ROOT`` and read it unconditionally,
+# which is correct for a real strand's own subprocess and wrong inside a test
+# — the test inherits the *outer* process's strand identity ambiently, so a
+# throwaway repo's ``.brr`` resolution got silently redirected into the real
+# host checkout).
+_CLONE_HOST_ROOT_MARKER = "brr-host-root"
+
+
 def shared_brr_dir(repo_root: Path) -> Path:
     """Return the shared ``.brr`` dir for a repo or worktree checkout.
 
-    In a normal checkout this is ``repo_root/.brr``. In a git worktree,
-    runtime state lives beside the common git dir in the main checkout.
+    In a normal checkout this is ``repo_root/.brr``. In a *linked* git
+    worktree, runtime state lives beside the common git dir in the main
+    checkout, which ``--git-common-dir`` resolves to for free.
+
+    **A ``git clone --shared`` child (#746) breaks that walk.** A clone has
+    its own, self-contained ``.git`` — not a pointer into a shared common
+    dir — so ``--git-common-dir`` from inside one resolves to the clone's
+    *own* ``.git``, and the formula below would compute a ``.brr`` under the
+    clone that was never created (verified directly: ``git
+    rev-parse --git-common-dir`` prints ``.git`` from inside a `--shared`
+    clone, an absolute host path from inside a linked worktree). Every
+    ``brnrd`` command the agent runs from its own cwd — outbox delivery,
+    ``.card``/``.mood`` writes, ``brnrd kb``, dominion access — resolves its
+    runtime dir through this function, so a silent wrong answer here is not
+    cosmetic.
+
+    The fix is :data:`_CLONE_HOST_ROOT_MARKER`: a file
+    ``worktree.create_clone`` writes inside the clone's own ``.git``,
+    checked before ever shelling out. Scoped to exactly the repos brr itself
+    cloned — a no-op for a resident, a ``host`` run, a linked worktree (all
+    of which fall through to the git walk below unchanged), and, just as
+    importantly, for an unrelated repo a test builds in a temp dir.
     """
     local = repo_root / ".brr"
     if local.exists():
         return local
+
+    marker = repo_root / ".git" / _CLONE_HOST_ROOT_MARKER
+    try:
+        marked_root = marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        marked_root = ""
+    if marked_root:
+        host_brr = Path(marked_root) / ".brr"
+        if host_brr.exists():
+            return host_brr
 
     result = _git(repo_root, "rev-parse", "--git-common-dir", check=False)
     if result.returncode != 0:

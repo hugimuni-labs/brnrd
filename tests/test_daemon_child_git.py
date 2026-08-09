@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from brr import cli, daemon, envs, gitops
+from brr import cli, daemon, envs, gitops, worktree
 from brr.run import Run
 from brr.runner import RunnerResult
 
@@ -1162,3 +1162,99 @@ def test_bot_identity_env_still_scrubs_the_discovery_overrides():
     assert "GIT_DIR" not in env and "GIT_WORK_TREE" not in env
     assert env["PATH"] == "/usr/bin"
     assert env["GIT_COMMITTER_NAME"] == gitops.BOT_NAME
+
+
+# ── #746: a clone's own .git isolates config and stash, where a linked
+# worktree never did ──────────────────────────────────────────────────
+#
+# The incident, twice over 2026-08-03/08-04 (#746's own comments): a
+# strand's `git config user.email` write, and separately a scratch
+# `git init`/`git commit`, landed in the *shared* `.git/config` — because a
+# linked worktree isolates files, never config or `refs/stash`. This is the
+# structural fix the issue asked for: give the child its own `.git`
+# (`git clone --shared`) instead. These two tests drive the exact two
+# channels the incidents used, against the real git behaviour (no mocks —
+# a mock would agree with both the broken and the fixed code equally
+# happily, which is exactly how the original incident hid).
+
+
+def _cloned(tmp_path):
+    """A host checkout with one commit, plus a #746 clone child."""
+    host = tmp_path / "host"
+    init_git_repo(host)
+    (host / "README.md").write_text("host\n", encoding="utf-8")
+    _git(host, "add", "-A")
+    _git(host, "commit", "-m", "host: base")
+    clone_path, branch = worktree.create_clone(host, "run-746-clone")
+    return host, clone_path, branch
+
+
+def test_a_clones_git_config_write_never_reaches_the_host(tmp_path):
+    host, clone_path, _branch = _cloned(tmp_path)
+    host_config_before = (host / ".git" / "config").read_text(encoding="utf-8")
+
+    result = _git(clone_path, "config", "user.email", "t@t")
+    assert result.returncode == 0
+
+    # The write landed — in the clone's own config, not vanished.
+    assert _git(clone_path, "config", "--get", "user.email").stdout.strip() == "t@t"
+    # The host's config is byte-identical to before.
+    assert (host / ".git" / "config").read_text(encoding="utf-8") == host_config_before
+    assert "t@t" not in (host / ".git" / "config").read_text(encoding="utf-8")
+
+
+def test_a_clones_git_stash_never_reaches_the_hosts_stash_refs(tmp_path):
+    host, clone_path, _branch = _cloned(tmp_path)
+    host_stash_before = _git(host, "rev-parse", "--verify", "-q", "refs/stash", check=False)
+    assert host_stash_before.returncode != 0  # no stash on the host yet
+
+    (clone_path / "README.md").write_text("clone edit\n", encoding="utf-8")
+    stashed = _git(clone_path, "stash", "push", "-m", "clone work")
+    assert stashed.returncode == 0
+    assert "No local changes to save" not in stashed.stdout
+
+    # The clone has its own stash entry.
+    clone_stash = _git(clone_path, "rev-parse", "--verify", "-q", "refs/stash", check=False)
+    assert clone_stash.returncode == 0
+    # The host still has none — a linked worktree would have put it there
+    # instead (refs/stash is repo-wide, not per-worktree).
+    host_stash_after = _git(host, "rev-parse", "--verify", "-q", "refs/stash", check=False)
+    assert host_stash_after.returncode != 0
+
+
+def test_a_clone_still_resolves_the_hosts_shared_brr_dir(tmp_path):
+    """The fix's own failure mode, pinned: #746 must not cost the strand its
+    ability to find the shared `.brr` (outbox, `.card`, dominion access) —
+    see `gitops.shared_brr_dir`'s marker-file mechanism."""
+    host, clone_path, _branch = _cloned(tmp_path)
+    # `create_clone` already minted `host/.brr` as `path_for`'s own parent
+    # directory (the same `mkdir(parents=True, exist_ok=True)` `create` has
+    # always done) — `exist_ok=True` here so the test doesn't care which.
+    (host / ".brr").mkdir(exist_ok=True)
+    assert gitops.shared_brr_dir(clone_path) == host / ".brr"
+
+
+def test_neutered_against_a_linked_worktree_the_same_checks_go_red(tmp_path):
+    """The containment tests above, re-run against the *old* shape they
+    replace — proof they discriminate rather than passing vacuously.
+
+    Not a test of production code: it drives the identical git operations
+    against `worktree.create` (a linked worktree) instead of
+    `worktree.create_clone`, and asserts the *pre-#746-fix* outcome — the
+    write reaches the host. If this test ever goes green, the two tests
+    above have stopped meaning anything.
+    """
+    host = tmp_path / "host"
+    init_git_repo(host)
+    (host / "README.md").write_text("host\n", encoding="utf-8")
+    _git(host, "add", "-A")
+    _git(host, "commit", "-m", "host: base")
+    linked_path, _branch = worktree.create(host, "run-746-linked")
+
+    host_config_before = (host / ".git" / "config").read_text(encoding="utf-8")
+    _git(linked_path, "config", "user.email", "t@t")
+    host_config_after = (host / ".git" / "config").read_text(encoding="utf-8")
+    # This is the bug: a linked worktree's config write lands in the shared
+    # file, so the host's config *does* change.
+    assert host_config_after != host_config_before
+    assert "t@t" in host_config_after
