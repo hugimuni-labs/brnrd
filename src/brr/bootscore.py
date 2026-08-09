@@ -679,18 +679,25 @@ def format_kernel(score: BootScore) -> str:
         # not an error (#1244 fork 1) — say what's missing and what it means
         # for this wake, rather than let the resident infer it from a failed
         # Read or a kb write that quietly never lands anywhere.
-        missing = " and ".join(
-            n for n, present in (
-                ("AGENTS.md", host.agents_md_missing),
-                ("kb", host.kb_missing),
-            ) if present
-        )
+        #
+        # The two facts are independent (a repo can carry a hand-authored
+        # AGENTS.md with no kb wired up yet, or vice versa), so the three
+        # combinations each get their own accurate sentence rather than one
+        # template that overclaims "hasn't run init" on a repo that has.
+        if host.agents_md_missing and host.kb_missing:
+            missing_bits = "no AGENTS.md, no committed/home kb"
+            cause = "this repo hasn't run `brnrd init` yet"
+        elif host.agents_md_missing:
+            missing_bits = "no AGENTS.md"
+            cause = "this repo hasn't run `brnrd init` yet"
+        else:
+            missing_bits = "no committed/home kb"
+            cause = "no kb is wired up for this repo yet"
         lines.append(
-            f"  no {missing} yet: this repo hasn't run `brnrd init` — no "
-            "shared contract" + (", no committed/home kb" if host.kb_missing else "")
-            + ". Bounded work only: answer, inspect, or run the setup "
-            "interview; don't invent a kb location to write into, and don't "
-            "assume an AGENTS.md convention that isn't there."
+            f"  {missing_bits}: {cause}. Bounded work only: answer, "
+            "inspect, or run the setup interview; don't invent a kb "
+            "location to write into, and don't assume an AGENTS.md "
+            "convention that isn't there."
         )
 
     for finding in attest_blocks(score.contracts):
