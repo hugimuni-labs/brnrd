@@ -15,6 +15,7 @@ import json
 import logging
 import re
 import time
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -26,7 +27,7 @@ from sqlalchemy import select  # noqa: E402
 
 from brnrd import create_app, inbox as inbox_service  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
-from brnrd.models import ChannelRoute, Event  # noqa: E402
+from brnrd.models import ChannelRoute, Event, TgPairCode  # noqa: E402
 from brnrd.platforms import whatsapp as wa  # noqa: E402
 from _helpers import brnrd_account_headers  # noqa: E402
 
@@ -320,6 +321,27 @@ def test_unknown_shaped_code_reports_invalid(env):
     r = _post(client, _message("15551234567", "TG-ZZZZ"))
     assert r.status_code == 200
     assert sends and "Invalid or expired" in sends[0]["text"]
+
+
+def test_expired_pair_code_names_the_retry_command(env):
+    """#1282 — same fix as the Telegram `/start` path: a code that genuinely
+    existed and expired (600s TTL) gets a specific, actionable message
+    instead of the generic "Invalid or expired pair code." text."""
+    app, client, sends = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    code = _pair_code(client, acc, rid)
+    with app.state.SessionLocal() as db:
+        pc = db.execute(select(TgPairCode).where(TgPairCode.code == code)).scalar_one()
+        pc.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        db.commit()
+
+    r = _post(client, _message("15551234567", code))
+    assert r.status_code == 200
+    assert sends
+    assert "expired" in sends[0]["text"]
+    assert "account connect" in sends[0]["text"]
+    assert sends[0]["text"] != "Invalid or expired pair code."
 
 
 # ── enqueue + response forwarding ──────────────────────────────────────
