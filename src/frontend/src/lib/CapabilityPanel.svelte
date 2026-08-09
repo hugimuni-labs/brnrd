@@ -124,22 +124,48 @@
 		return subject ? `machine #${subject.slice(-6)}` : `machine ${index + 1}`;
 	}
 
+	// #1268: the one place a group's `daemon-live` row is looked up. Both
+	// `machineLiveTell` (the header tell) and `machineIsGhost` (#1275, the
+	// collapse decision) read this same row rather than each re-deriving
+	// liveness their own way — one fact, one owner. `null` when the group
+	// has no `daemon-live` row at all (shouldn't happen for a real daemon —
+	// `cli-installed` always seeds one — but a catalog row can't assume its
+	// neighbour is present).
+	function machineLiveRow(g: Group): Row | null {
+		return g.rows.find((r) => r.cap.id === 'daemon-live') ?? null;
+	}
+
 	// #1268 maintainer follow-up: "multiple hex-id machines render with no
 	// tell for which is real vs ghost." A machine group's own `daemon-live`
 	// row already carries the answer (lit = inside the 2-minute heartbeat
 	// window, `evidence.as_of` = the last touch) — it was just buried among
 	// the group's other rows instead of riding the group's own header,
 	// which is the one line a human scanning several machines actually
-	// reads first. `null` when the group has no `daemon-live` row at all
-	// (shouldn't happen for a real daemon — `cli-installed` always seeds
-	// one — but a catalog row can't assume its neighbour is present).
+	// reads first.
 	function machineLiveTell(g: Group): string | null {
-		const live = g.rows.find((r) => r.cap.id === 'daemon-live');
+		const live = machineLiveRow(g);
 		if (!live) return null;
 		if (live.cap.state === 'lit') return 'live';
 		// `ageSince` already appends its own "ago" (`"3h 12m ago"`).
 		const age = live.cap.evidence.as_of ? ageSince(live.cap.evidence.as_of, now) : null;
 		return age ? `last seen ${age}` : 'not live';
+	}
+
+	// #1275: liveness outranks lit-ness in the collapse decision. A dead
+	// machine can never be fully lit (`daemon-live` is dark the moment the
+	// daemon stops reporting), so keying the fold on "every row lit" made a
+	// ghost machine — the one with the *least* information — render the
+	// *most* rows: 3+ full capability lines plus an "unobservable" count,
+	// expanded forever. `daemon-live`'s own `state` already carries the
+	// server's staleness verdict (`capabilities.py::_detect_daemon_live`,
+	// `_DAEMON_ONLINE_AFTER` = 2 minutes) — that horizon is consulted here,
+	// never re-derived from `evidence.as_of` client-side, so there is one
+	// clock for "is this machine alive" and the frontend is not it. `false`
+	// (never fold) when the group carries no `daemon-live` row — no signal
+	// to fold on beats a false positive.
+	function machineIsGhost(g: Group): boolean {
+		const live = machineLiveRow(g);
+		return live !== null && live.cap.state !== 'lit';
 	}
 
 	// #1268: expanded-group state for "collapse the lit" — a key from
@@ -404,7 +430,7 @@
 	</li>
 {/snippet}
 
-{#snippet groupRows(g: Group)}
+{#snippet groupRows(g: Group, ghost: boolean = false)}
 	<!-- #1268 mechanisms 1+2, both scoped to one group's own row list:
 	     - "collapse the lit": every row in this group is `lit` ⇒ one quiet
 	       "all N lit" line, expandable on press, instead of N rows a mature
@@ -412,22 +438,37 @@
 	     - "quiet the unobservable": unobservable rows never render their own
 	       boilerplate line or act affordance (an act on a lamp that *cannot
 	       be measured* invites a result the board can't show) — collapsed to
-	       one count per group instead, alongside whatever did render. -->
+	       one count per group instead, alongside whatever did render.
+	     #1275 adds a third, higher-priority reason to fold: `ghost` (a
+	     machine past #1268's staleness horizon — see `machineIsGhost`)
+	     collapses even though a dead machine can never satisfy `allLit`
+	     (its own `daemon-live` row is dark by construction). Only machine
+	     groups ever pass `ghost=true`; account/repo groups keep the
+	     lit-only rule unchanged. -->
 	{@const visible = g.rows.filter((r) => r.cap.state !== 'unobservable')}
 	{@const unobservable = g.rows.filter((r) => r.cap.state === 'unobservable')}
 	{@const allLit = g.rows.length > 0 && g.rows.every((r) => r.cap.state === 'lit')}
-	{#if allLit && !expanded.has(g.key)}
+	{@const collapsible = allLit || ghost}
+	{#if collapsible && !expanded.has(g.key)}
 		<button
 			type="button"
 			class="mt-1 flex cursor-pointer items-center gap-2 py-1 font-mono text-[10px] text-ink-mute hover:text-ink-quiet"
 			onclick={() => toggleExpanded(g.key)}
 		>
-			<span
-				class="inline-block h-2 w-2 shrink-0 rounded-full"
-				style={statusDotStyle('burning', STATUS_GOOD)}
-				aria-hidden="true"
-			></span>
-			all {g.rows.length} lit
+			{#if ghost}
+				<span
+					class="inline-block h-2 w-2 shrink-0 rounded-full border border-dashed border-stone-600"
+					aria-hidden="true"
+				></span>
+				not live — {g.rows.length} capabilit{g.rows.length === 1 ? 'y' : 'ies'} hidden ▸
+			{:else}
+				<span
+					class="inline-block h-2 w-2 shrink-0 rounded-full"
+					style={statusDotStyle('burning', STATUS_GOOD)}
+					aria-hidden="true"
+				></span>
+				all {g.rows.length} lit
+			{/if}
 		</button>
 	{:else}
 		<ul class="mt-1 flex flex-col divide-y divide-stone-900">
@@ -444,7 +485,7 @@
 				{unobservable.length} lamp{unobservable.length === 1 ? '' : 's'} unobservable from here
 			</p>
 		{/if}
-		{#if allLit}
+		{#if collapsible}
 			<button
 				type="button"
 				class="mt-1 cursor-pointer font-mono text-[9px] tracking-wide text-ink-mute uppercase hover:text-ink-quiet"
@@ -496,7 +537,7 @@
 					<p class="mt-2 font-mono text-[10px] text-stone-400">
 						{g.title}{#if tell}<span class="text-ink-mute"> · {tell}</span>{/if}
 					</p>
-					{@render groupRows(g)}
+					{@render groupRows(g, machineIsGhost(g))}
 				{/each}
 			</div>
 		{/if}
