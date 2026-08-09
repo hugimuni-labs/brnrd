@@ -1170,6 +1170,165 @@ def test_account_connect_no_service_keeps_foreground_escape(
     assert "brnrd up --foreground" in capsys.readouterr().out
 
 
+def test_account_connect_queues_greeting_when_a_door_is_configured(
+    monkeypatch, tmp_path, capsys,
+):
+    """#1244 fork 2: connect ends by queueing the first-wake greeting when
+    `AGENTS.md` is missing and a door that can actually carry it (here,
+    telegram, bound before this connect ran) is configured."""
+    from brr import protocol
+    from brr.gates import runtime as gate_runtime
+
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    monkeypatch.chdir(repo)
+    gate_runtime.save_state(repo / ".brr", "telegram", {"token": "t", "chat_id": 777})
+
+    monkeypatch.setattr("brr.gates.cloud.connect", lambda *_a, **_kw: {})
+    monkeypatch.setattr("brr.daemon_install.install", lambda **_kw: 0)
+
+    assert main(["account", "connect", "https://brnrd.example"]) is None
+
+    out = capsys.readouterr().out
+    assert "queued the setup interview" in out
+    assert "telegram" in out
+    pending = protocol.list_pending(repo / ".brr" / "inbox")
+    assert len(pending) == 1
+    assert pending[0]["source"] == "telegram"
+
+
+def test_account_connect_no_door_names_the_fallback(monkeypatch, tmp_path, capsys):
+    """No chat gate configured (only the just-completed cloud pairing, which
+    can't originate a message) ⇒ no greeting queued, and the reply names
+    both remaining paths (`brnrd init` at a terminal, `--defaults`)."""
+    from brr import protocol
+
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    monkeypatch.chdir(repo)
+
+    monkeypatch.setattr("brr.gates.cloud.connect", lambda *_a, **_kw: {})
+    monkeypatch.setattr("brr.daemon_install.install", lambda **_kw: 0)
+
+    assert main(["account", "connect", "https://brnrd.example"]) is None
+
+    out = capsys.readouterr().out
+    assert "no interview queued" in out
+    assert "--defaults" in out
+    assert "brnrd init" in out
+    assert protocol.list_pending(repo / ".brr" / "inbox") == []
+
+
+def test_account_connect_defaults_flag_writes_init_defaults_not_the_interview(
+    monkeypatch, tmp_path, capsys,
+):
+    """The signed opt-out rider: `--defaults` skips the interview and writes
+    today's `brnrd init` defaults directly — no greeting event queued."""
+    from brr import protocol
+
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    monkeypatch.chdir(repo)
+
+    monkeypatch.setattr("brr.gates.cloud.connect", lambda *_a, **_kw: {})
+    monkeypatch.setattr("brr.daemon_install.install", lambda **_kw: 0)
+    calls = []
+    monkeypatch.setattr(
+        "brr.adopt.init_repo",
+        lambda *a, **kw: calls.append((a, kw)),
+    )
+
+    assert main([
+        "account", "connect", "https://brnrd.example", "--defaults",
+    ]) is None
+
+    assert calls == [((), {"defaults": True})]
+    assert "writing brnrd init defaults" in capsys.readouterr().out
+    assert protocol.list_pending(repo / ".brr" / "inbox") == []
+
+
+def test_account_connect_skips_setup_entirely_once_agents_md_exists(
+    monkeypatch, tmp_path, capsys,
+):
+    """An already-initialized repo gets neither the greeting nor the
+    `--defaults` writer — connect is purely pairing there, unchanged."""
+    from brr import protocol
+
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    (repo / "AGENTS.md").write_text("# Project\n", encoding="utf-8")
+    monkeypatch.chdir(repo)
+
+    monkeypatch.setattr("brr.gates.cloud.connect", lambda *_a, **_kw: {})
+    monkeypatch.setattr("brr.daemon_install.install", lambda **_kw: 0)
+    monkeypatch.setattr(
+        "brr.adopt.init_repo",
+        lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError("init_repo must not run when AGENTS.md exists"),
+        ),
+    )
+
+    assert main(["account", "connect", "https://brnrd.example"]) is None
+
+    out = capsys.readouterr().out
+    assert "queued the setup interview" not in out
+    assert "no interview queued" not in out
+    assert protocol.list_pending(repo / ".brr" / "inbox") == []
+
+
+def test_account_connect_ctrl_c_during_pairing_exits_cleanly(
+    monkeypatch, tmp_path,
+):
+    """#1244 fork 2, signed rider: a ^C mid-pairing must not abandon the
+    terminal to a raw traceback — the daemon's default top-level handling
+    of an uncaught KeyboardInterrupt does exactly that (confirmed: this
+    test was red before the ``except KeyboardInterrupt`` clause landed,
+    propagating a bare traceback out of ``main()`` instead of a clean
+    ``SystemExit``)."""
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    monkeypatch.chdir(repo)
+
+    def _raise(*_a, **_kw):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("brr.gates.cloud.connect", _raise)
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(["account", "connect", "https://brnrd.example"])
+
+    message = str(excinfo.value)
+    assert "interrupted" in message
+    assert "pairing approval" in message
+    assert "account connect" in message
+
+
+def test_account_connect_ctrl_c_during_service_install_exits_cleanly(
+    monkeypatch, tmp_path,
+):
+    """Same contract, the other interactive stretch: pairing already
+    succeeded and was reported before the install's own linger prompt is
+    ever reached, so only the (independently re-runnable) install is what
+    the message names as cut off."""
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    monkeypatch.chdir(repo)
+
+    monkeypatch.setattr("brr.gates.cloud.connect", lambda *_a, **_kw: {})
+
+    def _raise(**_kw):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("brr.daemon_install.install", _raise)
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(["account", "connect", "https://brnrd.example"])
+
+    message = str(excinfo.value)
+    assert "interrupted" in message
+    assert "service install" in message
+
+
 def test_home_link_yes_asks_nothing(monkeypatch, tmp_path, capsys):
     """``--yes`` is the whole non-interactive contract: no confirm, no stdin read."""
     repo = tmp_path / "repo"

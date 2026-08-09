@@ -118,6 +118,40 @@ def test_git_init_if_needed(tmp_path, monkeypatch):
     assert (tmp_path / ".git").exists()
 
 
+def test_init_repo_defaults_skips_the_wake_even_when_it_would_be_available(
+    tmp_path, monkeypatch,
+):
+    """``defaults=True`` (#1244 fork 2's ``brnrd account connect --defaults``
+    opt-out) takes the headless path unconditionally — even when the wake
+    path would otherwise run (real TTY, playbook installed). The caller
+    already made this choice; re-deriving it from ``sys.stdin.isatty()``
+    would silently ignore an explicit ``--defaults`` on an interactive
+    terminal, which is the one case this flag exists for."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(adopt, "_detect_shells", lambda: [])
+    captured = []
+    _mock_runner_writing(monkeypatch, capture=captured)
+
+    from brr import init_wake
+
+    monkeypatch.setattr(
+        init_wake, "wake_path_available", lambda *a, **kw: (True, ""),
+    )
+
+    def _explode(*_a, **_kw):
+        raise AssertionError("run_init_wake must not be called under defaults=True")
+
+    monkeypatch.setattr(init_wake, "run_init_wake", _explode)
+
+    adopt.init_repo(defaults=True)
+
+    assert captured, "the headless runner path must still have run"
+    assert (repo / "AGENTS.md").exists()
+
+
 def test_missing_git_exits_with_install_recovery_instead_of_a_traceback(tmp_path):
     env = {
         **os.environ,
