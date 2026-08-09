@@ -124,6 +124,24 @@
 		return subject ? `machine #${subject.slice(-6)}` : `machine ${index + 1}`;
 	}
 
+	// #1268 maintainer follow-up: "multiple hex-id machines render with no
+	// tell for which is real vs ghost." A machine group's own `daemon-live`
+	// row already carries the answer (lit = inside the 2-minute heartbeat
+	// window, `evidence.as_of` = the last touch) — it was just buried among
+	// the group's other rows instead of riding the group's own header,
+	// which is the one line a human scanning several machines actually
+	// reads first. `null` when the group has no `daemon-live` row at all
+	// (shouldn't happen for a real daemon — `cli-installed` always seeds
+	// one — but a catalog row can't assume its neighbour is present).
+	function machineLiveTell(g: Group): string | null {
+		const live = g.rows.find((r) => r.cap.id === 'daemon-live');
+		if (!live) return null;
+		if (live.cap.state === 'lit') return 'live';
+		// `ageSince` already appends its own "ago" (`"3h 12m ago"`).
+		const age = live.cap.evidence.as_of ? ageSince(live.cap.evidence.as_of, now) : null;
+		return age ? `last seen ${age}` : 'not live';
+	}
+
 	// #1268: expanded-group state for "collapse the lit" — a key from
 	// `Group.key` that the resident has pressed open this session. Session-
 	// scoped only, same shape as `seenLit`/`regressed` below: nothing here
@@ -474,7 +492,10 @@
 			<div class="mt-3">
 				<p class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase">machine</p>
 				{#each groups.machine as g (g.key)}
-					<p class="mt-2 font-mono text-[10px] text-stone-400">{g.title}</p>
+					{@const tell = machineLiveTell(g)}
+					<p class="mt-2 font-mono text-[10px] text-stone-400">
+						{g.title}{#if tell}<span class="text-ink-mute"> · {tell}</span>{/if}
+					</p>
 					{@render groupRows(g)}
 				{/each}
 			</div>
