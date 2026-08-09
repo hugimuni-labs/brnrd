@@ -186,7 +186,15 @@ def _hub_signature_ok(secret: str, body: bytes, signature: str | None) -> bool:
     if not secret or not signature:
         return False
     expected = "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(signature, expected)
+    try:
+        return hmac.compare_digest(signature, expected)
+    except TypeError:
+        # `hmac.compare_digest` raises TypeError instead of returning False
+        # when a str argument carries non-ASCII (e.g. raw latin-1) code
+        # points — an attacker-controlled header can trigger it. Fail
+        # closed exactly like any other bad signature, never an unhandled
+        # 500 (H-4).
+        return False
 
 
 def _coerce_int(value: object) -> int | None:
@@ -818,10 +826,21 @@ async def whatsapp_webhook(request: Request, x_hub_signature_256: str | None = H
     return {"ok": True}
 
 
+def _telegram_secret_ok(settings, header_value: str | None) -> bool:
+    if not settings.telegram_webhook_secret:
+        return False
+    try:
+        return hmac.compare_digest(header_value or "", settings.telegram_webhook_secret)
+    except TypeError:
+        # Same non-ASCII-header TypeError as `_hub_signature_ok` — fail
+        # closed rather than 500 (H-4).
+        return False
+
+
 @router.post("/telegram")
 def telegram_webhook(request: Request, payload: dict, x_telegram_bot_api_secret_token: str | None = Header(default=None)):
     settings = request.app.state.settings
-    if not settings.telegram_webhook_secret or not hmac.compare_digest(x_telegram_bot_api_secret_token or "", settings.telegram_webhook_secret):
+    if not _telegram_secret_ok(settings, x_telegram_bot_api_secret_token):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="bad secret")
     # #409 — a group->supergroup migration service message carries no
     # text, so `parse_update` would already drop it silently; check for it

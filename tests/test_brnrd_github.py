@@ -496,6 +496,30 @@ def test_github_webhook_rejects_bad_signature(env):
     assert r.status_code == 403
 
 
+def test_github_webhook_fails_closed_on_a_non_ascii_signature_header(env):
+    """H-4: `hmac.compare_digest` raises `TypeError` instead of returning
+    `False` when a `str` argument carries non-ASCII code points — reachable
+    here because the header is attacker-controlled. Before the fix this
+    header turned a should-be-403 into an unhandled 500; confirm it still
+    reads as a bad signature. Headers are sent as raw (bytes, bytes) pairs
+    because httpx's str header path insists on ASCII and would reject the
+    payload before it ever reached the server — the wire itself has no such
+    restriction, so this is the realistic attacker shape, not a test
+    artifact."""
+    _, client, _ = env
+    raw = json.dumps(_payload(), separators=(",", ":")).encode("utf-8")
+    r = client.post(
+        "/v1/webhooks/github",
+        content=raw,
+        headers=[
+            (b"Content-Type", b"application/json"),
+            (b"X-GitHub-Event", b"issue_comment"),
+            (b"X-Hub-Signature-256", b"sha256=\xff\xfe not-hex"),
+        ],
+    )
+    assert r.status_code == 403, r.text
+
+
 def test_unbound_repo_gets_setup_comment_without_enqueue(env):
     app, client, posts = env
 
@@ -2098,6 +2122,35 @@ def test_app_webhook_refuses_a_bad_signature_when_a_secret_is_configured(monkeyp
             "X-Hub-Signature-256": _app_signature("wrong-secret", body),
             "Content-Type": "application/json",
         },
+    )
+
+    assert r.status_code == 403, r.text
+    assert called == []
+
+
+def test_app_webhook_fails_closed_on_a_non_ascii_signature_header(monkeypatch):
+    """H-4, App-webhook sibling of the same fix in `routers/webhooks.py`:
+    `_signature_ok` (`routers/github_app.py`) hit the identical
+    `hmac.compare_digest` `TypeError` on a non-ASCII header — an unhandled
+    500 instead of the 403 every other malformed-signature case here gets.
+    Raw (bytes, bytes) headers, same reasoning as the `webhooks.py` sibling
+    test: httpx's str header path is ASCII-only, the wire is not."""
+    called = []
+    monkeypatch.setattr(
+        "brnrd.routers.github_app.sync_installation",
+        lambda *a, **k: called.append(a),
+    )
+    _app, client, _ = _app_env(monkeypatch)
+    body = _app_webhook_body()
+
+    r = client.post(
+        "/api/github/webhook",
+        content=body,
+        headers=[
+            (b"X-GitHub-Event", b"installation"),
+            (b"X-Hub-Signature-256", b"sha256=\xff\xfe not-hex"),
+            (b"Content-Type", b"application/json"),
+        ],
     )
 
     assert r.status_code == 403, r.text
