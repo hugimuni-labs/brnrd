@@ -51,11 +51,22 @@ where you want the change visible immediately.
 
 ## `worktree`
 
-The daemon creates a git worktree under `.brr/worktrees/<run-id>/`
+The daemon creates a fresh tree under `.brr/worktrees/<run-id>/`
 on a fresh `brr/<run-id>` branch sprouted from the resolved seed ref.
-The runner cwd points at the worktree; your main checkout is
-untouched. After a successful run, the daemon inspects the worktree's
-git state and records one of four `publish_status` outcomes:
+The runner cwd points there; your main checkout is untouched.
+
+**A dispatched strand/worker gets its own `.git`** (`git clone --shared`
+from your checkout — cheap, objects still borrowed via
+`.git/objects/info/alternates` rather than copied), not a linked `git
+worktree`. A linked worktree shares `.git/config`, `refs/stash`, and the
+index namespace with your checkout by construction — a strand's own `git
+config` write or `git stash` used to land there instead of staying local
+(#746). Your own directly-dispatched `worktree`-env runs keep the linked
+worktree unchanged. Either shape publishes and tears down the same way
+described below; the difference is contained to how the tree is built.
+
+After a successful run, the daemon inspects the tree's git state and
+records one of four `publish_status` outcomes:
 
 - `ready` — the agent committed on a branch. `publish_branch` records
   what to ship (the original `brr/<run-id>` if the agent stayed put,
