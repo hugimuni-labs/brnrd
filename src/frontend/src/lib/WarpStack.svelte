@@ -6,6 +6,7 @@
 	import { ignitionPayload, itemRepos, type WarpLayer, type WarpHeat } from './warp';
 	import type { AuthoredBackchannelItem } from './backchannelPage';
 	import { runNodeHref } from './runNode';
+	import type { ResolvedPathname } from '$app/types';
 
 	interface Props {
 		layers: WarpLayer[];
@@ -71,7 +72,7 @@
 	// fact, not a guess, and the taken run node is one hop away. Two or more
 	// repos (or none) is the ambiguous case every other ref on this surface
 	// renders as plain text, so this does too, rather than pick one.
-	function takenHref(item: AuthoredBackchannelItem, runId: string): string | null {
+	function takenHref(item: AuthoredBackchannelItem, runId: string): ResolvedPathname | null {
 		const repos = itemRepos(item);
 		return repos.length === 1 ? runNodeHref(repos[0], runId) : null;
 	}

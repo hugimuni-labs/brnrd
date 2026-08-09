@@ -354,4 +354,3 @@ export function heartbeatLevel(
 	if (Number.isNaN(seen)) return 'unknown';
 	return now - seen > STALL_AFTER_MS ? 'stalling' : 'running';
 }
-
