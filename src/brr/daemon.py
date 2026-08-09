@@ -3417,6 +3417,34 @@ def _run_worker(
         # the filesystem lane; git's notion of "which working tree am I in" is
         # just cwd, and cwd is not contained.
         env.update(_child_git_pin(task, run_root))
+        # #1184: the pin above closes the *git* half of the same hazard —
+        # `Edit`/`Write` take a raw absolute path with no pin at all, and the
+        # strand worktree is a *child directory* of this same host checkout
+        # (`<repo_root>/.brr/worktrees/<run-id>/…`), so the host path is a
+        # strict prefix of the strand's own and the shape a model completes
+        # when it reaches for "the absolute path to X". `repo_root` is the
+        # host checkout `_run_worker` was dispatched against — armed only
+        # when the git pin actually pinned (``GIT_WORK_TREE`` present),
+        # the same fact-based gating `_child_git_pin` itself uses: no readable
+        # git dir ⇒ nothing to compare a write path against, same as the pin's
+        # own degrade.
+        #
+        # `BRR_WORK_TREE` duplicates `GIT_WORK_TREE` under the `BRR_` namespace
+        # deliberately, rather than the PreToolUse hook reading `GIT_WORK_TREE`
+        # itself: every `brnrd hook <phase>` invocation runs through
+        # `cli.main()`, and its first act — `_drop_inherited_git_pin` — pops
+        # `GIT_DIR`/`GIT_WORK_TREE` from `os.environ` before anything else runs
+        # (so brnrd's *own* git calls are never blinded by the pin they gave
+        # the strand). That scrub is correct and load-bearing for every other
+        # `brnrd` command, but it also means the hook subprocess this predicate
+        # runs in can never see `GIT_WORK_TREE` — a `BRR_`-namespaced copy is
+        # the only way `hooks._rooted_write_neutral` (see `HookContext`) gets
+        # to know the boundary at all. Caught live driving this guard end to
+        # end rather than only through `hooks.run_hook` unit tests, which
+        # construct their env dict by hand and so never exercise the scrub.
+        if "GIT_WORK_TREE" in env:
+            env["BRR_HOST_ROOT"] = str(repo_root)
+            env["BRR_WORK_TREE"] = env["GIT_WORK_TREE"]
         # The closeout guard (`hooks.next_move`, default off). Armed per-run via env
         # so the hook subprocess needs no config of its own. Default-off is the
         # control arm, not timidity: `next_move` failed 0/6 across *both* arms of the
