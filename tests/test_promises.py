@@ -21,11 +21,34 @@ from brr import cli, hooks, promises
 
 
 def test_promisable_matches_the_relics_vocabulary():
-    """`promises.PROMISABLE` is spelled twice; a comment cannot hold that."""
+    """`promises.PROMISABLE` is spelled twice; a comment cannot hold that.
+
+    Extended for #1060: the two blueprint-side sets agreeing with each
+    other was never the whole contract — every promisable kind that the
+    daemon does *not* already derive on its own must also have a keepable
+    `brnrd relic <kind>` front door, or a promise of that kind sits owed
+    forever except by hand-writing `.relics.jsonl`. Walked off the live
+    parser, not a hand-listed set, so a subcommand rename or removal fails
+    this test the same way a vocabulary drift would.
+    """
+    import argparse
+
     from brr import relics
 
     assert set(promises.PROMISABLE) <= relics._LIVE_KINDS
     assert set(cli._PROMISABLE) == set(promises.PROMISABLE)
+
+    parser = cli.build_parser()
+    relic_parser = None
+    for action in parser._actions:  # noqa: SLF001 — argparse exposes no public walk
+        if isinstance(action, argparse._SubParsersAction):  # noqa: SLF001
+            relic_parser = action.choices.get("relic")
+            if relic_parser is not None:
+                break
+    assert relic_parser is not None, "brnrd relic did not parse"
+    relic_names = set(cli._subcommand_names(relic_parser))
+    hand_attested = set(cli._PROMISABLE) - cli._RELIC_AUTO_DERIVED
+    assert hand_attested <= relic_names
 
 
 def test_read_missing_file_is_an_empty_blueprint(tmp_path):
@@ -136,6 +159,37 @@ def test_cli_writes_a_row_and_reports_the_owed_total(monkeypatch, tmp_path, caps
         for line in (tmp_path / promises.CONTROL_NAME).read_text().splitlines()
     ]
     assert rows == [{"what": "pr", "count": 2}]
+
+
+# ── #1060: the new relic front doors actually keep what they promise ──────
+
+
+@pytest.mark.parametrize(
+    "kind, relic_argv",
+    [
+        ("comment", ["relic", "comment", "issue #903 — stale-open sweep"]),
+        ("message", ["relic", "message", "design fork answered", "--channel", "telegram"]),
+        ("file", ["relic", "file", "/tmp/report.md"]),
+    ],
+)
+def test_the_new_relic_front_doors_keep_a_promise_of_the_same_kind(
+    monkeypatch, tmp_path, capsys, kind, relic_argv,
+):
+    """Stage a promise, keep it through the new subcommand, watch `owed`
+    clear — the whole point of #1060 rather than just a parser existing."""
+    from brr import relics
+
+    assert _run_cli(monkeypatch, tmp_path, ["promise", kind]) == 0
+    assert f"owed 1" in capsys.readouterr().out
+
+    monkeypatch.setenv("BRR_OUTBOX_DIR", str(tmp_path))
+    assert cli.main(relic_argv) == 0
+
+    shipped = relics.counts_by_kind(relics.read_reported(tmp_path))
+    assert shipped.get(kind) == 1
+    plan = promises.blueprint(promises.read(tmp_path), shipped)
+    assert plan.owed == {}
+    assert plan.kept
 
 
 def test_cli_refuses_an_unpromisable_word_and_writes_nothing(
