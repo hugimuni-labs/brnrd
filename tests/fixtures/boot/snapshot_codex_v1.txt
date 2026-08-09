@@ -16,7 +16,7 @@ brnrd boot · score v1 · depth compact
 body requested: codex (codex / gpt-5.6-terra) · Tier 2 hooks installed
 host: daemon · worktree · resident-owned
 daemon image: not tracked · no fingerprint captured in this process
-  no AGENTS.md and kb yet: this repo hasn't run `brnrd init` — no shared contract, no committed/home kb. Bounded work only: answer, inspect, or run the setup interview; don't invent a kb location to write into, and don't assume an AGENTS.md convention that isn't there.
+  no AGENTS.md, no committed/home kb: this repo hasn't run `brnrd init` yet. Bounded work only: answer, inspect, or run the setup interview; don't invent a kb location to write into, and don't assume an AGENTS.md convention that isn't there.
 continuity: ✗ first wake
 attention: evt-fixture-0001
 posture: brr/fixture-branch · week 80% left (resets Sunday) · budget 120m
@@ -265,7 +265,7 @@ hooks:
 source manifest:
     block                                                           owner        authority      bytes  location / freshness
   -------------------------------------------------------------------------------------------------------------------------
-  ✓ Boot kernel (action-first score)                                daemon-live  runtime          915  computed
+  ✓ Boot kernel (action-first score)                                daemon-live  runtime          885  computed
   ✓ Operational preamble (run.md)                                   product      contract     [bytes]  {PACKAGE_ROOT}/prompts/run.md  [mtime]
   ✓ Working register (weave.md)                                     product      contract     [bytes]  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Working register, worked example (register.md)                  product      contract     [bytes]  {PACKAGE_ROOT}/prompts/register.md  [mtime]
