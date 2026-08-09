@@ -3,8 +3,9 @@
 	import { flip } from 'svelte/animate';
 	import MarkdownContent from './MarkdownContent.svelte';
 	import { STATUS_BURNING, STATUS_COOLING, STATUS_UNKNOWN, threadColor } from './statusPalette';
-	import { ignitionPayload, type WarpLayer, type WarpHeat } from './warp';
+	import { ignitionPayload, itemRepos, type WarpLayer, type WarpHeat } from './warp';
 	import type { AuthoredBackchannelItem } from './backchannelPage';
+	import { runNodeHref } from './runNode';
 
 	interface Props {
 		layers: WarpLayer[];
@@ -61,6 +62,18 @@
 
 	function emberItems(layer: WarpLayer): AuthoredBackchannelItem[] {
 		return layer.items.filter((item) => item.state === 'ember');
+	}
+
+	// Run provenance for `taken:` (#1257 point 2): the item grammar has no
+	// `run:` row and no repo of its own — a warp item is account-global by
+	// construction (warp.ts's own comment on `itemRepos`) — but when the
+	// item's *own* refs already name exactly one repo, that's a resolved
+	// fact, not a guess, and the taken run node is one hop away. Two or more
+	// repos (or none) is the ambiguous case every other ref on this surface
+	// renders as plain text, so this does too, rather than pick one.
+	function takenHref(item: AuthoredBackchannelItem, runId: string): string | null {
+		const repos = itemRepos(item);
+		return repos.length === 1 ? runNodeHref(repos[0], runId) : null;
 	}
 
 	// Copy-to-chat is the shipping ignition affordance (#876 deferred as a
@@ -189,7 +202,15 @@
 					     address — referencing, never re-listing (#972). -->
 					<div class="font-mono text-[10px]">
 						<span class="tracking-wide text-amber-300 uppercase">taken</span>
-						<span class="text-ink-quiet"> → {item.taken.join(' · ')}</span>
+						<span class="text-ink-quiet">
+							→
+							{#each item.taken as runId, i (i)}
+								{@const href = takenHref(item, runId)}
+								{#if i > 0}<span> · </span>{/if}
+								{#if href}<a class="text-sky-400 underline hover:text-sky-300" {href}>{runId}</a>
+								{:else}{runId}{/if}
+							{/each}
+						</span>
 					</div>
 				{/if}
 				{#if item.needs}
