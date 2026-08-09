@@ -26,7 +26,7 @@ from .. import (
     limits,
     stripe_api,
 )
-from ..models import Account, ChannelRoute, Repo, StripeEvent, TgPairCode
+from ..models import Account, ChannelRoute, Daemon, Repo, StripeEvent, TgPairCode
 from ..platforms import github as gh
 from ..platforms import telegram as tg
 from ..platforms import whatsapp as wa
@@ -66,6 +66,28 @@ _UNPAIRED_TEXT = "This chat is not paired to a brnrd account yet. Get a pair cod
 # sync in tone only.
 _WA_UNPAIRED_TEXT = "This chat is not paired to a brnrd account yet. Get a pair code from the dashboard, then text it here to pair."
 _UNBOUND_REPO_TEXT = "This repository is not connected to brnrd yet. Open brnrd.dev, connect the repo, then call the bot again."
+# #1282 — a genuinely-expired-but-otherwise-valid code gets this instead of
+# the generic unknown/consumed text below: the maintainer's own read of the
+# raw "stale code" complaint (see the issue's follow-up comment) was that an
+# expired TTL is expected mechanically, but the UX should name the fix.
+_PAIR_CODE_EXPIRED_TEXT = "This pairing code expired — run brnrd account connect again for a fresh one."
+# #1282 — a bound chat whose account has no daemon online at all must say
+# so, not go silent: the webhook still enqueues the message (a daemon that
+# comes online later drains it normally), this is only the honest reply the
+# sender was otherwise never getting. `brnrd account connect` both pairs and
+# installs/starts the persistent daemon service (see
+# `src/brr/docs/account-daemon.md`); the runner itself is autodetected
+# `claude` / `codex` on that machine's PATH, hence the doctor pointer. See
+# `_account_has_online_daemon` for why this checks liveness, not runner
+# reporting.
+_NO_RUNNER_TEXT = (
+    "I'm bound to this chat but no daemon of yours is online right now, so "
+    "nothing is listening for this message yet. Run brnrd account connect "
+    "on the machine you want to run agents from (it pairs and starts the "
+    "daemon), with claude or codex installed and logged in so it has a "
+    "runner to use — brnrd runners doctor checks that. Your message is "
+    "saved; I'll answer once a daemon is online."
+)
 _BACKLOG_GRACE = timedelta(seconds=1)
 
 
@@ -157,6 +179,46 @@ def _repo_list_text(repos: list[Repo], current_id: str | None) -> str:
 
 def _enqueue_telegram_event(db: Session, parsed: tg.ParsedMessage, *, repo_id: str, body: str) -> None:
     inbox_service.enqueue(db, repo_id=repo_id, body=body, source="telegram", reply_to={"platform": "telegram", "chat_id": parsed.chat_id, "topic_id": parsed.topic_id, "message_id": parsed.message_id, "user": parsed.user, "user_id": parsed.user_id, "username": parsed.username}, attachments=parsed.attachments or None)
+
+
+# #1282 — matches `capabilities._DAEMON_ONLINE_AFTER`. Duplicated rather
+# than imported: pulling in `capabilities.py` here for one threshold would
+# also pull its `_Context` account-wide query shape, built for the
+# dashboard's batched capability scan, not a per-message check on the
+# webhook's synchronous hot path.
+_DAEMON_ONLINE_AFTER = timedelta(minutes=2)
+
+
+def _account_has_online_daemon(db: Session, account_id: str) -> bool:
+    """True iff the account has a daemon with a fresh heartbeat.
+
+    Deliberately *not* the finer-grained "has a daemon that's online **and**
+    reported an unblocked runner" test `capabilities._detect_daemon_live` /
+    `_detect_runner_available` make for the dashboard's FUEL/MACHINE rows —
+    `Daemon.runners_json` / `quota_json` are last-write-wins mirrors behind
+    `publish_scope.lane_permitted(..., lane="runners"/"quota")`, and a fresh
+    repo's `publish_layers` defaults to `OFF` (`publish_scope.
+    DEFAULT_NEW_CONNECT`) until its owner opts in — `brnrd account connect`
+    never sends `publish_layers` today, so nearly every freshly-paired
+    account reads as "no quota report" whether or not a runner is actually
+    configured. Gating the nudge on that signal would misfire on almost
+    every account, working or not. `Daemon.online` / `last_seen_at` are set
+    directly by `POST /daemons/register` and every heartbeat-carrying PUT,
+    with no publish-scope gate, so "is anything listening at all" is the one
+    honest binary signal available here — narrower than the real ask (it
+    won't catch "online but genuinely has no runner"), but it's the
+    unambiguous, unmistakably-true half: nobody has ever picked this
+    account's queue up.
+    """
+    now = datetime.now(timezone.utc)
+    daemons = db.execute(select(Daemon).where(Daemon.account_id == account_id)).scalars().all()
+    for daemon in daemons:
+        last_seen = daemon.last_seen_at
+        if last_seen is not None and last_seen.tzinfo is None:
+            last_seen = last_seen.replace(tzinfo=timezone.utc)
+        if bool(daemon.online) and last_seen is not None and now - last_seen <= _DAEMON_ONLINE_AFTER:
+            return True
+    return False
 
 
 def _github_mention_candidates(settings) -> list[str]:
@@ -561,7 +623,13 @@ def _handle_start(db: Session, settings, parsed: tg.ParsedMessage, code: str) ->
     expires = pc.expires_at if pc else None
     if expires is not None and expires.tzinfo is None:
         expires = expires.replace(tzinfo=timezone.utc)
-    if pc is None or pc.consumed or (expires and expires < datetime.now(timezone.utc)):
+    if pc is not None and not pc.consumed and expires is not None and expires < datetime.now(timezone.utc):
+        # #1282 — a code that genuinely existed and genuinely expired earns
+        # the specific nudge; unknown/consumed codes fall through to the
+        # generic text below (no evidence a real code was ever typed there).
+        _reply(settings, parsed, _PAIR_CODE_EXPIRED_TEXT)
+        return
+    if pc is None or pc.consumed:
         _reply(settings, parsed, "Invalid or expired pair code.")
         return
     topic_id = _topic_key(parsed)
@@ -709,7 +777,12 @@ def _handle_whatsapp_pair(
     expires = pc.expires_at if pc else None
     if expires is not None and expires.tzinfo is None:
         expires = expires.replace(tzinfo=timezone.utc)
-    if pc is None or pc.consumed or (expires and expires < datetime.now(timezone.utc)):
+    if pc is not None and not pc.consumed and expires is not None and expires < datetime.now(timezone.utc):
+        # #1282 — see the matching Telegram branch in `_handle_start`.
+        _wa_audit(trace, "pair_rejected", "reason=expired")
+        _wa_reply(settings, parsed, _PAIR_CODE_EXPIRED_TEXT)
+        return
+    if pc is None or pc.consumed:
         _wa_audit(trace, "pair_rejected", "reason=invalid_or_expired")
         _wa_reply(settings, parsed, "Invalid or expired pair code.")
         return
@@ -913,6 +986,10 @@ def telegram_webhook(request: Request, payload: dict, x_telegram_bot_api_secret_
             _audit_reject(parsed, reason=f"limit:{decision.reason}")
             _reply(settings, parsed, decision.message)
             return {"ok": True}
+        if not _account_has_online_daemon(db, route.account_id):
+            # #1282 — still enqueue (a daemon that comes online later drains
+            # it normally); the nudge is additive, not a rejection.
+            _reply(settings, parsed, _NO_RUNNER_TEXT)
         _enqueue_telegram_event(db, parsed, repo_id=route.repo_id, body=body)
     return {"ok": True}
 
