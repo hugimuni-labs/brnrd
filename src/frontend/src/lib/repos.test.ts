@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { connectRepo, setPublishLayers, telegramPairLabel } from './repos.ts';
+import { connectRepo, setPublishLayers, splitPairingCommand, telegramPairLabel } from './repos.ts';
 
 function fakeFetch(status: number, body: unknown): typeof fetch {
 	const calls: { url: string; init?: RequestInit }[] = [];
@@ -48,6 +48,32 @@ test('setPublishLayers escapes the repo id as a path segment', async () => {
 	const impl = fakeFetch(200, { ok: true, notice: 'Publish scope updated.' });
 	await setPublishLayers('repo/../x', 'none', impl);
 	assert.equal(calls(impl)[0].url, '/v1/repos/repo%2F..%2Fx/publish-layers');
+});
+
+// #1277a: the maintainer's own report — a COPY button that hands over
+// `cd <repo>`, a literal placeholder no shell can run, along with the line
+// that actually is. `splitPairingCommand` is the one place either
+// ColdStart.svelte or /repos/+page.svelte parses the backend's two-line
+// spelling, so this pins the split itself rather than each caller's markup.
+test('splitPairingCommand separates the cd line from the runnable command', () => {
+	const parts = splitPairingCommand('cd <repo>\nbrnrd account connect https://brnrd.dev');
+	assert.equal(parts.setupLine, 'cd <repo>');
+	assert.equal(parts.runnable, 'brnrd account connect https://brnrd.dev');
+});
+
+test('splitPairingCommand carries a real checkout name through unchanged', () => {
+	const parts = splitPairingCommand('cd brr\nbrnrd account connect https://brnrd.dev');
+	assert.equal(parts.setupLine, 'cd brr');
+	assert.equal(parts.runnable, 'brnrd account connect https://brnrd.dev');
+});
+
+// A single-line command (today's shape never sends one, but the parser must
+// not invent a blank prose line for a string that was already whole) is
+// entirely runnable — nothing to split out.
+test('splitPairingCommand treats a single-line command as entirely runnable', () => {
+	const parts = splitPairingCommand('brnrd account connect https://brnrd.dev');
+	assert.equal(parts.setupLine, null);
+	assert.equal(parts.runnable, 'brnrd account connect https://brnrd.dev');
 });
 
 // #885: "pair telegram button is always there no matter if it paired or
