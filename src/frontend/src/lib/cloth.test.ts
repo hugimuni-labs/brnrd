@@ -4,7 +4,6 @@ import test from 'node:test';
 import {
 	CLOTH_ROOT_CAP,
 	CLOTH_WINDOW_MS,
-	clothAgeLabel,
 	clothSelvage,
 	groupClothDays,
 	inClothWindow,
@@ -155,7 +154,13 @@ test('curated line: name, repo, chips, duration, age, node link', () => {
 	);
 	assert.equal(line.bare, false);
 	assert.equal(line.duration, '12m 34s');
-	assert.equal(line.age, '3h 0m ago');
+	// Past the 1h relative window, `age` is the viewer-local clock reading
+	// `ageLabel` (runLedger.ts, #1256) produces for the same instant — same
+	// day here, so no date prefix.
+	assert.equal(
+		line.age,
+		new Date(NOW - 3 * HOUR).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+	);
 	assert.equal(line.href, '/runs/acme__site/run-1');
 });
 
@@ -681,15 +686,14 @@ test('lens: strands weave as roots once the lens removes their parents', () => {
 	);
 });
 
-test('produce chips and age labels speak the loom grammar', () => {
+test('produce chips speak the loom grammar', () => {
 	assert.deepEqual(produceChips([]), []);
 	assert.deepEqual(
 		produceChips([{ kind: 'kb' }, { kind: 'kb_page' }]).map((chip) => chip.label),
 		['2kb']
 	);
-	assert.equal(clothAgeLabel(5 * 60 * 1000), '5m ago');
-	assert.equal(clothAgeLabel(3 * HOUR + 12 * 60 * 1000), '3h 12m ago');
-	assert.equal(clothAgeLabel(2 * DAY + 5 * HOUR), '2d 5h ago');
+	// Age-label rendering is `ageLabel`'s own grammar now (#1256), one shared
+	// formatter for every relative-age surface — see runLedger.test.ts.
 });
 
 test("weld: a run's item relics surface as addresses on its line — referencing, never re-listing", () => {

@@ -34,7 +34,6 @@
 	} from '$lib/runners';
 	import {
 		LiveRunsAuthError,
-		ageSince,
 		fetchLiveRuns,
 		heartbeatLevel,
 		liveRunDisplayName,
@@ -51,7 +50,7 @@
 		runNodeHref,
 		type NodeIdentity
 	} from '$lib/runNode';
-	import { durationLabel } from '$lib/runLedger';
+	import { ageSince, durationLabel } from '$lib/runLedger';
 	import ScheduleLane from '$lib/ScheduleLane.svelte';
 	import {
 		ScheduledWakesAuthError,

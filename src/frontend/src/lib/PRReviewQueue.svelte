@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { fade, fly } from 'svelte/transition';
 	import { flip } from 'svelte/animate';
-	import { ageSinceCreated, type PRReviewItem } from './prReviewQueue';
+	import type { PRReviewItem } from './prReviewQueue';
+	import { ageSince } from './runLedger';
 	import { STATUS_GOOD, STATUS_WARN, STATUS_UNKNOWN } from './statusPalette';
 	import WithheldNotice from './WithheldNotice.svelte';
 	import type { WithheldLane } from './withheld';
@@ -76,7 +77,7 @@
 							<span class="uppercase tracking-wide" style={`color: ${statusColor}`}
 								>{statusLabel}</span
 							>
-							<span class="text-ink-quiet">{ageSinceCreated(pr.created_at, now) ?? ''}</span>
+							<span class="text-ink-quiet">{ageSince(pr.created_at, now) ?? ''}</span>
 						</span>
 					</div>
 				</li>
