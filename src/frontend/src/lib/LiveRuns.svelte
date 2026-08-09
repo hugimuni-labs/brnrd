@@ -295,13 +295,24 @@
 								</p>
 							{/if}
 							<div class="grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[10px] text-ink-quiet">
-								<span>run: {run.run_id || run.id}</span>
+								<span>
+									run: {#if run.run_id}<a
+											class="text-amber-300 underline decoration-amber-900 hover:text-amber-100"
+											href={runNodeHref(run.repo_label, run.run_id)}>{run.run_id}</a
+										>{:else}{run.id}{/if}
+								</span>
 								<span>runner: {runner ?? '—'}</span>
 								<span>phase: {run.phase ?? '—'}</span>
 								<span>started: {clock(run.started_at)}</span>
 								<span>heartbeat: {clock(run.last_seen)}</span>
 								{#if run.parent_run_id}
-									<span class="col-span-2">parent: {parentLabel ?? run.parent_run_id}</span>
+									<span class="col-span-2">
+										parent: <a
+											class="text-amber-300 underline decoration-amber-900 hover:text-amber-100"
+											href={runNodeHref(run.repo_label, run.parent_run_id)}
+											>{parentLabel ?? run.parent_run_id}</a
+										>
+									</span>
 								{/if}
 							</div>
 						</div>
