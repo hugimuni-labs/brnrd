@@ -294,6 +294,28 @@ def test_the_bot_identity_reaches_a_residents_environment_too(tmp_path, monkeypa
     assert seen.get("GIT_COMMITTER_EMAIL") == gitops.BOT_EMAIL
 
 
+# ── #1184: the same wiring, for the rooted-write guard's own env fact ────
+#
+# `_child_git_pin` closes the *git* half of the hazard; `BRR_HOST_ROOT` arms
+# the `pre-tool` hook's other half (`hooks._rooted_write_neutral`) with the
+# host checkout root a hook subprocess cannot otherwise derive — cwd and
+# `-C` are exactly what the git pin outranks. Driven end to end for the same
+# reason the pin's own wiring tests are: a guard's logic can be perfect and
+# unwired, and this repo's own lesson is that counting call sites overcounts
+# coverage.
+
+
+def test_host_root_reaches_a_strands_environment(tmp_path, monkeypatch):
+    task, seen, _run_root = _drive_run_worker(tmp_path, monkeypatch, strand=True)
+    assert task.meta.get("strand") is True
+    assert seen.get("BRR_HOST_ROOT") == str(tmp_path)
+
+
+def test_no_host_root_reaches_a_non_strand_runs_environment(tmp_path, monkeypatch):
+    _task, seen, _run_root = _drive_run_worker(tmp_path, monkeypatch, strand=False)
+    assert "BRR_HOST_ROOT" not in seen
+
+
 def test_the_host_baseline_is_recorded_by_the_dispatch_path(tmp_path, monkeypatch):
     """Half 2's dispatch-time arm, wired rather than called directly."""
     task, _seen, _run_root = _drive_run_worker(tmp_path, monkeypatch, strand=True)

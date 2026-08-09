@@ -1348,9 +1348,9 @@ def test_install_hook_config_writes_wellformed_claude_settings(tmp_path):
     assert path == tmp_path / ".claude" / "settings.local.json"
     settings = json.loads(path.read_text(encoding="utf-8"))
     hook_block = settings["hooks"]
-    # All three abstract phases map to their native claude event names,
-    # each invoking ``brnrd hook <phase>`` — the keystone the wiring relies on.
-    assert set(hook_block) == {"PostToolBatch", "Stop", "SessionStart"}
+    # All four abstract phases map to their native claude event names, each
+    # invoking ``brnrd hook <phase>`` — the keystone the wiring relies on.
+    assert set(hook_block) == {"PostToolBatch", "Stop", "SessionStart", "PreToolUse"}
     cmds = {
         name: entries[0]["hooks"][0]["command"]
         for name, entries in hook_block.items()
@@ -1358,6 +1358,13 @@ def test_install_hook_config_writes_wellformed_claude_settings(tmp_path):
     assert cmds["PostToolBatch"] == "brnrd hook post-tool"
     assert cmds["Stop"] == "brnrd hook stop"
     assert cmds["SessionStart"] == "brnrd hook session-start"
+    assert cmds["PreToolUse"] == "brnrd hook pre-tool"
+    # #1184: unlike the other three (unconditional), the rooted-write guard
+    # is matcher-scoped to the two tools that take a raw file path — every
+    # other tool call never reaches ``brnrd hook pre-tool`` at all.
+    assert hook_block["PreToolUse"][0]["matcher"] == "Edit|Write"
+    for name in ("PostToolBatch", "Stop", "SessionStart"):
+        assert "matcher" not in hook_block[name][0]
     # statusLine is a TUI footer and does not fire under daemon --print runs,
     # so brr must not register a dead collector by default.
     assert "statusLine" not in settings
@@ -1396,6 +1403,14 @@ def test_install_hook_config_merges_and_preserves_user_keys(tmp_path):
     # ...a user hook brr doesn't own is preserved alongside brr's phases.
     assert "PreToolUse" in settings["hooks"]
     assert "PostToolBatch" in settings["hooks"]
+    # #1184: PreToolUse is the one event brr merges additively rather than
+    # replacing outright (the other three are brr's alone) — the user's own
+    # entry survives verbatim, first, with brr's rooted-write guard appended
+    # after it, so both fire rather than one silently losing the other.
+    pre_tool = settings["hooks"]["PreToolUse"]
+    assert pre_tool[0] == {"hooks": []}
+    assert pre_tool[-1]["hooks"][0]["command"] == "brnrd hook pre-tool"
+    assert pre_tool[-1]["matcher"] == "Edit|Write"
 
 
 def test_install_hook_config_unsupported_flavour_is_noop(tmp_path):
@@ -1416,6 +1431,176 @@ def test_hook_capability_precheck(tmp_path, monkeypatch):
     # brnrd not invocable → degrade.
     monkeypatch.setattr(hooks.shutil, "which", lambda _name: None)
     assert hooks.hook_capability("claude", tmp_path) is False
+
+
+# ── The rooted-write guard (#1184) ────────────────────────────────────────
+#
+# `daemon._child_git_pin` (#703) pins a strand's *git* to its own worktree,
+# but `Edit`/`Write` never touch git — they take a raw absolute path. This
+# `pre-tool` phase closes that gap: refuse a write path rooted in the host
+# checkout (``BRR_HOST_ROOT``) but outside the strand's own worktree
+# (``GIT_WORK_TREE`` — the same variable the git pin already exports).
+
+
+def _rooted_env(tmp_path, *, host_root, work_tree, flavour="claude"):
+    env = _env(tmp_path, flavour)
+    env["BRR_HOST_ROOT"] = str(host_root)
+    env["GIT_WORK_TREE"] = str(work_tree)
+    return env
+
+
+def _pre_tool_stdin(tool_name, file_path, **extra):
+    payload = {"tool_name": tool_name, "tool_input": {"file_path": file_path, **extra}}
+    return json.dumps(payload)
+
+
+def _rooted_layout(tmp_path):
+    host = tmp_path / "host"
+    work_tree = host / ".brr" / "worktrees" / "run-1"
+    work_tree.mkdir(parents=True)
+    return host, work_tree
+
+
+def test_pre_tool_is_a_noop_when_unarmed(tmp_path):
+    # No BRR_HOST_ROOT / GIT_WORK_TREE at all — a resident, a `host` run, or
+    # a strand whose git pin found no readable git dir (`_child_git_pin`'s
+    # own degrade). Nothing to compare a write path against is not evidence
+    # of anything, so this never blocks.
+    out, code = hooks.run_hook(
+        hooks.PHASE_PRE_TOOL,
+        _pre_tool_stdin("Write", "/host/checkout/daemon.py"),
+        _env(tmp_path),
+    )
+    assert code == 0
+    assert out == {}
+
+
+def test_pre_tool_refuses_a_write_rooted_in_host_outside_worktree(tmp_path):
+    host, work_tree = _rooted_layout(tmp_path)
+    env = _rooted_env(tmp_path, host_root=host, work_tree=work_tree)
+    out, code = hooks.run_hook(
+        hooks.PHASE_PRE_TOOL,
+        _pre_tool_stdin("Write", str(host / "daemon.py")),
+        env,
+    )
+    assert code == 0
+    deny = out["hookSpecificOutput"]
+    assert deny["hookEventName"] == "PreToolUse"
+    assert deny["permissionDecision"] == "deny"
+    assert "#1184" in deny["permissionDecisionReason"]
+    assert str(host) in deny["permissionDecisionReason"]
+    assert str(work_tree) in deny["permissionDecisionReason"]
+
+
+def test_pre_tool_refuses_edit_the_same_as_write(tmp_path):
+    host, work_tree = _rooted_layout(tmp_path)
+    env = _rooted_env(tmp_path, host_root=host, work_tree=work_tree)
+    out, code = hooks.run_hook(
+        hooks.PHASE_PRE_TOOL,
+        _pre_tool_stdin("Edit", str(host / "daemon.py")),
+        env,
+    )
+    assert code == 0
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_pre_tool_allows_a_write_rooted_in_the_worktree(tmp_path):
+    host, work_tree = _rooted_layout(tmp_path)
+    env = _rooted_env(tmp_path, host_root=host, work_tree=work_tree)
+    out, code = hooks.run_hook(
+        hooks.PHASE_PRE_TOOL,
+        _pre_tool_stdin("Write", str(work_tree / "daemon.py")),
+        env,
+    )
+    assert code == 0
+    assert out == {}
+
+
+def test_pre_tool_allows_a_write_to_the_worktree_root_itself(tmp_path):
+    # The boundary case: the path *is* GIT_WORK_TREE, not merely under it.
+    host, work_tree = _rooted_layout(tmp_path)
+    env = _rooted_env(tmp_path, host_root=host, work_tree=work_tree)
+    out, code = hooks.run_hook(
+        hooks.PHASE_PRE_TOOL,
+        _pre_tool_stdin("Write", str(work_tree)),
+        env,
+    )
+    assert code == 0
+    assert out == {}
+
+
+def test_pre_tool_ignores_tools_other_than_edit_write(tmp_path):
+    host, work_tree = _rooted_layout(tmp_path)
+    env = _rooted_env(tmp_path, host_root=host, work_tree=work_tree)
+    out, code = hooks.run_hook(
+        hooks.PHASE_PRE_TOOL,
+        _pre_tool_stdin("Read", str(host / "daemon.py")),
+        env,
+    )
+    assert code == 0
+    assert out == {}
+
+
+def test_pre_tool_ignores_a_relative_path(tmp_path):
+    # Rootedness is the discriminator, but only an absolute path can be
+    # rooted anywhere in particular — a relative path resolves against the
+    # runner's own (pinned) cwd, which this predicate cannot second-guess.
+    host, work_tree = _rooted_layout(tmp_path)
+    env = _rooted_env(tmp_path, host_root=host, work_tree=work_tree)
+    out, code = hooks.run_hook(
+        hooks.PHASE_PRE_TOOL,
+        _pre_tool_stdin("Write", "daemon.py"),
+        env,
+    )
+    assert code == 0
+    assert out == {}
+
+
+def test_pre_tool_ignores_a_path_outside_the_host_checkout_entirely(tmp_path):
+    # The documented escape hatch (a strand driving a scratch tree via
+    # `env -u GIT_DIR -u GIT_WORK_TREE`) is not this predicate's concern.
+    host, work_tree = _rooted_layout(tmp_path)
+    env = _rooted_env(tmp_path, host_root=host, work_tree=work_tree)
+    scratch = tmp_path / "other-repo" / "file.py"
+    out, code = hooks.run_hook(
+        hooks.PHASE_PRE_TOOL,
+        _pre_tool_stdin("Write", str(scratch)),
+        env,
+    )
+    assert code == 0
+    assert out == {}
+
+
+def test_pre_tool_block_is_silent_for_non_claude_flavours(tmp_path):
+    # Codex does not install this phase today — `codex_hook_args` covers
+    # only PostToolUse/Stop/SessionStart, the three its own hooks docs
+    # verify. Should a `pre-tool` fire reach here anyway, rendering must not
+    # assert an unverified block shape for it.
+    host, work_tree = _rooted_layout(tmp_path)
+    env = _rooted_env(tmp_path, host_root=host, work_tree=work_tree, flavour="codex")
+    out, code = hooks.run_hook(
+        hooks.PHASE_PRE_TOOL,
+        _pre_tool_stdin("Write", str(host / "daemon.py")),
+        env,
+    )
+    assert code == 0
+    assert out == {}
+
+
+def test_pre_tool_never_touches_the_portal_or_hook_state(tmp_path):
+    # A filesystem-safety predicate, not a correspondence one (contrast
+    # `subagent_neutral`, #1095): no portal read, no `.hook-state.json`
+    # write. Malformed/absent portal state must not change the verdict.
+    host, work_tree = _rooted_layout(tmp_path)
+    env = _rooted_env(tmp_path, host_root=host, work_tree=work_tree)
+    out, code = hooks.run_hook(
+        hooks.PHASE_PRE_TOOL,
+        _pre_tool_stdin("Write", str(host / "daemon.py")),
+        env,
+    )
+    assert code == 0
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert not (tmp_path / hooks.HOOK_STATE_NAME).exists()
 
 
 # ── The closeout guard (`hooks.next_move`) ───────────────────────────────
