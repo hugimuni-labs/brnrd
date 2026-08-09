@@ -257,6 +257,7 @@ hooks:
   post-tool: declared, installed; last-fired=not fired here
   stop: declared, installed; last-fired=not fired here
   session-start: declared, installed; last-fired=not fired here
+  pre-tool: declared, installed; last-fired=not fired here
 
 source manifest:
     block                                                           owner        authority      bytes  location / freshness

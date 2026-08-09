@@ -723,7 +723,10 @@ def build_parser() -> argparse.ArgumentParser:
     # and by Claude's TUI footer, never typed. They stay parseable and keep
     # their docstrings; they just don't spend a line of the operator's --help.
     p = sub.add_parser("hook")
-    p.add_argument("phase", help="abstract phase: post-tool | stop | session-start")
+    p.add_argument(
+        "phase",
+        help="abstract phase: post-tool | stop | session-start | pre-tool",
+    )
     p.set_defaults(func=cmd_hook)
 
     p = sub.add_parser("statusline")

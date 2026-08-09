@@ -769,6 +769,33 @@ class TestBootScore:
         assert by_name["session-start"].last_fired is None
         assert all(h.installed is True for h in score.hooks)
 
+    def test_pre_tool_reports_not_installed_under_codex(self, empty_repo):
+        """#1184: codex never gets `PreToolUse` wired — the score must say so.
+
+        `hooks_installed=True` is otherwise a single fact copied onto every
+        declared phase (the daemon's own approximation, unchanged by this
+        fix). It happened to be accurate for all three original phases under
+        both flavours; `pre-tool` is the first phase where it wouldn't be —
+        `codex_hook_args` carries no `PreToolUse` override, so a codex run
+        claiming it installed would be exactly the unbacked claim this
+        function otherwise refuses to make.
+        """
+        from brr.prompts import build_boot_score
+
+        codex_score = build_boot_score(
+            empty_repo, hooks_installed=True, runner_shell="codex",
+        )
+        by_name = {h.name: h for h in codex_score.hooks}
+        assert by_name["pre-tool"].installed is False
+        assert by_name["post-tool"].installed is True
+        assert by_name["stop"].installed is True
+        assert by_name["session-start"].installed is True
+
+        claude_score = build_boot_score(
+            empty_repo, hooks_installed=True, runner_shell="claude",
+        )
+        assert {h.name: h.installed for h in claude_score.hooks}["pre-tool"] is True
+
     def test_hook_stamps_round_trip_through_hooks_module(self, tmp_path):
         """The key the score reads is the key the hooks module writes.
 
