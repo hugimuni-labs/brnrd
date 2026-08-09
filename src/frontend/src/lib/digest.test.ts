@@ -178,7 +178,7 @@ test('buildDigest: rows are the summons-worthy subset only, newest first, linked
 	assert.equal(
 		digest.rows[0].href,
 		'/runs/Gurio__brr/shipped-a-pr#receipt',
-		'a digest row is always summons-worthy, so it links straight to the run\'s #receipt section (design-run-route.md rung 2)'
+		"a digest row is always summons-worthy, so it links straight to the run's #receipt section (design-run-route.md rung 2)"
 	);
 });
 

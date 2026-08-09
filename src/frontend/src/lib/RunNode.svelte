@@ -277,7 +277,12 @@
 			</div>
 			{#if boltLead}
 				<div class="mt-3 text-sm text-amber-100">
-					<MarkdownContent markdown={boltLead} sourcePath={node.body?.path ?? ''} {knownPaths} reveal />
+					<MarkdownContent
+						markdown={boltLead}
+						sourcePath={node.body?.path ?? ''}
+						{knownPaths}
+						reveal
+					/>
 				</div>
 			{/if}
 			<!-- The completion card: collapsed by default, tap to expand
