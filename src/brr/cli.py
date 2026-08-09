@@ -335,6 +335,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="pair only; do not install or start the systemd/launchd service",
     )
+    p.add_argument(
+        "--defaults",
+        action="store_true",
+        help=(
+            "skip the conversational setup interview on an uninitialized "
+            "repo; write today's `brnrd init` defaults directly instead"
+        ),
+    )
     linger = p.add_mutually_exclusive_group()
     linger.add_argument(
         "--yes-linger",
@@ -4282,6 +4290,22 @@ def cmd_daemon_logs(args):
     return daemon_install.logs(follow=not args.no_follow, lines=args.lines)
 
 
+def _connect_interrupted(step: str) -> "SystemExit":
+    """#1244 fork 2, signed rider: a single ^C here must say what happened,
+    not abandon the terminal to a raw traceback. Same contract
+    ``init_wake.py``'s own ``_on_sigint`` already gives the (now-retired)
+    terminal interview: nothing is corrupted, name the step that was cut
+    off, name the exact command that resumes it. No double-press — a single
+    ^C during a blocking wait (the pairing-approval poll, the linger
+    prompt) is unambiguous; it is the *silence* about what survived that
+    this rider objects to, not the single keystroke.
+    """
+    return SystemExit(
+        f"\n[brnrd] interrupted during {step} — nothing was left half-done; "
+        f"re-run `{brnrd_cmd()} account connect` to continue."
+    )
+
+
 def cmd_brnrd_connect(args):
     import os
     import socket
@@ -4296,6 +4320,12 @@ def cmd_brnrd_connect(args):
         cloud.connect(brr_dir, brnrd_url=url, daemon_name=daemon_name)
     except (cloud.CloudUnavailableError, TimeoutError) as exc:
         raise SystemExit(f"[brnrd] {exc}") from None
+    except KeyboardInterrupt:
+        # Nothing is written to disk until the server reports `paired`
+        # (`cloud.connect` only calls `_save_state` after that) — a ^C
+        # during the pairing-approval poll leaves the pending pair code to
+        # expire server-side on its own TTL and this machine untouched.
+        raise _connect_interrupted("pairing approval") from None
     if args.no_service:
         print(
             "[brnrd] Paired without a background service. "
@@ -4316,17 +4346,66 @@ def cmd_brnrd_connect(args):
 
     from . import daemon_install
 
-    result = daemon_install.install(
-        no_start=False,
-        prompt_linger=not args.no_linger,
-        assume_yes_linger=args.yes_linger,
-    )
+    try:
+        result = daemon_install.install(
+            no_start=False,
+            prompt_linger=not args.no_linger,
+            assume_yes_linger=args.yes_linger,
+        )
+    except KeyboardInterrupt:
+        # The one remaining interactive terminal moment in this command:
+        # `maybe_enable_linger`'s confirm prompt (linux only; reached unless
+        # ``--yes-linger``/``--no-linger`` opted out already). Pairing above
+        # already landed and was reported — a ^C here only cuts off the
+        # service install, which is independently re-runnable.
+        raise _connect_interrupted("service install") from None
     if result == 0:
         print("[brnrd] Connected and listening in the background.")
     else:
         print(
             "[brnrd] Paired, but the background service did not come up — "
             "see the diagnosis above."
+        )
+
+    _connect_finish_setup(repo_root, brr_dir, defaults=bool(args.defaults))
+
+
+def _connect_finish_setup(repo_root: Path, brr_dir: Path, *, defaults: bool) -> None:
+    """#1244 fork 2 — what `connect` does about an uninitialized repo.
+
+    ``--defaults`` (the signed opt-out rider): skip the conversational
+    interview and write today's `brnrd init` defaults directly — the exact
+    same headless path `brnrd init` already takes with no TTY, so this is
+    not a second init implementation, only a second caller of the first
+    one. Otherwise: queue the first-wake greeting event (see
+    :mod:`connect_greeting`) so the resident's next dispatch is the
+    interview, conducted over whichever door just proved live — never both.
+    """
+    if (repo_root / "AGENTS.md").exists():
+        return
+    if defaults:
+        from . import adopt
+
+        print("[brnrd] --defaults: writing brnrd init defaults, no interview")
+        adopt.init_repo(defaults=True)
+        return
+
+    from . import connect_greeting
+
+    outcome = connect_greeting.queue_greeting(repo_root, brr_dir)
+    if outcome.queued:
+        print(
+            f"[brnrd] no AGENTS.md yet — queued the setup interview as the "
+            f"resident's first wake over {outcome.door} ({outcome.event_id}). "
+            f"It reaches you there once `{brnrd_cmd()} up` is polling; "
+            f"`{brnrd_cmd()} account connect --defaults` writes plain "
+            "defaults instead, any time."
+        )
+    else:
+        print(f"[brnrd] no AGENTS.md yet, and no interview queued: {outcome.reason}.")
+        print(
+            f"[brnrd] run `{brnrd_cmd()} init` at the terminal, or "
+            f"`{brnrd_cmd()} account connect --defaults` for plain defaults."
         )
 
 
