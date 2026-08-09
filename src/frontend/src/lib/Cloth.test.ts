@@ -74,6 +74,7 @@ function bolt(overrides: Partial<BoltRow> = {}): BoltRow {
 		tokensOutput: null,
 		usdSubscriptionAttributed: null,
 		usdCreditsEquivalent: null,
+		declaration: null,
 		...overrides
 	};
 }
