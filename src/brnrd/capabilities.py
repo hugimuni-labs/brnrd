@@ -574,14 +574,37 @@ def _detect_publish_scope(ctx: _Context, cdef: CapabilityDef) -> list[Capability
 
 
 def _detect_repo_initialised(ctx: _Context, cdef: CapabilityDef) -> list[Capability]:
-    # #874-adjacent honesty constraint, spelled out in the spec: `adopt.py`
-    # makes no HTTP call and the corpus mirror doesn't carry a repo's
-    # AGENTS.md/kb/, so this is unobservable for every repo today — not a
-    # per-repo computation, a declared fact about the sensor.
-    return [
-        _build(cdef, repo.id, STATE_UNOBSERVABLE, Evidence("none", None), Act(ACT_COMMAND, None))
-        for repo in ctx.repos
-    ]
+    # #1268: wired to the daemon's own boot-kernel measurement (#1261 added
+    # `agents_md_missing`/`kb_missing` to `bootscore.BootHost`, computed
+    # daemon-side, per-repo, fresh on every wake). It reaches here via
+    # `Daemon.repo_agents_md_missing`/`.repo_kb_missing`, piggybacked on the
+    # same `PUT /v1/daemons/quota` tick that already carries
+    # `gate_health_json` — no new endpoint. Same "most recently seen daemon
+    # for this repo" pick `_detect_gate_health` uses, since this is a
+    # repo-scope fact only a paired daemon can report.
+    #
+    # `unobservable` survives as the honest reading for a repo with no
+    # daemon at all, or one whose daemon hasn't published a boot reading
+    # yet (older client, or first tick still pending) — distinct from the
+    # #874-adjacent sensor gap this detector used to declare permanently
+    # for *every* repo regardless of pairing.
+    out: list[Capability] = []
+    for repo in ctx.repos:
+        daemon = ctx.latest_daemon_by_repo.get(repo.id)
+        if daemon is None or daemon.repo_agents_md_missing is None or daemon.repo_kb_missing is None:
+            out.append(
+                _build(cdef, repo.id, STATE_UNOBSERVABLE, Evidence("none", None), Act(ACT_COMMAND, None))
+            )
+            continue
+        initialised = not (daemon.repo_agents_md_missing or daemon.repo_kb_missing)
+        state = STATE_LIT if initialised else STATE_DARK
+        out.append(
+            _build(
+                cdef, repo.id, state,
+                Evidence("daemon-heartbeat", _iso(daemon.quota_updated_at)), Act(ACT_COMMAND, None),
+            )
+        )
+    return out
 
 
 def _detect_bot_collaborator(ctx: _Context, cdef: CapabilityDef) -> list[Capability]:

@@ -145,6 +145,41 @@ def test_daemon_quota_round_trips_gate_health():
         assert json.loads(daemon.gate_health_json) == gates
 
 
+def test_daemon_quota_round_trips_repo_initialised_facts():
+    """#1268: `repo_agents_md_missing`/`repo_kb_missing` piggyback on the
+    same tick as `gates` — round-trips through the response and lands on
+    the `Daemon` row exactly like `gate_health_json` already does."""
+    client = _client()
+    _, daemon_headers, _repo_id = _repo_and_daemon(client)
+    assert client.post(
+        "/v1/daemons/register", json={"daemon_name": "laptop"}, headers=daemon_headers,
+    ).status_code == 200
+
+    posted = client.put(
+        "/v1/daemons/quota",
+        json={"shells": [], "gates": [], "repo_agents_md_missing": False, "repo_kb_missing": True},
+        headers=daemon_headers,
+    )
+    assert posted.status_code == 200, posted.text
+    body = posted.json()
+    assert body["repo_agents_md_missing"] is False
+    assert body["repo_kb_missing"] is True
+
+    from brnrd.models import Daemon
+
+    with client.app.state.SessionLocal() as db:
+        daemon = db.query(Daemon).one()
+        assert daemon.repo_agents_md_missing is False
+        assert daemon.repo_kb_missing is True
+
+    # Omitting the fields (an older daemon build) leaves them `None` —
+    # never coerced to a false "everything's fine" default.
+    omitted = client.put("/v1/daemons/quota", json={"shells": [], "gates": []}, headers=daemon_headers)
+    assert omitted.status_code == 200, omitted.text
+    assert omitted.json()["repo_agents_md_missing"] is None
+    assert omitted.json()["repo_kb_missing"] is None
+
+
 def test_daemon_quota_round_trips_updated_at_and_credits():
     """2026-07-07: `updated_at` (the scrape's own age, for real staleness
     detection) and `credits` (real per-run USD once metered overage kicks
