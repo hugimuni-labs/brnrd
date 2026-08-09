@@ -37,8 +37,18 @@ def test_parse_result_spend_and_context_but_no_quota():
     assert levels["source"] == "claude result JSON"
     assert levels["spend"]["total_cost_usd"] == 0.022774
     assert "$0.0228" in levels["spend"]["summary"]
-    assert "context left (est)" in levels["context_window"]["summary"]
-    assert 90 < levels["context_window"]["remaining_percentage"] < 100
+    # #1225: ``context_window`` used to be derived from ``modelUsage``'s
+    # cumulative-session token fields divided by a single ``contextWindow``
+    # (the same #1178 shape already fixed for ``context_window_used_percent``
+    # below) -- this payload's numbers happened to sit under 100% saturation,
+    # so it asserted a plausible-looking 90-100% remaining band. That was
+    # exactly the wrong reading: no ``session_id`` here means no transcript,
+    # so there is no *instantaneous* occupancy snapshot to report either.
+    # The fixed collector omits ``context_window`` entirely rather than fall
+    # back to the cumulative estimate -- a pessimistic absence beats a
+    # confident wrong number (#1178's standing rule, applied to this field
+    # too).
+    assert "context_window" not in levels
     assert levels["tokens"]["input_tokens"] == 515
     assert levels["tokens"]["output_tokens"] == 95
     assert levels["tokens"]["cache_read_input_tokens"] == 0
@@ -269,7 +279,13 @@ def test_facets_claude_collector_marks_quota_absent_not_known():
     levels = claude_status.parse_result(_RESULT)
     res = facets.build(levels=levels, levels_collector=claude_status.COLLECTED_SLOTS)
     assert res["spend"]["status"] == "known"
-    assert res["context_window"]["status"] == "known"
+    # #1225: ``_RESULT`` carries no ``session_id`` -> no transcript -> no
+    # instantaneous reading, so ``context_window`` is omitted from
+    # ``levels`` entirely (same standing rule as
+    # ``test_parse_result_spend_and_context_but_no_quota`` above) and the
+    # facet built from it reads "absent", not the pre-fix "known" this
+    # fixture used to get from the cumulative fallback formula.
+    assert res["context_window"]["status"] == "absent"
     assert res["quota"]["status"] == "absent"
 
 
@@ -568,6 +584,64 @@ def test_instantaneous_reading_uses_the_last_turn_not_the_running_total(tmp_path
     # (2 + 60000 + 2000) / 200000 * 100 = 31.001 -- the last turn's own
     # occupancy, nowhere near the cumulative sum's forced 100.0.
     assert 30 < pct < 32
+
+
+def test_context_window_remaining_percentage_tracks_instantaneous_not_cumulative(
+    tmp_path,
+):
+    """#1225: the ``context_window`` chip is the *other* #1178 consumer.
+
+    Same fixture shape as ``test_instantaneous_reading_uses_the_last_turn_
+    not_the_running_total`` above (a blown-up cumulative ``modelUsage`` that
+    would saturate the old formula to ~0% remaining, plus a transcript whose
+    last turn is modest) -- but this test reads
+    ``context_window.remaining_percentage`` instead of
+    ``tokens.context_window_used_percent``, pinning down that the fix
+    covers both consumers of the same instantaneous reading, not just the
+    one #1224 already wired up.
+    """
+    _transcript(
+        tmp_path,
+        "sess-instant-remaining",
+        [
+            _assistant_row(
+                "claude-sonnet-4-6",
+                {
+                    "inputTokens": 2,
+                    "cacheReadInputTokens": 20000,
+                    "cacheCreationInputTokens": 1000,
+                    "outputTokens": 300,
+                },
+            ),
+            _assistant_row(
+                "claude-sonnet-4-6",
+                {
+                    "inputTokens": 2,
+                    "cacheReadInputTokens": 60000,
+                    "cacheCreationInputTokens": 2000,
+                    "outputTokens": 150,
+                },
+            ),
+        ],
+    )
+    cumulative = {
+        "claude-sonnet-4-6": {
+            "inputTokens": 80,
+            "outputTokens": 12000,
+            "cacheReadInputTokens": 4_800_000,
+            "cacheCreationInputTokens": 50_000,
+            "contextWindow": 200_000,
+        }
+    }
+    payload = {"modelUsage": cumulative, "session_id": "sess-instant-remaining"}
+    levels = claude_status.parse_result(payload, projects_root=tmp_path)
+    # Last turn's own occupancy: (2 + 60000 + 2000) / 200000 * 100 = 31.001%
+    # used -> ~68.999% remaining. The old cumulative formula would instead
+    # divide the session-lifetime sum (4.85M+ tokens) by 200_000 and clamp
+    # to 0% remaining -- nowhere close.
+    remaining = levels["context_window"]["remaining_percentage"]
+    assert 68 < remaining < 70
+    assert "context left (est)" in levels["context_window"]["summary"]
 
 
 def test_instantaneous_reading_absent_when_no_transcript_matches():

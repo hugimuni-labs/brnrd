@@ -83,31 +83,6 @@ def _model_usage_cost(model_usage: Any) -> float | None:
     return total if found else None
 
 
-def _model_context_remaining(model_usage: Any) -> float | None:
-    """Return the most conservative per-model context headroom estimate."""
-    if not isinstance(model_usage, dict):
-        return None
-    lowest_remaining: float | None = None
-    for usage in model_usage.values():
-        if not isinstance(usage, dict):
-            continue
-        window = _num(_camel_or_snake(usage, "contextWindow", "context_window"))
-        if not window or window <= 0:
-            continue
-        used_parts = [
-            _camel_or_snake(usage, "inputTokens", "input_tokens"),
-            _camel_or_snake(usage, "cacheReadInputTokens", "cache_read_input_tokens"),
-            _camel_or_snake(
-                usage, "cacheCreationInputTokens", "cache_creation_input_tokens"
-            ),
-        ]
-        used = sum(v for v in (_num(part) for part in used_parts) if v is not None)
-        remaining = max(0.0, min(100.0, 100.0 * (1.0 - used / window)))
-        if lowest_remaining is None or remaining < lowest_remaining:
-            lowest_remaining = remaining
-    return lowest_remaining
-
-
 def _model_usage_ids(model_usage: Any) -> list[str] | None:
     """Return the real model id(s) keying this run's ``modelUsage``.
 
@@ -541,19 +516,30 @@ def parse_result(
             "total_cost_usd": round(total, 6),
         }
 
-    remaining = _model_context_remaining(payload.get("modelUsage"))
-    if remaining is not None:
+    # Instantaneous occupancy (#1178) is the only honest reading either
+    # consumer below can use — sourced from the session transcript's last
+    # turn, keyed off the same ``session_id`` used for refusal detection
+    # below. ``modelUsage``'s own token fields are cumulative across the
+    # whole *resumed* session (same object backing ``total_cost_usd``), so
+    # dividing them by a single ``contextWindow`` compares two different
+    # quantities — the bug #1178/#1224 fixed for ``context_window_used_
+    # percent`` and #1225 fixes here for ``context_window.remaining_
+    # percentage``, its sibling consumer of the same wrong formula.
+    instantaneous_pct = _instantaneous_context_used_percent(
+        payload.get("modelUsage"), payload.get("session_id"), projects_root,
+    )
+    if instantaneous_pct is not None:
+        remaining = max(0.0, min(100.0, 100.0 - instantaneous_pct))
         levels["context_window"] = {
             "summary": f"{_fmt_pct(remaining)}% context left (est)",
             "remaining_percentage": remaining,
         }
+    # When no instantaneous reading is available (no session_id, no
+    # transcript, no matching contextWindow) ``context_window`` is omitted
+    # entirely rather than falling back to the cumulative estimate — a
+    # pessimistic absence beats a confident wrong number (#1178's standing
+    # rule).
     tokens = _model_usage_tokens(payload.get("modelUsage"))
-    # Instantaneous occupancy is a *different* reading than the cumulative
-    # totals above (#1178) — sourced from the session transcript, keyed off
-    # the same ``session_id`` used for refusal detection below.
-    instantaneous_pct = _instantaneous_context_used_percent(
-        payload.get("modelUsage"), payload.get("session_id"), projects_root,
-    )
     if instantaneous_pct is not None:
         tokens = dict(tokens) if tokens else {}
         tokens["context_window_used_percent"] = instantaneous_pct
