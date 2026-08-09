@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -15,7 +16,7 @@ from sqlalchemy import select  # noqa: E402
 
 from brnrd import create_app  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
-from brnrd.models import ChannelRoute, Event  # noqa: E402
+from brnrd.models import ChannelRoute, Event, TgPairCode  # noqa: E402
 from _helpers import brnrd_account_headers  # noqa: E402
 
 _SECRET = "webhook-secret"
@@ -111,6 +112,11 @@ def _daemon_headers(client, acc, repo_id):
     return {"Authorization": f"Bearer {token}"}
 
 
+def _register_daemon(client, dmn_headers, name="local"):
+    r = client.post("/v1/daemons/register", json={"daemon_name": name}, headers=dmn_headers)
+    assert r.status_code == 200, r.text
+
+
 def test_webhook_rejects_bad_secret(env):
     _, client, _ = env
     # No secret header.
@@ -173,6 +179,29 @@ def test_invalid_start_code_is_reported(env):
     )
     assert r.status_code == 200
     assert sends and "Invalid" in sends[0]["text"]
+
+
+def test_expired_start_code_names_the_retry_command(env):
+    """#1282 — a code that genuinely existed and expired (600s TTL) gets a
+    specific, actionable message instead of folding into the generic
+    "Invalid or expired pair code." text an unknown/consumed code gets."""
+    app, client, sends = env
+    acc = _account(client)
+    rid = _repo(client, acc, name="myrepo")
+    code = _tg_pair_code(client, acc, rid)
+    with app.state.SessionLocal() as db:
+        pc = db.execute(select(TgPairCode).where(TgPairCode.code == code)).scalar_one()
+        pc.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        db.commit()
+
+    r = client.post(
+        "/v1/webhooks/telegram", json=_message(7, f"/start {code}"), headers=_HDR
+    )
+    assert r.status_code == 200
+    assert sends
+    assert "expired" in sends[0]["text"]
+    assert "account connect" in sends[0]["text"]
+    assert sends[0]["text"] != "Invalid or expired pair code."
 
 
 # ── #1242: the rescue loop, bare-code parity, username shape ──────────
@@ -293,6 +322,54 @@ def test_unset_bot_username_construction_is_quiet(caplog):
     caplog.set_level(logging.WARNING, logger="brnrd.config")
     Settings(database_url="sqlite:///:memory:")
     assert caplog.records == []
+
+
+def test_no_daemon_online_gets_a_nudge_and_still_enqueues(env):
+    """#1282 — a bound chat whose account has never had a daemon check in
+    must not go silent: it still gets a reply, and the message still
+    enqueues (a daemon that shows up later drains it normally)."""
+    app, client, sends = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    code = _tg_pair_code(client, acc, rid)
+    client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
+    sends.clear()  # drop the pairing confirmation
+
+    r = client.post(
+        "/v1/webhooks/telegram",
+        json=_message(555, "do the thing", message_id=43),
+        headers=_HDR,
+    )
+    assert r.status_code == 200
+    assert sends
+    assert "no daemon" in sends[0]["text"].lower()
+    assert "account connect" in sends[0]["text"]
+
+    with app.state.SessionLocal() as db:
+        event = db.execute(select(Event).where(Event.source == "telegram")).scalar_one()
+        assert event.body == "do the thing"
+
+
+def test_online_daemon_suppresses_the_no_daemon_nudge(env):
+    """#1282 — once a daemon has registered and is heartbeat-fresh, the
+    nudge stops firing (the account has somewhere for the message to go)."""
+    app, client, sends = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    code = _tg_pair_code(client, acc, rid)
+    client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
+    sends.clear()  # drop the pairing confirmation
+
+    dmn = _daemon_headers(client, acc, rid)
+    _register_daemon(client, dmn)
+
+    r = client.post(
+        "/v1/webhooks/telegram",
+        json=_message(555, "do the thing", message_id=44),
+        headers=_HDR,
+    )
+    assert r.status_code == 200
+    assert sends == []
 
 
 def test_bound_chat_message_enqueues_with_reply_to(env):
@@ -803,6 +880,10 @@ def test_response_is_forwarded_back_to_telegram(env):
         event_id = db.execute(
             select(Event).where(Event.source == "telegram")
         ).scalar_one().event_id
+    # #1282 — no daemon is registered yet at this point in the test, so the
+    # "task" message above also drew the no-runner nudge; this test is about
+    # response forwarding, so drop it (covered separately).
+    sends.clear()
 
     dmn = _daemon_headers(client, acc, rid)
     resp = client.post(
