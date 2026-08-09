@@ -73,9 +73,12 @@
 	// as a row in the fields grid above via `FRAME_FIELDS`.
 	let boltLead = $derived(node.body ? bodySection(node.body.markdown, 'Bolt') : '');
 	// The completion card (design-the-bolt.md §The completion card): the
-	// same merge `bolts.ts`'s `unackedBolts` does for the lane, here over
-	// every ledger row already scoped to this run — collapsed by default,
-	// tap to expand, same as the cloth-head lane's row.
+	// same re-report merge `bolts.ts`'s `unackedBolts` does across runs,
+	// here folded over every ledger row already scoped to this one run —
+	// collapsed by default, tap to expand. (The cloth-head lane this
+	// comment used to compare against retired with the strip, #1256 — the
+	// digest; this run node's own card is unaffected, per-run receipts
+	// stay put.)
 	let boltCard = $derived(boltCardDataFromLedgerRows(ledgerRows ?? []));
 	let boltCardOpen = $state(false);
 	// Frame prose starts at the first `## ` section. Everything before it —

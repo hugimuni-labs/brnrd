@@ -8,16 +8,13 @@
 		clothSelvage,
 		groupClothDays,
 		inClothWindow,
-		produceChips,
 		selvageParts,
 		weaveCloth,
 		type ClothLine,
 		type ClothTree
 	} from './cloth';
-	import { boltSummonsLabel, type BoltRow } from './bolts';
-	import BoltCompletionCard from './BoltCompletionCard.svelte';
 	import { LENS_ALL, applyLens, availableLenses, reconcileLens } from './loomLens';
-	import { ageLabel, type RunLedgerRow } from './runLedger';
+	import type { RunLedgerRow } from './runLedger';
 	import RunNodeInline from './RunNodeInline.svelte';
 	import Crossing from './Crossing.svelte';
 	import { crossingCells } from './crossing';
@@ -56,16 +53,6 @@
 		 *  row wraps, so the strip sits where the row's own content puts it. */
 		threads?: string[];
 		crossingIndex?: Map<string, string[]>;
-		/** The away lane (design-the-bolt.md §The cloth side, fork 2 signed):
-		 *  unacked bolts, newest first. Null while the run-ledger feed hasn't
-		 *  resolved yet — the count doctrine (`backchannel.ts`) applies here
-		 *  too: never render a partial lane. */
-		unackedBolts?: BoltRow[] | null;
-		onTakeBolt?: (runId: string) => void;
-		onTakeAllBolts?: () => void;
-		/** Bumped by the summons strip's "view" tap to arm the arrival glow —
-		 *  any change to this value (re)arms it, the value itself is inert. */
-		boltGlowToken?: number;
 	}
 
 	let {
@@ -75,31 +62,8 @@
 		stale,
 		surface = null,
 		threads = [],
-		crossingIndex = new Map(),
-		unackedBolts = null,
-		onTakeBolt,
-		onTakeAllBolts,
-		boltGlowToken = 0
+		crossingIndex = new Map()
 	}: Props = $props();
-
-	// The arrival glow: armed once per token change, decays on its own after
-	// ~2s. `prefers-reduced-motion` drops the CSS transition (see the
-	// `motion-reduce:` class below) so the lane still highlights and clears,
-	// it just doesn't animate the fade.
-	let boltLaneGlowing = $state(false);
-	// Deliberate: a plain snapshot of the prop at mount, mutated only inside
-	// the effect below, never read as a second reactive source of truth.
-	// svelte-ignore state_referenced_locally
-	let lastBoltGlowToken = boltGlowToken;
-	$effect(() => {
-		if (boltGlowToken === lastBoltGlowToken) return;
-		lastBoltGlowToken = boltGlowToken;
-		boltLaneGlowing = true;
-		const timer = setTimeout(() => {
-			boltLaneGlowing = false;
-		}, 2000);
-		return () => clearTimeout(timer);
-	});
 
 	// The lens rail (the dissolution, 2026-08-02). The chips lens the *past
 	// inventory*, and the cloth is the past's one object now, so the rail
@@ -163,11 +127,6 @@
 	// fold keys by the day instead: one quiet line per day, opened per day.
 	let expanded = new SvelteSet<string>();
 	let unfolded = new SvelteSet<string>();
-	// The completion card (design-the-bolt.md §The completion card): a bolt
-	// row's own expand state, separate from `expanded` above (root-run
-	// trees) — a lane row and a cloth row are different objects with
-	// different open/closed lives.
-	let boltCardOpen = new SvelteSet<string>();
 
 	function toggle(set: SvelteSet<string>, id: string) {
 		if (set.has(id)) set.delete(id);
@@ -407,87 +366,6 @@
 			</span>
 		</span>
 	</div>
-
-	{#if unackedBolts !== null && unackedBolts.length > 0}
-		<!-- The cloth-head lane (design-the-bolt.md §The cloth side, fork 2
-		     signed: the lane, not a modal — a modal punishes the rare
-		     visitor). Unacked bolts, newest first; an acked bolt simply stops
-		     rendering here, the cloth rows below are untouched (the archive is
-		     not the lane). `motion-reduce:transition-none` keeps the arrival
-		     glow honest under reduced motion: still highlights and clears,
-		     just doesn't animate the fade. -->
-		<div
-			class="mb-3 border border-amber-900/50 bg-amber-950/10 p-2.5 font-mono text-[11px] transition-colors duration-[2000ms] motion-reduce:transition-none {boltLaneGlowing
-				? 'bg-amber-900/30'
-				: ''}"
-			role="list"
-			aria-label="unacked bolts"
-		>
-			<div class="mb-1.5 flex items-baseline justify-between gap-2">
-				<span class="tracking-[0.14em] text-amber-200 uppercase">
-					⚡ {boltSummonsLabel(unackedBolts.length)}
-				</span>
-				<button
-					type="button"
-					class="cursor-pointer text-[10px] tracking-wide text-amber-300 uppercase hover:text-amber-100"
-					onclick={() => onTakeAllBolts?.()}
-				>
-					take all
-				</button>
-			</div>
-			<div class="space-y-1">
-				{#each unackedBolts as bolt (bolt.runId)}
-					{@const chips = produceChips(bolt.relics)}
-					{@const cardOpen = boltCardOpen.has(bolt.runId)}
-					<div
-						class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 border-t border-amber-900/25 pt-1"
-						role="listitem"
-					>
-						<!-- Tapping the row expands the completion card
-						     (design-the-bolt.md §The completion card); TAKE stays
-						     its own control, a sibling, and stops carrying the
-						     whole render. -->
-						<button
-							type="button"
-							class="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-left"
-							onclick={() => toggle(boltCardOpen, bolt.runId)}
-							aria-expanded={cardOpen}
-						>
-							<span class="shrink-0 text-ink-mute">{cardOpen ? '▾' : '▸'}</span>
-							<span class="min-w-[9ch] flex-1 break-words text-amber-100">{bolt.name}</span>
-							{#if chips.length > 0}
-								<span class="shrink-0 text-stone-300"
-									>{chips.map((chip) => chip.label).join(' ')}</span
-								>
-							{/if}
-							<span class="shrink-0 text-ink-mute">{ageLabel(bolt.endedAt, now)}</span>
-						</button>
-						<button
-							type="button"
-							class="shrink-0 cursor-pointer tracking-wide text-amber-300 uppercase hover:text-amber-100"
-							onclick={() => onTakeBolt?.(bolt.runId)}
-						>
-							take
-						</button>
-						{#if cardOpen}
-							<div class="w-full">
-								<BoltCompletionCard
-									bolt={bolt.bolt}
-									relics={bolt.relics}
-									wallClockSeconds={bolt.wallClockSeconds}
-									tokensInput={bolt.tokensInput}
-									tokensOutput={bolt.tokensOutput}
-									usdSubscriptionAttributed={bolt.usdSubscriptionAttributed}
-									usdCreditsEquivalent={bolt.usdCreditsEquivalent}
-									declaration={bolt.declaration}
-								/>
-							</div>
-						{/if}
-					</div>
-				{/each}
-			</div>
-		</div>
-	{/if}
 
 	<!-- The lens rail, above the weave it slices. Every chip is derived from
 	     the rows in this window — origins from `source_system`, shapes from

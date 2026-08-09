@@ -7,15 +7,8 @@
 	import LiveRuns from '$lib/LiveRuns.svelte';
 	import RunLedgerReceipt from '$lib/RunLedgerReceipt.svelte';
 	import Cloth from '$lib/Cloth.svelte';
-	import BoltSummons from '$lib/BoltSummons.svelte';
-	import {
-		boltsTakenStorageKey,
-		readTakenBolts,
-		serializeTakenBolts,
-		takeAll,
-		takeBolt,
-		unackedBolts
-	} from '$lib/bolts';
+	import Digest from '$lib/Digest.svelte';
+	import { digestLastLookedStorageKey, readLastLookedAt, serializeLastLookedAt } from '$lib/digest';
 	import ControlStrip from '$lib/ControlStrip.svelte';
 	import ColdStart from '$lib/ColdStart.svelte';
 	import PublishConsentNotice from '$lib/PublishConsentNotice.svelte';
@@ -288,60 +281,40 @@
 	let runLedgerError = $state<string | null>(null);
 	let runLedgerWindowMs = $state(CLOTH_WINDOW_MS);
 
-	// The bolt's cloth-side ack store (design-the-bolt.md §The cloth side).
-	// Per-viewer, client-side v1 — `bolts.ts`'s own header names the teams-era
-	// successor. Loaded once `accountId` is known, persisted on every change.
-	let boltsTaken = $state<string[]>([]);
-	let boltsTakenLoadedFor = $state<string | null>(null);
-	// Bumped by the summons strip's "view" tap to arm the lane's arrival glow.
-	let boltGlowToken = $state(0);
-	let unackedBoltRows = $derived(
-		runLedgerRows === null ? null : unackedBolts(runLedgerRows, boltsTaken)
-	);
+	// The digest's own anchor (design-run-route.md §The home page becomes a
+	// map, #1256): per-viewer, client-side, same `bolts.ts`-established
+	// discipline (localStorage keyed by account id) the retired ack store
+	// used — loaded once `accountId` is known, persisted only on an
+	// explicit "caught up" press, never on a mere render (an anchor that
+	// advances just because the page loaded is the "optimistic direction"
+	// lie the ticket names).
+	let lastLookedAt = $state<number | null>(null);
+	let lastLookedLoadedFor = $state<string | null>(null);
 
 	$effect(() => {
-		if (!accountId || boltsTakenLoadedFor === accountId) return;
+		if (!accountId || lastLookedLoadedFor === accountId) return;
 		try {
-			boltsTaken = readTakenBolts(localStorage.getItem(boltsTakenStorageKey(accountId)));
+			lastLookedAt = readLastLookedAt(
+				localStorage.getItem(digestLastLookedStorageKey(accountId)),
+				now
+			);
 		} catch {
 			// Storage can be unavailable in a private/restricted browser — the
-			// viewer just sees every bolt as unacked, never a broken page.
-			boltsTaken = [];
+			// viewer just gets the fallback window every visit, never a broken
+			// page.
+			lastLookedAt = null;
 		}
-		boltsTakenLoadedFor = accountId;
+		lastLookedLoadedFor = accountId;
 	});
 
-	function persistBoltsTaken() {
-		if (!accountId || boltsTakenLoadedFor !== accountId) return;
+	function markCaughtUp() {
+		lastLookedAt = now;
+		if (!accountId) return;
 		try {
-			localStorage.setItem(boltsTakenStorageKey(accountId), serializeTakenBolts(boltsTaken));
+			localStorage.setItem(digestLastLookedStorageKey(accountId), serializeLastLookedAt(now));
 		} catch {
-			// Best-effort — the live ack state still governs this tab.
+			// Best-effort — the live anchor still governs this tab for this visit.
 		}
-	}
-
-	function takeOneBolt(runId: string) {
-		boltsTaken = takeBolt(boltsTaken, runId);
-		persistBoltsTaken();
-	}
-
-	function takeAllBolts() {
-		if (!unackedBoltRows || unackedBoltRows.length === 0) return;
-		boltsTaken = takeAll(
-			boltsTaken,
-			unackedBoltRows.map((row) => row.runId)
-		);
-		persistBoltsTaken();
-	}
-
-	// "view" jumps to the cloth-head lane and arms its arrival glow — never a
-	// force-scroll of the page's own sections, and never a modal (fork 2,
-	// signed). The cloth section already carries `id="cloth-heading"`.
-	function viewBolts() {
-		document
-			.getElementById('cloth-heading')
-			?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-		boltGlowToken += 1;
 	}
 
 	let configRequests = $state<ConfigChangeRequestItem[] | null>(null);
@@ -1228,13 +1201,14 @@
 			</h1>
 		</header>
 
-		<!-- The summons strip (design-the-bolt.md §The cloth side, fork 2
-		     signed): a compact one-line toast at the door, seen on load — not
-		     sticky, it scrolls away naturally like everything else here. On
-		     mobile the rail below fills the whole first viewport, so this has
-		     to sit above it to be where the eye lands first (steer folded
-		     evt-1786144375669258422-mls4). -->
-		<BoltSummons unacked={unackedBoltRows} onView={viewBolts} onTakeAll={takeAllBolts} />
+		<!-- THE DIGEST (design-run-route.md §The home page becomes a map,
+		     #1256): replaces the summons strip — a compact one-line toast at
+		     the door, seen on load — not sticky, it scrolls away naturally
+		     like everything else here. On mobile the rail below fills the
+		     whole first viewport, so this has to sit above it to be where the
+		     eye lands first (steer folded evt-1786144375669258422-mls4,
+		     inherited from the strip it replaces). -->
+		<Digest rows={runLedgerRows} {now} {lastLookedAt} onCaughtUp={markCaughtUp} />
 
 		<!-- The cold start, directly under the title and above everything
 		     else: for an account with nothing connected every section below
@@ -1629,10 +1603,6 @@
 						surface={surfaceData}
 						{threads}
 						{crossingIndex}
-						unackedBolts={unackedBoltRows}
-						onTakeBolt={takeOneBolt}
-						onTakeAllBolts={takeAllBolts}
-						{boltGlowToken}
 					/>
 				{/if}
 			</div>
