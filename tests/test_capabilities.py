@@ -279,9 +279,14 @@ def test_cli_installed_is_unobservable_not_dark_with_no_daemon_ever():
     assert not any(c.scope == "machine" and c.id != "cli-installed" for c in caps)
 
 
-def test_repo_initialised_is_always_unobservable():
-    """#874-adjacent honesty constraint from the spec: no detector reaches
-    this fact today, regardless of how paired/lit everything else is."""
+def test_repo_initialised_is_unobservable_with_no_boot_report_yet():
+    """#1268 wired this detector to the daemon's own boot-kernel measurement
+    (#1261's `agents_md_missing`/`kb_missing`, piggybacked on the quota
+    publish tick) — it is no longer a permanent #874 sensor gap. A freshly
+    paired daemon that has never published a quota/boot tick still reads
+    `unobservable` here: `repo_agents_md_missing`/`repo_kb_missing` default
+    to `None` on the row, which is "never checked", not "checked and
+    fine"."""
     client = _client()
     token = _login(client)
     repo_id = _create_repo(client, token)
@@ -293,6 +298,62 @@ def test_repo_initialised_is_always_unobservable():
     caps = _evaluate(client, account_id)
     repo_init = [c for c in caps if c.id == "repo-initialised"]
     assert repo_init and all(c.state == STATE_UNOBSERVABLE for c in repo_init)
+
+
+def test_repo_initialised_lights_once_the_daemon_reports_both_present():
+    """The maintainer's own acceptance test in reverse (#1268): the most
+    initialised repo in an account should read `lit`, not `unobservable`,
+    once its daemon has actually published a boot reading."""
+    client = _client()
+    token = _login(client)
+    repo_id = _create_repo(client, token)
+    account_id = _account_id(client)
+    with client.app.state.SessionLocal() as db:
+        db.add(
+            Daemon(
+                id="dmn-init",
+                account_id=account_id,
+                repo_id=repo_id,
+                token_id="tok-init",
+                daemon_name="laptop",
+                repo_agents_md_missing=False,
+                repo_kb_missing=False,
+            )
+        )
+        db.commit()
+
+    caps = _evaluate(client, account_id)
+    repo_init = next(c for c in caps if c.id == "repo-initialised" and c.subject == repo_id)
+    assert repo_init.state == STATE_LIT
+    assert repo_init.evidence.source == "daemon-heartbeat"
+
+
+def test_repo_initialised_darkens_when_either_fact_is_missing():
+    """Either half missing (AGENTS.md absent, or no kb wired up) is enough
+    to darken the row — matches the boot kernel's own "either is enough to
+    say not-initialised" combination, not an AND that hides a half-set-up
+    repo as fine."""
+    client = _client()
+    token = _login(client)
+    repo_id = _create_repo(client, token)
+    account_id = _account_id(client)
+    with client.app.state.SessionLocal() as db:
+        db.add(
+            Daemon(
+                id="dmn-init",
+                account_id=account_id,
+                repo_id=repo_id,
+                token_id="tok-init",
+                daemon_name="laptop",
+                repo_agents_md_missing=False,
+                repo_kb_missing=True,
+            )
+        )
+        db.commit()
+
+    caps = _evaluate(client, account_id)
+    repo_init = next(c for c in caps if c.id == "repo-initialised" and c.subject == repo_id)
+    assert repo_init.state == STATE_DARK
 
 
 def test_bot_collaborator_unknown_is_unobservable_never_checked_yet():

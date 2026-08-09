@@ -208,6 +208,17 @@ class Daemon(Base):
         default="[]",
         info=_publish_store("quota", "repo"),
     )
+    # `repo-initialised` capability source (#1268), same piggyback shape as
+    # `gate_health_json` above: the daemon's own boot-kernel measurement for
+    # the repo it's paired to (`bootscore.BootHost.agents_md_missing` /
+    # `.kb_missing`, #1261), carried on the existing quota publish tick
+    # rather than a new endpoint. `None` on both = this daemon hasn't
+    # published a boot reading yet (older client, or first tick still
+    # pending) — `capabilities._detect_repo_initialised` reads that as
+    # `unobservable`, the same "none means never checked" shape every other
+    # detector in that module already uses.
+    repo_agents_md_missing: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
+    repo_kb_missing: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
     # Live/coexisting-runs snapshot (#258), mirrored from the local presence
     # registry via `PUT /v1/daemons/live-runs` — see
     # kb/design-dashboard-live-surface.md §"Reconsidered 2026-07-06".

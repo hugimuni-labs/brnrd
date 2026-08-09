@@ -1078,11 +1078,43 @@ def _gate_health_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
     return runtime.gate_health_rows(brr_dir)
 
 
+def _repo_initialised_snapshot(brr_dir: Path) -> dict[str, bool]:
+    """This daemon's own boot-kernel init facts for the repo it's paired to
+    (#1268's wire half): ``agents_md_missing`` / ``kb_missing``, the same
+    two existence checks ``prompts.build_boot_score`` runs on every wake
+    (#1261) — one stat call plus one config-scoped kb lookup, cheap enough
+    to repeat here on the quota publish cadence rather than thread the
+    wake's own reading across process boundaries.
+
+    ``brr_dir.parent`` is the repo root whenever the *local* (non-worktree)
+    ``.brr`` exists, which is always true for the checkout this publisher
+    runs from — ``daemon.start()`` performs the equivalent
+    ``repo_root / "AGENTS.md"`` check before ``brr_dir`` is even resolved,
+    at the one root the whole daemon process is hosted from. A run's own
+    per-thought worktree (``.brr/worktrees/<run-id>``) never reaches this
+    function; only the main daemon loop calls ``_publish_quota``.
+    """
+    from .. import config as conf, knowledge
+
+    repo_root = brr_dir.parent
+    agents_md_missing = not (repo_root / "AGENTS.md").exists()
+    try:
+        kb_missing = knowledge.active_kb_dir(repo_root, conf.load_config(repo_root)) is None
+    except Exception:
+        # Conservative direction on failure, same call `build_boot_score`
+        # makes: an unknown answer reports "present" rather than a
+        # possibly-wrong "missing" (a false "missing" would darken a
+        # capability that's actually fine).
+        kb_missing = False
+    return {"agents_md_missing": agents_md_missing, "kb_missing": kb_missing}
+
+
 @_publish_lane("quota")
 def _publish_quota(brr_dir: Path, inbox_dir: Path | None, state: dict) -> None:
     if not (state.get("token") and state.get("brnrd_url")):
         return
     try:
+        init_facts = _repo_initialised_snapshot(brr_dir)
         _context().request(
             state["brnrd_url"],
             "PUT",
@@ -1091,6 +1123,8 @@ def _publish_quota(brr_dir: Path, inbox_dir: Path | None, state: dict) -> None:
             json={
                 "shells": _quota_snapshot(brr_dir),
                 "gates": _gate_health_snapshot(brr_dir),
+                "repo_agents_md_missing": init_facts["agents_md_missing"],
+                "repo_kb_missing": init_facts["kb_missing"],
             },
             timeout=10,
         )

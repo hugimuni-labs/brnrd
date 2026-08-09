@@ -376,11 +376,20 @@ class QuotaReport(BaseModel):
 
     shells: list[QuotaShellIn] = Field(default_factory=list)
     gates: list[GateHealthIn] = Field(default_factory=list)
+    # #1268: this daemon's own boot-kernel measurement for the repo it's
+    # paired to (`bootscore.BootHost.agents_md_missing`/`.kb_missing`,
+    # #1261) — piggybacked on this same tick, not a new endpoint. `None`
+    # (the default) is what an older daemon build's payload looks like: the
+    # field is simply absent, same as a pre-#360 payload had no `gates`.
+    repo_agents_md_missing: bool | None = None
+    repo_kb_missing: bool | None = None
 
 
 class QuotaOut(BaseModel):
     shells: list[QuotaShellIn]
     gates: list[GateHealthIn] = Field(default_factory=list)
+    repo_agents_md_missing: bool | None = None
+    repo_kb_missing: bool | None = None
     quota_updated_at: datetime | None = None
 
 
