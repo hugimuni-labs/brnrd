@@ -485,6 +485,132 @@ def test_channel_bound_stays_dark_for_a_null_principal_non_telegram_route():
 
 
 # --------------------------------------------------------------------------
+# Account scoping (H-1): Token / ChannelRoute reads pin account_id in-query
+# --------------------------------------------------------------------------
+
+
+def test_machine_paired_ignores_a_token_row_belonging_to_another_account():
+    """`_Context.build` derives `tokens_by_id` from `token_ids` (the
+    account's own daemons' `token_id`s) filtered only by `Token.id.in_(...)`
+    — safe today only because a daemon's `token_id` is *conventionally*
+    always minted for the same account. Craft the row a broken invariant
+    would produce (account A's daemon pointing at a *revoked* token that
+    actually belongs to account B) and confirm A's own `machine-paired`
+    reading never depends on B's token state: with the account_id predicate
+    in place, the foreign token is invisible, so the daemon reads as paired
+    (no evidence of *this* account's own token being revoked) rather than
+    leaking B's revocation into A's panel."""
+    client = _client()
+    token_a = _login(client, github_id="1", login="account-a")
+    account_a = _account_id(client, login="account-a")
+    repo_id = _create_repo(client, token_a, repo="account-a/repo")
+
+    _login(client, github_id="2", login="account-b")
+    account_b = _account_id(client, login="account-b")
+
+    with client.app.state.SessionLocal() as db:
+        db.add(
+            Token(
+                id="tok-belongs-to-b",
+                account_id=account_b,
+                kind=Token.KIND_DAEMON,
+                token_hash="hash-b",
+                revoked=True,
+            )
+        )
+        db.add(
+            Daemon(
+                id="dmn-a-cross-token",
+                account_id=account_a,
+                repo_id=repo_id,
+                token_id="tok-belongs-to-b",
+                daemon_name="laptop",
+            )
+        )
+        db.commit()
+
+    caps = {(c.id, c.subject): c for c in _evaluate(client, account_a)}
+    machine_paired = caps[("machine-paired", "dmn-a-cross-token")]
+    assert machine_paired.state == STATE_LIT
+
+
+def test_channel_bound_ignores_a_channel_route_belonging_to_another_account():
+    """Same shape as above for the `ChannelRoute` read: `repo_id.in_(...)`
+    alone is safe only while every `ChannelRoute` row's `account_id` agrees
+    with the repo it points at. Craft the row that invariant violating would
+    produce (a paired route on account A's repo but stamped with account
+    B's `account_id`) and confirm the account_id predicate keeps it from
+    lighting A's `channel-bound` capability."""
+    from brnrd.models import ChannelRoute
+
+    client = _client()
+    token_a = _login(client, github_id="1", login="account-a")
+    account_a = _account_id(client, login="account-a")
+    repo_id = _create_repo(client, token_a, repo="account-a/repo")
+
+    _login(client, github_id="2", login="account-b")
+    account_b = _account_id(client, login="account-b")
+
+    with client.app.state.SessionLocal() as db:
+        db.add(
+            ChannelRoute(
+                id="cr-belongs-to-b",
+                platform="telegram",
+                channel_id="tg-chat-cross",
+                account_id=account_b,
+                repo_id=repo_id,
+                paired_user_id=555,
+            )
+        )
+        db.commit()
+
+    caps = {(c.id, c.subject): c for c in _evaluate(client, account_a)}
+    channel_bound = caps[("channel-bound", repo_id)]
+    assert channel_bound.state == STATE_DARK
+
+
+def test_capability_panel_output_is_unchanged_for_a_normal_single_account():
+    """The redundant account_id predicate must not move a single normal
+    account's own panel by a byte: same catalog ids, same states, for the
+    ordinary case where every Token/ChannelRoute row genuinely belongs to
+    the account being evaluated (mirrors the existing coverage test's
+    fixture shape)."""
+    client = _client()
+    token = _login(client)
+    repo_id = _create_repo(client, token, repo="Gurio/brr")
+    account_id = _account_id(client)
+
+    with client.app.state.SessionLocal() as db:
+        db.add(
+            Token(
+                id="tok-normal",
+                account_id=account_id,
+                kind=Token.KIND_DAEMON,
+                token_hash="hash-normal",
+                revoked=False,
+            )
+        )
+        db.add(
+            Daemon(
+                id="dmn-normal",
+                account_id=account_id,
+                repo_id=repo_id,
+                token_id="tok-normal",
+                daemon_name="laptop",
+            )
+        )
+        db.commit()
+
+    caps = _evaluate(client, account_id)
+    snapshot = sorted((c.id, c.scope, c.subject, c.state) for c in caps)
+    assert ("machine-paired", "machine", "dmn-normal", STATE_LIT) in snapshot
+    # Every catalog id still fires exactly once for this ordinary account —
+    # the predicate narrowed nothing that belonged here.
+    seen_ids = {c.id for c in caps}
+    assert seen_ids == {c.id for c in CAPABILITY_CATALOG}
+
+
+# --------------------------------------------------------------------------
 # Wire shape on the real endpoint
 # --------------------------------------------------------------------------
 

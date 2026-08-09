@@ -41,7 +41,15 @@ def _signature_ok(secret: str, body: bytes, signature: str | None) -> bool:
     if not secret or not signature:
         return False
     digest = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(f"sha256={digest}", signature)
+    try:
+        return hmac.compare_digest(f"sha256={digest}", signature)
+    except TypeError:
+        # `hmac.compare_digest` raises TypeError instead of returning False
+        # when a str argument carries non-ASCII (e.g. raw latin-1) code
+        # points — an attacker-controlled header can trigger it. Fail
+        # closed exactly like any other bad signature, never an unhandled
+        # 500 (H-4).
+        return False
 
 
 def _github_dt(value: object) -> datetime | None:

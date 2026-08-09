@@ -336,7 +336,12 @@ class _Context:
         if token_ids:
             tokens_by_id = {
                 t.id: t
-                for t in db.execute(select(Token).where(Token.id.in_(token_ids))).scalars()
+                for t in db.execute(
+                    select(Token).where(
+                        Token.id.in_(token_ids),
+                        Token.account_id == account.id,
+                    )
+                ).scalars()
             }
 
         repo_ids = [r.id for r in repos]
@@ -357,6 +362,7 @@ class _Context:
                 select(ChannelRoute).where(
                     ChannelRoute.repo_id.in_(repo_ids),
                     ChannelRoute.paired_user_id.isnot(None),
+                    ChannelRoute.account_id == account.id,
                 )
             ).scalars():
                 existing = channel_bound_repo_ids.get(route.repo_id)
