@@ -427,24 +427,31 @@ each other instead of re-listing each other.
 {"kind": "summary", "text": "…"}
 ```
 
-**Issues have a command, and it is the one relic worth the habit.**
+**Every hand-attested kind has a command** (#1060) — the kinds the daemon
+cannot see happen for itself, so a relic of that kind exists only if you
+write one:
 
 ```
 brnrd relic issue 686 --closed [--repo owner/name]
 brnrd relic issue 764 --opened
+brnrd relic pr 1175 [--summary TEXT]
+brnrd relic comment "issue #903 — stale-open sweep"
+brnrd relic message "design fork answered" [--channel telegram]
+brnrd relic file /tmp/report.md
+brnrd relic item the-loom#gate-chips-row-on-repos
 ```
 
-Same appended line, none of the JSON. It exists because issue produce is the
-only kind the daemon cannot see: commits, merges, the branch, the PR, kb
-pages and your reply are all derived, but `gh issue create` and `gh issue
-close` happen inside your shell and leave the daemon nothing to observe. So
-an issue relic exists **only** if you write one — and the misses skew, because
-filing feels like output while closing feels like tidying up.
+Same appended lines, none of the JSON. Commits, merges, the branch, kb
+pages, and your reply are all derived — `git log`, the `.pr` control, the
+knowledge capture — but issue actions, comments, ad-hoc messages, and a
+file produced outside a commit happen inside your shell and leave the
+daemon nothing to observe. The raw JSONL grammar above still works for
+anything a command doesn't cover.
 
-The action flag is required, not defaulted. An issue relic with no `action`
-is neither created nor completed — that is how every hand-written record
-predating this command still reads, and it stays true rather than being
-retro-fitted into a bucket nobody chose.
+The `issue` action flag is required, not defaulted. An issue relic with no
+`action` is neither created nor completed — that is how every hand-written
+record predating this command still reads, and it stays true rather than
+being retro-fitted into a bucket nobody chose.
 
 **Links are derived, not reported.** The daemon knows the run's forge and
 `owner/repo`, so an `issue` / `pr` / `commit` / `branch` relic gets its forge
