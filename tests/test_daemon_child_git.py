@@ -273,6 +273,27 @@ def test_no_pin_reaches_a_non_strand_runs_environment(tmp_path, monkeypatch):
     assert "GIT_WORK_TREE" not in seen
 
 
+def test_the_bot_identity_reaches_a_strands_environment(tmp_path, monkeypatch):
+    """#1135: a strand's own `git commit` — typed in its own shell, never
+    routed through `gitops.bot_identity_env()` — must not fall through to
+    whatever identity happens to be live on the host at that moment."""
+    _task, seen, _run_root = _drive_run_worker(tmp_path, monkeypatch, strand=True)
+    assert seen.get("GIT_AUTHOR_NAME") == gitops.BOT_NAME
+    assert seen.get("GIT_AUTHOR_EMAIL") == gitops.BOT_EMAIL
+    assert seen.get("GIT_COMMITTER_NAME") == gitops.BOT_NAME
+    assert seen.get("GIT_COMMITTER_EMAIL") == gitops.BOT_EMAIL
+
+
+def test_the_bot_identity_reaches_a_residents_environment_too(tmp_path, monkeypatch):
+    """Unlike the git pin above, the identity fix is not strand-scoped: a
+    resident's own themed-work commits are equally in scope (#1135)."""
+    _task, seen, _run_root = _drive_run_worker(tmp_path, monkeypatch, strand=False)
+    assert seen.get("GIT_AUTHOR_NAME") == gitops.BOT_NAME
+    assert seen.get("GIT_AUTHOR_EMAIL") == gitops.BOT_EMAIL
+    assert seen.get("GIT_COMMITTER_NAME") == gitops.BOT_NAME
+    assert seen.get("GIT_COMMITTER_EMAIL") == gitops.BOT_EMAIL
+
+
 def test_the_host_baseline_is_recorded_by_the_dispatch_path(tmp_path, monkeypatch):
     """Half 2's dispatch-time arm, wired rather than called directly."""
     task, _seen, _run_root = _drive_run_worker(tmp_path, monkeypatch, strand=True)
