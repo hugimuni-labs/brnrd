@@ -81,9 +81,11 @@
 	import {
 		ReposAuthError,
 		fetchRepos,
+		type Capability,
 		type ConnectedRepo,
 		type GitHubInstallation
 	} from '$lib/repos';
+	import CapabilityPanel from '$lib/CapabilityPanel.svelte';
 	import Landing from '$lib/Landing.svelte';
 	import { SurfaceAuthError, fetchSurface, type SurfaceResponse } from '$lib/surface';
 	import { glitchReveal, typeReveal } from '$lib/transitions';
@@ -143,6 +145,11 @@
 	// to read `setup_command` off, so the account-level spelling comes with
 	// the list itself.
 	let pairingCommand = $state<string | null>(null);
+	// The capability registry (design-capability-panel.md), same
+	// `/v1/dashboard/repos` fetch — additive/optional on the wire, so a
+	// backend that predates #1156 leaves this `null` and the panel renders
+	// nothing rather than an empty shell (`repos.ts` capabilities? comment).
+	let capabilities = $state<Capability[] | null>(null);
 	// Threaded into AccountDeletion's confirmation label — the same
 	// `/v1/dashboard/repos` fetch that populates connectedRepos already
 	// carries it, so this costs no extra round trip.
@@ -1050,6 +1057,7 @@
 				pairingCommand = repos.pairing_command ?? null;
 				githubLogin = repos.account.github_login;
 				accountId = repos.account.id;
+				capabilities = repos.capabilities ?? null;
 			} catch (e) {
 				if (!(e instanceof ReposAuthError)) {
 					runnersError = e instanceof Error ? e.message : 'project list fetch failed';
@@ -1239,6 +1247,17 @@
 		<ColdStart repos={connectedRepos} {installations} pairCommand={pairingCommand} />
 
 		<PublishConsentNotice repos={connectedRepos} />
+
+		<!-- The capability panel (design-capability-panel.md, build step 2):
+		     the board at rest — same registry ColdStart's own detectors used
+		     to answer alone, now one renderer for all of it. Sits beside
+		     ColdStart rather than replacing it (that replacement, and the
+		     /repos → /settings rename it unblocks, are their own signed
+		     effort — design-capability-panel.md §Build order steps 3-5); this
+		     is "the panel at rest + the frontier," placed where the old
+		     static /repos repetition sits, above the rail so it's never
+		     under the fold. -->
+		<CapabilityPanel {capabilities} {connectedRepos} {pairingCommand} {now} />
 
 		<!-- the rail, sticky (his 08-02 steer): resource truth — fuel, tank,
 		     slots, the next pick — stays on top at every scroll position and

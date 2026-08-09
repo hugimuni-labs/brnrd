@@ -3171,6 +3171,23 @@ def build_boot_score(
     kind = "daemon" if is_daemon else "ad-hoc"
     pub_owner = "resident-owned" if not is_strand else "strand"
 
+    # #1244 fork 1: name a missing AGENTS.md/kb in the kernel rather than
+    # let the resident infer it from a failed Read or a kb write that
+    # quietly never lands. Existence check only — never reads AGENTS.md's
+    # content, so this costs nothing on the common (initialized) path.
+    agents_md_missing = not (effective_root / "AGENTS.md").exists()
+    kb_missing = False
+    try:
+        from . import knowledge
+
+        kb_missing = knowledge.active_kb_dir(
+            effective_root, conf.load_config(effective_root)
+        ) is None
+    except Exception:  # noqa: BLE001 — a boot score must never fail a wake;
+        # conservative direction on failure, same call `shell_reads_agents_md_natively`
+        # makes: an unknown answer reports "present" rather than a possibly-wrong "missing".
+        kb_missing = False
+
     hooks_info = _collect_hooks_info(
         installed=hooks_installed, hook_stamps=hook_stamps, runner_shell=runner_shell
     )
@@ -3213,6 +3230,8 @@ def build_boot_score(
             # daemon (see `dev_reload.image_fingerprint_digest`).
             image_digest=dev_reload.image_fingerprint_digest(),
             image_captured_at=dev_reload.image_captured_at(),
+            agents_md_missing=agents_md_missing,
+            kb_missing=kb_missing,
         ),
         continuity=continuity if continuity is not None else BootContinuity(),
         attention=BootAttention(event_ids=event_ids, source_gate=source_gate),

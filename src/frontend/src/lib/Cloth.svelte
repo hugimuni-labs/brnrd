@@ -479,6 +479,7 @@
 									tokensOutput={bolt.tokensOutput}
 									usdSubscriptionAttributed={bolt.usdSubscriptionAttributed}
 									usdCreditsEquivalent={bolt.usdCreditsEquivalent}
+									declaration={bolt.declaration}
 								/>
 							</div>
 						{/if}
