@@ -2095,6 +2095,10 @@ def test_queue_spawn_request_declares_contract_from_frontmatter(tmp_path):
     event_id = path.stem
     task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
 
+    # #1186 seeds this path for real (dispatch-time skeleton write) — route
+    # it under tmp_path rather than a literal /tmp/... constant so this
+    # assertion-only test never touches the real shared /tmp.
+    report_path = str(tmp_path / "brr-declared-slug-report.md")
     accepted = daemon._queue_spawn_request(
         daemon._WorkerEmit(brr_dir, "", event_id),
         task,
@@ -2103,7 +2107,7 @@ def test_queue_spawn_request_declares_contract_from_frontmatter(tmp_path):
         {
             "spawn": True,
             "branch": "brr/declared-slug",
-            "report": "/tmp/brr-declared-slug-report.md",
+            "report": report_path,
         },
         "bounded side task",
         outbox,
@@ -2113,7 +2117,7 @@ def test_queue_spawn_request_declares_contract_from_frontmatter(tmp_path):
     spawned = [p for p in inbox.glob("*.md") if p.stem != event_id]
     child = protocol._read_event(spawned[0])
     assert child["spawn_contract_branch"] == "brr/declared-slug"
-    assert child["spawn_contract_report"] == "/tmp/brr-declared-slug-report.md"
+    assert child["spawn_contract_report"] == report_path
 
 
 def test_queue_spawn_request_renders_declared_contract_into_child_body(tmp_path):
@@ -2138,6 +2142,10 @@ def test_queue_spawn_request_renders_declared_contract_into_child_body(tmp_path)
     event_id = path.stem
     task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
 
+    # #1186 seeds this path for real (dispatch-time skeleton write) — route
+    # it under tmp_path rather than a literal /tmp/... constant so this
+    # assertion-only test never touches the real shared /tmp.
+    report_path = str(tmp_path / "brr-declared-slug-report.md")
     accepted = daemon._queue_spawn_request(
         daemon._WorkerEmit(brr_dir, "", event_id),
         task,
@@ -2146,7 +2154,7 @@ def test_queue_spawn_request_renders_declared_contract_into_child_body(tmp_path)
         {
             "spawn": True,
             "branch": "brr/declared-slug",
-            "report": "/tmp/brr-declared-slug-report.md",
+            "report": report_path,
         },
         "bounded side task",
         outbox,
@@ -2157,7 +2165,7 @@ def test_queue_spawn_request_renders_declared_contract_into_child_body(tmp_path)
     child_body = protocol._read_event(spawned[0])["body"]
     assert "bounded side task" in child_body
     assert "brr/declared-slug" in child_body
-    assert "/tmp/brr-declared-slug-report.md" in child_body
+    assert report_path in child_body
 
 
 def test_queue_spawn_request_undeclared_contract_leaves_the_body_alone(tmp_path):
@@ -2241,12 +2249,15 @@ def test_queue_spawn_request_accepts_an_absolute_report_path(tmp_path):
     event_id = path.stem
     task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
 
+    # #1186 seeds this path for real — keep it under tmp_path, not a
+    # literal /tmp/... constant, so this test never touches real /tmp.
+    report_path = str(tmp_path / "brr-report-with a space.md")
     accepted = daemon._queue_spawn_request(
         daemon._WorkerEmit(brr_dir, "", event_id),
         task,
         inbox,
         event_id,
-        {"spawn": True, "report": "/tmp/brr-report-with a space.md"},
+        {"spawn": True, "report": report_path},
         "bounded side task",
         outbox,
     )
@@ -2295,6 +2306,136 @@ def test_queue_spawn_request_carries_title_into_child_meta(tmp_path):
     spawned2 = [p for p in inbox.glob("*.md") if p.stem not in (event_id, spawned[0].stem)]
     child2 = protocol._read_event(spawned2[0])
     assert "title" not in child2
+
+
+# ── #1186: the declared `report:` file is pre-seeded at dispatch time ──
+
+
+def test_queue_spawn_request_seeds_declared_report_before_child_queued(
+    tmp_path, monkeypatch,
+):
+    """#1186: a strand that spends its whole context window on the actual
+    work has none left for the two voluntary closing acts — one of them is
+    writing the `report:` file it was contracted to produce, from a blank
+    page, at the point it has the least budget left to do so. The fix:
+    `_queue_spawn_request` writes a skeleton at the declared path itself,
+    *before* the child's own event is even queued — checked here by
+    wrapping `protocol.create_event` and asserting the file already exists
+    at the moment the child event is minted, not merely sometime before
+    this call returns."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "original task", status="processing")
+    event_id = path.stem
+    task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
+
+    report_path = tmp_path / "reports" / "brr-seed-report.md"
+    assert not report_path.exists()
+
+    real_create_event = protocol.create_event
+    seen = {}
+
+    def _wrapped_create_event(*args, **kwargs):
+        seen["report_existed_at_queue_time"] = report_path.exists()
+        return real_create_event(*args, **kwargs)
+
+    monkeypatch.setattr(daemon.protocol, "create_event", _wrapped_create_event)
+
+    accepted = daemon._queue_spawn_request(
+        daemon._WorkerEmit(brr_dir, "", event_id),
+        task,
+        inbox,
+        event_id,
+        {
+            "spawn": True,
+            "branch": "brr/declared-slug",
+            "report": str(report_path),
+            "title": "fix the frontend build",
+        },
+        "bounded side task",
+        outbox,
+    )
+
+    assert accepted is True
+    assert seen["report_existed_at_queue_time"] is True
+    content = report_path.read_text(encoding="utf-8")
+    assert "run-parent" in content
+    assert event_id in content
+    assert "brr/declared-slug" in content
+    assert "fix the frontend build" in content
+    assert daemon._read_outbox_notices(outbox) == []
+
+
+def test_queue_spawn_request_no_report_seeds_nothing(tmp_path, monkeypatch):
+    """Guard the guard: no `report:` declared ⇒ the seeding path never
+    runs at all, not merely "runs and no-ops". A `branch:`-only spawn (or
+    a bare one) must not touch the filesystem on this behalf."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "original task", status="processing")
+    event_id = path.stem
+    task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("_seed_declared_report must not be called with no report:")
+
+    monkeypatch.setattr(daemon, "_seed_declared_report", _boom)
+
+    accepted = daemon._queue_spawn_request(
+        daemon._WorkerEmit(brr_dir, "", event_id),
+        task,
+        inbox,
+        event_id,
+        {"spawn": True, "branch": "brr/declared-slug"},
+        "bounded side task",
+        outbox,
+    )
+
+    assert accepted is True
+
+
+def test_queue_spawn_request_report_collision_does_not_clobber(tmp_path):
+    """#1186's collision guard: a path that already holds *different*
+    content (not this same dispatch's own skeleton, re-seeded) is left
+    alone — a naming collision on a dispatcher-chosen path is a dispatcher
+    mistake, not a reason to refuse the spawn or destroy what's there. The
+    daemon notes it via an advisory notice instead."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "original task", status="processing")
+    event_id = path.stem
+    task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
+
+    report_path = tmp_path / "reports" / "brr-collision-report.md"
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text("someone else's unrelated file\n", encoding="utf-8")
+
+    accepted = daemon._queue_spawn_request(
+        daemon._WorkerEmit(brr_dir, "", event_id),
+        task,
+        inbox,
+        event_id,
+        {
+            "spawn": True,
+            "branch": "brr/declared-slug",
+            "report": str(report_path),
+        },
+        "bounded side task",
+        outbox,
+    )
+
+    assert accepted is True
+    assert report_path.read_text(encoding="utf-8") == "someone else's unrelated file\n"
+    notices = daemon._read_outbox_notices(outbox)
+    assert len(notices) == 1
+    assert notices[0]["kind"] == "advisory"
+    assert str(report_path) in notices[0]["text"]
 
 
 def test_notify_spawn_parent_declared_contract_beats_sibling_prose(tmp_path):
