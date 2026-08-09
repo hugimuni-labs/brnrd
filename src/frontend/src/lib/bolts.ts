@@ -96,6 +96,12 @@ export interface BoltRow {
 	tokensOutput: number | null;
 	usdSubscriptionAttributed: number | null;
 	usdCreditsEquivalent: number | null;
+	/** The validated `cut:` declaration this run's bolt carried, if the wire
+	 *  has one (#1236 threads `bolt_declaration` through the ledger; see the
+	 *  completion-card section below for the shape). `null` for a row that
+	 *  predates the wire or was never cut — the same absence discipline the
+	 *  rest of this interface follows. */
+	declaration: BoltDeclarationValue;
 }
 
 /**
@@ -121,6 +127,7 @@ export function unackedBolts(
 		if (!runId || taken.has(runId)) continue;
 		const bolt = parseBoltState(row.bolt);
 		if (!bolt) continue;
+		const declaration = parseBoltDeclaration(row.bolt_declaration);
 		const endedAt = row.ended_at ? Date.parse(row.ended_at) : Number.NaN;
 		if (!Number.isFinite(endedAt)) continue;
 		const name = row.name?.trim() || null;
@@ -128,6 +135,11 @@ export function unackedBolts(
 		if (existing) {
 			existing.endedAt = Math.max(existing.endedAt, endedAt);
 			existing.bolt = bolt;
+			// Same re-report as the bolt state itself — the declaration is
+			// stamped alongside `bolt`/`accepted_at` in one write
+			// (`daemon.py::_drain_outbox`), so it latest-wins on the same
+			// row, never merged field-by-field the way spend is below.
+			existing.declaration = declaration;
 			existing.relics.push(...(row.external_refs ?? []));
 			existing.repoLabel ??= row.repo_label;
 			// Spend, like bolt state, is this re-report's own measurement — a
@@ -162,6 +174,7 @@ export function unackedBolts(
 				name: name ?? runId,
 				named: name !== null,
 				bolt,
+				declaration,
 				repoLabel: row.repo_label,
 				endedAt,
 				relics: [...(row.external_refs ?? [])],
@@ -186,23 +199,153 @@ export function boltSummonsLabel(count: number): string {
 //
 // Data honesty is the constraint the design doc names as this account's
 // dominant defect class: render only what actually arrives on the wire, and
-// say plainly when a section's data does not. The audit behind these two
-// exports (see the report at the declared path): `cut_verb.py` parses a
-// full declaration — `asks`, `decisions`, `owed`, a declared `spend`
-// estimate, `next` — but `daemon.py`'s `_drain_outbox` only ever keeps
-// `{accepted_at, annotated, spend_declared}` in `task.meta["bolt"]`, and
-// both `state.md` (`_write_run_frame`) and `run_ledger.py`'s `_bolt_value`
-// narrow that further to a bare `"accepted" | "annotated"` string. Nothing
-// past that flag — not the mismatch text, not one `asks` row, not a single
-// `owed` line, not the declared spend string — is written anywhere this
-// frontend reads. Only two things the design's mockup describes actually
-// reach the wire: the verdict flag itself, and produce (`external_refs`) +
-// measured spend, which were already ledger columns before this feature.
+// say plainly when a section's data does not.
+//
+// The wire audit this note used to document (report at the declared path,
+// #1255): `cut_verb.py` parses a full declaration — `asks`, `decisions`,
+// `owed`, a declared `spend` estimate, `next` — but `daemon.py`'s
+// `_drain_outbox` kept only `{accepted_at, annotated, spend_declared}` in
+// `task.meta["bolt"]`, and both `state.md` and `run_ledger.py`'s
+// `_bolt_value` narrowed that further to a bare `"accepted" | "annotated"`
+// string. Nothing past that flag ever reached this frontend.
+//
+// #1236 closed that gap upstream: `cut_verb.durable_declaration` produces a
+// bounded, capped copy of the validated declaration plus the daemon's own
+// dissent, `_drain_outbox` keeps it whole on `task.meta["bolt"]`, and
+// `run_ledger.py`'s `bolt_declaration_value` carries it into the ledger row
+// (`RunLedgerRow.bolt_declaration` below) and the run node's own
+// `## Bolt Declaration` JSON block. This module's job past that point is
+// the same tolerant-read discipline every other export here follows
+// (`parseBoltState`, `readTakenBolts`): a row that predates the wire, or
+// whose declaration blew the persistence caps and was replaced by an
+// explicit `{omitted: true, reason}` marker, must read as its own honest
+// state — never silently as "nothing declared" and never as a crash.
+
+/** One `asks:` row, curated for the card — an event this run carried and
+ *  how it was closed (`answered` / `deferred:<where>` / `noted:<why>`,
+ *  `cut_verb.py`'s `_valid_disposition`). */
+export interface BoltAsk {
+	event: string;
+	disposition: string;
+	label?: string;
+}
+
+/** One carried `owed:` row — a promise named rather than shipped. */
+export interface BoltOwedRow {
+	label: string;
+	ref: string;
+	why: string;
+	where?: string;
+}
+
+/** The validated declaration, curated for the card (wire field names
+ *  translated to this module's usual camelCase, same as `BoltRow` translates
+ *  `wall_clock_seconds` → `wallClockSeconds`). Every array is present, even
+ *  when empty — an empty array is the honest "declared, nothing here" state;
+ *  `BoltDeclarationValue`'s `null` is the one that means "not carried". */
+export interface BoltDeclaration {
+	asks: BoltAsk[];
+	owed: BoltOwedRow[];
+	decisions: string[];
+	spendDeclared: string | null;
+	next: string | null;
+	/** The daemon's own mismatch lines, present only when the bolt is
+	 *  `annotated` — `cut_verb.durable_declaration`'s `dissent` tuple. */
+	dissent: string[];
+}
+
+/** The declaration existed but exceeded `cut_verb.py`'s persistence caps
+ *  (64 rows per section, 1024 chars per field, 64KB whole). Distinct from
+ *  `null`: the resident *did* declare something, it just could not be
+ *  stored whole — never rendered as a plain empty declaration. */
+export interface BoltDeclarationOmitted {
+	omitted: true;
+	reason: string;
+}
+
+/** `null` = not carried on this row (predates #1236, or the run was never
+ *  cut). Tolerant of anything else a reader doesn't recognise, same
+ *  contract `parseBoltState` holds for the bare flag. */
+export type BoltDeclarationValue = BoltDeclaration | BoltDeclarationOmitted | null;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function stringArray(value: unknown): string[] {
+	return Array.isArray(value)
+		? value.filter((item): item is string => typeof item === 'string')
+		: [];
+}
+
+function parseAsk(raw: unknown): BoltAsk | null {
+	if (!isRecord(raw)) return null;
+	const event = typeof raw.event === 'string' ? raw.event : '';
+	const disposition = typeof raw.disposition === 'string' ? raw.disposition : '';
+	if (!event || !disposition) return null;
+	const label = typeof raw.label === 'string' && raw.label ? raw.label : undefined;
+	return label ? { event, disposition, label } : { event, disposition };
+}
+
+function parseOwedRow(raw: unknown): BoltOwedRow | null {
+	if (!isRecord(raw)) return null;
+	const ref = typeof raw.ref === 'string' ? raw.ref : '';
+	const why = typeof raw.why === 'string' ? raw.why : '';
+	if (!ref || !why) return null;
+	const label = typeof raw.label === 'string' ? raw.label : '';
+	const where = typeof raw.where === 'string' && raw.where ? raw.where : undefined;
+	return where ? { label, ref, why, where } : { label, ref, why };
+}
+
+/** Tolerant read of the ledger's `bolt_declaration` column. Absent,
+ *  malformed, or shaped unlike anything `run_ledger.bolt_declaration_value`
+ *  produces reads as `null` — "not carried here" — rather than throwing;
+ *  every other reader in this module degrades the same way. */
+export function parseBoltDeclaration(raw: unknown): BoltDeclarationValue {
+	if (!isRecord(raw)) return null;
+	if (raw.omitted === true) {
+		const reason =
+			typeof raw.reason === 'string' && raw.reason ? raw.reason : 'persistence limits exceeded';
+		return { omitted: true, reason };
+	}
+	const asks = Array.isArray(raw.asks)
+		? raw.asks.map(parseAsk).filter((a): a is BoltAsk => a !== null)
+		: [];
+	const owed = Array.isArray(raw.owed)
+		? raw.owed.map(parseOwedRow).filter((o): o is BoltOwedRow => o !== null)
+		: [];
+	const spendDeclared =
+		typeof raw.spend_declared === 'string' && raw.spend_declared ? raw.spend_declared : null;
+	const next = typeof raw.next === 'string' && raw.next ? raw.next : null;
+	return {
+		asks,
+		owed,
+		decisions: stringArray(raw.decisions),
+		spendDeclared,
+		next,
+		dissent: stringArray(raw.dissent)
+	};
+}
 
 /** The verdict head's label — `bolt.ts`'s two-value contract, worded for
  *  the card's first line. */
 export function boltVerdictLabel(bolt: BoltState): string {
 	return bolt === 'annotated' ? 'accepted — with dissent' : 'accepted';
+}
+
+/** A declaration-backed section's own render state, one notch richer than
+ *  the plain `'present' | 'empty'` `produce`/`spend` use: `'omitted'` is the
+ *  capped-declaration case, distinct from both "declared, nothing here"
+ *  (`'empty'`) and "never carried on this row" (`'absent'`). */
+export type DeclarationSectionState = 'present' | 'empty' | 'omitted' | 'absent';
+
+function declarationSectionState(
+	declaration: BoltDeclarationValue,
+	hasContent: (d: BoltDeclaration) => boolean
+): DeclarationSectionState {
+	if (!declaration) return 'absent';
+	if ('omitted' in declaration) return 'omitted';
+	return hasContent(declaration) ? 'present' : 'empty';
 }
 
 /** Sections the completion card is prepared to render honestly, each tagged
@@ -213,20 +356,19 @@ export function boltVerdictLabel(bolt: BoltState): string {
  *  report" when the true state is "never carried here at all", which is
  *  exactly the distinction the constraint exists to keep visible.
  *
- *  `produce` and `spend` are conditioned on whether *this row* actually
- *  carries anything (an empty produce list or a null spend figure is a
- *  real, honest state, not a missing wire); `asks`, `decisions`, and `owed`
- *  are unconditionally absent — no code path persists them past the
- *  daemon's own validation pass, for any row, ever (see the module note
- *  above). Both are "absence", worded differently: a row with no relics
- *  says "this run made nothing"; `asks` says "this declaration was never
- *  carried past the daemon's own check". */
+ *  `produce` and `spend` (the *measured* stamp) are conditioned on whether
+ *  *this row* actually carries anything — an empty produce list or a null
+ *  spend figure is a real, honest state, not a missing wire. `asks`,
+ *  `decisions`, `owed`, and `spendDeclared` (the resident's estimate) read
+ *  off the declaration itself (#1236): `'absent'` when no declaration
+ *  argument is given at all, matching every call site that predates it. */
 export interface BoltCardSections {
-	asks: 'absent';
-	decisions: 'absent';
+	asks: DeclarationSectionState;
+	decisions: DeclarationSectionState;
 	produce: 'present' | 'empty';
-	owed: 'absent';
+	owed: DeclarationSectionState;
 	spend: 'present' | 'empty';
+	spendDeclared: DeclarationSectionState;
 }
 
 /** The completion card's own data shape — the subset of `BoltRow` the card
@@ -239,6 +381,7 @@ export interface BoltCardData {
 	tokensOutput: number | null;
 	usdSubscriptionAttributed: number | null;
 	usdCreditsEquivalent: number | null;
+	declaration: BoltDeclarationValue;
 }
 
 /** Merge every ledger row already known to belong to *one* run
@@ -251,6 +394,7 @@ export interface BoltCardData {
  *  error — the run node's "no `## Bolt` section" case, not a wire failure. */
 export function boltCardDataFromLedgerRows(rows: RunLedgerRow[]): BoltCardData | null {
 	let bolt: BoltState | null = null;
+	let declaration: BoltDeclarationValue = null;
 	const relics: RelicRecord[] = [];
 	let wallClockSeconds: number | null = null;
 	let tokensInput: number | null = null;
@@ -259,7 +403,13 @@ export function boltCardDataFromLedgerRows(rows: RunLedgerRow[]): BoltCardData |
 	let usdCreditsEquivalent: number | null = null;
 	for (const row of rows) {
 		const rowBolt = parseBoltState(row.bolt);
-		if (rowBolt) bolt = rowBolt;
+		if (rowBolt) {
+			bolt = rowBolt;
+			// Same write as `bolt` itself (`daemon.py::_drain_outbox` stamps
+			// both in one `task.meta["bolt"]` update) — latest-wins together,
+			// not merged field-by-field the way spend is below.
+			declaration = parseBoltDeclaration(row.bolt_declaration);
+		}
 		relics.push(...(row.external_refs ?? []));
 		if (row.wall_clock_seconds !== null && row.wall_clock_seconds !== undefined) {
 			wallClockSeconds = row.wall_clock_seconds;
@@ -285,18 +435,27 @@ export function boltCardDataFromLedgerRows(rows: RunLedgerRow[]): BoltCardData |
 		tokensInput,
 		tokensOutput,
 		usdSubscriptionAttributed,
-		usdCreditsEquivalent
+		usdCreditsEquivalent,
+		declaration
 	};
 }
 
-export function boltCardSections(row: {
-	relics: RelicRecord[];
-	wallClockSeconds: number | null;
-	tokensInput: number | null;
-	tokensOutput: number | null;
-	usdSubscriptionAttributed: number | null;
-	usdCreditsEquivalent: number | null;
-}): BoltCardSections {
+/** `declaration` defaults to `null` (never carried) so every call site that
+ *  predates #1236 — and the pre-existing test pinning "asks/decisions/owed
+ *  are unconditionally absent" — keeps reading exactly as before; passing
+ *  a real `BoltDeclarationValue` is what turns the three sections
+ *  data-driven. */
+export function boltCardSections(
+	row: {
+		relics: RelicRecord[];
+		wallClockSeconds: number | null;
+		tokensInput: number | null;
+		tokensOutput: number | null;
+		usdSubscriptionAttributed: number | null;
+		usdCreditsEquivalent: number | null;
+	},
+	declaration: BoltDeclarationValue = null
+): BoltCardSections {
 	const hasSpend =
 		row.wallClockSeconds !== null ||
 		row.tokensInput !== null ||
@@ -304,10 +463,11 @@ export function boltCardSections(row: {
 		row.usdSubscriptionAttributed !== null ||
 		row.usdCreditsEquivalent !== null;
 	return {
-		asks: 'absent',
-		decisions: 'absent',
+		asks: declarationSectionState(declaration, (d) => d.asks.length > 0),
+		decisions: declarationSectionState(declaration, (d) => d.decisions.length > 0),
 		produce: row.relics.length > 0 ? 'present' : 'empty',
-		owed: 'absent',
-		spend: hasSpend ? 'present' : 'empty'
+		owed: declarationSectionState(declaration, (d) => d.owed.length > 0),
+		spend: hasSpend ? 'present' : 'empty',
+		spendDeclared: declarationSectionState(declaration, (d) => d.spendDeclared !== null)
 	};
 }
