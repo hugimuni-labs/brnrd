@@ -118,6 +118,18 @@ _PROMISABLE = (
     "file",
 )
 
+#: Promisable kinds the daemon already derives without anyone writing a
+#: relic by hand: commits/branch from ``git log``, ``merge`` from a merge
+#: commit's own shape, ``kb`` from the pages the knowledge capture commits
+#: at closeout (see ``relics.derive_auto`` / ``knowledge.capture``). A
+#: promise naming one of these is answered by work that happens anyway, so
+#: ``relic`` owes no subcommand for it. Everything else in ``_PROMISABLE``
+#: is the hand-attested half — the only half a promise is really for — and
+#: needs one (#1060). Checked against the live ``relic`` subcommand set by
+#: a test that goes red on drift, same idiom as the ``_PROMISABLE`` /
+#: ``promises.PROMISABLE`` pair above.
+_RELIC_AUTO_DERIVED = frozenset({"commit", "branch", "merge", "kb"})
+
 #: Everything ``brnrd <verb>`` accepts, retired pointers included.
 ALL_COMMANDS = tuple(
     sorted(PUBLIC_COMMANDS + HIDDEN_COMMANDS + tuple(RETIRED_COMMANDS))
@@ -554,10 +566,14 @@ def build_parser() -> argparse.ArgumentParser:
              "name still keeps the promise")
     promise_p.add_argument(
         "--release", action="store_true",
-        help="withdraw a promise instead of making one; requires --why")
+        help="release --count units of this kind (default 1), not the "
+             "whole row — a kind promised 4 times and released once is "
+             "still owed 3; requires --why")
     promise_p.add_argument(
         "--why", default=None, metavar="REASON",
-        help="why the promise is being withdrawn (required with --release)")
+        help="why these units are being withdrawn (required with "
+             "--release; rides the row for the units this call releases, "
+             "not a statement about every promise of this kind)")
     promise_p.set_defaults(func=cmd_promise)
 
     # The mood seam's front door: collapses the lookup-then-write round trip
@@ -585,6 +601,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="item address, <layer>#<slug> (the heading's anchor in "
              "surface/layers/<layer>.md, e.g. the-loom#gate-chips-row-on-repos)")
     p.set_defaults(func=cmd_relic_item)
+
+    # The remaining three fronts onto `_PROMISABLE`'s hand-attested half
+    # (#1060): `comment`/`message`/`file` were promisable and rendered fine
+    # (`relics.label`) but had no subcommand at all — only a hand-written
+    # `.relics.jsonl` line could keep a promise of one of these kinds, and
+    # the CLI never said that was the escape hatch. Same shape as
+    # `issue`/`item`: one positional for the field the grammar already
+    # reads, the same outside-a-run and failed-append refusals.
+    p = relic_sub.add_parser(
+        "comment", help="record a comment this run left on an issue, PR, or thread")
+    p.add_argument(
+        "on",
+        help="what the comment was on, e.g. 'issue #903 — stale-open sweep'")
+    p.set_defaults(func=cmd_relic_comment)
+
+    p = relic_sub.add_parser(
+        "message",
+        help="record an outbound message this run sent, outside its own reply")
+    p.add_argument("note", help="what the message said or was about")
+    p.add_argument(
+        "--channel", default=None, metavar="NAME",
+        help="where it went, e.g. telegram, slack")
+    p.set_defaults(func=cmd_relic_message)
+
+    p = relic_sub.add_parser(
+        "file", help="record a file this run produced, outside a commit")
+    p.add_argument("path", help="the file's path")
+    p.set_defaults(func=cmd_relic_file)
 
     # Hidden per HIDDEN_COMMANDS — porcelain over the outbox verb grammar
     # (`docs/portals.md`), meant for the resident's own shell inside a live
@@ -1847,6 +1891,19 @@ def cmd_promise(args):
     Requiring the reason is what keeps a withdrawal a decision rather than a
     default, and the reason rides the row so the record of the abandonment
     lives where the abandonment happened.
+
+    **Release semantics, the call made explicit (#1060).** ``--release``
+    drops ``--count`` units of *this kind* (default 1) — ``blueprint``
+    subtracts the count from the kind's running total, same arithmetic as a
+    positive promise, just negative. It does **not** withdraw the whole
+    row: ``promise pr --count 4`` then ``promise pr --release --why …``
+    (default count 1) leaves 3 still promised, even though ``--why`` reads
+    like a statement about the row as a whole. Left as-is rather than
+    changed to "withdraw everything of this kind" — that reading would make
+    ``--why`` swallow a wider undertaking than the caller may have meant to
+    take back, silently, on a single flag most callers reach for after
+    shipping *some* but not all of a batch. The behavior was already
+    correct; only the help text and this docstring were silent on it.
     """
     import sys
 
@@ -2040,6 +2097,178 @@ def cmd_relic_item(args):
         )
         return 1
     print(f"[brnrd relic] item {address}")
+    return 0
+
+
+def cmd_relic_comment(args):
+    """Append a ``comment`` relic to this run's produce manifest (#1060).
+
+    Issue produce got its own front door in #686 because filing/closing an
+    issue is the one relic kind the daemon cannot see happen (``gh`` runs
+    inside the resident's shell). A comment left without an issue action
+    attached — a review comment, a reply on someone else's thread — is the
+    same species of invisible-to-the-daemon fact, and until now had no
+    subcommand at all: ``relics.label`` already renders
+    ``{"kind": "comment", "on": …}`` for the ``## Produce`` block (the
+    ``on`` field names what the comment was posted on), but reaching it
+    meant hand-writing the JSONL line.
+    """
+    import sys
+
+    from . import relics
+
+    outbox_dir = _wake_outbox_dir()
+    if outbox_dir is None:
+        print(
+            "[brnrd relic] no run outbox in this environment — `brnrd relic` "
+            "records produce for a live brnrd run, and the daemon names the "
+            "outbox through BRR_OUTBOX_DIR / BRR_PORTAL_STATE. Nothing was "
+            "written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    on = str(getattr(args, "on", "") or "").strip()
+    if not on:
+        print(
+            "[brnrd relic] say what the comment was on, e.g. `brnrd relic "
+            "comment 'issue #903 — stale-open sweep'`. Nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    control = outbox_dir / relics.CONTROL_NAME
+    try:
+        before = control.stat().st_size
+    except OSError:
+        before = 0
+    relics.append(outbox_dir, "comment", on=on)
+    try:
+        after = control.stat().st_size
+    except OSError:
+        after = before
+    if after <= before:
+        print(
+            f"[brnrd relic] could not append to {control} — nothing was "
+            "written.",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"[brnrd relic] comment on {on}")
+    return 0
+
+
+def cmd_relic_message(args):
+    """Append a ``message`` relic to this run's produce manifest (#1060).
+
+    The manifest's catch-all for outbound communication that is neither the
+    run's own terminal reply (auto-reported as a ``reply`` relic at
+    closeout) nor a forge comment (``brnrd relic comment``) — a message sent
+    by hand through a tool outside brnrd's own delivery portals. ``note`` is
+    what it said or was about; ``--channel`` is where it went, the same
+    grammar ``relics.label`` and ``docs/portals.md`` already document:
+    ``{"kind": "message", "channel": "telegram", "note": "design fork
+    answered"}``.
+    """
+    import sys
+
+    from . import relics
+
+    outbox_dir = _wake_outbox_dir()
+    if outbox_dir is None:
+        print(
+            "[brnrd relic] no run outbox in this environment — `brnrd relic` "
+            "records produce for a live brnrd run, and the daemon names the "
+            "outbox through BRR_OUTBOX_DIR / BRR_PORTAL_STATE. Nothing was "
+            "written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    note = str(getattr(args, "note", "") or "").strip()
+    if not note:
+        print(
+            "[brnrd relic] say what the message was, e.g. `brnrd relic "
+            "message 'design fork answered' --channel telegram`. Nothing "
+            "was written.",
+            file=sys.stderr,
+        )
+        return 1
+    channel = str(getattr(args, "channel", None) or "").strip() or None
+
+    control = outbox_dir / relics.CONTROL_NAME
+    try:
+        before = control.stat().st_size
+    except OSError:
+        before = 0
+    relics.append(outbox_dir, "message", note=note, channel=channel)
+    try:
+        after = control.stat().st_size
+    except OSError:
+        after = before
+    if after <= before:
+        print(
+            f"[brnrd relic] could not append to {control} — nothing was "
+            "written.",
+            file=sys.stderr,
+        )
+        return 1
+    where = f" via {channel}" if channel else ""
+    print(f"[brnrd relic] message{where}: {note}")
+    return 0
+
+
+def cmd_relic_file(args):
+    """Append a ``file`` relic to this run's produce manifest (#1060).
+
+    For a file this run produced outside a commit on the tracked branch — a
+    report handed off by path, an artifact written to a share. ``relics.
+    label`` already renders ``{"kind": "file", "path": …}`` for the
+    ``## Produce`` block; this is the front door onto that grammar, same
+    shape as ``brnrd relic item``'s single-field address.
+    """
+    import sys
+
+    from . import relics
+
+    outbox_dir = _wake_outbox_dir()
+    if outbox_dir is None:
+        print(
+            "[brnrd relic] no run outbox in this environment — `brnrd relic` "
+            "records produce for a live brnrd run, and the daemon names the "
+            "outbox through BRR_OUTBOX_DIR / BRR_PORTAL_STATE. Nothing was "
+            "written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    path = str(getattr(args, "path", "") or "").strip()
+    if not path:
+        print(
+            "[brnrd relic] say which file, e.g. `brnrd relic file "
+            "/tmp/report.md`. Nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    control = outbox_dir / relics.CONTROL_NAME
+    try:
+        before = control.stat().st_size
+    except OSError:
+        before = 0
+    relics.append(outbox_dir, "file", path=path)
+    try:
+        after = control.stat().st_size
+    except OSError:
+        after = before
+    if after <= before:
+        print(
+            f"[brnrd relic] could not append to {control} — nothing was "
+            "written.",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"[brnrd relic] file {path}")
     return 0
 
 
