@@ -298,6 +298,19 @@ function internalTarget(
 	return { target: knownPaths.has(target) ? target : null, anchor: fragment };
 }
 
+// The forge's own qualified shorthand, `owner/repo#N` — same deterministic
+// grammar `backchannelPage.ts`'s `FORGE_REF_RE` resolves for `refs:` rows
+// (#1257), applied here so it also resolves inside item/card prose instead
+// of sitting dead. `(?<![\w/.-])` keeps a `#1257` written after it from
+// being misread as the anchor of a *previous* run — the earlier boundary is
+// what stops `a/b/c#1` from partially matching as `b/c#1` (both segments
+// are single-slash by construction, so a third slash can only get there by
+// starting the match mid-path; the lookbehind refuses exactly that start).
+// A *bare* `#N` is still deliberately not this shape: in free-form prose,
+// same as in a `refs:` row, it names no repo and stays plain text — never a
+// confidently guessed link.
+const PROSE_FORGE_REF_RE = /(?<![\w/.-])([\w][\w.-]*\/[\w][\w.-]*)#(\d+)\b/;
+
 export function inlineTokens(
 	text: string,
 	currentPath: string,
@@ -306,13 +319,24 @@ export function inlineTokens(
 	const tokens: InlineToken[] = [];
 	// Inline code last in the alternation: a span inside a link's text stays
 	// part of the link rather than shadowing it.
-	const pattern = /\[([^\]]+)]\(([^)\s]+)(?:\s+"[^"]*")?\)|\*\*([^*]+)\*\*|`([^`]+)`/g;
+	const pattern = new RegExp(
+		`\\[([^\\]]+)]\\(([^)\\s]+)(?:\\s+"[^"]*")?\\)|\\*\\*([^*]+)\\*\\*|\`([^\`]+)\`|${PROSE_FORGE_REF_RE.source}`,
+		'g'
+	);
 	let cursor = 0;
 	for (const match of text.matchAll(pattern)) {
 		if (match.index! > cursor) tokens.push({ kind: 'text', text: text.slice(cursor, match.index) });
 		if (match[3] !== undefined) tokens.push({ kind: 'strong', text: match[3] });
 		else if (match[4] !== undefined) tokens.push({ kind: 'code', text: match[4] });
-		else {
+		else if (match[5] !== undefined) {
+			tokens.push({
+				kind: 'link',
+				text: match[0],
+				href: `https://github.com/${match[5]}/issues/${match[6]}`,
+				target: null,
+				anchor: null
+			});
+		} else {
 			const rawHref = match[2];
 			const isExternal = /^(https?:|mailto:)/i.test(rawHref);
 			const { target, anchor } = isExternal
