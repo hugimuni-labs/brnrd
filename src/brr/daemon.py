@@ -3384,6 +3384,29 @@ def _run_worker(
         if task.conversation_key:
             env["BRR_CONVERSATION_ID"] = task.conversation_key
 
+        # #1135: pin brnrd's own commit identity for the runner's *own* shell,
+        # not just brnrd's internal git calls. `gitops.bot_identity_env()`
+        # already pins these four vars for brnrd-authored commits (dominion
+        # capture, the founding deed) — but a `git commit` the agent itself
+        # types (resident or strand) never goes through that helper, so its
+        # author fell through to whatever identity happened to be live on
+        # the host at that moment: observed live, a strand's own commit
+        # authored as the human operator. Env outranks `.git/config` at every
+        # level, so setting it here overrides an inherited or ambient
+        # identity the same way `_child_git_pin` overrides an inherited cwd.
+        # Both resident and strand runs build their env through this one
+        # function (`_run_worker`'s two call sites), so no separate wiring is
+        # needed for either — unlike the git pin above, this is not
+        # strand-scoped: a resident's own themed-work commits are equally in
+        # scope. No config knob exists yet for an operator to choose their
+        # own name here (grepped `.brr/config`, `security.config`,
+        # `config.py`); that is a product decision for the maintainer, not
+        # this fix, so the bot identity is unconditional for now.
+        env["GIT_AUTHOR_NAME"] = gitops.BOT_NAME
+        env["GIT_AUTHOR_EMAIL"] = gitops.BOT_EMAIL
+        env["GIT_COMMITTER_NAME"] = gitops.BOT_NAME
+        env["GIT_COMMITTER_EMAIL"] = gitops.BOT_EMAIL
+
         # #703: pin this strand's git to the worktree it was given, so a shell
         # whose cwd drifted to the execution root cannot commit into the
         # *shared host checkout*. Live 2026-07-24: run-260724-2109-hqfz put 262
