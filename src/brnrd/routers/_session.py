@@ -743,10 +743,20 @@ def _safe_next(value: str) -> str:
     but this value is also handed to the frontend as a ``next=`` parameter and
     fed to ``window.location.assign``, which does not. Guard it here, at the
     single producer, rather than at each sink (#735).
+
+    A percent-encoded control character in the query string (`/%0A/evil`)
+    arrives here already decoded — FastAPI/Starlette resolve `%0A` to a
+    literal newline before this function ever sees the value — so a
+    same-site-looking `"/\n/evil.example"` passes the two checks above
+    unscathed. This value later reaches a raw `RedirectResponse(url=...)`
+    Location header and a cookie value with no further validation; reject
+    any control character here, at the source, rather than at either sink.
     """
     if not value or not value.startswith("/"):
         return "/"
     if value[1:2] in ("/", "\\"):
+        return "/"
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
         return "/"
     return value
 

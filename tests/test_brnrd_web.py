@@ -145,6 +145,22 @@ def test_login_context_carries_backend_validated_next(client):
     assert hostile.json()["signin_url"] == "/auth/github/start?next=/"
 
 
+def test_login_context_rejects_a_control_char_smuggled_via_percent_encoding(client):
+    """H-3: `%0A` in the raw query string decodes to a literal newline before
+    `_safe_next` ever runs, so `/%0A/evil.example` looks same-site to the old
+    two checks (starts with `/`, second char isn't `/` or `\\`) while
+    carrying an embedded newline through to a `RedirectResponse` Location
+    header / cookie value with nothing downstream re-validating it. Any
+    control character anywhere in the candidate must fall back to `/`,
+    exactly like the `//` and `/\\` protocol-relative forms above."""
+    hostile = client.get("/v1/dashboard/login-context?next=/%0A/evil.example")
+    assert hostile.json()["next"] == "/"
+    assert hostile.json()["signin_url"] == "/auth/github/start?next=/"
+
+    tab = client.get("/v1/dashboard/login-context?next=/ok/%09/evil.example")
+    assert tab.json()["next"] == "/"
+
+
 def test_login_context_reports_authenticated_session(client, monkeypatch):
     _login_web(client, monkeypatch)
     r = client.get("/v1/dashboard/login-context?next=/repos")
