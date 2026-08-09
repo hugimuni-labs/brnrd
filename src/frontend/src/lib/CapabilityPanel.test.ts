@@ -134,6 +134,56 @@ test('a fully-lit live machine still collapses to "all N lit"', async () => {
 	ok(!html.includes('not live'), 'a live machine never renders the ghost fold line');
 });
 
+// #1277b — the maintainer's own report: `signed in · lit` renders on a page
+// the reader could only be looking at while signed in — zero bits, every
+// load. `_detect_signed_in` (capabilities.py) only ever emits `lit` for this
+// id, so this is the realistic wire shape: an account group with the
+// tautological row alongside a real one.
+test('a lit signed-in row is cut from the account group', async () => {
+	// `terms` stays dark: an all-lit group collapses to the "all N lit"
+	// summary (its own, correct, pre-existing behaviour — #1268), which
+	// would hide `terms accepted` behind a fold and make this test unable
+	// to tell "cut" apart from "collapsed". Keeping one row genuinely unlit
+	// keeps the group expanded so both claims are checked on their own.
+	const html = await renderPanel({
+		capabilities: [
+			cap({ id: 'signed-in', scope: 'account', subject: null, state: 'lit' }),
+			cap({ id: 'terms', scope: 'account', subject: null, state: 'dark' })
+		]
+	});
+	ok(!html.includes('signed in'), 'the tautological row does not render');
+	ok(html.includes('terms accepted'), 'a sibling account row still renders in full');
+});
+
+// The row would carry real information in any state other than lit — this
+// guards against a fix that drops the id outright rather than gating on
+// `state === 'lit'` specifically (not reachable from today's detector, but
+// the row's own hint text and the design's "a row must earn its screen by
+// information" principle both hinge on state, not id).
+test('a non-lit signed-in row would still render — the cut is state-gated, not id-gated', async () => {
+	const html = await renderPanel({
+		capabilities: [cap({ id: 'signed-in', scope: 'account', subject: null, state: 'dark' })]
+	});
+	ok(
+		html.includes('signed in'),
+		'a non-lit state is information, not a tautology, and still renders'
+	);
+});
+
+// The underlying capability data is untouched by the cut — only this one
+// row's screen time goes. `summary`'s lit count reads straight off the
+// `capabilities` prop, so it still counts the row even though the account
+// group no longer renders it.
+test('the lit count in the header summary still counts the cut row', async () => {
+	const html = await renderPanel({
+		capabilities: [cap({ id: 'signed-in', scope: 'account', subject: null, state: 'lit' })]
+	});
+	ok(
+		html.includes('1 lit'),
+		'the summary still counts the capability the row itself no longer shows'
+	);
+});
+
 // A machine group with no `daemon-live` row at all (shouldn't happen for a
 // real daemon, but a catalog row can't assume its neighbour is present) must
 // not be treated as a ghost — no signal to fold on beats a false fold that

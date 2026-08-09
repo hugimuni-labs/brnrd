@@ -112,7 +112,6 @@
 	const TICK_MS = 1_000;
 
 	let shells = $state<QuotaShell[] | null>(null);
-	let quotaWithheld = $state<WithheldLane | null>(null);
 	// Three states, not two (#480's tensed-absence family): an anonymous
 	// visitor must never see the dashboard scaffolding flash before the
 	// landing swaps in, and a signed-in reader must never glimpse the
@@ -121,7 +120,6 @@
 	let now = $state(Date.now());
 
 	let runnersData = $state<RunnersResponse | null>(null);
-	let runnersWithheld = $state<WithheldLane | null>(null);
 	let runnersError = $state<string | null>(null);
 	// Transient receipt for the last rack action. A tap has no approval
 	// step and no modal — this line is its only textual acknowledgment,
@@ -256,7 +254,6 @@
 	// still publishes to it and this lane and the live-runs view both read it.
 	// Retiring the endpoint itself is a separate cut with its own blast.)
 	let scheduledWakes = $state<ScheduledWake[] | null>(null);
-	let activityWithheld = $state<WithheldLane | null>(null);
 	let scheduledWakesError = $state<string | null>(null);
 	// Loom envelope Phase 1 (kb/design-multi-workstream-concurrency.md
 	// §"Loom envelope") — piggybacked on the same live-runs fetch, not a
@@ -979,7 +976,6 @@
 		try {
 			const data = await fetchQuota();
 			shells = data.runner_quotas;
-			quotaWithheld = data.withheld ?? null;
 			authState = 'authed';
 		} catch (e) {
 			if (e instanceof QuotaAuthError) {
@@ -998,7 +994,6 @@
 		try {
 			const runners = await fetchRunners();
 			runnersData = runners;
-			runnersWithheld = runners.withheld ?? null;
 			runnersError = null;
 		} catch (e) {
 			// 401 already surfaced by the quota fetch's unauthenticated state.
@@ -1055,7 +1050,6 @@
 		try {
 			const scheduled = await fetchScheduledWakes();
 			scheduledWakes = scheduled.rows;
-			activityWithheld = scheduled.withheld ?? null;
 			scheduledWakesError = null;
 		} catch (e) {
 			if (!(e instanceof ScheduledWakesAuthError)) {
@@ -1275,12 +1269,13 @@
 				: 'sticky top-0'} z-40 -mx-6 max-h-[100svh] overflow-y-auto bg-stone-950/95 px-6 pt-3 pb-2 backdrop-blur-sm"
 			style="--ignite-delay: 120ms"
 		>
-			{#if runnersData?.profiles.length === 0 && runnersWithheld}
-				<WithheldNotice withheld={runnersWithheld} class="mb-2 text-sm text-amber-200" />
-			{/if}
-			{#if shells?.length === 0 && quotaWithheld}
-				<WithheldNotice withheld={quotaWithheld} class="mb-2 text-sm text-amber-200" />
-			{/if}
+			<!-- #1281: no per-lane "paused —" restated here — `runnersWithheld` /
+			     `quotaWithheld` are the same account-level publish-scope fact
+			     `PublishConsentNotice` already stated once, above, in the variant
+			     that carries the action (`set a scope`). A second, near-identical
+			     banner right below it repeated the fact with disagreeing wording
+			     and no new information — the "earn the screen" principle #1277
+			     already applies to this board. -->
 			<ControlStrip
 				runners={runnersData}
 				repos={connectedRepos}
@@ -1419,9 +1414,8 @@
 							selectedId={loomSelection?.kind === 'wake' ? loomSelection.id : focusRunId}
 						/>
 					</div>
-					{#if scheduledWakes?.length === 0 && activityWithheld}
-						<WithheldNotice withheld={activityWithheld} class="mt-2 text-sm text-amber-200" />
-					{/if}
+					<!-- #1281: no per-lane "paused —" restated here — see the rail's
+					     own note above `<ControlStrip>`; same fact, same fix. -->
 
 					<!-- The unfold: a selected strand (or the sole live one) expands in
 				     place into its run node; a selected wake into its schedule row.
@@ -1569,9 +1563,10 @@
 					configError={configRequestsError}
 				/>
 			</div>
-			{#if prReviewQueue?.length === 0 && prReviewQueueWithheld}
-				<WithheldNotice withheld={prReviewQueueWithheld} class="mt-2 text-sm text-amber-200" />
-			{/if}
+			<!-- #1281: no per-lane "paused —" restated here — `WarpBand` already
+			     has `withheld` above (folded into its own "withheld" chip and
+			     `BackchannelQueue`'s empty state); this second, standalone banner
+			     duplicated that plus the page-head notice. Same fact, same fix. -->
 		</section>
 
 		<!-- the cloth · past (#972): what has become — the wyrd's take-up.

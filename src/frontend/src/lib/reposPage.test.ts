@@ -47,6 +47,26 @@ test('the "connect this repository" section defers to the dashboard cold-start b
 	ok(!src.includes('npm install -g brnrd'), 'does not retype the install command');
 });
 
+// #1277a, second occurrence: this page's own "connect this repository"
+// section prints the *same* backend `pairing_command` (`cd <repo>\nbrnrd
+// account connect …`) in a COPY-button box as ColdStart.svelte's step 02 —
+// the maintainer's fix direction ("do this for every copy block with a
+// placeholder") applies here too, not only in the dashboard component.
+test('the connect-command box never hands the cd placeholder to the COPY button', () => {
+	const src = source();
+	ok(
+		/splitPairingCommand/.test(src),
+		'the page runs the same split ColdStart.svelte uses, not a second parser'
+	);
+	const connectSection = src.match(/id="connect-heading"[\s\S]{0,2000}/);
+	ok(connectSection, 'the "connect this repository" heading exists');
+	const body = connectSection![0];
+	ok(
+		/pairingParts\?\.runnable/.test(body),
+		'the code block and its COPY button both read the runnable half'
+	);
+});
+
 // The re-sync control (#1084's escape hatch): `POST /api/github/sync` exists,
 // is covered by backend tests, and had no frontend caller at all (`grep -rn
 // "github/sync" src --include='*.svelte'` found nothing before this branch).
