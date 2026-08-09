@@ -50,6 +50,7 @@ function compileTo(name: string, sourceFile: string, outName: string): void {
 		.replace(/'\.\/backchannelPage'/g, "'./backchannelPage.ts'")
 		.replace(/'\.\/configRequests'/g, "'./configRequests.ts'")
 		.replace(/'\.\/prReviewQueue'/g, "'./prReviewQueue.ts'")
+		.replace(/'\.\/runLedger'/g, "'./runLedger.ts'")
 		.replace(/'\.\/statusPalette'/g, "'./statusPalette.ts'")
 		.replace(/'\.\/warp'/g, "'./warp.ts'")
 		.replace(/'\.\/withheld'/g, "'./withheld.ts'");

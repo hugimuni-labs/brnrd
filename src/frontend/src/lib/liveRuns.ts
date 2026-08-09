@@ -355,16 +355,3 @@ export function heartbeatLevel(
 	return now - seen > STALL_AFTER_MS ? 'stalling' : 'running';
 }
 
-/** "3m ago" / "just now" — a live run's age since it started, ticking off
- * `now` the same way `timeUntil` ticks the quota window's countdown. */
-export function ageSince(startedAt: string | null, now: number): string | null {
-	if (!startedAt) return null;
-	const started = Date.parse(startedAt);
-	if (Number.isNaN(started)) return null;
-	const deltaS = Math.max(0, Math.floor((now - started) / 1000));
-	if (deltaS < 60) return 'just now';
-	const minutes = Math.floor(deltaS / 60);
-	if (minutes < 60) return `${minutes}m ago`;
-	const hours = Math.floor(minutes / 60);
-	return `${hours}h ${minutes % 60}m ago`;
-}

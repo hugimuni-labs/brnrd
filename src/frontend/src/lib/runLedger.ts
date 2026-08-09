@@ -349,6 +349,46 @@ export function dateTimeLabel(value: string | null, now = Date.now()): string {
 	return date.toLocaleString();
 }
 
+/** The dashboard's one relative-age grammar (#1256) — every surface that
+ * says "how long ago" (cloth lines, bolt rows, run nodes, the PR/config/
+ * backchannel queues) renders through this so none of them can drift from
+ * another's idea of "how old" or "old enough to need a clock instead of a
+ * countdown". Under an hour stays relative (`24m ago`, `just now`) — past
+ * that, a bare "3h 12m ago" keeps demanding arithmetic from the reader with
+ * every extra hour, so it switches to a clock reading instead: viewer-local
+ * time (`5:40 PM`), the same day/not-today check `dateTimeLabel` makes for
+ * its own (more verbose, receipt-grade) absolute rendering, but compact —
+ * a leading month/day only once the instant stops being today's
+ * (`Aug 8, 5:40 PM`), because a bare clock time from yesterday reads as
+ * today's and is simply wrong. `atMs`/`now` are epoch ms — the caller
+ * already resolved whatever wire timestamp it had. */
+export function ageLabel(atMs: number, now: number): string {
+	const deltaMs = Math.max(0, now - atMs);
+	if (deltaMs < 60_000) return 'just now';
+	const minutes = Math.floor(deltaMs / 60_000);
+	if (minutes < 60) return `${minutes}m ago`;
+	const at = new Date(atMs);
+	const clock = at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+	const today = new Date(now);
+	const sameDay =
+		at.getFullYear() === today.getFullYear() &&
+		at.getMonth() === today.getMonth() &&
+		at.getDate() === today.getDate();
+	if (sameDay) return clock;
+	return `${at.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${clock}`;
+}
+
+/** `ageLabel` for callers holding an ISO wire timestamp rather than an
+ * already-parsed epoch ms — every fetched record's age (`started_at`,
+ * `created_at`) on the dashboard. Null in, null out: an absent or
+ * unparseable timestamp renders nothing rather than "NaN ago". */
+export function ageSince(when: string | null, now: number): string | null {
+	if (!when) return null;
+	const at = Date.parse(when);
+	if (Number.isNaN(at)) return null;
+	return ageLabel(at, now);
+}
+
 /** The window the cloth should actually render, from the span the server
  * reports having served.
  *

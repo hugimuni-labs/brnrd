@@ -5,7 +5,6 @@
 	import { loomPastWindowLabel } from './loomBand';
 	import {
 		CLOTH_ROOT_CAP,
-		clothAgeLabel,
 		clothSelvage,
 		groupClothDays,
 		inClothWindow,
@@ -18,7 +17,7 @@
 	import { boltSummonsLabel, type BoltRow } from './bolts';
 	import BoltCompletionCard from './BoltCompletionCard.svelte';
 	import { LENS_ALL, applyLens, availableLenses, reconcileLens } from './loomLens';
-	import type { RunLedgerRow } from './runLedger';
+	import { ageLabel, type RunLedgerRow } from './runLedger';
 	import RunNodeInline from './RunNodeInline.svelte';
 	import Crossing from './Crossing.svelte';
 	import { crossingCells } from './crossing';
@@ -461,7 +460,7 @@
 									>{chips.map((chip) => chip.label).join(' ')}</span
 								>
 							{/if}
-							<span class="shrink-0 text-ink-mute">{clothAgeLabel(now - bolt.endedAt)}</span>
+							<span class="shrink-0 text-ink-mute">{ageLabel(bolt.endedAt, now)}</span>
 						</button>
 						<button
 							type="button"

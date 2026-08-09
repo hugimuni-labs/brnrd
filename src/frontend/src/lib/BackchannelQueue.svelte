@@ -5,7 +5,8 @@
 	import type { AuthoredBackchannelItem, BackchannelItemKind } from './backchannelPage';
 	import type { ConfigChangeRequestItem } from './configRequests';
 	import MarkdownContent from './MarkdownContent.svelte';
-	import { ageSinceCreated, type PRReviewItem } from './prReviewQueue';
+	import type { PRReviewItem } from './prReviewQueue';
+	import { ageSince } from './runLedger';
 	import { STATUS_GOOD, STATUS_SPENT, STATUS_UNKNOWN, STATUS_WARN } from './statusPalette';
 	import WithheldNotice from './WithheldNotice.svelte';
 	import type { WithheldLane } from './withheld';
@@ -291,7 +292,7 @@
 								<span class="uppercase tracking-wide" style={`color: ${statusColor}`}
 									>{item.statusLabel}</span
 								>
-								<span class="text-ink-quiet">{ageSinceCreated(item.createdAt, now) ?? ''}</span>
+								<span class="text-ink-quiet">{ageSince(item.createdAt, now) ?? ''}</span>
 								<a
 									class="text-sky-400 underline hover:text-sky-300"
 									href={item.href}
