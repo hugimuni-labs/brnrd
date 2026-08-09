@@ -1,8 +1,8 @@
-"""Git worktree helpers for run-isolated execution.
+"""Git worktree/clone helpers for run-isolated execution.
 
-Each run gets a fresh worktree at ``.brr/worktrees/<run-id>/`` on a
-dedicated ``brr/<run-id>`` branch sprouted from the resolved seed ref. The
-agent runs inside that sandbox and decides how its work should land:
+Each run gets a fresh tree at ``.brr/worktrees/<run-id>/`` on a dedicated
+``brr/<run-id>`` branch sprouted from the resolved seed ref. The agent runs
+inside that sandbox and decides how its work should land:
 
 - Leaving commits on ``brr/<run-id>`` follows the daemon's branch
   plan: finalization fast-forwards a resolved auto-land target, or
@@ -10,11 +10,40 @@ agent runs inside that sandbox and decides how its work should land:
 - Switching to a different branch (``git switch -c feat/foo`` or
   ``git switch existing``) records a runtime branch choice, and the
   branch is preserved as-is on cleanup.
+
+**Two shapes share this path template.** :func:`create` gives a run a
+*linked* ``git worktree`` — cheap, but its ``.git/config``, ``refs/stash``,
+and index namespace are shared with the main checkout by construction
+(there is exactly one common git dir). :func:`create_clone` gives a run its
+own ``git clone --shared`` — its own ``.git`` directory entirely (own
+config, own stash, own HEAD/index), objects still borrowed cheaply from the
+source via ``.git/objects/info/alternates`` rather than copied. #746 is the
+reason the second shape exists: a strand's own ``git config`` write or
+``git stash`` landed in the *host's* shared state, twice, because a linked
+worktree never isolated either. Strand/worker checkouts use
+:func:`create_clone`; the resident's own ``worktree``-env runs keep
+:func:`create` — see ``envs.WorktreeEnv.prepare``, which picks per run
+based on ``daemon._is_strand``.
+
+**The `--shared` clone's one open window, and how it's closed.** Objects a
+clone references only via its alternates file are the *source* repo's to
+keep or prune — if the source's own ``git gc`` ever collected an object the
+clone still needs (because nothing in the source points at it any more),
+the clone would corrupt. Two guards, not one: :func:`create_clone` sets
+``gc.auto=0`` in the clone's own config (belt), and
+:func:`land_clone_branch` fetches the clone's new commits into the host
+checkout's own refs the moment a run finishes (braces) — once a host-side
+ref points at them, the host's *own* gc can never consider them
+unreferenced, closing the window from the other end. The window that
+remains is only ever "a commit exists solely in a live clone's own object
+store, not yet landed" — the ordinary lifetime of any unpushed commit
+anywhere, not a new hazard.
 """
 
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -214,6 +243,138 @@ def create(repo_root: Path, run_id: str, *, base_ref: str = "HEAD") -> tuple[Pat
         detail = result.stderr.strip() or result.stdout.strip()
         raise RuntimeError(detail or f"failed to create worktree {worktree_path}")
     return worktree_path, branch
+
+
+def create_clone(repo_root: Path, run_id: str, *, base_ref: str = "HEAD") -> tuple[Path, str]:
+    """Create a fresh run *clone* on a new ``brr/<run_id>`` branch (#746).
+
+    Same contract and same path template as :func:`create` — same
+    ``(worktree_path, branch_name)`` return, same ``.brr/worktrees/<run_id>``
+    location (so every existing consumer that mounts/bind-mounts that path,
+    e.g. Docker's ``-v repo_root:repo_root``, needs no change) — but the
+    child gets its own ``.git`` directory via ``git clone --shared`` instead
+    of a linked ``git worktree add``. See the module docstring for why.
+
+    *base_ref* is resolved to a commit OID in *repo_root* **before**
+    cloning, and the clone is created ``--no-checkout`` then checked out at
+    that OID directly, rather than passed as a branch name to ``git
+    clone``/``git checkout -b``. A clone (unlike a linked worktree) does not
+    share *repo_root*'s local branch namespace — only the branch checked
+    out in *repo_root* at clone time becomes a local branch there, and every
+    other branch is only a `refs/remotes/origin/*` name — so an unresolved
+    *base_ref* naming some other local branch would silently pick up the
+    wrong start point via git's remote-branch DWIM instead of failing
+    loudly. A bare OID sidesteps the ambiguity entirely.
+    """
+    worktree_path = path_for(repo_root, run_id)
+    worktree_path.parent.mkdir(parents=True, exist_ok=True)
+    if worktree_path.exists():
+        raise RuntimeError(f"clone already exists: {worktree_path}")
+
+    base_oid = gitops.rev_parse(repo_root, base_ref)
+    if base_oid is None:
+        raise RuntimeError(f"cannot resolve base_ref {base_ref!r} in {repo_root}")
+
+    result = _git(
+        repo_root, "clone", "--shared", "--no-checkout", "--origin", "origin",
+        str(repo_root), str(worktree_path), check=False,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise RuntimeError(detail or f"failed to clone {worktree_path}")
+
+    # Belt: see the module docstring's alternates/gc paragraph. Best-effort —
+    # a clone that can't take this config is still a clone; the fetch-at-land
+    # brace is what actually has to hold.
+    _git(worktree_path, "config", "gc.auto", "0", check=False)
+
+    # Record which checkout this clone belongs to, for
+    # `gitops.shared_brr_dir` — a clone's own `--git-common-dir` names
+    # itself, not the host, so nothing else can answer "where is the shared
+    # `.brr`" for a tree resolved to this clone's path. Inside `.git/`, never
+    # the checked-out working tree: it must never appear in `git status`,
+    # never be committable, and never collide with anything the repo itself
+    # tracks. Best-effort — an unwritable `.git` still yields a working
+    # clone, just one `shared_brr_dir` has to find the slower way.
+    try:
+        (worktree_path / ".git" / gitops._CLONE_HOST_ROOT_MARKER).write_text(
+            f"{repo_root}\n", encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+    # `git clone <local-path> <dest>` points `origin` at the *local path* it
+    # cloned from, not the real remote — fine for objects (that's what
+    # --shared borrows), wrong for anything that resolves the repository
+    # from the remote URL: `gh pr view`, `gh issue view`, a credential
+    # helper matching on host. Repoint it at repo_root's own origin so a
+    # strand's `gh` calls resolve the real repository, not a filesystem
+    # path only this host can read.
+    real_origin = gitops.remote_url(repo_root, "origin")
+    if real_origin:
+        _git(worktree_path, "remote", "set-url", "origin", real_origin, check=False)
+
+    branch = run_branch_name(run_id)
+    result = _git(worktree_path, "checkout", "-b", branch, base_oid, check=False)
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise RuntimeError(
+            detail or f"failed to create branch {branch} in {worktree_path}"
+        )
+    return worktree_path, branch
+
+
+def remove_clone(worktree_path: Path) -> None:
+    """Delete a run clone's directory (#746).
+
+    A clone has no linked-worktree registration to remove from the host's
+    ``.git/worktrees/`` bookkeeping (:func:`remove`'s ``git worktree
+    remove``) and no shared ``core.worktree`` pin to clear
+    (:func:`clear_stale_worktree_pin`) — it is just a directory. Callers
+    must land whatever branch matters (:func:`land_clone_branch`) *before*
+    calling this: the clone's own object store is the only copy of any
+    commit that has not yet been landed or pushed, and this deletes it
+    unconditionally.
+
+    Best-effort: a directory that resists deletion is reported by neither
+    raising nor pretending — the same "leak rather than lose work" posture
+    :func:`has_uncommitted_changes`'s caller already applies before ever
+    reaching here.
+    """
+    shutil.rmtree(worktree_path, ignore_errors=True)
+
+
+def land_clone_branch(repo_root: Path, clone_path: Path, branch: str) -> gitops.BranchUpdateResult:
+    """Fetch *branch* from a run clone into *repo_root* as a local ref (#746).
+
+    ``daemon.publish`` reads and pushes branches as plain local refs in
+    *repo_root* — true for free with a linked worktree (one shared refs
+    db), not true for a clone (its own, separate ref namespace holds any
+    commit the run made). This makes it true again the same way
+    ``--shared`` already made the *objects* cheap to reach: a ``git fetch
+    <clone_path> <branch>`` costs nothing extra to transfer (the objects
+    are already visible via ``.git/objects/info/alternates``) and lands the
+    ref exactly where every existing publish-lane read already expects it.
+
+    Delegates the actual ref update to :func:`fast_forward_branch` (via
+    ``FETCH_HEAD``) rather than a bare ``update-ref``, so the same
+    checked-out-elsewhere refusal an ordinary branch update gets applies
+    here too — a collision ``git worktree list``-based detection cannot see
+    for a clone (a clone is not a linked worktree; nothing registers it),
+    but git's own working-tree state in *repo_root* is still a fact this
+    function can and does check before writing over it.
+
+    Also closes the module docstring's alternates/gc window: the instant
+    this ref exists in *repo_root*, the commits it points at are reachable
+    from the *host's own* refs, so the host's own gc can no longer consider
+    them unreferenced — independent of whether the clone's own ``gc.auto=0``
+    survived.
+    """
+    fetch = _git(repo_root, "fetch", "--no-tags", str(clone_path), branch, check=False)
+    if fetch.returncode != 0:
+        detail = fetch.stderr.strip() or fetch.stdout.strip()
+        return gitops.BranchUpdateResult(success=False, branch=branch, detail=detail)
+    return gitops.fast_forward_branch(repo_root, branch, "FETCH_HEAD")
 
 
 def switch_to(worktree_path: Path, branch: str) -> None:
