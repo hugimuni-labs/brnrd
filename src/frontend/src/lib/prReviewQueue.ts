@@ -39,20 +39,3 @@ export async function fetchPRReviewQueue(
 	}
 	return (await res.json()) as PRReviewQueueResponse;
 }
-
-/** Age for a calendar-time queue: minutes/hours/days/weeks since opened. */
-export function ageSinceCreated(createdAt: string | null, now: number): string | null {
-	if (!createdAt) return null;
-	const created = Date.parse(createdAt);
-	if (Number.isNaN(created)) return null;
-	const deltaS = Math.max(0, Math.floor((now - created) / 1000));
-	if (deltaS < 60) return 'just now';
-	const minutes = Math.floor(deltaS / 60);
-	if (minutes < 60) return `${minutes}m old`;
-	const hours = Math.floor(minutes / 60);
-	if (hours < 48) return `${hours}h old`;
-	const days = Math.floor(hours / 24);
-	if (days < 14) return `${days}d old`;
-	const weeks = Math.floor(days / 7);
-	return `${weeks}w ${days % 7}d old`;
-}

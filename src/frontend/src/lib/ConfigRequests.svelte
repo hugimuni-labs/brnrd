@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { fade, fly } from 'svelte/transition';
 	import { flip } from 'svelte/animate';
-	import { ageSinceCreated } from './prReviewQueue';
 	import type { ConfigChangeRequestItem } from './configRequests';
+	import { ageSince } from './runLedger';
 	import { STATUS_WARN } from './statusPalette';
 
 	interface Props {
@@ -54,7 +54,7 @@
 						</span>
 						<span class="flex shrink-0 items-center gap-2 font-mono">
 							<span class="uppercase tracking-wide" style={`color: ${PENDING_COLOR}`}>pending</span>
-							<span class="text-ink-quiet">{ageSinceCreated(req.created_at, now) ?? ''}</span>
+							<span class="text-ink-quiet">{ageSince(req.created_at, now) ?? ''}</span>
 							<a
 								class="text-sky-400 underline hover:text-sky-300"
 								href={req.approve_url}
