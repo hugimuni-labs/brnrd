@@ -179,16 +179,19 @@ def _commit_in(path, filename, text, message):
 
 
 def _make_finalize_task(
-    repo, tid, *, plan, status="done",
+    repo, tid, *, plan, status="done", strand=False,
 ):
     """Common setup for ``WorktreeEnv.finalize`` outcome-table tests.
 
     Returns ``(backend, ctx, task, runs_dir)``. Each test is responsible
     for whatever git activity inside ``ctx.cwd`` produces the worktree
-    state it wants to classify.
+    state it wants to classify. ``strand=True`` routes ``prepare`` through
+    the #746 clone path (``_is_strand_meta``) instead of a linked worktree —
+    same outcome table, different tree shape underneath.
     """
     response_path = repo / ".brr" / "responses" / f"{tid}.md"
-    task = Run(id=tid, event_id=tid, body="change", status=status)
+    meta = {"strand": True} if strand else {}
+    task = Run(id=tid, event_id=tid, body="change", status=status, meta=meta)
     backend = envs.get_env("worktree")
     ctx = backend.prepare(
         task, repo, {},
@@ -416,6 +419,124 @@ def test_worktree_finalize_skips_classification_when_task_not_done(tmp_path):
 
     assert "publish_status" not in task.meta
     assert "publish_branch" not in task.meta
+
+
+# ── #746: a strand gets a clone, through the full prepare/finalize API ──
+#
+# The tests above drive `WorktreeEnv` for a plain (non-strand) run and
+# never touch the clone path — `_make_finalize_task`'s new `strand=` kwarg
+# routes through `_is_strand_meta` the same way a real spawn/respawn
+# dispatch would. `tests/test_daemon_child_git.py` proves the clone's own
+# containment (config/stash) at the `worktree.create_clone` unit level;
+# these prove the *env layer* wires it correctly end to end — creation,
+# the publish-branch landing step, and teardown ordering.
+
+
+def test_worktree_prepare_gives_a_strand_its_own_git_directory(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    plan = _plan(seed="main", target=None)
+    task = Run(id="task-clone", event_id="task-clone", body="work", meta={"strand": True})
+    response_path = repo / ".brr" / "responses" / "task-clone.md"
+    backend = envs.get_env("worktree")
+
+    ctx = backend.prepare(task, repo, {}, branch_plan=plan, response_path=response_path)
+
+    assert task.meta["worktree_kind"] == "clone"
+    # A clone's `.git` is a real directory; a linked worktree's is a
+    # one-line `gitdir:` pointer file. This is the whole distinction #746
+    # is about, checked directly rather than inferred from behaviour.
+    assert (ctx.cwd / ".git").is_dir()
+
+
+def test_worktree_finalize_ready_lands_a_strands_clone_branch_into_repo_root(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    plan = _plan(seed="main", target=None)
+    backend, ctx, task, runs_dir = _make_finalize_task(
+        repo, "task-clone-ready", plan=plan, strand=True,
+    )
+    clone_path = ctx.cwd
+    _commit_in(clone_path, "change.txt", "change\n", "change")
+    clone_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=clone_path,
+        check=True, stdout=subprocess.PIPE, text=True,
+    ).stdout.strip()
+
+    backend.finalize(ctx, task, runs_dir)
+
+    assert task.meta["publish_status"] == "ready"
+    assert task.meta["publish_branch"] == "brr/task-clone-ready"
+    # The clone is gone (teardown ran)...
+    assert not clone_path.exists()
+    # ...but its branch landed in repo_root first — daemon.publish reads
+    # exactly this, `cwd=repo_root`, with no fetch of its own.
+    assert envs.gitops.branch_exists(repo, "brr/task-clone-ready")
+    assert envs.gitops.rev_parse(repo, "brr/task-clone-ready") == clone_head
+    # And repo_root's own working tree is untouched by the clone's commit.
+    assert not (repo / "change.txt").exists()
+
+
+def test_worktree_finalize_non_done_still_lands_a_strands_armed_publish_branch(tmp_path):
+    """The failure/salvage path: `daemon._capture_worktree` arms
+    `publish_branch` before `finalize` ever sees a non-`done` task. Finalize
+    must land it anyway, or `daemon.publish` (which runs afterward
+    regardless of task.status) finds nothing to push."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    plan = _plan(seed="main", target=None)
+    backend, ctx, task, runs_dir = _make_finalize_task(
+        repo, "task-clone-salvage", plan=plan, status="error", strand=True,
+    )
+    clone_path = ctx.cwd
+    _commit_in(clone_path, "salvage.txt", "salvage\n", "salvage")
+    clone_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=clone_path,
+        check=True, stdout=subprocess.PIPE, text=True,
+    ).stdout.strip()
+    # What `_capture_worktree` would have set before finalize runs.
+    task.meta["publish_branch"] = "brr/task-clone-salvage"
+
+    backend.finalize(ctx, task, runs_dir)
+
+    # Non-done: classification is skipped, so publish_status is untouched...
+    assert "publish_status" not in task.meta
+    # ...but the branch is landed regardless, and the clone is kept (the
+    # non-done path never tears anything down).
+    assert clone_path.exists()
+    assert envs.gitops.branch_exists(repo, "brr/task-clone-salvage")
+    assert envs.gitops.rev_parse(repo, "brr/task-clone-salvage") == clone_head
+
+
+def test_worktree_finalize_reports_conflict_when_a_clone_cannot_land(tmp_path, monkeypatch):
+    """A landing failure keeps the clone (evidence, not garbage) and flips
+    publish_status to conflict rather than silently deleting the only copy
+    of the work."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    plan = _plan(seed="main", target=None)
+    backend, ctx, task, runs_dir = _make_finalize_task(
+        repo, "task-clone-fail", plan=plan, strand=True,
+    )
+    clone_path = ctx.cwd
+    _commit_in(clone_path, "change.txt", "change\n", "change")
+
+    monkeypatch.setattr(
+        envs.worktree, "land_clone_branch",
+        lambda *a, **k: envs.gitops.BranchUpdateResult(
+            success=False, branch="brr/task-clone-fail", detail="simulated failure",
+        ),
+    )
+
+    backend.finalize(ctx, task, runs_dir)
+
+    assert task.meta["publish_status"] == "conflict"
+    assert task.meta["clone_land_failed"] == "simulated failure"
+    assert clone_path.exists()
     assert ctx.cwd.exists()
 
 
