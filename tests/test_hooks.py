@@ -875,6 +875,102 @@ def test_gate_less_silence_warning_survives_the_routing_latch(tmp_path):
     assert "nothing communicated on any thread yet" in second
 
 
+# ── #1142: the "no reply yet" line's consecutive-firing streak ──────────
+#
+# The Stop hook is a fresh subprocess every firing, so a run stuck re-firing
+# Stop with no reply ever landing on its waking thread saw the exact same
+# reassuring sentence every time — no way to tell "first firing, informative"
+# from "fourth firing, a loop" without a persisted counter. These pin the
+# counter (:data:`hooks.STOP_NO_REPLY_STREAK_KEY`) and the wording escalation
+# past :data:`hooks._STOP_NO_REPLY_ESCALATE_THRESHOLD`.
+
+_NO_REPLY_YET = "waking thread itself has no reply yet"
+_VERDICT = "Probable delivery-path problem"
+
+
+def test_stop_no_reply_streak_counts_and_escalates(tmp_path):
+    # Firing #1: informative, state-description wording — same sentence the
+    # pre-#1142 tests above already pin, now prefixed with the count.
+    first = _stop(tmp_path, token="t1", outbound=_DELIVERED)
+    assert "stop boundary #1 · 0 prior terminal messages consumed" in first
+    assert _NO_REPLY_YET in first
+    assert _VERDICT not in first
+
+    # Firing #2: same waking event, still no reply — past the threshold, so
+    # the wording turns into a verdict and points at the working alternative.
+    second = _stop(
+        tmp_path, token="t2", outbound={
+            "replies_current": 0, "replies_other": 0, "outbound_messages": 2,
+        },
+    )
+    assert "stop boundary #2 · 1 prior terminal message consumed" in second
+    assert _VERDICT in second
+    assert "gate: <name>" in second
+
+    # Firing #3: the count keeps climbing, wording stays escalated.
+    third = _stop(
+        tmp_path, token="t3", outbound={
+            "replies_current": 0, "replies_other": 0, "outbound_messages": 3,
+        },
+    )
+    assert "stop boundary #3 · 2 prior terminal messages consumed" in third
+    assert _VERDICT in third
+
+
+def test_stop_no_reply_streak_resets_when_replied(tmp_path):
+    # Build a streak past the threshold...
+    _stop(tmp_path, token="t1", outbound=_DELIVERED)
+    escalated = _stop(
+        tmp_path, token="t2", outbound={
+            "replies_current": 0, "replies_other": 0, "outbound_messages": 2,
+        },
+    )
+    assert _VERDICT in escalated
+
+    # ...then the waking thread finally gets its reply: the arm doesn't fire
+    # at all (a different elif matches), which is itself the reset — the
+    # streak's persisted count must not keep counting a resolved wait.
+    replied = _stop(
+        tmp_path, token="t3", outbound={
+            "replies_current": 1, "replies_other": 0, "outbound_messages": 2,
+        },
+    )
+    assert _NO_REPLY_YET not in replied
+    assert _VERDICT not in replied
+
+    # A fresh unanswered wait after that starts back at #1, not #3 — the old
+    # streak must not bleed into an unrelated, later wait.
+    fresh = _stop(
+        tmp_path, token="t4", outbound={
+            "replies_current": 0, "replies_other": 0, "outbound_messages": 3,
+        },
+    )
+    assert "stop boundary #1 · 0 prior terminal messages consumed" in fresh
+    assert _VERDICT not in fresh
+
+
+def test_stop_no_reply_streak_resets_on_new_waking_event(tmp_path):
+    # Two firings against evt-1 build the streak to #2 (escalated)...
+    _stop(tmp_path, token="t1", current_event="evt-1", outbound=_DELIVERED)
+    second = _stop(
+        tmp_path, token="t2", current_event="evt-1", outbound={
+            "replies_current": 0, "replies_other": 0, "outbound_messages": 2,
+        },
+    )
+    assert "stop boundary #2" in second
+
+    # ...a *different* waking event replacing it is a new wait, not a
+    # continuation: the streak must restart at #1 even though the run as a
+    # whole is still gate-owned and still hasn't replied to anything.
+    third = _stop(
+        tmp_path, token="t3", current_event="evt-2", outbound={
+            "replies_current": 0, "replies_other": 0, "outbound_messages": 3,
+        },
+    )
+    assert "stop boundary #1 · 0 prior terminal messages consumed" in third
+    assert _VERDICT not in third
+
+
 def test_content_dedupe_never_reaches_the_closeout_channel(tmp_path):
     # The guard for the defect above, stated as its own claim rather than as
     # a side effect of another test: a byte-identical closeout render is what
