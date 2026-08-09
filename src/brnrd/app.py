@@ -18,7 +18,7 @@ from .routers import accounts, billing, config_approval, daemons, dev, github_ap
 from .routers import dashboard as dashboard_router
 from .routers import repo_actions as repo_actions_router
 from .routers import web_auth as web_auth_router
-from .security_headers import HSTSMiddleware
+from .security_headers import CSPReportOnlyMiddleware, HSTSMiddleware, csp_report_only_value
 from .spa import backend_namespaces, declared_paths, mount_frontend, resolve_frontend_dir
 
 _STATIC_DIR = Path(__file__).with_name("static")
@@ -131,5 +131,13 @@ def create_app(
     frontend_dir = resolve_frontend_dir(settings.frontend_dir)
     if frontend_dir is not None:
         mount_frontend(app, frontend_dir, app.state.backend_namespaces)
+
+    # Report-Only CSP, hashed against whatever SvelteKit build is actually
+    # being served (see security_headers.py for why this can't be SvelteKit's
+    # own `kit.csp` under this app's static-adapter architecture). No build to
+    # hash against ⇒ no header, same "not an error" stance as the mount above.
+    csp_value = csp_report_only_value(frontend_dir)
+    if csp_value is not None:
+        app.add_middleware(CSPReportOnlyMiddleware, value=csp_value)
 
     return app
