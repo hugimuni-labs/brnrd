@@ -175,7 +175,11 @@ test('buildDigest: rows are the summons-worthy subset only, newest first, linked
 		['shipped-a-pr'],
 		'the quiet reply-only tick stays out of the digest rows'
 	);
-	assert.equal(digest.rows[0].href, '/runs/Gurio__brr/shipped-a-pr');
+	assert.equal(
+		digest.rows[0].href,
+		'/runs/Gurio__brr/shipped-a-pr#receipt',
+		'a digest row is always summons-worthy, so it links straight to the run\'s #receipt section (design-run-route.md rung 2)'
+	);
 });
 
 test('buildDigest: a run outside the window never appears in rows even when summons-worthy', () => {
