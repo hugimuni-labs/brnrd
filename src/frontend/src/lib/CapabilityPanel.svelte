@@ -124,9 +124,42 @@
 		return subject ? `machine #${subject.slice(-6)}` : `machine ${index + 1}`;
 	}
 
-	let groups = $derived.by((): { account: Row[]; machine: Group[]; repo: Group[] } => {
+	// #1268 maintainer follow-up: "multiple hex-id machines render with no
+	// tell for which is real vs ghost." A machine group's own `daemon-live`
+	// row already carries the answer (lit = inside the 2-minute heartbeat
+	// window, `evidence.as_of` = the last touch) — it was just buried among
+	// the group's other rows instead of riding the group's own header,
+	// which is the one line a human scanning several machines actually
+	// reads first. `null` when the group has no `daemon-live` row at all
+	// (shouldn't happen for a real daemon — `cli-installed` always seeds
+	// one — but a catalog row can't assume its neighbour is present).
+	function machineLiveTell(g: Group): string | null {
+		const live = g.rows.find((r) => r.cap.id === 'daemon-live');
+		if (!live) return null;
+		if (live.cap.state === 'lit') return 'live';
+		// `ageSince` already appends its own "ago" (`"3h 12m ago"`).
+		const age = live.cap.evidence.as_of ? ageSince(live.cap.evidence.as_of, now) : null;
+		return age ? `last seen ${age}` : 'not live';
+	}
+
+	// #1268: expanded-group state for "collapse the lit" — a key from
+	// `Group.key` that the resident has pressed open this session. Session-
+	// scoped only, same shape as `seenLit`/`regressed` below: nothing here
+	// persists past a reload, and a freshly-collapsed group starts collapsed
+	// again on the next fetch that still reads all-lit.
+	let expanded = new SvelteSet<string>();
+	function toggleExpanded(key: string) {
+		if (expanded.has(key)) expanded.delete(key);
+		else expanded.add(key);
+	}
+
+	let groups = $derived.by((): { account: Group; machine: Group[]; repo: Group[] } => {
 		const list = capabilities ?? [];
-		const account = list.filter((c) => c.scope === 'account').map(toRow);
+		const account: Group = {
+			key: 'account',
+			title: 'account',
+			rows: list.filter((c) => c.scope === 'account').map(toRow)
+		};
 
 		const bySubject = (scope: string) => {
 			const map = new SvelteMap<string, Capability[]>();
@@ -314,13 +347,9 @@
 			</div>
 			{#if cap.state === 'waiting' && requires}
 				<p class="mt-0.5 font-mono text-[10px] text-ink-mute">{requires}</p>
-			{:else if cap.state === 'unobservable'}
-				<p class="mt-0.5 font-mono text-[10px] text-ink-mute">
-					no detector reaches this from here yet
-				</p>
 			{/if}
 		</div>
-		{#if cap.state !== 'lit' && affordance.text}
+		{#if cap.state !== 'lit' && cap.state !== 'unobservable' && affordance.text}
 			{#if affordance.copyValue}
 				<button
 					type="button"
@@ -375,6 +404,58 @@
 	</li>
 {/snippet}
 
+{#snippet groupRows(g: Group)}
+	<!-- #1268 mechanisms 1+2, both scoped to one group's own row list:
+	     - "collapse the lit": every row in this group is `lit` ⇒ one quiet
+	       "all N lit" line, expandable on press, instead of N rows a mature
+	       account never needs to glance at.
+	     - "quiet the unobservable": unobservable rows never render their own
+	       boilerplate line or act affordance (an act on a lamp that *cannot
+	       be measured* invites a result the board can't show) — collapsed to
+	       one count per group instead, alongside whatever did render. -->
+	{@const visible = g.rows.filter((r) => r.cap.state !== 'unobservable')}
+	{@const unobservable = g.rows.filter((r) => r.cap.state === 'unobservable')}
+	{@const allLit = g.rows.length > 0 && g.rows.every((r) => r.cap.state === 'lit')}
+	{#if allLit && !expanded.has(g.key)}
+		<button
+			type="button"
+			class="mt-1 flex cursor-pointer items-center gap-2 py-1 font-mono text-[10px] text-ink-mute hover:text-ink-quiet"
+			onclick={() => toggleExpanded(g.key)}
+		>
+			<span
+				class="inline-block h-2 w-2 shrink-0 rounded-full"
+				style={statusDotStyle('burning', STATUS_GOOD)}
+				aria-hidden="true"
+			></span>
+			all {g.rows.length} lit
+		</button>
+	{:else}
+		<ul class="mt-1 flex flex-col divide-y divide-stone-900">
+			{#each visible as r (r.cap.id + r.cap.subject)}
+				{@render row(r)}
+			{/each}
+		</ul>
+		{#if unobservable.length}
+			<p class="mt-1 flex items-center gap-2 py-1 font-mono text-[10px] text-ink-mute">
+				<span
+					class="inline-block h-2 w-2 shrink-0 rounded-full border border-dashed border-stone-600"
+					aria-hidden="true"
+				></span>
+				{unobservable.length} lamp{unobservable.length === 1 ? '' : 's'} unobservable from here
+			</p>
+		{/if}
+		{#if allLit}
+			<button
+				type="button"
+				class="mt-1 cursor-pointer font-mono text-[9px] tracking-wide text-ink-mute uppercase hover:text-ink-quiet"
+				onclick={() => toggleExpanded(g.key)}
+			>
+				collapse
+			</button>
+		{/if}
+	{/if}
+{/snippet}
+
 {#if capabilities !== null && capabilities.length > 0}
 	<section
 		class="panel ignite mt-4 p-4"
@@ -400,24 +481,22 @@
 			{/if}
 		</div>
 
-		{#if groups.account.length}
-			<ul class="mt-3 flex flex-col divide-y divide-stone-900">
-				{#each groups.account as r (r.cap.id)}
-					{@render row(r)}
-				{/each}
-			</ul>
+		{#if groups.account.rows.length}
+			<div class="mt-3">
+				<p class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase">account</p>
+				{@render groupRows(groups.account)}
+			</div>
 		{/if}
 
 		{#if groups.machine.length}
 			<div class="mt-3">
 				<p class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase">machine</p>
 				{#each groups.machine as g (g.key)}
-					<p class="mt-2 font-mono text-[10px] text-stone-400">{g.title}</p>
-					<ul class="mt-1 flex flex-col divide-y divide-stone-900">
-						{#each g.rows as r (r.cap.id + r.cap.subject)}
-							{@render row(r)}
-						{/each}
-					</ul>
+					{@const tell = machineLiveTell(g)}
+					<p class="mt-2 font-mono text-[10px] text-stone-400">
+						{g.title}{#if tell}<span class="text-ink-mute"> · {tell}</span>{/if}
+					</p>
+					{@render groupRows(g)}
 				{/each}
 			</div>
 		{/if}
@@ -427,11 +506,7 @@
 				<p class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase">repo</p>
 				{#each groups.repo as g (g.key)}
 					<p class="mt-2 font-mono text-[10px] text-stone-400">{g.title}</p>
-					<ul class="mt-1 flex flex-col divide-y divide-stone-900">
-						{#each g.rows as r (r.cap.id + r.cap.subject)}
-							{@render row(r)}
-						{/each}
-					</ul>
+					{@render groupRows(g)}
 				{/each}
 			</div>
 		{/if}
