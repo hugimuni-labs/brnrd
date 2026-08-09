@@ -171,6 +171,10 @@ def _migrate_daemons(conn: Connection) -> None:
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS quota_updated_at TIMESTAMP"))
     # Per-gate ingestion health (#360), published in the quota payload.
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS gate_health_json TEXT DEFAULT '[]'"))
+    # `repo-initialised` capability source (#1268), also piggybacked on the
+    # quota payload — see models.Daemon.repo_agents_md_missing/.repo_kb_missing.
+    conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS repo_agents_md_missing BOOLEAN"))
+    conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS repo_kb_missing BOOLEAN"))
     # Live/coexisting-runs snapshot mirror (#258) — see models.Daemon.live_runs_json.
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS live_runs_json TEXT DEFAULT '[]'"))
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS live_runs_updated_at TIMESTAMP"))
