@@ -5,7 +5,6 @@
 	import { typeReveal } from './transitions';
 	import MoodChip from './MoodChip.svelte';
 	import {
-		ageSince,
 		heartbeatLevel,
 		liveRelicChips,
 		liveRunDisplayName,
@@ -13,7 +12,7 @@
 		type LiveRun
 	} from './liveRuns';
 	import { runFacesInWindow } from './runFace';
-	import { relicIcon } from './runLedger';
+	import { ageSince, relicIcon } from './runLedger';
 	import { runNodeHref } from './runNode';
 	import { STATUS_GOOD, STATUS_WARN, STATUS_UNKNOWN, statusDotStyle } from './statusPalette';
 	import WithheldNotice from './WithheldNotice.svelte';

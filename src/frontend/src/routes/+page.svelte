@@ -34,7 +34,6 @@
 	} from '$lib/runners';
 	import {
 		LiveRunsAuthError,
-		ageSince,
 		fetchLiveRuns,
 		heartbeatLevel,
 		liveRunDisplayName,
@@ -51,7 +50,7 @@
 		runNodeHref,
 		type NodeIdentity
 	} from '$lib/runNode';
-	import { durationLabel } from '$lib/runLedger';
+	import { ageSince, durationLabel } from '$lib/runLedger';
 	import ScheduleLane from '$lib/ScheduleLane.svelte';
 	import {
 		ScheduledWakesAuthError,
@@ -97,7 +96,13 @@
 		type ConfigChangeRequestItem
 	} from '$lib/configRequests';
 	import { railScrollVerdict, scrollClockTick, type ScrollClock } from '$lib/collapse';
-	import { machineDockTop, machineDockVerdict, machineTapVerdict } from '$lib/machineDock';
+	import {
+		machineDockTop,
+		machineDockVerdict,
+		machineTapVerdict,
+		railDockHeight,
+		type RailHeightSamples
+	} from '$lib/machineDock';
 
 	// Slice 2 (kb/design-dashboard-live-surface.md): the window-track
 	// live-quota view. Polls the same daemon-published data the Jinja
@@ -524,13 +529,24 @@
 			// `railCondensed` flip, is #1169's actual defect: the binding
 			// updates a frame after the DOM it measures, so the dock's target
 			// moved out from under its own reader for the one frame that
-			// mattered.
+			// mattered. `railDockHeight` (`machineDock.ts`) reads the same
+			// settled samples `dockTop` (template) does — see its own doc for
+			// why an open rack outranks `condensed` here too (#1258).
 			const dockRaw = machineSentinel
 				? machineDockVerdict({
 						home: machineSentinel.getBoundingClientRect().bottom,
 						dockTop: machineDockTop(
-							railClock.settled ? railSlimHeight || railHeight : railFullHeight,
-							railClock.settled
+							railDockHeight(
+								{
+									full: railFullHeight,
+									slim: railSlimHeight,
+									expanded: railExpandedHeight,
+									live: railHeight
+								},
+								railOpen,
+								railClock.settled
+							),
+							railClock.settled && !railOpen
 						),
 						docked: dockClock.settled
 					})
@@ -597,6 +613,19 @@
 	// ever fires for the very first condense on a fresh load, before this has
 	// a sample to give.
 	let railSlimHeight = $state(0);
+	// The rack's own settled height (#1258: expanded, the panel painted over
+	// the machine dock and its bottom was unreachable). `railFullHeight` and
+	// `railSlimHeight` are deliberately frozen while the rack is open — see
+	// their own guards — so before this existed, an open rack left `dockTop`
+	// (below) parked at the *resting* rail height while the rail itself,
+	// still `sticky top-0`, actually rendered up to `max-h-[100svh]` tall and
+	// stayed stuck for the whole scroll range the rack occupies (z-40, over
+	// the dock's z-30) — the dock was laid out correctly and painted under
+	// the rail the entire time. Same discipline as the other two: sampled at
+	// rest (`railHeight > 0` after the rack's content has mounted), never
+	// read live inside the scroll tick (`dockRaw` below) — that live read is
+	// #1169's actual defect, named where it's guarded against.
+	let railExpandedHeight = $state(0);
 	let machineSentinel = $state<HTMLDivElement | null>(null);
 	let railOpen = $state(false);
 	$effect(() => {
@@ -605,13 +634,26 @@
 	$effect(() => {
 		if (railCondensed && !railOpen && railHeight > 0) railSlimHeight = railHeight;
 	});
+	$effect(() => {
+		if (railOpen && railHeight > 0) railExpandedHeight = railHeight;
+	});
 	let railReserve = $derived(Math.max(0, railFullHeight - railHeight));
-	// The one target both the dock's actual CSS position (template below) and
-	// the tick's own raw threshold (`dockRaw` above) read — a single number,
-	// computed once, never two call sites each deriving their own version of
-	// "where the dock belongs".
+	// The one formula both the dock's actual CSS position (template below) and
+	// the tick's own raw threshold (`dockRaw` above) call — a single function
+	// (`machineDock.railDockHeight`), never two call sites each deriving their
+	// own version of "where the dock belongs". `condensed` still gates the 8px
+	// magnet overlap (`machineDockTop`'s own docstring) at the call site, not
+	// inside the height formula: that reclaim is for the slim-stacked rest
+	// state, and an open rack is never that, however the page happens to be
+	// scrolled.
+	let railSamples = $derived<RailHeightSamples>({
+		full: railFullHeight,
+		slim: railSlimHeight,
+		expanded: railExpandedHeight,
+		live: railHeight
+	});
 	let dockTop = $derived(
-		machineDockTop(railCondensed ? railSlimHeight || railHeight : railFullHeight, railCondensed)
+		machineDockTop(railDockHeight(railSamples, railOpen, railCondensed), railCondensed && !railOpen)
 	);
 
 	// His proposal, verbatim: "when it's expanded, it should just somehow go to
@@ -1220,13 +1262,43 @@
 		<!-- the rail, sticky (his 08-02 steer): resource truth — fuel, tank,
 		     slots, the next pick — stays on top at every scroll position and
 		     condenses to one line once the reader scrolls past it. This is
-		     where the old order-flip died: nothing jumps when a run ignites. -->
+		     where the old order-flip died: nothing jumps when a run ignites.
+
+		     Sticky lapses while the rack is open (#1258). The steer is about
+		     the glance bar; an open rack is a temporary, full detour, not the
+		     standing resource strip, and `max-h-[100svh]` alone doesn't make
+		     it a *bounded* detour — sticky, it stays glued to the viewport top
+		     at its full clamped height for nearly the entire rest of the
+		     page's scroll range (it only releases within the last ~page-worth
+		     of scroll, where its containing block actually ends), so it painted
+		     over the MACHINE dock the whole time regardless of `dockTop`
+		     (`railDockHeight` above fixes the *offset*; this fixes the block
+		     that ate the space that offset points into). `onRackChange`
+		     already lands the reader at the very top the instant it opens, so
+		     `sticky` buys nothing there it doesn't already have — dropping it
+		     only changes what happens once they keep scrolling: the panel
+		     scrolls away like any other block, its own `overflow-y-auto` still
+		     answers "is the panel's own bottom reachable", and the machine dock
+		     right after it becomes reachable the ordinary way. Static, not
+		     `sticky`, at scrollY 0 render identically — no jump at the
+		     boundary this toggles on.
+
+		     `overscroll-contain` (also #1258, measured rather than assumed:
+		     driven live, the panel's own `scrollTop` maxed out in the first
+		     wheel tick and 7600px of further wheel delta over the panel never
+		     moved `window.scrollY` by one pixel) blocked the chain from "the
+		     panel's own list is exhausted" to "keep scrolling the page" — the
+		     literal, measured shape of "unreachable" for a reader whose
+		     pointer or finger stays over the panel, which on a phone is
+		     everywhere the panel is (`-mx-6`, edge to edge). Gone with
+		     `sticky`, for the reader still scrolled past `max-h-[100svh]`'s
+		     own overflow, same trip. -->
 		<div bind:this={railSentinel} aria-hidden="true"></div>
 		<div
 			bind:clientHeight={railHeight}
-			class="ignite sticky top-0 z-40 -mx-6 max-h-[100svh] overflow-y-auto bg-stone-950/95 px-6 pt-3 pb-2 backdrop-blur-sm {railOpen
-				? 'overscroll-contain'
-				: ''}"
+			class="ignite {railOpen
+				? 'relative'
+				: 'sticky top-0'} z-40 -mx-6 max-h-[100svh] overflow-y-auto bg-stone-950/95 px-6 pt-3 pb-2 backdrop-blur-sm"
 			style="--ignite-delay: 120ms"
 		>
 			{#if runnersData?.profiles.length === 0 && runnersWithheld}
@@ -1310,11 +1382,23 @@
 		     living on the dock would leave the marker 24px adrift from the thing
 		     it marks, and `machineDockVerdict` reads that edge to decide what a
 		     tap means. Marker and gap in one element: the two edges cannot
-		     disagree. -->
+		     disagree.
+
+		     Sticky lapses with the rail's, while the rack is open (#1258): a
+		     `top: ${dockTop}px` that tracks the rail's full-panel height is
+		     exactly right for a *stuck* dock (flush under a rail also glued at
+		     the viewport top) and exactly wrong for a `relative` one, where
+		     `top` shifts the box off its in-flow position and would open a
+		     `dockTop`-tall dead gap above it the instant the rail (and this)
+		     stop being sticky. Normal flow, no offset, right where the
+		     now-`relative` rail's own bottom margin puts it — the ordinary
+		     reachable position this whole fix is for. -->
 		<div bind:this={machineSentinel} class="h-6" aria-hidden="true"></div>
 		<div
-			class="ignite machine-dock sticky z-30 -mx-6 bg-stone-950/95 px-6 backdrop-blur-sm"
-			style={`--ignite-delay: 250ms; top: ${dockTop}px`}
+			class="ignite machine-dock {railOpen
+				? 'relative'
+				: 'sticky'} z-30 -mx-6 bg-stone-950/95 px-6 backdrop-blur-sm"
+			style={railOpen ? '--ignite-delay: 250ms' : `--ignite-delay: 250ms; top: ${dockTop}px`}
 			aria-label="the machine"
 		>
 			<!-- Keyed on the dock verdict, not the rail's: docking is what changes

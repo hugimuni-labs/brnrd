@@ -2,7 +2,7 @@
 	import { resolve } from '$app/paths';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { DOCS_URL } from './publicStats';
-	import { ageSince } from './liveRuns';
+	import { ageSince } from './runLedger';
 	import { statusDotStyle, STATUS_GOOD, STATUS_COOLING } from './statusPalette';
 	import type { Capability, ConnectedRepo } from './repos';
 
