@@ -10,6 +10,7 @@ import {
 	machineHeadFields,
 	machineHeadRun,
 	machineTapVerdict,
+	railDockHeight,
 	railKeepsLivePick
 } from './machineDock.ts';
 import { tapVerdict } from './collapse.ts';
@@ -175,6 +176,38 @@ test('an unmeasured geometry never claims to be docked', () => {
 	// make the very first tap on a page at rest a scroll instead of an expand.
 	assert.equal(machineDockVerdict({ home: Number.NaN, dockTop: 44, docked: false }), false);
 	assert.equal(machineDockVerdict({ home: 0, dockTop: Number.NaN, docked: true }), false);
+});
+
+// railDockHeight (#1258): expanded, the rack panel painted over this dock
+// and its bottom was unreachable — `dockTop` was reading the *resting* rail
+// height while the rail itself rendered up to `max-h-[100svh]` tall and
+// stayed glued to the viewport top for the rack's whole open span.
+
+test('open outranks condensed — an open rack always reads its own settled height', () => {
+	const samples = { full: 90, slim: 44, expanded: 900, live: 12 };
+	assert.equal(railDockHeight(samples, true, false), 900);
+	assert.equal(railDockHeight(samples, true, true), 900, 'open beats condensed either way');
+});
+
+test('closed and at rest, the resting height answers — unchanged from before #1258', () => {
+	const samples = { full: 90, slim: 44, expanded: 900, live: 12 };
+	assert.equal(railDockHeight(samples, false, false), 90);
+});
+
+test('closed and condensed, the slim height answers — unchanged from before #1258', () => {
+	const samples = { full: 90, slim: 44, expanded: 900, live: 12 };
+	assert.equal(railDockHeight(samples, false, true), 44);
+});
+
+test("a settled sample of 0 falls back to the rail's own live height, every branch", () => {
+	// The first tick a state is reached, before its own settled `$effect` has
+	// fired — same fallback shape `railSlimHeight || railHeight` always had.
+	const unsettled = { full: 0, slim: 0, expanded: 0, live: 77 };
+	assert.equal(railDockHeight(unsettled, true, false), 77);
+	assert.equal(railDockHeight(unsettled, false, true), 77);
+	// `full` carries no `|| live` fallback — same as before #1258, it is
+	// sampled unconditionally at rest and 0 only ever means "not mounted yet".
+	assert.equal(railDockHeight(unsettled, false, false), 0);
 });
 
 test('the dock sits flush under the rail — no gap, his "like a magnet"', () => {
