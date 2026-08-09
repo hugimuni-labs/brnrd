@@ -247,19 +247,24 @@ class HookContext:
         self.flush_sync = (
             env.get("BRR_FLUSH_SYNC") or ""
         ).strip().lower() in {"1", "true", "yes", "on"}
-        # #1184: the rooted-write guard's two facts. `GIT_WORK_TREE` is not a
-        # `BRR_*` handle — it is the same variable `daemon._child_git_pin`
-        # already exports to pin this strand's *git*, read here for its other
-        # value: the one directory an `Edit`/`Write` is always allowed to
-        # land in. `BRR_HOST_ROOT` is new, armed by the daemon only alongside
-        # it (`daemon._runner_runtime`) — the host checkout root a subprocess
-        # cannot otherwise derive, since cwd and `-C` are exactly what the git
-        # pin outranks. Both unset ⇒ the guard is unarmed (a resident, a host
-        # run, or a strand whose pin didn't apply) and `_rooted_write_neutral`
-        # never blocks — the same fact-based degrade `_child_git_pin` uses.
+        # #1184: the rooted-write guard's two facts, both `BRR_`-namespaced
+        # copies the daemon arms alongside the git pin (`daemon._runner_runtime`)
+        # — deliberately not read off `GIT_DIR`/`GIT_WORK_TREE` directly, even
+        # though the pin already exports those. Every `brnrd hook <phase>`
+        # invocation runs through `cli.main()`, whose first act
+        # (`_drop_inherited_git_pin`) pops `GIT_DIR`/`GIT_WORK_TREE` from
+        # `os.environ` before anything else runs — correct and load-bearing for
+        # brnrd's own git calls, but it means this hook subprocess can never see
+        # the raw variables. `BRR_HOST_ROOT` is the host checkout root a
+        # subprocess cannot otherwise derive (cwd and `-C` are exactly what the
+        # pin outranks); `BRR_WORK_TREE` is `GIT_WORK_TREE`'s value under a name
+        # the scrub does not touch. Both unset ⇒ the guard is unarmed (a
+        # resident, a host run, or a strand whose pin didn't apply) and
+        # `_rooted_write_neutral` never blocks — the same fact-based degrade
+        # `_child_git_pin` uses.
         host_root = env.get("BRR_HOST_ROOT")
         self.host_root = Path(host_root) if host_root else None
-        work_tree = env.get("GIT_WORK_TREE")
+        work_tree = env.get("BRR_WORK_TREE")
         self.git_work_tree = Path(work_tree) if work_tree else None
         portal = env.get("BRR_PORTAL_STATE")
         self.portal_state_path = Path(portal) if portal else None

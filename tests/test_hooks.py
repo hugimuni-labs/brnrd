@@ -1439,13 +1439,24 @@ def test_hook_capability_precheck(tmp_path, monkeypatch):
 # but `Edit`/`Write` never touch git — they take a raw absolute path. This
 # `pre-tool` phase closes that gap: refuse a write path rooted in the host
 # checkout (``BRR_HOST_ROOT``) but outside the strand's own worktree
-# (``GIT_WORK_TREE`` — the same variable the git pin already exports).
+# (``BRR_WORK_TREE``).
+#
+# Deliberately not ``GIT_WORK_TREE`` even though the git pin exports exactly
+# that name into the same env dict: every ``brnrd hook <phase>`` invocation
+# runs through ``cli.main()``, whose first act (``_drop_inherited_git_pin``)
+# pops ``GIT_DIR``/``GIT_WORK_TREE`` from ``os.environ`` before anything else
+# runs, so the raw variable never reaches this subprocess in production —
+# only the ``BRR_``-namespaced copy the daemon arms alongside it survives.
+# Found live: an early cut of this guard read ``GIT_WORK_TREE`` directly and
+# passed every unit test here (which hand-build their env dict and so never
+# exercise the scrub) while never actually arming in a real `brnrd hook
+# pre-tool` subprocess.
 
 
 def _rooted_env(tmp_path, *, host_root, work_tree, flavour="claude"):
     env = _env(tmp_path, flavour)
     env["BRR_HOST_ROOT"] = str(host_root)
-    env["GIT_WORK_TREE"] = str(work_tree)
+    env["BRR_WORK_TREE"] = str(work_tree)
     return env
 
 
@@ -1462,7 +1473,7 @@ def _rooted_layout(tmp_path):
 
 
 def test_pre_tool_is_a_noop_when_unarmed(tmp_path):
-    # No BRR_HOST_ROOT / GIT_WORK_TREE at all — a resident, a `host` run, or
+    # No BRR_HOST_ROOT / BRR_WORK_TREE at all — a resident, a `host` run, or
     # a strand whose git pin found no readable git dir (`_child_git_pin`'s
     # own degrade). Nothing to compare a write path against is not evidence
     # of anything, so this never blocks.
@@ -1470,6 +1481,28 @@ def test_pre_tool_is_a_noop_when_unarmed(tmp_path):
         hooks.PHASE_PRE_TOOL,
         _pre_tool_stdin("Write", "/host/checkout/daemon.py"),
         _env(tmp_path),
+    )
+    assert code == 0
+    assert out == {}
+
+
+def test_pre_tool_ignores_the_raw_git_work_tree_env_var(tmp_path):
+    # #1184 regression: `cli.main()`'s own `_drop_inherited_git_pin` strips
+    # `GIT_DIR`/`GIT_WORK_TREE` from `os.environ` before any `brnrd hook
+    # <phase>` subprocess runs, so a real `pre-tool` fire never carries the
+    # raw variable — only `BRR_WORK_TREE` survives that scrub. A guard keyed
+    # on `GIT_WORK_TREE` would pass every other test in this file (they hand-
+    # build the env dict and so never exercise the scrub) while staying
+    # permanently unarmed in production. `BRR_HOST_ROOT` alone must not be
+    # enough to arm it.
+    host, work_tree = _rooted_layout(tmp_path)
+    env = _env(tmp_path)
+    env["BRR_HOST_ROOT"] = str(host)
+    env["GIT_WORK_TREE"] = str(work_tree)  # the raw name — must be ignored
+    out, code = hooks.run_hook(
+        hooks.PHASE_PRE_TOOL,
+        _pre_tool_stdin("Write", str(host / "daemon.py")),
+        env,
     )
     assert code == 0
     assert out == {}
