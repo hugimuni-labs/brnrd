@@ -7235,6 +7235,86 @@ def _queue_stop_request(
     return True
 
 
+def _render_seeded_report_skeleton(
+    *, title: str, dispatcher_run_id: str, event_id: str, contract_branch: str,
+) -> str:
+    """The skeleton body a declared ``report:`` path gets pre-seeded with.
+
+    Pulled out of :func:`_queue_spawn_request` so the collision check can
+    compute "what would this dispatch write" without re-running the write
+    itself (#1186)."""
+    return (
+        f"# Report — {title or '(untitled)'}\n"
+        "\n"
+        f"Dispatched by run {dispatcher_run_id}, event {event_id}.\n"
+        f"Declared branch: {contract_branch or '(none declared)'}\n"
+        "\n"
+        "## Status\n"
+        "\n"
+        "_Seeded at dispatch — grow this as work lands. Do not wait until "
+        "the end\n"
+        "to write it; a run that budgets its whole window for the work "
+        "has none\n"
+        "left for this file._\n"
+    )
+
+
+def _seed_declared_report(
+    contract_report: str,
+    *,
+    title: str,
+    dispatcher_run_id: str,
+    event_id: str,
+    contract_branch: str,
+    outbox_dir: Path | None,
+) -> None:
+    """#1186: write the declared ``report:`` file *at dispatch time*, before
+    the child even exists.
+
+    The fix this closes: a strand that spends its whole context window on
+    the actual work has none left for the report a `report:` contract
+    obligates it to write from a blank page. Pre-seeding the file here means
+    a strand that never gets around to it still leaves something more
+    informative than ``MISSING`` — the completion check (`_spawn_contract_check`)
+    just `stat`s the same path, unchanged.
+
+    Best-effort only, on purpose: a naming collision or a permissions
+    failure on a dispatcher-chosen path is a dispatcher-side problem, never
+    a reason to refuse the spawn itself. Every failure path here ends in an
+    advisory notice and a `return`, never an exception past this function.
+    """
+    path = Path(contract_report)
+    skeleton = _render_seeded_report_skeleton(
+        title=title, dispatcher_run_id=dispatcher_run_id, event_id=event_id,
+        contract_branch=contract_branch,
+    )
+    try:
+        if path.exists():
+            existing = path.read_text(encoding="utf-8", errors="replace")
+            if existing == skeleton:
+                return
+            _record_outbox_notice(
+                outbox_dir,
+                f"spawn: report: {contract_report} already exists with "
+                "different content — not overwritten. If that content "
+                "belongs to an unrelated file, the declared path collides "
+                "with it; the spawn proceeds regardless.",
+                kind="advisory",
+                lifetime="run",
+            )
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(skeleton, encoding="utf-8")
+    except OSError as exc:
+        _record_outbox_notice(
+            outbox_dir,
+            f"spawn: could not pre-seed report: {contract_report} "
+            f"({exc}) — the strand can still write it from scratch.",
+            kind="advisory",
+            lifetime="run",
+        )
+
+
 def _queue_spawn_request(
     emit: _WorkerEmit,
     task: Run,
@@ -7329,6 +7409,15 @@ def _queue_spawn_request(
             lifetime="run",
         )
         return False
+    if contract_report:
+        _seed_declared_report(
+            contract_report,
+            title=str(fm.get("title") or "").strip(),
+            dispatcher_run_id=task.id,
+            event_id=event_id,
+            contract_branch=contract_branch,
+            outbox_dir=outbox_dir,
+        )
     # #880 §1b: a short, dispatcher-declared label for this child — read
     # back as its presence ``label`` (``_presence_label_for_event``) so a
     # parent supervising several siblings can tell their rows apart from
