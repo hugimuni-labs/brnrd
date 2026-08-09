@@ -376,6 +376,133 @@ def test_relic_issue_feeds_the_produce_split(tmp_path, monkeypatch):
     assert relics_mod.issues_phrase(actions) == "1 created · 1 completed"
 
 
+# ── brnrd relic comment / message / file (#1060) ────────────────────────────
+#
+# `_PROMISABLE` names nine kinds; `relic` used to expose two front doors
+# (`issue`, `item`). These three close the gap for the hand-attested kinds
+# that had no subcommand at all — same shape as `issue`/`item`: one
+# positional for the grammar's own field, the same outside-a-run and
+# failed-append refusals.
+
+
+def test_relic_comment_writes_the_grammar_record(tmp_path, monkeypatch, capsys):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    assert main(["relic", "comment", "issue #903 — stale-open sweep"]) == 0
+    assert _relic_lines(outbox) == [
+        {"kind": "comment", "on": "issue #903 — stale-open sweep"},
+    ]
+    assert "issue #903 — stale-open sweep" in capsys.readouterr().out
+
+
+def test_relic_comment_refuses_a_blank_on(tmp_path, monkeypatch, capsys):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    assert main(["relic", "comment", "  "]) == 1
+    err = capsys.readouterr().err
+    assert "say what the comment was on" in err
+    assert not (outbox / ".relics.jsonl").exists()
+
+
+def test_relic_comment_outside_a_run_says_why(monkeypatch, capsys):
+    monkeypatch.delenv("BRR_OUTBOX_DIR", raising=False)
+    monkeypatch.delenv("BRR_PORTAL_STATE", raising=False)
+
+    assert main(["relic", "comment", "issue #5"]) == 1
+    assert "no run outbox" in capsys.readouterr().err
+
+
+def test_relic_comment_reports_a_failed_append(tmp_path, monkeypatch, capsys):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    from brr import relics as relics_mod
+
+    monkeypatch.setattr(relics_mod, "append", lambda *a, **k: None)
+    assert main(["relic", "comment", "issue #5"]) == 1
+    assert "could not append" in capsys.readouterr().err
+
+
+def test_relic_message_writes_the_grammar_record(tmp_path, monkeypatch, capsys):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    assert main(
+        ["relic", "message", "design fork answered", "--channel", "telegram"],
+    ) == 0
+    assert _relic_lines(outbox) == [
+        {"kind": "message", "note": "design fork answered", "channel": "telegram"},
+    ]
+    assert "design fork answered" in capsys.readouterr().out
+
+
+def test_relic_message_without_a_channel_omits_the_field(tmp_path, monkeypatch):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    assert main(["relic", "message", "pinged the maintainer"]) == 0
+    assert _relic_lines(outbox) == [
+        {"kind": "message", "note": "pinged the maintainer"},
+    ]
+
+
+def test_relic_message_refuses_a_blank_note(tmp_path, monkeypatch, capsys):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    assert main(["relic", "message", " "]) == 1
+    err = capsys.readouterr().err
+    assert "say what the message was" in err
+    assert not (outbox / ".relics.jsonl").exists()
+
+
+def test_relic_message_outside_a_run_says_why(monkeypatch, capsys):
+    monkeypatch.delenv("BRR_OUTBOX_DIR", raising=False)
+    monkeypatch.delenv("BRR_PORTAL_STATE", raising=False)
+
+    assert main(["relic", "message", "note"]) == 1
+    assert "no run outbox" in capsys.readouterr().err
+
+
+def test_relic_file_writes_the_grammar_record(tmp_path, monkeypatch, capsys):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    assert main(["relic", "file", "/tmp/report.md"]) == 0
+    assert _relic_lines(outbox) == [
+        {"kind": "file", "path": "/tmp/report.md"},
+    ]
+    assert "/tmp/report.md" in capsys.readouterr().out
+
+
+def test_relic_file_refuses_a_blank_path(tmp_path, monkeypatch, capsys):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    assert main(["relic", "file", " "]) == 1
+    err = capsys.readouterr().err
+    assert "say which file" in err
+    assert not (outbox / ".relics.jsonl").exists()
+
+
+def test_relic_file_outside_a_run_says_why(monkeypatch, capsys):
+    monkeypatch.delenv("BRR_OUTBOX_DIR", raising=False)
+    monkeypatch.delenv("BRR_PORTAL_STATE", raising=False)
+
+    assert main(["relic", "file", "/tmp/x"]) == 1
+    assert "no run outbox" in capsys.readouterr().err
+
+
 def test_portal_state_prints_text_view(tmp_path, capsys):
     state = tmp_path / "portal-state.json"
     state.write_text(
