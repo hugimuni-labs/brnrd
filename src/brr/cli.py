@@ -4303,25 +4303,16 @@ def cmd_brnrd_connect(args):
         )
         return
 
-    brnrd = brnrd_cmd()
-    if not (repo_root / "AGENTS.md").exists():
-        # `daemon.start` hard-exits before it ever writes a pidfile when the
-        # repo has no AGENTS.md (daemon.py, the `run brnrd init first` guard
-        # ~L13015). Installing and kickstarting the service anyway would
-        # hand launchd/systemd a job whose first line is that exit — under
-        # `KeepAlive: {SuccessfulExit: False}` / `Restart=on-failure` that is
-        # a throttled crash loop, "loaded" forever, never a pidfile, and
-        # nothing here proving otherwise (#1238). Pairing above is already
-        # valid without AGENTS.md, so skip the install rather than claim a
-        # service is listening that cannot start; the daemon starts the
-        # moment this repo has one.
-        print(
-            "[brnrd] Paired. This repo has no AGENTS.md yet, so the "
-            f"background service isn't installed — run `{brnrd} init` first, "
-            f"then `{brnrd} daemon install` to start listening in the "
-            "background."
-        )
-        return
+    # Used to skip the service install entirely here when `AGENTS.md` was
+    # missing: `daemon.start` hard-exited before it ever wrote a pidfile
+    # (daemon.py, the `run brnrd init first` guard), so installing anyway
+    # handed launchd/systemd a job whose first line was that exit — a
+    # throttled crash loop under `KeepAlive`/`Restart=on-failure`, "loaded"
+    # forever, never a pidfile (#1238). #1244 fork 1 made that boot path
+    # itself safe (`daemon.start` now boots, pairs, and polls with no
+    # `AGENTS.md` — it prints and continues instead of exiting), so the
+    # premise for skipping is gone: install proceeds unconditionally below,
+    # same as an initialized repo.
 
     from . import daemon_install
 

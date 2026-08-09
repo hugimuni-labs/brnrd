@@ -1053,9 +1053,8 @@ def test_account_connect_pairs_installs_and_starts_service(
 ):
     repo = tmp_path / "repo"
     init_git_repo(repo)
-    # AGENTS.md must already exist for connect to proceed to install — the
-    # no-AGENTS.md path is covered separately by
-    # test_account_connect_skips_install_without_agents_md below (#1238).
+    # The initialized-repo shape; the no-AGENTS.md path installs identically
+    # since #1244 fork 1 — see test_account_connect_installs_without_agents_md.
     (repo / "AGENTS.md").write_text("# Project\n", encoding="utf-8")
     monkeypatch.chdir(repo)
     calls = []
@@ -1119,12 +1118,19 @@ def test_account_connect_reports_when_the_service_does_not_come_up(
     assert "did not come up" in out
 
 
-def test_account_connect_skips_install_without_agents_md(
+def test_account_connect_installs_without_agents_md(
     monkeypatch, tmp_path, capsys,
 ):
-    """Preflight for #1238: `connect` before `init` must not install a
-    service that `daemon.start` will immediately hard-exit out of (no
-    AGENTS.md ⇒ a launchd/systemd crash loop with nothing proving it)."""
+    """#1244 fork 1: `connect` before `init` now installs normally.
+
+    This used to skip the service install entirely (#1238's preflight):
+    `daemon.start` immediately hard-exited with no `AGENTS.md`, so
+    installing anyway handed the service manager a job whose first line
+    was that exit — a crash loop with nothing proving it. `daemon.start`
+    no longer exits for that reason (it prints and boots), so the skip's
+    whole premise is gone and install proceeds exactly as it would for an
+    initialized repo — see `test_account_connect_pairs_installs_and_starts_service`,
+    the same shape, with no `AGENTS.md` written."""
     repo = tmp_path / "repo"
     init_git_repo(repo)
     assert not (repo / "AGENTS.md").exists()
@@ -1134,17 +1140,14 @@ def test_account_connect_skips_install_without_agents_md(
     monkeypatch.setattr("brr.gates.cloud.connect", lambda *_a, **_kw: {})
     monkeypatch.setattr(
         "brr.daemon_install.install",
-        lambda **kwargs: installed.append(kwargs),
+        lambda **kwargs: installed.append(kwargs) or 0,
     )
 
     assert main(["account", "connect", "https://brnrd.example"]) is None
 
-    assert installed == []
+    assert len(installed) == 1
     out = capsys.readouterr().out
-    assert "Connected and listening in the background" not in out
-    assert "Paired." in out
-    assert "brnrd init" in out
-    assert "brnrd daemon install" in out
+    assert "Connected and listening in the background" in out
 
 
 def test_account_connect_no_service_keeps_foreground_escape(
@@ -2700,13 +2703,23 @@ class TestNpxSpelling:
         assert "`brnrd account connect` links it" in out
         assert "npx" not in out
 
-    def _up_before_init(self, tmp_path, monkeypatch):
+    def _up_before_init(self, tmp_path, monkeypatch, capsys):
         """``brnrd up`` in a repo that was never adopted.
 
         Driven at ``daemon.start`` rather than through ``main(["up"])``:
         the CLI verb prefers an *installed service* when one exists, so
         going through it would have the suite poke the developer's own
         systemd user manager instead of the code path under test.
+
+        #1244 fork 1: this used to hard-exit right here (`SystemExit`,
+        "run `brnrd init` first") before `daemon.start` ever wrote a
+        pidfile — the crash loop #1238 could only work around downstream
+        of. The daemon now boots anyway: it prints the same fact instead
+        of dying on it, then falls into the normal main loop. This drives
+        that loop one scan past boot and escapes it the same way every
+        other loop-wiring test in this suite does — `list_pending` raises
+        `StopIteration` on first call, since there is nothing pending to
+        dispatch and the assertion is about boot, not dispatch.
         """
         from brr import daemon as daemon_mod
 
@@ -2714,18 +2727,32 @@ class TestNpxSpelling:
         init_git_repo(repo)
         monkeypatch.chdir(repo)
 
-        with pytest.raises(SystemExit) as excinfo:
+        monkeypatch.setattr(daemon_mod, "read_pid", lambda _b: None)
+        monkeypatch.setattr(daemon_mod, "_write_pid", lambda _b: None)
+        monkeypatch.setattr(daemon_mod, "_clear_pid", lambda _b: None)
+        monkeypatch.setattr(daemon_mod, "_start_gates", lambda *_a: [])
+        monkeypatch.setattr(daemon_mod.signal, "signal", lambda *_a: None)
+        monkeypatch.setattr(daemon_mod, "publish", lambda *_a, **_k: None)
+        monkeypatch.setattr(daemon_mod.conf, "load_config", lambda _r: {})
+
+        def _stop_the_loop(*_a, **_k):
+            raise StopIteration
+
+        monkeypatch.setattr(daemon_mod.protocol, "list_pending", _stop_the_loop)
+
+        with pytest.raises(StopIteration):
             daemon_mod.start(repo)
-        return str(excinfo.value)
+        return capsys.readouterr().out
 
-    def test_up_before_init_is_npx_spelled(self, tmp_path, monkeypatch):
+    def test_up_before_init_is_npx_spelled(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setenv("BRNRD_LAUNCHER", "npx")
-        assert "run `npx brnrd init` first" in self._up_before_init(
-            tmp_path, monkeypatch,
-        )
+        out = self._up_before_init(tmp_path, monkeypatch, capsys)
+        assert "no AGENTS.md yet" in out
+        assert "npx brnrd init" in out
 
-    def test_up_before_init_stays_bare_for_a_path_install(self, tmp_path, monkeypatch):
+    def test_up_before_init_stays_bare_for_a_path_install(self, tmp_path, monkeypatch, capsys):
         monkeypatch.delenv("BRNRD_LAUNCHER", raising=False)
-        message = self._up_before_init(tmp_path, monkeypatch)
-        assert "run `brnrd init` first" in message
-        assert "npx" not in message
+        out = self._up_before_init(tmp_path, monkeypatch, capsys)
+        assert "no AGENTS.md yet" in out
+        assert "brnrd init" in out
+        assert "npx" not in out

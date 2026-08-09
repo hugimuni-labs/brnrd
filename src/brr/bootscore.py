@@ -250,6 +250,37 @@ class BootHost:
     ``None`` exactly when :attr:`image_digest` is ``None``.
     """
 
+    agents_md_missing: bool = False
+    """This repo has no ``AGENTS.md`` — ``brnrd init`` hasn't run here yet (#1244
+    fork 1).
+
+    Same differential shape as :attr:`image_stale`: absence is a fact about
+    *this* boot, not a permanent property, so it costs nothing on an
+    initialized repo and is the first thing read on one that isn't.
+
+    Before this field existed, a missing ``AGENTS.md`` was invisible here —
+    ``daemon.start()`` used to hard-exit before a wake was ever assembled, so
+    no boot ever needed to say it, and once that exit became a soft warning
+    (#1244) a wake could reach this point with nothing telling it the repo
+    has no contract and no committed kb. `_build_orientation_set` already
+    drops the file from the orientation walk when it's absent (existence-
+    filtered, "never padded with guesses") — correct for *that* list, but
+    silent-omission there reads identically to "the wake already holds it",
+    which is the wrong inference to invite for a fact this load-bearing.
+    So the kernel says it in words: absence is a data point, not an error,
+    and the wake should know which one it woke into.
+    """
+
+    kb_missing: bool = False
+    """Same shape as :attr:`agents_md_missing`, for the kb: no home-knowledge
+    checkout and no repo-committed ``kb/`` resolve for this repo
+    (``knowledge.active_kb_dir()`` returns ``None``). Tracked separately from
+    ``AGENTS.md`` because the two aren't the same fact — a repo can carry a
+    hand-authored ``AGENTS.md`` with no kb wired up yet (or vice versa on an
+    account that provisions kb ahead of the interview) — and collapsing them
+    would tell the wake the wrong specific thing on that split.
+    """
+
 
 @dataclass(frozen=True)
 class BootAttention:
@@ -642,6 +673,33 @@ def format_kernel(score: BootScore) -> str:
             "daemon image: not tracked · no fingerprint captured in this process"
         )
 
+    if host.agents_md_missing or host.kb_missing:
+        # Differential like `image_stale` above: silent on an initialized
+        # repo, first thing read on one that isn't. Absence is a data point,
+        # not an error (#1244 fork 1) — say what's missing and what it means
+        # for this wake, rather than let the resident infer it from a failed
+        # Read or a kb write that quietly never lands anywhere.
+        #
+        # The two facts are independent (a repo can carry a hand-authored
+        # AGENTS.md with no kb wired up yet, or vice versa), so the three
+        # combinations each get their own accurate sentence rather than one
+        # template that overclaims "hasn't run init" on a repo that has.
+        if host.agents_md_missing and host.kb_missing:
+            missing_bits = "no AGENTS.md, no committed/home kb"
+            cause = "this repo hasn't run `brnrd init` yet"
+        elif host.agents_md_missing:
+            missing_bits = "no AGENTS.md"
+            cause = "this repo hasn't run `brnrd init` yet"
+        else:
+            missing_bits = "no committed/home kb"
+            cause = "no kb is wired up for this repo yet"
+        lines.append(
+            f"  {missing_bits}: {cause}. Bounded work only: answer, "
+            "inspect, or run the setup interview; don't invent a kb "
+            "location to write into, and don't assume an AGENTS.md "
+            "convention that isn't there."
+        )
+
     for finding in attest_blocks(score.contracts):
         # Differential, like every other kernel line and modelled directly
         # on `image_stale` above it: costs nothing on a healthy wake (the
@@ -754,6 +812,12 @@ def format_manifest(score: BootScore) -> str:
     if host.publication_owner:
         host_line += f" · {host.publication_owner}"
     lines.append(f"  {host_line}")
+    if host.agents_md_missing or host.kb_missing:
+        lines.append(
+            "  no init yet: AGENTS.md "
+            + ("missing" if host.agents_md_missing else "present")
+            + " · kb " + ("missing" if host.kb_missing else "present")
+        )
 
     posture = score.posture
     if posture.quota or posture.branch or posture.pending_count:
