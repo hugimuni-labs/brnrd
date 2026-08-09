@@ -158,6 +158,27 @@ export interface ReposResponse {
 	capabilities?: Capability[];
 }
 
+// #1277a: `pairing_command`/`setup_command` is two lines — a scene-setting
+// `cd <checkout>` (a literal, unrunnable placeholder before any repo is
+// known — `PAIR_REPO_PLACEHOLDER` in `_session.py` — or a real directory
+// name once one is) followed by the one line that is unconditionally
+// runnable. A COPY button that hands over the whole two-line string can
+// hand over a placeholder no shell can run. Split here, once, so every
+// caller renders the first line as prose and copies only the second —
+// never a second parser of the same backend spelling.
+export interface PairingCommandParts {
+	// `null` when the backend ever ships a single-line command — nothing to
+	// split out, the whole string is already runnable as copied.
+	setupLine: string | null;
+	runnable: string;
+}
+
+export function splitPairingCommand(raw: string): PairingCommandParts {
+	const newline = raw.indexOf('\n');
+	if (newline === -1) return { setupLine: null, runnable: raw };
+	return { setupLine: raw.slice(0, newline), runnable: raw.slice(newline + 1) };
+}
+
 export interface ConnectRepoPayload {
 	repo_full_name: string;
 	forge_repo_id?: string | null;

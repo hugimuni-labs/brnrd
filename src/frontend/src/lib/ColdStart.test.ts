@@ -24,7 +24,12 @@ async function renderColdStart(
 	const source = readFileSync(componentPath, 'utf8');
 	const compiled = compile(source, { generate: 'server', runes: true, name: 'ColdStart' });
 	const runnable = compiled.js.code
-		.replace(/'\.\/publicStats'/g, "'./publicStats.ts'")
+		// Same generic rewrite CapabilityPanel.test.ts uses: any bare relative
+		// import needs its `.ts` extension for Node's loader. Narrowed to
+		// `./publicStats` alone until #1277a's `splitPairingCommand` import
+		// (`./repos`) needed the same treatment — generic from here so the
+		// next added import doesn't silently need its own regex line too.
+		.replace(/'(\.\/[A-Za-z0-9_-]+)'/g, "'$1.ts'")
 		.replace(/import\s*\{[^}]*\}\s*from\s*'\$app\/paths';/, 'const resolve = (path) => path;');
 	writeFileSync(generated, runnable);
 	try {
@@ -218,6 +223,30 @@ test('the pairing command is rendered from the prop, never restated in the compo
 	ok(!html.includes('https://brnrd.dev'), 'no hardcoded endpoint of its own');
 	const source = readFileSync(componentPath, 'utf8');
 	ok(!source.includes('brnrd account connect'), 'the command is not typed into the component');
+});
+
+// #1277a — the maintainer's own report: the COPY button next to step 02 used
+// to hand over `cd <repo>` verbatim along with the runnable line beneath it,
+// a literal placeholder no shell can run. The box (and, by construction, the
+// button that copies its content) must hold only the runnable line; the `cd`
+// step becomes prose above it instead.
+test('the cd placeholder never appears inside the copyable command box', async () => {
+	const html = await renderColdStart([]);
+	ok(!html.includes('cd <repo>'), 'the literal placeholder is not printed anywhere on the page');
+	ok(html.includes('from your repo checkout:'), 'scene-setting prose replaces it');
+	ok(
+		html.includes('brnrd account connect'),
+		'the runnable line still renders, unconditionally copyable'
+	);
+});
+
+// A pairing command that is a single line (never sent today, but the
+// component must not assume two) has nothing to split out — no stray prose
+// paragraph, and the whole string still renders and is still copyable.
+test('a single-line pairing command renders whole, with no setup-line prose', async () => {
+	const html = await renderColdStart([], 'brnrd account connect https://brnrd.dev');
+	ok(html.includes('brnrd account connect https://brnrd.dev'));
+	ok(!html.includes('from your repo checkout:'), 'nothing to split out of a single line');
 });
 
 // A missing command must not render an empty terminal box pretending to hold

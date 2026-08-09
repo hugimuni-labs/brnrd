@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { DOCS_URL } from './publicStats';
+	import { splitPairingCommand } from './repos';
 	import type { ConnectedRepo, GitHubInstallation } from './repos';
 
 	// The cold start (2026-08-03). Reported from a real signup on the
@@ -114,6 +115,13 @@
 	// the standing free path — not a requirement for a working daemon.)
 	let cold = $derived(repos !== null && !daemonEverPaired);
 
+	// #1277a: the pairing command's first line is `cd <repo>` before any
+	// checkout is known — a literal placeholder no shell can run — handed
+	// over verbatim by the COPY button along with the runnable line beneath
+	// it. Split so the box only ever holds, and only ever copies, the line
+	// that is unconditionally runnable; the `cd` step becomes prose above it.
+	let pairParts = $derived(pairCommand ? splitPairingCommand(pairCommand) : null);
+
 	let copied = $state<string | null>(null);
 	let copyTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -173,6 +181,11 @@
 					<span class="text-amber-200/80">02</span> pair the daemon
 				</p>
 				{#if pairCommand}
+					{#if pairParts?.setupLine}
+						<!-- #1277a: scene-setting, not copyable — the box below hands
+						     over only the line that is unconditionally runnable. -->
+						<p class="mt-1.5 font-mono text-[11px] text-ink-mute">from your repo checkout:</p>
+					{/if}
 					<!-- Wrapped, not scrolled (driven on a 390px phone, 2026-08-03):
 					     `overflow-x-auto` clipped the middle line to "brnrd account
 					     connect https://brnrd.de" with no visible tell, which is a
@@ -182,12 +195,12 @@
 					<div class="mt-1.5 flex items-start gap-2">
 						<pre
 							class="min-w-0 grow border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] wrap-anywhere whitespace-pre-wrap text-stone-300"><code
-								>{pairCommand}</code
+								>{pairParts?.runnable ?? pairCommand}</code
 							></pre>
 						<button
 							type="button"
 							class="shrink-0 cursor-pointer border border-stone-800 px-2 py-2 font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-							onclick={() => copy('pair', pairCommand ?? '')}
+							onclick={() => copy('pair', pairParts?.runnable ?? pairCommand ?? '')}
 							>{copied === 'pair' ? 'copied' : 'copy'}</button
 						>
 					</div>

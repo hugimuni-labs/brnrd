@@ -179,12 +179,30 @@
 		else expanded.add(key);
 	}
 
+	// #1277b: `signed-in` is `lit` by construction the moment this panel can
+	// render at all (`_detect_signed_in`, capabilities.py — "this evaluator
+	// only ever runs for a resolved account") — a row that says "you are
+	// signed in" on the page that proves it is zero bits, rendered every
+	// load. Cut it from the account group's own row list when lit; the
+	// capability itself is untouched (`capabilities` still carries it, so
+	// `summary`'s counts and any other reader of the raw list see the same
+	// data as before — only this one row's screen time goes). A future
+	// `dark`/`waiting` state for this id — not possible today, per the
+	// detector's own comment — would still render: that state *is*
+	// information, the tautology is specifically the lit one.
+	function earnsItsRow(c: Capability): boolean {
+		return !(c.id === 'signed-in' && c.state === 'lit');
+	}
+
 	let groups = $derived.by((): { account: Group; machine: Group[]; repo: Group[] } => {
 		const list = capabilities ?? [];
 		const account: Group = {
 			key: 'account',
 			title: 'account',
-			rows: list.filter((c) => c.scope === 'account').map(toRow)
+			rows: list
+				.filter((c) => c.scope === 'account')
+				.filter(earnsItsRow)
+				.map(toRow)
 		};
 
 		const bySubject = (scope: string) => {
