@@ -652,6 +652,38 @@ class TestBootScore:
         assert score.host.kind == "daemon"
         assert len(score.contracts) >= 5
 
+    def test_boot_score_names_a_missing_agents_md_and_kb(self, empty_repo):
+        """#1244 fork 1: absence is a data point, not silence.
+
+        ``empty_repo`` has no ``AGENTS.md`` and no kb of any shape (no
+        home knowledge, no committed ``kb/`` — see the fixture's own
+        docstring). The score must say so on both fields, and the kernel
+        text must carry the fact where a wake actually reads it — not just
+        in the typed score nobody renders.
+        """
+        from brr.bootscore import format_kernel
+        from brr.prompts import build_boot_score
+
+        score = build_boot_score(empty_repo, is_daemon=True)
+        assert score.host.agents_md_missing is True
+        assert score.host.kb_missing is True
+
+        kernel = format_kernel(score)
+        assert "no AGENTS.md" in kernel
+        assert "kb" in kernel
+
+    def test_boot_score_stays_silent_once_agents_md_exists(self, empty_repo):
+        """The differential contract: nothing to say once init has run."""
+        from brr.bootscore import format_kernel
+        from brr.prompts import build_boot_score
+
+        (empty_repo / "AGENTS.md").write_text("# Project\n", encoding="utf-8")
+        score = build_boot_score(empty_repo, is_daemon=True)
+        assert score.host.agents_md_missing is False
+
+        kernel = format_kernel(score)
+        assert "no AGENTS.md" not in kernel
+
     def test_scored_daemon_prompt_names_the_body_it_runs_in(self, empty_repo):
         """The daemon's own path must resolve Shell+Core, not just a label.
 

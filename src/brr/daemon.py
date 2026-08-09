@@ -13153,8 +13153,37 @@ def start(
     # executing* — which is the only thing a spawn's boot can honestly claim.
     reload_mod.capture_image_fingerprint()
     if not (repo_root / "AGENTS.md").exists():
-        raise SystemExit(f"[brnrd] run `{brnrd_cmd()} init` first")
+        # #1244 fork 1: absence is a data point, not an error. This used to be
+        # `raise SystemExit(...)` — correct advice, wrong place: it fired
+        # before `_write_pid()`, so a service manager with
+        # `KeepAlive`/`Restart=on-failure` turned "please run init" into a
+        # throttled crash loop that never wrote a pidfile (#1238 worked
+        # around the *symptom* in `daemon_install`/`cli.cmd_brnrd_connect`
+        # without touching this root cause). Everything past this point
+        # already degrades gracefully with no `AGENTS.md` (dominion setup,
+        # account resolution, gate threads are each independently
+        # exception-guarded below) — so the daemon boots, pairs, and polls
+        # same as ever; a dispatched wake gets the fact via the boot kernel
+        # (`bootscore.BootHost.agents_md_missing`, `prompts.build_boot_score`)
+        # instead of silence, and can still do bounded work (answer, inspect,
+        # or run the eventual setup interview).
+        print(
+            f"[brnrd] no AGENTS.md yet — this repo hasn't run `{brnrd_cmd()} init`. "
+            "Booting anyway: pairing and polling are unaffected. A dispatched "
+            "run has no repository contract or kb to write against yet, so "
+            "it's limited to bounded work until init runs."
+        )
 
+    # #1244 fork 1: an uninitialized repo — even a bare `git init` with
+    # nothing else in it — has no `.brr/` yet; `brnrd init`'s
+    # `_setup_brr_dir` is normally what creates it. Previously irrelevant:
+    # the AGENTS.md exit above always fired first on that path, so nothing
+    # ever reached `_write_pid` without `.brr/` already existing. Now that
+    # boot proceeds, a `.brr`-less repo needs its own floor: mkdir here
+    # rather than let `_write_pid` raise a bare `FileNotFoundError` — a
+    # crash, not the polite refusal this fork replaces, and a worse
+    # regression than the one it fixes.
+    brr_dir.mkdir(parents=True, exist_ok=True)
     _write_pid(brr_dir)
     running = True
 

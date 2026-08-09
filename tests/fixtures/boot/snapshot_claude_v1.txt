@@ -16,6 +16,7 @@ brnrd boot · score v1 · depth compact
 body requested: claude-sonnet (claude / claude-sonnet-4-6) · Tier 2 hooks installed · requested from the dashboard spool rack
 host: daemon · worktree · resident-owned
 daemon image: not tracked · no fingerprint captured in this process
+  no AGENTS.md and kb yet: this repo hasn't run `brnrd init` — no shared contract, no committed/home kb. Bounded work only: answer, inspect, or run the setup interview; don't invent a kb location to write into, and don't assume an AGENTS.md convention that isn't there.
 continuity: ✗ first wake
 attention: evt-fixture-0001
 posture: brr/fixture-branch · session 72% left (resets 10:30pm); week 57% left · budget 120m
@@ -251,6 +252,7 @@ brnrd boot · schema v1 · depth compact
 
   body: claude-sonnet (claude / claude-sonnet-4-6) · Tier 2 hooks installed
   host: daemon · worktree · resident-owned
+  no init yet: AGENTS.md missing · kb missing
   posture: session 72% left (resets 10:30pm); week 57% left · brr/fixture-branch
 
 hooks:
@@ -262,7 +264,7 @@ hooks:
 source manifest:
     block                                                           owner        authority      bytes  location / freshness
   -------------------------------------------------------------------------------------------------------------------------
-  ✓ Boot kernel (action-first score)                                daemon-live  runtime          718  computed
+  ✓ Boot kernel (action-first score)                                daemon-live  runtime          990  computed
   ✓ Operational preamble (run.md)                                   product      contract     [bytes]  {PACKAGE_ROOT}/prompts/run.md  [mtime]
   ✓ Working register (weave.md)                                     product      contract     [bytes]  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Working register, worked example (register.md)                  product      contract     [bytes]  {PACKAGE_ROOT}/prompts/register.md  [mtime]
