@@ -145,6 +145,24 @@ class HostEnv:
         return task
 
 
+def _is_strand_meta(meta: dict[str, Any] | None) -> bool:
+    """True when *meta* describes a strand-stack run, in either spelling.
+
+    Duplicates ``daemon._is_strand`` deliberately rather than importing it —
+    ``daemon.py`` imports this module, so the reverse import would cycle.
+    Same contract: ``strand`` is canonical, ``worker`` is the pre-rename
+    spelling still on disk for records written before it, and both must
+    read true. Used to decide, per run, whether a ``worktree``-env child
+    gets a linked ``git worktree`` (:func:`worktree.create`, the resident's
+    own shape) or its own ``git clone --shared`` (:func:`worktree.create_clone`,
+    #746) — strand/worker checkouts only; the resident's ``worktree``-env
+    runs and any already-running legacy worktree are untouched.
+    """
+    if not meta:
+        return False
+    return bool(meta.get("strand") or meta.get("worker"))
+
+
 class WorktreeEnv(HostEnv):
     name = "worktree"
 
@@ -158,13 +176,35 @@ class WorktreeEnv(HostEnv):
         response_path: Path,
         outbox_path: Path | None = None,
     ) -> RunContext:
-        run_root, run_branch_name = worktree.create(
-            repo_root, task.id, base_ref=branch_plan.seed_ref,
-        )
+        # Strand/worker checkouts get their own `.git` (#746: a linked
+        # worktree shares config/stash/index with the host by construction).
+        # The resident's own `worktree`-env runs, and any host/no-strand
+        # caller, keep the linked worktree unchanged.
+        is_clone = _is_strand_meta(task.meta)
+        if is_clone:
+            run_root, run_branch_name = worktree.create_clone(
+                repo_root, task.id, base_ref=branch_plan.seed_ref,
+            )
+        else:
+            run_root, run_branch_name = worktree.create(
+                repo_root, task.id, base_ref=branch_plan.seed_ref,
+            )
         # When the event named a target branch, switch the worktree HEAD
         # there before the agent starts so it commits on the right branch
         # without any prompt instruction. The throwaway brr/<run-id>
         # placeholder stays as a local ref and is cleaned up at finalize.
+        #
+        # Note for the clone shape: `worktree.switch_to`'s pre-check for
+        # "branch already checked out elsewhere" resolves against *this
+        # tree's own* `git worktree list`, which for a clone can only ever
+        # see itself — a clone isn't a linked worktree, so nothing registers
+        # it, and nothing it can see registers anyone else either. So a
+        # clone cannot fail *fast* on a target-branch collision with the
+        # host or another linked worktree the way a linked worktree does;
+        # it fails *safely but late*, at `land_clone_branch` (finalize time),
+        # which checks the collision against `repo_root` itself rather than
+        # the child's own (blind) view. Known, accepted: correctness holds,
+        # only "fail fast" narrows for this one shape.
         if branch_plan.target_branch:
             try:
                 worktree.switch_to(run_root, branch_plan.target_branch)
@@ -185,6 +225,8 @@ class WorktreeEnv(HostEnv):
             starting_branch = run_branch_name
         task.meta["worktree_path"] = str(run_root)
         task.meta["branch_name"] = starting_branch
+        if is_clone:
+            task.meta["worktree_kind"] = "clone"
         task.meta.update(branch_plan.meta_items())
         return RunContext(
             name=self.name,
@@ -198,7 +240,7 @@ class WorktreeEnv(HostEnv):
             branch_name=starting_branch,
             run_branch=run_branch_name,
             branch_plan=branch_plan,
-            env_state={"worktree_path": str(run_root)},
+            env_state={"worktree_path": str(run_root), "is_clone": is_clone},
         )
 
     def finalize(
@@ -215,19 +257,37 @@ class WorktreeEnv(HostEnv):
         ``run.meta["publish_status"]`` and decides whether to push,
         with what lease, and to which remote ref. Finalize itself never
         updates a non-run branch ref and never calls
-        ``gitops.fast_forward_branch``.
+        ``gitops.fast_forward_branch`` **directly** — see the clone landing
+        step below, which does, but only to make an already-armed
+        ``publish_branch`` locally resolvable, never to choose one.
 
         Worktree teardown is outcome-aware: a clean success with no
         uncommitted files tears the worktree down (the branch ref +
         traces are the durable artefact). A ``detached`` outcome or any
         untracked/unstaged files in the worktree keep it alive so the
         operator can inspect what the agent left behind.
+
+        **Clone shape (#746), one addition.** A clone's commits live only
+        in its own object store until something fetches them — unlike a
+        linked worktree, where ``daemon.publish``'s ``cwd=repo_root`` reads
+        already resolve the branch for free. So whenever ``publish_branch``
+        is armed for a clone-shaped run — on the normal ``ready`` outcome
+        below *and* on the early-return failure/salvage path (`daemon.
+        _capture_worktree` arms it before finalize ever sees a non-``done``
+        task) — this lands it into ``repo_root`` first. Teardown never runs
+        ahead of that landing: the clone is the only copy of an unlanded
+        commit, and this function is the one place that decides both when
+        to land and when to delete, in that order, so there is no window
+        where the second could run without the first.
         """
         worktree_path = Path(ctx.env_state.get("worktree_path") or ctx.cwd)
+        is_clone = bool(ctx.env_state.get("is_clone"))
         run_branch = ctx.run_branch or worktree.run_branch_name(task.id)
         initial_branch = ctx.branch_name or run_branch
 
         if task.status != "done":
+            if is_clone:
+                self._land_clone_publish_branch(ctx, task, worktree_path)
             task.save(runs_dir)
             return task
 
@@ -243,6 +303,12 @@ class WorktreeEnv(HostEnv):
             task.meta["branch_name"] = outcome.publish_branch
         elif "publish_branch" in task.meta:
             del task.meta["publish_branch"]
+
+        if is_clone and outcome.publish_branch:
+            if not self._land_clone_publish_branch(ctx, task, worktree_path):
+                task.save(runs_dir)
+                return task
+
         task.save(runs_dir)
 
         if outcome.keep_worktree:
@@ -259,20 +325,48 @@ class WorktreeEnv(HostEnv):
             )
             return task
 
-        worktree.remove(
-            ctx.repo_root, task.id,
-            branch=run_branch,
-            delete_branch=outcome.delete_run_branch,
-            force=True,
-        )
-        if outcome.delete_unused_initial:
-            self._delete_unused_initial_branch(ctx.repo_root, run_branch)
-        elif outcome.publish_branch and run_branch != outcome.publish_branch:
-            # run_branch is a throwaway placeholder (brr/<run-id>) that
-            # was switched away from before the agent ran; it won't be
-            # pushed, so clean it up now.
-            self._delete_unused_initial_branch(ctx.repo_root, run_branch)
+        if is_clone:
+            worktree.remove_clone(worktree_path)
+        else:
+            worktree.remove(
+                ctx.repo_root, task.id,
+                branch=run_branch,
+                delete_branch=outcome.delete_run_branch,
+                force=True,
+            )
+            if outcome.delete_unused_initial:
+                self._delete_unused_initial_branch(ctx.repo_root, run_branch)
+            elif outcome.publish_branch and run_branch != outcome.publish_branch:
+                # run_branch is a throwaway placeholder (brr/<run-id>) that
+                # was switched away from before the agent ran; it won't be
+                # pushed, so clean it up now.
+                self._delete_unused_initial_branch(ctx.repo_root, run_branch)
         return task
+
+    def _land_clone_publish_branch(
+        self, ctx: RunContext, task: Run, worktree_path: Path,
+    ) -> bool:
+        """Land ``task.meta["publish_branch"]`` from a clone before it's read.
+
+        Returns True when there was nothing to land or landing succeeded;
+        False (having flipped ``publish_status`` to ``conflict`` and left a
+        reason on ``task.meta["clone_land_failed"]``) when it was armed and
+        landing failed — the caller's job is then to keep the clone for
+        inspection rather than delete the only copy of the work.
+        """
+        branch = task.meta.get("publish_branch")
+        if not branch:
+            return True
+        landed = worktree.land_clone_branch(ctx.repo_root, worktree_path, branch)
+        if landed.success:
+            return True
+        task.meta["publish_status"] = "conflict"
+        task.meta["clone_land_failed"] = landed.detail or "could not land clone branch"
+        print(
+            f"[brnrd] run {task.id}: keeping clone at {worktree_path} (failed to "
+            f"land {branch!r} onto {ctx.repo_root}: {task.meta['clone_land_failed']})"
+        )
+        return False
 
     def _resolve_outcome(
         self,
