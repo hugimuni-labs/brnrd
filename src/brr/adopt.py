@@ -187,7 +187,9 @@ def bootstrap(url: str | None = None) -> tuple[Path, list[str]]:
     return repo_root, available
 
 
-def init_repo(url: str | None = None, *, interactive: bool = False) -> None:
+def init_repo(
+    url: str | None = None, *, interactive: bool = False, defaults: bool = False,
+) -> None:
     """Initialize a repository for brr management.
 
     ``brnrd init`` is **one verb** (#507, maintainer decision 2026-07-22).
@@ -199,9 +201,18 @@ def init_repo(url: str | None = None, *, interactive: bool = False) -> None:
     Everything else **degrades**, it does not branch: no TTY, no playbook,
     or the wake explicitly disabled ⇒ the pre-#507 mechanical install runs
     instead, with one line naming why the wake was skipped. There is no
-    flag, because a flag would ask the user to choose between two things
-    they have no way to tell apart before their first run. CI stays safe by
-    construction: no TTY means no wake and no blocking read on stdin.
+    flag *on this command* for that choice, because a flag here would ask
+    the user to choose between two things they have no way to tell apart
+    before their first run. CI stays safe by construction: no TTY means no
+    wake and no blocking read on stdin.
+
+    ``defaults`` is a different caller's decision, not this one's: it is
+    how ``brnrd account connect --defaults`` (#1244 fork 2's signed
+    opt-out) forces the same headless path a no-TTY `init` already takes,
+    even from a real terminal — connect already asked its own question
+    (skip the interview or not); this only carries that answer through
+    without re-deriving it from ``sys.stdin.isatty()``, which would ignore
+    an explicit ``--defaults`` on an otherwise-interactive terminal.
 
     ``interactive`` is the retired ``-i``: a no-op on the wake path (the
     interview *is* the point) and the old timed-question path when the wake
@@ -209,6 +220,11 @@ def init_repo(url: str | None = None, *, interactive: bool = False) -> None:
     """
     repo_root, available = bootstrap(url)
     identity = _state_identity()
+
+    if defaults:
+        print(f"[brnrd] {style.dim('--defaults: skipping the interview')}")
+        _init_auto(repo_root, available, interactive=False)
+        return
 
     from . import init_wake as init_wake_mod
 

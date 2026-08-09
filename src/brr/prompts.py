@@ -3613,6 +3613,67 @@ def build_init_prompt(repo_root: Path, knowledge_shape: str = "repo") -> str:
     return f"{setup}\n\n{template}{directive}"
 
 
+def build_connect_greeting_task(
+    repo_root: Path, *, facts: dict[str, Any] | None = None,
+) -> str:
+    """The event body `connect_greeting.queue_greeting` mints (#1244 fork 2).
+
+    Reuses the same two ingredients :func:`build_init_wake_prompt` feeds the
+    terminal init wake — ``init-playbook.md`` (the interview + authoring
+    playbook) and the adopter template — so this run authors ``AGENTS.md``
+    and the kb seed exactly the way ``brnrd init`` always has, no second
+    implementation. Unlike that function, this does **not** call
+    :func:`build_daemon_prompt_with_score`: this text becomes a plain inbox
+    event ``body``, and the *normal* daemon dispatch path wraps it in the
+    ordinary Run Context Bundle on its own — that is the whole point of
+    fork 2 ("a normal resident-operated run over an established door", the
+    maintainer's own words, not a bespoke wake session).
+
+    The one addition is a short preamble reconciling the two places
+    ``init-playbook.md`` still assumes a literal terminal (it cannot be
+    edited here — ``src/brr/prompts/`` changes affect every user and need a
+    maintainer merge; see this task's own report for the two-line change
+    that would let a future edit fold this preamble into the template
+    itself).
+    """
+    preamble = (
+        "# First wake over a door, not a terminal (#1244 fork 2)\n\n"
+        "`AGENTS.md` is missing — nobody has run `brnrd init` here yet, and "
+        "this repo just connected a chat door. You are waking for the first "
+        "time on this repo, and — unlike the playbook right below assumes — "
+        "this is a **normal resident-operated run over an already-paired "
+        "door**, not a proxied terminal session (that terminal shape was "
+        "tried and rejected). Two places in the playbook below don't apply "
+        "here; read past them, keep everything else:\n\n"
+        "- \"You have no stdin here… the person types at the terminal brnrd "
+        "owns\" — there is no separate terminal; you already have this one. "
+        "The mechanism it describes is otherwise exactly right: a reply "
+        "lands as a new pending event, so ask, then wait for it, under the "
+        "standing portal rules your own playbook already gives you.\n"
+        "- The gate walk's `control: gate-setup <name>` outbox verb does not "
+        "exist on this run — that is the terminal wake's own machinery, "
+        "unavailable here. If the user wants a door wired up mid-conversation, "
+        "tell them the command to run themselves (e.g. `brnrd gate setup "
+        "telegram`), or note it as a follow-up; do not emit `control:`.\n\n"
+        "Everything else below — tone, survey-before-speaking, the interview "
+        "beats, authoring `AGENTS.md` from the adopter template that "
+        "follows, the kb seed, the closeout — applies unchanged.\n\n"
+        "---\n"
+    )
+    task_parts = [preamble + read_prompt(INIT_PLAYBOOK_NAME, repo_root).strip()]
+    if facts:
+        task_parts.append(build_init_wake_facts(facts))
+    from . import constitution
+
+    tpl_path = constitution.TEMPLATE_PATH
+    if tpl_path.exists():
+        task_parts.append(
+            "---\n\n## Adopter template (author `AGENTS.md` from this)\n\n"
+            + tpl_path.read_text(encoding="utf-8")
+        )
+    return "\n\n".join(p for p in task_parts if p)
+
+
 def _read_preamble_with_weave(repo_root: Path) -> str:
     """Read ``run.md`` plus the working-register contract (``weave.md``).
 
