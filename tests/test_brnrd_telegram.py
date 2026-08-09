@@ -123,6 +123,27 @@ def test_webhook_rejects_bad_secret(env):
     ).status_code == 403
 
 
+def test_webhook_fails_closed_on_a_non_ascii_secret_header(env):
+    """H-4: `hmac.compare_digest` raises `TypeError` (rather than returning
+    `False`) when a `str` argument carries non-ASCII code points, and this
+    header is attacker-controlled — before the fix this turned a should-be
+    403 into an unhandled 500. Raw (bytes, bytes) headers because httpx's
+    str header path is ASCII-only; the wire is not."""
+    import json as _json
+
+    _, client, _ = env
+    body = _json.dumps(_message(1, "hi")).encode("utf-8")
+    r = client.post(
+        "/v1/webhooks/telegram",
+        content=body,
+        headers=[
+            (b"Content-Type", b"application/json"),
+            (b"X-Telegram-Bot-Api-Secret-Token", b"\xff\xfe not-the-secret"),
+        ],
+    )
+    assert r.status_code == 403, r.text
+
+
 def test_start_binds_chat_and_confirms(env):
     app, client, sends = env
     acc = _account(client)
