@@ -118,7 +118,11 @@ export function buildDigest(rows: RunLedgerRow[], sinceMs: number, nowMs: number
 			repoLabel: row.repoLabel,
 			endedAt: row.endedAt,
 			bolt: row.bolt,
-			href: runNodeHref(row.repoLabel, row.runId)
+			// Every digest row is summons-worthy (`isSummonsWorthy`, above) —
+			// it carries a bolt verdict, a declared ask, or produce worth
+			// announcing, so the run's own `#receipt` section (RunNode.svelte)
+			// always has something to land on, not just the bare node.
+			href: (runNodeHref(row.repoLabel, row.runId) + '#receipt') as ResolvedPathname
 		}));
 	return { since: sinceMs, summary, summaryParts: selvageParts(summary), rows: digestRows };
 }
