@@ -55,7 +55,12 @@ from . import relics
 PHASE_POST_TOOL = "post-tool"
 PHASE_STOP = "stop"
 PHASE_SESSION_START = "session-start"
-PHASES = (PHASE_POST_TOOL, PHASE_STOP, PHASE_SESSION_START)
+# #1184: the fourth phase, and a different shape from the other three — those
+# compute an *injection* (portal delta, closeout briefing); this one computes
+# a *permission decision* on one tool call, before it runs. See
+# `_rooted_write_neutral` and `run_hook`'s early branch for it.
+PHASE_PRE_TOOL = "pre-tool"
+PHASES = (PHASE_POST_TOOL, PHASE_STOP, PHASE_SESSION_START, PHASE_PRE_TOOL)
 
 # Control dotfile the post-tool/stop hook touches to ask the daemon to
 # drain now. Lives beside the outbox; the daemon's drain skips dotfiles, so
@@ -242,6 +247,20 @@ class HookContext:
         self.flush_sync = (
             env.get("BRR_FLUSH_SYNC") or ""
         ).strip().lower() in {"1", "true", "yes", "on"}
+        # #1184: the rooted-write guard's two facts. `GIT_WORK_TREE` is not a
+        # `BRR_*` handle — it is the same variable `daemon._child_git_pin`
+        # already exports to pin this strand's *git*, read here for its other
+        # value: the one directory an `Edit`/`Write` is always allowed to
+        # land in. `BRR_HOST_ROOT` is new, armed by the daemon only alongside
+        # it (`daemon._runner_runtime`) — the host checkout root a subprocess
+        # cannot otherwise derive, since cwd and `-C` are exactly what the git
+        # pin outranks. Both unset ⇒ the guard is unarmed (a resident, a host
+        # run, or a strand whose pin didn't apply) and `_rooted_write_neutral`
+        # never blocks — the same fact-based degrade `_child_git_pin` uses.
+        host_root = env.get("BRR_HOST_ROOT")
+        self.host_root = Path(host_root) if host_root else None
+        work_tree = env.get("GIT_WORK_TREE")
+        self.git_work_tree = Path(work_tree) if work_tree else None
         portal = env.get("BRR_PORTAL_STATE")
         self.portal_state_path = Path(portal) if portal else None
         # The wake's persisted BootScore (`boot-score.json`), armed by the
@@ -4414,6 +4433,8 @@ def native_event_name(flavour: str | None, phase: str) -> str:
         return _POST_TOOL_EVENT.get(flavour or "", "PostToolUse")
     if phase == PHASE_STOP:
         return "Stop"
+    if phase == PHASE_PRE_TOOL:
+        return "PreToolUse"
     return "SessionStart"
 
 
@@ -4432,13 +4453,32 @@ def render_native(
     reason = neutral.get("block_reason")
 
     if flavour in ("claude", "codex"):
+        event_name = native_event_name(flavour, phase)
+        out: dict[str, Any] = {}
+        if phase == PHASE_PRE_TOOL:
+            # A tool-call-level refusal, a different control surface from
+            # Stop's turn-level block below. Claude's schema is
+            # ``hookSpecificOutput.permissionDecision`` (fire-verified against
+            # code.claude.com/docs/en/hooks, 2026-08-09) — not the top-level
+            # ``decision``/``continue`` fields, which only Stop reads. Codex
+            # does not install this phase at all today (`codex_hook_args`
+            # covers only PostToolUse/Stop/SessionStart — its own hooks docs
+            # verify no more than that), so this is claude-only in practice;
+            # an unarmed codex ``pre-tool`` fire (should one ever happen)
+            # falls through to the unblocked ``{}`` a no-op ``block=False``
+            # already produces.
+            if flavour == "claude" and block:
+                out["hookSpecificOutput"] = {
+                    "hookEventName": event_name,
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": reason or "refused (#1184)",
+                }
+            return out, 0
         # Both Claude and Codex accept the same ``hookSpecificOutput``
         # injection envelope (fire-verified). They diverge only on stop-control:
         # Claude blocks a premature stop with ``decision: block`` (continues the
         # turn, verified); Codex uses the documented ``continue: false`` /
         # ``stopReason`` shape.
-        event_name = native_event_name(flavour, phase)
-        out: dict[str, Any] = {}
         if block:
             if flavour == "claude":
                 out["decision"] = "block"
@@ -4501,6 +4541,12 @@ def _claude_hook_settings(brr_bin: str) -> dict[str, Any]:
     def _entry(phase: str) -> dict[str, Any]:
         return {"hooks": [{"type": "command", "command": hook_command(phase, brr_bin)}]}
 
+    def _matched_entry(phase: str, matcher: str) -> dict[str, Any]:
+        return {
+            "matcher": matcher,
+            "hooks": [{"type": "command", "command": hook_command(phase, brr_bin)}],
+        }
+
     # PostToolBatch (not PostToolUse): one injection per tool batch, after every
     # result lands — see ``_POST_TOOL_EVENT``. Claude ``statusLine`` is a TUI
     # footer and does not fire under the daemon's ``claude --print`` mode, so
@@ -4511,6 +4557,15 @@ def _claude_hook_settings(brr_bin: str) -> dict[str, Any]:
             native_event_name("claude", PHASE_POST_TOOL): [_entry(PHASE_POST_TOOL)],
             "Stop": [_entry(PHASE_STOP)],
             "SessionStart": [_entry(PHASE_SESSION_START)],
+            # #1184: the rooted-write guard, matcher-scoped unlike the three
+            # above (which fire on every tool call / turn boundary). It has
+            # an opinion only about the two tools that take a raw file path,
+            # so every other tool call never reaches ``brnrd hook pre-tool``
+            # at all rather than reaching it and being told "not my concern"
+            # on every keystroke. See ``install_hook_config`` for why this
+            # one key merges *additively* with a repo's own ``PreToolUse``
+            # rather than replacing it the way the other three do.
+            "PreToolUse": [_matched_entry(PHASE_PRE_TOOL, "Edit|Write")],
         },
     }
 
@@ -4593,7 +4648,20 @@ def install_hook_config(
     # merges. So a user's own footer or local settings are preserved while
     # brr's lifecycle hooks always install.
     merged = {**generated, **existing}
-    merged["hooks"] = {**existing.get("hooks", {}), **generated["hooks"]}
+    merged_hooks = {**existing.get("hooks", {}), **generated["hooks"]}
+    # ``PreToolUse`` (#1184) is the one event key brr does not fully own the
+    # way it owns the other three — a repo may already wire its own
+    # predicate there (permission prompts, a linter gate, whatever), and the
+    # rooted-write guard must not silently replace it; both need to keep
+    # firing. So this one key is additive: the user's own matcher entries
+    # survive, and brr's own is appended after them, rather than the
+    # whole-key overwrite every other lifecycle event gets above.
+    existing_pre_tool = existing.get("hooks", {}).get("PreToolUse")
+    if isinstance(existing_pre_tool, list) and existing_pre_tool:
+        merged_hooks["PreToolUse"] = [
+            *existing_pre_tool, *generated["hooks"]["PreToolUse"],
+        ]
+    merged["hooks"] = merged_hooks
     try:
         settings_dir.mkdir(parents=True, exist_ok=True)
         settings_path.write_text(
@@ -4824,6 +4892,94 @@ def subagent_neutral(
     return result
 
 
+# ── The rooted-write guard (#1184) ────────────────────────────────────────
+#
+# `daemon._child_git_pin` (#703) pins a strand's *git* to its own worktree,
+# but `Edit`/`Write` never go through git — they take a raw absolute path
+# and write it directly. The strand worktree is a child directory of the
+# shared host checkout (`<host>/.brr/worktrees/<run-id>/…`), so the host path
+# is a strict *prefix* of the strand's own, and it is the path shape every kb
+# page, issue, and prior commit message in a project uses — exactly what a
+# model completes when it reaches for "the absolute path to X", drifted cwd
+# or not. Telling the strand to always use absolute paths (`prompts/strand.md`)
+# was tried and demonstrably failed live: a strand read the warning,
+# understood it, and still wrote to the host checkout three minutes later.
+# rootedness, not absoluteness, was always the discriminator — so this
+# predicate checks that instead of hoping the model self-polices it.
+#
+# Tool names `Edit`/`Write` take: Claude Code's own two file-mutating tools.
+# `MultiEdit` is deliberately not listed — current Claude Code has folded it
+# into `Edit`; a Shell that still emits it independently would simply pass
+# this predicate unblocked, same as any tool this list doesn't name.
+_ROOTED_WRITE_TOOLS = frozenset({"Edit", "Write"})
+
+
+def _rooted_write_neutral(
+    ctx: "HookContext", payload: dict[str, Any]
+) -> dict[str, Any]:
+    """The neutral result for a ``pre-tool`` boundary (#1184).
+
+    Refuses an ``Edit``/``Write`` whose absolute ``file_path`` is rooted in
+    the host checkout (``ctx.host_root``) but *not* under this strand's own
+    worktree (``ctx.git_work_tree``) — the write `_child_git_pin` cannot see
+    coming, because it pins git, not the editor.
+
+    Unarmed (``host_root`` or ``git_work_tree`` absent — not a strand run, or
+    the git pin itself found no readable git dir) ⇒ always the pass-through
+    ``{"inject": None, "block": False, "block_reason": None}``, the same
+    fact-based degrade the pin uses: nothing to compare a write path against
+    is not evidence of anything, so it is never treated as one.
+
+    Deliberately shallow otherwise: no portal read, no hook-state read or
+    write, no latch — the one thing worth spending a subprocess's-worth of
+    work on before every file write is "is this path about to land in the
+    wrong tree", not this run's correspondence.
+    """
+    result: dict[str, Any] = {"inject": None, "block": False, "block_reason": None}
+    if ctx.host_root is None or ctx.git_work_tree is None:
+        return result
+    tool_name = payload.get("tool_name")
+    if tool_name not in _ROOTED_WRITE_TOOLS:
+        return result
+    tool_input = payload.get("tool_input")
+    raw_path = tool_input.get("file_path") if isinstance(tool_input, dict) else None
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return result
+    path = Path(raw_path)
+    if not path.is_absolute():
+        # Rootedness is the discriminator, but only an absolute path can be
+        # rooted anywhere in particular — a relative path resolves against
+        # the runner's own cwd, which the git pin already keeps inside the
+        # worktree (or leaves unpinned, in which case there is nothing this
+        # predicate can add). Nothing to refuse here.
+        return result
+    try:
+        resolved = path.resolve()
+        host_root = ctx.host_root.resolve()
+        work_tree = ctx.git_work_tree.resolve()
+    except OSError:
+        # An unresolvable path (a broken symlink component, a vanished
+        # mount) is a question for the tool call itself, not this predicate —
+        # refusing on a resolution failure would block writes this guard was
+        # never meant to have an opinion on.
+        return result
+    if resolved == work_tree or work_tree in resolved.parents:
+        return result
+    if resolved != host_root and host_root not in resolved.parents:
+        # Outside the host checkout entirely — a strand's documented escape
+        # hatch (scratch trees elsewhere via `env -u GIT_DIR -u
+        # GIT_WORK_TREE`) is not this predicate's concern.
+        return result
+    result["block"] = True
+    result["block_reason"] = (
+        f"refused (#1184): {raw_path} is rooted in the host checkout "
+        f"({host_root}) but outside this strand's own worktree "
+        f"({work_tree}). Rewrite the path relative to $GIT_WORK_TREE — "
+        f"that is where this write belongs."
+    )
+    return result
+
+
 # ── Entry point ──────────────────────────────────────────────────────────
 
 
@@ -4845,6 +5001,18 @@ def run_hook(
         return {}, 0
     ctx = HookContext(env)
     payload = _safe_json(stdin_text)
+    if phase == PHASE_PRE_TOOL:
+        # #1184: a filesystem-safety predicate, not a correspondence one —
+        # unlike every other phase it never touches the portal or hook state,
+        # so it takes neither the subagent branch nor `compute_neutral`
+        # below. It applies identically whether the write comes from the
+        # resident or an in-process subagent (#1095's isolation is about
+        # *correspondence*: a child owes no reply to the parent's
+        # correspondents. A stray write into the shared host checkout is a
+        # hazard either limb can cause, so neither is exempted here).
+        neutral = _rooted_write_neutral(ctx, payload)
+        record_boundary(ctx, phase, neutral)
+        return render_native(ctx.flavour, phase, neutral)
     # An in-process subagent shares every env handle with the resident, so the
     # payload is the only place the two differ (#1095). Branch before anything
     # reads the portal or the hook state — the isolation is the point.

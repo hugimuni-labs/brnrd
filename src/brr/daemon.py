@@ -3417,6 +3417,23 @@ def _run_worker(
         # the filesystem lane; git's notion of "which working tree am I in" is
         # just cwd, and cwd is not contained.
         env.update(_child_git_pin(task, run_root))
+        # #1184: the pin above closes the *git* half of the same hazard —
+        # `Edit`/`Write` take a raw absolute path with no pin at all, and the
+        # strand worktree is a *child directory* of this same host checkout
+        # (`<repo_root>/.brr/worktrees/<run-id>/…`), so the host path is a
+        # strict prefix of the strand's own and the shape a model completes
+        # when it reaches for "the absolute path to X". `repo_root` is the
+        # host checkout `_run_worker` was dispatched against — armed only
+        # when the git pin actually pinned (``GIT_WORK_TREE`` present),
+        # the same fact-based gating `_child_git_pin` itself uses: no readable
+        # git dir ⇒ nothing to compare a write path against, same as the pin's
+        # own degrade. The PreToolUse hook (``hooks._rooted_write_neutral``)
+        # reads this alongside ``GIT_WORK_TREE`` — already exported by the pin
+        # above — to refuse a write rooted in the checkout but outside the
+        # worktree, before the write happens rather than after a stray commit
+        # is discovered.
+        if "GIT_WORK_TREE" in env:
+            env["BRR_HOST_ROOT"] = str(repo_root)
         # The closeout guard (`hooks.next_move`, default off). Armed per-run via env
         # so the hook subprocess needs no config of its own. Default-off is the
         # control arm, not timidity: `next_move` failed 0/6 across *both* arms of the

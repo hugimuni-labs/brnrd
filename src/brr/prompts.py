@@ -3008,34 +3008,52 @@ def _collect_hooks_info(
     *,
     installed: bool | None = None,
     hook_stamps: dict[str, str] | None = None,
+    runner_shell: str | None = None,
 ) -> list[Any]:
     """Return a :class:`BootHook` list for the abstract phase set.
 
     A pure function of its arguments — every caller supplies what it actually
     knows, and nothing is inferred from ambient process state:
 
-    - ``declared`` is always ``True``: the three abstract phases are the
-      daemon's back-channel contract.
+    - ``declared`` is always ``True``: the abstract phases are the daemon's
+      back-channel contract.
     - ``installed`` is three-state — ``True`` (wired), ``False`` (this Shell
       cannot take the config), ``None`` (*unknown from here*).  The daemon
       passes the fact it holds; the CLI probes; nobody guesses.  Reporting
       "not-installed" for "I cannot see from here" is how a live hook told the
       only operator looking that it was dead.
     - ``last_fired`` is per phase.  A post-tool hook firing says nothing about
-      session-start, so a single stamp is never copied across all three.
+      session-start, so a single stamp is never copied across all four.
+    - ``pre-tool`` (#1184) is the one phase not every flavour installs even
+      when ``installed`` is otherwise true: codex's own hooks docs verify
+      only PostToolUse/Stop/SessionStart (``hooks.codex_hook_args`` carries
+      no ``PreToolUse`` override), so a codex run reporting it installed
+      alongside the other three would be exactly the unbacked claim this
+      function otherwise refuses to make. ``runner_shell`` — the same Shell
+      identity the Mode block already names — downgrades just that one cell
+      to ``False`` for codex; every other phase keeps the caller's single
+      fact unchanged. A profile whose declared ``hooks:`` flavour diverges
+      from its ``shell:`` is the one shape this narrower check cannot see —
+      out of scope here, same as it was before this phase existed.
     """
     from . import hooks as _hooks
     from .bootscore import BootHook
 
     stamps = hook_stamps or {}
+
+    def _phase_installed(phase: str) -> bool | None:
+        if phase == _hooks.PHASE_PRE_TOOL and runner_shell == "codex":
+            return False
+        return installed
+
     return [
         BootHook(
             name=phase,
             declared=True,
-            installed=installed,
+            installed=_phase_installed(phase),
             last_fired=str(stamps[phase]) if stamps.get(phase) else None,
         )
-        for phase in _hooks.PHASES  # ("post-tool", "stop", "session-start")
+        for phase in _hooks.PHASES  # ("post-tool", "stop", "session-start", "pre-tool")
     ]
 
 
@@ -3154,7 +3172,7 @@ def build_boot_score(
     pub_owner = "resident-owned" if not is_strand else "strand"
 
     hooks_info = _collect_hooks_info(
-        installed=hooks_installed, hook_stamps=hook_stamps
+        installed=hooks_installed, hook_stamps=hook_stamps, runner_shell=runner_shell
     )
 
     # tier is a *reading*, not a label: it reports what the hook contract
