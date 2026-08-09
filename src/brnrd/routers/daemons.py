@@ -406,6 +406,13 @@ def put_quota(payload: schemas.QuotaReport, principal: Principal = Depends(requi
     daemon.gate_health_json = json.dumps(
         [gate.model_dump() for gate in gates], separators=(",", ":")
     )
+    # #1268: same consent gate as `shells`/`gates` above — repo-derived
+    # content piggybacked on this tick, withheld exactly like the rest of
+    # it when the connecting repo hasn't consented to the "quota" lane.
+    repo_agents_md_missing = payload.repo_agents_md_missing if permitted else None
+    repo_kb_missing = payload.repo_kb_missing if permitted else None
+    daemon.repo_agents_md_missing = repo_agents_md_missing
+    daemon.repo_kb_missing = repo_kb_missing
     daemon.quota_updated_at = now
     daemon.online = True
     daemon.last_seen_at = now
@@ -413,6 +420,8 @@ def put_quota(payload: schemas.QuotaReport, principal: Principal = Depends(requi
     return schemas.QuotaOut(
         shells=shells,
         gates=gates,
+        repo_agents_md_missing=repo_agents_md_missing,
+        repo_kb_missing=repo_kb_missing,
         quota_updated_at=now,
     )
 

@@ -1087,6 +1087,48 @@ def test_loop_publishes_quota_snapshot(tmp_path, monkeypatch):
     ]
 
 
+def test_loop_publishes_repo_initialised_facts(tmp_path, monkeypatch):
+    """#1268: `agents_md_missing`/`kb_missing` piggyback on the same quota
+    tick as `gates` — computed from the repo root the daemon's own `.brr`
+    sits directly under (`brr_dir.parent`), the same root
+    `daemon.start()`'s own `AGENTS.md` check reads."""
+    from brnrd.models import Daemon as DaemonModel
+
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    brr_dir.mkdir(parents=True)
+    client, _ = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    daemon_headers = {"Authorization": f"Bearer {token}"}
+    assert client.post(
+        "/v1/daemons/register", json={"daemon_name": "laptop"}, headers=daemon_headers,
+    ).status_code == 200
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+    monkeypatch.setattr(cloud.codex_usage, "probe_rate_limits", lambda **kw: None)
+    monkeypatch.setattr(cloud.codex_status, "load_levels", lambda *a, **k: {})
+
+    # No AGENTS.md and no kb wired up at tmp_path yet — both facts should
+    # read "missing".
+    cloud._dashboard_publish_tick(brr_dir, inbox_dir)
+    with client.app.state.SessionLocal() as db:
+        daemon = db.query(DaemonModel).filter(DaemonModel.repo_id == pid).one()
+        assert daemon.repo_agents_md_missing is True
+        assert daemon.repo_kb_missing is True
+
+    # `brnrd init` equivalent: AGENTS.md now exists. The next tick should
+    # flip agents_md_missing without needing a fresh daemon/token.
+    (tmp_path / "AGENTS.md").write_text("# contract\n", encoding="utf-8")
+    cloud._dashboard_publish_tick(brr_dir, inbox_dir)
+    with client.app.state.SessionLocal() as db:
+        daemon = db.query(DaemonModel).filter(DaemonModel.repo_id == pid).one()
+        assert daemon.repo_agents_md_missing is False
+
+
 def test_claude_quota_shell_carries_scrape_updated_at_and_credits(tmp_path):
     """2026-07-07 fix ('the lying Claude usage panel'): the published shell
     payload must forward the underlying scrape's own timestamp (so the
