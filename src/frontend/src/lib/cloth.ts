@@ -14,7 +14,7 @@
 // documents for its `./boot.ts` import.
 
 import type { ResolvedPathname } from '$app/types';
-import { durationLabel, type RelicRecord, type RunLedgerRow } from './runLedger.ts';
+import { ageLabel, durationLabel, type RelicRecord, type RunLedgerRow } from './runLedger.ts';
 import { runNodeHref } from './runNode.ts';
 import { loomBarFraction, loomPastStop, nestShelfChildren } from './loomBand.ts';
 import { THERMAL_STOPS } from './statusPalette.ts';
@@ -169,15 +169,6 @@ export function produceChips(relics: RelicRecord[]): ClothChip[] {
 	return chips;
 }
 
-/** Same grammar the loom band's tooltips speak — m, then h m, then d h. */
-export function clothAgeLabel(ms: number): string {
-	const minutes = Math.max(0, Math.round(ms / 60_000));
-	if (minutes < 60) return `${minutes}m ago`;
-	const hours = Math.floor(minutes / 60);
-	if (hours < 48) return `${hours}h ${minutes % 60}m ago`;
-	return `${Math.floor(hours / 24)}d ${hours % 24}h ago`;
-}
-
 /** The window predicate: a row belongs to the cloth when it *closed* inside
  * the trailing window. Unparseable or future timestamps stay out. */
 export function inClothWindow(row: RunLedgerRow, now: number, windowMs: number): boolean {
@@ -265,7 +256,7 @@ function mergeRuns(rows: RunLedgerRow[], now: number, windowMs: number): MergedR
 	return merged;
 }
 
-function curatedLine(run: MergedRun): ClothLine {
+function curatedLine(run: MergedRun, now: number): ClothLine {
 	const chips = produceChips(run.relics);
 	const authoredName = run.name?.trim() || null;
 	return {
@@ -283,7 +274,7 @@ function curatedLine(run: MergedRun): ClothLine {
 		bare: chips.length === 0,
 		duration: durationLabel(run.wallSeconds),
 		wallSeconds: run.wallSeconds,
-		age: clothAgeLabel(run.ageMs),
+		age: ageLabel(run.endedAt, now),
 		ageMs: run.ageMs,
 		endedAt: run.endedAt,
 		color: THERMAL_STOPS[loomPastStop(run.ageMs)],
@@ -371,9 +362,9 @@ export function weaveCloth(
 	const trees: ClothTree[] = [];
 	for (const run of nested) {
 		if (run.depth === 0) {
-			trees.push({ root: curatedLine(run), children: [] });
+			trees.push({ root: curatedLine(run, now), children: [] });
 		} else if (trees.length > 0) {
-			trees[trees.length - 1].children.push(curatedLine(run));
+			trees[trees.length - 1].children.push(curatedLine(run, now));
 		}
 	}
 	const kept = trees.slice(0, Math.max(0, cap));

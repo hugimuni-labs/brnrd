@@ -40,6 +40,7 @@ async function renderStack(props: {
 			/import\s+MarkdownContent\s+from\s*'\.\/MarkdownContent\.svelte';/,
 			'const MarkdownContent = () => {};'
 		)
+		.replace(/'\.\/runNode'/g, "'./runNode.ts'")
 		.replace(/'\.\/statusPalette'/g, "'./statusPalette.ts'")
 		.replace(/'\.\/warp'/g, "'./warp.ts'");
 	writeFileSync(generated, runnable);
@@ -178,6 +179,56 @@ test('selecting an item shows the full bordered mandate block regardless of the 
 	ok(
 		body.includes('id="warp-item-the-loom-0:restructure"'),
 		'the selected item mounts its own fold (taken/needs/refs/body)'
+	);
+});
+
+test("taken links to the run node when the item's own refs resolve one repo, else stays plain (#1257)", async () => {
+	const solo = {
+		...BANKED_ITEM,
+		key: '2:solo-repo',
+		refs: [
+			{
+				label: 'hugimuni-labs/brnrd#928',
+				href: 'https://github.com/hugimuni-labs/brnrd/issues/928'
+			}
+		],
+		taken: ['run-260802-0001-9qgz']
+	};
+	const ambiguous = {
+		...BANKED_ITEM,
+		key: '3:two-repos',
+		headline: 'Touches two repos',
+		refs: [
+			{
+				label: 'hugimuni-labs/brnrd#928',
+				href: 'https://github.com/hugimuni-labs/brnrd/issues/928'
+			},
+			{ label: 'other-org/site#3', href: 'https://github.com/other-org/site/issues/3' }
+		],
+		taken: ['run-260802-0003-zzzz']
+	};
+	const body = await renderStack({
+		layers: [
+			layer({
+				items: [EMBER_ITEM, BANKED_ITEM, solo, ambiguous],
+				counts: { ember: 1, banked: 3, cold: 0, unstated: 0 }
+			})
+		],
+		initialOpenCallSign: 'the-loom',
+		initialOpenItemKey: '2:solo-repo'
+	});
+	ok(
+		body.includes('href="/runs/hugimuni-labs__brnrd/run-260802-0001-9qgz"'),
+		"one resolvable repo on the item's own refs earns the taken run a real link"
+	);
+	const ambiguousBody = await renderStack({
+		layers: [layer({ items: [ambiguous], counts: { ember: 0, banked: 1, cold: 0, unstated: 0 } })],
+		initialOpenCallSign: 'the-loom',
+		initialOpenItemKey: '3:two-repos'
+	});
+	ok(
+		ambiguousBody.includes('run-260802-0003-zzzz') && !ambiguousBody.includes('href="/runs/'),
+		'two repos on the same item is exactly the ambiguity every other ref here renders as plain text'
 	);
 });
 

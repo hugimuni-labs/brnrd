@@ -41,6 +41,7 @@ async function renderQueue(props: {
 		)
 		.replace(/'\.\/backchannel'/g, "'./backchannel.ts'")
 		.replace(/'\.\/prReviewQueue'/g, "'./prReviewQueue.ts'")
+		.replace(/'\.\/runLedger'/g, "'./runLedger.ts'")
 		.replace(/'\.\/statusPalette'/g, "'./statusPalette.ts'");
 	writeFileSync(generated, runnable);
 	try {

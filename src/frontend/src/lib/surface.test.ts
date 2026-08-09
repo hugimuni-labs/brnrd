@@ -105,6 +105,28 @@ test('inlineTokens renders backticked spans as code tokens', () => {
 	]);
 });
 
+test('inlineTokens resolves the qualified owner/repo#N shorthand in prose, never a bare #N (#1257)', () => {
+	const tokens = inlineTokens(
+		'see hugimuni-labs/brnrd#1256 and #1257 bare, also a/b/c#1',
+		'index.md',
+		new Set()
+	);
+	assert.deepEqual(tokens, [
+		{ kind: 'text', text: 'see ' },
+		{
+			kind: 'link',
+			text: 'hugimuni-labs/brnrd#1256',
+			href: 'https://github.com/hugimuni-labs/brnrd/issues/1256',
+			target: null,
+			anchor: null
+		},
+		// A bare `#1257` names no repo in prose, same ambiguity rule
+		// `parseRefs` applies to a `refs:` row — stays plain text. So does
+		// `a/b/c#1`: two slashes, not the single-slash owner/repo shape.
+		{ kind: 'text', text: ' and #1257 bare, also a/b/c#1' }
+	]);
+});
+
 test('previewBlock clamps a collapsed list by item and hiddenCount reports it', () => {
 	const list = {
 		kind: 'list' as const,
