@@ -301,6 +301,7 @@
 							tokensOutput={boltCard.tokensOutput}
 							usdSubscriptionAttributed={boltCard.usdSubscriptionAttributed}
 							usdCreditsEquivalent={boltCard.usdCreditsEquivalent}
+							declaration={boltCard.declaration}
 						/>
 					{/if}
 				{/if}
