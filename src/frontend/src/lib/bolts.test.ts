@@ -8,6 +8,7 @@ import {
 	boltSummonsLabel,
 	boltVerdictLabel,
 	boltsTakenStorageKey,
+	parseBoltDeclaration,
 	parseBoltState,
 	readTakenBolts,
 	serializeTakenBolts,
@@ -253,4 +254,152 @@ test('boltCardDataFromLedgerRows merges every row for one run — relics accumul
 	// Spend not reset by the second row's nulls.
 	assert.equal(data?.wallClockSeconds, 60);
 	assert.equal(data?.usdSubscriptionAttributed, 2);
+});
+
+// ── #1236/#1255: the declaration column, threaded through ─────────────────
+// The two tests above (`boltCardSections: asks/decisions/owed are
+// unconditionally absent`) still pin the old contract for the zero-argument
+// call every pre-#1236 call site makes — left untouched on purpose. These
+// pin the new one-argument shape the wire now actually carries.
+
+test('parseBoltDeclaration reads null/malformed as null — same degrade-not-throw contract as parseBoltState', () => {
+	assert.equal(parseBoltDeclaration(null), null);
+	assert.equal(parseBoltDeclaration(undefined), null);
+	assert.equal(parseBoltDeclaration('not an object'), null);
+	assert.equal(parseBoltDeclaration([1, 2, 3]), null);
+});
+
+test('parseBoltDeclaration reads a bare record with no recognised fields as an empty declaration, not null', () => {
+	// `run_ledger.bolt_declaration_value` always sends every key; an object
+	// this bare is unreachable on the real wire, but the parser still owes
+	// it an honest reading rather than a thrown error — every array defaults
+	// closed, never invented content.
+	assert.deepEqual(parseBoltDeclaration({}), {
+		asks: [],
+		owed: [],
+		decisions: [],
+		spendDeclared: null,
+		next: null,
+		dissent: []
+	});
+});
+
+test('parseBoltDeclaration reads the {omitted} marker as its own state, not a plain declaration', () => {
+	const parsed = parseBoltDeclaration({
+		omitted: true,
+		reason: 'persistence row cap exceeded: asks'
+	});
+	assert.deepEqual(parsed, { omitted: true, reason: 'persistence row cap exceeded: asks' });
+	// A missing/blank reason still reads as omitted, never crashes.
+	assert.deepEqual(parseBoltDeclaration({ omitted: true }), {
+		omitted: true,
+		reason: 'persistence limits exceeded'
+	});
+});
+
+test('parseBoltDeclaration parses a full declaration and filters malformed rows rather than throwing', () => {
+	const parsed = parseBoltDeclaration({
+		asks: [
+			{ event: 'evt-1', disposition: 'answered' },
+			{ event: 'evt-2', disposition: 'deferred:schedule.md', label: 'the notes repair' },
+			{ disposition: 'answered' }, // no event — dropped
+			'not a row' // wrong shape — dropped
+		],
+		owed: [
+			{ label: 'the-thing', ref: 'promise-1', why: 'ran out of budget' },
+			{ ref: 'promise-2' } // no why — dropped
+		],
+		decisions: ['"notify.gate stopgap": extended', 3, null],
+		spend_declared: '~$12, 56m',
+		next: 'none',
+		dissent: ['evt-…-4e17 undispositioned']
+	});
+	assert.ok(parsed && !('omitted' in parsed));
+	assert.equal(parsed?.asks.length, 2);
+	assert.equal(parsed?.asks[1].label, 'the notes repair');
+	assert.equal(parsed?.owed.length, 1);
+	assert.equal(parsed?.owed[0].label, 'the-thing');
+	// Non-string decisions entries are dropped, not stringified — the wire
+	// only ever sends strings here (`cut_verb._parse_decisions`).
+	assert.deepEqual(parsed?.decisions, ['"notify.gate stopgap": extended']);
+	assert.equal(parsed?.spendDeclared, '~$12, 56m');
+	assert.equal(parsed?.next, 'none');
+	assert.deepEqual(parsed?.dissent, ['evt-…-4e17 undispositioned']);
+});
+
+test('boltCardSections: a declaration argument turns asks/decisions/owed/spendDeclared data-driven', () => {
+	const declared = parseBoltDeclaration({
+		asks: [{ event: 'evt-1', disposition: 'answered' }],
+		owed: [],
+		decisions: ['kept'],
+		spend_declared: null,
+		dissent: []
+	});
+	const sections = boltCardSections(
+		{
+			relics: [],
+			wallClockSeconds: null,
+			tokensInput: null,
+			tokensOutput: null,
+			usdSubscriptionAttributed: null,
+			usdCreditsEquivalent: null
+		},
+		declared
+	);
+	assert.equal(sections.asks, 'present');
+	assert.equal(sections.decisions, 'present');
+	// Declared, but the row carries zero owed rows and no spend estimate —
+	// 'empty' is the honest state, not 'absent'.
+	assert.equal(sections.owed, 'empty');
+	assert.equal(sections.spendDeclared, 'empty');
+});
+
+test('boltCardSections: the {omitted} marker reports its own state on every declaration-backed section', () => {
+	const omitted = parseBoltDeclaration({
+		omitted: true,
+		reason: 'persistence JSON byte cap exceeded'
+	});
+	const sections = boltCardSections(
+		{
+			relics: [],
+			wallClockSeconds: null,
+			tokensInput: null,
+			tokensOutput: null,
+			usdSubscriptionAttributed: null,
+			usdCreditsEquivalent: null
+		},
+		omitted
+	);
+	assert.equal(sections.asks, 'omitted');
+	assert.equal(sections.decisions, 'omitted');
+	assert.equal(sections.owed, 'omitted');
+	assert.equal(sections.spendDeclared, 'omitted');
+});
+
+test('unackedBolts and boltCardDataFromLedgerRows carry the declaration through, latest-cut-wins', () => {
+	const declarationA = { asks: [{ event: 'evt-1', disposition: 'answered' }] };
+	const declarationB = { asks: [], owed: [{ ref: 'p-1', why: 'later' }] };
+	const rows = [
+		row({ run_id: 'run-1', bolt: 'accepted', bolt_declaration: declarationA }),
+		row({
+			run_id: 'run-1',
+			bolt: 'annotated',
+			ended_at: '2026-08-07T22:05:00Z',
+			bolt_declaration: declarationB
+		})
+	];
+	const [unacked] = unackedBolts(rows, []);
+	assert.ok(unacked.declaration && !('omitted' in unacked.declaration));
+	assert.equal(unacked.declaration?.owed[0]?.ref, 'p-1');
+
+	const card = boltCardDataFromLedgerRows(rows);
+	assert.ok(card?.declaration && !('omitted' in card.declaration));
+	assert.equal(card?.declaration?.owed[0]?.ref, 'p-1');
+});
+
+test('unackedBolts and boltCardDataFromLedgerRows leave declaration null when the row never carried one', () => {
+	const rows = [row({ run_id: 'run-1', bolt: 'accepted' })];
+	const [unacked] = unackedBolts(rows, []);
+	assert.equal(unacked.declaration, null);
+	assert.equal(boltCardDataFromLedgerRows(rows)?.declaration, null);
 });

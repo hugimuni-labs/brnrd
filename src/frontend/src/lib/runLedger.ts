@@ -195,6 +195,14 @@ export interface RunLedgerRow {
 	// Parsed tolerantly (`bolts.ts`'s `parseBoltState`) — an unrecognised
 	// value reads as "no bolt", never an error.
 	bolt?: string | null;
+	// The validated `cut:` declaration this row's bolt carried (#1236,
+	// `run_ledger.py`'s `bolt_declaration_value`) — the bounded asks/owed/
+	// decisions/spend-estimate/dissent object, `{omitted: true, reason}` when
+	// it blew the persistence caps, or absent/null on a row that predates the
+	// wire or was never cut. Read with `bolts.ts`'s `parseBoltDeclaration`,
+	// same tolerant-on-read contract as `bolt` above — never trust the raw
+	// shape directly.
+	bolt_declaration?: Record<string, unknown> | null;
 	external_refs: RelicRecord[] | null;
 	parent_run_id: string | null;
 	is_subspawn: boolean | null;
