@@ -33,6 +33,12 @@ Deliberately narrow, and the same shape the route config chose:
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import re
+from collections.abc import Iterable
+from pathlib import Path
+
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 HEADER = b"strict-transport-security"
@@ -81,3 +87,119 @@ class HSTSMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_with_hsts)
+
+
+# --- Content-Security-Policy (Report-Only) -----------------------------
+#
+# A naive `script-src 'self'` at the Cloudflare edge white-screened
+# brnrd.dev: SvelteKit's static build (`@sveltejs/adapter-static`, no
+# server process — see `spa.py`) bakes one inline `<script>` bootstrap
+# into `index.html` per build, and `'self'` blocks any inline script
+# outright.
+#
+# SvelteKit's own `kit.csp` cannot fix this here. Under `adapter-static`
+# it has exactly one delivery mode — a `<meta http-equiv=...>` tag baked
+# into the static HTML at build time, since there is no per-request
+# server to emit a header — and a `<meta>`-delivered policy cannot be
+# `Content-Security-Policy-Report-Only`; the CSP spec only allows the
+# report-only variant over an HTTP header. A meta-tag CSP would also be
+# *enforcing* the moment it shipped, which is the one thing this change
+# is explicitly not supposed to do yet. So the hash has to be computed
+# and served from here instead — same seam as HSTS, and per the same
+# `spa.py` architecture where the backend, not SvelteKit, is the only
+# thing that ever emits a response header for the built SPA.
+#
+# The inline script's content is not a fixed string: SvelteKit mints a
+# fresh `__sveltekit_<id>` global and fresh content-hashed chunk
+# filenames into it on every build. Hashing a value written down once
+# would silently drift the first time the frontend rebuilds — so this
+# reads the *actual* shipped `index.html` and hashes whatever inline
+# script is in it right now.
+
+_INLINE_SCRIPT_RE = re.compile(
+    rb"<script(?![^>]*\bsrc\s*=)[^>]*>(.*?)</script>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+CSP_HEADER = b"content-security-policy-report-only"
+
+# Widen only for a real, observed violation — this is deliberately the
+# narrowest policy that still lets the current app run.
+_BASE_DIRECTIVES: tuple[tuple[str, str], ...] = (
+    ("default-src", "'self'"),
+    ("style-src", "'self' 'unsafe-inline'"),
+    ("img-src", "'self' data:"),
+    ("connect-src", "'self'"),
+    ("font-src", "'self'"),
+    ("object-src", "'none'"),
+    ("base-uri", "'self'"),
+    ("frame-ancestors", "'none'"),
+)
+
+
+def inline_script_hashes(html: bytes) -> list[str]:
+    """CSP ``'sha256-...'`` sources, one per inline ``<script>`` in *html*.
+
+    A CSP hash source matches the exact bytes a browser hashes: the text
+    between a script tag's ``>`` and its ``</script>``, verbatim — no
+    trimming, no re-serialising. ``<script src=...>`` tags are excluded
+    (nothing inline to hash; ``'self'`` already covers same-origin files).
+    """
+    return [
+        "'sha256-" + base64.b64encode(hashlib.sha256(match.group(1)).digest()).decode("ascii") + "'"
+        for match in _INLINE_SCRIPT_RE.finditer(html)
+    ]
+
+
+def build_csp_report_only(script_hashes: Iterable[str]) -> str:
+    """Assemble the ``Content-Security-Policy-Report-Only`` header value."""
+    script_src = " ".join(("'self'", *script_hashes))
+    directives = [("script-src", script_src), *_BASE_DIRECTIVES]
+    return "; ".join(f"{name} {value}" for name, value in directives)
+
+
+def csp_report_only_value(frontend_dir: Path | None) -> str | None:
+    """The Report-Only CSP header value for the build in *frontend_dir*.
+
+    ``None`` when there is nothing to hash against — no frontend directory
+    (backend-only deployment) or no ``index.html`` in it (checkout where
+    ``npm run build`` has not run) — mirroring the "missing build is not an
+    error" stance ``resolve_frontend_dir`` already takes: shipping no header
+    beats shipping one with a hash that matches nothing.
+    """
+    if frontend_dir is None:
+        return None
+    index = frontend_dir / "index.html"
+    if not index.is_file():
+        return None
+    return build_csp_report_only(inline_script_hashes(index.read_bytes()))
+
+
+class CSPReportOnlyMiddleware:
+    """Add ``Content-Security-Policy-Report-Only`` to every response.
+
+    Report-Only, never enforcing: the maintainer flips to the enforcing
+    header once the violation stream from this one is clean (see module
+    docstring above for why SvelteKit's own ``kit.csp`` cannot ship the
+    report-only variant under this app's static-adapter architecture).
+    Same raw-ASGI shape as ``HSTSMiddleware`` and for the same reason — a
+    header rewrite has no business touching a streamed body.
+    """
+
+    def __init__(self, app: ASGIApp, *, value: str) -> None:
+        self.app = app
+        self.value = value.encode("latin-1")
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_csp(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = message.setdefault("headers", [])
+                if not any(name.lower() == CSP_HEADER for name, _ in headers):
+                    headers.append((CSP_HEADER, self.value))
+            await send(message)
+
+        await self.app(scope, receive, send_with_csp)
