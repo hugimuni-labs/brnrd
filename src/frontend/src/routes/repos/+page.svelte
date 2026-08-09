@@ -11,6 +11,7 @@
 		fetchRepos,
 		pairRepoTelegram,
 		setPublishLayers,
+		splitPairingCommand,
 		telegramPairLabel,
 		type ConnectedRepo,
 		type RepoActionResponse,
@@ -62,6 +63,12 @@
 	// already uses for its two command boxes; not reinvented.
 	let copied = $state<string | null>(null);
 	let copyTimer: ReturnType<typeof setTimeout> | undefined;
+
+	// #1277a, same fix as ColdStart.svelte's step 02: `data.pairing_command`
+	// leads with `cd <repo>`, a literal placeholder no shell can run — split
+	// it out so the box below only ever holds, and the button only ever
+	// copies, the line that is unconditionally runnable.
+	let pairingParts = $derived(data ? splitPairingCommand(data.pairing_command) : null);
 
 	async function copy(key: string, text: string) {
 		try {
@@ -559,15 +566,21 @@
 				</p>
 
 				<div class="mt-4">
+					{#if pairingParts?.setupLine}
+						<!-- #1277a: scene-setting, not copyable — see ColdStart.svelte's
+						     step 02 for the same split on the same backend string. -->
+						<p class="font-mono text-[11px] text-ink-mute">from your repo checkout:</p>
+					{/if}
 					<div class="mt-1.5 flex items-start gap-2">
 						<pre
 							class="min-w-0 grow border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] wrap-anywhere whitespace-pre-wrap text-stone-300"><code
-								>{data.pairing_command}</code
+								>{pairingParts?.runnable ?? data.pairing_command}</code
 							></pre>
 						<button
 							type="button"
 							class="shrink-0 cursor-pointer border border-stone-800 px-2 py-2 font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-							onclick={() => data && copy('connect-cmd', data.pairing_command)}
+							onclick={() =>
+								data && copy('connect-cmd', pairingParts?.runnable ?? data.pairing_command)}
 							>{copied === 'connect-cmd' ? 'copied' : 'copy'}</button
 						>
 					</div>
