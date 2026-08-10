@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from .. import ids, schemas
@@ -53,6 +53,36 @@ def pair_suggested_forge(pair: PairRequest) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+def initiator_proof_ok(pair: PairRequest, approve_secret: str) -> bool:
+    """Does ``approve_secret`` prove this approve came from the initiator?
+
+    The one comparison, so the two approve surfaces (the bearer route and
+    the browser's ``POST /v1/connect/{code}``) cannot drift into disagreeing
+    about what a valid proof is — and so the browser route can decline to
+    *materialize a repo* for an approve it already knows will be refused.
+
+    A row with no stored proof (``""``) answers ``False``: see
+    ``models.PairRequest.approve_secret_hash`` for why that direction is the
+    safe one.
+    """
+    expected = pair.approve_secret_hash or ""
+    if not expected or not approve_secret:
+        return False
+    return hmac.compare_digest(hash_token(approve_secret), expected)
+
+
+def _require_initiator_proof(pair: PairRequest, approve_secret: str) -> None:
+    if not initiator_proof_ok(pair, approve_secret):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "this approval link is incomplete or doesn't match this pair "
+                "code — open the full link your terminal printed, or re-run "
+                "`brnrd account connect` for a fresh one"
+            ),
+        )
+
+
 def _get_pair(db: Session, code: str) -> PairRequest:
     pair = db.execute(select(PairRequest).where(PairRequest.pair_code == code)).scalar_one_or_none()
     if pair is None:
@@ -80,6 +110,7 @@ def start_pair(
         raise HTTPException(status_code=503, detail="could not allocate pair code")
 
     secret = ids.poll_secret()
+    approve_secret = ids.pair_approve_secret()
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.pair_ttl_s)
     # No auth yet at this point in the handshake (that's what pairing mints)
     # — capabilities ride in unauthenticated, exactly like the pair code
@@ -101,37 +132,78 @@ def start_pair(
             id=ids.pair_request_id(),
             pair_code=code,
             poll_secret_hash=hash_token(secret),
+            approve_secret_hash=hash_token(approve_secret),
             status=PairRequest.STATUS_PENDING,
             expires_at=expires_at,
             capabilities_json=capabilities_json,
         )
     )
     db.commit()
-    return schemas.PairStarted(pair_code=code, pair_url=f"{settings.public_base_url.rstrip()}/connect/{code}", poll_secret=secret, expires_at=expires_at)
+    # The approval proof rides the **fragment**, not the query string: a
+    # fragment is never sent to a server, so it stays out of access logs,
+    # out of `Referer` on any onward navigation, and out of the JSON the
+    # approval page's own context endpoint returns. The browser reads it
+    # from `location.hash` and posts it back over TLS.
+    pair_url = f"{settings.public_base_url.rstrip()}/connect/{code}#{approve_secret}"
+    return schemas.PairStarted(pair_code=code, pair_url=pair_url, poll_secret=secret, approve_secret=approve_secret, expires_at=expires_at)
 
 
-def approve_core(db: Session, account_id: str, code: str, repo_id: str) -> str:
+def approve_core(db: Session, account_id: str, code: str, repo_id: str, approve_secret: str) -> str:
+    """Bind a pairing to ``account_id`` and mint its daemon token.
+
+    Two rules decide this, in order, and both used to be missing:
+
+    1. **The approver must prove it is the initiator.** A pair code is not a
+       bearer capability for approval. Before this check existed, any
+       authenticated account that knew a live code could approve it into
+       *itself*, and the victim's daemon then polled back a token scoped to
+       the attacker — agent-authority code execution on the victim's host.
+       The check runs before the repo lookup so a failed approve has no
+       side effects at all, and before the status read so a caller with no
+       proof learns nothing about the code beyond what `_get_pair` already
+       says.
+    2. **A pair code is approved exactly once**, claimed with a conditional
+       `UPDATE ... WHERE status='pending'`. Refusing only `consumed` (the
+       old shape) left an already-approved pair re-bindable — and left
+       check-then-use between the status read and the write, so two
+       concurrent approves could both mint a token and the last writer
+       decided who the daemon belonged to. The daemon token is minted only
+       after the row is claimed.
+    """
     pair = _get_pair(db, code)
-    if pair.status == PairRequest.STATUS_CONSUMED:
+    _require_initiator_proof(pair, approve_secret)
+    if pair.status != PairRequest.STATUS_PENDING:
         raise HTTPException(status_code=409, detail="pair code already used")
     repo = db.execute(select(Repo).where(Repo.id == repo_id, Repo.account_id == account_id)).scalar_one_or_none()
     if repo is None:
         raise HTTPException(status_code=404, detail="repo not found")
     raw = ids.daemon_token()
+    claimed = db.execute(
+        update(PairRequest)
+        .where(PairRequest.id == pair.id, PairRequest.status == PairRequest.STATUS_PENDING)
+        .values(
+            status=PairRequest.STATUS_APPROVED,
+            account_id=account_id,
+            repo_id=repo.id,
+            minted_token=raw,
+        )
+        .execution_options(synchronize_session=False)
+    ).rowcount
+    if claimed != 1:
+        # Lost the race. Nothing was written and no token exists yet — the
+        # session is discarded by `get_db`'s teardown, so there is nothing
+        # to unwind either.
+        raise HTTPException(status_code=409, detail="pair code already used")
     # repo_id remains the initial/default routing repo for compatibility with
     # the one-repo connect UI. The token principal itself is account-scoped.
     db.add(Token(id=ids.token_id(), account_id=account_id, repo_id=repo.id, kind=Token.KIND_DAEMON, token_hash=hash_token(raw), label="daemon (paired)"))
-    pair.status = PairRequest.STATUS_APPROVED
-    pair.account_id = account_id
-    pair.repo_id = repo.id
-    pair.minted_token = raw
     db.commit()
     return repo.id
 
 
 @router.post("/{code}/approve", response_model=schemas.PairStatus)
 def approve_pair(code: str, payload: schemas.PairApprove, principal: Principal = Depends(require_account), db: Session = Depends(get_db)):
-    repo_id = approve_core(db, principal.account_id, code, payload.repo_id)
+    repo_id = approve_core(db, principal.account_id, code, payload.repo_id, payload.approve_secret)
     return schemas.PairStatus(status="approved", account_id=principal.account_id, repo_id=repo_id)
 
 
