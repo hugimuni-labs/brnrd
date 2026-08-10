@@ -144,9 +144,9 @@
 				     or forwarded without it). The approve would 403; say so
 				     here, where the fix is one paste away. -->
 				<p class="mt-4 text-sm text-stone-300">
-					This approval link is incomplete. Copy the whole link your terminal printed —
-					including everything after the <code class="font-mono text-amber-200">#</code> — and
-					open that. It carries the proof that <em>you</em> are the one who asked to pair.
+					This approval link is incomplete. Copy the whole link your terminal printed — including
+					everything after the <code class="font-mono text-amber-200">#</code> — and open that. It
+					carries the proof that <em>you</em> are the one who asked to pair.
 				</p>
 			{:else if canApprove(context)}
 				{#if suggested && !showPicker}
