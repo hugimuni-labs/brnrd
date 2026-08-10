@@ -752,7 +752,9 @@ def test_a_rename_reports_its_destination(trees):
 # the main checkout and every linked worktree share. That is the whole bug.
 
 
-def _inner_pytest(tmp_path, decoy: Path, body: str) -> subprocess.CompletedProcess:
+def _inner_pytest(
+    tmp_path, decoy: Path, body: str, *, extra_env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess:
     """Run *body* as a pytest under `tests/conftest.py`, pinned at *decoy*.
 
     A subprocess and not `monkeypatch`, because the property under test is
@@ -764,6 +766,11 @@ def _inner_pytest(tmp_path, decoy: Path, body: str) -> subprocess.CompletedProce
 
     The real `tests/conftest.py` is copied rather than imported so the inner
     run exercises the shipped fixture and would notice it being deleted.
+
+    ``extra_env`` layers on top of the discovery pin every caller gets by
+    default — the identity-half tests (#1264) use it to add a bot-shaped
+    `GIT_AUTHOR_*`/`GIT_COMMITTER_*` pin alongside `GIT_DIR`/`GIT_WORK_TREE`,
+    exactly as `daemon.py`'s worker env sets both together for a real strand.
     """
     import shutil
     import sys
@@ -776,6 +783,7 @@ def _inner_pytest(tmp_path, decoy: Path, body: str) -> subprocess.CompletedProce
         **os.environ,
         "GIT_DIR": str(decoy / ".git"),
         "GIT_WORK_TREE": str(decoy),
+        **(extra_env or {}),
     }
     return subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(inner)],
@@ -856,22 +864,104 @@ def test_the_fixture_drops_the_pin_by_the_time_a_test_body_runs(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+# ── half 3b: the identity pin doesn't survive into a fixture's own commits
+# (#1264) ─────────────────────────────────────────────────────────────────
+#
+# Same shape as half 3 above, one axis over: `GIT_AUTHOR_*`/`GIT_COMMITTER_*`
+# instead of `GIT_DIR`/`GIT_WORK_TREE`. `daemon.py` pins both pairs together
+# for every strand run, so a fixture that only guards the discovery pair
+# still lets a strand's bot identity silently win a fixture's own
+# `-c user.email=` — exactly what broke
+# `test_derive_auto_squash_merge_requires_github_committer` in
+# `test_relics.py` before this fix.
+
+_INNER_WRITES_A_COMMIT = '''
+import subprocess
+
+
+def test_inner_commit_lands_with_the_identity_the_test_named(tmp_path):
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=sandbox, check=True)
+    (sandbox / "f.txt").write_text("1", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=sandbox, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Inner Suite",
+         "-c", "user.email=inner-suite@brr.invalid",
+         "commit", "-q", "-m", "inner commit"],
+        cwd=sandbox, check=True,
+    )
+    author = subprocess.run(
+        ["git", "log", "-1", "--format=%ae"], cwd=sandbox,
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    assert author == "inner-suite@brr.invalid", author
+'''
+
+
+def test_the_suite_commits_with_the_identity_the_fixture_names_not_the_strand(
+    tmp_path,
+):
+    """The load-bearing identity test, mirroring the discovery one above.
+
+    A strand-shaped ambient pin (`GIT_DIR`/`GIT_WORK_TREE` *and*
+    `GIT_AUTHOR_*`/`GIT_COMMITTER_*`, exactly as `daemon.py` sets both for a
+    real strand run) sits in the inner interpreter's environment at
+    startup. The inner suite's own `-c user.email=` must still win: if
+    `_hermetic_git_env` only scrubbed the discovery pair, this reds out
+    with the bot's email instead.
+
+    Reverting the identity half of the `delenv` in `tests/conftest.py`
+    turns this red.
+    """
+    decoy = tmp_path / "decoy"
+    init_git_repo(decoy)
+    result = _inner_pytest(
+        tmp_path, decoy, _INNER_WRITES_A_COMMIT,
+        extra_env={
+            "GIT_AUTHOR_NAME": gitops.BOT_NAME,
+            "GIT_AUTHOR_EMAIL": gitops.BOT_EMAIL,
+            "GIT_COMMITTER_NAME": gitops.BOT_NAME,
+            "GIT_COMMITTER_EMAIL": gitops.BOT_EMAIL,
+        },
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_this_very_suite_runs_without_a_discovery_override():
     """Same fact, asserted in-process — free, and it fails first."""
     for var in gitops.DISCOVERY_OVERRIDE_VARS:
         assert var not in os.environ
 
 
+def test_this_very_suite_runs_without_an_identity_override():
+    """The identity half of #1264, asserted in-process the same way.
+
+    A strand's pinned `GIT_AUTHOR_*`/`GIT_COMMITTER_*` (#1135/#1251) must
+    not survive into this suite's own `os.environ` any more than the
+    discovery pair above does — otherwise a fixture's `-c user.email=`
+    silently loses to the inherited identity (see
+    `test_derive_auto_squash_merge_requires_github_committer` in
+    `test_relics.py`, which is exactly that failure mode).
+    """
+    for var in gitops.IDENTITY_OVERRIDE_VARS:
+        assert var not in os.environ
+
+
 def test_the_fixture_sources_the_names_from_gitops():
-    """One list of these two variables in the project, not a fourth copy.
+    """One list of each of these variables in the project, not a fourth copy.
 
     `gitops.DISCOVERY_OVERRIDE_VARS`, `gitops.explicit_repo_env` and
-    `cli._drop_inherited_git_pin` already state this pair; #723 is the class
-    where the copies drift apart and one of them keeps being right.
+    `cli._drop_inherited_git_pin` already state the discovery pair;
+    `gitops.IDENTITY_OVERRIDE_VARS` and `gitops.bot_identity_env` state the
+    identity four (#1264). #723 is the class where the copies drift apart
+    and one of them keeps being right.
     """
     source = (Path(__file__).parent / "conftest.py").read_text(encoding="utf-8")
     assert "gitops.DISCOVERY_OVERRIDE_VARS" in source
     assert '"GIT_DIR"' not in source and "'GIT_DIR'" not in source
+    assert "gitops.IDENTITY_OVERRIDE_VARS" in source
+    assert '"GIT_AUTHOR_EMAIL"' not in source and "'GIT_AUTHOR_EMAIL'" not in source
 
 
 # ── half 4: publish refuses to ship from a repointed tree (#746) ─────

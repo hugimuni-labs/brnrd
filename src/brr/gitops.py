@@ -215,6 +215,19 @@ def explicit_repo_env(base: dict[str, str] | None = None) -> dict[str, str]:
 BOT_NAME = "brnrd-bot"
 BOT_EMAIL = "289761152+brnrd-bot@users.noreply.github.com"
 
+# The four variables git resolves identity from *before* it consults config
+# at any level — see the precedence note in :func:`bot_identity_env` below.
+# Named as a tuple, same shape as :data:`DISCOVERY_OVERRIDE_VARS`, so a
+# caller that needs to scrub *both* the discovery and identity overrides (the
+# test suite's ``_hermetic_git_env`` fixture) reads one list per concern
+# rather than typing the four names out a second time (#1264).
+IDENTITY_OVERRIDE_VARS = (
+    "GIT_AUTHOR_NAME",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_COMMITTER_NAME",
+    "GIT_COMMITTER_EMAIL",
+)
+
 
 def bot_identity_env(base: dict[str, str] | None = None) -> dict[str, str]:
     """:func:`explicit_repo_env` plus brnrd's own commit identity, pinned.
