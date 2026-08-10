@@ -3,8 +3,9 @@
 from pathlib import Path
 import subprocess
 
-from brr import account, knowledge
+from brr import account, daemon, knowledge
 from brr.prompts import _build_knowledge_sources_block
+from brr.run import Run
 
 from _helpers import (
     commit_files,
@@ -593,6 +594,70 @@ def test_committed_pages_in_window_noop_without_knowledge_repo(tmp_path):
     assert knowledge.committed_pages_in_window(
         repo, "deadbeef" * 5, cfg={}, run_id="run-mine",
     ) == []
+
+
+def test_capture_knowledge_credits_the_parent_when_a_strand_sweeps_first(
+    tmp_path,
+):
+    """#1276, driven end-to-end (two runs, one shared knowledge checkout,
+    no mocking of ``knowledge.capture``/``committed_pages_in_window``): a
+    parent authors a kb page and dispatches a strand before committing it.
+    The strand finalizes first — its own capture net's dirty-tree sweep is
+    repo-scoped, not run-scoped, so it is the one that actually commits the
+    parent's uncommitted page. Before the fix that sweep commit carried the
+    strand's own identity trailer, the strand claimed the page as its own
+    relic, and the parent's own later window read found nothing (filtered
+    by its own trailer, which the sweep never carried). After the fix the
+    sweep commits under the live parent's identity instead, the strand
+    claims nothing, and the parent's own finalization — still to come —
+    is the one that reports the page."""
+    repo, cfg, _forge = _capture_chain(tmp_path, checkout=False)
+    knowledge_repo = tmp_path / "home" / "knowledge"
+    start = knowledge.head_oid(repo, cfg)
+    assert start
+
+    runs_dir = daemon.gitops.shared_brr_dir(repo) / "runs"
+    parent = Run(
+        id="run-parent", event_id="evt-parent", body="parent work",
+        status="running", meta={"kb_start_oid": start},
+    )
+    parent.save(runs_dir)
+    child = Run(
+        id="run-child", event_id="evt-child", body="child work",
+        meta={"spawn_parent_run_id": "run-parent", "kb_start_oid": start},
+    )
+    child_outbox = tmp_path / "outbox-child"
+    child_outbox.mkdir()
+    parent_outbox = tmp_path / "outbox-parent"
+    parent_outbox.mkdir()
+
+    # The parent authored a page and dispatched its strand before
+    # committing it — still dirty in the shared checkout.
+    page = knowledge_repo / "repos" / "Gurio__brr" / "parent-authored.md"
+    page.write_text(
+        "written by the parent, not yet committed\n", encoding="utf-8",
+    )
+
+    # The strand finalizes first.
+    daemon._capture_knowledge(repo, cfg, child, outbox_dir=child_outbox)
+
+    # The sweep commit carries the *parent's* identity, not the strand's.
+    trailer = _git(
+        knowledge_repo, "log", "-1",
+        "--format=%(trailers:key=Brnrd-Run-Id,valueonly)",
+    ).stdout.strip()
+    assert trailer == "run-parent"
+    # And the strand, having swept under a borrowed identity, claims
+    # nothing of its own — no double-credit once the parent reports it.
+    assert daemon.relics.read_reported(child_outbox) == []
+
+    # The parent finalizes afterwards; its own commit-window read now
+    # finds the sweep commit, correctly trailer-stamped as its own.
+    daemon._capture_knowledge(repo, cfg, parent, outbox_dir=parent_outbox)
+
+    assert [
+        r["path"] for r in daemon.relics.read_reported(parent_outbox)
+    ] == ["parent-authored.md"]
 
 
 def test_capture_reconciles_a_stray_account_write_against_a_checkout_write(tmp_path):

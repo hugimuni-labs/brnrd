@@ -10545,6 +10545,45 @@ def _finalize_stopped_run(
     return task
 
 
+def _outermost_live_ancestor_run_id(task: Run, runs_dir: Path) -> str | None:
+    """Walk *task*'s ``spawn_parent_run_id`` chain and return the id of the
+    outermost ancestor still ``pending``/``running``, or ``None`` when every
+    ancestor has already finalized (or there is none) (#1276).
+
+    Exists for exactly one caller: the shared-knowledge dirty-tree sweep in
+    :func:`_capture_knowledge` below. The sweep commits *whatever is dirty*
+    in the shared account-knowledge checkout, repo-scoped but never
+    run-scoped — when a parent has authored kb pages and dispatched a
+    strand, and the strand finalizes first, the strand's own sweep is the
+    one that finds the parent's still-uncommitted pages dirty. Stamping
+    that commit with the sweeping run's own id is what #1276 measured: the
+    parent's later ``committed_pages_in_window`` read filters by its own
+    trailer and never finds a commit stamped with the strand's id, so the
+    pages it wrote are invisible to its own relics.
+
+    Walking to the *outermost* live ancestor rather than stopping at the
+    nearest one matters for a chain more than one level deep: an
+    intermediate ancestor that has already finalized cannot pick anything
+    up again, so only an ancestor still open when this run finalizes is a
+    safe target — and the topmost such ancestor is the one whose own
+    ``kb_start_oid..HEAD`` window is guaranteed to be a superset of every
+    descendant's, since it is the last of them to close. A cycle (a
+    corrupted or hand-edited chain) is bounded by ``seen``, never looped.
+    """
+    seen = {task.id}
+    live: str | None = None
+    current = str(task.meta.get("spawn_parent_run_id") or "").strip()
+    while current and current not in seen:
+        seen.add(current)
+        ancestor = Run.from_file(run_manifest_path(runs_dir, current))
+        if ancestor is None:
+            break
+        if ancestor.status in ("pending", "running"):
+            live = ancestor.id
+        current = str(ancestor.meta.get("spawn_parent_run_id") or "").strip()
+    return live
+
+
 def _capture_knowledge(
     repo_root: Path,
     cfg: dict,
@@ -10573,13 +10612,17 @@ def _capture_knowledge(
         # unaffected: it is not the shared checkout.
         return
 
+    runs_dir = gitops.shared_brr_dir(repo_root) / "runs"
+    live_ancestor = _outermost_live_ancestor_run_id(task, runs_dir)
+    sweep_run_id = live_ancestor or task.id
+
     captured_pages: list[str] = []
     mirror_notes: list[str] = []
     moved = knowledge.capture(
         repo_root, f"brnrd-kb: capture knowledge after run {task.id}", cfg=cfg,
         captured_pages=captured_pages,
         conversation_id=task.conversation_key or None,
-        run_id=task.id,
+        run_id=sweep_run_id,
         mirror_notes=mirror_notes,
     )
     if moved:
@@ -10588,6 +10631,26 @@ def _capture_knowledge(
     # tree, matching page count — so the skip only exists if it is said.
     for note in mirror_notes:
         print(f"[brnrd] knowledge: {note}")
+
+    if live_ancestor:
+        # #1276: the sweep above just ran under the live ancestor's identity
+        # rather than this run's own — whatever it found dirty could be this
+        # run's own unsaved kb work or the ancestor's, indistinguishable
+        # from the shared checkout's working-tree state alone. Rather than
+        # guess, credit defers wholesale to the ancestor: its own
+        # finalization, still to come, will pick these commits up through
+        # its own ``committed_pages_in_window`` read below, now that they
+        # carry *its* trailer. A page this run committed itself mid-run
+        # through the installed commit-msg hook (stamped with this run's own
+        # id, unambiguous) is untouched by this — it is picked up by this
+        # run's own ``committed_pages_in_window`` call further down.
+        if captured_pages:
+            print(
+                f"[brnrd] knowledge: deferred {len(captured_pages)} kb page(s) "
+                f"swept by {task.id} to live ancestor {live_ancestor} (#1276)"
+            )
+        captured_pages = []
+
     # Union in pages the resident committed mid-run (#538): everything the
     # knowledge repo took between the run-start stamp and now, scoped to
     # this repo's pages *and* this run's own commits (#565) — a sibling's
