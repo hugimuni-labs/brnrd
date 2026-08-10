@@ -108,7 +108,18 @@ def interactive() -> bool:
 
     ``stdin`` only: a front door piped into ``less`` still prints, but a
     front door with no keyboard behind it must not reach ``input()``.
+
+    ``CI`` is checked *before* the tty, because a tty is not proof of a
+    typist: a CI job that allocates one (``docker run -t``, anything under
+    ``script``) satisfies ``isatty()`` with nobody behind it, and the
+    prompts here have no timeout by design. Measured, not theorised —
+    driving this door under ``script`` blocked until the harness killed it.
+    ``CI`` is the one env var every runner sets and no human shell does.
     """
+    import os
+
+    if os.environ.get("CI"):
+        return False
     try:
         return bool(sys.stdin.isatty())
     except (AttributeError, ValueError):  # a closed or exotic stdin
@@ -137,12 +148,21 @@ def _ask(question: str, *, default: bool = True) -> bool:
 
 
 def _ask_choice(question: str, choices: tuple[str, ...], *, default: str) -> str:
-    """Pick one of *choices*, or ``skip``. Unrecognised input takes *default*."""
+    """Pick one of *choices*, or ``skip``.
+
+    Empty takes *default* — Enter accepts the recommendation, which is the
+    whole point of naming one. **Anything unrecognised skips**, and that
+    asymmetry is deliberate: the answer this saw first in a live terminal
+    was ``n``, a person declining a *which-one* question in the vocabulary
+    of the yes/no one above it. Falling back to the default there does not
+    guess helpfully — it runs a credential-entering interview nobody
+    agreed to. An answer we could not read is never consent to act.
+    """
     options = "/".join((*choices, "skip"))
     try:
         raw = input(
             f"  {style.qmark()} {style.bold(question)} "
-            f"{style.dim('[' + options + ']')} {style.dim('(default ' + default + ')')} "
+            f"{style.dim('[' + options + ']')} {style.dim('(Enter for ' + default + ')')} "
         ).strip().lower()
     except (EOFError, KeyboardInterrupt):
         print()
@@ -152,8 +172,8 @@ def _ask_choice(question: str, choices: tuple[str, ...], *, default: str) -> str
         return default
     if raw in choices or raw == "skip":
         return raw
-    _note(f"unrecognised — using {style.accent(default)}")
-    return default
+    _note(f"didn't recognise {style.accent(raw)} — skipping rather than guessing")
+    return "skip"
 
 
 # ── The steps ───────────────────────────────────────────────────────
