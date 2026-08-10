@@ -1326,8 +1326,97 @@ def _reserved_surface_page_paths(repo_root: Path, ctx: Any, cfg: dict) -> list[P
     ]
 
 
+_REFS_ROW_VALUE_RE = re.compile(r"^refs:[ \t]*(.*)$")
+
+# The stale-refs annotation mark (#1137). A flag, not a strike: unlike a
+# live-menu option (#957), a work-surface item can legitimately outlive the
+# PR it references, so this only draws a human's eye rather than claiming
+# the item is done.
+_STALE_REF_MARK = "⚑"
+
+
+def _item_refs_text(entry: str) -> str | None:
+    """The value of a ``## `` item's own ``refs:`` row, or ``None``.
+
+    Walks the same recognized-row block :func:`_backchannel_item_handle`
+    already parses (``kind``/``state``/``needs``/``refs``/``prompt``/
+    ``taken``, contiguous, directly under the heading, after the
+    conventional single blank line) — the schema backchannel items, warp
+    items (THE WELD, ``weld.py``), and plan-page entries are all authored
+    against, so one walk reads a ``refs:`` row the same way regardless of
+    which surface page it lives on. ``None`` when the item carries no
+    ``refs:`` row at all (most items — the annotation below only applies to
+    the ones that name a PR).
+    """
+    lines = entry.split("\n")
+    i = 1
+    if i < len(lines) and lines[i].strip() == "":
+        i += 1
+    while i < len(lines) and _BACKCHANNEL_ROW_RE.match(lines[i]):
+        match = _REFS_ROW_VALUE_RE.match(lines[i])
+        if match:
+            return match.group(1).strip()
+        i += 1
+    return None
+
+
+def _annotate_stale_refs(content: str, resolved_prs: dict[int, str] | None) -> str:
+    """Flag work-surface items whose ``refs:`` row names only PR(s) this
+    wake's forge-state snapshot already reports MERGED/CLOSED (#1137).
+
+    The join #957 built for the live menu (``menus._referenced_pr_numbers`` /
+    ``forge_state.resolved_pr_lookup``) never reached work-surface pages —
+    a plan/backchannel/layer item's own ``refs:`` row could sit unmarked for
+    days after the PR it names has merged, with no mechanism to catch it
+    (the incident that opened #1137). This is the render-side join for that
+    row, parallel to the live-menu one.
+
+    Deliberately an **annotation** appended to the item's own heading line,
+    never a suppression: a work-surface item can legitimately outlive the
+    PR it references (follow-up work, a design page the PR only partially
+    executed) — this flags staleness for a human to judge, it never drops
+    or strikes the item.
+
+    Reuses :func:`menus._strike_reason` outright rather than re-deriving its
+    join — it already implements exactly the semantic this annotation wants
+    to match: **all-or-nothing**. An item naming one resolved PR and one
+    still-open PR (or a number this wake's forge state has no opinion on)
+    renders unchanged, same as the live menu — the item is still live work
+    until *every* PR it names is done (#957's own precedent, quoted in its
+    docstring).
+
+    Returns *content* unchanged — same object — when there is nothing to
+    annotate (no ``resolved_prs`` snapshot, no ``## `` items, or no item's
+    refs fully resolve): the common case, and it keeps an unannotated page
+    byte-identical to its own disk copy for the #628 "whole" accounting
+    below.
+    """
+    if not resolved_prs:
+        return content
+    entries = _split_h2_entries(content)
+    if not entries:
+        return content
+    heading_match = _H2_RE.search(content)
+    preamble = content[: heading_match.start()] if heading_match else ""
+    changed = False
+    pieces: list[str] = []
+    for entry in entries:
+        refs_text = _item_refs_text(entry)
+        reason = menus._strike_reason(refs_text, resolved_prs) if refs_text else None
+        if reason:
+            heading, sep, rest = entry.partition("\n")
+            entry = f"{heading}    {_STALE_REF_MARK} refs {reason}{sep}{rest}"
+            changed = True
+        pieces.append(entry)
+    if not changed:
+        return content
+    return preamble + "".join(pieces)
+
+
 def _build_work_surface_block_scored(
     repo_root: Path,
+    *,
+    resolved_prs: dict[int, str] | None = None,
 ) -> tuple[TrimResult, "frozenset[Path]"]:
     """The scored implementation behind ``_build_work_surface_block``.
 
@@ -1371,6 +1460,19 @@ def _build_work_surface_block_scored(
       item before its size enters the budget walk at all; the free-text body
       under each item is dropped (it's authored for the dashboard reader, not
       the wake) and the page says so in place, same as any other trim marker.
+
+    ``resolved_prs`` (#1137) is the same ``{pr_number: "merged 3h ago"}`` join
+    #957 built for the live menu (:func:`brr.forge_state.resolved_pr_lookup`),
+    applied here to every page's own ``## `` items via
+    :func:`_annotate_stale_refs` — an item whose ``refs:`` row names only PR(s)
+    this wake's forge state already reports resolved gets a short annotation on
+    its heading line, never a suppression. Applied *before* a page's content
+    enters :func:`_trim_sectioned_page`, so an annotated page is charged for
+    the annotation's bytes like any other content and — because the annotation
+    changes the rendered text — no longer counts as "whole" under the
+    byte-identical-to-disk rule above, same as a backchannel page that lost
+    its free-text body. Omit ``resolved_prs`` (the default) to render exactly
+    as today, with no forge-state input.
     """
     from . import account as acc
     from . import config as conf
@@ -1430,7 +1532,8 @@ def _build_work_surface_block_scored(
             continue
         relative = path.relative_to(surface).as_posix()
         allowance = min(_SURFACE_RESERVE_PAGE_BYTES, remaining)
-        trimmed = _trim_sectioned_page(content, allowance, f"`surface/{relative}`")
+        annotated = _annotate_stale_refs(content, resolved_prs)
+        trimmed = _trim_sectioned_page(annotated, allowance, f"`surface/{relative}`")
         block = f"### {relative}\n\n{trimmed.text}"
         if trimmed.floor_overflow_section is not None:
             trimmed_bytes = len(trimmed.text.encode("utf-8"))
@@ -1462,8 +1565,9 @@ def _build_work_surface_block_scored(
             if topup_allowance <= floor.size:
                 block, trimmed = floor.block, floor.trimmed
             else:
+                annotated = _annotate_stale_refs(floor.content, resolved_prs)
                 trimmed = _trim_sectioned_page(
-                    floor.content, topup_allowance, f"`surface/{relative}`"
+                    annotated, topup_allowance, f"`surface/{relative}`"
                 )
                 block = f"### {relative}\n\n{trimmed.text}"
                 if trimmed.floor_overflow_section is not None:
@@ -1495,6 +1599,7 @@ def _build_work_surface_block_scored(
             # budget arithmetic below, same as any other page's real size —
             # this is what shrank 68% of a live budget to a fraction of it.
             content, handles_dropped = _backchannel_handles_only(raw_content)
+        content = _annotate_stale_refs(content, resolved_prs)
         page_bytes = len(content.encode("utf-8"))
         if remaining <= 0:
             unannounced.append((relative, content))
@@ -2126,7 +2231,10 @@ def _rendered_bytes(block: str) -> int:
 
 
 def _build_injected_blocks_with_contracts(
-    repo_root: Path, *, task_text: str | None = None
+    repo_root: Path,
+    *,
+    task_text: str | None = None,
+    resolved_prs: dict[int, str] | None = None,
 ) -> tuple[list[tuple[str, str]], list["ContractEntry"], "frozenset[Path]"]:
     """The scored implementation behind ``_build_injected_blocks``.
 
@@ -2145,6 +2253,12 @@ def _build_injected_blocks_with_contracts(
     prose*, or the wake pays for them twice and the T-vs-P experiment measures
     nothing.  An unkeyed ``list[str]`` made that subtraction impossible to state;
     a keyed one makes it a dict lookup.
+
+    ``resolved_prs`` (#1137) passes straight through to
+    ``_build_work_surface_block_scored`` — the caller's own join of this
+    wake's forge-state snapshot, when one is available (see
+    ``build_daemon_prompt_with_score``); ``None`` renders the work-surface
+    block exactly as before, with no stale-refs annotation.
 
     Shared by ``_build_injected_blocks``, ``build_injected_context``, and
     the scored prompt-builder variants — one computation, three consumers.
@@ -2208,7 +2322,9 @@ def _build_injected_blocks_with_contracts(
         keyed.append(("dominion", dominion_block))
 
     # 3. One discovered shared orientation root.
-    work_surface_trim, work_surface_whole = _build_work_surface_block_scored(repo_root)
+    work_surface_trim, work_surface_whole = _build_work_surface_block_scored(
+        repo_root, resolved_prs=resolved_prs
+    )
     work_surface = work_surface_trim.text
     contracts.append(ContractEntry(
         block_key="work-surface",
@@ -2352,7 +2468,10 @@ def _build_injected_blocks_with_contracts(
 
 
 def _build_injected_blocks(
-    repo_root: Path, *, task_text: str | None = None
+    repo_root: Path,
+    *,
+    task_text: str | None = None,
+    resolved_prs: dict[int, str] | None = None,
 ) -> list[str]:
     """The standing, always-on context blocks brr injects into every wake.
 
@@ -2380,7 +2499,9 @@ def _build_injected_blocks(
     Delegates to ``_build_injected_blocks_with_contracts`` and discards the
     contracts list and the keys — the scored variant is the single implementation.
     """
-    keyed, _, _ = _build_injected_blocks_with_contracts(repo_root, task_text=task_text)
+    keyed, _, _ = _build_injected_blocks_with_contracts(
+        repo_root, task_text=task_text, resolved_prs=resolved_prs
+    )
     return [text for _, text in keyed]
 
 
@@ -2427,6 +2548,7 @@ def _join_prompt_parts(
     inject_blocks: bool = True,
     prepared_injected_blocks: list[str] | None = None,
     prepared_introspection_block: str | None = None,
+    resolved_prs: dict[int, str] | None = None,
 ) -> str:
     """Stitch preamble, optional recent-context block, and trailer.
 
@@ -2450,7 +2572,9 @@ def _join_prompt_parts(
         parts.extend(
             prepared_injected_blocks
             if prepared_injected_blocks is not None
-            else _build_injected_blocks(repo_root, task_text=task_text)
+            else _build_injected_blocks(
+                repo_root, task_text=task_text, resolved_prs=resolved_prs
+            )
         )
     if diffense:
         pack_step = read_prompt("diffense.md", repo_root)
@@ -3300,6 +3424,21 @@ def build_daemon_prompt_with_score(
     branch_name = kwargs.get("branch_name")
     hooks_installed = kwargs.get("hooks_installed")
 
+    # #1137: the same forge-state join #957 built for the live menu
+    # (`resolved_prs` — a `{pr_number: "merged 3h ago"}` map), reused here so
+    # a work-surface item's own `refs:` row can be annotated the same way.
+    # `communication_snapshot["forge"]` is this wake's own already-built
+    # facet (`daemon.py` sets it network-free before this function ever
+    # runs) — never re-fetched here, and absent (ad-hoc/setup callers, a
+    # strand's isolated snapshot) simply renders with no annotation, same as
+    # today.
+    communication_snapshot = kwargs.get("communication_snapshot")
+    resolved_prs = (
+        forge_state.resolved_pr_lookup(communication_snapshot.get("forge"))
+        if isinstance(communication_snapshot, dict)
+        else None
+    )
+
     pitfall_text = "\n".join(t for t in (task, event_body or "") if t)
 
     # The introspection toggle is read inside _build_introspection_block (it
@@ -3316,7 +3455,7 @@ def build_daemon_prompt_with_score(
         introspection_block = ""
     else:
         injected_keyed, inject_contracts, injected_whole = _build_injected_blocks_with_contracts(
-            repo_root, task_text=pitfall_text or None
+            repo_root, task_text=pitfall_text or None, resolved_prs=resolved_prs
         )
         introspection_block = _build_introspection_block(repo_root)
 
@@ -3884,6 +4023,17 @@ def build_daemon_prompt(
     if (event_body or "").strip() != task.strip():
         trailer = f"{trailer}\nRun instruction: {task}"
 
+    # #1137: same forge-state join as `build_daemon_prompt_with_score` — see
+    # that function's own comment. This bare-`build_daemon_prompt` path
+    # (direct calls, `brnrd run` one-shot mode) has `communication_snapshot`
+    # as its own parameter rather than a kwarg, so the lookup happens here
+    # too rather than only in the scored variant.
+    resolved_prs = (
+        forge_state.resolved_pr_lookup(communication_snapshot.get("forge"))
+        if isinstance(communication_snapshot, dict)
+        else None
+    )
+
     # Match pitfalls against the run instruction and the original event text — the
     # triggers the resident recorded tend to echo how a request is phrased. The
     # same text selects the orientation set's task-touched kb hubs, so it is
@@ -3965,6 +4115,7 @@ def build_daemon_prompt(
         inject_blocks=not strand,
         prepared_injected_blocks=prepared_blocks,
         prepared_introspection_block=_prepared_introspection_block,
+        resolved_prs=resolved_prs,
     )
     if _size_sink is not None:
         # Only what this function alone can measure: the bundle is computed
