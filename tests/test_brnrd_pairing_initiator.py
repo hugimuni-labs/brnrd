@@ -285,3 +285,40 @@ def test_a_second_account_cannot_rebind_an_approved_pair(client):
     assert r.status_code == 409, r.text
     polled = _poll(client, pair).json()
     assert polled["repo_id"] == repo_id
+
+
+def test_a_row_written_without_the_column_defaults_to_unapprovable(client):
+    """The fail-closed direction, pinned at the schema layer rather than
+    trusted from the application one.
+
+    `approve_secret_hash` defaults to `""`, and `""` is what `approve_core`
+    refuses. If that default ever became NULL-and-permissive, or the column
+    picked up a truthy default, every legacy row would become approvable by
+    anyone again — which is the original finding, restored by a schema edit
+    nobody would read as a security change.
+    """
+    with client.app.state.SessionLocal() as db:
+        from datetime import datetime, timedelta, timezone
+
+        from brnrd import ids
+        from brnrd.security import hash_token
+
+        row = PairRequest(
+            id=ids.pair_request_id(),
+            pair_code="BR-OLDX",
+            poll_secret_hash=hash_token("s"),
+            status=PairRequest.STATUS_PENDING,
+            expires_at=datetime.now(timezone.utc) + timedelta(seconds=600),
+        )
+        db.add(row)
+        db.commit()
+
+    assert _pair_row(client, "BR-OLDX").approve_secret_hash == ""
+
+    headers, repo_id = _account(client, github_id="1", login="owner", repo="Gurio/laptop")
+    r = client.post(
+        "/v1/accounts/pair/BR-OLDX/approve",
+        json={"repo_id": repo_id, "approve_secret": "anything"},
+        headers=headers,
+    )
+    assert r.status_code == 403, r.text
