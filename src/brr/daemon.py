@@ -403,6 +403,12 @@ def _start_gates(
 # ``_publish_tree_mismatch``.
 _PUBLISH_TREE_MISMATCH = "publish-tree-mismatch"
 
+#: A ``Run.status`` past which nothing more will happen on its own. Used
+#: wherever a reader must distinguish "this run produced nothing" from "this
+#: run has not produced it *yet*" — the completion note's produce handles, and
+#: the bolt's stranded-strand check (#1298).
+_TERMINAL_RUN_STATUSES = frozenset({"done", "error", "conflict", "stopped"})
+
 
 def _publish_tree_mismatch(repo_root: Path) -> dict | None:
     """Is *repo_root* the tree git agrees it is? ``None`` when confirmed. (#746)
@@ -2751,11 +2757,13 @@ def _run_worker(
     if is_home_root:
         sync_result = sync.SyncResult()
         host_branch = gitops.current_branch(repo_root)
+        seed = host_branch if host_branch != "HEAD" else "HEAD"
         branch_plan = branching.PublishPlan(
-            seed_ref=host_branch if host_branch != "HEAD" else "HEAD",
+            seed_ref=seed,
             target_branch=None,
             source="home:host",
             host_context_branch=host_branch if host_branch != "HEAD" else None,
+            seed_oid=gitops.rev_parse(repo_root, seed),
         )
     else:
         sync_targets = _branches_to_refresh(repo_root, event)
@@ -4267,9 +4275,32 @@ def _run_worker(
         try:
             has_new_commit = worktree.has_commits_beyond(
                 run_root, branch_plan.seed_ref,
+                base_oid=getattr(branch_plan, "seed_oid", None),
             )
-        except Exception:
-            has_new_commit = False
+        except worktree.BaseUnresolvable as exc:
+            # #1298: git could not answer, which is not the same fact as "the
+            # agent committed nothing" — and the old ``False`` here spoke the
+            # second. Downstream, ``False`` un-gates ``_stray_host_write``
+            # (the ``host-head-moved`` advisory the issue quoted), tells the
+            # forge facet there is nothing to land, and joins the finalize
+            # side in reporting an empty run. Erring the other way costs a
+            # published branch that may equal its base; erring this way cost
+            # three strands their commits in one evening.
+            print(
+                f"[brnrd] worker {eid}: base unresolvable ({exc}); assuming "
+                "the run committed rather than assuming it did not"
+            )
+            has_new_commit = True
+        except Exception as exc:  # noqa: BLE001 - same posture, wider net
+            # An unreadable checkout (already torn down, permissions) is the
+            # same epistemic state as an unresolvable base and gets the same
+            # answer, for the same reason. Kept as its own arm only so the
+            # line the operator reads names which of the two happened.
+            print(
+                f"[brnrd] worker {eid}: commit probe failed ({exc}); assuming "
+                "the run committed rather than assuming it did not"
+            )
+            has_new_commit = True
         task.meta["has_new_commit"] = has_new_commit
         satisfied, signal = _result_satisfied_delivery(
             result, output_stats, event, has_new_commit=has_new_commit,
@@ -7601,6 +7632,51 @@ def _short_event_summary(event: dict, *, limit: int = 80) -> str:
     return text if len(text) <= limit else text[: limit - 3].rstrip() + "..."
 
 
+def _stranded_strands(task: Run, repo_root: Path) -> list[tuple[str, str]]:
+    """Children this run dispatched whose promised branch exists nowhere (#1298).
+
+    Returns ``(child_run_id, declared_branch)`` pairs. A strand's declared
+    ``branch:`` is the deliverable the parent was told to expect; when the run
+    has reached a terminal state and that branch resolves to **neither** a
+    local head nor any remote-tracking ref in the parent's own checkout, the
+    child's commits are reachable from nothing. For a clone-shaped strand
+    (#746) that is not "unpushed", it is *gone* — ``remove_clone`` deletes the
+    only object store that held them.
+
+    Three deliberate narrowings, each one a way this could otherwise cry wolf:
+
+    - **Only a declared contract may indict.** Same rule ``_spawn_contract_
+      check`` already lives by (#640): a strand with no ``branch:`` clause
+      promised no branch, and a review strand legitimately publishes nothing.
+      Nothing is inferred from prose here.
+    - **Only a terminal child.** A strand still running has not failed to
+      publish; it has not finished.
+    - **A ref anywhere counts as salvaged.** Local-only is unpushed, which is
+      a different (and recoverable) complaint — the work exists and the
+      publish lane can still carry it. This names only work that exists on no
+      ref at all.
+    """
+    runs_dir = gitops.shared_brr_dir(Path(repo_root)) / "runs"
+    if not runs_dir.exists():
+        return []
+    remote = gitops.default_remote(Path(repo_root))
+    stranded: list[tuple[str, str]] = []
+    for child in list_runs(runs_dir):
+        if str(child.meta.get("spawn_parent_run_id") or "") != task.id:
+            continue
+        if child.status not in _TERMINAL_RUN_STATUSES:
+            continue
+        declared = str(child.meta.get("spawn_contract_branch") or "").strip()
+        if not declared:
+            continue
+        if gitops.branch_head(Path(repo_root), declared):
+            continue
+        if remote and gitops.rev_parse(Path(repo_root), f"{remote}/{declared}"):
+            continue
+        stranded.append((child.id, declared))
+    return stranded
+
+
 def _cut_mismatches(
     task: Run,
     declaration: cut_verb.CutDeclaration,
@@ -7697,6 +7773,33 @@ def _cut_mismatches(
                 norm = label.strip().lower()
                 if not any(norm in ref or ref in norm for ref in declared_refs):
                     mismatches.append(f"owed: {label!r} has no carried row naming it")
+
+    # ── stranded strands (#1298) ──────────────────────────────────────
+    # The bolt's promise is that a run does not close over work nobody can
+    # reach. Everything above audits what *this* run produced; a dispatched
+    # strand's produce is on a branch this run never touched, so none of it
+    # sees the case where the strand finished, promised a branch, and that
+    # branch exists on no ref at all. Before this check a parent could close
+    # `produce: none` with a clean bolt over three destroyed strands — which
+    # is exactly what happened the night #1298 was filed, on the strongest
+    # core available, with the pitfall already read. Remembering is not a
+    # mechanism; this is.
+    if repo_root is not None:
+        owed_refs = [row.ref.strip().lower() for row in declaration.owed if row.ref]
+        for child_id, branch in _stranded_strands(task, Path(repo_root)):
+            named = any(
+                branch.lower() in ref or child_id.lower() in ref
+                for ref in owed_refs
+            )
+            if named:
+                # Declared as still owed — that is the honest close, and the
+                # guard's whole point is to force the declaration, not to
+                # forbid the state.
+                continue
+            mismatches.append(
+                f"owed: strand {child_id} declared {branch} and it exists on "
+                "no local or remote ref — its work is unsalvaged"
+            )
 
     return mismatches
 
@@ -10306,7 +10409,7 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
         # deliberately left absent.
         published_commits = 0
     thin_block = ""
-    terminal = task.status in {"done", "error", "conflict", "stopped"}
+    terminal = task.status in _TERMINAL_RUN_STATUSES
     if (
         terminal
         and not published_branch
@@ -10899,8 +11002,27 @@ def _capture_worktree(
             ):
                 print(f"[brnrd] salvage: committed in-flight work for {task.id}")
         seed_ref = getattr(branch_plan, "seed_ref", None)
-        if seed_ref and not worktree.has_commits_beyond(run_root, seed_ref):
-            return
+        if seed_ref:
+            try:
+                moved = worktree.has_commits_beyond(
+                    run_root, seed_ref,
+                    base_oid=getattr(branch_plan, "seed_oid", None),
+                )
+            except worktree.BaseUnresolvable as exc:
+                # #1298: this is the salvage path — the net under the floor —
+                # and before the pin it shared the floor's hole exactly. An
+                # unresolvable base made it `return`, so the one code path
+                # whose entire job is "do not lose the work of a run that went
+                # wrong" declined on the grounds that git would not talk.
+                # Arm the publish instead; a branch published in error is
+                # cheap, and this arm only ever runs on a run already failing.
+                print(
+                    f"[brnrd] salvage: base unresolvable for {task.id} ({exc}); "
+                    f"arming publish of {branch} anyway"
+                )
+                moved = True
+            if not moved:
+                return
         task.meta["has_new_commit"] = True
         task.meta["publish_branch"] = branch
         task.meta["branch_name"] = branch

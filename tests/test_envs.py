@@ -2225,7 +2225,7 @@ def test_solitary_finalize_success_removes_network_and_cred_stage(
         envs.worktree, "current_branch", lambda _p: ctx.branch_name,
     )
     monkeypatch.setattr(
-        envs.worktree, "has_commits_beyond", lambda _p, _s: False,
+        envs.worktree, "has_commits_beyond", lambda _p, _s, **_k: False,
     )
     monkeypatch.setattr(
         envs.worktree, "has_uncommitted_changes", lambda _p: False,
