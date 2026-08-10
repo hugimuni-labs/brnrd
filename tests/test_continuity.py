@@ -487,6 +487,80 @@ def test_shipped_only_counts_merges_after_the_last_wake() -> None:
     assert cont_mod._merged_since(prs, cutoff) == ("#386",)
 
 
+# ── #1140: a stacked merge is not "shipped" ─────────────────────────────────
+
+
+def _pr(number, base=None, merged_at="2026-07-13T23:20:00Z") -> dict:
+    return {"number": number, "state": "MERGED", "merged_at": merged_at, "base": base}
+
+
+def test_merged_since_ignores_default_branch_when_not_given() -> None:
+    """No ``default_branch`` known ⇒ the pre-#1140 reading: everything MERGED
+    since the cutoff counts as shipped, regardless of ``base``."""
+    from brr import forge_pr_cache
+
+    cutoff = forge_pr_cache.parse_iso("2026-07-13T23:00:00Z")
+    prs = [_pr(1139, base="brr/the-child-speaks-for-itself"), _pr(1134, base="main")]
+    assert cont_mod._merged_since(prs, cutoff) == ("#1134", "#1139")
+    assert cont_mod._stacked_since(prs, cutoff) == ()
+
+
+def test_merged_since_excludes_a_known_stacked_base() -> None:
+    """A PR whose base is known and disagrees with ``default_branch`` moves
+    out of ``shipped`` and into ``stacked`` — #1140's whole point."""
+    from brr import forge_pr_cache
+
+    cutoff = forge_pr_cache.parse_iso("2026-07-13T23:00:00Z")
+    prs = [
+        _pr(1139, base="brr/the-child-speaks-for-itself"),
+        _pr(1134, base="main"),
+        _pr(1130, base=None),  # unknown base never excludes — see docstring
+    ]
+    assert cont_mod._merged_since(prs, cutoff, default_branch="main") == (
+        "#1130", "#1134",
+    )
+    assert cont_mod._stacked_since(prs, cutoff, default_branch="main") == (
+        "#1139 (→ brr/the-child-speaks-for-itself)",
+    )
+
+
+def test_stacked_since_empty_without_a_default_branch() -> None:
+    """Nothing is ever reclassified as stacked on missing information —
+    an unreadable ``default_branch`` degrades to "say nothing", not to a
+    guess."""
+    from brr import forge_pr_cache
+
+    cutoff = forge_pr_cache.parse_iso("2026-07-13T23:00:00Z")
+    prs = [_pr(1139, base="brr/the-child-speaks-for-itself")]
+    assert cont_mod._stacked_since(prs, cutoff) == ()
+
+
+def test_build_continuity_splits_shipped_and_stacked(tmp_path: Path) -> None:
+    """End-to-end: ``build_continuity`` itself carries the split through to
+    :class:`BootContinuity`, not just the two private helpers."""
+    import time
+
+    brr_dir = _brr_with_prior_wake(tmp_path)
+    # ``since`` is the prior score file's real mtime — merges must postdate
+    # it, so stamp them off the clock rather than a fixed literal.
+    score_mtime = (brr_dir / "runs" / "run-260713-2251-ropg" / "boot-score.json").stat().st_mtime
+    merged_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(score_mtime + 60))
+    prs = [
+        _pr(1139, base="brr/the-child-speaks-for-itself", merged_at=merged_at),
+        _pr(1134, base="main", merged_at=merged_at),
+    ]
+    c = cont_mod.build_continuity(brr_dir, prs=prs, default_branch="main")
+    assert c.shipped == ("#1134",)
+    assert c.stacked == ("#1139 (→ brr/the-child-speaks-for-itself)",)
+
+    # The rendered kernel carries both words, distinctly.
+    from brr.bootscore import BootScore, format_kernel
+
+    rendered = format_kernel(BootScore(continuity=c))
+    assert "shipped #1134" in rendered
+    assert "stacked #1139 (→ brr/the-child-speaks-for-itself)" in rendered
+
+
 # ── The stale image: a boot that knows it may be lying ────────────────────────
 
 
