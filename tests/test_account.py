@@ -1,5 +1,6 @@
 import json
 import subprocess
+from pathlib import Path
 
 from brr import account
 
@@ -317,6 +318,101 @@ def test_project_home_uses_path_hash_for_same_basename(monkeypatch, tmp_path):
     assert ctx_a.dominion_repo != ctx_b.dominion_repo
     assert ctx_a.dominion_repo.parent.name.startswith("repo-")
     assert ctx_b.dominion_repo.parent.name.startswith("repo-")
+
+
+def _add_remote(repo: Path, url: str) -> None:
+    subprocess.run(
+        ["git", "remote", "add", "origin", url],
+        cwd=repo, check=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+
+
+def test_project_home_unifies_worktrees_of_the_same_remote_repo(monkeypatch, tmp_path):
+    """#1193 rec 3: keying the fallback project home on the repo's canonicalized
+    origin remote (rather than the checkout's own filesystem path) means a
+    linked worktree of a repo lands in the *same* project home as the main
+    checkout — the concrete case the issue's `/tmp/brr-wt-<slug>` /
+    `.claude/worktrees/agent-<hash>` examples describe. Before this fix every
+    such path minted its own empty project home (9 observed for this repo
+    alone on 2026-08-10)."""
+    state_home = tmp_path / "state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+    main_repo = tmp_path / "main"
+    init_git_repo(main_repo)
+    commit_files(main_repo, {"README.md": "hi\n"})
+    _add_remote(main_repo, "git@github.com:acme/widget.git")
+
+    worktree = tmp_path / "wt"
+    _add_worktree(main_repo, worktree, branch="wt-branch")
+
+    ctx_main = account.resolve_context(main_repo)
+    ctx_worktree = account.resolve_context(worktree)
+
+    assert ctx_main.dominion_repo == ctx_worktree.dominion_repo
+
+
+def test_project_home_unifies_worktrees_with_no_remote_via_git_common_dir(
+    monkeypatch, tmp_path,
+):
+    """The no-remote rung of the fallback also unifies worktrees: every
+    linked worktree of one clone shares a `--git-common-dir`, which is what
+    the identity keys on once there is no origin to canonicalize."""
+    state_home = tmp_path / "state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+    main_repo = tmp_path / "main"
+    init_git_repo(main_repo)
+    commit_files(main_repo, {"README.md": "hi\n"})
+
+    worktree = tmp_path / "wt"
+    _add_worktree(main_repo, worktree, branch="wt-branch")
+
+    ctx_main = account.resolve_context(main_repo)
+    ctx_worktree = account.resolve_context(worktree)
+
+    assert ctx_main.dominion_repo == ctx_worktree.dominion_repo
+
+
+def test_project_home_distinguishes_different_remote_repos(monkeypatch, tmp_path):
+    """Two genuinely different repos (different canonicalized origin remotes)
+    must still resolve to different project homes — identity keying must not
+    trade path-uniqueness away for a blanket collapse."""
+    state_home = tmp_path / "state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    init_git_repo(repo_a)
+    init_git_repo(repo_b)
+    commit_files(repo_a, {"README.md": "a\n"})
+    commit_files(repo_b, {"README.md": "b\n"})
+    _add_remote(repo_a, "git@github.com:acme/widget.git")
+    _add_remote(repo_b, "git@github.com:acme/gadget.git")
+
+    ctx_a = account.resolve_context(repo_a)
+    ctx_b = account.resolve_context(repo_b)
+
+    assert ctx_a.dominion_repo != ctx_b.dominion_repo
+
+
+def test_project_home_with_no_remote_is_stable_and_not_path_derived(
+    monkeypatch, tmp_path,
+):
+    """A repo with no origin remote must resolve without crashing, and
+    resolving the same path twice must agree — the `--git-common-dir` rung
+    backs the fallback now, not a bare hash of the resolved path."""
+    state_home = tmp_path / "state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+    repo = tmp_path / "solo"
+    init_git_repo(repo)
+    commit_files(repo, {"README.md": "hi\n"})
+
+    ctx_first = account.resolve_context(repo)
+    ctx_second = account.resolve_context(repo)
+
+    assert ctx_first.dominion_repo == ctx_second.dominion_repo
+    assert ctx_first.dominion_repo.is_dir()
+    kind, _key = account._repo_identity(repo)
+    assert kind == "gitdir"
 
 
 def test_repo_dominion_path_is_repo_tagged(tmp_path):
@@ -992,3 +1088,93 @@ def test_detect_relabelled_repo_silent_when_the_old_label_holds_nothing(tmp_path
             shutil.rmtree(path)
 
     assert account.detect_relabelled_repo(ctx, repo, "hugimuni-labs/brnrd") is None
+
+
+# ── #1193 rec 4 — orphaned project-home sweep ──────────────────────────
+
+
+def _fresh_project_home(tmp_path, *, name="repo") -> Path:
+    """A just-scaffolded project home, forced via ``home.path`` (no git needed)."""
+    repo = tmp_path / name
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    home = tmp_path / f"{name}-home"
+    account.resolve_context(repo, {"home.path": str(home)})
+    return home
+
+
+def test_survey_project_home_flags_a_freshly_scaffolded_home_as_default(tmp_path):
+    home = _fresh_project_home(tmp_path)
+
+    survey = account.survey_project_home(home)
+
+    assert survey.default_scaffold is True
+    assert survey.reasons  # always says why, even for the positive verdict
+
+
+def test_survey_project_home_keeps_a_home_with_run_history(tmp_path):
+    home = _fresh_project_home(tmp_path)
+    run_file = home / "runs" / "repo" / "run-x" / "state.md"
+    run_file.parent.mkdir(parents=True)
+    run_file.write_text("# state\n", encoding="utf-8")
+
+    survey = account.survey_project_home(home)
+
+    assert survey.default_scaffold is False
+    assert any("runs/" in reason for reason in survey.reasons)
+
+
+def test_survey_project_home_keeps_a_home_with_an_authored_knowledge_page(tmp_path):
+    home = _fresh_project_home(tmp_path)
+    page = home / "knowledge" / "repos" / "repo" / "subject-x.md"
+    page.parent.mkdir(parents=True)
+    page.write_text("# X\n", encoding="utf-8")
+
+    survey = account.survey_project_home(home)
+
+    assert survey.default_scaffold is False
+    assert any("knowledge" in reason for reason in survey.reasons)
+
+
+def test_survey_project_home_keeps_a_home_with_an_edited_surface_page(tmp_path):
+    home = _fresh_project_home(tmp_path)
+    index = home / "surface" / "index.md"
+    index.write_text(index.read_text(encoding="utf-8") + "\nan operator note\n", encoding="utf-8")
+
+    survey = account.survey_project_home(home)
+
+    assert survey.default_scaffold is False
+    assert any("surface/index.md" in reason for reason in survey.reasons)
+
+
+def test_survey_project_home_keeps_a_home_with_an_extra_surface_page(tmp_path):
+    home = _fresh_project_home(tmp_path)
+    extra = home / "surface" / "workflow.md"
+    extra.write_text("# Workflow\n", encoding="utf-8")
+
+    survey = account.survey_project_home(home)
+
+    assert survey.default_scaffold is False
+    assert any("surface/" in reason for reason in survey.reasons)
+
+
+def test_list_project_homes_finds_every_scaffolded_home(monkeypatch, tmp_path):
+    state_home = tmp_path / "state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    init_git_repo(repo_a)
+    init_git_repo(repo_b)
+    commit_files(repo_a, {"README.md": "a\n"})
+    commit_files(repo_b, {"README.md": "b\n"})
+
+    ctx_a = account.resolve_context(repo_a)
+    ctx_b = account.resolve_context(repo_b)
+
+    found = account.list_project_homes(state_home)
+
+    assert set(found) == {ctx_a.dominion_repo, ctx_b.dominion_repo}
+
+
+def test_list_project_homes_empty_when_nothing_scaffolded_yet(tmp_path):
+    assert account.list_project_homes(tmp_path / "nowhere") == []
