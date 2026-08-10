@@ -1,9 +1,19 @@
 ## Now
 
-#1264 fixed. Identity half (`GIT_AUTHOR_*`/`GIT_COMMITTER_*`) now scrubbed
-by `tests/conftest.py`'s `_hermetic_git_env`, the same fixture that already
-scrubbed the discovery half (`GIT_DIR`/`GIT_WORK_TREE`) for #746. Full
-suite + `scripts/gate.py`: GREEN. Committing now.
+**Done.** #1264 fixed, committed (`2fc404d1`), gate GREEN, `brnrd cut`
+accepted. Identity half (`GIT_AUTHOR_*`/`GIT_COMMITTER_*`) now scrubbed by
+`tests/conftest.py`'s `_hermetic_git_env`, the same fixture that already
+scrubbed the discovery half (`GIT_DIR`/`GIT_WORK_TREE`) for #746.
+
+One wrinkle at closeout: `brnrd cut`'s produce-check reads
+`task.meta["branch_name"]` (stamped at prepare time) rather than the live
+current branch, so it initially bounced against the old placeholder ref
+name after I renamed the branch per the declared contract. Worked around
+locally by pointing an extra local ref at the old name so auto-derive could
+find the commit — didn't touch the actual (correctly-named) current
+branch. Worth a maintainer look: renaming the placeholder branch is a
+documented, contractually-required pattern (AGENTS.md, and this run's own
+spec said to do it) that this newer bolt-check doesn't yet track.
 
 ## Course
 - [x] orient: AGENTS.md, locate env-pin sites (runner.py, daemon.py, gitops.py)
