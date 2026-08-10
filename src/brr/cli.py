@@ -978,11 +978,23 @@ def main(argv: list[str] | None = None) -> None:
         idx = raw.index("--")
         passthrough = raw[idx + 1:]
         raw = raw[:idx]
-    args = build_parser().parse_args(raw)
-    args.passthrough = passthrough
     from . import gitops
 
     try:
+        if not raw:
+            # Bare `brnrd` — the narrated front door
+            # (`decision-retire-init.md` §"The front door"). Handled here
+            # rather than as an argparse default because the subparsers are
+            # `required=True` and must stay that way: `brnrd <verb>` is the
+            # CLI it has always been, and a mistyped verb must still be an
+            # argparse error, not a guided setup. The only argv this
+            # intercepts is the empty one, which argparse could previously
+            # only answer with "the following arguments are required".
+            from . import front_door
+
+            return front_door.run()
+        args = build_parser().parse_args(raw)
+        args.passthrough = passthrough
         return args.func(args)
     except gitops.RepoTreeUnusable as exc:
         # #1108: the one failure where a traceback actively misleads. It
