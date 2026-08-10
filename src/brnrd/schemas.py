@@ -84,11 +84,22 @@ class PairStarted(BaseModel):
     pair_code: str
     pair_url: str
     poll_secret: str
+    # The initiating daemon's proof, to be presented back at approve. Already
+    # embedded in `pair_url`'s fragment — returned separately only so a
+    # client that builds its own approval surface doesn't have to parse the
+    # URL apart. Never leaves the machine that ran the pairing command
+    # except through the link its human opens.
+    approve_secret: str
     expires_at: datetime
 
 
 class PairApprove(BaseModel):
     repo_id: str
+    # Defaulted rather than required so a client that sends none gets the
+    # explicit 403 ("open the full link your terminal printed") from
+    # `approve_core` instead of a 422 that reads like a malformed request.
+    # Absent and wrong are the same answer either way.
+    approve_secret: str = ""
 
 
 class TelegramPairStart(BaseModel):
