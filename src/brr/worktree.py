@@ -447,21 +447,68 @@ def current_branch(worktree_path: Path) -> str | None:
     return name or None
 
 
-def has_commits_beyond(worktree_path: Path, base_ref: str) -> bool:
-    """Return True if the worktree HEAD has commits not reachable from *base_ref*."""
-    result = subprocess.run(
-        ["git", "rev-list", "--count", f"{base_ref}..HEAD"],
-        cwd=worktree_path,
-        capture_output=True,
-        text=True,
-        check=False,
+class BaseUnresolvable(RuntimeError):
+    """No candidate base resolved inside the checkout being probed (#1298).
+
+    Raised rather than answered, because the only two answers
+    :func:`has_commits_beyond` can give both mean something it does not know.
+    ``False`` in particular is the sentence "this run committed nothing", and
+    three separate call sites act on it by discarding the run's checkout.
+    """
+
+
+def has_commits_beyond(
+    worktree_path: Path,
+    base_ref: str,
+    *,
+    base_oid: str | None = None,
+) -> bool:
+    """Return True if the worktree HEAD has commits not reachable from the base.
+
+    *base_oid* is preferred over *base_ref* and exists because a ref **name**
+    is not portable into the checkout this probe runs in. A strand's checkout
+    is a ``git clone --shared`` (#746), whose local heads are only the branch
+    ``repo_root`` had checked out at clone time — every other branch is a
+    ``refs/remotes/origin/*`` name, and git's rev-parse fallback tries
+    ``refs/remotes/<name>``, never ``refs/remotes/origin/<name>``. So the
+    ordinary seed name ``main`` resolves to *nothing* in a strand clone taken
+    from a host checkout standing on any other branch, and
+    ``git rev-list --count main..HEAD`` exits 128.
+
+    An oid has neither problem: the clone shares the object store, so it
+    always resolves, and it cannot drift under a running child the way a
+    branch name can.
+
+    **Raises :class:`BaseUnresolvable` when no candidate resolves**, instead of
+    returning ``False``. #1298 is what the old ``return False`` cost: git
+    could not answer, the caller heard "the child committed nothing", the
+    publish was skipped and the clone — the only copy of the commits — was
+    deleted. A probe may report what it measured; it may not report a failure
+    to measure as a measurement.
+    """
+    candidates = [c for c in (base_oid, base_ref) if c]
+    last_detail = ""
+    for candidate in candidates:
+        result = subprocess.run(
+            ["git", "rev-list", "--count", f"{candidate}..HEAD"],
+            cwd=worktree_path,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            last_detail = (result.stderr or result.stdout or "").strip()
+            continue
+        try:
+            return int(result.stdout.strip() or "0") > 0
+        except ValueError:
+            # git exited 0 with something that is not a count. Unreadable is
+            # not zero, so this is the same refusal as an unresolvable base.
+            last_detail = f"unreadable count {result.stdout.strip()!r}"
+    raise BaseUnresolvable(
+        f"no base resolved in {worktree_path} from "
+        f"{candidates or ['(nothing given)']}: {last_detail or 'no detail'}"
     )
-    if result.returncode != 0:
-        return False
-    try:
-        return int(result.stdout.strip() or "0") > 0
-    except ValueError:
-        return False
 
 
 def unpushed_commit_count(worktree_path: Path) -> int:
