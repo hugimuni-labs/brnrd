@@ -907,14 +907,25 @@ def test_stop_no_reply_streak_counts_and_escalates(tmp_path):
     assert _VERDICT in second
     assert "gate: <name>" in second
 
-    # Firing #3: the count keeps climbing, wording stays escalated.
+    # Firing #3: the count keeps climbing, but the verdict itself does not
+    # repeat — #1296's belt-and-suspenders latch (`no_reply_capped`,
+    # `hooks.STOP_NO_REPLY_ESCALATED_KEY`). This line used to assert "wording
+    # stays escalated" (unbounded repetition past the threshold); that was
+    # exactly the bug #1296 measured live — a gate-less self-woken run
+    # renagged 7 times in a row with the identical verdict, because nothing
+    # here capped the *rendering* independently of the streak count still
+    # climbing. The verdict is a one-time statement, not a ticker: firing #2
+    # already said it, so firing #3 says nothing new on this line (the rest
+    # of the closeout capsule — produce, notices, pending — still renders).
     third = _stop(
         tmp_path, token="t3", outbound={
             "replies_current": 0, "replies_other": 0, "outbound_messages": 3,
         },
     )
-    assert "stop boundary #3 · 2 prior terminal messages consumed" in third
-    assert _VERDICT in third
+    assert "stop boundary #3" not in third
+    assert _VERDICT not in third
+    # The capsule as a whole is not empty — only the capped line is gone.
+    assert "delivery so far" in third
 
 
 def test_stop_no_reply_streak_resets_when_replied(tmp_path):
@@ -969,6 +980,48 @@ def test_stop_no_reply_streak_resets_on_new_waking_event(tmp_path):
     )
     assert "stop boundary #1 · 0 prior terminal messages consumed" in third
     assert _VERDICT not in third
+
+
+# ── #1296: the escalated verdict has a ceiling, independent of gate_less ─
+#
+# run-260810-0728-x41g, reconstructed from its own boundaries.jsonl: a
+# schedule-thread continuation woken by a `spawn_completed` event, already
+# delivered via `gate: telegram` twice this run (any_delivery=True), never
+# accrued a reply on its own waking thread (replies_current=0). The daemon's
+# `current_event_replyable` was wrong for that run shape (root cause: fixed
+# in daemon.py, see `_spawn_parent_still_collecting`) and this same verdict
+# line rendered 6 times in a row across Stop firings before the run ended.
+# This test does not assume the root-cause fix — it drives the hooks-side
+# ceiling directly, so it still passes even if some future bug makes
+# `current_event_replyable` wrong again (the requirement's own "belt and
+# suspenders" framing).
+
+def test_stop_no_reply_escalation_has_a_ceiling_regardless_of_recurrence(tmp_path):
+    outbound = {"replies_current": 0, "replies_other": 0, "outbound_messages": 2}
+    first = _stop(tmp_path, token="t1", outbound=_DELIVERED)
+    assert _VERDICT not in first  # firing #1: below threshold, reassuring wording
+
+    second = _stop(tmp_path, token="t2", outbound=outbound)
+    assert _VERDICT in second  # firing #2: threshold reached, verdict said once
+
+    # Firings #3 through #7 (matching the live run's 6 total escalated
+    # firings) must never repeat it — each token still changes (mirroring
+    # the live transcript's growing notices/outbound counts), so this is
+    # not merely the token-dedupe latch already covered elsewhere.
+    for n in range(3, 8):
+        rendered = _stop(
+            tmp_path, token=f"t{n}",
+            outbound={**outbound, "outbound_messages": n},
+        )
+        assert _VERDICT not in rendered, f"firing #{n} repeated the verdict"
+        assert f"stop boundary #{n}" not in rendered
+
+    state = _hook_state(tmp_path)
+    assert state[hooks.STOP_NO_REPLY_ESCALATED_KEY] is True
+    # The streak itself keeps counting truthfully — only the render is
+    # capped, so a reader inspecting hook state directly still sees how long
+    # this has actually been going on.
+    assert state[hooks.STOP_NO_REPLY_STREAK_KEY] == 7
 
 
 def test_content_dedupe_never_reaches_the_closeout_channel(tmp_path):

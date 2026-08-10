@@ -4322,6 +4322,7 @@ def _run_worker(
                     source,
                     spawn_parent_run_id=str(
                         task.meta.get("spawn_parent_run_id") or ""),
+                    runs_dir=runs_dir,
                 )
                 # #562's residual: "unowned" is not automatically "unheard".
                 # `notify.gate` (explicit config key, or single-gate
@@ -4366,6 +4367,7 @@ def _run_worker(
                     source,
                     spawn_parent_run_id=str(
                         task.meta.get("spawn_parent_run_id") or ""),
+                    runs_dir=runs_dir,
                     duplicate=terminal_duplicate,
                     undeliverable=undeliverable,
                     delivered_elsewhere=bool(output_stats.get("delivered", 0)),
@@ -5664,6 +5666,15 @@ def _live_delivery_projection(
         return {"known": False}
     meta = task.meta if hasattr(task, "meta") else {}
     spawn_parent_run_id = str(meta.get("spawn_parent_run_id") or "")
+    runs_dir = brr_dir / "runs" if brr_dir is not None else None
+    # #1296: a stale ``spawn_parent_run_id`` (the schedule-thread-
+    # continuation shape — see ``_spawn_parent_still_collecting``) must not
+    # read as an owned dispatch edge here either, or this projection
+    # disagrees with the same run's own ``_terminal_reply_lands`` verdict.
+    if spawn_parent_run_id and not _spawn_parent_still_collecting(
+        spawn_parent_run_id, runs_dir,
+    ):
+        spawn_parent_run_id = ""
     owned = _gate_owns_source(source)
     notify_gate = ""
     if not owned and not spawn_parent_run_id and brr_dir is not None:
@@ -5675,6 +5686,7 @@ def _live_delivery_projection(
     route = _terminal_route(
         source,
         spawn_parent_run_id=spawn_parent_run_id,
+        runs_dir=runs_dir,
         undeliverable=undeliverable,
         delivered_elsewhere=already_delivered,
         gate_fallback=bool(notify_gate),
@@ -5917,6 +5929,7 @@ def _write_live_portal_state(
                     str(getattr(task, "source", "") or ""),
                     spawn_parent_run_id=str(
                         task.meta.get("spawn_parent_run_id") or ""),
+                    runs_dir=brr_dir / "runs" if brr_dir is not None else None,
                 ),
                 "events": events,
             },
@@ -8770,20 +8783,62 @@ def _gate_owns_source(source: str) -> bool:
     return _delivery_source_for_gate(source) in _BUILTIN_GATES
 
 
+def _spawn_parent_still_collecting(
+    spawn_parent_run_id: str, runs_dir: Path | None,
+) -> bool:
+    """Could *spawn_parent_run_id* still collect a dispatch-edge report?
+
+    ``True`` on anything unresolvable — no id, no *runs_dir*, an unreadable
+    manifest — the same "unknown, not impossible" posture
+    :func:`_terminal_reply_lands` already takes for an absent *source*: a
+    lookup failure must never manufacture a false "nobody will collect
+    this." ``False`` only when the manifest reads cleanly and its own
+    ``status`` has already reached :data:`_TERMINAL_RUN_STATUSES`.
+
+    #1296, live: a schedule-thread continuation woken by a
+    ``spawn_completed`` event inherits that event's own
+    ``spawn_parent_run_id`` field (``Run.from_event``'s blanket meta copy —
+    every event key outside ``_EVENT_META_FIELDS`` rides straight onto the
+    new run's meta). That field was stamped by ``_notify_spawn_parent`` for
+    a *different* reader — it names who dispatched the strand that just
+    completed, not who dispatched *this* waking run. The two happen to
+    share a run id only when the schedule thread's own prior run is still
+    the one reading its inbox; once that prior run has finalized (bolt
+    accepted, process exited), the id is a corpse the continuation keeps
+    quoting. Presence alone can never tell the two cases apart — only a
+    liveness read of the named run can.
+    """
+    if not spawn_parent_run_id or runs_dir is None:
+        return True
+    parent = Run.from_file(run_manifest_path(runs_dir, spawn_parent_run_id))
+    if parent is None:
+        return True
+    return parent.status not in _TERMINAL_RUN_STATUSES
+
+
 def _terminal_reply_lands(
-    source: str, *, spawn_parent_run_id: str = "",
+    source: str,
+    *,
+    spawn_parent_run_id: str = "",
+    runs_dir: Path | None = None,
 ) -> bool:
     """True when a run's terminal reply has somewhere to arrive.
 
     Exactly two things carry a terminal stream out of the run: a gate that
     owns *source* (:func:`_gate_owns_source`), or a spawning parent that
-    collects the child's report along the dispatch edge. Anything else —
-    a ``schedule`` wake most of all — leaves the final stdout captured to
-    the response path as the run's own body/message store and nowhere
-    else, and a reply addressed at that event can never be delivered.
+    collects the child's report along the dispatch edge — and only while
+    that parent is still around to collect it
+    (:func:`_spawn_parent_still_collecting`); a *finished* parent is not a
+    dispatch edge, it is a dead end wearing one's id (#1296). Anything
+    else — a ``schedule`` wake most of all — leaves the final stdout
+    captured to the response path as the run's own body/message store and
+    nowhere else, and a reply addressed at that event can never be
+    delivered.
 
     An *absent* source is unknown, not impossible: treated as landing, so
     a missing field never manufactures a false "nobody will see this".
+    *runs_dir* omitted behaves the same way for *spawn_parent_run_id* —
+    unverifiable is not the same claim as false.
 
     Shared by the dispatch path (terminal-stream suppression) and the
     portal state (``inbound.current_event_replyable``, which the Stop-hook
@@ -8792,7 +8847,11 @@ def _terminal_reply_lands(
     """
     if not source:
         return True
-    return bool(spawn_parent_run_id) or _gate_owns_source(source)
+    if spawn_parent_run_id and _spawn_parent_still_collecting(
+        spawn_parent_run_id, runs_dir,
+    ):
+        return True
+    return _gate_owns_source(source)
 
 
 _TERMINAL_ROUTE_DUPLICATE = "duplicate"
@@ -8808,6 +8867,7 @@ def _terminal_route(
     source: str,
     *,
     spawn_parent_run_id: str = "",
+    runs_dir: Path | None = None,
     duplicate: bool = False,
     undeliverable: bool = False,
     delivered_elsewhere: bool = False,
@@ -8851,6 +8911,13 @@ def _terminal_route(
     ``unknown`` covers an absent source, which :func:`_terminal_reply_lands`
     treats as landing rather than as impossible. Naming it beats an empty
     string that reads as "no terminal stream".
+
+    *runs_dir*, when given, gates the ``dispatch-edge`` branch on
+    :func:`_spawn_parent_still_collecting` the same way
+    :func:`_terminal_reply_lands` does (#1296) — omitted, *spawn_parent_run_id*
+    is trusted on presence alone, matching every caller that already
+    resolved liveness upstream (``undeliverable``/``gate_fallback`` land
+    first in the precedence below either way).
     """
     if duplicate:
         return _TERMINAL_ROUTE_DUPLICATE
@@ -8864,7 +8931,9 @@ def _terminal_route(
             if delivered_elsewhere
             else _TERMINAL_ROUTE_GATE_SOLE
         )
-    if spawn_parent_run_id:
+    if spawn_parent_run_id and _spawn_parent_still_collecting(
+        spawn_parent_run_id, runs_dir,
+    ):
         return _TERMINAL_ROUTE_DISPATCH_EDGE
     return _TERMINAL_ROUTE_UNKNOWN
 
