@@ -55,13 +55,15 @@ from . import config as conf
 from . import gitops
 
 CACHE_NAME = "forge-pr-state.json"
-# Bumped 1 -> 2 for the ``unsupported`` / ``forge_kind`` fields (#852). Purely
-# documentary: nothing in this module reads or validates ``schema`` on load,
-# so an old schema-1 cache on disk (no ``unsupported`` key) still reads
-# correctly under the new code — it just never matches the new branch in
-# :func:`read_state` and falls through to the original absent/error/stale/
-# fresh derivation, exactly as it did before this change.
-SCHEMA = 2
+# Bumped 1 -> 2 for the ``unsupported`` / ``forge_kind`` fields (#852), then
+# 2 -> 3 for ``base`` (#1140: a PR merged into a feature branch rendered
+# byte-identical to one merged into ``main`` on every surface this cache
+# feeds). Purely documentary: nothing in this module reads or validates
+# ``schema`` on load, so an older cache on disk (no ``base`` key) still reads
+# correctly under the new code — a row without it just carries
+# ``base: None``, which every reader already treats as "unknown, say
+# nothing" rather than "on the default branch".
+SCHEMA = 3
 
 # The cache rides the daemon's scan tick; PR state moves on human timescales
 # (a merge, a review), so a 5-minute TTL keeps the block honest without
@@ -257,6 +259,11 @@ def _shape(row: dict[str, Any]) -> dict[str, Any] | None:
         "title": str(row.get("title") or "").strip(),
         "state": str(row.get("state") or "").strip().upper() or "UNKNOWN",
         "branch": branch,
+        # The base this PR merges *into* (#1140) — ``None`` when ``gh``
+        # didn't say (older cache, or a row shaped by a test that omits it),
+        # which every reader treats as "unknown, don't claim a mismatch"
+        # rather than "confirmed same as default".
+        "base": str(row.get("baseRefName") or "").strip() or None,
         "url": str(row.get("url") or "").strip(),
         "draft": bool(row.get("isDraft")),
         "merged_at": str(row.get("mergedAt") or "").strip() or None,
@@ -324,7 +331,7 @@ def refresh(repo_root: Path, *, timeout: float = _GH_TIMEOUT_SECONDS) -> dict[st
         "gh", "pr", "list",
         "--state", "all",
         "--limit", str(FETCH_LIMIT),
-        "--json", "number,title,state,headRefName,mergedAt,closedAt,url,isDraft",
+        "--json", "number,title,state,headRefName,baseRefName,mergedAt,closedAt,url,isDraft",
     ]
     if label:
         cmd += ["--repo", label]

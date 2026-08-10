@@ -337,11 +337,20 @@ def pr_needs_attention(worktree_entry: dict[str, Any], *, now: float | None = No
     return _pr_worth_a_line(pr, now=now)
 
 
-def format_pr(pr: dict[str, Any], *, now: float | None = None) -> str:
+def format_pr(
+    pr: dict[str, Any], *, now: float | None = None, default_branch: str | None = None,
+) -> str:
     """``#382 MERGED 3h ago`` / ``#390 OPEN (draft)`` — the compact PR marker.
 
     The resolution age is the load-bearing half for a merged/closed PR: "merged
     3h ago" is what makes a remembered "still awaiting review" visibly wrong.
+
+    ``#1140``: a PR merged into a *feature* branch rendered identically to one
+    merged into the default branch — nothing here said which. When *pr*
+    carries a known ``base`` that disagrees with the caller-supplied
+    ``default_branch``, append ``→ <base>``; the terse case (base unknown, or
+    base == default) renders exactly as before this change — a strict
+    addition, never a reformat.
     """
     if not isinstance(pr, dict):
         return ""
@@ -353,6 +362,9 @@ def format_pr(pr: dict[str, Any], *, now: float | None = None) -> str:
     if pr.get("draft") and state == "OPEN":
         text += " (draft)"
     text += _resolution_age_suffix(pr, state, now=now)
+    base = str(pr.get("base") or "").strip()
+    if base and default_branch and base != default_branch:
+        text += f" → {base}"
     return text
 
 
@@ -982,4 +994,8 @@ def build_forge_state(
         facet["threads"] = threads
     facet["pr_state"] = pr_state
     facet["prod"] = prod
+    # #1140: the one thing that turns a known ``base`` into a *comparison* —
+    # rides in the facet so every renderer (and continuity's stacked-vs-
+    # shipped split) reads the same value instead of each re-deriving it.
+    facet["default_branch"] = gitops.default_branch(repo_root)
     return facet
