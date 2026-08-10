@@ -5083,6 +5083,12 @@ def subagent_neutral(
 # this predicate unblocked, same as any tool this list doesn't name.
 _ROOTED_WRITE_TOOLS = frozenset({"Edit", "Write"})
 
+# Control files a strand is legitimately entitled to write to in the shared
+# outbox directory ($BRR_OUTBOX_DIR). The bundle names these explicitly as
+# where the run's control data lives — see daemon-substrate.md →
+# control files table.
+_CONTROL_FILES = frozenset({".card", ".mood", ".keepalive", ".name"})
+
 
 def _rooted_write_neutral(
     ctx: "HookContext", payload: dict[str, Any]
@@ -5140,6 +5146,25 @@ def _rooted_write_neutral(
         # hatch (scratch trees elsewhere via `env -u GIT_DIR -u
         # GIT_WORK_TREE`) is not this predicate's concern.
         return result
+    # Carve out writes to the strand's own control files (.card, .mood,
+    # .keepalive, .name) in the shared outbox directory. These are
+    # legitimately written to the outbox dir by design — the bundle names
+    # them explicitly as where the run's control data lives (see
+    # daemon-substrate.md → control files table). A path "rooted outside the
+    # worktree" is not evidence of a mistaken write when the path is a
+    # delegated control file the run was told to write to.
+    if ctx.outbox_dir is not None:
+        try:
+            outbox_dir = ctx.outbox_dir.resolve()
+            if (
+                resolved.parent == outbox_dir
+                and resolved.name in _CONTROL_FILES
+            ):
+                return result
+        except OSError:
+            # If outbox_dir cannot resolve, fall through to the block below —
+            # this is a question for the tool call itself, not this predicate.
+            pass
     result["block"] = True
     result["block_reason"] = (
         f"refused (#1184): {raw_path} is rooted in the host checkout "
