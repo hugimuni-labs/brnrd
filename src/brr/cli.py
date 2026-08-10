@@ -394,6 +394,17 @@ def build_parser() -> argparse.ArgumentParser:
                    help="repo name for the knowledge backup (default: brnrd-knowledge)")
     p.set_defaults(func=cmd_home_link)
 
+    p = home_sub.add_parser(
+        "sweep-orphans",
+        help="list (and, with --delete, remove) project homes holding "
+             "nothing but default scaffold — #1193 rec 4",
+    )
+    p.add_argument("--delete", action="store_true",
+                   help="actually remove the orphaned homes found (default: dry run, lists only)")
+    p.add_argument("--yes", action="store_true",
+                   help="skip the confirmation prompt (required with --delete when not on a TTY)")
+    p.set_defaults(func=cmd_home_sweep_orphans)
+
     # Hidden per HIDDEN_COMMANDS above (help ceiling, not obscurity) — omit
     # `help=` here too, or it leaks into the listing despite the constant.
     config_p = sub.add_parser("config")
@@ -3779,6 +3790,73 @@ def cmd_home_link(args):
         )
     except home_link.HomeLinkError as exc:
         raise SystemExit(f"[brnrd] {exc}")
+
+
+def cmd_home_sweep_orphans(args):
+    """``brnrd home sweep-orphans`` — #1193 rec 4.
+
+    Rec 3 keyed the fallback project home on repo identity instead of raw
+    checkout path, so a worktree, a scratch clone, or a container mount no
+    longer mints its own empty home. It does nothing about the ones the old
+    keying already minted before that fix landed — this lists them
+    (:func:`account.survey_project_home` does the actual classification,
+    read-only) and only deletes on an explicit ``--delete``, itself gated
+    by ``--yes`` off a TTY exactly like ``brnrd home link``.
+    """
+    from . import account
+
+    homes = account.list_project_homes()
+    if not homes:
+        print("[brnrd home sweep-orphans] no project homes found under "
+              "~/.local/state/brnrd/projects/ (or $XDG_STATE_HOME/brnrd/projects/)")
+        return 0
+
+    surveys = [account.survey_project_home(home) for home in homes]
+    orphans = [s for s in surveys if s.default_scaffold]
+    kept = [s for s in surveys if not s.default_scaffold]
+
+    print(f"[brnrd home sweep-orphans] {len(homes)} project home(s) scanned: "
+          f"{len(orphans)} default-scaffold, {len(kept)} carrying real content")
+    for s in orphans:
+        print(f"  orphan  {s.home}")
+    for s in kept:
+        print(f"  keep    {s.home}  ({'; '.join(s.reasons)})")
+
+    if not orphans:
+        return 0
+
+    if not args.delete:
+        print()
+        print(f"[brnrd home sweep-orphans] dry run — nothing deleted. "
+              f"Re-run with --delete to remove the {len(orphans)} orphan(s) above.")
+        return 0
+
+    if not args.yes:
+        import sys
+
+        if not sys.stdin.isatty():
+            raise SystemExit(
+                "[brnrd home sweep-orphans] --delete needs --yes when not running interactively"
+            )
+        from .adopt import _confirm
+
+        print()
+        if not _confirm(
+            f"Delete {len(orphans)} default-scaffold project home(s)?",
+            default=False,
+        ):
+            print("[brnrd home sweep-orphans] cancelled — nothing changed")
+            return 0
+
+    import shutil
+
+    for s in orphans:
+        # Remove the whole `projects/<name>/` directory, not just its
+        # `home/` child — an emptied `<name>/` left behind is the same
+        # noise this tool exists to clear.
+        shutil.rmtree(s.home.parent)
+        print(f"  deleted {s.home.parent}")
+    return 0
 
 
 def cmd_config_promote(args):

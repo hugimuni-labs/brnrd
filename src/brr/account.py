@@ -206,20 +206,162 @@ def _xdg_state_home() -> Path:
     return Path.home() / ".local" / "state"
 
 
-def _path_hash(path: Path) -> str:
+# ── #1193 rec 3 — key the fallback project home on repo identity ──────
+#
+# ``_default_project_home`` used to hash ``repo_root.resolve()`` directly:
+# every distinct filesystem path to the *same* repository (a worktree, a
+# scratch ``/tmp/brr-wt-<slug>`` checkout, a container mount) minted its own
+# empty project home. Verified live 2026-08-10: nine separate
+# ``hugimuni-labs__brnrd-*`` project homes under
+# ``~/.local/state/brnrd/projects/`` for what is, on disk, one repository.
+#
+# ``_repo_identity`` picks the strongest discriminator available and
+# only degrades when a weaker one is all that exists:
+#
+# 1. **Canonicalized origin remote** — identifies "the same repo" across
+#    every clone, worktree, and machine that points at it. The strong
+#    choice whenever a remote exists.
+# 2. **Resolved ``--git-common-dir``** — every linked worktree of one clone
+#    shares a common git dir, so this still unifies worktrees when there is
+#    no remote. Tradeoff, named rather than hidden: it does NOT unify two
+#    independent ``git clone``s of the same remote-less repo — each has its
+#    own ``.git`` and nothing left to compare once the remote is gone.
+# 3. **Resolved absolute path** — the pre-existing behaviour, reached only
+#    when *repo_root* is not a git checkout at all (or git cannot be run).
+_SCP_LIKE_REMOTE_RE = re.compile(r"^(?:[\w.\-]+@)?([\w.\-]+):(?!//)(.+)$")
+_URL_REMOTE_RE = re.compile(
+    r"^[a-zA-Z][a-zA-Z0-9+.\-]*://(?:[^@/]*@)?([^/:]+)(?::\d+)?/(.+)$"
+)
+
+
+def _canonical_remote_identity(url: str) -> str | None:
+    """Canonicalize a git remote URL to a host-scoped identity string.
+
+    Every clone-URL shape git hands out for the same remote —
+    ``git@host:owner/repo.git``, ``ssh://git@host/owner/repo.git``,
+    ``https://host/owner/repo`` — collapses to the same ``host/path``
+    string; unrelated repos don't collide (host + path is exactly what
+    distinguishes them). Not GitHub-specific, unlike
+    ``gates.github.parse.parse_origin_url``: this repo's own remotes are
+    the common case, but nothing here should stop working the day a repo
+    points at GitLab or a self-hosted forge. Returns ``None`` for anything
+    unparseable (a local ``file://`` remote, a bare path, a malformed
+    string) so the caller falls through to the next discriminator instead
+    of hashing a scheme fragment in place of an identity.
+    """
+    text = (url or "").strip()
+    if not text:
+        return None
+    match = _URL_REMOTE_RE.match(text) or _SCP_LIKE_REMOTE_RE.match(text)
+    if not match:
+        return None
+    host = match.group(1).strip().lower()
+    path = match.group(2).strip().strip("/")
+    if path.endswith(".git"):
+        path = path[: -len(".git")]
+    if not host or not path:
+        return None
+    return f"{host}/{path}"
+
+
+def _git_common_dir(repo_root: Path) -> Path | None:
+    """Resolve *repo_root*'s ``--git-common-dir`` to an absolute real path.
+
+    ``None`` for anything that isn't a git checkout, or when git can't be
+    run at all — never raises, so a caller can always fall through.
+    """
     try:
-        basis = str(path.resolve())
+        result = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=repo_root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
     except OSError:
-        basis = str(path.absolute())
-    return hashlib.sha1(basis.encode("utf-8")).hexdigest()[:10]
+        return None
+    if result.returncode != 0:
+        return None
+    common_dir = Path(result.stdout.strip())
+    if not common_dir.is_absolute():
+        common_dir = repo_root / common_dir
+    try:
+        return common_dir.resolve()
+    except OSError:
+        return common_dir.absolute()
 
 
-def _repo_slug(repo_root: Path, cfg: dict[str, Any] | None = None) -> str:
-    return _slug(repo_label(repo_root, cfg).replace("/", "__"))
+def _repo_identity(repo_root: Path) -> tuple[str, str]:
+    """Return ``(kind, key)`` — the strongest available identity for *repo_root*.
+
+    ``kind`` is one of ``"remote"`` / ``"gitdir"`` / ``"path"``, matching the
+    three rungs in the module note above. Callers that need a single
+    opaque string (the project-home hash) combine the two; callers that
+    want a *human-readable* slug (:func:`_project_home_slug`) need to know
+    which rung fired, because only the top two are stable across more than
+    one filesystem path.
+    """
+
+    try:
+        remote_name = gitops.default_remote(repo_root)
+        url = gitops.remote_url(repo_root, remote_name) if remote_name else None
+    except Exception:  # noqa: BLE001 - identity derivation must not abort a wake
+        url = None
+    if url:
+        remote_identity = _canonical_remote_identity(url)
+        if remote_identity:
+            return "remote", remote_identity
+
+    common_dir = _git_common_dir(repo_root)
+    if common_dir is not None:
+        return "gitdir", str(common_dir)
+
+    try:
+        basis = str(repo_root.resolve())
+    except OSError:
+        basis = str(repo_root.absolute())
+    return "path", basis
+
+
+def _identity_hash(repo_root: Path) -> str:
+    kind, key = _repo_identity(repo_root)
+    return hashlib.sha1(f"{kind}:{key}".encode("utf-8")).hexdigest()[:10]
+
+
+def _project_home_slug(repo_root: Path, cfg: dict[str, Any] | None = None) -> str:
+    """Human-readable prefix for the project-home directory name.
+
+    Must stay as identity-stable as :func:`_identity_hash` beside it, or a
+    per-checkout label would quietly reopen the divergence the hash exists
+    to close (the directory name is ``<slug>-<hash>`` — a mismatched slug
+    still mints two directories even when the hash agrees). ``repo_label``
+    already resolves a configured label or a recognized-forge (github)
+    remote to something stable regardless of checkout path; its only
+    path-derived fallback is the checkout's own ``repo_root.name``, and
+    that fallback is exactly the #1193 instability for a linked worktree
+    or a second clone. This steps in only for that one case: prefer the
+    clone's own remote identity (stable across every worktree *and*
+    clone of it) when one exists but wasn't github-shaped enough for
+    ``repo_label`` to recognize, else the shared clone's main-checkout
+    directory name (stable across every worktree of *that* clone).
+    """
+
+    cfg = cfg or {}
+    label = repo_label(repo_root, cfg)
+    if label != (repo_root.name or DEFAULT_REPO_LABEL):
+        return _slug(label.replace("/", "__"))
+
+    kind, identity_key = _repo_identity(repo_root)
+    if kind == "remote":
+        return _slug(identity_key.replace("/", "__"))
+    if kind == "gitdir":
+        return _slug(Path(identity_key).parent.name)
+    return _slug(label.replace("/", "__"))
 
 
 def _default_project_home(repo_root: Path, cfg: dict[str, Any] | None = None) -> Path:
-    name = f"{_repo_slug(repo_root, cfg)}-{_path_hash(repo_root)}"
+    name = f"{_project_home_slug(repo_root, cfg)}-{_identity_hash(repo_root)}"
     return _xdg_state_home() / DEFAULT_STATE_NAMESPACE / "projects" / name / "home"
 
 
@@ -579,7 +721,7 @@ def resolve_context(
     if kind not in {"project", "account"}:
         kind = "account" if explicit_account_id or connected_account_id else "project"
     account_id = explicit_account_id or (connected_account_id if kind == "account" else "")
-    home_id = account_id if kind == "account" else f"{_repo_slug(repo_root, cfg)}-{_path_hash(repo_root)}"
+    home_id = account_id if kind == "account" else f"{_project_home_slug(repo_root, cfg)}-{_identity_hash(repo_root)}"
     home_root = explicit_home or (
         _default_account_home(account_id) if kind == "account"
         else _default_project_home(repo_root, cfg)
@@ -982,15 +1124,15 @@ def _migrate_legacy_work_surface(home_root: Path) -> None:
     _move_surface_entry(home_root / LEDGER_PATH, surface / LEDGER_PATH)
 
 
-def _seed_work_surface(home_root: Path, repo_label_value: str) -> None:
-    """Create the light orientation seed once; subsequent authors own it."""
+def _work_surface_seed_text(slug: str) -> str:
+    """The exact starter content ``_seed_work_surface`` writes for *slug*.
 
-    surface = home_root / SURFACE_PATH
-    index = surface / "index.md"
-    if index.exists():
-        return
-    slug = slug_repo_label(repo_label_value)
-    index.write_text(
+    Factored out so the orphan sweep (:func:`survey_project_home`, #1193
+    rec 4) can reconstruct the same text and compare byte-for-byte instead
+    of guessing "looks default" from size or a fuzzy match.
+    """
+
+    return (
         "# Work surface\n\n"
         "The shared orientation for user and resident. The wake and dashboard "
         "discover Markdown here because it exists; code chooses typography, "
@@ -1007,9 +1149,19 @@ def _seed_work_surface(home_root: Path, repo_label_value: str) -> None:
         "links become the later loom graph's edges. Daemon-attested files such "
         "as `runs/*/state.md` frame each run body, not pages to "
         "move in here. Add a page when it earns a shared purpose; do not turn "
-        "the surface into a form.\n",
-        encoding="utf-8",
+        "the surface into a form.\n"
     )
+
+
+def _seed_work_surface(home_root: Path, repo_label_value: str) -> None:
+    """Create the light orientation seed once; subsequent authors own it."""
+
+    surface = home_root / SURFACE_PATH
+    index = surface / "index.md"
+    if index.exists():
+        return
+    slug = slug_repo_label(repo_label_value)
+    index.write_text(_work_surface_seed_text(slug), encoding="utf-8")
 
 
 # ── Inter-run plan helpers inside the discovered surface ─────────────
@@ -1590,3 +1742,120 @@ def _label_has_memory(ctx: HomeContext, label: str) -> bool:
         except OSError:
             continue
     return False
+
+
+# ── #1193 rec 4 — sweep orphaned project homes ─────────────────────────
+#
+# Rec 3 above stops *new* project homes from fragmenting; it does nothing
+# about the ones the old path-hashed fallback already minted — nine, on
+# the machine this was written and verified on, for one repo. This is a
+# read-only-by-default tool: it names which project homes hold nothing but
+# the scaffold ``resolve_context`` writes at birth (registry, ``.gitignore``,
+# the deed README, the seeded ``surface/index.md``, empty ``runs/``) versus
+# homes carrying real content (run history, authored surface pages,
+# knowledge pages), and deletes only on an explicit confirm. Never called
+# from ``resolve_context`` or any other automatic path — a tool, not a
+# behaviour.
+
+
+def _home_registry_default_label(home_root: Path) -> str | None:
+    """Return the ``default_repo`` label recorded in *home_root*'s registry.
+
+    ``None`` when there is no registry, it's unreadable, or it names no
+    default — an even older scaffold shape, or not a brnrd home at all.
+    """
+    try:
+        raw = json.loads((home_root / REGISTRY_PATH).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    label = str(raw.get("default_repo") or "").strip()
+    return label or None
+
+
+@dataclass(frozen=True)
+class ProjectHomeSurvey:
+    """One ``<xdg-state>/brnrd/projects/*/home`` directory the sweep looked at.
+
+    ``default_scaffold`` is the verdict; ``reasons`` explains it either
+    way — a claim about "nothing here" is exactly the kind that needs to
+    show its work before a delete flag trusts it.
+    """
+
+    home: Path
+    default_scaffold: bool
+    reasons: tuple[str, ...]
+
+
+def list_project_homes(xdg_state_home: Path | None = None) -> list[Path]:
+    """Every ``<xdg-state>/brnrd/projects/*/home`` directory that exists."""
+
+    root = (xdg_state_home or _xdg_state_home()) / DEFAULT_STATE_NAMESPACE / "projects"
+    if not root.is_dir():
+        return []
+    return sorted(p for p in root.glob("*/home") if p.is_dir())
+
+
+def survey_project_home(home: Path) -> ProjectHomeSurvey:
+    """Classify *home* as default-scaffold-only or carrying real content.
+
+    Pure and read-only: this never deletes anything, only decides. Three
+    independent checks, any one of which is enough to keep the home:
+
+    - **run history** — a file anywhere under ``runs/`` (current shape) or
+      ``run-state/`` (the pre-migration legacy shape, in case the sweep
+      runs before a migration pass has).
+    - **knowledge pages** — a ``.md`` file anywhere under
+      ``knowledge/repos/`` (the deed's own ``knowledge/README.md`` doesn't
+      count — that's scaffold too, written the same way the dominion's
+      own deed is).
+    - **authored surface content** — anything under ``surface/`` other
+      than exactly one ``index.md`` whose text matches
+      :func:`_work_surface_seed_text` byte-for-byte for this home's own
+      registered default label. A home old enough to predate the registry
+      ``default_repo`` field (or the ``surface/`` layout itself) can't be
+      proven default by this check, so it counts as real content rather
+      than guessing.
+    """
+
+    reasons: list[str] = []
+    is_default = True
+
+    for runs_dirname in (RUNS_PATH, "run-state"):
+        runs_dir = home / runs_dirname
+        if runs_dir.is_dir() and any(p.is_file() for p in runs_dir.rglob("*")):
+            is_default = False
+            reasons.append(f"{runs_dirname}/ holds run file(s)")
+
+    knowledge_repos = home / KNOWLEDGE_PATH / REPOS_PATH
+    if knowledge_repos.is_dir() and any(knowledge_repos.rglob("*.md")):
+        is_default = False
+        reasons.append("knowledge/repos/ holds authored page(s)")
+
+    surface = home / SURFACE_PATH
+    if surface.is_dir():
+        surface_files = sorted(p for p in surface.rglob("*") if p.is_file())
+        if surface_files != [surface / "index.md"]:
+            is_default = False
+            reasons.append("surface/ doesn't hold exactly the seeded index page")
+        else:
+            default_label = _home_registry_default_label(home)
+            expected = (
+                _work_surface_seed_text(slug_repo_label(default_label))
+                if default_label
+                else None
+            )
+            actual = (surface / "index.md").read_text(encoding="utf-8")
+            if expected is None:
+                is_default = False
+                reasons.append(
+                    "surface/index.md exists but no registry default_repo "
+                    "to reconstruct the seed text against — can't prove it's unedited"
+                )
+            elif actual != expected:
+                is_default = False
+                reasons.append("surface/index.md differs from the seed template")
+
+    if is_default:
+        reasons.append("only default scaffold found (registry, .gitignore, deed, seed surface)")
+
+    return ProjectHomeSurvey(home=home, default_scaffold=is_default, reasons=tuple(reasons))
