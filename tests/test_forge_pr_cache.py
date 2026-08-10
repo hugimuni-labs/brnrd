@@ -125,6 +125,7 @@ def _pr(number: int, branch: str, state: str = "OPEN", **extra) -> dict:
         "title": f"PR {number}",
         "state": state,
         "branch": branch,
+        "base": None,
         "url": f"https://github.com/Gurio/brr/pull/{number}",
         "draft": False,
         "merged_at": None,
@@ -180,13 +181,14 @@ def test_refresh_writes_cache(tmp_path, monkeypatch):
     rows = [
         {
             "number": 382, "title": "Boot score", "state": "MERGED",
-            "headRefName": "brr/boot-score-slice1", "isDraft": False,
+            "headRefName": "brr/boot-score-slice1",
+            "baseRefName": "brr/the-child-speaks-for-itself", "isDraft": False,
             "mergedAt": "2026-07-13T18:40:00Z", "closedAt": "2026-07-13T18:40:00Z",
             "url": "https://github.com/Gurio/brr/pull/382",
         },
         {
             "number": 390, "title": "Forge PR state", "state": "OPEN",
-            "headRefName": "brr/forge-pr-state", "isDraft": True,
+            "headRefName": "brr/forge-pr-state", "baseRefName": "main", "isDraft": True,
             "mergedAt": None, "closedAt": None,
             "url": "https://github.com/Gurio/brr/pull/390",
         },
@@ -195,6 +197,9 @@ def test_refresh_writes_cache(tmp_path, monkeypatch):
     def fake_gh(cmd, **kwargs):
         assert cmd[:3] == ["gh", "pr", "list"]
         assert "--repo" in cmd and "Gurio/brr" in cmd
+        # #1140: the base has to actually be *asked for* or nothing
+        # downstream can ever know a merge landed on a feature branch.
+        assert "baseRefName" in cmd[cmd.index("--json") + 1]
         return subprocess.CompletedProcess(cmd, 0, json.dumps(rows), "")
 
     monkeypatch.setattr(forge_pr_cache.subprocess, "run", _gh_only(fake_gh))
@@ -206,8 +211,28 @@ def test_refresh_writes_cache(tmp_path, monkeypatch):
     by_number = {row["number"]: row for row in on_disk["prs"]}
     assert by_number[382]["state"] == "MERGED"
     assert by_number[382]["branch"] == "brr/boot-score-slice1"
+    assert by_number[382]["base"] == "brr/the-child-speaks-for-itself"
     assert by_number[390]["draft"] is True
+    assert by_number[390]["base"] == "main"
     assert on_disk["fetched_at"]
+
+
+def test_refresh_omits_base_when_gh_does_not_say(tmp_path, monkeypatch):
+    """No ``baseRefName`` in the row (older ``gh``?) reads as unknown, not ``""``."""
+    repo = _repo_with_remote(tmp_path)
+    rows = [{
+        "number": 1, "title": "x", "state": "OPEN",
+        "headRefName": "brr/x", "isDraft": False,
+        "mergedAt": None, "closedAt": None,
+        "url": "https://github.com/Gurio/brr/pull/1",
+    }]
+
+    def fake_gh(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, json.dumps(rows), "")
+
+    monkeypatch.setattr(forge_pr_cache.subprocess, "run", _gh_only(fake_gh))
+    payload = forge_pr_cache.refresh(repo)
+    assert payload["prs"][0]["base"] is None
 
 
 def test_refresh_failure_records_error_and_keeps_last_rows(tmp_path, monkeypatch):
@@ -612,12 +637,69 @@ def test_render_lists_prs_without_a_worktree(render):
     assert "brr/orphan" in rendered
 
 
+@pytest.mark.parametrize("render", [prompts._format_forge_state, run_context._render_forge_state])
+def test_render_names_a_stacked_base_end_to_end(render):
+    """#1140: a worktree's merged PR whose base isn't the facet's own
+    default branch names it in the same rendered forge block a resident
+    reads at boot."""
+    facet = _facet({"status": "fresh", "standalone": []})
+    facet["default_branch"] = "main"
+    facet["worktrees"][1]["pr"]["base"] = "brr/the-child-speaks-for-itself"
+    rendered = render(facet)
+    assert "#382 MERGED" in rendered
+    assert "brr/the-child-speaks-for-itself" in rendered
+    # The other worktree's PR (#390, base unset) carries no base override —
+    # the stacked branch name appears exactly once, for #382 alone.
+    assert rendered.count("brr/the-child-speaks-for-itself") == 1
+
+
 def test_format_pr_marks_drafts_and_ages_resolutions():
     assert forge_state.format_pr(_pr(9, "b", draft=True)) == "#9 OPEN (draft)"
     assert forge_state.format_pr(_pr(9, "b", state="CLOSED")) == "#9 CLOSED"
     aged = _pr(9, "b", state="MERGED", merged_at=_iso(-2 * 3600))
     assert forge_state.format_pr(aged) == "#9 MERGED 2h ago"
     assert forge_state.format_pr(None) == ""
+
+
+def test_format_pr_terse_case_is_unchanged_by_base_branch():
+    """#1140: the common case (base == default, or base/default unknown)
+    must render *exactly* as before this change — a strict addition, not a
+    reformat."""
+    aged = _pr(1139, "brr/x", state="MERGED", merged_at=_iso(-1800))
+    # No default_branch known to the caller at all.
+    assert forge_state.format_pr(aged) == "#1139 MERGED 30m ago"
+    # base unknown (None, the pre-#1140 / older-cache shape).
+    assert (
+        forge_state.format_pr(aged, default_branch="main")
+        == "#1139 MERGED 30m ago"
+    )
+    # base known and equal to the default branch.
+    on_main = _pr(1139, "brr/x", state="MERGED", merged_at=_iso(-1800), base="main")
+    assert (
+        forge_state.format_pr(on_main, default_branch="main")
+        == "#1139 MERGED 30m ago"
+    )
+
+
+def test_format_pr_names_a_stacked_base():
+    """#1140's own candidate spelling: only rendered when base != default."""
+    stacked = _pr(
+        1139, "brr/x", state="MERGED", merged_at=_iso(-1800),
+        base="brr/the-child-speaks-for-itself",
+    )
+    assert (
+        forge_state.format_pr(stacked, default_branch="main")
+        == "#1139 MERGED 30m ago → brr/the-child-speaks-for-itself"
+    )
+    # Known base, but the caller never supplied a default branch to compare
+    # against — nothing to say, so nothing is said.
+    assert forge_state.format_pr(stacked) == "#1139 MERGED 30m ago"
+    # Still applies to open PRs, not just merged ones.
+    stacked_open = _pr(9, "b", base="brr/parent")
+    assert (
+        forge_state.format_pr(stacked_open, default_branch="main")
+        == "#9 OPEN → brr/parent"
+    )
 
 
 @pytest.mark.parametrize(
