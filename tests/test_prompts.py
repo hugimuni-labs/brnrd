@@ -11,6 +11,7 @@ from brr.prompts import (
     RECENT_TURN_MAX_BYTES,
     SCHEDULE_TURN_DEDUP_RATIO,
     TrimResult,
+    _annotate_stale_refs,
     _backchannel_handles_only,
     _build_context_block,
     _build_identity_core_block,
@@ -3787,6 +3788,172 @@ class TestBackchannelHandles:
 
         assert "This free-text body must survive" in result.text
         assert "injected as handles only" not in result.text
+
+
+# ── #1137 — stale-refs annotation on work-surface items ────────────────
+#
+# The render-side join #957 built for the live menu (menus._strike_reason /
+# forge_state.resolved_pr_lookup), applied to a work-surface item's own
+# `refs:` row: an item naming only already-resolved PR(s) gets an
+# annotation on its heading, never a suppression — a surface item can
+# legitimately outlive the PR it references.
+
+
+class TestStaleRefsAnnotation:
+    def test_item_naming_a_merged_pr_is_annotated(self, tmp_path):
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        (surface / "plan.md").write_text(
+            "## Ship the migration\n\n"
+            "kind: act\n"
+            "refs: #1126\n"
+            "prompt: land it\n",
+            encoding="utf-8",
+        )
+
+        result, _whole = _build_work_surface_block_scored(
+            tmp_path, resolved_prs={1126: "merged 14h ago"}
+        )
+
+        assert "## Ship the migration    ⚑ refs #1126 merged 14h ago" in result.text
+
+    def test_item_naming_only_an_open_pr_is_unchanged(self, tmp_path):
+        """#997-style: the number is a real forge artifact, just not a
+        resolved one — still live work."""
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        (surface / "plan.md").write_text(
+            "## Still cooking\n\nkind: act\nrefs: #997\nprompt: wait for review\n",
+            encoding="utf-8",
+        )
+
+        # #997 is a real forge artifact this wake resolved elsewhere (open,
+        # per `forge_state.resolved_pr_lookup`'s own contract, a resolved PR
+        # is simply absent — never mapped to `None`); #1126 is unrelated,
+        # present only to prove the join is real and merely doesn't fire here.
+        result, _whole = _build_work_surface_block_scored(
+            tmp_path, resolved_prs={1126: "merged 14h ago"}
+        )
+
+        assert "## Still cooking\n" in result.text
+        assert "⚑" not in result.text
+
+    def test_item_naming_a_pr_with_no_forge_opinion_is_unchanged(self, tmp_path):
+        """A number this wake's forge-state snapshot never mentions at all —
+        absent from the lookup, same as an open PR at this join's level."""
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        (surface / "plan.md").write_text(
+            "## Untracked reference\n\nkind: act\nrefs: #42\nprompt: who knows\n",
+            encoding="utf-8",
+        )
+
+        result, _whole = _build_work_surface_block_scored(
+            tmp_path, resolved_prs={1126: "merged 14h ago"}
+        )
+
+        assert "## Untracked reference\n" in result.text
+        assert "⚑" not in result.text
+
+    def test_item_naming_one_merged_and_one_open_pr_is_unchanged(self, tmp_path):
+        """Matches menus._strike_reason's all-or-nothing rule (#957): the
+        item is still live work until *every* PR it names is done."""
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        (surface / "plan.md").write_text(
+            "## Two gates, one still open\n\n"
+            "kind: act\n"
+            "refs: #1126 #997\n"
+            "prompt: land the rest\n",
+            encoding="utf-8",
+        )
+
+        result, _whole = _build_work_surface_block_scored(
+            tmp_path, resolved_prs={1126: "merged 14h ago"}
+        )
+
+        assert "## Two gates, one still open\n" in result.text
+        assert "⚑" not in result.text
+
+    def test_only_the_stale_item_is_annotated_among_several(self, tmp_path):
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        (surface / "plan.md").write_text(
+            "## Done already\n\nkind: act\nrefs: #1126\nprompt: a\n\n"
+            "## Still live\n\nkind: act\nrefs: #997\nprompt: b\n",
+            encoding="utf-8",
+        )
+
+        result, _whole = _build_work_surface_block_scored(
+            tmp_path, resolved_prs={1126: "merged 14h ago"}
+        )
+
+        assert "## Done already    ⚑ refs #1126 merged 14h ago" in result.text
+        assert "## Still live\n" in result.text
+
+    def test_no_resolved_prs_is_a_noop(self, tmp_path):
+        """No forge-state snapshot at all (the default) renders exactly as
+        before — the common ad-hoc/setup-stage case, no annotation input."""
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        content = "## Ship the migration\n\nkind: act\nrefs: #1126\nprompt: land it\n"
+        (surface / "plan.md").write_text(content, encoding="utf-8")
+
+        result, whole = _build_work_surface_block_scored(tmp_path)
+
+        assert "⚑" not in result.text
+        assert (surface / "plan.md").resolve() in whole
+
+    def test_annotate_stale_refs_is_a_pure_noop_without_a_refs_row(self):
+        content = "## No refs here\n\nkind: decide\nprompt: pick one\n"
+        assert _annotate_stale_refs(content, {1126: "merged 14h ago"}) is content
+
+    def test_end_to_end_from_a_forge_snapshot_through_the_daemon_prompt(self, tmp_path):
+        """The real wiring: `communication_snapshot["forge"]` (built
+        network-free by `forge_state.build_forge_state` in the daemon) reaches
+        the work-surface block exactly the way it already reaches the live
+        menu (#957) — same snapshot, one more consumer.
+        """
+        prompts_dir = tmp_path / ".brr" / "prompts"
+        prompts_dir.mkdir(parents=True)
+        (prompts_dir / "run.md").write_text("You are an agent.", encoding="utf-8")
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        (surface / "plan.md").write_text(
+            "## Ship the migration\n\nkind: act\nrefs: #1126\nprompt: land it\n",
+            encoding="utf-8",
+        )
+
+        prompt = build_daemon_prompt(
+            "task",
+            "evt-1",
+            "/tmp/r.md",
+            tmp_path,
+            communication_snapshot={
+                "current_thread": "telegram:555:",
+                "forge": {
+                    "worktrees": [],
+                    "pr_state": {
+                        "standalone": [
+                            {
+                                "number": 1126,
+                                "state": "MERGED",
+                                "merged_at": "2020-01-01T00:00:00Z",
+                            },
+                        ],
+                    },
+                },
+            },
+        )
+
+        assert "## Ship the migration    ⚑ refs #1126 merged" in prompt
 
 
 # ── CS6 — runner policy injection ─────────────────────────────────────
