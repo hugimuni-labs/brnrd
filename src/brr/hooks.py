@@ -115,6 +115,21 @@ STOP_NO_REPLY_STREAK_KEY = "stop_no_reply_streak"
 # the one that never got a reply is not the same unanswered wait
 # continuing) rather than keep climbing across unrelated events.
 STOP_NO_REPLY_EVENT_KEY = "stop_no_reply_event"
+# #1296 belt-and-suspenders: once the escalated (post-threshold, verdict-
+# form) "no reply yet" line has rendered once for the waking event above, it
+# has said everything it has to say — repeating the same verdict on every
+# later Stop firing while the streak keeps climbing is exactly the
+# unbounded renag #1296 measured live (7 firings, one waking event, a
+# schedule-thread run whose `spawn_parent_run_id` outlived its own
+# dispatching parent). This latch is deliberately independent of
+# `_stop_is_gate_less`/`current_event_replyable`'s own correctness — the
+# root cause is fixed at the source in daemon.py
+# (`_spawn_parent_still_collecting`), but a streak that has already reached
+# the escalation threshold once is, by construction, never going to un-ring
+# that bell, so capping it here costs nothing even when the upstream read is
+# right, and is the net under the floor for when some future bug makes it
+# wrong again. Resets alongside the streak at a new waking event.
+STOP_NO_REPLY_ESCALATED_KEY = "stop_no_reply_escalated"
 # The blank-mood boundary nudge (greenlit 2026-08-03, evts w67h/6i1w/2wnq):
 # `card stale`, one tier softer. Unlike `card stale` it never keeps the bar
 # alive (ambient — see `_render_bar`'s `mood_prompt`) and unlike a repeating
@@ -460,12 +475,29 @@ def _bump_stop_no_reply_streak(state: dict[str, Any], portal: dict[str, Any]) ->
     if state.get(STOP_NO_REPLY_EVENT_KEY) != current_event_id:
         state[STOP_NO_REPLY_STREAK_KEY] = 0
         state[STOP_NO_REPLY_EVENT_KEY] = current_event_id
+        # A fresh waking event gets its own first escalated rendering too —
+        # see :data:`STOP_NO_REPLY_ESCALATED_KEY`.
+        state[STOP_NO_REPLY_ESCALATED_KEY] = False
     streak = (
         int(state.get(STOP_NO_REPLY_STREAK_KEY) or 0) + 1
         if _stop_no_reply_due(portal) else 0
     )
     state[STOP_NO_REPLY_STREAK_KEY] = streak
     return streak
+
+
+def _stop_no_reply_escalation_capped(state: dict[str, Any], no_reply_streak: int) -> bool:
+    """True when the escalated "no reply yet" verdict has already rendered once.
+
+    #1296 belt-and-suspenders — read :data:`STOP_NO_REPLY_ESCALATED_KEY`'s
+    module comment for the why. Pure read: the caller latches the state
+    write itself, on the render, the same division of labour
+    ``GATELESS_ROUTING_KEY``/``note_routing`` already use just above this
+    one — ``format_delta`` stays a pure function of its arguments.
+    """
+    if no_reply_streak < _STOP_NO_REPLY_ESCALATE_THRESHOLD:
+        return False
+    return bool(state.get(STOP_NO_REPLY_ESCALATED_KEY))
 
 
 def _write_hook_state(ctx: HookContext, state: dict[str, Any]) -> None:
@@ -2679,6 +2711,7 @@ def format_delta(
     bolt_edge: bool = False,
     repeat_streaks: dict[str, int] | None = None,
     no_reply_streak: int = 0,
+    no_reply_capped: bool = False,
 ) -> str | None:
     """Render a compact context delta from the live portal-state payload.
 
@@ -3086,22 +3119,33 @@ def format_delta(
             # not snapshot state.
             prior = max(0, no_reply_streak - 1)
             if no_reply_streak >= _STOP_NO_REPLY_ESCALATE_THRESHOLD:
-                # Past the threshold the state-description sentence itself
-                # is now a false promise (it already failed to resolve
-                # ``prior`` times), so this reads as a verdict instead —
-                # pointing at the one delivery path confirmed to work from
-                # inside this same loop: an outbox ``gate:`` file (#1142's
-                # own "workaround that worked" section).
-                lines.append(
-                    f"- delivery: stop boundary #{no_reply_streak} · {prior} "
-                    f"prior terminal message{'s' if prior != 1 else ''} "
-                    "consumed, current=0 — recurring, not pre-dispatch: this "
-                    "promise has now failed to resolve "
-                    f"{prior} time{'s' if prior != 1 else ''} in a row. "
-                    "Probable delivery-path problem — report through "
-                    "`gate: <name>` instead; an outbox gate delivers mid-run "
-                    "and does not depend on this line ever clearing."
-                )
+                # #1296 belt-and-suspenders: the verdict below is a one-time
+                # statement — "this is a routing problem, use gate:" — not a
+                # progress ticker. Once said, saying it again on every later
+                # Stop while the streak climbs (7 times, live, on a run whose
+                # `current_event_replyable` was wrong for reasons upstream of
+                # this file — see `daemon._spawn_parent_still_collecting`) is
+                # pure noise repeating a verdict already delivered. Capped
+                # independently of whatever `gate_less` computed, so a future
+                # bug in that upstream read still cannot renag forever.
+                if not no_reply_capped:
+                    # Past the threshold the state-description sentence
+                    # itself is now a false promise (it already failed to
+                    # resolve ``prior`` times), so this reads as a verdict
+                    # instead — pointing at the one delivery path confirmed
+                    # to work from inside this same loop: an outbox
+                    # ``gate:`` file (#1142's own "workaround that worked"
+                    # section).
+                    lines.append(
+                        f"- delivery: stop boundary #{no_reply_streak} · {prior} "
+                        f"prior terminal message{'s' if prior != 1 else ''} "
+                        "consumed, current=0 — recurring, not pre-dispatch: this "
+                        "promise has now failed to resolve "
+                        f"{prior} time{'s' if prior != 1 else ''} in a row. "
+                        "Probable delivery-path problem — report through "
+                        "`gate: <name>` instead; an outbox gate delivers mid-run "
+                        "and does not depend on this line ever clearing."
+                    )
             else:
                 lines.append(
                     f"- delivery: stop boundary #{no_reply_streak} · {prior} "
@@ -4335,6 +4379,10 @@ def compute_neutral(
         # the prior one, and the counter's job is to say how many times the
         # *firing* has happened, not how many times it rendered.
         no_reply_streak = _bump_stop_no_reply_streak(state, portal)
+        # #1296: same "decide here, latch on the render" division of labour
+        # as ``note_routing``/``GATELESS_ROUTING_KEY`` just above — computed
+        # ahead of the call so ``format_delta`` stays a pure read of it.
+        no_reply_capped = _stop_no_reply_escalation_capped(state, no_reply_streak)
         if stop_token != state.get("stop_last_token"):
             inject = format_delta(
                 portal, stop=True, run_body=_read_card_body(ctx), mood=mood,
@@ -4342,6 +4390,7 @@ def compute_neutral(
                 event_seen=event_decisions, inbox_pointer=inbox_pointer,
                 plan=plan, route=route,
                 no_reply_streak=no_reply_streak,
+                no_reply_capped=no_reply_capped,
             )
             # Latch on the render, not on the decision: a Stop whose token
             # did not move injects nothing, and burning the one statement on
@@ -4352,6 +4401,12 @@ def compute_neutral(
             # was said, whichever arm said it.
             if gate_less_run:
                 state[GATELESS_ROUTING_KEY] = True
+            # Same discipline for the escalated verdict (#1296): a render at
+            # or past threshold has now said it once, whether or not this
+            # particular firing was already capped — the write is idempotent
+            # and only meaningful the first time it flips false → true.
+            if no_reply_streak >= _STOP_NO_REPLY_ESCALATE_THRESHOLD:
+                state[STOP_NO_REPLY_ESCALATED_KEY] = True
         state["stop_last_token"] = stop_token
         state["last_token"] = stop_token
     else:
