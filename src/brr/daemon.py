@@ -5776,11 +5776,16 @@ def _write_live_portal_state(
             time.monotonic() - card_written_monotonic
             if isinstance(card_written_monotonic, (int, float)) else None
         )
-        scm_facet = _scm_facet(work_dir, task.meta.get("branch_name"))
         live_branch, live_seed = (
             relics.collection_scope(task.meta, Path(work_dir))
             if work_dir else (None, None)
         )
+        # collection_scope is rename-aware (#1293): once a mid-run
+        # ``git branch -m`` moves the worktree off the prepare-time
+        # placeholder, this is the live name, not the stale stamp — so the
+        # SCM facet's branch label tracks the same ground truth the produce
+        # facet below derives commits against, instead of disagreeing with it.
+        scm_facet = _scm_facet(work_dir, live_branch or task.meta.get("branch_name"))
         # A host run's scope is the shared checkout (relics.collection_scope's
         # host_start_oid fallback); gate it by run identity so the live
         # facet never flashes a concurrent sibling's commits as this run's
