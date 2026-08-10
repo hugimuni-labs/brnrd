@@ -992,6 +992,13 @@ def main(argv: list[str] | None = None) -> None:
         # Every frame between here and there is machinery; the message is
         # the whole product.
         raise SystemExit(f"[brnrd] {exc}") from None
+    except gitops.NotAGitRepository as exc:
+        # The sibling of the above: a fresh user runs `brnrd account connect`
+        # from a folder that is not a git checkout and, before this, got the
+        # full subprocess/RuntimeError traceback as the product's first
+        # impression. The message names the cwd and both ways out; a front
+        # door owes a plain sentence, not a stack.
+        raise SystemExit(f"[brnrd] {exc}") from None
 
 
 def _repo_root() -> Path:
