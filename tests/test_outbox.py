@@ -1955,6 +1955,77 @@ def test_terminal_route_names_what_carried_the_stream():
         "schedule", duplicate=True, gate_fallback=True) == "duplicate"
 
 
+# ── #1296: a stale spawn_parent_run_id is not a live dispatch edge ──────
+#
+# Root cause, reconstructed from run-260810-0728-x41g's own boundary
+# evidence: a schedule-thread continuation woken by a ``spawn_completed``
+# event inherits *that event's* ``spawn_parent_run_id`` field via
+# ``Run.from_event``'s blanket meta copy — stamped there by
+# ``_notify_spawn_parent`` to say who dispatched the strand that just
+# completed, not who dispatched this continuation. The two only coincide
+# while the schedule thread's own prior run is still alive; once it has
+# finalized, ``_terminal_reply_lands``/``_terminal_route`` used to trust the
+# id on presence alone and call it a landing dispatch edge forever.
+
+def _save_run(runs_dir, run_id, status):
+    Run(id=run_id, event_id=f"evt-{run_id}", body="", status=status).save(runs_dir)
+
+
+def test_spawn_parent_still_collecting_checks_liveness(tmp_path):
+    _save_run(tmp_path, "run-parent-live", "running")
+    _save_run(tmp_path, "run-parent-dead", "done")
+
+    # Unresolvable ⇒ unknown, not impossible — same posture as an absent
+    # source in `_terminal_reply_lands`.
+    assert daemon._spawn_parent_still_collecting("", tmp_path) is True
+    assert daemon._spawn_parent_still_collecting("run-parent-live", None) is True
+    assert daemon._spawn_parent_still_collecting("run-ghost", tmp_path) is True
+
+    # Resolvable and still running/pending ⇒ a real dispatch edge.
+    assert daemon._spawn_parent_still_collecting("run-parent-live", tmp_path) is True
+
+    # Resolvable and already terminal (#1296's actual shape) ⇒ nobody is
+    # left to collect anything.
+    assert daemon._spawn_parent_still_collecting("run-parent-dead", tmp_path) is False
+
+
+def test_terminal_reply_lands_checks_spawn_parent_liveness(tmp_path):
+    _save_run(tmp_path, "run-parent-dead", "done")
+
+    # Back-compat: no runs_dir given behaves exactly like before this fix —
+    # presence alone lands it. Every pre-#1296 call site that doesn't pass
+    # runs_dir (and every existing test pinning this predicate) must see no
+    # change here.
+    assert daemon._terminal_reply_lands(
+        "spawn_completed", spawn_parent_run_id="run-parent-dead") is True
+
+    # With runs_dir, a dead parent is not a dispatch edge, and
+    # spawn_completed is itself owned by no gate — the reply has nowhere
+    # left to land.
+    assert daemon._terminal_reply_lands(
+        "spawn_completed", spawn_parent_run_id="run-parent-dead",
+        runs_dir=tmp_path,
+    ) is False
+
+
+def test_terminal_route_checks_spawn_parent_liveness(tmp_path):
+    _save_run(tmp_path, "run-parent-dead", "done")
+    route = daemon._terminal_route
+
+    # Back-compat, same reasoning as the predicate above.
+    assert route(
+        "spawn_completed", spawn_parent_run_id="run-parent-dead") == "dispatch-edge"
+
+    # A dead parent is not a dispatch edge once liveness is checked; falls
+    # through to `unknown` here since `undeliverable`/`gate_fallback` are the
+    # caller's job to compute (see the real call sites in daemon.py, which
+    # now derive them from the fixed `_terminal_reply_lands`).
+    assert route(
+        "spawn_completed", spawn_parent_run_id="run-parent-dead",
+        runs_dir=tmp_path,
+    ) == "unknown"
+
+
 def test_resolve_notify_gate_explicit_key_wins(tmp_path, monkeypatch):
     # An explicit key resolves outright — no need to check whether it is
     # also the *only* configured gate.
