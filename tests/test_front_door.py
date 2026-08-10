@@ -1,0 +1,240 @@
+"""Tests for bare ``brnrd`` — the narrated front door.
+
+What these pin, in one sentence each: the empty argv reaches the door and
+*only* the empty argv does; the door announces exactly the command it then
+runs; it never touches ``input()`` or a mutating verb without a terminal;
+and it never redoes a step that is already standing.
+"""
+
+from __future__ import annotations
+
+import builtins
+from pathlib import Path
+
+import pytest
+
+from brr import front_door
+from brr.cli import main
+
+from _helpers import init_git_repo
+
+
+@pytest.fixture
+def repo(tmp_path, monkeypatch) -> Path:
+    root = tmp_path / "proj"
+    init_git_repo(root)
+    monkeypatch.chdir(root)
+    return root
+
+
+@pytest.fixture(autouse=True)
+def _no_stray_input(monkeypatch):
+    """A prompt nobody asked for is the failure this suite exists to catch.
+
+    Every test that *wants* a prompt replaces this; the rest inherit a
+    hard error, so a step that slipped past its TTY gate fails loudly here
+    instead of hanging a CI run on a blocking read.
+    """
+    def _refuse(*_args, **_kwargs):
+        raise AssertionError("the front door asked a question it should not have")
+
+    monkeypatch.setattr(builtins, "input", _refuse)
+
+
+def _answering(text: str):
+    """An ``input`` stub that echoes its prompt, the way a terminal does.
+
+    ``input(prompt)`` writes the prompt to stdout itself, so a stub that
+    only returns an answer makes the question invisible to ``capsys`` —
+    and a test asserting on question text would then be asserting on
+    nothing. This keeps the visible half visible.
+    """
+    def _input(prompt: str = "") -> str:
+        print(prompt, end="")
+        return text
+
+    return _input
+
+
+def _all_configured(monkeypatch, *, connected=True, doors=("telegram",)):
+    """Report the machine as set up, without building real gate state.
+
+    These are the two predicates the door reads; faking the predicates
+    keeps the test about orchestration rather than about each gate's
+    on-disk layout, which its own suite already owns.
+    """
+    from brr.gates import cloud
+    from brr.gates import runtime as gate_runtime
+
+    monkeypatch.setattr(cloud, "is_configured", lambda _brr_dir: connected)
+    monkeypatch.setattr(gate_runtime, "configured_gates", lambda _brr_dir: list(doors))
+
+
+# ── Dispatch ────────────────────────────────────────────────────────
+
+
+def test_bare_argv_opens_the_front_door(monkeypatch):
+    calls = []
+    monkeypatch.setattr(front_door, "run", lambda: calls.append(True) or 7)
+    assert main([]) == 7
+    assert calls == [True]
+
+
+def test_a_verb_still_takes_the_ordinary_cli_path(monkeypatch):
+    """`brnrd <verb>` must not be re-routed — the door is the empty argv only."""
+    monkeypatch.setattr(
+        front_door, "run",
+        lambda: pytest.fail("a named verb reached the front door"),
+    )
+    with pytest.raises(SystemExit) as exc:
+        main(["--version"])
+    assert exc.value.code == 0
+
+
+def test_a_mistyped_verb_is_still_an_argparse_error(monkeypatch):
+    """The regression this guards: making the door an argparse *default*
+    would turn every typo into a guided setup instead of an error."""
+    monkeypatch.setattr(
+        front_door, "run",
+        lambda: pytest.fail("a mistyped verb reached the front door"),
+    )
+    with pytest.raises(SystemExit) as exc:
+        main(["conect"])
+    assert exc.value.code == 2
+
+
+# ── The narration is not a lie ──────────────────────────────────────
+
+
+def test_the_announced_command_is_the_command_that_runs(repo, capsys, monkeypatch):
+    """The one promise the whole door rests on.
+
+    Not "a command ran" — *the announced one* ran, with the options that
+    argv parses to. Read the announcement back off stdout, re-parse it, and
+    require the namespace that reached the command to be that namespace;
+    an announcement that drifts from its own execution (a silently added
+    flag, a different verb) fails here and nowhere else.
+    """
+    from brr import cli
+
+    ran = []
+    monkeypatch.setattr(cli, "cmd_gate_list", lambda args: ran.append(args) or 0)
+
+    front_door._invoke(["gate", "list"])
+
+    line = capsys.readouterr().out.strip()
+    assert line.startswith("$ brnrd "), line
+    announced = line.removeprefix("$ brnrd ").split()
+    assert announced == ["gate", "list"]
+
+    assert len(ran) == 1, "the announced argv did not reach its own command"
+    executed = {k: v for k, v in vars(ran[0]).items() if k != "passthrough"}
+    assert executed == vars(cli.build_parser().parse_args(announced))
+
+
+# ── No terminal, no blocking, no mutation ───────────────────────────
+
+
+def test_no_terminal_runs_nothing_and_names_every_command(repo, capsys, monkeypatch):
+    monkeypatch.setattr(front_door, "interactive", lambda: False)
+    monkeypatch.setattr(
+        front_door, "_invoke",
+        lambda argv: pytest.fail(f"ran {argv} with no terminal behind it"),
+    )
+    _all_configured(monkeypatch, connected=False, doors=())
+
+    code = front_door.run()
+
+    out = capsys.readouterr().out
+    assert "not a terminal — reading state only, running nothing" in out
+    assert "$ brnrd account connect" in out
+    assert "$ brnrd gate setup telegram" in out
+    assert code == 1
+
+
+# ── Idempotence ─────────────────────────────────────────────────────
+
+
+def test_a_finished_repo_is_a_receipt_not_a_setup(repo, capsys, monkeypatch):
+    (repo / "AGENTS.md").write_text("# contract\n", encoding="utf-8")
+    monkeypatch.setattr(front_door, "interactive", lambda: True)
+    monkeypatch.setattr(
+        front_door, "_invoke",
+        lambda argv: pytest.fail(f"re-ran {argv} on an already-set-up repo"),
+    )
+    _all_configured(monkeypatch)
+
+    code = front_door.run()
+
+    out = capsys.readouterr().out
+    assert "already connected" in out
+    assert "already written" in out
+    assert "all set" in out
+    assert code == 0
+
+
+# ── The closing offer ───────────────────────────────────────────────
+
+
+def test_the_setup_offer_queues_the_first_run(repo, capsys, monkeypatch):
+    from brr import connect_greeting
+
+    monkeypatch.setattr(front_door, "interactive", lambda: True)
+    monkeypatch.setattr(builtins, "input", _answering("y"))
+    _all_configured(monkeypatch)
+
+    queued = []
+
+    def _queue(repo_root, brr_dir):
+        queued.append((repo_root, brr_dir))
+        return connect_greeting.GreetingOutcome(
+            queued=True, event_id="evt-test", door="telegram",
+        )
+
+    monkeypatch.setattr(connect_greeting, "queue_greeting", _queue)
+
+    code = front_door.run()
+
+    out = capsys.readouterr().out
+    assert "run setup now?" in out
+    assert "queued over telegram (evt-test)" in out
+    assert len(queued) == 1
+    assert code == 0
+
+
+def test_declining_the_offer_changes_nothing(repo, capsys, monkeypatch):
+    from brr import connect_greeting
+
+    monkeypatch.setattr(front_door, "interactive", lambda: True)
+    monkeypatch.setattr(builtins, "input", _answering("n"))
+    monkeypatch.setattr(
+        connect_greeting, "queue_greeting",
+        lambda *_a, **_k: pytest.fail("declining the offer still queued a run"),
+    )
+    _all_configured(monkeypatch)
+
+    code = front_door.run()
+
+    assert code == 1
+    assert "skipped" in capsys.readouterr().out
+
+
+def test_an_interrupted_question_declines_out_loud(repo, capsys, monkeypatch):
+    """^C at a prompt is an answer, not an abandoned terminal — the
+    luxury-car bar `decision-retire-init.md` holds this funnel to."""
+    def _interrupt(_prompt=""):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(front_door, "interactive", lambda: True)
+    monkeypatch.setattr(builtins, "input", _interrupt)
+    monkeypatch.setattr(
+        front_door, "_invoke",
+        lambda argv: pytest.fail(f"ran {argv} after an interrupted question"),
+    )
+    _all_configured(monkeypatch, connected=False, doors=())
+
+    code = front_door.run()
+
+    out = capsys.readouterr().out
+    assert "nothing was changed" in out
+    assert code == 1
