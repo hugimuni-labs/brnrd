@@ -595,6 +595,138 @@ def test_capture_knowledge_derives_relics_from_commit_window_and_dedupes(
     ]
 
 
+def _persist_run_manifest(runs_dir, run_id, status, meta=None):
+    Run(
+        id=run_id, event_id=f"evt-{run_id}", body="work",
+        status=status, meta=dict(meta or {}),
+    ).save(runs_dir)
+
+
+def test_outermost_live_ancestor_run_id_walks_past_a_finalized_middle_run(
+    tmp_path,
+):
+    """#1276: a chain more than one level deep must not stop at the nearest
+    ancestor — only an ancestor still open when this run finalizes is a
+    safe credit target, and the topmost one is the last of them to close."""
+    runs_dir = tmp_path / ".brr" / "runs"
+    _persist_run_manifest(runs_dir, "run-grandparent", "running")
+    _persist_run_manifest(
+        runs_dir, "run-parent", "done",
+        {"spawn_parent_run_id": "run-grandparent"},
+    )
+    child = Run(
+        id="run-child", event_id="evt-child", body="work",
+        meta={"spawn_parent_run_id": "run-parent"},
+    )
+
+    assert (
+        daemon._outermost_live_ancestor_run_id(child, runs_dir)
+        == "run-grandparent"
+    )
+
+
+def test_outermost_live_ancestor_run_id_none_when_every_ancestor_finalized(
+    tmp_path,
+):
+    runs_dir = tmp_path / ".brr" / "runs"
+    _persist_run_manifest(runs_dir, "run-parent", "done")
+    child = Run(
+        id="run-child", event_id="evt-child", body="work",
+        meta={"spawn_parent_run_id": "run-parent"},
+    )
+
+    assert daemon._outermost_live_ancestor_run_id(child, runs_dir) is None
+    # No parent at all is the same answer, not an error.
+    orphan = Run(id="run-orphan", event_id="evt-orphan", body="work")
+    assert daemon._outermost_live_ancestor_run_id(orphan, runs_dir) is None
+    # An unresolvable parent id (a hand-edited or corrupted chain) degrades
+    # the same way — never an exception.
+    dangling = Run(
+        id="run-dangling", event_id="evt-dangling", body="work",
+        meta={"spawn_parent_run_id": "run-does-not-exist"},
+    )
+    assert daemon._outermost_live_ancestor_run_id(dangling, runs_dir) is None
+
+
+def test_capture_knowledge_defers_dirty_sweep_credit_to_a_live_ancestor(
+    tmp_path, monkeypatch,
+):
+    """#1276: a strand's own finalization sweep is what actually commits a
+    still-running parent's uncommitted kb pages (the dirty scan is
+    repo-scoped, not run-scoped). Before the fix, the sweep stamped and
+    credited those pages to the strand; the parent's own later window read
+    then found nothing, filtered by its own identity trailer. The sweep
+    must run under the live ancestor's id instead, and this run must not
+    self-credit what it swept under that borrowed identity."""
+    runs_dir = tmp_path / ".brr" / "runs"
+    _persist_run_manifest(runs_dir, "run-parent", "running")
+    child = Run(
+        id="run-child", event_id="evt-child", body="child work",
+        meta={"spawn_parent_run_id": "run-parent", "kb_start_oid": "a" * 40},
+    )
+    outbox = tmp_path / ".brr" / "outbox" / child.event_id
+    outbox.mkdir(parents=True)
+
+    capture_calls: list[str | None] = []
+
+    def fake_capture(*_args, captured_pages, run_id=None, **_kwargs):
+        capture_calls.append(run_id)
+        # A dirty scan that is repo-scoped, not run-scoped: this is the
+        # parent's uncommitted page, swept because it happened to be dirty.
+        captured_pages.append("parent-authored.md")
+        return True
+
+    monkeypatch.setattr(daemon.knowledge, "capture", fake_capture)
+    monkeypatch.setattr(
+        daemon.knowledge, "committed_pages_in_window",
+        lambda *_a, **_k: [],
+    )
+
+    daemon._capture_knowledge(tmp_path, {}, child, outbox_dir=outbox)
+
+    # The sweep committed under the *parent's* identity, not the strand's.
+    assert capture_calls == ["run-parent"]
+    # And the strand claims none of what it swept — nothing to defer twice.
+    assert daemon.relics.read_reported(outbox) == []
+
+
+def test_capture_knowledge_still_credits_a_run_with_no_live_ancestor(
+    tmp_path, monkeypatch,
+):
+    """The common case (no parent, or a parent that already finalized) is
+    unchanged by #1276's fix: this run sweeps and credits under its own
+    identity exactly as before."""
+    task = Run(
+        id="run-solo", event_id="evt-solo", body="work",
+        meta={"kb_start_oid": "a" * 40},
+    )
+    outbox = tmp_path / ".brr" / "outbox" / task.event_id
+    outbox.mkdir(parents=True)
+
+    capture_calls: list[str | None] = []
+
+    def fake_capture(*_args, captured_pages, run_id=None, **_kwargs):
+        capture_calls.append(run_id)
+        captured_pages.append("own.md")
+        return True
+
+    monkeypatch.setattr(daemon.knowledge, "capture", fake_capture)
+    monkeypatch.setattr(
+        daemon.knowledge, "committed_pages_in_window",
+        lambda *_a, **_k: [],
+    )
+    monkeypatch.setattr(
+        daemon.knowledge, "kb_page_url", lambda *_a, **_k: None,
+    )
+
+    daemon._capture_knowledge(tmp_path, {}, task, outbox_dir=outbox)
+
+    assert capture_calls == ["run-solo"]
+    assert daemon.relics.read_reported(outbox) == [
+        {"kind": "kb", "path": "own.md"},
+    ]
+
+
 def test_capture_knowledge_stopped_run_suppresses_shared_window_sweep(
     tmp_path, monkeypatch,
 ):
