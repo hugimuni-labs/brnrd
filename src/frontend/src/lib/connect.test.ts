@@ -99,7 +99,13 @@ test('approveConnect surfaces backend rejections without throwing', async () => 
 
 test('approveConnect raises the auth error on 401', async () => {
 	await assert.rejects(
-		() => approveConnect('BR-123', 'repo_1', 'proof-abc', fakeFetch(401, { detail: 'unauthenticated' })),
+		() =>
+			approveConnect(
+				'BR-123',
+				'repo_1',
+				'proof-abc',
+				fakeFetch(401, { detail: 'unauthenticated' })
+			),
 		ConnectAuthError
 	);
 });
@@ -187,10 +193,7 @@ test('the login detour carries the proof through, encoded as one value', () => {
 	// A fragment dropped at the login hop lands the reader back on this page
 	// with nothing to present — so it travels inside `next=`, percent-encoded,
 	// and the backend's `_safe_next` hands it back unchanged.
-	assert.equal(
-		loginUrlForConnect('BR-123', '#abc123'),
-		'/login?next=%2Fconnect%2FBR-123%23abc123'
-	);
+	assert.equal(loginUrlForConnect('BR-123', '#abc123'), '/login?next=%2Fconnect%2FBR-123%23abc123');
 	assert.equal(loginUrlForConnect('BR-123', ''), '/login?next=%2Fconnect%2FBR-123');
 	assert.equal(connectNextUrl('BR-123', '#abc123'), '/connect/BR-123#abc123');
 });
