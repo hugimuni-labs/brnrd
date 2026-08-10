@@ -56,16 +56,28 @@ def _answering(text: str):
     return _input
 
 
-def _all_configured(monkeypatch, *, connected=True, doors=("telegram",)):
+def _all_configured(monkeypatch, *, connected=True, doors=("telegram",), runner_found=True):
     """Report the machine as set up, without building real gate state.
 
-    These are the two predicates the door reads; faking the predicates
-    keeps the test about orchestration rather than about each gate's
-    on-disk layout, which its own suite already owns.
+    Fakes the three predicates the door reads for a machine's standing —
+    a runner on PATH, a connected account, a configured door — so the test
+    stays about orchestration rather than each gate's on-disk layout, which
+    its own suite already owns.
+
+    The runner predicate is mocked *deliberately*, not incidentally: it
+    reads the real PATH (``runner.detect_all_runners``), so a suite that
+    left it live passes on a dev box that happens to have ``claude`` /
+    ``codex`` installed and fails on CI, which has neither — the exact
+    environment-dependent green that let this door merge-red the first time.
     """
+    from brr import runner
     from brr.gates import cloud
     from brr.gates import runtime as gate_runtime
 
+    monkeypatch.setattr(
+        runner, "detect_all_runners",
+        lambda _repo_root: ["claude"] if runner_found else [],
+    )
     monkeypatch.setattr(cloud, "is_configured", lambda _brr_dir: connected)
     monkeypatch.setattr(gate_runtime, "configured_gates", lambda _brr_dir: list(doors))
 
