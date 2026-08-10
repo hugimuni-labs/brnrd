@@ -316,7 +316,11 @@ class BootContinuity:
     So this carries the *world's* readout instead, measured off git, the run
     directory and the local forge cache — never off the resident's own prose:
 
-    - :attr:`shipped` — PRs that merged since the last wake
+    - :attr:`shipped` — PRs that merged since the last wake, onto the repo's
+      default branch
+    - :attr:`stacked` — PRs that merged since the last wake onto some *other*
+      branch (#1140) — a squash landed, but ``shipped`` is not the honest
+      word for it: the child branch, not ``main``, carries the change
     - :attr:`dominion_commits` — memory the last wake actually committed
     - :attr:`drift` — where what the resident *said* it did and what the repo
       *shows* it did have come apart
@@ -335,6 +339,7 @@ class BootContinuity:
     last_age: str | None = None        # ``"2h ago"``
     mount: str = "✗ first wake"        # ``"✓"`` | ``"✗ first wake"`` | ``"✗ unreachable"``
     shipped: tuple[str, ...] = ()      # ``("#386", "#387")``
+    stacked: tuple[str, ...] = ()      # ``("#1139 (→ brr/the-child-…)",)``
     dominion_commits: int = 0
     drift: tuple[str, ...] = ()
 
@@ -564,6 +569,8 @@ def _format_continuity(c: BootContinuity) -> list[str]:
     head = "continuity: ✓ " + " ".join(bits) if bits else "continuity: ✓"
     if c.shipped:
         head += " · shipped " + " ".join(c.shipped)
+    if c.stacked:
+        head += " · stacked " + " ".join(c.stacked)
     if c.dominion_commits:
         head += f" · dominion +{c.dominion_commits}"
     lines = [head]

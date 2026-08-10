@@ -2297,11 +2297,19 @@ def _build_continuity_facet(
                 if isinstance(rows, list):
                     prs = rows
 
+        # A fresh read off repo_root, not forge_facet.get("default_branch"):
+        # forge_facet can be None (home root — see the call site) even when
+        # repo_root itself has a perfectly readable default branch, and
+        # #1140's shipped-vs-stacked split should work on that path too, not
+        # only when a forge facet happened to get built for other reasons.
+        default_branch = gitops.default_branch(repo_root)
+
         return continuity_mod.build_continuity(
             brr_dir,
             current_run_id=run_id,
             dominion_repo=dominion_repo,
             prs=prs,
+            default_branch=default_branch,
         )
     except Exception as exc:  # pragma: no cover - defensive
         print(f"[brnrd] continuity facet unavailable: {exc}")
