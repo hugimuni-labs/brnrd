@@ -1291,9 +1291,9 @@ def test_dashboard_can_issue_telegram_pair_link():
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] is True
-    assert body["pairing_code"].startswith("TG-")
-    assert body["action_url"].startswith("https://t.me/brnrd_bot?start=TG-")
-    assert "Open https://t.me/brnrd_bot?start=TG-" in body["instructions"]
+    assert body["pairing_code"].startswith("PK-")
+    assert body["action_url"].startswith("https://t.me/brnrd_bot?start=PK-")
+    assert "Open https://t.me/brnrd_bot?start=PK-" in body["instructions"]
 
 
 def test_dashboard_disconnect_purges_repo_rows_and_last_repo_clears_surface():
