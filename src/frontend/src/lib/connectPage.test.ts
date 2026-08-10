@@ -35,7 +35,26 @@ test('the "connect a repository" dead-end link carries the pairing back as next=
 		'the link points at /repos with a next= query param, routed through resolve() for typed navigation'
 	);
 	ok(
-		/encodeURIComponent\(`\/connect\/\$\{code\}`\)/.test(block),
+		/encodeURIComponent\(connectNextUrl\(code, hash\)\)/.test(block),
 		'next= carries this exact pairing code back, not a bare /repos'
+	);
+});
+
+// A-1: the same round trip has to carry the *approval proof* home too. The
+// proof rides the URL fragment, and a detour that rebuilds the path from
+// `code` alone drops it — the reader returns to a live code they can no
+// longer approve. `connectNextUrl` is the one spelling of "this pairing,
+// with everything it needs", so the two detours off this page (sign-in and
+// connect-a-repo) both go through it.
+test('every detour off the approval page rebuilds the link through connectNextUrl', () => {
+	const src = source();
+	ok(/href=\{loginUrlForConnect\(code, hash\)\}/.test(src), 'the sign-in link carries the hash');
+	ok(
+		/encodeURIComponent\(connectNextUrl\(code, hash\)\)/.test(src),
+		'the connect-a-repo detour carries the hash'
+	);
+	ok(
+		!/`\/connect\/\$\{code\}`/.test(src),
+		'no hand-rolled /connect/<code> path that would silently drop the fragment'
 	);
 });

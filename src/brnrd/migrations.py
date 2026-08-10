@@ -247,6 +247,18 @@ def _migrate_pair_requests(conn: Connection) -> None:
     # NULL on existing/in-flight rows: they predate the column and fall back
     # to the old pick-from-a-list behaviour, same as always.
     conn.execute(text("ALTER TABLE pair_requests ADD COLUMN IF NOT EXISTS capabilities_json TEXT"))
+    # See models.PairRequest.approve_secret_hash — the initiator proof an
+    # approve must present. Backfilled as `''`, which `approve_core` reads
+    # as "unapprovable": rows in flight across the deploy fail closed and
+    # their humans re-run `brnrd account connect`. That is the intended
+    # outcome, not collateral — the alternative is a window in which the
+    # account-hijack still works, and the pair TTL is 600 seconds.
+    conn.execute(
+        text(
+            "ALTER TABLE pair_requests ADD COLUMN IF NOT EXISTS "
+            "approve_secret_hash VARCHAR(64) NOT NULL DEFAULT ''"
+        )
+    )
 
 
 def _migrate_terms_acceptances(conn: Connection) -> None:
