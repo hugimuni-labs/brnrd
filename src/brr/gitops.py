@@ -272,6 +272,22 @@ class RepoTreeUnusable(OSError):
     """
 
 
+class NotAGitRepository(RuntimeError):
+    """The current directory is not inside any git working tree.
+
+    **Why it subclasses ``RuntimeError`` and carries its own message.** The
+    raw failure it replaces *was* a bare ``RuntimeError`` — so every
+    existing ``except RuntimeError`` (the CLI's ``_maybe_*`` helpers,
+    ``adopt``'s repo check) that degrades this to "no brnrd here" keeps
+    matching it unchanged; only a *distinguishable type* is new, so a
+    front-door command can catch it and render a clean line instead of a
+    traceback (the #1108 pattern, extended to its sibling failure). The
+    message is composed at the raise site, not the catch site, so it is
+    correct no matter who catches it: it names the cwd and both real ways
+    out — ``git init`` here, or ``cd`` into an existing checkout.
+    """
+
+
 def diagnose_unusable_tree(named: Path, *, asked_from: Path) -> str:
     """Explain why git named *named* as a working tree that isn't there.
 
@@ -460,7 +476,11 @@ def ensure_git_repo() -> Path:
     try:
         result = _git(cwd, "rev-parse", "--show-toplevel")
     except subprocess.CalledProcessError as exc:
-        raise RuntimeError("Not a Git repository; run `git init` first.") from exc
+        raise NotAGitRepository(
+            f"{cwd} is not a git repository. brnrd works inside a git "
+            f"checkout — either run `git init` here to start one, or `cd` "
+            f"into an existing repository and try again."
+        ) from exc
     root = Path(result.stdout.strip())
     if not root.is_dir():
         raise RepoTreeUnusable(diagnose_unusable_tree(root, asked_from=cwd))
