@@ -1394,6 +1394,74 @@ def test_home_link_reports_actionable_error_with_no_traceback(monkeypatch, tmp_p
     assert "gh is not authenticated" in str(exc.value)
 
 
+def _scaffold_project_home(tmp_path, name="repo"):
+    """A just-scaffolded project home, matching account.py's own test helper."""
+    from brr import account
+
+    repo = tmp_path / name
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Project\n", encoding="utf-8")
+    (repo / ".brr" / "inbox").mkdir(parents=True)
+    (repo / ".brr" / "responses").mkdir(parents=True)
+    home = tmp_path / f"{name}-home"
+    account.resolve_context(repo, {"home.path": str(home)})
+    return home
+
+
+def test_home_sweep_orphans_lists_without_deleting_by_default(monkeypatch, tmp_path, capsys):
+    home = _scaffold_project_home(tmp_path)
+    monkeypatch.setattr("brr.account.list_project_homes", lambda: [home])
+
+    assert main(["home", "sweep-orphans"]) == 0
+
+    out = capsys.readouterr().out
+    assert str(home) in out
+    assert "orphan" in out
+    assert "dry run" in out
+    assert home.is_dir()  # nothing deleted
+
+
+def test_home_sweep_orphans_keeps_a_home_with_real_content(monkeypatch, tmp_path, capsys):
+    home = _scaffold_project_home(tmp_path)
+    (home / "runs" / "repo" / "run-x").mkdir(parents=True)
+    (home / "runs" / "repo" / "run-x" / "state.md").write_text("# state\n", encoding="utf-8")
+    monkeypatch.setattr("brr.account.list_project_homes", lambda: [home])
+
+    assert main(["home", "sweep-orphans"]) == 0
+
+    out = capsys.readouterr().out
+    assert "keep" in out
+    assert "0 default-scaffold" in out
+    assert home.is_dir()
+
+
+def test_home_sweep_orphans_delete_yes_removes_the_orphan(monkeypatch, tmp_path, capsys):
+    home = _scaffold_project_home(tmp_path)
+    monkeypatch.setattr("brr.account.list_project_homes", lambda: [home])
+
+    def _fail_confirm(*_a, **_kw):  # pragma: no cover
+        raise AssertionError("--yes must not prompt")
+
+    monkeypatch.setattr("brr.adopt._confirm", _fail_confirm)
+
+    assert main(["home", "sweep-orphans", "--delete", "--yes"]) == 0
+
+    out = capsys.readouterr().out
+    assert "deleted" in out
+    assert not home.parent.exists()
+
+
+def test_home_sweep_orphans_delete_without_yes_needs_a_tty(monkeypatch, tmp_path):
+    home = _scaffold_project_home(tmp_path)
+    monkeypatch.setattr("brr.account.list_project_homes", lambda: [home])
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    with pytest.raises(SystemExit) as exc:
+        main(["home", "sweep-orphans", "--delete"])
+    assert "--yes" in str(exc.value)
+    assert home.is_dir()  # refused, not deleted
+
+
 def test_review_prints_pr_title_and_body(tmp_path, capsys):
     pack = tmp_path / "pack.json"
     _write_review_pack(pack)
