@@ -99,6 +99,22 @@ def poll_secret() -> str:
     return secrets.token_urlsafe(24)
 
 
+def pair_approve_secret() -> str:
+    """Proof that an approve came from the daemon that *started* the pairing.
+
+    Deliberately not the poll secret. The poll secret is the daemon's own
+    credential — presenting it returns the minted daemon token — and this
+    value is designed to travel to a *browser*, in a URL the human pastes.
+    Two secrets, two blast radii: leaking this one costs the pairing, not
+    the token.
+
+    256-bit, unlike the ~20-bit human-typable ``pair_code``: this is the
+    value the approval decision now rests on, so it has to be the one that
+    is not enumerable.
+    """
+    return secrets.token_urlsafe(32)
+
+
 def pair_code() -> str:
     return "BR-" + "".join(secrets.choice(_PAIR_ALPHABET) for _ in range(4))
 

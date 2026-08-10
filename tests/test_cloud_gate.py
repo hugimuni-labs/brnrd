@@ -169,7 +169,7 @@ def _handshake(client, acc_headers, pid):
     pair = client.post("/v1/accounts/pair").json()
     client.post(
         f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": pid},
+        json={"repo_id": pid, "approve_secret": pair["approve_secret"]},
         headers=acc_headers,
     )
     paired = client.get(
@@ -486,7 +486,7 @@ def test_connect_registers_token_for_dashboard_publishes(tmp_path, monkeypatch):
             approved = True
             response = client.post(
                 f"/v1/accounts/pair/{pair['pair_code']}/approve",
-                json={"repo_id": repo_id},
+                json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]},
                 headers=account_headers,
             )
             assert response.status_code == 200

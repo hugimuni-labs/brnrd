@@ -434,6 +434,20 @@ class PairRequest(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     pair_code: Mapped[str] = mapped_column(String(16), unique=True, index=True)
     poll_secret_hash: Mapped[str] = mapped_column(String(64))
+    # Proof that the account approving this pairing is the one that
+    # *initiated* it. Minted beside the poll secret at `start_pair`,
+    # returned only to the connecting daemon, and carried to the browser in
+    # the approval URL's fragment — so the short, enumerable `pair_code` is
+    # no longer a bearer capability for approval. Hashed at rest, like the
+    # poll secret; `pairing.approve_core` is the only reader.
+    #
+    # `""` means "this row carries no proof" — a row written before this
+    # column existed. Approval is **refused** in that case rather than
+    # waved through: a pairing with no initiator proof is exactly the shape
+    # the account-hijack used, and the pair TTL is 600s, so the whole cost
+    # of failing closed is one re-run of `brnrd account connect` inside a
+    # single deploy window.
+    approve_secret_hash: Mapped[str] = mapped_column(String(64), default="", server_default="")
     status: Mapped[str] = mapped_column(String(16), default=STATUS_PENDING)
     account_id: Mapped[str | None] = mapped_column(nullable=True)
     repo_id: Mapped[str | None] = mapped_column(nullable=True)
