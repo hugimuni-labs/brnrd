@@ -181,13 +181,19 @@ class WorktreeEnv(HostEnv):
         # The resident's own `worktree`-env runs, and any host/no-strand
         # caller, keep the linked worktree unchanged.
         is_clone = _is_strand_meta(task.meta)
+        # The pinned oid, when the plan resolved one, so the commit this
+        # checkout sprouts from is *the same object* the finalize-time probe
+        # compares against (#1298). Resolving the name twice — once here,
+        # once at finalize — is what let a ref move underneath a run; and for
+        # a clone the name may not be resolvable on the far side at all.
+        base = branch_plan.seed_oid or branch_plan.seed_ref
         if is_clone:
             run_root, run_branch_name = worktree.create_clone(
-                repo_root, task.id, base_ref=branch_plan.seed_ref,
+                repo_root, task.id, base_ref=base,
             )
         else:
             run_root, run_branch_name = worktree.create(
-                repo_root, task.id, base_ref=branch_plan.seed_ref,
+                repo_root, task.id, base_ref=base,
             )
         # When the event named a target branch, switch the worktree HEAD
         # there before the agent starts so it commits on the right branch
@@ -391,6 +397,11 @@ class WorktreeEnv(HostEnv):
           ``status=ready``, publish the new branch. Worktree is torn
           down unless it has uncommitted leftovers; the unused
           ``brr/<run-id>`` placeholder is best-effort deleted.
+
+        And one non-case, kept distinct from all four: when neither the
+        pinned base oid nor the seed ref resolves inside this checkout, no
+        classification has been *made* — see the ``BaseUnresolvable`` arm
+        below (#1298).
         """
         plan = ctx.branch_plan
         if plan is None:
@@ -408,7 +419,30 @@ class WorktreeEnv(HostEnv):
                 keep_reason="detached HEAD",
             )
 
-        if not worktree.has_commits_beyond(worktree_path, plan.seed_ref):
+        try:
+            moved = worktree.has_commits_beyond(
+                worktree_path, plan.seed_ref, base_oid=plan.seed_oid,
+            )
+        except worktree.BaseUnresolvable as exc:
+            # #1298: the one outcome that must never be reached by *inference*
+            # is "nothing" — it publishes no branch, and for a clone the
+            # caller then deletes the only copy of whatever was committed.
+            # With no base to compare against, the honest state is "cannot
+            # tell", and the two errors are not symmetric: publishing a branch
+            # that turns out to equal its base costs a stale ref, while
+            # deleting a branch that turns out to carry work costs the work.
+            print(
+                f"[brnrd] finalize: base unresolvable in {worktree_path} "
+                f"({exc}); publishing {final_branch!r} and keeping the "
+                "checkout rather than assuming it is empty"
+            )
+            return _FinalizeOutcome(
+                status="ready",
+                publish_branch=final_branch,
+                keep_worktree=True,
+                keep_reason="seed base unresolvable — cannot prove it is empty",
+            )
+        if not moved:
             return _FinalizeOutcome(
                 status="nothing",
                 publish_branch=None,
