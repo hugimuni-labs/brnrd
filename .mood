@@ -1,0 +1,2 @@
+lock_
+fix in, full suite green under a clean venv, running the CI-shaped gate now before commit

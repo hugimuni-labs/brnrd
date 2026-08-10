@@ -14,8 +14,8 @@ from brr import gitops
 def _hermetic_git_env(tmp_path_factory, monkeypatch):
     """Pin git's ambient environment — machine-independence *and* containment.
 
-    Two jobs, and reading this fixture as only the first is what let #746
-    happen.
+    Three jobs, and reading this fixture as only the first is what let #746
+    happen, or #1264 after it.
 
     **Machine-independence.** CI runners have no git identity at all (``git
     commit`` fails, which surfaces downstream as a misleading "src refspec
@@ -39,15 +39,31 @@ def _hermetic_git_env(tmp_path_factory, monkeypatch):
     the maintainer's live repository, and separately a ``core.worktree``
     write repointed it for fifteen minutes while every command exited 0.
 
+    **Identity.** ``GIT_AUTHOR_*``/``GIT_COMMITTER_*`` resolve *before* any
+    ``-c user.name=``/``-c user.email=`` a call site passes, exactly the way
+    ``GIT_DIR``/``GIT_WORK_TREE`` outrank ``cwd=``/``-C`` above — same
+    precedence shape, different axis (who committed, not which tree).
+    ``daemon.py``'s worker env pins these four unconditionally for *every*
+    strand and resident run (#1135/#1251, so a run's own commits land
+    authored as the bot), and a strand running this very suite inherits them
+    the same way it inherits the discovery pair. Unscrubbed, that silently
+    breaks any fixture asserting on committer identity — a strand-run
+    ``test_derive_auto_squash_merge_requires_github_committer`` reds out
+    because its ``-c user.email=noreply@github.com`` loses to the inherited
+    bot email — for reasons that have nothing to do with the code under
+    test (#1264).
+
     So this fixture is a boundary, not a convenience: the suite's git may
-    only ever touch trees the suite itself built. Dropped here rather than
-    at each call site because the fixture is the one place it can be said
-    once. Names come from :data:`gitops.DISCOVERY_OVERRIDE_VARS` — the same
-    tuple ``gitops.explicit_repo_env`` and ``cli._drop_inherited_git_pin``
-    read, so there is one list of these two variables in the project and not
-    a third copy typed out here.
+    only ever touch trees the suite itself built, authored as whatever
+    identity the test itself set up. Dropped here rather than at each call
+    site because the fixture is the one place it can be said once. Names
+    come from :data:`gitops.DISCOVERY_OVERRIDE_VARS` (read by
+    ``gitops.explicit_repo_env`` and ``cli._drop_inherited_git_pin``) and
+    :data:`gitops.IDENTITY_OVERRIDE_VARS` (the same four names
+    ``gitops.bot_identity_env`` sets), so there is one list of each concern
+    in the project and not a third copy typed out here.
     """
-    for var in gitops.DISCOVERY_OVERRIDE_VARS:
+    for var in (*gitops.DISCOVERY_OVERRIDE_VARS, *gitops.IDENTITY_OVERRIDE_VARS):
         monkeypatch.delenv(var, raising=False)
     cfg = tmp_path_factory.getbasetemp() / "gitconfig-hermetic"
     if not cfg.exists():
