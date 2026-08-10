@@ -219,6 +219,36 @@ def test_declining_the_offer_changes_nothing(repo, capsys, monkeypatch):
     assert "skipped" in capsys.readouterr().out
 
 
+def test_an_unreadable_answer_skips_instead_of_guessing(repo, capsys, monkeypatch):
+    """Found in a live terminal, not in review: answering the *which door*
+    question with ``n`` — the vocabulary of the yes/no question above it —
+    used to fall back to the named default and open Telegram's token
+    interview. An answer we could not read is not consent to act."""
+    monkeypatch.setattr(front_door, "interactive", lambda: True)
+    monkeypatch.setattr(builtins, "input", _answering("n"))
+    monkeypatch.setattr(
+        front_door, "_invoke",
+        lambda argv: pytest.fail(f"ran {argv} on an answer it could not read"),
+    )
+    _all_configured(monkeypatch, connected=True, doors=())
+
+    code = front_door.run()
+
+    assert "skipping rather than guessing" in capsys.readouterr().out
+    assert code == 1
+
+
+def test_ci_is_never_treated_as_a_typist(monkeypatch):
+    """A tty is not proof of a human: CI runners that allocate one
+    (`docker run -t`, anything under `script`) would sit on a prompt with
+    no timeout until the harness killed them. Measured, then guarded."""
+    monkeypatch.setattr("sys.stdin", type("_TTY", (), {"isatty": lambda self: True})())
+    monkeypatch.delenv("CI", raising=False)
+    assert front_door.interactive() is True
+    monkeypatch.setenv("CI", "true")
+    assert front_door.interactive() is False
+
+
 def test_an_interrupted_question_declines_out_loud(repo, capsys, monkeypatch):
     """^C at a prompt is an answer, not an abandoned terminal — the
     luxury-car bar `decision-retire-init.md` holds this funnel to."""
