@@ -579,6 +579,46 @@ def test_cloud_gate_state_migrates_to_account_home(tmp_path):
     assert not legacy.exists()
 
 
+def test_connected_account_id_finds_a_split_shape_legacy_cloud_json(monkeypatch, tmp_path):
+    """The 2026-08-05 token split (`gates/cloud.py`'s `_TOKEN_FILENAME`)
+    moved the bearer token out of `cloud.json` into a gitignored sibling
+    file, and every writer of `cloud.json` since has stamped it without a
+    `token` key. `_connected_account_id`'s legacy fast path never followed —
+    it still read `state.get("token")` straight off the raw JSON, which is
+    now permanently ``None`` for any `cloud.json` a post-split writer has
+    touched. A repo whose legacy file is in the *new* split shape (account
+    info present, token beside it, never migrated into an account home —
+    the state a repo predating the account-scoped registry entirely would
+    be stuck in) must still resolve to its account, not silently fall back
+    to an unlinked project home."""
+    state_home = tmp_path / "state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    gates_dir = repo / ".brr" / "gates"
+    gates_dir.mkdir(parents=True)
+    (gates_dir / "cloud.json").write_text(
+        json.dumps(
+            {
+                "account_id": "acct-1",
+                "repo_id": "repo-old",
+                "brnrd_url": "https://brnrd.example",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (gates_dir / "cloud.token").write_text("bd_secret", encoding="utf-8")
+
+    # No registry anywhere names this repo — the only signal available is
+    # the legacy file, exactly like an install that predates the
+    # account-scoped repo registry and has never re-triggered a migration.
+    ctx = account.resolve_context(repo, {}, create=False)
+
+    assert ctx.kind == "account"
+    assert ctx.account_id == "acct-1"
+
+
 def test_run_state_blob_url_none_for_local_only_dominion(tmp_path):
     """A purely-local account dominion (no remote) yields no web URL, so callers
     fall back to a non-path label rather than leaking a host path."""

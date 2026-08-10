@@ -575,6 +575,14 @@ def _configured_repos(
     return repos
 
 
+def _has_content(path: Path) -> bool:
+    """Does *path* exist and hold a non-blank token? Never raises."""
+    try:
+        return bool(path.read_text(encoding="utf-8").strip())
+    except OSError:
+        return False
+
+
 def _connected_account_id(repo_root: Path) -> str | None:
     """Return the connected account id for a repo.
 
@@ -592,7 +600,18 @@ def _connected_account_id(repo_root: Path) -> str | None:
         state = json.loads(state_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         state = {}
-    if state.get("token") and state.get("brnrd_url"):
+    # The token itself lives beside this file, never inside it, since the
+    # 2026-08-05 split (`gates/cloud.py`'s `_TOKEN_FILENAME` / this module's
+    # own `CLOUD_TOKEN_FILENAME` — same basename, duplicated for the same
+    # reason as `SECURITY_CONFIG_FILENAME` above). A `cloud.json` written or
+    # re-saved by any code after that split therefore never carries a
+    # `token` key by construction, so `state.get("token")` alone is dead for
+    # every install the split has touched — this repo-local legacy fast path
+    # would silently and permanently stop firing (falling through to the
+    # registry lookup below, which is empty for any pre-registry install)
+    # without this second check.
+    has_token = bool(state.get("token")) or _has_content(state_path.parent / CLOUD_TOKEN_FILENAME)
+    if has_token and state.get("brnrd_url"):
         value = str(state.get("account_id") or state.get("account") or "").strip()
         if value:
             return value
