@@ -10709,6 +10709,52 @@ def test_drain_outbox_cut_produce_attested_with_commits_is_clean(tmp_path):
     assert daemon._read_outbox_notices(outbox) == []
 
 
+def test_drain_outbox_cut_produce_survives_mid_run_branch_rename(tmp_path):
+    """#1293: ``task.meta["branch_name"]`` is stamped once at prepare time,
+    before the run has done any work — always the placeholder
+    ``brr/<run-id>``. The receipts pin (``AGENTS.md`` / every dispatch spec)
+    requires renaming that placeholder to a descriptive slug *before
+    committing*, so a run that follows the pin correctly ends up with a
+    stale ``branch_name`` in ``task.meta`` and all its commits on a branch
+    that name no longer resolves to. The exact sequence r5ia drove by hand
+    this morning (run-260810-0201-r5ia, cited in #1293): checkout starts on
+    the placeholder, ``git branch -m`` to the descriptive slug mid-run, more
+    commits land after the rename. The bolt's produce check must still
+    derive all of it — before *and* after the rename — from the live
+    branch, not the abandoned stamp."""
+    repo_root = tmp_path / "repo"
+    init_git_repo(repo_root)
+    commit_files(repo_root, {"a.txt": "1"}, message="seed")
+    subprocess.run(
+        ["git", "checkout", "-b", "brr/run-xyz1"], cwd=repo_root, check=True,
+    )
+    commit_files(repo_root, {"b.txt": "2"}, message="before the rename")
+    subprocess.run(
+        ["git", "branch", "-m", "brr/a-descriptive-slug"],
+        cwd=repo_root, check=True,
+    )
+    commit_files(repo_root, {"c.txt": "3"}, message="after the rename")
+
+    # branch_name still names the placeholder — prepare-time stamp, never
+    # re-read after the rename the run performed on its own worktree.
+    meta = {"branch_name": "brr/run-xyz1", "seed_ref": "main"}
+
+    branch, seed = daemon.relics.collection_scope(meta, repo_root)
+    records = daemon.relics.collect(repo_root, branch=branch, seed_ref=seed, outbox_dir=None)
+    subjects = {r.get("subject") for r in records if r["kind"] == "commit"}
+    assert "before the rename" in subjects
+    assert "after the rename" in subjects
+
+    promoted, task, outbox, _inbox, _responses, _event_id = _drain_cut(
+        tmp_path, "---\ncut: true\nproduce: attested\n---\nDone.\n",
+        meta=meta,
+        repo_root=repo_root,
+    )
+
+    assert promoted == 1
+    assert daemon._read_outbox_notices(outbox) == []
+
+
 def test_drain_outbox_cut_owed_promise_with_no_carried_row_bounces(tmp_path):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"

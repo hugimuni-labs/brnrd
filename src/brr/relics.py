@@ -280,17 +280,35 @@ def collection_scope(
     commits that appeared during this run, regardless of what branch dance
     produced them. A detached HEAD yields no branch rather than the literal
     string ``HEAD``.
+
+    A worktree run's ``branch_name`` is stamped once, at prepare time,
+    before the run has done anything — it is always the placeholder
+    ``brr/<run-id>``. The receipts pin (``AGENTS.md`` / every dispatch
+    spec) requires renaming that placeholder to a descriptive slug *before
+    committing*, so the stamped name and the branch the worktree actually
+    ends up on routinely diverge mid-run — and every commit lands on the
+    live name, not the stamped one (#1293). So once a live checkout branch
+    is readable, it — not the prepare-time stamp — is what "the branch
+    this run is on" means; ``branch_name`` only backstops it when HEAD
+    can't be read (no worktree, detached HEAD, a git error). ``seed_ref``
+    is untouched either way: a rename doesn't move the fork point.
     """
     branch = str(meta.get("branch_name") or "") or None
     seed = str(meta.get("seed_ref") or "") or None
-    if branch is None and work_dir is not None:
+    current: str | None = None
+    if work_dir is not None:
         try:
-            current = gitops.current_branch(Path(work_dir))
+            probed = gitops.current_branch(Path(work_dir))
         except Exception:
-            current = None
-        if current and current != "HEAD":
+            probed = None
+        if probed and probed != "HEAD":
+            current = probed
+    if branch is None:
+        if current:
             branch = current
             seed = str(meta.get("host_start_oid") or "") or seed
+    elif current and current != branch:
+        branch = current
     return branch, seed
 
 
