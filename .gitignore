@@ -43,3 +43,9 @@ build/
 # Local scratch (screenshots, one-off playwright scripts) — never produce;
 # live-account views get the same no-commit handling as the session cookie.
 .tmp/
+
+# Run control files (.card/.mood/.name) belong in the run outbox dir,
+# never the repo tree — a strand committing its own card is scratch, not source.
+/.card
+/.mood
+/.name
