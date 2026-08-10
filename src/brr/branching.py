@@ -58,6 +58,21 @@ class PublishPlan:
     source: str
     host_context_branch: str | None
     expected_remote_oid: str | None = None
+    #: The commit *seed_ref* pointed at when this plan was resolved, read in
+    #: ``repo_root``. The child's checkout is the only place the "did this run
+    #: commit anything?" probe can run, and a ref **name** is not portable into
+    #: it: a strand's checkout is a ``git clone --shared`` (#746) whose local
+    #: heads are only the branch ``repo_root`` had checked out at clone time,
+    #: so the ordinary seed name ``main`` resolves to nothing there
+    #: (``refs/remotes/main`` is tried, ``refs/remotes/origin/main`` is not).
+    #: ``git rev-list --count main..HEAD`` then exits 128, and #1298 measured
+    #: what the callers did with that: read it as "no commits", publish
+    #: nothing, and ``rmtree`` the only copy of the work. An oid is portable —
+    #: the clone shares the object store — and it cannot move underneath the
+    #: run the way a branch name can. ``None`` only when the ref would not
+    #: resolve in ``repo_root`` either, which is a different (and louder)
+    #: problem.
+    seed_oid: str | None = None
 
     def meta_items(self) -> dict[str, str]:
         """Return non-empty run metadata fields for this plan."""
@@ -65,6 +80,8 @@ class PublishPlan:
             "seed_ref": self.seed_ref,
             "branch_source": self.source,
         }
+        if self.seed_oid:
+            out["seed_oid"] = self.seed_oid
         if self.target_branch:
             out["target_branch"] = self.target_branch
         if self.host_context_branch:
@@ -108,6 +125,7 @@ def resolve_publish_plan(
         target_branch=None,
         source="fallback:preserve",
         host_context_branch=host_context,
+        seed_oid=gitops.rev_parse(repo_root, default_seed),
     )
 
 
@@ -151,6 +169,7 @@ def _plan_for_event_target(
         source=source,
         host_context_branch=host_context_branch,
         expected_remote_oid=expected_remote_oid,
+        seed_oid=gitops.rev_parse(repo_root, seed_ref),
     )
 
 
