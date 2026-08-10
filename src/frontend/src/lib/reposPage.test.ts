@@ -111,8 +111,17 @@ test('a validated next= query param is read, and only a /connect/<code> shape is
 		'reads next= off the current URL, the same param /login already uses'
 	);
 	ok(
-		/\/\^\\\/connect\\\/\(\[A-Za-z0-9-\]\{1,40\}\)\$\//.test(src),
+		/\/\^\\\/connect\\\/\(\[A-Za-z0-9-\]\{1,40\}\)\(\?:#\(\[A-Za-z0-9_-\]\{1,128\}\)\)\?\$\//.test(
+			src
+		),
 		'validates next= against its own path shape before trusting it as a nav target — a query param is reader input, even for a client-side goto'
+	);
+	// A-1: the `#…` tail is the pairing's initiator proof. Carrying the code
+	// home without it returns the reader to a live pairing they can no longer
+	// approve — the dead end this affordance exists to end, one step later.
+	ok(
+		/#\$\{returnTarget\.proof\}/.test(src),
+		'the return nav re-attaches the approval proof it validated'
 	);
 });
 
@@ -128,10 +137,16 @@ test('connecting a repo through the manual form returns to a pending pairing on 
 	ok(runActionStart >= 0, 'runAction exists');
 	const runActionFn = src.slice(runActionStart, runActionStart + 1200);
 	ok(
-		/returnOnSuccess && returnCode\)\s*\{\s*\n\s*await goto\(resolve\('\/connect\/\[code\]', \{ code: returnCode \}\)\)/.test(
+		/returnOnSuccess && returnTarget\)\s*\{[\s\S]{0,400}?await goto\([\s\S]{0,200}?resolve\('\/connect\/\[code\]', \{ code: returnTarget\.code \}\)/.test(
 			runActionFn
 		),
 		'runAction actually navigates to returnTo on a successful, opted-in action'
+	);
+	// A-1: and it carries the approval proof, or the reader arrives at a live
+	// pairing they can no longer approve.
+	ok(
+		/returnTarget\.proof \? `#\$\{returnTarget\.proof\}` : ''/.test(runActionFn),
+		'the nav re-attaches the initiator proof it validated off next='
 	);
 });
 

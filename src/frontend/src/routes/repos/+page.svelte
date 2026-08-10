@@ -52,11 +52,19 @@
 	// trusted as a free-form redirect target — this is a same-origin client
 	// nav (`goto`), not a server 30x, but a query param is still reader
 	// input.
-	let returnCode = $derived.by(() => {
+	//
+	// The `#…` tail is the pairing's initiator proof (A-1). The approval page
+	// cannot approve without it, so a return trip that rebuilds the path from
+	// the code alone lands the reader back on a live code they can no longer
+	// use — the same dead end this affordance exists to end, one step later.
+	// Validated on its own alphabet (`secrets.token_urlsafe`), same stance as
+	// the code beside it.
+	let returnTarget = $derived.by(() => {
 		const raw = page.url.searchParams.get('next') ?? '';
-		const match = /^\/connect\/([A-Za-z0-9-]{1,40})$/.exec(raw);
-		return match ? match[1] : null;
+		const match = /^\/connect\/([A-Za-z0-9-]{1,40})(?:#([A-Za-z0-9_-]{1,128}))?$/.exec(raw);
+		return match ? { code: match[1], proof: match[2] ?? '' } : null;
 	});
+	let returnCode = $derived(returnTarget?.code ?? null);
 
 	// Clipboard for the "connect this repository" command (no-installation
 	// state, #1084/#1032 steer) — same copy/flash idiom ColdStart.svelte
@@ -252,8 +260,17 @@
 				// "connect a repository" dead end onto the repo-picker path it
 				// always had. Skip the local refresh() in this case — we're
 				// leaving the page.
-				if (returnOnSuccess && returnCode) {
-					await goto(resolve('/connect/[code]', { code: returnCode }));
+				if (returnOnSuccess && returnTarget) {
+					// `resolve()` owns the route, as the lint rule wants — but a
+					// fragment is not part of a route, and it is the whole reason
+					// this trip exists (the approval page cannot approve without
+					// the proof). Appended after, once, on the value the resolver
+					// already produced.
+					await goto(
+						// eslint-disable-next-line svelte/no-navigation-without-resolve
+						resolve('/connect/[code]', { code: returnTarget.code }) +
+							(returnTarget.proof ? `#${returnTarget.proof}` : '')
+					);
 					return;
 				}
 				await refresh();
