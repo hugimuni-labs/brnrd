@@ -1732,6 +1732,83 @@ def test_pre_tool_never_touches_the_portal_or_hook_state(tmp_path):
     assert not (tmp_path / hooks.HOOK_STATE_NAME).exists()
 
 
+def test_pre_tool_allows_write_to_card_in_outbox_dir(tmp_path):
+    # A strand's .card control file lives in the shared outbox dir
+    # ($BRR_OUTBOX_DIR), not in the worktree. This is by design — the bundle
+    # names it explicitly as where the run's card lives (daemon-substrate.md
+    # → control files table). The write should be allowed despite the path
+    # being outside the worktree. The outbox dir is rooted in the host
+    # checkout but outside the strand's worktree.
+    host, work_tree = _rooted_layout(tmp_path)
+    outbox = host / ".brr" / "outbox" / "run-1"
+    outbox.mkdir(parents=True)
+    env = _rooted_env(tmp_path, host_root=host, work_tree=work_tree)
+    env["BRR_OUTBOX_DIR"] = str(outbox)
+    out, code = hooks.run_hook(
+        hooks.PHASE_PRE_TOOL,
+        _pre_tool_stdin("Write", str(outbox / ".card")),
+        env,
+    )
+    assert code == 0
+    assert out == {}
+
+
+def test_pre_tool_allows_write_to_control_files_in_outbox_dir(tmp_path):
+    # All control files (.card, .mood, .keepalive, .name) are allowed.
+    host, work_tree = _rooted_layout(tmp_path)
+    outbox = host / ".brr" / "outbox" / "run-1"
+    outbox.mkdir(parents=True)
+    env = _rooted_env(tmp_path, host_root=host, work_tree=work_tree)
+    env["BRR_OUTBOX_DIR"] = str(outbox)
+
+    for control_file in [".mood", ".keepalive", ".name"]:
+        out, code = hooks.run_hook(
+            hooks.PHASE_PRE_TOOL,
+            _pre_tool_stdin("Write", str(outbox / control_file)),
+            env,
+        )
+        assert code == 0, f"Failed for {control_file}"
+        assert out == {}, f"Failed for {control_file}"
+
+
+def test_pre_tool_blocks_other_files_in_outbox_dir(tmp_path):
+    # The carve-out is specific to the four named control files. A write to
+    # some other file inside $BRR_OUTBOX_DIR (not one of .card/.mood/
+    # .keepalive/.name) that also happens to be outside the worktree should
+    # still be blocked — the carve-out must not become "anything in the
+    # outbox dir is exempt."
+    host, work_tree = _rooted_layout(tmp_path)
+    outbox = host / ".brr" / "outbox" / "run-1"
+    outbox.mkdir(parents=True)
+    env = _rooted_env(tmp_path, host_root=host, work_tree=work_tree)
+    env["BRR_OUTBOX_DIR"] = str(outbox)
+    out, code = hooks.run_hook(
+        hooks.PHASE_PRE_TOOL,
+        _pre_tool_stdin("Write", str(outbox / "other-file.json")),
+        env,
+    )
+    assert code == 0
+    deny = out["hookSpecificOutput"]
+    assert deny["permissionDecision"] == "deny"
+    assert "#1184" in deny["permissionDecisionReason"]
+
+
+def test_pre_tool_allows_edit_to_control_files_same_as_write(tmp_path):
+    # The carve-out applies to both Edit and Write tools.
+    host, work_tree = _rooted_layout(tmp_path)
+    outbox = host / ".brr" / "outbox" / "run-1"
+    outbox.mkdir(parents=True)
+    env = _rooted_env(tmp_path, host_root=host, work_tree=work_tree)
+    env["BRR_OUTBOX_DIR"] = str(outbox)
+    out, code = hooks.run_hook(
+        hooks.PHASE_PRE_TOOL,
+        _pre_tool_stdin("Edit", str(outbox / ".card")),
+        env,
+    )
+    assert code == 0
+    assert out == {}
+
+
 # ── The closeout guard (`hooks.next_move`) ───────────────────────────────
 #
 # The contract `next_move` failed 0/6 across *both* arms of the drift bench —
