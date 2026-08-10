@@ -92,7 +92,7 @@ def _connect(client, headers, repo_id):
 
     approve = client.post(
         f"/v1/accounts/pair/{code}/approve",
-        json={"repo_id": repo_id},
+        json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]},
         headers=headers,
     )
     assert approve.status_code == 200, approve.text

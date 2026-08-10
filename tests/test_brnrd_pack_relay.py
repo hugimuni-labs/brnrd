@@ -64,7 +64,7 @@ def _daemon_headers(client):
     pair = client.post("/v1/accounts/pair").json()
     client.post(
         f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": rid},
+        json={"repo_id": rid, "approve_secret": pair["approve_secret"]},
         headers=acc,
     )
     token = client.get(

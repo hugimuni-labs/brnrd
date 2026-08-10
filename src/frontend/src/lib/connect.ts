@@ -43,6 +43,30 @@ export interface ApproveResult {
 
 export class ConnectAuthError extends Error {}
 
+// The approval proof the pairing daemon minted, read off the URL fragment
+// (`/connect/BR-XXXX#<secret>`). It rides the fragment and not the query
+// string deliberately: a fragment is never sent to a server, so it stays out
+// of access logs and out of `Referer`. Only the terminal that ran
+// `brnrd account connect` printed a link carrying it, which is the whole
+// point — a signed-in session says who you are, not that you are the one who
+// asked to pair.
+export function approvalProofFromHash(hash: string): string {
+	return hash.startsWith('#') ? hash.slice(1) : hash;
+}
+
+// The sign-in detour has to carry the proof with it. `next=` is consumed
+// server-side (cookie -> 303 Location), and a fragment dropped at the login
+// hop lands the reader back on the approval page with nothing to present.
+// Encoded as one whole value so the `#` survives the query string it rides
+// in; the backend's `_safe_next` passes it through unchanged.
+export function connectNextUrl(code: string, hash: string): string {
+	return `/connect/${encodeURIComponent(code)}${approvalProofFromHash(hash) ? hash : ''}`;
+}
+
+export function loginUrlForConnect(code: string, hash: string): string {
+	return `/login?next=${encodeURIComponent(connectNextUrl(code, hash))}`;
+}
+
 export async function fetchConnectContext(
 	code: string,
 	fetchImpl: typeof fetch = fetch
@@ -59,16 +83,24 @@ export async function fetchConnectContext(
 // first use — the repo the pairing daemon itself reported, instead of one
 // the reader picked from a list. The primary "connect <repo>" button calls
 // this with no id; the fallback dropdown always passes one explicitly.
+//
+// `approveProof` is the initiator proof from the URL fragment. The backend
+// refuses an approve without it (403) — a session alone was never meant to
+// authorize binding someone else's pairing.
 export async function approveConnect(
 	code: string,
 	repoId: string = '',
+	approveProof: string = '',
 	fetchImpl: typeof fetch = fetch
 ): Promise<ApproveResult> {
+	const sent: Record<string, string> = {};
+	if (repoId) sent.repo_id = repoId;
+	if (approveProof) sent.approve_secret = approveProof;
 	const res = await fetchImpl(`/v1/connect/${encodeURIComponent(code)}`, {
 		method: 'POST',
 		credentials: 'include',
 		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify(repoId ? { repo_id: repoId } : {})
+		body: JSON.stringify(sent)
 	});
 	if (res.status === 401) throw new ConnectAuthError('not signed in');
 	const body = (await res.json().catch(() => ({}))) as Partial<ApproveResult>;
@@ -90,6 +122,14 @@ export function canApprove(context: ConnectContext): boolean {
 		(context.status === 'pending' || context.status === 'approved') &&
 		(context.repos.length > 0 || context.suggested_repo_full_name !== '')
 	);
+}
+
+// A live code the reader still can't approve, because the link they opened
+// lost its fragment — hand-copied, or forwarded without the tail. The
+// backend answers 403 either way; saying it before the click is the
+// difference between a fixable instruction and a wall.
+export function missingApprovalProof(context: ConnectContext, hash: string): boolean {
+	return canApprove(context) && approvalProofFromHash(hash) === '';
 }
 
 // The true dead end (2026-08-03, narrowed 2026-08-06 once pairing could
