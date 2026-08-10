@@ -4644,7 +4644,7 @@ def _format_communication_snapshot(
     return "\n".join(lines)
 
 
-def _format_pr_state(pr_state: Any) -> list[str]:
+def _format_pr_state(pr_state: Any, *, default_branch: str | None = None) -> list[str]:
     """Lines for the PR-state cache: its trustworthiness, then homeless PRs.
 
     Reads the facet only — the cache behind it is filled by the daemon tick
@@ -4661,7 +4661,7 @@ def _format_pr_state(pr_state: Any) -> list[str]:
     if standalone:
         lines.append("- PRs in flight or just resolved (no local worktree):")
         for pr in standalone:
-            marker = forge_state.format_pr(pr)
+            marker = forge_state.format_pr(pr, default_branch=default_branch)
             if not marker:
                 continue
             branch = str(pr.get("branch") or "").strip()
@@ -4692,6 +4692,7 @@ def _format_forge_state(forge: Any) -> str:
     """
     if not isinstance(forge, dict) or not forge:
         return ""
+    default_branch = forge.get("default_branch")
     lines: list[str] = ["Forge state (local, network-free):"]
     lines.append(f"- {forge_state.render_prod_line(forge.get('prod'))}")
 
@@ -4729,7 +4730,7 @@ def _format_forge_state(forge: Any) -> str:
             detail = f" ({'; '.join(bits)})" if bits else ""
             tag = f" [{tid}]" if tid else ""
             link = f" — {url}" if url else ""
-            pr = forge_state.format_pr(wt.get("pr"))
+            pr = forge_state.format_pr(wt.get("pr"), default_branch=default_branch)
             pr_marker = f" → {pr}" if pr else ""
             lines.append(f"  - `{branch}`{tag}{detail}{pr_marker}{link}")
         omitted = worktree_summary["omitted"]
@@ -4742,7 +4743,9 @@ def _format_forge_state(forge: Any) -> str:
     if worktree_summary["total"] or has_threads:
         # Only speak about PR state when the block has a body at all — an
         # empty facet still renders as nothing.
-        lines.extend(_format_pr_state(forge.get("pr_state")))
+        lines.extend(
+            _format_pr_state(forge.get("pr_state"), default_branch=default_branch)
+        )
 
     if isinstance(threads, list) and threads:
         lines.append("- Issues / PRs in play:")

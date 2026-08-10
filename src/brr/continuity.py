@@ -183,16 +183,17 @@ def _dominion_commits_since(repo: Path, since: float) -> int:
     return sum(1 for line in out.splitlines() if line.strip())
 
 
-def _merged_since(prs: Iterable[Any], since: float) -> tuple[str, ...]:
-    """PRs that reached MERGED since the last wake — ``("#386", "#387")``.
+def _resolved_merges_since(
+    prs: Iterable[Any], since: float,
+) -> Iterable[tuple[float, Any, str]]:
+    """Yield ``(merged_epoch, number, base)`` for every PR MERGED after *since*.
 
-    The forge block already knew this and buried it in reference position as a
-    *list of PRs*.  The fact was there; the loop was not closed, because nothing
-    said **you did this**.  Position and framing are the whole delta.
+    Shared by :func:`_merged_since` and :func:`_stacked_since` so the two
+    "did this land" readings can never disagree about *which* merges are in
+    the window — only about which branch they landed on.
     """
     from . import forge_pr_cache
 
-    out: list[tuple[float, str]] = []
     for pr in prs or ():
         if not isinstance(pr, dict):
             continue
@@ -204,7 +205,55 @@ def _merged_since(prs: Iterable[Any], since: float) -> tuple[str, ...]:
         merged = forge_pr_cache.parse_iso(pr.get("merged_at"))
         if merged is None or merged < since:
             continue
+        base = str(pr.get("base") or "").strip()
+        yield merged, number, base
+
+
+def _merged_since(
+    prs: Iterable[Any], since: float, *, default_branch: str | None = None,
+) -> tuple[str, ...]:
+    """PRs that reached MERGED since the last wake **on the default branch**
+    — ``("#386", "#387")``.
+
+    The forge block already knew this and buried it in reference position as a
+    *list of PRs*.  The fact was there; the loop was not closed, because nothing
+    said **you did this**.  Position and framing are the whole delta.
+
+    ``#1140``: "shipped" is a claim about ``main``, not about GitHub's merge
+    state — a squash landed on a feature branch is not this.  A PR whose
+    ``base`` is known and disagrees with *default_branch* is excluded here and
+    picked up by :func:`_stacked_since` instead; an unknown base (older cache
+    row, or *default_branch* itself unreadable) is never enough to exclude a
+    merge — the terse, pre-#1140 behaviour is the default when either side of
+    the comparison is missing.
+    """
+    out: list[tuple[float, str]] = []
+    for merged, number, base in _resolved_merges_since(prs, since):
+        if default_branch and base and base != default_branch:
+            continue
         out.append((merged, f"#{number}"))
+    return tuple(name for _, name in sorted(out))
+
+
+def _stacked_since(
+    prs: Iterable[Any], since: float, *, default_branch: str | None = None,
+) -> tuple[str, ...]:
+    """PRs MERGED since the last wake onto a **known, non-default** branch —
+    ``("#1139 (→ brr/the-child-speaks-for-itself)",)``.
+
+    ``#1140``: the class of merge ``shipped`` cannot honestly claim — the
+    squash landed, but not on ``main``.  Empty whenever *default_branch*
+    itself is unreadable, since nothing could be judged against it (never
+    silently reclassifies a merge as stacked on missing information — see
+    :func:`_merged_since`).
+    """
+    if not default_branch:
+        return ()
+    out: list[tuple[float, str]] = []
+    for merged, number, base in _resolved_merges_since(prs, since):
+        if not base or base == default_branch:
+            continue
+        out.append((merged, f"#{number} (→ {base})"))
     return tuple(name for _, name in sorted(out))
 
 
@@ -319,6 +368,7 @@ def build_continuity(
     dominion_repo: Path | None = None,
     prs: Sequence[Any] | None = None,
     now: float | None = None,
+    default_branch: str | None = None,
 ) -> BootContinuity:
     """Assemble the continuity facet.  Never raises; degrades to a stated ``✗``.
 
@@ -327,6 +377,13 @@ def build_continuity(
     that should be here is not — and a resident that reads that line knows to
     distrust everything downstream of it, which is precisely the bad news an
     authored ``continuity: ✓ 391 entries`` could never have delivered.
+
+    *default_branch*, when the caller has it (#1140), lets :attr:`shipped`
+    keep its word honest: a merge whose ``base`` disagrees with it moves to
+    :attr:`stacked` instead. ``None`` — the caller couldn't read one, or this
+    repo's forge cache predates the ``base`` field — degrades to the
+    pre-#1140 reading: everything MERGED counts as shipped, nothing is ever
+    called stacked from missing information.
     """
     now = time.time() if now is None else now
 
@@ -368,7 +425,8 @@ def build_continuity(
         last_run=run_id,
         last_age=_format_age(max(0.0, now - mtime)),
         mount="✓",
-        shipped=_merged_since(prs or (), mtime),
+        shipped=_merged_since(prs or (), mtime, default_branch=default_branch),
+        stacked=_stacked_since(prs or (), mtime, default_branch=default_branch),
         dominion_commits=(
             _dominion_commits_since(dominion_repo, mtime)
             if dominion_repo is not None
