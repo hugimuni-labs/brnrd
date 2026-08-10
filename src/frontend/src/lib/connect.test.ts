@@ -66,12 +66,12 @@ test('approveConnect posts the repo id and returns the backend notice', async ()
 	const impl = fakeFetch(200, {
 		ok: true,
 		notice: 'Your daemon is connected. You can return to your terminal.',
-		telegram: { pair_code: 'TG-1', instructions: 'send /start TG-1', deep_link: null }
+		telegram: { pair_code: 'PK-1', instructions: 'send /start PK-1', deep_link: null }
 	});
 	const result = await approveConnect('BR-123', 'repo_1', impl);
 	assert.equal(result.ok, true);
 	assert.match(result.notice, /daemon is connected/);
-	assert.equal(result.telegram?.pair_code, 'TG-1');
+	assert.equal(result.telegram?.pair_code, 'PK-1');
 	const calls = (impl as unknown as { calls: { url: string; init?: RequestInit }[] }).calls;
 	assert.equal(calls[0].init?.method, 'POST');
 	assert.deepEqual(JSON.parse(String(calls[0].init?.body)), { repo_id: 'repo_1' });

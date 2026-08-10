@@ -796,7 +796,7 @@ def test_connect_approve_makes_poll_return_token(client, monkeypatch):
     body = approve.json()
     assert body["ok"] is True
     assert "Your daemon is connected" in body["notice"]
-    assert body["telegram"]["pair_code"].startswith("TG-")
+    assert body["telegram"]["pair_code"].startswith("PK-")
 
     # The CLI's poll now returns the freshly minted daemon token.
     polled = client.get(
@@ -806,7 +806,7 @@ def test_connect_approve_makes_poll_return_token(client, monkeypatch):
     assert polled["status"] == "paired"
     assert polled["daemon_token"]
     assert polled["repo_id"] == repo_id
-    assert polled["telegram_pair"]["pair_code"].startswith("TG-")
+    assert polled["telegram_pair"]["pair_code"].startswith("PK-")
     assert f"/start {polled['telegram_pair']['pair_code']}" in polled["telegram_pair"]["instructions"]
 
 
@@ -845,7 +845,7 @@ def test_connect_approve_offers_telegram_pair_link(monkeypatch):
     assert approve.status_code == 200
     body = approve.json()
     assert "Your daemon is connected" in body["notice"]
-    assert body["telegram"]["deep_link"].startswith("https://t.me/brnrd_bot?start=TG-")
+    assert body["telegram"]["deep_link"].startswith("https://t.me/brnrd_bot?start=PK-")
     assert "bind this chat" in body["telegram"]["instructions"]
 
     polled = client.get(

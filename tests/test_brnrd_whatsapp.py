@@ -25,9 +25,9 @@ pytest.importorskip("sqlalchemy")
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 
-from brnrd import create_app, inbox as inbox_service  # noqa: E402
+from brnrd import create_app, ids, inbox as inbox_service  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
-from brnrd.models import ChannelRoute, Event, TgPairCode  # noqa: E402
+from brnrd.models import ChannelRoute, Event, Repo, TgPairCode  # noqa: E402
 from brnrd.platforms import whatsapp as wa  # noqa: E402
 from _helpers import brnrd_account_headers  # noqa: E402
 
@@ -261,6 +261,43 @@ def test_pair_code_binds_chat_and_confirms(env):
     assert "myrepo" in sends[0]["text"]
 
 
+def test_legacy_tg_prefixed_code_still_pairs(env):
+    """#1237 migration window: `ids.tg_pair_code` no longer mints the `TG-`
+    shape (moved to `PK-`), but a code minted before the flip must still
+    pair until it naturally expires — `_WA_PAIR_CODE_RE` accepts both.
+    Inserted directly since the mint itself can't produce this shape
+    anymore."""
+    app, client, sends = env
+    acc = _account(client)
+    rid = _repo(client, acc, name="myrepo")
+    with app.state.SessionLocal() as db:
+        repo = db.get(Repo, rid)
+        code = "TG-LEGA"
+        db.add(
+            TgPairCode(
+                id=ids.tg_pair_code_id(),
+                code=code,
+                account_id=repo.account_id,
+                repo_id=rid,
+                expires_at=datetime.now(timezone.utc) + timedelta(seconds=600),
+            )
+        )
+        db.commit()
+
+    r = _post(client, _message("15551234567", code))
+    assert r.status_code == 200
+
+    with app.state.SessionLocal() as db:
+        route = db.execute(
+            select(ChannelRoute).where(
+                ChannelRoute.platform == "whatsapp", ChannelRoute.channel_id == "15551234567"
+            )
+        ).scalar_one()
+        assert route.repo_id == rid
+    assert len(sends) == 1
+    assert "myrepo" in sends[0]["text"]
+
+
 def test_pairing_audit_joins_decisions_without_sender_or_code(env, caplog):
     _, client, _ = env
     caplog.set_level(logging.INFO, logger="uvicorn.error")
@@ -293,9 +330,10 @@ def test_pair_code_is_case_insensitive_and_whitespace_tolerant(env):
 
 
 def test_invalid_pair_code_shaped_text_is_not_treated_as_pairing(env):
-    """Only the exact TG-XXXX shape is a pairing attempt — an unpaired
-    chat's ordinary message gets the unpaired-setup reply, not "invalid
-    pair code" (which would leak that the format is being probed)."""
+    """Only the exact PK-XXXX (or legacy TG-XXXX, #1237 migration window)
+    shape is a pairing attempt — an unpaired chat's ordinary message gets
+    the unpaired-setup reply, not "invalid pair code" (which would leak
+    that the format is being probed)."""
     app, client, sends = env
     r = _post(client, _message("15551234567", "hello there"))
     assert r.status_code == 200
