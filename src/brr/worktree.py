@@ -485,6 +485,15 @@ def has_commits_beyond(
     publish was skipped and the clone — the only copy of the commits — was
     deleted. A probe may report what it measured; it may not report a failure
     to measure as a measurement.
+
+    One case is exempt from that refusal and is not a hedge: when ``HEAD``
+    itself does not resolve — an empty or absent repository — "this checkout
+    has commits beyond anything" is *false*, plainly and measurably, and
+    there is no work to protect. Keeping that arm distinct matters because
+    ``has_new_commit`` is read as a delivery-satisfaction signal too, not only
+    as a publish one: answering "cannot tell" there would mark a runner that
+    produced nothing at all as having produced a commit, and silently retire
+    its retry.
     """
     candidates = [c for c in (base_oid, base_ref) if c]
     last_detail = ""
@@ -505,6 +514,12 @@ def has_commits_beyond(
             # git exited 0 with something that is not a count. Unreadable is
             # not zero, so this is the same refusal as an unresolvable base.
             last_detail = f"unreadable count {result.stdout.strip()!r}"
+    head = subprocess.run(
+        ["git", "rev-parse", "--verify", "HEAD"],
+        cwd=worktree_path, capture_output=True, text=True, check=False,
+    )
+    if head.returncode != 0:
+        return False
     raise BaseUnresolvable(
         f"no base resolved in {worktree_path} from "
         f"{candidates or ['(nothing given)']}: {last_detail or 'no detail'}"
