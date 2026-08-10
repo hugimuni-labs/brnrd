@@ -25,7 +25,7 @@ from brnrd.models import Account, ConfigChangeRequest, PairRequest, Repo, TermsA
 from brnrd.routers.accounts import SESSION_TTL, account_for_github_identity, issue_session_token
 from brnrd.routers.config_approval import decide_core as decide_config_change
 from brnrd.routers.github_app import sync_app_installations_for_account
-from brnrd.routers.pairing import approve_core, pair_suggested_forge, pair_suggested_repo_full_name, telegram_pair_core
+from brnrd.routers.pairing import approve_core, initiator_proof_ok, pair_suggested_forge, pair_suggested_repo_full_name, telegram_pair_core
 
 from ._session import (
     _account_id,
@@ -411,15 +411,21 @@ def connect_approve_api(
     """Approve a daemon pair code (#327 Jinja-removal, /connect slice).
 
     JSON transport for the retired Jinja ``connect_submit`` — the auth and
-    approval semantics are ``approve_core``'s, unchanged: session required,
-    code expiry (410), single-use after the daemon polls (409), and the repo
-    lookup is scoped to the session's own account (404 on any other
+    approval semantics are ``approve_core``'s: session required, initiator
+    proof required (403), code expiry (410), single approval (409), and the
+    repo lookup scoped to the session's own account (404 on any other
     account's repo).
+
+    ``approve_secret`` is the proof the pairing daemon minted and the
+    approval page read out of its URL fragment. A signed-in session is *not*
+    sufficient here and never was meant to be — it says who you are, not
+    that you are the one who asked to pair.
     """
     account_id = _account_id(request, db)
     if account_id is None:
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
     repo_id = str((payload or {}).get("repo_id") or "")
+    approve_secret = str((payload or {}).get("approve_secret") or "")
     from fastapi import HTTPException
 
     if not repo_id:
@@ -434,11 +440,19 @@ def connect_approve_api(
         # through with `repo_id` still empty lets `approve_core` below give
         # its own accurate 410/409/404 for those, unchanged from before
         # this existed.
+        #
+        # Two narrowings since: `approved` is no longer approvable at all
+        # (single approval, `approve_core`), and an approve carrying no
+        # valid initiator proof is going to be a 403 — so neither may spend
+        # the repo cap on the way to its own refusal. The same
+        # `initiator_proof_ok` the approve itself uses decides it, so the
+        # two can't drift apart.
         account = db.get(Account, account_id)
         pair = _get_pair_row(db, code)
-        live = pair is not None and _pair_code_status(db, code, pair) in (
-            PairRequest.STATUS_PENDING,
-            PairRequest.STATUS_APPROVED,
+        live = (
+            pair is not None
+            and _pair_code_status(db, code, pair) == PairRequest.STATUS_PENDING
+            and initiator_proof_ok(pair, approve_secret)
         )
         if live:
             repo = _resolve_or_create_repo_for_pair(request, db, account, pair) if account is not None else None
@@ -456,7 +470,7 @@ def connect_approve_api(
                 )
             repo_id = repo.id
     try:
-        approve_core(db, account_id, code, repo_id)
+        approve_core(db, account_id, code, repo_id, approve_secret)
     except HTTPException as exc:
         return JSONResponse({"ok": False, "notice": str(exc.detail)}, status_code=exc.status_code)
     try:

@@ -4,9 +4,13 @@
 	import { resolve } from '$app/paths';
 	import {
 		ConnectAuthError,
+		approvalProofFromHash,
 		approveConnect,
 		canApprove,
+		connectNextUrl,
 		fetchConnectContext,
+		loginUrlForConnect,
+		missingApprovalProof,
 		needsRepoEnable,
 		statusNotice,
 		type ApproveResult,
@@ -31,6 +35,12 @@
 	let result = $state<ApproveResult | null>(null);
 
 	let code = $derived(page.params.code ?? '');
+	// The initiator proof the pairing daemon minted, carried here in the URL
+	// fragment. The backend refuses an approve without it — a session says
+	// who you are, not that you are the one who asked to pair.
+	let hash = $derived(page.url.hash ?? '');
+	let approveProof = $derived(approvalProofFromHash(hash));
+	let linkIncomplete = $derived(context ? missingApprovalProof(context, hash) : false);
 	let notice = $derived(context ? statusNotice(context) : null);
 	let suggested = $derived(context?.suggested_repo_full_name || '');
 	// "local" ⇒ this checkout has no forge behind `owner/name` — the label
@@ -58,7 +68,7 @@
 		posting = true;
 		result = null;
 		try {
-			result = await approveConnect(code, useSuggested ? '' : repoId);
+			result = await approveConnect(code, useSuggested ? '' : repoId, approveProof);
 		} catch (e) {
 			if (e instanceof ConnectAuthError) unauthenticated = true;
 			else error = e instanceof Error ? e.message : 'approve failed';
@@ -90,7 +100,7 @@
 			<p class="text-sm text-stone-400">
 				Sign in to approve this daemon — <a
 					class="text-sky-400 underline"
-					href={`/login?next=/connect/${encodeURIComponent(code)}`}
+					href={loginUrlForConnect(code, hash)}
 					rel="external">log in</a
 				>.
 			</p>
@@ -124,11 +134,20 @@
 				     genuinely terminal and gets no affordance it can't honour. -->
 				{#if needsRepoEnable(context)}
 					<a
-						href={resolve(`/repos?next=${encodeURIComponent(`/connect/${code}`)}`)}
+						href={resolve(`/repos?next=${encodeURIComponent(connectNextUrl(code, hash))}`)}
 						class="mt-3 inline-flex items-center border border-amber-700 bg-amber-950/40 px-3 py-1.5 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:border-amber-500"
 						>connect a repository</a
 					>
 				{/if}
+			{:else if linkIncomplete}
+				<!-- A live code, but the link lost its `#…` tail (hand-copied,
+				     or forwarded without it). The approve would 403; say so
+				     here, where the fix is one paste away. -->
+				<p class="mt-4 text-sm text-stone-300">
+					This approval link is incomplete. Copy the whole link your terminal printed — including
+					everything after the <code class="font-mono text-amber-200">#</code> — and open that. It
+					carries the proof that <em>you</em> are the one who asked to pair.
+				</p>
 			{:else if canApprove(context)}
 				{#if suggested && !showPicker}
 					<!-- The primary path: the pairing already knows its own repo

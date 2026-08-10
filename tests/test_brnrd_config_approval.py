@@ -50,7 +50,7 @@ def _repo_and_daemon(client: TestClient) -> tuple[str, dict[str, str], dict[str,
     pair = client.post("/v1/accounts/pair").json()
     client.post(
         f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": repo["repo_id"]},
+        json={"repo_id": repo["repo_id"], "approve_secret": pair["approve_secret"]},
         headers=account_headers,
     )
     paired = client.get(

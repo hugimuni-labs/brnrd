@@ -557,7 +557,7 @@ def test_connect_api_requires_login(client):
     r = client.get(f"/v1/connect/{pair['pair_code']}")
     assert r.status_code == 401
     assert r.json() == {"detail": "unauthenticated"}
-    r = client.post(f"/v1/connect/{pair['pair_code']}", json={"repo_id": "repo_x"})
+    r = client.post(f"/v1/connect/{pair['pair_code']}", json={"repo_id": "repo_x", "approve_secret": pair["approve_secret"]})
     assert r.status_code == 401
     assert r.json() == {"detail": "unauthenticated"}
 
@@ -606,7 +606,7 @@ def test_connect_approve_with_no_repo_id_creates_and_binds_the_suggested_repo(cl
         "/v1/accounts/pair", json={"repo_full_name": "Gurio/newbox"}
     ).json()
 
-    approve = client.post(f"/v1/connect/{pair['pair_code']}", json={})
+    approve = client.post(f"/v1/connect/{pair['pair_code']}", json={"approve_secret": pair["approve_secret"]})
     assert approve.status_code == 200
     body = approve.json()
     assert body["ok"] is True
@@ -635,7 +635,7 @@ def test_connect_approve_with_no_repo_id_reuses_an_already_connected_repo(client
     pair = client.post(
         "/v1/accounts/pair", json={"repo_full_name": "Gurio/laptop"}
     ).json()
-    approve = client.post(f"/v1/connect/{pair['pair_code']}", json={})
+    approve = client.post(f"/v1/connect/{pair['pair_code']}", json={"approve_secret": pair["approve_secret"]})
     assert approve.status_code == 200
     with client.app.state.SessionLocal() as db:
         rows = db.execute(select(Repo).where(Repo.repo_full_name == "Gurio/laptop")).scalars().all()
@@ -650,7 +650,7 @@ def test_connect_approve_with_no_repo_id_and_no_capabilities_is_a_clear_dead_end
     reads like a bug."""
     _login_web(client, monkeypatch)
     pair = client.post("/v1/accounts/pair").json()
-    approve = client.post(f"/v1/connect/{pair['pair_code']}", json={})
+    approve = client.post(f"/v1/connect/{pair['pair_code']}", json={"approve_secret": pair["approve_secret"]})
     assert approve.status_code == 422
     assert approve.json()["ok"] is False
     assert "Couldn't tell which repo" in approve.json()["notice"]
@@ -691,7 +691,7 @@ def test_connect_approve_with_no_repo_id_creates_a_local_forge_repo(client, monk
     pair = client.post(
         "/v1/accounts/pair", json={"repo_full_name": "local/laptop-a1b2c3", "forge": "local"}
     ).json()
-    approve = client.post(f"/v1/connect/{pair['pair_code']}", json={})
+    approve = client.post(f"/v1/connect/{pair['pair_code']}", json={"approve_secret": pair["approve_secret"]})
     assert approve.status_code == 200
     with client.app.state.SessionLocal() as db:
         repo = db.execute(
@@ -711,7 +711,7 @@ def test_connect_approve_rejects_an_unrecognised_forge_label(client, monkeypatch
     pair = client.post(
         "/v1/accounts/pair", json={"repo_full_name": "Weird/box", "forge": "bitbucket"}
     ).json()
-    approve = client.post(f"/v1/connect/{pair['pair_code']}", json={})
+    approve = client.post(f"/v1/connect/{pair['pair_code']}", json={"approve_secret": pair["approve_secret"]})
     assert approve.status_code == 200
     with client.app.state.SessionLocal() as db:
         repo = db.execute(select(Repo).where(Repo.repo_full_name == "Weird/box")).scalar_one()
@@ -734,7 +734,7 @@ def test_connect_context_reports_expired_code(client, monkeypatch):
     assert r.json()["status"] == "expired"
 
     approve = client.post(
-        f"/v1/connect/{pair['pair_code']}", json={"repo_id": "repo_x"}
+        f"/v1/connect/{pair['pair_code']}", json={"repo_id": "repo_x", "approve_secret": pair["approve_secret"]}
     )
     assert approve.status_code == 410
     assert approve.json() == {"ok": False, "notice": "pair code expired"}
@@ -743,7 +743,7 @@ def test_connect_context_reports_expired_code(client, monkeypatch):
     # real "expired" answer, not the auto-resolve dead-end's 422 — a dead
     # code is not allowed to spend the repo cap trying to auto-create
     # something for an approve that was always going to fail.
-    approve_no_id = client.post(f"/v1/connect/{pair['pair_code']}", json={})
+    approve_no_id = client.post(f"/v1/connect/{pair['pair_code']}", json={"approve_secret": pair["approve_secret"]})
     assert approve_no_id.status_code == 410
     assert approve_no_id.json() == {"ok": False, "notice": "pair code expired"}
 
@@ -772,7 +772,7 @@ def test_connect_approve_binds_to_the_sessions_account(client, monkeypatch):
     pair = client.post("/v1/accounts/pair").json()
 
     r = client.post(
-        f"/v1/connect/{pair['pair_code']}", json={"repo_id": other_repo_id}
+        f"/v1/connect/{pair['pair_code']}", json={"repo_id": other_repo_id, "approve_secret": pair["approve_secret"]}
     )
     assert r.status_code == 404
     assert r.json() == {"ok": False, "notice": "repo not found"}
@@ -790,7 +790,7 @@ def test_connect_approve_makes_poll_return_token(client, monkeypatch):
     pair = client.post("/v1/accounts/pair").json()
 
     approve = client.post(
-        f"/v1/connect/{pair['pair_code']}", json={"repo_id": repo_id}
+        f"/v1/connect/{pair['pair_code']}", json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]}
     )
     assert approve.status_code == 200
     body = approve.json()
@@ -817,7 +817,7 @@ def test_connect_approve_is_single_use_after_poll(client, monkeypatch):
     _login_web(client, monkeypatch)
     pair = client.post("/v1/accounts/pair").json()
     assert client.post(
-        f"/v1/connect/{pair['pair_code']}", json={"repo_id": repo_id}
+        f"/v1/connect/{pair['pair_code']}", json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]}
     ).json()["ok"] is True
     client.get(
         f"/v1/accounts/pair/{pair['pair_code']}",
@@ -825,7 +825,7 @@ def test_connect_approve_is_single_use_after_poll(client, monkeypatch):
     )
 
     again = client.post(
-        f"/v1/connect/{pair['pair_code']}", json={"repo_id": repo_id}
+        f"/v1/connect/{pair['pair_code']}", json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]}
     )
     assert again.status_code == 409
     assert again.json() == {"ok": False, "notice": "pair code already used"}
@@ -840,7 +840,7 @@ def test_connect_approve_offers_telegram_pair_link(monkeypatch):
     pair = client.post("/v1/accounts/pair").json()
 
     approve = client.post(
-        f"/v1/connect/{pair['pair_code']}", json={"repo_id": repo_id}
+        f"/v1/connect/{pair['pair_code']}", json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]}
     )
     assert approve.status_code == 200
     body = approve.json()
@@ -858,3 +858,62 @@ def test_connect_approve_offers_telegram_pair_link(monkeypatch):
         assert tg_pair.repo_id == repo_id
         assert polled["telegram_pair"]["pair_code"] == tg_pair.code
         assert polled["telegram_pair"]["deep_link"] == f"https://t.me/brnrd_bot?start={tg_pair.code}"
+
+
+def test_connect_approve_refuses_a_session_that_cannot_prove_it_initiated(client, monkeypatch):
+    """A-1, on the surface an attacker would actually use: a browser.
+
+    A signed-in session says *who you are*. It has never said *you are the
+    one who asked to pair*, and until the initiator proof existed this route
+    treated the two as the same thing — so any signed-in account holding a
+    live pair code could bind a stranger's daemon to itself.
+    """
+    repo_id = _account_and_repo(client)
+    _login_web(client, monkeypatch)
+    pair = client.post("/v1/accounts/pair").json()
+
+    r = client.post(f"/v1/connect/{pair['pair_code']}", json={"repo_id": repo_id})
+    assert r.status_code == 403, r.text
+    assert r.json()["ok"] is False
+    assert "incomplete" in r.json()["notice"]
+
+    with client.app.state.SessionLocal() as db:
+        row = db.execute(
+            select(PairRequest).where(PairRequest.pair_code == pair["pair_code"])
+        ).scalar_one()
+        assert row.status == PairRequest.STATUS_PENDING
+        assert row.account_id is None
+
+
+def test_a_proofless_approve_does_not_spend_the_repo_cap_on_its_way_to_403(client, monkeypatch):
+    """The no-`repo_id` path auto-*creates* the repo the pairing named before
+    approving it. An approve that is already going to be refused must not
+    get that side effect — same rule the expired/consumed codes have had
+    since 2026-08-06, now extended to a missing initiator proof."""
+    _login_web(client, monkeypatch)
+    pair = client.post(
+        "/v1/accounts/pair", json={"repo_full_name": "Gurio/newbox"}
+    ).json()
+
+    approve = client.post(f"/v1/connect/{pair['pair_code']}", json={})
+    assert approve.status_code == 403, approve.text
+    with client.app.state.SessionLocal() as db:
+        assert (
+            db.execute(
+                select(Repo).where(Repo.repo_full_name == "Gurio/newbox")
+            ).scalar_one_or_none()
+            is None
+        )
+
+
+def test_the_approval_fragment_survives_the_sign_in_detour(client):
+    """The proof rides the URL fragment, and an unauthenticated reader is
+    sent through `/login?next=…` before they can approve. `_safe_next` is the
+    one backend link in that chain that could silently eat it — a fragment is
+    same-site, carries no authority of its own, and must come back whole."""
+    from brnrd.routers._session import _safe_next
+
+    assert _safe_next("/connect/BR-1234#s3cr3t") == "/connect/BR-1234#s3cr3t"
+    # ...without loosening the off-site guards it exists for.
+    assert _safe_next("//evil.example/#s") == "/"
+    assert _safe_next("/\\evil.example#s") == "/"

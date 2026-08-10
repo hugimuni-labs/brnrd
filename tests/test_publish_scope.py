@@ -56,7 +56,7 @@ def _pair_daemon(client: TestClient, repo_id: str) -> str:
     session already set by `_login` approves the pair code and the CLI-side
     poll returns the minted daemon token."""
     pair = client.post("/v1/accounts/pair").json()
-    approved = client.post(f"/v1/connect/{pair['pair_code']}", json={"repo_id": repo_id})
+    approved = client.post(f"/v1/connect/{pair['pair_code']}", json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]})
     assert approved.status_code == 200, approved.text
     polled = client.get(
         f"/v1/accounts/pair/{pair['pair_code']}",

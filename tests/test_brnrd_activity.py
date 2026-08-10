@@ -46,7 +46,7 @@ def _repo_and_daemon(client: TestClient) -> tuple[dict[str, str], dict[str, str]
     pair = client.post("/v1/accounts/pair").json()
     client.post(
         f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": repo["repo_id"]},
+        json={"repo_id": repo["repo_id"], "approve_secret": pair["approve_secret"]},
         headers=account_headers,
     )
     paired = client.get(
@@ -61,7 +61,7 @@ def _pair_daemon(client: TestClient, account_headers: dict[str, str], repo_id: s
     pair = client.post("/v1/accounts/pair").json()
     approved = client.post(
         f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": repo_id},
+        json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]},
         headers=account_headers,
     )
     assert approved.status_code == 200
@@ -328,7 +328,7 @@ def test_activity_views_collapse_repeat_snapshots_across_daemon_tokens():
     pair = client.post("/v1/accounts/pair").json()
     client.post(
         f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": repo_id},
+        json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]},
         headers=account_headers,
     )
     paired = client.get(

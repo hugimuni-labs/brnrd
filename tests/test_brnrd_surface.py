@@ -29,7 +29,7 @@ def _repo_and_daemon(client: TestClient) -> tuple[dict[str, str], dict[str, str]
     account_headers = brnrd_account_headers(client.app, github_id="123", login="octocat", email="a@b.com")
     repo = client.post("/v1/accounts/repos", json={"repo_full_name": "Gurio/brr", "default_branch": "main", "publish_layers": PUBLISH_EVERYTHING}, headers=account_headers).json()
     pair = client.post("/v1/accounts/pair").json()
-    client.post(f"/v1/accounts/pair/{pair['pair_code']}/approve", json={"repo_id": repo["repo_id"]}, headers=account_headers)
+    client.post(f"/v1/accounts/pair/{pair['pair_code']}/approve", json={"repo_id": repo["repo_id"], "approve_secret": pair["approve_secret"]}, headers=account_headers)
     paired = client.get(f"/v1/accounts/pair/{pair['pair_code']}", params={"poll_secret": pair["poll_secret"]}).json()
     return account_headers, {"Authorization": f"Bearer {paired['daemon_token']}"}
 

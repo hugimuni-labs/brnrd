@@ -3,8 +3,12 @@ import test from 'node:test';
 
 import {
 	ConnectAuthError,
+	approvalProofFromHash,
 	approveConnect,
 	canApprove,
+	connectNextUrl,
+	loginUrlForConnect,
+	missingApprovalProof,
 	fetchConnectContext,
 	needsRepoEnable,
 	statusNotice,
@@ -68,13 +72,16 @@ test('approveConnect posts the repo id and returns the backend notice', async ()
 		notice: 'Your daemon is connected. You can return to your terminal.',
 		telegram: { pair_code: 'PK-1', instructions: 'send /start PK-1', deep_link: null }
 	});
-	const result = await approveConnect('BR-123', 'repo_1', impl);
+	const result = await approveConnect('BR-123', 'repo_1', 'proof-abc', impl);
 	assert.equal(result.ok, true);
 	assert.match(result.notice, /daemon is connected/);
 	assert.equal(result.telegram?.pair_code, 'PK-1');
 	const calls = (impl as unknown as { calls: { url: string; init?: RequestInit }[] }).calls;
 	assert.equal(calls[0].init?.method, 'POST');
-	assert.deepEqual(JSON.parse(String(calls[0].init?.body)), { repo_id: 'repo_1' });
+	assert.deepEqual(JSON.parse(String(calls[0].init?.body)), {
+		repo_id: 'repo_1',
+		approve_secret: 'proof-abc'
+	});
 });
 
 test('approveConnect surfaces backend rejections without throwing', async () => {
@@ -82,6 +89,7 @@ test('approveConnect surfaces backend rejections without throwing', async () => 
 	const result = await approveConnect(
 		'BR-123',
 		'repo_1',
+		'proof-abc',
 		fakeFetch(409, { ok: false, notice: 'pair code already used' })
 	);
 	assert.equal(result.ok, false);
@@ -91,7 +99,13 @@ test('approveConnect surfaces backend rejections without throwing', async () => 
 
 test('approveConnect raises the auth error on 401', async () => {
 	await assert.rejects(
-		() => approveConnect('BR-123', 'repo_1', fakeFetch(401, { detail: 'unauthenticated' })),
+		() =>
+			approveConnect(
+				'BR-123',
+				'repo_1',
+				'proof-abc',
+				fakeFetch(401, { detail: 'unauthenticated' })
+			),
 		ConnectAuthError
 	);
 });
@@ -148,7 +162,47 @@ test('approveConnect with no repo id posts an empty body (server auto-resolves)'
 		notice: 'Your daemon is connected. You can return to your terminal.',
 		telegram: null
 	});
-	await approveConnect('BR-123', '', impl);
+	await approveConnect('BR-123', '', 'proof-abc', impl);
 	const calls = (impl as unknown as { calls: { url: string; init?: RequestInit }[] }).calls;
-	assert.deepEqual(JSON.parse(String(calls[0].init?.body)), {});
+	assert.deepEqual(JSON.parse(String(calls[0].init?.body)), { approve_secret: 'proof-abc' });
+});
+
+// --- the initiator proof (A-1) ------------------------------------------
+
+test('approveProof rides the fragment, and an empty one posts nothing', async () => {
+	// The backend refuses a proofless approve with a 403 — the client must
+	// not invent a value to fill the field, or the 403 turns into a wrong
+	// answer nobody can read.
+	const impl = fakeFetch(403, { ok: false, notice: 'this approval link is incomplete' });
+	const result = await approveConnect('BR-123', 'repo_1', '', impl);
+	assert.equal(result.ok, false);
+	const calls = (impl as unknown as { calls: { init?: RequestInit }[] }).calls;
+	assert.deepEqual(JSON.parse(String(calls[0].init?.body)), { repo_id: 'repo_1' });
+});
+
+test('approvalProofFromHash strips exactly one leading hash', () => {
+	assert.equal(approvalProofFromHash('#abc123'), 'abc123');
+	assert.equal(approvalProofFromHash('abc123'), 'abc123');
+	assert.equal(approvalProofFromHash(''), '');
+	assert.equal(approvalProofFromHash('#'), '');
+	// `secrets.token_urlsafe` emits `-` and `_`; neither may be eaten.
+	assert.equal(approvalProofFromHash('#a-b_c'), 'a-b_c');
+});
+
+test('the login detour carries the proof through, encoded as one value', () => {
+	// A fragment dropped at the login hop lands the reader back on this page
+	// with nothing to present — so it travels inside `next=`, percent-encoded,
+	// and the backend's `_safe_next` hands it back unchanged.
+	assert.equal(loginUrlForConnect('BR-123', '#abc123'), '/login?next=%2Fconnect%2FBR-123%23abc123');
+	assert.equal(loginUrlForConnect('BR-123', ''), '/login?next=%2Fconnect%2FBR-123');
+	assert.equal(connectNextUrl('BR-123', '#abc123'), '/connect/BR-123#abc123');
+});
+
+test('missingApprovalProof names the live-code-but-truncated-link case', () => {
+	assert.equal(missingApprovalProof(ctx(), ''), true, 'live code, no fragment');
+	assert.equal(missingApprovalProof(ctx(), '#abc'), false);
+	// Terminal states have their own notice; this one must not steal it.
+	assert.equal(missingApprovalProof(ctx({ status: 'consumed' }), ''), false);
+	assert.equal(missingApprovalProof(ctx({ status: 'expired' }), ''), false);
+	assert.equal(missingApprovalProof(ctx({ repos: [] }), ''), false, 'the repo dead end wins');
 });

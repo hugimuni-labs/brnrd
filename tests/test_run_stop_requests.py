@@ -217,7 +217,7 @@ def test_live_runs_publish_hands_down_pending_stops_and_retires_acked():
     pair = client.post("/v1/accounts/pair").json()
     client.post(
         f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": repo_id},
+        json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]},
         headers=account_headers,
     )
     paired = client.get(
