@@ -104,4 +104,10 @@ def pair_code() -> str:
 
 
 def tg_pair_code() -> str:
-    return "TG-" + "".join(secrets.choice(_PAIR_ALPHABET) for _ in range(4))
+    # #1237 — "PK-" (pair key), not "TG-": this code is texted to WhatsApp
+    # just as much as Telegram, so the mint can't brand it with a channel it
+    # only happened to ship on first. Unambiguous against `pair_code`'s own
+    # `BR-` prefix (no shared letters). See `_WA_PAIR_CODE_RE` in
+    # `routers/webhooks.py` for the migration-window acceptance rule this
+    # rename requires on the read side.
+    return "PK-" + "".join(secrets.choice(_PAIR_ALPHABET) for _ in range(4))
