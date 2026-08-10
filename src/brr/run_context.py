@@ -337,7 +337,7 @@ def _render_communication_snapshot(snapshot: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _render_pr_state(pr_state: Any) -> list[str]:
+def _render_pr_state(pr_state: Any, *, default_branch: str | None = None) -> list[str]:
     """PR-cache trustworthiness + open PRs with no local worktree (plain)."""
     lines: list[str] = []
     note = forge_state.pr_state_note(pr_state)
@@ -349,7 +349,7 @@ def _render_pr_state(pr_state: Any) -> list[str]:
     if standalone:
         lines.append("- PRs in flight or just resolved (no local worktree):")
         for pr in standalone:
-            marker = forge_state.format_pr(pr)
+            marker = forge_state.format_pr(pr, default_branch=default_branch)
             if not marker:
                 continue
             branch = str(pr.get("branch") or "").strip()
@@ -371,6 +371,7 @@ def _render_forge_state(forge: Any) -> str:
     """Render the forge-state facet for the context file (plain, no backticks)."""
     if not isinstance(forge, dict) or not forge:
         return ""
+    default_branch = forge.get("default_branch")
     lines: list[str] = ["Forge state (local, network-free):"]
     lines.append(f"- {forge_state.render_prod_line(forge.get('prod'))}")
     worktrees = forge.get("worktrees")
@@ -407,7 +408,7 @@ def _render_forge_state(forge: Any) -> str:
             tag = f" [{tid}]" if tid else ""
             url = str(wt.get("branch_url") or "").strip()
             link = f" — {url}" if url else ""
-            pr = forge_state.format_pr(wt.get("pr"))
+            pr = forge_state.format_pr(wt.get("pr"), default_branch=default_branch)
             pr_marker = f" → {pr}" if pr else ""
             lines.append(f"  - {branch}{tag}{detail}{pr_marker}{link}")
         omitted = worktree_summary["omitted"]
@@ -417,7 +418,9 @@ def _render_forge_state(forge: Any) -> str:
     threads = forge.get("threads")
     if worktree_summary["total"] or (isinstance(threads, list) and threads):
         # Only speak about PR state when the block has a body at all.
-        lines.extend(_render_pr_state(forge.get("pr_state")))
+        lines.extend(
+            _render_pr_state(forge.get("pr_state"), default_branch=default_branch)
+        )
     if isinstance(threads, list) and threads:
         lines.append("- Issues / PRs in play:")
         for th in threads:
