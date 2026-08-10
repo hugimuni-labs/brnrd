@@ -708,11 +708,17 @@ def _handle_command(db: Session, settings, parsed: tg.ParsedMessage, command: st
 
 # #1242 — shared with the Telegram dispatch below (bare-code parity): a
 # bare pair code is recognized the same way on both channels, against the
-# one shape ``ids.tg_pair_code`` actually mints. Not renamed off the `TG-`
-# spelling here — #1237 owns de-hardcoding the channel-branded prefix;
-# this only reuses the existing constant instead of adding a second,
-# independent hardcoding of it for the new Telegram lane.
-_WA_PAIR_CODE_RE = re.compile(r"^TG-[A-Z0-9]{4}$")
+# shape(s) ``ids.tg_pair_code`` mints or has minted.
+#
+# #1237 — the mint moved from "TG-" to "PK-" (channel-neutral: this same
+# code is texted to WhatsApp, not just Telegram). Both prefixes are
+# accepted here for one migration window: a code minted under the old
+# prefix, in flight at deploy time, must still pair. Drop the `TG|`
+# alternative (back to `^PK-[A-Z0-9]{4}$`) once no such code can still be
+# outstanding — codes expire on `settings.pair_ttl_s` (default 600s), so
+# one `pair_ttl_s` window after the mint flip ships to production, every
+# `TG-` code has already expired and the alternative is dead weight.
+_WA_PAIR_CODE_RE = re.compile(r"^(?:TG|PK)-[A-Z0-9]{4}$")
 
 
 def _wa_reply(settings, parsed: "wa.ParsedMessage", text: str) -> None:
@@ -738,9 +744,10 @@ def _bare_pair_code_from_text(text: str) -> str | None:
     parity with the ``/start <code>`` lane, for a user who pastes just the
     code).
 
-    Matched against the exact shape ``ids.tg_pair_code`` produces
-    (``TG-`` + 4 alphabet chars), case-insensitively — anything else is an
-    ordinary task message, not a pairing attempt.
+    Matched against the shape ``ids.tg_pair_code`` produces (``PK-`` + 4
+    alphabet chars, plus the legacy ``TG-`` shape during the #1237
+    migration window — see ``_WA_PAIR_CODE_RE``), case-insensitively —
+    anything else is an ordinary task message, not a pairing attempt.
     """
     candidate = (text or "").strip().upper()
     return candidate if _WA_PAIR_CODE_RE.match(candidate) else None
@@ -933,9 +940,10 @@ def telegram_webhook(request: Request, payload: dict, x_telegram_bot_api_secret_
         return {"ok": True}
     with request.app.state.SessionLocal() as db:
         # #1242 — bare-code parity with WhatsApp: `/start <code>` first
-        # (the deep-link-driven shape), then a bare `TG-XXXX` typed with no
-        # command syntax at all — same fallback order as the WhatsApp lane
-        # below, same handler either way once a code is found.
+        # (the deep-link-driven shape), then a bare `PK-XXXX` (or legacy
+        # `TG-XXXX`, #1237 migration window) typed with no command syntax at
+        # all — same fallback order as the WhatsApp lane below, same handler
+        # either way once a code is found.
         code = tg.pair_code_from_text(parsed.text) or _bare_pair_code_from_text(parsed.text)
         if code:
             _handle_start(db, settings, parsed, code)

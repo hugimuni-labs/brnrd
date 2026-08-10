@@ -14,9 +14,9 @@ pytest.importorskip("sqlalchemy")
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 
-from brnrd import create_app  # noqa: E402
+from brnrd import create_app, ids  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
-from brnrd.models import ChannelRoute, Event, TgPairCode  # noqa: E402
+from brnrd.models import ChannelRoute, Event, Repo, TgPairCode  # noqa: E402
 from _helpers import brnrd_account_headers  # noqa: E402
 
 _SECRET = "webhook-secret"
@@ -172,6 +172,44 @@ def test_start_binds_chat_and_confirms(env):
     assert "myrepo" in sends[0]["text"]
 
 
+def test_legacy_tg_prefixed_code_still_pairs_via_start(env):
+    """#1237 migration window: `ids.tg_pair_code` no longer mints the `TG-`
+    shape (moved to `PK-`), but a code minted before the flip must still
+    pair via `/start <code>` until it naturally expires. `/start` never
+    consults `_WA_PAIR_CODE_RE` — this is real coverage of the `/start`
+    invariant, not a guard on the regex itself (see the bare-code sibling
+    test below for that)."""
+    app, client, sends = env
+    acc = _account(client)
+    rid = _repo(client, acc, name="myrepo")
+    with app.state.SessionLocal() as db:
+        repo = db.get(Repo, rid)
+        code = "TG-LEGA"
+        db.add(
+            TgPairCode(
+                id=ids.tg_pair_code_id(),
+                code=code,
+                account_id=repo.account_id,
+                repo_id=rid,
+                expires_at=datetime.now(timezone.utc) + timedelta(seconds=600),
+            )
+        )
+        db.commit()
+
+    r = client.post(
+        "/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR
+    )
+    assert r.status_code == 200
+
+    with app.state.SessionLocal() as db:
+        binding = db.execute(
+            select(ChannelRoute).where(ChannelRoute.channel_id == "555")
+        ).scalar_one()
+        assert binding.repo_id == rid
+    assert len(sends) == 1
+    assert "myrepo" in sends[0]["text"]
+
+
 def test_invalid_start_code_is_reported(env):
     _, client, sends = env
     r = client.post(
@@ -229,12 +267,45 @@ def test_unpaired_plain_message_reply_names_the_rescue_command(env):
 
 
 def test_bare_pair_code_binds_chat_like_start(env):
-    """Telegram accepts a bare TG-XXXX exactly like WhatsApp does — a user
+    """Telegram accepts a bare PK-XXXX exactly like WhatsApp does — a user
     who pastes just the code, no /start prefix, still pairs."""
     app, client, sends = env
     acc = _account(client)
     rid = _repo(client, acc, name="myrepo")
     code = _tg_pair_code(client, acc, rid)
+
+    r = client.post("/v1/webhooks/telegram", json=_message(555, code), headers=_HDR)
+    assert r.status_code == 200
+
+    with app.state.SessionLocal() as db:
+        binding = db.execute(
+            select(ChannelRoute).where(ChannelRoute.channel_id == "555")
+        ).scalar_one()
+        assert binding.repo_id == rid
+    assert len(sends) == 1
+    assert "myrepo" in sends[0]["text"]
+
+
+def test_legacy_tg_prefixed_code_still_pairs_bare(env):
+    """#1237 migration window, bare-code lane: unlike `/start`, the bare
+    lane consults `_WA_PAIR_CODE_RE` directly, so this is real coverage of
+    the regex still accepting the legacy `TG-` shape."""
+    app, client, sends = env
+    acc = _account(client)
+    rid = _repo(client, acc, name="myrepo")
+    with app.state.SessionLocal() as db:
+        repo = db.get(Repo, rid)
+        code = "TG-LEGA"
+        db.add(
+            TgPairCode(
+                id=ids.tg_pair_code_id(),
+                code=code,
+                account_id=repo.account_id,
+                repo_id=rid,
+                expires_at=datetime.now(timezone.utc) + timedelta(seconds=600),
+            )
+        )
+        db.commit()
 
     r = client.post("/v1/webhooks/telegram", json=_message(555, code), headers=_HDR)
     assert r.status_code == 200
@@ -916,7 +987,7 @@ def test_telegram_pair_returns_deep_link_when_username_set():
         "/v1/accounts/pair/telegram", json={"repo_id": rid}, headers=acc
     ).json()
     code = body["pair_code"]
-    assert code.startswith("TG-")
+    assert code.startswith("PK-")
     # @-prefix stripped; the pair code rides as the tap-to-open start= param.
     assert body["deep_link"] == f"https://t.me/brnrd_bot?start={code}"
     assert body["deep_link"] in body["instructions"]
