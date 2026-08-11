@@ -84,3 +84,20 @@ test('the warp section feeds the queue its withheld lane instead of also renderi
 	ok(/withheld=\{prReviewQueueWithheld\}/.test(body), 'the queue still receives the withheld lane');
 	ok(!/<WithheldNotice/.test(body), 'no standalone WithheldNotice remains inside the warp section');
 });
+
+// The new-since highlight must clear on the *next* reload, not linger until
+// an explicit "caught up" press (his 2026-08-11 ask). The load effect reads
+// the stored anchor into memory first — this visit's highlight — then
+// re-arms storage to `now` so a second reload starts clean; only source
+// order proves the in-memory read happens before the re-arm write.
+test('the last-looked load effect reads the stored anchor before re-arming it to now', () => {
+	const src = source();
+	const effectAt = src.indexOf('lastLookedLoadedFor === accountId) return;');
+	ok(effectAt >= 0, 'the last-looked load effect exists');
+	const tail = src.slice(effectAt);
+	const readAt = tail.indexOf('readLastLookedAt(localStorage.getItem(key), now)');
+	const rearmAt = tail.indexOf('localStorage.setItem(key, serializeLastLookedAt(now))');
+	ok(readAt >= 0, 'the effect reads the stored anchor into memory');
+	ok(rearmAt >= 0, 'the effect re-arms storage to now on the same load');
+	ok(readAt < rearmAt, 'the read happens before the re-arm write, not after');
+});
