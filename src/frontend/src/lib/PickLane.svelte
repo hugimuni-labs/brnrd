@@ -236,7 +236,10 @@
 				     share this lead slot and padding box. Before this existed it
 				     was the one row in the lane with a blank where its threads
 				     belong. -->
-					<Crossing cells={crossingCells(threads, row.crosses, topicFaces)} label="threads this pick serves" />
+					<Crossing
+						cells={crossingCells(threads, row.crosses, topicFaces)}
+						label="threads this pick serves"
+					/>
 					<span
 						class="h-[7px] shrink-0 rounded-r-[1px]"
 						style={`width: ${(row.barFraction * 34).toFixed(2)}%; background-color: ${row.color}`}

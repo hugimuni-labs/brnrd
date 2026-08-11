@@ -76,7 +76,9 @@ test('no standalone per-lane WithheldNotice repeats the page-head banner', () =>
 // alone (#1281's rule, carried through the graph rewrite).
 test('the warp section feeds the queue its withheld lane instead of also rendering a standalone notice', () => {
 	const src = source();
-	const warpSection = src.match(/aria-labelledby="warp-heading"[\s\S]*?aria-labelledby="cloth-heading"/);
+	const warpSection = src.match(
+		/aria-labelledby="warp-heading"[\s\S]*?aria-labelledby="cloth-heading"/
+	);
 	ok(warpSection, 'the warp section exists');
 	const body = warpSection![0];
 	ok(/withheld=\{prReviewQueueWithheld\}/.test(body), 'the queue still receives the withheld lane');

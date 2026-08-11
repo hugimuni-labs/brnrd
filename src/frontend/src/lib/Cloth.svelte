@@ -125,10 +125,12 @@
 	let selvage = $derived(rows === null ? null : selvageParts(clothSelvage(rows, now, windowMs)));
 	// Rows newer than the viewer's anchor — what "caught up" clears.
 	let newCount = $derived(
-		newSince === null ? 0 : windowRows.filter((row) => {
-			const endedAt = Date.parse(row.ended_at ?? '');
-			return Number.isFinite(endedAt) && endedAt > newSince;
-		}).length
+		newSince === null
+			? 0
+			: windowRows.filter((row) => {
+					const endedAt = Date.parse(row.ended_at ?? '');
+					return Number.isFinite(endedAt) && endedAt > newSince;
+				}).length
 	);
 	function isNew(line: ClothLine): boolean {
 		return newSince !== null && Number.isFinite(line.endedAt) && line.endedAt > newSince;
@@ -256,7 +258,11 @@
 	     collapse — the row wraps onto a second flex line (`flex-wrap` on the
 	     row, below) rather than crushing the name into a column of letters. -->
 	<Crossing
-		cells={crossingCells(threads, line.runId ? crossingIndex.get(line.runId) : undefined, topicFaces)}
+		cells={crossingCells(
+			threads,
+			line.runId ? crossingIndex.get(line.runId) : undefined,
+			topicFaces
+		)}
 	/>
 	<!-- The sigils, immediately before the name: the runes transitioned from
 	     run ids to topic ids (2026-08-11) — a run wears the topics of the

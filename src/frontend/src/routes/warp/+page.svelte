@@ -122,7 +122,9 @@
 					type="button"
 					role="tab"
 					aria-selected={tab === 'live'}
-					class="cursor-pointer {tab === 'live' ? 'text-amber-200' : 'text-ink-mute hover:text-stone-300'}"
+					class="cursor-pointer {tab === 'live'
+						? 'text-amber-200'
+						: 'text-ink-mute hover:text-stone-300'}"
 					onclick={() => (tab = 'live')}>live</button
 				>
 				<button

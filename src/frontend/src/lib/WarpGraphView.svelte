@@ -191,8 +191,7 @@
 					<p class="font-mono text-[10px] text-ink-quiet">
 						unblocks
 						{#each dependents(item, graph) as dep (dep.id)}
-							<a class="ml-1 text-amber-300/90 hover:text-amber-100" href={`#${dep.id}`}
-								>{dep.id}</a
+							<a class="ml-1 text-amber-300/90 hover:text-amber-100" href={`#${dep.id}`}>{dep.id}</a
 							>
 						{/each}
 					</p>

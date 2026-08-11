@@ -34,11 +34,7 @@ export type ItemType = 'decision' | 'preparation' | 'action';
  *  open. One fact, one place: the receipt row *is* the state. */
 export type ItemState = 'open' | 'done' | 'retired';
 
-const KNOWN_TYPES: ReadonlySet<string> = new Set<ItemType>([
-	'decision',
-	'preparation',
-	'action'
-]);
+const KNOWN_TYPES: ReadonlySet<string> = new Set<ItemType>(['decision', 'preparation', 'action']);
 
 /** Item ids are allocated (`w-42`), never reused, rename-proof. The
  *  grammar is looser than the allocator on purpose: any slug-shaped
