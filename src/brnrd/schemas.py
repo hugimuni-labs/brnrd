@@ -689,6 +689,14 @@ class LiveRunIn(BaseModel):
     # (= `frames[0]`, shared across a face family by design).
     mood_rest: str | None = Field(default=None, max_length=16)
     mood_pitch: float | None = Field(default=None, ge=0.0, le=1.0)
+    # The run's claimed topic slugs (the-run-that-claims-its-thread): raw
+    # from the resident's `.topics` control via the presence heartbeat
+    # (`presence.py` → `cloud.py::_live_runs_snapshot`), no resolution
+    # here — the dashboard resolves against its own warp graph, same
+    # "this API owns no table" stance as `mood`. Empty for an unclaimed
+    # run; bounded against a hostile payload only (the daemon already
+    # slug-filters and caps at 32; 8 is generous for honest use).
+    topics: list[str] = Field(default_factory=list, max_length=8)
 
     @classmethod
     def string_bounds(cls) -> dict[str, int]:

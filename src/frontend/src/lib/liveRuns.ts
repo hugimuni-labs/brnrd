@@ -71,6 +71,13 @@ export interface LiveRun {
 	 *  frame hasn't been authored yet — both fall back to the base. */
 	mood_rest?: string | null;
 	mood_pitch?: number | null;
+	// The run's claimed topic slugs (the-run-that-claims-its-thread): raw
+	// from the resident's `.topics` control via the presence heartbeat —
+	// a burning run's thread, visible while it burns, before any
+	// `topics.md` lands on the node. Absent on a pre-upgrade daemon or an
+	// unclaimed run; resolve against the page's own warp graph
+	// (`topicFaces`), never a table of this file's own.
+	topics?: string[] | null;
 	// #476 wyrd §3: a stop the account owner has parked for this run, not yet
 	// consumed by the daemon. Server-side (rather than a fact the client holds
 	// in memory) so the cell keeps saying "stopping" across a reload — and so
