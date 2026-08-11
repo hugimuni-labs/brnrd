@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { TopicCounts, TopicThread } from './warpGraph';
+	import { RUNE_SPACE, type TopicCounts, type TopicThread } from './warpGraph';
 
 	// The heddles — the topic rail (2026-08-11 proposal round). Topics are
 	// the Photoshop-layers axis: a small collapsible block, a flat list —
@@ -135,6 +135,16 @@
 						</button>
 					</li>
 				{/each}
+				{#if threads.length > RUNE_SPACE}
+					<!-- The topic cap is the rune space (his 2026-08-11 word): within
+					     24 topics every topic wears a unique stave; past it the probe
+					     runs out of alphabet and collisions are pigeonhole. Merging
+					     topics is the fix; this line is the honest gauge. -->
+					<li class="font-mono text-[10px] text-amber-300/80">
+						{threads.length} topics — past the rune space ({RUNE_SPACE}); staves now collide. merge
+						topics.
+					</li>
+				{/if}
 				{#if untagged}
 					<!-- Untagged open items are a fact, not a topic: named here so
 					     a filtered view's "missing" items are accounted for. -->

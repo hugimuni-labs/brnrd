@@ -12,7 +12,7 @@
 		liveTakenRuns,
 		readyItems,
 		resolveTopics,
-		topicFace,
+		topicFaces,
 		type ItemType,
 		type WarpGraph,
 		type WarpItem
@@ -68,6 +68,7 @@
 		return item.type === null ? '▫' : TYPE_MARK[item.type];
 	}
 
+	let faces = $derived(topicFaces(graph));
 	let ready = $derived(readyItems(graph).filter((item) => itemInTopics(item, graph, selected)));
 	let held = $derived(blockedItems(graph).filter((item) => itemInTopics(item, graph, selected)));
 	let openTotal = $derived(graph.items.filter((item) => item.state === 'open').length);
@@ -139,9 +140,10 @@
 			{#if topics.length > 0}
 				<span class="shrink-0 font-mono text-[11px]" aria-label="topics">
 					{#each topics as topic (topic.canonicalId)}
-						<span style={`color: ${topicFace(topic).color}`} title={topic.title}
-							>{topicFace(topic).glyph}</span
-						>
+						{@const face = faces.get(topic.canonicalId)}
+						{#if face}
+							<span style={`color: ${face.color}`} title={topic.title}>{face.glyph}</span>
+						{/if}
 					{/each}
 				</span>
 			{/if}

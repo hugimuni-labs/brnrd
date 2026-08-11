@@ -65,6 +65,7 @@
 		readyItems,
 		runTopicIndex,
 		topicCounts,
+		topicFaces,
 		topicThreads,
 		weavingRows
 	} from '$lib/warpGraph';
@@ -451,6 +452,7 @@
 	// asked rather than only on the run that is doing it.
 	let weavingCallSigns = $derived(new Set(weaving.map((row) => row.callSign).filter(Boolean)));
 	let crossingIndex = $derived(runTopicIndex(warpGraphData));
+	let topicFaceMap = $derived(topicFaces(warpGraphData));
 	// All three feeds resolved (loaded or errored) — until then the needs
 	// strip's sum is a partial read, and rendering it as a verdict is the
 	// measured 20 → "clear" → 4 flicker. `authoredBackchannelItems.length
@@ -1436,6 +1438,8 @@
 							{weaving}
 							{threads}
 							{crossingIndex}
+							topicFaces={topicFaceMap}
+							selectedTopics={heddleSelection}
 							{now}
 							onSelect={selectFromLoom}
 							{daemonMood}
@@ -1672,6 +1676,7 @@
 						surface={surfaceData}
 						{threads}
 						{crossingIndex}
+						topicFaces={topicFaceMap}
 						selectedTopics={heddleSelection}
 						newSince={lastLookedAt}
 						onCaughtUp={markCaughtUp}

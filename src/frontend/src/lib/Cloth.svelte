@@ -25,7 +25,7 @@
 		runNodeFromSurface,
 		type NodeIdentity
 	} from './runNode';
-	import { runFace } from './runFace';
+	import { runFace, type RunFace } from './runFace';
 	import type { SurfaceResponse } from './surface';
 	import MoodChip from './MoodChip.svelte';
 
@@ -49,6 +49,9 @@
 		 *  than it wear the brighter ground (the digest block's successor). */
 		newSince?: number | null;
 		onCaughtUp?: (() => void) | null;
+		/** The set-probed topic faces (`warpGraph.topicFaces`) — one
+		 *  assignment for the whole page; the bare hash is the fallback. */
+		topicFaces?: Map<string, RunFace>;
 		/** The corpus, for the in-place node unfold (his 08-02 steer: a cloth
 		 *  item previews where the reader stands — a page redirect costs them
 		 *  their place on the way back). Null while loading; the unfold then
@@ -71,6 +74,7 @@
 		selectedTopics = null,
 		newSince = null,
 		onCaughtUp = null,
+		topicFaces = new Map<string, RunFace>(),
 		surface = null,
 		threads = [],
 		crossingIndex = new Map()
@@ -252,7 +256,7 @@
 	     collapse — the row wraps onto a second flex line (`flex-wrap` on the
 	     row, below) rather than crushing the name into a column of letters. -->
 	<Crossing
-		cells={crossingCells(threads, line.runId ? crossingIndex.get(line.runId) : undefined)}
+		cells={crossingCells(threads, line.runId ? crossingIndex.get(line.runId) : undefined, topicFaces)}
 	/>
 	<!-- The sigils, immediately before the name: the runes transitioned from
 	     run ids to topic ids (2026-08-11) — a run wears the topics of the
@@ -263,9 +267,8 @@
 		{#if sigils.length > 0}
 			<span class="shrink-0 font-mono" aria-hidden="true">
 				{#each sigils as topicId (topicId)}
-					<span style={`color: ${runFace(topicId).color}`} title={topicId}
-						>{runFace(topicId).glyph}</span
-					>
+					{@const face = topicFaces.get(topicId) ?? runFace(topicId)}
+					<span style={`color: ${face.color}`} title={topicId}>{face.glyph}</span>
 				{/each}
 			</span>
 		{/if}

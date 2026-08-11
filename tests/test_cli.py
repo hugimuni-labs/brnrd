@@ -313,11 +313,11 @@ def test_relic_item_writes_the_address_record(tmp_path, monkeypatch, capsys):
     outbox.mkdir()
     _relic_env(monkeypatch, outbox)
 
-    assert main(["relic", "item", "the-loom#gate-chips-row-on-repos"]) == 0
+    assert main(["relic", "item", "w-42"]) == 0
     assert _relic_lines(outbox) == [
-        {"address": "the-loom#gate-chips-row-on-repos", "kind": "item"},
+        {"address": "w-42", "kind": "item"},
     ]
-    assert "the-loom#gate-chips-row-on-repos" in capsys.readouterr().out
+    assert "w-42" in capsys.readouterr().out
 
 
 def test_relic_item_refuses_a_malformed_address(tmp_path, monkeypatch, capsys):
@@ -328,12 +328,12 @@ def test_relic_item_refuses_a_malformed_address(tmp_path, monkeypatch, capsys):
     _relic_env(monkeypatch, outbox)
 
     for bad in [
-        "", "the-loom", "#slug", "the-loom#", "The-Loom#weld",
-        "owner/repo#42", "the-loom#two words",
+        "", "#slug", "the-loom#", "The-Loom", "under_score",
+        "owner/repo#42", "two words",
     ]:
         assert main(["relic", "item", bad]) == 1
     err = capsys.readouterr().err
-    assert "<layer>#<slug>" in err
+    assert "item id" in err
     assert "nothing was written" in err.lower()
     assert not (outbox / ".relics.jsonl").exists()
 
@@ -342,7 +342,7 @@ def test_relic_item_outside_a_run_says_why(monkeypatch, capsys):
     monkeypatch.delenv("BRR_OUTBOX_DIR", raising=False)
     monkeypatch.delenv("BRR_PORTAL_STATE", raising=False)
 
-    assert main(["relic", "item", "the-loom#weld"]) == 1
+    assert main(["relic", "item", "w-42"]) == 1
     err = capsys.readouterr().err
     assert "no run outbox" in err
 

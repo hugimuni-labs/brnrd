@@ -4,7 +4,7 @@
 	import type { ScheduledWake } from './scheduledWakes';
 	import type { WeavingRow } from './warpGraph';
 	import { armedOverflow, pickRows, PICKING_ROW_CAP, type PickRow } from './pickLane';
-	import { runFacesInWindow } from './runFace';
+	import { runFacesInWindow, type RunFace } from './runFace';
 	import Crossing from './Crossing.svelte';
 	import { crossingCells } from './crossing';
 	import { statusDotStyle, glowFor, STATUS_BURNING } from './statusPalette';
@@ -45,6 +45,12 @@
 		 *  see `PickRow.crosses`. */
 		threads?: string[];
 		crossingIndex?: Map<string, string[]>;
+		/** The set-probed topic faces (`warpGraph.topicFaces`). */
+		topicFaces?: Map<string, RunFace>;
+		/** Canonical topic ids lit on the heddle rail; null = all. The whole
+		 *  dashboard filters by the lit set (his 2026-08-11 steer) — hidden
+		 *  picks are counted in an honest line, never silently vanished. */
+		selectedTopics?: ReadonlySet<string> | null;
 	}
 
 	let {
@@ -56,10 +62,25 @@
 		selectedId = null,
 		daemonMood = null,
 		threads = [],
-		crossingIndex = new Map()
+		crossingIndex = new Map(),
+		topicFaces = new Map<string, RunFace>(),
+		selectedTopics = null
 	}: Props = $props();
 
-	let rows = $derived(pickRows({ liveRuns, scheduledWakes, weaving, now }));
+	let allRows = $derived(pickRows({ liveRuns, scheduledWakes, weaving, now }));
+	// The heddle lens over the lane: a row's topics come from the taken:
+	// index (picking) or its own serves: claim (armed). A row making no
+	// topic claim is honestly "not this topic" under a real filter — and
+	// the hidden count renders below, so a burning run never just vanishes.
+	function rowTopics(row: PickRow): string[] {
+		return crossingIndex.get(row.id) ?? row.crosses;
+	}
+	let rows = $derived(
+		selectedTopics === null
+			? allRows
+			: allRows.filter((row) => rowTopics(row).some((id) => selectedTopics.has(id)))
+	);
+	let hiddenByTopics = $derived(allRows.length - rows.length);
 	let overflow = $derived(armedOverflow(scheduledWakes, now));
 	let picking = $derived(rows.filter((row) => row.phase === 'picking'));
 	let armed = $derived(rows.filter((row) => row.phase === 'armed'));
@@ -140,7 +161,7 @@
 								class="inline-block w-2 shrink-0 text-center text-amber-300/80"
 								aria-hidden="true">↯</span
 							>
-							<Crossing cells={crossingCells(threads, crossingIndex.get(row.id))} />
+							<Crossing cells={crossingCells(threads, crossingIndex.get(row.id), topicFaces)} />
 							{#if face}
 								<span class="shrink-0 text-[9px]" aria-hidden="true" style={`color: ${face.color}`}
 									>{face.glyph}</span
@@ -215,7 +236,7 @@
 				     share this lead slot and padding box. Before this existed it
 				     was the one row in the lane with a blank where its threads
 				     belong. -->
-					<Crossing cells={crossingCells(threads, row.crosses)} label="threads this pick serves" />
+					<Crossing cells={crossingCells(threads, row.crosses, topicFaces)} label="threads this pick serves" />
 					<span
 						class="h-[7px] shrink-0 rounded-r-[1px]"
 						style={`width: ${(row.barFraction * 34).toFixed(2)}%; background-color: ${row.color}`}
@@ -235,5 +256,13 @@
 			     identically to a complete one, and only this line knows. -->
 			<p class="mt-1 font-mono text-[9px] text-ink-mute">+{overflow} further out</p>
 		{/if}
+	{/if}
+	{#if hiddenByTopics > 0}
+		<!-- The heddle lens's honest remainder: a filtered lane must say what
+		     it is not showing — a hidden burning run rendered as silence would
+		     be the filter lying about the machine. -->
+		<p class="mt-1 font-mono text-[9px] text-ink-mute">
+			+{hiddenByTopics} pick{hiddenByTopics === 1 ? '' : 's'} outside lit topics
+		</p>
 	{/if}
 </div>
