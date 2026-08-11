@@ -4,7 +4,7 @@ import test from 'node:test';
 import { ARMED_ROW_CAP, armedOverflow, pickRows } from './pickLane.ts';
 import type { LiveRun } from './liveRuns.ts';
 import type { ScheduledWake } from './scheduledWakes.ts';
-import type { WeavingRow } from './warp.ts';
+import type { WeavingRow } from './warpGraph.ts';
 
 const NOW = Date.parse('2026-08-02T18:00:00Z');
 const MINUTE = 60_000;
@@ -61,20 +61,20 @@ test('the lane is a queue from the front: burning picks first, then soonest-firs
 });
 
 test('a picking row carries the warp items its run lifted — the weld, on the object', () => {
-	const weaving = [
+	const weaving: WeavingRow[] = [
 		{
-			callSign: 'the-loom',
-			path: 'surface/layers/the-loom.md',
-			item: { headline: 'THE MACHINE: the frontend fuse shipped' },
+			callSign: 'loom',
+			headline: 'THE MACHINE: the frontend fuse shipped',
+			itemId: 'w-1',
 			liveRunId: 'burning'
 		},
 		{
-			callSign: 'the-post',
-			path: 'surface/layers/the-post.md',
-			item: { headline: 'THE GRAVEYARD' },
+			callSign: 'post',
+			headline: 'THE GRAVEYARD',
+			itemId: 'w-2',
 			liveRunId: 'other'
 		}
-	] as unknown as WeavingRow[];
+	];
 	const rows = pickRows({
 		liveRuns: [run({ id: 'burning', run_id: 'burning' })],
 		scheduledWakes: null,
@@ -84,7 +84,7 @@ test('a picking row carries the warp items its run lifted — the weld, on the o
 	assert.equal(rows.length, 1);
 	assert.deepEqual(
 		rows[0].serves.map((s) => s.callSign),
-		['the-loom']
+		['loom']
 	);
 });
 

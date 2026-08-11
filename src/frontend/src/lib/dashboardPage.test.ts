@@ -70,16 +70,15 @@ test('no standalone per-lane WithheldNotice repeats the page-head banner', () =>
 	);
 });
 
-// `WarpBand` already receives `withheld` and folds it into its own chip /
-// `BackchannelQueue`'s empty state — the standalone banner that used to sit
-// right after it in the warp section was a third repeat of the same fact
-// for that lane alone. `prReviewQueueWithheld` survives (still fed to
-// `WarpBand`); only the redundant standalone call is gone.
-test('the warp section feeds WarpBand its withheld lane instead of also rendering a standalone notice', () => {
+// The derived needs-you strip already receives `withheld` and folds it
+// into `BackchannelQueue`'s empty state — a standalone banner inside the
+// warp section would be a second repeat of the same fact for that lane
+// alone (#1281's rule, carried through the graph rewrite).
+test('the warp section feeds the queue its withheld lane instead of also rendering a standalone notice', () => {
 	const src = source();
-	const warpSection = src.match(/aria-labelledby="warp-heading"[\s\S]{0,2500}/);
+	const warpSection = src.match(/aria-labelledby="warp-heading"[\s\S]*?aria-labelledby="cloth-heading"/);
 	ok(warpSection, 'the warp section exists');
 	const body = warpSection![0];
-	ok(/withheld=\{prReviewQueueWithheld\}/.test(body), 'WarpBand still receives the withheld lane');
+	ok(/withheld=\{prReviewQueueWithheld\}/.test(body), 'the queue still receives the withheld lane');
 	ok(!/<WithheldNotice/.test(body), 'no standalone WithheldNotice remains inside the warp section');
 });

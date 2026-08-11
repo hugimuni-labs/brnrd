@@ -2,7 +2,7 @@
 	import { glitchReveal } from './transitions';
 	import { moodFace, type DaemonMood, type LiveRun } from './liveRuns';
 	import type { ScheduledWake } from './scheduledWakes';
-	import type { WeavingRow } from './warp';
+	import type { WeavingRow } from './warpGraph';
 	import { armedOverflow, pickRows, PICKING_ROW_CAP, type PickRow } from './pickLane';
 	import { runFacesInWindow } from './runFace';
 	import Crossing from './Crossing.svelte';
