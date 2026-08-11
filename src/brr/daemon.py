@@ -11023,14 +11023,37 @@ def _capture_worktree(
     if run_root is None:
         return
     run_root = Path(run_root)
-    branch = worktree.current_branch(run_root)
+    try:
+        branch = worktree.current_branch(run_root)
+    except worktree.BranchUnresolvable as exc:
+        # #1302: this is the salvage path — the net under the floor — and
+        # an unresolvable branch used to read identically to a genuine
+        # detached HEAD (both a bare ``return``, no diagnostic). The
+        # outcome is unchanged (there is still no branch name to commit
+        # onto), but it is no longer silent: an operator watching this run
+        # go dark now sees *why* salvage declined instead of a log that
+        # looks the same for "nothing to do" and "could not tell".
+        print(
+            f"[brnrd] salvage: branch unresolvable for {task.id} ({exc}); "
+            "no branch to publish"
+        )
+        return
     if not branch:
         # Detached HEAD — no branch to publish; finalize keeps the worktree
         # for forensic inspection.
         return
     protected = str(task.meta.get("host_context_branch") or "").strip()
+    # #1302: ``worktree.has_uncommitted_changes`` here, never
+    # ``gitops.worktree_dirty`` — both run the same ``git status
+    # --porcelain`` probe, but ``worktree_dirty`` answers a git failure
+    # with "clean" (documented best-effort, fine for its other advisory
+    # callers) while this function's whole job is not losing a failed
+    # run's uncommitted work. ``has_uncommitted_changes`` answers the same
+    # failure with "dirty" instead, so a probe that cannot tell still
+    # tries to commit rather than silently skipping the one floor this
+    # path exists to provide.
     try:
-        if branch == protected and gitops.worktree_dirty(run_root):
+        if branch == protected and worktree.has_uncommitted_changes(run_root):
             # The run died standing on the operator's own branch (a host-env
             # run that never moved off it). Divert the floor commit to a
             # salvage branch and hand the operator's branch back untouched —
@@ -11062,7 +11085,7 @@ def _capture_worktree(
                 f"for failed {task.id}"
             )
             return
-        if gitops.worktree_dirty(run_root):
+        if worktree.has_uncommitted_changes(run_root):
             if gitops.commit_all(
                 run_root,
                 f"brr salvage: in-flight work from interrupted run {task.id}",
