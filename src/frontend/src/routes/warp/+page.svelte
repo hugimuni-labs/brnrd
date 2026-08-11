@@ -18,7 +18,7 @@
 		itemInTopics,
 		resolveTopics,
 		topicCounts,
-		topicFace,
+		topicFaces,
 		topicThreads,
 		weavingRows
 	} from '$lib/warpGraph';
@@ -43,6 +43,7 @@
 	let completed = $derived(
 		completedItems(graph).filter((item) => itemInTopics(item, graph, selected))
 	);
+	let faces = $derived(topicFaces(graph));
 
 	function toggleTopic(id: string) {
 		const all = new Set(threads.map((thread) => thread.canonicalId));
@@ -153,11 +154,14 @@
 								>
 							{/if}
 							{#each resolveTopics(item, graph) as topic (topic.canonicalId)}
-								<span
-									class="shrink-0 font-mono text-[11px]"
-									style={`color: ${topicFace(topic).color}`}
-									title={topic.title}>{topicFace(topic).glyph}</span
-								>
+								{@const face = faces.get(topic.canonicalId)}
+								{#if face}
+									<span
+										class="shrink-0 font-mono text-[11px]"
+										style={`color: ${face.color}`}
+										title={topic.title}>{face.glyph}</span
+									>
+								{/if}
 							{/each}
 							<span class="ml-auto shrink-0 text-[10px] whitespace-nowrap text-ink-mute">
 								{item.state === 'retired'
