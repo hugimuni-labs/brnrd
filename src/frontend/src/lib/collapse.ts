@@ -135,8 +135,9 @@ export interface ScrollClock {
 // 300ms was tuned for the old trailing-debounce ("soon after scrolling
 // stops"); the 2026-08-11 correction fires from the threshold crossing
 // instead, so it reads against his own stated intuition — "within a
-// second" — rather than that old tuning.
-export const SCROLL_SETTLE_MS = 1_000;
+// second" — rather than that old tuning. Reduced to 500ms on 2026-08-11
+// (his follow-up: "reduce it from one 2nd to half a second").
+export const SCROLL_SETTLE_MS = 500;
 
 /**
  * One tick of the shared clock. Called with this instant's raw geometric
