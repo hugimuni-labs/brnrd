@@ -7,14 +7,17 @@ import {
 	buildWarpGraph,
 	completedItems,
 	isBlocked,
+	isRunTopicsFile,
 	isTopicFile,
 	isWarpItemFile,
 	itemInTopics,
 	liveTakenRuns,
+	parseRunTopics,
 	parseWarpItem,
 	parseWarpTopic,
 	readyItems,
 	resolveTopics,
+	runIdForTopicsPath,
 	runTopicIndex,
 	topicCounts,
 	topicFace,
@@ -51,6 +54,26 @@ describe('file discovery', () => {
 		assert.equal(isWarpItemFile('surface/layers/w-1.md'), false);
 		assert.equal(isTopicFile('surface/topics/loom.md'), true);
 		assert.equal(isTopicFile('surface/topics/index.md'), false);
+	});
+
+	it('recognizes a run topics file by its exact four-segment shape', () => {
+		assert.equal(isRunTopicsFile('runs/hugimuni-labs__brnrd/run-a/topics.md'), true);
+		assert.equal(isRunTopicsFile('runs/hugimuni-labs__brnrd/run-a/state.md'), false);
+		assert.equal(isRunTopicsFile('runs/hugimuni-labs__brnrd/run-a/messages/topics.md'), false);
+		assert.equal(isRunTopicsFile('runs/only-one-slug/topics.md'), false);
+		assert.equal(isRunTopicsFile('surface/topics/topics.md'), false);
+	});
+});
+
+describe('run topics.md', () => {
+	it('parses the topics: row, splitIds grammar', () => {
+		assert.deepEqual(parseRunTopics('# Topics\n\ntopics: loom post\n'), ['loom', 'post']);
+		assert.deepEqual(parseRunTopics(''), []);
+	});
+
+	it('runIdForTopicsPath names the run, null for any other path', () => {
+		assert.equal(runIdForTopicsPath('runs/hugimuni-labs__brnrd/run-a/topics.md'), 'run-a');
+		assert.equal(runIdForTopicsPath('runs/hugimuni-labs__brnrd/run-a/state.md'), null);
 	});
 });
 
@@ -218,6 +241,45 @@ describe('the graph', () => {
 	it('runTopicIndex joins taken and done runs to canonical topic ids', () => {
 		const index = runTopicIndex(graph);
 		assert.deepEqual(index.get('run-260810-0001-aaaa'), ['post']);
+	});
+
+	it("runTopicIndex unions a run's own topics.md claim for a run with no item edge", () => {
+		const withClaim = [
+			...files,
+			file('runs/hugimuni-labs__brnrd/run-chat/topics.md', '# Topics\n\ntopics: loom\n')
+		];
+		const index = runTopicIndex(graphOf(...files), withClaim);
+		assert.deepEqual(index.get('run-chat'), ['loom']);
+	});
+
+	it('runTopicIndex dedups a run both taken-by-item and claimed by its own topics.md', () => {
+		const claimFiles = [
+			...files,
+			file('runs/hugimuni-labs__brnrd/run-260810-0001-aaaa/topics.md', '# Topics\n\ntopics: post\n')
+		];
+		const index = runTopicIndex(graph, claimFiles);
+		assert.deepEqual(index.get('run-260810-0001-aaaa'), ['post']);
+	});
+
+	it('runTopicIndex: an unknown topic id in a topics.md is dropped silently', () => {
+		const claimFiles = [
+			...files,
+			file(
+				'runs/hugimuni-labs__brnrd/run-chat/topics.md',
+				'# Topics\n\ntopics: loom no-such-topic\n'
+			)
+		];
+		const index = runTopicIndex(graph, claimFiles);
+		assert.deepEqual(index.get('run-chat'), ['loom']);
+	});
+
+	it('runTopicIndex ignores paths that are not a run topics.md', () => {
+		const notATopicsFile = [
+			...files,
+			file('runs/hugimuni-labs__brnrd/run-chat/state.md', 'topics: loom\n')
+		];
+		const index = runTopicIndex(graph, notATopicsFile);
+		assert.equal(index.has('run-chat'), false);
 	});
 
 	it('topicCounts splits ready/blocked per canonical id, untagged under empty key', () => {

@@ -44,6 +44,7 @@ async function renderBlock(props: {
 	error?: string | null;
 	stale?: boolean;
 	selectedId?: string | null;
+	crossingIndex?: Map<string, string[]>;
 }): Promise<string> {
 	const source = readFileSync(componentPath, 'utf8');
 	const compiled = compile(source, { generate: 'server', runes: true, name: 'RunBlock' });
@@ -62,11 +63,33 @@ after(() => rmSync(generated, { force: true }));
 const alpha = pick({ id: 'run-a', label: 'Alpha', clock: '3m12s', note: null });
 const bravo = pick({ id: 'run-b', label: 'Bravo', clock: '9m01s', note: null });
 
-test('pulse: the head wears the lead — face, name, its own clock', async () => {
-	const body = await renderBlock({ burning: [alpha], armed: [], open: false });
-	ok(body.includes(runFace('run-a').glyph), "the lead's face renders");
+// 2026-08-11 mark doctrine: the head's face is the run's first crossed
+// topic (`crossingIndex`), never the run id itself — a run wears the
+// topics of the work it did. `topicFaces` is left at its default empty map
+// in these fixtures, so the component's own fallback (`runFace(topicId)`)
+// is what produces the glyph asserted below.
+const topicsByRun = new Map([
+	['run-a', ['loom']],
+	['run-b', ['post']]
+]);
+
+test('pulse: the head wears the lead — its first crossed topic, name, its own clock', async () => {
+	const body = await renderBlock({
+		burning: [alpha],
+		armed: [],
+		open: false,
+		crossingIndex: topicsByRun
+	});
+	ok(body.includes(runFace('loom').glyph), "the lead's first-topic face renders");
 	ok(body.includes('Alpha'), "the lead's name renders");
 	ok(body.includes('3m12s'), "the lead's own clock renders");
+});
+
+test('a run that crossed no topic wears no fabricated mark', async () => {
+	// No `crossingIndex` passed — defaults to empty, so `face` is null and
+	// the watermark span (the `{#if face}` guard) never renders at all.
+	const body = await renderBlock({ burning: [alpha], armed: [], open: false });
+	ok(!body.includes('text-4xl'), 'the watermark face span is absent, not empty');
 });
 
 // Hard constraint: pulse is pixel-identical to today whether or not a caller
@@ -84,16 +107,25 @@ test('pulse is pixel-identical: no selection renders the same whether `selectedI
 });
 
 test('inspection: selecting a different run swaps the face and name, not the tail', async () => {
-	const pulse = await renderBlock({ burning: [alpha, bravo], armed: [], open: false });
+	const pulse = await renderBlock({
+		burning: [alpha, bravo],
+		armed: [],
+		open: false,
+		crossingIndex: topicsByRun
+	});
 	const inspecting = await renderBlock({
 		burning: [alpha, bravo],
 		armed: [],
 		open: false,
-		selectedId: 'run-b'
+		selectedId: 'run-b',
+		crossingIndex: topicsByRun
 	});
 	// Identity borrows the selection.
 	ok(!pulse.includes('Bravo'), "pulse never names the run that isn't the lead");
-	ok(inspecting.includes(runFace('run-b').glyph), "inspecting wears the selected run's face");
+	ok(
+		inspecting.includes(runFace('post').glyph),
+		"inspecting wears the selected run's first-topic face"
+	);
 	ok(inspecting.includes('Bravo'), "inspecting wears the selected run's name");
 	// The tail stays the lead's — the quiet proof the machine never stopped
 	// being the machine underneath the borrowed face (the "+N / lead clock

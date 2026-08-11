@@ -18,7 +18,7 @@
 		type NodeIdentity
 	} from './runNode';
 	import { STATUS_GOOD, STATUS_WARN, STATUS_UNKNOWN, statusDotStyle } from './statusPalette';
-	import { runFace } from './runFace';
+	import { runFace, type RunFace } from './runFace';
 	import type { SurfaceResponse } from './surface';
 	import { glitchReveal, typeReveal } from './transitions';
 
@@ -66,6 +66,17 @@
 		 * and flattened runner/phase/elapsed into one 10px vitals string).
 		 */
 		identity?: NodeIdentity | null;
+		/**
+		 * The run⇄topic join (`warpGraph.runTopicIndex`) and the set-probed
+		 * topic faces (`warpGraph.topicFaces`) — how this panel finds the
+		 * run's face now that the rune wears a topic, not the run id
+		 * (2026-08-11 mark doctrine: "a run wears the topics of the work it
+		 * did, never a hue of its own"). Optional and empty by default so a
+		 * caller that hasn't wired the warp graph through yet gets no face
+		 * rather than a stale one.
+		 */
+		crossingIndex?: Map<string, string[]>;
+		topicFaces?: Map<string, RunFace>;
 	}
 
 	let {
@@ -76,7 +87,9 @@
 		vitals = [],
 		liveLevel = null,
 		stopRun = requestRunStop,
-		identity = null
+		identity = null,
+		crossingIndex = new Map(),
+		topicFaces = new Map()
 	}: Props = $props();
 
 	// Confirm-then-commit, in the repos page's own grammar: an explicit pair of
@@ -145,10 +158,17 @@
 		)
 	);
 	let cornerLabel = $derived([identity?.age, 'run node'].filter(Boolean).join(' · '));
-	// The face is hashed from the `runId` prop, never from the identity block:
-	// the prop is always present, and it is the same string the lane and the
-	// cloth hash, so the unfolded node wears the mark the reader tapped.
-	let face = $derived(runFace(runId));
+	// The face is the run's first crossed topic (2026-08-11 mark doctrine:
+	// the rune transitioned from run ids to topic ids — a run wears the
+	// topics of the work it did, never a hue of its own; same join and same
+	// "first topic" reading the parked machine block uses). `topicFaces`
+	// carries the set-probed hue so this panel agrees with the cloth and the
+	// rail rather than re-hashing its own; `runFace` is only the fallback
+	// for a topic the probe hasn't assigned yet. A run that crossed no topic
+	// wears no fabricated mark — `face` is null and the glyph simply doesn't
+	// render.
+	let topicId = $derived(crossingIndex.get(runId)?.[0] ?? null);
+	let face = $derived(topicId ? (topicFaces.get(topicId) ?? runFace(topicId)) : null);
 	let runnerLine = $derived.by(() => {
 		const runner = identity?.runner || digest?.runner || '';
 		return runner ? `runner: ${runner}` : null;
@@ -219,9 +239,14 @@
 			</div>
 			{#if identity?.name}
 				<p class="mt-1.5 flex min-w-0 items-center gap-1.5">
-					<span class="shrink-0 text-sm" aria-hidden="true" style={`color: ${face.color}`}
-						>{face.glyph}</span
-					>
+					{#if face}
+						<span
+							class="shrink-0 text-sm"
+							aria-hidden="true"
+							style={`color: ${face.color}`}
+							title={topicId}>{face.glyph}</span
+						>
+					{/if}
 					<span
 						class="truncate text-sm font-medium text-amber-100"
 						use:typeReveal={{ text: identity.name }}>{identity.name}</span

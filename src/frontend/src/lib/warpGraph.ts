@@ -23,6 +23,19 @@ import type { SurfaceFile } from './surface.ts';
 // inversion is the design — topics stopped being where items live and
 // became properties items wear. Value imports carry `.ts` extensions
 // because the tests run under node's own runner with no bundler in play.
+//
+// **Runs carry their topics; topics do not carry run lists** (maintainer,
+// 2026-08-11, live: "I prefer the runs to have a list / set of topics it
+// touches/touched"). The `taken:`/`done:` edges above answer for a run
+// that lifted an item, but most runs (chat-woken, scheduled) take no
+// item and so leave no edge at all — the retro-assignment door for those
+// is a small file in the run's own node, `runs/<slug>/<run-id>/topics.md`
+// (`isRunTopicsFile` / `parseRunTopics` below), carrying one `topics:` row
+// in the same `splitIds` grammar the warp already speaks. `runTopicIndex`
+// unions both doors; the corpus already mirrors the run-node directory
+// these files live in (`runNode.ts`'s `runNodeFromSurface` reads
+// `state.md`/`body.md`/`messages/` from the same prefix), so this is one
+// more reader of a directory that already exists, not a new root.
 
 export const WARP_PREFIX = 'surface/warp/';
 export const TOPICS_PREFIX = 'surface/topics/';
@@ -322,10 +335,54 @@ export function itemInTopics(
 
 // ── the run⇄topic join: runes transition from run ids to topic ids ────────
 
-/** run id → canonical topic ids, via the items the run took or completed.
+/** A run's own topic membership file: `runs/<slug>/<run-id>/topics.md`,
+ *  a sibling of the `state.md` / `body.md` / `messages/` the corpus
+ *  already mirrors under that prefix (`runNode.ts`). Four path segments,
+ *  the last exactly `topics.md` — deliberately not a prefix match, so a
+ *  message file or a future run-node kind never mis-parses as this one. */
+export function isRunTopicsFile(path: string): boolean {
+	const parts = path.split('/');
+	return (
+		parts.length === 4 &&
+		parts[0] === 'runs' &&
+		parts[1] !== '' &&
+		parts[2] !== '' &&
+		parts[3] === 'topics.md'
+	);
+}
+
+/** The run id a `runs/<slug>/<run-id>/topics.md` path names, or null for
+ *  any other path. */
+export function runIdForTopicsPath(path: string): string | null {
+	if (!isRunTopicsFile(path)) return null;
+	return path.split('/')[2] ?? null;
+}
+
+const RUN_TOPICS_ROW_RE = /^(topics)[:][ \t]*(.*)$/;
+
+/** The authored topic ids off a run's own `topics.md` — same `topics:`
+ *  row grammar an item speaks, parsed with the module's shared row-block
+ *  reader. Ids as authored (aliases allowed); resolution through
+ *  `topicByAlias`, and dropping what doesn't resolve, is `runTopicIndex`'s
+ *  job, the same second gate an item's `topics:` row goes through via
+ *  `resolveTopics`. */
+export function parseRunTopics(markdown: string): string[] {
+	const { rows } = parsePage(markdown, RUN_TOPICS_ROW_RE);
+	return splitIds(rows.get('topics') ?? '');
+}
+
+/** run id → canonical topic ids, via the items the run took or completed,
+ *  unioned with each run's own `topics.md` claim (`isRunTopicsFile` /
+ *  `parseRunTopics`) — the retro-assignment door for a run that took no
+ *  item (chat-woken, scheduled) and so left no `taken:`/`done:` edge.
  *  This is the join the cloth's sigils and the topic filter read — a run
- *  wears the topics of the work it did, never a hue of its own. */
-export function runTopicIndex(graph: WarpGraph): Map<string, string[]> {
+ *  wears the topics of the work it did, never a hue of its own.
+ *  `files` defaults empty so a caller that hasn't wired the corpus feed
+ *  through yet still gets the item-derived half, unchanged. */
+export function runTopicIndex(
+	graph: WarpGraph,
+	files: readonly SurfaceFile[] = []
+): Map<string, string[]> {
 	const order = new Map(graph.topics.map((topic, index) => [topic.canonicalId, index]));
 	const seen = new Map<string, Set<string>>();
 	const add = (runId: string, item: WarpItem) => {
@@ -337,6 +394,18 @@ export function runTopicIndex(graph: WarpGraph): Map<string, string[]> {
 	for (const item of graph.items) {
 		for (const runId of item.taken) add(runId, item);
 		if (item.doneRun) add(item.doneRun, item);
+	}
+	for (const file of files) {
+		const runId = runIdForTopicsPath(file.path);
+		if (!runId) continue;
+		const set = seen.get(runId) ?? new Set<string>();
+		for (const raw of parseRunTopics(file.markdown)) {
+			// An id the graph doesn't recognize is dropped silently here —
+			// the drift audit's job to name, not this join's to guess at.
+			const topic = graph.topicByAlias.get(raw);
+			if (topic) set.add(topic.canonicalId);
+		}
+		seen.set(runId, set);
 	}
 	const index = new Map<string, string[]>();
 	for (const [runId, set] of seen) {
