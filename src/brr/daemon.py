@@ -2519,6 +2519,60 @@ def _child_git_pin(task: Run, run_root: Path) -> dict[str, str]:
     return {"GIT_DIR": str(git_dir), "GIT_WORK_TREE": str(run_root)}
 
 
+# Retry budget for `_stamp_host_start_oid`'s dispatch-time HEAD read (#1309
+# item 2) — small and fast: this absorbs a transient lock/hiccup, not a real
+# outage, and a dispatch path is not the place to burn seconds hoping.
+_HOST_START_OID_RETRIES = 3
+_HOST_START_OID_RETRY_DELAY = 0.2
+
+
+def _stamp_host_start_oid(
+    task: Run, repo_root: Path,
+    *, retries: int = _HOST_START_OID_RETRIES,
+    delay: float = _HOST_START_OID_RETRY_DELAY,
+) -> None:
+    """Pin ``task.meta["host_start_oid"]`` for a host run's relic window (#1309 item 2).
+
+    A **host** run has no assigned branch, so ``relics.collection_scope``
+    cannot measure "what this run committed" from branch-vs-seed — the usual
+    host flow merges back into the seed branch, which erases the range.
+    This pins the checkout's HEAD at dispatch instead; commits that appear
+    beyond this OID during the run are this run's produce.
+
+    ``gitops.rev_parse`` answers a transient git failure (a lock held by a
+    concurrent process, a momentary hiccup) identically to "HEAD does not
+    resolve" — both ``None``. Left unhandled, that collapse means an
+    unstamped ``host_start_oid`` is indistinguishable from "this run
+    legitimately has no host baseline", and ``collection_scope``'s
+    branchless fallback seeds from ``default_branch`` instead — for a host
+    run *on* the default branch, seed equals branch, the diff is empty, and
+    the run's real commits silently vanish from its own produce/relic list
+    even though they exist in history.
+
+    A couple of quick retries absorb the transient case for free. A HEAD
+    that still won't resolve is loudly flagged rather than left as a bare
+    unstamped key nothing downstream can tell apart from the legitimate
+    case.
+    """
+    start_oid = None
+    attempts = max(1, retries)
+    for attempt in range(attempts):
+        start_oid = gitops.rev_parse(repo_root, "HEAD")
+        if start_oid:
+            break
+        if attempt < attempts - 1:
+            time.sleep(delay)
+    if start_oid:
+        task.meta["host_start_oid"] = start_oid
+    else:
+        print(
+            f"[brnrd] run {task.id}: could not resolve HEAD for host_start_oid "
+            f"after {attempts} attempt(s) — this run's commits may not appear "
+            "in its own produce/relic list until the checkout is readable "
+            "again (#1309)"
+        )
+
+
 # Above this many dirty paths in the host checkout, #703's arm 2 records no
 # baseline and is skipped for the run. A truncated baseline is *worse than
 # none*: every dropped path would read as "new" at finalize and the check
@@ -2538,12 +2592,29 @@ def _record_host_baseline(task: Run, repo_root: Path) -> None:
     checkout — there is no "stray" to define. Best-effort throughout: an
     unreadable checkout records nothing, and a missing baseline disables the
     check rather than failing the run.
+
+    **The HEAD read's failure is recorded, not swallowed (#1309 item 3).**
+    ``rev_parse`` returning ``None`` here used to leave ``host_head_at_dispatch``
+    simply absent — indistinguishable at finalize from "never dispatched
+    through this function at all", which is the one case that's legitimately
+    fine to skip (``test_no_baseline_disables_the_check_rather_than_guessing``).
+    A failed *attempt* is not that: it means a real baseline was owed and
+    couldn't be taken, so ``host_head_at_dispatch_unavailable`` marks it
+    explicitly for ``_stray_host_write`` to surface rather than silently
+    no-op the commit arm. The dirty-paths read keeps its existing best-effort
+    fallback (an empty baseline on failure) deliberately — a dispatch-time
+    dirty-paths failure followed by a *successful* finalize-time read is
+    already safe-direction (over-reports rather than misses), and is left
+    alone; only a finalize-time read that itself fails needs guarding, done
+    below.
     """
     if task.env == "host":
         return
     head = gitops.rev_parse(repo_root, "HEAD")
     if head:
         task.meta["host_head_at_dispatch"] = head
+    else:
+        task.meta["host_head_at_dispatch_unavailable"] = True
     paths = gitops.dirty_paths(repo_root)
     if len(paths) > _HOST_BASELINE_PATH_CAP:
         task.meta["host_dirty_at_dispatch_skipped"] = f"over-cap:{len(paths)}"
@@ -2591,6 +2662,16 @@ def _stray_host_write(task: Run, repo_root: Path) -> dict | None:
       reaches it too — labelling that honestly is what keeps the note
       readable, and a guard that fires constantly for a non-reason stops being
       read long before the tenth alarm, the real one.
+    - ``stray-check-incomplete`` — an arm could not be measured at all
+      (#1309 item 3): the dispatch-time HEAD read failed
+      (``host_head_at_dispatch_unavailable``), or either ``rev_parse`` or
+      ``dirty_paths`` fails again *here*, at finalize. Both a missing
+      dispatch-time baseline and a failed finalize-time read used to read
+      identically to "nothing changed" — a genuine stray write a broken
+      probe could not see was silently missed, not merely delayed. Weakest
+      signal deliberately: a real finding always outranks "part of the check
+      was unmeasurable", but "nothing found" must never win over "couldn't
+      look" by silently discarding the latter.
     """
     if task.env == "host":
         return None
@@ -2599,10 +2680,13 @@ def _stray_host_write(task: Run, repo_root: Path) -> dict | None:
     baseline_head = str(task.meta.get("host_head_at_dispatch") or "").strip()
     signals: list[str] = []
     detail: dict = {}
+    incomplete: list[str] = []
 
     if baseline_head:
         now_head = gitops.rev_parse(repo_root, "HEAD")
-        if now_head and now_head != baseline_head:
+        if now_head is None:
+            incomplete.append("commit")
+        elif now_head != baseline_head:
             owned = gitops.commits_owned_by_run(repo_root, baseline_head, task.id)
             detail["host_head_at_dispatch"] = baseline_head
             detail["host_head_now"] = now_head
@@ -2611,6 +2695,8 @@ def _stray_host_write(task: Run, repo_root: Path) -> dict | None:
                 detail["stray_commits"] = owned
             else:
                 signals.append("host-head-moved")
+    elif task.meta.get("host_head_at_dispatch_unavailable"):
+        incomplete.append("commit")
 
     raw_baseline = task.meta.get("host_dirty_at_dispatch")
     if raw_baseline is not None:
@@ -2622,16 +2708,28 @@ def _stray_host_write(task: Run, repo_root: Path) -> dict | None:
             # against it would invent "new" paths. Skip the arm.
             baseline_paths = None
         if baseline_paths is not None:
-            gained = sorted(gitops.dirty_paths(repo_root) - baseline_paths)
-            if gained:
-                signals.append("stranded-worktree")
-                detail["stranded_paths"] = gained
+            now_paths = gitops.dirty_paths_or_none(repo_root)
+            if now_paths is None:
+                incomplete.append("dirty")
+            else:
+                gained = sorted(now_paths - baseline_paths)
+                if gained:
+                    signals.append("stranded-worktree")
+                    detail["stranded_paths"] = gained
+
+    if incomplete:
+        signals.append("stray-check-incomplete")
+        detail["incomplete_arms"] = incomplete
 
     if not signals:
         return None
     # Strongest first: proof outranks the mode the fix creates, which outranks
-    # an unattributed ref move.
-    for kind in ("stray-commit", "stranded-worktree", "host-head-moved"):
+    # an unattributed ref move, which outranks "part of the check couldn't
+    # even measure" — a real finding is always more actionable than that.
+    for kind in (
+        "stray-commit", "stranded-worktree", "host-head-moved",
+        "stray-check-incomplete",
+    ):
         if kind in signals:
             return {"kind": kind, "signals": signals, **detail}
     return None
@@ -3210,14 +3308,11 @@ def _run_worker(
     if branch_name:
         task.meta["branch_name"] = branch_name
     else:
-        # A host run has no assigned branch, so relic derivation cannot
-        # measure "what this run committed" from branch-vs-seed — the usual
-        # host flow merges back into the seed branch, which erases the range.
-        # Pin the checkout's HEAD now; commits that appear beyond this OID
-        # during the run are this run's produce (relics.collection_scope).
-        start_oid = gitops.rev_parse(repo_root, "HEAD")
-        if start_oid:
-            task.meta["host_start_oid"] = start_oid
+        # A host run has no assigned branch — pin the checkout's HEAD now so
+        # relics.collection_scope's branchless fallback has a start point.
+        # See _stamp_host_start_oid for why a bare rev_parse isn't enough
+        # (#1309 item 2).
+        _stamp_host_start_oid(task, repo_root)
     branch_setup_notice = task.meta.get("branch_setup_notice") or None
     # Resolve once during run assembly.  ``portal-state.json`` refreshes every
     # heartbeat, so carrying this avoids turning a stable URL into repeated git
@@ -11438,6 +11533,27 @@ def _run_state_produce_changed(
     return relics.fingerprint(records) != task.meta.get("run_state_produce_fingerprint")
 
 
+def _produce_lines_regressed(existing: list[str], rendered: list[str]) -> bool:
+    """True when *rendered* is missing a bullet *existing* already proved.
+
+    Produce only ever grows or reformats within a run's life — a commit or
+    other relic already captured cannot un-happen. So a bullet present in
+    the last-written section but absent from a fresh collection is stronger
+    evidence of an ambiguous git-probe glitch in ``relics.collection_scope``
+    (#1309 item 4) than of a real change: unlike a fully-empty collection
+    (already handled by the caller falling back on an empty ``rendered``),
+    this result *looks* real — non-empty, no exception raised — while
+    silently having lost something. Comparing rendered bullet lines rather
+    than structured records keeps this check symmetric with
+    :func:`_existing_produce_lines`, which only ever recovers rendered text.
+    """
+    existing_bullets = {line for line in existing if line.startswith("- ")}
+    if not existing_bullets:
+        return False
+    rendered_bullets = {line for line in rendered if line.startswith("- ")}
+    return not existing_bullets.issubset(rendered_bullets)
+
+
 def _run_state_produce_lines(
     path: Path,
     task: Run,
@@ -11452,6 +11568,15 @@ def _run_state_produce_lines(
     receipt can never disagree about what a run made. Every failure degrades
     to the previously written section — produce is a convenience on a
     lifecycle attestation, and must never be able to fail a state write.
+
+    **A non-empty-but-incomplete collection degrades the same way (#1309
+    item 4).** ``relics.collect`` is documented best-effort: a probe glitch
+    inside ``relics.collection_scope`` can silently narrow what it sees
+    without raising, so the ``except Exception`` above never catches it, and
+    the *empty*-``rendered`` fallback below never fires either — the result
+    looks like real produce, just less of it. :func:`_produce_lines_regressed`
+    catches that shape specifically: never publish a collection that drops a
+    relic the document already proved.
     """
     if work_dir is None:
         return _existing_produce_lines(path)
@@ -11467,9 +11592,14 @@ def _run_state_produce_lines(
         )
     except Exception:
         return _existing_produce_lines(path)
-    task.meta["run_state_produce_fingerprint"] = relics.fingerprint(records)
     rendered = relics.render_markdown(records)
-    return rendered if rendered else _existing_produce_lines(path)
+    if not rendered:
+        return _existing_produce_lines(path)
+    existing = _existing_produce_lines(path)
+    if _produce_lines_regressed(existing, rendered):
+        return existing
+    task.meta["run_state_produce_fingerprint"] = relics.fingerprint(records)
+    return rendered
 
 
 def _record_dispatch_edge(

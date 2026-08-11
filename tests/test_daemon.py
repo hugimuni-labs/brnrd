@@ -10085,6 +10085,72 @@ def test_run_state_doc_carries_produce_and_preserves_it(tmp_path, monkeypatch):
     assert "stage: finished" in text
 
 
+def test_run_state_produce_never_regresses_on_a_probe_glitch(tmp_path, monkeypatch):
+    """#1309 item 4: a fresh collection missing a relic must not erase it.
+
+    ``relics.collect`` is documented best-effort — a git-probe glitch
+    (``relics.collection_scope`` reading an ambiguous branch/seed) can
+    return a real-looking but *incomplete* record list without raising, so
+    the writer's own ``except Exception`` guard never sees it. Unlike the
+    fully-empty case (already handled: an empty ``rendered`` falls back to
+    ``_existing_produce_lines``), a *non-empty but smaller* result sailed
+    straight through and overwrote a previously-complete section — produce
+    only grows within a run's life, so a relic that was already recorded
+    disappearing is stronger evidence of a glitch than of a real change.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    task = Run(
+        id="run-produce-regress",
+        event_id="evt-produce-regress",
+        body="make something",
+        source="telegram",
+        status="running",
+        meta={"branch_name": "brr/thing", "seed_ref": "main"},
+    )
+
+    monkeypatch.setattr(
+        daemon.relics,
+        "collect",
+        lambda *_args, **_kwargs: [
+            {"kind": "commit", "sha": "abc1234def", "subject": "do the thing",
+             "url": "https://forge/commit/abc1234"},
+            {"kind": "pr", "number": 487, "url": "https://forge/pr/487"},
+        ],
+    )
+    path = daemon._persist_run_state_doc(
+        ctx, task, repo_label="Gurio/brr", stage="running",
+        work_dir=repo, outbox_dir=None,
+    )
+    text = path.read_text(encoding="utf-8")
+    assert "[PR #487](https://forge/pr/487)" in text
+
+    # A later heartbeat's probe glitches: it still resolves *something*
+    # (never raises), but drops the PR relic the document already proved.
+    monkeypatch.setattr(
+        daemon.relics,
+        "collect",
+        lambda *_args, **_kwargs: [
+            {"kind": "commit", "sha": "abc1234def", "subject": "do the thing",
+             "url": "https://forge/commit/abc1234"},
+        ],
+    )
+    path = daemon._persist_run_state_doc(
+        ctx, task, repo_label="Gurio/brr", stage="running",
+        work_dir=repo, outbox_dir=None,
+    )
+    text = path.read_text(encoding="utf-8")
+    assert "[PR #487](https://forge/pr/487)" in text, (
+        "a proven relic must survive a later probe's incomplete reading"
+    )
+    assert "[abc1234 do the thing](https://forge/commit/abc1234)" in text
+
+
 def test_run_state_doc_carries_the_complete_bounded_bolt_declaration(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
