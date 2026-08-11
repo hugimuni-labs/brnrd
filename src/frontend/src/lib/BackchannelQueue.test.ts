@@ -1,28 +1,31 @@
-import { equal, ok } from 'node:assert/strict';
+import { ok } from 'node:assert/strict';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, test } from 'node:test';
 import { compile } from 'svelte/compiler';
 import { render } from 'svelte/server';
-import type { AuthoredBackchannelItem } from './backchannelPage.ts';
+import type { ConfigChangeRequestItem } from './configRequests.ts';
+import type { PRReviewItem } from './prReviewQueue.ts';
+import type { WithheldLane } from './withheld.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const componentPath = join(here, 'BackchannelQueue.svelte');
 const generated = join(here, '.backchannelQueue.generated.mjs');
 
-// The briefing fold, compacted one level further (design-dashboard-briefing
-// §3, then the 2026-08-01 list-itself compaction): a folded authored item's
-// row carries only its disclosure, headline, and kind chip. Refs and the
-// `prompt:` copy-chip move inside the fold body, above the prose, and render
-// only once that one row is open. These tests render the real component
-// server-side (same dance as workSurfaceHeader.test.ts: compile with stubbed
-// child components, since neither `MarkdownContent` nor `WithheldNotice`
-// compiles standalone outside a bundler's `.svelte` resolution) and assert
-// the fold's contract on the produced markup.
+// The needs-you strip's derived half only (2026-08-11: the resident-authored
+// half retired into the warp, and this component's authored-item fold went
+// with it — nothing produces one in production anymore). These tests render
+// the real component server-side (same dance as workSurfaceHeader.test.ts:
+// compile with a stubbed child component, since `WithheldNotice` doesn't
+// compile standalone outside a bundler's `.svelte` resolution) and assert
+// the derived rows, the stale badge, the empty state, and the draft
+// footnote on the produced markup.
 async function renderQueue(props: {
-	authoredItems?: AuthoredBackchannelItem[];
-	initialOpenKey?: string | null;
+	prs?: PRReviewItem[];
+	requests?: ConfigChangeRequestItem[];
+	stale?: boolean;
+	withheld?: WithheldLane | null;
 }): Promise<string> {
 	const source = readFileSync(componentPath, 'utf8');
 	const compiled = compile(source, {
@@ -31,10 +34,6 @@ async function renderQueue(props: {
 		name: 'BackchannelQueue'
 	});
 	const runnable = compiled.js.code
-		.replace(
-			/import\s+MarkdownContent\s+from\s*'\.\/MarkdownContent\.svelte';/,
-			'const MarkdownContent = () => {};'
-		)
 		.replace(
 			/import\s+WithheldNotice\s+from\s*'\.\/WithheldNotice\.svelte';/,
 			'const WithheldNotice = () => {};'
@@ -62,108 +61,69 @@ async function renderQueue(props: {
 
 after(() => rmSync(generated, { force: true }));
 
-function item(overrides: Partial<AuthoredBackchannelItem>): AuthoredBackchannelItem {
+function pr(overrides: Partial<PRReviewItem>): PRReviewItem {
 	return {
-		key: '0:untitled',
-		headline: 'untitled',
-		kind: null,
-		state: null,
-		needs: null,
-		refs: [],
-		taken: [],
-		prompt: null,
-		bodyMarkdown: '',
+		number: 1,
+		title: 'a title',
+		url: 'https://example.test/pr/1',
+		repo_label: 'x/y',
+		created_at: null,
+		draft: false,
+		author: '',
 		...overrides
 	};
 }
 
-const decideTheSplit = item({
-	key: '0:decide-the-split',
-	headline: 'decide the split',
-	kind: 'decide',
-	refs: [
-		{ label: 'design-wyrd', href: null },
-		{ label: 'PR #915', href: 'https://example.test/pr/915' }
-	],
-	prompt: 'answer the split question in one line',
-	bodyMarkdown: 'Two paragraphs of context the row must not read aloud.'
+test('nothing waiting renders the honest empty state, no withheld notice', async () => {
+	const html = await renderQueue({});
+	ok(html.includes('Nothing needs you right now.'));
 });
 
-const readTheLedger = item({
-	key: '1:read-the-ledger',
-	headline: 'read the ledger',
-	kind: 'read',
-	prompt: null,
-	bodyMarkdown: 'The ledger prose.'
-});
-
-test('a folded row renders only the headline and kind chip — no refs, no prompt chip', async () => {
-	const html = await renderQueue({ authoredItems: [decideTheSplit] });
-	ok(html.includes('decide the split'));
-	ok(html.includes('>decide<'), 'kind chip renders its label');
-	ok(!html.includes('design-wyrd'), 'refs stay folded behind the row');
-	ok(!html.includes('https://example.test/pr/915'), 'link refs stay folded behind the row');
-	ok(
-		!html.includes('answer the split question in one line'),
-		'the prompt chip stays folded behind the row'
-	);
-});
-
-test('opening a row surfaces its refs, its prompt chip, and its prose', async () => {
+test('a withheld lane takes over the empty state instead of the plain message', async () => {
 	const html = await renderQueue({
-		authoredItems: [decideTheSplit],
-		initialOpenKey: '0:decide-the-split'
+		withheld: { lane: 'needs-you', unrecorded: ['x/y'] } satisfies WithheldLane
 	});
-	ok(html.includes('decide the split'));
-	ok(html.includes('design-wyrd'), 'bare ref renders as a label once open');
-	ok(html.includes('https://example.test/pr/915'), 'link ref renders as a link once open');
-	ok(html.includes('answer the split question in one line'), 'the prompt chip renders once open');
-	ok(
-		html.includes('id="backchannel-fold-0:decide-the-split"'),
-		'the fold body (refs, prompt chip, and — via MarkdownContent, stubbed here — the prose) is mounted once open'
-	);
+	ok(!html.includes('Nothing needs you right now.'));
 });
 
-test('the body folds behind the row by default — closed rows render no body container, no refs, no prompt chip', async () => {
-	const html = await renderQueue({ authoredItems: [decideTheSplit, readTheLedger] });
-	ok(!html.includes('aria-expanded="true"'));
-	ok(html.includes('aria-expanded="false"'), 'a folded row still declares the fold');
-	ok(!html.includes('id="backchannel-fold-'), 'no fold body is mounted while closed');
-	ok(!html.includes('design-wyrd'), 'refs stay folded');
-	ok(!html.includes('answer the split question in one line'), 'the prompt chip stays folded');
+test('a draft PR renders no row — the empty state holds even with one PR present', async () => {
+	const html = await renderQueue({ prs: [pr({ draft: true, title: 'still cooking' })] });
+	ok(html.includes('Nothing needs you right now.'));
+	ok(!html.includes('still cooking'));
 });
 
-test('exactly one row unfolds — the open key mounts that body and only that body', async () => {
+test('a non-draft PR renders its row', async () => {
+	const html = await renderQueue({ prs: [pr({ number: 7, title: 'ship it', draft: false })] });
+	ok(html.includes('#7 ship it'));
+	ok(!html.includes('Nothing needs you right now.'));
+});
+
+test('a mixed batch renders only the non-draft row plus a quiet draft footnote', async () => {
 	const html = await renderQueue({
-		authoredItems: [decideTheSplit, readTheLedger],
-		initialOpenKey: '1:read-the-ledger'
-	});
-	equal(html.split('aria-expanded="true"').length - 1, 1, 'one open row');
-	ok(html.includes('id="backchannel-fold-1:read-the-ledger"'));
-	ok(!html.includes('id="backchannel-fold-0:decide-the-split"'));
-});
-
-test('an item with no body offers no fold affordance', async () => {
-	const html = await renderQueue({
-		authoredItems: [item({ key: '0:no-body', headline: 'no body here', kind: 'act' })]
-	});
-	ok(html.includes('no body here'));
-	ok(!html.includes('aria-expanded'), 'nothing to unfold, so no expand control');
-});
-
-test('an item with no body has nowhere to fold refs and the prompt chip into, so they stay on the row', async () => {
-	const html = await renderQueue({
-		authoredItems: [
-			item({
-				key: '0:no-body',
-				headline: 'no body here',
-				kind: 'act',
-				refs: [{ label: 'design-wyrd', href: null }],
-				prompt: 'do the thing'
-			})
+		prs: [
+			pr({ number: 1, title: 'ready for review', draft: false }),
+			pr({ number: 2, title: 'wip', draft: true }),
+			pr({ number: 3, title: 'also wip', draft: true })
 		]
 	});
-	ok(html.includes('no body here'));
-	ok(html.includes('design-wyrd'), 'refs render on an un-foldable row');
-	ok(html.includes('do the thing'), 'the prompt chip renders on an un-foldable row');
+	ok(html.includes('#1 ready for review'));
+	ok(!html.includes('wip'));
+	ok(html.includes('2 draft, still being worked'));
+});
+
+test('no draft footnote when nothing is withheld', async () => {
+	const html = await renderQueue({ prs: [pr({ number: 1, draft: false })] });
+	ok(!html.includes('draft, still being worked'));
+});
+
+test('the stale badge renders only when the report is stale', async () => {
+	const stale = await renderQueue({ prs: [pr({ draft: false })], stale: true });
+	ok(stale.includes('stale report'));
+	const fresh = await renderQueue({ prs: [pr({ draft: false })], stale: false });
+	ok(!fresh.includes('stale report'));
+});
+
+test('the naming remnant is gone — no "backchannel" wording renders', async () => {
+	const html = await renderQueue({ prs: [pr({ draft: false })], stale: true });
+	ok(!/backchannel/i.test(html));
 });
