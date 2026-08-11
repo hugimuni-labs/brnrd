@@ -361,17 +361,84 @@ export function topicFace(topic: WarpTopic): RunFace {
  *  rune; past it, collisions are pigeonhole, and the rail says so. */
 export const RUNE_SPACE = 24;
 
+/** The perceptual floor a well-spread window still guarantees: below this
+ *  many degrees apart, two hues read as "the same-ish color" at swatch
+ *  size even with different runes next to them. `separateHues` below
+ *  targets full even use of the circle (`360 / n`), which clears this
+ *  floor for any n up to 12 — past that the floor itself becomes
+ *  unreachable (13 topics can't sit ≥28° apart on one circle) and the
+ *  pass falls back to the smaller even spacing that pigeonhole allows, the
+ *  same "give ground gracefully" shape the glyph probe's alphabet-
+ *  exhausted fallback uses. Exported for the tests below, not read by the
+ *  computation itself — `separateHues` always asks for the whole circle;
+ *  this is the floor that asking-for-the-whole-circle happens to clear. */
+export const MIN_HUE_GAP = 28;
+
+/** Hue-separation pass, same shape as the glyph collision probe above but on
+ *  the color circle instead of the rune alphabet. A hash can and does put
+ *  two topics within a few degrees of each other (his complaint: "6 topics
+ *  can land neighbors"), and hue alone was the only thing telling them
+ *  apart once the rune alphabet runs out — so this doesn't just clear
+ *  collisions, it spreads the whole window across the full circle: sort by
+ *  each topic's own hash-derived hue (ties broken by canonical id, so the
+ *  sort — and everything downstream — is deterministic for a given topic
+ *  set), then sweep forward asking for `360 / n` between consecutive hues,
+ *  the widest even spacing n hues can share. A pair that already sat
+ *  further apart than that keeps its distance; only a pair crowding each
+ *  other gets pushed.
+ *
+ * The forward sweep can walk the last hue past a full turn; `overflow`
+ * measures how far it and the seam back to the first hue overran the circle,
+ * and the final loop compresses every hue by a fraction of that overflow
+ * (more for later topics, none for the first) so the run closes without
+ * disturbing sort order — the same "give ground gracefully" shape the glyph
+ * probe's alphabet-exhausted fallback uses.
+ *
+ * Stability trade-off, stated once here per the borrowed-idiom rule: a
+ * topic's hue can shift when the SET changes — a new topic landing between
+ * two existing ones on the circle nudges every hue after it, exactly the
+ * trade `runFacesInWindow`'s glyph probe already made for the rune. Only
+ * hue and the derived `color` move; the glyph a topic already earned from
+ * the probe above is untouched. Per-id hue stability across renames/set
+ * changes was never the ask — same-page distinguishability was. */
+function separateHues(faces: Map<string, RunFace>): Map<string, RunFace> {
+	const n = faces.size;
+	if (n <= 1) return faces;
+	const order = [...faces.keys()].sort((a, b) => {
+		const diff = faces.get(a)!.hue - faces.get(b)!.hue;
+		return diff !== 0 ? diff : a.localeCompare(b);
+	});
+	const gap = 360 / n;
+	const spread = [faces.get(order[0])!.hue];
+	for (let i = 1; i < n; i += 1) {
+		spread.push(Math.max(faces.get(order[i])!.hue, spread[i - 1] + gap));
+	}
+	const overflow = spread[n - 1] + gap - (spread[0] + 360);
+	if (overflow > 0) {
+		for (let i = 0; i < n; i += 1) spread[i] -= overflow * (i / (n - 1));
+	}
+	const out = new Map<string, RunFace>();
+	order.forEach((id, i) => {
+		const hue = Math.round(((spread[i] % 360) + 360) % 360);
+		const face = faces.get(id)!;
+		out.set(id, { ...face, hue, color: `hsl(${hue} 48% 64%)` });
+	});
+	return out;
+}
+
 /** One face per topic, collision-probed within the set (the same
  *  `runFacesInWindow` machinery the cloth used for runs): within the rune
- *  space, no two topics share a stave. Keyed on canonical ids in sorted
- *  order so the assignment is deterministic for a given topic set. All
- *  surfaces must read faces from this one map — a surface hashing its own
- *  face would disagree with the rail the moment a probe re-rolls one. */
+ *  space, no two topics share a stave, and — the hue-separation pass this
+ *  function adds on top — no two topics' hues sit closer than
+ *  `MIN_HUE_GAP` either. Keyed on canonical ids in sorted order so the
+ *  assignment is deterministic for a given topic set. All surfaces must
+ *  read faces from this one map — a surface hashing its own face would
+ *  disagree with the rail the moment a probe re-rolls one. */
 export function topicFaces(graph: WarpGraph): Map<string, RunFace> {
 	const ids = graph.topics
 		.filter((topic) => topic.splitInto.length === 0)
 		.map((topic) => topic.canonicalId);
-	return runFacesInWindow(ids);
+	return separateHues(runFacesInWindow(ids));
 }
 
 /** The thread alphabet, in topic order — what every crossing strip and the

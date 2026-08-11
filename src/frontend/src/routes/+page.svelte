@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
-	import { SvelteSet } from 'svelte/reactivity';
 	import { resolve } from '$app/paths';
 	import AccountDeletion from '$lib/AccountDeletion.svelte';
 	import BillingPanel from '$lib/BillingPanel.svelte';
@@ -76,6 +75,7 @@
 		weavingRows
 	} from '$lib/warpGraph';
 	import HeddleRail from '$lib/HeddleRail.svelte';
+	import { toggleHeddleSelection } from '$lib/heddleSelection';
 	import WarpGraphView from '$lib/WarpGraphView.svelte';
 	import BackchannelQueue from '$lib/BackchannelQueue.svelte';
 	import { buildDerivedAsks, derivedAsksChip } from '$lib/backchannel';
@@ -378,17 +378,13 @@
 		}
 	}
 	function toggleHeddle(id: string) {
-		const all = new SvelteSet(topicThreadList.map((thread) => thread.canonicalId));
-		let next: SvelteSet<string>;
-		if (heddleSelection === null) {
-			next = all;
-			next.delete(id);
-		} else {
-			next = new SvelteSet(heddleSelection);
-			if (next.has(id)) next.delete(id);
-			else next.add(id);
-		}
-		persistHeddles(next.size >= topicThreadList.length ? null : next);
+		persistHeddles(
+			toggleHeddleSelection(
+				heddleSelection,
+				id,
+				topicThreadList.map((thread) => thread.canonicalId)
+			)
+		);
 	}
 	function allHeddles() {
 		persistHeddles(null);
