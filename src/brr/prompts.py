@@ -1510,6 +1510,36 @@ def _build_work_surface_block_scored(
     # the one coordinate left for a page that rendered nothing at all.
     unannounced: list[tuple[str, str]] = []
 
+    # The warp index (2026-08-11): `surface/warp/` and `surface/topics/`
+    # are the item space — dozens of small files whose *graph*, not whose
+    # pages, is what a wake needs. Injecting them as pages would flood the
+    # walk (and evict every page after them), so both directories are
+    # excluded from the per-page loop below and the item space rides as one
+    # composed index: one line per open item — id · type · topics ·
+    # blocked-by · headline — ready before held, decisions first, plus a
+    # short done-tail. An item's full body is one `Read` away by the id the
+    # index carries.
+    try:
+        from . import items as items_mod
+
+        warp_index = items_mod.render_index(items_mod.warp_dir(ctx))
+    except Exception:
+        warp_index = None
+    if warp_index:
+        block = (
+            "### the warp — open items\n\n"
+            "The account's work-item graph (`surface/warp/<id>.md`, topics "
+            "under `surface/topics/`). Address an item by its id in any "
+            "event body to take it; verbs: `brnrd item list|new|done|retire`. "
+            "decisions/preparations wait on the user; actions are "
+            "dispatchable. Full body: read the item's file.\n\n"
+            + warp_index
+        )
+        size = len(block.encode("utf-8"))
+        if size <= remaining:
+            blocks.append(block)
+            remaining -= size
+
     # #1061 rec 1 — the named reserve, floor pre-pass. For each load-bearing
     # page, render once against `min(page size, _SURFACE_RESERVE_PAGE_BYTES)`
     # and carve that rendered size out of `remaining` *before* the
@@ -1552,6 +1582,10 @@ def _build_work_surface_block_scored(
     for path in acc.work_surface_files(ctx):
         resolved = path.resolve()
         relative = path.relative_to(surface).as_posix()
+        if relative.startswith(("warp/", "topics/")):
+            # The item space rides as the composed index above, never as
+            # pages — see the warp-index block.
+            continue
         floor = reserve_floor.get(resolved)
         if floor is not None:
             # The topup: this page's own floor, spent above, plus whatever

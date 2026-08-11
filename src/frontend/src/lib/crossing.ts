@@ -25,7 +25,7 @@
  * own runner with no bundler in the loop.
  */
 
-import { runFace } from './runFace.ts';
+import { runFace, type RunFace } from './runFace.ts';
 
 export interface CrossingCell {
 	callSign: string;
@@ -45,13 +45,16 @@ export interface CrossingCell {
  */
 export function crossingCells(
 	threads: string[],
-	crossed: readonly string[] | undefined
+	crossed: readonly string[] | undefined,
+	/** The set-probed topic faces (`warpGraph.topicFaces`) — pass it so a
+	 *  probed rune's hue matches the rail; the bare hash is the fallback. */
+	faces?: Map<string, RunFace>
 ): CrossingCell[] {
 	if (threads.length === 0 || !crossed || crossed.length === 0) return [];
 	const set = new Set(crossed);
 	return threads.map((callSign) => ({
 		callSign,
 		lit: set.has(callSign),
-		color: runFace(callSign).color
+		color: (faces?.get(callSign) ?? runFace(callSign)).color
 	}));
 }

@@ -1,5 +1,5 @@
 import { parseRefs, type BackchannelRef } from './backchannelPage.ts';
-import { runFace, type RunFace } from './runFace.ts';
+import { runFace, runFacesInWindow, type RunFace } from './runFace.ts';
 import type { SurfaceFile } from './surface.ts';
 
 // The warp as a dependency graph (2026-08-11, the maintainer's dictated
@@ -359,6 +359,25 @@ export function topicFace(topic: WarpTopic): RunFace {
 	return runFace(topic.canonicalId);
 }
 
+/** The rune space — the Elder Futhark's 24 staves. The topic cap the
+ *  maintainer set ("the amount of topics limited by the runes"): within
+ *  ≤24 topics the collision probe below guarantees every topic a unique
+ *  rune; past it, collisions are pigeonhole, and the rail says so. */
+export const RUNE_SPACE = 24;
+
+/** One face per topic, collision-probed within the set (the same
+ *  `runFacesInWindow` machinery the cloth used for runs): within the rune
+ *  space, no two topics share a stave. Keyed on canonical ids in sorted
+ *  order so the assignment is deterministic for a given topic set. All
+ *  surfaces must read faces from this one map — a surface hashing its own
+ *  face would disagree with the rail the moment a probe re-rolls one. */
+export function topicFaces(graph: WarpGraph): Map<string, RunFace> {
+	const ids = graph.topics
+		.filter((topic) => topic.splitInto.length === 0)
+		.map((topic) => topic.canonicalId);
+	return runFacesInWindow(ids);
+}
+
 /** The thread alphabet, in topic order — what every crossing strip and the
  *  heddle rail share. Color from the topic's own face, not from position:
  *  an index-based hue reshuffles the whole page when one topic retires. */
@@ -369,9 +388,14 @@ export interface TopicThread {
 }
 
 export function topicThreads(graph: WarpGraph): TopicThread[] {
+	const faces = topicFaces(graph);
 	return graph.topics
 		.filter((topic) => topic.splitInto.length === 0)
-		.map((topic) => ({ canonicalId: topic.canonicalId, title: topic.title, face: topicFace(topic) }));
+		.map((topic) => ({
+			canonicalId: topic.canonicalId,
+			title: topic.title,
+			face: faces.get(topic.canonicalId) ?? topicFace(topic)
+		}));
 }
 
 /** Items currently held by a live run — the visible frame the warp draws

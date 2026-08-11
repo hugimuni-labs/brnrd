@@ -18,8 +18,10 @@ import {
 	runTopicIndex,
 	topicCounts,
 	topicFace,
+	topicFaces,
 	topicThreads,
-	dependents
+	dependents,
+	RUNE_SPACE
 } from './warpGraph.ts';
 import type { SurfaceFile } from './surface.ts';
 
@@ -237,6 +239,19 @@ describe('the graph', () => {
 		// Face is a pure function of the canonical id — stable across set
 		// changes, unlike the index-based hue this replaces.
 		assert.deepEqual(threads[0].face, topicFace(withSplit.topics.find((t) => t.canonicalId === 'loom')!));
+	});
+
+	it('topicFaces are unique within the rune space — the set-probed cap', () => {
+		// 20 topics (< RUNE_SPACE): the probe must hand every topic its own
+		// stave, whatever the hashes collide on.
+		const files = Array.from({ length: 20 }, (_, i) =>
+			file(`surface/topics/topic-${i}.md`, `# Topic ${i}\n`)
+		);
+		const g = graphOf(...files);
+		const faces = topicFaces(g);
+		const glyphs = [...faces.values()].map((face) => face.glyph);
+		assert.equal(new Set(glyphs).size, glyphs.length);
+		assert.ok(glyphs.length <= RUNE_SPACE);
 	});
 
 	it('liveTakenRuns frames only currently-live holders', () => {
