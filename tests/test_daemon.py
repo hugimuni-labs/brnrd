@@ -10439,6 +10439,28 @@ def test_drain_outbox_await_key_present_with_empty_value_still_arms(tmp_path):
 # ── cut: / the bolt (design-the-bolt.md) ─────────────────────────────
 
 
+def test_issue_filing_claims_matches_the_conservative_pattern_set():
+    """#1259's pattern set, pinned directly: adjacency to the `#N` token is
+    what does the work of not firing on ordinary issue-number prose."""
+    assert daemon._issue_filing_claims("Filed #12 to track this.") == {12: "filed"}
+    assert daemon._issue_filing_claims("#12 filed, will follow up.") == {12: "filed"}
+    assert daemon._issue_filing_claims("Opened #12 for the follow-up.") == {12: "filed"}
+    assert daemon._issue_filing_claims("Closes #12 outright.") == {12: "closed"}
+    assert daemon._issue_filing_claims("closing #12 now.") == {12: "closed"}
+    # a later claim about the same number wins — a real filed-then-closed
+    # lifecycle settles on the final state, not the first sentence.
+    assert daemon._issue_filing_claims(
+        "Filed #12 earlier this run.", "Closes #12.",
+    ) == {12: "closed"}
+    # ordinary mentions, no adjacent claim verb — nothing fires.
+    assert daemon._issue_filing_claims("See #12 for context.") == {}
+    assert daemon._issue_filing_claims("This fixes the bug described in #12.") == {}
+    assert daemon._issue_filing_claims("") == {}
+    # a PR opened with a number between the verb and the ref — the
+    # adjacency requirement structurally excludes it.
+    assert daemon._issue_filing_claims("Opened PR #12 for review.") == {}
+
+
 def _drain_cut(
     tmp_path, frontmatter, *, meta=None, stats=None, repo_root=None, filename="cut.md",
 ):
@@ -10701,6 +10723,108 @@ def test_drain_outbox_cut_produce_attested_with_commits_is_clean(tmp_path):
 
     promoted, task, outbox, _inbox, _responses, _event_id = _drain_cut(
         tmp_path, "---\ncut: true\nproduce: attested\n---\nDone.\n",
+        meta={"branch_name": "feature", "seed_ref": "main"},
+        repo_root=repo_root,
+    )
+
+    assert promoted == 1
+    assert daemon._read_outbox_notices(outbox) == []
+
+
+def test_drain_outbox_cut_issue_filed_claim_with_no_relic_bounces(tmp_path):
+    """#1259: a reply that claims "filed #N" with no matching `issue`
+    relic in the manifest is the same claim-vs-receipt gap the `produce:`
+    check already catches for branches — the run-260808-2* case that shipped
+    six issues and a bolt card reading "nothing produced"."""
+    repo_root = tmp_path / "repo"
+    init_git_repo(repo_root)
+    commit_files(repo_root, {"a.txt": "1"}, message="seed")
+    subprocess.run(["git", "checkout", "-b", "feature"], cwd=repo_root, check=True)
+    commit_files(repo_root, {"b.txt": "2"}, message="add b")
+
+    promoted, task, outbox, _inbox, _responses, _event_id = _drain_cut(
+        tmp_path,
+        "---\ncut: true\nproduce: attested\n---\nFiled #9999 to track the follow-up.\n",
+        meta={"branch_name": "feature", "seed_ref": "main"},
+        repo_root=repo_root,
+    )
+
+    assert promoted == 0
+    [notice] = daemon._read_outbox_notices(outbox)
+    assert (
+        "issue #9999 mentioned as filed but no issue relic exists"
+        in notice["text"]
+    )
+    assert "brnrd relic issue 9999 --opened" in notice["text"]
+
+
+def test_drain_outbox_cut_issue_filed_claim_with_relic_is_clean(tmp_path):
+    """The same claim, recorded — `brnrd relic issue 9999 --opened` before
+    the cut — clears the check."""
+    repo_root = tmp_path / "repo"
+    init_git_repo(repo_root)
+    commit_files(repo_root, {"a.txt": "1"}, message="seed")
+    subprocess.run(["git", "checkout", "-b", "feature"], cwd=repo_root, check=True)
+    commit_files(repo_root, {"b.txt": "2"}, message="add b")
+
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-current"
+    outbox_dir.mkdir(parents=True, exist_ok=True)
+    daemon.relics.append(outbox_dir, "issue", number=9999, action="opened")
+
+    promoted, task, outbox, _inbox, _responses, _event_id = _drain_cut(
+        tmp_path,
+        "---\ncut: true\nproduce: attested\n---\nFiled #9999 to track the follow-up.\n",
+        meta={"branch_name": "feature", "seed_ref": "main"},
+        repo_root=repo_root,
+    )
+
+    assert promoted == 1
+    assert daemon._read_outbox_notices(outbox) == []
+    assert task.meta["bolt"]["annotated"] == 0
+
+
+def test_drain_outbox_cut_issue_closed_claim_read_off_the_card_bounces(tmp_path):
+    """The scan reads `.card` as well as the reply body — a claim narrated
+    there and nowhere else must still be caught."""
+    repo_root = tmp_path / "repo"
+    init_git_repo(repo_root)
+    commit_files(repo_root, {"a.txt": "1"}, message="seed")
+    subprocess.run(["git", "checkout", "-b", "feature"], cwd=repo_root, check=True)
+    commit_files(repo_root, {"b.txt": "2"}, message="add b")
+
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-current"
+    outbox_dir.mkdir(parents=True, exist_ok=True)
+    (outbox_dir / ".card").write_text(
+        "## Now\ncloses #4242 — the stale-lock ticket\n", encoding="utf-8",
+    )
+
+    promoted, task, outbox, _inbox, _responses, _event_id = _drain_cut(
+        tmp_path,
+        "---\ncut: true\nproduce: attested\n---\nDone.\n",
+        meta={"branch_name": "feature", "seed_ref": "main"},
+        repo_root=repo_root,
+    )
+
+    assert promoted == 0
+    [notice] = daemon._read_outbox_notices(outbox)
+    assert "issue #4242 mentioned as closed but no issue relic exists" in notice["text"]
+    assert "brnrd relic issue 4242 --closed" in notice["text"]
+
+
+def test_drain_outbox_cut_bare_issue_mention_does_not_false_positive(tmp_path):
+    """#1259's own hard constraint: ordinary prose that mentions an issue
+    number without claiming to have filed or closed it must not bounce —
+    a false mismatch is worse than a missed one."""
+    repo_root = tmp_path / "repo"
+    init_git_repo(repo_root)
+    commit_files(repo_root, {"a.txt": "1"}, message="seed")
+    subprocess.run(["git", "checkout", "-b", "feature"], cwd=repo_root, check=True)
+    commit_files(repo_root, {"b.txt": "2"}, message="add b")
+
+    promoted, task, outbox, _inbox, _responses, _event_id = _drain_cut(
+        tmp_path,
+        "---\ncut: true\nproduce: attested\n---\n"
+        "See #9999 for the context motivating this change; it stays open.\n",
         meta={"branch_name": "feature", "seed_ref": "main"},
         repo_root=repo_root,
     )
