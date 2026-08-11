@@ -490,11 +490,14 @@
 	// of both rails is a bit buggy because they behave differently … I just
 	// think it should behave more uniformly and clearly and like collapse
 	// not immediately but soon after the scroll happens so that the elements
-	// do not congest"). `collapse.ts` `scrollClockTick` owns the timing rule
-	// — hysteresis (THE BOUNDARY THAT FLICKERED), then a settle debounce —
-	// and this one effect is the one JS timer that steps *both* the rail's
-	// and the dock's clock together, every tick, so they can never answer on
-	// two different schedules again (#1169's actual defect).
+	// do not congest"; corrected 2026-08-11 — collapse now fires ~1s after
+	// the threshold is first crossed rather than waiting for scrolling to
+	// stop, see `collapse.ts`'s own doc on `scrollClockTick`). `collapse.ts`
+	// `scrollClockTick` owns the timing rule — hysteresis (THE BOUNDARY THAT
+	// FLICKERED), then a settle debounce — and this one effect is the one JS
+	// timer that steps *both* the rail's and the dock's clock together,
+	// every tick, so they can never answer on two different schedules again
+	// (#1169's actual defect).
 	let railSentinel = $state<HTMLElement | null>(null);
 	let railClock = $state<ScrollClock>({ settled: false, pendingAt: null });
 	let dockClock = $state<ScrollClock>({ settled: false, pendingAt: null });

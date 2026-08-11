@@ -71,6 +71,22 @@ export function tapVerdict(open: boolean, scrolledPast: boolean): TapVerdict {
  * immediately but soon after the scroll happens so that the elements do not
  * congest").
  *
+ * Corrected 2026-08-11 (his follow-up: the rail was staying full-size for
+ * the *whole* scroll and only collapsing once the reader stopped, which
+ * "doesn't look good" — you want to see what you're scrolling to while
+ * you're still scrolling. "within a second after passing some threshold it
+ * should collapse even if the scrolling still happens"). The clock below
+ * used to reschedule its deadline on *every* qualifying tick — a trailing
+ * debounce that only ever fires once ticks stop arriving, i.e. once the
+ * reader stops scrolling. Continuous scrolling delivers a 'scroll' event
+ * on nearly every frame, so the deadline was pushed forward in lockstep
+ * with the scroll and never actually reached until the reader let go. The
+ * fix anchors the deadline to the *first* qualifying tick (leading edge)
+ * and lets later ticks fall through unchanged — the debounce still exists
+ * (so a reader who taps the threshold and immediately backs off gets
+ * `raw=false` and clears it before it fires), but it no longer re-arms
+ * itself against a scroll that is still going.
+ *
  * Unifies #1169's diagnosis: the rail's `railScrollVerdict` and the machine
  * dock's own threshold ran as two independent verdicts, on two independent
  * `$effect` reads, coupled only through `machineDockTop(railHeight, …)` — a
@@ -99,10 +115,12 @@ export function tapVerdict(open: boolean, scrolledPast: boolean): TapVerdict {
  * nothing "congests" by un-collapsing sooner than asked, and #1011 (THE
  * PICKER YOU CANNOT REACH) is about a reader's `open` surviving scroll, not
  * about slowing down the reader's path back to the top. Collapsing is
- * debounced `settleMs` past the *last* qualifying tick (a trailing debounce,
- * rescheduled on every call while still short of the deadline) so a reader
- * mid-scroll never watches the page reflow under their cursor — it happens
- * once, after they stop.
+ * debounced `settleMs` past the *first* qualifying tick (a leading-edge
+ * debounce, armed once and left alone) so a reader who taps the threshold
+ * for a single frame and backs off still gets a clean `raw=false` reset
+ * before it fires — but a scroll that keeps going does not push the
+ * deadline out in front of itself forever. It commits on schedule, in
+ * motion or not.
  */
 export interface ScrollClock {
 	/** The settled, debounced verdict every renderer reads. */
@@ -114,14 +132,17 @@ export interface ScrollClock {
 	pendingAt: number | null;
 }
 
-export const SCROLL_SETTLE_MS = 300;
+// 300ms was tuned for the old trailing-debounce ("soon after scrolling
+// stops"); the 2026-08-11 correction fires from the threshold crossing
+// instead, so it reads against his own stated intuition — "within a
+// second" — rather than that old tuning.
+export const SCROLL_SETTLE_MS = 1_000;
 
 /**
  * One tick of the shared clock. Called with this instant's raw geometric
- * verdict (`railScrollVerdict`, `machineDockVerdict` — see each) and again,
- * unchanged but for `now`, from the settle timer once scrolling has been
- * quiet for `settleMs`. Both call sites read the same rules from the same
- * place.
+ * verdict (`railScrollVerdict`, `machineDockVerdict` — see each) on every
+ * scroll/resize tick, and again from the settle timer once the deadline
+ * arrives. Both call sites read the same rules from the same place.
  */
 export function scrollClockTick(
 	clock: ScrollClock,
@@ -131,8 +152,9 @@ export function scrollClockTick(
 ): ScrollClock {
 	if (!raw) return { settled: false, pendingAt: null };
 	if (clock.settled) return { settled: true, pendingAt: null };
-	if (clock.pendingAt !== null && now >= clock.pendingAt) return { settled: true, pendingAt: null };
-	return { settled: false, pendingAt: now + settleMs };
+	if (clock.pendingAt === null) return { settled: false, pendingAt: now + settleMs };
+	if (now >= clock.pendingAt) return { settled: true, pendingAt: null };
+	return clock;
 }
 
 /**

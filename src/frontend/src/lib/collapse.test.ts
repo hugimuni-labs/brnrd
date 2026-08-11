@@ -104,8 +104,9 @@ test('an unmeasured full height still gets a minimum dead band, not a zero one',
 });
 
 // scrollClockTick — the shared settle clock both the rail and the machine
-// dock now run through (2026-08-08). Expansion is immediate; collapse waits
-// `settleMs` past the last qualifying tick.
+// dock run through (2026-08-08, corrected 2026-08-11). Expansion is
+// immediate; collapse waits `settleMs` past the *first* qualifying tick —
+// a leading-edge debounce, not a trailing one.
 
 const REST: ScrollClock = { settled: false, pendingAt: null };
 
@@ -124,21 +125,23 @@ test('a fresh raw=true tick arms a deadline settleMs out, not settled yet', () =
 	assert.deepEqual(scrollClockTick(REST, true, 1_000, 300), { settled: false, pendingAt: 1_300 });
 });
 
-test('every qualifying tick before the deadline reschedules it — a trailing debounce', () => {
-	// Scrolling continuously re-arms the deadline from the *last* tick, not
-	// the first — his "collapse … soon after the scroll happens" reads as
-	// "after it stops", not "300ms after it started".
+test('every qualifying tick before the deadline leaves it alone — a leading-edge debounce', () => {
+	// Corrected 2026-08-11 (his follow-up: the rail stayed full-size for the
+	// whole scroll and only collapsed once the reader stopped — "it should
+	// collapse even if the scrolling still happens"). Continuous scrolling
+	// delivers a tick almost every frame; a trailing debounce that reschedules
+	// on each one never actually reaches its deadline until the scroll stops,
+	// which is the exact bug reported. The deadline is armed once, off the
+	// *first* qualifying tick, and later ticks — same or different `now` —
+	// must not move it.
 	const armed = scrollClockTick(REST, true, 1_000, 300);
-	assert.deepEqual(scrollClockTick(armed, true, 1_100, 300), { settled: false, pendingAt: 1_400 });
-	assert.deepEqual(scrollClockTick(armed, true, 1_250, 300), { settled: false, pendingAt: 1_550 });
+	assert.deepEqual(scrollClockTick(armed, true, 1_100, 300), armed);
+	assert.deepEqual(scrollClockTick(armed, true, 1_250, 300), armed);
 });
 
 test('the deadline commits once reached, and only then', () => {
 	const armed = scrollClockTick(REST, true, 1_000, 300);
-	assert.deepEqual(scrollClockTick(armed, true, 1_299, 300), {
-		settled: false,
-		pendingAt: 1_599
-	});
+	assert.deepEqual(scrollClockTick(armed, true, 1_299, 300), armed);
 	assert.deepEqual(scrollClockTick(armed, true, 1_300, 300), { settled: true, pendingAt: null });
 	assert.deepEqual(scrollClockTick(armed, true, 1_301, 300), { settled: true, pendingAt: null });
 });
