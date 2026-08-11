@@ -231,6 +231,27 @@ test('boltCardSections: produce and spend distinguish empty (real, honest) from 
 	assert.equal(something.spend, 'present');
 });
 
+// #1259: an audit/design run whose produce is tickets + kb, never a commit,
+// must not read as "nothing produced this run" — `produce` gates on
+// `relics.length`, not on any commit/branch/PR-shaped subset, so an
+// issue-only or kb-only manifest already renders 'present'. Pinned here so
+// a future refactor that narrows the gate to commit-shaped kinds gets
+// caught the same wake it lands.
+test('boltCardSections: an issue/kb-only manifest still reads as produce present (#1259)', () => {
+	const ticketsAndKb = boltCardSections({
+		relics: [
+			{ kind: 'issue', number: 1238, action: 'opened' },
+			{ kind: 'kb', path: 'kb/trace.md' }
+		],
+		wallClockSeconds: null,
+		tokensInput: null,
+		tokensOutput: null,
+		usdSubscriptionAttributed: null,
+		usdCreditsEquivalent: null
+	});
+	assert.equal(ticketsAndKb.produce, 'present');
+});
+
 test('boltCardDataFromLedgerRows returns null when no row carries a recognised bolt', () => {
 	assert.equal(boltCardDataFromLedgerRows([]), null);
 	assert.equal(boltCardDataFromLedgerRows([row({ bolt: null })]), null);
