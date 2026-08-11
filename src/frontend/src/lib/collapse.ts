@@ -136,8 +136,9 @@ export interface ScrollClock {
 // stops"); the 2026-08-11 correction fires from the threshold crossing
 // instead, so it reads against his own stated intuition — "within a
 // second" — rather than that old tuning. Reduced to 500ms on 2026-08-11
-// (his follow-up: "reduce it from one 2nd to half a second").
-export const SCROLL_SETTLE_MS = 500;
+// (his follow-up: "reduce it from one 2nd to half a second"); further
+// tightened to 250ms same day (his follow-up: "let's do actually 250").
+export const SCROLL_SETTLE_MS = 250;
 
 /**
  * One tick of the shared clock. Called with this instant's raw geometric
