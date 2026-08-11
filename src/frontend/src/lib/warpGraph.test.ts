@@ -238,7 +238,10 @@ describe('the graph', () => {
 		);
 		// Face is a pure function of the canonical id — stable across set
 		// changes, unlike the index-based hue this replaces.
-		assert.deepEqual(threads[0].face, topicFace(withSplit.topics.find((t) => t.canonicalId === 'loom')!));
+		assert.deepEqual(
+			threads[0].face,
+			topicFace(withSplit.topics.find((t) => t.canonicalId === 'loom')!)
+		);
 	});
 
 	it('topicFaces are unique within the rune space — the set-probed cap', () => {
@@ -255,10 +258,7 @@ describe('the graph', () => {
 	});
 
 	it('liveTakenRuns frames only currently-live holders', () => {
-		const item = parseWarpItem(
-			'surface/warp/w-8.md',
-			'# X\n\ntaken: run-a run-b\n'
-		);
+		const item = parseWarpItem('surface/warp/w-8.md', '# X\n\ntaken: run-a run-b\n');
 		assert.deepEqual(liveTakenRuns(item, new Set(['run-b'])), ['run-b']);
 	});
 
