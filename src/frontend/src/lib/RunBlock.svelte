@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { runFace } from './runFace';
+	import { runFace, type RunFace } from './runFace';
 	import { machineBodyOnScreen, machineHeadFields, machineHeadRun } from './machineDock';
 	import type { PickRow } from './pickLane';
 	import { pitchAccent } from './statusPalette';
@@ -57,6 +57,16 @@
 		 *  selectable run already has a row there, so a second run-lookup
 		 *  surface would just be two sources for one name. */
 		selectedId?: string | null;
+		/**
+		 * The run⇄topic join (`warpGraph.runTopicIndex`) and the set-probed
+		 * topic faces (`warpGraph.topicFaces`) — the head's face now reads the
+		 * run's first crossed topic rather than hashing the run id itself
+		 * (2026-08-11 mark doctrine: "a run wears the topics of the work it
+		 * did, never a hue of its own"). Optional and empty by default, same
+		 * as `Cloth.svelte`'s own props of the same name.
+		 */
+		crossingIndex?: Map<string, string[]>;
+		topicFaces?: Map<string, RunFace>;
 	}
 	let {
 		burning,
@@ -66,7 +76,9 @@
 		docked = false,
 		error = null,
 		stale = false,
-		selectedId = null
+		selectedId = null,
+		crossingIndex = new Map(),
+		topicFaces = new Map()
 	}: Props = $props();
 	let lead = $derived(burning[0] ?? null);
 	// The identity the head wears. `machineHeadRun` picks the id; falling back
@@ -77,7 +89,11 @@
 	let headRun = $derived(
 		burning.find((row) => row.id === machineHeadRun(lead?.id ?? null, selectedId)) ?? lead
 	);
-	let face = $derived(headRun ? runFace(headRun.id) : null);
+	// The face is the head run's first crossed topic, not the run id — see
+	// the props doc above. A run that crossed no topic wears no fabricated
+	// mark: `face` is null and both render sites below already guard on it.
+	let headTopicId = $derived(headRun ? (crossingIndex.get(headRun.id)?.[0] ?? null) : null);
+	let face = $derived(headTopicId ? (topicFaces.get(headTopicId) ?? runFace(headTopicId)) : null);
 	// THE FACE IN THREE TENSES piece 1: the head run's *mood* — how it feels,
 	// distinct from `face` above (*who* it is). `headRun.mood` rides the same
 	// `PickRow.mood` field `pickLane.ts` already resolves through the wire's
