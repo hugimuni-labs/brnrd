@@ -7953,9 +7953,11 @@ def _cut_mismatches(
       it reads off the same ``relics_list``.
     - **topic-per-run** (the-run-that-claims-its-thread): no ``.topics``
       claim and no ``item`` relic on this run's own ``.relics.jsonl`` is
-      named ``topicless: ...``. Unconditional — no *repo_root* gate, unlike
-      **produce**/**owed** — since both facts live on the outbox this run
-      already owns; a schedule-woken or strand run is not exempt.
+      named ``topicless: ...``. No *repo_root* gate, unlike
+      **produce**/**owed** — a schedule-woken or strand run is not exempt.
+      Skipped only when *outbox_dir* itself is ``None`` (an isolated-check
+      test caller, never a real cut-time call) — "cannot tell" is unknown,
+      not an assumed violation.
     """
     mismatches: list[str] = []
 
@@ -7986,10 +7988,16 @@ def _cut_mismatches(
     # `item` kind (`weld.annotate_ignition` writes it at ignition, when the
     # dispatching event named a warp item). Universal capability: a
     # schedule-woken or strand run is not exempt, so this runs unconditionally
-    # rather than behind the `repo_root is not None` gate below. Asked once,
-    # at the bolt — rides the existing bounce/dissent cap-3 ladder rather
-    # than a new nag channel.
-    if not run_ledger.read_run_topics_control(outbox_dir):
+    # rather than behind the `repo_root is not None` gate below — **except**
+    # for `outbox_dir` itself, which every real cut-time call carries (the
+    # `cut:` directive being validated lives inside it) but a caller probing
+    # an unrelated check (e.g. #1298's stranded-strands tests, which pass
+    # `outbox_dir=None` on purpose to isolate that check) does not. "Cannot
+    # tell" reads as unknown here, same as `gate_receipt.read_receipt`'s
+    # absent/unreadable/wrong-tree collapse to "chip renders nothing" — never
+    # as an assumed violation. Asked once, at the bolt — rides the existing
+    # bounce/dissent cap-3 ladder rather than a new nag channel.
+    if outbox_dir is not None and not run_ledger.read_run_topics_control(outbox_dir):
         item_taken = any(
             record.get("kind") == "item"
             for record in relics.read_reported(outbox_dir)
