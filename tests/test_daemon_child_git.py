@@ -567,6 +567,59 @@ def test_no_baseline_disables_the_check_rather_than_guessing(trees):
     assert daemon._stray_host_write(task, host) is None
 
 
+# ── #1309 item 2: host_start_oid must not silently stay unstamped ────
+
+
+def test_stamp_host_start_oid_retries_a_transient_rev_parse_failure(
+    trees, monkeypatch,
+):
+    """A momentary git hiccup at dispatch must not cost the run its baseline.
+
+    ``gitops.rev_parse`` answers "HEAD does not resolve" and "git could not
+    run right now" with the same ``None`` — a single failed attempt must not
+    be read as the former.
+    """
+    host, _run_root = trees
+    task = _strand(host, run_id="run-hso-retry")
+    real_rev_parse = gitops.rev_parse
+    calls = {"n": 0}
+
+    def flaky(repo_root, ref):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None  # the one transient failure
+        return real_rev_parse(repo_root, ref)
+
+    monkeypatch.setattr(gitops, "rev_parse", flaky)
+    daemon._stamp_host_start_oid(task, host, retries=3, delay=0)
+
+    assert calls["n"] == 2, "must retry rather than accept the first failure"
+    assert task.meta["host_start_oid"] == _head(host)
+
+
+def test_stamp_host_start_oid_flags_a_persistent_failure_instead_of_silence(
+    trees, monkeypatch, capsys,
+):
+    """Every attempt exhausted ⇒ loudly flagged, never a bare unstamped key.
+
+    Pre-#1309 this stayed silent: the meta key was simply absent, which
+    ``relics.collection_scope`` cannot tell apart from "this run legitimately
+    has no host baseline" — its branchless fallback then seeds from
+    ``default_branch``, and for a host run on the default branch that empty
+    diff silently drops the run's own commits from its produce list.
+    """
+    host, _run_root = trees
+    task = _strand(host, run_id="run-hso-fail")
+
+    monkeypatch.setattr(gitops, "rev_parse", lambda *_a, **_k: None)
+    daemon._stamp_host_start_oid(task, host, retries=2, delay=0)
+
+    assert "host_start_oid" not in task.meta
+    out = capsys.readouterr().out
+    assert "run-hso-fail" in out
+    assert "host_start_oid" in out
+
+
 def test_pre_existing_dirt_in_the_host_tree_is_not_a_finding(trees):
     """The maintainer's own work-in-progress was already there."""
     host, run_root = trees

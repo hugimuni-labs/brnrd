@@ -2453,6 +2453,60 @@ def _child_git_pin(task: Run, run_root: Path) -> dict[str, str]:
     return {"GIT_DIR": str(git_dir), "GIT_WORK_TREE": str(run_root)}
 
 
+# Retry budget for `_stamp_host_start_oid`'s dispatch-time HEAD read (#1309
+# item 2) — small and fast: this absorbs a transient lock/hiccup, not a real
+# outage, and a dispatch path is not the place to burn seconds hoping.
+_HOST_START_OID_RETRIES = 3
+_HOST_START_OID_RETRY_DELAY = 0.2
+
+
+def _stamp_host_start_oid(
+    task: Run, repo_root: Path,
+    *, retries: int = _HOST_START_OID_RETRIES,
+    delay: float = _HOST_START_OID_RETRY_DELAY,
+) -> None:
+    """Pin ``task.meta["host_start_oid"]`` for a host run's relic window (#1309 item 2).
+
+    A **host** run has no assigned branch, so ``relics.collection_scope``
+    cannot measure "what this run committed" from branch-vs-seed — the usual
+    host flow merges back into the seed branch, which erases the range.
+    This pins the checkout's HEAD at dispatch instead; commits that appear
+    beyond this OID during the run are this run's produce.
+
+    ``gitops.rev_parse`` answers a transient git failure (a lock held by a
+    concurrent process, a momentary hiccup) identically to "HEAD does not
+    resolve" — both ``None``. Left unhandled, that collapse means an
+    unstamped ``host_start_oid`` is indistinguishable from "this run
+    legitimately has no host baseline", and ``collection_scope``'s
+    branchless fallback seeds from ``default_branch`` instead — for a host
+    run *on* the default branch, seed equals branch, the diff is empty, and
+    the run's real commits silently vanish from its own produce/relic list
+    even though they exist in history.
+
+    A couple of quick retries absorb the transient case for free. A HEAD
+    that still won't resolve is loudly flagged rather than left as a bare
+    unstamped key nothing downstream can tell apart from the legitimate
+    case.
+    """
+    start_oid = None
+    attempts = max(1, retries)
+    for attempt in range(attempts):
+        start_oid = gitops.rev_parse(repo_root, "HEAD")
+        if start_oid:
+            break
+        if attempt < attempts - 1:
+            time.sleep(delay)
+    if start_oid:
+        task.meta["host_start_oid"] = start_oid
+    else:
+        print(
+            f"[brnrd] run {task.id}: could not resolve HEAD for host_start_oid "
+            f"after {attempts} attempt(s) — this run's commits may not appear "
+            "in its own produce/relic list until the checkout is readable "
+            "again (#1309)"
+        )
+
+
 # Above this many dirty paths in the host checkout, #703's arm 2 records no
 # baseline and is skipped for the run. A truncated baseline is *worse than
 # none*: every dropped path would read as "new" at finalize and the check
@@ -3144,14 +3198,11 @@ def _run_worker(
     if branch_name:
         task.meta["branch_name"] = branch_name
     else:
-        # A host run has no assigned branch, so relic derivation cannot
-        # measure "what this run committed" from branch-vs-seed — the usual
-        # host flow merges back into the seed branch, which erases the range.
-        # Pin the checkout's HEAD now; commits that appear beyond this OID
-        # during the run are this run's produce (relics.collection_scope).
-        start_oid = gitops.rev_parse(repo_root, "HEAD")
-        if start_oid:
-            task.meta["host_start_oid"] = start_oid
+        # A host run has no assigned branch — pin the checkout's HEAD now so
+        # relics.collection_scope's branchless fallback has a start point.
+        # See _stamp_host_start_oid for why a bare rev_parse isn't enough
+        # (#1309 item 2).
+        _stamp_host_start_oid(task, repo_root)
     branch_setup_notice = task.meta.get("branch_setup_notice") or None
     # Resolve once during run assembly.  ``portal-state.json`` refreshes every
     # heartbeat, so carrying this avoids turning a stable URL into repeated git
