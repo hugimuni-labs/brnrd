@@ -78,7 +78,7 @@
 	import HeddleRail from '$lib/HeddleRail.svelte';
 	import WarpGraphView from '$lib/WarpGraphView.svelte';
 	import BackchannelQueue from '$lib/BackchannelQueue.svelte';
-	import { buildBackchannelItems } from '$lib/backchannel';
+	import { buildDerivedAsks, derivedAsksChip } from '$lib/backchannel';
 	import { pickRows } from '$lib/pickLane';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
 	import { CLOTH_WINDOW_MS } from '$lib/cloth';
@@ -345,10 +345,10 @@
 	let topicCountsMap = $derived(topicCounts(warpGraphData));
 	let warpReadyCount = $derived(readyItems(warpGraphData).length);
 	// The derived half of needs-you (PR review queue + config requests) —
-	// authored asks live in the warp as decision/preparation items now.
-	let derivedNeedsItems = $derived(
-		buildBackchannelItems(prReviewQueue ?? [], configRequests ?? [])
-	);
+	// authored asks live in the warp as decision/preparation items now. A
+	// draft PR is filtered out by buildDerivedAsks itself (not here), so
+	// this count, the strip's visibility below, and its chip all agree.
+	let derivedNeedsItems = $derived(buildDerivedAsks(prReviewQueue ?? [], configRequests ?? []));
 	let needsOpen = $state(false);
 	// The heddle selection: canonical topic ids lit; null = all (default).
 	// Per-viewer, per-account, persisted like the digest anchor.
@@ -465,11 +465,12 @@
 	let topicFaceMap = $derived(topicFaces(warpGraphData));
 	// All three feeds resolved (loaded or errored) — until then the needs
 	// strip's sum is a partial read, and rendering it as a verdict is the
-	// measured 20 → "clear" → 4 flicker. `authoredBackchannelItems.length
-	// === 0` alone cannot tell "surface not yet fetched" from "no authored
-	// items"; only the feed handles can. The strip's chip is the only place
-	// this state renders — the layer stack below it never hears about it.
-	let backchannelFeedsResolved = $derived(
+	// measured 20 → "clear" → 4 flicker. `derivedNeedsItems.length === 0`
+	// alone cannot tell "feeds not yet fetched" from "genuinely nothing
+	// waiting"; only the feed handles can. The strip's chip is the only
+	// place this state renders — the layer stack below it never hears
+	// about it.
+	let derivedAsksFeedsResolved = $derived(
 		(surfaceData !== null || surfaceError !== null) &&
 			(prReviewQueue !== null || prReviewQueueError !== null) &&
 			(configRequests !== null || configRequestsError !== null)
@@ -1612,9 +1613,7 @@
 							>needs you</span
 						>
 						<span class="font-mono text-[10px] text-ink-quiet"
-							>· {backchannelFeedsResolved
-								? `${derivedNeedsItems.length} derived`
-								: 'counting…'}</span
+							>· {derivedAsksChip(derivedAsksFeedsResolved, derivedNeedsItems.length)}</span
 						>
 					</button>
 					{#if needsOpen}
@@ -1626,8 +1625,6 @@
 								<p class="mb-2 text-sm text-red-400">{configRequestsError}</p>
 							{/if}
 							<BackchannelQueue
-								authoredItems={[]}
-								knownPaths={surfaceKnownPaths}
 								prs={prReviewQueue ?? []}
 								requests={configRequests ?? []}
 								stale={prReviewQueueStale}

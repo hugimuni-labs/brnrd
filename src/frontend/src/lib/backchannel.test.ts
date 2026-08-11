@@ -1,57 +1,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-	backchannelChip,
-	backchannelCount,
-	backchannelShowClear,
-	buildBackchannelItems,
-	needsPreview,
-	toggleFold
+	buildDerivedAsks,
+	derivedAsksChip,
+	derivedAsksShowClear,
+	draftPrCount
 } from './backchannel.ts';
-import type { AuthoredBackchannelItem } from './backchannelPage.ts';
-import type { ConfigChangeRequestItem } from './configRequests.ts';
 import type { PRReviewItem } from './prReviewQueue.ts';
 
-test('backchannel count spans both review and config queues', () => {
-	const prs: PRReviewItem[] = [
-		{
-			number: 1,
-			title: '',
-			url: '',
-			repo_label: '',
-			created_at: null,
-			draft: false,
-			author: ''
-		},
-		{
-			number: 2,
-			title: '',
-			url: '',
-			repo_label: '',
-			created_at: null,
-			draft: false,
-			author: ''
-		}
-	];
-	const requests: ConfigChangeRequestItem[] = [
-		{
-			id: 'cfg-1',
-			repo_label: '',
-			config_key: '',
-			current_value: '',
-			requested_value: '',
-			reason: '',
-			created_at: null,
-			expires_at: null,
-			approve_url: ''
-		}
-	];
-	assert.equal(backchannelCount([], []), 0);
-	assert.equal(backchannelCount(prs, requests), 3);
-});
-
-test('backchannel items merge the two queues oldest-first', () => {
-	const items = buildBackchannelItems(
+test('derived asks merge the two queues oldest-first', () => {
+	const items = buildDerivedAsks(
 		[
 			{
 				number: 42,
@@ -88,100 +46,66 @@ test('backchannel items merge the two queues oldest-first', () => {
 	assert.equal(items[1].headline, '#42 Ship the thing');
 });
 
-test('the clear verdict waits for every feed — a mid-load zero is counting, not clear', () => {
-	// The measured 2026-08-01 flicker: derived feeds arrive as [] while the
-	// authored surface file is still in flight → count 0, feeds unresolved.
-	assert.equal(backchannelShowClear(false, 0, false), false);
-	assert.equal(backchannelChip(false, 0, 0), 'counting…');
-});
-
-test('a genuinely empty resolved queue is clear', () => {
-	assert.equal(backchannelShowClear(true, 0, false), true);
-	assert.equal(backchannelChip(true, 0, 0), 'nothing waiting');
-});
-
-test('withheld is never rendered as clear', () => {
-	assert.equal(backchannelShowClear(true, 0, true), false);
-});
-
-test('the chip attributes the two populations — never a bare sum', () => {
-	// design-dashboard-briefing §3: "16 authored · 4 derived", never "20".
-	assert.equal(backchannelChip(true, 16, 4), '16 authored · 4 derived');
-	assert.equal(backchannelChip(true, 0, 1), '0 authored · 1 derived');
-});
-
-test('a partial sum stays labeled as still counting, attribution intact', () => {
-	assert.equal(backchannelChip(false, 3, 1), '3 authored · 1 derived · counting…');
-});
-
-test('the fold holds one open row: opening another closes the first, tapping the open row closes it', () => {
-	assert.equal(toggleFold(null, 'a'), 'a');
-	assert.equal(toggleFold('a', 'b'), 'b');
-	assert.equal(toggleFold('b', 'b'), null);
-});
-
-function authoredItem(overrides: Partial<AuthoredBackchannelItem>): AuthoredBackchannelItem {
+function pr(overrides: Partial<PRReviewItem>): PRReviewItem {
 	return {
-		key: '0:untitled',
-		headline: 'untitled',
-		kind: null,
-		state: null,
-		needs: null,
-		refs: [],
-		taken: [],
-		prompt: null,
-		bodyMarkdown: '',
+		number: 1,
+		title: '',
+		url: '',
+		repo_label: '',
+		created_at: null,
+		draft: false,
+		author: '',
 		...overrides
 	};
 }
 
-test('the needs preview leads with decision/action asks — stable within groups, derived at the tail', () => {
-	// Maintainer, 08-02: "the top item in all that should be a decision/
-	// action ask." A later act item outranks an earlier review item; within
-	// each group the file's own order holds; derived rows stay last.
-	const rows = needsPreview(
-		[
-			authoredItem({ key: '0:read', headline: 'read the weld PR', kind: 'review' }),
-			authoredItem({ key: '1:approve', headline: 'approve the cut', kind: 'act' }),
-			authoredItem({ key: '2:split', headline: 'decide the split', kind: 'decide' })
-		],
-		[
-			{
-				key: 'pr:x#1',
-				kind: 'pr',
-				createdAt: null,
-				headline: '#1 the weld',
-				context: 'x',
-				statusLabel: 'review',
-				href: 'https://example.test/1',
-				linkLabel: 'open'
-			}
-		],
-		3
-	);
-	assert.deepEqual(
-		rows.map((row) => row.headline),
-		['approve the cut', 'decide the split', 'read the weld PR']
-	);
-	assert.equal(rows[0].kind, 'act');
-});
-
-test('the needs preview caps at its limit and gives derived rows their asking kind', () => {
-	const derived = buildBackchannelItems(
-		[
-			{
-				number: 9,
-				title: 'the weld',
-				url: 'https://example.test/9',
-				repo_label: 'x/y',
-				created_at: null,
-				draft: false,
-				author: 'brnrd'
-			}
-		],
+test('a draft PR means the resident is not done with it — never a needs-you row', () => {
+	// Maintainer, 08-11: "5 of 7 in draft, showing them as needing user
+	// attention feels like a lie." Filtered at the builder so the count,
+	// the chip, and the rows all agree — no consumer can drift out of sync.
+	const items = buildDerivedAsks(
+		[pr({ number: 1, draft: true }), pr({ number: 2, draft: false })],
 		[]
 	);
-	const rows = needsPreview([], derived, 3);
-	assert.equal(rows.length, 1);
-	assert.equal(rows[0].kind, 'review', 'a PR previews as the review it asks for');
+	assert.deepEqual(
+		items.map((item) => item.headline),
+		['#2 Untitled PR']
+	);
+});
+
+test('a fully-draft queue derives to nothing waiting, not a zero verdict on a lie', () => {
+	const items = buildDerivedAsks([pr({ number: 1, draft: true })], []);
+	assert.deepEqual(items, []);
+});
+
+test('draftPrCount counts only what buildDerivedAsks withheld', () => {
+	assert.equal(draftPrCount(null), 0);
+	assert.equal(draftPrCount(undefined), 0);
+	assert.equal(draftPrCount([]), 0);
+	assert.equal(draftPrCount([pr({ number: 1, draft: true }), pr({ number: 2, draft: false })]), 1);
+});
+
+test('the clear verdict waits for every feed — a mid-load zero is counting, not clear', () => {
+	// The measured 2026-08-01 flicker: derived feeds arrive as [] while
+	// another feed is still in flight → count 0, feeds unresolved.
+	assert.equal(derivedAsksShowClear(false, 0, false), false);
+	assert.equal(derivedAsksChip(false, 0), 'counting…');
+});
+
+test('a genuinely empty resolved queue is clear', () => {
+	assert.equal(derivedAsksShowClear(true, 0, false), true);
+	assert.equal(derivedAsksChip(true, 0), 'nothing waiting');
+});
+
+test('withheld is never rendered as clear', () => {
+	assert.equal(derivedAsksShowClear(true, 0, true), false);
+});
+
+test('the chip states a bare derived count once resolved — one population, no attribution needed', () => {
+	assert.equal(derivedAsksChip(true, 4), '4 derived');
+	assert.equal(derivedAsksChip(true, 1), '1 derived');
+});
+
+test('a partial sum stays labeled as still counting', () => {
+	assert.equal(derivedAsksChip(false, 3), '3 derived · counting…');
 });
