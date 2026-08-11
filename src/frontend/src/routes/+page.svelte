@@ -346,7 +346,9 @@
 	let warpReadyCount = $derived(readyItems(warpGraphData).length);
 	// The derived half of needs-you (PR review queue + config requests) —
 	// authored asks live in the warp as decision/preparation items now.
-	let derivedNeedsItems = $derived(buildBackchannelItems(prReviewQueue ?? [], configRequests ?? []));
+	let derivedNeedsItems = $derived(
+		buildBackchannelItems(prReviewQueue ?? [], configRequests ?? [])
+	);
 	let needsOpen = $state(false);
 	// The heddle selection: canonical topic ids lit; null = all (default).
 	// Per-viewer, per-account, persisted like the digest anchor.
@@ -357,7 +359,9 @@
 		try {
 			const raw = localStorage.getItem(`brnrd.heddles.${accountId}`);
 			const parsed = raw ? JSON.parse(raw) : null;
-			heddleSelection = Array.isArray(parsed) ? new Set(parsed.filter((id) => typeof id === 'string')) : null;
+			heddleSelection = Array.isArray(parsed)
+				? new Set(parsed.filter((id) => typeof id === 'string'))
+				: null;
 		} catch {
 			heddleSelection = null;
 		}
