@@ -9062,6 +9062,54 @@ def test_run_body_captures_the_resident_card_without_daemon_prose(tmp_path):
     assert task.meta["run_body_path"] == str(path)
 
 
+def test_persist_run_topics_writes_the_canonical_row(tmp_path):
+    """Rendered, not raw-copied: a bare `.topics` row (no `topics:` prefix)
+    still lands as the one canonical `topics: <slugs>` shape on the node."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    task = Run(id="run-topics", event_id="evt-topics", body="work", source="telegram")
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    (outbox / ".topics").write_text("the-loom the-post\n", encoding="utf-8")
+
+    path = daemon._persist_run_topics(
+        ctx, task, repo_label="Gurio/brr", outbox_dir=outbox,
+    )
+
+    assert path == ctx.runs_dir / "Gurio__brr" / "run-topics" / "topics.md"
+    assert path.read_text(encoding="utf-8") == "topics: the-loom the-post\n"
+    assert task.meta["run_topics_path"] == str(path)
+
+
+def test_persist_run_topics_no_claim_writes_no_file(tmp_path):
+    """Absence is honest — no `.topics` claim means no fabricated file."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    task = Run(id="run-no-topics", event_id="evt-x", body="work", source="telegram")
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+
+    path = daemon._persist_run_topics(
+        ctx, task, repo_label="Gurio/brr", outbox_dir=outbox,
+    )
+
+    assert path is None
+    assert not (
+        ctx.runs_dir / "Gurio__brr" / "run-no-topics" / "topics.md"
+    ).exists()
+    assert "run_topics_path" not in task.meta
+
+
 def test_persist_boundaries_summary_writes_beside_body_and_state(tmp_path):
     """The node gets the derived summary, not the raw transcript.
 
@@ -10614,6 +10662,7 @@ def test_issue_filing_claims_matches_the_conservative_pattern_set():
 
 def _drain_cut(
     tmp_path, frontmatter, *, meta=None, stats=None, repo_root=None, filename="cut.md",
+    topics="the-loom",
 ):
     """Stage one ``cut:`` directive and drain it.
 
@@ -10621,12 +10670,19 @@ def _drain_cut(
     ``_drain_await`` above — the current event is born ``processing`` (a
     live wake holding it), so a cut targeting "the current event" never
     also has to dispose of itself.
+
+    *topics* stages a ``.topics`` claim by default so the topicless bolt
+    check (added alongside this docstring) doesn't bounce every pre-existing
+    cut fixture in this file — pass ``None`` to test the topicless path
+    itself, which has its own dedicated tests below.
     """
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
     outbox = brr_dir / "outbox" / "evt-current"
     outbox.mkdir(parents=True, exist_ok=True)
+    if topics is not None:
+        (outbox / ".topics").write_text(topics + "\n", encoding="utf-8")
     path = protocol.create_event(inbox, "telegram", "original", status="processing")
     event_id = path.stem
     (outbox / filename).write_text(frontmatter, encoding="utf-8")
@@ -10728,6 +10784,7 @@ def test_drain_outbox_cut_bounce_cap_then_accept_annotated(tmp_path):
     responses = brr_dir / "responses"
     outbox = brr_dir / "outbox" / "evt-current"
     outbox.mkdir(parents=True)
+    (outbox / ".topics").write_text("the-loom\n", encoding="utf-8")
     protocol.create_event(inbox, source="telegram", body="a question", status="pending")
     path = protocol.create_event(inbox, "telegram", "original", status="processing")
     event_id = path.stem
@@ -10767,6 +10824,7 @@ def test_drain_outbox_cut_persists_declaration_and_daemon_dissent(tmp_path):
     responses = brr_dir / "responses"
     outbox = brr_dir / "outbox" / "evt-current"
     outbox.mkdir(parents=True)
+    (outbox / ".topics").write_text("the-loom\n", encoding="utf-8")
     ask = protocol.create_event(
         inbox, source="telegram", body="which lane?", status="pending",
     ).stem
@@ -11061,6 +11119,7 @@ def test_drain_outbox_cut_owed_carried_row_matching_ref_is_clean(tmp_path):
     inbox = brr_dir / "inbox"
     outbox = brr_dir / "outbox" / "evt-current"
     outbox.mkdir(parents=True)
+    (outbox / ".topics").write_text("the-loom\n", encoding="utf-8")
     responses = brr_dir / "responses"
     path = protocol.create_event(inbox, "telegram", "original", status="processing")
     event_id = path.stem
@@ -11093,6 +11152,75 @@ def test_drain_outbox_cut_notice_carries_source_file_for_identity_join(tmp_path)
     assert promoted == 0
     [notice] = daemon._read_outbox_notices(outbox)
     assert notice["source_file"] == "cut-abc.md"
+
+
+# ── topic-per-run: the bolt asks once (the-run-that-claims-its-thread) ──
+
+
+def test_drain_outbox_cut_topicless_bounces(tmp_path):
+    """No `.topics` and no item taken ⇒ the bolt names it, once, and bounces
+    like any other declared mismatch — the existing cap-3 ladder, not a new
+    nag channel."""
+    promoted, task, outbox, _inbox, _responses, _event_id = _drain_cut(
+        tmp_path, "---\ncut: true\n---\nDone.\n", topics=None,
+    )
+
+    assert promoted == 0
+    [notice] = daemon._read_outbox_notices(outbox)
+    assert "cut bounced:" in notice["text"]
+    assert "topicless" in notice["text"]
+    assert "write .topics or take an item" in notice["text"]
+
+
+def test_drain_outbox_cut_topics_claimed_is_clean(tmp_path):
+    """A run that wrote `.topics` clears the check — no dissent."""
+    promoted, task, outbox, _inbox, _responses, _event_id = _drain_cut(
+        tmp_path, "---\ncut: true\n---\nDone.\n", topics="the-loom the-post",
+    )
+
+    assert promoted == 1
+    assert daemon._read_outbox_notices(outbox) == []
+
+
+def test_drain_outbox_cut_item_taken_satisfies_the_check_with_no_topics(tmp_path):
+    """The items store's own signal — an `item` relic on this run's
+    manifest — satisfies the check with no `.topics` file at all."""
+    promoted, task, outbox, _inbox, _responses, _event_id = _drain_cut(
+        tmp_path, "---\ncut: true\n---\nDone.\n", topics=None,
+    )
+    assert promoted == 0  # sanity: without the item relic this bounces
+
+    # Re-run with the item relic present.
+    outbox2 = tmp_path / ".brr" / "outbox" / "evt-current2"
+    outbox2.mkdir(parents=True)
+    inbox2 = tmp_path / ".brr" / "inbox"
+    responses2 = tmp_path / ".brr" / "responses"
+    daemon.relics.append(outbox2, "item", address="w-42")
+    (outbox2 / "cut.md").write_text("---\ncut: true\n---\nDone.\n", encoding="utf-8")
+    path = protocol.create_event(inbox2, "telegram", "original", status="processing")
+    event_id2 = path.stem
+    task2 = Run(
+        id="run-parent-2", event_id=event_id2, body="original", source="telegram",
+        meta={},
+    )
+    promoted2 = daemon._drain_outbox(
+        daemon._WorkerEmit(tmp_path / ".brr", None, event_id2),
+        task2, responses2, event_id2, outbox2, inbox2,
+    )
+    assert promoted2 == 1
+    assert daemon._read_outbox_notices(outbox2) == []
+
+
+def test_drain_outbox_cut_topicless_garbage_topics_file_still_bounces(tmp_path):
+    """A `.topics` file with no slug-shaped token is the same as absent —
+    lenient parse, never a crash, but not a claim either."""
+    promoted, task, outbox, _inbox, _responses, _event_id = _drain_cut(
+        tmp_path, "---\ncut: true\n---\nDone.\n", topics="!!! ### $$$ ___",
+    )
+
+    assert promoted == 0
+    [notice] = daemon._read_outbox_notices(outbox)
+    assert "topicless" in notice["text"]
 
 
 # ── portal-state `bolt` projection ───────────────────────────────────
