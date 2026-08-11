@@ -61,26 +61,46 @@
 					>{open ? '▾' : '▸'}</span
 				>
 				<span class="font-mono text-[11px] tracking-wide text-amber-200 uppercase">heddles</span>
-				<span class="font-mono text-[10px] text-ink-quiet"
-					>· {threads.length} topic{threads.length === 1 ? '' : 's'}{filtered
-						? ` · ${litCount} lit`
-						: ''}</span
+				<!-- The rail's own filter chip (his 2026-08-11 read: "it doesn't
+				     really look that much like filtering" — this is the fix that
+				     doesn't depend on whether the strip is open): "◒ lens N/M"
+				     names the control as a lens even at rest, and turns the same
+				     amber the WarpGraphView/Cloth "N of M … lensed by the heddles"
+				     lines below wear the moment a press actually narrows them —
+				     one state, one color, three places, so cause and effect read
+				     as the same fact. -->
+				<span
+					class="flex items-center gap-x-1 font-mono text-[10px] tracking-wide uppercase"
+					class:text-amber-300={filtered}
+					class:text-ink-quiet={!filtered}
+					title={filtered
+						? 'filtering — press a lit rune to add, a dim one to clear'
+						: 'lens · press a rune to filter'}
 				>
+					<span aria-hidden="true">◒</span>
+					{litCount}/{threads.length}
+					{filtered ? 'lit' : 'all lit'}
+				</span>
 			</button>
 			<!-- The collapsed strip is the legend: every topic's rune, lit or
 			     dim, each a working toggle — the Photoshop layer eyes at their
-			     smallest. -->
-			<span class="ml-auto flex flex-wrap items-center gap-x-1.5 gap-y-0.5 font-mono text-[12px]">
+			     smallest. A lit rune also wears a bottom ring so the on/off
+			     read survives two topics landing on close hues (the separate
+			     color fix lives in `topicFaces`; this is the belt, not the
+			     buckle). -->
+			<span class="ml-auto flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[16px]">
 				{#each threads as thread (thread.canonicalId)}
 					{@const lit = isLit(thread.canonicalId)}
 					<button
 						type="button"
-						class="cursor-pointer leading-none"
-						style={lit ? `color: ${thread.face.color}` : ''}
+						class="cursor-pointer rounded-sm leading-none"
+						style={lit
+							? `color: ${thread.face.color}; box-shadow: 0 1.5px 0 0 ${thread.face.color};`
+							: ''}
 						class:text-ink-mute={!lit}
-						class:opacity-50={!lit}
+						class:opacity-40={!lit}
 						aria-pressed={lit}
-						title={`${thread.title} · ${lit ? 'lit' : 'off'}`}
+						title={`${thread.title} · ${lit ? 'lit — filtering it in' : 'off — press to filter to it'}`}
 						onclick={() => onToggle?.(thread.canonicalId)}
 					>
 						{thread.face.glyph}{#if weaving.has(thread.canonicalId)}<span
@@ -112,8 +132,19 @@
 							aria-pressed={lit}
 							onclick={() => onToggle?.(thread.canonicalId)}
 						>
+							<!-- The layer-eye (his read: lean into the Photoshop-layers
+							     idiom the strip already half-speaks). A filled dot is a
+							     visibility toggle in every layers panel; a hollow one
+							     reads "off" independent of color, so a row still reads as
+							     a filter row when two topics' hues are close. -->
 							<span
-								class="shrink-0 font-mono"
+								class="shrink-0 font-mono text-[13px] leading-none"
+								style={lit ? `color: ${thread.face.color}` : ''}
+								class:text-ink-mute={!lit}
+								aria-hidden="true">{lit ? '●' : '○'}</span
+							>
+							<span
+								class="shrink-0 font-mono text-[16px] leading-none"
 								style={lit ? `color: ${thread.face.color}` : ''}
 								class:text-ink-mute={!lit}
 								class:opacity-50={!lit}
