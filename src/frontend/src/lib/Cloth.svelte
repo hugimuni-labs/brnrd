@@ -25,7 +25,7 @@
 		runNodeFromSurface,
 		type NodeIdentity
 	} from './runNode';
-	import { runFacesInWindow, type RunFace } from './runFace';
+	import { runFace, type RunFace } from './runFace';
 	import type { SurfaceResponse } from './surface';
 	import MoodChip from './MoodChip.svelte';
 
@@ -41,6 +41,17 @@
 		now: number;
 		windowMs: number;
 		stale: boolean;
+		/** Canonical topic ids lit on the heddle rail; null = all. The weave
+		 *  lenses to runs that crossed a lit topic — the selvage still hems
+		 *  the whole window, same as the derived lens rail below. */
+		selectedTopics?: ReadonlySet<string> | null;
+		/** The viewer's "since you looked" anchor (epoch ms) — rows newer
+		 *  than it wear the brighter ground (the digest block's successor). */
+		newSince?: number | null;
+		onCaughtUp?: (() => void) | null;
+		/** The set-probed topic faces (`warpGraph.topicFaces`) — one
+		 *  assignment for the whole page; the bare hash is the fallback. */
+		topicFaces?: Map<string, RunFace>;
 		/** The corpus, for the in-place node unfold (his 08-02 steer: a cloth
 		 *  item previews where the reader stands — a page redirect costs them
 		 *  their place on the way back). Null while loading; the unfold then
@@ -60,6 +71,10 @@
 		now,
 		windowMs,
 		stale,
+		selectedTopics = null,
+		newSince = null,
+		onCaughtUp = null,
+		topicFaces = new Map<string, RunFace>(),
 		surface = null,
 		threads = [],
 		crossingIndex = new Map()
@@ -72,7 +87,17 @@
 	// renders. The lens is local view state, like a fold: it slices what
 	// this cloth shows, and nothing outside the cloth ever asks about it.
 	let windowRows = $derived((rows ?? []).filter((row) => inClothWindow(row, now, windowMs)));
-	let lenses = $derived(availableLenses(windowRows));
+	// The heddle lens: runs that crossed a lit topic (via `crossingIndex`,
+	// the run→topics join). Under a real filter an untopiced run is honestly
+	// "not this topic" and folds into the count line below the header.
+	let topicRows = $derived(
+		selectedTopics === null
+			? windowRows
+			: windowRows.filter((row) =>
+					(crossingIndex.get(row.run_id ?? '') ?? []).some((id) => selectedTopics.has(id))
+				)
+	);
+	let lenses = $derived(availableLenses(topicRows));
 	let lens = $state<string>(LENS_ALL);
 	// A selection can outlive its lens (rows aged out, the vocabulary moved).
 	// Reconciling here keeps the weave and the chip row from disagreeing.
@@ -94,27 +119,22 @@
 	// is the hem of the whole cloth, not of a lens, so it sums the whole
 	// window regardless of which chip is lit.
 	let weave = $derived(
-		rows === null ? null : weaveCloth(applyLens(windowRows, activeLens), now, windowMs, rootCap)
+		rows === null ? null : weaveCloth(applyLens(topicRows, activeLens), now, windowMs, rootCap)
 	);
 	let days = $derived(weave === null ? null : groupClothDays(weave.trees));
-	// THE FACE IN THREE TENSES, piece 2: display-time collision re-roll. The
-	// cloth is where the 24-glyph alphabet actually runs out — a 30-day
-	// window routinely draws more roots than there are runes — so this reads
-	// off `runFace` directly no longer; every id in the rendered weave (roots
-	// and strand children, in the weave's own newest-first order) shares one
-	// probe pass instead. Recomputed whenever the weave changes (a re-poll, a
-	// lens switch); ids outside today's weave (a folded-away day, a dropped
-	// root past the cap) simply aren't in the map — nothing reads their face.
-	let faceWindow = $derived.by(() => {
-		if (weave === null) return new Map<string, RunFace>();
-		const ids: string[] = [];
-		for (const tree of weave.trees) {
-			ids.push(tree.root.id);
-			for (const child of tree.children) ids.push(child.id);
-		}
-		return runFacesInWindow(ids);
-	});
 	let selvage = $derived(rows === null ? null : selvageParts(clothSelvage(rows, now, windowMs)));
+	// Rows newer than the viewer's anchor — what "caught up" clears.
+	let newCount = $derived(
+		newSince === null
+			? 0
+			: windowRows.filter((row) => {
+					const endedAt = Date.parse(row.ended_at ?? '');
+					return Number.isFinite(endedAt) && endedAt > newSince;
+				}).length
+	);
+	function isNew(line: ClothLine): boolean {
+		return newSince !== null && Number.isFinite(line.endedAt) && line.endedAt > newSince;
+	}
 	// `weave.dropped` reads 0 once `showOlder` lifts the cap (nothing is
 	// dropped any more) — so the hem needs the *pre-lift* total, not the
 	// live drop count, to know whether it still has anything to say once
@@ -221,7 +241,7 @@
 	</span>
 {/snippet}
 
-{#snippet curatedLine(line: ClothLine, child: boolean, faces: Map<string, RunFace>)}
+{#snippet curatedLine(line: ClothLine, child: boolean)}
 	{#if child}
 		<span class="shrink-0 text-ink-mute" aria-hidden="true">↳</span>
 	{/if}
@@ -238,20 +258,25 @@
 	     collapse — the row wraps onto a second flex line (`flex-wrap` on the
 	     row, below) rather than crushing the name into a column of letters. -->
 	<Crossing
-		cells={crossingCells(threads, line.runId ? crossingIndex.get(line.runId) : undefined)}
+		cells={crossingCells(
+			threads,
+			line.runId ? crossingIndex.get(line.runId) : undefined,
+			topicFaces
+		)}
 	/>
-	<!-- The face, immediately before the name — the same slot it takes in the
-	     pick lane and the node header, so one run reads as one run across the
-	     three surfaces it appears on. Hashed from `line.id`, the key this row
-	     already renders under (`run_id ?? event_id ?? ended_at`); a row that
-	     resolved to none of those gets nothing rather than a fabricated mark.
-	     Looked up in `faces` (piece 2: `runFacesInWindow`) rather than hashed
-	     fresh here — the cloth is a multi-run surface, so this row's glyph can
-	     depend on which other ids share its rendered window. -->
-	{#if line.id}
-		{@const face = faces.get(line.id)}
-		{#if face}
-			<span class="shrink-0" aria-hidden="true" style={`color: ${face.color}`}>{face.glyph}</span>
+	<!-- The sigils, immediately before the name: the runes transitioned from
+	     run ids to topic ids (2026-08-11) — a run wears the topics of the
+	     work it did, the same glyph+hue the heddle rail introduces. A run
+	     that crossed no topic wears nothing rather than a fabricated mark. -->
+	{#if line.runId}
+		{@const sigils = (crossingIndex.get(line.runId) ?? []).slice(0, 3)}
+		{#if sigils.length > 0}
+			<span class="shrink-0 font-mono" aria-hidden="true">
+				{#each sigils as topicId (topicId)}
+					{@const face = topicFaces.get(topicId) ?? runFace(topicId)}
+					<span style={`color: ${face.color}`} title={topicId}>{face.glyph}</span>
+				{/each}
+			</span>
 		{/if}
 	{/if}
 	{#if line.href}
@@ -317,10 +342,14 @@
 {#snippet runRow(tree: ClothTree, index: number)}
 	<div role="listitem" in:glitchReveal={{ duration: 240, delay: index * 24 }}>
 		<div
-			class="relative flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 pb-[3px] font-mono text-xs leading-relaxed max-[480px]:gap-x-1.5"
+			class="relative flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 pb-[3px] font-mono text-xs leading-relaxed max-[480px]:gap-x-1.5 {isNew(
+				tree.root
+			)
+				? 'bg-stone-100/5'
+				: ''}"
 		>
 			{@render rowBar(tree.root, false)}
-			{@render curatedLine(tree.root, false, faceWindow)}
+			{@render curatedLine(tree.root, false)}
 			{#if tree.children.length > 0}
 				<button
 					type="button"
@@ -338,11 +367,15 @@
 			<div class="mt-0.5 space-y-0.5" out:fade={{ duration: 100 }}>
 				{#each tree.children as child, childIndex (child.id)}
 					<div
-						class="relative ml-4 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 pb-[2px] font-mono text-[11px] leading-relaxed max-[480px]:ml-2 max-[480px]:gap-x-1.5"
+						class="relative ml-4 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 pb-[2px] font-mono text-[11px] leading-relaxed max-[480px]:ml-2 max-[480px]:gap-x-1.5 {isNew(
+							child
+						)
+							? 'bg-stone-100/5'
+							: ''}"
 						in:glitchReveal={{ duration: 240, delay: childIndex * 24 }}
 					>
 						{@render rowBar(child, true)}
-						{@render curatedLine(child, true, faceWindow)}
+						{@render curatedLine(child, true)}
 					</div>
 					{@render nodeUnfold(child, true)}
 				{/each}
@@ -355,6 +388,17 @@
 	<div class="mb-3 flex items-center justify-between gap-2 text-sm">
 		<span class="font-mono font-medium tracking-wide text-amber-200 uppercase">the cloth</span>
 		<span class="flex items-center gap-2">
+			{#if newCount > 0 && onCaughtUp}
+				<!-- The digest block's successor: the anchor lives here now. New
+				     rows wear the brighter ground; one press retires the glow. -->
+				<button
+					type="button"
+					class="cursor-pointer border border-stone-700/60 bg-stone-900/40 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-amber-200 uppercase hover:text-amber-100"
+					onclick={() => onCaughtUp?.()}
+				>
+					{newCount} new · caught up
+				</button>
+			{/if}
 			{#if stale}
 				<span
 					class="border border-sky-900/60 bg-sky-950/40 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-sky-300 uppercase"
@@ -393,6 +437,12 @@
 				</button>
 			{/each}
 		</div>
+	{/if}
+
+	{#if selectedTopics !== null && windowRows.length > topicRows.length}
+		<p class="mb-1 font-mono text-[10px] text-ink-mute">
+			{topicRows.length} of {windowRows.length} runs in lit topics
+		</p>
 	{/if}
 
 	{#if weave === null || days === null || selvage === null}
