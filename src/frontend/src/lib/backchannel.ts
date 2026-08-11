@@ -1,12 +1,19 @@
-import type { AuthoredBackchannelItem, BackchannelItemKind } from './backchannelPage';
 import type { ConfigChangeRequestItem } from './configRequests';
 import type { PRReviewItem } from './prReviewQueue';
 
-export type BackchannelKind = 'pr' | 'config';
+// The needs-you strip's derived half: rows the daemon derives from forge
+// and config feeds, not items anyone authored — authored asks now live in
+// the warp itself (design-work-layers.md). This module used to also carry
+// a resident-authored population (`backchannel*` naming, #875 v2); that
+// half retired into the warp 2026-08-11 and is gone from here — see
+// `BackchannelQueue.svelte` and `+page.svelte`'s needs-you strip, the two
+// remaining consumers, for what's left.
 
-export interface BackchannelItem {
+export type DerivedAskKind = 'pr' | 'config';
+
+export interface DerivedAskItem {
 	key: string;
-	kind: BackchannelKind;
+	kind: DerivedAskKind;
 	createdAt: string | null;
 	headline: string;
 	context: string;
@@ -21,23 +28,16 @@ function parseCreatedAt(value: string | null): number {
 	return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
 }
 
-export function backchannelCount(
-	prs: PRReviewItem[] | null | undefined,
-	requests: ConfigChangeRequestItem[] | null | undefined
-): number {
-	return (prs?.length ?? 0) + (requests?.length ?? 0);
-}
-
 // Loading is a state, not an answer (#918's UI sibling, measured 2026-08-01:
 // three loads of the same page rendered the §1 counter as 20 · "clear" · 4,
 // because every intermediate feed arrival rendered as a finished verdict).
 // The clear verdict and the final count may only render once every feed the
 // sum spans has resolved — loaded or errored, but not still in flight.
 
-/** The §1 "queue is clear" collapse is only true once all feeds resolved,
- * the sum is zero, and nothing is withheld. Before that, an empty count is
- * an unmeasured absence, not a zero. */
-export function backchannelShowClear(
+/** The needs-you strip's "queue is clear" collapse is only true once every
+ * feed resolved, the sum is zero, and nothing is withheld. Before that, an
+ * empty count is an unmeasured absence, not a zero. */
+export function derivedAsksShowClear(
 	feedsResolved: boolean,
 	count: number,
 	withheld: boolean
@@ -46,78 +46,45 @@ export function backchannelShowClear(
 }
 
 /** Counter chip text: never presents an in-flight sum as a verdict, and
- * never a bare sum — the count spans two populations with different owners
- * (resident-authored surface items vs. rows derived from forge/config
- * feeds), so the chip always attributes: "N authored · M derived". */
-export function backchannelChip(
-	feedsResolved: boolean,
-	authoredCount: number,
-	derivedCount: number
-): string {
-	const attributed = `${authoredCount} authored · ${derivedCount} derived`;
-	if (!feedsResolved) {
-		return authoredCount + derivedCount === 0 ? 'counting…' : `${attributed} · counting…`;
-	}
-	if (authoredCount + derivedCount === 0) return 'nothing waiting';
-	return attributed;
+ * never counts a draft PR — `buildDerivedAsks` is the one place that
+ * filters drafts, so this chip, the strip's visibility, and its rows all
+ * agree on the same population. */
+export function derivedAsksChip(feedsResolved: boolean, count: number): string {
+	if (!feedsResolved) return count === 0 ? 'counting…' : `${count} derived · counting…`;
+	if (count === 0) return 'nothing waiting';
+	return `${count} derived`;
 }
 
-/** The briefing fold's whole state is one key (design-dashboard-briefing §3:
- * the full-prose render is the *open* state of exactly one row). Opening a
- * row closes whichever was open; tapping the open row closes it. */
-export function toggleFold(open: string | null, key: string): string | null {
-	return open === key ? null : key;
+/** Open PRs withheld from the needs-you count because they're still
+ * drafts — a draft means "the resident isn't done with it" (workflow.md),
+ * not "needs you". Informational only: render it as a quiet footnote if at
+ * all, never as a row. */
+export function draftPrCount(prs: PRReviewItem[] | null | undefined): number {
+	return (prs ?? []).filter((pr) => pr.draft).length;
 }
 
-export interface NeedsPreviewRow {
-	key: string;
-	headline: string;
-	kind: BackchannelItemKind | null;
-}
-
-/** The needs strip's collapsed preview: the top asks, decision/action first
- * (maintainer, 08-02: "the top item in all that should be a decision/action
- * ask"). Authored `decide`/`act` items lead, then the remaining authored
- * items — stable within each group, the file's own order preserved (order
- * *is* the priority within a band) — then the derived rows at the end, the
- * same tail position the full list gives them. Derived rows wear the kind
- * their action asks for: a PR is a `review`, a config request a `decide`. */
-export function needsPreview(
-	authored: AuthoredBackchannelItem[],
-	derived: BackchannelItem[],
-	limit: number
-): NeedsPreviewRow[] {
-	const asks = authored.filter((item) => item.kind === 'decide' || item.kind === 'act');
-	const rest = authored.filter((item) => item.kind !== 'decide' && item.kind !== 'act');
-	return [
-		...[...asks, ...rest].map((item) => ({
-			key: `a:${item.key}`,
-			headline: item.headline,
-			kind: item.kind
-		})),
-		...derived.map((item) => ({
-			key: `d:${item.key}`,
-			headline: item.headline,
-			kind: (item.kind === 'pr' ? 'review' : 'decide') as BackchannelItemKind
-		}))
-	].slice(0, limit);
-}
-
-export function buildBackchannelItems(
+/** The rows a returning reader is asked to look at: open (non-draft) PRs
+ * awaiting review, plus config-change requests awaiting a decision. A draft
+ * PR is filtered here, at the one place every consumer (count, chip, rows)
+ * reads from — never in a renderer, or some consumer would disagree with
+ * another about what's waiting. */
+export function buildDerivedAsks(
 	prs: PRReviewItem[],
 	requests: ConfigChangeRequestItem[]
-): BackchannelItem[] {
-	const items: BackchannelItem[] = [
-		...prs.map((pr) => ({
-			key: `pr:${pr.repo_label}#${pr.number}`,
-			kind: 'pr' as const,
-			createdAt: pr.created_at,
-			headline: `#${pr.number} ${pr.title || 'Untitled PR'}`,
-			context: `${pr.repo_label || 'unknown repo'}${pr.author ? ` · ${pr.author}` : ''}`,
-			statusLabel: pr.draft ? 'draft' : 'review',
-			href: pr.url,
-			linkLabel: 'open'
-		})),
+): DerivedAskItem[] {
+	const items: DerivedAskItem[] = [
+		...prs
+			.filter((pr) => !pr.draft)
+			.map((pr) => ({
+				key: `pr:${pr.repo_label}#${pr.number}`,
+				kind: 'pr' as const,
+				createdAt: pr.created_at,
+				headline: `#${pr.number} ${pr.title || 'Untitled PR'}`,
+				context: `${pr.repo_label || 'unknown repo'}${pr.author ? ` · ${pr.author}` : ''}`,
+				statusLabel: 'review',
+				href: pr.url,
+				linkLabel: 'open'
+			})),
 		...requests.map((request) => ({
 			key: `config:${request.id}`,
 			kind: 'config' as const,
