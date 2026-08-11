@@ -3100,6 +3100,29 @@ def test_live_runs_snapshot_resolves_mood_at_the_serving_edge(tmp_path):
     assert none["mood_pitch"] is None
 
 
+def test_live_runs_snapshot_carries_claimed_topics(tmp_path):
+    """the-run-that-claims-its-thread, live-read steer: a burning run's
+    claimed topics ride the live-runs payload, not only closeout's
+    `topics.md`. Raw slugs pass through, no resolution — unlike `mood`
+    there is nothing here to resolve."""
+    from brr import presence
+
+    brr_dir = tmp_path / ".brr"
+    presence.register(
+        brr_dir, kind="daemon", stream="t:1:", run_id="run-with-topics",
+        repo_label="Gurio/brr", pid=os.getpid(), entry_id="e-topics",
+    )
+    presence.heartbeat(brr_dir, "e-topics", topics=["the-loom", "the-post"])
+    presence.register(
+        brr_dir, kind="daemon", stream="t:2:", run_id="run-no-topics",
+        repo_label="Gurio/brr", pid=os.getpid(), entry_id="e-none",
+    )
+
+    rows = {row["run_id"]: row for row in cloud._live_runs_snapshot(brr_dir)}
+    assert rows["run-with-topics"]["topics"] == ["the-loom", "the-post"]
+    assert rows["run-no-topics"]["topics"] == []
+
+
 def test_a_runs_mood_reaches_the_wire_as_richly_as_the_daemons_own(tmp_path):
     """The asymmetry that caused this, asserted as a rule rather than a value.
 
