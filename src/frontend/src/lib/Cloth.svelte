@@ -202,6 +202,8 @@
 					href={line.href}
 					vitals={clothVitals(line)}
 					identity={clothIdentity(line, child)}
+					{crossingIndex}
+					{topicFaces}
 				/>
 			{:else}
 				<!-- No node in the corpus (closed before the weld, or the mirror
