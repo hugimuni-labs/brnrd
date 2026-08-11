@@ -6,6 +6,7 @@
 	// file used to be). Feeds are ones the dashboard already publishes —
 	// the corpus mirror and the live-runs snapshot; no new endpoint.
 	import { onMount } from 'svelte';
+	import { SvelteSet } from 'svelte/reactivity';
 	import { resolve } from '$app/paths';
 	import HeddleRail from '$lib/HeddleRail.svelte';
 	import WarpGraphView from '$lib/WarpGraphView.svelte';
@@ -46,13 +47,13 @@
 	let faces = $derived(topicFaces(graph));
 
 	function toggleTopic(id: string) {
-		const all = new Set(threads.map((thread) => thread.canonicalId));
-		let next: Set<string>;
+		const all = new SvelteSet(threads.map((thread) => thread.canonicalId));
+		let next: SvelteSet<string>;
 		if (selected === null) {
 			next = all;
 			next.delete(id);
 		} else {
-			next = new Set(selected);
+			next = new SvelteSet(selected);
 			if (next.has(id)) next.delete(id);
 			else next.add(id);
 		}

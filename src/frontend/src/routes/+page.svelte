@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
+	import { SvelteSet } from 'svelte/reactivity';
 	import { resolve } from '$app/paths';
 	import AccountDeletion from '$lib/AccountDeletion.svelte';
 	import BillingPanel from '$lib/BillingPanel.svelte';
@@ -7,7 +8,12 @@
 	import LiveRuns from '$lib/LiveRuns.svelte';
 	import RunLedgerReceipt from '$lib/RunLedgerReceipt.svelte';
 	import Cloth from '$lib/Cloth.svelte';
-	import { digestLastLookedStorageKey, readLastLookedAt, serializeLastLookedAt } from '$lib/digest';
+	import {
+		digestLastLookedStorageKey,
+		lastLookedAnchor,
+		readLastLookedAt,
+		serializeLastLookedAt
+	} from '$lib/digest';
 	import ControlStrip from '$lib/ControlStrip.svelte';
 	import ColdStart from '$lib/ColdStart.svelte';
 	import PublishConsentNotice from '$lib/PublishConsentNotice.svelte';
@@ -368,13 +374,13 @@
 		}
 	}
 	function toggleHeddle(id: string) {
-		const all = new Set(topicThreadList.map((thread) => thread.canonicalId));
-		let next: Set<string>;
+		const all = new SvelteSet(topicThreadList.map((thread) => thread.canonicalId));
+		let next: SvelteSet<string>;
 		if (heddleSelection === null) {
 			next = all;
 			next.delete(id);
 		} else {
-			next = new Set(heddleSelection);
+			next = new SvelteSet(heddleSelection);
 			if (next.has(id)) next.delete(id);
 			else next.add(id);
 		}
@@ -1678,7 +1684,7 @@
 						{crossingIndex}
 						topicFaces={topicFaceMap}
 						selectedTopics={heddleSelection}
-						newSince={lastLookedAt}
+						newSince={lastLookedAnchor(lastLookedAt, now)}
 						onCaughtUp={markCaughtUp}
 					/>
 				{/if}

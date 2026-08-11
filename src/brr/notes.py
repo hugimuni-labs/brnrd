@@ -327,22 +327,38 @@ _REGISTRY: tuple[Surface, ...] = (
         traits=("budgeted-inject",),
     ),
     Surface(
-        key="backchannel",
+        key="warp-items",
         rides="work-surface",
         root=ROOT_SURFACE,
-        path_hint="<surface>/backchannel.md",
-        role="maintainer<->resident items, read in a browser",
+        path_hint="<surface>/warp/*.md",
+        role="the work-item graph: one item per file, needs: rows as edges",
         readers=(
-            "brr.prompts._backchannel_handles_only",
-            "frontend backchannelPage.ts",
+            "brr.items.render_index",
+            "brr.weld",
+            "frontend warpGraph.ts",
         ),
-        grammar="one `## ` item per entry plus schema rows the wake reads",
-        parser="brr.prompts._backchannel_item_handle",
+        grammar=(
+            "one `# ` title, a recognized-row block (type/topics/needs/"
+            "done/retired/refs/prompt/taken), then free body; lifecycle "
+            "derives from the receipt rows"
+        ),
+        parser="brr.items.parse_item",
         budget=(
-            "compressed to heading + schema-row **handles** before it enters "
-            "the surface budget at all — the free-text body never rides a wake"
+            "never enters the surface page walk — the wake carries the "
+            "composed open-items index (`items.render_index`) instead"
         ),
-        traits=("h2-sections", "budgeted-inject"),
+        traits=(),
+    ),
+    Surface(
+        key="topics",
+        rides="work-surface",
+        root=ROOT_SURFACE,
+        path_hint="<surface>/topics/*.md",
+        role="the filter axis: topic definitions with alias id sets",
+        readers=("frontend warpGraph.ts",),
+        grammar="one `# ` title, `ids:`/`split-into:` rows, definition body",
+        budget="excluded from the surface page walk, same as warp items",
+        traits=(),
     ),
     Surface(
         key="active-plan",
@@ -357,16 +373,6 @@ _REGISTRY: tuple[Surface, ...] = (
             "reserve as `workflow.md`"
         ),
         traits=("h2-sections", "budgeted-inject"),
-    ),
-    Surface(
-        key="layers",
-        rides="work-surface",
-        root=ROOT_SURFACE,
-        path_hint="<surface>/layers/*.md",
-        role="standing themed layers of the work surface",
-        readers=("brr.account.work_surface_files",),
-        grammar="Markdown, one file per layer; discovered, not registered",
-        traits=("budgeted-inject",),
     ),
     Surface(
         key="decisions-ledger",
@@ -472,7 +478,7 @@ class Resolved:
     """A registry entry joined with what is actually on disk right now.
 
     ``paths`` is a list because three entries are globs by nature
-    (``layers/*.md``, the kb page types, and — in principle — a
+    (``warp/*.md``, the kb page types, and — in principle — a
     multi-dominion install). ``bytes`` and ``mtime`` aggregate over it;
     ``exists`` is ``False`` when the glob matched nothing, which is a
     legitimate state for most surfaces and never on its own a finding.
@@ -750,9 +756,9 @@ _RESOLVERS: dict[str, Callable[[_Roots], list[Path]]] = {
     "thread-of-record": lambda r: _one(r.dominion, "thread-of-record.md"),
     "workflow": lambda r: _one(r.surface, "workflow.md"),
     "surface-index": lambda r: _one(r.surface, "index.md"),
-    "backchannel": lambda r: _one(r.surface, "backchannel.md"),
+    "warp-items": lambda r: _glob(r.surface, "warp/*.md"),
+    "topics": lambda r: _glob(r.surface, "topics/*.md"),
     "active-plan": lambda r: _active_plan(r),
-    "layers": lambda r: _glob(r.surface, "layers/*.md"),
     "decisions-ledger": lambda r: _one(r.surface, "ledger/decisions.md"),
     "kb-index": lambda r: _one(r.kb, "index.md"),
     "kb-log": lambda r: _one(r.kb, "log.md"),
