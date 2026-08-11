@@ -3095,7 +3095,7 @@ def _run_worker(
     # another route. Best-effort — the weld must never block the run.
     try:
         ignited_items = weld.annotate_ignition(
-            weld.layers_dir(account_context),
+            weld.warp_dir(account_context),
             outbox_dir,
             run_id=task.id,
             body=str(event.get("body") or ""),
@@ -11136,7 +11136,7 @@ def _weld_capture(
     account home right after this in the same finalize, so the surface
     change rides the existing capture net.
     """
-    layers_root = weld.layers_dir(account_context)
+    layers_root = weld.warp_dir(account_context)
     if layers_root is None:
         return
     branch, seed = relics.collection_scope(task.meta, work_dir)

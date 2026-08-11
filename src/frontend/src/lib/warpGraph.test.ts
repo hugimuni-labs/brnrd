@@ -1,0 +1,272 @@
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+
+import {
+	blockedItems,
+	blockers,
+	buildWarpGraph,
+	completedItems,
+	isBlocked,
+	isTopicFile,
+	isWarpItemFile,
+	itemInTopics,
+	liveTakenRuns,
+	parseWarpItem,
+	parseWarpTopic,
+	readyItems,
+	resolveTopics,
+	runTopicIndex,
+	topicCounts,
+	topicFace,
+	topicFaces,
+	topicThreads,
+	dependents,
+	RUNE_SPACE
+} from './warpGraph.ts';
+import type { SurfaceFile } from './surface.ts';
+
+function file(path: string, markdown: string): SurfaceFile {
+	return { path, markdown, layer: 'authored', truncated: false };
+}
+
+const TOPIC_LOOM = file(
+	'surface/topics/loom.md',
+	'# The loom\n\nThe dashboard becomes the machine it renders.'
+);
+const TOPIC_POST = file(
+	'surface/topics/post.md',
+	'# The post\n\nids: mail\n\nChannels and delivery.'
+);
+
+function graphOf(...files: SurfaceFile[]) {
+	return buildWarpGraph(files);
+}
+
+describe('file discovery', () => {
+	it('recognizes item and topic files, skipping index and nested paths', () => {
+		assert.equal(isWarpItemFile('surface/warp/w-1.md'), true);
+		assert.equal(isWarpItemFile('surface/warp/index.md'), false);
+		assert.equal(isWarpItemFile('surface/warp/sub/w-1.md'), false);
+		assert.equal(isWarpItemFile('surface/layers/w-1.md'), false);
+		assert.equal(isTopicFile('surface/topics/loom.md'), true);
+		assert.equal(isTopicFile('surface/topics/index.md'), false);
+	});
+});
+
+describe('parseWarpItem', () => {
+	it('parses the full row block and body', () => {
+		const item = parseWarpItem(
+			'surface/warp/w-7.md',
+			[
+				'# Ship the digest',
+				'',
+				'type: action',
+				'topics: loom post',
+				'needs: w-3 w-4',
+				'refs: hugimuni-labs/brnrd#1256',
+				'prompt: Build the digest per the signed design.',
+				'taken: run-260810-0001-aaaa',
+				'',
+				'Body prose here.'
+			].join('\n')
+		);
+		assert.equal(item.id, 'w-7');
+		assert.equal(item.headline, 'Ship the digest');
+		assert.equal(item.type, 'action');
+		assert.deepEqual(item.topics, ['loom', 'post']);
+		assert.deepEqual(item.needs, ['w-3', 'w-4']);
+		assert.equal(item.state, 'open');
+		assert.deepEqual(item.taken, ['run-260810-0001-aaaa']);
+		assert.equal(item.refs[0].href, 'https://github.com/hugimuni-labs/brnrd/issues/1256');
+		assert.equal(item.prompt, 'Build the digest per the signed design.');
+		assert.equal(item.bodyMarkdown, 'Body prose here.');
+	});
+
+	it('derives state from the receipt rows — done wins, retired second, no state row exists', () => {
+		const done = parseWarpItem(
+			'surface/warp/w-2.md',
+			'# X\n\ntype: decision\ndone: 2026-08-11 run-260811-1114-z0xq\n'
+		);
+		assert.equal(done.state, 'done');
+		assert.equal(done.doneDate, '2026-08-11');
+		assert.equal(done.doneRun, 'run-260811-1114-z0xq');
+
+		const retired = parseWarpItem('surface/warp/w-3.md', '# X\n\nretired: 2026-08-10 superseded\n');
+		assert.equal(retired.state, 'retired');
+		assert.equal(retired.retiredNote, '2026-08-10 superseded');
+
+		const open = parseWarpItem('surface/warp/w-4.md', '# X\n');
+		assert.equal(open.state, 'open');
+	});
+
+	it('treats an unknown type as untyped, never coerced', () => {
+		const item = parseWarpItem('surface/warp/w-5.md', '# X\n\ntype: chore\n');
+		assert.equal(item.type, null);
+	});
+
+	it('ends the row block at the first unrecognized line', () => {
+		const item = parseWarpItem(
+			'surface/warp/w-6.md',
+			'# X\n\ntype: action\nnot a row\nneeds: w-1\n'
+		);
+		assert.equal(item.type, 'action');
+		assert.deepEqual(item.needs, []);
+		assert.match(item.bodyMarkdown, /not a row/);
+	});
+
+	it('falls back to the id as headline', () => {
+		const item = parseWarpItem('surface/warp/w-9.md', 'type: action\n');
+		assert.equal(item.headline, 'w-9');
+	});
+});
+
+describe('parseWarpTopic', () => {
+	it('carries the alias set, canonical first, never duplicated', () => {
+		const topic = parseWarpTopic('surface/topics/post.md', '# The post\n\nids: mail post\n\nBody.');
+		assert.equal(topic.canonicalId, 'post');
+		assert.deepEqual(topic.ids, ['post', 'mail']);
+		assert.equal(topic.definitionMarkdown, 'Body.');
+	});
+
+	it('reads split-into as the retirement breadcrumb', () => {
+		const topic = parseWarpTopic('surface/topics/old.md', '# Old\n\nsplit-into: a b\n');
+		assert.deepEqual(topic.splitInto, ['a', 'b']);
+	});
+});
+
+describe('the graph', () => {
+	const files = [
+		TOPIC_LOOM,
+		TOPIC_POST,
+		file('surface/warp/w-1.md', '# Decide the shape\n\ntype: decision\ntopics: loom\n'),
+		file(
+			'surface/warp/w-2.md',
+			'# Build it\n\ntype: action\ntopics: loom\nneeds: w-1\nprompt: build\n'
+		),
+		file('surface/warp/w-3.md', '# Mail thing\n\ntype: action\ntopics: mail\n'),
+		file(
+			'surface/warp/w-4.md',
+			'# Done thing\n\ntype: action\ntopics: post\ndone: 2026-08-10 run-260810-0001-aaaa\n'
+		),
+		file('surface/warp/w-5.md', '# Dangling\n\ntype: action\nneeds: w-99\n')
+	];
+	const graph = graphOf(...files);
+
+	it('resolves topic aliases to canonical topics', () => {
+		const mailItem = graph.itemById.get('w-3')!;
+		const topics = resolveTopics(mailItem, graph);
+		assert.equal(topics.length, 1);
+		assert.equal(topics[0].canonicalId, 'post');
+	});
+
+	it('derives blocked from open edges only — a done blocker frees', () => {
+		assert.equal(isBlocked(graph.itemById.get('w-2')!, graph), true);
+		const doneBlocking = graphOf(
+			file('surface/warp/w-1.md', '# A\n\ntype: decision\ndone: 2026-08-01\n'),
+			file('surface/warp/w-2.md', '# B\n\ntype: action\nneeds: w-1\n')
+		);
+		assert.equal(isBlocked(doneBlocking.itemById.get('w-2')!, doneBlocking), false);
+	});
+
+	it('a dangling edge warns, never blocks', () => {
+		const item = graph.itemById.get('w-5')!;
+		assert.equal(isBlocked(item, graph), false);
+		assert.deepEqual(blockers(item, graph).dangling, ['w-99']);
+	});
+
+	it('bands: ready decisions first, blocked below, completed apart', () => {
+		const ready = readyItems(graph).map((item) => item.id);
+		assert.deepEqual(ready, ['w-1', 'w-3', 'w-5']);
+		assert.deepEqual(
+			blockedItems(graph).map((item) => item.id),
+			['w-2']
+		);
+		assert.deepEqual(
+			completedItems(graph).map((item) => item.id),
+			['w-4']
+		);
+	});
+
+	it('dependents answers the unblocks direction', () => {
+		assert.deepEqual(
+			dependents(graph.itemById.get('w-1')!, graph).map((item) => item.id),
+			['w-2']
+		);
+	});
+
+	it('numeric-aware ordering keeps w-2 before w-10', () => {
+		const wide = graphOf(
+			file('surface/warp/w-10.md', '# Ten\n\ntype: action\n'),
+			file('surface/warp/w-2.md', '# Two\n\ntype: action\n')
+		);
+		assert.deepEqual(
+			readyItems(wide).map((item) => item.id),
+			['w-2', 'w-10']
+		);
+	});
+
+	it('topic filter: untagged passes only the all-lit filter', () => {
+		const untagged = graph.itemById.get('w-5')!;
+		assert.equal(itemInTopics(untagged, graph, null), true);
+		assert.equal(itemInTopics(untagged, graph, new Set(['loom'])), false);
+		const loomItem = graph.itemById.get('w-1')!;
+		assert.equal(itemInTopics(loomItem, graph, new Set(['loom'])), true);
+		assert.equal(itemInTopics(loomItem, graph, new Set(['post'])), false);
+	});
+
+	it('runTopicIndex joins taken and done runs to canonical topic ids', () => {
+		const index = runTopicIndex(graph);
+		assert.deepEqual(index.get('run-260810-0001-aaaa'), ['post']);
+	});
+
+	it('topicCounts splits ready/blocked per canonical id, untagged under empty key', () => {
+		const counts = topicCounts(graph);
+		assert.deepEqual(counts.get('loom'), { ready: 1, blocked: 1 });
+		assert.deepEqual(counts.get('post'), { ready: 1, blocked: 0 });
+		assert.deepEqual(counts.get(''), { ready: 1, blocked: 0 });
+	});
+
+	it('topicThreads drops split breadcrumbs and carries stable faces', () => {
+		const withSplit = graphOf(
+			TOPIC_LOOM,
+			file('surface/topics/old.md', '# Old\n\nsplit-into: loom\n')
+		);
+		const threads = topicThreads(withSplit);
+		assert.deepEqual(
+			threads.map((thread) => thread.canonicalId),
+			['loom']
+		);
+		// Face is a pure function of the canonical id — stable across set
+		// changes, unlike the index-based hue this replaces.
+		assert.deepEqual(
+			threads[0].face,
+			topicFace(withSplit.topics.find((t) => t.canonicalId === 'loom')!)
+		);
+	});
+
+	it('topicFaces are unique within the rune space — the set-probed cap', () => {
+		// 20 topics (< RUNE_SPACE): the probe must hand every topic its own
+		// stave, whatever the hashes collide on.
+		const files = Array.from({ length: 20 }, (_, i) =>
+			file(`surface/topics/topic-${i}.md`, `# Topic ${i}\n`)
+		);
+		const g = graphOf(...files);
+		const faces = topicFaces(g);
+		const glyphs = [...faces.values()].map((face) => face.glyph);
+		assert.equal(new Set(glyphs).size, glyphs.length);
+		assert.ok(glyphs.length <= RUNE_SPACE);
+	});
+
+	it('liveTakenRuns frames only currently-live holders', () => {
+		const item = parseWarpItem('surface/warp/w-8.md', '# X\n\ntaken: run-a run-b\n');
+		assert.deepEqual(liveTakenRuns(item, new Set(['run-b'])), ['run-b']);
+	});
+
+	it('alias collisions resolve to the first topic, deterministically', () => {
+		const collided = graphOf(
+			file('surface/topics/a.md', '# A\n\nids: shared\n'),
+			file('surface/topics/b.md', '# B\n\nids: shared\n')
+		);
+		assert.equal(collided.topicByAlias.get('shared')!.canonicalId, 'a');
+	});
+});
