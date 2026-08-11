@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { digestLastLookedStorageKey, readLastLookedAt, serializeLastLookedAt } from './digest.ts';
+import {
+	LAST_LOOKED_FALLBACK_WINDOW_MS,
+	digestLastLookedStorageKey,
+	lastLookedAnchor,
+	readLastLookedAt,
+	serializeLastLookedAt
+} from './digest.ts';
 
 const NOW = Date.parse('2026-08-09T20:00:00Z');
 
@@ -27,4 +33,12 @@ test('corrupt, absent, or future storage reads as never-looked', () => {
 
 test('serialization truncates to integer milliseconds', () => {
 	assert.equal(serializeLastLookedAt(1234.9), '1234');
+});
+
+test('a never-pressed viewer still gets a bounded anchor — the press must stay reachable', () => {
+	// The digest block used to be the first press's home; with the highlight
+	// living in the cloth, a null anchor deleting the affordance would leave
+	// no way to ever record one.
+	assert.equal(lastLookedAnchor(null, NOW), NOW - LAST_LOOKED_FALLBACK_WINDOW_MS);
+	assert.equal(lastLookedAnchor(NOW - 5_000, NOW), NOW - 5_000);
 });
