@@ -1453,6 +1453,16 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
                 # unknown handle degrades to name-only — never a guessed
                 # face (the library's honesty bar).
                 **_mood_payload(entry),
+                # the-run-that-claims-its-thread, live-read steer: the
+                # resident's claimed topic slugs, same heartbeat-refreshed
+                # pass-through as `mood` — raw slugs only, no resolution
+                # here (there's nothing to resolve; unlike mood there's no
+                # glyph lookup). `[]` for an entry that predates this field
+                # or has claimed nothing yet.
+                "topics": [
+                    str(slug) for slug in (entry.get("topics") or [])
+                    if isinstance(slug, str)
+                ],
             })
         )
     return out
