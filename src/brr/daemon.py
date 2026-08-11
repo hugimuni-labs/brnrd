@@ -11467,6 +11467,27 @@ def _run_state_produce_changed(
     return relics.fingerprint(records) != task.meta.get("run_state_produce_fingerprint")
 
 
+def _produce_lines_regressed(existing: list[str], rendered: list[str]) -> bool:
+    """True when *rendered* is missing a bullet *existing* already proved.
+
+    Produce only ever grows or reformats within a run's life — a commit or
+    other relic already captured cannot un-happen. So a bullet present in
+    the last-written section but absent from a fresh collection is stronger
+    evidence of an ambiguous git-probe glitch in ``relics.collection_scope``
+    (#1309 item 4) than of a real change: unlike a fully-empty collection
+    (already handled by the caller falling back on an empty ``rendered``),
+    this result *looks* real — non-empty, no exception raised — while
+    silently having lost something. Comparing rendered bullet lines rather
+    than structured records keeps this check symmetric with
+    :func:`_existing_produce_lines`, which only ever recovers rendered text.
+    """
+    existing_bullets = {line for line in existing if line.startswith("- ")}
+    if not existing_bullets:
+        return False
+    rendered_bullets = {line for line in rendered if line.startswith("- ")}
+    return not existing_bullets.issubset(rendered_bullets)
+
+
 def _run_state_produce_lines(
     path: Path,
     task: Run,
@@ -11481,6 +11502,15 @@ def _run_state_produce_lines(
     receipt can never disagree about what a run made. Every failure degrades
     to the previously written section — produce is a convenience on a
     lifecycle attestation, and must never be able to fail a state write.
+
+    **A non-empty-but-incomplete collection degrades the same way (#1309
+    item 4).** ``relics.collect`` is documented best-effort: a probe glitch
+    inside ``relics.collection_scope`` can silently narrow what it sees
+    without raising, so the ``except Exception`` above never catches it, and
+    the *empty*-``rendered`` fallback below never fires either — the result
+    looks like real produce, just less of it. :func:`_produce_lines_regressed`
+    catches that shape specifically: never publish a collection that drops a
+    relic the document already proved.
     """
     if work_dir is None:
         return _existing_produce_lines(path)
@@ -11496,9 +11526,14 @@ def _run_state_produce_lines(
         )
     except Exception:
         return _existing_produce_lines(path)
-    task.meta["run_state_produce_fingerprint"] = relics.fingerprint(records)
     rendered = relics.render_markdown(records)
-    return rendered if rendered else _existing_produce_lines(path)
+    if not rendered:
+        return _existing_produce_lines(path)
+    existing = _existing_produce_lines(path)
+    if _produce_lines_regressed(existing, rendered):
+        return existing
+    task.meta["run_state_produce_fingerprint"] = relics.fingerprint(records)
+    return rendered
 
 
 def _record_dispatch_edge(
