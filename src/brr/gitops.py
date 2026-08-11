@@ -1023,6 +1023,18 @@ def create_orphan_branch(
     works on any git version and never touches the main worktree's index
     or HEAD. Returns the new commit OID, the existing head if *branch*
     already exists, or ``None`` on failure (e.g. no committer identity).
+
+    **The final write is old-value-checked (#1309).** The entry-point
+    ``branch_exists`` read and the write below are not atomic with each
+    other — a concurrent caller (two daemons racing :func:`dominion.
+    ensure_dominion`, or an upstream ambiguous-failure read that made an
+    adoption path look absent when it was not) can create *branch*, pointed
+    at real history, in that window. An unconditional ``update-ref`` would
+    silently overwrite it — this is the one call site in the module that
+    can orphan committed history rather than merely fail. Passing an empty
+    old-value makes git refuse the write instead of clobbering: "the ref
+    must not exist" is exactly the invariant this function is relying on
+    when it decided to mint a *new* root commit.
     """
     if branch_exists(repo_root, branch):
         return branch_head(repo_root, branch)
@@ -1054,10 +1066,14 @@ def create_orphan_branch(
     commit_oid = commit.stdout.strip()
 
     update = _git(
-        repo_root, "update-ref", f"refs/heads/{branch}", commit_oid, check=False,
+        repo_root, "update-ref", f"refs/heads/{branch}", commit_oid, "",
+        check=False,
     )
     if update.returncode != 0:
-        return None
+        # Refused because the ref now exists (a concurrent writer landed
+        # first) — never overwrite it; adopt whatever is there rather than
+        # reporting failure over a branch that in fact exists.
+        return branch_head(repo_root, branch)
     return commit_oid
 
 
@@ -1397,6 +1413,28 @@ def worktree_dirty(worktree_path: Path) -> bool:
     return bool(result.stdout.strip())
 
 
+def _dirty_paths_probe(worktree_path: Path) -> set[str] | None:
+    """Shared machinery for :func:`dirty_paths` / :func:`dirty_paths_or_none`.
+
+    ``None`` when ``git status --porcelain`` itself failed to answer —
+    kept apart from a real empty set so a caller that needs the
+    distinction (see :func:`dirty_paths_or_none`) can have it.
+    """
+    result = _git(worktree_path, "status", "--porcelain", check=False)
+    if result.returncode != 0:
+        return None
+    paths: set[str] = set()
+    for line in result.stdout.splitlines():
+        entry = line[3:].strip() if len(line) > 3 else ""
+        if not entry:
+            continue
+        # `R  old -> new` / `C  old -> new`: the destination is the path that
+        # now exists in the tree.
+        _, sep, dest = entry.partition(" -> ")
+        paths.add((dest if sep else entry).strip('"'))
+    return paths
+
+
 def dirty_paths(worktree_path: Path) -> set[str]:
     """The set of paths ``git status --porcelain`` reports in *worktree_path*.
 
@@ -1409,21 +1447,26 @@ def dirty_paths(worktree_path: Path) -> set[str]:
     question is *which files*, not how they differ, and a file's status can
     legitimately change between readings (untracked, then staged). A rename
     (``R  old -> new``) contributes the destination. Unreadable or non-repo
-    reports empty, matching :func:`worktree_dirty`'s best-effort posture.
+    reports empty, matching :func:`worktree_dirty`'s best-effort posture —
+    see :func:`dirty_paths_or_none` for a sibling that keeps "could not
+    measure" distinct from "measured and clean".
     """
-    result = _git(worktree_path, "status", "--porcelain", check=False)
-    if result.returncode != 0:
-        return set()
-    paths: set[str] = set()
-    for line in result.stdout.splitlines():
-        entry = line[3:].strip() if len(line) > 3 else ""
-        if not entry:
-            continue
-        # `R  old -> new` / `C  old -> new`: the destination is the path that
-        # now exists in the tree.
-        _, sep, dest = entry.partition(" -> ")
-        paths.add((dest if sep else entry).strip('"'))
-    return paths
+    return _dirty_paths_probe(worktree_path) or set()
+
+
+def dirty_paths_or_none(worktree_path: Path) -> set[str] | None:
+    """Like :func:`dirty_paths`, but ``None`` when git could not answer at all.
+
+    ``dirty_paths`` documents best-effort: any git failure collapses to an
+    empty set, which is the right contract for a caller asking a simple
+    "what's dirty" question. #703's stray-write detector (``daemon.py``)
+    diffs *two* readings of this and needs the third state kept apart — a
+    failed dispatch-time or finalize-time read must not silently read as
+    "definitely clean", or a real stranded-worktree signal a broken read
+    genuinely could not see computes as "nothing changed" instead of
+    "could not tell" (#1309 item 3).
+    """
+    return _dirty_paths_probe(worktree_path)
 
 
 def commits_owned_by_run(
