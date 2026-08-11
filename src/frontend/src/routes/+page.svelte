@@ -294,25 +294,40 @@
 	// The digest's own anchor (design-run-route.md §The home page becomes a
 	// map, #1256): per-viewer, client-side, same `bolts.ts`-established
 	// discipline (localStorage keyed by account id) the retired ack store
-	// used — loaded once `accountId` is known, persisted only on an
-	// explicit "caught up" press, never on a mere render (an anchor that
-	// advances just because the page loaded is the "optimistic direction"
-	// lie the ticket names).
+	// used.
+	//
+	// Visit-scoped (his 2026-08-11 read: "the highlighting… should disappear
+	// on the next page reload; it shows which work was done since you last
+	// visited"). The stored anchor is read once, on load, and immediately
+	// re-armed to `now` — so a *second* reload starts clean — while the
+	// in-memory `lastLookedAt` this visit renders against stays pinned to
+	// the value that was on disk when the page opened: the glow must not
+	// vanish the instant the page paints, only the instant it reloads. The
+	// "caught up" press is unchanged, the mid-visit clear: storage is
+	// already ahead of it by construction, so its own write only matters for
+	// the in-memory anchor a reader still watches this tab.
 	let lastLookedAt = $state<number | null>(null);
 	let lastLookedLoadedFor = $state<string | null>(null);
 
 	$effect(() => {
 		if (!accountId || lastLookedLoadedFor === accountId) return;
+		const key = digestLastLookedStorageKey(accountId);
 		try {
-			lastLookedAt = readLastLookedAt(
-				localStorage.getItem(digestLastLookedStorageKey(accountId)),
-				now
-			);
+			lastLookedAt = readLastLookedAt(localStorage.getItem(key), now);
 		} catch {
 			// Storage can be unavailable in a private/restricted browser — the
 			// viewer just gets the fallback window every visit, never a broken
 			// page.
 			lastLookedAt = null;
+		}
+		try {
+			// Re-arm immediately: this visit already has its anchor in memory
+			// above, so advancing storage here (rather than waiting for
+			// "caught up") is what makes the *next* reload a fresh visit.
+			localStorage.setItem(key, serializeLastLookedAt(now));
+		} catch {
+			// Best-effort — worst case a future reload re-shows this visit's
+			// highlight instead of clearing it.
 		}
 		lastLookedLoadedFor = accountId;
 	});
@@ -584,6 +599,33 @@
 			if (nextDock.settled !== dockClock.settled || nextDock.pendingAt !== dockClock.pendingAt) {
 				dockClock = nextDock;
 			}
+			// The bar that knows the section: one more verdict from the same
+			// tick, the same "settled, not live" discipline as the two clocks
+			// above — `nextDock.settled` (this tick's fresh verdict), never the
+			// `machineDocked` derived, which still reads last tick's committed
+			// `dockClock` until Svelte flushes the effects this tick just
+			// scheduled. Section headings measured live (`getBoundingClientRect`,
+			// four more calls beside the two this tick already makes) rather
+			// than cached: their offsets drift with async content loads that
+			// throw no resize event, and a stale cache would light the wrong
+			// header instead of just costing a few extra reads.
+			if (nextDock.settled) {
+				const stackBottom = window.scrollY + stickyStackHeight;
+				const headings: HTMLElement[] = [
+					warpHeadingEl,
+					clothHeadingEl,
+					corpusHeadingEl,
+					billingHeadingEl
+				].filter((el): el is HTMLElement => el !== null);
+				let next: { id: string; label: string } | null = null;
+				for (const el of headings) {
+					const top = el.getBoundingClientRect().top + window.scrollY;
+					if (top <= stackBottom) next = { id: el.id, label: el.textContent?.trim() ?? '' };
+				}
+				if (next?.id !== activeSection?.id) activeSection = next;
+			} else if (activeSection !== null) {
+				activeSection = null;
+			}
 			// Both clocks stepped in the one tick above — "applied to both in
 			// the same frame". Reschedule against whichever settles first;
 			// `tick()` re-derives everything live, so a clock that isn't due
@@ -672,6 +714,81 @@
 	let dockTop = $derived(
 		machineDockTop(railDockHeight(railSamples, railOpen, railCondensed), railCondensed && !railOpen)
 	);
+
+	// The bar that knows the section (his 2026-08-11 read: "whenever we
+	// scroll a new section past the collapsed sections, we should highlight
+	// the whole section frame, and have a header of this section also
+	// attached to the collapsed bar at the end… so we know where we are,
+	// rather than having the text scrolled under the collapsed header").
+	//
+	// The label rides the machine dock — the last, bottom-most box in the
+	// sticky stack — so it reads as the stack's own footer rather than a
+	// third independent sticky element. Gated on `machineDocked` alone: by
+	// the time the dock reaches its own docked form the rail is already
+	// condensed above it (the dock's own threshold sits strictly after the
+	// rail's — `machineDockVerdict`), so one flag names "the stack is fully
+	// collapsed" without re-deriving the rail's half of it.
+	//
+	// Same footprint discipline as the rail's own `railReserve` (`collapse.ts`
+	// doc, and the hard rule this component's own history carries): the
+	// label adds a line inside the dock's sticky box, which has no spare
+	// padding to swallow it into, so its two settled heights (with the label,
+	// without) are sampled the same way `railFullHeight`/`railSlimHeight` are
+	// — at rest, never mid-transition — and `machineDockReserve` below holds
+	// the *shorter* form's flow footprint level with the taller one so
+	// nothing under the dock shifts when the label appears or clears.
+	let machineDockHeight = $state(0);
+	let machineDockRestHeight = $state(0);
+	let machineDockLabelHeight = $state(0);
+	// The section currently under the reader, or `null` before the first
+	// tracked heading has scrolled up to the stack's own bottom edge (at
+	// rest, or still inside the cold-start/capability/machine run above the
+	// warp, the bar says nothing — same rule as the rest of this block).
+	let activeSection = $state<{ id: string; label: string } | null>(null);
+	let showSectionLabel = $derived(machineDocked && activeSection !== null);
+	$effect(() => {
+		if (!showSectionLabel && machineDockHeight > 0) machineDockRestHeight = machineDockHeight;
+	});
+	$effect(() => {
+		if (showSectionLabel && machineDockHeight > 0) machineDockLabelHeight = machineDockHeight;
+	});
+	let machineDockReserve = $derived(
+		showSectionLabel ? 0 : Math.max(0, machineDockLabelHeight - machineDockRestHeight)
+	);
+	// The scroll-margin every warp item's `<li>` reads (`WarpGraphView.svelte`
+	// via `--sticky-stack-h`) so a followed `#w-N` link lands below the stack
+	// instead of under it (his same-round ask: "the redirect is relative to
+	// the top of the page, but because we have the overlay… it hides it").
+	// The taller of the dock's two settled heights, deliberately: whichever
+	// one is painted at the moment a reader follows a link, the clearance
+	// must be enough for either.
+	let stickyStackHeight = $derived(
+		railSlimHeight + Math.max(machineDockRestHeight, machineDockLabelHeight)
+	);
+	// Headings measured, not the sections themselves (his own list: "the
+	// warp #warp-heading, the cloth #cloth-heading, the library
+	// #corpus-heading, account") — bound once each mounts, read live inside
+	// the one scroll tick below rather than cached on resize: unlike the
+	// rail's own geometry these can drift from an async content load with no
+	// resize event at all (the warp graph landing pushes the cloth down),
+	// and `getBoundingClientRect()` on four elements already sits next to
+	// the two the tick calls today — cheap, and correct against that drift
+	// where a resize-only cache would silently go stale.
+	let warpHeadingEl = $state<HTMLElement | null>(null);
+	let clothHeadingEl = $state<HTMLElement | null>(null);
+	let corpusHeadingEl = $state<HTMLElement | null>(null);
+	let billingHeadingEl = $state<HTMLElement | null>(null);
+
+	// The section frame's own quiet half of the ask — "the active section's
+	// frame also lights subtly… keep it quiet, the header line is the loud
+	// half". Same idiom `WarpGraphView`'s own item rows already use for a
+	// live-held frame (`border-l-2`, colour swapped rather than the border
+	// itself appearing) — the border is always present, always transparent
+	// until lit, so toggling it never touches the section's box model the
+	// way adding/removing padding would.
+	function sectionActive(id: string): boolean {
+		return activeSection?.id === id;
+	}
 
 	// His proposal, verbatim: "when it's expanded, it should just somehow go to
 	// the top of the page. And when it's collapsed, go back if it's possible."
@@ -1177,7 +1294,10 @@
 	     scaffolding it replaces. -->
 	<Landing />
 {:else}
-	<div class="mx-auto flex max-w-2xl flex-col p-6">
+	<div
+		class="mx-auto flex max-w-2xl flex-col p-6"
+		style={`--sticky-stack-h: ${stickyStackHeight}px`}
+	>
 		<header class="ignite" style="--ignite-delay: 0ms">
 			<div class="flex items-start justify-between gap-4">
 				<!-- The wordmark wears the board's mood (#566): the newest live run's
@@ -1407,6 +1527,7 @@
 		     reachable position this whole fix is for. -->
 		<div bind:this={machineSentinel} class="h-6" aria-hidden="true"></div>
 		<div
+			bind:clientHeight={machineDockHeight}
 			class="ignite machine-dock {railOpen
 				? 'relative'
 				: 'sticky'} z-30 -mx-6 bg-stone-950/95 px-6 backdrop-blur-sm"
@@ -1436,7 +1557,37 @@
 					/>
 				</div>
 			{/key}
+			<!-- The bar that knows the section: the stack's own footer line,
+			     ember (not the gray `text-ink-mute` every other quiet label on
+			     this page wears) because this one line answers "where am I", not
+			     "here's a fact" — on theme, lit a little, the one label on the
+			     page that means to be noticed. Renders only once the stack has
+			     actually collapsed into the dock's docked form and a tracked
+			     heading has scrolled up to meet it; at rest, or still above the
+			     warp, it says nothing. -->
+			{#if showSectionLabel && activeSection}
+				<a
+					href={`#${activeSection.id}`}
+					class="-mx-1 mt-1 flex items-baseline gap-1.5 border-t border-stone-800/80 px-1 pt-1 pb-1 font-mono text-[10px] tracking-wide text-amber-300/90 hover:text-amber-200"
+					onclick={(event) => {
+						event.preventDefault();
+						document
+							.getElementById(activeSection!.id)
+							?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+					}}
+				>
+					<span aria-hidden="true">↓</span>
+					{activeSection.label}
+				</a>
+			{/if}
 		</div>
+		<!-- The label above adds a line inside the dock's own sticky box, which
+		     has no spare padding to absorb it into — this spacer is the dock's
+		     own `railReserve`, holding the shorter (no-label) form's flow
+		     footprint level with the taller one so nothing below shifts when
+		     the label appears or clears (this component's own hard rule: a
+		     sticky element's flow footprint must not change with its form). -->
+		<div style={`height: ${machineDockReserve}px`} aria-hidden="true"></div>
 		<section class="ignite" style="--ignite-delay: 260ms" aria-label="the machine's lane">
 			{#if machineExpanded}
 				<div in:glitchReveal={{ duration: 240 }}>
@@ -1564,11 +1715,23 @@
 		     should be one of the center elements"), because a returning reader
 		     asks "what does the resident need from me?" first, and it is
 		     answered without ever hiding the layers. -->
-		<section class="ignite mt-6" style="--ignite-delay: 400ms" aria-labelledby="warp-heading">
+		<section
+			class="ignite mt-6 border-l-2 pl-3 transition-colors duration-300 {sectionActive(
+				'warp-heading'
+			)
+				? 'border-amber-500/40'
+				: 'border-transparent'}"
+			style="--ignite-delay: 400ms"
+			aria-labelledby="warp-heading"
+		>
 			<div class="flex items-baseline justify-between gap-3">
 				<div>
 					<p class="eyebrow">the warp · intent</p>
-					<h2 id="warp-heading" class="font-mono text-sm font-semibold text-amber-100">
+					<h2
+						bind:this={warpHeadingEl}
+						id="warp-heading"
+						class="font-mono text-sm font-semibold text-amber-100"
+					>
 						what is asked
 					</h2>
 				</div>
@@ -1664,11 +1827,23 @@
 		     Runs as root nodes of collapsed trees over a sliding window; the
 		     selvage (the cloth's self-finished edge) carries the spend→produce
 		     aggregates the retired instruments section used to hold. -->
-		<section class="ignite mt-10" style="--ignite-delay: 900ms" aria-labelledby="cloth-heading">
+		<section
+			class="ignite mt-10 border-l-2 pl-3 transition-colors duration-300 {sectionActive(
+				'cloth-heading'
+			)
+				? 'border-amber-500/40'
+				: 'border-transparent'}"
+			style="--ignite-delay: 900ms"
+			aria-labelledby="cloth-heading"
+		>
 			<div class="flex items-baseline justify-between gap-3">
 				<div>
 					<p class="eyebrow">the cloth · past</p>
-					<h2 id="cloth-heading" class="font-mono text-sm font-semibold text-amber-100">
+					<h2
+						bind:this={clothHeadingEl}
+						id="cloth-heading"
+						class="font-mono text-sm font-semibold text-amber-100"
+					>
 						what has become
 					</h2>
 				</div>
@@ -1698,11 +1873,23 @@
 			</div>
 		</section>
 
-		<section class="ignite mt-10" style="--ignite-delay: 1600ms" aria-labelledby="corpus-heading">
+		<section
+			class="ignite mt-10 border-l-2 pl-3 transition-colors duration-300 {sectionActive(
+				'corpus-heading'
+			)
+				? 'border-amber-500/40'
+				: 'border-transparent'}"
+			style="--ignite-delay: 1600ms"
+			aria-labelledby="corpus-heading"
+		>
 			<div class="flex items-baseline justify-between gap-3">
 				<div>
 					<p class="eyebrow">the library</p>
-					<h2 id="corpus-heading" class="font-mono text-sm font-semibold text-amber-100">
+					<h2
+						bind:this={corpusHeadingEl}
+						id="corpus-heading"
+						class="font-mono text-sm font-semibold text-amber-100"
+					>
 						work surface
 					</h2>
 				</div>
@@ -1725,11 +1912,23 @@
 			</div>
 		</section>
 
-		<section class="ignite mt-10" style="--ignite-delay: 2100ms" aria-labelledby="billing-heading">
+		<section
+			class="ignite mt-10 border-l-2 pl-3 transition-colors duration-300 {sectionActive(
+				'billing-heading'
+			)
+				? 'border-amber-500/40'
+				: 'border-transparent'}"
+			style="--ignite-delay: 2100ms"
+			aria-labelledby="billing-heading"
+		>
 			<div class="flex items-baseline justify-between gap-3">
 				<div>
 					<p class="eyebrow">account</p>
-					<h2 id="billing-heading" class="font-mono text-sm font-semibold text-amber-100">
+					<h2
+						bind:this={billingHeadingEl}
+						id="billing-heading"
+						class="font-mono text-sm font-semibold text-amber-100"
+					>
 						subscription
 					</h2>
 				</div>
