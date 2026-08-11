@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { tick } from 'svelte';
 	import { fade } from 'svelte/transition';
 	import type { ResolvedPathname } from '$app/types';
 	import MarkdownContent from './MarkdownContent.svelte';
@@ -18,6 +19,7 @@
 		type WarpGraph,
 		type WarpItem
 	} from './warpGraph';
+	import { openReducer } from './warpGraphOpen';
 
 	// The warp, rendered as the maintainer asked for it: the unblocked items
 	// colorful on top — glance, decide or do — and the blocked ones greyed
@@ -45,8 +47,31 @@
 		initialOpenId = null
 	}: Props = $props();
 
+	// The disclosure set (2026-08-11 round: open-on-follow). A `Set`, not the
+	// old single `openId` — the one legal case where two items are open at
+	// once is following a `held by` / `unblocks` link, so the shape has to
+	// carry more than one id. `openReducer` (`warpGraphOpen.ts`) owns the two
+	// rules (toggle collapses to one, follow adds) as plain, tested logic;
+	// this component only wires DOM events to it.
 	// svelte-ignore state_referenced_locally
-	let openId = $state<string | null>(initialOpenId);
+	let openIds = $state<Set<string>>(new Set(initialOpenId ? [initialOpenId] : []));
+
+	function toggleOpen(id: string) {
+		openIds = new Set(openReducer(openIds, { type: 'toggle', id }));
+	}
+
+	/** A `held by` / `unblocks` in-graph link: open the target, keep whatever
+	 *  else is open, then scroll once the newly-opened body has actually
+	 *  grown the layout (`tick()` first — scrolling against the pre-expand
+	 *  geometry lands short exactly the height of the body that just
+	 *  appeared). The scroll-margin that keeps the target out from under the
+	 *  sticky stack rides the item `<li>` itself (below), not this call. */
+	async function followItemLink(event: MouseEvent, targetId: string) {
+		event.preventDefault();
+		openIds = new Set(openReducer(openIds, { type: 'follow', id: targetId }));
+		await tick();
+		document.getElementById(targetId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+	}
 
 	// decision = the amber ask (the user's call), preparation = the frost of
 	// work deliberately held for a hand, action = the burning dispatchable.
@@ -107,6 +132,7 @@
 			? 'border-stone-800'
 			: ''}"
 		style={band === 'ready' ? `border-left-color: ${typeColor(item)}` : ''}
+		style:scroll-margin-top="var(--sticky-stack-h, 16px)"
 	>
 		<div class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
 			<span
@@ -121,8 +147,8 @@
 				'ready'
 					? 'text-amber-100'
 					: 'text-ink-quiet'} hover:text-amber-50"
-				aria-expanded={openId === item.id}
-				onclick={() => (openId = openId === item.id ? null : item.id)}
+				aria-expanded={openIds.has(item.id)}
+				onclick={() => toggleOpen(item.id)}
 			>
 				{item.headline}
 			</button>
@@ -167,7 +193,7 @@
 				</span>
 			{/if}
 		</div>
-		{#if openId === item.id}
+		{#if openIds.has(item.id)}
 			<div class="mt-1 mb-1 space-y-1.5 pl-4 text-[11px]" out:fade={{ duration: 100 }}>
 				{#if item.bodyMarkdown}
 					<MarkdownContent
@@ -181,7 +207,10 @@
 					<p class="font-mono text-[10px] text-ink-quiet">
 						held by
 						{#each edge.open as blocker (blocker.id)}
-							<a class="ml-1 text-amber-300/90 hover:text-amber-100" href={`#${blocker.id}`}
+							<a
+								class="ml-1 text-amber-300/90 hover:text-amber-100"
+								href={`#${blocker.id}`}
+								onclick={(event) => followItemLink(event, blocker.id)}
 								>{blocker.id} {blocker.headline}</a
 							>
 						{/each}
@@ -191,7 +220,10 @@
 					<p class="font-mono text-[10px] text-ink-quiet">
 						unblocks
 						{#each dependents(item, graph) as dep (dep.id)}
-							<a class="ml-1 text-amber-300/90 hover:text-amber-100" href={`#${dep.id}`}>{dep.id}</a
+							<a
+								class="ml-1 text-amber-300/90 hover:text-amber-100"
+								href={`#${dep.id}`}
+								onclick={(event) => followItemLink(event, dep.id)}>{dep.id}</a
 							>
 						{/each}
 					</p>
