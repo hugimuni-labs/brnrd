@@ -753,3 +753,38 @@ def test_read_run_mood_control_blank_file_is_no_mood(tmp_path):
     outbox.mkdir()
     (outbox / ".mood").write_text("\n\n")
     assert run_ledger.read_run_mood_control(outbox) is None
+
+
+def test_read_run_topics_control_bare_slug_row(tmp_path):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    (outbox / ".topics").write_text("the-loom the-post\n", encoding="utf-8")
+    assert run_ledger.read_run_topics_control(outbox) == ["the-loom", "the-post"]
+
+
+def test_read_run_topics_control_prefixed_row_and_middot_separator(tmp_path):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    (outbox / ".topics").write_text("topics: the-loom · the-post\n", encoding="utf-8")
+    assert run_ledger.read_run_topics_control(outbox) == ["the-loom", "the-post"]
+
+
+def test_read_run_topics_control_absent_or_missing_dir_is_none(tmp_path):
+    assert run_ledger.read_run_topics_control(tmp_path / "missing") is None
+    assert run_ledger.read_run_topics_control(None) is None
+
+
+def test_read_run_topics_control_garbage_drops_to_none_never_crashes(tmp_path):
+    """Lenient parse: junk tokens are filtered, not fatal — a `.topics` that
+    survives filtering to nothing is the same as absent, not an empty list."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    (outbox / ".topics").write_text("!!! ### $$$\n", encoding="utf-8")
+    assert run_ledger.read_run_topics_control(outbox) is None
+
+
+def test_read_run_topics_control_filters_junk_tokens_among_valid_ones(tmp_path):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    (outbox / ".topics").write_text("the-loom !!! the-post\n", encoding="utf-8")
+    assert run_ledger.read_run_topics_control(outbox) == ["the-loom", "the-post"]
