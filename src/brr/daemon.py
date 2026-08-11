@@ -4191,6 +4191,7 @@ def _run_worker(
                     brr_dir, presence_id,
                     name=run_ledger.read_run_name_control(outbox_dir) or "",
                     mood=run_ledger.read_run_mood_control(outbox_dir) or "",
+                    topics=run_ledger.read_run_topics_control(outbox_dir) or [],
                 )
             elapsed = int(time.monotonic() - attempt_started_monotonic)
             emit(
@@ -7916,12 +7917,14 @@ def _cut_mismatches(
     attests. Returns named diff strings, empty when clean
     (``design-the-bolt.md`` §What the daemon validates).
 
-    Three checks — the ones this build step scoped. The design's own table
-    lists five; SCM posture and the verified-delivery-lane row are not
-    checked here: the SCM facet is already visible to the resident on every
-    boundary without needing a cut-time guard, and the delivery-lane check
-    is a hard dependency on #1205's fresh-send primitive, which does not
-    exist yet (named in the design doc's own "Edges" section).
+    The checks below, plus the topic-per-run check
+    (the-run-that-claims-its-thread) and the stranded-strands check further
+    down. The design's own table lists five; SCM posture and the
+    verified-delivery-lane row are not checked here: the SCM facet is
+    already visible to the resident on every boundary without needing a
+    cut-time guard, and the delivery-lane check is a hard dependency on
+    #1205's fresh-send primitive, which does not exist yet (named in the
+    design doc's own "Edges" section).
 
     - **asks** vs pending events: every event :func:`_pending_events_for_agent`
       still shows this run must have a disposition row; a row claiming
@@ -7948,6 +7951,13 @@ def _cut_mismatches(
       relic in the same collection is named. Same skip condition as
       **produce** (no *repo_root* ⇒ no relics collection ⇒ skipped) since
       it reads off the same ``relics_list``.
+    - **topic-per-run** (the-run-that-claims-its-thread): no ``.topics``
+      claim and no ``item`` relic on this run's own ``.relics.jsonl`` is
+      named ``topicless: ...``. No *repo_root* gate, unlike
+      **produce**/**owed** — a schedule-woken or strand run is not exempt.
+      Skipped only when *outbox_dir* itself is ``None`` (an isolated-check
+      test caller, never a real cut-time call) — "cannot tell" is unknown,
+      not an assumed violation.
     """
     mismatches: list[str] = []
 
@@ -7971,6 +7981,33 @@ def _cut_mismatches(
             continue
         if row.disposition == "answered":
             mismatches.append(f"{short} declared answered but is still pending")
+
+    # ── topic-per-run, the forward half (the-run-that-claims-its-thread) ──
+    # No repo_root needed — both facts live on the outbox this run already
+    # owns: `.topics` (a resident-authored claim) and `.relics.jsonl`'s own
+    # `item` kind (`weld.annotate_ignition` writes it at ignition, when the
+    # dispatching event named a warp item). Universal capability: a
+    # schedule-woken or strand run is not exempt, so this runs unconditionally
+    # rather than behind the `repo_root is not None` gate below — **except**
+    # for `outbox_dir` itself, which every real cut-time call carries (the
+    # `cut:` directive being validated lives inside it) but a caller probing
+    # an unrelated check (e.g. #1298's stranded-strands tests, which pass
+    # `outbox_dir=None` on purpose to isolate that check) does not. "Cannot
+    # tell" reads as unknown here, same as `gate_receipt.read_receipt`'s
+    # absent/unreadable/wrong-tree collapse to "chip renders nothing" — never
+    # as an assumed violation. Asked once, at the bolt — rides the existing
+    # bounce/dissent cap-3 ladder rather than a new nag channel.
+    if outbox_dir is not None and not run_ledger.read_run_topics_control(outbox_dir):
+        item_taken = any(
+            record.get("kind") == "item"
+            for record in relics.read_reported(outbox_dir)
+            if isinstance(record, dict)
+        )
+        if not item_taken:
+            mismatches.append(
+                "topicless: no topic claimed and no item taken — write "
+                ".topics or take an item"
+            )
 
     # ── produce, and the shipped counts owed needs too ──────────────
     relics_list: list[dict[str, Any]] | None = None
@@ -11876,6 +11913,34 @@ def _persist_run_body(
     return path
 
 
+def _persist_run_topics(
+    account_context: account.AccountContext | None,
+    task: Run,
+    *,
+    repo_label: str,
+    outbox_dir: Path | None,
+) -> Path | None:
+    """Capture the resident's claimed topic slugs as ``topics.md``.
+
+    Rendered, not raw-copied: ``.topics`` accepts two input shapes (a bare
+    slug row, or a ``topics:``-prefixed one — see
+    :func:`run_ledger.read_run_topics_control`), and the node file is one
+    canonical shape (``topics: <slugs>``) so a dashboard reader never has to
+    handle both. No claim ⇒ no file — absence is honest, never a fabricated
+    empty row (mirrors :func:`_persist_run_body`'s discipline).
+    """
+    if account_context is None or not account_context.enabled or outbox_dir is None:
+        return None
+    slugs = run_ledger.read_run_topics_control(outbox_dir)
+    if not slugs:
+        return None
+    path = account.run_dir(account_context, repo_label, task.id) / "topics.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    protocol._atomic_write(path, "topics: " + " ".join(slugs) + "\n")
+    task.meta["run_topics_path"] = str(path)
+    return path
+
+
 # ── Control-file preservation (#1027, #1017) ────────────────────────────
 #
 # Closeout used to *render* the run's outbox — ``.card`` into ``body.md``,
@@ -12057,6 +12122,11 @@ NOT_PRESERVED: dict[str, str] = {
     hooks_mod.CARD_NAME: (
         "already captured as body.md by _persist_run_body; copying it here "
         "too would duplicate the same text under two names on the node"
+    ),
+    run_ledger.RUN_TOPICS_CONTROL_NAME: (
+        "already captured as topics.md by _persist_run_topics, rendered "
+        "(not raw-copied) so the two accepted `.topics` input shapes always "
+        "normalize to the one canonical row the node carries"
     ),
     hooks_mod.FORGE_HANDOFF_NAME: (
         "a daemon/agent handshake marker naming an internal event id — "
@@ -13436,6 +13506,12 @@ def _run_worker_and_finalize(
             task,
             repo_label=repo_label,
             card_path=outbox_path / _CARD_CONTROL_NAME if outbox_path else None,
+        )
+        _persist_run_topics(
+            account_context,
+            task,
+            repo_label=repo_label,
+            outbox_dir=outbox_path,
         )
         _persist_run_state_doc(
             account_context,

@@ -9,6 +9,7 @@ raw per-run row.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,6 +34,15 @@ RUN_MOOD_CONTROL_NAME = ".mood"
 # how much of it is ever trusted.
 _RUN_MOOD_MAX_BYTES = 500
 _RUN_MOOD_MAX_CHARS = 64
+#: The resident's own topic claim (the-run-that-claims-its-thread): first
+#: line, or a `topics:`-prefixed line — same lenient-parse tolerance as
+#: every other control file. Whitespace/`·`-separated slugs, same separator
+#: convention `items._split_ids` already uses for an item's own `topics:`
+#: row and `taken:` row.
+RUN_TOPICS_CONTROL_NAME = ".topics"
+_RUN_TOPICS_MAX_BYTES = 2000
+_RUN_TOPICS_MAX_SLUGS = 32
+_TOPIC_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 _BEFORE_WEEKLY_KEY = "run_ledger_weekly_used_before"
 _BEFORE_FIVE_HOUR_KEY = "run_ledger_five_hour_used_before"
@@ -469,6 +479,36 @@ def read_run_mood_control(outbox_dir: Path | None) -> str | None:
     lines = raw[:_RUN_MOOD_MAX_BYTES].decode("utf-8", errors="replace").splitlines()
     value = lines[0].strip()[:_RUN_MOOD_MAX_CHARS] if lines else ""
     return value or None
+
+
+def read_run_topics_control(outbox_dir: Path | None) -> list[str] | None:
+    """Read the resident-claimed topic slugs from `.topics`, lenient.
+
+    Accepts either shape on the first line: bare slugs (`the-loom the-post`)
+    or a `topics:`-prefixed row (`topics: the-loom the-post`) — the same two
+    forms the task spec asks for, whitespace/`·`-separated. Slug-shape junk
+    is dropped rather than rejected (never a crash on garbage); a `.topics`
+    that survives filtering to nothing returns ``None``, same as absent —
+    a run's topic claim is either real slugs or no claim, never an empty
+    list on the wire. Deliberately **not** validated against existing
+    `surface/topics/` pages: a run may mint a topic (its own resident act),
+    so an unknown slug is the drift audit's finding, not a capture error.
+    """
+    if outbox_dir is None:
+        return None
+    try:
+        raw = (outbox_dir / RUN_TOPICS_CONTROL_NAME).read_bytes()
+    except OSError:
+        return None
+    lines = raw[:_RUN_TOPICS_MAX_BYTES].decode("utf-8", errors="replace").splitlines()
+    if not lines:
+        return None
+    first = lines[0].strip()
+    if first.lower().startswith("topics:"):
+        first = first[len("topics:"):].strip()
+    tokens = [t for t in re.split(r"[\s·]+", first) if t]
+    slugs = [t for t in tokens if _TOPIC_SLUG_RE.match(t)][:_RUN_TOPICS_MAX_SLUGS]
+    return slugs or None
 
 
 def usd_credits_equivalent(levels: Mapping[str, Any] | None) -> float | None:

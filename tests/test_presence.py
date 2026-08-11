@@ -98,6 +98,26 @@ def test_heartbeat_refreshes_resident_authored_name(tmp_path):
     assert presence.list_active(brr)[0]["name"] == "dashboard name"
 
 
+def test_register_defaults_topics_to_empty_list(tmp_path):
+    brr = tmp_path / ".brr"
+    entry = presence.register(brr, kind="daemon", run_id="t1")
+    assert entry["topics"] == []
+
+
+def test_heartbeat_refreshes_resident_claimed_topics(tmp_path):
+    """Same live-read discipline as `mood`/`name` (steer, 2026-08-12): a
+    burning run's claimed topics ride the same heartbeat, not only the
+    closeout `topics.md` capture."""
+    brr = tmp_path / ".brr"
+    entry = presence.register(brr, kind="daemon", run_id="t1")
+    assert presence.heartbeat(brr, entry["id"], topics=["the-loom", "the-post"]) is True
+    assert presence.list_active(brr)[0]["topics"] == ["the-loom", "the-post"]
+    # Omitting `topics` on a later heartbeat leaves the last claim standing
+    # — same "None means unchanged" rule `name`/`mood` already follow.
+    assert presence.heartbeat(brr, entry["id"]) is True
+    assert presence.list_active(brr)[0]["topics"] == ["the-loom", "the-post"]
+
+
 def test_deregister_removes(tmp_path):
     brr = tmp_path / ".brr"
     entry = presence.register(brr, kind="session", run_id="t1")

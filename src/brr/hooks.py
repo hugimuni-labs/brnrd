@@ -149,6 +149,19 @@ MOOD_NUDGE_KEY = "mood_nudge_shown"
 # "never renders while the file happens to be empty this boundary", so the
 # disqualification has to survive a mood that later reads blank again.
 MOOD_EVER_WRITTEN_KEY = "mood_ever_written"
+# The topic-discoverability chip's render counter (steer, 2026-08-12): a
+# `topic?` marker on the boundary bar while this run has claimed no topic
+# (no `.topics`, no item taken) — same commit-after-render latch idiom as
+# `MOOD_NUDGE_KEY`, generalised from a boolean to a small counter because
+# the maintainer's own furniture rule ("we shouldn't repeat the same
+# un-interactive data into each boundary") caps this at a *few* renders
+# rather than exactly one: unlike the mood nudge (a single soft ask), the
+# affordance's job is to be seen near the start of a run, and one shot can
+# miss a boundary that renders nothing else laden. Never reset once the cap
+# is reached — the bolt's dissent row (`daemon._cut_mismatches`) is the net
+# underneath this invitation, so silence past the cap is not a lost signal.
+TOPIC_NUDGE_COUNT_KEY = "topic_nudge_count"
+_TOPIC_NUDGE_CAP = 2
 # Three-class boundary split (#1116): ambient vitals render on the first
 # post-tool boundary and then only when a threshold crosses, never every tick.
 # The keys below are the per-run ambient-state ledger entries.
@@ -193,6 +206,16 @@ MOOD_NAME = ".mood"
 # The blank-mood nudge's elapsed floor: a run this young has not necessarily
 # had a moment worth a face yet, so the chip waits rather than firing at t=0.
 _MOOD_NUDGE_ELAPSED_SECONDS = 900  # ~15m
+# The resident's own topic claim (the-run-that-claims-its-thread). Same
+# idiom as `.mood` above — read fresh at every boundary rather than through
+# `run_ledger.read_run_topics_control` (which the daemon side uses for the
+# closeout/live-read paths): the hook path stays import-light on purpose
+# (see `_read_mood`'s docstring for the same call), so this is a second,
+# deliberately small copy of the same lenient parse — the two must never
+# disagree, same risk `keepalive_until` names for its own two readers.
+TOPICS_NAME = ".topics"
+_TOPICS_READ_CAP_CHARS = 2000
+_TOPIC_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # The run body rides the closeout delta whole. Capped only against a
 # pathological card: this is the resident's own prose, and truncating it is a
 # worse failure than the tokens it costs at a once-per-run boundary.
@@ -391,6 +414,32 @@ def _read_mood(ctx: HookContext) -> str | None:
         return None
     text = first_line.strip()
     return text or None
+
+
+def _read_topics(ctx: HookContext) -> list[str] | None:
+    """Read the resident's `.topics` claim fresh, lenient, slug-filtered.
+
+    Same "read the artifact" doctrine as :func:`_read_mood`: the resident
+    may write this at any boundary, and the discoverability chip needs to
+    see it disappear the moment it does. Accepts a bare slug row or a
+    `topics:`-prefixed one; junk tokens are dropped rather than raising.
+    Returns ``None`` for absent, unreadable, or filtered-to-nothing — same
+    class as "no claim" for the caller's eligibility check.
+    """
+    if ctx.outbox_dir is None:
+        return None
+    path = ctx.outbox_dir / TOPICS_NAME
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            first_line = handle.readline(_TOPICS_READ_CAP_CHARS)
+    except OSError:
+        return None
+    text = first_line.strip()
+    if text.lower().startswith("topics:"):
+        text = text[len("topics:"):].strip()
+    tokens = [t for t in re.split(r"[\s·]+", text) if t]
+    slugs = [t for t in tokens if _TOPIC_SLUG_RE.match(t)]
+    return slugs or None
 
 
 def _read_hook_state(ctx: HookContext) -> dict[str, Any]:
@@ -1301,6 +1350,18 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         "moment any `.mood` write happens, however stale it later goes.",
         # the `mood?` form asks for a write. Caller-latched
         # to once per run, so classing it here costs one chip, not a repeat.
+        klass=OBLIGATION,
+    ),
+    _BarSegment(
+        "topic", "topic",
+        "the topic-discoverability nudge (the-run-that-claims-its-thread, "
+        "steer 2026-08-12): `topic?` while this run has claimed no topic "
+        "(no `.topics`, no item taken), disappearing the boundary a claim "
+        "lands. Caller-latched like `mood?`, but by a small counter rather "
+        "than a boolean — capped at 2 renders per run rather than 1, since "
+        "the affordance's job is to be *seen* near the start of a run and "
+        "one shot can miss a quiet boundary. Never what keeps the bar "
+        "alive on its own; the bolt's dissent row is the net underneath it.",
         klass=OBLIGATION,
     ),
     _BarSegment(
@@ -2271,6 +2332,7 @@ def _render_bar(
     run_name: dict[str, Any],
     mood: str | None,
     mood_prompt: bool = False,
+    topic_prompt: bool = False,
     surprise: str | None = None,
     orient: tuple[int, int] | None = None,
     census: str | None = None,
@@ -2422,6 +2484,16 @@ def _render_bar(
         # (`MOOD_NUDGE_KEY`) and the docstring above — this branch only
         # renders what the caller already decided was this run's one ask.
         segments.append(("mood", "mood?"))
+    if topic_prompt:
+        # The topic-discoverability chip (steer, 2026-08-12): independent of
+        # mood — a run can wear a face and still have claimed no thread.
+        # Ambient like `mood?`, capped at a few renders by the caller's own
+        # counter (`TOPIC_NUDGE_COUNT_KEY`); this branch only renders what
+        # the caller already decided was still within budget. No detail
+        # line: the chip alone is the whole ask, per the maintainer's own
+        # "passive chip, not a nag row" — a subtitle here would double the
+        # furniture the cap exists to avoid.
+        segments.append(("topic", "topic?"))
     segments.append(("card", _card_chip(card, card_stale)))
 
     details: list[str] = []
@@ -2694,6 +2766,7 @@ def format_delta(
     run_body: str | None = None,
     mood: str | None = None,
     mood_prompt: bool = False,
+    topic_prompt: bool = False,
     surprise: str | None = None,
     orient: tuple[int, int] | None = None,
     census: str | None = None,
@@ -2854,7 +2927,8 @@ def format_delta(
             events=action_events,
             budget=budget, outbound=outbound, produce=produce, card=card,
             card_stale=card_stale, resources=resources, run_name=run_name,
-            mood=mood, mood_prompt=mood_prompt, surprise=surprise,
+            mood=mood, mood_prompt=mood_prompt, topic_prompt=topic_prompt,
+            surprise=surprise,
             orient=orient, census=census,
             notices=notices, finished_spawns=finished_spawns,
             event_seen=event_seen, inbox_pointer=inbox_pointer,
@@ -4247,6 +4321,12 @@ def compute_neutral(
     # after the fact, once ``inject`` proves this boundary actually rendered
     # something carrying it (see the commit below the phase dispatch).
     mood_prompt = False
+    # The topic-discoverability chip's per-boundary eligibility (steer,
+    # 2026-08-12) — only ever set True in the mid-run branch below; latched
+    # after the fact via a counter, not a boolean (`TOPIC_NUDGE_COUNT_KEY`),
+    # since the cap is a few renders rather than exactly one. See the commit
+    # below the phase dispatch, mirroring `mood_prompt`'s own.
+    topic_prompt = False
     # The pending-event seen ledger (letter chrome, see that section): decide
     # once per boundary how each event renders, off the persisted per-run
     # state — hooks are fresh subprocesses, so this is the only memory the
@@ -4275,6 +4355,10 @@ def compute_neutral(
     mood = _read_mood(ctx)
     if mood is not None:
         state[MOOD_EVER_WRITTEN_KEY] = True
+    # Same fresh-read discipline, for the topic-discoverability chip's own
+    # reason: the resident may write `.topics` between hook fires, and the
+    # chip's whole job is to disappear the moment a claim lands.
+    topics = _read_topics(ctx)
     # Re-read every boundary, like `.mood` and `.card`: a resident gates
     # more than once in a long run, and a cached verdict is exactly the
     # stale claim this chip exists to make visible. `gate_receipt.read_receipt`
@@ -4304,6 +4388,19 @@ def compute_neutral(
     plan_token = promises.token(plan)
     plan_edge = plan.any_promises and plan_token != state.get("plan_token")
     state["plan_token"] = plan_token
+    # The topic-discoverability chip's eligibility (steer, 2026-08-12):
+    # topicless — no `.topics` claim and no `item` relic on this run's own
+    # manifest (the same signal `daemon._cut_mismatches` checks at the
+    # bolt, read here off the produce counts the daemon already computed
+    # rather than re-parsing `.relics.jsonl`) — and the render cap not yet
+    # reached. Recomputed fresh every boundary (no "ever claimed" latch like
+    # mood's): a claim landing must make the chip vanish immediately, and a
+    # claim that later disappears is out of scope for this build (noted as
+    # an open edge, not a state this chip tracks).
+    topic_nudge_count = int(state.get(TOPIC_NUDGE_COUNT_KEY) or 0)
+    topicless = not topics and not produce_counts.get("item")
+    if topicless and topic_nudge_count < _TOPIC_NUDGE_CAP:
+        topic_prompt = True
     # The course (`.card` §Plan/§Course), read fresh for the same reason as
     # the blueprint above — a control file the portal token never sees, so
     # its only path to the boundary is its own latch. Parsed off the card
@@ -4534,7 +4631,8 @@ def compute_neutral(
             or route_edge or bolt_edge or token_moved
         ):
             inject = format_delta(
-                portal, mood=mood, mood_prompt=mood_prompt, surprise=edge,
+                portal, mood=mood, mood_prompt=mood_prompt,
+                topic_prompt=topic_prompt, surprise=edge,
                 orient=orient, census=census,
                 event_seen=event_decisions, inbox_pointer=inbox_pointer,
                 gate_receipt_data=gate_receipt_data,
@@ -4562,6 +4660,10 @@ def compute_neutral(
     # only case the ambient chip could actually have ridden along in.
     if mood_prompt and inject is not None:
         state[MOOD_NUDGE_KEY] = True
+    # Same commit-on-render discipline, counter form: only a boundary that
+    # actually carried the chip spends one of the cap's few renders.
+    if topic_prompt and inject is not None:
+        state[TOPIC_NUDGE_COUNT_KEY] = topic_nudge_count + 1
 
     if phase == PHASE_STOP:
         # `action_events` / `action_pending` were already partitioned above

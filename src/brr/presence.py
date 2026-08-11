@@ -144,6 +144,13 @@ def register(
         # emote library happens at the serving edge (cloud.py), so an
         # unknown handle degrades to nothing there, never to a guessed face.
         "mood": "",
+        # Resident-claimed topic slugs (`.topics` first line, "the run that
+        # claims its thread"), refreshed per heartbeat like ``mood`` — a
+        # burning run's thread is visible on the live-runs view while it
+        # burns, not only after closeout captures ``topics.md`` onto the
+        # node. Raw slugs only, same "no resolution here" discipline as
+        # ``mood``.
+        "topics": [],
     }
     _atomic_write(pdir / f"{eid}.json", json.dumps(entry))
     return entry
@@ -155,6 +162,7 @@ def heartbeat(
     *,
     name: str | None = None,
     mood: str | None = None,
+    topics: list[str] | None = None,
     now: float | None = None,
 ) -> bool:
     """Refresh a participant's ``last_seen``. Returns False if it's gone."""
@@ -167,6 +175,8 @@ def heartbeat(
         entry["name"] = name
     if mood is not None:
         entry["mood"] = mood
+    if topics is not None:
+        entry["topics"] = list(topics)
     try:
         _atomic_write(path, json.dumps(entry))
     except OSError:
