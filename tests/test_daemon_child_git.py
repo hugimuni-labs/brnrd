@@ -661,6 +661,98 @@ def test_strongest_signal_wins_when_both_arms_fire(trees):
     assert set(verdict["signals"]) == {"stray-commit", "stranded-worktree"}
 
 
+# ── #1309 item 3: a finalize-time read that itself fails must not launder
+# into "nothing changed". A safety net that fails open on the same
+# measurement class it exists to catch is worse than no net: it reports
+# clean while it is blind. ────────────────────────────────────────────
+
+
+def test_dirty_check_flags_when_finalize_cannot_measure(trees, monkeypatch):
+    """The checkout is genuinely dirty, but the finalize-time read fails.
+
+    Pre-#1309: `gitops.dirty_paths` collapses "could not tell" into an empty
+    set exactly like "measured, nothing dirty" — `gained` computes empty
+    either way, and a real stranded-worktree signal a broken read could not
+    see is silently missed, not merely delayed.
+    """
+    host, run_root = trees
+    task = _dispatched(host, run_root)
+    # A real stray write is sitting right there...
+    (host / "deliverable.md").write_text("262 insertions\n", encoding="utf-8")
+    # ...but the probe backing this arm cannot see it right now.
+    monkeypatch.setattr(gitops, "dirty_paths_or_none", lambda *_a: None)
+
+    verdict = daemon._stray_host_write(task, host)
+    assert verdict is not None, "an unmeasurable read must not read as clean"
+    assert verdict["kind"] == "stray-check-incomplete"
+    assert "dirty" in verdict["incomplete_arms"]
+    assert "stranded-worktree" not in verdict["signals"], (
+        "no real reading was taken — must not fabricate one"
+    )
+
+
+def test_commit_check_flags_when_finalize_rev_parse_fails(trees, monkeypatch):
+    """Same shape, the commit arm: dispatch captured a real baseline, but the
+    finalize-time HEAD read fails, so "did HEAD move" cannot be answered."""
+    host, run_root = trees
+    task = _dispatched(host, run_root)
+    _commit_in_host_as(host, task.id)  # HEAD genuinely moved, attributably
+
+    monkeypatch.setattr(gitops, "rev_parse", lambda *_a, **_k: None)
+
+    verdict = daemon._stray_host_write(task, host)
+    assert verdict is not None
+    assert verdict["kind"] == "stray-check-incomplete"
+    assert "commit" in verdict["incomplete_arms"]
+    assert "stray-commit" not in verdict["signals"]
+
+
+def test_commit_check_flags_when_dispatch_head_read_failed(trees):
+    """The dispatch-time HEAD read itself failed — no baseline was ever taken.
+
+    Distinct from `test_no_baseline_disables_the_check_rather_than_guessing`:
+    that case is a run never routed through `_record_host_baseline` at all
+    (nothing was attempted). This one *was* dispatched normally and the
+    probe inside it failed — a fact `_record_host_baseline` must record, not
+    swallow, or the two situations become indistinguishable to finalize.
+
+    Uses its own ``MonkeyPatch`` context, scoped to just the dispatch-time
+    call: the module-level ``monkeypatch`` fixture is shared with the
+    autouse ``_hermetic_git_env`` fixture (same test, same instance), so an
+    ``undo()`` here would also undo *that* fixture's ``GIT_DIR``/
+    ``GIT_WORK_TREE`` scrub and let this test's own git calls escape into
+    whatever tree the outer process happens to be pinned to — exactly the
+    #703 hazard this whole suite exists to contain.
+    """
+    host, run_root = trees
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(gitops, "rev_parse", lambda *_a, **_k: None)
+        task = _dispatched(host, run_root)
+    # Context exited: HEAD resolves normally again for the finalize-time read.
+
+    assert "host_head_at_dispatch" not in task.meta
+    assert task.meta["host_head_at_dispatch_unavailable"] is True
+
+    _commit_in_host_as(host, task.id)
+    verdict = daemon._stray_host_write(task, host)
+    assert verdict is not None
+    assert verdict["kind"] == "stray-check-incomplete"
+    assert "commit" in verdict["incomplete_arms"]
+
+
+def test_incomplete_is_the_weakest_signal(trees, monkeypatch):
+    """A real finding always outranks "part of the check was unmeasurable" —
+    the actionable verdict must not be buried under an availability note."""
+    host, run_root = trees
+    task = _dispatched(host, run_root)
+    _commit_in_host_as(host, task.id)
+    monkeypatch.setattr(gitops, "dirty_paths_or_none", lambda *_a: None)
+
+    verdict = daemon._stray_host_write(task, host)
+    assert verdict["kind"] == "stray-commit"
+    assert "stray-check-incomplete" in verdict["signals"]
+
+
 # ── the reporting surface: the finding has to reach a reader ─────────
 #
 # #703 exists because "nothing refused it and nothing reported it". A verdict

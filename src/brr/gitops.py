@@ -1413,6 +1413,28 @@ def worktree_dirty(worktree_path: Path) -> bool:
     return bool(result.stdout.strip())
 
 
+def _dirty_paths_probe(worktree_path: Path) -> set[str] | None:
+    """Shared machinery for :func:`dirty_paths` / :func:`dirty_paths_or_none`.
+
+    ``None`` when ``git status --porcelain`` itself failed to answer —
+    kept apart from a real empty set so a caller that needs the
+    distinction (see :func:`dirty_paths_or_none`) can have it.
+    """
+    result = _git(worktree_path, "status", "--porcelain", check=False)
+    if result.returncode != 0:
+        return None
+    paths: set[str] = set()
+    for line in result.stdout.splitlines():
+        entry = line[3:].strip() if len(line) > 3 else ""
+        if not entry:
+            continue
+        # `R  old -> new` / `C  old -> new`: the destination is the path that
+        # now exists in the tree.
+        _, sep, dest = entry.partition(" -> ")
+        paths.add((dest if sep else entry).strip('"'))
+    return paths
+
+
 def dirty_paths(worktree_path: Path) -> set[str]:
     """The set of paths ``git status --porcelain`` reports in *worktree_path*.
 
@@ -1425,21 +1447,26 @@ def dirty_paths(worktree_path: Path) -> set[str]:
     question is *which files*, not how they differ, and a file's status can
     legitimately change between readings (untracked, then staged). A rename
     (``R  old -> new``) contributes the destination. Unreadable or non-repo
-    reports empty, matching :func:`worktree_dirty`'s best-effort posture.
+    reports empty, matching :func:`worktree_dirty`'s best-effort posture —
+    see :func:`dirty_paths_or_none` for a sibling that keeps "could not
+    measure" distinct from "measured and clean".
     """
-    result = _git(worktree_path, "status", "--porcelain", check=False)
-    if result.returncode != 0:
-        return set()
-    paths: set[str] = set()
-    for line in result.stdout.splitlines():
-        entry = line[3:].strip() if len(line) > 3 else ""
-        if not entry:
-            continue
-        # `R  old -> new` / `C  old -> new`: the destination is the path that
-        # now exists in the tree.
-        _, sep, dest = entry.partition(" -> ")
-        paths.add((dest if sep else entry).strip('"'))
-    return paths
+    return _dirty_paths_probe(worktree_path) or set()
+
+
+def dirty_paths_or_none(worktree_path: Path) -> set[str] | None:
+    """Like :func:`dirty_paths`, but ``None`` when git could not answer at all.
+
+    ``dirty_paths`` documents best-effort: any git failure collapses to an
+    empty set, which is the right contract for a caller asking a simple
+    "what's dirty" question. #703's stray-write detector (``daemon.py``)
+    diffs *two* readings of this and needs the third state kept apart — a
+    failed dispatch-time or finalize-time read must not silently read as
+    "definitely clean", or a real stranded-worktree signal a broken read
+    genuinely could not see computes as "nothing changed" instead of
+    "could not tell" (#1309 item 3).
+    """
+    return _dirty_paths_probe(worktree_path)
 
 
 def commits_owned_by_run(

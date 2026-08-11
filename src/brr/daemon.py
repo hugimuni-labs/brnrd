@@ -2526,12 +2526,29 @@ def _record_host_baseline(task: Run, repo_root: Path) -> None:
     checkout — there is no "stray" to define. Best-effort throughout: an
     unreadable checkout records nothing, and a missing baseline disables the
     check rather than failing the run.
+
+    **The HEAD read's failure is recorded, not swallowed (#1309 item 3).**
+    ``rev_parse`` returning ``None`` here used to leave ``host_head_at_dispatch``
+    simply absent — indistinguishable at finalize from "never dispatched
+    through this function at all", which is the one case that's legitimately
+    fine to skip (``test_no_baseline_disables_the_check_rather_than_guessing``).
+    A failed *attempt* is not that: it means a real baseline was owed and
+    couldn't be taken, so ``host_head_at_dispatch_unavailable`` marks it
+    explicitly for ``_stray_host_write`` to surface rather than silently
+    no-op the commit arm. The dirty-paths read keeps its existing best-effort
+    fallback (an empty baseline on failure) deliberately — a dispatch-time
+    dirty-paths failure followed by a *successful* finalize-time read is
+    already safe-direction (over-reports rather than misses), and is left
+    alone; only a finalize-time read that itself fails needs guarding, done
+    below.
     """
     if task.env == "host":
         return
     head = gitops.rev_parse(repo_root, "HEAD")
     if head:
         task.meta["host_head_at_dispatch"] = head
+    else:
+        task.meta["host_head_at_dispatch_unavailable"] = True
     paths = gitops.dirty_paths(repo_root)
     if len(paths) > _HOST_BASELINE_PATH_CAP:
         task.meta["host_dirty_at_dispatch_skipped"] = f"over-cap:{len(paths)}"
@@ -2579,6 +2596,16 @@ def _stray_host_write(task: Run, repo_root: Path) -> dict | None:
       reaches it too — labelling that honestly is what keeps the note
       readable, and a guard that fires constantly for a non-reason stops being
       read long before the tenth alarm, the real one.
+    - ``stray-check-incomplete`` — an arm could not be measured at all
+      (#1309 item 3): the dispatch-time HEAD read failed
+      (``host_head_at_dispatch_unavailable``), or either ``rev_parse`` or
+      ``dirty_paths`` fails again *here*, at finalize. Both a missing
+      dispatch-time baseline and a failed finalize-time read used to read
+      identically to "nothing changed" — a genuine stray write a broken
+      probe could not see was silently missed, not merely delayed. Weakest
+      signal deliberately: a real finding always outranks "part of the check
+      was unmeasurable", but "nothing found" must never win over "couldn't
+      look" by silently discarding the latter.
     """
     if task.env == "host":
         return None
@@ -2587,10 +2614,13 @@ def _stray_host_write(task: Run, repo_root: Path) -> dict | None:
     baseline_head = str(task.meta.get("host_head_at_dispatch") or "").strip()
     signals: list[str] = []
     detail: dict = {}
+    incomplete: list[str] = []
 
     if baseline_head:
         now_head = gitops.rev_parse(repo_root, "HEAD")
-        if now_head and now_head != baseline_head:
+        if now_head is None:
+            incomplete.append("commit")
+        elif now_head != baseline_head:
             owned = gitops.commits_owned_by_run(repo_root, baseline_head, task.id)
             detail["host_head_at_dispatch"] = baseline_head
             detail["host_head_now"] = now_head
@@ -2599,6 +2629,8 @@ def _stray_host_write(task: Run, repo_root: Path) -> dict | None:
                 detail["stray_commits"] = owned
             else:
                 signals.append("host-head-moved")
+    elif task.meta.get("host_head_at_dispatch_unavailable"):
+        incomplete.append("commit")
 
     raw_baseline = task.meta.get("host_dirty_at_dispatch")
     if raw_baseline is not None:
@@ -2610,16 +2642,28 @@ def _stray_host_write(task: Run, repo_root: Path) -> dict | None:
             # against it would invent "new" paths. Skip the arm.
             baseline_paths = None
         if baseline_paths is not None:
-            gained = sorted(gitops.dirty_paths(repo_root) - baseline_paths)
-            if gained:
-                signals.append("stranded-worktree")
-                detail["stranded_paths"] = gained
+            now_paths = gitops.dirty_paths_or_none(repo_root)
+            if now_paths is None:
+                incomplete.append("dirty")
+            else:
+                gained = sorted(now_paths - baseline_paths)
+                if gained:
+                    signals.append("stranded-worktree")
+                    detail["stranded_paths"] = gained
+
+    if incomplete:
+        signals.append("stray-check-incomplete")
+        detail["incomplete_arms"] = incomplete
 
     if not signals:
         return None
     # Strongest first: proof outranks the mode the fix creates, which outranks
-    # an unattributed ref move.
-    for kind in ("stray-commit", "stranded-worktree", "host-head-moved"):
+    # an unattributed ref move, which outranks "part of the check couldn't
+    # even measure" — a real finding is always more actionable than that.
+    for kind in (
+        "stray-commit", "stranded-worktree", "host-head-moved",
+        "stray-check-incomplete",
+    ):
         if kind in signals:
             return {"kind": kind, "signals": signals, **detail}
     return None

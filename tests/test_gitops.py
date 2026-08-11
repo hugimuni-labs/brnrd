@@ -249,6 +249,31 @@ def test_create_orphan_branch_refuses_to_clobber_a_concurrently_created_ref(
     )
 
 
+def test_dirty_paths_or_none_keeps_unmeasurable_apart_from_clean(tmp_path):
+    """#1309 item 3 plumbing: a failed read must not read as "definitely clean".
+
+    ``dirty_paths`` documents best-effort (empty on any failure); its new
+    sibling keeps the third state so #703's stray-write detector can tell
+    "measured, nothing dirty" from "could not measure" instead of diffing
+    two empty sets that mean different things.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+
+    assert gitops.dirty_paths_or_none(repo) == set()
+
+    (repo / "scratch.txt").write_text("dirty\n", encoding="utf-8")
+    assert gitops.dirty_paths_or_none(repo) == {"scratch.txt"}
+
+    not_a_repo = tmp_path / "not-a-repo"
+    not_a_repo.mkdir()
+    assert gitops.dirty_paths_or_none(not_a_repo) is None
+    assert gitops.dirty_paths(not_a_repo) == set(), (
+        "the best-effort sibling keeps its own empty-on-failure contract"
+    )
+
+
 def test_fast_forward_branch_updates_unchecked_out_branch(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
