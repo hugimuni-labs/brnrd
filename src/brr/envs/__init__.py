@@ -409,7 +409,23 @@ class WorktreeEnv(HostEnv):
                 "worktree finalize has no publish plan"
             )
 
-        final_branch = worktree.current_branch(worktree_path)
+        try:
+            final_branch = worktree.current_branch(worktree_path)
+        except worktree.BranchUnresolvable as exc:
+            # #1302: git could not say whether this is detached or something
+            # worse — not the same fact as "detached on purpose", but the
+            # same safe answer either way: keep the worktree rather than
+            # infer a status this run never earned.
+            print(
+                f"[brnrd] finalize {worktree_path}: branch unresolvable "
+                f"({exc}); keeping the worktree rather than guessing"
+            )
+            return _FinalizeOutcome(
+                status="detached",
+                publish_branch=None,
+                keep_worktree=True,
+                keep_reason="branch unresolvable",
+            )
 
         if final_branch is None:
             return _FinalizeOutcome(
