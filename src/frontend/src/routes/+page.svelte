@@ -7,7 +7,6 @@
 	import LiveRuns from '$lib/LiveRuns.svelte';
 	import RunLedgerReceipt from '$lib/RunLedgerReceipt.svelte';
 	import Cloth from '$lib/Cloth.svelte';
-	import Digest from '$lib/Digest.svelte';
 	import { digestLastLookedStorageKey, readLastLookedAt, serializeLastLookedAt } from '$lib/digest';
 	import ControlStrip from '$lib/ControlStrip.svelte';
 	import ColdStart from '$lib/ColdStart.svelte';
@@ -61,12 +60,19 @@
 		servedWindowMs,
 		type RunLedgerRow
 	} from '$lib/runLedger';
-	import { parseBackchannelPage } from '$lib/backchannelPage';
-	import { buildWarpLayers, emberCount, restingLayers, weavingRows } from '$lib/warp';
-	import ThreadLegend from '$lib/ThreadLegend.svelte';
-	import { buildCrossingIndex, crossingCells, crossingThreads } from '$lib/crossing';
+	import {
+		buildWarpGraph,
+		readyItems,
+		runTopicIndex,
+		topicCounts,
+		topicThreads,
+		weavingRows
+	} from '$lib/warpGraph';
+	import HeddleRail from '$lib/HeddleRail.svelte';
+	import WarpGraphView from '$lib/WarpGraphView.svelte';
+	import BackchannelQueue from '$lib/BackchannelQueue.svelte';
+	import { buildBackchannelItems } from '$lib/backchannel';
 	import { pickRows } from '$lib/pickLane';
-	import WarpBand from '$lib/WarpBand.svelte';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
 	import { CLOTH_WINDOW_MS } from '$lib/cloth';
 	import { loomPastWindowLabel } from '$lib/loomBand';
@@ -320,28 +326,62 @@
 	let surfaceData = $state<SurfaceResponse | null>(null);
 	let surfaceError = $state<string | null>(null);
 
-	// #875 v2: the backchannel's authored half lives in the same discovered
-	// corpus §3 already fetches — no second endpoint, just a second reader of
-	// `surfaceData`. `knownPaths` lets an item body's internal links resolve
-	// the same way the corpus browser's do (`WorkSurface.svelte`).
-	const BACKCHANNEL_SURFACE_PATH = 'surface/backchannel.md';
-	let backchannelFile = $derived(
-		surfaceData?.files.find((f) => f.path === BACKCHANNEL_SURFACE_PATH) ?? null
-	);
-	let authoredBackchannelItems = $derived(
-		backchannelFile ? parseBackchannelPage(backchannelFile.markdown) : []
-	);
 	let surfaceKnownPaths = $derived(new Set((surfaceData?.files ?? []).map((f) => f.path)));
-	// The warp (design-work-layers.md, #972 step 2): the standing intent
-	// surface, discovered from `surface/layers/*.md` in the same corpus feed
-	// the backchannel and corpus browser already read — no new endpoint, a
-	// third reader of one fetch. Layers are authored, never derived: an
-	// empty array here means nothing is strung, and the section renders as
-	// one quiet line rather than not at all — the warp is a standing part of
-	// the board once this ships, and absence-of-files is a fact worth a line,
-	// not a hidden section (the §1 empty-queue precedent).
-	let warpLayers = $derived(surfaceData ? buildWarpLayers(surfaceData.files) : []);
-	let warpEmberCount = $derived(emberCount(warpLayers));
+	// The warp as a graph (2026-08-11 round): items under `surface/warp/`,
+	// topics under `surface/topics/`, discovered from the same corpus feed
+	// the corpus browser already reads — no new endpoint, another reader of
+	// one fetch. Topics are the filter axis (the heddles); blocked/ready are
+	// derived from the `needs:` edges; the runes now hash from canonical
+	// topic ids, so every mark on this page is stable across set changes.
+	let warpGraphData = $derived(buildWarpGraph(surfaceData?.files ?? []));
+	let topicThreadList = $derived(topicThreads(warpGraphData));
+	let topicCountsMap = $derived(topicCounts(warpGraphData));
+	let warpReadyCount = $derived(readyItems(warpGraphData).length);
+	// The derived half of needs-you (PR review queue + config requests) —
+	// authored asks live in the warp as decision/preparation items now.
+	let derivedNeedsItems = $derived(buildBackchannelItems(prReviewQueue ?? [], configRequests ?? []));
+	let needsOpen = $state(false);
+	// The heddle selection: canonical topic ids lit; null = all (default).
+	// Per-viewer, per-account, persisted like the digest anchor.
+	let heddleSelection = $state<Set<string> | null>(null);
+	let heddleLoadedFor = $state<string | null>(null);
+	$effect(() => {
+		if (!accountId || heddleLoadedFor === accountId) return;
+		try {
+			const raw = localStorage.getItem(`brnrd.heddles.${accountId}`);
+			const parsed = raw ? JSON.parse(raw) : null;
+			heddleSelection = Array.isArray(parsed) ? new Set(parsed.filter((id) => typeof id === 'string')) : null;
+		} catch {
+			heddleSelection = null;
+		}
+		heddleLoadedFor = accountId;
+	});
+	function persistHeddles(next: Set<string> | null) {
+		heddleSelection = next;
+		if (!accountId) return;
+		try {
+			if (next === null) localStorage.removeItem(`brnrd.heddles.${accountId}`);
+			else localStorage.setItem(`brnrd.heddles.${accountId}`, JSON.stringify([...next]));
+		} catch {
+			// Storage unavailable — the selection still governs this tab.
+		}
+	}
+	function toggleHeddle(id: string) {
+		const all = new Set(topicThreadList.map((thread) => thread.canonicalId));
+		let next: Set<string>;
+		if (heddleSelection === null) {
+			next = all;
+			next.delete(id);
+		} else {
+			next = new Set(heddleSelection);
+			if (next.has(id)) next.delete(id);
+			else next.add(id);
+		}
+		persistHeddles(next.size >= topicThreadList.length ? null : next);
+	}
+	function allHeddles() {
+		persistHeddles(null);
+	}
 	// The ignition crossing, render half (#972 machine round): while an
 	// ignited item's `taken:` run is live, the item rides the machine block's
 	// weaving lane and the warp stack rests it — one item space, moved by
@@ -379,15 +419,7 @@
 	let machineOpen = $state(true);
 	let machineExpanded = $derived(machineOpen || loomSelection !== null);
 	let liveRunIds = $derived(new Set((liveRuns ?? []).map((run) => run.run_id || run.id)));
-	let weaving = $derived(weavingRows(warpLayers, liveRunIds));
-	// One item space, moved by tense — but only when the machine is open to
-	// receive it. Parked, the machine is a single line: a weaving item
-	// resting out of the warp would render *nowhere*. So the item leaves the
-	// warp stack only while the lane that carries it is actually on screen;
-	// parked, it stays in the warp, lit by the legend's weaving bolt.
-	let warpStackLayers = $derived(
-		machineExpanded ? restingLayers(warpLayers, liveRunIds) : warpLayers
-	);
+	let weaving = $derived(weavingRows(warpGraphData, liveRunIds));
 	// THE CROSSING (`crossing.ts`): the warp threads in authored order, and
 	// run id → the ones each run lifted, read off the `taken:` rows the weld
 	// already writes. One index, three readers — the warp header's legend, the
@@ -413,12 +445,12 @@
 			extra: burningRows.length - 1
 		};
 	});
-	let threads = $derived(crossingThreads(warpLayers));
-	// Which layers have an item weaving right now — the answer to "which one is
-	// being worked", rendered on the warp where the question gets asked rather
-	// than only on the run that is doing it.
-	let weavingCallSigns = $derived(new Set(weaving.map((row) => row.callSign)));
-	let crossingIndex = $derived(buildCrossingIndex(warpLayers));
+	let threads = $derived(topicThreadList.map((thread) => thread.canonicalId));
+	// Which topics have an item weaving right now — the answer to "which one
+	// is being worked", rendered on the heddle rail where the question gets
+	// asked rather than only on the run that is doing it.
+	let weavingCallSigns = $derived(new Set(weaving.map((row) => row.callSign).filter(Boolean)));
+	let crossingIndex = $derived(runTopicIndex(warpGraphData));
 	// All three feeds resolved (loaded or errored) — until then the needs
 	// strip's sum is a partial read, and rendering it as a verdict is the
 	// measured 20 → "clear" → 4 flicker. `authoredBackchannelItems.length
@@ -1195,14 +1227,10 @@
 			</h1>
 		</header>
 
-		<!-- THE DIGEST (design-run-route.md §The home page becomes a map,
-		     #1256): replaces the summons strip — a compact one-line toast at
-		     the door, seen on load — not sticky, it scrolls away naturally
-		     like everything else here. On mobile the rail below fills the
-		     whole first viewport, so this has to sit above it to be where the
-		     eye lands first (steer folded evt-1786144375669258422-mls4,
-		     inherited from the strip it replaces). -->
-		<Digest rows={runLedgerRows} {now} {lastLookedAt} onCaughtUp={markCaughtUp} />
+		<!-- The digest block is gone (2026-08-11, his ask: it was a redirect
+		     onto a run and repeated after the cloth). Its "since you looked"
+		     anchor survives below: cloth rows newer than the last visit wear
+		     the brighter ground, and "caught up" sits in the cloth's header. -->
 
 		<!-- The cold start, directly under the title and above everything
 		     else: for an account with nothing connected every section below
@@ -1530,43 +1558,89 @@
 				<p class="font-mono text-[10px] text-ink-quiet">
 					{surfaceData === null
 						? 'stringing…'
-						: `${warpLayers.length} ${warpLayers.length === 1 ? 'layer' : 'layers'} · ${warpEmberCount} ember`}
+						: `${topicThreadList.length} topic${topicThreadList.length === 1 ? '' : 's'} · ${warpReadyCount} ready`}
 				</p>
 			</div>
-			<!-- The threads, named and coloured: the legend for every crossing strip
-			     drawn below it, and what turns a lit tick from countable into
-			     identifiable. A layer with something weaving wears its own hue and
-			     a bolt — his ask, answered where he asked it. -->
+			<!-- The heddles: the topic rail — the Photoshop-layers filter axis.
+			     Collapsed it is the legend (every topic's rune, lit or dim, each
+			     a working toggle); expanded it is the flat topic list with
+			     ready/held counts. The lit set lenses the warp below and the
+			     cloth after it. -->
 			<div class="mt-1.5">
-				<ThreadLegend cells={crossingCells(threads, threads)} weaving={weavingCallSigns} />
-			</div>
-			<!-- The flip is dead (2026-08-02): the layer stack is the standing
-			     body and renders always — the old needs-you heddle *replaced*
-			     it whenever items waited, so a daemon restart that resolved
-			     the feeds made the warp vanish behind a tab. The needs-you
-			     queue is the band's compact strip now, above the stack; feed
-			     state only ever touches the strip's own chip. -->
-			<div class="mt-2">
-				<WarpBand
-					surfaceLoaded={surfaceData !== null}
-					layers={warpStackLayers}
-					knownPaths={surfaceKnownPaths}
-					authoredItems={authoredBackchannelItems}
-					prs={prReviewQueue}
-					requests={configRequests}
-					feedsResolved={backchannelFeedsResolved}
-					onOpenPage={openInLibrary}
-					stale={prReviewQueueStale}
-					{now}
-					withheld={prReviewQueueWithheld}
-					prError={prReviewQueueError}
-					configError={configRequestsError}
+				<HeddleRail
+					threads={topicThreadList}
+					counts={topicCountsMap}
+					selected={heddleSelection}
+					weaving={weavingCallSigns}
+					onToggle={toggleHeddle}
+					onAll={allHeddles}
 				/>
 			</div>
-			<!-- #1281: no per-lane "paused —" restated here — `WarpBand` already
-			     has `withheld` above (folded into its own "withheld" chip and
-			     `BackchannelQueue`'s empty state); this second, standalone banner
-			     duplicated that plus the page-head notice. Same fact, same fix. -->
+			<!-- The derived half of needs-you: PR review + config approvals —
+			     feeds the daemon derives, not items anyone authored. Authored
+			     asks are decision/preparation items in the warp itself now, so
+			     this strip renders only when something derived actually waits. -->
+			{#if derivedNeedsItems.length > 0 || prReviewQueueError || configRequestsError}
+				<div class="subpanel mt-2 px-3 py-2 text-xs">
+					<button
+						type="button"
+						class="flex w-full cursor-pointer flex-wrap items-baseline gap-x-2 text-left"
+						aria-expanded={needsOpen}
+						onclick={() => (needsOpen = !needsOpen)}
+					>
+						<span class="font-mono text-[10px] text-ink-quiet" aria-hidden="true"
+							>{needsOpen ? '▾' : '▸'}</span
+						>
+						<span class="font-mono text-[11px] tracking-wide text-amber-200 uppercase"
+							>needs you</span
+						>
+						<span class="font-mono text-[10px] text-ink-quiet"
+							>· {backchannelFeedsResolved
+								? `${derivedNeedsItems.length} derived`
+								: 'counting…'}</span
+						>
+					</button>
+					{#if needsOpen}
+						<div class="mt-2">
+							{#if prReviewQueueError}
+								<p class="mb-2 text-sm text-red-400">{prReviewQueueError}</p>
+							{/if}
+							{#if configRequestsError}
+								<p class="mb-2 text-sm text-red-400">{configRequestsError}</p>
+							{/if}
+							<BackchannelQueue
+								authoredItems={[]}
+								knownPaths={surfaceKnownPaths}
+								prs={prReviewQueue ?? []}
+								requests={configRequests ?? []}
+								stale={prReviewQueueStale}
+								{now}
+								withheld={prReviewQueueWithheld}
+							/>
+						</div>
+					{/if}
+				</div>
+			{/if}
+			<!-- The graph: unblocked items colorful on top — glance, decide or
+			     do — blocked ones greyed below, live-held ones framed in place. -->
+			<div class="mt-2">
+				{#if surfaceData === null}
+					<p class="text-sm text-ink-quiet">stringing…</p>
+				{:else}
+					<WarpGraphView
+						graph={warpGraphData}
+						selected={heddleSelection}
+						{liveRunIds}
+						knownPaths={surfaceKnownPaths}
+						onOpenPage={openInLibrary}
+					/>
+				{/if}
+			</div>
+			<p class="mt-2 font-mono text-[10px] text-ink-mute">
+				<a href={resolve('/warp')} class="hover:text-stone-300"
+					>all items · live &amp; completed →</a
+				>
+			</p>
 		</section>
 
 		<!-- the cloth · past (#972): what has become — the wyrd's take-up.
@@ -1598,6 +1672,9 @@
 						surface={surfaceData}
 						{threads}
 						{crossingIndex}
+						selectedTopics={heddleSelection}
+						newSince={lastLookedAt}
+						onCaughtUp={markCaughtUp}
 					/>
 				{/if}
 			</div>
