@@ -222,9 +222,12 @@ export function pickRows(input: {
 			urgency: (liveRuns ?? []).length > 1 ? ('attention' as const) : ('calm' as const),
 			barFraction: 1,
 			serves: servesByRun.get(id) ?? [],
-			// A live run's threads come from the page's `taken:` index, which is
-			// authoritative for a run that exists. Nothing to add here.
-			crosses: [],
+			// A live run's threads: its own claimed topics off the wire
+			// (`.topics` → presence heartbeat → live-runs payload), fresher
+			// than any node file — the page's `taken:` index still unions in
+			// at render time (`PickLane.rowTopics`), so an item-ignited run
+			// and a claiming run both read true, together when both hold.
+			crosses: run.topics ?? [],
 			mood: moodFace(run.mood, run.mood_glyph, run.mood_pitch, run.mood_frames, run.mood_rest)
 		};
 	});

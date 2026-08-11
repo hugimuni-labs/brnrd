@@ -68,12 +68,17 @@
 	}: Props = $props();
 
 	let allRows = $derived(pickRows({ liveRuns, scheduledWakes, weaving, now }));
-	// The heddle lens over the lane: a row's topics come from the taken:
-	// index (picking) or its own serves: claim (armed). A row making no
-	// topic claim is honestly "not this topic" under a real filter — and
-	// the hidden count renders below, so a burning run never just vanishes.
+	// The heddle lens over the lane: a row's topics are the UNION of the
+	// page's taken: index and the row's own claim — an armed pick's
+	// `serves:` threads, or a burning run's live `.topics` claim off the
+	// wire (`pickLane.ts`). Union, not fallback: a run that both took an
+	// item and claimed a thread reads true on both, and "topics touched"
+	// is a set, never a precedence fight. A row making no claim at all is
+	// honestly "not this topic" under a real filter — and the hidden count
+	// renders below, so a burning run never just vanishes.
 	function rowTopics(row: PickRow): string[] {
-		return crossingIndex.get(row.id) ?? row.crosses;
+		const indexed = crossingIndex.get(row.id) ?? [];
+		return [...new Set([...indexed, ...row.crosses])];
 	}
 	let rows = $derived(
 		selectedTopics === null
@@ -161,7 +166,7 @@
 								class="inline-block w-2 shrink-0 text-center text-amber-300/80"
 								aria-hidden="true">↯</span
 							>
-							<Crossing cells={crossingCells(threads, crossingIndex.get(row.id), topicFaces)} />
+							<Crossing cells={crossingCells(threads, rowTopics(row), topicFaces)} />
 							{#if face}
 								<span class="shrink-0 text-[9px]" aria-hidden="true" style={`color: ${face.color}`}
 									>{face.glyph}</span
@@ -237,7 +242,7 @@
 				     was the one row in the lane with a blank where its threads
 				     belong. -->
 					<Crossing
-						cells={crossingCells(threads, row.crosses, topicFaces)}
+						cells={crossingCells(threads, rowTopics(row), topicFaces)}
 						label="threads this pick serves"
 					/>
 					<span

@@ -1014,6 +1014,60 @@ def test_dashboard_live_runs_api_returns_runs():
     assert body["stale"] is False
 
 
+def test_dashboard_live_runs_api_round_trips_claimed_topics():
+    """The `topics` field (the-run-that-claims-its-thread) survives the
+    server: the daemon's presence heartbeat publishes raw slugs, and the
+    dashboard reads them back off the stored snapshot — the whitelist
+    (`LiveRunIn`) must carry the member or the wire silently drops it,
+    which is exactly how the live lane rendered topicless for a run whose
+    claim the daemon was already publishing."""
+    import json
+    from datetime import datetime, timezone
+
+    from brnrd.models import Daemon
+
+    client = _client()
+    token = _login(client)
+    pid = _create_repo(client, token)
+
+    with client.app.state.SessionLocal() as db:
+        daemon = Daemon(
+            id="dmn-live-t", repo_id=pid, token_id="tok-live-t", daemon_name="laptop",
+            live_runs_json=json.dumps(
+                [
+                    {"id": "pres-t", "kind": "daemon", "stream": "telegram:x:",
+                     "run_id": "run-threaded", "repo_label": "Gurio/brr",
+                     "topics": ["the-loom", "the-post"]},
+                    {"id": "pres-u", "kind": "daemon", "stream": "telegram:y:",
+                     "run_id": "run-unclaimed", "repo_label": "Gurio/brr"},
+                ]
+            ),
+            live_runs_updated_at=datetime.now(timezone.utc),
+        )
+        db.add(daemon)
+        db.commit()
+
+    r = client.get("/v1/dashboard/live-runs")
+    assert r.status_code == 200
+    rows = {row["run_id"]: row for row in r.json()["runs"]}
+    assert rows["run-threaded"]["topics"] == ["the-loom", "the-post"]
+    # A snapshot stored before this field existed serves no key at all;
+    # a validated unclaimed row serves []. Both read as "no claim" — the
+    # frontend type is optional for exactly this reason.
+    assert rows["run-unclaimed"].get("topics", []) == []
+
+    # The PUT-side whitelist is the half that silently dropped the field
+    # before this change — prove the isolate keeps it, not just the
+    # stored-snapshot passthrough above.
+    from brnrd import schemas as _schemas
+
+    intake = _schemas.isolate_live_runs(
+        [{"id": "pres-w", "run_id": "run-w", "topics": ["the-loom"]}]
+    )
+    assert intake.runs[0].topics == ["the-loom"]
+    assert _schemas.isolate_live_runs([{"id": "pres-x", "run_id": "run-x"}]).runs[0].topics == []
+
+
 def test_dashboard_live_runs_api_returns_spawn_max_concurrent():
     """Loom envelope Phase 1 (kb/design-multi-workstream-concurrency.md
     §"Loom envelope"): the configured spawn: pool width piggybacks on the
