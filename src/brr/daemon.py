@@ -577,6 +577,27 @@ def publish(
     # the local target ref first.
     remote_branch = expected if expected and expected != push_branch else push_branch
 
+    def _measure_or_push_blind(probe_fn, *probe_args) -> list[str] | None:
+        """Run a commit-range probe; ``None`` means "could not measure."
+
+        #1308: a probe that raises ``_CommitProbeUnresolvable`` answered
+        nothing, not zero — treating that as "nothing to push" is what
+        silently dropped a first-publish push when the underlying ``git``
+        call timed out or hit a transient lock on the shared checkout.
+        ``None`` here tells the caller to skip the empty-commits guard and
+        push anyway: a push with nothing new is a harmless no-op on the
+        remote, but a skipped push over unmeasured commits loses work.
+        """
+        try:
+            return probe_fn(*probe_args)
+        except _CommitProbeUnresolvable as exc:
+            print(
+                f"[brnrd] run {task.id}: commit probe for {push_branch!r} could "
+                f"not measure ({exc}); pushing anyway rather than risking a "
+                f"silent skip"
+            )
+            return None
+
     try:
         upstream = gitops.branch_upstream(repo_root, push_branch)
         remote = gitops.branch_remote(repo_root, push_branch)
@@ -584,8 +605,8 @@ def publish(
         force_with_lease = False
 
         if upstream and remote_branch == push_branch:
-            commits = _commits_between(repo_root, upstream, push_branch)
-            if not commits:
+            commits = _measure_or_push_blind(_commits_between, repo_root, upstream, push_branch)
+            if commits == []:
                 return
             if not remote:
                 remote = upstream.split("/", 1)[0] if "/" in upstream else None
@@ -595,10 +616,10 @@ def publish(
                 return
             remote_ref = f"{remote}/{remote_branch}"
             if gitops.rev_parse(repo_root, remote_ref):
-                commits = _commits_between(repo_root, remote_ref, push_branch)
+                commits = _measure_or_push_blind(_commits_between, repo_root, remote_ref, push_branch)
             else:
-                commits = _commits_since_seed(repo_root, push_branch)
-            if not commits:
+                commits = _measure_or_push_blind(_commits_since_seed, repo_root, push_branch)
+            if commits == []:
                 return
             # Set upstream only when pushing to a matching-named branch
             # for the first time; refspec pushes don't carry an
@@ -631,7 +652,11 @@ def publish(
             lease_oid=(expected_remote_oid if force_with_lease else None),
         )
         push_payload: dict = {
-            "commits": len(commits),
+            # ``commits`` is ``None`` on the #1308 "could not measure" path —
+            # ``run_progress``'s push_done handler already treats a
+            # non-``int`` count as "leave the prior reading alone", so an
+            # unmeasured count renders as absent, never as a false zero.
+            "commits": len(commits) if commits is not None else None,
             "branch": push_branch,
             "set_upstream": set_upstream,
             "force_with_lease": force_with_lease,
@@ -828,30 +853,71 @@ def _forge_view_url(
         return None
 
 
+class _CommitProbeUnresolvable(Exception):
+    """A commit-range probe could not measure — distinct from measuring zero.
+
+    ``_commits_between``/``_commits_since_seed`` shell out to ``git log`` /
+    ``git merge-base``, either of which can fail to answer at all (a
+    subprocess timeout, an unresolvable ref under lock contention on a
+    shared checkout) as opposed to correctly answering "no commits in this
+    range." The old code conflated the two: a non-zero returncode or an
+    uncaught ``TimeoutExpired`` both read as ``[]``, and ``publish()``'s
+    ``if not commits: return`` then discarded a real push in silence
+    (#1308). This is #1298/#1302's ``BaseUnresolvable`` / ``BranchUnresolvable``
+    shape one probe over — a probe that cannot answer must say so loudly
+    rather than answer wrong.
+    """
+
+
 def _commits_between(repo_root: Path, base_ref: str, branch: str) -> list[str]:
-    result = subprocess.run(
-        ["git", "log", f"{base_ref}..{branch}", "--oneline"],
-        cwd=repo_root, capture_output=True, text=True, timeout=10,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "log", f"{base_ref}..{branch}", "--oneline"],
+            cwd=repo_root, capture_output=True, text=True, timeout=10,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise _CommitProbeUnresolvable(
+            f"git log {base_ref}..{branch} timed out: {exc}"
+        ) from exc
     if result.returncode != 0:
-        return []
+        detail = (result.stderr or result.stdout or "").strip()
+        raise _CommitProbeUnresolvable(
+            f"git log {base_ref}..{branch} failed (exit {result.returncode}): "
+            f"{detail or '<no output>'}"
+        )
     return [c for c in result.stdout.splitlines() if c.strip()]
 
 
 def _commits_since_seed(repo_root: Path, branch: str) -> list[str]:
     seed = gitops.default_branch(repo_root) or "HEAD"
-    merge_base = subprocess.run(
-        ["git", "merge-base", seed, branch],
-        cwd=repo_root, capture_output=True, text=True, timeout=10,
-    )
-    if merge_base.returncode == 0 and merge_base.stdout.strip():
+    try:
+        merge_base = subprocess.run(
+            ["git", "merge-base", seed, branch],
+            cwd=repo_root, capture_output=True, text=True, timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        # Fall through to the plain-log probe below rather than raising
+        # immediately — the same "try the other approach" posture the
+        # existing non-zero-returncode fallback already takes, just
+        # extended to cover the probe hanging instead of merely failing.
+        merge_base = None
+    if merge_base is not None and merge_base.returncode == 0 and merge_base.stdout.strip():
         return _commits_between(repo_root, merge_base.stdout.strip(), branch)
-    result = subprocess.run(
-        ["git", "log", branch, "--oneline"],
-        cwd=repo_root, capture_output=True, text=True, timeout=10,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "log", branch, "--oneline"],
+            cwd=repo_root, capture_output=True, text=True, timeout=10,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise _CommitProbeUnresolvable(
+            f"git log {branch} timed out: {exc}"
+        ) from exc
     if result.returncode != 0:
-        return []
+        detail = (result.stderr or result.stdout or "").strip()
+        raise _CommitProbeUnresolvable(
+            f"git log {branch} failed (exit {result.returncode}): "
+            f"{detail or '<no output>'}"
+        )
     return [c for c in result.stdout.splitlines() if c.strip()]
 
 

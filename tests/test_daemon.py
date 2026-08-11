@@ -6218,6 +6218,91 @@ def test_publish_runs_with_task_meta_for_pr_rebase(tmp_path, monkeypatch):
     )
 
 
+def test_commits_between_raises_on_timeout_not_empty(tmp_path):
+    """#1308: a probe that cannot measure must say so, not answer zero.
+
+    ``_commits_between`` shells out to ``git log``; a ``TimeoutExpired``
+    used to propagate uncaught (returning nothing at all, effectively an
+    unhandled crash from the caller's perspective) and a non-zero
+    returncode used to read as "no commits". Neither is the same fact as
+    "measured the range and found it empty" — both must now raise
+    ``_CommitProbeUnresolvable`` so ``publish()`` can tell the difference.
+    """
+    import subprocess as subprocess_mod
+
+    def fake_run(*_a, **_k):
+        raise subprocess_mod.TimeoutExpired(cmd=["git", "log"], timeout=10)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(daemon.subprocess, "run", fake_run)
+        with pytest.raises(daemon._CommitProbeUnresolvable):
+            daemon._commits_between(tmp_path, "main", "brr/topic")
+
+
+def test_commits_between_raises_on_nonzero_returncode(tmp_path):
+    """A resolvable-looking call that still exits non-zero (lock
+    contention, an unresolvable ref) is a failed measurement, not a zero
+    one — the old code returned ``[]`` for both "genuinely no commits"
+    and "git could not tell me", indistinguishably (#1308)."""
+    init_git_repo(tmp_path)
+    commit_files(tmp_path, {"seed.txt": "seed\n"})
+    with pytest.raises(daemon._CommitProbeUnresolvable):
+        # "definitely-not-a-ref" resolves nowhere, so git log exits non-zero
+        # rather than answering "zero commits".
+        daemon._commits_between(tmp_path, "definitely-not-a-ref", "HEAD")
+
+
+def test_publish_pushes_first_publish_branch_when_commit_probe_times_out(
+    tmp_path, monkeypatch, capsys,
+):
+    """The exact #1308 shape: a strand's first push of a brand-new branch,
+    where ``_commits_since_seed``'s internal ``git`` probe hangs.
+
+    Before the fix, ``TimeoutExpired`` raised inside ``_commits_since_seed``
+    propagated all the way up through ``publish()``'s own
+    ``except (subprocess.TimeoutExpired, FileNotFoundError): pass`` — a
+    handler written for the final ``git push`` subprocess call, not this
+    internal probe — and the branch was silently never pushed. The fix
+    must push anyway rather than trust an unmeasurable "zero".
+    """
+    repo, origin = _host_publish_repo(tmp_path)
+    subprocess.run(
+        ["git", "checkout", "-q", "-b", "brr/new-work"], cwd=repo, check=True,
+    )
+    commit_files(repo, {"work.txt": "brand new branch\n"}, message="new work")
+
+    real_run = subprocess.run
+
+    def flaky_run(cmd, *args, **kwargs):
+        if cmd[:2] in (["git", "merge-base"], ["git", "log"]):
+            raise subprocess.TimeoutExpired(cmd=cmd, timeout=10)
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(daemon.subprocess, "run", flaky_run)
+
+    task = Run(
+        id="run-1308",
+        event_id="evt-1308",
+        body="first publish",
+        status="done",
+        meta={"publish_branch": "brr/new-work"},
+    )
+
+    daemon.publish(repo, task)
+
+    # The branch reached origin despite the probe never being able to
+    # measure a commit count — a push a correspondent can inspect, not a
+    # silently discarded one.
+    remote_branches = subprocess.run(
+        ["git", "branch", "--list", "brr/new-work"], cwd=origin,
+        capture_output=True, text=True, check=True,
+    ).stdout
+    assert "brr/new-work" in remote_branches
+    out = capsys.readouterr().out
+    assert "could not measure" in out
+    assert "pushing brr/new-work" in out
+
+
 def test_worker_finalize_tolerates_gate_cleanup_after_response(
     tmp_path, monkeypatch,
 ):
