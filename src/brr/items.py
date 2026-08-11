@@ -411,7 +411,9 @@ def render_index(
         return " ".join(parts)
 
     def order(item: WarpItem) -> tuple:
-        return (_TYPE_ORDER[item.type], item.id)
+        match = ALLOCATED_ID_RE.fullmatch(item.id)
+        id_key = (0, int(match.group(1)), "") if match else (1, 0, item.id)
+        return (_TYPE_ORDER[item.type], id_key)
 
     ready = sorted(
         (item for item in open_items if not open_blockers(item, by_id)), key=order

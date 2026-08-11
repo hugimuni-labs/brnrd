@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { fade } from 'svelte/transition';
+	import type { ResolvedPathname } from '$app/types';
 	import MarkdownContent from './MarkdownContent.svelte';
 	import { repoRunSlug, runIdSlug, runNodeHref } from './runNode';
 	import { STATUS_BURNING, STATUS_COOLING, STATUS_UNKNOWN, STATUS_WARN } from './statusPalette';
@@ -77,7 +78,7 @@
 	/** A `taken:` run's node href — resolvable only when the item's refs
 	 *  name exactly one repo (the run route needs a repo slug; a guess that
 	 *  404s is worse than plain text). */
-	function takenHref(item: WarpItem, runId: string): string | null {
+	function takenHref(item: WarpItem, runId: string): ResolvedPathname | null {
 		const repos = itemRepos(item);
 		if (repos.length !== 1) return null;
 		return runNodeHref(repoRunSlug(repos[0]), runIdSlug(runId));
@@ -202,10 +203,13 @@
 						{#each item.refs as ref, index (index)}
 							{#if index > 0}<span class="text-ink-mute"> · </span>{/if}
 							{#if ref.href}
+								<!-- Forge/document refs are genuinely external destinations —
+								     same escape CapabilityPanel takes: this row never assumes
+								     client-side routing owns these links. -->
 								<a
 									href={ref.href}
 									target="_blank"
-									rel="noopener"
+									rel="noopener external"
 									class="text-amber-300/90 hover:text-amber-100">{ref.label}</a
 								>
 							{:else}

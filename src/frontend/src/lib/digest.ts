@@ -26,3 +26,16 @@ export function readLastLookedAt(raw: string | null | undefined, nowMs: number):
 export function serializeLastLookedAt(ms: number): string {
 	return String(Math.trunc(ms));
 }
+
+/** First-ever-visit fallback span — the retired digest block's own default —
+ *  so a viewer who has never pressed "caught up" still gets a bounded
+ *  highlight window (and the press that arms the real anchor), rather than
+ *  no entry point at all: the null anchor must not delete the affordance
+ *  that records the first anchor. */
+export const LAST_LOOKED_FALLBACK_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/** The concrete instant the highlight windows against: the viewer's own
+ *  last confirmed look, or `now − fallback` when none is recorded yet. */
+export function lastLookedAnchor(lastLookedAt: number | null, nowMs: number): number {
+	return lastLookedAt ?? nowMs - LAST_LOOKED_FALLBACK_WINDOW_MS;
+}
