@@ -38,7 +38,7 @@
 import type { LiveRun, MoodFace } from './liveRuns.ts';
 import { liveRunDisplayName, moodFace } from './liveRuns.ts';
 import type { ScheduledWake } from './scheduledWakes.ts';
-import type { WeavingRow } from './warp.ts';
+import type { WeavingRow } from './warpGraph.ts';
 import { futureEtaLabel, futureShelfRows } from './futureShelf.ts';
 import { durationLabel } from './runLedger.ts';
 import { THERMAL_STOPS, type GlowUrgency } from './statusPalette.ts';
@@ -173,7 +173,7 @@ export function pickRows(input: {
 	const servesByRun = new Map<string, PickServes[]>();
 	for (const row of weaving) {
 		const list = servesByRun.get(row.liveRunId) ?? [];
-		list.push({ callSign: row.callSign, headline: row.item.headline });
+		list.push({ callSign: row.callSign, headline: row.headline });
 		servesByRun.set(row.liveRunId, list);
 	}
 

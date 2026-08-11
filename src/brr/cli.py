@@ -105,7 +105,7 @@ PUBLIC_COMMANDS = (
 HIDDEN_COMMANDS = (
     "prompts", "hook", "statusline", "worktree-hygiene", "config", "emotes",
     "relic", "gate-run", "close-check", "promise", "mood", "do", "notes",
-    "await", "cut", "legend",
+    "await", "cut", "legend", "item",
 )
 
 #: What ``brnrd promise`` accepts, spelled here so building the parser costs
@@ -617,8 +617,7 @@ def build_parser() -> argparse.ArgumentParser:
         "item", help="record the warp item this run ignited from")
     p.add_argument(
         "address",
-        help="item address, <layer>#<slug> (the heading's anchor in "
-             "surface/layers/<layer>.md, e.g. the-loom#gate-chips-row-on-repos)")
+        help="item id (the file's basename in surface/warp/, e.g. w-42)")
     p.set_defaults(func=cmd_relic_item)
 
     # The remaining three fronts onto `_PROMISABLE`'s hand-attested half
@@ -648,6 +647,39 @@ def build_parser() -> argparse.ArgumentParser:
         "file", help="record a file this run produced, outside a commit")
     p.add_argument("path", help="the file's path")
     p.set_defaults(func=cmd_relic_file)
+
+    # The warp item space (2026-08-11): `brnrd item` are the maintenance
+    # verbs over `surface/warp/` — writes are verbs, not prose, so a weak
+    # core can only be asked to do what the system can check it did
+    # (design-decision-surface.md §Maintenance contract).
+    # `item` is hidden for the same reason as `relic`: it is the resident's
+    # maintenance verb over the account's warp (`surface/warp/`), pointed at
+    # from the wake's own warp-index block, not an operator's daily noun.
+    item_p = sub.add_parser("item")
+    item_sub = item_p.add_subparsers(dest="item_cmd", required=True)
+    p = item_sub.add_parser("list", help="the open-items index (--all for everything)")
+    p.add_argument("--all", action="store_true", help="include done/retired items")
+    p.set_defaults(func=cmd_item_list)
+    p = item_sub.add_parser("new", help="mint a new item file, id allocated")
+    p.add_argument("headline", help="the item's one-line headline")
+    p.add_argument(
+        "--type", required=True, choices=("decision", "preparation", "action"),
+        dest="item_type")
+    p.add_argument("--topics", default=None, help="topic ids, space-separated")
+    p.add_argument("--needs", default=None, help="blocking item ids, space-separated")
+    p.add_argument("--prompt", default=None, help="the dispatch mandate, one line")
+    p.add_argument("--refs", default=None, help="refs row, `·`-separated")
+    p.add_argument("--body", default=None, help="free markdown body")
+    p.set_defaults(func=cmd_item_new)
+    p = item_sub.add_parser("done", help="stamp an item's completion receipt")
+    p.add_argument("id", help="item id, or a unique fragment of its headline")
+    p.add_argument("--run", default=None, help="run id for the receipt "
+                   "(default: this run, via BRR_RUN_ID)")
+    p.set_defaults(func=cmd_item_done)
+    p = item_sub.add_parser("retire", help="retire an item without completing it")
+    p.add_argument("id", help="item id, or a unique fragment of its headline")
+    p.add_argument("--why", default=None, help="one line on why")
+    p.set_defaults(func=cmd_item_retire)
 
     # Hidden per HIDDEN_COMMANDS — porcelain over the outbox verb grammar
     # (`docs/portals.md`), meant for the resident's own shell inside a live
@@ -2070,22 +2102,21 @@ def cmd_relic_item(args):
     """Append an ``item`` relic — the warp item this run serves (#972).
 
     THE WELD's manifest half: the run's produce manifest carries the
-    ``layer#slug`` address of the warp item that ignited it, so the item and
+    id of the warp item that ignited it, so the item and
     the run's cloth line can point at each other through resolver addresses
     instead of re-listing each other's content. The daemon writes this relic
     itself when the dispatching event body names the address
     (``weld.annotate_ignition``); this front door is for the run that only
     learns mid-flight which item it is serving.
 
-    Validation is grammar-only and strict: an address outside
-    ``<layer>#<slug>`` (lowercase ``[a-z0-9-]``, both halves starting
-    alphanumeric) is refused with the shape it wanted and **never written** —
-    a malformed address in the manifest would be an unresolvable claim every
-    downstream renderer has to carry. Whether the address *resolves* (the
-    layer file and heading exist in the account home) is deliberately not
-    checked here: the account surface is the daemon's knowledge, not the run
-    environment's, and capture skips an unresolvable address with a log line
-    rather than guessing.
+    Validation is grammar-only and strict: an id outside the slug grammar
+    (lowercase ``[a-z0-9-]``, starting alphanumeric) is refused with the
+    shape it wanted and **never written** — a malformed id in the manifest
+    would be an unresolvable claim every downstream renderer has to carry.
+    Whether the id *resolves* (the item file exists in the account home) is
+    deliberately not checked here: the account surface is the daemon's
+    knowledge, not the run environment's, and capture skips an unresolvable
+    id with a log line rather than guessing.
     """
     import sys
 
@@ -2106,10 +2137,9 @@ def cmd_relic_item(args):
     address = str(getattr(args, "address", "") or "").strip()
     if not weld.is_item_address(address):
         print(
-            f"[brnrd relic] not an item address: {address!r} — want "
-            "<layer>#<slug>, lowercase [a-z0-9-] on both sides of the #, "
-            "e.g. `brnrd relic item the-loom#gate-chips-row-on-repos` "
-            "(the slug is the item heading's anchor). Nothing was written.",
+            f"[brnrd relic] not an item id: {address!r} — want the item "
+            "file's basename in surface/warp/, lowercase [a-z0-9-], e.g. "
+            "`brnrd relic item w-42`. Nothing was written.",
             file=sys.stderr,
         )
         return 1
@@ -2548,6 +2578,159 @@ def cmd_do(args):
         )
         return 127
     return 0  # pragma: no cover — unreachable: execvp never returns on success
+
+
+def _item_context(*, create_dir: bool = False):
+    """Resolve the account's warp directory from the current repo.
+
+    Returns ``(warp_root, error)`` — exactly one is non-None. Read verbs
+    pass ``create_dir=False`` and get an error when no warp exists;
+    ``brnrd item new`` scaffolds the directory on first use (a mint is an
+    act, and the first item is what brings the warp into being).
+    """
+    from . import account as account_mod
+    from . import config as conf
+
+    repo_root = _repo_root()
+    cfg = conf.load_config(repo_root)
+    ctx = account_mod.resolve_context(repo_root, cfg, create=False)
+    if ctx is None or not getattr(ctx, "enabled", False):
+        return None, "no enabled account home for this repo — the warp lives there"
+    surface = account_mod.work_surface_path(ctx)
+    from .items import WARP_DIRNAME
+
+    warp_root = surface / WARP_DIRNAME
+    if not warp_root.is_dir():
+        if not create_dir:
+            return None, (
+                f"no warp yet — nothing under {warp_root}. "
+                "`brnrd item new` mints the first item."
+            )
+        warp_root.mkdir(parents=True, exist_ok=True)
+    return warp_root, None
+
+
+def _resolve_item_arg(warp_root, raw: str):
+    """An id, or a unique case-insensitive fragment of an open item's
+    headline. Returns ``(item, error)`` — ambiguity is an error, never a
+    coin flip."""
+    from . import items as items_mod
+
+    raw = (raw or "").strip()
+    path = items_mod.resolve_item(warp_root, raw)
+    if path is not None:
+        return items_mod.parse_item(path), None
+    candidates = [
+        item
+        for item in items_mod.load_items(warp_root)
+        if item.state == "open" and raw.lower() in item.headline.lower()
+    ]
+    if len(candidates) == 1:
+        return candidates[0], None
+    if not candidates:
+        return None, f"nothing matches {raw!r} — not an id, not an open headline"
+    names = " · ".join(f"{item.id} ({item.headline})" for item in candidates[:6])
+    return None, f"{raw!r} is ambiguous: {names}"
+
+
+def cmd_item_list(args):
+    from . import items as items_mod
+
+    warp_root, err = _item_context()
+    if err:
+        print(f"[brnrd item] {err}")
+        return 0
+    if getattr(args, "all", False):
+        for item in items_mod.load_items(warp_root):
+            mark = {"open": "·", "done": "✓", "retired": "✕"}[item.state]
+            topics = (" [" + " ".join(item.topics) + "]") if item.topics else ""
+            print(f"{mark} {item.id} {item.type or 'untyped'}{topics} — {item.headline}")
+        return 0
+    index = items_mod.render_index(warp_root)
+    print(index if index else "[brnrd item] the warp is bare")
+    return 0
+
+
+def cmd_item_new(args):
+    import sys
+
+    from . import items as items_mod
+
+    warp_root, err = _item_context(create_dir=True)
+    if err:
+        print(f"[brnrd item] {err}", file=sys.stderr)
+        return 1
+    item_id = items_mod.allocate_id(warp_root)
+    text = items_mod.new_item_text(
+        args.headline.strip(),
+        item_type=args.item_type,
+        topics=(args.topics or "").split() or None,
+        needs=(args.needs or "").split() or None,
+        prompt=(args.prompt or None),
+        refs=(args.refs or None),
+        body=(args.body or None),
+    )
+    path = warp_root / f"{item_id}.md"
+    path.write_text(text, encoding="utf-8")
+    print(f"{item_id} — {path}")
+    return 0
+
+
+def _item_receipt_date() -> str:
+    import datetime as _dt
+
+    return _dt.date.today().isoformat()
+
+
+def cmd_item_done(args):
+    import os
+    import sys
+
+    from . import items as items_mod
+
+    warp_root, err = _item_context()
+    if err:
+        print(f"[brnrd item] {err}", file=sys.stderr)
+        return 1
+    item, err = _resolve_item_arg(warp_root, args.id)
+    if err:
+        print(f"[brnrd item] {err}", file=sys.stderr)
+        return 1
+    run_id = (args.run or os.environ.get("BRR_RUN_ID") or "").strip() or None
+    if not items_mod.mark_done(item.path, date=_item_receipt_date(), run_id=run_id):
+        print(
+            f"[brnrd item] {item.id} is already {item.state} — a second "
+            "receipt would rewrite history. Nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"{item.id} done — {item.headline}")
+    return 0
+
+
+def cmd_item_retire(args):
+    import sys
+
+    from . import items as items_mod
+
+    warp_root, err = _item_context()
+    if err:
+        print(f"[brnrd item] {err}", file=sys.stderr)
+        return 1
+    item, err = _resolve_item_arg(warp_root, args.id)
+    if err:
+        print(f"[brnrd item] {err}", file=sys.stderr)
+        return 1
+    if not items_mod.mark_retired(
+        item.path, date=_item_receipt_date(), why=(args.why or None)
+    ):
+        print(
+            f"[brnrd item] {item.id} is already {item.state}. Nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"{item.id} retired — {item.headline}")
+    return 0
 
 
 def cmd_kb(args):
