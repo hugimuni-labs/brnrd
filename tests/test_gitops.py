@@ -9,6 +9,7 @@ from brr.gitops import (
     PushStatus,
     branch_head,
     commit_all,
+    create_orphan_branch,
     current_branch,
     ensure_run_id_hook,
     fast_forward_branch,
@@ -17,7 +18,7 @@ from brr.gitops import (
     push_branch,
     shared_brr_dir,
 )
-from brr import forge_pr_cache, worktree
+from brr import forge_pr_cache, gitops, worktree
 from brr.worktree import (
     WorktreeHygieneEntry,
     WorktreeHygieneSnapshot,
@@ -210,6 +211,42 @@ def test_fast_forward_branch_refuses_diverged_target(tmp_path):
 
     assert result.success is False
     assert result.detail
+
+
+def test_create_orphan_branch_refuses_to_clobber_a_concurrently_created_ref(
+    tmp_path, monkeypatch,
+):
+    """#1309 item 1: the final ``update-ref`` must be old-value-checked.
+
+    ``create_orphan_branch`` checks ``branch_exists`` once at entry, then
+    does two non-mutating plumbing calls before its actual write. A
+    concurrent process (two daemons racing ``ensure_dominion``, or a
+    transient git/network hiccup upstream that made an adoption path look
+    absent when it was not) can create the same branch, pointed at real
+    history, in that window. Simulate the race by lying about
+    ``branch_exists`` at entry while the branch genuinely exists underneath
+    — the exact shape of "our own read said absent, git's ref store
+    disagrees" the CAS write must catch.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+
+    monkeypatch.setattr(gitops, "branch_exists", lambda *_: False)
+
+    real_oid = create_orphan_branch(repo, "dominion", message="real history")
+    assert real_oid is not None
+
+    racer_oid = create_orphan_branch(repo, "dominion", message="racer")
+
+    # The loser adopts the winner's commit rather than reporting failure —
+    # mirroring the function's own entry-point "branch already exists"
+    # short-circuit, and sparing ``ensure_dominion`` a spurious
+    # RuntimeError over a branch that in fact now exists just fine.
+    assert racer_oid == real_oid, "a losing race must adopt, not fail"
+    assert branch_head(repo, "dominion") == real_oid, (
+        "the branch that already existed must survive untouched"
+    )
 
 
 def test_fast_forward_branch_updates_unchecked_out_branch(tmp_path):

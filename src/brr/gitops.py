@@ -1023,6 +1023,18 @@ def create_orphan_branch(
     works on any git version and never touches the main worktree's index
     or HEAD. Returns the new commit OID, the existing head if *branch*
     already exists, or ``None`` on failure (e.g. no committer identity).
+
+    **The final write is old-value-checked (#1309).** The entry-point
+    ``branch_exists`` read and the write below are not atomic with each
+    other — a concurrent caller (two daemons racing :func:`dominion.
+    ensure_dominion`, or an upstream ambiguous-failure read that made an
+    adoption path look absent when it was not) can create *branch*, pointed
+    at real history, in that window. An unconditional ``update-ref`` would
+    silently overwrite it — this is the one call site in the module that
+    can orphan committed history rather than merely fail. Passing an empty
+    old-value makes git refuse the write instead of clobbering: "the ref
+    must not exist" is exactly the invariant this function is relying on
+    when it decided to mint a *new* root commit.
     """
     if branch_exists(repo_root, branch):
         return branch_head(repo_root, branch)
@@ -1054,10 +1066,14 @@ def create_orphan_branch(
     commit_oid = commit.stdout.strip()
 
     update = _git(
-        repo_root, "update-ref", f"refs/heads/{branch}", commit_oid, check=False,
+        repo_root, "update-ref", f"refs/heads/{branch}", commit_oid, "",
+        check=False,
     )
     if update.returncode != 0:
-        return None
+        # Refused because the ref now exists (a concurrent writer landed
+        # first) — never overwrite it; adopt whatever is there rather than
+        # reporting failure over a branch that in fact exists.
+        return branch_head(repo_root, branch)
     return commit_oid
 
 
