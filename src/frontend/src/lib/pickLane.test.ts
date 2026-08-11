@@ -224,3 +224,14 @@ test('a summary shaped some other way is left as it arrived', () => {
 	});
 	assert.equal(rows[0].label, 'forge review needed');
 });
+
+test("a burning run's live topic claim rides the row's crosses (the-run-that-claims-its-thread)", () => {
+	const rows = pickRows({
+		liveRuns: [run({ topics: ['the-loom', 'the-post'] }), run({ id: 'bare', run_id: 'bare' })],
+		scheduledWakes: null,
+		now: NOW
+	});
+	assert.deepEqual(rows[0].crosses, ['the-loom', 'the-post']);
+	// No claim ⇒ empty, never null/undefined — the lens filters on it directly.
+	assert.deepEqual(rows[1].crosses, []);
+});
