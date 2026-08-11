@@ -21,7 +21,8 @@ import {
 	topicFaces,
 	topicThreads,
 	dependents,
-	RUNE_SPACE
+	RUNE_SPACE,
+	MIN_HUE_GAP
 } from './warpGraph.ts';
 import type { SurfaceFile } from './surface.ts';
 
@@ -255,6 +256,51 @@ describe('the graph', () => {
 		const glyphs = [...faces.values()].map((face) => face.glyph);
 		assert.equal(new Set(glyphs).size, glyphs.length);
 		assert.ok(glyphs.length <= RUNE_SPACE);
+	});
+
+	function circularMinGap(hues: number[]): number {
+		const sorted = [...hues].sort((a, b) => a - b);
+		return Math.min(
+			...sorted.map((h, i) => (i === 0 ? h + 360 - sorted[sorted.length - 1] : h - sorted[i - 1]))
+		);
+	}
+
+	it('topicFaces spreads hues to a minimum angular distance — his "6 topics land neighbors" case', () => {
+		const files = Array.from({ length: 6 }, (_, i) =>
+			file(`surface/topics/topic-${i}.md`, `# Topic ${i}\n`)
+		);
+		const g = graphOf(...files);
+		const faces = topicFaces(g);
+		const hues = [...faces.values()].map((face) => face.hue);
+		assert.equal(new Set(hues).size, hues.length, 'no two topics share a hue');
+		// 6 <= 12, so the full-circle target (360/6 = 60°) clears MIN_HUE_GAP
+		// with room to spare — assert the documented floor, not the exact
+		// target (the wrap-seam correction can shave a couple of degrees off
+		// individual gaps; see the doc comment on `separateHues`).
+		assert.ok(
+			circularMinGap(hues) >= MIN_HUE_GAP,
+			`min gap ${circularMinGap(hues)} below the documented floor ${MIN_HUE_GAP}`
+		);
+	});
+
+	it('topicFaces gracefully falls back to even spacing past the separable count', () => {
+		// More topics than 360 / MIN_HUE_GAP can hold apart at the full gap —
+		// pigeonhole, same shape as the glyph probe's alphabet-exhausted case.
+		// The pass still keeps every hue distinct and roughly evenly spaced
+		// rather than leaving any pair bunched.
+		const files = Array.from({ length: 24 }, (_, i) =>
+			file(`surface/topics/topic-${i}.md`, `# Topic ${i}\n`)
+		);
+		const g = graphOf(...files);
+		const hues = [...topicFaces(g).values()].map((face) => face.hue);
+		assert.equal(new Set(hues).size, hues.length);
+		assert.ok(circularMinGap(hues) >= 10, `min gap collapsed: ${circularMinGap(hues)}`);
+	});
+
+	it('a single topic is untouched by the hue pass — no neighbour to separate from', () => {
+		const g = graphOf(TOPIC_LOOM);
+		const faces = topicFaces(g);
+		assert.deepEqual(faces.get('loom'), topicFace(g.topics.find((t) => t.canonicalId === 'loom')!));
 	});
 
 	it('liveTakenRuns frames only currently-live holders', () => {
