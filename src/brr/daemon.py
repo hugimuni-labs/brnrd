@@ -7690,6 +7690,58 @@ def _stranded_strands(task: Run, repo_root: Path) -> list[tuple[str, str]]:
     return stranded
 
 
+# Issue-filing claim-vs-relic mismatch (#1259) — the same claim-vs-receipt
+# shape `_cut_mismatches`'s `produce:` check already applies to a whole
+# declaration, turned on one narrower claim the resident makes in its own
+# prose: "filed #1240" in the reply text or `.card` with no `issue` relic
+# naming #1240 anywhere in this run's manifest. Deliberately narrow — a
+# false "you claimed this" on ordinary prose mentioning an issue number is
+# worse than missing a real gap (the task's own hard constraint), so every
+# pattern requires the claim verb sitting directly against the `#N` token,
+# no filler words between them. That adjacency also does most of the work
+# keeping this off PR references: "opened PR #1300" and "PR #1300 filed"
+# both have another token between the claim verb and the `#`, so neither
+# matches. Residual risk, named rather than patched around: "opened #1300
+# to track the follow-up" where #1300 is actually a just-opened PR reads
+# identically to an issue-filing claim — accepted, not covered.
+#
+# This is a *different* surface from `closekeyword.py`'s predicate: that
+# module scans commit messages and PR bodies for text GitHub itself will
+# act on; this scans the resident's own reply/`.card` narration, which
+# GitHub never reads, for a claim the resident made about what it did. No
+# shared input, so no risk of the two disagreeing about the same text.
+_ISSUE_FILED_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bfiled\s+#(\d+)\b", re.IGNORECASE),
+    re.compile(r"#(\d+)\s+filed\b", re.IGNORECASE),
+    re.compile(r"\bopened\s+#(\d+)\b", re.IGNORECASE),
+)
+_ISSUE_CLOSED_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bclos(?:e[sd]?|ing)\s+#(\d+)\b", re.IGNORECASE),
+)
+
+
+def _issue_filing_claims(*texts: str) -> dict[int, str]:
+    """Issue numbers the resident's own prose claims to have filed/closed.
+
+    Scans each *texts* argument (reply body, ``.card`` content) against the
+    conservative pattern set above and returns ``{number: "filed" | "closed"}``
+    — one claim per number, later matches winning so a "filed #N ... closed
+    #N" narrative (a real, complete lifecycle) settles on the stronger,
+    final claim rather than the first one seen.
+    """
+    claims: dict[int, str] = {}
+    for text in texts:
+        if not text:
+            continue
+        for pattern in _ISSUE_FILED_PATTERNS:
+            for m in pattern.finditer(text):
+                claims[int(m.group(1))] = "filed"
+        for pattern in _ISSUE_CLOSED_PATTERNS:
+            for m in pattern.finditer(text):
+                claims[int(m.group(1))] = "closed"
+    return claims
+
+
 def _cut_mismatches(
     task: Run,
     declaration: cut_verb.CutDeclaration,
@@ -7697,6 +7749,7 @@ def _cut_mismatches(
     pending_events: list[dict[str, Any]],
     repo_root: Path | None,
     outbox_dir: Path | None,
+    reply_text: str = "",
 ) -> list[str]:
     """Cross-reference a ``cut:`` declaration against what the daemon itself
     attests. Returns named diff strings, empty when clean
@@ -7728,6 +7781,12 @@ def _cut_mismatches(
       is named; an outstanding, label-less promise (a bare
       ``brnrd promise pr --count 2``) requires only that at least one
       carried row exists, since there is nothing to name it against.
+    - **issue-filing claims** (#1259): :func:`_issue_filing_claims` scans
+      *reply_text* and the run's ``.card`` for a conservative "filed #N" /
+      "closed #N" pattern set; a number claimed with no matching ``issue``
+      relic in the same collection is named. Same skip condition as
+      **produce** (no *repo_root* ⇒ no relics collection ⇒ skipped) since
+      it reads off the same ``relics_list``.
     """
     mismatches: list[str] = []
 
@@ -7770,6 +7829,34 @@ def _cut_mismatches(
                 "produce: attested declared but the manifest is empty and "
                 "nothing auto-derived"
             )
+
+        # ── issue-filing claims vs issue relics (#1259) ──────────────
+        card_text = ""
+        if outbox_dir is not None:
+            try:
+                card_text = (
+                    (outbox_dir / _CARD_CONTROL_NAME).read_text(encoding="utf-8")
+                )
+            except OSError:
+                card_text = ""
+        claims = _issue_filing_claims(reply_text, card_text)
+        if claims:
+            reported_numbers: set[int] = set()
+            for record in relics_list:
+                if not isinstance(record, dict) or record.get("kind") != "issue":
+                    continue
+                try:
+                    reported_numbers.add(int(record.get("number")))
+                except (TypeError, ValueError):
+                    continue
+            for number, claim in sorted(claims.items()):
+                if number in reported_numbers:
+                    continue
+                flag = "--opened" if claim == "filed" else "--closed"
+                mismatches.append(
+                    f"issue #{number} mentioned as {claim} but no issue "
+                    f"relic exists — brnrd relic issue {number} {flag}"
+                )
 
     # ── owed ──────────────────────────────────────────────────────────
     shipped = relics.counts_by_kind(relics_list) if relics_list is not None else {}
@@ -8141,6 +8228,7 @@ def _drain_outbox(
                 pending_events=pending_events,
                 repo_root=repo_root,
                 outbox_dir=outbox_dir,
+                reply_text=body,
             )
             if mismatches:
                 bounces_so_far = int(
