@@ -21,7 +21,8 @@ import {
 	topicFaces,
 	topicThreads,
 	dependents,
-	RUNE_SPACE
+	RUNE_SPACE,
+	MIN_HUE_GAP
 } from './warpGraph.ts';
 import type { SurfaceFile } from './surface.ts';
 
@@ -272,10 +273,14 @@ describe('the graph', () => {
 		const faces = topicFaces(g);
 		const hues = [...faces.values()].map((face) => face.hue);
 		assert.equal(new Set(hues).size, hues.length, 'no two topics share a hue');
-		// The sweep's forced-uniform-spacing correction can shave a couple of
-		// degrees off the nominal target near the wrap seam — see the doc
-		// comment on `separateHues`. Assert the floor, not the exact target.
-		assert.ok(circularMinGap(hues) >= 25, `min gap too tight: ${circularMinGap(hues)}`);
+		// 6 <= 12, so the full-circle target (360/6 = 60°) clears MIN_HUE_GAP
+		// with room to spare — assert the documented floor, not the exact
+		// target (the wrap-seam correction can shave a couple of degrees off
+		// individual gaps; see the doc comment on `separateHues`).
+		assert.ok(
+			circularMinGap(hues) >= MIN_HUE_GAP,
+			`min gap ${circularMinGap(hues)} below the documented floor ${MIN_HUE_GAP}`
+		);
 	});
 
 	it('topicFaces gracefully falls back to even spacing past the separable count', () => {

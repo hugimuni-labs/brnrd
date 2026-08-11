@@ -369,9 +369,10 @@ export const RUNE_SPACE = 24;
  *  unreachable (13 topics can't sit ≥28° apart on one circle) and the
  *  pass falls back to the smaller even spacing that pigeonhole allows, the
  *  same "give ground gracefully" shape the glyph probe's alphabet-
- *  exhausted fallback uses. Referenced in the tests below, not in the
- *  computation — the computation just always asks for the whole circle. */
-const MIN_HUE_GAP = 28;
+ *  exhausted fallback uses. Exported for the tests below, not read by the
+ *  computation itself — `separateHues` always asks for the whole circle;
+ *  this is the floor that asking-for-the-whole-circle happens to clear. */
+export const MIN_HUE_GAP = 28;
 
 /** Hue-separation pass, same shape as the glyph collision probe above but on
  *  the color circle instead of the rune alphabet. A hash can and does put
