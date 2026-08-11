@@ -257,6 +257,47 @@ describe('the graph', () => {
 		assert.ok(glyphs.length <= RUNE_SPACE);
 	});
 
+	function circularMinGap(hues: number[]): number {
+		const sorted = [...hues].sort((a, b) => a - b);
+		return Math.min(
+			...sorted.map((h, i) => (i === 0 ? h + 360 - sorted[sorted.length - 1] : h - sorted[i - 1]))
+		);
+	}
+
+	it('topicFaces spreads hues to a minimum angular distance — his "6 topics land neighbors" case', () => {
+		const files = Array.from({ length: 6 }, (_, i) =>
+			file(`surface/topics/topic-${i}.md`, `# Topic ${i}\n`)
+		);
+		const g = graphOf(...files);
+		const faces = topicFaces(g);
+		const hues = [...faces.values()].map((face) => face.hue);
+		assert.equal(new Set(hues).size, hues.length, 'no two topics share a hue');
+		// The sweep's forced-uniform-spacing correction can shave a couple of
+		// degrees off the nominal target near the wrap seam — see the doc
+		// comment on `separateHues`. Assert the floor, not the exact target.
+		assert.ok(circularMinGap(hues) >= 25, `min gap too tight: ${circularMinGap(hues)}`);
+	});
+
+	it('topicFaces gracefully falls back to even spacing past the separable count', () => {
+		// More topics than 360 / MIN_HUE_GAP can hold apart at the full gap —
+		// pigeonhole, same shape as the glyph probe's alphabet-exhausted case.
+		// The pass still keeps every hue distinct and roughly evenly spaced
+		// rather than leaving any pair bunched.
+		const files = Array.from({ length: 24 }, (_, i) =>
+			file(`surface/topics/topic-${i}.md`, `# Topic ${i}\n`)
+		);
+		const g = graphOf(...files);
+		const hues = [...topicFaces(g).values()].map((face) => face.hue);
+		assert.equal(new Set(hues).size, hues.length);
+		assert.ok(circularMinGap(hues) >= 10, `min gap collapsed: ${circularMinGap(hues)}`);
+	});
+
+	it('a single topic is untouched by the hue pass — no neighbour to separate from', () => {
+		const g = graphOf(TOPIC_LOOM);
+		const faces = topicFaces(g);
+		assert.deepEqual(faces.get('loom'), topicFace(g.topics.find((t) => t.canonicalId === 'loom')!));
+	});
+
 	it('liveTakenRuns frames only currently-live holders', () => {
 		const item = parseWarpItem('surface/warp/w-8.md', '# X\n\ntaken: run-a run-b\n');
 		assert.deepEqual(liveTakenRuns(item, new Set(['run-b'])), ['run-b']);
