@@ -429,7 +429,9 @@
 	let weaving = $derived(weavingRows(warpGraphData, liveRunIds));
 	// THE CROSSING (`crossing.ts`): the warp threads in authored order, and
 	// run id → the ones each run lifted, read off the `taken:` rows the weld
-	// already writes. One index, three readers — the warp header's legend, the
+	// already writes, unioned with each run's own `topics.md` claim
+	// (`runTopicIndex`'s other door, for a run that took no item). One index,
+	// three readers — the warp header's legend, the
 	// pick lane's rows, the cloth's lines — so one alphabet travels the whole
 	// page: same threads, same cells, same width, wherever a strip is drawn.
 	// That shared vocabulary is the answer to "temporal repeating instead of
@@ -457,7 +459,7 @@
 	// is being worked", rendered on the heddle rail where the question gets
 	// asked rather than only on the run that is doing it.
 	let weavingCallSigns = $derived(new Set(weaving.map((row) => row.callSign).filter(Boolean)));
-	let crossingIndex = $derived(runTopicIndex(warpGraphData));
+	let crossingIndex = $derived(runTopicIndex(warpGraphData, surfaceData?.files ?? []));
 	let topicFaceMap = $derived(topicFaces(warpGraphData));
 	// All three feeds resolved (loaded or errored) — until then the needs
 	// strip's sum is a partial read, and rendering it as a verdict is the
@@ -1430,6 +1432,8 @@
 						stale={liveRunsStale}
 						onToggle={onMachineToggle}
 						selectedId={loomSelection?.kind === 'run' ? loomSelection.id : null}
+						{crossingIndex}
+						topicFaces={topicFaceMap}
 					/>
 				</div>
 			{/key}
@@ -1505,6 +1509,8 @@
 											vitals={selectedVitals}
 											liveLevel={selectedLiveLevel}
 											identity={selectedIdentity}
+											{crossingIndex}
+											topicFaces={topicFaceMap}
 										/>
 									{:else if selectedLiveRuns.length > 0}
 										<LiveRuns
