@@ -428,11 +428,36 @@ def switch_to(worktree_path: Path, branch: str) -> None:
         )
 
 
+class BranchUnresolvable(RuntimeError):
+    """git could not determine the branch checked out in a worktree (#1302).
+
+    Raised rather than answered, for the same reason :class:`BaseUnresolvable`
+    is: a bare ``None`` here is already the sentence "this worktree is on a
+    detached HEAD", and two callers act on that reading by treating the
+    worktree as safe to skip (finalize keeps it "for forensic inspection",
+    salvage declines to arm a publish). Collapsing a genuine measurement
+    failure into the same ``None`` would make those callers believe a run
+    detached on purpose when git simply could not answer — silently
+    dropping the one path (salvage) whose entire job is not losing a failed
+    run's uncommitted work.
+
+    ``git symbolic-ref --quiet --short HEAD`` exits non-zero for a real
+    detached HEAD *and* for a broken/unreadable tree alike, but the two are
+    distinguishable one probe further in: a true detached HEAD still has a
+    ``HEAD`` that resolves to a commit (``git rev-parse --verify HEAD``
+    succeeds); a tree git cannot even do that much for is not offering a
+    detached-HEAD answer, it is declining to answer at all. This class is
+    raised only for the second case.
+    """
+
+
 def current_branch(worktree_path: Path) -> str | None:
     """Return the branch HEAD points at inside *worktree_path*, or None.
 
-    Returns ``None`` for a detached HEAD (rare — only happens if the
-    agent explicitly detaches inside the worktree).
+    Returns ``None`` for a genuinely detached HEAD (rare — only happens if
+    the agent explicitly detaches inside the worktree). Raises
+    :class:`BranchUnresolvable` when git cannot answer at all — see that
+    class's docstring for why the two are kept apart.
     """
     result = subprocess.run(
         ["git", "symbolic-ref", "--quiet", "--short", "HEAD"],
@@ -441,10 +466,24 @@ def current_branch(worktree_path: Path) -> str | None:
         text=True,
         check=False,
     )
-    if result.returncode != 0:
+    if result.returncode == 0:
+        name = result.stdout.strip()
+        return name or None
+    head = subprocess.run(
+        ["git", "rev-parse", "--verify", "HEAD"],
+        cwd=worktree_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if head.returncode == 0:
+        # HEAD resolves to a real commit, just not via a symbolic ref —
+        # a genuine detached HEAD, the one case this function still answers.
         return None
-    name = result.stdout.strip()
-    return name or None
+    raise BranchUnresolvable(
+        f"no branch or resolvable HEAD in {worktree_path}: "
+        f"{(head.stderr or head.stdout or '').strip() or 'no detail'}"
+    )
 
 
 class BaseUnresolvable(RuntimeError):
