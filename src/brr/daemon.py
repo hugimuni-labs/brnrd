@@ -206,8 +206,14 @@ _CARD_CONTROL_NAME = ".card"
 # live, 2026-07-07 (a same-thread follow-up naming the exact gap from a
 # prior run's own ergonomics note). Same shape as `.card`/`.keepalive`: a
 # small control dotfile the daemon reads on the heartbeat cadence, never
-# delivered as a chat message.
-_PR_CONTROL_NAME = ".pr"
+# delivered as a chat message. #1318: the literal used to live only here,
+# private (`_PR_CONTROL_NAME`, leading underscore) — invisible to
+# `_discover_control_file_names` below despite this module being read by
+# it, and duplicated as a second hardcoded literal in `relics.py` and
+# `hooks.py` besides. `relics.PR_CONTROL_NAME` is now the one public
+# source; this stays as a local alias so every existing call site in this
+# file keeps working unchanged.
+_PR_CONTROL_NAME = relics.PR_CONTROL_NAME
 # Soft cap on the live projection the daemon accepts from ``.card``. The full
 # body is copied at closeout; only the ``## Now`` projection rides packets.
 _CARD_CONTROL_MAX_BYTES = 64 * 1024
