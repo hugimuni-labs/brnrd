@@ -3208,6 +3208,84 @@ def test_post_tool_surfaces_armed_dated_letters_end_to_end(tmp_path):
     ) in ctx
 
 
+# ── Armed-letter obligation classification (#1209) ────────────────────────
+#
+# `_has_post_tool_obligations`'s armed-letters clause used to treat mere
+# *presence* of an armed `at:` entry as an obligation — so a letter hours
+# out rendered the OBLIGATION-classed block at every boundary of the whole
+# run, defeating the quiet-boundary economy (#1116) until it fired. The fix
+# scopes the clause to overdue-or-imminent entries only; the always-shown
+# render (`_render_armed_rows`, exercised above) is untouched.
+
+
+def _obligations_portal(**armed_entry_overrides):
+    """Minimal portal with every *other* obligation signal quiet, so only
+    the armed-letters clause under test can flip the verdict."""
+    entry = {"id": "x", "when": "T", "heading": "X"}
+    entry.update(armed_entry_overrides)
+    return {
+        "attention": {"pending_event_count": 0, "pending_outbox_file_count": 0},
+        "card": {"stale": False},
+        "notices": [],
+        "schedule": {"armed": [entry]},
+    }
+
+
+def test_armed_entry_far_in_the_future_is_not_an_obligation():
+    portal = _obligations_portal(at=time.time() + 6 * 3600)
+    assert hooks._has_post_tool_obligations(
+        portal, None, None, False, False,
+    ) is False
+
+
+def test_armed_entry_within_the_imminent_horizon_is_an_obligation():
+    portal = _obligations_portal(at=time.time() + 5 * 60)
+    assert hooks._has_post_tool_obligations(
+        portal, None, None, False, False,
+    ) is True
+
+
+def test_armed_entry_overdue_is_an_obligation():
+    portal = _obligations_portal(at=time.time() - 100)
+    assert hooks._has_post_tool_obligations(
+        portal, None, None, False, False,
+    ) is True
+
+
+def test_armed_entry_missing_at_is_an_obligation():
+    # Fail toward the obligation, same posture as an unavailable portal
+    # elsewhere in this function: a malformed payload must not silently
+    # mute the escalation. `_obligations_portal()`'s default entry carries
+    # no `at` key at all — the shape a truly malformed projection would take.
+    portal = _obligations_portal()
+    assert "at" not in portal["schedule"]["armed"][0]
+    assert hooks._has_post_tool_obligations(
+        portal, None, None, False, False,
+    ) is True
+
+
+def test_armed_entry_render_path_unaffected_by_obligation_horizon():
+    # `_render_armed_rows` / the bar's armed block still shows a
+    # far-future entry regardless of the obligation classification above —
+    # the two are deliberately decoupled (#1209's own text: "the sweep
+    # line itself can stay — it is the gate-opening that lies").
+    rows = hooks._render_armed_rows([
+        {"id": "x", "when": "2026-12-25T09:00:00Z", "heading": "X",
+         "at": time.time() + 6 * 3600},
+    ])
+    assert "⏲ 2026-12-25T09:00:00Z · X" in rows[1]
+
+
+def test_armed_entry_is_due_helper_directly():
+    now = time.time()
+    assert hooks._armed_entry_is_due({"at": now + 3600}) is False
+    assert hooks._armed_entry_is_due({"at": now + 60}) is True
+    assert hooks._armed_entry_is_due({"at": now - 1}) is True
+    assert hooks._armed_entry_is_due({}) is True
+    assert hooks._armed_entry_is_due({"at": None}) is True
+    assert hooks._armed_entry_is_due({"at": "not-a-number"}) is True
+
+
 # ── The `.mood` control channel (#566 layer 2) ───────────────────────────
 
 
