@@ -606,13 +606,42 @@
 			// *top* is the seam (unlike `machineSentinel`, which carries a
 			// deliberate gap as its own height, the heddle sentinel is a bare
 			// zero-height marker with nothing to carry).
-			const heddleRaw = heddleSentinel
-				? machineDockVerdict({
-						home: heddleSentinel.getBoundingClientRect().top,
-						dockTop: railBottomTop,
-						docked: heddleClock.settled
-					})
-				: false;
+			//
+			// THE STACK THAT ATE THE TAPS (his 2026-08-12 report: the docked
+			// heddle strip rendering mid-viewport, painted over the expanded
+			// rack). "Docked" only ever means *stuck to the viewport in place
+			// of a scrolled-off full form* — while the rack is open, the
+			// heddle (and machine) dock render `relative` with no offset
+			// (template below), so nothing is actually stuck to anything.
+			// Before this guard, `heddleRaw`/`dockRaw` kept tracking
+			// `heddleSentinel`/`machineSentinel` regardless of `railOpen`, so
+			// scrolling far enough past the (long, non-sticky) open rack
+			// still flipped `heddleClock`/`dockClock` to `settled`. The
+			// heddle box then mounted (`{#if heddleCondensed}` below) — but
+			// `relative` with no `top` places it in plain document flow
+			// immediately after the rail, wherever that DOM position
+			// happens to be relative to the reader's actual scroll: glued to
+			// a document coordinate near the rack's own top, never tracking
+			// the viewport, so it painted over whatever of the rack was
+			// still on screen there and then scrolled out of reach for
+			// good — a strip that looks docked (mounted, styled `sticky`
+			// once folded) but was never actually reachable. Same for the
+			// machine dock's own `dockClock`, which feeds `activeSection` /
+			// `sectionFrameLit` below: a "collapsed stack" verdict computed
+			// while nothing is visually collapsed is exactly the source of
+			// his second report, the section-frame highlight not tracking
+			// reliably. Forcing both raw verdicts false while the rack is
+			// open — never docked without something to dock *to* — fixes
+			// the mount, the position, and the section highlight from the
+			// one place they all read.
+			const heddleRaw =
+				!railOpen && heddleSentinel
+					? machineDockVerdict({
+							home: heddleSentinel.getBoundingClientRect().top,
+							dockTop: railBottomTop,
+							docked: heddleClock.settled
+						})
+					: false;
 			const nextHeddle = scrollClockTick(heddleClock, heddleRaw, now);
 			// The machine's own target shifts down by the heddle strip's
 			// settled flow contribution — `heddleDockHeight` while it is
@@ -623,13 +652,15 @@
 			// last tick's committed derived" rule the section label already
 			// follows below).
 			const heddleFlowAtDock = nextHeddle.settled ? heddleDockHeight : heddleDockSettledHeight;
-			const dockRaw = machineSentinel
-				? machineDockVerdict({
-						home: machineSentinel.getBoundingClientRect().bottom,
-						dockTop: railBottomTop + heddleFlowAtDock,
-						docked: dockClock.settled
-					})
-				: false;
+			// Same `!railOpen` guard as `heddleRaw` above, same reason.
+			const dockRaw =
+				!railOpen && machineSentinel
+					? machineDockVerdict({
+							home: machineSentinel.getBoundingClientRect().bottom,
+							dockTop: railBottomTop + heddleFlowAtDock,
+							docked: dockClock.settled
+						})
+					: false;
 			const nextRail = scrollClockTick(railClock, railRaw, now);
 			const nextDock = scrollClockTick(dockClock, dockRaw, now);
 			// Reassign only on an actual change: `scrollClockTick` returns a
