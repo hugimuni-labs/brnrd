@@ -1862,6 +1862,80 @@ def test_pre_tool_allows_edit_to_control_files_same_as_write(tmp_path):
     assert out == {}
 
 
+def test_pre_tool_allows_write_to_pr_and_topics_in_outbox_dir(tmp_path):
+    # #1318 regression: `.pr` (`relics._read_pr_control` / the bolt's
+    # `remote_scm` facet) and `.topics` (`run_ledger.read_run_topics_control`)
+    # are real, documented control files whose only reader is the outbox
+    # dir — same shape as `.mood`/`.keepalive`/`.name` in the test above,
+    # just added later and missed by the old hand-listed
+    # `_CONTROL_FILES`. Before the fix, a strand writing either one here
+    # was refused and told to rewrite under `$GIT_WORK_TREE`, where
+    # nothing reads it — the PR-relic path a bolt's `produce: attested`
+    # depends on stayed empty even after `gh pr create` succeeded.
+    host, work_tree = _rooted_layout(tmp_path)
+    outbox = host / ".brr" / "outbox" / "run-1"
+    outbox.mkdir(parents=True)
+    env = _rooted_env(tmp_path, host_root=host, work_tree=work_tree)
+    env["BRR_OUTBOX_DIR"] = str(outbox)
+
+    for control_file in [".pr", ".topics"]:
+        out, code = hooks.run_hook(
+            hooks.PHASE_PRE_TOOL,
+            _pre_tool_stdin("Write", str(outbox / control_file)),
+            env,
+        )
+        assert code == 0, f"Failed for {control_file}"
+        assert out == {}, f"Failed for {control_file}"
+
+
+def test_pre_tool_control_file_refusal_does_not_recommend_git_work_tree(tmp_path):
+    # #1318: when the refused path's filename matches a known control file
+    # (here `.pr`, written straight at the host root rather than under the
+    # outbox dir — still refused, since the carve-out only fires inside
+    # $BRR_OUTBOX_DIR) the remedy must not tell the strand to rewrite under
+    # `$GIT_WORK_TREE` — that is the wrong destination for a file every
+    # reader (`relics._read_pr_control`) only ever reads from the outbox
+    # dir. The message should name the outbox dir instead.
+    host, work_tree = _rooted_layout(tmp_path)
+    outbox = host / ".brr" / "outbox" / "run-1"
+    outbox.mkdir(parents=True)
+    env = _rooted_env(tmp_path, host_root=host, work_tree=work_tree)
+    env["BRR_OUTBOX_DIR"] = str(outbox)
+    out, code = hooks.run_hook(
+        hooks.PHASE_PRE_TOOL,
+        _pre_tool_stdin("Write", str(host / ".pr")),
+        env,
+    )
+    assert code == 0
+    deny = out["hookSpecificOutput"]
+    assert deny["permissionDecision"] == "deny"
+    reason = deny["permissionDecisionReason"]
+    assert "#1184" in reason
+    # The old message unconditionally said "Rewrite the path relative to
+    # $GIT_WORK_TREE" — that recommendation must be gone here, even though
+    # the reworded message still *names* $GIT_WORK_TREE to say it's the
+    # wrong place.
+    assert "Rewrite the path relative to $GIT_WORK_TREE" not in reason
+    assert str(outbox) in reason
+
+
+def test_pre_tool_non_control_file_refusal_still_recommends_git_work_tree(tmp_path):
+    # The reworded remedy is conditional on the filename, not a blanket
+    # rewrite of the message — an ordinary source file rooted in the host
+    # checkout keeps the original `$GIT_WORK_TREE` advice, which is correct
+    # for it.
+    host, work_tree = _rooted_layout(tmp_path)
+    env = _rooted_env(tmp_path, host_root=host, work_tree=work_tree)
+    out, code = hooks.run_hook(
+        hooks.PHASE_PRE_TOOL,
+        _pre_tool_stdin("Write", str(host / "daemon.py")),
+        env,
+    )
+    assert code == 0
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "$GIT_WORK_TREE" in reason
+
+
 # ── The closeout guard (`hooks.next_move`) ───────────────────────────────
 #
 # The contract `next_move` failed 0/6 across *both* arms of the drift bench —
