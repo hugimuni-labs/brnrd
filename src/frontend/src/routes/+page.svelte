@@ -101,19 +101,19 @@
 		fetchConfigRequests,
 		type ConfigChangeRequestItem
 	} from '$lib/configRequests';
+	import { sectionFrameLit } from '$lib/collapse';
+	import { machineTapVerdict } from '$lib/machineDock';
 	import {
-		railScrollVerdict,
-		scrollClockTick,
-		sectionFrameLit,
-		type ScrollClock
-	} from '$lib/collapse';
-	import {
-		machineDockTop,
-		machineDockVerdict,
-		machineTapVerdict,
-		railDockHeight,
-		type RailHeightSamples
-	} from '$lib/machineDock';
+		SCROLL_STEP_THROTTLE_MS,
+		activeSectionFrom,
+		initialStackClocks,
+		limbDockVerdict,
+		railRawVerdict,
+		stackAtRest,
+		stackReserve,
+		stepStackClocks,
+		type StackClocks
+	} from '$lib/stickyStack';
 	import HeddleStrip from '$lib/HeddleStrip.svelte';
 
 	// Slice 2 (kb/design-dashboard-live-surface.md): the window-track
@@ -506,415 +506,196 @@
 	// nothing while idle, and ignition *reveals* the machine in place instead
 	// of moving sections around the reader.
 
-	// The shared scroll/settle clock (2026-08-08, his steer: "the behaviour
-	// of both rails is a bit buggy because they behave differently … I just
-	// think it should behave more uniformly and clearly and like collapse
-	// not immediately but soon after the scroll happens so that the elements
-	// do not congest"; corrected 2026-08-11 — collapse now fires ~1s after
-	// the threshold is first crossed rather than waiting for scrolling to
-	// stop, see `collapse.ts`'s own doc on `scrollClockTick`). `collapse.ts`
-	// `scrollClockTick` owns the timing rule — hysteresis (THE BOUNDARY THAT
-	// FLICKERED), then a settle debounce — and this one effect is the one JS
-	// timer that steps *both* the rail's and the dock's clock together,
-	// every tick, so they can never answer on two different schedules again
-	// (#1169's actual defect).
-	let railSentinel = $state<HTMLElement | null>(null);
-	let railClock = $state<ScrollClock>({ settled: false, pendingAt: null });
-	let dockClock = $state<ScrollClock>({ settled: false, pendingAt: null });
-	let railCondensed = $derived(railClock.settled);
-	// Whether the machine's one line is stuck to the top with the lane it
-	// belongs to left behind at the block's home. Measured off the block's own
-	// sentinel rather than inferred from `railCondensed`: the two boundaries sit
-	// about sixteen pixels apart, and a travel trip (tap the docked head, land
-	// at the block) can decouple them further even while the rail stays
-	// condensed the whole time — it has to be the geometric fact and not a
-	// neighbour's proxy. Verdict, dead band, and why travel terminates against
-	// it: `machineDock.machineDockVerdict`.
-	let machineDocked = $derived(dockClock.settled);
-	// The heddles join the stack (2026-08-12, his follow-up: the heddles
-	// filter every surface below them — warp, machine lane, cloth — so they
-	// belong docked between the rail and the machine, at the exact boundary
-	// of their own scope). The heddle rail's own home lives deep in the warp
-	// section, nowhere near the rail — structurally that is the machine
-	// dock's own question ("has this block's home scrolled up to where the
-	// stack would park it"), not the rail's own ("has my own full form
-	// scrolled off") — the rail shrinks *itself* when it condenses; the
-	// heddle strip is a whole new element appearing far from its source. So
-	// this reuses `machineDockVerdict`'s dead-band geometry (home vs. a
-	// target dock line, hysteresis via `MACHINE_DOCK_SLACK_PX`) rather than
-	// `railScrollVerdict`'s — same idiom (condense once provably scrolled
-	// past, release near the natural top, hold state between), the fitting
-	// shape for a sentinel that is not the thing whose form is changing.
+	// THE STACK THAT OWNS ITS GEOMETRY (w-48, `design-the-sticky-stack.md`;
+	// case file #1169 · #1258 · #1325 · #1328 · the post-#1328 tap-eater).
+	// One sticky container — rail, docked heddle copy, machine head, section
+	// label — replaces the hand-stepped clocks, six settled-height samples,
+	// three reserve spacers, and two JS-computed `top:` styles that used to
+	// coordinate three independently-positioned sticky elements. CSS layout
+	// owns geometry; JavaScript owns only booleans (`stickyStack.ts` has the
+	// argument). The felt behavior — collapse commits `SCROLL_SETTLE_MS`
+	// after the first qualifying crossing, expansion is immediate, every
+	// boundary carries a dead band — survives verbatim through the same
+	// `scrollClockTick` the old machinery used, now fed by a throttled
+	// live-rect step instead of a per-frame scroll handler.
+	//
+	// Sentinels, all flow-stable by construction:
+	// - `releaseSentinel` (before the container): the stack's own top — the
+	//   rail un-condenses when it comes back within 8px of the viewport top.
+	// - `condenseSentinel` (after the reserve spacer): the *at-rest* stack
+	//   bottom — the spacer holds `rest − live`, so this line does not move
+	//   when the rail changes form, and the rail condenses only once the
+	//   whole full stack has provably scrolled past (THE BOUNDARY THAT
+	//   FLICKERED's dead band, kept).
+	// - `heddleSentinel` (the heddle rail's home in the warp) and
+	//   `machineSentinel` (the lane's home): each limb docks when its home
+	//   crosses the stack's *live* bottom edge, read directly off the
+	//   container at each step. A late step shifts *when* a limb docks by
+	//   pixels of scroll; it can never shift *where anything paints* —
+	//   that asymmetry is the whole design.
+	let stackEl = $state<HTMLElement | null>(null);
+	let releaseSentinel = $state<HTMLElement | null>(null);
+	let condenseSentinel = $state<HTMLElement | null>(null);
 	let heddleSentinel = $state<HTMLElement | null>(null);
-	let heddleClock = $state<ScrollClock>({ settled: false, pendingAt: null });
-	let heddleCondensed = $derived(heddleClock.settled);
-	let settleTimer: ReturnType<typeof setTimeout> | null = null;
+	let machineSentinel = $state<HTMLElement | null>(null);
+	// Section headings, bound once each mounts — observed by the same
+	// boundary observer the limb sentinels use (a standard scroll-spy), so
+	// `activeSection` updates at crossings rather than per-frame reads.
+	let warpHeadingEl = $state<HTMLElement | null>(null);
+	let clothHeadingEl = $state<HTMLElement | null>(null);
+	let corpusHeadingEl = $state<HTMLElement | null>(null);
+	let billingHeadingEl = $state<HTMLElement | null>(null);
+	let railOpen = $state(false);
+	let clocks = $state<StackClocks>(initialStackClocks());
+	let railCondensed = $derived(clocks.rail.settled);
+	let heddleDocked = $derived(clocks.heddle.settled);
+	let machineDocked = $derived(clocks.lane.settled);
+	// The stack's own collapsed verdict — `machineDocked` already implies the
+	// rail is condensed above it (each dock boundary sits strictly after the
+	// one above it), so one flag names "the stack is fully collapsed" for
+	// `sectionFrameLit`'s two readers (his 2026-08-11 report, "it never
+	// un-highlights" — the border must never light without the stack
+	// actually being collapsed).
+	let stackCollapsed = $derived(machineDocked);
+	let activeSection = $state<{ id: string; label: string } | null>(null);
+	let showSectionLabel = $derived(stackCollapsed && activeSection !== null);
+	// The stack's live height (ResizeObserver) — also the scroll-margin every
+	// warp item's `<li>` reads via `--sticky-stack-h`, so a followed `#w-N`
+	// link lands below whatever the stack currently paints.
+	let stickyStackHeight = $state(0);
+	// The one surviving settled sample, and the design's whole risk budget:
+	// re-sampled on every qualifying resize (never frozen), it feeds only the
+	// spacer below the container — see `stackReserve`'s own doc.
+	let stackRestHeight = $state(0);
+	let stackReservePx = $derived(stackReserve(stackRestHeight, stickyStackHeight));
+	// `onRackChange` needs to re-step the clocks the instant the rack opens
+	// (un-docking is immediate, never debounced); the wiring effect below
+	// installs the real function.
+	let requestStackStep: () => void = () => {};
+
 	$effect(() => {
-		const sentinel = railSentinel;
-		if (!sentinel || typeof window === 'undefined') return;
-		const tick = () => {
+		if (typeof window === 'undefined') return;
+		const stack = stackEl;
+		const release = releaseSentinel;
+		const condense = condenseSentinel;
+		const heddleHome = heddleSentinel;
+		const laneHome = machineSentinel;
+		const headings = [warpHeadingEl, clothHeadingEl, corpusHeadingEl, billingHeadingEl].filter(
+			(el): el is HTMLElement => el !== null
+		);
+		if (!stack || !release || !condense || !heddleHome || !laneHome) return;
+
+		// Local authority; the reactive `clocks` is assigned only on change
+		// (reference-identity dirtying). `step` runs from listeners and
+		// timers — async, so its reads of `railOpen` are untracked and this
+		// effect re-runs only when an element binding changes.
+		//
+		// Raw verdicts are computed from live rects inside `step`, never
+		// cached from observer entries. IntersectionObserver was driven
+		// first and measured out: an instant jump (deep link, fling, a
+		// programmatic scroll) teleports a sentinel from below the viewport
+		// to above it with `isIntersecting` false -> false — no state
+		// change, no callback, and a cached "above" map holds its stale
+		// answer indefinitely. Eight rect reads per step, at most every
+		// SCROLL_STEP_THROTTLE_MS, is the honest price; the old machinery
+		// paid more per animation frame.
+		let current: StackClocks = initialStackClocks();
+		let settleTimer: ReturnType<typeof setTimeout> | null = null;
+		let throttleTimer: ReturnType<typeof setTimeout> | null = null;
+
+		const step = () => {
 			if (settleTimer !== null) {
 				clearTimeout(settleTimer);
 				settleTimer = null;
 			}
 			const now = Date.now();
-			const railTop = sentinel.getBoundingClientRect().top + window.scrollY;
-			const railRaw = railScrollVerdict({
-				scrollY: window.scrollY,
-				railTop,
-				railFullHeight,
-				condensed: railClock.settled
-			});
-			// The sentinel's *bottom*: it carries the seam above the block as a
-			// real box, so its bottom edge and the dock's in-flow top are the
-			// same line. Its top is 24px higher, and that gap is the trip's
-			// landing margin below — two different numbers off one element, so
-			// neither is a constant nudged until it looked right. Computed
-			// locally rather than read off the top-level `dockTop` derived:
-			// that derived depends on `railClock` (via `railCondensed`), and
-			// this effect *writes* `railClock` below — reading a derived of
-			// your own write inside the same effect is a real cycle in Svelte
-			// 5 (`effect_update_depth_exceeded`, driven and caught live), not
-			// just a style preference. Same formula either way; `dockTop`
-			// stays the template's single source of truth for the rendered
-			// position.
-			// Settled rail heights, never `railHeight`'s live `clientHeight`
-			// binding — that live read, paired with a same-tick
-			// `railCondensed` flip, is #1169's actual defect: the binding
-			// updates a frame after the DOM it measures, so the dock's target
-			// moved out from under its own reader for the one frame that
-			// mattered. `railDockHeight` (`machineDock.ts`) reads the same
-			// settled samples `dockTop` (template) does — see its own doc for
-			// why an open rack outranks `condensed` here too (#1258).
-			const railBottomTop = machineDockTop(
-				railDockHeight(
-					{
-						full: railFullHeight,
-						slim: railSlimHeight,
-						expanded: railExpandedHeight,
-						live: railHeight
-					},
-					railOpen,
-					railClock.settled
-				),
-				railClock.settled && !railOpen
+			// The stack's live bottom edge is the limb boundary in both
+			// regimes for free: pinned, it is the painted stack height; at
+			// rest, it is the stack's own flow bottom — below every limb
+			// home, so nothing docks at rest without arithmetic saying so.
+			const stackBottom = stack.getBoundingClientRect().bottom;
+			const raws = {
+				rail: railRawVerdict({
+					condenseAbove: condense.getBoundingClientRect().top < 0,
+					// The rail's own 8px release slack, as it always was:
+					// un-condense only once the stack's top is back within
+					// 8px of the viewport's.
+					releaseAbove: release.getBoundingClientRect().top < -8,
+					condensed: current.rail.settled
+				}),
+				heddle: limbDockVerdict({
+					homeTop: heddleHome.getBoundingClientRect().top,
+					stackBottom,
+					docked: current.heddle.settled
+				}),
+				lane: limbDockVerdict({
+					homeTop: laneHome.getBoundingClientRect().top,
+					stackBottom,
+					docked: current.lane.settled
+				})
+			};
+			const result = stepStackClocks(current, raws, railOpen, now);
+			current = result.clocks;
+			if (result.changed) clocks = result.clocks;
+			const nextSection = activeSectionFrom(
+				headings.map((el) => ({
+					id: el.id,
+					label: el.textContent?.trim() ?? '',
+					above: el.getBoundingClientRect().top < stackBottom
+				}))
 			);
-			// Where the heddle strip docks: directly under the rail, same line
-			// `dockTop` (template) computes — recomputed locally for the same
-			// own-write-cycle reason `railBottomTop` above is. `heddleSentinel`
-			// lives at the heddle rail's true home, screens below; its own
-			// *top* is the seam (unlike `machineSentinel`, which carries a
-			// deliberate gap as its own height, the heddle sentinel is a bare
-			// zero-height marker with nothing to carry).
-			//
-			// THE STACK THAT ATE THE TAPS (his 2026-08-12 report: the docked
-			// heddle strip rendering mid-viewport, painted over the expanded
-			// rack). "Docked" only ever means *stuck to the viewport in place
-			// of a scrolled-off full form* — while the rack is open, the
-			// heddle (and machine) dock render `relative` with no offset
-			// (template below), so nothing is actually stuck to anything.
-			// Before this guard, `heddleRaw`/`dockRaw` kept tracking
-			// `heddleSentinel`/`machineSentinel` regardless of `railOpen`, so
-			// scrolling far enough past the (long, non-sticky) open rack
-			// still flipped `heddleClock`/`dockClock` to `settled`. The
-			// heddle box then mounted (`{#if heddleCondensed}` below) — but
-			// `relative` with no `top` places it in plain document flow
-			// immediately after the rail, wherever that DOM position
-			// happens to be relative to the reader's actual scroll: glued to
-			// a document coordinate near the rack's own top, never tracking
-			// the viewport, so it painted over whatever of the rack was
-			// still on screen there and then scrolled out of reach for
-			// good — a strip that looks docked (mounted, styled `sticky`
-			// once folded) but was never actually reachable. Same for the
-			// machine dock's own `dockClock`, which feeds `activeSection` /
-			// `sectionFrameLit` below: a "collapsed stack" verdict computed
-			// while nothing is visually collapsed is exactly the source of
-			// his second report, the section-frame highlight not tracking
-			// reliably. Forcing both raw verdicts false while the rack is
-			// open — never docked without something to dock *to* — fixes
-			// the mount, the position, and the section highlight from the
-			// one place they all read.
-			const heddleRaw =
-				!railOpen && heddleSentinel
-					? machineDockVerdict({
-							home: heddleSentinel.getBoundingClientRect().top,
-							dockTop: railBottomTop,
-							docked: heddleClock.settled
-						})
-					: false;
-			const nextHeddle = scrollClockTick(heddleClock, heddleRaw, now);
-			// The machine's own target shifts down by the heddle strip's
-			// settled flow contribution — `heddleDockHeight` while it is
-			// actually docked, `heddleDockReserve` (its own settled sample)
-			// while it is not, so the machine's sticky offset always matches
-			// the heddle box's *real* flow footprint at that instant, never
-			// the frame behind it (same "read this tick's fresh verdict, not
-			// last tick's committed derived" rule the section label already
-			// follows below).
-			const heddleFlowAtDock = nextHeddle.settled ? heddleDockHeight : heddleDockSettledHeight;
-			// Same `!railOpen` guard as `heddleRaw` above, same reason.
-			const dockRaw =
-				!railOpen && machineSentinel
-					? machineDockVerdict({
-							home: machineSentinel.getBoundingClientRect().bottom,
-							dockTop: railBottomTop + heddleFlowAtDock,
-							docked: dockClock.settled
-						})
-					: false;
-			const nextRail = scrollClockTick(railClock, railRaw, now);
-			const nextDock = scrollClockTick(dockClock, dockRaw, now);
-			// Reassign only on an actual change: `scrollClockTick` returns a
-			// fresh object every call, and Svelte's `$state` dirties on
-			// reference identity — reassigning an object-shaped value that is
-			// only *shallowly equal* still notifies every reader, which is
-			// the other half of the same cycle (this effect reads
-			// `railClock.settled` above, so an unconditional reassignment
-			// below reschedules the effect against itself every tick, settled
-			// or not).
-			if (nextRail.settled !== railClock.settled || nextRail.pendingAt !== railClock.pendingAt) {
-				railClock = nextRail;
+			if (nextSection?.id !== activeSection?.id) activeSection = nextSection;
+			if (result.nextDeadline !== null) {
+				settleTimer = setTimeout(step, Math.max(0, result.nextDeadline - now));
 			}
-			if (nextDock.settled !== dockClock.settled || nextDock.pendingAt !== dockClock.pendingAt) {
-				dockClock = nextDock;
-			}
+		};
+		requestStackStep = step;
+
+		// Trailing-edge throttle: at most one step per window, and always
+		// one after the last event — an instant jump's final position is
+		// never missed, which is the exact hole the observer version had.
+		const scheduleStep = () => {
+			if (throttleTimer !== null) return;
+			throttleTimer = setTimeout(() => {
+				throttleTimer = null;
+				step();
+			}, SCROLL_STEP_THROTTLE_MS);
+		};
+
+		const resizeObserver = new ResizeObserver((entries) => {
+			const height = entries[entries.length - 1]?.contentRect.height;
+			if (typeof height !== 'number') return;
+			const rounded = Math.round(height);
+			if (rounded !== stickyStackHeight) stickyStackHeight = rounded;
 			if (
-				nextHeddle.settled !== heddleClock.settled ||
-				nextHeddle.pendingAt !== heddleClock.pendingAt
+				stackAtRest({
+					railOpen,
+					railCondensed: current.rail.settled,
+					heddleDocked: current.heddle.settled,
+					machineDocked: current.lane.settled
+				}) &&
+				rounded > 0 &&
+				rounded !== stackRestHeight
 			) {
-				heddleClock = nextHeddle;
+				stackRestHeight = rounded;
 			}
-			// The bar that knows the section: one more verdict from the same
-			// tick, the same "settled, not live" discipline as the two clocks
-			// above — `nextDock.settled` (this tick's fresh verdict), never the
-			// `machineDocked` derived, which still reads last tick's committed
-			// `dockClock` until Svelte flushes the effects this tick just
-			// scheduled. Section headings measured live (`getBoundingClientRect`,
-			// four more calls beside the two this tick already makes) rather
-			// than cached: their offsets drift with async content loads that
-			// throw no resize event, and a stale cache would light the wrong
-			// header instead of just costing a few extra reads.
-			if (nextDock.settled) {
-				// `stickyStackHeight` (below) is a component-level `$derived` off
-				// `heddleCondensed`, itself `$derived(heddleClock.settled)` — the
-				// *last committed* clock, not this tick's own `nextHeddle`
-				// assigned three lines up. Reusing it here would re-open exactly
-				// the #1169 class this whole tick was written to close (see the
-				// long comment above `heddleFlowAtDock`): a stack-height read
-				// built from the previous frame's docking state, paired with
-				// this frame's fresh heading positions, can hand a fast scroll a
-				// `stackBottom` one heddle-strip-height short — the reader lands
-				// inside the *next* section while the tick still measures the
-				// old boundary, and the bar's own label is what visibly lags.
-				// `heddleFlowAtDock` is already this tick's settled contribution
-				// (used to place the dock itself, line above); reuse it instead
-				// of re-deriving a second, staler copy of the same fact.
-				const stackBottom =
-					window.scrollY +
-					railSlimHeight +
-					heddleFlowAtDock +
-					Math.max(machineDockRestHeight, machineDockLabelHeight);
-				const headings: HTMLElement[] = [
-					warpHeadingEl,
-					clothHeadingEl,
-					corpusHeadingEl,
-					billingHeadingEl
-				].filter((el): el is HTMLElement => el !== null);
-				let next: { id: string; label: string } | null = null;
-				for (const el of headings) {
-					const top = el.getBoundingClientRect().top + window.scrollY;
-					if (top <= stackBottom) next = { id: el.id, label: el.textContent?.trim() ?? '' };
-				}
-				if (next?.id !== activeSection?.id) activeSection = next;
-			} else if (activeSection !== null) {
-				activeSection = null;
-			}
-			// Both clocks stepped in the one tick above — "applied to both in
-			// the same frame". Reschedule against whichever settles first;
-			// `tick()` re-derives everything live, so a clock that isn't due
-			// yet just re-arms itself with fresh geometry next call.
-			const deadlines = [nextRail.pendingAt, nextDock.pendingAt, nextHeddle.pendingAt].filter(
-				(deadline): deadline is number => deadline !== null
-			);
-			if (deadlines.length > 0) {
-				settleTimer = setTimeout(tick, Math.max(0, Math.min(...deadlines) - now));
-			}
-		};
-		tick();
-		window.addEventListener('scroll', tick, { passive: true });
-		window.addEventListener('resize', tick, { passive: true });
+			scheduleStep();
+		});
+		resizeObserver.observe(stack);
+
+		window.addEventListener('scroll', scheduleStep, { passive: true });
+		window.addEventListener('resize', scheduleStep, { passive: true });
+		step();
+
 		return () => {
-			window.removeEventListener('scroll', tick);
-			window.removeEventListener('resize', tick);
+			requestStackStep = () => {};
+			window.removeEventListener('scroll', scheduleStep);
+			window.removeEventListener('resize', scheduleStep);
+			resizeObserver.disconnect();
 			if (settleTimer !== null) clearTimeout(settleTimer);
+			if (throttleTimer !== null) clearTimeout(throttleTimer);
 		};
 	});
-
-	// The rail's flow footprint stays constant while its painted height changes
-	// (2026-08-02, his "the collapsing should be more natural with the
-	// scrolling"). A sticky element still occupies its own box in flow, and that
-	// box sits at the very top of the document — off-screen for any reader who
-	// has scrolled far enough to condense it. So when the rail shrinks by 100px,
-	// the browser holds `scrollY` and every section below rises 100px under the
-	// reader's eyes: the "glitch" is the page moving, not the rail.
-	//
-	// The spacer below the rail absorbs exactly the difference, so the document
-	// height never changes with the rail's form. It is only ever non-zero while
-	// the rail is condensed, and the hysteresis above guarantees condensing
-	// happens only once the *whole* full rail has scrolled past — so the
-	// reserved space genuinely never enters the viewport (at the old
-	// single-threshold trigger it inflated while still on screen: a blank band
-	// right where the rail had been). `railFullHeight` is sampled only in the
-	// resting full form: an expanded rack is a panel, not the rail's own height.
-	let railHeight = $state(0);
-	let railFullHeight = $state(0);
-	// The condensed rail's own settled height, sampled the same way
-	// `railFullHeight` is (resting, not mid-transition) so `dockTop` below
-	// never has to read the live `clientHeight` binding once the page has
-	// condensed at least once. The `|| railHeight` fallback in `dockTop` only
-	// ever fires for the very first condense on a fresh load, before this has
-	// a sample to give.
-	let railSlimHeight = $state(0);
-	// The rack's own settled height (#1258: expanded, the panel painted over
-	// the machine dock and its bottom was unreachable). `railFullHeight` and
-	// `railSlimHeight` are deliberately frozen while the rack is open — see
-	// their own guards — so before this existed, an open rack left `dockTop`
-	// (below) parked at the *resting* rail height while the rail itself,
-	// still `sticky top-0`, actually rendered up to `max-h-[100svh]` tall and
-	// stayed stuck for the whole scroll range the rack occupies (z-40, over
-	// the dock's z-30) — the dock was laid out correctly and painted under
-	// the rail the entire time. Same discipline as the other two: sampled at
-	// rest (`railHeight > 0` after the rack's content has mounted), never
-	// read live inside the scroll tick (`dockRaw` below) — that live read is
-	// #1169's actual defect, named where it's guarded against.
-	let railExpandedHeight = $state(0);
-	let machineSentinel = $state<HTMLDivElement | null>(null);
-	let railOpen = $state(false);
-	$effect(() => {
-		if (!railCondensed && !railOpen && railHeight > 0) railFullHeight = railHeight;
-	});
-	$effect(() => {
-		if (railCondensed && !railOpen && railHeight > 0) railSlimHeight = railHeight;
-	});
-	$effect(() => {
-		if (railOpen && railHeight > 0) railExpandedHeight = railHeight;
-	});
-	let railReserve = $derived(Math.max(0, railFullHeight - railHeight));
-	// The one formula both the dock's actual CSS position (template below) and
-	// the tick's own raw threshold (`dockRaw` above) call — a single function
-	// (`machineDock.railDockHeight`), never two call sites each deriving their
-	// own version of "where the dock belongs". `condensed` still gates the 8px
-	// magnet overlap (`machineDockTop`'s own docstring) at the call site, not
-	// inside the height formula: that reclaim is for the slim-stacked rest
-	// state, and an open rack is never that, however the page happens to be
-	// scrolled.
-	let railSamples = $derived<RailHeightSamples>({
-		full: railFullHeight,
-		slim: railSlimHeight,
-		expanded: railExpandedHeight,
-		live: railHeight
-	});
-	let dockTop = $derived(
-		machineDockTop(railDockHeight(railSamples, railOpen, railCondensed), railCondensed && !railOpen)
-	);
-
-	// The heddle strip's own footprint (2026-08-12): unlike the rail/dock's
-	// two-settled-heights pattern, the docked strip has exactly one rendered
-	// shape, so one live height plus one *settled* fallback is enough —
-	// `heddleDockSettledHeight` only ever grows, sampled whenever the strip
-	// is actually mounted and measured, so a reader who un-docks it (scrolls
-	// back above the heddle rail's home) doesn't hand the machine dock a
-	// stale zero for the one tick before `heddleDockHeight` itself resets.
-	// Same reserve idiom as `railReserve`/`machineDockReserve`: while the
-	// strip isn't rendering, the reserve spacer holds its last known height
-	// so `machineSentinel`'s own flow position — and everything after it —
-	// never moves when the strip mounts or unmounts off-screen.
-	let heddleDockHeight = $state(0);
-	let heddleDockSettledHeight = $state(0);
-	$effect(() => {
-		if (heddleDockHeight > 0) heddleDockSettledHeight = heddleDockHeight;
-	});
-	let heddleDockReserve = $derived(heddleCondensed ? 0 : heddleDockSettledHeight);
-	// The machine's own sticky offset, pushed down by the heddle strip's
-	// current flow contribution (box while docked, reserve while not) so it
-	// always matches `machineSentinel`'s real in-flow position — the same
-	// "offset must track flow" rule `dockTop` already keeps for the rail.
-	let machineTop = $derived(dockTop + (heddleCondensed ? heddleDockHeight : heddleDockReserve));
-
-	// The bar that knows the section (his 2026-08-11 read: "whenever we
-	// scroll a new section past the collapsed sections, we should highlight
-	// the whole section frame, and have a header of this section also
-	// attached to the collapsed bar at the end… so we know where we are,
-	// rather than having the text scrolled under the collapsed header").
-	//
-	// The label rides the machine dock — the last, bottom-most box in the
-	// sticky stack — so it reads as the stack's own footer rather than a
-	// third independent sticky element. Gated on `machineDocked` alone: by
-	// the time the dock reaches its own docked form the rail is already
-	// condensed above it (the dock's own threshold sits strictly after the
-	// rail's — `machineDockVerdict`), so one flag names "the stack is fully
-	// collapsed" without re-deriving the rail's half of it.
-	//
-	// Same footprint discipline as the rail's own `railReserve` (`collapse.ts`
-	// doc, and the hard rule this component's own history carries): the
-	// label adds a line inside the dock's sticky box, which has no spare
-	// padding to swallow it into, so its two settled heights (with the label,
-	// without) are sampled the same way `railFullHeight`/`railSlimHeight` are
-	// — at rest, never mid-transition — and `machineDockReserve` below holds
-	// the *shorter* form's flow footprint level with the taller one so
-	// nothing under the dock shifts when the label appears or clears.
-	let machineDockHeight = $state(0);
-	let machineDockRestHeight = $state(0);
-	let machineDockLabelHeight = $state(0);
-	// The section currently under the reader, or `null` before the first
-	// tracked heading has scrolled up to the stack's own bottom edge (at
-	// rest, or still inside the cold-start/capability/machine run above the
-	// warp, the bar says nothing — same rule as the rest of this block).
-	let activeSection = $state<{ id: string; label: string } | null>(null);
-	// The stack's own collapsed verdict — `machineDocked` already implies
-	// the rail and the heddle strip are collapsed too (each dock threshold
-	// sits strictly after the one above it), so this names that fact for
-	// the one place both the label and the section border now share:
-	// `sectionFrameLit` (`collapse.ts`; his 2026-08-11 report, "it never
-	// un-highlights" — the border used to read `activeSection` alone and
-	// could outlive a state-driven, non-scroll un-collapse).
-	let stackCollapsed = $derived(machineDocked);
-	let showSectionLabel = $derived(stackCollapsed && activeSection !== null);
-	$effect(() => {
-		if (!showSectionLabel && machineDockHeight > 0) machineDockRestHeight = machineDockHeight;
-	});
-	$effect(() => {
-		if (showSectionLabel && machineDockHeight > 0) machineDockLabelHeight = machineDockHeight;
-	});
-	let machineDockReserve = $derived(
-		showSectionLabel ? 0 : Math.max(0, machineDockLabelHeight - machineDockRestHeight)
-	);
-	// The scroll-margin every warp item's `<li>` reads (`WarpGraphView.svelte`
-	// via `--sticky-stack-h`) so a followed `#w-N` link lands below the stack
-	// instead of under it (his same-round ask: "the redirect is relative to
-	// the top of the page, but because we have the overlay… it hides it").
-	// The taller of the dock's two settled heights, deliberately: whichever
-	// one is painted at the moment a reader follows a link, the clearance
-	// must be enough for either. Includes the heddle strip's *live* height
-	// only while it is actually docked — reserved-but-invisible space isn't
-	// part of the painted stack a follow has to clear.
-	let stickyStackHeight = $derived(
-		railSlimHeight +
-			(heddleCondensed ? heddleDockHeight : 0) +
-			Math.max(machineDockRestHeight, machineDockLabelHeight)
-	);
-	// Headings measured, not the sections themselves (his own list: "the
-	// warp #warp-heading, the cloth #cloth-heading, the library
-	// #corpus-heading, account") — bound once each mounts, read live inside
-	// the one scroll tick below rather than cached on resize: unlike the
-	// rail's own geometry these can drift from an async content load with no
-	// resize event at all (the warp graph landing pushes the cloth down),
-	// and `getBoundingClientRect()` on four elements already sits next to
-	// the two the tick calls today — cheap, and correct against that drift
-	// where a resize-only cache would silently go stale.
-	let warpHeadingEl = $state<HTMLElement | null>(null);
-	let clothHeadingEl = $state<HTMLElement | null>(null);
-	let corpusHeadingEl = $state<HTMLElement | null>(null);
-	let billingHeadingEl = $state<HTMLElement | null>(null);
 
 	// The section frame's own quiet half of the ask — "the active section's
 	// frame also lights subtly… keep it quiet, the header line is the loud
@@ -941,6 +722,9 @@
 	let railReturnY = $state<number | null>(null);
 	function onRackChange(open: boolean) {
 		railOpen = open;
+		// Un-docking is immediate, never debounced — step the clocks in the
+		// same act, before the smooth scroll below has moved anything.
+		requestStackStep();
 		if (typeof window === 'undefined') return;
 		if (open) {
 			if (window.scrollY > 0) {
@@ -1000,7 +784,7 @@
 			// already plays one section above.
 			machineReturnY = window.scrollY;
 			const home = window.scrollY + machineSentinel.getBoundingClientRect().top;
-			window.scrollTo({ top: Math.max(0, home - railHeight), behavior: 'smooth' });
+			window.scrollTo({ top: Math.max(0, home - stickyStackHeight), behavior: 'smooth' });
 		} else if (tap.open === false && machineReturnY !== null) {
 			const back = machineReturnY;
 			machineReturnY = null;
@@ -1527,252 +1311,169 @@
 		     under the fold. -->
 		<CapabilityPanel {capabilities} {connectedRepos} {pairingCommand} {now} />
 
-		<!-- the rail, sticky (his 08-02 steer): resource truth — fuel, tank,
-		     slots, the next pick — stays on top at every scroll position and
-		     condenses to one line once the reader scrolls past it. This is
-		     where the old order-flip died: nothing jumps when a run ignites.
-
-		     Sticky lapses while the rack is open (#1258). The steer is about
-		     the glance bar; an open rack is a temporary, full detour, not the
-		     standing resource strip, and `max-h-[100svh]` alone doesn't make
-		     it a *bounded* detour — sticky, it stays glued to the viewport top
-		     at its full clamped height for nearly the entire rest of the
-		     page's scroll range (it only releases within the last ~page-worth
-		     of scroll, where its containing block actually ends), so it painted
-		     over the MACHINE dock the whole time regardless of `dockTop`
-		     (`railDockHeight` above fixes the *offset*; this fixes the block
-		     that ate the space that offset points into). `onRackChange`
-		     already lands the reader at the very top the instant it opens, so
-		     `sticky` buys nothing there it doesn't already have — dropping it
-		     only changes what happens once they keep scrolling: the panel
-		     scrolls away like any other block, its own `overflow-y-auto` still
-		     answers "is the panel's own bottom reachable", and the machine dock
-		     right after it becomes reachable the ordinary way. Static, not
-		     `sticky`, at scrollY 0 render identically — no jump at the
-		     boundary this toggles on.
-
-		     `overscroll-contain` (also #1258, measured rather than assumed:
-		     driven live, the panel's own `scrollTop` maxed out in the first
-		     wheel tick and 7600px of further wheel delta over the panel never
-		     moved `window.scrollY` by one pixel) blocked the chain from "the
-		     panel's own list is exhausted" to "keep scrolling the page" — the
-		     literal, measured shape of "unreachable" for a reader whose
-		     pointer or finger stays over the panel, which on a phone is
-		     everywhere the panel is (`-mx-6`, edge to edge). Gone with
-		     `sticky`, for the reader still scrolled past `max-h-[100svh]`'s
-		     own overflow, same trip. -->
-		<div bind:this={railSentinel} aria-hidden="true"></div>
-		<div
-			bind:clientHeight={railHeight}
-			class="ignite {railOpen
-				? 'relative'
-				: 'sticky top-0'} z-40 -mx-6 max-h-[100svh] overflow-y-auto bg-stone-950/95 px-6 pt-3 pb-2 backdrop-blur-sm"
-			style="--ignite-delay: 120ms"
-		>
+		<div bind:this={releaseSentinel} class="h-px -mb-px" aria-hidden="true"></div>
+		<!-- THE STACK (w-48, `design-the-sticky-stack.md`): rail, docked heddle
+		     copy, machine head, section label — one sticky container, so every
+		     slot's position is CSS layout and none of them can be painted at a
+		     wrong document coordinate (the tap-eater class this replaces). The
+		     container goes `relative` while the rack is open (#1258): the rack
+		     is a full detour, `onRackChange` lands the reader at the top, and
+		     a static panel scrolls away like any other block — its own
+		     `overflow-y-auto` keeps its bottom reachable. At scrollY 0 the two
+		     positions render identically, so nothing jumps at the toggle. -->
+		<div bind:this={stackEl} class="{railOpen ? 'relative' : 'sticky top-0'} z-40">
+			<!-- the rail: resource truth — fuel, tank, slots, the next pick —
+			     stays on top at every scroll position and condenses to one line
+			     once the reader scrolls past the whole full stack. Bottom
+			     padding is reclaimed while condensed (his magnet steer: "could
+			     we remove the space between them, almost at least, when they
+			     are collapsed and on the top?") so the docked strips beneath
+			     sit flush. -->
 			<!-- #1281: no per-lane "paused —" restated here — `runnersWithheld` /
 			     `quotaWithheld` are the same account-level publish-scope fact
 			     `PublishConsentNotice` already stated once, above, in the variant
-			     that carries the action (`set a scope`). A second, near-identical
-			     banner right below it repeated the fact with disagreeing wording
-			     and no new information — the "earn the screen" principle #1277
-			     already applies to this board. -->
-			<ControlStrip
-				runners={runnersData}
-				repos={connectedRepos}
-				{shells}
-				{runnersError}
-				{runnersNote}
-				onTap={tapWakeRunner}
-				onReleaseSticky={releaseStickyRunner}
-				ledgerRows={runLedgerRows}
-				{scheduledWakes}
-				{now}
-				activeSpawns={liveRuns === null ? null : activeSpawns}
-				maxSpawns={spawnMaxConcurrent}
-				condensed={railCondensed}
-				{onRackChange}
-				{livePick}
-				machineDocks={true}
-			/>
-		</div>
-		<!-- The rail's missing height, held in flow so the page below never
-		     moves when the rail changes form. Non-zero only while condensed,
-		     which is only while this part of the document is off-screen. -->
-		<div style={`height: ${railReserve}px`} aria-hidden="true"></div>
-
-		<!-- the heddles, docked (his 2026-08-12 follow-up, verbatim: "since it
-		     acts as a filter for all the surfaces, and I might wanna change the
-		     filters as I am looking at the cloth for example"). Rail → heddles
-		     → machine: the heddles lens the warp, the machine lane, and the
-		     cloth below them, but never the rail (resource truth, unfiltered),
-		     so they sit exactly at the boundary of what they filter — the
-		     placement teaches itself. A thin SEAM, not a third box: different
-		     tint, hairline top/bottom borders, tighter padding than the rail
-		     and dock either side of it, so it reads as a lens laid between
-		     instruments rather than another instrument (his one worry, met
-		     with styling rather than a different position).
-
-		     Same control as the home strip below — `HeddleStrip` renders the
-		     SAME `heddleSelection` through the SAME `toggleHeddle`/`allHeddles`,
-		     never a forked copy. Mounted only while `heddleCondensed` (the
-		     home strip is the control at rest, exactly as before); the reserve
-		     spacer right after it holds its settled height so unmounting it
-		     off-screen never moves `machineSentinel` and everything past it.
-		     No `.ignite` here on purpose — that class is "state birth only,
-		     nothing re-ignites after load" (`layout.css`); this box mounts
-		     and unmounts every time the reader crosses the docking threshold,
-		     and animating a 700ms fade-in-from-transparent on every crossing
-		     is exactly the re-ignite §3b's own canon refuses — it read as the
-		     strip going half-invisible each time it docked. -->
-		{#if heddleCondensed}
+			     that carries the action (`set a scope`). -->
 			<div
-				bind:clientHeight={heddleDockHeight}
-				class="{railOpen
-					? 'relative'
-					: 'sticky'} z-35 -mx-6 flex flex-wrap items-baseline gap-x-2 gap-y-1 border-y border-stone-800/60 bg-stone-900 px-6 py-1.5"
-				style={railOpen ? '' : `top: ${dockTop}px`}
-				aria-label="the heddles · lens"
+				class="ignite -mx-6 max-h-[100svh] overflow-y-auto bg-stone-950/95 px-6 pt-3 backdrop-blur-sm {railCondensed &&
+				!railOpen
+					? 'pb-0'
+					: 'pb-2'}"
+				style="--ignite-delay: 120ms"
 			>
-				<HeddleStrip
-					threads={topicThreadList}
-					selected={heddleSelection}
-					weaving={weavingCallSigns}
-					onToggle={toggleHeddle}
-					onAll={allHeddles}
+				<ControlStrip
+					runners={runnersData}
+					repos={connectedRepos}
+					{shells}
+					{runnersError}
+					{runnersNote}
+					onTap={tapWakeRunner}
+					onReleaseSticky={releaseStickyRunner}
+					ledgerRows={runLedgerRows}
+					{scheduledWakes}
+					{now}
+					activeSpawns={liveRuns === null ? null : activeSpawns}
+					maxSpawns={spawnMaxConcurrent}
+					condensed={railCondensed}
+					{onRackChange}
+					{livePick}
+					machineDocks={true}
 				/>
 			</div>
-		{/if}
-		<div style={`height: ${heddleDockReserve}px`} aria-hidden="true"></div>
 
-		<!-- the machine · the now (his 08-02 steer: "practically I think it
-		     should be on top… it's the user-facing surface — looking what run is
-		     doing at the moment and an overview of all of the runs"). The fall
-		     (#1013: warp → machine → cloth as a run's biography) survives in the
-		     tenses below, but the pulse outranks the biography at the top of the
-		     page: the first question a returning reader asks is "what is
-		     happening right now", and while parked the machine costs one line,
-		     so the answer is free even when it is "nothing".
+			<!-- the heddles, docked (his 2026-08-12 follow-up: "since it acts as
+			     a filter for all the surfaces, and I might wanna change the
+			     filters as I am looking at the cloth for example"). Rail →
+			     heddles → machine: the heddles lens the warp, the machine lane,
+			     and the cloth below them, but never the rail (resource truth,
+			     unfiltered). A thin SEAM, not a third box: different tint,
+			     hairline borders, tighter padding, so it reads as a lens laid
+			     between instruments.
 
-		     Parked, the machine is RunBlock's single line — the burning run's
-		     name with its face watermarked behind it (A RUN HAS NO FACE,
-		     answered where he asked it: "the face appears in the middle of the
-		     block and kinda shadows the name"). Tapping the line unfolds the
-		     lane in place; folding it returns the weaving items to the warp
-		     stack below, where they render lit instead of resting. -->
-		<!-- THE DOCK (his 2026-08-02 magnet steer, in his own correction:
-			     "not the collapsed rack + oneline main runner info, as it is
-			     now, but a collapsed fuel + collapsed oneline machine stuck to
-			     it"). Fuel on top, the machine's one line flush beneath it, and
-			     the rail's borrowed live-pick row deleted — one fact, one
-			     surface.
-
-			     Only the *head* sticks. The lane below stays in normal flow: a
-			     tall panel pinned to the top of a phone is chrome eating the
-			     page, and it would re-raise THE PICKER YOU CANNOT REACH (#1011)
-			     by making an opened panel's own scroll position fight the dock.
-			     Nothing here reads the scroll verdict to change what is open —
-			     docking is visual, and the reader's expansion survives every
-			     offset.
-
-			     `top` (`dockTop` above) tracks the rail's *settled* height
-			     because the rail changes form as it condenses; a pinned
-			     constant would either gap or hide the head behind it, and a
-			     head hidden behind the rail reads as the block having
-			     vanished, which is the complaint this answers. Settled, not
-			     live: reading the live `clientHeight` binding mid-transition
-			     is #1169's own defect (`collapse.ts`'s `railScrollVerdict`
-			     doc has the full account). -->
-		<!-- Sticky travels only inside its own parent's box, so this dock is a
-		     direct child of the page column — a sibling of the rail, exactly as
-		     the rail is. Nested one level into the machine's own `<section>` it
-		     stuck for the height of that section and then left with it, which
-		     is precisely the behaviour being fixed and looked identical in a
-		     static screenshot. Driven, not reasoned: the first build shipped
-		     the nested version and the phone shot showed the rail alone. -->
-		<!-- The seam above the block, held by the sentinel as a real box rather
-		     than written as the dock's own `mt-6`. A stuck sticky box parks its
-		     border box at `top` exactly — the margin goes with it — so a seam
-		     living on the dock would leave the marker 24px adrift from the thing
-		     it marks, and `machineDockVerdict` reads that edge to decide what a
-		     tap means. Marker and gap in one element: the two edges cannot
-		     disagree.
-
-		     Sticky lapses with the rail's, while the rack is open (#1258): a
-		     `top: ${machineTop}px` that tracks the rail's full-panel height
-		     (plus the heddle strip's own settled flow footprint, 2026-08-12 —
-		     `machineTop` above, `dockTop` alone once again once the heddles
-		     never docked this session) is exactly right for a *stuck* dock
-		     (flush under whatever is glued above it at the viewport top) and
-		     exactly wrong for a `relative` one, where `top` shifts the box off
-		     its in-flow position and would open a dead gap above it the
-		     instant the rail (and this) stop being sticky. Normal flow, no
-		     offset, right where the now-`relative` rail's own bottom margin
-		     puts it — the ordinary reachable position this whole fix is for. -->
-		<div bind:this={machineSentinel} class="h-6" aria-hidden="true"></div>
-		<div
-			bind:clientHeight={machineDockHeight}
-			class="ignite machine-dock {railOpen
-				? 'relative'
-				: 'sticky'} z-30 -mx-6 bg-stone-950/95 px-6 backdrop-blur-sm"
-			style={railOpen ? '--ignite-delay: 250ms' : `--ignite-delay: 250ms; top: ${machineTop}px`}
-			aria-label="the machine"
-		>
-			<!-- Keyed on the dock verdict, not the rail's: docking is what changes
-			     this line's form — pointer or disclosure — so it is what the
-			     redraw should mark. -->
-			<!-- One frame, two moods: a run selected anywhere on the loom outranks
-			     the lead for the head's face and name (`machineHeadRun`), so a
-			     reader scrolled down to the dock still sees which run their
-			     selection holds. `null` when the selection is a wake, or there is
-			     none — pulse, unchanged. The lane below already renders the
-			     selection inline; this only tells the docked head about it. -->
-			{#key machineDocked}
-				<div in:glitchReveal={{ duration: 200 }}>
-					<RunBlock
-						burning={burningRows}
-						armed={armedRows}
-						open={machineExpanded}
-						docked={machineDocked}
-						error={liveRunsError}
-						stale={liveRunsStale}
-						onToggle={onMachineToggle}
-						selectedId={loomSelection?.kind === 'run' ? loomSelection.id : null}
-						{crossingIndex}
-						topicFaces={topicFaceMap}
+			     Same control as the home strip below — `HeddleStrip` renders the
+			     SAME `heddleSelection` through the SAME `toggleHeddle`/
+			     `allHeddles`, never a forked copy. Mounted only while docked
+			     (the home strip is the control at rest); unmounting happens
+			     off-screen behind the dead band, and the stack's own layout
+			     absorbs the footprint — no reserve spacer, which also retires
+			     the phantom rest-gap the old reserve left behind after the
+			     first-ever dock. No `.ignite` here on purpose — that class is
+			     "state birth only" (`layout.css`), and this box mounts on every
+			     docking crossing. -->
+			{#if heddleDocked}
+				<div
+					class="-mx-6 flex flex-wrap items-baseline gap-x-2 gap-y-1 border-y border-stone-800/60 bg-stone-900 px-6 py-1.5"
+					aria-label="the heddles · lens"
+				>
+					<HeddleStrip
+						threads={topicThreadList}
+						selected={heddleSelection}
+						weaving={weavingCallSigns}
+						onToggle={toggleHeddle}
+						onAll={allHeddles}
 					/>
 				</div>
-			{/key}
-			<!-- The bar that knows the section: the stack's own footer line,
-			     ember (not the gray `text-ink-mute` every other quiet label on
-			     this page wears) because this one line answers "where am I", not
-			     "here's a fact" — on theme, lit a little, the one label on the
-			     page that means to be noticed. Renders only once the stack has
-			     actually collapsed into the dock's docked form and a tracked
-			     heading has scrolled up to meet it; at rest, or still above the
-			     warp, it says nothing. -->
-			{#if showSectionLabel && activeSection}
-				<a
-					href={`#${activeSection.id}`}
-					class="-mx-1 mt-1 flex items-baseline gap-1.5 border-t border-stone-800/80 px-1 pt-1 pb-1 font-mono text-[10px] tracking-wide text-amber-300/90 hover:text-amber-200"
-					onclick={(event) => {
-						event.preventDefault();
-						document
-							.getElementById(activeSection!.id)
-							?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-					}}
-				>
-					<span aria-hidden="true">↓</span>
-					{activeSection.label}
-				</a>
 			{/if}
+
+			<!-- the machine · the now (his 08-02 steer: "practically I think it
+			     should be on top… it's the user-facing surface"). While parked
+			     the machine costs one line, so "what is happening right now" is
+			     free even when the answer is "nothing". The head lives in the
+			     stack permanently (his 2026-08-12 sign-off on the w-48 design):
+			     its old sibling-with-computed-`top:` arrangement re-pinned it
+			     after ~48px of scroll anyway, and the offset arithmetic was the
+			     tap-eater's whole species. Only the head is chrome — the lane
+			     below stays in normal flow (#1011: a tall body is never pinned),
+			     and nothing here reads a scroll verdict to change what is open.
+			     At rest the head keeps the old seam as its own margin; docked,
+			     the margin collapses and the head magnets flush under the rail
+			     (`machineDockTop`'s old 8px reclaim, now just layout). -->
+			<div
+				class="ignite machine-dock -mx-6 bg-stone-950/95 px-6 backdrop-blur-sm {machineDocked
+					? ''
+					: 'mt-6'}"
+				style="--ignite-delay: 250ms"
+				aria-label="the machine"
+			>
+				<!-- Keyed on the dock verdict: docking is what changes this line's
+				     form — pointer or disclosure — so it is what the redraw marks.
+				     A run selected anywhere on the loom outranks the lead for the
+				     head's face and name (`machineHeadRun`). -->
+				{#key machineDocked}
+					<div in:glitchReveal={{ duration: 200 }}>
+						<RunBlock
+							burning={burningRows}
+							armed={armedRows}
+							open={machineExpanded}
+							docked={machineDocked}
+							error={liveRunsError}
+							stale={liveRunsStale}
+							onToggle={onMachineToggle}
+							selectedId={loomSelection?.kind === 'run' ? loomSelection.id : null}
+							{crossingIndex}
+							topicFaces={topicFaceMap}
+						/>
+					</div>
+				{/key}
+				<!-- The bar that knows the section: the stack's own footer line,
+				     ember because this one line answers "where am I". Renders only
+				     once the stack has actually collapsed and a tracked heading
+				     has scrolled up to meet it. -->
+				{#if showSectionLabel && activeSection}
+					<a
+						href={`#${activeSection.id}`}
+						class="-mx-1 mt-1 flex items-baseline gap-1.5 border-t border-stone-800/80 px-1 pt-1 pb-1 font-mono text-[10px] tracking-wide text-amber-300/90 hover:text-amber-200"
+						onclick={(event) => {
+							event.preventDefault();
+							document
+								.getElementById(activeSection!.id)
+								?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+						}}
+					>
+						<span aria-hidden="true">↓</span>
+						{activeSection.label}
+					</a>
+				{/if}
+			</div>
 		</div>
-		<!-- The label above adds a line inside the dock's own sticky box, which
-		     has no spare padding to absorb it into — this spacer is the dock's
-		     own `railReserve`, holding the shorter (no-label) form's flow
-		     footprint level with the taller one so nothing below shifts when
-		     the label appears or clears (this component's own hard rule: a
-		     sticky element's flow footprint must not change with its form). -->
-		<div style={`height: ${machineDockReserve}px`} aria-hidden="true"></div>
+		<!-- The one surviving spacer (`stackReserve`): a sticky container is
+		     still in flow, so without this the rail condensing would move the
+		     document under a scrolled reader. Holds `rest − live`, non-zero
+		     only while the stack's full form is provably off-screen. It
+		     positions nothing — a stale value is one scroll jump near the top,
+		     never a mis-painted strip. -->
+		<div style={`height: ${stackReservePx}px`} aria-hidden="true"></div>
+		<!-- The condense boundary: flow-stable at the at-rest stack bottom
+		     (the spacer above is exactly what holds it still). The rail
+		     condenses once this line scrolls above the viewport top, and
+		     un-condenses only when `releaseSentinel` returns — THE BOUNDARY
+		     THAT FLICKERED's dead band, as a sentinel pair. -->
+		<div bind:this={condenseSentinel} class="h-px -mb-px" aria-hidden="true"></div>
+		<!-- The lane's home: the machine head's docked form (pointer vs
+		     disclosure, `machineTapVerdict`) keys on this line crossing the
+		     stack's live bottom — the geometric fact a tap's meaning turns on,
+		     measured off a sibling in normal flow because the head itself is
+		     always stuck. -->
+		<div bind:this={machineSentinel} class="h-px -mb-px" aria-hidden="true"></div>
 		<section class="ignite" style="--ignite-delay: 260ms" aria-label="the machine's lane">
 			{#if machineExpanded}
 				<div in:glitchReveal={{ duration: 240 }}>
