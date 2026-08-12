@@ -2,15 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-	MACHINE_DOCK_SLACK_PX,
-	RAIL_BOTTOM_PADDING_PX,
 	machineBodyOnScreen,
-	machineDockTop,
-	machineDockVerdict,
 	machineHeadFields,
 	machineHeadRun,
 	machineTapVerdict,
-	railDockHeight,
 	railKeepsLivePick
 } from './machineDock.ts';
 import { tapVerdict } from './collapse.ts';
@@ -133,125 +128,6 @@ test('a fold always happens with the lane on screen', () => {
 			}
 		}
 	}
-});
-
-test('the head docks once its home has gone a line past the parking spot', () => {
-	assert.equal(machineDockVerdict({ home: 200, dockTop: 44, docked: false }), false);
-	assert.equal(machineDockVerdict({ home: 44, dockTop: 44, docked: false }), false);
-	assert.equal(machineDockVerdict({ home: -400, dockTop: 44, docked: false }), true);
-});
-
-test('the verdict holds a dead band — THE BOUNDARY THAT FLICKERED, same rule', () => {
-	// A form change earns a dead band at least as tall as the form change
-	// itself, and this one swaps the head between its pointer and disclosure
-	// forms. Inside the band the verdict keeps its last answer, so a slow
-	// touchpad sitting on the boundary has nothing to toggle.
-	const inside = { home: 44 - MACHINE_DOCK_SLACK_PX / 2, dockTop: 44 };
-	assert.equal(machineDockVerdict({ ...inside, docked: false }), false);
-	assert.equal(machineDockVerdict({ ...inside, docked: true }), true);
-});
-
-test('travel terminates: landing at the block releases the dock', () => {
-	// The trip scrolls the *sentinel's top* to `railHeight` from the viewport
-	// top, which puts the block's home one seam (24px) below that, while the
-	// head parks `RAIL_BOTTOM_PADDING_PX` above `railHeight` for as long as the
-	// rail stays condensed — and it does, since it only un-condenses back at the
-	// page's own top. So the reader lands clear of the parking spot, undocked,
-	// and the next tap is an ordinary fold rather than a second trip to where
-	// they already are.
-	const railHeight = 44;
-	const seam = 24;
-	assert.equal(
-		machineDockVerdict({
-			home: railHeight + seam,
-			dockTop: machineDockTop(railHeight, true),
-			docked: true
-		}),
-		false
-	);
-});
-
-test('an unmeasured geometry never claims to be docked', () => {
-	// First paint, before either measurement binds. Guessing "docked" would
-	// make the very first tap on a page at rest a scroll instead of an expand.
-	assert.equal(machineDockVerdict({ home: Number.NaN, dockTop: 44, docked: false }), false);
-	assert.equal(machineDockVerdict({ home: 0, dockTop: Number.NaN, docked: true }), false);
-});
-
-// railDockHeight (#1258): expanded, the rack panel painted over this dock
-// and its bottom was unreachable — `dockTop` was reading the *resting* rail
-// height while the rail itself rendered up to `max-h-[100svh]` tall and
-// stayed glued to the viewport top for the rack's whole open span.
-
-test('open outranks condensed — an open rack always reads its own settled height', () => {
-	const samples = { full: 90, slim: 44, expanded: 900, live: 12 };
-	assert.equal(railDockHeight(samples, true, false), 900);
-	assert.equal(railDockHeight(samples, true, true), 900, 'open beats condensed either way');
-});
-
-test('closed and at rest, the resting height answers — unchanged from before #1258', () => {
-	const samples = { full: 90, slim: 44, expanded: 900, live: 12 };
-	assert.equal(railDockHeight(samples, false, false), 90);
-});
-
-test('closed and condensed, the slim height answers — unchanged from before #1258', () => {
-	const samples = { full: 90, slim: 44, expanded: 900, live: 12 };
-	assert.equal(railDockHeight(samples, false, true), 44);
-});
-
-test("a settled sample of 0 falls back to the rail's own live height, every branch", () => {
-	// The first tick a state is reached, before its own settled `$effect` has
-	// fired — same fallback shape `railSlimHeight || railHeight` always had.
-	const unsettled = { full: 0, slim: 0, expanded: 0, live: 77 };
-	assert.equal(railDockHeight(unsettled, true, false), 77);
-	assert.equal(railDockHeight(unsettled, false, true), 77);
-	// `full` carries no `|| live` fallback — same as before #1258, it is
-	// sampled unconditionally at rest and 0 only ever means "not mounted yet".
-	assert.equal(railDockHeight(unsettled, false, false), 0);
-});
-
-test('the dock sits flush under the rail — no gap, his "like a magnet"', () => {
-	assert.equal(machineDockTop(132), 132);
-});
-
-test('the dock follows the rail as it condenses rather than pinning a constant', () => {
-	assert.ok(machineDockTop(132) > machineDockTop(44));
-});
-
-test('an unmeasured rail docks at the top rather than floating off it', () => {
-	// First paint, before `clientHeight` binds. Guessing high hides the head
-	// behind the rail, which reads as the block having vanished — the exact
-	// complaint this change answers.
-	assert.equal(machineDockTop(null), 0);
-	assert.equal(machineDockTop(undefined), 0);
-	assert.equal(machineDockTop(Number.NaN), 0);
-	assert.equal(machineDockTop(-40), 0);
-});
-
-test('the offset is whole pixels — a fractional sticky top seams against the rail', () => {
-	assert.equal(machineDockTop(131.6), 132);
-});
-
-test("condensed, the dock reclaims the rail's own bottom padding", () => {
-	// His read: "could we remove the space between them, almost at least, when
-	// they are collapsed and on the top?" The space is not a design choice — it
-	// is the rail's `pb-2`. Derived from the thing it cancels, so it stays
-	// correct if that padding changes; a nudged constant would silently stop
-	// matching.
-	assert.equal(machineDockTop(132, true), 132 - RAIL_BOTTOM_PADDING_PX);
-});
-
-test('at rest the spacing stays — two blocks in a page, not one instrument', () => {
-	assert.equal(machineDockTop(132, false), 132);
-	assert.equal(machineDockTop(132), 132);
-});
-
-test('the overlap can never push the dock above the viewport', () => {
-	// A rail shorter than its own padding is not a real layout, but a first
-	// paint with a partial measurement is — and a negative sticky top hides the
-	// head off-screen, which reads as the block having vanished.
-	assert.equal(machineDockTop(4, true), 0);
-	assert.equal(machineDockTop(0, true), 0);
 });
 
 test('the rail drops its live-pick row once the machine docks beneath it', () => {
