@@ -182,6 +182,13 @@ _AMBIENT_BUDGET_THRESHOLDS = (25, 50, 75, 90)
 # once each in the descending direction only.
 _AMBIENT_QUOTA_THRESHOLDS = (30.0, 20.0, 10.0, 5.0)
 
+# An armed ``at:`` letter only opens the obligation boundary once its fire
+# time is within this horizon (or already past it) — see
+# ``_armed_entry_is_due`` (#1209). The always-shown render of the full armed
+# set (``_render_armed_rows``) is unaffected; this constant scopes the
+# *obligation classification* only.
+_ARMED_IMMINENT_HORIZON_SECONDS = 15 * 60
+
 # Closeout artifact obligations the armed guard can escalate from the soft
 # `inject` mention (see `format_delta`, which already surfaces a stale card
 # / unpushed SCM as additionalContext) to a hard `block`. Each maps to a
@@ -607,6 +614,24 @@ def _suppress_unchanged_inject(
 # ── Three-class ambient split (#1116) ────────────────────────────────────────
 
 
+def _armed_entry_is_due(entry: dict[str, Any]) -> bool:
+    """True when an armed ``at:`` letter is overdue or imminent (#1209).
+
+    Mirrors ``_keepalive_remaining_seconds``'s shape (parse, compare to now,
+    fail toward the safe side) but the payload here is already epoch seconds
+    (``ScheduleEntry.at`` / the ``"at": e.at`` row in ``armed_letters()``),
+    not an ISO string. A missing or unparseable ``at`` fails toward "due" —
+    an unavailable portal already counts as an obligation elsewhere in this
+    module's own docstring, and a malformed entry must not silently mute the
+    escalation the same way.
+    """
+    at = entry.get("at")
+    if not isinstance(at, (int, float)) or isinstance(at, bool):
+        return True
+    remaining = at - time.time()
+    return remaining <= _ARMED_IMMINENT_HORIZON_SECONDS
+
+
 def _has_post_tool_obligations(
     portal: dict[str, Any],
     plan: "promises.Blueprint | None",
@@ -674,7 +699,7 @@ def _has_post_tool_obligations(
         schedule_facet.get("armed")
         if isinstance(schedule_facet.get("armed"), list) else []
     )
-    if armed:
+    if any(_armed_entry_is_due(e) for e in armed if isinstance(e, dict)):
         return True
     budget = portal.get("budget") if isinstance(portal.get("budget"), dict) else {}
     if budget.get("long_running"):
