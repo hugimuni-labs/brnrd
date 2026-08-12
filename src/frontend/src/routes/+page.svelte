@@ -101,7 +101,12 @@
 		fetchConfigRequests,
 		type ConfigChangeRequestItem
 	} from '$lib/configRequests';
-	import { railScrollVerdict, scrollClockTick, type ScrollClock } from '$lib/collapse';
+	import {
+		railScrollVerdict,
+		scrollClockTick,
+		sectionFrameLit,
+		type ScrollClock
+	} from '$lib/collapse';
 	import {
 		machineDockTop,
 		machineDockVerdict,
@@ -109,6 +114,7 @@
 		railDockHeight,
 		type RailHeightSamples
 	} from '$lib/machineDock';
+	import HeddleStrip from '$lib/HeddleStrip.svelte';
 
 	// Slice 2 (kb/design-dashboard-live-surface.md): the window-track
 	// live-quota view. Polls the same daemon-published data the Jinja
@@ -525,6 +531,23 @@
 	// neighbour's proxy. Verdict, dead band, and why travel terminates against
 	// it: `machineDock.machineDockVerdict`.
 	let machineDocked = $derived(dockClock.settled);
+	// The heddles join the stack (2026-08-12, his follow-up: the heddles
+	// filter every surface below them — warp, machine lane, cloth — so they
+	// belong docked between the rail and the machine, at the exact boundary
+	// of their own scope). The heddle rail's own home lives deep in the warp
+	// section, nowhere near the rail — structurally that is the machine
+	// dock's own question ("has this block's home scrolled up to where the
+	// stack would park it"), not the rail's own ("has my own full form
+	// scrolled off") — the rail shrinks *itself* when it condenses; the
+	// heddle strip is a whole new element appearing far from its source. So
+	// this reuses `machineDockVerdict`'s dead-band geometry (home vs. a
+	// target dock line, hysteresis via `MACHINE_DOCK_SLACK_PX`) rather than
+	// `railScrollVerdict`'s — same idiom (condense once provably scrolled
+	// past, release near the natural top, hold state between), the fitting
+	// shape for a sentinel that is not the thing whose form is changing.
+	let heddleSentinel = $state<HTMLElement | null>(null);
+	let heddleClock = $state<ScrollClock>({ settled: false, pendingAt: null });
+	let heddleCondensed = $derived(heddleClock.settled);
 	let settleTimer: ReturnType<typeof setTimeout> | null = null;
 	$effect(() => {
 		const sentinel = railSentinel;
@@ -563,22 +586,47 @@
 			// mattered. `railDockHeight` (`machineDock.ts`) reads the same
 			// settled samples `dockTop` (template) does — see its own doc for
 			// why an open rack outranks `condensed` here too (#1258).
+			const railBottomTop = machineDockTop(
+				railDockHeight(
+					{
+						full: railFullHeight,
+						slim: railSlimHeight,
+						expanded: railExpandedHeight,
+						live: railHeight
+					},
+					railOpen,
+					railClock.settled
+				),
+				railClock.settled && !railOpen
+			);
+			// Where the heddle strip docks: directly under the rail, same line
+			// `dockTop` (template) computes — recomputed locally for the same
+			// own-write-cycle reason `railBottomTop` above is. `heddleSentinel`
+			// lives at the heddle rail's true home, screens below; its own
+			// *top* is the seam (unlike `machineSentinel`, which carries a
+			// deliberate gap as its own height, the heddle sentinel is a bare
+			// zero-height marker with nothing to carry).
+			const heddleRaw = heddleSentinel
+				? machineDockVerdict({
+						home: heddleSentinel.getBoundingClientRect().top,
+						dockTop: railBottomTop,
+						docked: heddleClock.settled
+					})
+				: false;
+			const nextHeddle = scrollClockTick(heddleClock, heddleRaw, now);
+			// The machine's own target shifts down by the heddle strip's
+			// settled flow contribution — `heddleDockHeight` while it is
+			// actually docked, `heddleDockReserve` (its own settled sample)
+			// while it is not, so the machine's sticky offset always matches
+			// the heddle box's *real* flow footprint at that instant, never
+			// the frame behind it (same "read this tick's fresh verdict, not
+			// last tick's committed derived" rule the section label already
+			// follows below).
+			const heddleFlowAtDock = nextHeddle.settled ? heddleDockHeight : heddleDockSettledHeight;
 			const dockRaw = machineSentinel
 				? machineDockVerdict({
 						home: machineSentinel.getBoundingClientRect().bottom,
-						dockTop: machineDockTop(
-							railDockHeight(
-								{
-									full: railFullHeight,
-									slim: railSlimHeight,
-									expanded: railExpandedHeight,
-									live: railHeight
-								},
-								railOpen,
-								railClock.settled
-							),
-							railClock.settled && !railOpen
-						),
+						dockTop: railBottomTop + heddleFlowAtDock,
 						docked: dockClock.settled
 					})
 				: false;
@@ -597,6 +645,12 @@
 			}
 			if (nextDock.settled !== dockClock.settled || nextDock.pendingAt !== dockClock.pendingAt) {
 				dockClock = nextDock;
+			}
+			if (
+				nextHeddle.settled !== heddleClock.settled ||
+				nextHeddle.pendingAt !== heddleClock.pendingAt
+			) {
+				heddleClock = nextHeddle;
 			}
 			// The bar that knows the section: one more verdict from the same
 			// tick, the same "settled, not live" discipline as the two clocks
@@ -629,7 +683,7 @@
 			// the same frame". Reschedule against whichever settles first;
 			// `tick()` re-derives everything live, so a clock that isn't due
 			// yet just re-arms itself with fresh geometry next call.
-			const deadlines = [nextRail.pendingAt, nextDock.pendingAt].filter(
+			const deadlines = [nextRail.pendingAt, nextDock.pendingAt, nextHeddle.pendingAt].filter(
 				(deadline): deadline is number => deadline !== null
 			);
 			if (deadlines.length > 0) {
@@ -714,6 +768,29 @@
 		machineDockTop(railDockHeight(railSamples, railOpen, railCondensed), railCondensed && !railOpen)
 	);
 
+	// The heddle strip's own footprint (2026-08-12): unlike the rail/dock's
+	// two-settled-heights pattern, the docked strip has exactly one rendered
+	// shape, so one live height plus one *settled* fallback is enough —
+	// `heddleDockSettledHeight` only ever grows, sampled whenever the strip
+	// is actually mounted and measured, so a reader who un-docks it (scrolls
+	// back above the heddle rail's home) doesn't hand the machine dock a
+	// stale zero for the one tick before `heddleDockHeight` itself resets.
+	// Same reserve idiom as `railReserve`/`machineDockReserve`: while the
+	// strip isn't rendering, the reserve spacer holds its last known height
+	// so `machineSentinel`'s own flow position — and everything after it —
+	// never moves when the strip mounts or unmounts off-screen.
+	let heddleDockHeight = $state(0);
+	let heddleDockSettledHeight = $state(0);
+	$effect(() => {
+		if (heddleDockHeight > 0) heddleDockSettledHeight = heddleDockHeight;
+	});
+	let heddleDockReserve = $derived(heddleCondensed ? 0 : heddleDockSettledHeight);
+	// The machine's own sticky offset, pushed down by the heddle strip's
+	// current flow contribution (box while docked, reserve while not) so it
+	// always matches `machineSentinel`'s real in-flow position — the same
+	// "offset must track flow" rule `dockTop` already keeps for the rail.
+	let machineTop = $derived(dockTop + (heddleCondensed ? heddleDockHeight : heddleDockReserve));
+
 	// The bar that knows the section (his 2026-08-11 read: "whenever we
 	// scroll a new section past the collapsed sections, we should highlight
 	// the whole section frame, and have a header of this section also
@@ -744,7 +821,15 @@
 	// rest, or still inside the cold-start/capability/machine run above the
 	// warp, the bar says nothing — same rule as the rest of this block).
 	let activeSection = $state<{ id: string; label: string } | null>(null);
-	let showSectionLabel = $derived(machineDocked && activeSection !== null);
+	// The stack's own collapsed verdict — `machineDocked` already implies
+	// the rail and the heddle strip are collapsed too (each dock threshold
+	// sits strictly after the one above it), so this names that fact for
+	// the one place both the label and the section border now share:
+	// `sectionFrameLit` (`collapse.ts`; his 2026-08-11 report, "it never
+	// un-highlights" — the border used to read `activeSection` alone and
+	// could outlive a state-driven, non-scroll un-collapse).
+	let stackCollapsed = $derived(machineDocked);
+	let showSectionLabel = $derived(stackCollapsed && activeSection !== null);
 	$effect(() => {
 		if (!showSectionLabel && machineDockHeight > 0) machineDockRestHeight = machineDockHeight;
 	});
@@ -760,9 +845,13 @@
 	// the top of the page, but because we have the overlay… it hides it").
 	// The taller of the dock's two settled heights, deliberately: whichever
 	// one is painted at the moment a reader follows a link, the clearance
-	// must be enough for either.
+	// must be enough for either. Includes the heddle strip's *live* height
+	// only while it is actually docked — reserved-but-invisible space isn't
+	// part of the painted stack a follow has to clear.
 	let stickyStackHeight = $derived(
-		railSlimHeight + Math.max(machineDockRestHeight, machineDockLabelHeight)
+		railSlimHeight +
+			(heddleCondensed ? heddleDockHeight : 0) +
+			Math.max(machineDockRestHeight, machineDockLabelHeight)
 	);
 	// Headings measured, not the sections themselves (his own list: "the
 	// warp #warp-heading, the cloth #cloth-heading, the library
@@ -786,7 +875,7 @@
 	// until lit, so toggling it never touches the section's box model the
 	// way adding/removing padding would.
 	function sectionActive(id: string): boolean {
-		return activeSection?.id === id;
+		return sectionFrameLit(stackCollapsed, activeSection?.id ?? null, id);
 	}
 
 	// His proposal, verbatim: "when it's expanded, it should just somehow go to
@@ -1462,6 +1551,50 @@
 		     which is only while this part of the document is off-screen. -->
 		<div style={`height: ${railReserve}px`} aria-hidden="true"></div>
 
+		<!-- the heddles, docked (his 2026-08-12 follow-up, verbatim: "since it
+		     acts as a filter for all the surfaces, and I might wanna change the
+		     filters as I am looking at the cloth for example"). Rail → heddles
+		     → machine: the heddles lens the warp, the machine lane, and the
+		     cloth below them, but never the rail (resource truth, unfiltered),
+		     so they sit exactly at the boundary of what they filter — the
+		     placement teaches itself. A thin SEAM, not a third box: different
+		     tint, hairline top/bottom borders, tighter padding than the rail
+		     and dock either side of it, so it reads as a lens laid between
+		     instruments rather than another instrument (his one worry, met
+		     with styling rather than a different position).
+
+		     Same control as the home strip below — `HeddleStrip` renders the
+		     SAME `heddleSelection` through the SAME `toggleHeddle`/`allHeddles`,
+		     never a forked copy. Mounted only while `heddleCondensed` (the
+		     home strip is the control at rest, exactly as before); the reserve
+		     spacer right after it holds its settled height so unmounting it
+		     off-screen never moves `machineSentinel` and everything past it.
+		     No `.ignite` here on purpose — that class is "state birth only,
+		     nothing re-ignites after load" (`layout.css`); this box mounts
+		     and unmounts every time the reader crosses the docking threshold,
+		     and animating a 700ms fade-in-from-transparent on every crossing
+		     is exactly the re-ignite §3b's own canon refuses — it read as the
+		     strip going half-invisible each time it docked. -->
+		{#if heddleCondensed}
+			<div
+				bind:clientHeight={heddleDockHeight}
+				class="{railOpen
+					? 'relative'
+					: 'sticky'} z-35 -mx-6 flex flex-wrap items-baseline gap-x-2 gap-y-1 border-y border-stone-800/60 bg-stone-900 px-6 py-1.5"
+				style={railOpen ? '' : `top: ${dockTop}px`}
+				aria-label="the heddles · lens"
+			>
+				<HeddleStrip
+					threads={topicThreadList}
+					selected={heddleSelection}
+					weaving={weavingCallSigns}
+					onToggle={toggleHeddle}
+					onAll={allHeddles}
+				/>
+			</div>
+		{/if}
+		<div style={`height: ${heddleDockReserve}px`} aria-hidden="true"></div>
+
 		<!-- the machine · the now (his 08-02 steer: "practically I think it
 		     should be on top… it's the user-facing surface — looking what run is
 		     doing at the moment and an overview of all of the runs"). The fall
@@ -1516,21 +1649,23 @@
 		     disagree.
 
 		     Sticky lapses with the rail's, while the rack is open (#1258): a
-		     `top: ${dockTop}px` that tracks the rail's full-panel height is
-		     exactly right for a *stuck* dock (flush under a rail also glued at
-		     the viewport top) and exactly wrong for a `relative` one, where
-		     `top` shifts the box off its in-flow position and would open a
-		     `dockTop`-tall dead gap above it the instant the rail (and this)
-		     stop being sticky. Normal flow, no offset, right where the
-		     now-`relative` rail's own bottom margin puts it — the ordinary
-		     reachable position this whole fix is for. -->
+		     `top: ${machineTop}px` that tracks the rail's full-panel height
+		     (plus the heddle strip's own settled flow footprint, 2026-08-12 —
+		     `machineTop` above, `dockTop` alone once again once the heddles
+		     never docked this session) is exactly right for a *stuck* dock
+		     (flush under whatever is glued above it at the viewport top) and
+		     exactly wrong for a `relative` one, where `top` shifts the box off
+		     its in-flow position and would open a dead gap above it the
+		     instant the rail (and this) stop being sticky. Normal flow, no
+		     offset, right where the now-`relative` rail's own bottom margin
+		     puts it — the ordinary reachable position this whole fix is for. -->
 		<div bind:this={machineSentinel} class="h-6" aria-hidden="true"></div>
 		<div
 			bind:clientHeight={machineDockHeight}
 			class="ignite machine-dock {railOpen
 				? 'relative'
 				: 'sticky'} z-30 -mx-6 bg-stone-950/95 px-6 backdrop-blur-sm"
-			style={railOpen ? '--ignite-delay: 250ms' : `--ignite-delay: 250ms; top: ${dockTop}px`}
+			style={railOpen ? '--ignite-delay: 250ms' : `--ignite-delay: 250ms; top: ${machineTop}px`}
 			aria-label="the machine"
 		>
 			<!-- Keyed on the dock verdict, not the rail's: docking is what changes
@@ -1748,7 +1883,14 @@
 			     Collapsed it is the legend (every topic's rune, lit or dim, each
 			     a working toggle); expanded it is the flat topic list with
 			     ready/held counts. The lit set lenses the warp below and the
-			     cloth after it. -->
+			     cloth after it.
+
+			     The heddle rail's true home — nothing about this box changes
+			     shape with scroll (unlike the rail above, it never needs its
+			     own reserve spacer). `heddleSentinel` marks the top edge the
+			     docking verdict measures; the docked copy renders far above,
+			     between the rail and the machine dock. -->
+			<div bind:this={heddleSentinel} aria-hidden="true"></div>
 			<div class="mt-1.5">
 				<HeddleRail
 					threads={topicThreadList}
