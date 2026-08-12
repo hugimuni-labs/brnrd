@@ -202,3 +202,29 @@ export function railScrollVerdict(state: {
 	if (!state.condensed) return state.scrollY > condenseAt;
 	return state.scrollY >= releaseAt;
 }
+
+/**
+ * The section-under-the-reader frame — border and label, now one state.
+ *
+ * His 2026-08-11 report, folded into the heddle-docking round: the section
+ * BORDER (`+page.svelte`'s `sectionActive`) read `activeSection` alone,
+ * while the LABEL riding the machine dock (`showSectionLabel`) read
+ * `stackCollapsed && activeSection`. Any path that un-collapses the sticky
+ * stack without a fresh scroll tick — a state-driven toggle, not a
+ * scroll — never re-runs the effect that would clear `activeSection`, so
+ * the border (missing the same gate) stayed lit indefinitely: "it never
+ * un-highlights."
+ *
+ * One function closes the gap structurally rather than patching each call
+ * site to remember the same two-part condition: both the border and the
+ * label call this, so neither can light without the stack actually being
+ * collapsed, and a caller iterating several heading ids can never get back
+ * more than one `true` — the reader is under exactly one section, or none.
+ */
+export function sectionFrameLit(
+	stackCollapsed: boolean,
+	activeSectionId: string | null,
+	id: string
+): boolean {
+	return stackCollapsed && activeSectionId === id;
+}
