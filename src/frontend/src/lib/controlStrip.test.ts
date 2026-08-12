@@ -375,7 +375,8 @@ test("railIsSlim is exactly isCollapsed under the rail's own vocabulary", () => 
 	}
 });
 
-// THE BOUNDARY THAT FLICKERED — `railScrollVerdict`'s own hysteresis tests
-// moved to `collapse.test.ts` (2026-08-08, the unified scroll/settle clock):
-// the geometry now lives in `collapse.ts` beside the clock that debounces it,
-// and its tests moved with it. Unchanged behaviour, unchanged scenarios.
+// THE BOUNDARY THAT FLICKERED — the rail's hysteresis moved twice: first to
+// `collapse.ts` (2026-08-08, the unified scroll/settle clock), then into
+// `stickyStack.ts`'s sentinel-pair form (w-48, the stack rewrite). Its dead
+// band is now `railRawVerdict`, tested in `stickyStack.test.ts` — same rule,
+// condense and release as two different boundaries.
