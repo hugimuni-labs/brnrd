@@ -4,8 +4,11 @@ import { describe, it } from 'node:test';
 import {
 	blockedItems,
 	blockers,
+	blockersOnYou,
 	buildWarpGraph,
 	completedItems,
+	contributingCone,
+	goalItems,
 	isBlocked,
 	isRunTopicsFile,
 	isTopicFile,
@@ -376,5 +379,87 @@ describe('the graph', () => {
 			file('surface/topics/b.md', '# B\n\nids: shared\n')
 		);
 		assert.equal(collided.topicByAlias.get('shared')!.canonicalId, 'a');
+	});
+});
+
+describe('goal node (design-goal-oriented-engineering.md)', () => {
+	it('parses the three goal-only free-text rows', () => {
+		const item = parseWarpItem(
+			'surface/warp/g-1.md',
+			'# Grow attention\n\ntype: goal\nmetric: tickets bought\ntarget: 1000/mo\nhorizon: Q4 2026\n'
+		);
+		assert.equal(item.type, 'goal');
+		assert.equal(item.metric, 'tickets bought');
+		assert.equal(item.target, '1000/mo');
+		assert.equal(item.horizon, 'Q4 2026');
+		assert.equal(item.state, 'open');
+	});
+
+	it('advances: is the same list grammar as needs:, legal on any item', () => {
+		const item = parseWarpItem('surface/warp/w-1.md', '# Ship it\n\ntype: action\nadvances: g-1 g-2\n');
+		assert.deepEqual(item.advances, ['g-1', 'g-2']);
+	});
+
+	it('advances: is legal on a goal itself (a sub-goal edge)', () => {
+		const item = parseWarpItem('surface/warp/g-2.md', '# Sub-goal\n\ntype: goal\nadvances: g-1\n');
+		assert.deepEqual(item.advances, ['g-1']);
+	});
+
+	it('goalItems bands goals apart from readyItems/blockedItems', () => {
+		const g = graphOf(
+			file('surface/warp/g-1.md', '# Grow attention\n\ntype: goal\n'),
+			file('surface/warp/w-1.md', '# Decide\n\ntype: decision\n')
+		);
+		assert.deepEqual(goalItems(g).map((item) => item.id), ['g-1']);
+		assert.deepEqual(
+			readyItems(g).map((item) => item.id),
+			['w-1']
+		);
+		assert.deepEqual(blockedItems(g), []);
+	});
+
+	it('contributingCone: direct advancers plus their transitive needs closure', () => {
+		const g = graphOf(
+			file('surface/warp/g-1.md', '# Grow attention\n\ntype: goal\n'),
+			file(
+				'surface/warp/w-1.md',
+				'# Ship the digest\n\ntype: action\nadvances: g-1\nneeds: w-2\n'
+			),
+			file('surface/warp/w-2.md', '# Instrument analytics\n\ntype: preparation\n'),
+			file('surface/warp/w-3.md', '# Unrelated\n\ntype: action\n')
+		);
+		const cone = new Set(contributingCone('g-1', g).map((item) => item.id));
+		assert.deepEqual(cone, new Set(['w-1', 'w-2']));
+	});
+
+	it('contributingCone does not recurse through a sub-goal\'s own advancers', () => {
+		const g = graphOf(
+			file('surface/warp/g-1.md', '# Parent goal\n\ntype: goal\n'),
+			file('surface/warp/g-2.md', '# Sub-goal\n\ntype: goal\nadvances: g-1\n'),
+			file('surface/warp/w-1.md', '# Work on the sub-goal\n\ntype: action\nadvances: g-2\n')
+		);
+		const cone = contributingCone('g-1', g).map((item) => item.id);
+		assert.deepEqual(cone, ['g-2']);
+	});
+
+	it('blockersOnYou: open decisions/preparations inside the cone, done ones excluded', () => {
+		const g = graphOf(
+			file('surface/warp/g-1.md', '# Grow attention\n\ntype: goal\n'),
+			file('surface/warp/w-1.md', '# Ship\n\ntype: action\nadvances: g-1\nneeds: w-2 w-3\n'),
+			file('surface/warp/w-2.md', '# Pick the metric\n\ntype: decision\n'),
+			file('surface/warp/w-3.md', '# Already decided\n\ntype: decision\ndone: 2026-08-11\n')
+		);
+		assert.deepEqual(
+			blockersOnYou('g-1', g).map((item) => item.id),
+			['w-2']
+		);
+	});
+
+	it('topicCounts excludes goals — they are not item-lane rows', () => {
+		const g = graphOf(
+			TOPIC_LOOM,
+			file('surface/warp/g-1.md', '# Grow attention\n\ntype: goal\ntopics: loom\n')
+		);
+		assert.equal(topicCounts(g).get('loom'), undefined);
 	});
 });
