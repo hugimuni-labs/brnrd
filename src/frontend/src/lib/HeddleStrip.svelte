@@ -34,6 +34,18 @@
 
 	let litCount = $derived(selected === null ? threads.length : selected.size);
 	let filtered = $derived(selected !== null && selected.size < threads.length);
+
+	// THE RUNES THAT SHIFT (his 2026-08-12 report: "the heddle runes shift
+	// when pressed, because the ALL is added"). Two widths moved on the same
+	// press: the chip's own wording ("6/6 all lit" → "1/6 lit") pushed the
+	// `ml-auto` rune cluster's start, and the `all` reset button's
+	// `{#if filtered}` mount added a whole element after the runes. Fixed by
+	// reserving both boxes rather than conditioning their presence: the chip
+	// drops the "all " word entirely (the numbers already say N of M; a
+	// disagreeing wording added nothing "N/M lit" doesn't), and `all` always
+	// renders, `invisible` (not unmounted) when there is nothing to reset —
+	// `visibility: hidden` keeps its layout box in the flow, `display: none`
+	// (an `{#if}`) would not. Positions must not move on press.
 </script>
 
 <!-- The rail's own filter chip (his 2026-08-11 read: "it doesn't really
@@ -51,8 +63,7 @@
 		: 'lens · press a rune to filter'}
 >
 	<span aria-hidden="true">◒</span>
-	{litCount}/{threads.length}
-	{filtered ? 'lit' : 'all lit'}
+	{litCount}/{threads.length} lit
 </span>
 <!-- Every topic's rune, lit or dim, each a working toggle — the Photoshop
      layer eyes at their smallest. A lit rune also wears a bottom ring so
@@ -78,13 +89,13 @@
 				>{/if}
 		</button>
 	{/each}
-	{#if filtered}
-		<button
-			type="button"
-			class="cursor-pointer font-mono text-[9px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-			onclick={() => onAll?.()}
-		>
-			all
-		</button>
-	{/if}
+	<button
+		type="button"
+		class="cursor-pointer font-mono text-[9px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+		class:invisible={!filtered}
+		disabled={!filtered}
+		onclick={() => onAll?.()}
+	>
+		all
+	</button>
 </span>
