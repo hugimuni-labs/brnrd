@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { RUNE_SPACE, type TopicCounts, type TopicThread } from './warpGraph';
+	import HeddleStrip from './HeddleStrip.svelte';
 
 	// The heddles — the topic rail (2026-08-11 proposal round). Topics are
 	// the Photoshop-layers axis: a small collapsible block, a flat list —
@@ -42,8 +43,6 @@
 		return selected === null || selected.has(id);
 	}
 
-	let litCount = $derived(selected === null ? threads.length : selected.size);
-	let filtered = $derived(selected !== null && selected.size < threads.length);
 	let untagged = $derived(counts.get('') ?? null);
 </script>
 
@@ -61,64 +60,12 @@
 					>{open ? '▾' : '▸'}</span
 				>
 				<span class="font-mono text-[11px] tracking-wide text-amber-200 uppercase">heddles</span>
-				<!-- The rail's own filter chip (his 2026-08-11 read: "it doesn't
-				     really look that much like filtering" — this is the fix that
-				     doesn't depend on whether the strip is open): "◒ lens N/M"
-				     names the control as a lens even at rest, and turns the same
-				     amber the WarpGraphView/Cloth "N of M … lensed by the heddles"
-				     lines below wear the moment a press actually narrows them —
-				     one state, one color, three places, so cause and effect read
-				     as the same fact. -->
-				<span
-					class="flex items-center gap-x-1 font-mono text-[10px] tracking-wide uppercase"
-					class:text-amber-300={filtered}
-					class:text-ink-quiet={!filtered}
-					title={filtered
-						? 'filtering — press a lit rune to add, a dim one to clear'
-						: 'lens · press a rune to filter'}
-				>
-					<span aria-hidden="true">◒</span>
-					{litCount}/{threads.length}
-					{filtered ? 'lit' : 'all lit'}
-				</span>
 			</button>
-			<!-- The collapsed strip is the legend: every topic's rune, lit or
-			     dim, each a working toggle — the Photoshop layer eyes at their
-			     smallest. A lit rune also wears a bottom ring so the on/off
-			     read survives two topics landing on close hues (the separate
-			     color fix lives in `topicFaces`; this is the belt, not the
-			     buckle). -->
-			<span class="ml-auto flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[16px]">
-				{#each threads as thread (thread.canonicalId)}
-					{@const lit = isLit(thread.canonicalId)}
-					<button
-						type="button"
-						class="cursor-pointer rounded-sm leading-none"
-						style={lit
-							? `color: ${thread.face.color}; box-shadow: 0 1.5px 0 0 ${thread.face.color};`
-							: ''}
-						class:text-ink-mute={!lit}
-						class:opacity-40={!lit}
-						aria-pressed={lit}
-						title={`${thread.title} · ${lit ? 'lit — filtering it in' : 'off — press to filter to it'}`}
-						onclick={() => onToggle?.(thread.canonicalId)}
-					>
-						{thread.face.glyph}{#if weaving.has(thread.canonicalId)}<span
-								class="text-amber-300/90"
-								aria-label="weaving now">↯</span
-							>{/if}
-					</button>
-				{/each}
-				{#if filtered}
-					<button
-						type="button"
-						class="cursor-pointer font-mono text-[9px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-						onclick={() => onAll?.()}
-					>
-						all
-					</button>
-				{/if}
-			</span>
+			<!-- The collapsed strip — chip, runes, `all` reset — is the legend:
+			     every topic's rune, lit or dim, each a working toggle. Shared
+			     with the docked sticky copy (`HeddleStrip.svelte`, `+page.svelte`)
+			     so the two never fork: one control, one `heddleSelection`. -->
+			<HeddleStrip {threads} {selected} {weaving} {onToggle} {onAll} />
 		</div>
 		{#if open}
 			<ul class="mt-2 space-y-1" id={FOLD_ID}>

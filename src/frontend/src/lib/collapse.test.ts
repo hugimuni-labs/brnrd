@@ -5,6 +5,7 @@ import {
 	isCollapsed,
 	railScrollVerdict,
 	scrollClockTick,
+	sectionFrameLit,
 	tapVerdict,
 	type ScrollClock
 } from './collapse.ts';
@@ -144,4 +145,43 @@ test('the deadline commits once reached, and only then', () => {
 	assert.deepEqual(scrollClockTick(armed, true, 1_299, 300), armed);
 	assert.deepEqual(scrollClockTick(armed, true, 1_300, 300), { settled: true, pendingAt: null });
 	assert.deepEqual(scrollClockTick(armed, true, 1_301, 300), { settled: true, pendingAt: null });
+});
+
+// sectionFrameLit — the section-under-the-reader frame, border and label as
+// one state (his 2026-08-11 report: the border used to read `activeSection`
+// alone and could outlive a state-driven un-collapse the label's own
+// `stackCollapsed` gate already survived). Pinned per his ask: the lit set
+// over a page's tracked headings is empty whenever the stack isn't
+// collapsed, and never holds more than one id.
+
+const HEADINGS = ['warp-heading', 'cloth-heading', 'corpus-heading', 'billing-heading'];
+
+function litSet(stackCollapsed: boolean, activeSectionId: string | null): string[] {
+	return HEADINGS.filter((id) => sectionFrameLit(stackCollapsed, activeSectionId, id));
+}
+
+test('the stack not collapsed: no heading is ever lit, whatever activeSection claims', () => {
+	for (const activeSectionId of [null, 'warp-heading', 'cloth-heading', 'nonexistent-id']) {
+		assert.deepEqual(litSet(false, activeSectionId), []);
+	}
+});
+
+test('collapsed with nothing tracked: still nothing lit', () => {
+	assert.deepEqual(litSet(true, null), []);
+});
+
+test('collapsed with a tracked heading: exactly that one heading lights, never a second', () => {
+	for (const id of HEADINGS) {
+		const lit = litSet(true, id);
+		assert.deepEqual(lit, [id]);
+		assert.ok(lit.length <= 1);
+	}
+});
+
+test('the lit set never exceeds size 1, across every stack/activeSection combination', () => {
+	for (const stackCollapsed of [false, true]) {
+		for (const activeSectionId of [null, ...HEADINGS]) {
+			assert.ok(litSet(stackCollapsed, activeSectionId).length <= 1);
+		}
+	}
 });
