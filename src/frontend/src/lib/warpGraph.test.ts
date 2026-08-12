@@ -396,7 +396,10 @@ describe('goal node (design-goal-oriented-engineering.md)', () => {
 	});
 
 	it('advances: is the same list grammar as needs:, legal on any item', () => {
-		const item = parseWarpItem('surface/warp/w-1.md', '# Ship it\n\ntype: action\nadvances: g-1 g-2\n');
+		const item = parseWarpItem(
+			'surface/warp/w-1.md',
+			'# Ship it\n\ntype: action\nadvances: g-1 g-2\n'
+		);
 		assert.deepEqual(item.advances, ['g-1', 'g-2']);
 	});
 
@@ -410,7 +413,10 @@ describe('goal node (design-goal-oriented-engineering.md)', () => {
 			file('surface/warp/g-1.md', '# Grow attention\n\ntype: goal\n'),
 			file('surface/warp/w-1.md', '# Decide\n\ntype: decision\n')
 		);
-		assert.deepEqual(goalItems(g).map((item) => item.id), ['g-1']);
+		assert.deepEqual(
+			goalItems(g).map((item) => item.id),
+			['g-1']
+		);
 		assert.deepEqual(
 			readyItems(g).map((item) => item.id),
 			['w-1']
@@ -421,10 +427,7 @@ describe('goal node (design-goal-oriented-engineering.md)', () => {
 	it('contributingCone: direct advancers plus their transitive needs closure', () => {
 		const g = graphOf(
 			file('surface/warp/g-1.md', '# Grow attention\n\ntype: goal\n'),
-			file(
-				'surface/warp/w-1.md',
-				'# Ship the digest\n\ntype: action\nadvances: g-1\nneeds: w-2\n'
-			),
+			file('surface/warp/w-1.md', '# Ship the digest\n\ntype: action\nadvances: g-1\nneeds: w-2\n'),
 			file('surface/warp/w-2.md', '# Instrument analytics\n\ntype: preparation\n'),
 			file('surface/warp/w-3.md', '# Unrelated\n\ntype: action\n')
 		);
@@ -432,7 +435,7 @@ describe('goal node (design-goal-oriented-engineering.md)', () => {
 		assert.deepEqual(cone, new Set(['w-1', 'w-2']));
 	});
 
-	it('contributingCone does not recurse through a sub-goal\'s own advancers', () => {
+	it("contributingCone does not recurse through a sub-goal's own advancers", () => {
 		const g = graphOf(
 			file('surface/warp/g-1.md', '# Parent goal\n\ntype: goal\n'),
 			file('surface/warp/g-2.md', '# Sub-goal\n\ntype: goal\nadvances: g-1\n'),

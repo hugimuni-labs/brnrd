@@ -36,6 +36,16 @@ import type { SurfaceFile } from './surface.ts';
 // these files live in (`runNode.ts`'s `runNodeFromSurface` reads
 // `state.md`/`body.md`/`messages/` from the same prefix), so this is one
 // more reader of a directory that already exists, not a new root.
+//
+// **The `goal` node kind** (2026-08-12, design-goal-oriented-engineering.md):
+// same file grammar, one more legal `type:` value, allocated from its own
+// `g-<N>` counter (daemon-side) so goal ids never collide with `w-<N>`. Any
+// item — including a goal itself, for sub-goals — may carry `advances:`
+// (the same list grammar as `needs:`, naming the goals it advances). A
+// goal's *contributing cone* (`contributingCone`) and *blockers-on-you*
+// (`blockersOnYou`) are derived, never authored — same rule as blocked/
+// ready. Goals never fold into `readyItems`/`blockedItems`/`topicCounts`;
+// `goalItems` is their own door. Mirrors `src/brr/items.py` in lockstep.
 
 export const WARP_PREFIX = 'surface/warp/';
 export const TOPICS_PREFIX = 'surface/topics/';
@@ -350,7 +360,9 @@ export function blockedItems(graph: WarpGraph): WarpItem[] {
 /** Open goals, in id order — the warp's own band above the item lanes
  *  (design-goal-oriented-engineering.md). */
 export function goalItems(graph: WarpGraph): WarpItem[] {
-	return graph.items.filter((item) => item.state === 'open' && isGoal(item)).sort((a, b) => compareIds(a.id, b.id));
+	return graph.items
+		.filter((item) => item.state === 'open' && isGoal(item))
+		.sort((a, b) => compareIds(a.id, b.id));
 }
 
 /** A goal's contributing cone, derived — never authored (the design's own
@@ -375,9 +387,7 @@ export function contributingCone(goalId: string, graph: WarpGraph): WarpItem[] {
 			}
 		}
 	}
-	return [...coneIds]
-		.map((id) => graph.itemById.get(id)!)
-		.sort((a, b) => compareIds(a.id, b.id));
+	return [...coneIds].map((id) => graph.itemById.get(id)!).sort((a, b) => compareIds(a.id, b.id));
 }
 
 /** The callback channel for one goal — a *query, not a list*: every open
