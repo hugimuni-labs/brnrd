@@ -1207,6 +1207,56 @@ def _build_pitfalls_block(repo_root: Path, task_text: str) -> str:
     return pitfalls.format_block(matched)
 
 
+def _build_strand_pitfalls_contract(
+    repo_root: Path, task_text: str | None
+) -> "tuple[list[tuple[str, str]], ContractEntry]":
+    """The one inject-stack block a strand wake receives (#1185).
+
+    Every other block in the inject stack (identity-core, dominion digest,
+    work surface, knowledge sources, recent activity) is standing-half
+    material that belongs only to the dispatching resident (see
+    ``prompts/strand.md``'s own framing) — a strand's boot score keeps all
+    of those empty. Pitfalls are the one exception: they are the account's
+    failure-memory lookup, matched fresh against each run's own task text,
+    and a strand is single-shot — the one run shape that cannot learn from
+    its own patterns and so benefits most per byte from being handed this
+    list.
+
+    Mirrors block 5 of ``_build_injected_blocks_with_contracts``
+    (~L2401-2416) byte for byte, including its never-weighed (``bytes=None``)
+    vs weighed-and-empty (``bytes=0``) distinction (#1181) — same
+    ``block_key="pitfalls"`` so ``brnrd prompts show`` and any caller keying
+    off ``injected_keyed`` by name find it in the same slot for a strand as
+    for a resident wake.
+
+    Returns the keyed block (empty list when nothing rendered — no task
+    text, dominion disabled/absent, or no trigger matched) alongside the
+    single :class:`ContractEntry` describing it, so a caller building either
+    the prompt text or a contracts-only manifest can take just the half it
+    needs.
+    """
+    from .bootscore import ContractEntry, OWNER_RESIDENT, AUTHORITY_MEMORY
+
+    if task_text:
+        pitfalls_block = _build_pitfalls_block(repo_root, task_text)
+        pitfalls_bytes = _rendered_bytes(pitfalls_block)
+    else:
+        pitfalls_block = ""
+        pitfalls_bytes = None
+    contract = ContractEntry(
+        block_key="pitfalls",
+        label="Task-matched pitfalls",
+        owner=OWNER_RESIDENT,
+        authority=AUTHORITY_MEMORY,
+        freshness=None,
+        location="computed",
+        present=bool(pitfalls_block),
+        bytes=pitfalls_bytes,
+    )
+    keyed = [("pitfalls", pitfalls_block)] if pitfalls_block else []
+    return keyed, contract
+
+
 class _ReserveFloor(NamedTuple):
     """One reserved page's pre-charged floor render (#1061 rec 1).
 
@@ -2580,6 +2630,7 @@ def _join_prompt_parts(
     task_text: str | None = None,
     diffense: bool = False,
     inject_blocks: bool = True,
+    strand: bool = False,
     prepared_injected_blocks: list[str] | None = None,
     prepared_introspection_block: str | None = None,
     resolved_prs: dict[int, str] | None = None,
@@ -2589,11 +2640,24 @@ def _join_prompt_parts(
     ``inject_blocks=False`` skips the resident stack entirely — the base
     injected blocks (identity core, dominion digest, work surface, runner
     policy, pitfalls, knowledge sources, kb health) and the
-    introspection dev-mode block. That's the B4 strand trim: a bounded
-    strand wake gets its task and files, not the standing resident context.
-    The ``diffense`` review-pack step is independent of that trim (a strand
-    wake asking for diffense is out of scope for now; whatever the caller
-    passes is honored as-is).
+    introspection dev-mode block.
+
+    ``strand=True`` *narrows* ``inject_blocks`` rather than defeating it —
+    that's the B4 strand trim: a bounded strand wake gets its task and
+    files, not the standing resident context, with one exception (#1185).
+    Pitfalls are the account's failure-memory lookup, matched fresh against
+    each run's own task text, and a strand is single-shot — the one run
+    shape that cannot learn from its own patterns and so benefits most per
+    byte from being handed this list. The fallback build (used when no
+    scored variant pre-built the blocks — ``prepared_injected_blocks`` is
+    ``None``) picks the pitfalls-only slice for a strand and the full stack
+    otherwise; ``prepared_injected_blocks``, when supplied, is honored
+    as-is (the caller — :func:`build_daemon_prompt_with_score` — already
+    scoped it the same way). The introspection dev-mode invitation stays
+    resident-only regardless: it invites a look at "the whole shape ... just
+    read", a shape a strand was never given. The ``diffense`` review-pack
+    step is independent of the trim (a strand wake asking for diffense is
+    out of scope for now; whatever the caller passes is honored as-is).
     """
     # The kernel leads.  Everything after it is reference the wake may consult;
     # the kernel is the wake's own first move (``bootscore.format_kernel``).
@@ -2603,22 +2667,26 @@ def _join_prompt_parts(
         # ordinary path stays lazy, but a replay/inspection run must not
         # build the prompt and its manifest from two independently-read
         # views of dominion and knowledge state.
-        parts.extend(
-            prepared_injected_blocks
-            if prepared_injected_blocks is not None
-            else _build_injected_blocks(
-                repo_root, task_text=task_text, resolved_prs=resolved_prs
+        if prepared_injected_blocks is not None:
+            parts.extend(prepared_injected_blocks)
+        elif strand:
+            strand_keyed, _ = _build_strand_pitfalls_contract(repo_root, task_text)
+            parts.extend(text for _, text in strand_keyed)
+        else:
+            parts.extend(
+                _build_injected_blocks(
+                    repo_root, task_text=task_text, resolved_prs=resolved_prs
+                )
             )
-        )
     if diffense:
         pack_step = read_prompt("diffense.md", repo_root)
         if pack_step:
             parts.append(pack_step)
-    if inject_blocks:
+    if inject_blocks and not strand:
         # Last framing before the task: invite the resident to look at the
         # whole shape it has just read (opt-in dev mode). Placed here so it
         # can refer to everything above and sit fresh against the task
-        # bundle.
+        # bundle. Never for a strand — see docstring.
         introspection_block = (
             prepared_introspection_block
             if prepared_introspection_block is not None
@@ -3294,13 +3362,16 @@ def build_boot_score(
             has_introspection=has_introspection,
         )
 
-        # Inject-stack blocks (skipped for strands)
+        # Inject-stack blocks (skipped for strands, except pitfalls — #1185)
         if not is_strand:
             _, inject_contracts, block_whole = _build_injected_blocks_with_contracts(
                 effective_root, task_text=task_text
             )
         else:
-            inject_contracts = []
+            _, pitfalls_contract = _build_strand_pitfalls_contract(
+                effective_root, task_text
+            )
+            inject_contracts = [pitfalls_contract]
             block_whole = frozenset()
 
         if injected_whole is None:
@@ -3483,8 +3554,13 @@ def build_daemon_prompt_with_score(
     mount_sink: dict[str, str] | None = kwargs.pop("_mount_sink", None)
 
     if strand:
-        injected_keyed: list[tuple[str, str]] = []
-        inject_contracts: list[Any] = []
+        # #1185: a strand is single-shot — it cannot learn from its own
+        # patterns the way a resident's later wake would — so the pitfalls
+        # block is the one exception to "no inject stack for strands".
+        injected_keyed, pitfalls_contract = _build_strand_pitfalls_contract(
+            repo_root, pitfall_text
+        )
+        inject_contracts = [pitfalls_contract]
         injected_whole: frozenset[Path] = frozenset()
         introspection_block = ""
     else:
@@ -3998,12 +4074,16 @@ def build_daemon_prompt(
     ``strand=True`` (B4, ``kb/design-director-loop.md`` §orchestrator/worker)
     swaps in the slim child stack: ``strand.md`` + ``weave.md`` instead of
     the resident's ``run.md``, and the resident-only injected blocks
-    (identity core, dominion digest, work surface, runner policy, pitfalls,
-    knowledge sources, kb health, introspection) are
-    skipped entirely — a strand wake still gets ``daemon-substrate.md`` (it
-    still runs under the daemon and needs the delivery/portal mechanics) and
-    the full Run Context Bundle (its actual task). Default ``False`` is
-    byte-identical to the prior behavior.
+    (identity core, dominion digest, work surface, runner policy,
+    knowledge sources, kb health, introspection) are skipped entirely — a
+    strand wake still gets ``daemon-substrate.md`` (it still runs under the
+    daemon and needs the delivery/portal mechanics) and the full Run
+    Context Bundle (its actual task). Pitfalls are the one exception
+    (#1185): a strand is single-shot and cannot learn from its own
+    patterns the way a resident's later wake would, so the account's
+    failure-memory lookup — matched fresh against this run's own task text
+    — is handed over same as a resident wake, and nothing else. Default
+    ``False`` is byte-identical to the prior behavior.
     """
     # A mounted block leaves the prose. It is not dropped — it arrives as a seeded
     # `Read` and its result (`transcript.py`), so the wake receives the same bytes
@@ -4146,7 +4226,7 @@ def build_daemon_prompt(
     prompt = _join_prompt_parts(
         preamble, repo_root, trailer, kernel=kernel,
         task_text=pitfall_text, diffense=diffense,
-        inject_blocks=not strand,
+        strand=strand,
         prepared_injected_blocks=prepared_blocks,
         prepared_introspection_block=_prepared_introspection_block,
         resolved_prs=resolved_prs,
