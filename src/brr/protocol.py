@@ -82,10 +82,62 @@ _OUTBOX_ROUTING_KEYS = (
 )
 
 
+_CODE_FENCE_RE = re.compile(r"^(`{3,}|~{3,})[ \t]*[\w.+-]*[ \t]*$")
+
+
+def _strip_leading_code_fence(text: str) -> str:
+    """Unwrap a *leading* Markdown code fence around a routing block.
+
+    Every doc page renders outbox directives inside a code fence, so a
+    resident reproducing the rendered shape writes exactly that — and
+    both the canonical and lenient parsers read it as prose, delivering
+    the raw directive to a human instead of arming it (live misfire,
+    2026-08-12: a full ``spawn:`` spec shipped to the maintainer's chat).
+
+    Engages only when the message *opens* with a fence line and the
+    first non-empty line inside is routing — a ``---`` frontmatter
+    opener, or a recognised selector whose value is a single bare token
+    (the same guard the lenient path applies). A fenced block quoted
+    mid-message, a fenced code sample, or an unclosed fence is left
+    untouched. On a match, both fence lines are removed and the result
+    is handed to the normal two-shape parse below.
+    """
+    lines = text.splitlines(keepends=True)
+    idx = 0
+    while idx < len(lines) and not lines[idx].strip():
+        idx += 1
+    if idx >= len(lines):
+        return text
+    fence_match = _CODE_FENCE_RE.match(lines[idx].strip())
+    if not fence_match:
+        return text
+    fence = fence_match.group(1)
+    j = idx + 1
+    while j < len(lines) and not lines[j].strip():
+        j += 1
+    if j >= len(lines):
+        return text
+    inner = lines[j].strip()
+    if inner != "---":
+        if ":" not in inner:
+            return text
+        key, value = (part.strip() for part in inner.split(":", 1))
+        if key not in _OUTBOX_ROUTING_KEYS:
+            return text
+        if not value or not re.fullmatch(r"\S+", value):
+            return text
+    for k in range(j + 1, len(lines)):
+        closing = lines[k].strip()
+        if (closing and set(closing) == {fence[0]}
+                and len(closing) >= len(fence)):
+            return "".join(lines[idx + 1:k]) + "".join(lines[k + 1:])
+    return text
+
+
 def parse_outbox_message(text: str) -> tuple[dict[str, Any], str]:
     """Parse an outbox message's routing frontmatter and body, tolerantly.
 
-    Returns ``(meta, body)``. Accepts two shapes:
+    Returns ``(meta, body)``. Accepts three shapes:
 
     - **Canonical** — a ``---``-fenced frontmatter block, exactly as
       :func:`parse_frontmatter` / :func:`frontmatter_body` handle it.
@@ -93,6 +145,9 @@ def parse_outbox_message(text: str) -> tuple[dict[str, Any], str]:
       fence*, ended by a ``---`` line, a blank line, or the first
       non-``key: value`` line: e.g. ``event: <id>\\n---\\nbody``,
       ``event: <id>\\n\\nbody``, or ``spawn: true\\n# Task``.
+    - **Code-fenced** — either of the above wrapped in a leading
+      Markdown code fence, the way every doc page renders these
+      directives (see :func:`_strip_leading_code_fence`).
 
     The lenient shape exists because the resident reaches for it
     naturally — the delivery contract names ``event:`` / ``gate:`` /
@@ -121,6 +176,7 @@ def parse_outbox_message(text: str) -> tuple[dict[str, Any], str]:
     ``event:`` target or unconfigured ``gate:`` with a notice rather
     than misdelivering.
     """
+    text = _strip_leading_code_fence(text)
     if text.startswith("---\n"):
         return parse_frontmatter(text), frontmatter_body(text)
 
