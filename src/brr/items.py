@@ -1,4 +1,5 @@
-"""The warp item space, daemon half (2026-08-11 round).
+"""The warp item space, daemon half (2026-08-11 round; ``goal`` node kind
+added 2026-08-12, ``design-goal-oriented-engineering.md``).
 
 One work item = one authored markdown file ``surface/warp/<id>.md``; one
 topic = one file ``surface/topics/<slug>.md``. Topics are properties items
@@ -10,13 +11,27 @@ computation in two languages, deliberately kept in lockstep:
 
 - one ``# `` title line → the headline
 - a contiguous recognized-row block: ``type:`` ``topics:`` ``needs:``
-  ``done:`` ``retired:`` ``refs:`` ``prompt:`` ``taken:``
+  ``advances:`` ``metric:`` ``target:`` ``horizon:`` ``done:`` ``retired:``
+  ``refs:`` ``prompt:`` ``taken:``
 - everything after the first unrecognized line is the body, never parsed
 
 Lifecycle is **derived, never authored**: a ``done:`` row makes an item
 done, a ``retired:`` row retires it, absence is open. There is no
 ``state:`` row on purpose — the receipt row *is* the state, one fact in
 one place. Blocked/ready likewise derive from the ``needs:`` edges.
+
+**The goal node kind** (``type: goal``) is the same file grammar, one more
+legal ``type:`` value, allocated from its own ``g-<N>`` counter instead of
+``w-<N>``. Goals carry three more free-text rows (``metric:`` ``target:``
+``horizon:`` — no parsing beyond the row grammar, per the design) and, like
+any item, may carry ``advances:`` (the same list grammar as ``needs:``,
+naming the goal ids this item advances — legal on a goal itself, for
+sub-goals, though nothing gives that case special treatment yet). A goal's
+*contributing cone* and *blockers-on-you* are derived from ``advances:`` +
+``needs:`` (``contributing_cone`` / ``blockers_on_you`` below) — never
+authored, same rule as blocked/ready. Goals are not items in the
+ready/held sense: ``render_index`` and the CLI list them in their own
+band, never folded into the dispatchable bands.
 
 Item files are authored surface (both hands hold the pen), so every edit
 here is minimal and row-scoped — never a rewrite of prose. Surface
@@ -40,14 +55,30 @@ WARP_DIRNAME = "warp"
 TOPICS_DIRNAME = "topics"
 
 #: Any slug-shaped basename is a legal item id (a hand-authored name is an
-#: item, not a silent skip); the *allocator* only ever mints ``w-<N>``.
+#: item, not a silent skip); the *allocator* only ever mints ``w-<N>`` (or
+#: ``g-<N>`` for goals — see ``allocate_id``).
 ITEM_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 ALLOCATED_ID_RE = re.compile(r"^w-(\d+)$")
+#: Goal ids, minted by the same allocator under a separate counter — a
+#: goal never collides with an item's ``w-<N>`` regardless of mint order.
+GOAL_ID_RE = re.compile(r"^g-(\d+)$")
+#: Either allocated shape, prefix captured — the shared ordering key
+#: ``load_items``/``render_index`` use so goals sort numerically among
+#: themselves instead of falling into the lexical "named id" bucket.
+_ANY_ALLOCATED_ID_RE = re.compile(r"^(w|g)-(\d+)$")
 
 ITEM_TYPES = ("decision", "preparation", "action")
+#: The one node kind outside the three above — user-declared, its own id
+#: space, its own render band. ``type: goal`` is otherwise the same row
+#: grammar; see the module docstring.
+GOAL_TYPE = "goal"
+ALL_TYPES = ITEM_TYPES + (GOAL_TYPE,)
 
 _TITLE_RE = re.compile(r"^#[ \t]+(.*)$")
-_ROW_RE = re.compile(r"^(type|topics|needs|done|retired|refs|prompt|taken):[ \t]*(.*)$")
+_ROW_RE = re.compile(
+    r"^(type|topics|needs|advances|done|retired|refs|prompt|taken"
+    r"|metric|target|horizon):[ \t]*(.*)$"
+)
 
 #: Scan grammar for free text (event bodies): allocated ids are safe as
 #: bare tokens (``w-42`` collides with nothing English); a hand-named item
@@ -67,11 +98,21 @@ class WarpItem:
     type: str | None
     topics: list[str] = field(default_factory=list)
     needs: list[str] = field(default_factory=list)
+    #: Goal ids this item advances (same list grammar as ``needs``). Legal
+    #: on any item, including a goal itself (a sub-goal edge) — see the
+    #: module docstring for what that case does and does not do yet.
+    advances: list[str] = field(default_factory=list)
     taken: list[str] = field(default_factory=list)
     done: str | None = None
     retired: str | None = None
     refs: str = ""
     prompt: str | None = None
+    #: Goal-only free-text rows (design's own words: "no parsing beyond
+    #: the row grammar"). ``None`` when absent, on any item type — nothing
+    #: here enforces they only appear on a ``goal``.
+    metric: str | None = None
+    target: str | None = None
+    horizon: str | None = None
     body: str = ""
 
     @property
@@ -150,14 +191,18 @@ def parse_item(path: Path) -> WarpItem | None:
         id=item_id,
         path=path,
         headline=headline,
-        type=item_type if item_type in ITEM_TYPES else None,
+        type=item_type if item_type in ALL_TYPES else None,
         topics=_split_ids(rows.get("topics", "")),
         needs=_split_ids(rows.get("needs", "")),
+        advances=_split_ids(rows.get("advances", "")),
         taken=_split_ids(rows.get("taken", "")),
         done=rows.get("done"),
         retired=rows.get("retired"),
         refs=rows.get("refs", ""),
         prompt=rows.get("prompt") or None,
+        metric=rows.get("metric") or None,
+        target=rows.get("target") or None,
+        horizon=rows.get("horizon") or None,
         body=body,
     )
 
@@ -174,12 +219,18 @@ def load_items(warp_root: Path | None) -> list[WarpItem]:
         if item is not None:
             items.append(item)
 
-    def key(item: WarpItem) -> tuple:
-        match = ALLOCATED_ID_RE.fullmatch(item.id)
-        return (0, int(match.group(1))) if match else (1, item.id)
-
-    items.sort(key=key)
+    items.sort(key=_id_sort_key)
     return items
+
+
+def _id_sort_key(item: WarpItem) -> tuple:
+    """Numeric-aware id order: ``w-<N>``/``g-<N>`` sort by prefix then
+    number (so goals sort numerically among themselves too), any other
+    slug-shaped id sorts lexically after, in its own bucket."""
+    match = _ANY_ALLOCATED_ID_RE.fullmatch(item.id)
+    if match:
+        return (0, match.group(1), int(match.group(2)))
+    return (1, item.id, 0)
 
 
 def resolve_item(warp_root: Path | None, item_id: str) -> Path | None:
@@ -207,16 +258,21 @@ def scan_item_ids(text: str) -> list[str]:
     return seen
 
 
-def allocate_id(warp_root: Path) -> str:
-    """The next never-used allocated id (``w-<N>``), scanning every file —
-    including done/retired ones — so an id is never reused."""
+def allocate_id(warp_root: Path, item_type: str | None = None) -> str:
+    """The next never-used allocated id, scanning every file — including
+    done/retired ones — so an id is never reused. ``item_type == "goal"``
+    mints off the separate ``g-<N>`` counter; every other type (including
+    the default) keeps the original ``w-<N>`` counter, so the two spaces
+    never collide regardless of mint order."""
+    id_re = GOAL_ID_RE if item_type == GOAL_TYPE else ALLOCATED_ID_RE
+    prefix = "g" if item_type == GOAL_TYPE else "w"
     highest = 0
     if warp_root.is_dir():
         for path in warp_root.glob("*.md"):
-            match = ALLOCATED_ID_RE.fullmatch(path.stem)
+            match = id_re.fullmatch(path.stem)
             if match:
                 highest = max(highest, int(match.group(1)))
-    return f"w-{highest + 1}"
+    return f"{prefix}-{highest + 1}"
 
 
 def new_item_text(
@@ -225,17 +281,31 @@ def new_item_text(
     item_type: str,
     topics: list[str] | None = None,
     needs: list[str] | None = None,
+    advances: list[str] | None = None,
+    metric: str | None = None,
+    target: str | None = None,
+    horizon: str | None = None,
     prompt: str | None = None,
     refs: str | None = None,
     body: str | None = None,
 ) -> str:
-    """Serialize a fresh item file in the canonical row order."""
+    """Serialize a fresh item file in the canonical row order. ``metric``/
+    ``target``/``horizon`` are the goal-only rows (free text, no parsing);
+    ``advances`` is legal on any item type, including a goal (sub-goals)."""
     lines = [f"# {headline}", ""]
     lines.append(f"type: {item_type}")
     if topics:
         lines.append(f"topics: {' '.join(topics)}")
     if needs:
         lines.append(f"needs: {' '.join(needs)}")
+    if advances:
+        lines.append(f"advances: {' '.join(advances)}")
+    if metric:
+        lines.append(f"metric: {metric}")
+    if target:
+        lines.append(f"target: {target}")
+    if horizon:
+        lines.append(f"horizon: {horizon}")
     if refs:
         lines.append(f"refs: {refs}")
     if prompt:
@@ -380,6 +450,41 @@ def open_blockers(item: WarpItem, by_id: dict[str, WarpItem]) -> list[str]:
     return out
 
 
+def contributing_cone(goal_id: str, items: list[WarpItem]) -> list[WarpItem]:
+    """A goal's contributing cone, derived — never authored (the design's
+    own rule): every item that directly ``advances:`` this goal id, plus
+    the transitive ``needs:`` closure of those items. An item advancing a
+    *different* goal that happens to be itself a sub-goal of this one is
+    **not** pulled in — ``advances:`` on a goal is legal grammar (sub-
+    goals) but nothing gives it special recursive treatment yet, per the
+    design's own "nothing renders it specially yet." Numeric-aware id
+    order, deterministic for a given graph."""
+    by_id = {item.id: item for item in items}
+    cone_ids: set[str] = {item.id for item in items if goal_id in item.advances}
+    frontier = list(cone_ids)
+    while frontier:
+        current = by_id.get(frontier.pop())
+        if current is None:
+            continue
+        for needed in current.needs:
+            if needed in by_id and needed not in cone_ids:
+                cone_ids.add(needed)
+                frontier.append(needed)
+    return sorted((by_id[i] for i in cone_ids), key=_id_sort_key)
+
+
+def blockers_on_you(goal_id: str, items: list[WarpItem]) -> list[WarpItem]:
+    """The callback channel for one goal — a *query, not a list*: every
+    open decision/preparation item inside its contributing cone. Nobody
+    curates this; it falls out of the cone the same way blocked/ready
+    falls out of ``needs:``."""
+    return [
+        item
+        for item in contributing_cone(goal_id, items)
+        if item.state == "open" and item.type in ("decision", "preparation")
+    ]
+
+
 _TYPE_MARK = {"decision": "◆", "preparation": "◇", "action": "●", None: "▫"}
 _TYPE_ORDER = {"decision": 0, "preparation": 1, "action": 2, None: 3}
 
@@ -390,13 +495,18 @@ def render_index(
     done_tail: int = 5,
 ) -> str | None:
     """The compact open-items index a wake carries in place of the item
-    pages — one line per open item, ready before held, decisions first;
-    a short done-tail for continuity. ``None`` when there is no warp."""
+    pages — goals first (their own band, never folded into ready/held: a
+    goal is a container, not a dispatchable/decidable item), then one line
+    per open item, ready before held, decisions first, plus a short
+    done-tail for continuity. ``None`` when there is no warp."""
     items = load_items(warp_root)
     if not items:
         return None
     by_id = {item.id: item for item in items}
-    open_items = [item for item in items if item.state == "open"]
+    goals = [item for item in items if item.type == GOAL_TYPE and item.state == "open"]
+    open_items = [
+        item for item in items if item.state == "open" and item.type != GOAL_TYPE
+    ]
 
     def line(item: WarpItem) -> str:
         parts = [f"- {item.id} {_TYPE_MARK[item.type]} {item.type or 'untyped'}"]
@@ -410,10 +520,26 @@ def render_index(
             parts.append(f"[taken: {' '.join(item.taken[-2:])}]")
         return " ".join(parts)
 
+    def goal_line(goal: WarpItem) -> str:
+        parts = [f"- {goal.id} ◎ goal — {goal.headline}"]
+        spine = " ".join(
+            f"{key}: {value}"
+            for key, value in (
+                ("metric", goal.metric),
+                ("target", goal.target),
+                ("horizon", goal.horizon),
+            )
+            if value
+        )
+        if spine:
+            parts.append(f"[{spine}]")
+        callback = blockers_on_you(goal.id, items)
+        if callback:
+            parts.append("· needs-you " + " ".join(item.id for item in callback))
+        return " ".join(parts)
+
     def order(item: WarpItem) -> tuple:
-        match = ALLOCATED_ID_RE.fullmatch(item.id)
-        id_key = (0, int(match.group(1)), "") if match else (1, 0, item.id)
-        return (_TYPE_ORDER[item.type], id_key)
+        return (_TYPE_ORDER[item.type], _id_sort_key(item))
 
     ready = sorted(
         (item for item in open_items if not open_blockers(item, by_id)), key=order
@@ -422,13 +548,20 @@ def render_index(
         (item for item in open_items if open_blockers(item, by_id)), key=order
     )
     out: list[str] = []
+    if goals:
+        out.append("goals:")
+        out.extend(goal_line(goal) for goal in sorted(goals, key=_id_sort_key))
     if ready:
         out.append("ready:")
         out.extend(line(item) for item in ready)
     if held:
         out.append("held:")
         out.extend(line(item) for item in held)
-    finished = [item for item in items if item.state == "done" and item.done]
+    finished = [
+        item
+        for item in items
+        if item.state == "done" and item.done and item.type != GOAL_TYPE
+    ]
     if finished:
         finished.sort(key=lambda item: item.done or "", reverse=True)
         tail = " · ".join(

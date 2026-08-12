@@ -36,22 +36,44 @@ import type { SurfaceFile } from './surface.ts';
 // these files live in (`runNode.ts`'s `runNodeFromSurface` reads
 // `state.md`/`body.md`/`messages/` from the same prefix), so this is one
 // more reader of a directory that already exists, not a new root.
+//
+// **The `goal` node kind** (2026-08-12, design-goal-oriented-engineering.md):
+// same file grammar, one more legal `type:` value, allocated from its own
+// `g-<N>` counter (daemon-side) so goal ids never collide with `w-<N>`. Any
+// item — including a goal itself, for sub-goals — may carry `advances:`
+// (the same list grammar as `needs:`, naming the goals it advances). A
+// goal's *contributing cone* (`contributingCone`) and *blockers-on-you*
+// (`blockersOnYou`) are derived, never authored — same rule as blocked/
+// ready. Goals never fold into `readyItems`/`blockedItems`/`topicCounts`;
+// `goalItems` is their own door. Mirrors `src/brr/items.py` in lockstep.
 
 export const WARP_PREFIX = 'surface/warp/';
 export const TOPICS_PREFIX = 'surface/topics/';
 
-export type ItemType = 'decision' | 'preparation' | 'action';
+/** `goal` (design-goal-oriented-engineering.md, 2026-08-12) is the one node
+ *  kind outside the original three — user-declared, its own `g-<N>` id
+ *  space (daemon-side allocator), its own render band. It is otherwise the
+ *  same row grammar; a goal never appears in the ready/held item bands
+ *  (`readyItems`/`blockedItems` filter it out) — `goalItems` below is its
+ *  door. */
+export type ItemType = 'decision' | 'preparation' | 'action' | 'goal';
 
 /** Lifecycle, fully derived — there is deliberately no `state:` row. A
  *  `done:` row makes an item done; a `retired:` row retires it; absence is
  *  open. One fact, one place: the receipt row *is* the state. */
 export type ItemState = 'open' | 'done' | 'retired';
 
-const KNOWN_TYPES: ReadonlySet<string> = new Set<ItemType>(['decision', 'preparation', 'action']);
+const KNOWN_TYPES: ReadonlySet<string> = new Set<ItemType>([
+	'decision',
+	'preparation',
+	'action',
+	'goal'
+]);
 
-/** Item ids are allocated (`w-42`), never reused, rename-proof. The
- *  grammar is looser than the allocator on purpose: any slug-shaped
- *  basename parses, so a hand-authored id is an item, not a silent skip. */
+/** Item ids are allocated (`w-42`, or `g-42` for a goal), never reused,
+ *  rename-proof. The grammar is looser than the allocator on purpose: any
+ *  slug-shaped basename parses, so a hand-authored id is an item, not a
+ *  silent skip. */
 const ID_RE = /^[a-z0-9][a-z0-9-]*$/;
 
 export interface WarpItem {
@@ -67,6 +89,10 @@ export interface WarpItem {
 	topics: string[];
 	/** Item ids this item depends on — the inbound edges of the graph. */
 	needs: string[];
+	/** Goal ids this item advances (same list grammar as `needs`). Legal on
+	 *  any item, including a goal itself (a sub-goal edge) — see
+	 *  `contributingCone` for what that case does and does not do. */
+	advances: string[];
 	state: ItemState;
 	/** Run ids that took this item (daemon-written at ignition). */
 	taken: string[];
@@ -77,6 +103,12 @@ export interface WarpItem {
 	retiredNote: string | null;
 	refs: BackchannelRef[];
 	prompt: string | null;
+	/** Goal-only free-text rows (no parsing beyond the row grammar, per the
+	 *  design). `null` when absent, on any item type — nothing here
+	 *  enforces they only appear on a `goal`. */
+	metric: string | null;
+	target: string | null;
+	horizon: string | null;
 	bodyMarkdown: string;
 }
 
@@ -102,7 +134,8 @@ export interface WarpGraph {
 	topicByAlias: Map<string, WarpTopic>;
 }
 
-const ROW_RE = /^(type|topics|needs|done|retired|refs|prompt|taken):[ \t]*(.*)$/;
+const ROW_RE =
+	/^(type|topics|needs|advances|done|retired|refs|prompt|taken|metric|target|horizon):[ \t]*(.*)$/;
 const TITLE_RE = /^#[ \t]+(.*)$/;
 
 function basename(path: string): string {
@@ -189,6 +222,7 @@ export function parseWarpItem(path: string, markdown: string): WarpItem {
 		type: KNOWN_TYPES.has(typeRaw) ? (typeRaw as ItemType) : null,
 		topics: splitIds(rows.get('topics') ?? ''),
 		needs: splitIds(rows.get('needs') ?? ''),
+		advances: splitIds(rows.get('advances') ?? ''),
 		state,
 		taken: splitIds(rows.get('taken') ?? ''),
 		doneDate,
@@ -196,6 +230,9 @@ export function parseWarpItem(path: string, markdown: string): WarpItem {
 		retiredNote: retiredRaw,
 		refs: parseRefs(rows.get('refs') ?? ''),
 		prompt: rows.get('prompt') || null,
+		metric: rows.get('metric') || null,
+		target: rows.get('target') || null,
+		horizon: rows.get('horizon') || null,
 		bodyMarkdown: body
 	};
 }
@@ -288,25 +325,78 @@ export function dependents(item: WarpItem, graph: WarpGraph): WarpItem[] {
 	return graph.items.filter((other) => other.state === 'open' && other.needs.includes(item.id));
 }
 
-const TYPE_ORDER: Record<ItemType, number> = { decision: 0, preparation: 1, action: 2 };
+// `goal` sits in the Record for exhaustiveness only — a goal never reaches
+// `typeRank` in practice, since `readyItems`/`blockedItems` both filter
+// goals out before sorting (goals are a container, not a dispatchable/
+// decidable item; see `goalItems` below for their own door).
+const TYPE_ORDER: Record<ItemType, number> = { decision: 0, preparation: 1, action: 2, goal: 3 };
 
 function typeRank(item: WarpItem): number {
 	return item.type === null ? 3 : TYPE_ORDER[item.type];
 }
 
+function isGoal(item: WarpItem): boolean {
+	return item.type === 'goal';
+}
+
 /** The ready band: open, unblocked, decisions first — the glance-decide-do
- *  order the surface exists for. Untyped items sink to the band's tail. */
+ *  order the surface exists for. Untyped items sink to the band's tail.
+ *  Goals never fold in here — they render in their own section
+ *  (`goalItems`). */
 export function readyItems(graph: WarpGraph): WarpItem[] {
 	return graph.items
-		.filter((item) => item.state === 'open' && !isBlocked(item, graph))
+		.filter((item) => item.state === 'open' && !isGoal(item) && !isBlocked(item, graph))
 		.sort((a, b) => typeRank(a) - typeRank(b) || compareIds(a.id, b.id));
 }
 
-/** The held band: open but blocked, greyed below the ready band. */
+/** The held band: open but blocked, greyed below the ready band. Goals
+ *  never fold in here either — see `readyItems`. */
 export function blockedItems(graph: WarpGraph): WarpItem[] {
 	return graph.items
-		.filter((item) => item.state === 'open' && isBlocked(item, graph))
+		.filter((item) => item.state === 'open' && !isGoal(item) && isBlocked(item, graph))
 		.sort((a, b) => typeRank(a) - typeRank(b) || compareIds(a.id, b.id));
+}
+
+/** Open goals, in id order — the warp's own band above the item lanes
+ *  (design-goal-oriented-engineering.md). */
+export function goalItems(graph: WarpGraph): WarpItem[] {
+	return graph.items
+		.filter((item) => item.state === 'open' && isGoal(item))
+		.sort((a, b) => compareIds(a.id, b.id));
+}
+
+/** A goal's contributing cone, derived — never authored (the design's own
+ *  rule): every item that directly `advances:` this goal id, plus the
+ *  transitive `needs:` closure of those items. An item advancing a
+ *  *different* goal that happens to be itself a sub-goal of this one is
+ *  **not** pulled in — `advances:` on a goal is legal grammar (sub-goals)
+ *  but nothing gives it special recursive treatment yet, mirroring
+ *  `items.py`'s `contributing_cone` in lockstep. */
+export function contributingCone(goalId: string, graph: WarpGraph): WarpItem[] {
+	const coneIds = new Set<string>(
+		graph.items.filter((item) => item.advances.includes(goalId)).map((item) => item.id)
+	);
+	const frontier = [...coneIds];
+	while (frontier.length) {
+		const current = graph.itemById.get(frontier.pop()!);
+		if (!current) continue;
+		for (const needed of current.needs) {
+			if (graph.itemById.has(needed) && !coneIds.has(needed)) {
+				coneIds.add(needed);
+				frontier.push(needed);
+			}
+		}
+	}
+	return [...coneIds].map((id) => graph.itemById.get(id)!).sort((a, b) => compareIds(a.id, b.id));
+}
+
+/** The callback channel for one goal — a *query, not a list*: every open
+ *  decision/preparation item inside its contributing cone. Mirrors
+ *  `items.py`'s `blockers_on_you` in lockstep. */
+export function blockersOnYou(goalId: string, graph: WarpGraph): WarpItem[] {
+	return contributingCone(goalId, graph).filter(
+		(item) => item.state === 'open' && (item.type === 'decision' || item.type === 'preparation')
+	);
 }
 
 /** Done and retired items, newest receipt first — the completed tab. */
@@ -609,7 +699,9 @@ export function topicCounts(graph: WarpGraph): Map<string, TopicCounts> {
 		counts.set(key, entry);
 	};
 	for (const item of graph.items) {
-		if (item.state !== 'open') continue;
+		// The heddle rail lenses the item lanes; goals carry their own
+		// section and their own count elsewhere, never these chips.
+		if (item.state !== 'open' || item.type === 'goal') continue;
 		const blocked = isBlocked(item, graph);
 		const topics = resolveTopics(item, graph);
 		if (topics.length === 0) bump('', blocked);

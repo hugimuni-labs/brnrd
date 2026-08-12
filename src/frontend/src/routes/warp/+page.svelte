@@ -14,8 +14,10 @@
 	import { LiveRunsAuthError, fetchLiveRuns } from '$lib/liveRuns';
 	import { SurfaceAuthError, fetchSurface, type SurfaceResponse } from '$lib/surface';
 	import {
+		blockersOnYou,
 		buildWarpGraph,
 		completedItems,
+		goalItems,
 		itemInTopics,
 		resolveTopics,
 		topicCounts,
@@ -32,6 +34,7 @@
 	let selected = $state<Set<string> | null>(null);
 
 	let graph = $derived(buildWarpGraph(data?.files ?? []));
+	let goals = $derived(goalItems(graph));
 	let threads = $derived(topicThreads(graph));
 	let counts = $derived(topicCounts(graph));
 	let weavingTopics = $derived(
@@ -106,6 +109,46 @@
 		{#if data.files.length === 0 && data.withheld}
 			<div class="panel p-4"><WithheldNotice withheld={data.withheld} /></div>
 		{:else}
+			{#if goals.length > 0}
+				<!-- Goals are their own band, above the item lanes — a goal is a
+				     container (identity, history, joins), not a dispatchable/
+				     decidable item, so it never folds into the heddle-lensed
+				     ready/held lists below (design-goal-oriented-engineering.md). -->
+				<div class="mb-4">
+					<p class="mb-1 font-mono text-[9px] tracking-[0.16em] text-ink-mute uppercase">goals</p>
+					<ul class="space-y-1 font-mono text-xs" aria-label="goals">
+						{#each goals as goal (goal.id)}
+							{@const callback = blockersOnYou(goal.id, graph)}
+							<li class="border-l-2 border-amber-300/60 py-0.5 pl-2">
+								<a
+									href={resolve('/goals/[id]', { id: goal.id })}
+									class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-amber-100 hover:text-amber-50"
+								>
+									<span class="shrink-0" aria-hidden="true">◎</span>
+									<span class="min-w-[9ch] flex-1 break-words leading-tight">{goal.headline}</span>
+									<span class="shrink-0 font-mono text-[9px] text-ink-mute">{goal.id}</span>
+								</a>
+								{#if goal.metric || goal.target || goal.horizon}
+									<p class="pl-4 font-mono text-[10px] text-ink-quiet">
+										{[
+											goal.metric && `metric: ${goal.metric}`,
+											goal.target && `target: ${goal.target}`,
+											goal.horizon && `horizon: ${goal.horizon}`
+										]
+											.filter(Boolean)
+											.join(' · ')}
+									</p>
+								{/if}
+								{#if callback.length > 0}
+									<p class="pl-4 font-mono text-[10px] text-amber-300/90">
+										needs-you {callback.map((item) => item.id).join(' ')}
+									</p>
+								{/if}
+							</li>
+						{/each}
+					</ul>
+				</div>
+			{/if}
 			<div class="mb-3">
 				<HeddleRail
 					{threads}
