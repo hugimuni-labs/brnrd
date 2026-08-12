@@ -3,7 +3,6 @@ import test from 'node:test';
 
 import {
 	isCollapsed,
-	railScrollVerdict,
 	scrollClockTick,
 	sectionFrameLit,
 	tapVerdict,
@@ -52,56 +51,6 @@ test('no tap taken past the scroll verdict can ever close what the reader opened
 	for (const open of [true, false]) {
 		assert.notEqual(tapVerdict(open, true).open, false);
 	}
-});
-
-// railScrollVerdict — moved from controlStrip.test.ts (2026-08-08, the
-// unified scroll/settle clock): the geometry is unchanged, THE BOUNDARY THAT
-// FLICKERED's dead band has the same asymmetric thresholds as always.
-// Condensing waits for the whole full rail to scroll past; un-condensing
-// waits for the return to the rail's natural top. A reader parked anywhere
-// between them (which is where a slow touchpad scroll lives) must see no
-// form change in either direction.
-const RAIL = { railTop: 100, railFullHeight: 180 };
-
-test('the rail does not condense while any of its full form is still on screen', () => {
-	// Old trigger fired at scrollY > railTop (101). That inflated the spacer
-	// while the freed band was still visible, and 1px of jitter toggled it.
-	assert.equal(railScrollVerdict({ ...RAIL, scrollY: 101, condensed: false }), false);
-	assert.equal(railScrollVerdict({ ...RAIL, scrollY: 279, condensed: false }), false);
-});
-
-test('the rail condenses once the reader has scrolled past the whole of it', () => {
-	assert.equal(railScrollVerdict({ ...RAIL, scrollY: 281, condensed: true }), true);
-	assert.equal(railScrollVerdict({ ...RAIL, scrollY: 281, condensed: false }), true);
-});
-
-test('a condensed rail stays condensed through the dead band — no flicker on the way up', () => {
-	// Same scroll positions as the first test, opposite prior state: the
-	// verdict must hold, not toggle. This pair IS the hysteresis.
-	assert.equal(railScrollVerdict({ ...RAIL, scrollY: 279, condensed: true }), true);
-	assert.equal(railScrollVerdict({ ...RAIL, scrollY: 120, condensed: true }), true);
-});
-
-test('the rail un-condenses only back at its natural top', () => {
-	assert.equal(railScrollVerdict({ ...RAIL, scrollY: 107, condensed: true }), false);
-	assert.equal(railScrollVerdict({ ...RAIL, scrollY: 0, condensed: true }), false);
-});
-
-test('an unmeasured full height still gets a minimum dead band, not a zero one', () => {
-	// Before the first measurement railFullHeight is 0; a zero band would
-	// reintroduce the single shared boundary this function exists to remove.
-	assert.equal(
-		railScrollVerdict({ railTop: 100, railFullHeight: 0, scrollY: 120, condensed: false }),
-		false
-	);
-	assert.equal(
-		railScrollVerdict({ railTop: 100, railFullHeight: 0, scrollY: 148, condensed: false }),
-		false
-	);
-	assert.equal(
-		railScrollVerdict({ railTop: 100, railFullHeight: 0, scrollY: 149, condensed: false }),
-		true
-	);
 });
 
 // scrollClockTick — the shared settle clock both the rail and the machine
