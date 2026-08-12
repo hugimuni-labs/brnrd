@@ -697,6 +697,47 @@
 		};
 	});
 
+	// THE RESERVE'S OWN RACE (regression after #1331, this fix): the effect
+	// above only ever updated `stickyStackHeight` from the ResizeObserver,
+	// which fires *after* the browser has already laid out — and can
+	// already have painted — the DOM mutation a dock/condense flip causes.
+	// `stackReserve`'s own doc called this lag "the design's whole risk
+	// budget" and expected at most "one scroll jump near the top." Measured
+	// under a fast fling (repro/repro2.mjs, kb/design-the-sticky-stack.md):
+	// the gap is wider than that. For the one paint between the boolean
+	// flip and the next ResizeObserver notification, `stackReservePx` is
+	// still built from the *stale pre-transition* height, so the document
+	// is transiently shorter than it should be by exactly the stack's own
+	// shrink — and a reader already scrolled past that point gets their
+	// scroll position yanked mid-flight. It happens once per limb that
+	// docks/condenses in the burst (up to three, crossed together on a fast
+	// enough scroll — the "after a second" the report names), and a scroll
+	// position yanked out from under an in-flight momentum scroll is
+	// exactly the regime that leaves a `position: sticky` + backdrop-filter
+	// layer showing a stale compositor frame on mobile Safari (the docked
+	// strip "painted over" list content, clipped mid-paint).
+	//
+	// Re-measuring here, keyed on the same booleans that drive the docked
+	// content's mount/unmount, closes the gap structurally rather than
+	// racing it: Svelte runs `$effect`s after the DOM has been patched for
+	// the reactive change that triggered them, so by the time this body
+	// runs, `railCondensed`/`heddleDocked`/`machineDocked` and the DOM they
+	// drove are already in agreement — same tick as the mutation, not the
+	// next ResizeObserver notification. The ResizeObserver above still
+	// owns the general case (viewport width, font load, content reflow —
+	// resizes these booleans don't predict); this effect only front-runs it
+	// for the resizes the stack's own state already knows are coming.
+	$effect(() => {
+		// Explicit reads so the effect re-runs on each transition, not once.
+		void railCondensed;
+		void heddleDocked;
+		void machineDocked;
+		void railOpen;
+		if (typeof window === 'undefined' || !stackEl) return;
+		const height = Math.round(stackEl.getBoundingClientRect().height);
+		if (height > 0 && height !== stickyStackHeight) stickyStackHeight = height;
+	});
+
 	// The section frame's own quiet half of the ask — "the active section's
 	// frame also lights subtly… keep it quiet, the header line is the loud
 	// half". Same idiom `WarpGraphView`'s own item rows already use for a

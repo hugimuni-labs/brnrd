@@ -165,3 +165,38 @@ test('any active form — condensed, open, docked — disqualifies the sample', 
 	assert.equal(stackAtRest({ ...rest, heddleDocked: true }), false);
 	assert.equal(stackAtRest({ ...rest, machineDocked: true }), false);
 });
+
+// THE RESERVE'S OWN RACE (regression, "the top row still glitches under
+// scroll after #1331") — a contract test, not a DOM-timing one. `stackReserve`
+// is a pure function; it cannot itself distinguish a stale `liveHeight`
+// reading from a fresh one, so it cannot be *made* to fail on the actual bug
+// from inside this file — that lives entirely in +page.svelte's wiring (a
+// `stickyStackHeight` `$state` fed only by a `ResizeObserver`, which fires
+// *after* the browser has already laid out the DOM mutation a dock/condense
+// flip causes; a fast fling can cross rail-condense + heddle-dock +
+// machine-dock together, so the stack's own live height shrinks by ~160px
+// while the reserve spacer is still built from the pre-transition reading —
+// measured directly with a Playwright harness, `repro/repro2.mjs`, which
+// recorded a real, non-monotonic `window.scrollY` (up to a 227px backward
+// jump) synchronized exactly with each dock-state flip on the unfixed code,
+// and zero such jumps once `+page.svelte` re-measures `stickyStackHeight`
+// synchronously off the same booleans that mount the docked content — the
+// `npm test` harness here has no DOM, so it cannot run that check itself).
+//
+// What *is* expressible here is the contract the fix depends on: fed the
+// stale (pre-transition) height, `stackReserve` silently returns a reserve
+// that is short by exactly the transition's own shrink — a caller MUST
+// re-measure `liveHeight` before calling this, never reuse a reading from
+// before the dock/condense state it is meant to compensate for.
+test("a stale live-height reading under-reserves by exactly the transition's own shrink", () => {
+	const restHeight = 400; // sampled once, at true rest (nothing docked)
+	const preTransitionLive = 400; // stale: still reads as if nothing had docked
+	const postTransitionLive = 240; // fresh: rail condensed + heddle/machine docked
+
+	const staleReserve = stackReserve(restHeight, preTransitionLive);
+	assert.equal(staleReserve, 0); // wrong — the document is 160px short right now
+
+	const freshReserve = stackReserve(restHeight, postTransitionLive);
+	assert.equal(freshReserve, restHeight - postTransitionLive);
+	assert.equal(freshReserve, 160); // the exact gap a reader's scroll position fell into
+});
