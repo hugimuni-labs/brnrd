@@ -663,7 +663,25 @@
 			// throw no resize event, and a stale cache would light the wrong
 			// header instead of just costing a few extra reads.
 			if (nextDock.settled) {
-				const stackBottom = window.scrollY + stickyStackHeight;
+				// `stickyStackHeight` (below) is a component-level `$derived` off
+				// `heddleCondensed`, itself `$derived(heddleClock.settled)` — the
+				// *last committed* clock, not this tick's own `nextHeddle`
+				// assigned three lines up. Reusing it here would re-open exactly
+				// the #1169 class this whole tick was written to close (see the
+				// long comment above `heddleFlowAtDock`): a stack-height read
+				// built from the previous frame's docking state, paired with
+				// this frame's fresh heading positions, can hand a fast scroll a
+				// `stackBottom` one heddle-strip-height short — the reader lands
+				// inside the *next* section while the tick still measures the
+				// old boundary, and the bar's own label is what visibly lags.
+				// `heddleFlowAtDock` is already this tick's settled contribution
+				// (used to place the dock itself, line above); reuse it instead
+				// of re-deriving a second, staler copy of the same fact.
+				const stackBottom =
+					window.scrollY +
+					railSlimHeight +
+					heddleFlowAtDock +
+					Math.max(machineDockRestHeight, machineDockLabelHeight);
 				const headings: HTMLElement[] = [
 					warpHeadingEl,
 					clothHeadingEl,
