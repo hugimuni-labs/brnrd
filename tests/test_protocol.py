@@ -162,6 +162,71 @@ class TestParseOutboxMessage:
         assert meta == {"event": "evt-9"}
         assert body == "the answer\n"
 
+    def test_code_fenced_routing_block(self):
+        # The third natural shape (live misfire, 2026-08-12): the docs
+        # render every directive inside a Markdown code fence, so a
+        # resident reproduces exactly that — and the strict/lenient
+        # parsers both read it as prose, delivering the raw spec to a
+        # human instead of arming the directive.
+        meta, body = protocol.parse_outbox_message(
+            "```\nspawn: true\ntitle: the row that floats away\n"
+            "shell: claude\ncore: sonnet\n```\n\n# Task\ndo the thing\n")
+        assert meta == {
+            "spawn": True, "title": "the row that floats away",
+            "shell": "claude", "core": "sonnet",
+        }
+        assert body == "# Task\ndo the thing\n"
+
+    def test_code_fenced_canonical_frontmatter(self):
+        # A ``---`` frontmatter block wrapped in a code fence parses as
+        # if the fence were not there.
+        meta, body = protocol.parse_outbox_message(
+            "```\n---\nevent: evt-9\n---\n```\nthe answer\n")
+        assert meta == {"event": "evt-9"}
+        assert body == "the answer\n"
+
+    def test_code_fenced_with_info_string(self):
+        meta, body = protocol.parse_outbox_message(
+            "```yaml\nevent: evt-9\n```\nthe answer\n")
+        assert meta == {"event": "evt-9"}
+        assert body == "the answer\n"
+
+    def test_tilde_fenced_routing_block(self):
+        meta, body = protocol.parse_outbox_message(
+            "~~~\nnote: evt-9\n~~~\n")
+        assert meta == {"note": "evt-9"}
+        assert body == ""
+
+    def test_code_fence_around_non_routing_stays_prose(self):
+        # A fenced block that does not open with a routing selector is
+        # somebody's code sample, not a directive.
+        text = "```\nkey: value\nother: thing\n```\nprose\n"
+        meta, body = protocol.parse_outbox_message(text)
+        assert meta == {}
+        assert body == text
+
+    def test_code_fence_selector_leading_prose_stays_prose(self):
+        # Same bare-token guard as the lenient path: a fenced block whose
+        # selector value is prose is a quotation, not routing.
+        text = "```\nevent: the meeting is moved\n```\nsee you there\n"
+        meta, body = protocol.parse_outbox_message(text)
+        assert meta == {}
+        assert body == text
+
+    def test_unclosed_code_fence_stays_prose(self):
+        text = "```\nspawn: true\nno closing fence\n"
+        meta, body = protocol.parse_outbox_message(text)
+        assert meta == {}
+        assert body == text
+
+    def test_fenced_directive_mid_message_stays_prose(self):
+        # Quoting a directive *inside* a message must not route: only a
+        # leading fence is ever considered.
+        text = "look at this misfire:\n```\nspawn: true\n```\nfunny, no?\n"
+        meta, body = protocol.parse_outbox_message(text)
+        assert meta == {}
+        assert body == text
+
 
 class TestEvents:
     def test_create_and_list(self, tmp_path):
