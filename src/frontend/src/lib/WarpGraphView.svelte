@@ -76,15 +76,22 @@
 	// decision = the amber ask (the user's call), preparation = the frost of
 	// work deliberately held for a hand, action = the burning dispatchable.
 	// Untyped wears the unknown gray — a drift finding, visible as one.
+	// `goal` never actually reaches these maps — `readyItems`/`blockedItems`
+	// (warpGraph.ts) filter goals out before this view ever sees a row — but
+	// the `Record<ItemType, …>` type needs every key filled regardless; do
+	// not mint a new visual idiom for it here (goals get their own section,
+	// not a lane row).
 	const TYPE_COLOR: Record<ItemType, string> = {
 		decision: STATUS_WARN,
 		preparation: STATUS_COOLING,
-		action: STATUS_BURNING
+		action: STATUS_BURNING,
+		goal: STATUS_UNKNOWN
 	};
 	const TYPE_MARK: Record<ItemType, string> = {
 		decision: '◆',
 		preparation: '◇',
-		action: '●'
+		action: '●',
+		goal: '◎'
 	};
 
 	function typeColor(item: WarpItem): string {

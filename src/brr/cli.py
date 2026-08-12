@@ -663,10 +663,21 @@ def build_parser() -> argparse.ArgumentParser:
     p = item_sub.add_parser("new", help="mint a new item file, id allocated")
     p.add_argument("headline", help="the item's one-line headline")
     p.add_argument(
-        "--type", required=True, choices=("decision", "preparation", "action"),
+        "--type", required=True,
+        choices=("decision", "preparation", "action", "goal"),
         dest="item_type")
     p.add_argument("--topics", default=None, help="topic ids, space-separated")
     p.add_argument("--needs", default=None, help="blocking item ids, space-separated")
+    p.add_argument(
+        "--advances", default=None,
+        help="goal ids this item advances, space-separated (legal on any "
+        "type, including a goal itself for sub-goals)")
+    p.add_argument(
+        "--metric", default=None, help="goal-only: the number this goal moves")
+    p.add_argument(
+        "--target", default=None, help="goal-only: the finish line")
+    p.add_argument(
+        "--horizon", default=None, help="goal-only: the timeframe")
     p.add_argument("--prompt", default=None, help="the dispatch mandate, one line")
     p.add_argument("--refs", default=None, help="refs row, `·`-separated")
     p.add_argument("--body", default=None, help="free markdown body")
@@ -2646,6 +2657,10 @@ def cmd_item_list(args):
             topics = (" [" + " ".join(item.topics) + "]") if item.topics else ""
             print(f"{mark} {item.id} {item.type or 'untyped'}{topics} — {item.headline}")
         return 0
+    # `render_index` already puts goals in their own leading band, ahead of
+    # ready/held — this list verb and the wake's composed index are the
+    # same function, so they never drift (design-goal-oriented-
+    # engineering.md §"the wake's composed open-items index").
     index = items_mod.render_index(warp_root)
     print(index if index else "[brnrd item] the warp is bare")
     return 0
@@ -2660,12 +2675,16 @@ def cmd_item_new(args):
     if err:
         print(f"[brnrd item] {err}", file=sys.stderr)
         return 1
-    item_id = items_mod.allocate_id(warp_root)
+    item_id = items_mod.allocate_id(warp_root, args.item_type)
     text = items_mod.new_item_text(
         args.headline.strip(),
         item_type=args.item_type,
         topics=(args.topics or "").split() or None,
         needs=(args.needs or "").split() or None,
+        advances=(args.advances or "").split() or None,
+        metric=(args.metric or None),
+        target=(args.target or None),
+        horizon=(args.horizon or None),
         prompt=(args.prompt or None),
         refs=(args.refs or None),
         body=(args.body or None),
