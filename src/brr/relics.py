@@ -66,6 +66,15 @@ from . import gitops
 from . import knowledge
 
 CONTROL_NAME = ".relics.jsonl"
+# The explicit PR/MR control file `_read_pr_control` below reads. Public
+# (not `_PR_CONTROL_NAME`) so it is discoverable the same way every other
+# control-file constant here is: `daemon._discover_control_file_names`
+# introspects this module for public `*_NAME` constants, and #1318 found
+# that a *private*, module-local `.pr` name (the shape this constant used
+# to be duplicated as, in `daemon.py`) is invisible to that scan — the
+# exact "member nobody listed" bug the discovery helper exists to prevent,
+# just one layer up: the constant itself wasn't listed.
+PR_CONTROL_NAME = ".pr"
 
 _LIVE_KINDS = {
     "commit", "branch", "pr", "merge", "kb", "issue", "comment", "message",
@@ -252,7 +261,7 @@ def _read_pr_control(outbox_dir: Path | None) -> str | None:
     if outbox_dir is None:
         return None
     try:
-        text = (outbox_dir / ".pr").read_text(encoding="utf-8").strip()
+        text = (outbox_dir / PR_CONTROL_NAME).read_text(encoding="utf-8").strip()
     except OSError:
         return None
     if not text:

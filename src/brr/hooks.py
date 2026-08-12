@@ -51,6 +51,7 @@ from . import portals
 from . import promises
 from . import protocol
 from . import relics
+from . import run_ledger
 
 PHASE_POST_TOOL = "post-tool"
 PHASE_STOP = "stop"
@@ -3815,7 +3816,7 @@ def _scm_pr_number(outbox_dir: Path | None) -> str | None:
     if outbox_dir is None:
         return None
     try:
-        text = (outbox_dir / ".pr").read_text(encoding="utf-8").strip()
+        text = (outbox_dir / relics.PR_CONTROL_NAME).read_text(encoding="utf-8").strip()
     except OSError:
         return None
     match = re.search(r"(\d+)\s*$", text)
@@ -5244,7 +5245,69 @@ _ROOTED_WRITE_TOOLS = frozenset({"Edit", "Write"})
 # outbox directory ($BRR_OUTBOX_DIR). The bundle names these explicitly as
 # where the run's control data lives — see daemon-substrate.md →
 # control files table.
-_CONTROL_FILES = frozenset({".card", ".mood", ".keepalive", ".name"})
+#
+# #1318: this used to be four hand-listed literal strings and missed `.pr`
+# and `.topics` — both real, documented control files
+# (`relics.PR_CONTROL_NAME`, `TOPICS_NAME` above) whose own home *is* the
+# outbox dir. A strand that wrote either one hit this guard, got refused,
+# and was pointed at `$GIT_WORK_TREE` — the wrong location for a file
+# `relics._read_pr_control` / `run_ledger.read_run_topics_control` only
+# ever read from the outbox dir, so the write that should have populated
+# `.pr` (and with it a bolt's `produce: attested`) landed nowhere.
+#
+# Rather than hand-list the fix too, this derives the set the same way
+# `daemon._discover_control_file_names` does for closeout preservation:
+# scan a fixed tuple of modules for public (no leading underscore)
+# module-level string constants named `*_NAME`, so a module that grows a
+# new outbox control-file constant joins here with no edit — see that
+# function's docstring for the identical mechanism and the bug shape it
+# was built to catch ("a class defined by listing its members meets the
+# member nobody listed"). Not reused directly: `daemon.py` imports this
+# module as `hooks_mod`, so importing back would cycle. This is the local,
+# smaller mirror the daemon-side docstring anticipates for exactly that
+# case, scoped to the modules this file can already import.
+#
+# Not every discovered `*_NAME` belongs, though — three of them are
+# daemon-owned state a strand should never Edit/Write over regardless of
+# location (`portals.LIVE_INBOX_NAME` / `LIVE_PORTAL_STATE_NAME`:
+# "daemon-owned, heartbeat-refreshed; inspect, don't edit", per
+# daemon-substrate.md; `portals.LIVE_MENU_NAME`: written only through the
+# live-menu contract, one atomic generation at a time, never a raw file
+# edit), and one names a file that is not outbox-scoped at all
+# (`run_ledger.LEDGER_NAME`, the repo-shared ledger). Excluded explicitly
+# rather than swept in by the same scan that finds the legitimate ones.
+_CONTROL_FILE_MODULES = (gate_receipt, portals, promises, relics, run_ledger)
+_CONTROL_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*NAME$")
+_NOT_OUTBOX_WRITABLE = frozenset({
+    portals.LIVE_INBOX_NAME,
+    portals.LIVE_PORTAL_STATE_NAME,
+    portals.LIVE_MENU_NAME,
+    run_ledger.LEDGER_NAME,
+})
+
+
+def _discover_control_file_names(modules: tuple[Any, ...]) -> frozenset[str]:
+    """Local mirror of ``daemon._discover_control_file_names`` (#1318).
+
+    Same contract — every public module-level string constant matching
+    ``*_NAME`` on the given modules, keyed by nothing but its own value —
+    scoped to modules this file can import without cycling back into
+    ``daemon`` (which imports this module as ``hooks_mod``).
+    """
+    found: set[str] = set()
+    for module in modules:
+        for attr, value in vars(module).items():
+            if not _CONTROL_NAME_RE.match(attr):
+                continue
+            if isinstance(value, str) and value:
+                found.add(value)
+    return frozenset(found)
+
+
+_CONTROL_FILES = (
+    frozenset({CARD_NAME})  # this module's own; no other module names it
+    | _discover_control_file_names(_CONTROL_FILE_MODULES)
+) - _NOT_OUTBOX_WRITABLE
 
 
 def _rooted_write_neutral(
@@ -5303,13 +5366,13 @@ def _rooted_write_neutral(
         # hatch (scratch trees elsewhere via `env -u GIT_DIR -u
         # GIT_WORK_TREE`) is not this predicate's concern.
         return result
-    # Carve out writes to the strand's own control files (.card, .mood,
-    # .keepalive, .name) in the shared outbox directory. These are
-    # legitimately written to the outbox dir by design — the bundle names
-    # them explicitly as where the run's control data lives (see
-    # daemon-substrate.md → control files table). A path "rooted outside the
-    # worktree" is not evidence of a mistaken write when the path is a
-    # delegated control file the run was told to write to.
+    # Carve out writes to the strand's own control files (_CONTROL_FILES,
+    # above) in the shared outbox directory. These are legitimately written
+    # to the outbox dir by design — the bundle names them explicitly as
+    # where the run's control data lives (see daemon-substrate.md → control
+    # files table). A path "rooted outside the worktree" is not evidence of
+    # a mistaken write when the path is a delegated control file the run
+    # was told to write to.
     if ctx.outbox_dir is not None:
         try:
             outbox_dir = ctx.outbox_dir.resolve()
@@ -5323,12 +5386,35 @@ def _rooted_write_neutral(
             # this is a question for the tool call itself, not this predicate.
             pass
     result["block"] = True
-    result["block_reason"] = (
-        f"refused (#1184): {raw_path} is rooted in the host checkout "
-        f"({host_root}) but outside this strand's own worktree "
-        f"({work_tree}). Rewrite the path relative to $GIT_WORK_TREE — "
-        f"that is where this write belongs."
-    )
+    if resolved.name in _CONTROL_FILES:
+        # #1318: a recognised control-file name refused only because it
+        # landed somewhere other than the outbox dir (a bare host-root
+        # write, or `ctx.outbox_dir` failed to resolve above) — the
+        # generic "$GIT_WORK_TREE" remedy is actively wrong for these:
+        # every reader of `.pr` / `.topics` / `.mood` / `.name` / `.card`
+        # (`relics._read_pr_control`, `run_ledger.read_run_topics_control`,
+        # ...) reads it from the outbox dir, never the worktree, so
+        # rewriting there would just move the file somewhere nothing reads
+        # it. #792's rule: a wrong remedy is not a smaller bug than a wrong
+        # diagnosis, so the remedy names the actual destination instead.
+        outbox_hint = (
+            str(ctx.outbox_dir) if ctx.outbox_dir is not None
+            else "this run's $BRR_OUTBOX_DIR"
+        )
+        result["block_reason"] = (
+            f"refused (#1184): {raw_path} is rooted in the host checkout "
+            f"({host_root}) but outside this strand's own worktree "
+            f"({work_tree}). {resolved.name} is a control file — its "
+            f"documented home is the outbox dir ({outbox_hint}), not "
+            f"$GIT_WORK_TREE; rewrite the path there instead."
+        )
+    else:
+        result["block_reason"] = (
+            f"refused (#1184): {raw_path} is rooted in the host checkout "
+            f"({host_root}) but outside this strand's own worktree "
+            f"({work_tree}). Rewrite the path relative to $GIT_WORK_TREE — "
+            f"that is where this write belongs."
+        )
     return result
 
 
