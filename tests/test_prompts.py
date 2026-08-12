@@ -920,10 +920,17 @@ class TestPromptBuilding:
 
         assert "- update available: 0.1.0 → 0.2.0" in prompt
 
-    def test_daemon_prompt_worker_excludes_resident_stack(self, tmp_path):
-        # A pitfall would normally surface for a matching task — confirm
-        # the worker path skips the injected blocks entirely, not just the
-        # ones that happen to be empty in this fixture.
+    def test_daemon_prompt_worker_excludes_resident_stack_but_admits_pitfalls(
+        self, tmp_path
+    ):
+        # #1185: a strand is single-shot — it cannot learn from its own
+        # patterns the way a resident's later wake would — so the pitfalls
+        # block (the account's failure-memory lookup, matched fresh against
+        # this run's own task text) is the one exception to "no inject
+        # stack for strands". Confirm the worker path admits *only* that
+        # one block: everything else in the inject stack (identity core,
+        # dominion, work surface, knowledge sources, recent activity) stays
+        # gone, even though the fixture below seeds a pitfall that matches.
         _seed_pitfalls(
             tmp_path,
             "## Blind retry\ntrigger: docker\n"
@@ -936,12 +943,33 @@ class TestPromptBuilding:
             strand=True,
         )
         assert "Resident Identity Core" not in prompt
-        assert "Pitfalls that match this task" not in prompt
-        assert "Rebuild the image before you trust the cache." not in prompt
+        assert "Pitfalls that match this task" in prompt
+        assert "Blind retry" in prompt
+        assert "Rebuild the image before you trust the cache." in prompt
         assert "bounded, single-purpose thought" in prompt
         assert _says(prompt, "the turn frame in `weave.md` §The turn")
         # Mechanics still ride — a worker wake is still under the daemon.
         assert "single-flight" in prompt
+
+    def test_daemon_prompt_worker_omits_pitfalls_when_nothing_matches(
+        self, tmp_path
+    ):
+        # Same worker path, no matching trigger this time — the pitfalls
+        # slot renders empty/absent, same as it would for a resident wake,
+        # and the rest of the inject stack stays gone.
+        _seed_pitfalls(
+            tmp_path,
+            "## Blind retry\ntrigger: docker\nRebuild first.\n",
+        )
+        prompt = build_daemon_prompt(
+            "update the readme wording", "evt-1", "/tmp/resp.md",
+            tmp_path,
+            run_id="task-9",
+            strand=True,
+        )
+        assert "Pitfalls that match this task" not in prompt
+        assert "Resident Identity Core" not in prompt
+        assert "Blind retry" not in prompt
 
     def test_daemon_prompt_default_keeps_resident_stack(self, tmp_path):
         prompt = build_daemon_prompt(
