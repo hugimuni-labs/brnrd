@@ -10719,6 +10719,27 @@ def test_drain_outbox_cut_minimal_bolt_is_accepted(tmp_path):
     assert not (outbox / "cut.md").exists()
 
 
+def test_drain_outbox_cut_bounces_double_wrapped_staging_casualty(tmp_path):
+    """Old porcelain output can remain on disk after an upgrade. The drain
+    recognizes the stranded declaration before accepting a minimal bolt."""
+    promoted, task, outbox, _inbox, responses, event_id = _drain_cut(
+        tmp_path,
+        "---\ncut: true\n---\n"
+        "cut: true\n---\nasks:\n"
+        "  - event: evt-old\n    disposition: answered\n",
+        filename="do-old-cut-0.md",
+    )
+
+    assert promoted == 0
+    assert "bolt" not in task.meta
+    assert task.meta["cut_bounces"] == 1
+    [notice] = daemon._read_outbox_notices(outbox)
+    assert notice["source_file"] == "do-old-cut-0.md"
+    assert "declaration-shaped body" in notice["text"]
+    assert "staging casualty" in notice["text"]
+    assert protocol.list_partials(responses, event_id) == []
+
+
 def test_drain_outbox_cut_undispositioned_pending_event_bounces(tmp_path):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
