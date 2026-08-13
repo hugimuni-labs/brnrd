@@ -162,8 +162,8 @@ and the reply are yours.
   a kb page with the kb URL the portal provides; when none is available, use
   its basename only (`subject-envs.md`). Other files by basename too,
   **never host paths** — `.brr/worktrees/<run-id>/kb/foo.md` renders
-  nowhere. brnrd appends the forge-hosted branch URL to the card when one
-  exists; **don't fabricate one.**
+  nowhere. brnrd appends the forge-hosted branch URL to the card when a
+  real one exists — that's the only source for it.
 - **next move** — `weave.md` §The turn owns the reply's whole shape, menu
   and bare state included; one owner, and this pin only checks it.
   Mechanical, before sending: **read the literal last line** — it is the
@@ -182,15 +182,11 @@ and the reply are yours.
   - once the runner exits, nothing holds the slot for you — a follow-up
     becomes the **next run**, same conversation, only the process resets
   - **the wait is nearly free — prefer it to a premature close.** A blocked
-    `brnrd await` spends *zero* model tokens until the daemon resolves it; the
-    only thing held is the single-flight slot. Closing a run a follow-up will
-    re-open trades that free hold for a cold restart — a whole wake
-    reassembled from files, the thread re-read. So when the conversation could
-    plausibly continue, **waiting-on-Stop is the cheaper default, not a
-    special case**: hold the slot and let a message, a strand, or the timeout
-    decide, rather than paying to reconstruct the scene next run. The failure
-    this guards is the run that hit a snag, closed clean, and made the user
-    pay a new wake to say one more sentence.
+    `brnrd await` spends *zero* model tokens; the only thing held is the
+    single-flight slot. Closing early trades that free hold for a cold
+    restart — a whole wake reassembled from files — to buy nothing:
+    **waiting-on-Stop is the cheaper default, not a special case.** Hold the
+    slot; let a message, a strand, or the timeout decide.
 - **receipts** — wrote files ⇒ **commit on the current branch; uncommitted
   work disappears.**
   - `worktree` environment ⇒ the daemon publishes the branch you end on ·
