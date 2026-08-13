@@ -1010,6 +1010,37 @@ def _discover_markdown(root: Path) -> list[Path]:
     return files
 
 
+#: Mirrors ``items.WARP_DIRNAME`` / ``items.READINGS_SUFFIX`` — held as a
+#: literal here rather than imported to avoid an account<->items import
+#: cycle (``items.py`` already imports ``account``). See
+#: ``_discover_goal_readings``.
+_WARP_DIRNAME = "warp"
+_READINGS_GLOB = "g-*.readings.jsonl"
+
+
+def _discover_goal_readings(surface_root: Path) -> list[Path]:
+    """Enumerate goal readings stores beside their item files
+    (``surface/warp/g-<N>.readings.jsonl``) for the corpus mirror — the
+    dashboard's ``/goals/[id]`` trajectory table reads these the same way
+    it reads warp item files, joined client-side (design-goal-oriented-
+    engineering.md). ``_discover_markdown`` only picks up ``.md``, so
+    readings need this narrow sibling instead of widening that shared walk
+    (knowledge/runs layers have no readings concept). Same hardening: no
+    symlinks, no hidden paths.
+    """
+
+    warp_root = surface_root / _WARP_DIRNAME
+    if not warp_root.is_dir():
+        return []
+    files: list[Path] = []
+    for path in sorted(warp_root.glob(_READINGS_GLOB)):
+        if path.name.startswith("."):
+            continue
+        if path.is_file() and not path.is_symlink():
+            files.append(path)
+    return files
+
+
 def work_surface_files(ctx: AccountContext) -> list[Path]:
     """Return authored Markdown files in stable orientation order.
 
@@ -1071,6 +1102,16 @@ def corpus_files(ctx: AccountContext) -> list[CorpusFile]:
             except ValueError:
                 continue  # a root outside home (never expected) is not corpus
             entries.append(CorpusFile(layer=layer, path=rel, abspath=abspath))
+        if layer == "authored":
+            # Goal readings ride the same authored-layer mirror as their
+            # item files, beside them — the trajectory table joins them
+            # client-side by path, no new endpoint.
+            for abspath in _discover_goal_readings(root):
+                try:
+                    rel = abspath.relative_to(home).as_posix()
+                except ValueError:
+                    continue
+                entries.append(CorpusFile(layer=layer, path=rel, abspath=abspath))
         entries.sort(key=lambda f: (Path(f.path).name != "index.md", f.path))
         result.extend(entries)
     return result

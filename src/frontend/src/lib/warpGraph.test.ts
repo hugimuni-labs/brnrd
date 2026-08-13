@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
 import {
@@ -8,20 +9,27 @@ import {
 	buildWarpGraph,
 	completedItems,
 	contributingCone,
+	findGoalReadingsFile,
+	formatReadingValue,
 	goalItems,
+	goalReadingsPath,
 	isBlocked,
+	isGoalReadingsFile,
 	isRunTopicsFile,
 	isTopicFile,
 	isWarpItemFile,
 	itemInTopics,
 	liveTakenRuns,
+	parseGoalReadings,
 	parseRunTopics,
 	parseWarpItem,
 	parseWarpTopic,
+	readingsNewestFirst,
 	readyItems,
 	resolveTopics,
 	runIdForTopicsPath,
 	runTopicIndex,
+	summarizeGoalReadings,
 	topicCounts,
 	topicFace,
 	topicFaces,
@@ -464,5 +472,115 @@ describe('goal node (design-goal-oriented-engineering.md)', () => {
 			file('surface/warp/g-1.md', '# Grow attention\n\ntype: goal\ntopics: loom\n')
 		);
 		assert.equal(topicCounts(g).get('loom'), undefined);
+	});
+});
+
+describe('goal readings (design-goal-oriented-engineering.md §"a metrics block in the wake")', () => {
+	it('isGoalReadingsFile matches only a g-<N> readings file directly under warp/', () => {
+		assert.equal(isGoalReadingsFile('surface/warp/g-1.readings.jsonl'), true);
+		assert.equal(isGoalReadingsFile('surface/warp/g-12.readings.jsonl'), true);
+		assert.equal(isGoalReadingsFile('surface/warp/w-1.readings.jsonl'), false);
+		assert.equal(isGoalReadingsFile('surface/warp/g-1.md'), false);
+		assert.equal(isGoalReadingsFile('surface/warp/nested/g-1.readings.jsonl'), false);
+		assert.equal(isGoalReadingsFile('surface/topics/g-1.readings.jsonl'), false);
+	});
+
+	it('goalReadingsPath/findGoalReadingsFile locate the sibling file by path', () => {
+		const readingsFile = file(
+			'surface/warp/g-1.readings.jsonl',
+			'{"ts": "2026-08-01T00:00:00Z", "key": "tickets", "value": 10, "source": "m"}'
+		);
+		assert.equal(goalReadingsPath('g-1'), 'surface/warp/g-1.readings.jsonl');
+		assert.equal(findGoalReadingsFile('g-1', [readingsFile]), readingsFile);
+		assert.equal(findGoalReadingsFile('g-2', [readingsFile]), null);
+	});
+
+	it('parseGoalReadings skips malformed lines rather than throwing', () => {
+		const markdown = [
+			'{"ts": "2026-08-01T00:00:00Z", "key": "tickets", "value": 10, "source": "m"}',
+			'not json at all',
+			'{"ts": "2026-08-02T00:00:00Z", "key": "tickets"}', // missing value
+			'{"ts": "2026-08-03T00:00:00Z", "key": "tickets", "value": 15, "source": "m", "note": "spike"}',
+			''
+		].join('\n');
+		const readings = parseGoalReadings(markdown);
+		assert.deepEqual(
+			readings.map((r) => r.value),
+			[10, 15]
+		);
+		assert.equal(readings[1].note, 'spike');
+		assert.equal(readings[0].note, null);
+	});
+
+	it('summarizeGoalReadings: latest/previous/delta/count/min/max, sorted by ts not append order', () => {
+		const readings = parseGoalReadings(
+			[
+				'{"ts": "2026-08-03T00:00:00Z", "key": "tickets", "value": 15, "source": "m"}',
+				'{"ts": "2026-08-01T00:00:00Z", "key": "tickets", "value": 10, "source": "m"}',
+				'{"ts": "2026-08-02T00:00:00Z", "key": "conversion", "value": 0.5, "source": "m"}'
+			].join('\n')
+		);
+		const summary = summarizeGoalReadings(readings);
+		const tickets = summary.get('tickets')!;
+		assert.equal(tickets.latest.value, 15);
+		assert.equal(tickets.previous?.value, 10);
+		assert.equal(tickets.delta, 5);
+		assert.equal(tickets.count, 2);
+		assert.equal(tickets.min, 10);
+		assert.equal(tickets.max, 15);
+		const conversion = summary.get('conversion')!;
+		assert.equal(conversion.previous, null);
+		assert.equal(conversion.delta, null);
+		assert.equal(conversion.count, 1);
+	});
+
+	it('readingsNewestFirst orders by ts descending without mutating the input', () => {
+		const readings = parseGoalReadings(
+			[
+				'{"ts": "2026-08-01T00:00:00Z", "key": "tickets", "value": 10, "source": "m"}',
+				'{"ts": "2026-08-03T00:00:00Z", "key": "tickets", "value": 15, "source": "m"}'
+			].join('\n')
+		);
+		const ordered = readingsNewestFirst(readings);
+		assert.deepEqual(
+			ordered.map((r) => r.ts),
+			['2026-08-03T00:00:00Z', '2026-08-01T00:00:00Z']
+		);
+		// input order untouched
+		assert.equal(readings[0].ts, '2026-08-01T00:00:00Z');
+	});
+
+	it('formatReadingValue trims integers and trailing zeros', () => {
+		assert.equal(formatReadingValue(10), '10');
+		assert.equal(formatReadingValue(12.5), '12.5');
+		assert.equal(formatReadingValue(0.1), '0.1');
+	});
+
+	// `tests/fixtures/goal_readings_sample.jsonl` is real `brnrd goal record`
+	// output (captured from a scratch account, three calls: two `tickets`
+	// samples, one `conversion` sample) — not hand-written here. The same
+	// file also round-trips through `items.load_readings` in
+	// `tests/test_items.py`, so the Python writer and this reader are
+	// checked against one grammar instead of two independently plausible
+	// ones (same cross-language-fixture shape as `card_now_projection.json`
+	// / `runNode.test.ts` above).
+	it('parses real brnrd goal record output byte-for-byte', () => {
+		const raw = readFileSync(
+			new URL('../../../../tests/fixtures/goal_readings_sample.jsonl', import.meta.url),
+			'utf8'
+		);
+		const readings = parseGoalReadings(raw);
+		assert.equal(readings.length, 3);
+		const summary = summarizeGoalReadings(readings);
+		const tickets = summary.get('tickets')!;
+		assert.equal(tickets.latest.value, 18);
+		assert.equal(tickets.previous?.value, 12);
+		assert.equal(tickets.delta, 6);
+		assert.equal(tickets.count, 2);
+		const conversion = summary.get('conversion')!;
+		assert.equal(conversion.latest.value, 0.42);
+		assert.equal(conversion.count, 1);
+		assert.equal(readings[0].note, 'first count');
+		assert.equal(readings[1].note, null);
 	});
 });

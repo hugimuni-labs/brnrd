@@ -83,3 +83,79 @@ def test_item_list_renders_goals_band_above_ready_held(tmp_path, monkeypatch, ca
     assert "g-1" in lines[1] and "metric: tickets" in lines[1]
     assert "ready:" in lines
     assert lines.index("goals:") < lines.index("ready:")
+
+
+# ── `brnrd goal record` / `brnrd goal show` ──────────────────────────────
+
+
+def _new_goal(**kwargs) -> None:
+    args = ["item", "new", "Grow attention", "--type", "goal"]
+    for flag, value in kwargs.items():
+        args += [f"--{flag}", value]
+    main(args)
+
+
+def test_goal_record_appends_and_echoes_latest(tmp_path, monkeypatch, capsys):
+    _repo_with_home(tmp_path, monkeypatch)
+    _new_goal(metric="tickets", target="1000", horizon="Q4")
+    capsys.readouterr()
+
+    rc = main(["goal", "record", "g-1", "tickets", "10", "--source", "manual"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "g-1 tickets = 10" in out
+    assert "via manual" in out
+
+
+def test_goal_record_refuses_a_non_goal_item(tmp_path, monkeypatch, capsys):
+    repo = _repo_with_home(tmp_path, monkeypatch)
+    main(["item", "new", "Ship the digest", "--type", "action"])
+    capsys.readouterr()
+
+    rc = main(["goal", "record", "w-1", "tickets", "10"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "not a goal" in err
+
+
+def test_goal_record_refuses_an_unknown_id(tmp_path, monkeypatch, capsys):
+    _repo_with_home(tmp_path, monkeypatch)
+    _new_goal()
+    capsys.readouterr()
+
+    rc = main(["goal", "record", "g-99", "tickets", "10"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "nothing matches" in err
+
+
+def test_goal_show_says_no_readings_yet_when_unread(tmp_path, monkeypatch, capsys):
+    _repo_with_home(tmp_path, monkeypatch)
+    _new_goal(metric="tickets", target="1000", horizon="Q4")
+    capsys.readouterr()
+
+    rc = main(["goal", "show", "g-1"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "metric: tickets" in out
+    assert "target: 1000" in out
+    assert "horizon: Q4" in out
+    assert "no readings yet" in out
+
+
+def test_goal_show_renders_latest_delta_and_sample_count(tmp_path, monkeypatch, capsys):
+    _repo_with_home(tmp_path, monkeypatch)
+    _new_goal(metric="tickets", target="1000", horizon="Q4")
+    capsys.readouterr()
+
+    main(["goal", "record", "g-1", "tickets", "10", "--source", "manual"])
+    capsys.readouterr()
+    main(["goal", "record", "g-1", "tickets", "15", "--source", "manual"])
+    capsys.readouterr()
+
+    rc = main(["goal", "show", "g-1"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "tickets: 15" in out
+    assert "vs previous" in out
+    assert "2 samples" in out

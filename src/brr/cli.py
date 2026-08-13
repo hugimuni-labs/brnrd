@@ -105,7 +105,7 @@ PUBLIC_COMMANDS = (
 HIDDEN_COMMANDS = (
     "prompts", "hook", "statusline", "worktree-hygiene", "config", "emotes",
     "relic", "gate-run", "close-check", "promise", "mood", "do", "notes",
-    "await", "cut", "legend", "item",
+    "await", "cut", "legend", "item", "goal",
 )
 
 #: What ``brnrd promise`` accepts, spelled here so building the parser costs
@@ -691,6 +691,27 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id", help="item id, or a unique fragment of its headline")
     p.add_argument("--why", default=None, help="one line on why")
     p.set_defaults(func=cmd_item_retire)
+
+    # `brnrd goal` (design-goal-oriented-engineering.md §"a metrics block in
+    # the wake"): the readings store's maintenance verbs, mirroring `item`'s
+    # shape — same `_item_context`/id-resolution helpers, same read/refuse
+    # style. Hidden for the same reason as `item`: the resident's own
+    # measuring hand, recorded on its own schedule (collectors are explicitly
+    # out of scope — this CLI is the one grammar both a human and a resident
+    # write through).
+    goal_p = sub.add_parser("goal")
+    goal_sub = goal_p.add_subparsers(dest="goal_cmd", required=True)
+    p = goal_sub.add_parser("record", help="append a reading + echo the latest")
+    p.add_argument("id", help="goal id, or a unique fragment of its headline")
+    p.add_argument("key", help="the metric key this sample is for")
+    p.add_argument("value", type=float, help="the sample's numeric value")
+    p.add_argument("--source", default=None, help="where the number came from")
+    p.add_argument("--note", default=None, help="optional free-text note")
+    p.set_defaults(func=cmd_goal_record)
+    p = goal_sub.add_parser(
+        "show", help="metric/target/horizon header, then latest reading per key")
+    p.add_argument("id", help="goal id, or a unique fragment of its headline")
+    p.set_defaults(func=cmd_goal_show)
 
     # Hidden per HIDDEN_COMMANDS — porcelain over the outbox verb grammar
     # (`docs/portals.md`), meant for the resident's own shell inside a live
@@ -2644,6 +2665,21 @@ def _resolve_item_arg(warp_root, raw: str):
     return None, f"{raw!r} is ambiguous: {names}"
 
 
+def _resolve_goal_arg(warp_root, raw: str):
+    """Same resolution as ``_resolve_item_arg``, plus the goal-only gate:
+    an id/headline that resolves to a non-goal item is refused, the same
+    way an unknown id is — "goal record" and "goal show" only ever touch
+    ``type: goal`` files."""
+    from . import items as items_mod
+
+    item, err = _resolve_item_arg(warp_root, raw)
+    if err:
+        return None, err
+    if item.type != items_mod.GOAL_TYPE:
+        return None, f"{item.id} is a {item.type or 'untyped'} item, not a goal"
+    return item, None
+
+
 def cmd_item_list(args):
     from . import items as items_mod
 
@@ -2749,6 +2785,80 @@ def cmd_item_retire(args):
         )
         return 1
     print(f"{item.id} retired — {item.headline}")
+    return 0
+
+
+def cmd_goal_record(args):
+    import sys
+
+    from . import items as items_mod
+
+    warp_root, err = _item_context()
+    if err:
+        print(f"[brnrd goal] {err}", file=sys.stderr)
+        return 1
+    goal, err = _resolve_goal_arg(warp_root, args.id)
+    if err:
+        print(f"[brnrd goal] {err}", file=sys.stderr)
+        return 1
+    key = args.key.strip()
+    if not key:
+        print("[brnrd goal] key must not be empty", file=sys.stderr)
+        return 1
+    reading = items_mod.append_reading(
+        warp_root,
+        goal.id,
+        key,
+        args.value,
+        source=(args.source or "").strip(),
+        note=(args.note or None),
+    )
+    source_note = f" via {reading.source}" if reading.source else ""
+    print(f"{goal.id} {reading.key} = {items_mod.format_value(reading.value)}{source_note} ({reading.ts})")
+    return 0
+
+
+def cmd_goal_show(args):
+    import sys
+
+    from . import items as items_mod
+
+    warp_root, err = _item_context()
+    if err:
+        print(f"[brnrd goal] {err}", file=sys.stderr)
+        return 1
+    goal, err = _resolve_goal_arg(warp_root, args.id)
+    if err:
+        print(f"[brnrd goal] {err}", file=sys.stderr)
+        return 1
+    print(f"{goal.id} — {goal.headline}")
+    spine = " ".join(
+        f"{label}: {value}"
+        for label, value in (
+            ("metric", goal.metric), ("target", goal.target), ("horizon", goal.horizon)
+        )
+        if value
+    )
+    if spine:
+        print(spine)
+    readings = items_mod.load_readings(warp_root, goal.id)
+    if not readings:
+        print("no readings yet")
+        return 0
+    summary = items_mod.reading_summary(readings)
+    for key in sorted(summary):
+        info = summary[key]
+        delta = (
+            f" (Δ{items_mod.format_delta(info.delta)} vs previous)"
+            if info.previous is not None
+            else ""
+        )
+        plural = "" if info.count == 1 else "s"
+        print(
+            f"{key}: {items_mod.format_value(info.latest.value)}{delta} "
+            f"· {info.count} sample{plural} "
+            f"· min {items_mod.format_value(info.min)} · max {items_mod.format_value(info.max)}"
+        )
     return 0
 
 

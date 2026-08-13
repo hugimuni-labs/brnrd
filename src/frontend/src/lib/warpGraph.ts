@@ -399,6 +399,127 @@ export function blockersOnYou(goalId: string, graph: WarpGraph): WarpItem[] {
 	);
 }
 
+// ── goal readings: the trajectory table's data (design-goal-oriented-
+// engineering.md §"a metrics block in the wake") ──────────────────────────
+//
+// A goal's readings store is a sibling file beside its item file —
+// `surface/warp/g-<N>.readings.jsonl`, one JSON object per line, append-
+// only. It rides the same authored-layer corpus mirror as the item file
+// (`account.corpus_files` on the daemon side), so `/goals/[id]` finds it in
+// `data.files` by path, exactly like it finds the goal's own `.md` file —
+// no new endpoint. Mirrors `items.py`'s `Reading`/`load_readings`/
+// `reading_summary` in lockstep.
+
+export const READINGS_SUFFIX = '.readings.jsonl';
+
+export interface GoalReading {
+	ts: string;
+	key: string;
+	value: number;
+	source: string;
+	note: string | null;
+}
+
+/** The readings-file path for a goal id — never guessed at render time,
+ *  always this one shape. */
+export function goalReadingsPath(goalId: string): string {
+	return `${WARP_PREFIX}${goalId}${READINGS_SUFFIX}`;
+}
+
+export function isGoalReadingsFile(path: string): boolean {
+	if (!path.startsWith(WARP_PREFIX)) return false;
+	const rest = path.slice(WARP_PREFIX.length);
+	if (!rest.endsWith(READINGS_SUFFIX) || rest.includes('/')) return false;
+	const id = rest.slice(0, -READINGS_SUFFIX.length);
+	return /^g-\d+$/.test(id);
+}
+
+/** The corpus file carrying one goal's readings, or null when it never
+ *  shipped one (an unread goal, or no readings-capable corpus mirror). */
+export function findGoalReadingsFile(goalId: string, files: SurfaceFile[]): SurfaceFile | null {
+	const path = goalReadingsPath(goalId);
+	return files.find((f) => f.path === path) ?? null;
+}
+
+/** Every parseable sample, file order. A malformed line is skipped, not
+ *  fatal — one bad line does not lose a goal's whole history, mirroring
+ *  `items.py`'s `load_readings` tolerance. */
+export function parseGoalReadings(markdown: string): GoalReading[] {
+	const out: GoalReading[] = [];
+	for (const rawLine of (markdown ?? '').split('\n')) {
+		const line = rawLine.trim();
+		if (!line) continue;
+		let record: unknown;
+		try {
+			record = JSON.parse(line);
+		} catch {
+			continue;
+		}
+		if (typeof record !== 'object' || record === null) continue;
+		const r = record as Record<string, unknown>;
+		if (typeof r.ts !== 'string' || typeof r.key !== 'string') continue;
+		const value = typeof r.value === 'number' ? r.value : Number(r.value);
+		if (!Number.isFinite(value)) continue;
+		out.push({
+			ts: r.ts,
+			key: r.key,
+			value,
+			source: typeof r.source === 'string' ? r.source : '',
+			note: typeof r.note === 'string' && r.note ? r.note : null
+		});
+	}
+	return out;
+}
+
+export interface GoalReadingSummary {
+	latest: GoalReading;
+	previous: GoalReading | null;
+	delta: number | null;
+	count: number;
+	min: number;
+	max: number;
+}
+
+/** Per key: latest sample, previous sample, delta, sample count, min, max —
+ *  chronological by `ts`, mirroring `items.py`'s `reading_summary`. */
+export function summarizeGoalReadings(readings: GoalReading[]): Map<string, GoalReadingSummary> {
+	const byKey = new Map<string, GoalReading[]>();
+	for (const reading of readings) {
+		const bucket = byKey.get(reading.key) ?? [];
+		bucket.push(reading);
+		byKey.set(reading.key, bucket);
+	}
+	const out = new Map<string, GoalReadingSummary>();
+	for (const [key, samples] of byKey) {
+		const ordered = [...samples].sort((a, b) => a.ts.localeCompare(b.ts));
+		const latest = ordered[ordered.length - 1];
+		const previous = ordered.length > 1 ? ordered[ordered.length - 2] : null;
+		const values = ordered.map((r) => r.value);
+		out.set(key, {
+			latest,
+			previous,
+			delta: previous ? latest.value - previous.value : null,
+			count: ordered.length,
+			min: Math.min(...values),
+			max: Math.max(...values)
+		});
+	}
+	return out;
+}
+
+/** Newest-first render order for the trajectory table. */
+export function readingsNewestFirst(readings: GoalReading[]): GoalReading[] {
+	return [...readings].sort((a, b) => b.ts.localeCompare(a.ts));
+}
+
+/** Compact numeric rendering — integers stay bare, fractions trim trailing
+ *  zeros. Mirrors `items.py`'s `format_value` so a number reads the same on
+ *  the CLI and the dashboard. */
+export function formatReadingValue(value: number): string {
+	if (Number.isInteger(value)) return String(value);
+	return value.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+}
+
 /** Done and retired items, newest receipt first — the completed tab. */
 export function completedItems(graph: WarpGraph): WarpItem[] {
 	return graph.items

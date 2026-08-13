@@ -6,10 +6,15 @@
 	// publishes — the corpus mirror — joined client-side; no new endpoint.
 	//
 	// Three derived views, none authored (the design's own rule):
-	//  - trajectory: no metric source is wired yet (no analytics, no X read)
-	//    — rendered as a visibly turned-off part with its enable path named,
-	//    never as absence (design-capability-panel.md / design-run-route.md
-	//    "the off parts stay visible"), not as a silently missing section.
+	//  - trajectory: the readings series off the goal's own sibling file
+	//    (`g-<N>.readings.jsonl`, same corpus mirror as the item file, joined
+	//    client-side by path — `findGoalReadingsFile`). No source connected
+	//    yet ⇒ a visibly turned-off part naming its own enable path, never a
+	//    silently missing section (design-capability-panel.md /
+	//    design-run-route.md "the off parts stay visible"); a goal *with* a
+	//    readings file but zero parseable lines renders the same off state,
+	//    text-identical to "never recorded" — the reader's question is "is
+	//    there anything to see", not "why is the file empty".
 	//  - contributing work: the item cone under `advances:` (`contributingCone`).
 	//  - blockers-on-you: the open decision/preparation items inside that cone
 	//    (`blockersOnYou`) — a query, not a curated list.
@@ -23,7 +28,12 @@
 		blockersOnYou,
 		buildWarpGraph,
 		contributingCone,
+		findGoalReadingsFile,
+		formatReadingValue,
+		parseGoalReadings,
+		readingsNewestFirst,
 		resolveTopics,
+		summarizeGoalReadings,
 		topicFaces,
 		type ItemType,
 		type WarpItem
@@ -39,6 +49,10 @@
 	let cone = $derived(goal ? contributingCone(goal.id, graph) : []);
 	let callback = $derived(goal ? blockersOnYou(goal.id, graph) : []);
 	let faces = $derived(topicFaces(graph));
+	let readingsFile = $derived(goal ? findGoalReadingsFile(goal.id, data?.files ?? []) : null);
+	let readings = $derived(readingsFile ? parseGoalReadings(readingsFile.markdown) : []);
+	let readingsTable = $derived(readingsNewestFirst(readings));
+	let readingsSummary = $derived(summarizeGoalReadings(readings));
 
 	// Same marks the item lanes wear (WarpGraphView.svelte) — the design asks
 	// to reuse the existing heddle/lane visual grammar for item rows, never
@@ -166,21 +180,58 @@
 				id="trajectory-heading"
 				class="font-mono text-[10px] tracking-[0.16em] text-ink-mute uppercase"
 			>
-				trajectory
+				trajectory{#if readingsTable.length > 0}
+					· {readingsTable.length}{/if}
 			</h2>
-			<!-- The off-part-visible rule: a capability with no data source yet
-			     renders as a visibly turned-off row naming its own enable path,
-			     never as a missing section — same doctrine CapabilityPanel.svelte
-			     already renders for `unobservable`/`waiting` lamps. -->
-			<div class="mt-1 flex items-start gap-2 py-1 opacity-70">
-				<span
-					class="mt-1 inline-block h-2 w-2 shrink-0 rounded-full border border-dashed border-stone-600"
-					aria-hidden="true"
-				></span>
-				<p class="font-mono text-[11px] text-ink-quiet">
-					no metric source connected yet — analytics + X read are the enable path.
-				</p>
-			</div>
+			{#if readingsTable.length === 0}
+				<!-- The off-part-visible rule: a capability with no data source yet
+				     renders as a visibly turned-off row naming its own enable path,
+				     never as a missing section — same doctrine CapabilityPanel.svelte
+				     already renders for `unobservable`/`waiting` lamps. -->
+				<div class="mt-1 flex items-start gap-2 py-1 opacity-70">
+					<span
+						class="mt-1 inline-block h-2 w-2 shrink-0 rounded-full border border-dashed border-stone-600"
+						aria-hidden="true"
+					></span>
+					<p class="font-mono text-[11px] text-ink-quiet">
+						no readings yet — record one with <span class="text-stone-300"
+							>brnrd goal record {goal.id} &lt;key&gt; &lt;value&gt;</span
+						>; collectors (analytics, X read) are the automated enable path.
+					</p>
+				</div>
+			{:else}
+				<div class="mt-1 overflow-x-auto">
+					<table class="w-full border-collapse text-left font-mono text-[11px]">
+						<thead>
+							<tr class="text-ink-mute">
+								<th class="pr-3 pb-1 font-normal">ts</th>
+								<th class="pr-3 pb-1 font-normal">key</th>
+								<th class="pr-3 pb-1 font-normal">value</th>
+								<th class="pb-1 font-normal">source</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each readingsTable as r, i (i)}
+								<tr class="border-t border-stone-800">
+									<td class="pr-3 py-0.5 text-ink-quiet">{r.ts}</td>
+									<td class="pr-3 py-0.5 text-stone-300">{r.key}</td>
+									<td class="pr-3 py-0.5 text-amber-100">{formatReadingValue(r.value)}</td>
+									<td class="py-0.5 text-ink-quiet">{r.source || '—'}</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+				<ul class="mt-2 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[10px] text-ink-quiet">
+					{#each [...readingsSummary] as [key, info] (key)}
+						<li>
+							<span class="text-stone-300">{key}:</span> latest {formatReadingValue(
+								info.latest.value
+							)} · min {formatReadingValue(info.min)} · max {formatReadingValue(info.max)}
+						</li>
+					{/each}
+				</ul>
+			{/if}
 		</section>
 
 		<section aria-labelledby="contributing-heading">

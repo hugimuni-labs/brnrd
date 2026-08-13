@@ -286,6 +286,51 @@ def test_corpus_files_joins_surface_knowledge_and_runs(tmp_path):
     assert [f.layer for f in files if f.path.startswith("knowledge/repos/")] == ["knowledge"]
 
 
+def test_corpus_files_includes_goal_readings_beside_the_item_file(tmp_path):
+    """A goal's readings store rides the authored-layer mirror beside its
+    item file — the dashboard's `/goals/[id]` trajectory table joins the two
+    by path client-side, no new endpoint (design-goal-oriented-engineering.md)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    home = tmp_path / "account-home"
+    ctx = account.resolve_context(repo, {"home.path": str(home), "repo.label": "Gurio/brr"})
+
+    warp = account.work_surface_path(ctx) / "warp"
+    warp.mkdir(parents=True, exist_ok=True)
+    (warp / "g-1.md").write_text("# Grow attention\n\ntype: goal\n", encoding="utf-8")
+    (warp / "g-1.readings.jsonl").write_text(
+        '{"ts": "2026-08-01T00:00:00Z", "key": "tickets", "value": 10.0, "source": "m"}\n',
+        encoding="utf-8",
+    )
+    # A non-readings, non-goal file in the same directory must not leak in
+    # under a lookalike name.
+    (warp / "w-1.md").write_text("# Ship\n\ntype: action\n", encoding="utf-8")
+
+    files = account.corpus_files(ctx)
+    paths = [f.path for f in files]
+    assert "surface/warp/g-1.readings.jsonl" in paths
+    assert "surface/warp/g-1.md" in paths
+    readings_file = next(f for f in files if f.path == "surface/warp/g-1.readings.jsonl")
+    assert readings_file.layer == "authored"
+    assert readings_file.abspath.read_text(encoding="utf-8").startswith('{"ts"')
+
+
+def test_corpus_files_omits_readings_when_none_exist(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    home = tmp_path / "account-home"
+    ctx = account.resolve_context(repo, {"home.path": str(home), "repo.label": "Gurio/brr"})
+
+    warp = account.work_surface_path(ctx) / "warp"
+    warp.mkdir(parents=True, exist_ok=True)
+    (warp / "g-1.md").write_text("# Grow attention\n\ntype: goal\n", encoding="utf-8")
+
+    paths = [f.path for f in account.corpus_files(ctx)]
+    assert not any(p.endswith(".readings.jsonl") for p in paths)
+
+
 def test_default_home_is_repo_derived_project_home(monkeypatch, tmp_path):
     state_home = tmp_path / "state"
     monkeypatch.setenv("XDG_STATE_HOME", str(state_home))

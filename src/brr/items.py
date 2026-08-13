@@ -41,6 +41,8 @@ this module never commits or pushes.
 
 from __future__ import annotations
 
+import datetime as _dt
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -53,6 +55,11 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 WARP_DIRNAME = "warp"
 TOPICS_DIRNAME = "topics"
+#: A goal's readings store, beside its item file: ``g-<N>.readings.jsonl``.
+#: Append-only, one JSON object per line — no schema migration, a goal
+#: without readings is simply unread (design-goal-oriented-engineering.md
+#: §"a metrics block in the wake"). See ``append_reading``/``load_readings``.
+READINGS_SUFFIX = ".readings.jsonl"
 
 #: Any slug-shaped basename is a legal item id (a hand-authored name is an
 #: item, not a silent skip); the *allocator* only ever mints ``w-<N>`` (or
@@ -536,7 +543,11 @@ def render_index(
         callback = blockers_on_you(goal.id, items)
         if callback:
             parts.append("· needs-you " + " ".join(item.id for item in callback))
-        return " ".join(parts)
+        line = " ".join(parts)
+        readings = readings_index_line(goal.id, warp_root)
+        if readings:
+            line += "\n  " + readings
+        return line
 
     def order(item: WarpItem) -> tuple:
         return (_TYPE_ORDER[item.type], _id_sort_key(item))
@@ -570,3 +581,202 @@ def render_index(
         )
         out.append(f"done recently: {tail}")
     return "\n".join(out) if out else None
+
+
+# ── goal readings store ─────────────────────────────────────────────────
+#
+# "a metrics block in the wake — the goal's current numbers injected as
+# perception, not polled per run" (design-goal-oriented-engineering.md).
+# One append-only file per goal, beside its item file: ``g-<N>.readings.jsonl``,
+# one JSON object per line — never parsed as item-file row grammar, never
+# migrated. A goal with no readings file is simply unread, not an error.
+
+
+@dataclass(frozen=True)
+class Reading:
+    """One parsed sample line. ``note`` is ``None`` when the line omitted it."""
+
+    ts: str
+    key: str
+    value: float
+    source: str
+    note: str | None = None
+
+
+def _now_iso() -> str:
+    return (
+        _dt.datetime.now(_dt.timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
+def _parse_iso(value: str) -> _dt.datetime | None:
+    try:
+        return _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+def readings_path(warp_root: Path, goal_id: str) -> Path:
+    """The readings file for *goal_id* — always beside the item file,
+    regardless of whether either exists yet."""
+    return warp_root / f"{goal_id}{READINGS_SUFFIX}"
+
+
+def append_reading(
+    warp_root: Path,
+    goal_id: str,
+    key: str,
+    value: float,
+    *,
+    source: str = "",
+    note: str | None = None,
+    ts: str | None = None,
+) -> Reading:
+    """Append one sample line; mints the file on first use. The caller
+    resolves ``goal_id`` against a real goal first (``brnrd goal record``
+    refuses an unknown id the way the item verbs do) — this function itself
+    does not check, so it stays the one place both the CLI and tests can
+    write a reading without round-tripping through argument parsing."""
+    reading = Reading(ts=ts or _now_iso(), key=key, value=float(value), source=source, note=note or None)
+    record = {"ts": reading.ts, "key": reading.key, "value": reading.value, "source": reading.source}
+    if reading.note:
+        record["note"] = reading.note
+    path = readings_path(warp_root, goal_id)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record, sort_keys=True) + "\n")
+    return reading
+
+
+def load_readings(warp_root: Path, goal_id: str) -> list[Reading]:
+    """Every parseable sample for a goal, file order (append-only, so this
+    is chronological unless hand-edited). A malformed line is skipped, not
+    fatal — one bad line does not lose a goal's whole history, same stance
+    ``parse_item`` takes on an unreadable file."""
+    path = readings_path(warp_root, goal_id)
+    if not path.is_file():
+        return []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    out: list[Reading] = []
+    for raw_line in text.splitlines():
+        raw_line = raw_line.strip()
+        if not raw_line:
+            continue
+        try:
+            record = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        try:
+            out.append(
+                Reading(
+                    ts=str(record["ts"]),
+                    key=str(record["key"]),
+                    value=float(record["value"]),
+                    source=str(record.get("source", "")),
+                    note=(str(record["note"]) if record.get("note") else None),
+                )
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+@dataclass(frozen=True)
+class ReadingSummary:
+    """One key's summary — the shape both ``brnrd goal show`` and the
+    ``/goals/[id]`` trajectory table's per-key line need."""
+
+    latest: Reading
+    previous: Reading | None
+    delta: float | None
+    count: int
+    min: float
+    max: float
+
+
+def reading_summary(readings: list[Reading]) -> dict[str, ReadingSummary]:
+    """Per key: latest sample, previous sample, delta, sample count, min,
+    max — chronological by ``ts`` (a hand-edited out-of-order file sorts
+    itself back into place here rather than trusting append order)."""
+    by_key: dict[str, list[Reading]] = {}
+    for reading in readings:
+        by_key.setdefault(reading.key, []).append(reading)
+    out: dict[str, ReadingSummary] = {}
+    for key, samples in by_key.items():
+        ordered = sorted(samples, key=lambda r: r.ts)
+        latest = ordered[-1]
+        previous = ordered[-2] if len(ordered) > 1 else None
+        values = [r.value for r in ordered]
+        out[key] = ReadingSummary(
+            latest=latest,
+            previous=previous,
+            delta=(latest.value - previous.value) if previous is not None else None,
+            count=len(ordered),
+            min=min(values),
+            max=max(values),
+        )
+    return out
+
+
+def format_value(value: float) -> str:
+    """Compact numeric rendering — integers stay bare, fractions trim
+    trailing zeros. Shared by the CLI and the wake-line composer so a
+    number reads the same everywhere it appears."""
+    if value == int(value):
+        return str(int(value))
+    text = f"{value:.4f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def format_delta(value: float) -> str:
+    sign = "+" if value >= 0 else ""
+    return f"{sign}{format_value(value)}"
+
+
+def _days_between(earlier: str, later: str) -> int:
+    a, b = _parse_iso(earlier), _parse_iso(later)
+    if a is None or b is None:
+        return 0
+    return max(0, round((b - a).total_seconds() / 86400))
+
+
+#: Soft byte cap for the wake-line composer's readings row — the first key
+#: always renders (a goal with one chunky reading still gets a line); later
+#: keys stop being added once the running total would cross the cap, so the
+#: overflow is a dropped trailing key, never a mid-key hard cut.
+_READINGS_LINE_BUDGET = 200
+
+
+def readings_index_line(goal_id: str, warp_root: Path | None) -> str | None:
+    """The compact second line the wake's open-items index renders under a
+    goal with readings — latest-per-key only, capped ~200B. ``None`` when
+    the goal has no readings yet, or there is no warp root to read from."""
+    if warp_root is None:
+        return None
+    readings = load_readings(warp_root, goal_id)
+    if not readings:
+        return None
+    summary = reading_summary(readings)
+    prefix = "readings:"
+    used = len(prefix.encode("utf-8"))
+    segments: list[str] = []
+    for key in sorted(summary):
+        info = summary[key]
+        segment = f"{key} {format_value(info.latest.value)}"
+        if info.previous is not None:
+            days = _days_between(info.previous.ts, info.latest.ts)
+            segment += f" (Δ{format_delta(info.delta)} since {days}d)"
+        joiner = " · " if segments else " "
+        cost = len((joiner + segment).encode("utf-8"))
+        if segments and used + cost > _READINGS_LINE_BUDGET:
+            break
+        used += cost
+        segments.append(segment)
+    return prefix + " " + " · ".join(segments)
