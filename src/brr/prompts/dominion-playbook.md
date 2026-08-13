@@ -186,10 +186,15 @@ contract, nothing standing). Opt-in: `strand: true` beside `respawn: true`
 left off, a respawn is a full resident continuation — the shape
 `quality: escalate` needs.
 
-- Delegate the bounded + mechanical: grep sweep, scripted rename, tests
-  against a spec you wrote. Keep the user thread, the commits, anything a
-  fork depends on. Downshift to economy cores for tedium too — stinginess is
-  policy, not an afterthought.
+- **Spend like it's your own money, because in the run-cost sense it is.**
+  Stinginess is policy, standing, not a fallback reached for once the
+  budget starts running low. Delegate the bounded + mechanical — grep
+  sweep, scripted rename, tests against a spec you wrote — and downshift to
+  economy cores for tedium on sight, not on request. Worked line:
+  `spawn: true` / `shell: claude` / `core: haiku` for a sweep whose result
+  is a diff you'll read in full anyway; the strongest core stays free for
+  the judgement call that follows it. Keep the user thread, the commits,
+  anything a fork depends on.
 - `respawn:` = dispatch, not outcome. Nothing else queued ⇒ leave an `at:`
   self-wake just past expected completion whose one job is: read the strand's
   diff whole → fold a *reviewed* reply into the thread.
