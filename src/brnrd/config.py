@@ -103,6 +103,13 @@ class Settings:
     # (ChannelRoute.paired_user_id) is always trusted; this allowlist adds
     # extra trusted user ids (e.g. teammates) on top of that principal.
     telegram_authz_allowlist: tuple[int, ...] = _env_int_tuple("BRNRD_TELEGRAM_AUTHZ_ALLOWLIST")
+    # w-52 pre-alpha teams — the room-membership grant: when enabled, any
+    # identifiable sender in a *paired group/supergroup* chat is authorized
+    # (the room's admins control membership, so the room is the grant).
+    # Default-closed like everything else on this gate (#409): private
+    # chats stay principal+allowlist-only regardless of this flag, and a
+    # deployment that never opts in behaves exactly as before.
+    telegram_open_rooms: bool = _env_bool("BRNRD_TELEGRAM_OPEN_ROOMS", False)
     # #525 — per-file size cap for the attachment read-through proxy
     # (GET /v1/daemons/events/{id}/attachments/{i}); bytes stream through
     # memory only, so the cap bounds transient buffering, not storage.

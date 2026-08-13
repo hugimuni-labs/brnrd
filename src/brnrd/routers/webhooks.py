@@ -604,10 +604,25 @@ def _authorized(settings, parsed: tg.ParsedMessage, route: ChannelRoute) -> bool
     """#409 — default-closed: enqueue iff the verified sender is the
     chat's paired principal or sits in the configured allowlist. The
     sender is always ``parsed.user_id`` (the update's verified
-    ``from.id``), never text parsed from the message body."""
+    ``from.id``), never text parsed from the message body.
+
+    w-52 pre-alpha teams: with ``telegram_open_rooms`` enabled, a paired
+    **group/supergroup** chat also authorizes any identifiable sender —
+    the room's admins control who is in the room, so membership is the
+    grant. Three deliberate bounds: the flag is default-off; a private
+    chat never widens (``chat_type`` must verifiably be a group, read
+    from the update's own ``chat.type``, never from message text); and
+    an anonymous-admin post (``user_id is None``, #409) stays refused —
+    attribution is part of the grant."""
     if parsed.user_id is None:
         return False
     if route.paired_user_id is not None and parsed.user_id == route.paired_user_id:
+        return True
+    if (
+        settings.telegram_open_rooms
+        and parsed.chat_type in ("group", "supergroup")
+        and route.paired_user_id is not None
+    ):
         return True
     return parsed.user_id in settings.telegram_authz_allowlist
 

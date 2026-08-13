@@ -85,9 +85,13 @@ def _message(
     name="Ada",
     user_id=42,
     username="ada_l",
+    chat_type=None,
 ):
+    chat = {"id": chat_id}
+    if chat_type is not None:
+        chat["type"] = chat_type
     msg = {
-        "chat": {"id": chat_id},
+        "chat": chat,
         "from": {"id": user_id, "first_name": name, "username": username},
         "message_id": message_id,
         "date": int(time.time()) if date is None else date,
@@ -1299,3 +1303,120 @@ def test_responded_event_clears_pointers_and_proxy_404s(env):
         assert inbox_service.attachments_of(row) == []
     r = client.get(f"/v1/daemons/events/{event['event_id']}/attachments/0", headers=dmn)
     assert r.status_code == 404
+
+
+# ── w-52 pre-alpha teams: the room-membership grant ──────────────────
+# The room is the address (w-52): with telegram_open_rooms enabled, a
+# paired group/supergroup authorizes any identifiable sender — the room's
+# admins control membership, so the room is the grant. Default stays
+# closed (#409); private chats never widen; anonymity never speaks.
+
+
+def _room_env(monkeypatch, *, open_rooms):
+    monkeypatch.setattr("brnrd.platforms.telegram.send_message", lambda *a, **k: None)
+    settings = Settings(
+        database_url="sqlite:///:memory:",
+        telegram_bot_token="bot:TOKEN",
+        telegram_webhook_secret=_SECRET,
+        telegram_open_rooms=open_rooms,
+    )
+    app = create_app(settings)
+    client = TestClient(app)
+    acc = _account(client)
+    rid = _repo(client, acc)
+    code = _tg_pair_code(client, acc, rid)
+    # The principal pairs the ROOM (a supergroup), exactly the POC shape.
+    client.post(
+        "/v1/webhooks/telegram",
+        json=_message(-100555, f"/start {code}", chat_type="supergroup"),
+        headers=_HDR,
+    )
+    return app, client, rid
+
+
+def test_room_grant_off_refuses_a_group_stranger(monkeypatch):
+    app, client, _rid = _room_env(monkeypatch, open_rooms=False)
+    r = client.post(
+        "/v1/webhooks/telegram",
+        json=_message(-100555, "do the thing", chat_type="supergroup",
+                      user_id=999, username="sasha", name="Sasha"),
+        headers=_HDR,
+    )
+    assert r.status_code == 200
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(Event)).scalars().all() == []
+
+
+def test_room_grant_on_enqueues_a_group_member_with_attribution(monkeypatch):
+    app, client, rid = _room_env(monkeypatch, open_rooms=True)
+    r = client.post(
+        "/v1/webhooks/telegram",
+        json=_message(-100555, "ship it", chat_type="supergroup",
+                      user_id=999, username="sasha", name="Sasha"),
+        headers=_HDR,
+    )
+    assert r.status_code == 200
+    with app.state.SessionLocal() as db:
+        event = db.execute(select(Event).where(Event.source == "telegram")).scalar_one()
+        assert event.repo_id == rid
+        assert event.body == "ship it"
+        # Attribution is part of the grant: the event names the member.
+        import json as _json
+
+        reply_to = _json.loads(event.reply_to)
+        assert reply_to["user_id"] == 999
+        assert reply_to["username"] == "sasha"
+
+
+def test_room_grant_never_widens_a_private_chat(monkeypatch):
+    monkeypatch.setattr("brnrd.platforms.telegram.send_message", lambda *a, **k: None)
+    settings = Settings(
+        database_url="sqlite:///:memory:",
+        telegram_bot_token="bot:TOKEN",
+        telegram_webhook_secret=_SECRET,
+        telegram_open_rooms=True,
+    )
+    app = create_app(settings)
+    client = TestClient(app)
+    acc = _account(client)
+    rid = _repo(client, acc)
+    code = _tg_pair_code(client, acc, rid)
+    client.post(
+        "/v1/webhooks/telegram",
+        json=_message(555, f"/start {code}", chat_type="private"),
+        headers=_HDR,
+    )
+    r = client.post(
+        "/v1/webhooks/telegram",
+        json=_message(555, "do the thing", chat_type="private",
+                      user_id=999, username="mallory", name="Mallory"),
+        headers=_HDR,
+    )
+    assert r.status_code == 200
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(Event)).scalars().all() == []
+
+
+def test_room_grant_refuses_an_untyped_chat_even_when_open(monkeypatch):
+    # chat.type absent ⇒ chat_type == "" ⇒ the group clause must not fire:
+    # authorization widens only on Telegram's own verifiable classification.
+    app, client, _rid = _room_env(monkeypatch, open_rooms=True)
+    r = client.post(
+        "/v1/webhooks/telegram",
+        json=_message(-100555, "do the thing", user_id=999),
+        headers=_HDR,
+    )
+    assert r.status_code == 200
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(Event)).scalars().all() == []
+
+
+def test_room_grant_refuses_anonymous_admins(monkeypatch):
+    # sender_chat ⇒ user_id None (#409): a room grants members, never masks.
+    app, client, _rid = _room_env(monkeypatch, open_rooms=True)
+    payload = _message(-100555, "do the thing", chat_type="supergroup", user_id=77)
+    payload["message"]["sender_chat"] = {"id": -100555}
+    r = client.post("/v1/webhooks/telegram", json=payload, headers=_HDR)
+    assert r.status_code == 200
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(Event)).scalars().all() == []
