@@ -56,6 +56,7 @@ AUTHORITY_SUBSTRATE = "substrate"  # product-owned daemon mechanics (daemon-subs
 AUTHORITY_POLICY = "policy"        # operator-approved runner policy
 AUTHORITY_MEMORY = "memory"        # resident working memory (dominion, pitfalls)
 AUTHORITY_SURFACE = "surface"      # shared user/resident-authored work surface
+AUTHORITY_HEARTH = "hearth"        # shared human/resident personal space — never mirrored (#1332)
 AUTHORITY_KNOWLEDGE = "knowledge"  # project + home knowledge sources
 AUTHORITY_ACTIVITY = "activity"    # daemon-live recent activity log tail
 AUTHORITY_HEALTH = "health"        # daemon-live kb health scan
