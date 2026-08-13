@@ -105,7 +105,7 @@ PUBLIC_COMMANDS = (
 HIDDEN_COMMANDS = (
     "prompts", "hook", "statusline", "worktree-hygiene", "config", "emotes",
     "relic", "gate-run", "close-check", "promise", "mood", "do", "notes",
-    "await", "cut", "legend", "item", "goal",
+    "await", "cut", "legend", "item", "goal", "queue", "envoy",
 )
 
 #: What ``brnrd promise`` accepts, spelled here so building the parser costs
@@ -716,8 +716,12 @@ def build_parser() -> argparse.ArgumentParser:
     # The public queue (`envoys.py`): mail that arrived at envoy standing —
     # it can never ignite a run; a sweep on the resident's own clock closes
     # each item `answered` / `noted` / `dropped`.
-    queue_p = sub.add_parser(
-        "queue", help="the public queue — envoy-standing mail, swept, never igniting")
+    # Hidden per HIDDEN_COMMANDS (same reasoning as `item`/`goal`: the
+    # resident's own verbs, pointed at from the wake and the sweep contract,
+    # not an operator's daily noun — the dashboard drawer is the operator
+    # read surface). No `help=` on the top-level parsers, so they stay off
+    # `--help` (see the comment on `do` below).
+    queue_p = sub.add_parser("queue")
     queue_sub = queue_p.add_subparsers(dest="queue_cmd")
     p = queue_sub.add_parser("list", help="queue items, oldest first (default verb)")
     p.add_argument("--status", default=None, help="filter: arrived/answered/noted/dropped")
@@ -743,8 +747,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_queue_close)
     queue_p.set_defaults(func=cmd_queue_list, status=None)
 
-    envoy_p = sub.add_parser(
-        "envoy", help="the envoy registry — public identities the resident wears")
+    envoy_p = sub.add_parser("envoy")
     envoy_sub = envoy_p.add_subparsers(dest="envoy_cmd")
     p = envoy_sub.add_parser("list", help="registry rows (default verb)")
     p.set_defaults(func=cmd_envoy_list)
