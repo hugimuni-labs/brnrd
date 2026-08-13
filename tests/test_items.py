@@ -4,6 +4,7 @@ index, and the row-scoped file edits every verb rests on."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from brr import items
@@ -362,3 +363,175 @@ def test_render_index_none_when_only_a_done_goal_exists(tmp_path: Path):
     # the done-tail excludes goals) — documented via a non-crashing None,
     # not a silent surprise.
     assert items.render_index(root) is None
+
+
+# ── goal readings store ──────────────────────────────────────────────────
+
+
+def test_append_reading_writes_one_jsonl_line_and_returns_it(tmp_path: Path):
+    root = _warp(tmp_path)
+    reading = items.append_reading(
+        root, "g-1", "tickets", 10, source="manual", ts="2026-08-01T00:00:00Z"
+    )
+    assert reading.key == "tickets"
+    assert reading.value == 10.0
+    path = items.readings_path(root, "g-1")
+    assert path.name == "g-1.readings.jsonl"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    record = json.loads(lines[0])
+    assert record == {
+        "ts": "2026-08-01T00:00:00Z",
+        "key": "tickets",
+        "value": 10.0,
+        "source": "manual",
+    }
+
+
+def test_append_reading_includes_note_only_when_given(tmp_path: Path):
+    root = _warp(tmp_path)
+    items.append_reading(root, "g-1", "tickets", 1, ts="2026-08-01T00:00:00Z")
+    items.append_reading(
+        root, "g-1", "tickets", 2, note="second one", ts="2026-08-02T00:00:00Z"
+    )
+    lines = items.readings_path(root, "g-1").read_text(encoding="utf-8").splitlines()
+    assert "note" not in json.loads(lines[0])
+    assert json.loads(lines[1])["note"] == "second one"
+
+
+def test_load_readings_is_empty_for_an_unread_goal(tmp_path: Path):
+    root = _warp(tmp_path)
+    assert items.load_readings(root, "g-1") == []
+
+
+def test_load_readings_skips_malformed_lines(tmp_path: Path):
+    root = _warp(tmp_path)
+    path = items.readings_path(root, "g-1")
+    path.write_text(
+        '{"ts": "2026-08-01T00:00:00Z", "key": "tickets", "value": 1.0, "source": "m"}\n'
+        "not json at all\n"
+        '{"ts": "2026-08-02T00:00:00Z", "key": "tickets"}\n'  # missing value
+        '{"ts": "2026-08-03T00:00:00Z", "key": "tickets", "value": 2.0, "source": "m"}\n',
+        encoding="utf-8",
+    )
+    readings = items.load_readings(root, "g-1")
+    assert [r.value for r in readings] == [1.0, 2.0]
+
+
+def test_reading_summary_delta_previous_and_bounds(tmp_path: Path):
+    root = _warp(tmp_path)
+    items.append_reading(root, "g-1", "tickets", 10, ts="2026-08-01T00:00:00Z")
+    items.append_reading(root, "g-1", "tickets", 15, ts="2026-08-03T00:00:00Z")
+    items.append_reading(root, "g-1", "conversion", 0.5, ts="2026-08-02T00:00:00Z")
+    summary = items.reading_summary(items.load_readings(root, "g-1"))
+    assert summary["tickets"].latest.value == 15
+    assert summary["tickets"].previous.value == 10
+    assert summary["tickets"].delta == 5
+    assert summary["tickets"].count == 2
+    assert summary["tickets"].min == 10
+    assert summary["tickets"].max == 15
+    assert summary["conversion"].previous is None
+    assert summary["conversion"].delta is None
+    assert summary["conversion"].count == 1
+
+
+def test_reading_summary_orders_by_ts_not_append_order(tmp_path: Path):
+    root = _warp(tmp_path)
+    # Appended out of chronological order — the summary sorts by ts.
+    items.append_reading(root, "g-1", "tickets", 15, ts="2026-08-03T00:00:00Z")
+    items.append_reading(root, "g-1", "tickets", 10, ts="2026-08-01T00:00:00Z")
+    summary = items.reading_summary(items.load_readings(root, "g-1"))
+    assert summary["tickets"].latest.value == 15
+    assert summary["tickets"].previous.value == 10
+    assert summary["tickets"].delta == 5
+
+
+def test_format_value_trims_integers_and_trailing_zeros():
+    assert items.format_value(10.0) == "10"
+    assert items.format_value(12.5) == "12.5"
+    assert items.format_value(0.1000) == "0.1"
+
+
+def test_format_delta_signs_positive_and_negative():
+    assert items.format_delta(5) == "+5"
+    assert items.format_delta(-5) == "-5"
+    assert items.format_delta(0) == "+0"
+
+
+def test_readings_index_line_none_without_readings(tmp_path: Path):
+    root = _warp(tmp_path)
+    _write(root, "g-1", "# Grow\n\ntype: goal\n")
+    assert items.readings_index_line("g-1", root) is None
+    assert items.readings_index_line("g-1", None) is None
+
+
+def test_readings_index_line_latest_per_key_with_delta(tmp_path: Path):
+    root = _warp(tmp_path)
+    items.append_reading(root, "g-1", "tickets", 10, ts="2026-08-01T00:00:00Z")
+    items.append_reading(root, "g-1", "tickets", 15, ts="2026-08-03T00:00:00Z")
+    items.append_reading(root, "g-1", "conversion", 0.5, ts="2026-08-02T00:00:00Z")
+    line = items.readings_index_line("g-1", root)
+    assert line is not None
+    assert line.startswith("readings: ")
+    assert "conversion 0.5" in line
+    assert "tickets 15 (Δ+5 since 2d)" in line
+
+
+def test_readings_index_line_capped_around_200_bytes(tmp_path: Path):
+    root = _warp(tmp_path)
+    for i in range(40):
+        items.append_reading(root, "g-1", f"metric-{i:02d}", i, ts=f"2026-08-01T00:00:{i:02d}Z")
+    line = items.readings_index_line("g-1", root)
+    assert line is not None
+    # First key always renders even if a cap-crossing later key gets
+    # dropped — the budget bounds growth, it never empties the line.
+    assert len(line.encode("utf-8")) < 260
+    assert "metric-00" in line
+
+
+def test_render_index_appends_readings_as_a_second_line_under_the_goal(
+    tmp_path: Path,
+):
+    root = _warp(tmp_path)
+    _write(root, "g-1", "# Grow attention\n\ntype: goal\nmetric: tickets\n")
+    items.append_reading(root, "g-1", "tickets", 10, ts="2026-08-01T00:00:00Z")
+    index = items.render_index(root)
+    assert index is not None
+    lines = index.split("\n")
+    goal_idx = next(i for i, line in enumerate(lines) if line.startswith("- g-1"))
+    assert lines[goal_idx + 1].strip().startswith("readings: tickets 10")
+
+
+def test_render_index_no_readings_line_when_goal_unread(tmp_path: Path):
+    root = _warp(tmp_path)
+    _write(root, "g-1", "# Grow attention\n\ntype: goal\n")
+    index = items.render_index(root)
+    assert index is not None
+    assert "readings:" not in index
+
+
+# ``tests/fixtures/goal_readings_sample.jsonl`` is real ``brnrd goal record``
+# output (captured from a scratch account, three calls: two `tickets`
+# samples one `conversion` sample), not hand-written — the same file also
+# round-trips through `parseGoalReadings` in
+# `src/frontend/src/lib/warpGraph.test.ts`, so the Python writer and the TS
+# reader are checked against one grammar instead of two independently
+# plausible ones.
+FIXTURE_READINGS = Path(__file__).parent / "fixtures" / "goal_readings_sample.jsonl"
+
+
+def test_fixture_readings_load_and_summarize_as_recorded(tmp_path: Path):
+    root = _warp(tmp_path)
+    root.joinpath("g-1.readings.jsonl").write_bytes(FIXTURE_READINGS.read_bytes())
+    readings = items.load_readings(root, "g-1")
+    assert len(readings) == 3
+    summary = items.reading_summary(readings)
+    assert summary["tickets"].latest.value == 18
+    assert summary["tickets"].previous.value == 12
+    assert summary["tickets"].delta == 6
+    assert summary["tickets"].count == 2
+    assert summary["conversion"].latest.value == 0.42
+    assert summary["conversion"].count == 1
+    # The first tickets sample carries the recorded note; the second doesn't.
+    assert readings[0].note == "first count"
+    assert readings[1].note is None
