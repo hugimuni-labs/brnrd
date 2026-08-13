@@ -100,10 +100,12 @@ npm install -g brnrd     # or: uv tool install brnrd · pipx install brnrd
 brnrd --version
 ```
 
-1. [Install brnrd](./getting-started/install/) — the full picture, including
+1. [Check the prerequisites](./getting-started/prerequisites/) — terminal, GitHub,
+   and one coding-agent CLI.
+2. [Install brnrd](./getting-started/install/) — the full picture, including
    what to do when there is no Python on the machine.
-2. [Choose a managed or self-hosted connection](./getting-started/connect/).
-3. [Send your first task](./getting-started/first-task/).
+3. [Choose a managed or self-hosted connection](./getting-started/connect/).
+4. [Send your first task](./getting-started/first-task/).
 
 ## Current posture
 
