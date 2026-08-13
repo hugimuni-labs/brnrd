@@ -1511,7 +1511,7 @@ def _build_hearth_block(repo_root: Path) -> str:
     the budget or, worse, riding the same unredacted wires the work
     surface and knowledge corpus do. A page's full text is one ``Read``
     away by the path this index names, exactly like the warp item index
-    above it in the file.
+    inside the work-surface block just below this function.
 
     Placed with the identity/continuity blocks, ahead of the work surface
     (see ``_build_injected_blocks_with_contracts``): who-we-are reads
