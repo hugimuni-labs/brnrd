@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Any
 
 from . import account
+from . import envoys
 from . import gitops
 from . import presence
 from . import protocol
@@ -463,6 +464,38 @@ def _plan_inbox(
 ) -> None:
     """The account dispatch inbox — ``dispatch/inbox`` + ``dispatch/responses``."""
     _plan_inbox_dir(ctx.dispatch_inbox, ctx.responses_dir, window, now, actions)
+    _plan_public_queue(ctx, window, now, actions)
+
+
+def _plan_public_queue(
+    ctx: account.HomeContext, window: float, now: float, actions: list[Action],
+) -> None:
+    """The public queue — ``dispatch/queue`` (``envoys.py``).
+
+    Closed items (``answered``/``noted``/``dropped``) age out on the same
+    window as the inbox; ``arrived`` items stay regardless of age — a
+    swept-late queue must degrade to *old mail*, never to *lost mail*.
+    The drawer must not become the next immortal inbox, and the close
+    verbs (not this sweep) are what empties it.
+    """
+    home_root = account.context_home_root(ctx)
+    qdir = envoys.queue_dir(home_root)
+    if not qdir.is_dir():
+        return
+    cutoff = now - window
+    for path in sorted(qdir.glob("*.md")):
+        mtime = _mtime(path)
+        if mtime is None or mtime >= cutoff:
+            continue
+        try:
+            meta = protocol.parse_frontmatter(path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if meta.get("status") not in envoys.QUEUE_TERMINAL_STATUSES:
+            continue
+        actions.append(Action(
+            store="inbox", kind=FILE, path=path, bytes=_size(path),
+        ))
 
 
 def _plan_repo_inbox(

@@ -47,6 +47,7 @@ def test_resolve_context_creates_account_home_and_registry(tmp_path):
     assert home_row == {"kind": "home", "label": "home", "path": str(home)}
     assert (home / ".gitignore").read_text(encoding="utf-8").splitlines() == [
         "/dispatch/inbox/",
+        "/dispatch/queue/",
         "/dispatch/responses/",
         "/knowledge/",
         "/.brr/",

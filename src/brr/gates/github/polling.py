@@ -30,7 +30,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from ... import protocol
+from ... import envoys, protocol
 from . import attachments, cache, client, parse
 from .constants import _SEEN_CAP
 from .paths import (
@@ -112,6 +112,18 @@ def _create_github_event(
         logger.warning(
             "github authz reject repo=%s author=%s trigger=%s reason=%s",
             repo, author, trigger, reason,
+        )
+        # The refusal stands; the *signal* need not be lost. Off by
+        # default (``public_queue.refused_summonses``), best-effort by
+        # contract — see ``envoys.record_refused_summons``.
+        envoys.record_refused_summons(
+            inbox_dir.parent,
+            channel="github",
+            author=author,
+            repo=repo,
+            trigger=trigger,
+            reason=reason,
+            body=body,
         )
         return None
     # Source-trust tiering (#517): an author who cleared the #408 gate is a
