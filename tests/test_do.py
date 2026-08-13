@@ -593,7 +593,7 @@ def test_cut_errors_without_an_outbox(monkeypatch, capsys, tmp_path):
     declaration = tmp_path / "bolt.md"
     declaration.write_text("---\n---\nDone.\n", encoding="utf-8")
 
-    assert main(["cut", str(declaration)]) == 1
+    assert main(["cut", str(declaration), "--timeout", "0.01"]) == 1
     assert "no run outbox" in capsys.readouterr().err
 
 
@@ -663,6 +663,107 @@ def test_cut_splices_the_marker_into_an_existing_frontmatter_block(
     assert staged["text"] == (
         "---\ncut: true\nproduce: none\nowed: none\n---\nAll done.\n"
     )
+
+
+def test_cut_refuses_incident_lenient_shape_before_staging(
+    tmp_path, monkeypatch, capsys,
+):
+    """The 2026-08-13 casualty: declaration rows after the lenient fence
+    must not be double-wrapped into a minimal bolt with machine text body."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    declaration = tmp_path / "bolt.md"
+    declaration.write_text(
+        "cut: true\n---\nasks:\n"
+        "  - event: evt-1786643067802091788-wuxo\n"
+        "    disposition: answered\n",
+        encoding="utf-8",
+    )
+
+    assert main(["cut", str(declaration), "--timeout", "0.01"]) == 1
+    err = capsys.readouterr().err
+    assert "invalid cut declaration shape" in err
+    assert "lists must be keyed mappings" in err
+    assert "evt-...: answered" in err
+    assert list(outbox.glob("do-*-cut-*.md")) == []
+
+
+def test_cut_refuses_bullet_list_inside_canonical_declaration(
+    tmp_path, monkeypatch, capsys,
+):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    declaration = tmp_path / "bolt.md"
+    declaration.write_text(
+        "---\ncut: true\nasks:\n  - event: evt-one\n"
+        "    disposition: answered\n---\nDone.\n",
+        encoding="utf-8",
+    )
+
+    assert main(["cut", str(declaration)]) == 1
+    assert "lists must be keyed mappings" in capsys.readouterr().err
+    assert list(outbox.glob("do-*-cut-*.md")) == []
+
+
+def test_cut_lenient_minimal_shape_stages_without_double_wrap(
+    tmp_path, monkeypatch,
+):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    declaration = tmp_path / "bolt.md"
+    lenient = "cut: true\n---\nAll done.\n"
+    declaration.write_text(lenient, encoding="utf-8")
+    staged = {}
+
+    def _sleep(_seconds):
+        matches = list(outbox.glob("do-*-cut-*.md"))
+        if matches:
+            staged["text"] = matches[0].read_text(encoding="utf-8")
+            payload = json.loads((outbox / "portal-state.json").read_text())
+            payload["bolt"] = _CLEAN_BOLT
+            (outbox / "portal-state.json").write_text(json.dumps(payload))
+            matches[0].unlink()
+
+    monkeypatch.setattr(time, "sleep", _sleep)
+
+    assert main(["cut", str(declaration)]) == 0
+    assert staged["text"] == lenient
+
+
+def test_cut_canonical_declaration_with_marker_stages_byte_for_byte(
+    tmp_path, monkeypatch,
+):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    declaration = tmp_path / "bolt.md"
+    canonical = (
+        "---\ncut: true\nproduce: none\nowed: none\n---\n"
+        "The loom is tied off.\n"
+    )
+    declaration.write_text(canonical, encoding="utf-8")
+    staged = {}
+
+    def _sleep(_seconds):
+        matches = list(outbox.glob("do-*-cut-*.md"))
+        if matches:
+            staged["text"] = matches[0].read_text(encoding="utf-8")
+            payload = json.loads((outbox / "portal-state.json").read_text())
+            payload["bolt"] = _CLEAN_BOLT
+            (outbox / "portal-state.json").write_text(json.dumps(payload))
+            matches[0].unlink()
+
+    monkeypatch.setattr(time, "sleep", _sleep)
+
+    assert main(["cut", str(declaration)]) == 0
+    assert staged["text"] == canonical
 
 
 def test_cut_reports_unconfirmed_when_the_bolt_facet_never_appears(

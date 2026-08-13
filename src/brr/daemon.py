@@ -6857,9 +6857,27 @@ def _stage_outbound(
     source_ref: str = "",
     status: str = message_store.PENDING,
     reason: str = "",
-) -> Path | None:
+    outbox_dir: Path | None = None,
+) -> tuple[Path | None, bool]:
+    blocked = False
+    chat_bound = kind in {"interim", "outbound"} or (
+        kind == "terminal" and _gate_owns_source(target_gate)
+    )
+    if status == message_store.PENDING and chat_bound:
+        notice_dir = outbox_dir
+        if notice_dir is None:
+            raw_outbox = str(getattr(task, "meta", {}).get("outbox_path") or "")
+            notice_dir = Path(raw_outbox) if raw_outbox else None
+        blocked = _block_directive_shaped_chat_body(
+            notice_dir,
+            body,
+            source_file=Path(source_ref.split("#", 1)[0]).name,
+        )
+        if blocked:
+            status = message_store.UNDELIVERABLE
+            reason = "directive-shaped body blocked at the chat delivery seam"
     if account_context is None or not account_context.enabled:
-        return None
+        return None, blocked
     label = str(task.meta.get("repo_label") or account_context.default_repo.label)
     return message_store.stage(
         account_context,
@@ -6873,7 +6891,41 @@ def _stage_outbound(
         source_ref=source_ref,
         status=status,
         reason=reason,
+    ), blocked
+
+
+_CUT_DECLARATION_BODY_KEYS = frozenset({
+    "asks", "produce", "owed", "spend", "decisions", "next",
+})
+
+
+def _first_nonempty_line(body: str) -> str:
+    return next((line.strip() for line in body.splitlines() if line.strip()), "")
+
+
+def _declaration_shaped_cut_body(body: str) -> bool:
+    """Detect a minimal bolt whose declaration was stranded in its body."""
+    first = _first_nonempty_line(body)
+    if protocol.is_outbox_routing_selector_line(first):
+        return True
+    key = first.split(":", 1)[0].strip() if ":" in first else ""
+    return key in _CUT_DECLARATION_BODY_KEYS
+
+
+def _block_directive_shaped_chat_body(
+    outbox_dir: Path | None, body: str, *, source_file: str,
+) -> bool:
+    """Block a leading routing selector at the outbox-to-chat seam."""
+    first = _first_nonempty_line(body)
+    if not protocol.is_outbox_routing_selector_line(first):
+        return False
+    _record_outbox_notice(
+        outbox_dir,
+        "chat delivery blocked: directive-shaped body begins with a routing "
+        "selector — machine-tense text was NOT delivered",
+        kind="refused", lifetime="run", source_file=source_file,
     )
+    return True
 
 
 def _stage_terminal_response(
@@ -6908,7 +6960,7 @@ def _stage_terminal_response(
     status = (
         message_store.UNDELIVERABLE if undeliverable else message_store.PENDING
     )
-    path = _stage_outbound(
+    path, blocked = _stage_outbound(
         task,
         account_context,
         body=body,
@@ -6920,6 +6972,8 @@ def _stage_terminal_response(
         status=status,
         reason=suppressed_reason,
     )
+    if blocked:
+        protocol.update_event_meta(event, terminal_suppressed=True)
     if path is not None:
         protocol.attach_message_path(response_path, path)
         if suppressed_reason and status == message_store.PENDING:
@@ -8240,7 +8294,7 @@ def _drain_outbox(
             )
             if dispatched:
                 promoted += 1
-                message_path = _stage_outbound(
+                message_path, _blocked = _stage_outbound(
                     task, account_context,
                     body=body or task.body,
                     kind="dispatch",
@@ -8262,7 +8316,7 @@ def _drain_outbox(
             )
             if dispatched:
                 promoted += 1
-                message_path = _stage_outbound(
+                message_path, _blocked = _stage_outbound(
                     task, account_context,
                     body=body,
                     kind="dispatch",
@@ -8284,7 +8338,7 @@ def _drain_outbox(
             )
             if handled:
                 promoted += 1
-                message_path = _stage_outbound(
+                message_path, _blocked = _stage_outbound(
                     task, account_context,
                     body=body,
                     kind="dispatch",
@@ -8306,7 +8360,7 @@ def _drain_outbox(
             )
             if handled:
                 promoted += 1
-                message_path = _stage_outbound(
+                message_path, _blocked = _stage_outbound(
                     task, account_context,
                     body=body or f"stop {fm.get('stop')}",
                     kind="dispatch",
@@ -8434,6 +8488,14 @@ def _drain_outbox(
                 outbox_dir=outbox_dir,
                 reply_text=body,
             )
+            if (
+                declaration == cut_verb.CutDeclaration()
+                and _declaration_shaped_cut_body(body)
+            ):
+                mismatches.insert(
+                    0,
+                    "declaration-shaped body — staging casualty, not a woven reply",
+                )
             if mismatches:
                 bounces_so_far = int(
                     (task.meta.get("cut_bounces") or 0)
@@ -8500,7 +8562,7 @@ def _drain_outbox(
             # note). Synthesize an already-`done` event the gate delivers
             # and cleans up; it never wakes a thought.
             gate_available = _gate_can_deliver(emit.brr_dir, gate)
-            message_path = _stage_outbound(
+            message_path, blocked = _stage_outbound(
                 task,
                 account_context,
                 body=body,
@@ -8516,7 +8578,11 @@ def _drain_outbox(
                     "" if gate_available
                     else f"gate {gate!r} is not deliverable on this account"
                 ),
+                outbox_dir=outbox_dir,
             )
+            if blocked:
+                _retire_outbox_staging(fpath)
+                continue
             if _deliver_out_of_bound(
                 emit, task, responses_dir, inbox_dir, event_id, gate, fm, body,
                 outbox_dir, message_path=message_path,
@@ -8723,7 +8789,7 @@ def _drain_outbox(
             f"no gate owns {target_source or 'unknown'} events; route via "
             "gate:<name> if a person must read it"
         )
-        message_path = _stage_outbound(
+        message_path, blocked = _stage_outbound(
             task,
             account_context,
             body=body,
@@ -8748,7 +8814,11 @@ def _drain_outbox(
                 "" if deliverable else
                 undeliverable_reason
             ),
+            outbox_dir=outbox_dir,
         )
+        if blocked:
+            _retire_outbox_staging(fpath)
+            continue
         # The retire below is guarded by ``cross and target_event is not None``;
         # ``not deliverable`` is *wider* than that, because ``target_source``
         # falls back to the run's own source when there is no cross target — so
