@@ -3,6 +3,9 @@ title: Install
 description: Install the brnrd command, and check that it can see a coding-agent Runner.
 ---
 
+New to terminal tooling? Start with the short [Prerequisites](../prerequisites/)
+checklist, then come back here.
+
 Use whichever command matches the tooling you already have — just the one;
 all three install the same program and leave you with a `brnrd` command on
 your `PATH`.

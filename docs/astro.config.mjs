@@ -39,9 +39,10 @@ export default defineConfig({
         {
           label: 'Getting started',
           items: [
-            { label: '1. Install', slug: 'getting-started/install' },
-            { label: '2. Connect', slug: 'getting-started/connect' },
-            { label: '3. First task', slug: 'getting-started/first-task' },
+            { label: '1. Prerequisites', slug: 'getting-started/prerequisites' },
+            { label: '2. Install', slug: 'getting-started/install' },
+            { label: '3. Connect', slug: 'getting-started/connect' },
+            { label: '4. First task', slug: 'getting-started/first-task' },
           ],
         },
         {
