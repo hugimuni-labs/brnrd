@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onDestroy, onMount } from 'svelte';
+	import { onDestroy, onMount, untrack } from 'svelte';
 	import { resolve } from '$app/paths';
 	import AccountDeletion from '$lib/AccountDeletion.svelte';
 	import BillingPanel from '$lib/BillingPanel.svelte';
@@ -685,7 +685,20 @@
 
 		window.addEventListener('scroll', scheduleStep, { passive: true });
 		window.addEventListener('resize', scheduleStep, { passive: true });
-		step();
+		// `untrack`, load-bearing (THE RAIL THAT COULDN'T DECIDE, 2026-08-13):
+		// every other `step()` call runs from listeners and timers — async, so
+		// its `railOpen`/`activeSection` reads are untracked, exactly as the
+		// comment at the top of this effect promises. This first call is the
+		// one synchronous exception: unwrapped, its reads made `activeSection`
+		// a dependency of this whole wiring effect, so every scroll-spy
+		// crossing (any topic split) tore the machinery down and rebuilt it
+		// with `initialStackClocks()` — un-collapsing rail, heddles, and label
+		// for one settle window. The transient expansion moved the stack's
+		// bottom edge back across the very heading that had just crossed it,
+		// flipping `activeSection` back, and the loop self-sustained: the rail
+		// flapped full↔slim at ~12Hz while the reader held still at a section
+		// boundary (`repro/repro3.mjs` measures exactly this).
+		untrack(step);
 
 		return () => {
 			requestStackStep = () => {};
