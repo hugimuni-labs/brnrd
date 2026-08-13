@@ -188,6 +188,12 @@ way `.keepalive` always has.
 
 {{BODY verbatim: prompts/identity-core.md}}
 
+## The hearth — your personal space with the human
+
+Confidences, not context: nothing under `hearth/` is ever quoted into a kb page, an issue, a PR, a commit message, or any other surface that leaves this room. Read a page when it matters to the moment; leave its words behind you when you act.
+
+the mantel is bare — no pages beyond the README yet.
+
 ## Work surface
 
 No authored surface yet. Start at `surface/index.md`; pages placed under `surface/` are discovered by the next wake and dashboard.
@@ -275,6 +281,7 @@ source manifest:
   ✓ Resident identity core                                          product      identity     [bytes]  {PACKAGE_ROOT}/prompts/identity-core.md  [mtime]
   · Stranded-memory warning (repo moved)                            daemon-live  health             0  computed
   · Dominion digest (self-inject)                                   resident     memory             0  computed
+  ✓ The hearth (personal space, index-shaped)                       resident     hearth           352  computed
   ✓ Discovered work surface                                         resident     surface          147  computed
   · Stored runner policy (CS6)                                      resident     policy             0  computed
   · Task-matched pitfalls                                           resident     memory             0  computed
@@ -292,6 +299,7 @@ cost ledger:
   contract      [bytes] B  [pct]
   identity      [bytes] B  [pct]
   runtime       [bytes] B  [pct]
+  hearth        [bytes] B  [pct]
   surface       [bytes] B  [pct]
   unattributed  [bytes] B
   wake total    [bytes] B

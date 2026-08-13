@@ -14,12 +14,15 @@ from brr.prompts import (
     _annotate_stale_refs,
     _backchannel_handles_only,
     _build_context_block,
+    _build_hearth_block,
     _build_identity_core_block,
     _build_injected_blocks_with_contracts,
     _build_runner_policy_block,
+    _build_strand_pitfalls_contract,
     _build_work_surface_block,
     _build_work_surface_block_scored,
     _entry_key,
+    _first_heading,
     _format_recent_conversation,
     _read_recent_log,
     _MAX_ACCRETING_BLOCK_BYTES,
@@ -3596,6 +3599,176 @@ class TestWorkSurfaceInjection:
         # Every other, non-chronological block stays untouched — defaults.
         assert by_key["identity-core"].stale is False
         assert by_key["identity-core"].newest_item is None
+
+
+# ── #1332 — the hearth: wake injection, index-shaped ────────────────────
+
+
+class TestHearthInjection:
+    def test_first_heading_reads_the_page_own_h1(self):
+        assert _first_heading("# The maintainer\n\nbody") == "The maintainer"
+        assert _first_heading("no heading here\njust prose") == ""
+        assert _first_heading("## Not an H1\n\n# But this is\n") == "But this is"
+
+    def test_bare_hearth_states_the_mantel_is_bare(self, tmp_path):
+        """No pages beyond the seeded README ⇒ named, not absent — the
+        block still renders, with the block header and the bare line."""
+        from brr import account
+
+        _seed_account_home(tmp_path)
+        home = tmp_path / "acct-home"
+        account.resolve_context(
+            tmp_path, {"home.path": str(home), "repo.label": "local/default"}
+        )
+
+        result = _build_hearth_block(tmp_path)
+
+        assert "The hearth" in result
+        assert "the mantel is bare" in result
+        assert "README.md" not in result  # the seed itself is not a "page"
+
+    def test_confidences_marker_always_present(self, tmp_path):
+        """The privacy pin's third leg: every render — bare or populated —
+        carries the standing reminder that page contents are confidences."""
+        from brr import account
+
+        _seed_account_home(tmp_path)
+        home = tmp_path / "acct-home"
+        ctx = account.resolve_context(
+            tmp_path, {"home.path": str(home), "repo.label": "local/default"}
+        )
+        (account.hearth_path(ctx) / "note.md").write_text(
+            "# A note\n\nbody", encoding="utf-8"
+        )
+
+        result = _build_hearth_block(tmp_path)
+
+        assert _says(
+            result,
+            "is ever quoted into a kb page, an issue, a PR, a commit message, "
+            "or any other surface that leaves this room",
+        )
+
+    def test_pages_render_as_one_line_each_filename_and_first_heading(self, tmp_path):
+        from brr import account
+
+        _seed_account_home(tmp_path)
+        home = tmp_path / "acct-home"
+        ctx = account.resolve_context(
+            tmp_path, {"home.path": str(home), "repo.label": "local/default"}
+        )
+        hearth = account.hearth_path(ctx)
+        (hearth / "arseni.md").write_text(
+            "# The maintainer — personal context\n\nthe rest never rides the wake.\n",
+            encoding="utf-8",
+        )
+        (hearth / "headingless.md").write_text("just prose, no H1\n", encoding="utf-8")
+
+        result = _build_hearth_block(tmp_path)
+
+        assert "- `arseni.md` — The maintainer — personal context" in result
+        assert "- `headingless.md`" in result
+        # Never the page body — the whole point of "index-shaped".
+        assert "never rides the wake" not in result
+        assert "just prose, no H1" not in result
+
+    def test_readme_excluded_from_the_per_page_index(self, tmp_path):
+        from brr import account
+
+        _seed_account_home(tmp_path)
+        home = tmp_path / "acct-home"
+        ctx = account.resolve_context(
+            tmp_path, {"home.path": str(home), "repo.label": "local/default"}
+        )
+        (account.hearth_path(ctx) / "note.md").write_text(
+            "# A note\n\nbody", encoding="utf-8"
+        )
+
+        result = _build_hearth_block(tmp_path)
+
+        assert "- `README.md`" not in result
+        assert "- `note.md` — A note" in result
+
+    def test_over_budget_pages_get_a_named_truncation_banner(self, tmp_path):
+        from brr import account
+
+        _seed_account_home(tmp_path)
+        home = tmp_path / "acct-home"
+        ctx = account.resolve_context(
+            tmp_path, {"home.path": str(home), "repo.label": "local/default"}
+        )
+        hearth = account.hearth_path(ctx)
+        # Comfortably past the ~1.5 KB index budget once headers are added.
+        for i in range(80):
+            (hearth / f"page-{i:03d}.md").write_text(
+                f"# Page number {i:03d} with a long descriptive heading title\n\nbody\n",
+                encoding="utf-8",
+            )
+
+        result = _build_hearth_block(tmp_path)
+
+        assert "further hearth page" in result
+        assert "omitted" in result
+        assert "read them under `hearth/`" in result
+        # The banner names a *count*, never a host filesystem path (#1332
+        # guard: same "never host paths" discipline as the remote-reader
+        # rule for any other injected block).
+        assert str(tmp_path) not in result
+
+    def test_placed_with_identity_continuity_ahead_of_work_surface(self, tmp_path):
+        """Assembly order (#1332): the hearth rides beside identity/dominion,
+        strictly before the work surface — who-we-are before what-we-do."""
+        from brr import account
+
+        _seed_account_home(tmp_path)
+        home = tmp_path / "acct-home"
+        ctx = account.resolve_context(
+            tmp_path, {"home.path": str(home), "repo.label": "local/default"}
+        )
+        (account.hearth_path(ctx) / "note.md").write_text(
+            "# A note\n\nbody", encoding="utf-8"
+        )
+        (account.work_surface_path(ctx) / "index.md").write_text(
+            "# Work surface", encoding="utf-8"
+        )
+
+        _, contracts, _whole = _build_injected_blocks_with_contracts(tmp_path)
+        order = [c.block_key for c in contracts]
+
+        assert order.index("dominion") < order.index("hearth") < order.index("work-surface")
+
+    def test_contract_entry_carries_the_hearth_authority(self, tmp_path):
+        from brr.bootscore import AUTHORITY_HEARTH
+
+        _seed_account_home(tmp_path)
+
+        _, contracts, _whole = _build_injected_blocks_with_contracts(tmp_path)
+        by_key = {c.block_key: c for c in contracts}
+
+        assert by_key["hearth"].authority == AUTHORITY_HEARTH
+        assert by_key["hearth"].location == "computed"
+        assert by_key["hearth"].present is True  # bare hearth still renders
+
+    def test_strand_wake_never_receives_the_hearth_block(self, tmp_path):
+        """Defence in depth: a strand's inject stack is pitfalls-only by
+        construction (``_build_strand_pitfalls_contract``), so this pins the
+        structural exclusion the privacy contract depends on, not just the
+        resident-wake ordering above."""
+        from brr import account
+
+        _seed_account_home(tmp_path)
+        home = tmp_path / "acct-home"
+        ctx = account.resolve_context(
+            tmp_path, {"home.path": str(home), "repo.label": "local/default"}
+        )
+        (account.hearth_path(ctx) / "note.md").write_text(
+            "# A note\n\nconfidential.\n", encoding="utf-8"
+        )
+
+        keyed, contract = _build_strand_pitfalls_contract(tmp_path, "some task")
+
+        assert "hearth" not in [k for k, _ in keyed]
+        assert contract.block_key == "pitfalls"
 
 
 # ── #1061 rec 1 — the named surface reserve ────────────────────────────

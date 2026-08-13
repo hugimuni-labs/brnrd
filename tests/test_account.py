@@ -696,6 +696,102 @@ def test_resolve_context_creates_and_seeds_work_surface(tmp_path):
     assert "plans/repo/active.md" in index
 
 
+# ── #1332 — the hearth: a first-class personal space ──────────────────
+
+
+def test_resolve_context_creates_and_seeds_hearth(tmp_path):
+    """Init scaffold: a fresh account home gets ``hearth/README.md`` naming
+    the room's purpose, a sibling of ``surface/`` and ``knowledge/``."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    home = tmp_path / "home"
+
+    account.resolve_context(repo, {"home.path": str(home)})
+
+    assert (home / "hearth").is_dir()
+    readme = (home / "hearth" / "README.md").read_text(encoding="utf-8")
+    assert "# The hearth" in readme
+    # Named as distinct from the other three rooms, not just present.
+    assert "surface/" in readme
+    assert "knowledge/" in readme
+
+
+def test_seed_hearth_never_overwrites_an_existing_room(tmp_path):
+    """Idempotency: an account that already grew a hearth by hand (the
+    common case #1332 was filed against) must come out byte-identical —
+    write-if-absent, same discipline as ``_seed_work_surface``."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    home = tmp_path / "home"
+    hearth = home / "hearth"
+    hearth.mkdir(parents=True)
+    custom_readme = "# My own hearth\n\nwritten by hand before the product knew.\n"
+    (hearth / "README.md").write_text(custom_readme, encoding="utf-8")
+    (hearth / "confidence.md").write_text("# A secret\n\nprivate.\n", encoding="utf-8")
+
+    # Run resolve_context (the real init path) twice — birth and a later boot.
+    account.resolve_context(repo, {"home.path": str(home)})
+    account.resolve_context(repo, {"home.path": str(home)})
+
+    assert (hearth / "README.md").read_text(encoding="utf-8") == custom_readme
+    assert (hearth / "confidence.md").read_text(encoding="utf-8") == (
+        "# A secret\n\nprivate.\n"
+    )
+    # No stray files introduced beside the two the human already wrote.
+    assert {p.name for p in hearth.iterdir()} == {"README.md", "confidence.md"}
+
+
+def test_hearth_files_ignores_symlinked_directories(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    home = tmp_path / "account-home"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.md").write_text("leak", encoding="utf-8")
+
+    ctx = account.resolve_context(repo, {"home.path": str(home), "repo.label": "Gurio/brr"})
+    hearth = account.hearth_path(ctx)
+    (hearth / "evil").symlink_to(outside, target_is_directory=True)
+
+    names = [p.name for p in account.hearth_files(ctx)]
+    assert "secret.md" not in names
+    assert "README.md" in names
+
+
+def test_hearth_never_rides_the_dashboard_corpus_or_knowledge_lanes(tmp_path):
+    """Privacy pin (#1332): ask the *owning* module — ``account.corpus_files``,
+    the single source ``gates/cloud_publisher._corpus_resolve`` reads for the
+    dashboard's corpus PUT, and ``account.knowledge_path``, the only root
+    ``knowledge.capture`` ever commits/pushes from. A hearth page must not
+    surface from either, for every corpus layer, not a hand-copied lane list.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    home = tmp_path / "account-home"
+    ctx = account.resolve_context(repo, {"home.path": str(home), "repo.label": "Gurio/brr"})
+
+    hearth = account.hearth_path(ctx)
+    (hearth / "confidence.md").write_text("# A secret\n\nprivate stuff.\n", encoding="utf-8")
+
+    # The dashboard corpus lane: every layer, asked of the owning module.
+    files = account.corpus_files(ctx)
+    assert files, "sanity: the surface/knowledge/runs corpus is non-empty"
+    for f in files:
+        assert f.layer in account.CORPUS_LAYERS
+        assert not f.path.startswith("hearth/"), f.path
+        assert "hearth" not in Path(f.path).parts
+
+    # The knowledge push lane: hearth is not even reachable from the root
+    # `knowledge.capture` operates under.
+    knowledge_root = account.knowledge_path(ctx)
+    assert not str(hearth).startswith(str(knowledge_root) + "/")
+    assert not str(knowledge_root).startswith(str(hearth) + "/")
+
+
 def test_active_plan_path_is_repo_tagged(tmp_path):
     """CS5: the active plan path is tagged by repo label inside plans/."""
     ctx = account.AccountContext(

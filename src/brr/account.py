@@ -38,6 +38,24 @@ REPO_DOMINION_DIRNAME = "dominion"
 # outside this directory on purpose.
 SURFACE_PATH = "surface"
 
+# #1332 — the hearth: the shared human<->resident *personal* space
+# (confidences, story, the relationship), distinct from ``surface/`` (the
+# work), ``dominion/`` (the resident's own workshop, i.e. this whole home),
+# and ``knowledge/`` (shared project facts). Deliberately a sibling of
+# ``SURFACE_PATH``, never nested under it: ``corpus_files`` below only walks
+# ``surface/``, ``knowledge/repos/``, and ``runs/`` for the dashboard corpus
+# and kb/knowledge push lanes, so a directory that never joins that roots
+# tuple never rides those wires by construction — no exclusion filter to
+# forget, nothing to keep in sync. See ``hearth_path`` / ``hearth_files`` /
+# ``_seed_hearth`` below and ``prompts._build_hearth_block`` for the
+# index-shaped wake injection.
+HEARTH_PATH = "hearth"
+
+# The hearth's own seed file's basename — excluded from the per-page index
+# a wake sees (``prompts._build_hearth_block``): it is the room's own
+# description, not a page about the relationship.
+HEARTH_README_NAME = "README.md"
+
 # Names retained *inside* the discovered surface so the useful plan/ledger
 # conventions survive without remaining separate orientation roots.
 PLANS_PATH = "plans"
@@ -774,11 +792,12 @@ def resolve_context(
             home_kind=kind,
             home_id=home_id,
         )
-        for rel in (DISPATCH_INBOX_PATH, RESPONSES_PATH, RUNS_PATH, SURFACE_PATH):
+        for rel in (DISPATCH_INBOX_PATH, RESPONSES_PATH, RUNS_PATH, SURFACE_PATH, HEARTH_PATH):
             (home_root / rel).mkdir(parents=True, exist_ok=True)
         _migrate_legacy_run_state(home_root)
         _migrate_legacy_work_surface(home_root)
         _seed_work_surface(home_root, current_label)
+        _seed_hearth(home_root)
 
     if kind == "account" and create:
         migration_ctx = HomeContext(
@@ -1203,6 +1222,92 @@ def _seed_work_surface(home_root: Path, repo_label_value: str) -> None:
         return
     slug = slug_repo_label(repo_label_value)
     index.write_text(_work_surface_seed_text(slug), encoding="utf-8")
+
+
+def _hearth_seed_text() -> str:
+    """The exact starter content ``_seed_hearth`` writes.
+
+    Names the room's purpose so an empty hearth still reads as an
+    invitation rather than an unexplained directory (#1332) — the same
+    "empty-but-named beats absent" instinct the issue itself argues for.
+    Factored out, same reasoning as ``_work_surface_seed_text``: a future
+    orphan/health sweep can reconstruct and compare this byte-for-byte
+    instead of guessing "looks default."
+    """
+
+    return (
+        "# The hearth\n\n"
+        "The shared space between you and your resident — confidences, "
+        "story, the shape of the relationship. Distinct from `surface/` "
+        "(the work you do together), `knowledge/` (what the projects "
+        "taught it), and the rest of this home (its own working memory): "
+        "this room is about the two of you, not the tasks.\n\n"
+        "## What goes here\n\n"
+        "Whatever you'd want a long-running collaborator to actually "
+        "remember about you and about this relationship — free-form "
+        "Markdown, one page per thing that deserves its own file. Nothing "
+        "here is a form to fill in.\n\n"
+        "## What the daemon does with it\n\n"
+        "Every wake sees a small index — each page's filename and its own "
+        "first heading, nothing more — so the room is known without being "
+        "read cold every time. A page's full text is read on demand, the "
+        "same way any other file is.\n\n"
+        "## The one hard rule\n\n"
+        "This room stays home. It is excluded from kb capture, from every "
+        "knowledge push lane, and from dashboard mirroring — the wake "
+        "injection carries its own reminder that page contents are "
+        "confidences, never quoted into kb pages, issues, PRs, or any "
+        "other public surface.\n"
+    )
+
+
+def _seed_hearth(home_root: Path) -> None:
+    """Create the hearth's own README once; subsequent authors own it.
+
+    Write-if-absent, exactly like ``_seed_work_surface``: an account that
+    already grew a hearth by hand (the common case this issue was filed
+    against — a maintainer wrote real pages here before the product knew
+    the room existed) must come out byte-identical.
+    """
+
+    hearth = home_root / HEARTH_PATH
+    readme = hearth / HEARTH_README_NAME
+    if readme.exists():
+        return
+    readme.write_text(_hearth_seed_text(), encoding="utf-8")
+
+
+def hearth_path(ctx: AccountContext) -> Path:
+    """Return the account home's hearth directory (#1332).
+
+    A sibling of :func:`work_surface_path`, never nested under it — see
+    the module-level comment on ``HEARTH_PATH`` for why that placement is
+    itself the privacy boundary.
+    """
+
+    return context_home_root(ctx) / HEARTH_PATH
+
+
+def hearth_files(ctx: AccountContext) -> list[Path]:
+    """Return hearth Markdown files in stable order, README leading.
+
+    Same hardening as :func:`work_surface_files`: no symlinks, no hidden
+    paths, ``.md`` only. Includes the README (callers building the
+    per-page wake index exclude it by name — see
+    ``prompts._build_hearth_block``); this function stays a plain
+    discovery primitive so a future reader (health check, orphan sweep)
+    gets the whole directory, not a pre-filtered view.
+    """
+
+    root = hearth_path(ctx)
+    files = _discover_markdown(root)
+    return sorted(
+        files,
+        key=lambda path: (
+            path.name != HEARTH_README_NAME,
+            path.relative_to(root).as_posix(),
+        ),
+    )
 
 
 # ── Inter-run plan helpers inside the discovered surface ─────────────
