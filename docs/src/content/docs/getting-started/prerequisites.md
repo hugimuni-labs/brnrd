@@ -47,13 +47,14 @@ you do not need a separate brnrd model key.
 
 ## 4. The install runtime
 
-brnrd runs on **Python 3.10 or newer**, but the recommended npm installer can
-provision a private copy if your computer does not already have Python. For that
-path, install a current [Node.js LTS](https://nodejs.org/en/download) release;
-it supplies the `npm` command used on the next page.
+Live in Node already? You're home: `npm install -g brnrd` on the next page is
+the recommended path, and it provisions a private Python for you when the
+machine has none. Just have a current [Node.js LTS](https://nodejs.org/en/download)
+installed (on a Mac, `brew install node` does it).
 
-Already comfortable with Python tooling? The install page also offers
+More of a Python person? The install page also offers
 [uv](https://docs.astral.sh/uv/getting-started/installation/) and
-[pipx](https://pipx.pypa.io/stable/installation/) as alternatives.
+[pipx](https://pipx.pypa.io/stable/installation/) — brnrd itself runs on
+Python 3.10+.
 
 That is the whole toolbox. You are ready to [install brnrd](../install/).
