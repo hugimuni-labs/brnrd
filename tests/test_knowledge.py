@@ -476,6 +476,42 @@ def test_capture_page_manifest_excludes_reply_archives(tmp_path):
     assert captured_pages == ["decision.md"]
 
 
+def test_capture_never_walks_the_hearth(tmp_path):
+    """#1332 privacy pin: ``knowledge.capture`` commits/pushes only
+    ``account.knowledge_path`` — the hearth is a sibling directory
+    (``account.hearth_path``) that root never contains, so a hearth page
+    must never reach the forge, the capture manifest, or even get read.
+    Driven with a real push chain (the ``_capture_chain`` fixture), not a
+    mock, so the assertion is about the actual git objects that land.
+    """
+    from brr import account
+
+    repo, cfg, forge = _capture_chain(tmp_path, checkout=False)
+    ctx = account.resolve_context(repo, cfg, create=True)
+    hearth = account.hearth_path(ctx)
+    hearth.mkdir(parents=True, exist_ok=True)
+    confidence = hearth / "confidence.md"
+    confidence.write_text(
+        "# A secret\n\nprivate stuff that must never leave this room.\n",
+        encoding="utf-8",
+    )
+    page = tmp_path / "home" / "knowledge" / "repos" / "Gurio__brr" / "decision.md"
+    page.write_text("a decision\n", encoding="utf-8")
+
+    captured_pages: list[str] = []
+    assert knowledge.capture(
+        repo, "kb: capture", cfg=cfg, captured_pages=captured_pages,
+    ) is True
+
+    assert captured_pages == ["decision.md"]
+    assert not _forge_has(forge, "confidence.md")
+    assert not any("hearth" in p for p in captured_pages)
+    # The page itself is untouched — capture never even opened it.
+    assert confidence.read_text(encoding="utf-8") == (
+        "# A secret\n\nprivate stuff that must never leave this room.\n"
+    )
+
+
 def test_committed_pages_in_window_credits_resident_committed_pages(tmp_path):
     """#538: a page the resident *commits* mid-run is invisible to the
     dirty-vs-HEAD capture diff; the run-start OID window still sees it —

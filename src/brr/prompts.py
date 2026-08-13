@@ -1463,6 +1463,120 @@ def _annotate_stale_refs(content: str, resolved_prs: dict[int, str] | None) -> s
     return preamble + "".join(pieces)
 
 
+#: ~1.5 KB — a small standing block, index-shaped on purpose (#1332): one
+#: line per hearth page, never the page body. The hearth's whole point is
+#: that its pages are never mirrored anywhere, so a byte-budget mirroring
+#: the work surface's tens of KB would be the wrong shape even before the
+#: privacy question — this block is a table of contents, not orientation.
+_HEARTH_INDEX_BUDGET_BYTES = 1536
+
+#: The confidences reminder every hearth block carries, bare or populated.
+#: Read literally by the resident's own delivery discipline (kb capture,
+#: commit messages, issue/PR bodies, chat replies) — this is the line that
+#: makes "never quoted into a public surface" a standing instruction
+#: instead of something only ``account.HEARTH_PATH``'s placement enforces
+#: structurally.
+_HEARTH_CONFIDENCES_MARKER = (
+    "Confidences, not context: nothing under `hearth/` is ever quoted into "
+    "a kb page, an issue, a PR, a commit message, or any other surface "
+    "that leaves this room. Read a page when it matters to the moment; "
+    "leave its words behind you when you act."
+)
+
+
+def _first_heading(content: str) -> str:
+    """The page's own first ``# `` line, title only — ``""`` if it has none.
+
+    Deliberately the *first* H1, not the first ``## ``: a hearth page is
+    one free-form document, not a sectioned page like a surface hub, so its
+    own title is the whole orientation a one-line index needs (#1332).
+    """
+
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("# "):
+            return stripped[2:].strip()
+    return ""
+
+
+def _build_hearth_block(repo_root: Path) -> str:
+    """The hearth's index-shaped standing block (#1332) — never the pages.
+
+    ``<account home>/hearth/`` is the shared human<->resident *personal*
+    space — confidences, story, the relationship — distinct from
+    ``surface/`` (the work), the rest of the home (the resident's own
+    workshop), and ``knowledge/`` (shared project facts). A wake perceives
+    one line per page (filename + the page's own first ``# `` heading),
+    never the page body: the room is real to every wake without flooding
+    the budget or, worse, riding the same unredacted wires the work
+    surface and knowledge corpus do. A page's full text is one ``Read``
+    away by the path this index names, exactly like the warp item index
+    above it in the file.
+
+    Placed with the identity/continuity blocks, ahead of the work surface
+    (see ``_build_injected_blocks_with_contracts``): who-we-are reads
+    before what-we-do, the same ordering rationale ``_build_identity_core_block``
+    already uses.
+
+    A hearth with no pages beyond its own README states that plainly
+    (``the mantel is bare``) rather than omitting the block — an unnamed
+    absence reads as "no such room," and the room exists the moment
+    ``resolve_context`` first ran (see ``account._seed_hearth``). Returns
+    ``""`` only when dominion injection itself is off or no home resolves —
+    the same two guards ``_build_work_surface_block_scored`` uses.
+    """
+    from . import account as acc
+    from . import config as conf
+
+    cfg = conf.load_config(repo_root)
+    if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
+        return ""
+    try:
+        ctx = acc.resolve_context(repo_root, cfg, create=False)
+    except Exception:
+        return ""
+    if not ctx.enabled:
+        return ""
+
+    hearth = acc.hearth_path(ctx)
+    header = "## The hearth — your personal space with the human\n\n" + _HEARTH_CONFIDENCES_MARKER
+
+    pages = [
+        path
+        for path in acc.hearth_files(ctx)
+        if path.relative_to(hearth).as_posix() != acc.HEARTH_README_NAME
+    ]
+    if not pages:
+        return header + "\n\nthe mantel is bare — no pages beyond the README yet."
+
+    lines: list[str] = []
+    omitted = 0
+    remaining = max(0, _HEARTH_INDEX_BUDGET_BYTES - len(header.encode("utf-8")))
+    for path in pages:
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        relative = path.relative_to(hearth).as_posix()
+        heading = _first_heading(content)
+        line = f"- `{relative}`" + (f" — {heading}" if heading else "")
+        size = len(line.encode("utf-8")) + 1  # +1 for the joining newline
+        if size > remaining:
+            omitted += 1
+            continue
+        lines.append(line)
+        remaining -= size
+
+    body = "\n".join(lines)
+    if omitted:
+        noun = "page" if omitted == 1 else "pages"
+        body += (
+            f"\n\n_({omitted} further hearth {noun} omitted — the index "
+            f"budget was exhausted: read them under `hearth/`)_"
+        )
+    return f"{header}\n\n{body}"
+
+
 def _build_work_surface_block_scored(
     repo_root: Path,
     *,
@@ -2351,7 +2465,7 @@ def _build_injected_blocks_with_contracts(
         ContractEntry,
         OWNER_PRODUCT, OWNER_RESIDENT, OWNER_PROJECT, OWNER_DAEMON_LIVE,
         AUTHORITY_IDENTITY, AUTHORITY_MEMORY, AUTHORITY_SURFACE, AUTHORITY_POLICY,
-        AUTHORITY_KNOWLEDGE, AUTHORITY_ACTIVITY, AUTHORITY_HEALTH,
+        AUTHORITY_KNOWLEDGE, AUTHORITY_ACTIVITY, AUTHORITY_HEALTH, AUTHORITY_HEARTH,
     )
 
     keyed: list[tuple[str, str]] = []
@@ -2404,6 +2518,24 @@ def _build_injected_blocks_with_contracts(
     ))
     if dominion_block:
         keyed.append(("dominion", dominion_block))
+
+    # 2c. The hearth — shared human/resident personal space, index-shaped
+    # (#1332). Grouped with identity/continuity, ahead of the work surface:
+    # who-we-are before what-we-do. Never mirrored — see AUTHORITY_HEARTH
+    # and `_build_hearth_block`'s own docstring for the privacy contract.
+    hearth_block = _build_hearth_block(repo_root)
+    contracts.append(ContractEntry(
+        block_key="hearth",
+        label="The hearth (personal space, index-shaped)",
+        owner=OWNER_RESIDENT,
+        authority=AUTHORITY_HEARTH,
+        freshness=None,
+        location="computed",
+        present=bool(hearth_block),
+        bytes=_rendered_bytes(hearth_block),
+    ))
+    if hearth_block:
+        keyed.append(("hearth", hearth_block))
 
     # 3. One discovered shared orientation root.
     work_surface_trim, work_surface_whole = _build_work_surface_block_scored(
@@ -2563,16 +2695,18 @@ def _build_injected_blocks(
 
     1. Resident identity core — product-owned invariant contract
     2. Dominion digest (living playbook + ``self-inject``)
-    3. Discovered work surface — the shared authored orientation
-    4. Stored runner policy (CS6) — standing runner preferences
-    5. Pitfalls matching the task
-    6. Recent-activity log tail
-    7. kb health note
-    8. notes health note — the resident's own surfaces (:mod:`brr.notes`)
+    3. The hearth — personal space, index-shaped (#1332)
+    4. Discovered work surface — the shared authored orientation
+    5. Stored runner policy (CS6) — standing runner preferences
+    6. Pitfalls matching the task
+    7. Recent-activity log tail
+    8. kb health note
+    9. notes health note — the resident's own surfaces (:mod:`brr.notes`)
 
     The ordering puts the product identity contract before the resident-owned
-    state (dominion + work surface + policy), then the shared project
-    history, so a waking can distinguish authority layers in read order.
+    state (dominion + hearth + work surface + policy), then the shared
+    project history, so a waking can distinguish authority layers in read
+    order.
 
     Shared by ``_join_prompt_parts`` and ``build_injected_context``; whatever
     block is added here surfaces in both paths with no drift.  Mode-toggle
