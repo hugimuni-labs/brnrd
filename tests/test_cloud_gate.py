@@ -1000,6 +1000,48 @@ def test_corpus_fingerprint_tolerates_missing_knowledge_root(tmp_path):
     assert digest
 
 
+def test_hearth_never_reaches_the_dashboard_corpus_resolve(tmp_path):
+    """#1332 privacy pin, driven at the actual publish-lane boundary:
+    ``_corpus_resolve`` is the one function ``_publish_corpus`` calls to
+    learn what the ``PUT /v1/daemons/surface`` lane carries. Populate a
+    hearth page and ask *that* function, not a hand-copied lane list — it
+    is the owning module for exactly this wire.
+    """
+    from brr import account
+
+    brr_dir = tmp_path / ".brr"
+    repo_root = brr_dir.parent
+    repo_root.mkdir(parents=True, exist_ok=True)
+    init_git_repo(repo_root)
+
+    # No cfg override, matching ``_corpus_resolve``'s own bare
+    # ``resolve_context(repo_root, create=False)`` call below — both must
+    # land on the same (default, project-derived) home for this test to
+    # exercise the real seam instead of two unrelated homes.
+    ctx = account.resolve_context(repo_root, create=True)
+    (account.hearth_path(ctx) / "confidence.md").write_text(
+        "# A secret\n\nprivate stuff that must never leave this room.\n",
+        encoding="utf-8",
+    )
+    # Also seed a surface page so the corpus is non-trivially populated —
+    # a resolver that returns an empty list either way would pass this
+    # assertion for the wrong reason.
+    (account.work_surface_path(ctx) / "index.md").write_text(
+        "# Work surface", encoding="utf-8"
+    )
+
+    resolved = cloud._corpus_resolve(brr_dir)
+    assert resolved is not None
+    files, _knowledge_dir = resolved
+    assert files, "sanity: the corpus resolved something"
+    for f in files:
+        assert not f.path.startswith("hearth/"), f.path
+
+    # And the payload builder (what actually rides the PUT) agrees.
+    payload = cloud._corpus_payload(files)
+    assert all(not entry["path"].startswith("hearth/") for entry in payload)
+
+
 def test_loop_publishes_quota_snapshot(tmp_path, monkeypatch):
     """#237: real per-shell quota windows replace the dashboard's UNKNOWN card."""
     import json as json_mod
