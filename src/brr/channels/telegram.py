@@ -44,6 +44,11 @@ class ParsedMessage:
     is_edit: bool = False
     has_media: bool = False
     attachments: list[dict] = field(default_factory=list)
+    # Telegram's own chat classification ("private", "group", "supergroup",
+    # "channel"); "" when the update carried none. Load-bearing for the
+    # room-membership grant (w-52): authorization may widen only when the
+    # chat is verifiably a group, and this field is the verification.
+    chat_type: str = ""
 
 
 def _safe_filename(name: str, fallback: str) -> str:
@@ -121,6 +126,7 @@ def parse_update(payload: dict) -> ParsedMessage | None:
         user_id = None
     return ParsedMessage(
         chat_id=str(chat_id),
+        chat_type=str((msg.get("chat") or {}).get("type") or ""),
         text=text,
         message_date=message_date,
         message_id=msg.get("message_id"),
