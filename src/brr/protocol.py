@@ -82,6 +82,19 @@ _OUTBOX_ROUTING_KEYS = (
 )
 
 
+def is_outbox_routing_selector_line(line: str) -> bool:
+    """Whether *line* is the exact selector shape the lenient parser accepts."""
+    stripped = line.strip()
+    if ":" not in stripped:
+        return False
+    key, value = (part.strip() for part in stripped.split(":", 1))
+    return (
+        key in _OUTBOX_ROUTING_KEYS
+        and bool(value)
+        and re.fullmatch(r"\S+", value) is not None
+    )
+
+
 _CODE_FENCE_RE = re.compile(r"^(`{3,}|~{3,})[ \t]*[\w.+-]*[ \t]*$")
 
 
@@ -119,12 +132,7 @@ def _strip_leading_code_fence(text: str) -> str:
         return text
     inner = lines[j].strip()
     if inner != "---":
-        if ":" not in inner:
-            return text
-        key, value = (part.strip() for part in inner.split(":", 1))
-        if key not in _OUTBOX_ROUTING_KEYS:
-            return text
-        if not value or not re.fullmatch(r"\S+", value):
+        if not is_outbox_routing_selector_line(inner):
             return text
     for k in range(j + 1, len(lines)):
         closing = lines[k].strip()
@@ -188,11 +196,7 @@ def parse_outbox_message(text: str) -> tuple[dict[str, Any], str]:
         return {}, text
 
     first = lines[idx].strip()
-    lead_key = first.split(":", 1)[0].strip() if ":" in first else ""
-    if lead_key not in _OUTBOX_ROUTING_KEYS:
-        return {}, text
-    lead_value = first.split(":", 1)[1].strip()
-    if not lead_value or not re.fullmatch(r"\S+", lead_value):
+    if not is_outbox_routing_selector_line(first):
         # ``event: the meeting is moved`` — a routing key leading prose,
         # not a routing selector. Leave the message intact.
         return {}, text
