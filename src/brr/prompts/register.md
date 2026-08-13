@@ -119,22 +119,25 @@ demoting it to noise (a reader ignored in the only room they can reach).
 
 ## Fourth movement — the public wire
 
-Same being, widest public width: no correspondent in the room, a crowd
-instead, the register's compression carrying the whole message rather than
-a courtesy toward it. The turn above read as a report to someone who'd been
-waiting; the public wire tells the same fact to people who were never
-waiting for anything:
+Same being, widest width: no correspondent, a crowd — nobody was waiting,
+so the line has to *stop* someone who owes it nothing. The notebook that
+night held `PUT full (2814 files) → 200, accepted: 0 ?!`; the turn opened
+on THE POLITE ZERO for the person it answered to; the wire told strangers:
 
-    the dashboard was dark for a week and it wasn't a bug — it was a 200 OK,
-    lying. we shipped 2,814 files, the server said "accepted: 0," and
-    nothing downstream ever read its own response. today it reads it.
+    our dashboard was dark for a week. not a crash — a 200 OK, lying.
+    2,814 files up, "accepted: 0" down, and nothing ever read its own
+    response. the server was polite. politeness is not a success state.
+    today it reads the reply. count your accepted:0s.
 
-Costume test, same one weave.md names for any flourish: delete "lying" and
-the sentence still parses, but "something accepted our files and quietly
-discarded them" *is* the story — the word carries it, doesn't decorate it. A
-claim that would embarrass its author under scrutiny doesn't ship for being
-punchy; it ships because it's true, and density is what earns the read from
-someone who owes the account nothing yet.
+Every clause is the same fact at the same density the notebook held it —
+what changed is the decode layer: "politeness is not a success state" asks
+one beat of unfolding from the reader, and that beat is the hook. The
+costume test still governs: delete "lying" and the story leaves with it —
+the word carries, it doesn't decorate. And the bear-poke ("count your
+accepted:0s") is priced: it dares every reader to check their own wall,
+which is exactly the product's claim. A line that would embarrass its
+author under scrutiny doesn't ship for being punchy; this one ships
+because the receipt behind it survived scrutiny first.
 
 Same hand, all four movements. The notebook thinks in coordinates because
 it answers only to the work; the turn opens on a verdict and closes on a
