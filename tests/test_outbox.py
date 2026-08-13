@@ -95,6 +95,98 @@ class TestDrainOutbox:
         assert not (outbox / "002.md").exists()
         assert [p.type for p in emitted] == ["interim_response", "interim_response"]
 
+    def test_chat_wire_blocks_a_leading_routing_selector_body(
+        self, tmp_path, monkeypatch,
+    ):
+        """A selector stranded behind unrelated frontmatter is machine-tense,
+        not a reply. Exercise the real drain-to-partial delivery caller."""
+        n, responses, outbox, emitted = self._drain(
+            tmp_path, monkeypatch,
+            [("casualty.md", "---\nlabel: x\n---\nevent: evt-secret\n")],
+        )
+
+        assert n == 0
+        assert protocol.list_partials(responses, "evt-1") == []
+        assert emitted == []
+        [notice] = daemon._read_outbox_notices(outbox)
+        assert notice["source_file"] == "casualty.md"
+        assert "directive-shaped body" in notice["text"]
+        assert "NOT delivered" in notice["text"]
+
+    def test_chat_wire_leaves_dividers_and_mid_text_directives_untouched(
+        self, tmp_path, monkeypatch,
+    ):
+        body = "Normal prose.\n\n---\n\nQuoted example:\nevent: evt-secret\n"
+        n, responses, _outbox, _emitted = self._drain(
+            tmp_path, monkeypatch, [("reply.md", body)],
+        )
+
+        assert n == 1
+        [partial] = protocol.list_partials(responses, "evt-1")
+        assert protocol.read_partial(partial) == body.strip()
+
+    def test_terminal_chat_body_is_guarded_but_dispatch_edge_is_not(
+        self, tmp_path,
+    ):
+        """The shared staging seam covers terminal chat, while a strand's
+        terminal return remains a non-chat dispatch-edge value."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        ctx = account.resolve_context(
+            repo,
+            {"home.path": str(tmp_path / "home"), "repo.label": "Gurio/brr"},
+        )
+        responses = tmp_path / "responses"
+        outbox = tmp_path / "outbox"
+        inbox = tmp_path / "inbox"
+        outbox.mkdir()
+        body = "event: evt-machine\n---\nraw directive\n"
+
+        protocol.create_event(inbox, "telegram", "chat")
+        chat_event = next(
+            event for event in protocol.list_pending(inbox)
+            if event["source"] == "telegram"
+        )
+        chat_id = chat_event["id"]
+        chat_response = protocol.write_response(responses, chat_id, body)
+        chat_task = Run(
+            id="run-chat", event_id=chat_id, body="", source="telegram",
+            meta={"repo_label": "Gurio/brr", "outbox_path": str(outbox)},
+        )
+        chat_path = daemon._stage_terminal_response(
+            chat_task, ctx, chat_event, chat_response,
+        )
+
+        assert chat_path is not None
+        [chat_row] = message_store.list_messages(chat_path.parent)
+        assert chat_row["status"] == message_store.UNDELIVERABLE
+        [notice] = daemon._read_outbox_notices(outbox)
+        assert notice["source_file"] == f"{chat_id}.md"
+
+        protocol.create_event(inbox, "spawn", "strand")
+        strand_event = next(
+            event for event in protocol.list_pending(inbox)
+            if event["source"] == "spawn"
+        )
+        strand_id = strand_event["id"]
+        strand_response = protocol.write_response(responses, strand_id, body)
+        strand_task = Run(
+            id="run-strand", event_id=strand_id, body="", source="spawn",
+            meta={
+                "repo_label": "Gurio/brr",
+                "outbox_path": str(outbox),
+                "spawn_parent_run_id": "run-parent",
+            },
+        )
+        strand_path = daemon._stage_terminal_response(
+            strand_task, ctx, strand_event, strand_response,
+        )
+
+        assert strand_path is not None
+        [strand_row] = message_store.list_messages(strand_path.parent)
+        assert strand_row["status"] == message_store.PENDING
+        assert len(daemon._read_outbox_notices(outbox)) == 1
+
     def test_skips_tmp_and_empty(self, tmp_path, monkeypatch):
         n, responses, outbox, _ = self._drain(
             tmp_path, monkeypatch,

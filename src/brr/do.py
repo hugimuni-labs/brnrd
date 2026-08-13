@@ -18,8 +18,8 @@ this module only ever emits the canonical one, since a reply/note/gate body
 of arbitrary resident text could otherwise collide with the lenient parser's
 blank-line/`---`-sniffing heuristics — the canonical fence's own regex is
 non-greedy, so it always closes at *this* module's own fence, never at
-anything the body happens to contain). No daemon-side code changes; nothing
-here is a second implementation of the drain's routing decisions.
+anything the body happens to contain). Nothing here is a second
+implementation of the drain's routing decisions.
 
 **The verdict-observation contract.** A directive's outbox file carries no
 identity the daemon reflects back — a notice names the *target* (an event
@@ -66,6 +66,23 @@ from pathlib import Path
 from typing import Any
 
 from . import protocol
+
+
+_CUT_DECLARATION_KEYS = frozenset({
+    "asks", "produce", "owed", "spend", "decisions", "next",
+})
+
+_CUT_SHAPE_ERROR = """invalid cut declaration shape: declaration keys must be in frontmatter and lists must be keyed mappings; nothing was staged. Use:
+---
+cut: true
+asks:
+  evt-...: answered
+produce: none
+owed: none
+spend: <value>
+next: none
+---
+<woven reply>"""
 
 #: Suggested/default wait for a staged directive to be drained, per the
 #: task's own guidance — long enough to clear the daemon's heartbeat tick
@@ -234,15 +251,50 @@ def stage_cut(
       every sibling verb in this module already uses
       (:func:`stage_note`/:func:`stage_gate`).
 
-    Returns ``(path, error)`` — *path* is ``None`` only when *file_path*
-    itself could not be read; a malformed declaration still stages (the
-    drain reports the refusal in ``notices``, exactly like every other
-    verb here).
+    Returns ``(path, error)``. *path* is ``None`` when *file_path* could not
+    be read or when declaration fields were stranded in the body / expressed
+    as unsupported bullet lists. Those staging casualties are refused here,
+    before a lossy wrapper can turn them into a legal minimal bolt.
     """
     try:
         text = Path(file_path).read_text(encoding="utf-8")
     except OSError as exc:
         return None, f"could not read {file_path}: {exc}"
+    parsed, body = protocol.parse_outbox_message(text)
+    first_body_line = next(
+        (line.strip() for line in body.splitlines() if line.strip()), "",
+    )
+    body_key = (
+        first_body_line.split(":", 1)[0].strip()
+        if ":" in first_body_line else ""
+    )
+
+    # A declaration belongs in the routing block, never in the woven body.
+    # The shared frontmatter parser deliberately has no YAML-list grammar;
+    # reject list-looking declarations here instead of silently erasing them.
+    declaration_prefix = text
+    if text.startswith("---\n"):
+        canonical_body = protocol.frontmatter_body(text)
+        declaration_prefix = (
+            text[:-len(canonical_body)] if canonical_body else text
+        )
+    elif "\n---" in text:
+        declaration_prefix = text.split("\n---", 1)[0]
+    declaration_uses_bullets = any(
+        line.lstrip().startswith("- ")
+        for line in declaration_prefix.splitlines()
+    )
+    body_declaration_uses_bullets = (
+        body_key in _CUT_DECLARATION_KEYS
+        and any(line.lstrip().startswith("- ") for line in body.splitlines()[1:])
+    )
+    if (
+        body_key in _CUT_DECLARATION_KEYS
+        or declaration_uses_bullets
+        or body_declaration_uses_bullets
+    ):
+        return None, _CUT_SHAPE_ERROR
+
     filename = stage_filename("cut", index)
     if text.startswith("---\n"):
         fm = protocol.parse_frontmatter(text)
@@ -257,6 +309,12 @@ def stage_cut(
         protocol._atomic_write(
             path, spliced if spliced.endswith("\n") else spliced + "\n",
         )
+        return path, None
+    # A lenient routing block is already a complete outbox message. Staging
+    # it byte-for-byte avoids the double-wrap that erased its declaration.
+    if "cut" in parsed:
+        path = outbox_dir / filename
+        protocol._atomic_write(path, text if text.endswith("\n") else text + "\n")
         return path, None
     path = stage_message(outbox_dir, filename, meta={"cut": "true"}, body=text)
     return path, None
