@@ -713,6 +713,43 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id", help="goal id, or a unique fragment of its headline")
     p.set_defaults(func=cmd_goal_show)
 
+    # The public queue (`envoys.py`): mail that arrived at envoy standing —
+    # it can never ignite a run; a sweep on the resident's own clock closes
+    # each item `answered` / `noted` / `dropped`.
+    queue_p = sub.add_parser(
+        "queue", help="the public queue — envoy-standing mail, swept, never igniting")
+    queue_sub = queue_p.add_subparsers(dest="queue_cmd")
+    p = queue_sub.add_parser("list", help="queue items, oldest first (default verb)")
+    p.add_argument("--status", default=None, help="filter: arrived/answered/noted/dropped")
+    p.set_defaults(func=cmd_queue_list)
+    p = queue_sub.add_parser("show", help="one item, whole")
+    p.add_argument("id", help="queue item id")
+    p.set_defaults(func=cmd_queue_show)
+    p = queue_sub.add_parser(
+        "record", help="file one arrived item (sweep scripts' write verb)")
+    p.add_argument("--channel", required=True, help="medium it arrived on (x, github, ...)")
+    p.add_argument("--body", default=None, help="the item's text")
+    p.add_argument("--body-file", default=None, help="read the text from a file (- for stdin)")
+    p.add_argument(
+        "--meta", action="append", default=[], metavar="KEY=VALUE",
+        help="context fields (author=..., ref=..., envoy=...), repeatable")
+    p.set_defaults(func=cmd_queue_record)
+    p = queue_sub.add_parser("close", help="close one item with a verb")
+    p.add_argument("id", help="queue item id")
+    p.add_argument(
+        "--as", required=True, dest="verb", choices=("answered", "noted", "dropped"),
+        help="the close verb")
+    p.add_argument("--why", default=None, help="one line on why (required for dropped)")
+    p.set_defaults(func=cmd_queue_close)
+    queue_p.set_defaults(func=cmd_queue_list, status=None)
+
+    envoy_p = sub.add_parser(
+        "envoy", help="the envoy registry — public identities the resident wears")
+    envoy_sub = envoy_p.add_subparsers(dest="envoy_cmd")
+    p = envoy_sub.add_parser("list", help="registry rows (default verb)")
+    p.set_defaults(func=cmd_envoy_list)
+    envoy_p.set_defaults(func=cmd_envoy_list)
+
     # Hidden per HIDDEN_COMMANDS — porcelain over the outbox verb grammar
     # (`docs/portals.md`), meant for the resident's own shell inside a live
     # wake, not an operator's terminal. `-- <command> [args...]` is split out
@@ -2859,6 +2896,159 @@ def cmd_goal_show(args):
             f"· {info.count} sample{plural} "
             f"· min {items_mod.format_value(info.min)} · max {items_mod.format_value(info.max)}"
         )
+    return 0
+
+
+def _home_root_context():
+    """Resolve the account home root from the current repo.
+
+    Returns ``(home_root, error)`` — exactly one is non-None. Mirrors
+    ``_item_context``: the queue and the envoy registry are account
+    organs, so no enabled account home means neither exists here.
+    """
+    from . import account as account_mod
+    from . import config as conf
+
+    repo_root = _repo_root()
+    cfg = conf.load_config(repo_root)
+    ctx = account_mod.resolve_context(repo_root, cfg, create=False)
+    if ctx is None or not getattr(ctx, "enabled", False):
+        return None, "no enabled account home for this repo"
+    return account_mod.context_home_root(ctx), None
+
+
+def _queue_item_line(item) -> str:
+    status = str(item.get("status") or "?")
+    mark = {"arrived": "✉", "answered": "✓", "noted": "·", "dropped": "✕"}.get(
+        status, "?"
+    )
+    source = str(item.get("source") or "?")
+    author = str(item.get("author") or "")
+    who = f" {author}" if author else ""
+    kind = str(item.get("kind") or "")
+    kind_s = f" [{kind}]" if kind else ""
+    body = " ".join(str(item.get("body") or "").split())
+    if len(body) > 80:
+        body = body[:77] + "…"
+    return f"{mark} {item.get('id')} {source}{who}{kind_s} {status} — {body}"
+
+
+def cmd_queue_list(args):
+    import sys
+
+    from . import envoys as envoys_mod
+
+    home_root, err = _home_root_context()
+    if err:
+        print(f"[brnrd queue] {err}", file=sys.stderr)
+        return 1
+    items = envoys_mod.list_items(home_root, status=getattr(args, "status", None))
+    if not items:
+        arrived = envoys_mod.list_items(home_root, status=envoys_mod.QUEUE_OPEN_STATUS)
+        scope = f"status={args.status} " if getattr(args, "status", None) else ""
+        print(f"[brnrd queue] no {scope}items ({len(arrived)} arrived in the drawer)")
+        return 0
+    for item in items:
+        print(_queue_item_line(item))
+    return 0
+
+
+def cmd_queue_show(args):
+    import sys
+
+    from . import envoys as envoys_mod
+
+    home_root, err = _home_root_context()
+    if err:
+        print(f"[brnrd queue] {err}", file=sys.stderr)
+        return 1
+    path = envoys_mod.queue_dir(home_root) / f"{args.id}.md"
+    if not path.is_file():
+        print(f"[brnrd queue] no item {args.id}", file=sys.stderr)
+        return 1
+    print(path.read_text(encoding="utf-8"), end="")
+    return 0
+
+
+def cmd_queue_record(args):
+    import sys
+
+    from . import envoys as envoys_mod
+
+    home_root, err = _home_root_context()
+    if err:
+        print(f"[brnrd queue] {err}", file=sys.stderr)
+        return 1
+    if bool(args.body) == bool(args.body_file):
+        print("[brnrd queue] exactly one of --body / --body-file", file=sys.stderr)
+        return 2
+    if args.body_file:
+        body = (
+            sys.stdin.read()
+            if args.body_file == "-"
+            else Path(args.body_file).read_text(encoding="utf-8")
+        )
+    else:
+        body = args.body
+    meta: dict[str, object] = {}
+    for pair in args.meta:
+        if "=" not in pair:
+            print(f"[brnrd queue] --meta wants KEY=VALUE, got {pair!r}", file=sys.stderr)
+            return 2
+        key, value = pair.split("=", 1)
+        meta[key.strip()] = value.strip()
+    try:
+        path = envoys_mod.record(home_root, args.channel, body, **meta)
+    except ValueError as exc:
+        print(f"[brnrd queue] {exc}", file=sys.stderr)
+        return 2
+    print(f"[brnrd queue] recorded {path.stem}")
+    return 0
+
+
+def cmd_queue_close(args):
+    import sys
+
+    from . import envoys as envoys_mod
+
+    home_root, err = _home_root_context()
+    if err:
+        print(f"[brnrd queue] {err}", file=sys.stderr)
+        return 1
+    if args.verb == "dropped" and not args.why:
+        print("[brnrd queue] dropped needs --why", file=sys.stderr)
+        return 2
+    try:
+        envoys_mod.close(home_root, args.id, args.verb, why=args.why)
+    except ValueError as exc:
+        print(f"[brnrd queue] {exc}", file=sys.stderr)
+        return 1
+    print(f"[brnrd queue] {args.id} → {args.verb}")
+    return 0
+
+
+def cmd_envoy_list(args):
+    import sys
+
+    from . import envoys as envoys_mod
+
+    home_root, err = _home_root_context()
+    if err:
+        print(f"[brnrd envoy] {err}", file=sys.stderr)
+        return 1
+    rows = envoys_mod.list_envoys(home_root)
+    if not rows:
+        print(
+            "[brnrd envoy] no envoys — the registry is "
+            f"{envoys_mod.envoys_dir(home_root)}"
+        )
+        return 0
+    for row in rows:
+        state = "on " if row.get("enabled") else "off"
+        platform = str(row.get("platform") or "?")
+        handle = str(row.get("handle") or "?")
+        policy = str(row.get("policy") or envoys_mod.DEFAULT_POLICY)
+        print(f"{state} {row['slug']} · {platform} {handle} · policy: {policy}")
     return 0
 
 

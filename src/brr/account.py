@@ -96,6 +96,7 @@ _CLOUD_TOKEN_RELPATH = f"{ACCOUNT_GATES_PATH}/{CLOUD_TOKEN_FILENAME}"
 
 GITIGNORE = f"""\
 /dispatch/inbox/
+/dispatch/queue/
 /dispatch/responses/
 /knowledge/
 /.brr/
