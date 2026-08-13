@@ -12,9 +12,10 @@ On macOS, open **Terminal** from Applications → Utilities. On Linux, use the
 terminal app that came with your desktop.
 
 On Windows, first [install WSL 2](https://learn.microsoft.com/windows/wsl/install),
-then do the rest of this guide inside its Ubuntu terminal. brnrd's install and
-daemon docs target macOS or Linux; native Windows is not yet a documented,
-supported path.
+then do the rest of this guide inside its Ubuntu terminal. Everything below is
+plain Linux from there — though we have not traced the WSL path end to end yet,
+so treat it as adventurous and tell us what you hit. Native Windows (without
+WSL) is not a supported path.
 
 ## 2. Git and GitHub CLI
 
