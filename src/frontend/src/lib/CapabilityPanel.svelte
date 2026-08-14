@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { browser } from '$app/environment';
 	import { resolve } from '$app/paths';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { DOCS_URL } from './publicStats';
@@ -314,6 +315,24 @@
 		return { text: '', href: null, copyValue: null };
 	}
 
+	// Maintainer ask (2026-08-14): once onboarding is done the board has no
+	// daily business rendering N sections of green lamps — a hide control,
+	// persisted, with the panel's eventual permanent home being /repos
+	// (standing item: "capabilities to repos"). Hidden is a *fold*, not an
+	// absence: the off-parts-visible rule (design-capability-panel.md, signed
+	// 2026-08-09) still gets its one visible line with the way back on it.
+	// localStorage, not the account record: which surfaces a given browser
+	// wants folded is that browser's own reading posture, same tier as a
+	// scroll position — not yet account state.
+	const HIDDEN_KEY = 'brnrd:capabilities-hidden';
+	let hidden = $state(browser && localStorage.getItem(HIDDEN_KEY) === '1');
+	function setHidden(value: boolean) {
+		hidden = value;
+		if (!browser) return;
+		if (value) localStorage.setItem(HIDDEN_KEY, '1');
+		else localStorage.removeItem(HIDDEN_KEY);
+	}
+
 	let copied = $state<string | null>(null);
 	let copyTimer: ReturnType<typeof setTimeout> | undefined;
 	async function copy(key: string, text: string) {
@@ -516,6 +535,22 @@
 {/snippet}
 
 {#if capabilities !== null && capabilities.length > 0}
+	{#if hidden}
+		<!-- The folded board: one mute line, not zero — the reader who folded
+		     it (or inherits this browser) can always see there is a board and
+		     re-open it. The summary sentence rides along so a regression is
+		     at least *countable* without unfolding. -->
+		<p class="mt-4 flex flex-wrap items-baseline gap-x-2 font-mono text-[10px] text-ink-mute">
+			<span>capabilities{#if summary} · {summary}{/if}</span>
+			<button
+				type="button"
+				class="cursor-pointer font-mono text-[9px] tracking-wide uppercase hover:text-ink-quiet"
+				onclick={() => setHidden(false)}
+			>
+				show
+			</button>
+		</p>
+	{:else}
 	<section
 		class="panel ignite mt-4 p-4"
 		style="--ignite-delay: 120ms"
@@ -528,16 +563,26 @@
 					capabilities
 				</h2>
 			</div>
-			{#if summary}
-				<!-- Own line at narrow widths (`w-full`, driven at 390px, 2026-08-09):
-				     the sentence is long enough to wrap, and wrapping while pinned
-				     beside the heading collided its second line into "capabilities".
-				     `sm:` un-wraps it back to the top-right, matching every other
-				     section's status-line placement. -->
-				<p class="w-full font-mono text-[10px] text-ink-quiet sm:w-auto sm:text-right">
-					{summary}
-				</p>
-			{/if}
+			<div class="flex w-full items-baseline justify-between gap-x-3 sm:w-auto sm:justify-end">
+				{#if summary}
+					<!-- Own line at narrow widths (`w-full`, driven at 390px, 2026-08-09):
+					     the sentence is long enough to wrap, and wrapping while pinned
+					     beside the heading collided its second line into "capabilities".
+					     `sm:` un-wraps it back to the top-right, matching every other
+					     section's status-line placement. -->
+					<p class="font-mono text-[10px] text-ink-quiet sm:text-right">
+						{summary}
+					</p>
+				{/if}
+				<button
+					type="button"
+					class="cursor-pointer font-mono text-[9px] tracking-wide text-ink-mute uppercase hover:text-ink-quiet"
+					title="fold the board to one line (this browser remembers)"
+					onclick={() => setHidden(true)}
+				>
+					hide
+				</button>
+			</div>
 		</div>
 
 		{#if groups.account.rows.length}
@@ -570,4 +615,5 @@
 			</div>
 		{/if}
 	</section>
+	{/if}
 {/if}
