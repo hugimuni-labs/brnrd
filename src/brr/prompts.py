@@ -4872,7 +4872,11 @@ def _format_pending_events(
         return ""
     total = len(events)
     rendered_events = events[:_PENDING_EVENTS_RENDER_MAX]
-    omitted = total - len(rendered_events)
+    # Counted from what the loop *kept*, not from the slice: entries without
+    # an id are skipped below, and an omitted count taken from the slice
+    # would then under-report. A truncation that misstates its own size is
+    # the same lie as one that says nothing.
+    rendered = 0
     bullets: list[str] = []
     for ev in rendered_events:
         eid = str(ev.get("id") or "").strip()
@@ -4884,6 +4888,7 @@ def _format_pending_events(
             summary = summary[:137].rstrip() + "..."
         src = f" ({source})" if source else ""
         sep = f": {summary}" if summary else ""
+        rendered += 1
         bullets.append(f"- {eid}{src}{sep}")
         paths = ev.get("attachment_paths")
         if isinstance(paths, list) and paths:
@@ -4897,6 +4902,7 @@ def _format_pending_events(
                     "the bytes never reached this machine or were already "
                     "swept by retention; this is not the same as no attachment"
                 )
+    omitted = total - rendered
     if omitted > 0:
         bullets.append(
             f"- … +{omitted:,} more pending events not rendered here — read "

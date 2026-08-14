@@ -2157,7 +2157,9 @@ def _render_event_rows(
     """
     total = len(events)
     rendered_events = events[:_PENDING_EVENT_ROWS_MAX]
-    omitted = total - len(rendered_events)
+    # Counted from what the loop *kept* — non-dict entries are skipped below,
+    # and an omitted count taken from the slice would under-report.
+    rendered = 0
     rows: list[str] = []
     for ev in rendered_events:
         if not isinstance(ev, dict):
@@ -2170,8 +2172,10 @@ def _render_event_rows(
             continue
         body = _event_body(ev)
         size = len(body.encode("utf-8", "replace"))
+        rendered += 1
         rows.append(f"- {_event_header(ev, size=size, changed=status == 'changed')}")
         rows.extend(_event_body_block(body, size, inbox_pointer))
+    omitted = total - rendered
     if omitted > 0:
         rows.append(
             f"- … +{omitted:,} more pending events not rendered here — read "

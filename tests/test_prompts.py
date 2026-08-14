@@ -1449,6 +1449,24 @@ class TestPromptBuilding:
             "portal-state.json / inbox.json for the full list"
         ) in block
 
+    def test_format_pending_events_omitted_count_counts_what_it_rendered(self):
+        """The elision number must describe the *rows*, not the slice.
+
+        An entry with no id is skipped by the loop, so counting omissions
+        from `events[:CAP]` under-reports by exactly the skipped ones — a
+        truncation that misstates its own size is the same lie as one that
+        says nothing, which is the bug the cap exists to fix.
+        """
+        events = [{"id": "", "source": "telegram", "summary": "no id"}]
+        events += [
+            {"id": f"evt-{i}", "source": "telegram", "summary": f"msg {i}"}
+            for i in range(60)
+        ]
+        block = prompts._format_pending_events(events)
+        rendered = [ln for ln in block.splitlines() if ln.startswith("- evt-")]
+        assert len(rendered) == 39, "the id-less entry consumed a slice seat"
+        assert f"+{len(events) - 39:,} more pending events" in block
+
     def test_format_pending_events_no_elision_line_when_it_fits(self):
         events = [
             {"id": f"evt-{i}", "source": "telegram", "summary": f"msg {i}"}
