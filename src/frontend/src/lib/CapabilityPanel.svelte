@@ -541,11 +541,12 @@
 		     re-open it. The summary sentence rides along so a regression is
 		     at least *countable* without unfolding. -->
 		<p class="mt-4 flex flex-wrap items-baseline gap-x-2 font-mono text-[10px] text-ink-mute">
-			<!-- `{' · '}` as an expression: literal text at an `{#if}` boundary
-			     gets whitespace-trimmed by the compiler (rendered as
-			     `capabilities· 19 lit` — caught on a prod screenshot). -->
+			<!-- One template-literal expression: literal text at an `{#if}`
+			     boundary gets whitespace-trimmed by the compiler (rendered as
+			     `capabilities· 19 lit` — caught on a prod screenshot), and a
+			     bare `{' · '}` trips svelte/no-useless-mustaches. -->
 			<span
-				>capabilities{#if summary}{' · '}{summary}{/if}</span
+				>capabilities{#if summary}{` · ${summary}`}{/if}</span
 			>
 			<button
 				type="button"
@@ -605,7 +606,7 @@
 						<p class="mt-2 font-mono text-[10px] text-stone-400">
 							<!-- Same trim as the folded line above: the span's leading
 						     space was compiler-eaten (`#18bfac· last seen`). -->
-							{g.title}{#if tell}<span class="text-ink-mute">{' · '}{tell}</span>{/if}
+							{g.title}{#if tell}<span class="text-ink-mute">{` · ${tell}`}</span>{/if}
 						</p>
 						{@render groupRows(g, machineIsGhost(g))}
 					{/each}
