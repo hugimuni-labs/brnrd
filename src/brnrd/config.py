@@ -80,6 +80,12 @@ class Settings:
     public_base_url: str = os.environ.get("BRNRD_PUBLIC_BASE_URL", "http://localhost:8000")
     inbox_long_poll_max_s: float = _env_float("BRNRD_INBOX_LONGPOLL_MAX_S", 25.0)
     inbox_poll_interval_s: float = _env_float("BRNRD_INBOX_POLL_INTERVAL_S", 0.5)
+    # Ceiling on one inbox poll's response. Until 2026-08-14 there was none,
+    # and a fresh account home polling `since = 0` was handed 1,226 events in
+    # a single body. A page bounds the blast radius of any cursor fault: the
+    # cursor advances per page, so the backlog still drains, one poll at a
+    # time, and a daemon that dies mid-drain resumes instead of restarting.
+    inbox_page_limit: int = _env_int("BRNRD_INBOX_PAGE_LIMIT", 200)
     pair_ttl_s: int = _env_int("BRNRD_PAIR_TTL_S", 600)
     pack_relay_ttl_s: int = _env_int("BRNRD_PACK_RELAY_TTL_S", 3600)
     enable_dev_endpoints: bool = os.environ.get("BRNRD_ENABLE_DEV", "1") != "0"
