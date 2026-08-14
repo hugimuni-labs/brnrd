@@ -2131,6 +2131,13 @@ def _event_seen_line(ev: dict[str, Any], shown: int) -> str:
     )
 
 
+#: 1,203 pending events once rendered 234 KB into a SessionStart seed — the
+#: same shape of bug as :data:`prompts._PENDING_EVENTS_RENDER_MAX`. Caps the
+#: rendered window here too; the true omitted count always appears on the
+#: elision line rather than being silently dropped.
+_PENDING_EVENT_ROWS_MAX = 40
+
+
 def _render_event_rows(
     events: list[Any],
     event_seen: dict[str, dict[str, Any]] | None,
@@ -2143,9 +2150,18 @@ def _render_event_rows(
     the shape ad-hoc callers and replay get). An unchanged already-shown
     body collapses to the one-line seen form; a changed one re-renders in
     full under a ``Δ changed`` mark.
+
+    Capped at :data:`_PENDING_EVENT_ROWS_MAX` — existing order is preserved
+    (never re-sorted), just truncated, and a fitting list gets no elision
+    line at all.
     """
+    total = len(events)
+    rendered_events = events[:_PENDING_EVENT_ROWS_MAX]
+    # Counted from what the loop *kept* — non-dict entries are skipped below,
+    # and an omitted count taken from the slice would under-report.
+    rendered = 0
     rows: list[str] = []
-    for ev in events:
+    for ev in rendered_events:
         if not isinstance(ev, dict):
             continue
         decision = (event_seen or {}).get(str(ev.get("id") or ""))
@@ -2156,8 +2172,15 @@ def _render_event_rows(
             continue
         body = _event_body(ev)
         size = len(body.encode("utf-8", "replace"))
+        rendered += 1
         rows.append(f"- {_event_header(ev, size=size, changed=status == 'changed')}")
         rows.extend(_event_body_block(body, size, inbox_pointer))
+    omitted = total - rendered
+    if omitted > 0:
+        rows.append(
+            f"- … +{omitted:,} more pending events not rendered here — read "
+            "the live portal-state.json / inbox.json for the full list"
+        )
     return rows
 
 
