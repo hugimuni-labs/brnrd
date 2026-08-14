@@ -301,15 +301,20 @@ function internalTarget(
 // The forge's own qualified shorthand, `owner/repo#N` — same deterministic
 // grammar `backchannelPage.ts`'s `FORGE_REF_RE` resolves for `refs:` rows
 // (#1257), applied here so it also resolves inside item/card prose instead
-// of sitting dead. `(?<![\w/.-])` keeps a `#1257` written after it from
-// being misread as the anchor of a *previous* run — the earlier boundary is
-// what stops `a/b/c#1` from partially matching as `b/c#1` (both segments
-// are single-slash by construction, so a third slash can only get there by
-// starting the match mid-path; the lookbehind refuses exactly that start).
-// A *bare* `#N` is still deliberately not this shape: in free-form prose,
-// same as in a `refs:` row, it names no repo and stays plain text — never a
-// confidently guessed link.
-const PROSE_FORGE_REF_RE = /(?<![\w/.-])([\w][\w.-]*\/[\w][\w.-]*)#(\d+)\b/;
+// of sitting dead. The leading `(^|[^\w/.-])` group is the match boundary:
+// it stops `a/b/c#1` from partially matching as `b/c#1` (both segments are
+// single-slash by construction, so a third slash can only get there by
+// starting the match mid-path; the boundary group refuses exactly that
+// start). It is a *consuming* group, not a lookbehind, on purpose: regex
+// lookbehind is a parse-time SyntaxError on Safari < 16.4 (macOS < Big
+// Sur caps below that), and because this regex is a module-top-level
+// literal, one lookbehind killed every route chunk that imports this
+// module — the whole dashboard rendered as a 500 on an older Mac
+// (2026-08-14). The consumer in `inlineTokens` re-emits the consumed
+// boundary character as prose text. A *bare* `#N` is still deliberately
+// not this shape: in free-form prose, same as in a `refs:` row, it names
+// no repo and stays plain text — never a confidently guessed link.
+const PROSE_FORGE_REF_RE = /(^|[^\w/.-])([\w][\w.-]*\/[\w][\w.-]*)#(\d+)\b/;
 
 export function inlineTokens(
 	text: string,
@@ -325,14 +330,18 @@ export function inlineTokens(
 	);
 	let cursor = 0;
 	for (const match of text.matchAll(pattern)) {
-		if (match.index! > cursor) tokens.push({ kind: 'text', text: text.slice(cursor, match.index) });
+		// The forge-ref alternative consumes its boundary character (group 5,
+		// see PROSE_FORGE_REF_RE) — hand it back to the preceding text token.
+		const forgeRef = match[6] !== undefined;
+		const start = match.index! + (forgeRef ? match[5]!.length : 0);
+		if (start > cursor) tokens.push({ kind: 'text', text: text.slice(cursor, start) });
 		if (match[3] !== undefined) tokens.push({ kind: 'strong', text: match[3] });
 		else if (match[4] !== undefined) tokens.push({ kind: 'code', text: match[4] });
-		else if (match[5] !== undefined) {
+		else if (forgeRef) {
 			tokens.push({
 				kind: 'link',
-				text: match[0],
-				href: `https://github.com/${match[5]}/issues/${match[6]}`,
+				text: `${match[6]}#${match[7]}`,
+				href: `https://github.com/${match[6]}/issues/${match[7]}`,
 				target: null,
 				anchor: null
 			});

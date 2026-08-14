@@ -211,3 +211,22 @@ def test_the_image_tells_the_app_where_the_built_spa_is():
         f"BRNRD_FRONTEND_DIR at {declared.group(1)} while copying the build to "
         f"{copied.group(1)} — every deep link would 404 in production."
     )
+
+
+def test_missing_app_asset_is_a_404_not_the_shell(spa_client):
+    """A missing `/_app/...` file must 404 — the shell there is a lie.
+
+    Every `_app` URL is minted by the SvelteKit build, never typed by a
+    person and never a client route. Serving `index.html` for one that
+    does not exist turned a stale or intercepted chunk fetch into
+    ``200 text/html``, which the browser's ``import()`` reports as the
+    opaque "Importing a module script failed" and SvelteKit renders as a
+    500 — a soft 404 wearing a server error's face (measured live,
+    2026-08-14). The 404 is also what SvelteKit's stale-deploy recovery
+    (reload on failed navigation import) is designed to meet.
+    """
+    response = spa_client.get("/_app/immutable/nodes/9999.DeadBeef.js")
+    assert response.status_code == 404
+    assert "text/html" not in response.headers.get("content-type", "")
+    # An `_app` file that *does* exist still serves normally.
+    assert spa_client.get("/_app/app.js").status_code == 200
