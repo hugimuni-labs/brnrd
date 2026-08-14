@@ -260,6 +260,66 @@ def _step_account(repo_root: Path, brr_dir: Path, *, tty: bool) -> bool:
     return cloud.is_configured(brr_dir)
 
 
+def _step_memory(repo_root: Path, *, tty: bool) -> bool:
+    """Name the resident's memory — the account home — out loud.
+
+    After ``_step_account`` (this step needs the account actually resolved,
+    or there is no home to describe) and before ``_step_doors`` (memory
+    matters more than where the daemon reaches you). Never blocks and
+    never fails setup — an empty home is a new resident's normal path, not
+    a problem to fix — so it always returns True.
+
+    The defect this closes, measured 2026-08-14: the ladder above narrated
+    runner, account, doors, contract, and never once said where the
+    resident's *memory* lives. A user set brnrd up on a second machine, the
+    home was created empty and unremarked, and the kb (4,200 pages), the
+    warp (55 items), the topics (6), and 8,112 run records simply were not
+    there — nothing on screen said so, and the dashboard came up hollow for
+    hours before anyone understood why. This step is that missing receipt,
+    on every run, not only a restore.
+    """
+    from . import account
+    from . import config as conf
+
+    _step("your memory")
+    cfg = conf.load_config(repo_root)
+    # Read-only, mirroring ``cmd_account_status``: this step reports on the
+    # home, it must never be the thing that creates or seeds it.
+    ctx = account.resolve_context(repo_root, cfg, create=False)
+    home_root = account.context_home_root(ctx)
+    manifest = account.home_manifest(ctx)
+
+    if not manifest.has_memory:
+        _ok(f"{home_root} — starting with no memory yet; it fills as this resident works")
+        # Informational only, deliberately never offered as `_invoke` here:
+        # `home link` pushes, and the reader this note is for is the one
+        # who *already has* remote-backed memory under a different name —
+        # offering to push this empty home at it risks a rejected,
+        # non-fast-forward push against exactly that history. `brnrd home
+        # link` is the right next command; running it for them is not.
+        _note("already have memory elsewhere? `brnrd home link` attaches a remote:")
+        _command(["home", "link"])
+        return True
+
+    _ok(str(home_root))
+    _note(
+        f"{manifest.kb_pages:,} kb pages · {manifest.warp_items:,} warp items · "
+        f"{manifest.topics:,} topics · {manifest.run_records:,} run records"
+    )
+
+    if not manifest.fully_linked:
+        _note("local-only — this memory doesn't survive the machine yet")
+        if not tty:
+            _command(["home", "link"])
+        elif _ask("back it up to private GitHub repos now?"):
+            _invoke(["home", "link"])
+        else:
+            _note("skipped — run it whenever you like:")
+            _command(["home", "link"])
+
+    return True
+
+
 def _step_doors(brr_dir: Path, *, tty: bool) -> bool:
     """At least one door — where brnrd reaches you, and you it.
 
@@ -410,6 +470,7 @@ def run() -> int:
         standing = [
             _step_runner(repo_root),
             _step_account(repo_root, brr_dir, tty=tty),
+            _step_memory(repo_root, tty=tty),
             _step_doors(brr_dir, tty=tty),
             _step_contract(repo_root, brr_dir, tty=tty),
         ]
