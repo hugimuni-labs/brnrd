@@ -1084,6 +1084,83 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
         state["since"] = cursor
         _save_state(brr_dir, state)
     _deliver_responses(brr_dir, inbox_dir, responses_dir, state)
+    _close_noted_events(inbox_dir, state)
+
+
+#: How many noted closes one poll will push. A resident can retire a very
+#: large batch in a single run (1,202 on 2026-08-14), and each close is its
+#: own round trip; unbounded, that one sweep would hold the gate loop for
+#: minutes and starve the poll that feeds it. The remainder rides the next
+#: poll — the local state is already terminal, so nothing is lost by taking
+#: several ticks to tell the server about it.
+_NOTED_CLOSE_BATCH = 50
+
+
+def _close_noted_events(inbox_dir: Path, state: dict) -> None:
+    """Tell the server about events this daemon retired without speaking.
+
+    ``note:`` is silent *to the correspondent* — that is its whole point —
+    but it was silent to the **server** too, and that is a different thing
+    wearing the same word. A noted event kept ``status = queued`` in the
+    events table forever: it never got a terminal ``done`` post, so nothing
+    ever closed it. Consequences, both measured on 2026-08-14:
+
+    - the queued set only ever grew, and it is the one structural defence
+      against a replay (``brnrd/inbox.py`` ``_QUEUED_ONLY_RATIONALE``);
+    - ``clamp_since``'s floor is ``oldest_queued - 1``, so every ancient
+      never-closed letter pinned the cursor heal at the beginning of time.
+
+    A fresh account home then polled ``since = 0`` and was handed 1,226
+    events, the great majority already read and deliberately closed on the
+    machine that came before. The evidence of the close existed; it just
+    never crossed the wire.
+
+    Best-effort and idempotent. A failure leaves the local stamp unwritten,
+    so the next poll retries; a 404 means the server already forgot the row
+    (GC, or a different daemon closed it), which is the same end state and
+    is stamped rather than retried forever.
+    """
+    if not (state.get("brnrd_url") and state.get("token")):
+        return
+    closed = 0
+    for event in protocol.list_noted(inbox_dir, "cloud"):
+        if closed >= _NOTED_CLOSE_BATCH:
+            break
+        if event.get("cloud_closed_at"):
+            continue
+        cloud_event_id = str(event.get("cloud_event_id") or "").strip()
+        if not cloud_event_id:
+            # Locally minted, never came from the cloud: nothing to tell.
+            continue
+        try:
+            _request(
+                state["brnrd_url"], "POST", "/v1/daemons/responses",
+                token=state["token"],
+                json={
+                    "event_id": cloud_event_id,
+                    "body_markdown": "",
+                    "status": "noted",
+                },
+                retry=False,
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort sweep
+            if getattr(exc, "status_code", None) != 404:
+                # Transient or auth: leave it unstamped and retry next poll.
+                # One line, not one per event, or a large batch would bury
+                # the log it is trying to explain.
+                if closed == 0:
+                    print(
+                        f"[brnrd:cloud] noted-close sweep deferred: {exc}"
+                    )
+                return
+        try:
+            protocol.update_event_meta(
+                event,
+                cloud_closed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            )
+        except OSError:
+            continue
+        closed += 1
 
 
 def _deliver_responses(brr_dir: Path, inbox_dir: Path, responses_dir: Path, state: dict) -> None:

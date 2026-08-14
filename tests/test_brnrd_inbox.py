@@ -317,7 +317,7 @@ def test_long_poll_route_waits_async_and_offloads_each_db_read(monkeypatch):
     caller_thread = threading.get_ident()
     db_threads = []
 
-    def fake_fetch(session_factory, repo_ids, since):
+    def fake_fetch(session_factory, repo_ids, since, limit=None):
         db_threads.append(threading.get_ident())
         return []
 
@@ -396,8 +396,8 @@ def test_long_poll_wakes_on_enqueue(env, monkeypatch):
 
     real_fetch = inbox_service._fetch_since_many_detached
 
-    def observed_fetch(session_factory, repo_ids, since):
-        rows = real_fetch(session_factory, repo_ids, since)
+    def observed_fetch(session_factory, repo_ids, since, limit=None):
+        rows = real_fetch(session_factory, repo_ids, since, limit)
         if not poll_reached_db.is_set():
             first_read_row_count.append(len(rows))
             poll_reached_db.set()
@@ -1126,3 +1126,151 @@ def test_forwarder_table_ignores_unknown_platform():
     forwarder(
         ForwardItem(event_id="e1", reply_to={"platform": "slack"}, body="hi", status="done")
     )  # silently does nothing, same as the old if/elif falling through
+
+
+def test_inbox_poll_is_paged_and_the_cursor_drains_the_rest():
+    """One poll can never hand over an unbounded backlog again.
+
+    The measurement behind the page (2026-08-14): an account home created
+    fresh on a new machine had no `account/gates/cloud.json`, so the daemon
+    polled `since = 0` and the server answered with **every** queued event
+    across the account — 1,226 of them in a single response body, ingested
+    at ~10/s while the wake that had to handle them was still being built.
+    The free-tier burst ceiling (`limits.py`, 6 events/min) did not help:
+    it governs *enqueue*, and a replay is all delivery.
+
+    The cursor is what drains the remainder, so the page costs only round
+    trips: the backlog still arrives in full, one bounded chunk at a time,
+    and a daemon that dies mid-drain resumes at its last cursor instead of
+    starting over.
+
+    Five events against a page of two — deliberately under that same 6/min
+    enqueue ceiling, which this test tripped on its first draft and which is
+    exactly the kind of silent 429 a fixture hides.
+    """
+    forwarder = CapturingForwarder()
+    settings = Settings(
+        database_url="sqlite:///:memory:",
+        inbox_long_poll_max_s=1.0,
+        inbox_poll_interval_s=0.02,
+        inbox_page_limit=2,
+    )
+    client = TestClient(create_app(settings, forwarder=forwarder))
+    acc = _account(client)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
+    for i in range(5):
+        enq = client.post(
+            "/v1/_dev/enqueue",
+            json={"repo_id": rid, "body": f"m{i}"},
+            headers=acc,
+        )
+        assert enq.status_code == 201, enq.text
+
+    seen: list[str] = []
+    pages = 0
+    cursor = 0
+    for _ in range(6):  # a failure bound, not a schedule
+        page = client.get(
+            "/v1/daemons/inbox",
+            params={"since": cursor, "wait": 0},
+            headers=dmn,
+        ).json()
+        assert len(page["events"]) <= 2, "a page must never exceed the limit"
+        if not page["events"]:
+            break
+        pages += 1
+        seen.extend(e["body"] for e in page["events"])
+        assert page["cursor"] > cursor, "the cursor must advance per page"
+        cursor = page["cursor"]
+
+    # Bounded per response, complete in aggregate, in order — and it really
+    # took more than one response, or the bound proved nothing.
+    assert seen == [f"m{i}" for i in range(5)]
+    assert pages == 3
+
+
+def test_inbox_page_limit_off_returns_the_whole_backlog():
+    """The bound is opt-in at the query layer; absent, behaviour is unchanged.
+
+    Guards the seam rather than the setting: `fetch_since_many` must be a
+    no-op wrapper when no limit is passed, so every other caller (and any
+    older deployment reading a config that predates `inbox_page_limit`)
+    keeps the semantics it had.
+    """
+    forwarder = CapturingForwarder()
+    settings = Settings(database_url="sqlite:///:memory:")
+    app = create_app(settings, forwarder=forwarder)
+    client = TestClient(app)
+    acc = _account(client)
+    rid = _repo(client, acc)
+    for i in range(5):
+        client.post(
+            "/v1/_dev/enqueue",
+            json={"repo_id": rid, "body": f"m{i}"},
+            headers=acc,
+        )
+    with app.state.SessionLocal() as db:
+        assert len(inbox_service.fetch_since_many(db, {rid}, 0)) == 5
+        assert len(inbox_service.fetch_since_many(db, {rid}, 0, limit=2)) == 2
+        # A non-positive limit means "no bound", never "no rows".
+        assert len(inbox_service.fetch_since_many(db, {rid}, 0, limit=0)) == 5
+
+
+def test_a_noted_close_retires_the_event_without_forwarding_anything():
+    """`note:` must close the server row — silently, but really.
+
+    A noted event used to stay `queued` forever: the resident's deliberate
+    retire was a local file edit and nothing else, so the only exit from
+    the queued set was a terminal `done`. That made the queued set grow
+    without bound, and the queued set is the one structural defence
+    against a replay — 554 of the 1,203 events replayed on 2026-08-14 were
+    letters already read and deliberately closed on another machine.
+
+    Two properties, and the second is why this is not just a `done` with an
+    empty body: the row closes, and **the platform hears nothing**.
+    """
+    forwarder = CapturingForwarder()
+    settings = Settings(database_url="sqlite:///:memory:")
+    app = create_app(settings, forwarder=forwarder)
+    client = TestClient(app)
+    acc = _account(client)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
+    enq = client.post(
+        "/v1/_dev/enqueue", json={"repo_id": rid, "body": "noise"}, headers=acc
+    ).json()
+    event_id = enq["event_id"]
+
+    before = len(forwarder.items)
+    ack = client.post(
+        "/v1/daemons/responses",
+        json={"event_id": event_id, "body_markdown": "", "status": "noted"},
+        headers=dmn,
+    )
+    assert ack.status_code == 200, ack.text
+    assert len(forwarder.items) == before, "a note must not reach the platform"
+
+    # The row is closed, so it can never redeliver — cursor or no cursor.
+    drained = client.get(
+        "/v1/daemons/inbox", params={"since": 0, "wait": 0}, headers=dmn
+    ).json()
+    assert drained["events"] == []
+
+    with app.state.SessionLocal() as db:
+        row = db.execute(
+            select(Event).where(Event.event_id == event_id)
+        ).scalar_one()
+        assert row.status == Event.STATUS_RESPONDED
+        assert row.response_status == "noted"
+        assert row.body is None
+        assert row.attachments_json == "[]"
+
+    # Idempotent: the daemon retries this sweep until it sees a 2xx.
+    again = client.post(
+        "/v1/daemons/responses",
+        json={"event_id": event_id, "body_markdown": "", "status": "noted"},
+        headers=dmn,
+    )
+    assert again.status_code == 200, again.text
+    assert len(forwarder.items) == before
