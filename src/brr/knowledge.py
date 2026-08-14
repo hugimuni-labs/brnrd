@@ -1321,7 +1321,7 @@ def _source_excerpt(source: KnowledgeSource) -> str:
             return ""
         lines = [f"### {source.name}", ""]
         for path in docs[:20]:
-            lines.append(f"- {path.relative_to(source.root).as_posix()}")
+            lines.append(f"- {source.root.name}/{path.relative_to(source.root).as_posix()}")
         if len(docs) > 20:
             lines.append(f"- ... {len(docs) - 20} more")
         return "\n".join(lines)
