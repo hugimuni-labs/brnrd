@@ -541,7 +541,12 @@
 		     re-open it. The summary sentence rides along so a regression is
 		     at least *countable* without unfolding. -->
 		<p class="mt-4 flex flex-wrap items-baseline gap-x-2 font-mono text-[10px] text-ink-mute">
-			<span>capabilities{#if summary} · {summary}{/if}</span>
+			<!-- `{' · '}` as an expression: literal text at an `{#if}` boundary
+			     gets whitespace-trimmed by the compiler (rendered as
+			     `capabilities· 19 lit` — caught on a prod screenshot). -->
+			<span
+				>capabilities{#if summary}{' · '}{summary}{/if}</span
+			>
 			<button
 				type="button"
 				class="cursor-pointer font-mono text-[9px] tracking-wide uppercase hover:text-ink-quiet"
@@ -551,69 +556,71 @@
 			</button>
 		</p>
 	{:else}
-	<section
-		class="panel ignite mt-4 p-4"
-		style="--ignite-delay: 120ms"
-		aria-labelledby="capabilities-heading"
-	>
-		<div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-			<div>
-				<p class="eyebrow">the board</p>
-				<h2 id="capabilities-heading" class="font-mono text-sm font-semibold text-amber-100">
-					capabilities
-				</h2>
-			</div>
-			<div class="flex w-full items-baseline justify-between gap-x-3 sm:w-auto sm:justify-end">
-				{#if summary}
-					<!-- Own line at narrow widths (`w-full`, driven at 390px, 2026-08-09):
+		<section
+			class="panel ignite mt-4 p-4"
+			style="--ignite-delay: 120ms"
+			aria-labelledby="capabilities-heading"
+		>
+			<div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+				<div>
+					<p class="eyebrow">the board</p>
+					<h2 id="capabilities-heading" class="font-mono text-sm font-semibold text-amber-100">
+						capabilities
+					</h2>
+				</div>
+				<div class="flex w-full items-baseline justify-between gap-x-3 sm:w-auto sm:justify-end">
+					{#if summary}
+						<!-- Own line at narrow widths (`w-full`, driven at 390px, 2026-08-09):
 					     the sentence is long enough to wrap, and wrapping while pinned
 					     beside the heading collided its second line into "capabilities".
 					     `sm:` un-wraps it back to the top-right, matching every other
 					     section's status-line placement. -->
-					<p class="font-mono text-[10px] text-ink-quiet sm:text-right">
-						{summary}
-					</p>
-				{/if}
-				<button
-					type="button"
-					class="cursor-pointer font-mono text-[9px] tracking-wide text-ink-mute uppercase hover:text-ink-quiet"
-					title="fold the board to one line (this browser remembers)"
-					onclick={() => setHidden(true)}
-				>
-					hide
-				</button>
+						<p class="font-mono text-[10px] text-ink-quiet sm:text-right">
+							{summary}
+						</p>
+					{/if}
+					<button
+						type="button"
+						class="cursor-pointer font-mono text-[9px] tracking-wide text-ink-mute uppercase hover:text-ink-quiet"
+						title="fold the board to one line (this browser remembers)"
+						onclick={() => setHidden(true)}
+					>
+						hide
+					</button>
+				</div>
 			</div>
-		</div>
 
-		{#if groups.account.rows.length}
-			<div class="mt-3">
-				<p class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase">account</p>
-				{@render groupRows(groups.account)}
-			</div>
-		{/if}
+			{#if groups.account.rows.length}
+				<div class="mt-3">
+					<p class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase">account</p>
+					{@render groupRows(groups.account)}
+				</div>
+			{/if}
 
-		{#if groups.machine.length}
-			<div class="mt-3">
-				<p class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase">machine</p>
-				{#each groups.machine as g (g.key)}
-					{@const tell = machineLiveTell(g)}
-					<p class="mt-2 font-mono text-[10px] text-stone-400">
-						{g.title}{#if tell}<span class="text-ink-mute"> · {tell}</span>{/if}
-					</p>
-					{@render groupRows(g, machineIsGhost(g))}
-				{/each}
-			</div>
-		{/if}
+			{#if groups.machine.length}
+				<div class="mt-3">
+					<p class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase">machine</p>
+					{#each groups.machine as g (g.key)}
+						{@const tell = machineLiveTell(g)}
+						<p class="mt-2 font-mono text-[10px] text-stone-400">
+							<!-- Same trim as the folded line above: the span's leading
+						     space was compiler-eaten (`#18bfac· last seen`). -->
+							{g.title}{#if tell}<span class="text-ink-mute">{' · '}{tell}</span>{/if}
+						</p>
+						{@render groupRows(g, machineIsGhost(g))}
+					{/each}
+				</div>
+			{/if}
 
-		{#if groups.repo.length}
-			<div class="mt-3">
-				<p class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase">repo</p>
-				{#each groups.repo as g (g.key)}
-					<p class="mt-2 font-mono text-[10px] text-stone-400">{g.title}</p>
-					{@render groupRows(g)}
-				{/each}
-			</div>
-		{/if}
-	</section>
+			{#if groups.repo.length}
+				<div class="mt-3">
+					<p class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase">repo</p>
+					{#each groups.repo as g (g.key)}
+						<p class="mt-2 font-mono text-[10px] text-stone-400">{g.title}</p>
+						{@render groupRows(g)}
+					{/each}
+				</div>
+			{/if}
+		</section>
 	{/if}
 {/if}
