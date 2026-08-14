@@ -1079,6 +1079,51 @@ class TestCrossGateReplyRouting:
         [row] = message_store.list_messages(messages_dir)
         assert row["status"] == message_store.UNDELIVERABLE
         assert row["status"]
+        # Undeliverable interim reply to a schedule event should record kind="advisory"
+        # because schedule is a daemon-minted source with no correspondent
+        assert notice["kind"] == "advisory"
+
+    def test_spawn_completed_target_with_no_gate_is_recorded_advisory(
+        self, tmp_path, monkeypatch,
+    ):
+        """Undeliverable interim reply to spawn_completed should record kind="advisory".
+
+        A spawn_completed event is a daemon-minted fact for the parent run, not a
+        correspondent event — there is no "someone" to deliver to, so an undeliverable
+        reply is not a loss (like schedule events). Both should record kind="advisory"
+        to avoid inflating the dropped/refused count in notices.
+        """
+        ctx = self._account_ctx(tmp_path)
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        protocol.create_event(
+            inbox, source="spawn_completed", body="completed",
+            spawn_parent_run_id="run-parent-xyz",
+        )
+        bid = protocol.list_pending(inbox)[0]["id"]
+        (outbox / "reply.md").write_text(f"---\nevent: {bid}\n---\nnoted\n")
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id="evt-A")
+        task = types.SimpleNamespace(id="task-A", source="telegram", meta={})
+
+        n = daemon._drain_outbox(
+            emit, task, responses, "evt-A", outbox, inbox,
+            account_context=ctx,
+        )
+
+        assert n == 0
+        assert protocol.list_partials(responses, bid) == []
+        assert protocol.list_partials(responses, "evt-A") == []
+        assert [e["id"] for e in protocol.list_done(inbox, "spawn_completed")] == [bid]
+        notices = daemon._read_outbox_notices(outbox)
+        [notice] = notices
+        assert notice["kind"] == "advisory"
+        assert "reply text staged undeliverable" in notice["text"]
+        assert "no gate owns spawn_completed events" in notice["text"]
 
     def test_own_event_notice_may_not_claim_a_retire_that_never_happens(
         self, tmp_path, monkeypatch,
