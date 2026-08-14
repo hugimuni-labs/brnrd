@@ -603,8 +603,7 @@
 					</div>
 					<p class="mt-1 font-mono text-[11px] text-ink-mute">
 						No <code class="text-stone-400">brnrd</code> on this machine yet?
-						<code class="text-stone-400">npx brnrd account connect …</code> does the whole cold start
-						in one line.
+						<code class="text-stone-400">npx brnrd</code> does the whole cold start in one word.
 					</p>
 				</div>
 			</section>
