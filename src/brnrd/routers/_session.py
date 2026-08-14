@@ -238,28 +238,26 @@ def _paired_channels_by_repo(directory: list[dict[str, Any]]) -> dict[str, list[
 # the zero-repo spelling is served from here too (`pairing_command` on
 # `GET /v1/dashboard/repos`) rather than re-typed in the frontend.
 #
-# The endpoint stays the literal it has always been rather than
-# `settings.public_base_url`: that default is `http://localhost:8000`, and a
-# self-hosted control plane printing its own loopback address as the thing to
-# pair against would be a regression on the one string that has to be right.
-_PAIR_ENDPOINT = "https://brnrd.dev"
-
 # What the cold-start block puts where a real checkout's name would go.
 PAIR_REPO_PLACEHOLDER = "<repo>"
 
 
 def pairing_command(repo_dir: str) -> str:
-    """The two lines that pair a local daemon to this control plane.
+    """The two lines that set up a local daemon against this control plane.
 
     Used to be three: a trailing ``brnrd up``. Dropped 2026-08-04 (#1084) —
-    ``cmd_brnrd_connect`` (``src/brr/cli.py``) already calls
-    ``daemon_install.install(no_start=False, ...)`` unless ``--no-service``,
-    which installs *and starts* the native service and prints its own
-    "Connected and listening in the background." ``brnrd up`` on the
-    default path only re-starts what line 2 just started — a redundant
-    third step in the one command a first-time reader has to get right.
+    connect installs *and starts* the native service. Then two spelled
+    verbs: ``brnrd account connect https://brnrd.dev``. Reduced 2026-08-14
+    (the iMac trace): the CLI grew the bare-``brnrd`` guided front door
+    (``front_door.py``, `decision-retire-init.md`) — it announces and runs
+    ``account connect`` itself (whose URL already defaults to
+    ``$BRNRD_URL`` or ``https://brnrd.dev``), then walks doors and the
+    first-run contract, resuming idempotently — while this surface kept
+    teaching the pre-door spelling, and a fresh-machine onboarding typed
+    the old spell off the wall. One word survives every verb rename by
+    construction, which is this function's whole reason to exist server-side.
     """
-    return f"cd {repo_dir}\nbrnrd account connect {_PAIR_ENDPOINT}"
+    return f"cd {repo_dir}\nbrnrd"
 
 
 def _repo_views(db: Session, repos: list[Repo]) -> list[dict]:
