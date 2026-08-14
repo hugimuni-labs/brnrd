@@ -242,11 +242,39 @@ def test_an_unreadable_answer_skips_instead_of_guessing(repo, capsys, monkeypatc
         front_door, "_invoke",
         lambda argv: pytest.fail(f"ran {argv} on an answer it could not read"),
     )
-    _all_configured(monkeypatch, connected=True, doors=())
+    # ``connected=False``: a connected account now passes the doors step
+    # outright (the cloud-managed door), so the which-one interview this
+    # test exercises only exists on the machine that has no cloud.
+    _all_configured(monkeypatch, connected=False, doors=())
 
     code = front_door.run()
 
     assert "skipping rather than guessing" in capsys.readouterr().out
+    assert code == 1
+
+
+def test_a_connected_account_is_a_door_and_no_token_is_demanded(repo, capsys, monkeypatch):
+    """The first live macOS onboarding, pinned: ``✓ already connected`` two
+    lines above a BotFather-token interview is the product contradicting
+    itself. A connected account IS a door — cloud-managed, no credential to
+    type — and the self-managed interview is offered as a command, not run.
+    The autouse ``_no_stray_input`` fixture is the other half of this test:
+    the whole ladder must complete without one question."""
+    monkeypatch.setattr(front_door, "interactive", lambda: True)
+    monkeypatch.setattr(
+        front_door, "_invoke",
+        lambda argv: pytest.fail(f"ran {argv} on a machine already reachable"),
+    )
+    _all_configured(monkeypatch, connected=True, doors=())
+
+    code = front_door.run()
+
+    out = capsys.readouterr().out
+    assert "cloud-managed — your brnrd.dev account is the door" in out
+    assert "optional: a direct, self-managed door" in out
+    # The contract rung stays honest: the cloud wire is reply-shaped, so
+    # the next move is the human's first message, not a doomed queue.
+    assert "message your account's bot about this repo" in out
     assert code == 1
 
 
@@ -261,10 +289,17 @@ def test_ci_is_never_treated_as_a_typist(monkeypatch):
     assert front_door.interactive() is False
 
 
-def test_an_interrupted_question_declines_out_loud(repo, capsys, monkeypatch):
-    """^C at a prompt is an answer, not an abandoned terminal — the
-    luxury-car bar `decision-retire-init.md` holds this funnel to."""
+def test_an_interrupted_question_stops_the_whole_ladder(repo, capsys, monkeypatch):
+    """^C means *stop asking*, not *next question*. Measured live
+    (2026-08-14, the first macOS onboarding): the old per-step catch kept
+    narrating after the launcher had already died of the same SIGINT, so
+    the door interviewed a shell prompt. One interrupt now ends the run —
+    out loud, resumable, exit 128+SIGINT — and asks nothing further; a
+    second ``input`` call would trip this stub's counter."""
+    asked = []
+
     def _interrupt(_prompt=""):
+        asked.append(True)
         raise KeyboardInterrupt
 
     monkeypatch.setattr(front_door, "interactive", lambda: True)
@@ -278,5 +313,6 @@ def test_an_interrupted_question_declines_out_loud(repo, capsys, monkeypatch):
     code = front_door.run()
 
     out = capsys.readouterr().out
-    assert "nothing was changed" in out
-    assert code == 1
+    assert "stopped — nothing else was changed" in out
+    assert len(asked) == 1, "the door kept asking past a ^C"
+    assert code == 130

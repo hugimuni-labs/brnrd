@@ -186,12 +186,14 @@ def test_dashboard_repos_api_serves_one_pairing_command_to_a_cold_account():
 
     cold = client.get("/v1/dashboard/repos").json()
     assert cold["connected_repos"] == []
-    # Two lines, not three (#1084): `brnrd account connect` already installs
-    # and starts the native service, so a trailing `brnrd up` only restarted
-    # what the line above it just started.
+    # One word, not a spelled verb (2026-08-14, the iMac trace): the served
+    # command is the bare-`brnrd` guided front door, which announces and
+    # runs `account connect` itself and survives every CLI verb rename by
+    # construction — the drift this endpoint exists to prevent, measured
+    # live when this string taught a retired spelling to a fresh machine.
     assert cold["pairing_command"].splitlines() == [
         "cd <repo>",
-        "brnrd account connect https://brnrd.dev",
+        "brnrd",
     ]
 
     _create_repo(client, token, repo="Gurio/brr")

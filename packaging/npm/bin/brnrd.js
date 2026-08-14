@@ -83,6 +83,16 @@ const CHILD_ENV = {
   UV_PYTHON_INSTALL_DIR: UV_PYTHONS,
 };
 
+// ^C belongs to the child, not to this launcher. Both sit in the same
+// foreground process group, so a SIGINT reaches both: brnrd catches it and
+// answers (stop the setup ladder, clean up, exit); an unhandled launcher
+// dies mid-`spawnSync`, the shell prints its prompt over a child that is
+// still talking, and the survivor narrates into a terminal it no longer
+// owns — measured on the first live macOS onboarding, 2026-08-14. A no-op
+// handler keeps node alive through the child's run (dispatch is deferred
+// while spawnSync blocks); the child's exit status still decides ours.
+process.on("SIGINT", () => {});
+
 const run = (cmd, args, opts = {}) =>
   spawnSync(cmd, args, { stdio: "inherit", ...opts });
 

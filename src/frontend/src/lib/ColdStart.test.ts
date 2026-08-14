@@ -18,7 +18,7 @@ const generated = join(here, '.coldStart.generated.mjs');
 // false in the rendered HTML still fails here.
 async function renderColdStart(
 	repos: ConnectedRepo[] | null,
-	pairCommand: string | null = 'cd <repo>\nbrnrd account connect https://brnrd.dev',
+	pairCommand: string | null = 'cd <repo>\nbrnrd',
 	installations: GitHubInstallation[] | null = null
 ): Promise<string> {
 	const source = readFileSync(componentPath, 'utf8');
@@ -93,18 +93,18 @@ function repo(over: Partial<ConnectedRepo> = {}): ConnectedRepo {
 
 // The reported gap (2026-08-03 signup): six empty sections and no install
 // line, no pointer at the page where a repo is enabled, no docs link.
-// #1243 updated the third rung from "enable a repository" (retired —
-// Direction A binds the repo at pairing) to `brnrd init`, the 08-08 trace's
-// missing rung.
-test('an account with nothing connected is told the three things that have to happen', async () => {
+// #1243 put `brnrd init` here; the 08-14 iMac trace found the board still
+// teaching it four days after `decision-retire-init.md` folded it into the
+// bare-`brnrd` front door. Two rungs now: install, then the guided door.
+test('an account with nothing connected is told the two things that have to happen', async () => {
 	const html = await renderColdStart([]);
 	ok(html.includes('install the cli'), 'names the install step');
 	ok(html.includes('npm install -g brnrd'), 'prints the headline install command');
 	ok(html.includes('uv tool install brnrd'), 'offers the uv alternate');
 	ok(html.includes('pipx install brnrd'), 'offers the pipx alternate');
-	ok(html.includes('pair the daemon'), 'names the pairing step');
-	ok(html.includes('brnrd account connect'), 'prints the pairing command');
-	ok(html.includes('brnrd init'), "names the init step, the 08-08 trace's missing rung");
+	ok(html.includes('the guided setup'), 'names the guided-door step');
+	ok(!html.includes('brnrd init'), 'the retired verb is off the wall (08-14 trace)');
+	ok(!html.includes('account connect'), 'the pre-door pairing spell is off the wall too');
 	ok(html.includes(`href="${DOCS_URL}"`), 'carries a docs link');
 });
 
@@ -117,40 +117,29 @@ test('the block survives a connected repo until a daemon has ever paired', async
 	ok(html.includes('the cold start'), 'a connected repo with no daemon is still the cold start');
 	ok(html.includes('nothing is paired yet'));
 	ok(
-		html.includes('pair the daemon'),
-		'the pairing step survives — this is exactly what used to vanish'
+		html.includes('the guided setup'),
+		'the setup step survives — this is exactly what used to vanish'
 	);
-	ok(html.includes('brnrd account connect'), 'the pairing command still renders');
 });
 
-// #1243: step 03 is unobservable exactly like step 01 — no wire fact says
-// "init has run" — so, unlike the old repo-enablement step it replaced, it
-// must never claim done. The component's own header comment states this
-// model; this pins the rendered strings actually agree with it.
-test('the init step never claims done — it is unobservable like step 01', async () => {
+// Step 01 is unobservable (no wire fact says "the CLI is installed") and
+// the guided door reports its own rungs in the terminal — so no step here
+// may render a done-marker a wire fact does not back.
+test('no step claims done — the ladder is unobservable from here', async () => {
 	const html = await renderColdStart([repo({ daemon_status: 'missing' })]);
 	ok(!html.includes('— done'), 'no step in this ladder renders a done-marker');
 });
 
-// The finding this branch fixes (`brr/one-sequence-two-surfaces`): ColdStart
-// used to read install → enable a repository → pair the daemon, while
-// `/repos` — the very page step 02 sent the reader to — opened with run the
-// pairing command, *then* install the GitHub App. #1243 replaces the third
-// rung again, this time with the 08-08 trace's missing command — pinned as
-// a position assertion, not a substring check, since an earlier ordering
-// bug also contained every one of these phrases and only their sequence was
-// wrong.
-test('the ladder reads install → pair → init', async () => {
+// The finding `brr/one-sequence-two-surfaces` fixed was an ordering bug —
+// pinned as a position assertion, not a substring check, since the wrong
+// ordering also contained every phrase. Two rungs since the 08-14 trace:
+// the CLI must exist before the one word that drives it.
+test('the ladder reads install → run brnrd', async () => {
 	const html = await renderColdStart([]);
 	const installAt = html.indexOf('install the cli');
-	const pairAt = html.indexOf('pair the daemon');
-	const initAt = html.indexOf('brnrd init');
-	ok(installAt >= 0 && pairAt >= 0 && initAt >= 0, 'all three rungs render');
-	ok(
-		installAt < pairAt,
-		'install precedes pair — the CLI is a prerequisite to the pairing command'
-	);
-	ok(pairAt < initAt, 'pair precedes init — 02 has to bind the repo before 03 can act on it');
+	const doorAt = html.indexOf('the guided setup');
+	ok(installAt >= 0 && doorAt >= 0, 'both rungs render');
+	ok(installAt < doorAt, 'install precedes the door — the CLI is a prerequisite');
 });
 
 // The failure mode the old pin was actually guarding, restated correctly:
@@ -176,7 +165,7 @@ test('an unrecognized daemon_status does not count as paired', async () => {
 	const html = await renderColdStart([repo({ daemon_status: 'weird' })]);
 	ok(html.includes('the cold start'), 'an unknown status is not silently treated as paired');
 	ok(html.includes('nothing is paired yet'));
-	ok(html.includes('pair the daemon'), 'the pairing step still renders');
+	ok(html.includes('the guided setup'), 'the setup step still renders');
 });
 
 // #1243: the GitHub App is an optional identity upgrade, named once in the
@@ -231,11 +220,13 @@ test('the pairing command is rendered from the prop, never restated in the compo
 // button that copies its content) must hold only the runnable line; the `cd`
 // step becomes prose above it instead.
 test('the cd placeholder never appears inside the copyable command box', async () => {
-	const html = await renderColdStart([]);
+	// A distinctive runnable line, so the assertion can find *it* rather
+	// than the word "brnrd", which this page says everywhere.
+	const html = await renderColdStart([], 'cd <repo>\nbrnrd-runnable-line');
 	ok(!html.includes('cd <repo>'), 'the literal placeholder is not printed anywhere on the page');
 	ok(html.includes('from your repo checkout:'), 'scene-setting prose replaces it');
 	ok(
-		html.includes('brnrd account connect'),
+		html.includes('brnrd-runnable-line'),
 		'the runnable line still renders, unconditionally copyable'
 	);
 });
@@ -253,9 +244,11 @@ test('a single-line pairing command renders whole, with no setup-line prose', as
 // one; the step's prose still stands on its own.
 test('a missing pairing command drops the code block, not the step', async () => {
 	const html = await renderColdStart([], null);
-	ok(html.includes('pair the daemon'), 'the step survives');
+	ok(html.includes('the guided setup'), 'the step survives');
 	ok(html.includes('In the checkout'), 'its prose survives');
-	ok(!html.includes('brnrd account connect'), 'no terminal box pretending to hold a command');
+	// Exactly one terminal box on the page — step 01's install command; the
+	// step-02 box is gone rather than rendered empty.
+	equal(html.split('<pre').length - 1, 1, 'no empty box pretending to hold a command');
 });
 
 // The product's only docs link used to be `gurio.github.io/brr/`, which

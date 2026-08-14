@@ -225,6 +225,16 @@ def _xdg_state_home() -> Path:
     return Path.home() / ".local" / "state"
 
 
+def state_root() -> Path:
+    """Where brnrd keeps machine-wide state — the answer to "what do I
+    delete to reset this box", asked live by the first macOS onboarding
+    and answerable then only by reading this file. Public so surfaces that
+    orient a human (the front door, docs, doctor screens) name one path
+    from one derivation instead of each hand-spelling the XDG fallback.
+    """
+    return _xdg_state_home() / "brnrd"
+
+
 # ── #1193 rec 3 — key the fallback project home on repo identity ──────
 #
 # ``_default_project_home`` used to hash ``repo_root.resolve()`` directly:
