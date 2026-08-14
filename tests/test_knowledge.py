@@ -1072,11 +1072,36 @@ def test_repo_docs_block_skips_vendored_trees(tmp_path):
 
     block = knowledge.render_injection(repo, {})
 
-    assert "src/content/guide.md" in block
-    assert "README.md" in block
+    assert "docs/src/content/guide.md" in block
+    assert "docs/README.md" in block
     assert "node_modules" not in block
     assert "dist/index.md" not in block
     assert ".astro" not in block
+
+
+def test_repo_docs_renders_nested_paths_with_docs_prefix(tmp_path):
+    """Repo-docs paths must be rendered repo-root-relative, prefixed with 'docs/'.
+
+    #1350: a nested doc at docs/src/content/docs/getting-started/install.md
+    must render as docs/src/content/docs/getting-started/install.md, not
+    src/content/docs/getting-started/install.md. The root name prefix is
+    load-bearing: residents copy paths from the wake block and they must
+    resolve from the execution root."""
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    docs = repo / "docs"
+    (docs / "src" / "content" / "docs" / "getting-started").mkdir(parents=True)
+    (docs / "src" / "content" / "docs" / "getting-started" / "install.md").write_text(
+        "installation guide", encoding="utf-8"
+    )
+
+    block = knowledge.render_injection(repo, {})
+
+    # The path must start with 'docs/', not 'src/' — this is how it resolves
+    # from the execution root. The bullet list entry ensures we're checking
+    # the rendered line, not substring within the full path.
+    assert "- docs/src/content/docs/getting-started/install.md" in block
+    assert "- src/content/docs/getting-started/install.md" not in block
 
 
 def test_search_does_not_descend_into_vendored_trees(tmp_path):
