@@ -103,6 +103,21 @@ def _invoke(argv: list[str]):
 # ── Asking ──────────────────────────────────────────────────────────
 
 
+class Interrupted(Exception):
+    """``^C`` at any prompt — the person wants out of the *ladder*, not past
+    this one rung.
+
+    Measured on the first live macOS onboarding (2026-08-14): ``^C`` at the
+    door-choice prompt was caught per-step, so the door marched on to the
+    next question over a shell that had already printed its prompt — the
+    npm launcher died of the same SIGINT while this process caught it, and
+    the survivor narrated into a terminal it no longer owned. Two answers,
+    two meanings, split on purpose: **EOF** is "no answer *here*" (a piped
+    stdin, a closed tty) and still declines one step out loud; **^C** is
+    "stop asking" and ends the whole run, saying what it left standing.
+    """
+
+
 def interactive() -> bool:
     """Whether this invocation may ask the user anything.
 
@@ -138,7 +153,10 @@ def _ask(question: str, *, default: bool = True) -> bool:
     hint = "Y/n" if default else "y/N"
     try:
         raw = input(f"  {style.qmark()} {style.bold(question)} {style.dim('[' + hint + ']')} ").strip()
-    except (EOFError, KeyboardInterrupt):
+    except KeyboardInterrupt:
+        print()
+        raise Interrupted() from None
+    except EOFError:
         print()
         _note("no answer — skipping this step; nothing was changed")
         return False
@@ -164,7 +182,10 @@ def _ask_choice(question: str, choices: tuple[str, ...], *, default: str) -> str
             f"  {style.qmark()} {style.bold(question)} "
             f"{style.dim('[' + options + ']')} {style.dim('(Enter for ' + default + ')')} "
         ).strip().lower()
-    except (EOFError, KeyboardInterrupt):
+    except KeyboardInterrupt:
+        print()
+        raise Interrupted() from None
+    except EOFError:
         print()
         _note("no answer — skipping this step; nothing was changed")
         return "skip"
@@ -240,14 +261,33 @@ def _step_account(repo_root: Path, brr_dir: Path, *, tty: bool) -> bool:
 
 
 def _step_doors(brr_dir: Path, *, tty: bool) -> bool:
-    """At least one door — where brnrd reaches you, and you it."""
+    """At least one door — where brnrd reaches you, and you it.
+
+    Two kinds, named the way the 2026-08-14 steer named them: a
+    **cloud-managed** door rides the account pairing — brnrd.dev runs the
+    bot, and a connected account is already reachable with no credential
+    to type here; a **self-managed** door is a token the user brings
+    (BotFather, a Slack app, signal-cli) for a direct, no-cloud-in-the-path
+    wire. The first live macOS onboarding hit the old shape of this step:
+    ``✓ already connected`` two lines above, and then an interview
+    demanding a bot token the cloud path exists to make unnecessary. So a
+    connected account *passes* this step, and the self-managed interview
+    becomes what it always was in practice — the power move, offered, not
+    required.
+    """
+    from .gates import cloud
     from .gates import runtime as gate_runtime
 
     _step("your doors")
     configured = [name for name in gate_runtime.configured_gates(brr_dir)
                   if name in DOOR_CHOICES]
     if configured:
-        _ok("configured: " + ", ".join(style.accent(name) for name in configured))
+        _ok("self-managed: " + ", ".join(style.accent(name) for name in configured))
+        return True
+    if cloud.is_configured(brr_dir):
+        _ok("cloud-managed — your brnrd.dev account is the door; chat rides the account wire")
+        _note("optional: a direct, self-managed door with your own bot token:")
+        _command(["gate", "setup", "<gate>"])
         return True
 
     _note("no door configured yet — a door is where brnrd reaches you")
@@ -285,6 +325,29 @@ def _step_contract(repo_root: Path, brr_dir: Path, *, tty: bool) -> bool:
         return True
 
     _note("written by your first run — a conversation, not a form")
+
+    # A question whose *yes* is known to fail is not a question — it is a
+    # refusal wearing one. `queue_greeting` needs a door that can say the
+    # first word, and the cloud wire is reply-shaped (it answers, it does
+    # not open — `door_for_greeting`'s contract). So with no direct door
+    # at all, don't ask: say the true next move instead. On the cloud-only
+    # machine that is the human's — the conversation starts from their
+    # side, and the first inbound message wakes the run that writes this
+    # file. (A direct door that *is* configured but can't be addressed
+    # still gets `queue_greeting`'s own refusal, which names the gap.)
+    from .gates import cloud
+    from .gates import runtime as gate_runtime
+
+    direct = [name for name in gate_runtime.configured_gates(brr_dir)
+              if name in DOOR_CHOICES]
+    if not direct:
+        if cloud.is_configured(brr_dir):
+            _note("your cloud door can reply but not start a conversation —")
+            _note("message your account's bot about this repo, and the first run takes it from there")
+        else:
+            _note("needs a door first (the step above) — then this offer works")
+        return False
+
     if not tty:
         # No standalone verb dispatches this run yet — `account connect`
         # queues it as a side effect, and this door offers it directly.
@@ -292,7 +355,11 @@ def _step_contract(repo_root: Path, brr_dir: Path, *, tty: bool) -> bool:
         _note(f"re-run `{brnrd_cmd()}` from a terminal to start it")
         return False
     if not _ask("run setup now?"):
-        _note(f"skipped — `{brnrd_cmd()} account connect` offers it again")
+        # The way back is this same door — it resumes from this rung. The
+        # line used to send people to `account connect`, a verb whose job
+        # here was already done; a resume instruction that renames the
+        # entrance is a resume instruction that gets pasted and half-works.
+        _note(f"skipped — run `{brnrd_cmd()}` again whenever you like")
         return False
 
     outcome = connect_greeting.queue_greeting(repo_root, brr_dir)
@@ -327,15 +394,32 @@ def run() -> int:
     print(f"{style.bold('brnrd')} {style.dim(__version__)} "
           f"{style.dim('· guided setup')}")
     print(f"{style.dim('repo:')} {style.accent(str(repo_root))}")
+    # Where brnrd keeps things, said up front. The first live macOS
+    # onboarding spent its reset attempt grepping `~/brnrd`, `/home/<user>`,
+    # `~/local` — the answer (`$XDG_STATE_HOME` shape, macOS included) is
+    # nowhere a newcomer would look, and a tool that hides where it lives
+    # cannot be cleanly uninstalled, reset, or trusted.
+    from . import account
+
+    print(f"{style.dim('state:')} {style.accent(str(account.state_root()))}"
+          f"{style.dim(' · per-repo: ' + str(brr_dir))}")
     if not tty:
         _note("not a terminal — reading state only, running nothing")
 
-    standing = [
-        _step_runner(repo_root),
-        _step_account(repo_root, brr_dir, tty=tty),
-        _step_doors(brr_dir, tty=tty),
-        _step_contract(repo_root, brr_dir, tty=tty),
-    ]
+    try:
+        standing = [
+            _step_runner(repo_root),
+            _step_account(repo_root, brr_dir, tty=tty),
+            _step_doors(brr_dir, tty=tty),
+            _step_contract(repo_root, brr_dir, tty=tty),
+        ]
+    except Interrupted:
+        # 128+SIGINT, the exit code the shell would have minted had nothing
+        # caught it — a script watching this door reads ^C as ^C.
+        print()
+        print(f"{style.dot()} stopped — nothing else was changed; "
+              f"{style.dim('run ' + brnrd_cmd() + ' again any time; it resumes here')}")
+        return 130
 
     print()
     if all(standing):

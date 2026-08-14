@@ -53,6 +53,24 @@
 	// is now that command; the App becomes what it actually is, an optional
 	// identity upgrade named once in the footer, never a gate. ColdStart
 	// now matches Direction A: install → pair → init.
+	//
+	// Third trace, 2026-08-14 (the iMac onboarding): `brnrd init` was
+	// retired into the bare-`brnrd` front door (decision-retire-init.md,
+	// 08-10) and this board kept teaching the dead verb for four days —
+	// the maintainer's own fresh-machine run read the wall, typed the old
+	// spell, and met the new flow only by accident. Two steps now:
+	// install, then `brnrd` in the checkout — the guided door pairs,
+	// names your doors, and queues the first run, resuming from whatever
+	// rung stands. The command box still renders the *served* string
+	// (`pairing_command`, `_session.py`) so a CLI rename reaches here
+	// without a frontend deploy — the exact drift this trace measured,
+	// closed at its cause.
+	//
+	// Named, not yet closed (same trace): this block gates on repo-scoped
+	// `daemon_status` only, so an account-level paired machine with no
+	// enabled repo reads "nothing is paired yet" while the capabilities
+	// board below lists the very machine. Needs machines on this
+	// component's wire — filed with the trace, not hacked around here.
 	interface Props {
 		// `null` = the repos fetch hasn't landed. Render nothing rather than
 		// flashing a cold start at an account that has fifteen repos: the
@@ -74,14 +92,6 @@
 	let { repos, installations = null, pairCommand = null }: Props = $props();
 
 	const INSTALL_COMMAND = 'npm install -g brnrd';
-	// Step 03 (2026-08-08 trace, #1243): the rung the trace proved fatal.
-	// `daemon.start` refuses to run without an `AGENTS.md` in the checkout
-	// (`run brnrd init first`, `daemon.py`) — every account that paired
-	// without ever seeing this line got a daemon that registers, crash-
-	// loops under its service manager, and never breathes. Docs already
-	// teach install → init → connect; this board taught install → connect
-	// → App and guaranteed the trace. One line, added.
-	const INIT_COMMAND = 'brnrd init';
 
 	let appInstalled = $derived((installations?.length ?? 0) > 0);
 	// "Paired" here means the one-time setup act completed, not "currently
@@ -149,7 +159,7 @@
 			nothing is paired yet
 		</h2>
 		<p class="mt-2 text-sm text-stone-400">
-			This board reads a daemon running on your own machine. There is none yet — three steps, in
+			This board reads a daemon running on your own machine. There is none yet — two steps, in
 			order.
 		</p>
 
@@ -178,7 +188,7 @@
 
 			<li>
 				<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
-					<span class="text-amber-200/80">02</span> pair the daemon
+					<span class="text-amber-200/80">02</span> run <code>brnrd</code> — the guided setup
 				</p>
 				{#if pairCommand}
 					{#if pairParts?.setupLine}
@@ -206,40 +216,10 @@
 					</div>
 				{/if}
 				<p class="mt-1.5 text-sm text-stone-400">
-					In the checkout, after 01. It prints a link back here to approve, and this board starts
-					reading the daemon — no enabled repository required yet, this is the account-level pair.
-					Execution never leaves your machine.
-				</p>
-			</li>
-
-			<li>
-				<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
-					<span class="text-amber-200/80">03</span> run <code>brnrd init</code>
-				</p>
-				<div class="mt-1.5 flex items-start gap-2">
-					<pre
-						class="min-w-0 grow border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] wrap-anywhere whitespace-pre-wrap text-stone-300"><code
-							>{INIT_COMMAND}</code
-						></pre>
-					<button
-						type="button"
-						class="shrink-0 cursor-pointer border border-stone-800 px-2 py-2 font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-						onclick={() => copy('init', INIT_COMMAND)}
-						>{copied === 'init' ? 'copied' : 'copy'}</button
-					>
-				</div>
-				<!-- The rung the 08-08 trace proved fatal (design-onboarding-
-				     second-trace.md, #1243): step 02 already bound this repo —
-				     nothing left to "enable" on a separate screen — but the
-				     daemon still refuses to start without this. Unobservable
-				     from here exactly like step 01 (no wire fact says "init has
-				     run"), so no done-marker, on purpose — a checkmark that
-				     guessed would be the same lie the header comment above
-				     refuses for step 01. -->
-				<p class="mt-1.5 text-sm text-stone-400">
-					Same checkout, once 02 has paired — your repo connected the moment you paired above, so
-					there is nothing to enable on a separate screen. This writes what the resident reads
-					before it can act; skip it and the daemon stays paired with nothing to run.
+					In the checkout, after 01. One word, narrated: it pairs this machine (printing a link back
+					here to approve), names your doors, and queues the first run — the one that writes your
+					repo's <code>AGENTS.md</code>. Re-run it any time; it resumes from whatever step is
+					standing. Execution never leaves your machine.
 				</p>
 			</li>
 		</ol>
