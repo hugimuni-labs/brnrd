@@ -3717,3 +3717,97 @@ def test_a_readable_shape_annotates_nothing(tmp_path, monkeypatch):
     assert [p.name for p in files] == ["photo.jpg"]
     assert failed == [] and unrecognised is None
     assert cloud._annotate_failures("hi", failed, unrecognised) == "hi"
+
+
+def _noted_event(inbox, cloud_event_id: str):
+    """One already-retired cloud letter — `create_event` returns a Path."""
+    return protocol.create_event(
+        inbox,
+        source="cloud",
+        body="noise",
+        status="noted",
+        cloud_event_id=cloud_event_id,
+    )
+
+
+def test_a_noted_event_is_reported_closed_to_the_cloud_exactly_once(tmp_path, monkeypatch):
+    """`note:` must stop being silent to the *server* as well as the human.
+
+    Before this sweep a noted event kept `status = queued` in the events
+    table forever — the resident's deliberate close was a local file edit
+    and nothing more. The queued set is the structural defence against a
+    replay (`brnrd/inbox.py` `_QUEUED_ONLY_RATIONALE`), so a set with no
+    exit made that defence weaker every day: on 2026-08-14 a fresh home
+    polled `since = 0` and was handed 1,226 events, 554 of them letters
+    already read and deliberately closed on the machine before.
+
+    Three properties: it posts, it posts `noted` (never `done`, which would
+    forward an empty message to the platform), and it never posts twice.
+    """
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    _noted_event(inbox, "ev_aaa")
+    _noted_event(inbox, "ev_bbb")
+    state = {"brnrd_url": "https://example.invalid", "token": "t"}
+
+    posts: list[dict] = []
+
+    def fake_request(base_url, method, path, **kwargs):
+        posts.append({"path": path, "json": kwargs.get("json")})
+        return {}
+
+    monkeypatch.setattr(cloud, "_request", fake_request)
+    cloud._close_noted_events(inbox, state)
+
+    assert [p["path"] for p in posts] == ["/v1/daemons/responses"] * 2
+    assert {p["json"]["event_id"] for p in posts} == {"ev_aaa", "ev_bbb"}
+    assert all(p["json"]["status"] == "noted" for p in posts)
+    assert all(p["json"]["body_markdown"] == "" for p in posts)
+
+    # Stamped, so the next poll is a no-op — not a second close per tick.
+    cloud._close_noted_events(inbox, state)
+    assert len(posts) == 2
+
+
+def test_a_failed_noted_close_is_retried_and_a_404_is_not(tmp_path, monkeypatch):
+    """The two ways a close can not-happen are not the same fact.
+
+    A transient failure means the server never heard it: leave the stamp
+    off and retry. A 404 means the row is already gone (GC'd, or another
+    daemon closed it) — the end state we wanted, so stamping it is correct
+    and retrying it forever is a poll that never stops failing.
+    """
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    _noted_event(inbox, "ev_boom")
+    state = {"brnrd_url": "https://example.invalid", "token": "t"}
+
+    def transient(base_url, method, path, **kwargs):
+        raise RuntimeError("502 bad gateway")
+
+    monkeypatch.setattr(cloud, "_request", transient)
+    cloud._close_noted_events(inbox, state)
+    assert not protocol.list_noted(inbox, "cloud")[0].get("cloud_closed_at")
+
+    def gone(base_url, method, path, **kwargs):
+        err = RuntimeError("404")
+        err.status_code = 404
+        raise err
+
+    monkeypatch.setattr(cloud, "_request", gone)
+    cloud._close_noted_events(inbox, state)
+    assert protocol.list_noted(inbox, "cloud")[0].get("cloud_closed_at")
+
+
+def test_list_noted_sees_only_noted_events_of_its_own_source(tmp_path):
+    """`list_active` deliberately excludes `noted`; this is its counterpart."""
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    _noted_event(inbox, "ev_yes")
+    protocol.create_event(inbox, source="cloud", body="still open")
+    protocol.create_event(
+        inbox, source="github", body="elsewhere", status="noted",
+    )
+
+    ids = [e.get("cloud_event_id") for e in protocol.list_noted(inbox, "cloud")]
+    assert ids == ["ev_yes"]

@@ -305,34 +305,52 @@ responded event) and the whole fix on the broken one."""
 
 def fetch_since_many(
     db: Session, repo_ids: Collection[str], since: int,
+    *, limit: int | None = None,
 ) -> list[Event]:
+    """One page of an account's queued backlog, oldest first.
+
+    *limit* bounds the page. It exists because this query had no bound at
+    all until 2026-08-14, when a freshly created account home polled with
+    ``since = 0`` and was handed **1,226 events in a single response** —
+    every queued event across the account, back to the 90-day row TTL. The
+    daemon ingested them at ~10/s for two minutes and the next wake
+    inherited all of them at once.
+
+    A page is not a fix for the cursor (that is `clamp_since_many` and the
+    status filter above); it is the ceiling that makes any future cursor
+    fault survivable instead of terminal. The cursor advances per page, so
+    a daemon that dies mid-drain resumes where it stopped rather than
+    restarting from the beginning.
+    """
     ids_set = set(repo_ids)
     if not ids_set:
         return []
-    return list(
-        db.execute(
-            select(Event)
-            .where(
-                Event.repo_id.in_(ids_set),
-                Event.seq > since,
-                # See `_QUEUED_ONLY_RATIONALE` — answered events never
-                # redeliver, cursor or no cursor.
-                Event.status == Event.STATUS_QUEUED,
-            )
-            .order_by(Event.seq)
-        ).scalars()
+    stmt = (
+        select(Event)
+        .where(
+            Event.repo_id.in_(ids_set),
+            Event.seq > since,
+            # See `_QUEUED_ONLY_RATIONALE` — answered events never
+            # redeliver, cursor or no cursor.
+            Event.status == Event.STATUS_QUEUED,
+        )
+        .order_by(Event.seq)
     )
+    if limit is not None and limit > 0:
+        stmt = stmt.limit(limit)
+    return list(db.execute(stmt).scalars())
 
 
 def _fetch_since_many_detached(
     session_factory: sessionmaker,
     repo_ids: Collection[str],
     since: int,
+    limit: int | None = None,
 ) -> list[Event]:
     """Read one account-wide poll without leaking session-bound rows."""
 
     with session_factory() as db:
-        events = fetch_since_many(db, repo_ids, since)
+        events = fetch_since_many(db, repo_ids, since, limit=limit)
         for event in events:
             db.expunge(event)
     return events
@@ -345,6 +363,7 @@ async def long_poll_many(
     *,
     max_wait_s: float,
     interval_s: float,
+    limit: int | None = None,
 ) -> list[Event]:
     """Long-poll without occupying FastAPI's worker pool while waiting.
 
@@ -360,6 +379,7 @@ async def long_poll_many(
             session_factory,
             repo_ids,
             since,
+            limit,
         )
         if events or time.monotonic() >= deadline:
             return events
@@ -368,6 +388,52 @@ async def long_poll_many(
 
 def _body_sha(body_markdown: str) -> str:
     return hashlib.sha256(body_markdown.encode("utf-8")).hexdigest()
+
+
+#: The response status that closes an event **without forwarding anything**.
+#: The daemon's ``note:`` outbox verb — a resident retiring a letter
+#: deliberately, no message going out — used to be an entirely local act:
+#: ``status: noted`` in a file under the account home, and nothing on the
+#: wire. The server therefore kept the row ``queued`` forever.
+#:
+#: That is not a cosmetic gap. ``_QUEUED_ONLY_RATIONALE`` above explains that
+#: the queued set is the structural guarantee against a replay — but a set
+#: that only ever *grows* makes the guarantee weaker every day, because the
+#: only exit was a terminal ``done`` and most retired letters never get one.
+#: Measured 2026-08-14: a fresh account home polled ``since = 0`` and was
+#: handed 1,226 events, the overwhelming majority of them long since read and
+#: deliberately closed on some other machine. ``clamp_since``'s floor is
+#: ``oldest_queued - 1``, so those same never-closed rows also pinned the
+#: clamp at the beginning of time for every future re-pair.
+#:
+#: A noted close is silent on the platform and terminal in the database.
+RESPONSE_STATUS_NOTED = "noted"
+
+
+def _close_noted(db: Session, event: Event) -> Event:
+    """Retire *event* server-side with no platform forward.
+
+    Idempotent: a second post for an already-closed event is a quiet ACK,
+    the same shape ``record_response`` gives a duplicate terminal body. The
+    daemon retries this on every poll until it sees a 2xx, so "already
+    closed" must never be an error.
+    """
+    if event.status == Event.STATUS_RESPONDED:
+        return event
+    now = datetime.now(timezone.utc)
+    created = event.created_at
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    event.response_status = RESPONSE_STATUS_NOTED
+    event.response_len = 0
+    event.response_ms = int((now - created).total_seconds() * 1000)
+    event.response_sha = _body_sha("")
+    event.responded_at = now
+    event.status = Event.STATUS_RESPONDED
+    event.body = None
+    event.attachments_json = "[]"
+    db.commit()
+    return event
 
 
 def record_response(db: Session, *, repo_id: str, event_id: str, body_markdown: str, status: str, forwarder: Forwarder, conversation_id: str | None = None) -> Event | None:
@@ -405,6 +471,8 @@ def record_response(db: Session, *, repo_id: str, event_id: str, body_markdown: 
     if conversation_id and not event.conversation_id:
         event.conversation_id = conversation_id
         db.commit()
+    if status == RESPONSE_STATUS_NOTED:
+        return _close_noted(db, event)
     sha = _body_sha(body_markdown)
     if event.status == Event.STATUS_RESPONDED and sha == event.response_sha:
         # Idempotent retry of the last forwarded message: quiet ACK.

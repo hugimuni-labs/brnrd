@@ -722,6 +722,27 @@ def list_active(inbox_dir: Path, source: str) -> list[dict[str, Any]]:
     return events
 
 
+def list_noted(inbox_dir: Path, source: str) -> list[dict[str, Any]]:
+    """Return ``noted`` events matching *source*, oldest first.
+
+    ``noted`` is terminal locally — the resident retired the letter without
+    speaking — but the origin that *sent* the letter has no way to know
+    that unless someone tells it. This lister is the sweep surface for
+    telling it; ``list_active`` deliberately excludes ``noted`` because
+    nothing is ever *delivered* for one.
+    """
+    if not inbox_dir.exists():
+        return []
+    events = []
+    for entry in sorted(os.scandir(inbox_dir), key=_event_sort_key):
+        if not entry.name.endswith(".md"):
+            continue
+        ev = _read_event(Path(entry.path))
+        if ev and ev.get("status") == "noted" and ev.get("source") == source:
+            events.append(ev)
+    return events
+
+
 def set_status(event: dict[str, Any], status: str) -> None:
     """Update the status field of an event file atomically."""
     path: Path = event["_path"]
