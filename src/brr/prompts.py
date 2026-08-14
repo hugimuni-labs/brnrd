@@ -4839,6 +4839,13 @@ def _build_run_context_bundle(
     return "\n".join(sections) + "\n"
 
 
+#: 1,203 pending events once rendered 165.9 KB into a 252.7 KB wake — the
+#: replay ate the thought that was supposed to handle it. This caps the
+#: rendered window; the true omitted count always appears on the elision
+#: line below rather than being silently dropped (that silence was the bug).
+_PENDING_EVENTS_RENDER_MAX = 40
+
+
 def _format_pending_events(
     events: list[dict[str, Any]] | None,
 ) -> str:
@@ -4856,11 +4863,18 @@ def _format_pending_events(
     by retention — gets a sub-bullet that says so explicitly: *announced,
     not fetched* is a different fact than *no attachment*, and rendering
     neither is how that distinction went missing the first time (#1154).
+
+    Capped at :data:`_PENDING_EVENTS_RENDER_MAX` — existing order is
+    preserved (never re-sorted), just truncated, and a fitting list gets no
+    elision line at all.
     """
     if not events:
         return ""
+    total = len(events)
+    rendered_events = events[:_PENDING_EVENTS_RENDER_MAX]
+    omitted = total - len(rendered_events)
     bullets: list[str] = []
-    for ev in events:
+    for ev in rendered_events:
         eid = str(ev.get("id") or "").strip()
         if not eid:
             continue
@@ -4883,6 +4897,11 @@ def _format_pending_events(
                     "the bytes never reached this machine or were already "
                     "swept by retention; this is not the same as no attachment"
                 )
+    if omitted > 0:
+        bullets.append(
+            f"- … +{omitted:,} more pending events not rendered here — read "
+            "the live portal-state.json / inbox.json for the full list"
+        )
     return "\n".join(bullets)
 
 
