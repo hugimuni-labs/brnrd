@@ -8829,6 +8829,15 @@ def _drain_outbox(
         # its waking event is handled while it is still pending.
         retires_target = not deliverable and cross and target_event is not None
         if not deliverable:
+            # Daemon-minted sources (spawn_completed, schedule) have no correspondent,
+            # so an undeliverable reply is not a loss — use kind="advisory" rather than
+            # "dropped" to avoid inflating the dropped/refused count (#1351). Other
+            # gateless sources represent a genuine absence of delivery plumbing.
+            notice_kind = (
+                "advisory"
+                if target_source in ("spawn_completed", "schedule")
+                else "dropped"
+            )
             _record_outbox_notice(
                 outbox_dir,
                 (
@@ -8837,10 +8846,7 @@ def _drain_outbox(
                     if retires_target else
                     f"reply text staged undeliverable — {undeliverable_reason}"
                 ),
-                # Genuinely undelivered — no gate owns the target source at
-                # all, so nothing reaches anyone. Not a policy refusal of a
-                # known destination; the plumbing to reach one is absent.
-                kind="dropped",
+                kind=notice_kind,
                 lifetime="run",
             )
         ppath = (
