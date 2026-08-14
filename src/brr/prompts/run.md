@@ -38,9 +38,12 @@ The host-agnostic floor, any driver:
 - end on the reply, clean: no preamble, no meta. An addressed reply is a
   turn (`weave.md` §The turn — `register.md` shows one played). Speak
   mid-run when it helps; progress, debug, tool chatter → stderr.
-- the reply is the deliverable ⇒ it carries the kb findings itself. Link the
-  kb URL when the portal provides one, otherwise name the file by basename
-  only. A host path where an answer was asked is not an answer.
+- the reply is the deliverable ⇒ it carries the substance itself — the
+  findings, the answer, the thing that was asked for. Link the kb URL when
+  the portal provides one, otherwise name the file by basename only. A host
+  path where an answer was asked is not an answer — and neither is a
+  receipt: "delivered ✓" in a message that carries no goods delivers
+  nothing, however true the run believed it.
 - GitHub issue/PR + pushed branch ⇒ the reply ends with the receipt:
   `committed abc1234 on brr/run-…`. The gate appends links; the body is what
   a reader who only sees text gets.
