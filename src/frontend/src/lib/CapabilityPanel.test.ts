@@ -26,7 +26,10 @@ async function renderPanel(props: {
 	const compiled = compile(source, { generate: 'server', runes: true, name: 'CapabilityPanel' });
 	const runnable = compiled.js.code
 		.replace(/'(\.\/[A-Za-z0-9_-]+)'/g, "'$1.ts'")
-		.replace(/import\s*\{[^}]*\}\s*from\s*'\$app\/paths';/, 'const resolve = (path) => path;');
+		.replace(/import\s*\{[^}]*\}\s*from\s*'\$app\/paths';/, 'const resolve = (path) => path;')
+		// Server-render posture, same as SvelteKit's own prerender: no browser,
+		// so the hide fold reads as not-hidden and localStorage is never touched.
+		.replace(/import\s*\{[^}]*\}\s*from\s*'\$app\/environment';/, 'const browser = false;');
 	writeFileSync(generated, runnable);
 	try {
 		const module = await import(`${generated}?t=${process.pid}-${Math.random()}`);
