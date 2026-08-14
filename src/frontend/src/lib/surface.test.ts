@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import test from 'node:test';
 import {
 	basename,
@@ -125,6 +126,44 @@ test('inlineTokens resolves the qualified owner/repo#N shorthand in prose, never
 		// `a/b/c#1`: two slashes, not the single-slash owner/repo shape.
 		{ kind: 'text', text: ' and #1257 bare, also a/b/c#1' }
 	]);
+});
+
+test('inlineTokens resolves a forge ref at string start and after punctuation', () => {
+	// The boundary in PROSE_FORGE_REF_RE is a consuming `(^|[^\w/.-])` group,
+	// not a lookbehind — these two starts are exactly what that group has to
+	// keep working: start-of-string (the empty alternative) and a consumed
+	// punctuation character that must come back as prose text.
+	assert.deepEqual(inlineTokens('a/b#7 leads', 'index.md', new Set()), [
+		{
+			kind: 'link',
+			text: 'a/b#7',
+			href: 'https://github.com/a/b/issues/7',
+			target: null,
+			anchor: null
+		},
+		{ kind: 'text', text: ' leads' }
+	]);
+	assert.deepEqual(inlineTokens('see (a/b#7)', 'index.md', new Set()), [
+		{ kind: 'text', text: 'see (' },
+		{
+			kind: 'link',
+			text: 'a/b#7',
+			href: 'https://github.com/a/b/issues/7',
+			target: null,
+			anchor: null
+		},
+		{ kind: 'text', text: ')' }
+	]);
+});
+
+test('surface.ts carries no regex lookbehind — Safari < 16.4 must parse every chunk this module rides', () => {
+	// A lookbehind in a module-top-level regex *literal* is a parse-time
+	// SyntaxError on Safari ≤ 16.3, which killed every route chunk importing
+	// this module and rendered the dashboard as a 500 on an older Mac
+	// (2026-08-14). Source-scan, not behavior: the failure mode is a parser
+	// this test runner does not have.
+	const source = fs.readFileSync(new URL('./surface.ts', import.meta.url), 'utf-8');
+	assert.ok(!source.includes('(?<'), 'regex lookbehind/named group found in surface.ts');
 });
 
 test('previewBlock clamps a collapsed list by item and hiddenCount reports it', () => {

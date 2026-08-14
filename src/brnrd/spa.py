@@ -128,6 +128,16 @@ def mount_frontend(app: FastAPI, directory: Path, claimed: frozenset[str]) -> No
         asset = _safe_file(root, spa_path)
         if asset is not None:
             return FileResponse(asset)
+        # `_app/` is SvelteKit's own build namespace — every URL under it is
+        # minted by the build (hashed chunks, version.json), never a client
+        # route, so the shell is always the wrong answer there. Serving it
+        # anyway turned every missing-chunk fetch into `200 text/html`, which
+        # a browser's `import()` reports as the opaque "Importing a module
+        # script failed" and SvelteKit renders as a 500 — a soft 404 wearing
+        # a server error's face (measured live, 2026-08-14). A real 404 is
+        # also what SvelteKit's own stale-deploy recovery expects to see.
+        if spa_path == "_app" or spa_path.startswith("_app/"):
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
         if not index.is_file():
             return JSONResponse({"detail": "Not Found"}, status_code=404)
         # 200, not 404: the client router owns the path from here, including
