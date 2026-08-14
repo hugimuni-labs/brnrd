@@ -1384,6 +1384,55 @@ def test_every_pending_event_always_gets_at_least_one_line(tmp_path):
     assert "(no body)" in ctx
 
 
+def test_render_event_rows_caps_at_40_with_honest_elision_line():
+    # 1,203 pending events once rendered 234 KB into a SessionStart seed —
+    # the replay ate the thought that was supposed to handle it. 100 events
+    # is enough to prove the cap and the true omitted count.
+    events = [
+        {"id": f"evt-{i}", "source": "telegram", "body": f"msg {i}"}
+        for i in range(100)
+    ]
+    rows = hooks._render_event_rows(events, None, None)
+    chrome_rows = [r for r in rows if r.startswith("- ✉ evt-")]
+    assert len(chrome_rows) == 40
+    assert any(r.startswith("- ✉ evt-0 ") for r in chrome_rows)
+    assert any(r.startswith("- ✉ evt-39 ") for r in chrome_rows)
+    assert not any("evt-40 " in r for r in rows)
+    assert rows[-1] == (
+        "- … +60 more pending events not rendered here — read the live "
+        "portal-state.json / inbox.json for the full list"
+    )
+
+
+def test_render_event_rows_no_elision_line_when_it_fits():
+    events = [
+        {"id": f"evt-{i}", "source": "telegram", "body": f"msg {i}"}
+        for i in range(10)
+    ]
+    rows = hooks._render_event_rows(events, None, None)
+    chrome_rows = [r for r in rows if r.startswith("- ✉ evt-")]
+    assert len(chrome_rows) == 10
+    assert not any("more pending events" in r for r in rows)
+
+
+def test_session_start_seed_caps_pending_events_at_40(tmp_path):
+    # The integration path for the same bug: the SessionStart portal-seed
+    # renderer must carry the cap too, not just the unit-level helper.
+    events = [
+        {"id": f"evt-{i}", "source": "telegram", "summary": f"msg {i}"}
+        for i in range(50)
+    ]
+    _portal(tmp_path, token="t1", pending=50, events=events)
+    out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert ctx.count("- ✉ evt-") == 40
+    assert "evt-40 " not in ctx
+    assert (
+        "- … +10 more pending events not rendered here — read the live "
+        "portal-state.json / inbox.json for the full list"
+    ) in ctx
+
+
 def test_codex_hook_args_wellformed(tmp_path, monkeypatch):
     monkeypatch.setattr(hooks.shutil, "which", lambda _name: "/usr/bin/brnrd")
     assert hooks.codex_hook_capability() is True

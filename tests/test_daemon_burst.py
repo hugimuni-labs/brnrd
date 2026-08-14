@@ -16,6 +16,7 @@ flakiness.
 
 from __future__ import annotations
 
+import datetime
 import os
 import threading
 import time
@@ -333,6 +334,76 @@ def test_failure_defers_pending_siblings_without_hiding_them(tmp_path):
     assert all(ev["deferred_by_run"] == "run-x" for ev in pending)
     assert all(ev["defer_reason"] == "operational_failure" for ev in pending)
     assert protocol.list_dispatchable(inbox) == []
+    # Staggered release (the herd-defer fix): evt-b carries the base 60s
+    # delay, evt-c is pushed 2s further out (n=2 ⇒ step = min(2.0, 1800/1)).
+    # Oldest-first order means evt-b alone is eligible at +61s; both are
+    # eligible once the stagger has fully elapsed at +63s.
     assert [
         ev["id"] for ev in protocol.list_dispatchable(inbox, now=time.time() + 61)
+    ] == ["evt-b"]
+    assert [
+        ev["id"] for ev in protocol.list_dispatchable(inbox, now=time.time() + 63)
     ] == ["evt-b", "evt-c"]
+
+
+def _defer_stamp(ev: dict) -> float:
+    return (
+        datetime.datetime.strptime(ev["defer_until"], "%Y-%m-%dT%H:%M:%SZ")
+        .replace(tzinfo=datetime.timezone.utc)
+        .timestamp()
+    )
+
+
+def test_failure_defers_siblings_with_staggered_release(tmp_path):
+    """N siblings get N distinct, monotonically increasing ``defer_until``
+    values instead of one synchronised release — the herd-defer fix: 1,203
+    siblings stamped with the same instant is what handed the next wake the
+    whole wall. The first sibling still gets exactly the base delay, and the
+    total spread stays within the 30-minute ceiling."""
+    inbox = tmp_path / ".brr" / "inbox"
+    lead = _seed(tmp_path, "evt-a")
+    n = 20
+    for i in range(n):
+        _seed(tmp_path, f"evt-s{i:02d}")
+    protocol.set_status(lead, "done")
+
+    before = time.time()
+    changed = daemon._defer_pending_siblings_after_failure(
+        inbox,
+        lead_event_id="evt-a",
+        run_id="run-x",
+        seconds=60,
+    )
+    assert changed == n
+
+    pending = protocol.list_pending(inbox)
+    assert [ev["id"] for ev in pending] == [f"evt-s{i:02d}" for i in range(n)]
+
+    stamps = [_defer_stamp(ev) for ev in pending]
+    assert len(set(stamps)) == n, "every sibling must get a distinct defer_until"
+    assert stamps == sorted(stamps), "release order must follow list order"
+    # First sibling == base delay (±1s for the whole-second formatting).
+    assert abs(stamps[0] - (before + 60)) <= 1
+    # Total spread stays bounded by step = min(2.0, 1800.0 / (n - 1)).
+    step = min(2.0, 1800.0 / max(1, n - 1))
+    assert abs((stamps[-1] - stamps[0]) - (n - 1) * step) <= 1
+
+
+def test_failure_defer_single_sibling_unchanged(tmp_path):
+    """N=1 must not regress: the sole sibling still gets exactly the base
+    delay, same as before staggering existed."""
+    inbox = tmp_path / ".brr" / "inbox"
+    lead = _seed(tmp_path, "evt-a")
+    _seed(tmp_path, "evt-b")
+    protocol.set_status(lead, "done")
+
+    before = time.time()
+    changed = daemon._defer_pending_siblings_after_failure(
+        inbox,
+        lead_event_id="evt-a",
+        run_id="run-x",
+        seconds=60,
+    )
+    assert changed == 1
+    pending = protocol.list_pending(inbox)
+    assert abs(_defer_stamp(pending[0]) - (before + 60)) <= 1

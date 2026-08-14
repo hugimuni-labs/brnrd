@@ -13350,10 +13350,11 @@ def _write_terminal_failure_response(
     return True
 
 
-def _format_utc_after(seconds: float) -> str:
+def _format_utc_after(seconds: float, *, now: float | None = None) -> str:
+    base = time.time() if now is None else now
     return time.strftime(
         "%Y-%m-%dT%H:%M:%SZ",
-        time.gmtime(time.time() + max(0.0, seconds)),
+        time.gmtime(base + max(0.0, seconds)),
     )
 
 
@@ -13371,16 +13372,31 @@ def _defer_pending_siblings_after_failure(
     not eligible to become the next lead until ``defer_until`` passes.
     This is the first Q2-shaped failure brake for #128; per-run claim and
     run-keyed primary outbox remain separate slices.
+
+    A single shared ``defer_until`` used to be stamped on every sibling —
+    with 1,203 siblings that is a perfectly synchronised release: every
+    event becomes eligible in the same instant and the next wake inherits
+    the whole wall. Instead, siblings are staggered deterministically in
+    ``protocol.list_pending`` order (oldest first ⇒ released first): the
+    first deferred sibling still gets the base ``seconds`` delay (no
+    regression for the common 1-3 event case), and each later one is pushed
+    ``step`` seconds further out, where ``step`` shrinks as the pile grows
+    so the total added spread never exceeds 30 minutes.
     """
     if seconds <= 0:
         return 0
-    defer_until = _format_utc_after(seconds)
+    siblings = [
+        pending
+        for pending in protocol.list_pending(inbox_dir)
+        if pending.get("id") != lead_event_id and pending.get("status") == "pending"
+    ]
+    if not siblings:
+        return 0
+    now = time.time()
+    step = min(2.0, 1800.0 / max(1, len(siblings) - 1))
     changed = 0
-    for pending in protocol.list_pending(inbox_dir):
-        if pending.get("id") == lead_event_id:
-            continue
-        if pending.get("status") != "pending":
-            continue
+    for index, pending in enumerate(siblings):
+        defer_until = _format_utc_after(seconds + index * step, now=now)
         try:
             protocol.update_event_meta(
                 pending,

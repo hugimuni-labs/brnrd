@@ -1428,6 +1428,55 @@ class TestPromptBuilding:
         assert "announced, not fetched" in prompt
         assert "ghost.png" in prompt
 
+    def test_format_pending_events_caps_at_40_with_honest_elision_line(self):
+        # 1,203 pending events once rendered 165.9 KB into a 252.7 KB wake —
+        # the replay ate the thought that was supposed to handle it. 100
+        # events here is enough to prove the cap and the elision count
+        # without ballooning the test.
+        events = [
+            {"id": f"evt-{i}", "source": "telegram", "summary": f"msg {i}"}
+            for i in range(100)
+        ]
+        block = prompts._format_pending_events(events)
+        rendered_ids = [f"evt-{i}" for i in range(40)]
+        omitted_ids = [f"evt-{i}" for i in range(40, 100)]
+        for eid in rendered_ids:
+            assert f"- {eid} " in block
+        for eid in omitted_ids:
+            assert eid not in block
+        assert (
+            "- … +60 more pending events not rendered here — read the live "
+            "portal-state.json / inbox.json for the full list"
+        ) in block
+
+    def test_format_pending_events_omitted_count_counts_what_it_rendered(self):
+        """The elision number must describe the *rows*, not the slice.
+
+        An entry with no id is skipped by the loop, so counting omissions
+        from `events[:CAP]` under-reports by exactly the skipped ones — a
+        truncation that misstates its own size is the same lie as one that
+        says nothing, which is the bug the cap exists to fix.
+        """
+        events = [{"id": "", "source": "telegram", "summary": "no id"}]
+        events += [
+            {"id": f"evt-{i}", "source": "telegram", "summary": f"msg {i}"}
+            for i in range(60)
+        ]
+        block = prompts._format_pending_events(events)
+        rendered = [ln for ln in block.splitlines() if ln.startswith("- evt-")]
+        assert len(rendered) == 39, "the id-less entry consumed a slice seat"
+        assert f"+{len(events) - 39:,} more pending events" in block
+
+    def test_format_pending_events_no_elision_line_when_it_fits(self):
+        events = [
+            {"id": f"evt-{i}", "source": "telegram", "summary": f"msg {i}"}
+            for i in range(10)
+        ]
+        block = prompts._format_pending_events(events)
+        for i in range(10):
+            assert f"- evt-{i} " in block
+        assert "more pending events" not in block
+
     def test_daemon_prompt_omits_inbox_when_no_pending_events(self, tmp_path):
         prompt = build_daemon_prompt(
             "work on A", "evt-A", "/tmp/resp.md", tmp_path,
