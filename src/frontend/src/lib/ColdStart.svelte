@@ -216,9 +216,9 @@
 					</div>
 				{/if}
 				<p class="mt-1.5 text-sm text-stone-400">
-					In the checkout, after 01. One word, narrated: it pairs this machine (printing a link
-					back here to approve), names your doors, and queues the first run — the one that writes
-					your repo's <code>AGENTS.md</code>. Re-run it any time; it resumes from whatever step is
+					In the checkout, after 01. One word, narrated: it pairs this machine (printing a link back
+					here to approve), names your doors, and queues the first run — the one that writes your
+					repo's <code>AGENTS.md</code>. Re-run it any time; it resumes from whatever step is
 					standing. Execution never leaves your machine.
 				</p>
 			</li>
