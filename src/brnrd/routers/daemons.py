@@ -708,6 +708,7 @@ async def inbox(request: Request, since: int | None = Query(default=None), wait:
         since_seq,
         max_wait_s=max_wait,
         interval_s=settings.inbox_poll_interval_s,
+        limit=settings.inbox_page_limit,
     )
     cursor = max((e.seq for e in events), default=since_seq)
     await anyio.to_thread.run_sync(
