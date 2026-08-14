@@ -313,8 +313,33 @@ def test_step_memory_renders_the_manifest_line_for_a_populated_home(repo, capsys
 
     out = capsys.readouterr().out
     assert str(account.context_home_root(ctx)) in out
-    assert "1 kb pages · 1 warp items · 0 topics · 0 run records" in out
+    assert "1 kb page · 1 warp item · 0 topics · 0 run records" in out
     assert result is True
+
+
+def test_the_manifest_line_agrees_with_itself_about_number(repo, capsys):
+    """One page is not "1 kb pages".
+
+    This step's whole job is making a home legible at a glance; a count
+    that disagrees with its own noun spends some of the credibility the
+    number is there to earn. Pins both sides of the boundary at once so a
+    future edit cannot fix one and break the other.
+    """
+    ctx = account.resolve_context(repo, {})
+    topics = account.work_surface_path(ctx) / "topics"
+    topics.mkdir(parents=True, exist_ok=True)
+    for name in ("a.md", "b.md"):
+        (topics / name).write_text("# t", encoding="utf-8")
+    kb = account.knowledge_path(ctx)
+    kb.mkdir(parents=True, exist_ok=True)
+    (kb / "design.md").write_text("# Design", encoding="utf-8")
+
+    front_door._step_memory(repo, tty=False)
+
+    out = capsys.readouterr().out
+    assert "1 kb page ·" in out and "1 kb pages" not in out
+    assert "2 topics" in out
+    assert "0 warp items" in out  # zero takes the plural, as English does
 
 
 def test_step_memory_renders_the_new_resident_line_for_an_empty_home(repo, capsys):

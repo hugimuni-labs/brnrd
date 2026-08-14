@@ -260,6 +260,19 @@ def _step_account(repo_root: Path, brr_dir: Path, *, tty: bool) -> bool:
     return cloud.is_configured(brr_dir)
 
 
+def _tally(count: int, singular: str, plural: str) -> str:
+    """``1 kb page`` / ``4,200 kb pages`` — the receipt has to read right.
+
+    This step exists to make a home's contents legible at a glance, and a
+    line that says "1 kb pages" spends a little of the credibility the
+    number is there to earn. Thousands separators for the same reason: the
+    difference between a resident that has lived and one that has not is
+    usually four digits wide.
+    """
+
+    return f"{count:,} {singular if count == 1 else plural}"
+
+
 def _step_memory(repo_root: Path, *, tty: bool) -> bool:
     """Name the resident's memory — the account home — out loud.
 
@@ -302,10 +315,14 @@ def _step_memory(repo_root: Path, *, tty: bool) -> bool:
         return True
 
     _ok(str(home_root))
-    _note(
-        f"{manifest.kb_pages:,} kb pages · {manifest.warp_items:,} warp items · "
-        f"{manifest.topics:,} topics · {manifest.run_records:,} run records"
-    )
+    _note(" · ".join(
+        _tally(n, one, many) for n, one, many in (
+            (manifest.kb_pages, "kb page", "kb pages"),
+            (manifest.warp_items, "warp item", "warp items"),
+            (manifest.topics, "topic", "topics"),
+            (manifest.run_records, "run record", "run records"),
+        )
+    ))
 
     if not manifest.fully_linked:
         _note("local-only — this memory doesn't survive the machine yet")
