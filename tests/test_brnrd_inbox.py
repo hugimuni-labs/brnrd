@@ -1274,3 +1274,60 @@ def test_a_noted_close_retires_the_event_without_forwarding_anything():
     )
     assert again.status_code == 200, again.text
     assert len(forwarder.items) == before
+
+
+@pytest.mark.parametrize(
+    "platform", ["telegram", "github", "whatsapp"],
+)
+def test_every_forward_handler_tolerates_an_incomplete_reply_to(platform):
+    """A routable platform with nothing to route to is not an exception.
+
+    `forward_github` and `forward_whatsapp` both `.get` their addressing
+    fields and return early when they are missing. `forward_telegram` used
+    a bare `reply_to["chat_id"]`, so the same shape raised KeyError from
+    inside the forwarder — and `record_response` turns anything the
+    forwarder raises into a `DeliveryError`, which the daemon retries
+    forever at the poll cadence. Observed live 2026-08-15: four events
+    retried 36 times against a non-2xx and never stopped.
+
+    Parametrized over the platform names the routing table actually
+    registers rather than over a list written by hand — a fourth handler
+    added without the guard should fail here, not in production. If this
+    list and `make_default_forwarder`'s table drift apart, that drift is
+    the bug this test exists to catch.
+    """
+    settings = Settings(
+        telegram_bot_token="t",
+        whatsapp_access_token="w",
+        whatsapp_phone_number_id="1",
+    )
+    forward = inbox_service.make_default_forwarder(settings)
+    item = inbox_service.ForwardItem(
+        event_id="ev_x",
+        reply_to={"platform": platform},  # routable, and addressed to nothing
+        body="hello",
+        status="done",
+    )
+    forward(item)  # must return quietly, never raise
+
+
+def test_the_handler_list_above_matches_the_routing_table():
+    """Guard the guard: the parametrize list must not drift from the table.
+
+    Enumerating a class by hand is how a test goes green on the very member
+    it was written to cover. Ask the module what it registers.
+    """
+    import inspect
+
+    source = inspect.getsource(inbox_service.make_default_forwarder)
+    table = source.split("handlers: dict[str, Callable[[ForwardItem, dict], None]] = {", 1)[1]
+    table = table.split("}", 1)[0]
+    registered = {
+        line.split('"')[1]
+        for line in table.splitlines()
+        if line.strip().startswith('"')
+    }
+    assert registered == {"telegram", "github", "whatsapp"}, (
+        "a platform was added to the routing table without extending "
+        "test_every_forward_handler_tolerates_an_incomplete_reply_to"
+    )

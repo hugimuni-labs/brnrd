@@ -87,10 +87,21 @@ def make_default_forwarder(settings) -> Forwarder:
     def forward_telegram(item: ForwardItem, reply_to: dict) -> None:
         if not settings.telegram_bot_token:
             return
+        # `.get`, not `[...]` — and an early return, the way both sibling
+        # handlers below already do it. A bare subscript here turns a
+        # routable-but-incomplete `reply_to` into a KeyError raised from
+        # inside the forwarder, and the caller cannot tell that apart from
+        # a platform that genuinely refused the message. An event whose
+        # `reply_to` lost its chat is not a delivery *failure* — there is
+        # simply nowhere to deliver, which is exactly what the github and
+        # whatsapp handlers say by returning.
+        chat_id = reply_to.get("chat_id")
+        if not chat_id:
+            return
         from .platforms import telegram
         telegram.send_message(
             settings.telegram_bot_token,
-            reply_to["chat_id"],
+            chat_id,
             item.body,
             topic_id=reply_to.get("topic_id") or None,
             reply_to_message_id=reply_to.get("message_id") or None,
