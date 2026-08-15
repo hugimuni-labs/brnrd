@@ -5038,3 +5038,74 @@ class TestInertPitfallReachesTheWake:
 
         parsed = pitfalls.parse_pitfalls(dominion.dominion_path(repo))
         assert [p.title for p in parsed] == ["Half-drafted", "Docker rebuild"]
+
+
+class TestPromptsTeachOnlyLiveGrammar:
+    """A prompt file is injected into every wake and read as instruction.
+
+    A directive the daemon *refuses*, or a command that does not exist, costs
+    every wake that believes it — and it fails silently, because the resident
+    writes the thing it was taught and reads the refusal (if it reads
+    `notices` at all) as its own mistake. Found 2026-08-15: the always-injected
+    `daemon-substrate.md` taught `await: event` two screens below the row
+    saying conditions are refused, and told the reader to call
+    `brnrd portal await`, which has never been a command.
+
+    Both guards derive their expectations from the *owning* module — the
+    parser and the CLI — never from a list maintained here, so a future
+    rename cannot leave them green over a stale denylist.
+    """
+
+    def _prompt_files(self):
+        d = Path(prompts.__file__).parent / "prompts"
+        files = sorted(d.glob("*.md"))
+        assert files, f"no prompt files found under {d} — the walk is broken"
+        return files
+
+    def test_every_await_directive_in_the_prompts_is_accepted(self):
+        """`await: <x>` shown in a prompt must survive `parse_await`."""
+        from brr import await_verb
+
+        row_re = re.compile(r"`await:\s*([^`\n|]+?)\s*`")
+        seen = []
+        for path in self._prompt_files():
+            for value in row_re.findall(path.read_text()):
+                seen.append((path.name, value))
+                _f, _t, error = await_verb.parse_await(
+                    {"await": value, "timeout": "12m"}
+                )
+                assert error is None, (
+                    f"{path.name} teaches `await: {value}`, which the daemon "
+                    f"refuses: {error}"
+                )
+
+        # Sanity: a rename that stops this regex matching must fail loudly
+        # rather than pass over an empty set.
+        assert seen, "found no `await:` directives in the prompts at all"
+
+    def test_every_brnrd_portal_subcommand_named_in_the_prompts_exists(self):
+        """`brnrd portal <x>` in a prompt must be a registered subcommand."""
+        from brr import cli
+
+        parser = cli.build_parser()
+        registered = set()
+        for action in parser._subparsers._group_actions:  # noqa: SLF001
+            portal = action.choices.get("portal")
+            if portal is None:
+                continue
+            for sub in portal._subparsers._group_actions:  # noqa: SLF001
+                registered |= set(sub.choices)
+        assert registered, "could not read the portal subcommands off the CLI"
+
+        named = []
+        for path in self._prompt_files():
+            for word in re.findall(r"brnrd portal ([a-z-]+)", path.read_text()):
+                named.append((path.name, word))
+                assert word in registered, (
+                    f"{path.name} names `brnrd portal {word}`, which is not a "
+                    f"registered subcommand (have: {sorted(registered)})"
+                )
+
+        # No sanity assertion on `named`: zero mentions is a legitimate state
+        # for this one, and asserting non-empty would force a prompt to keep
+        # naming the command forever.
