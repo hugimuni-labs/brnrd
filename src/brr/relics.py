@@ -419,16 +419,37 @@ class _ForgeLinks:
         *,
         override_kind: str | None = None,
         override_url_base: str | None = None,
+        repo_root: Path | None = None,
     ) -> None:
         self.remote_url = remote_url or None
         self.override_kind = override_kind
         self.override_url_base = override_url_base
+        self.repo_root = repo_root
         self.repo_path: str | None = None
         if self.remote_url:
             parsed = forges.parse_remote(self.remote_url)
             if parsed is not None:
                 _, owner, repo = parsed
                 self.repo_path = f"{owner}/{repo}"
+
+    def _sha_is_local(self, sha: str) -> bool:
+        """Does *sha* name a commit in this checkout?
+
+        The one question that separates "this commit is in the repo I am
+        linking it to" from a guess. Local and offline —
+        ``git rev-parse <sha>^{commit}`` reads the object database, never
+        the network — so it is cheap enough to ask about every relic.
+
+        ``True`` when we cannot check (no repo root): unverifiable is not
+        the same fact as absent, and refusing to link on a missing checkout
+        would strip links from every relic collected outside one.
+        """
+        if self.repo_root is None:
+            return True
+        try:
+            return gitops.rev_parse(self.repo_root, f"{sha}^{{commit}}") is not None
+        except Exception:
+            return True
 
     def _thread_repo(self, repo: Any = None) -> str | None:
         """``owner/repo`` for a thread relic: the record's own ``repo`` field
@@ -456,11 +477,43 @@ class _ForgeLinks:
             override_url_base=self.override_url_base,
         )
 
-    def commit(self, sha: Any) -> str | None:
+    def commit(self, sha: Any, repo: Any = None) -> str | None:
+        """A commit's forge URL, or ``None`` when this checkout cannot attest it.
+
+        Two cases, and the difference is who made the claim (#1368):
+
+        - **the record names a repo** — a declaration, and declarations are
+          honoured. The sha lives in another project by construction, so
+          there is nothing here to check it against.
+        - **the record names no repo** — then "the execution repo" is an
+          *assumption*, not a fact, and it is the assumption that shipped a
+          confident 404 for a knowledge-repo sha. So verify it: the sha must
+          actually resolve in this checkout before we link it here.
+
+        Auto-derived commits are unaffected — their shas come from
+        ``git log`` in this same repo, so they always resolve.
+
+        **The known false negative, stated rather than discovered later.**
+        The check cannot tell "in another repo" from "in this repo but not
+        fetched here" — a server-side merge sha (``gh pr merge`` creates the
+        commit on the forge) is real, belongs to this repo, and is absent
+        locally, so it renders unlinked. That is the direction this is
+        willing to be wrong in: a missing link is visible and recoverable,
+        a confident 404 is neither. It is also narrow — a ``merge`` relic
+        prefers its ``pr`` link and only a sha-only merge loses anything.
+        The remedy that has no false negative at all is auto-attribution
+        (the capture net recording the repo it pushed to at write time);
+        this is the floor under it, not a substitute for it. See #1368.
+        """
+        path = self._thread_repo(repo)
         if not self.remote_url or not sha:
+            return None
+        declared = "/" in str(repo or "").strip().strip("/")
+        if not declared and not self._sha_is_local(str(sha)):
             return None
         return forges.commit_url(
             self.remote_url, str(sha),
+            repo_path=path,
             override_kind=self.override_kind,
             override_url_base=self.override_url_base,
         )
@@ -498,6 +551,7 @@ def forge_links(repo_root: Path | None) -> _ForgeLinks:
         remote_url,
         override_kind=cfg.get("forge.kind") or None,
         override_url_base=cfg.get("forge.url_base") or None,
+        repo_root=repo_root,
     )
 
 
@@ -526,13 +580,13 @@ def link_reported(
         elif kind == "pr" and record.get("number"):
             url = links.pull_request(record["number"], record.get("repo"))
         elif kind == "commit" and record.get("sha"):
-            url = links.commit(record["sha"])
+            url = links.commit(record["sha"], record.get("repo"))
         elif kind == "branch" and record.get("name"):
             url = links.branch(record["name"])
         elif kind == "merge":
             url = (
-                links.pull_request(record["pr"]) if record.get("pr") else None
-            ) or links.commit(record.get("sha"))
+                links.pull_request(record["pr"], record.get("repo")) if record.get("pr") else None
+            ) or links.commit(record.get("sha"), record.get("repo"))
         if url:
             record["url"] = url
     return records
@@ -651,28 +705,59 @@ def derive_auto(
     return out
 
 
-def _identity(record: dict[str, Any]) -> tuple[str, str] | None:
+def _identity(
+    record: dict[str, Any], default_repo: str | None = None,
+) -> tuple[str, str] | tuple[str, str, str] | None:
     """The dedup key for a relic, or ``None`` when the kind has no stable
     identity (``summary``, ``comment``, ``message``, ``reply``, unknown kinds
     — those never merge; two comments are two comments).
 
     Commits key on the 7-char sha prefix so a reported full sha and an
     auto-derived ``git log --format=%h`` short sha still meet.
+
+    The repo is part of the key — two projects' commits can share a
+    short-sha prefix, and two projects' PRs certainly share numbers. But it
+    is **resolved before keying, never read raw**: ``repo`` is optional in
+    the grammar and means "this checkout" when absent, so keying on its raw
+    presence would give one PR two identities — ``("pr", "1368")`` and
+    ``("pr", "1368", "owner/repo")`` — and render the same row twice the
+    moment one writer names its own repo and another does not. One fact,
+    one key: fall back to *default_repo* so both spellings collapse.
     """
     kind = str(record.get("kind") or "")
+
+    def _repo() -> str | None:
+        named = str(record.get("repo") or "").strip().strip("/")
+        return named or (default_repo or None)
+
     if kind in {"pr", "issue"}:
         number = record.get("number")
-        return (kind, str(number)) if number else None
+        repo = _repo()
+        if not number:
+            return None
+        if repo:
+            return (kind, str(number), str(repo))
+        return (kind, str(number))
     if kind == "commit":
         sha = str(record.get("sha") or "")
-        return ("commit", sha[:7]) if sha else None
+        if not sha:
+            return None
+        repo = _repo()
+        if repo:
+            return ("commit", sha[:7], str(repo))
+        return ("commit", sha[:7])
     if kind == "merge":
         # A merge keys on its commit sha but in its own namespace: the
         # maintainer's explicit ask (2026-07-21) is that merges performed
         # are a separate block from PRs made, so a merge relic never
         # collapses into a ``pr`` relic for the same number.
         sha = str(record.get("sha") or "")
-        return ("merge", sha[:7]) if sha else None
+        if not sha:
+            return None
+        repo = _repo()
+        if repo:
+            return ("merge", sha[:7], str(repo))
+        return ("merge", sha[:7])
     if kind == "branch":
         name = str(record.get("name") or "")
         return ("branch", name) if name else None
@@ -688,7 +773,9 @@ def _identity(record: dict[str, Any]) -> tuple[str, str] | None:
     return None
 
 
-def dedupe(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def dedupe(
+    records: list[dict[str, Any]], default_repo: str | None = None,
+) -> list[dict[str, Any]]:
     """Collapse records that name the same relic into one row.
 
     The observed failure (run-260721-0922-pfqd): the ``.pr`` control file
@@ -705,7 +792,7 @@ def dedupe(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     index: dict[tuple[str, str], int] = {}
     for record in records:
-        key = _identity(record)
+        key = _identity(record, default_repo)
         if key is None:
             out.append(record)
             continue
@@ -812,7 +899,7 @@ def collect(
         repo_root, branch=branch, seed_ref=seed_ref, outbox_dir=outbox_dir,
         links=links, commit_run_id=commit_run_id,
     )
-    return dedupe(summary + auto + rest_reported)
+    return dedupe(summary + auto + rest_reported, links.repo_path)
 
 
 # A relic kind that may travel into markup and publish payloads unescaped.
@@ -1097,7 +1184,8 @@ def live_summary(
                 root, branch=branch, seed_ref=seed_ref, outbox_dir=outbox_dir,
                 links=links, commit_run_id=commit_run_id,
             )
-            + link_reported(read_reported(outbox_dir), links)
+            + link_reported(read_reported(outbox_dir), links),
+            links.repo_path,
         )
 
         # A .pr number is useful live even when forge URL derivation cannot

@@ -746,6 +746,106 @@ def test_await_defaults_the_ceiling_from_the_runs_remaining_budget(
     assert "file:" not in staged_text["body"]
 
 
+def _staged_timeout_seconds(body):
+    import re
+
+    match = re.search(r"^timeout:\s*(\d+)s", body, re.MULTILINE)
+    assert match, f"no timeout in staged directive: {body!r}"
+    return int(match.group(1))
+
+
+def _drive_await(outbox, monkeypatch, argv=("--json",)):
+    staged_text = {}
+
+    def drain():
+        for path in _staged_await(outbox):
+            staged_text["body"] = path.read_text(encoding="utf-8")
+            path.unlink()
+
+    clock = _FakeClock(on_sleep=drain)
+    monkeypatch.setattr(time, "sleep", clock.sleep)
+    monkeypatch.setattr(time, "monotonic", clock.monotonic)
+    assert main(["await", "--outbox", str(outbox), *argv]) == 0
+    return staged_text["body"]
+
+
+def _in(seconds):
+    from datetime import datetime, timedelta, timezone
+
+    stamp = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+    return stamp.isoformat().replace("+00:00", "Z")
+
+
+def test_await_recall_continues_the_standing_deadline(tmp_path, monkeypatch):
+    """``pending`` is *this call's* ceiling, never the wait's — so calling
+    again continues the same vigil rather than starting a longer one.
+
+    Before this, a bare re-call re-derived the ceiling from the run's
+    remaining budget every time, so a deliberate short hold grew on each
+    pass with nothing on any surface saying so: three re-calls turned a
+    12-minute vigil into hours. The deadline is already in
+    ``portal-state.json`` — the verb's own rule (#1187) is that the caller
+    never restates what the daemon already tracks.
+
+    Neuter check (by hand, don't ship it): make ``cmd_await`` call
+    ``_await_default_timeout`` unconditionally and this goes red at 6300s.
+    """
+    outbox = _await_outbox(
+        tmp_path,
+        budget={"budget_seconds": 7200, "elapsed_seconds": 900},
+        await_state={
+            "armed": True, "generation": "111", "resolved": False,
+            "deadline": _in(300), "capped": False,
+        },
+    )
+
+    staged = _staged_timeout_seconds(_drive_await(outbox, monkeypatch))
+    assert 280 <= staged <= 300, staged
+    assert staged < 6300, "the re-call re-armed at the budget default"
+
+
+def test_await_explicit_timeout_still_beats_a_standing_deadline(
+    tmp_path, monkeypatch,
+):
+    """Continuing and re-arming are different acts, and ``--timeout`` is how
+    a caller says the second one."""
+    outbox = _await_outbox(
+        tmp_path,
+        budget={"budget_seconds": 7200, "elapsed_seconds": 900},
+        await_state={
+            "armed": True, "generation": "111", "resolved": False,
+            "deadline": _in(300), "capped": False,
+        },
+    )
+
+    body = _drive_await(outbox, monkeypatch, argv=("--json", "--timeout", "20m"))
+    assert _staged_timeout_seconds(body) == 1200
+
+
+def test_await_falls_back_to_budget_when_no_vigil_is_standing(
+    tmp_path, monkeypatch,
+):
+    """A *resolved* arming is a finished wait, not a standing one — the next
+    call is a fresh vigil and takes the budget-derived default again. Same
+    for an expired deadline: there is nothing left to continue."""
+    for index, state in enumerate((
+        {"armed": True, "generation": "111", "resolved": True,
+         "outcome": "timeout", "deadline": _in(300)},
+        {"armed": True, "generation": "111", "resolved": False,
+         "deadline": _in(-30)},
+        {"armed": False},
+    )):
+        case_dir = tmp_path / f"case-{index}"
+        case_dir.mkdir()
+        outbox = _await_outbox(
+            case_dir,
+            budget={"budget_seconds": 600, "elapsed_seconds": 60},
+            await_state=state,
+        )
+        body = _drive_await(outbox, monkeypatch)
+        assert _staged_timeout_seconds(body) == 540, state
+
+
 def test_await_file_flag_rides_along_as_an_extra_trigger(
     tmp_path, capsys, monkeypatch,
 ):
