@@ -1985,6 +1985,44 @@ def test_pre_tool_non_control_file_refusal_still_recommends_git_work_tree(tmp_pa
     assert "$GIT_WORK_TREE" in reason
 
 
+def test_pre_tool_allows_write_to_brr_reports_directory(tmp_path):
+    # #1410: the daemon's shared `.brr/reports/` directory is a legitimate
+    # write location for strands that are given a `report:` contract. A strand
+    # told to write `report: /host/.brr/reports/my-report.md` should be allowed
+    # to do so, even though the path is rooted in the host checkout but
+    # outside the strand's own worktree.
+    host, work_tree = _rooted_layout(tmp_path)
+    reports = host / ".brr" / "reports"
+    reports.mkdir(parents=True)
+    env = _rooted_env(tmp_path, host_root=host, work_tree=work_tree)
+    out, code = hooks.run_hook(
+        hooks.PHASE_PRE_TOOL,
+        _pre_tool_stdin("Write", str(reports / "my-report.md")),
+        env,
+    )
+    assert code == 0
+    assert out == {}
+
+
+def test_pre_tool_blocks_write_to_neighbouring_brr_path_outside_reports(tmp_path):
+    # #1410: the carve-out is specific to `.brr/reports/`. A neighbouring
+    # `.brr/` path (not under `.brr/reports/`) that is also outside the
+    # worktree should still be blocked — the carve-out must not widen to
+    # allow arbitrary `.brr/` writes.
+    host, work_tree = _rooted_layout(tmp_path)
+    (host / ".brr").mkdir(parents=True, exist_ok=True)
+    env = _rooted_env(tmp_path, host_root=host, work_tree=work_tree)
+    out, code = hooks.run_hook(
+        hooks.PHASE_PRE_TOOL,
+        _pre_tool_stdin("Write", str(host / ".brr" / "other-file.json")),
+        env,
+    )
+    assert code == 0
+    deny = out["hookSpecificOutput"]
+    assert deny["permissionDecision"] == "deny"
+    assert "#1184" in deny["permissionDecisionReason"]
+
+
 # ── The closeout guard (`hooks.next_move`) ───────────────────────────────
 #
 # The contract `next_move` failed 0/6 across *both* arms of the drift bench —
