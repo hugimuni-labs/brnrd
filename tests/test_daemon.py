@@ -1201,6 +1201,147 @@ def test_run_worker_accepts_current_outbox_reply_without_stdout(
     ] == ["handled through outbox"]
 
 
+def test_poison_outbox_file_does_not_wedge_the_flush_tick(tmp_path, monkeypatch):
+    """#1379: one bad staging file must cost itself, not the whole tick.
+
+    Driven through the *real* caller the defect lives in —
+    ``_invoke_with_heartbeat``'s boundary-flush poll firing the actual
+    ``_emit_flush`` closure ``_run_worker`` built, which calls the real
+    ``_drain_outbox`` — not a hand-built ``_drain_outbox(...)`` call. The
+    stub runner stages a poison file (crafted to raise inside
+    ``_resolve_event_target``, one of the calls the drain's own docstring
+    used to claim were guarded and weren't) ahead of a healthy plain-reply
+    file, writes the ``.flush`` signal ``_invoke_with_heartbeat`` polls
+    for, then sleeps past one ``_FLUSH_POLL_INTERVAL`` tick — long enough
+    for the real flush-triggered drain to run while the "runner" is still
+    "alive" — and snapshots the outbox *before* returning, isolating this
+    from the unrelated post-return recovery drain a few lines below it in
+    ``_run_worker``.
+
+    Pre-fix, the poison file's exception would propagate out of
+    ``_drain_outbox`` into ``_invoke_with_heartbeat``'s blanket
+    ``except Exception: pass``, abandoning the whole tick: the healthy
+    file never promoted, ``_write_live_portal_state`` never reached (its
+    call sits after the drain in both ``_emit_heartbeat`` and
+    ``_emit_flush``), and the file retried identically forever since the
+    drain always sorts oldest-mtime-first.
+    """
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-1379")
+    _stub_env_isolated(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        daemon.runner, "resolve_runner_profile",
+        lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root),
+    )
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts,
+        "build_daemon_prompt",
+        lambda task, eid, rp, root, **kw: "PROMPT",
+    )
+    base_env = envs.get_env("worktree")
+
+    # A targeted poison: only the file addressed to this exact sentinel
+    # event id blows up inside `_resolve_event_target` (one of the calls
+    # `_drain_outbox`'s own docstring claimed, falsely, were guarded) —
+    # the healthy file (no `event:` field, defaults to the current event)
+    # is unaffected and drains through the real function.
+    real_resolve = daemon._resolve_event_target
+
+    def _boom_resolve(address_sources, raw_target):
+        if raw_target == "evt-1379-poison-target":
+            raise RuntimeError("synthetic poison for #1379's drain guard test")
+        return real_resolve(address_sources, raw_target)
+
+    monkeypatch.setattr(daemon, "_resolve_event_target", _boom_resolve)
+
+    snapshot: dict = {}
+
+    def fake_invoke(_self, ctx, runner_name, invocation, cfg=None, *, trace=False):
+        outbox_dir = Path(ctx.outbox_host)
+        outbox_dir.mkdir(parents=True, exist_ok=True)
+        # Oldest first — the exact shape that wedges the pre-fix drain
+        # (both it and the pending-count lister sort oldest-mtime-first).
+        poison = outbox_dir / "poison.md"
+        poison.write_text(
+            "---\nevent: evt-1379-poison-target\n---\nnever delivered\n",
+            encoding="utf-8",
+        )
+        old = time.time() - 5
+        os.utime(poison, (old, old))
+        healthy = outbox_dir / "healthy.md"
+        healthy.write_text("plain reply, no frontmatter\n", encoding="utf-8")
+        newer = time.time() - 4
+        os.utime(healthy, (newer, newer))
+        (outbox_dir / ".flush").write_text("tok-1379\n", encoding="utf-8")
+        # > 1 `_FLUSH_POLL_INTERVAL` (1.0s) tick, so the real poll loop in
+        # `_invoke_with_heartbeat` observes the flush signal and fires the
+        # real `_emit_flush` while this "runner" is still "alive".
+        time.sleep(1.3)
+        poisoned_dir = outbox_dir / ".poisoned"
+        processed_dir = outbox_dir / ".processed"
+        snapshot["poisoned"] = (
+            sorted(p.name for p in poisoned_dir.glob("*"))
+            if poisoned_dir.is_dir() else []
+        )
+        snapshot["processed"] = (
+            sorted(p.name for p in processed_dir.glob("*"))
+            if processed_dir.is_dir() else []
+        )
+        state_path = outbox_dir / "portal-state.json"
+        snapshot["portal_state"] = (
+            json.loads(state_path.read_text(encoding="utf-8"))
+            if state_path.exists() else None
+        )
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("ok\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation,
+            runner_name=runner_name,
+            command=["mock"],
+            stdout="ok\n",
+            stderr="",
+            returncode=0,
+            trace_dir=None,
+            artifacts=[],
+        )
+
+    monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+    task = daemon._run_worker(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 1,
+    )
+
+    # The run itself completed — no uncaught exception blew through
+    # `_run_worker` (the pre-fix failure mode the post-return recovery
+    # drain would have hit a second time, this time with nothing to catch
+    # it).
+    assert task.status == "done"
+
+    # Snapshotted *during* the flush tick, before the post-return recovery
+    # drain runs — this is specifically the `_emit_flush` -> `_drain_outbox`
+    # path #1379 is about.
+    assert snapshot["poisoned"] == ["poison.md"], (
+        "the poison file must be quarantined off the drain's own glob, "
+        "not retried forever nor left drifting in the live outbox dir"
+    )
+    assert snapshot["processed"] == ["healthy.md"], (
+        "the healthy file must still drain in the same tick — one file's "
+        "failure costs that file, not its neighbours"
+    )
+    portal_state = snapshot["portal_state"]
+    assert portal_state is not None, (
+        "_write_live_portal_state must still run this tick — pre-fix, the "
+        "poison file's exception abandoned the whole tick before this call"
+    )
+    assert portal_state["outbound"]["replies_current"] == 1
+    notice_texts = [n.get("text", "") for n in portal_state.get("notices", [])]
+    assert any(
+        "RuntimeError" in text and "poison.md" in text
+        for text in notice_texts
+    ), f"no notice named the poison file's exception + filename: {notice_texts}"
+
+
 def test_drain_outbox_queues_respawn_request(tmp_path):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"

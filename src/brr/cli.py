@@ -2473,7 +2473,7 @@ def _do_render(verb: str, label: str, status: str, detail: str) -> tuple[str, bo
     if status == do_mod.OK:
         return f"{verb} {label} ✓", True
     if status == do_mod.QUEUED:
-        return f"{verb} {label} ? still queued", False
+        return f"{verb} {label} ? {detail or 'still queued'}", False
     return f"{verb} {label} ✗ {detail}", False
 
 
@@ -4028,7 +4028,7 @@ def cmd_cut(args):
             print(f"[brnrd cut] accepted — {where}")
         return 0
     if status == do_mod.QUEUED:
-        print("[brnrd cut] ? still queued", file=sys.stderr)
+        print(f"[brnrd cut] ? {detail or 'still queued'}", file=sys.stderr)
         return 1
     print(f"[brnrd cut] bounced — {detail}", file=sys.stderr)
     return 1
