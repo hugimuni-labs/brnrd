@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""The envoy's browser half — a persistent, human-logged-in browser session
+for X, giving the resident the verbs the API forbids (reply/quote to
+accounts that haven't mentioned it since April 2026 — an API-only wall).
+
+Installed shim, same shape as ``x-post.py`` / ``x-read.py``: the mechanics
+live in the product tree (``brr.envoy_x_browser``, covered by tests and the
+gate), this file holds nothing but its own directory. Every path (the
+persistent Chromium profile, the shared receipt log, the hourly-cap config,
+the kill switch, draft screenshots) resolves relative to *here* — install
+by dropping this file beside the other envoy files, mode ``0700`` (it opens
+a browser tied to a live logged-in session; the account/gates directory
+convention next to it is also owner-only). ``brr`` and ``playwright`` must
+both be importable from wherever this runs — ``pip install playwright &&
+playwright install chromium`` if the second one isn't there yet; the
+``check`` verb below reports that error legibly if it's missing rather
+than crashing partway through a launch.
+
+    python3 x-browser.py login                       -> one-time human login
+    python3 x-browser.py check                        -> session live? as whom? cap left?
+    python3 x-browser.py read <url>                    -> structured JSON
+    python3 x-browser.py search <query>                -> structured JSON
+    python3 x-browser.py draft <url> --text "<s>"       -> screenshot only, never sends
+    python3 x-browser.py send <url> --text "<s>" --confirm
+        -> ships disarmed: also needs BRR_X_BROWSER_SEND=1 in the environment,
+           and refuses past the hourly cap
+
+Nothing here posts by default — see ``x-browser.disabled`` (kill switch,
+presence alone refuses every verb but ``check``) and the disarmed-send
+guard in ``brr.envoy_x_browser`` for the two independent brakes on `send`.
+"""
+import os
+import sys
+
+from brr import envoy_x_browser
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+if __name__ == "__main__":
+    envoy_x_browser.main(sys.argv[1:], HERE)
