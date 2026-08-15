@@ -218,6 +218,15 @@ def attachments_of(event: Event) -> list[dict[str, Any]]:
 #: reused, which it does not do.
 _MEDIA_GROUP_MERGE_WINDOW = timedelta(seconds=15)
 
+#: Bound on compare-and-swap retries for a concurrent album merge (see
+#: ``_merge_into_open_media_group`` below). Exhausting it is not an error —
+#: it degrades to "no open event found", the same outcome as a merge that
+#: misses its window, so the caller mints a fresh event. Generous relative
+#: to the largest real album (Telegram caps at 10 items) since a spurious
+#: extra event costs nothing and a dropped attachment is the one outcome
+#: this exists to rule out.
+_MEDIA_GROUP_MERGE_MAX_ATTEMPTS = 12
+
 
 def _find_open_media_group(
     db: Session, *, repo_id: str, media_group_id: str,
@@ -249,6 +258,78 @@ def _find_open_media_group(
     return None
 
 
+def _merge_into_open_media_group(
+    db: Session,
+    *,
+    repo_id: str,
+    media_group_id: str,
+    body: str,
+    attachments: list[dict[str, Any]] | None,
+) -> Event | None:
+    """Fold *body* / *attachments* into the open media-group event, or
+    ``None`` (no open event — the caller mints a fresh one).
+
+    #1396 — ``_find_open_media_group``'s SELECT carries no row lock, and
+    Telegram delivers each album item as its own webhook call that
+    ``telegram_webhook`` (a sync ``def``) runs genuinely concurrently in
+    Starlette's threadpool: two overlapping calls could both read the same
+    ``attachments_json``, both append, and the later commit silently
+    overwrite the earlier — one photo gone. Measured: 1-5/20 concurrent
+    5-item-album trials lost an attachment before this fix
+    (``tests/test_brnrd_telegram.py::test_concurrent_album_webhooks_do_not_lose_attachments``).
+
+    ``with_for_update()`` is not the fix here: this service runs on SQLite
+    in dev/test (``run_startup_migrations`` skips entirely for any
+    non-Postgres dialect, so SQLite is a live target, not just a CI
+    artifact) and SQLite has no row-level locking at all — a FOR UPDATE
+    clause is silently dropped, which would make this file's own tests
+    pass while proving nothing about the box that ran them.
+
+    So: compare-and-swap instead of a lock. The UPDATE's WHERE re-checks
+    ``attachments_json`` against the exact value just read; when two
+    merges race, at most one UPDATE's WHERE still matches (rowcount 1),
+    the other's matches nothing (rowcount 0, its computed merge is
+    discarded, never written) and it retries against freshly re-read
+    state. Atomic on every backend this service runs — a single
+    row-scoped UPDATE is race-free relative to any other statement,
+    SQLite and Postgres alike, with no reliance on isolation level or
+    backend-specific locking syntax.
+    """
+    for _ in range(_MEDIA_GROUP_MERGE_MAX_ATTEMPTS):
+        existing = _find_open_media_group(
+            db, repo_id=repo_id, media_group_id=media_group_id,
+        )
+        if existing is None:
+            return None
+        new_body = existing.body
+        if body and not (existing.body or "").strip():
+            new_body = body
+        new_attachments_json = existing.attachments_json
+        if attachments:
+            merged = attachments_of(existing)
+            merged.extend(attachments)
+            new_attachments_json = json.dumps(merged)
+        if new_body == existing.body and new_attachments_json == existing.attachments_json:
+            return existing
+        result = db.execute(
+            update(Event)
+            .where(
+                Event.seq == existing.seq,
+                Event.attachments_json == existing.attachments_json,
+            )
+            .values(body=new_body, attachments_json=new_attachments_json)
+        )
+        db.commit()
+        if result.rowcount == 1:
+            db.refresh(existing)
+            return existing
+        # Lost the race: another merge landed between our read and our
+        # write. Its commit is authoritative — never overwrite it with a
+        # merge computed from data that's now stale. Re-read and retry.
+        db.expire(existing)
+    return None
+
+
 def enqueue(
     db: Session,
     *,
@@ -272,20 +353,15 @@ def enqueue(
     """
     media_group_id = str(media_group_id or "").strip() or None
     if media_group_id:
-        existing = _find_open_media_group(
-            db, repo_id=repo_id, media_group_id=media_group_id,
+        merged_event = _merge_into_open_media_group(
+            db,
+            repo_id=repo_id,
+            media_group_id=media_group_id,
+            body=body,
+            attachments=attachments,
         )
-        if existing is not None:
-            if body and not (existing.body or "").strip():
-                existing.body = body
-            if attachments:
-                merged = attachments_of(existing)
-                merged.extend(attachments)
-                existing.attachments_json = json.dumps(merged)
-            db.add(existing)
-            db.commit()
-            db.refresh(existing)
-            return existing
+        if merged_event is not None:
+            return merged_event
     reply_to = dict(reply_to or {})
     if media_group_id:
         reply_to["media_group_id"] = media_group_id
