@@ -10700,6 +10700,43 @@ def test_drain_outbox_await_arm_snapshots_currently_pending_ids(tmp_path):
     assert len(task.meta["await"]["armed_pending_ids"]) == 1
 
 
+def test_drain_outbox_await_arm_snapshot_ignores_a_correspondents_message(tmp_path):
+    """The snapshot is the *defect class*, not "everything pending now".
+
+    #1327 is about a retired self-parented `spawn_completed`, which stays
+    `status: pending` until run end because the #1146 observation stamp is
+    not removal. A live correspondent's message is not that: it is pending
+    because nobody has answered it. Excluding it would make the wait sleep
+    straight through the person who wrote it, and
+    `prompts/daemon-substrate.md` promises the opposite in as many words —
+    "any *other* pending event resolves it the same way ... the queue never
+    starves".
+
+    Added on convergence: the first implementation snapshotted every pending
+    id, and all three of its own tests went green over this, because each was
+    derived from the implementation's shape rather than from the contract.
+    """
+    promoted, task, _outbox = _drain_await(
+        tmp_path, "---\nawait: true\ntimeout: 20m\n---\n",
+        pre_pending=[("telegram", None)],
+    )
+
+    assert promoted == 1
+    assert task.meta["await"]["armed_pending_ids"] == []
+
+
+def test_drain_outbox_await_arm_snapshot_ignores_another_parents_completion(tmp_path):
+    """A completion belonging to some *other* parent is not this run's fact
+    to have had in hand, so it never enters the snapshot either."""
+    promoted, task, _outbox = _drain_await(
+        tmp_path, "---\nawait: true\ntimeout: 20m\n---\n",
+        pre_pending=[("spawn_completed", {"spawn_parent_run_id": "run-somebody-else"})],
+    )
+
+    assert promoted == 1
+    assert task.meta["await"]["armed_pending_ids"] == []
+
+
 def test_drain_outbox_await_arm_snapshot_is_empty_with_nothing_pending(tmp_path):
     """The ordinary case — nothing was already waiting — snapshots nothing,
     so a plain ``await:`` still resolves on the very next event exactly as
