@@ -55,6 +55,16 @@ class _TelegramNotModified(Exception):
     """
 
 
+class _TelegramMessageGone(Exception):
+    """Telegram returned 400 "message to edit not found" on editMessageText.
+
+    The message was deleted or expired — the one edit failure that should
+    map to ``delivery.CardGone`` and trigger a re-send. Kept distinct from
+    every other API error (rate limit, 5xx, timeout) so those keep retrying
+    the same edit instead of being mistaken for a gone message.
+    """
+
+
 def _api_call(
     token: str,
     method: str,
@@ -76,8 +86,11 @@ def _api_call(
     payload = _response_json(response)
     if response.status_code == 400 and method == "editMessageText":
         description = str(payload.get("description", ""))
-        if "message is not modified" in description.lower():
+        lowered = description.lower()
+        if "message is not modified" in lowered:
             raise _TelegramNotModified(description) from None
+        if "message to edit not found" in lowered:
+            raise _TelegramMessageGone(description) from None
     if not 200 <= response.status_code < 300:
         message = _telegram_error_message(response, payload)
         raise RuntimeError(f"Telegram API error {response.status_code}: {message}")
@@ -819,6 +832,8 @@ class _CardTransport:
             )
         except _TelegramNotModified:
             raise delivery.CardUnchanged from None
+        except _TelegramMessageGone:
+            raise delivery.CardGone from None
 
 
 def _menu_render_state_path(brr_dir: Path, thread: str) -> Path:

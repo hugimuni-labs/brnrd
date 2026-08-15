@@ -1220,7 +1220,16 @@ class _CloudCardTransport:
         return self._post({"event_id": self._event_id, "text": text}).get("message_id")
 
     def edit(self, message_id: int, text: str) -> None:
-        self._post({"event_id": self._event_id, "text": text, "message_id": message_id})
+        try:
+            self._post({"event_id": self._event_id, "text": text, "message_id": message_id})
+        except RuntimeError as exc:
+            # The server maps a Telegram "message gone" (``tg.CardGone``)
+            # to 409 on this endpoint (``routers/daemons.py`` post_card) —
+            # the one status this transport can trust as "actually gone"
+            # rather than a passing 5xx/timeout.
+            if getattr(exc, "status_code", None) == 409:
+                raise delivery.CardGone(str(exc)) from exc
+            raise
 
 
 def _card_text_for(brr_dir: Path, conv_key: str, run_id: str, platform: str) -> str | None:
