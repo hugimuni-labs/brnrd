@@ -1219,10 +1219,10 @@ def test_dedupe_keeps_commits_in_different_repos_apart(tmp_path: Path):
     outbox = tmp_path / "outbox"
     outbox.mkdir()
     # Commit in brnrd (execution repo)
-    relics.append(outbox, "commit", sha="abc1234", subject="work in brnrd")
-    # Same short-sha prefix but in knowledge repo
+    relics.append(outbox, "commit", sha="abc1234567890", subject="work in brnrd")
+    # Same short-sha prefix (abc1234) but in knowledge repo
     relics.append(
-        outbox, "commit", sha="abc1234def", subject="work in knowledge",
+        outbox, "commit", sha="abc1234abcdef", subject="work in knowledge",
         repo="hugimuni-labs/brnrd-knowledge",
     )
 
@@ -1232,6 +1232,6 @@ def test_dedupe_keeps_commits_in_different_repos_apart(tmp_path: Path):
     commits = [r for r in out if r["kind"] == "commit"]
     assert len(commits) == 2
     # First commit links to execution repo
-    assert commits[0].get("url") == "https://github.com/Gurio/brr/commit/abc1234"
+    assert commits[0].get("url") == "https://github.com/Gurio/brr/commit/abc1234567890"
     # Second commit links to knowledge repo
-    assert commits[1].get("url") == "https://github.com/hugimuni-labs/brnrd-knowledge/commit/abc1234"
+    assert commits[1].get("url") == "https://github.com/hugimuni-labs/brnrd-knowledge/commit/abc1234abcdef"
