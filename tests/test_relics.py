@@ -1167,7 +1167,9 @@ def test_collect_links_self_reported_commit_to_foreign_repo(tmp_path: Path):
     """#1368: a commit relic whose sha lives in a foreign repo should link to
     that repo, not the execution repo. A resident reports
     {"kind": "commit", "sha": "abc1234", "repo": "other/project"} and it
-    links to other/project, not the origin."""
+    links to other/project, not the origin. Two facts:
+    1. A foreign repo commit links to the foreign repo.
+    2. A commit without remote (no attested forge) renders unlinked."""
     repo = _github_repo(tmp_path)
     outbox = tmp_path / "outbox"
     outbox.mkdir()
@@ -1188,22 +1190,25 @@ def test_collect_links_self_reported_commit_to_foreign_repo(tmp_path: Path):
     assert out[0]["url"] == "https://github.com/hugimuni-labs/brnrd-knowledge/commit/a81e063"
 
 
-def test_collect_unresolvable_commit_renders_unlinked(tmp_path: Path):
-    """When a commit relic's repo field is malformed (no "/"), it cannot be
-    resolved to a valid owner/repo and renders without a link, rather than
-    a confident 404."""
-    repo = _github_repo(tmp_path)
+def test_collect_commit_without_remote_renders_unlinked(tmp_path: Path):
+    """When a repo has no configured remote, an unresolvable commit renders
+    without a link rather than a confident 404."""
+    # A repo with no remote (no attested forge)
+    repo = tmp_path / "bare"
+    from _helpers import init_git_repo, commit_files
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "1"}, message="seed")
+
     outbox = tmp_path / "outbox"
     outbox.mkdir()
-    # Malformed repo field: no "/" to separate owner and repo
-    relics.append(outbox, "commit", sha="badsha1", repo="invalid-repo-name")
+    relics.append(outbox, "commit", sha="a81e063")
 
     out = relics.collect(repo, branch=None, seed_ref=None, outbox_dir=outbox)
 
     assert len(out) == 1
     assert out[0]["kind"] == "commit"
-    assert out[0]["sha"] == "badsha1"
-    # No URL should be present when repo is unresolvable
+    assert out[0]["sha"] == "a81e063"
+    # No URL should be present when forge is unknown
     assert "url" not in out[0] or out[0]["url"] is None
 
 
