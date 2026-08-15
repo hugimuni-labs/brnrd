@@ -395,6 +395,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_home_link)
 
     p = home_sub.add_parser(
+        "manifest",
+        help="count what the resolved home actually holds — kb pages, "
+             "warp items, topics, run records, surface pages, git state",
+    )
+    p.add_argument("--json", action="store_true",
+                   help="emit machine-readable JSON instead of text")
+    p.set_defaults(func=cmd_home_manifest)
+
+    p = home_sub.add_parser(
         "sweep-orphans",
         help="list (and, with --delete, remove) project homes holding "
              "nothing but default scaffold — #1193 rec 4",
@@ -4314,6 +4323,55 @@ def cmd_home_link(args):
         )
     except home_link.HomeLinkError as exc:
         raise SystemExit(f"[brnrd] {exc}")
+
+
+def cmd_home_manifest(args):
+    """``brnrd home manifest [--json]`` — what the resolved home actually holds.
+
+    The reusable half of the front door's missing memory step
+    (``front_door._step_memory``): read-only by construction
+    (``resolve_context(create=False)``, mirroring ``cmd_account_status``),
+    so running this command never materializes or seeds the thing it
+    reports on.
+    """
+    import json as _json
+
+    from . import account
+    from . import config as conf
+
+    repo_root = _repo_root()
+    cfg = conf.load_config(repo_root)
+    ctx = account.resolve_context(repo_root, cfg, create=False)
+    home_root = account.context_home_root(ctx)
+    manifest = account.home_manifest(ctx)
+
+    if getattr(args, "json", False):
+        print(_json.dumps({
+            "home": str(home_root),
+            "kb_pages": manifest.kb_pages,
+            "warp_items": manifest.warp_items,
+            "topics": manifest.topics,
+            "run_records": manifest.run_records,
+            "surface_pages": manifest.surface_pages,
+            "commit_count": manifest.commit_count,
+            "origin_url": manifest.origin_url,
+            "knowledge_origin_url": manifest.knowledge_origin_url,
+            "has_memory": manifest.has_memory,
+        }, indent=2, sort_keys=True))
+        return 0
+
+    print(f"[brnrd home manifest] {home_root}")
+    print(f"  kb pages         : {manifest.kb_pages:,}")
+    print(f"  warp items       : {manifest.warp_items:,}")
+    print(f"  topics           : {manifest.topics:,}")
+    print(f"  run records      : {manifest.run_records:,}")
+    print(f"  surface pages    : {manifest.surface_pages:,}")
+    print(f"  git commits      : {manifest.commit_count:,}")
+    print(f"  memory origin    : {manifest.origin_url or '(none — local only)'}")
+    print(f"  knowledge origin : {manifest.knowledge_origin_url or '(none — local only)'}")
+    if not manifest.has_memory:
+        print("\n  no memory yet — this resident is starting fresh")
+    return 0
 
 
 def cmd_home_sweep_orphans(args):

@@ -1147,6 +1147,176 @@ def corpus_files(ctx: AccountContext) -> list[CorpusFile]:
     return result
 
 
+@dataclass(frozen=True)
+class HomeManifest:
+    """What a resolved home (:func:`resolve_context`) actually holds.
+
+    The read side of the front door's missing step (2026-08-14): nothing
+    before this counted a home's own memory, so setting brnrd up on a
+    second machine produced an empty, silently-scaffolded home that
+    rendered identically to one holding thousands of kb pages and years of
+    run history — nothing on screen said which one a user was looking at.
+    See ``front_door._step_memory``, the caller this exists for.
+    """
+
+    kb_pages: int
+    warp_items: int
+    topics: int
+    run_records: int
+    surface_pages: int
+    commit_count: int
+    #: The dominion (home) repo's own ``origin`` remote URL, or ``None`` —
+    #: never a constructed ``owner/brnrd-home``-shaped guess. ``home_link.py``
+    #: lets an operator name these backup repos anything
+    #: (``--dominion-name`` / ``--knowledge-name``), so the repo *name* is
+    #: not a fact this module can know; the URL git itself reports is.
+    origin_url: str | None
+    #: Same fact for ``<home>/knowledge`` — a separate, independently-linked
+    #: git repo (``account.py``'s own module docstring: "the two git repos
+    #: ... stay separate"). ``None`` when knowledge isn't its own git repo
+    #: yet, or has no ``origin``.
+    knowledge_origin_url: str | None
+
+    @property
+    def has_memory(self) -> bool:
+        """Whether this home carries anything beyond its own birth scaffold.
+
+        Deliberately excludes ``surface_pages`` and ``commit_count``:
+        ``resolve_context`` seeds ``surface/index.md`` and a founding commit
+        for *every* freshly-created home, account or project, so both are
+        already nonzero on a resident that has never done a moment of real
+        work. kb pages, warp items, topics, and run records only appear once
+        something has actually happened — they are the honest "has this
+        resident lived yet" signal.
+        """
+
+        return bool(self.kb_pages or self.warp_items or self.topics or self.run_records)
+
+    @property
+    def fully_linked(self) -> bool:
+        """Whether both home-scoped repos already carry an ``origin``.
+
+        ``home_link.link_home`` wires both the dominion and the knowledge
+        repo in one idempotent call, so "should we offer to link" only
+        needs to know whether *either* is still local-only.
+        """
+
+        return self.origin_url is not None and self.knowledge_origin_url is not None
+
+
+def _count_markdown_files(root: Path | None) -> int:
+    """Top-level ``*.md`` file count — never raises on a missing *root*.
+
+    Mirrors how items are actually enumerated (``items.load_items``,
+    ``warp_root.glob("*.md")``, symlinks skipped): warp items and topics
+    are both flat, one-file-per-thing directories, never nested, so a
+    shallow glob is the correct count rather than a recursive walk.
+    """
+
+    if root is None or not root.is_dir():
+        return 0
+    return sum(
+        1 for p in root.glob("*.md")
+        if p.is_file() and not p.is_symlink() and not p.name.startswith(".")
+    )
+
+
+def _count_run_records(runs_dir: Path) -> int:
+    """Run directories under ``runs_dir/<repo>/`` for every repo slug.
+
+    Two levels deep: ``runs/<repo-slug>/<run-id>/`` — a run record is the
+    inner directory, so this sums, across every repo-slug directory
+    currently under *runs_dir*, the number of child directories it holds.
+    A missing *runs_dir*, or a repo slug with no runs yet, contributes 0
+    rather than raising.
+    """
+
+    if not runs_dir.is_dir():
+        return 0
+    total = 0
+    for repo_entry in runs_dir.iterdir():
+        if not repo_entry.is_dir() or repo_entry.name.startswith("."):
+            continue
+        total += sum(1 for run_entry in repo_entry.iterdir() if run_entry.is_dir())
+    return total
+
+
+def _commit_count(repo_root: Path) -> int:
+    """Total commits reachable from HEAD — 0 for no repo or no commits yet.
+
+    ``explicit_repo_env`` scrubs any inherited ``GIT_DIR``/``GIT_WORK_TREE``
+    before this hand-rolled call, the same guard every other direct ``git``
+    invocation in this module's neighbourhood (``home_link.py``) applies —
+    *repo_root* names its own tree explicitly via ``cwd=``.
+    """
+
+    if not (repo_root / ".git").exists():
+        return 0
+    result = subprocess.run(
+        ["git", "rev-list", "--count", "HEAD"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+        env=gitops.explicit_repo_env(),
+    )
+    if result.returncode != 0:
+        return 0
+    try:
+        return int(result.stdout.strip())
+    except ValueError:
+        return 0
+
+
+def _origin_url(repo_root: Path) -> str | None:
+    """The literal ``origin`` remote URL for *repo_root*, or ``None``.
+
+    Named ``origin`` specifically, not "whatever remote happens to be
+    first": ``home_link.py`` always wires its backup repos under that name,
+    so this reads the same one it writes. A URL is a fact git can state; a
+    repo *name* (``brnrd-home`` by default, but ``--dominion-name`` /
+    ``--knowledge-name`` make it whatever the operator chose) is a guess
+    this function refuses to make.
+    """
+
+    if not (repo_root / ".git").exists():
+        return None
+    return gitops.remote_url(repo_root, "origin")
+
+
+def home_manifest(ctx: HomeContext) -> HomeManifest:
+    """Count what *ctx*'s resolved home actually holds.
+
+    Read-only and total: never creates anything, never raises on a
+    directory that hasn't been written to yet — a home nobody has used is
+    a legitimate answer (a freshly resolved home on a second machine, or a
+    brand-new resident), not an error condition. Counts, by category:
+
+    - ``kb_pages`` — markdown files anywhere under ``knowledge/``.
+    - ``warp_items`` / ``topics`` — files in the warp/topics work-surface
+      directories (:func:`items.warp_dir` / :func:`items.topics_dir`).
+    - ``run_records`` — run directories under ``runs/<repo>/``.
+    - ``surface_pages`` — markdown anywhere under ``surface/``.
+    - ``commit_count`` — the dominion repo's own commit count.
+    - ``origin_url`` / ``knowledge_origin_url`` — each repo's actual
+      ``origin`` URL (see :func:`_origin_url`), never a guessed name.
+    """
+
+    from . import items
+
+    home_root = context_home_root(ctx)
+    return HomeManifest(
+        kb_pages=len(_discover_markdown(knowledge_path(ctx))),
+        warp_items=_count_markdown_files(items.warp_dir(ctx)),
+        topics=_count_markdown_files(items.topics_dir(ctx)),
+        run_records=_count_run_records(ctx.runs_dir),
+        surface_pages=len(_discover_markdown(work_surface_path(ctx))),
+        commit_count=_commit_count(home_root),
+        origin_url=_origin_url(home_root),
+        knowledge_origin_url=_origin_url(knowledge_path(ctx)),
+    )
+
+
 def _contains_no_files(root: Path) -> bool:
     """True when *root* is a directory skeleton — no regular files anywhere."""
 
