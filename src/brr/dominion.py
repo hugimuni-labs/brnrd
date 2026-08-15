@@ -124,12 +124,26 @@ def resident_dominion_candidates(
     *,
     repo_label: str | None = None,
     include_legacy: bool = True,
+    account_context: "account.AccountContext | None" = None,
 ) -> list[ResidentDominion]:
     """Return resident-memory locations, newest account path first.
 
     The account-scoped path is authoritative when present. The repo-local
     orphan-branch path remains a fallback so partially migrated installs can
     still wake with their old memory instead of going blank.
+
+    *account_context*, when a caller already has one resolved, is reused as
+    is rather than re-derived: ``account.resolve_context`` recomputes repo
+    identity from scratch, including a `git` subprocess fallback for a repo
+    with no matching remote, and a caller in a per-tick loop (the daemon's
+    ``_fire_due_schedules``, on every scan) that skips this parameter pays
+    that cost again on every call for an answer that cannot have changed
+    since the daemon's own startup resolution (#1405 — measured on an idle
+    machine as the dominant, and highly variable, per-tick cost: up to
+    ~9-10 redundant resolutions per second-scale daemon run, individual
+    calls ranging 20ms-400ms, entirely subprocess-spawn-bound). A caller
+    with no context handy (CLI entry points, prompt assembly) still gets
+    one derived here, unchanged.
     """
 
     if cfg is None:
@@ -143,7 +157,9 @@ def resident_dominion_candidates(
     try:
         from . import account
 
-        ctx = account.resolve_context(repo_root, cfg, create=False)
+        ctx = account_context if account_context is not None else account.resolve_context(
+            repo_root, cfg, create=False,
+        )
         if ctx.enabled:
             label = repo_label or account.repo_label(repo_root, cfg)
             candidates.append(
