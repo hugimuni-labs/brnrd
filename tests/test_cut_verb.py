@@ -352,3 +352,107 @@ def test_parse_cut_empty_spend_and_next_are_none_not_empty_string():
     assert error is None
     assert declaration.spend is None
     assert declaration.next is None
+
+
+# ── strands (#1197) ──────────────────────────────────────────────────
+
+
+def test_parse_cut_strands_is_empty_by_default():
+    declaration, error = cut_verb.parse_cut({"cut": "true"})
+    assert error is None
+    assert declaration.strands == ()
+
+
+def test_parse_cut_strands_flow_scalar_mapping_form():
+    declaration, error = cut_verb.parse_cut(
+        {
+            "cut": "true",
+            "strands": {
+                "run-260815-1057-3zi4": "handoff — the next wake converges it",
+                "run-260815-1222-itba": "converged — read whole, merged 3283df40",
+            },
+        }
+    )
+    assert error is None
+    by_run = {row.run: row.disposition for row in declaration.strands}
+    assert by_run["run-260815-1057-3zi4"] == "handoff — the next wake converges it"
+    assert by_run["run-260815-1222-itba"] == "converged — read whole, merged 3283df40"
+
+
+def test_parse_cut_strands_accepts_stopped_and_abandoned():
+    declaration, error = cut_verb.parse_cut(
+        {
+            "cut": "true",
+            "strands": {
+                "run-a": "stopped: superseded",
+                "run-b": "abandoned — wrong contract from the start",
+            },
+        }
+    )
+    assert error is None
+    by_run = {row.run: row.disposition for row in declaration.strands}
+    assert by_run["run-a"] == "stopped: superseded"
+    assert by_run["run-b"] == "abandoned — wrong contract from the start"
+
+
+def test_parse_cut_strands_rejects_an_unrecognised_disposition():
+    declaration, error = cut_verb.parse_cut(
+        {"cut": "true", "strands": {"run-a": "in progress"}}
+    )
+    assert declaration is None
+    assert "unrecognised disposition" in error
+    assert "run-a" in error
+
+
+def test_parse_cut_strands_rejects_an_empty_disposition():
+    declaration, error = cut_verb.parse_cut(
+        {"cut": "true", "strands": {"run-a": ""}}
+    )
+    assert declaration is None
+    assert "unrecognised disposition" in error
+
+
+def test_parse_cut_strands_nested_dict_form_also_works():
+    declaration, error = cut_verb.parse_cut(
+        {
+            "cut": "true",
+            "strands": {"run-a": {"disposition": "handoff — next wake"}},
+        }
+    )
+    assert error is None
+    [row] = declaration.strands
+    assert row.run == "run-a"
+    assert row.disposition == "handoff — next wake"
+
+
+def test_parse_cut_strands_list_of_dicts_form_is_forward_compatible():
+    declaration, error = cut_verb.parse_cut(
+        {
+            "cut": "true",
+            "strands": [{"run": "run-a", "disposition": "converged"}],
+        }
+    )
+    assert error is None
+    [row] = declaration.strands
+    assert row.run == "run-a"
+    assert row.disposition == "converged"
+
+
+def test_parse_cut_strands_list_entry_missing_run_is_refused():
+    declaration, error = cut_verb.parse_cut(
+        {"cut": "true", "strands": [{"disposition": "handoff"}]}
+    )
+    assert declaration is None
+    assert "missing its run" in error
+
+
+def test_parse_cut_strands_rejects_a_non_mapping_non_list():
+    declaration, error = cut_verb.parse_cut({"cut": "true", "strands": "later"})
+    assert declaration is None
+    assert "neither a mapping nor a list" in error
+
+
+def test_parse_cut_unknown_key_error_names_strands_as_known():
+    declaration, error = cut_verb.parse_cut({"cut": "true", "strand": "x"})
+    assert declaration is None
+    assert "strands" in error

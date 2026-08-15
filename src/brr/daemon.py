@@ -8023,6 +8023,12 @@ def _cut_mismatches(
       relic in the same collection is named. Same skip condition as
       **produce** (no *repo_root* ⇒ no relics collection ⇒ skipped) since
       it reads off the same ``relics_list``.
+    - **strands** (#1197): every live entry in :func:`_owned_child_controls`
+      must appear as a ``strands:`` key naming one of a closed disposition
+      set (``handoff`` / ``converged`` / ``stopped`` / ``abandoned``); a key
+      naming a run that is not a live owned child of this run is named too.
+      No *repo_root* or *outbox_dir* gate — the child registry is in-process
+      state, always readable.
     - **topic-per-run** (the-run-that-claims-its-thread): no ``.topics``
       claim and no ``item`` relic on this run's own ``.relics.jsonl`` is
       named ``topicless: ...``. No *repo_root* gate, unlike
@@ -8170,6 +8176,34 @@ def _cut_mismatches(
                 f"owed: strand {child_id} declared {branch} and it exists on "
                 "no local or remote ref — its work is unsalvaged"
             )
+
+    # ── live strand handoff (#1197) ─────────────────────────────────────
+    # #1298 above closes the case where a dispatched child finished and its
+    # promised branch is gone; this closes the sibling case — a bolt landing
+    # while a child is still *running*, where no machine surface could tell
+    # "the parent named the handoff" from "the parent dropped the thread."
+    # `#1147` forbids blocking the cut over it, so this bounces exactly like
+    # every other row rather than holding the run hostage. Reads
+    # `_owned_child_controls` — the same live-registry projection
+    # `hooks._live_child_handover_line` renders and `portal-state.json`'s
+    # `resources.coexisting_runs.owned_children` carries — deliberately, so
+    # there is one source of truth for "is this child still live," not a
+    # second one grown here.
+    declared_strands: dict[str, cut_verb.StrandDisposition] = {}
+    for row in declaration.strands:
+        declared_strands.setdefault(row.run, row)
+    live_child_ids: set[str] = set()
+    for entry in _owned_child_controls(task.id):
+        child_id = str(entry.get("run_id") or entry.get("event_id") or "").strip()
+        if not child_id:
+            continue
+        live_child_ids.add(child_id)
+        if child_id not in declared_strands:
+            mismatches.append(f"strands: {child_id} is live and undispositioned")
+    for run_id in sorted(set(declared_strands) - live_child_ids):
+        mismatches.append(
+            f"strands: {run_id} is not a live child of this run"
+        )
 
     return mismatches
 
