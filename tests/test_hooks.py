@@ -336,6 +336,100 @@ def test_post_tool_pending_events_are_framed_as_action_not_telemetry(tmp_path):
     assert "Address each below" not in ctx2
 
 
+def test_post_tool_pending_sermon_compresses_on_unchanged_second_boundary(tmp_path):
+    # The full instruction sentence must not repeat byte-identically at
+    # every laden boundary while the pending SET stands still: first laden
+    # boundary gets the full sentence, the next boundary with the exact same
+    # ids gets the compact one-liner instead. The per-event rows underneath
+    # (letter chrome, seen/changed collapse) are untouched by this — only
+    # the header sentence changes shape.
+    events = [{"id": "evt-2", "source": "telegram", "summary": "hi"}]
+    _portal(tmp_path, token="t1", pending=1, events=events)
+    out1, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    ctx1 = out1["hookSpecificOutput"]["additionalContext"]
+    assert "Address each below with an `event:` reply" in ctx1
+
+    _portal(tmp_path, token="t2", pending=1, events=events)
+    out2, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    ctx2 = out2["hookSpecificOutput"]["additionalContext"]
+    assert "Address each below" not in ctx2
+    assert (
+        "1 pending event(s), 0 undelivered outbox file(s) — "
+        "`event:`/`note:` each before closeout."
+    ) in ctx2
+
+
+def test_post_tool_pending_sermon_full_again_on_a_new_event_id(tmp_path):
+    # A fresh id arriving mid-run is the derailment moment — the full
+    # sentence must come back, not stay compressed just because *something*
+    # was pending before too.
+    events = [{"id": "evt-2", "source": "telegram", "summary": "hi"}]
+    _portal(tmp_path, token="t1", pending=1, events=events)
+    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+
+    _portal(tmp_path, token="t2", pending=1, events=events)
+    out2, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    assert "Address each below" not in out2["hookSpecificOutput"]["additionalContext"]
+
+    events3 = events + [{"id": "evt-3", "source": "telegram", "summary": "new"}]
+    _portal(tmp_path, token="t3", pending=2, events=events3)
+    out3, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    ctx3 = out3["hookSpecificOutput"]["additionalContext"]
+    assert "Address each below with an `event:` reply" in ctx3
+
+
+def test_pending_set_changed_tracks_ids_and_count():
+    # Unit-level on `_pending_set_changed` itself (the persisted-ledger
+    # primitive the bar-path pending sermon calls every laden boundary),
+    # independent of whatever else does or doesn't open the bar.
+    state: dict = {}
+    # First laden boundary: no stored snapshot yet.
+    assert hooks._pending_set_changed(state, [{"id": "evt-1"}], 1) is True
+    # Same set again: unchanged.
+    assert hooks._pending_set_changed(state, [{"id": "evt-1"}], 1) is False
+    # A new id: changed.
+    assert (
+        hooks._pending_set_changed(
+            state, [{"id": "evt-1"}, {"id": "evt-2"}], 2
+        )
+        is True
+    )
+    # Same set again: unchanged.
+    assert (
+        hooks._pending_set_changed(
+            state, [{"id": "evt-1"}, {"id": "evt-2"}], 2
+        )
+        is False
+    )
+    # One resolves — count decreases, no new id: still unchanged. A pure
+    # decrease is deliberately not a trigger; the compact line's own numbers
+    # already carry it.
+    assert hooks._pending_set_changed(state, [{"id": "evt-2"}], 1) is False
+    # Count increases with no new tracked id (the id-less-event fallback):
+    # the count-increase check still catches it.
+    assert hooks._pending_set_changed(state, [{"id": "evt-2"}], 2) is True
+
+
+def test_format_delta_pending_sermon_form_follows_pending_set_changed():
+    # Direct-call level, mirroring `test_card_stale_detail_compresses_on_the_
+    # third_consecutive_boundary`'s style for `repeat_streaks`: the caller-
+    # owned edge alone decides which of the two sentence forms renders.
+    payload = _bar_payload(
+        attention={"pending_event_count": 1, "pending_outbox_file_count": 0},
+        inbound={"events": [
+            {"id": "evt-9", "source": "telegram", "summary": "ping"},
+        ]},
+    )
+    full = hooks.format_delta(payload, pending_set_changed=True)
+    compact = hooks.format_delta(payload, pending_set_changed=False)
+    assert "Address each below with an `event:` reply" in full
+    assert "Address each below" not in compact
+    assert (
+        "1 pending event(s), 0 undelivered outbox file(s) — "
+        "`event:`/`note:` each before closeout."
+    ) in compact
+
+
 def test_stop_surfaces_unpushed_and_modified_scm(tmp_path):
     _portal(
         tmp_path, token="t1", pending=0,
@@ -1413,6 +1507,66 @@ def test_render_event_rows_no_elision_line_when_it_fits():
     chrome_rows = [r for r in rows if r.startswith("- ✉ evt-")]
     assert len(chrome_rows) == 10
     assert not any("more pending events" in r for r in rows)
+
+
+def test_render_event_rows_all_collapsed_no_elision_line():
+    # The double-count bug: a `seen ×N · unchanged` row is emitted via
+    # `continue` without bumping the render counter, so an all-collapsed
+    # list (nothing actually omitted) still got an elision line claiming
+    # every row it had just printed was missing. 5 pending, all collapsed:
+    # 5 rows, no "+N more" line.
+    events = [
+        {"id": f"evt-{i}", "source": "telegram", "body": f"msg {i}"}
+        for i in range(5)
+    ]
+    event_seen = {ev["id"]: {"status": "seen", "shown": 3} for ev in events}
+    rows = hooks._render_event_rows(events, event_seen, None)
+    assert len(rows) == 5
+    assert all("seen ×3 · unchanged" in r for r in rows)
+    assert not any("more pending events" in r for r in rows)
+
+
+def test_render_event_rows_mixed_collapsed_omission_count_is_exact(monkeypatch):
+    # Same bug, the mixed shape: with the cap patched down to 10, 50 pending
+    # events where half the in-cap slice collapses to the seen form and half
+    # renders in full must report the *true* omission (50 - 10 = 40). Before
+    # the fix, collapsed rows didn't count as rendered, so this would read
+    # "+45 more" — 5 rows double-counted as both shown and omitted.
+    monkeypatch.setattr(hooks, "_PENDING_EVENT_ROWS_MAX", 10)
+    events = [
+        {"id": f"evt-{i}", "source": "telegram", "body": f"msg {i}"}
+        for i in range(50)
+    ]
+    event_seen = {
+        events[i]["id"]: {"status": "seen", "shown": 2} for i in range(0, 10, 2)
+    }
+    rows = hooks._render_event_rows(events, event_seen, None)
+    seen_rows = [r for r in rows if "seen ×2 · unchanged" in r]
+    assert len(seen_rows) == 5
+    for i in range(0, 10, 2):
+        assert any(events[i]["id"] in r for r in seen_rows)
+    joined = "\n".join(rows)
+    for i in range(10, 50):
+        assert events[i]["id"] not in joined
+    assert rows[-1] == (
+        "- … +40 more pending events not rendered here — read the live "
+        "portal-state.json / inbox.json for the full list"
+    )
+
+
+def test_render_event_rows_omitted_count_counts_what_it_rendered():
+    # Mirrors test_format_pending_events_omitted_count_counts_what_it_rendered
+    # in test_prompts.py — the elision number must describe the rows the
+    # loop actually kept, not the raw slice; a non-dict entry consumes a
+    # slice seat but renders nothing.
+    events = ["not-a-dict"] + [
+        {"id": f"evt-{i}", "source": "telegram", "body": f"msg {i}"}
+        for i in range(60)
+    ]
+    rows = hooks._render_event_rows(events, None, None)
+    chrome_rows = [r for r in rows if r.startswith("- ✉ evt-")]
+    assert len(chrome_rows) == 39, "the non-dict entry consumed a slice seat"
+    assert f"+{len(events) - 39:,} more pending events" in rows[-1]
 
 
 def test_session_start_seed_caps_pending_events_at_40(tmp_path):
