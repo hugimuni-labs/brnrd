@@ -5361,38 +5361,77 @@ class TestNotifyGateFallback:
         assert not row.get("platform_gate")
         assert "telegram" in row["reason"]
 
-    def test_incapable_sole_gate_resolves_undeliverable_not_a_dead_drawer(
+    def test_cloud_now_capable_sole_gate_delivers_to_the_account_drawer(
         self, tmp_path, monkeypatch,
     ):
-        # #1205: cloud is "configured" (``_gate_can_deliver`` says yes) but
-        # structurally cannot originate an unaddressed send — a schedule
-        # wake carries no ``cloud_event_id`` for it to reply against. Before
-        # the fix this synthesized a `done` cloud event nothing would ever
-        # read (the drawer the courier never opens); now it must resolve
-        # exactly like "no candidate at all" — honest, not silent.
+        # #1205: cloud declares ``CAN_SEND_UNADDRESSED = True`` now that the
+        # server's fresh-send primitive (``POST /v1/daemons/messages``)
+        # backs it — a schedule wake's terminal reply resolves through the
+        # fallback exactly like any other capable gate. The load-bearing
+        # assertion is *where* the synthesized event lands: cloud's own
+        # delivery loop drains ``account_context.dispatch_inbox``
+        # exclusively (``_start_account_gates`` excludes it from every
+        # per-repo gate set), never a repo's local ``inbox_dir`` — the
+        # "wrong drawer" half of #1205's mechanism 1, live again the moment
+        # cloud became capable of an unaddressed send at all.
+        # ``create_event`` never errors on a wrong directory, so a
+        # regression here is silent except for this assertion.
         task, ctx, event, inbox_dir, responses_dir = self._run(
             tmp_path, monkeypatch, configured_gates=("cloud",),
         )
 
-        assert task.meta["terminal_route"] == "undeliverable"
+        assert task.meta["terminal_route"] == "gate-fallback"
+        # Nothing synthesized into the repo-local inbox beyond the schedule
+        # event itself — the fix routes the *write*, it does not widen what
+        # this inbox holds.
         assert list(inbox_dir.glob("*.md")) == [event["_path"]]
+        [fallback] = protocol.list_done(ctx.dispatch_inbox, "cloud")
+        fallback_body = protocol.read_response(ctx.responses_dir, fallback["id"])
+        assert fallback_body.strip() == "director tick note"
 
         [row] = self._message_rows(ctx, task)
-        assert row["status"] == daemon.message_store.UNDELIVERABLE
+        # Queuing to the fallback gate is not a platform receipt (#1205) —
+        # this row reads `carried`, never `delivered`, until cloud's own
+        # delivery loop (not exercised by this unit test) actually posts it.
+        assert row["status"] == daemon.message_store.CARRIED
+        assert "cloud" in row["reason"]
 
-    def test_incapable_gate_is_skipped_in_favour_of_a_capable_one(
+    def test_two_capable_candidates_with_no_history_stay_ambiguous(
         self, tmp_path, monkeypatch,
     ):
-        # cloud and telegram are both configured — cloud is filtered out by
-        # capability before single-gate inference ever runs, so telegram is
-        # the (unambiguous) survivor rather than a second "several
-        # candidates" ambiguity.
+        # cloud and telegram are both configured and both capable now.
+        # Pre-#1205, cloud's incapability made telegram the unambiguous
+        # survivor; with two genuine candidates and no conversation history
+        # to break the tie, ``_resolve_notify_gate`` resolves to nothing
+        # rather than guessing (pinned at the unit level in
+        # ``test_outbox.py``; this exercises the same decision through the
+        # real ``_run_worker`` path).
         task, ctx, event, inbox_dir, responses_dir = self._run(
             tmp_path, monkeypatch, configured_gates=("cloud", "telegram"),
         )
 
+        assert task.meta["terminal_route"] == "undeliverable"
+        assert protocol.list_done(inbox_dir, "telegram") == []
+        assert protocol.list_done(ctx.dispatch_inbox, "cloud") == []
+
+        [row] = self._message_rows(ctx, task)
+        assert row["status"] == daemon.message_store.UNDELIVERABLE
+
+    def test_two_capable_candidates_prefer_recent_activity(
+        self, tmp_path, monkeypatch,
+    ):
+        # Seeding one candidate's conversation history breaks the tie the
+        # previous test leaves unresolved — same recent-activity tiebreak as
+        # ``test_resolve_notify_gate_ambiguous_prefers_most_recently_active_thread``
+        # in ``test_outbox.py``, exercised here with cloud as a genuine
+        # (now-capable) second candidate.
+        task, ctx, event, inbox_dir, responses_dir = self._run(
+            tmp_path, monkeypatch, configured_gates=("cloud", "telegram"),
+            seed_conversations=[("telegram:1:0", 30)],
+        )
+
         assert task.meta["terminal_route"] == "gate-fallback"
-        assert protocol.list_done(inbox_dir, "cloud") == []
+        assert protocol.list_done(ctx.dispatch_inbox, "cloud") == []
         [fallback] = protocol.list_done(inbox_dir, "telegram")
         fallback_body = protocol.read_response(responses_dir, fallback["id"])
         assert fallback_body.strip() == "director tick note"
