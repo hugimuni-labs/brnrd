@@ -2045,10 +2045,20 @@ class TestPromptBuilding:
         # A1/#211 + B5/#216: the delivery-portals block carries the compact
         # next-move rule (four closeout states, manufactured options named
         # as the failure mode) and the post-delivery linger contract (hold
-        # the slot with `await:`/`brnrd portal await` rather than a
-        # hand-rolled poll loop, dispatch-or-explicit-defer ownership for
-        # unrelated pending work). Full contracts live in the portals
-        # manual (pinned in test_docs.py).
+        # the slot with `await:` / `brnrd await` rather than a hand-rolled
+        # poll loop, dispatch-or-explicit-defer ownership for unrelated
+        # pending work). Full contracts live in the portals manual (pinned
+        # in test_docs.py).
+        #
+        # The verb pin moved 2026-08-15. This test used to assert
+        # `brnrd portal await`, which has never been a registered command —
+        # `portal` has only `state` and `facets` (cli.py). So the suite was
+        # holding a prompt that taught a command that does not exist, and
+        # the pin is what kept it there. What the test is *for* is unchanged:
+        # the linger contract must reach the wake. Only the spelling of the
+        # verb was wrong, in the prompt and here.
+        # TestPromptsTeachOnlyLiveGrammar now derives this from the CLI's own
+        # parser instead of from a literal, so the next rename cannot repeat it.
         prompt = build_daemon_prompt(
             "ship it",
             "evt-1",
@@ -2067,7 +2077,7 @@ class TestPromptBuilding:
         assert "Manufactured options are the failure mode" in prompt
         assert "linger" in prompt
         assert "await:" in prompt
-        assert "brnrd portal await" in prompt
+        assert "brnrd await" in prompt
         assert _says(prompt, "strand capacity and quota are healthy")
         assert _says(prompt, "queue never starves")
 
@@ -5038,3 +5048,74 @@ class TestInertPitfallReachesTheWake:
 
         parsed = pitfalls.parse_pitfalls(dominion.dominion_path(repo))
         assert [p.title for p in parsed] == ["Half-drafted", "Docker rebuild"]
+
+
+class TestPromptsTeachOnlyLiveGrammar:
+    """A prompt file is injected into every wake and read as instruction.
+
+    A directive the daemon *refuses*, or a command that does not exist, costs
+    every wake that believes it — and it fails silently, because the resident
+    writes the thing it was taught and reads the refusal (if it reads
+    `notices` at all) as its own mistake. Found 2026-08-15: the always-injected
+    `daemon-substrate.md` taught `await: event` two screens below the row
+    saying conditions are refused, and told the reader to call
+    `brnrd portal await`, which has never been a command.
+
+    Both guards derive their expectations from the *owning* module — the
+    parser and the CLI — never from a list maintained here, so a future
+    rename cannot leave them green over a stale denylist.
+    """
+
+    def _prompt_files(self):
+        d = Path(prompts.__file__).parent / "prompts"
+        files = sorted(d.glob("*.md"))
+        assert files, f"no prompt files found under {d} — the walk is broken"
+        return files
+
+    def test_every_await_directive_in_the_prompts_is_accepted(self):
+        """`await: <x>` shown in a prompt must survive `parse_await`."""
+        from brr import await_verb
+
+        row_re = re.compile(r"`await:\s*([^`\n|]+?)\s*`")
+        seen = []
+        for path in self._prompt_files():
+            for value in row_re.findall(path.read_text()):
+                seen.append((path.name, value))
+                _f, _t, error = await_verb.parse_await(
+                    {"await": value, "timeout": "12m"}
+                )
+                assert error is None, (
+                    f"{path.name} teaches `await: {value}`, which the daemon "
+                    f"refuses: {error}"
+                )
+
+        # Sanity: a rename that stops this regex matching must fail loudly
+        # rather than pass over an empty set.
+        assert seen, "found no `await:` directives in the prompts at all"
+
+    def test_every_brnrd_portal_subcommand_named_in_the_prompts_exists(self):
+        """`brnrd portal <x>` in a prompt must be a registered subcommand."""
+        from brr import cli
+
+        parser = cli.build_parser()
+        registered = set()
+        for action in parser._subparsers._group_actions:  # noqa: SLF001
+            portal = action.choices.get("portal")
+            if portal is None:
+                continue
+            for sub in portal._subparsers._group_actions:  # noqa: SLF001
+                registered |= set(sub.choices)
+        assert registered, "could not read the portal subcommands off the CLI"
+
+        named = []
+        for path in self._prompt_files():
+            for word in re.findall(r"brnrd portal ([a-z-]+)", path.read_text()):
+                named.append((path.name, word))
+                assert word in registered, (
+                    f"{path.name} names `brnrd portal {word}`, which is not a "
+                    f"registered subcommand (have: {sorted(registered)})"
+                )
+
+        # No sanity assertion on `named`: zero mentions is a legitimate state
+        # for this one, and asserting non-empty would force a prompt to keep
+        # naming the command forever.

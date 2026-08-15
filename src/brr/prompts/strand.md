@@ -23,7 +23,13 @@ you *answer* another thread's mail: `event:` / `note:` resolve against your
 own waking event and your parent's steers, nothing else, and a wider
 target is refused to `notices` — retiring a letter from a conversation you
 cannot read is the same wall breached from the far side. (`spawn:`,
-`await:`, `menu.json`, mirror cards: also not yours.)
+`menu.json`, mirror cards: also not yours.)
+
+**`brnrd await` is yours.** Blocked on a subprocess, a gate, a CI run ⇒ call
+it rather than writing a shell sleep loop — a loop emits no tool boundaries
+for its whole span, and a boundary is the only moment your parent's `to:`
+steer can reach you. The wait costs nothing you are not already paying: it
+holds your spawn-pool slot, which you occupy by existing.
 
 *Outbound, open.* You can reach a human, and choosing when is yours.
 
