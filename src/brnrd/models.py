@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -351,7 +351,14 @@ class Event(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     response_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     response_len: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    response_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # BigInteger, not Integer: response_ms is a wall-clock delta in
+    # milliseconds since Event.created_at, and any event still open past
+    # 2**31-1 ms (~24.855 days) overflowed a 32-bit column at commit time —
+    # unhandled on postgres, and in the done path this landed *after*
+    # forwarder(...) had already posted, so every daemon retry re-delivered
+    # the same reply (#1377). See migrations.py::_migrate_events for the
+    # existing-row backfill.
+    response_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     responded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # sha256 of the last forwarded response body — the retry-dedupe handle
     # that lets a responded event keep forwarding continuation messages

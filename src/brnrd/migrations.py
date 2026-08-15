@@ -224,6 +224,38 @@ def _migrate_events(conn: Connection) -> None:
     # model's ``index=True`` for installs that migrate instead of create.
     conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS conversation_id VARCHAR(255)"))
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_events_conversation_id ON events (conversation_id)"))
+    # #1377 — response_ms is a millisecond delta that overflowed 32-bit
+    # INTEGER once an event sat open past 2**31-1 ms (~24.855 days): the
+    # commit 500'd, and in the done path that landed *after* the reply had
+    # already forwarded, so every retry re-delivered it. models.py now
+    # declares BigInteger; widen any existing INTEGER column to match.
+    _widen_events_response_ms(conn)
+
+
+def _widen_events_response_ms(conn: Connection) -> None:
+    data_type = conn.execute(
+        text(
+            """
+            SELECT data_type
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'events'
+              AND column_name = 'response_ms'
+            """
+        )
+    ).scalar_one_or_none()
+    if data_type is None:
+        # create_all already made the column the right width on a fresh DB.
+        return
+    if data_type != "integer":
+        # Already bigint (or wider) — nothing to do. A guard that fires on
+        # every type, including bigint, would silently pass over nothing
+        # forever if this ever got renamed away from the intended check.
+        assert data_type == "bigint", (
+            f"unexpected events.response_ms data_type: {data_type!r}"
+        )
+        return
+    conn.execute(text("ALTER TABLE events ALTER COLUMN response_ms TYPE BIGINT"))
 
 
 def _migrate_repos(conn: Connection) -> None:
