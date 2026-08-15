@@ -3818,6 +3818,42 @@ def _await_default_timeout(payload: dict) -> float:
     return max(_AWAIT_MIN_TIMEOUT_SECONDS, remaining)
 
 
+def _await_continued_timeout(previous: dict) -> float | None:
+    """Seconds left on a *standing* arming, or ``None`` when there isn't one.
+
+    ``pending`` is this **call's** ceiling, never the wait's: the daemon's
+    arming is still up, with its own deadline, and *call again* continues the
+    same vigil. Re-deriving the default from the run's remaining budget on
+    each re-call silently re-arms it longer every time — a deliberate
+    12-minute hold becomes hours by the third call, with nothing on any
+    surface saying so.
+
+    Inheriting is not a convenience; it is the verb's own design rule applied
+    to its own re-call. ``spawn:<id>`` died because it asked the caller to
+    restate what the daemon already tracks (#1187), and the deadline is
+    tracked — it is in ``portal-state.json`` before this process starts. An
+    explicit ``--timeout`` still wins: that is the caller deliberately
+    re-arming, which is a different act from continuing.
+    """
+    if not previous.get("armed") or previous.get("resolved"):
+        return None
+    raw = previous.get("deadline")
+    if not isinstance(raw, str):
+        return None
+    from datetime import datetime, timezone
+
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    import time as _time
+
+    remaining = parsed.timestamp() - _time.time()
+    return remaining if remaining > 0 else None
+
+
 def _await_parse_timeout(raw: str) -> float | None:
     """``30m`` / ``1h30m`` / a bare number of seconds → seconds, or ``None``."""
     from . import schedule as schedule_mod
@@ -3884,6 +3920,9 @@ def cmd_await(args):
         )
         return 1
 
+    previous = payload.get("await") if isinstance(payload.get("await"), dict) else {}
+    previous_generation = previous.get("generation")
+
     if args.timeout is not None:
         timeout_seconds = _await_parse_timeout(str(args.timeout))
         if timeout_seconds is None or timeout_seconds <= 0:
@@ -3894,10 +3933,11 @@ def cmd_await(args):
             )
             return 1
     else:
-        timeout_seconds = _await_default_timeout(payload)
-
-    previous = payload.get("await") if isinstance(payload.get("await"), dict) else {}
-    previous_generation = previous.get("generation")
+        # A bare re-call *continues* the standing vigil at its own deadline;
+        # only a first call falls through to the budget-derived default.
+        timeout_seconds = (
+            _await_continued_timeout(previous) or _await_default_timeout(payload)
+        )
 
     before = do_mod.notices_of(payload)
     staged = do_mod.stage_await(
