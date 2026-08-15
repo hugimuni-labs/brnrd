@@ -53,6 +53,7 @@ def test_resolve_context_creates_account_home_and_registry(tmp_path):
         "/.brr/",
         "/security.config",
         "/account/gates/cloud.token",
+        "/account/x-browser-profile/",
         "*.tmp",
     ]
 
