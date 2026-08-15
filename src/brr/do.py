@@ -69,7 +69,7 @@ from . import protocol
 
 
 _CUT_DECLARATION_KEYS = frozenset({
-    "asks", "produce", "owed", "spend", "decisions", "next",
+    "asks", "produce", "owed", "spend", "decisions", "next", "strands",
 })
 
 _CUT_SHAPE_ERROR = """invalid cut declaration shape: declaration keys must be in frontmatter and lists must be keyed mappings; nothing was staged. Use:
