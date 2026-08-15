@@ -491,13 +491,24 @@ def _require_session(driver: Any, verb: str) -> None:
     consumer can simply never read, which is the same silence in a new
     costume. A ``SystemExit`` cannot be skipped that way — the caller gets
     a non-zero exit and an actionable fix instead of data to misinterpret.
+
+    The refusal names **both** causes on purpose. :meth:`whoami` returns
+    ``None`` for a redirect to ``/login`` *and* for a profile link that did
+    not resolve inside its 5s timeout, and those are different worlds: one
+    needs a login, the other needs a retry. A remedy is part of a
+    diagnostic's truth claim — a message confidently naming the login
+    branch sends its reader to re-authenticate a session that was never
+    dead, which is this same defect one layer up.
     """
     if driver.whoami() is None:
         raise SystemExit(
-            f"refusing: no active X session — `{verb}` cannot tell a "
+            f"refusing: no X session confirmed — `{verb}` cannot tell a "
             "logged-out session from a genuinely empty result, so it "
-            "refuses rather than hand back a look-alike. Run "
-            "`x-browser.py login` to establish a session, then retry."
+            "refuses rather than hand back a look-alike. Two causes look "
+            "identical from here: the session is dead, or X did not render "
+            "the profile link inside whoami's timeout. Run "
+            "`x-browser.py login` if a browser shows you logged out; retry "
+            "once if it does not."
         )
 
 

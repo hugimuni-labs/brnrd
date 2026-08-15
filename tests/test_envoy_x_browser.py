@@ -413,7 +413,12 @@ def test_read_refuses_when_logged_out(tmp_path):
         envoy_x_browser.run(
             ["read", "https://x.com/a/status/1"], paths, driver_factory=_factory_for(driver),
         )
-    assert "not logged in" in str(exc.value) or "no active X session" in str(exc.value)
+    # The refusal must name *both* causes: whoami() returns None for a dead
+    # session and for a profile link that missed its timeout, and the remedies
+    # differ. An either/or assertion on one phrase would go green over a
+    # message that confidently sends the reader to re-log a live session.
+    message = str(exc.value)
+    assert "login" in message and "retry" in message
     assert "whoami" in driver.calls
     assert not any(isinstance(c, tuple) and c[0] == "read_url" for c in driver.calls)
 
@@ -426,7 +431,12 @@ def test_search_refuses_when_logged_out(tmp_path):
     driver = _FakeDriver(whoami_value=None)
     with pytest.raises(SystemExit) as exc:
         envoy_x_browser.run(["search", "brnrd"], paths, driver_factory=_factory_for(driver))
-    assert "not logged in" in str(exc.value) or "no active X session" in str(exc.value)
+    # The refusal must name *both* causes: whoami() returns None for a dead
+    # session and for a profile link that missed its timeout, and the remedies
+    # differ. An either/or assertion on one phrase would go green over a
+    # message that confidently sends the reader to re-log a live session.
+    message = str(exc.value)
+    assert "login" in message and "retry" in message
     assert "whoami" in driver.calls
     assert not any(isinstance(c, tuple) and c[0] == "search" for c in driver.calls)
 
