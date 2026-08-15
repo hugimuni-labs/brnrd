@@ -1161,3 +1161,72 @@ def test_render_markdown_links_issue_relic():
     assert body[-1] == (
         "- 🎫 [issue #566 (opened)](https://github.com/Gurio/brr/issues/566)"
     )
+
+
+def test_collect_links_self_reported_commit_to_foreign_repo(tmp_path: Path):
+    """#1368: a commit relic whose sha lives in a foreign repo should link to
+    that repo, not the execution repo. A resident reports
+    {"kind": "commit", "sha": "abc1234", "repo": "other/project"} and it
+    links to other/project, not the origin."""
+    repo = _github_repo(tmp_path)
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    # Self-reported commit in a different repo (e.g., knowledge repo)
+    relics.append(
+        outbox, "commit",
+        sha="a81e063",
+        repo="hugimuni-labs/brnrd-knowledge",
+    )
+
+    out = relics.collect(repo, branch=None, seed_ref=None, outbox_dir=outbox)
+
+    assert len(out) == 1
+    assert out[0]["kind"] == "commit"
+    assert out[0]["sha"] == "a81e063"
+    assert out[0]["repo"] == "hugimuni-labs/brnrd-knowledge"
+    # The URL must link to the foreign repo, not the execution repo
+    assert out[0]["url"] == "https://github.com/hugimuni-labs/brnrd-knowledge/commit/a81e063"
+
+
+def test_collect_unresolvable_commit_renders_unlinked(tmp_path: Path):
+    """When a commit relic's repo field is malformed (no "/"), it cannot be
+    resolved to a valid owner/repo and renders without a link, rather than
+    a confident 404."""
+    repo = _github_repo(tmp_path)
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    # Malformed repo field: no "/" to separate owner and repo
+    relics.append(outbox, "commit", sha="badsha1", repo="invalid-repo-name")
+
+    out = relics.collect(repo, branch=None, seed_ref=None, outbox_dir=outbox)
+
+    assert len(out) == 1
+    assert out[0]["kind"] == "commit"
+    assert out[0]["sha"] == "badsha1"
+    # No URL should be present when repo is unresolvable
+    assert "url" not in out[0] or out[0]["url"] is None
+
+
+def test_dedupe_keeps_commits_in_different_repos_apart(tmp_path: Path):
+    """Two commits with the same short-sha prefix but in different repos must
+    not dedup into one relic — the repo must be part of the dedup key."""
+    repo = _github_repo(tmp_path)
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    # Commit in brnrd (execution repo)
+    relics.append(outbox, "commit", sha="abc1234", subject="work in brnrd")
+    # Same short-sha prefix but in knowledge repo
+    relics.append(
+        outbox, "commit", sha="abc1234def", subject="work in knowledge",
+        repo="hugimuni-labs/brnrd-knowledge",
+    )
+
+    out = relics.collect(repo, branch=None, seed_ref=None, outbox_dir=outbox)
+
+    # Both commits should survive; they don't dedupe
+    commits = [r for r in out if r["kind"] == "commit"]
+    assert len(commits) == 2
+    # First commit links to execution repo
+    assert commits[0].get("url") == "https://github.com/Gurio/brr/commit/abc1234"
+    # Second commit links to knowledge repo
+    assert commits[1].get("url") == "https://github.com/hugimuni-labs/brnrd-knowledge/commit/abc1234"
