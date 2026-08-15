@@ -8438,22 +8438,32 @@ def _drain_outbox(
             # never flips out of `status: pending` until run end (the
             # #1146 stamp is not removal) — so it stays in every later
             # tick's pending set and resolves every subsequent wait
-            # instantly, forever. Snapshot the ids pending *right now*, at
-            # arm time, the same way `cut:` already does just below; the
-            # resolve side excludes exactly this set so the wait fires only
-            # on what's genuinely new since arming, never on a fact this
-            # run already had in hand when it armed.
+            # instantly, forever. Snapshot those ids at arm time; the
+            # resolve side excludes exactly this set, so the wait fires
+            # only on what is genuinely new since arming.
+            #
+            # The snapshot is deliberately narrow: **only** a retired
+            # self-parented completion this run has already observed. It is
+            # NOT "everything pending right now". Excluding a live
+            # correspondent's message that happened to be pending at arm
+            # time would make the wait sleep straight through them, and
+            # `prompts/daemon-substrate.md` promises the opposite in as many
+            # words — "any *other* pending event resolves it the same way …
+            # the queue never starves". The wider class (any event pending
+            # before arming) is a separate design call and is not taken here.
+            #
+            # Note the call below is not a pure read: `_pending_events_for_agent`
+            # writes `observed_by`/`observed_at` via `protocol.update_event_meta`
+            # for unobserved self-parented completions. In a live wake the
+            # heartbeat has almost always stamped them already, so this only
+            # ever pulls that write slightly earlier — but it is a write, and
+            # a future reader should not have to discover that.
             armed_pending = (
                 _pending_events_for_agent(
                     inbox_dir, event_id,
-                    strand=(
-                        _is_strand(task.meta) if hasattr(task, "meta") else False
-                    ),
+                    strand=_is_strand(task.meta),
                     account_context=account_context,
-                    repo_label=(
-                        task.meta.get("repo_label")
-                        if hasattr(task, "meta") else None
-                    ),
+                    repo_label=task.meta.get("repo_label"),
                     observer_run_id=task.id,
                 )
                 if inbox_dir is not None else []
@@ -8471,7 +8481,14 @@ def _drain_outbox(
                 "resolved": False,
                 "capped": False,
                 "armed_pending_ids": sorted(
-                    {str(ev["id"]) for ev in armed_pending if ev.get("id")}
+                    {
+                        str(ev["id"])
+                        for ev in armed_pending
+                        if ev.get("id")
+                        and ev.get("source") == "spawn_completed"
+                        and str(ev.get("spawn_parent_run_id") or "") == task.id
+                        and ev.get("observed_by")
+                    }
                 ),
             }
             promoted += 1
