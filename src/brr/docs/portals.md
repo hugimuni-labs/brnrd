@@ -269,6 +269,11 @@ body, and stopping is a result. Declared fields, all optional:
 - `owed:` — `none`, or a mapping of carried rows (`ref:`/`why:`/`where:`)
   naming a promise you're not shipping this run.
 - `spend:` / `next:` — free text, carried verbatim.
+- `strands:` (#1197) — every live child this run dispatched, keyed by run
+  id, each mapped to one of `handoff` / `converged` / `stopped` /
+  `abandoned` plus a free-text tail naming the reason. Doesn't block the
+  cut (#1147 forbids that) — same bounce-then-accept-annotated ladder as
+  every other row.
 
 (`asks`/`owed` are keyed mappings, not YAML lists — `protocol.py`'s
 frontmatter grammar has no list syntax; see `cut_verb.py`'s module
@@ -288,6 +293,11 @@ attests:
   empty, are both named.
 - **owed** vs the blueprint (`.promises.jsonl`) — an outstanding, labelled
   promise with no carried row naming it is named.
+- **strands** vs the live child registry (the same `owned_children`
+  projection `portal-state.json` → `resources.coexisting_runs` and the
+  closeout's live-child handover line both read) — a live child with no
+  `strands:` row is named, and a `strands:` row naming a run that isn't a
+  live child of this run is named too.
 
 Mismatch ⇒ **bounce**: a notice named `cut bounced: <diff>`, the file
 retired, nothing delivered. Bounded like the closeout latch learned to be:
