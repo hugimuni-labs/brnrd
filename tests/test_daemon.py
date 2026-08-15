@@ -6444,6 +6444,59 @@ def test_publish_pushes_first_publish_branch_when_commit_probe_times_out(
     assert "pushing brr/new-work" in out
 
 
+def test_refuse_publish_does_not_blame_746_for_a_missing_repo(tmp_path, capsys):
+    """#1408: ``gitops.toplevel`` returns ``None`` for two different causes —
+    a repointed ``core.worktree`` (#746) *and* "this is not a git repository
+    at all" — and ``_refuse_publish`` used to print the confident #746
+    diagnosis for both. ``tmp_path`` here is never ``git init``ed (the exact
+    shape every other test in this module hits when a repo isn't set up),
+    so this is the ordinary case, not the exotic one — and the message must
+    not assert a cause the code never established.
+    """
+    task = Run(id="run-1408a", event_id="evt-1408a", body="x", status="done")
+
+    mismatch = daemon._refuse_publish(task, tmp_path, "publish")
+
+    assert mismatch is not None
+    assert mismatch["cause"] == "not-a-repo"
+    out = capsys.readouterr().out
+    assert "REFUSING publish" in out
+    assert "#746" not in out
+    assert "core.worktree" not in out
+    detail = json.loads(task.meta["stray_host_write_detail"])
+    assert detail["cause"] == "not-a-repo"
+
+
+def test_refuse_publish_names_746_for_a_genuine_core_worktree_repoint(
+    tmp_path, capsys,
+):
+    """The other side of #1408: a *real* ``core.worktree`` repoint — the
+    shared git dir's config pointed at some other tree, exactly #746's
+    incident — must still land the #746 diagnosis, because this time the
+    code actually established it: ``gitops.toplevel`` resolves a real path
+    that disagrees with ``repo_root``, not ``None``.
+    """
+    repo = tmp_path / "repo"
+    other = tmp_path / "elsewhere"
+    init_git_repo(repo)
+    other.mkdir()
+    subprocess.run(
+        ["git", "config", "core.worktree", str(other)], cwd=repo, check=True,
+    )
+    task = Run(id="run-1408b", event_id="evt-1408b", body="x", status="done")
+
+    mismatch = daemon._refuse_publish(task, repo, "publish")
+
+    assert mismatch is not None
+    assert mismatch["cause"] == "core-worktree-mismatch"
+    out = capsys.readouterr().out
+    assert "REFUSING publish" in out
+    assert "#746" in out
+    assert "core.worktree" in out
+    detail = json.loads(task.meta["stray_host_write_detail"])
+    assert detail["cause"] == "core-worktree-mismatch"
+
+
 def test_worker_finalize_tolerates_gate_cleanup_after_response(
     tmp_path, monkeypatch,
 ):
