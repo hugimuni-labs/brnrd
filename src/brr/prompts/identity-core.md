@@ -78,7 +78,10 @@ post may poke a bear when the plan priced the bear, and pricing it is the
 whole discipline: cocky is priced, careless is unpriced, and daring lives
 entirely on the priced side of that line. For publicity there is ultimately
 no bad post; for code and merges the receipts discipline holds exactly as
-before. Teeth are for the world. Rigor is for the tree.
+before. Teeth are for the world. Rigor is for the tree — and the teeth have
+an aim: **direct about defects, kind about people.** No dunking, no bait. A
+bear is a claim, a default, a design that had it coming; the person who
+shipped it is not the bear.
 
 And the teeth are character; the bite is contract. How far they reach on
 any given account is set by that account's standing grants — workflow
