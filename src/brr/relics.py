@@ -456,11 +456,13 @@ class _ForgeLinks:
             override_url_base=self.override_url_base,
         )
 
-    def commit(self, sha: Any) -> str | None:
+    def commit(self, sha: Any, repo: Any = None) -> str | None:
+        path = self._thread_repo(repo)
         if not self.remote_url or not sha:
             return None
         return forges.commit_url(
             self.remote_url, str(sha),
+            repo_path=path,
             override_kind=self.override_kind,
             override_url_base=self.override_url_base,
         )
@@ -526,13 +528,13 @@ def link_reported(
         elif kind == "pr" and record.get("number"):
             url = links.pull_request(record["number"], record.get("repo"))
         elif kind == "commit" and record.get("sha"):
-            url = links.commit(record["sha"])
+            url = links.commit(record["sha"], record.get("repo"))
         elif kind == "branch" and record.get("name"):
             url = links.branch(record["name"])
         elif kind == "merge":
             url = (
-                links.pull_request(record["pr"]) if record.get("pr") else None
-            ) or links.commit(record.get("sha"))
+                links.pull_request(record["pr"], record.get("repo")) if record.get("pr") else None
+            ) or links.commit(record.get("sha"), record.get("repo"))
         if url:
             record["url"] = url
     return records
@@ -651,28 +653,46 @@ def derive_auto(
     return out
 
 
-def _identity(record: dict[str, Any]) -> tuple[str, str] | None:
+def _identity(record: dict[str, Any]) -> tuple[str, str] | tuple[str, str, str] | None:
     """The dedup key for a relic, or ``None`` when the kind has no stable
     identity (``summary``, ``comment``, ``message``, ``reply``, unknown kinds
     — those never merge; two comments are two comments).
 
     Commits key on the 7-char sha prefix so a reported full sha and an
-    auto-derived ``git log --format=%h`` short sha still meet.
+    auto-derived ``git log --format=%h`` short sha still meet. When a repo
+    is named (a commit from a different project), the key includes it to
+    prevent commits with the same short-sha prefix in different repos from
+    incorrectly deduping.
     """
     kind = str(record.get("kind") or "")
     if kind in {"pr", "issue"}:
         number = record.get("number")
-        return (kind, str(number)) if number else None
+        repo = record.get("repo")
+        if not number:
+            return None
+        if repo:
+            return (kind, str(number), str(repo))
+        return (kind, str(number))
     if kind == "commit":
         sha = str(record.get("sha") or "")
-        return ("commit", sha[:7]) if sha else None
+        if not sha:
+            return None
+        repo = record.get("repo")
+        if repo:
+            return ("commit", sha[:7], str(repo))
+        return ("commit", sha[:7])
     if kind == "merge":
         # A merge keys on its commit sha but in its own namespace: the
         # maintainer's explicit ask (2026-07-21) is that merges performed
         # are a separate block from PRs made, so a merge relic never
         # collapses into a ``pr`` relic for the same number.
         sha = str(record.get("sha") or "")
-        return ("merge", sha[:7]) if sha else None
+        if not sha:
+            return None
+        repo = record.get("repo")
+        if repo:
+            return ("merge", sha[:7], str(repo))
+        return ("merge", sha[:7])
     if kind == "branch":
         name = str(record.get("name") or "")
         return ("branch", name) if name else None
