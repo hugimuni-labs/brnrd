@@ -1438,3 +1438,73 @@ def test_list_project_homes_finds_every_scaffolded_home(monkeypatch, tmp_path):
 
 def test_list_project_homes_empty_when_nothing_scaffolded_yet(tmp_path):
     assert account.list_project_homes(tmp_path / "nowhere") == []
+
+
+# ── envoy shims: import guards and documentation ──────────────────────
+
+def test_envoy_shims_have_import_error_guards():
+    """Ensure the three envoy shims (x-post.py, x-read.py, x-browser.py)
+    have try/except guards around the brr imports, so they fail legibly
+    when the interpreter cannot import brr, rather than surfacing a bare
+    ModuleNotFoundError.
+    """
+    from pathlib import Path
+
+    repo_root = Path(__file__).parent.parent
+    shim_names = ["x-post.py", "x-read.py", "x-browser.py"]
+
+    for shim_name in shim_names:
+        shim_path = repo_root / "examples" / "envoy" / shim_name
+        assert shim_path.exists(), f"shim {shim_name} not found at {shim_path}"
+        content = shim_path.read_text(encoding="utf-8")
+
+        # Guard 1: must have a try/except around the brr import
+        assert "try:" in content, f"{shim_name}: missing try block around import"
+        assert "except ModuleNotFoundError" in content, (
+            f"{shim_name}: missing ModuleNotFoundError handler"
+        )
+        assert "raise SystemExit" in content, (
+            f"{shim_name}: missing SystemExit in error handler"
+        )
+        # Guard 2: the error message must name the issue and the fix
+        assert "cannot import" in content, (
+            f"{shim_name}: error message must name the import problem"
+        )
+        assert (".venv/bin/python3" in content or "<python-with-brr>" in content), (
+            f"{shim_name}: error message must hint at the solution "
+            "(usually .venv/bin/python3)"
+        )
+
+
+def test_envoy_readme_does_not_regress_to_bare_python3_commands():
+    """Ensure examples/envoy/README.md does not regress to bare `python3`
+    invocations in its examples — the documentation must guide users to an
+    interpreter where brr is importable.
+    """
+    from pathlib import Path
+
+    repo_root = Path(__file__).parent.parent
+    readme_path = repo_root / "examples" / "envoy" / "README.md"
+    assert readme_path.exists(), f"README not found at {readme_path}"
+    content = readme_path.read_text(encoding="utf-8")
+
+    # The README's install steps should name the requirement clearly
+    assert "brr" in content.lower(), "README must mention brr requirement"
+    assert (
+        "importable" in content.lower()
+        or "interpreter" in content.lower()
+    ), "README must clarify which interpreter to use"
+
+    # Reject bare python3 invocations in examples (lines that look like commands)
+    # OK patterns: <python-with-brr>, .venv/bin/python3, etc.
+    # NOT OK: just "python3 x-post.py" or "python3 x-read.py" or "python3 x-browser.py"
+    bad_patterns = [
+        "python3 x-post.py",
+        "python3 x-read.py",
+        "python3 x-browser.py",
+    ]
+    for pattern in bad_patterns:
+        assert pattern not in content, (
+            f"README regressed: contains bare '{pattern}' "
+            f"instead of directing to an interpreter where brr is importable"
+        )
