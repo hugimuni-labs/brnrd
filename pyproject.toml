@@ -76,6 +76,14 @@ backend = [
 postgres = [
   "psycopg[binary]>=3.1",
 ]
+# Backs the browser envoy (`envoy_x_browser.py`) — a headed, persistent
+# Chromium profile for X verbs the API forbids. Optional and imported
+# lazily (`_playwright_driver`): most adopters never touch this envoy,
+# and `playwright install` pulls a native browser binary, so it stays out
+# of the project's default dependency set.
+browser = [
+  "playwright>=1.40",
+]
 # `pyyaml` is not a runtime dependency: `scripts/gate.py` reads
 # `.github/workflows/ci.yml` so the local gate cannot drift from CI's
 # own leg list. A hardcoded copy is the bug that script exists to prevent.

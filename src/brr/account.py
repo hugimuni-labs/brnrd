@@ -19,7 +19,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from . import gitops
+from . import envoy_x_browser, gitops
 
 DEFAULT_REPO_LABEL = "local/default"
 HOME_ROOT_LABEL = "home"
@@ -94,6 +94,17 @@ SECURITY_CONFIG_FILENAME = "security.config"
 CLOUD_TOKEN_FILENAME = "cloud.token"
 _CLOUD_TOKEN_RELPATH = f"{ACCOUNT_GATES_PATH}/{CLOUD_TOKEN_FILENAME}"
 
+# The X browser envoy's persistent Chromium profile (``envoy_x_browser.
+# Paths.profile_dir``, installed at ``account/x-browser-profile/`` beside
+# the ``x-browser.py`` shim — see ``examples/envoy/README.md``). It holds
+# live session cookies: leaked, it *is* the account, the same class of
+# secret as the cloud gate's bearer token above, so it gets the same
+# never-tracked treatment rather than riding the home's default
+# commit-everything-as-memory behaviour. Sourced from ``envoy_x_browser.
+# PROFILE_DIRNAME`` rather than a second literal, so the two modules
+# cannot drift apart silently.
+_BROWSER_PROFILE_RELPATH = f"account/{envoy_x_browser.PROFILE_DIRNAME}"
+
 GITIGNORE = f"""\
 /dispatch/inbox/
 /dispatch/queue/
@@ -102,6 +113,7 @@ GITIGNORE = f"""\
 /.brr/
 /{SECURITY_CONFIG_FILENAME}
 /{_CLOUD_TOKEN_RELPATH}
+/{_BROWSER_PROFILE_RELPATH}/
 *.tmp
 """
 
