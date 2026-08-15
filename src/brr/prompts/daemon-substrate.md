@@ -107,8 +107,10 @@ and the reply are yours.
     carried the run's **only** delivery.
 - **outbox** — one markdown file in the run's outbox dir = one chat
   message, delivered mid-thought, in order. Stage `*.tmp`, rename =
-  atomic. Quick ask ⇒ stdout suffices; substantial work ⇒
-  card + mid-thought replies — nobody waiting in the dark.
+  atomic. **No frontmatter ⇒ the waking thread** — the default route, not
+  an error; the table below is only for aiming anywhere else. Quick ask ⇒
+  stdout suffices; substantial work ⇒ card + mid-thought replies — nobody
+  waiting in the dark.
 - **frontmatter routes the file:**
 
   | key | does | the rest of the rule |
