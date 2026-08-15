@@ -217,6 +217,76 @@ def test_a_transient_failure_backs_off_instead_of_retrying_every_poll(tmp_path):
     assert protocol._read_event(event["_path"])["status"] == "done"
 
 
+def test_a_transient_failure_stops_retrying_at_the_ceiling(tmp_path):
+    """The 2026-08-15 flood: backoff alone never gives up on a transient
+    failure, so one event survived 46+ attempts across a daemon restart —
+    each retry re-delivering a copy, since the server forwards the message
+    before it 500s. Past the ceiling, treat it like ``PermanentDeliveryError``.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    ctx = account.resolve_context(
+        repo, {"home.path": str(tmp_path / "home"), "repo.label": "Gurio/brr"},
+    )
+    inbox, responses, event = _event(tmp_path, "short reply", cloud_event_id="ev_1")
+    eid = event["id"]
+    message = message_store.stage(
+        ctx,
+        repo_label="Gurio/brr",
+        run_id="run-1",
+        body="short reply",
+        kind="terminal",
+        target_event=eid,
+        target_gate="cloud",
+    )
+    protocol.attach_message_path(protocol.response_path(responses, eid), message)
+
+    calls = []
+
+    def deliver(_event, _body):
+        calls.append(1)
+        raise RuntimeError("500 Internal Server Error")
+
+    key = ("cloud", eid)
+    for _ in range(runtime._DELIVERY_FAILURE_CEILING):
+        runtime.deliver_stream(inbox, responses, "cloud", deliver, brr_dir=tmp_path)
+        state = runtime._delivery_retry.get(key)
+        if state is not None:
+            attempts, _ = state
+            runtime._delivery_retry[key] = (attempts, 0.0)  # force next tick due
+
+    assert len(calls) == runtime._DELIVERY_FAILURE_CEILING
+    assert protocol._read_event(event["_path"])["status"] == "error"
+    assert key not in runtime._delivery_retry
+
+    stored = message_store.read(message)
+    assert stored["status"] == "undeliverable"
+    assert str(runtime._DELIVERY_FAILURE_CEILING) in stored["reason"]
+
+    # No further attempt: the event is closed, not "done"/"processing".
+    runtime.deliver_stream(inbox, responses, "cloud", deliver, brr_dir=tmp_path)
+    assert len(calls) == runtime._DELIVERY_FAILURE_CEILING
+
+
+def test_a_success_below_the_ceiling_still_resets_the_failure_count(tmp_path):
+    inbox, responses, event = _event(tmp_path, "short reply", cloud_event_id="ev_1")
+    eid = event["id"]
+    key = ("cloud", eid)
+    for _ in range(runtime._DELIVERY_FAILURE_CEILING - 1):
+        runtime._delivery_failed("cloud", eid, now=0.0)
+    runtime._delivery_retry[key] = (
+        runtime._delivery_retry[key][0], 0.0,
+    )  # force the next tick due regardless of wall clock
+    assert runtime._delivery_retry[key][0] == runtime._DELIVERY_FAILURE_CEILING - 1
+
+    runtime.deliver_stream(
+        inbox, responses, "cloud", lambda _e, _b: {"ok": True}, brr_dir=tmp_path
+    )
+
+    assert key not in runtime._delivery_retry
+    assert protocol._read_event(event["_path"])["status"] == "delivered"
+
+
 def test_the_backoff_grows_and_is_capped():
     for attempt in range(1, 12):
         runtime._delivery_failed("cloud", "evt-x", now=0.0)

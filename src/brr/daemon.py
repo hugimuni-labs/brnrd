@@ -5730,7 +5730,19 @@ def _resolve_await_state(
 
     _extend_keepalive(keepalive_path, effective_deadline)
 
-    outcome, which = await_verb.evaluate(armed.get("file"), pending_events)
+    # #1327: exclude whatever was already pending at arm time (the
+    # snapshot `_drain_outbox` took when this wait was staged) — a
+    # `spawn_completed` this run already rendered and stamped `observed_by`
+    # stays `status: pending` until run end (#1146's stamp is not removal),
+    # so without this it would satisfy every tick's `evaluate` for the rest
+    # of the run. The wait resolves on what's new *since arming*, not on a
+    # fact this run already had in hand when it armed.
+    armed_pending_ids = set(armed.get("armed_pending_ids") or ())
+    fresh_events = (
+        [ev for ev in pending_events if str(ev.get("id") or "") not in armed_pending_ids]
+        if armed_pending_ids else pending_events
+    )
+    outcome, which = await_verb.evaluate(armed.get("file"), fresh_events)
     if outcome is None and now >= effective_deadline:
         outcome = "timeout"
         which = None
@@ -8547,6 +8559,41 @@ def _drain_outbox(
                     )
                     _retire_outbox_staging(fpath)
                     continue
+                # #1327: a `spawn_completed` the daemon already rendered to this
+                # run (stamped `observed_by` in `_pending_events_for_agent`)
+                # never flips out of `status: pending` until run end (the
+                # #1146 stamp is not removal) — so it stays in every later
+                # tick's pending set and resolves every subsequent wait
+                # instantly, forever. Snapshot those ids at arm time; the
+                # resolve side excludes exactly this set, so the wait fires
+                # only on what is genuinely new since arming.
+                #
+                # The snapshot is deliberately narrow: **only** a retired
+                # self-parented completion this run has already observed. It is
+                # NOT "everything pending right now". Excluding a live
+                # correspondent's message that happened to be pending at arm
+                # time would make the wait sleep straight through them, and
+                # `prompts/daemon-substrate.md` promises the opposite in as many
+                # words — "any *other* pending event resolves it the same way …
+                # the queue never starves". The wider class (any event pending
+                # before arming) is a separate design call and is not taken here.
+                #
+                # Note the call below is not a pure read: `_pending_events_for_agent`
+                # writes `observed_by`/`observed_at` via `protocol.update_event_meta`
+                # for unobserved self-parented completions. In a live wake the
+                # heartbeat has almost always stamped them already, so this only
+                # ever pulls that write slightly earlier — but it is a write, and
+                # a future reader should not have to discover that.
+                armed_pending = (
+                    _pending_events_for_agent(
+                        inbox_dir, event_id,
+                        strand=_is_strand(task.meta),
+                        account_context=account_context,
+                        repo_label=task.meta.get("repo_label"),
+                        observer_run_id=task.id,
+                    )
+                    if inbox_dir is not None else []
+                )
                 task.meta["await"] = {
                     "file": file_path,
                     "timeout_seconds": timeout_seconds,
@@ -8559,6 +8606,16 @@ def _drain_outbox(
                     "generation": str(time.time_ns()),
                     "resolved": False,
                     "capped": False,
+                    "armed_pending_ids": sorted(
+                        {
+                            str(ev["id"])
+                            for ev in armed_pending
+                            if ev.get("id")
+                            and ev.get("source") == "spawn_completed"
+                            and str(ev.get("spawn_parent_run_id") or "") == task.id
+                            and ev.get("observed_by")
+                        }
+                    ),
                 }
                 promoted += 1
                 if stats is not None:
