@@ -169,6 +169,50 @@ def test_dashboard_repos_api_returns_repo_management_payload():
     assert body["oauth_ready"] is True
 
 
+def test_dashboard_repos_api_carries_the_machines_summary():
+    """design-machines-and-guests.md R1 / #1365 — the `machines` summary
+    additive on this payload, feeding ColdStart's account-level gate.
+
+    A daemon paired with `repo_id is None` (the exact #1365 fixture: a
+    freshly paired machine, no repo enabled yet) must flip `paired` true
+    while `any_enabled_repo` stays false — that's precisely the state the
+    old repo-scoped-only gate couldn't see.
+    """
+    from brnrd.models import Daemon
+
+    client = _client()
+    token = _login(client, login="Gurio")
+    account_id = _account_id(client)
+
+    cold = client.get("/v1/dashboard/repos").json()
+    assert cold["machines"] == {"paired": False, "any_enabled_repo": False}
+
+    with client.app.state.SessionLocal() as db:
+        db.add(
+            Daemon(
+                id="dmn-zero-repo",
+                account_id=account_id,
+                repo_id=None,
+                token_id="tok-zero-repo",
+                daemon_name="iMac",
+                online=True,
+            )
+        )
+        db.commit()
+
+    paired_no_repo = client.get("/v1/dashboard/repos").json()
+    assert paired_no_repo["machines"] == {"paired": True, "any_enabled_repo": False}
+
+    repo_id = _create_repo(client, token, repo="Gurio/brr")
+    with client.app.state.SessionLocal() as db:
+        daemon = db.get(Daemon, "dmn-zero-repo")
+        daemon.repo_id = repo_id
+        db.commit()
+
+    warm = client.get("/v1/dashboard/repos").json()
+    assert warm["machines"] == {"paired": True, "any_enabled_repo": True}
+
+
 def test_dashboard_repos_api_serves_one_pairing_command_to_a_cold_account():
     """The cold-start block's command and a repo's ``setup_command`` are one string.
 

@@ -26,6 +26,7 @@ from ._session import (
     _github_sync_configured,
     _installations,
     _installed_repos,
+    _machine_views,
     _notice_text,
     _repo_views,
     _repos,
@@ -845,6 +846,23 @@ def _installed_repo_out(row: GitHubInstalledRepo, *, connected_names: set[str]) 
     }
 
 
+def _machines_summary_out(db: Session, account_id: str) -> dict[str, Any]:
+    """Account-level machine presence, for ColdStart's gate (#1365).
+
+    A compact summary rather than the full `GET /v1/machines` list — the
+    same account-scoped `_machine_views` query threaded onto this payload
+    instead of a second round-trip, since the cold-start block only ever
+    needs two bits: *has anything paired* and *does any paired machine
+    carry an enabled repo*. The full per-machine listing (name, liveness,
+    which repos) is `GET /v1/machines`'s job, not this summary's.
+    """
+    views = _machine_views(db, account_id)
+    return {
+        "paired": len(views) > 0,
+        "any_enabled_repo": any(view["enabled_repos"] for view in views),
+    }
+
+
 @router.get("/v1/dashboard/repos")
 def dashboard_repos_api(
     request: Request,
@@ -906,6 +924,11 @@ def dashboard_repos_api(
             # no repo row to read the command off. Account-level like
             # `install_url` and `github_app_slug` beside it.
             "pairing_command": pairing_command(PAIR_REPO_PLACEHOLDER),
+            # design-machines-and-guests.md R1 / #1365 — account-level
+            # machine presence, additive: a backend that predates this still
+            # omits the key and the frontend falls back to the pre-fix,
+            # repo-scoped-only gate (see `ColdStart.svelte`'s `machines` prop).
+            "machines": _machines_summary_out(db, account.id),
         }
     )
 
