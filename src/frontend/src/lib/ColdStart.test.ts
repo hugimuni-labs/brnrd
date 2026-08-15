@@ -7,7 +7,7 @@ import { after, test } from 'node:test';
 import { compile } from 'svelte/compiler';
 import { render } from 'svelte/server';
 import { DOCS_URL } from './publicStats.ts';
-import type { ConnectedRepo, GitHubInstallation } from './repos.ts';
+import type { ConnectedRepo, GitHubInstallation, MachinesSummary } from './repos.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const componentPath = join(here, 'ColdStart.svelte');
@@ -19,7 +19,12 @@ const generated = join(here, '.coldStart.generated.mjs');
 async function renderColdStart(
 	repos: ConnectedRepo[] | null,
 	pairCommand: string | null = 'cd <repo>\nbrnrd',
-	installations: GitHubInstallation[] | null = null
+	installations: GitHubInstallation[] | null = null,
+	// #1365: defaults to `null`, same "an older/unwired caller reads as
+	// unknown, not paired" contract the component itself gives the prop —
+	// so every existing call site below still exercises the pre-#1365
+	// repo-scoped-only gate unchanged.
+	machines: MachinesSummary | null = null
 ): Promise<string> {
 	const source = readFileSync(componentPath, 'utf8');
 	const compiled = compile(source, { generate: 'server', runes: true, name: 'ColdStart' });
@@ -34,7 +39,7 @@ async function renderColdStart(
 	writeFileSync(generated, runnable);
 	try {
 		const module = await import(`${generated}?t=${process.pid}`);
-		return render(module.default, { props: { repos, pairCommand, installations } }).body;
+		return render(module.default, { props: { repos, pairCommand, installations, machines } }).body;
 	} finally {
 		rmSync(generated, { force: true });
 	}
@@ -120,6 +125,58 @@ test('the block survives a connected repo until a daemon has ever paired', async
 		html.includes('the guided setup'),
 		'the setup step survives — this is exactly what used to vanish'
 	);
+});
+
+// #1365, the fixture that named this gap: a machine paired at the account
+// level with zero connected repos must not read "nothing is paired yet" —
+// that was the literal screenshot (capabilities board listing the machine
+// directly under this exact copy).
+test('a paired account-level machine with no repos is not told nothing is paired', async () => {
+	const html = await renderColdStart([], undefined, null, {
+		paired: true,
+		any_enabled_repo: false
+	});
+	ok(
+		html.includes('the cold start'),
+		'the block still renders — there is genuinely nothing to show yet'
+	);
+	ok(!html.includes('nothing is paired yet'), 'the account has, in fact, paired');
+	ok(html.includes('machine paired, no repo enabled yet'), 'names the honest intermediate state');
+	ok(html.includes('enable a repo'), 'points at the actual next step, not re-pairing');
+});
+
+// The same gap, but with a connected repo whose own daemon status is
+// `missing` — the repo-scoped signal alone still says "not paired" here,
+// exactly like the classic cold case above; only the account-level
+// `machines.paired` fact tells them apart.
+test('a paired machine with a repo connected but not yet enabled reads the same honest state', async () => {
+	const html = await renderColdStart([repo({ daemon_status: 'missing' })], undefined, null, {
+		paired: true,
+		any_enabled_repo: false
+	});
+	ok(!html.includes('nothing is paired yet'));
+	ok(html.includes('machine paired, no repo enabled yet'));
+});
+
+// Once any repo actually carries a daemon, `daemonEverPaired` alone already
+// clears the block (pre-#1365 behavior) — `machines.paired` being true too
+// must not resurrect either panel.
+test('the block is gone once a repo is actually enabled, machines summary or not', async () => {
+	const html = await renderColdStart([repo({ daemon_status: 'online' })], undefined, null, {
+		paired: true,
+		any_enabled_repo: true
+	});
+	ok(!html.includes('the cold start'));
+	ok(!html.includes('machine paired, no repo enabled yet'));
+});
+
+// An older backend that predates the `machines` field must not regress
+// toward the bug: `undefined`/`null` reads as unknown, never as paired, so
+// this stays the classic cold-start ladder exactly as before #1365.
+test('a backend that omits the machines summary keeps the pre-#1365 ladder', async () => {
+	const html = await renderColdStart([], undefined, null, null);
+	ok(html.includes('nothing is paired yet'));
+	ok(!html.includes('machine paired, no repo enabled yet'));
 });
 
 // Step 01 is unobservable (no wire fact says "the CLI is installed") and

@@ -132,6 +132,17 @@ export interface Capability {
 	frontier: boolean;
 }
 
+// design-machines-and-guests.md R1 / #1365 — account-level machine
+// presence, compact enough to ride `ReposResponse` instead of costing
+// ColdStart a second round-trip to `GET /v1/machines`. `paired` is *any*
+// daemon ever registered on this account, repo or not; `any_enabled_repo`
+// distinguishes "paired, nothing enabled yet" from "paired and working" —
+// the two states the old repo-scoped-only gate collapsed into one.
+export interface MachinesSummary {
+	paired: boolean;
+	any_enabled_repo: boolean;
+}
+
 export interface ReposResponse {
 	generated_at: string;
 	account: RepoAccount;
@@ -156,6 +167,10 @@ export interface ReposResponse {
 	// client/response that predates it. No component reads this yet — see
 	// the `Capability` doc comment above.
 	capabilities?: Capability[];
+	// Additive, optional, same "absent on an older backend" contract as
+	// `capabilities` above — `ColdStart.svelte` falls back to its pre-#1365
+	// repo-scoped-only gate when this is missing.
+	machines?: MachinesSummary;
 }
 
 // #1277a: `pairing_command`/`setup_command` is two lines — a scene-setting
