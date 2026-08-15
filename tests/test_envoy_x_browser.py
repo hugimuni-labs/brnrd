@@ -120,6 +120,10 @@ def test_help_never_creates_a_driver(tmp_path, argv):
     with pytest.raises(SystemExit) as exc:
         envoy_x_browser.run(argv, paths, driver_factory=_refusing_factory)
     assert "Usage:" in str(exc.value)
+    # Must resolve through the -h/--help short-circuit itself, not just
+    # happen to raise a Usage-shaped message via some other path (e.g. the
+    # unknown-verb fallback, which also starts with TOP_USAGE).
+    assert "unknown verb" not in str(exc.value)
 
 
 def test_empty_argv_prints_usage_without_a_driver(tmp_path):
