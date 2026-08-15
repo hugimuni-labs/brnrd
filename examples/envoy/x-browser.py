@@ -14,14 +14,15 @@ convention next to it is also owner-only). ``brr`` and ``playwright`` must
 both be importable from wherever this runs — ``pip install playwright &&
 playwright install chromium`` if the second one isn't there yet; the
 ``check`` verb below reports that error legibly if it's missing rather
-than crashing partway through a launch.
+than crashing partway through a launch. Run this script with an interpreter
+where ``brr`` is importable (usually ``<repo>/.venv/bin/python3``).
 
-    python3 x-browser.py login                       -> one-time human login
-    python3 x-browser.py check                        -> session live? as whom? cap left?
-    python3 x-browser.py read <url>                    -> structured JSON
-    python3 x-browser.py search <query>                -> structured JSON
-    python3 x-browser.py draft <url> --text "<s>"       -> screenshot only, never sends
-    python3 x-browser.py send <url> --text "<s>" --confirm
+    <python-with-brr> x-browser.py login                       -> one-time human login
+    <python-with-brr> x-browser.py check                        -> session live? as whom? cap left?
+    <python-with-brr> x-browser.py read <url>                    -> structured JSON
+    <python-with-brr> x-browser.py search <query>                -> structured JSON
+    <python-with-brr> x-browser.py draft <url> --text "<s>"       -> screenshot only, never sends
+    <python-with-brr> x-browser.py send <url> --text "<s>" --confirm
         -> ships disarmed: also needs BRR_X_BROWSER_SEND=1 in the environment,
            and refuses past the hourly cap
 
@@ -32,7 +33,17 @@ guard in ``brr.envoy_x_browser`` for the two independent brakes on `send`.
 import os
 import sys
 
-from brr import envoy_x_browser
+try:
+    from brr import envoy_x_browser
+except ModuleNotFoundError as exc:
+    raise SystemExit(
+        "x-browser.py needs the brr package: this interpreter cannot import it. "
+        "Run the script with an interpreter that has brr installed, usually:\n"
+        "  <repo>/.venv/bin/python3 x-browser.py […]\n"
+        "or wherever 'python3 -c import\\ brr' works in your environment.\n"
+        "The system 'python3' on the PATH often cannot import brr; "
+        "that is usually the issue, not the package."
+    ) from exc
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
