@@ -2045,10 +2045,20 @@ class TestPromptBuilding:
         # A1/#211 + B5/#216: the delivery-portals block carries the compact
         # next-move rule (four closeout states, manufactured options named
         # as the failure mode) and the post-delivery linger contract (hold
-        # the slot with `await:`/`brnrd portal await` rather than a
-        # hand-rolled poll loop, dispatch-or-explicit-defer ownership for
-        # unrelated pending work). Full contracts live in the portals
-        # manual (pinned in test_docs.py).
+        # the slot with `await:` / `brnrd await` rather than a hand-rolled
+        # poll loop, dispatch-or-explicit-defer ownership for unrelated
+        # pending work). Full contracts live in the portals manual (pinned
+        # in test_docs.py).
+        #
+        # The verb pin moved 2026-08-15. This test used to assert
+        # `brnrd portal await`, which has never been a registered command —
+        # `portal` has only `state` and `facets` (cli.py). So the suite was
+        # holding a prompt that taught a command that does not exist, and
+        # the pin is what kept it there. What the test is *for* is unchanged:
+        # the linger contract must reach the wake. Only the spelling of the
+        # verb was wrong, in the prompt and here.
+        # TestPromptsTeachOnlyLiveGrammar now derives this from the CLI's own
+        # parser instead of from a literal, so the next rename cannot repeat it.
         prompt = build_daemon_prompt(
             "ship it",
             "evt-1",
@@ -2067,7 +2077,7 @@ class TestPromptBuilding:
         assert "Manufactured options are the failure mode" in prompt
         assert "linger" in prompt
         assert "await:" in prompt
-        assert "brnrd portal await" in prompt
+        assert "brnrd await" in prompt
         assert _says(prompt, "strand capacity and quota are healthy")
         assert _says(prompt, "queue never starves")
 
