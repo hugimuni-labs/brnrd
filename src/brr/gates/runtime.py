@@ -396,6 +396,19 @@ def run_loop(
 DELIVERY_BACKOFF_BASE_S = 60.0
 DELIVERY_BACKOFF_CAP_S = 900.0
 
+# Consecutive-failure ceiling for a *transient* delivery. Backoff alone does
+# not bound total cost — measured 2026-08-15: one event survived 46+ attempts
+# across a daemon restart because each retry re-delivered a copy to the
+# correspondent (the server forwards the message before it 500s), so "keep
+# backing off forever" was itself the flood. Past this many consecutive
+# failures the delivery is abandoned exactly like a ``PermanentDeliveryError``
+# — not because a later attempt is provably impossible, but because it has
+# had enough tries. A daemon restart clears ``_delivery_retry`` and re-earns a
+# fresh ceiling; that's fine and deliberate (a restart is a legitimate reason
+# to try again — see the per-process note below), and the durable record of
+# how many times it failed lives in the gate health file either way.
+_DELIVERY_FAILURE_CEILING = 10
+
 # (gate, event id) -> (consecutive failures, monotonic time of next attempt)
 _delivery_retry: dict[tuple[str, str], tuple[int, float]] = {}
 
@@ -407,6 +420,40 @@ class PermanentDeliveryError(Exception):
     structurally required to address the message. :func:`deliver_stream`
     closes the event ``error`` instead of retrying it forever.
     """
+
+
+def _abandon_delivery(
+    source: str,
+    eid: str,
+    event: dict,
+    message_path: Path | None,
+    brr_dir: Path | None,
+    *,
+    log_reason: str,
+    health_error: str,
+    message_reason: str,
+) -> None:
+    """Close an event whose delivery will not be attempted again.
+
+    Shared terminal path for a :class:`PermanentDeliveryError` (this attempt
+    could never have succeeded) and the consecutive-failure ceiling (it
+    might have, but enough of them didn't) — same disposition, different
+    reasons: settle the backoff state, record the failure where a wake can
+    read it, retire the in-flight durable message row to
+    ``message_store.UNDELIVERABLE`` rather than leaving it ``pending``
+    forever, and close the event ``error``.
+    """
+    print(f"[brnrd:{source}] {log_reason}")
+    _delivery_settled(source, eid)
+    record_delivery_health(brr_dir, source, event_id=eid, error=health_error)
+    if message_path:
+        message_store.transition(
+            message_path, message_store.UNDELIVERABLE, reason=message_reason,
+        )
+    try:
+        protocol.set_status(event, "error")
+    except OSError as exc:
+        print(f"[brnrd:{source}] could not close {eid}: {exc}")
 
 
 def _delivery_due(gate: str, eid: str, *, now: float) -> bool:
@@ -519,22 +566,31 @@ def deliver_stream(
             # and retire the durable message row that was in flight, or it
             # sits ``pending`` forever wearing a status nothing will ever
             # read as failed (#undeliverable-means-nobody-took-it).
-            print(f"[brnrd:{source}] delivery impossible for {eid}: {e}")
-            _delivery_settled(source, eid)
-            record_delivery_health(
-                brr_dir, source, event_id=eid, error=f"undeliverable: {e}"
+            _abandon_delivery(
+                source, eid, event, message_path, brr_dir,
+                log_reason=f"delivery impossible for {eid}: {e}",
+                health_error=f"undeliverable: {e}",
+                message_reason=str(e),
             )
-            if message_path:
-                message_store.transition(
-                    message_path, message_store.UNDELIVERABLE, reason=str(e),
-                )
-            try:
-                protocol.set_status(event, "error")
-            except OSError as exc:
-                print(f"[brnrd:{source}] could not close {eid}: {exc}")
             continue
         except Exception as e:  # noqa: BLE001 - one bad event must not stall the rest
             attempts = _delivery_failed(source, eid, now=now)
+            if attempts >= _DELIVERY_FAILURE_CEILING:
+                # Enough tries. Backing off further only stretches the same
+                # flood over a longer clock; treat it like a permanent
+                # failure from here.
+                _abandon_delivery(
+                    source, eid, event, message_path, brr_dir,
+                    log_reason=(
+                        f"delivery ceiling ({_DELIVERY_FAILURE_CEILING}) reached "
+                        f"for {eid} after {attempts} attempts, last error: {e}"
+                    ),
+                    health_error=f"undeliverable after {attempts} attempts: {e}",
+                    message_reason=(
+                        f"delivery failed {attempts} consecutive times: {e}"
+                    ),
+                )
+                continue
             print(
                 f"[brnrd:{source}] delivery error for {eid} "
                 f"(attempt {attempts}): {e}"

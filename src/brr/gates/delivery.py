@@ -185,9 +185,23 @@ class CardUnchanged(Exception):
 
     A ``CardTransport.edit`` raises this when the platform's own
     not-modified check fires; ``update_card`` treats it as a successful
-    no-op rather than re-sending. Any *other* exception from ``edit``
-    means the message is gone, and ``update_card`` falls through to send
-    a replacement.
+    no-op rather than re-sending. See ``CardGone`` for the one *other*
+    exception ``update_card`` treats specially — every remaining exception
+    is a transport hiccup, not proof the message is gone.
+    """
+
+
+class CardGone(Exception):
+    """The platform *confirms* the card message no longer exists.
+
+    A ``CardTransport.edit`` raises this only when the platform positively
+    reports the message is gone (deleted, expired, or — for the cloud
+    transport — a server-mapped 409). ``update_card`` re-sends on this and
+    only this. Before this type existed, *any* edit failure was treated as
+    "message gone" and re-sent: on the night of 2026-08-15 a run of server
+    502s turned every failed edit into a fresh status message, because a
+    transport hiccup and an actually-deleted message rendered identically
+    to the generic ``except Exception`` that used to sit here.
     """
 
 
@@ -205,7 +219,13 @@ class CardTransport(Protocol):
         ...
 
     def edit(self, message_id: int, text: str) -> None:
-        """Edit the card in place; raise ``CardUnchanged`` on a no-op."""
+        """Edit the card in place.
+
+        Raise ``CardUnchanged`` on a no-op, ``CardGone`` when the platform
+        confirms the message no longer exists. Any other exception is a
+        transport hiccup — let it propagate; ``update_card`` keeps the
+        stored message id and retries the edit on the next render.
+        """
         ...
 
 
@@ -222,8 +242,11 @@ def update_card(
     """Send or edit the live progress card for *run_id*, idempotently.
 
     Skips the round-trip when the rendered text matches the last one.
-    Edits the stored message when present, falling back to a fresh send
-    if it has vanished. Transport failures are swallowed — a gate thread
+    Edits the stored message when present; re-sends only when the
+    transport *confirms* it is gone (``CardGone``) — a generic transport
+    failure (5xx, timeout, network blip) keeps the stored message id and
+    retries the same edit on the next render instead of minting a
+    duplicate. Transport failures are otherwise swallowed — a gate thread
     must keep running even if its platform is briefly unreachable.
     """
     entry = runtime.load_run_card(brr_dir, gate, run_id)
@@ -243,8 +266,9 @@ def update_card(
                 # Server-side check agrees the body didn't change; a
                 # successful no-op, not a reason to send a duplicate.
                 pass
-            except Exception:
-                # The message is gone (deleted, expired). Send anew.
+            except CardGone:
+                # The platform confirms the message is actually gone —
+                # the one case that should mint a replacement.
                 message_id = transport.send(text, reply_to=reply_to)
                 if message_id is None:
                     return
@@ -252,6 +276,11 @@ def update_card(
                     brr_dir, gate, run_id,
                     _card_entry(message_id, text, render_tag),
                 )
+                return
+            except Exception:
+                # A transport hiccup, not proof the message is gone. Keep
+                # the stored message_id — the next render retries this
+                # same edit instead of sending a duplicate status message.
                 return
             entry["last_text"] = text
             if render_tag is not None:
