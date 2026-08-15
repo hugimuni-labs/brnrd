@@ -10251,7 +10251,9 @@ def _fire_due_schedules(
     if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
         return
     try:
-        candidates = dominion.resident_dominion_candidates(repo_root, cfg)
+        candidates = dominion.resident_dominion_candidates(
+            repo_root, cfg, account_context=account_context,
+        )
         dom = None
         entries = []
         for candidate in candidates:
