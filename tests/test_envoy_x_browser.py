@@ -331,6 +331,35 @@ def test_check_reports_kill_switch_state_json(tmp_path, capsys):
     assert out["cap"] == envoy_x_browser.DEFAULT_HOURLY_CAP
 
 
+def test_check_names_the_profile_it_asked(tmp_path, capsys):
+    """A logged-out answer must say *which* profile answered.
+
+    The shim resolves its paths from its own directory and more than one
+    copy of it exists, so running the wrong copy finds an empty profile
+    beside itself and reports ``logged_in_as: null`` — identical to a live
+    copy whose session died. Without the directory in the answer the two
+    cases are one case. Asserted against ``paths.profile_dir`` rather than
+    a literal, so a rename of the well-known filename cannot leave this
+    test green over a stale string.
+    """
+    paths = _paths(tmp_path)
+    driver = _FakeDriver(whoami_value=None)
+    envoy_x_browser.run(["check", "--json"], paths, driver_factory=_factory_for(driver))
+    out = json.loads(capsys.readouterr().out)
+    assert out["profile_dir"] == str(paths.profile_dir)
+    assert envoy_x_browser.PROFILE_DIRNAME in out["profile_dir"]
+
+
+def test_check_human_output_names_the_profile_too(tmp_path, capsys):
+    """The plain line carries it as well — a human reading `check` output is
+    exactly the reader who ran the wrong copy."""
+    paths = _paths(tmp_path)
+    driver = _FakeDriver(whoami_value="brnrd_resident")
+    envoy_x_browser.run(["check"], paths, driver_factory=_factory_for(driver))
+    line = capsys.readouterr().out
+    assert str(paths.profile_dir) in line
+
+
 # ── draft: fills, screenshots, never sends ────────────────────────────
 
 
