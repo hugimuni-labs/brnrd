@@ -938,6 +938,57 @@ def test_send_message_chunks_long_body(monkeypatch):
     assert "reply_to_message_id" not in posts[1]
 
 
+def test_send_fresh_message_returns_the_last_chunks_id(monkeypatch):
+    """#1205's fresh-send primitive — no reply target, but a caller needs
+    the platform id back (``POST /v1/daemons/messages``'s whole contract)."""
+    from brnrd.platforms import telegram as tg
+
+    posts: list[dict] = []
+
+    class _Resp:
+        def __init__(self, message_id):
+            self._message_id = message_id
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"ok": True, "result": {"message_id": self._message_id}}
+
+    import itertools
+    ids = itertools.count(101)
+
+    def fake_post(url, json=None, timeout=None):
+        posts.append(json)
+        return _Resp(next(ids))
+
+    monkeypatch.setattr(tg.httpx, "post", fake_post)
+
+    body = "\n".join(f"line {i} " + "x" * 300 for i in range(80))  # well past 4096
+    message_id = tg.send_fresh_message("bot:T", 555, body, topic_id=7)
+
+    assert len(posts) >= 2  # fanned out across messages, same chunking as send_message
+    assert all("reply_to_message_id" not in p for p in posts)  # nothing to thread onto
+    assert all(p.get("message_thread_id") == 7 for p in posts)
+    # the *last* chunk's id — what the correspondent sees last on the screen
+    assert message_id == str(100 + len(posts))
+
+
+def test_send_fresh_message_empty_result_returns_none(monkeypatch):
+    from brnrd.platforms import telegram as tg
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"ok": True, "result": {}}
+
+    monkeypatch.setattr(tg.httpx, "post", lambda url, json=None, timeout=None: _Resp())
+
+    assert tg.send_fresh_message("bot:T", 555, "hi") is None
+
+
 def test_response_is_forwarded_back_to_telegram(env):
     app, client, sends = env
     acc = _account(client)
