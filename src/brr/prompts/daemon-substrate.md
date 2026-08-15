@@ -169,10 +169,13 @@ and the reply are yours.
   Mechanical, before sending: **read the literal last line** — it is the
   menu, or it is the bare state (`done` | `continuing` | `blocked`).
 - **linger** — conversation clearly live ⇒ deliver via outbox, then hold the
-  slot with `await:` (above) rather than a hand-rolled poll loop: arm
-  `await: event` with `timeout:` set to your horizon, then call
-  `brnrd portal await` — `outcome: pending` ⇒ call it again, anything else
-  is the resolution. `.keepalive` extends itself to the deadline.
+  slot with `brnrd await` (the row above) rather than a hand-rolled poll
+  loop: `brnrd await --timeout <your horizon>`, bare — it stages the
+  directive, reports its own arming verdict, and blocks. `outcome: pending`
+  ⇒ call it again **carrying the same `--timeout`**, since each call arms a
+  new directive and a bare re-call silently re-arms at the default (your
+  whole remaining budget). Anything other than `pending` is the resolution.
+  `.keepalive` extends itself to the deadline.
   - a same-thread follow-up resolves the wait as its `event` outcome
     (always armed, whether or not you named it) — fold it in
   - any *other* pending event resolves it the same way — `spawn:` it when
