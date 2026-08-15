@@ -70,6 +70,7 @@ nothing was ever declared.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -85,12 +86,21 @@ _PRODUCE_VALUES = {"attested", "none"}
 #: Every field the declaration frontmatter may carry, beyond the ``cut``
 #: marker itself. A key outside this set is refused by name.
 _KNOWN_KEYS = frozenset({
-    "cut", "asks", "decisions", "produce", "owed", "spend", "next",
+    "cut", "asks", "decisions", "produce", "owed", "spend", "next", "strands",
 })
 
 #: Disposition prefixes that take a free-text tail (``deferred:<where>``,
 #: ``noted:<why>``). ``answered`` is the one disposition with no tail.
 _DISPOSITION_PREFIXES = ("deferred:", "noted:")
+
+#: Closed set of ``strands:`` dispositions (#1197) — a live child this run
+#: dispatched must be left in one of these states, checked as the value's
+#: leading word; the free tail after it carries the reason. Closed because
+#: the whole point is that a machine can read it.
+_STRAND_DISPOSITIONS = ("handoff", "converged", "stopped", "abandoned")
+_STRAND_DISPOSITION_RE = re.compile(
+    r"^(" + "|".join(_STRAND_DISPOSITIONS) + r")\b", re.IGNORECASE
+)
 
 # The declaration is reader-authored and therefore unbounded at the parse
 # layer.  Persistence is deliberately narrower: a declaration either fits
@@ -101,6 +111,7 @@ PERSISTENCE_MAX_ASKS = 64
 PERSISTENCE_MAX_OWED = 64
 PERSISTENCE_MAX_DECISIONS = 64
 PERSISTENCE_MAX_DISSENT = 64
+PERSISTENCE_MAX_STRANDS = 64
 PERSISTENCE_MAX_TEXT_CHARS = 1024
 PERSISTENCE_MAX_JSON_BYTES = 65_536
 
@@ -126,6 +137,15 @@ class OwedRow:
 
 
 @dataclass(frozen=True)
+class StrandDisposition:
+    """One ``strands:`` row: a live child this run dispatched, and how the
+    run leaves it (#1197)."""
+
+    run: str
+    disposition: str
+
+
+@dataclass(frozen=True)
 class CutDeclaration:
     """A parsed, structurally-valid ``cut:`` declaration.
 
@@ -143,6 +163,7 @@ class CutDeclaration:
     owed: tuple[OwedRow, ...] = ()
     spend: str | None = None
     next: str | None = None
+    strands: tuple[StrandDisposition, ...] = ()
 
 
 def _valid_disposition(value: str) -> bool:
@@ -243,6 +264,53 @@ def _parse_owed(raw: Any) -> tuple[bool, tuple[OwedRow, ...], str | None]:
     )
 
 
+def _valid_strand_disposition(value: str) -> bool:
+    return bool(_STRAND_DISPOSITION_RE.match(value.strip()))
+
+
+def _parse_strands(raw: Any) -> tuple[tuple[StrandDisposition, ...], str | None]:
+    if raw in (None, ""):
+        return (), None
+    rows: list[StrandDisposition] = []
+    if isinstance(raw, dict):
+        for run, value in raw.items():
+            run = str(run).strip()
+            if not run:
+                return (), "strands: an empty run key names nothing"
+            if isinstance(value, dict):
+                disposition = str(value.get("disposition") or "").strip()
+            else:
+                disposition = str(value if value is not None else "").strip()
+            if not _valid_strand_disposition(disposition):
+                return (), (
+                    f"strands: {run} has an unrecognised disposition "
+                    f"{disposition!r} — use handoff, converged, stopped, or "
+                    "abandoned"
+                )
+            rows.append(StrandDisposition(run=run, disposition=disposition))
+        return tuple(rows), None
+    if isinstance(raw, (list, tuple)):
+        # Forward-compatible, same rationale as `_parse_asks`: never produced
+        # by `protocol.parse_frontmatter` today, but accepted when a caller
+        # constructs `fm` with a real Python list directly.
+        for item in raw:
+            if not isinstance(item, dict):
+                return (), f"strands: entry {item!r} is not a run/disposition pair"
+            run = str(item.get("run") or "").strip()
+            disposition = str(item.get("disposition") or "").strip()
+            if not run:
+                return (), f"strands: entry {item!r} is missing its run"
+            if not _valid_strand_disposition(disposition):
+                return (), (
+                    f"strands: {run} has an unrecognised disposition "
+                    f"{disposition!r} — use handoff, converged, stopped, or "
+                    "abandoned"
+                )
+            rows.append(StrandDisposition(run=run, disposition=disposition))
+        return tuple(rows), None
+    return (), f"strands: {raw!r} is neither a mapping nor a list of rows"
+
+
 def _parse_decisions(raw: Any) -> tuple[str, ...]:
     """``decisions:`` is reader-facing and never validated — carry whatever
     shape arrived rather than reject a free-text field for structure nobody
@@ -280,7 +348,8 @@ def parse_cut(fm: dict[str, Any]) -> tuple[CutDeclaration | None, str | None]:
     if unknown:
         return None, (
             "cut: unrecognised field(s) " + ", ".join(unknown)
-            + " — known fields are asks, decisions, produce, owed, spend, next"
+            + " — known fields are asks, decisions, produce, owed, spend, "
+            "next, strands"
         )
 
     asks, asks_error = _parse_asks(fm.get("asks"))
@@ -290,6 +359,10 @@ def parse_cut(fm: dict[str, Any]) -> tuple[CutDeclaration | None, str | None]:
     owed_none, owed_rows, owed_error = _parse_owed(fm.get("owed"))
     if owed_error:
         return None, owed_error
+
+    strands, strands_error = _parse_strands(fm.get("strands"))
+    if strands_error:
+        return None, strands_error
 
     produce_raw = fm.get("produce")
     produce: str | None = None
@@ -310,6 +383,7 @@ def parse_cut(fm: dict[str, Any]) -> tuple[CutDeclaration | None, str | None]:
         owed=owed_rows,
         spend=spend,
         next=next_step,
+        strands=strands,
     ), None
 
 
@@ -331,6 +405,7 @@ def durable_declaration(
         ("owed", len(declaration.owed), PERSISTENCE_MAX_OWED),
         ("decisions", len(declaration.decisions), PERSISTENCE_MAX_DECISIONS),
         ("dissent", len(dissent), PERSISTENCE_MAX_DISSENT),
+        ("strands", len(declaration.strands), PERSISTENCE_MAX_STRANDS),
     )
     exceeded = [name for name, count, limit in counts if count > limit]
     if exceeded:
@@ -357,6 +432,10 @@ def durable_declaration(
         }
         for row in declaration.owed
     ]
+    strands = [
+        {"run": row.run, "disposition": row.disposition}
+        for row in declaration.strands
+    ]
     payload: dict[str, Any] = {
         "asks": asks,
         "owed": owed,
@@ -364,12 +443,14 @@ def durable_declaration(
         "spend_declared": declaration.spend,
         "next": declaration.next,
         "dissent": list(dissent),
+        "strands": strands,
     }
     texts = [
         value
         for value in (
             *(field for row in asks for field in row.values()),
             *(field for row in owed for field in row.values()),
+            *(field for row in strands for field in row.values()),
             *payload["decisions"],
             payload["spend_declared"],
             payload["next"],
