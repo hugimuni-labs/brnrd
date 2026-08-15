@@ -71,6 +71,7 @@ __all__ = [
     "_installed_repos",
     "_json_account",
     "_json_body",
+    "_machine_views",
     "_needs_terms",
     "_notice_text",
     "_oauth_redirect_uri",
@@ -258,6 +259,58 @@ def pairing_command(repo_dir: str) -> str:
     construction, which is this function's whole reason to exist server-side.
     """
     return f"cd {repo_dir}\nbrnrd"
+
+
+# design-machines-and-guests.md R1 / #1365 — the account-keyed twin of
+# `_repo_views` below. That function starts from *repos* and asks "which
+# daemon serves this repo"; this one starts from *daemons* and asks "which
+# account owns this machine" — the join `Daemon.account_id` already carries
+# directly (models.py:181-190), where `_repo_views` has to go through
+# `Daemon.repo_id.in_(repo_ids)` because it only ever sees one account's
+# repos at a time.
+#
+# `Daemon.repo_id` is **default-routing metadata, not membership**: every
+# `POST /v1/daemons/register` for an already-known `(account_id,
+# daemon_name)` overwrites it (`daemons.register`) — the same physical
+# machine re-registering against a second repo checkout silently drops the
+# first repo's `repo_id` off this daemon's own row, it doesn't add to a
+# list. There is no schema-level many-repos-per-daemon membership today, so
+# `enabled_repos` is honestly 0-or-1-long: the daemon's *current*
+# default-routing repo, when it names one that still exists, else empty.
+# That "empty" case is exactly #1365's bug fixture — a freshly paired
+# machine with `repo_id is None` — so this function is what lets that
+# machine surface as *paired, no repo enabled* instead of vanishing from
+# every account-level view the way the old repo-scoped-only gate did.
+def _machine_views(db: Session, account_id: str) -> list[dict[str, Any]]:
+    daemons = list(db.execute(select(Daemon).where(Daemon.account_id == account_id)).scalars())
+    repo_ids = {d.repo_id for d in daemons if d.repo_id}
+    repos_by_id: dict[str, Repo] = {}
+    if repo_ids:
+        repos_by_id = {r.id: r for r in db.execute(select(Repo).where(Repo.id.in_(repo_ids))).scalars()}
+    now = datetime.now(timezone.utc)
+    views: list[dict[str, Any]] = []
+    for daemon in daemons:
+        last_seen = _dt(daemon.last_seen_at)
+        # Same predicate as `_repo_views`' `online` and
+        # `capabilities._detect_daemon_live` — one online window, three
+        # module-local copies by deliberate convention (see
+        # `capabilities._DAEMON_ONLINE_AFTER`'s own comment): each caller
+        # would otherwise pull in a dependency shape it doesn't want.
+        online = bool(daemon.online) and last_seen is not None and now - last_seen <= _DAEMON_ONLINE_AFTER
+        repo = repos_by_id.get(daemon.repo_id) if daemon.repo_id else None
+        views.append(
+            {
+                "daemon": daemon,
+                "online": online,
+                "last_seen": last_seen,
+                "enabled_repos": [repo] if repo is not None else [],
+            }
+        )
+    return sorted(
+        views,
+        key=lambda v: (v["online"], v["last_seen"] or datetime.min.replace(tzinfo=timezone.utc)),
+        reverse=True,
+    )
 
 
 def _repo_views(db: Session, repos: list[Repo]) -> list[dict]:

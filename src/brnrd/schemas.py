@@ -162,6 +162,33 @@ class DaemonDeregister(BaseModel):
     daemon_name: str = Field(min_length=1, max_length=128)
 
 
+class MachineRepoOut(BaseModel):
+    """One repo a machine is currently the default-routing daemon for.
+
+    Not a membership record (see ``_session._machine_views``) — a machine
+    that has re-registered against a different repo since carries neither
+    row here for the one it left.
+    """
+
+    repo_id: str
+    repo_full_name: str
+
+
+class MachineOut(BaseModel):
+    """`GET /v1/machines` row — design-machines-and-guests.md R1, #1365."""
+
+    daemon_id: str
+    daemon_name: str
+    online: bool
+    last_seen: datetime | None = None
+    enabled_repos: list[MachineRepoOut] = Field(default_factory=list)
+
+
+class MachinesOut(BaseModel):
+    generated_at: datetime
+    machines: list[MachineOut]
+
+
 class EventOut(BaseModel):
     event_id: str
     seq: int
