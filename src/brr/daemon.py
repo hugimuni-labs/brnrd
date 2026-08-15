@@ -10911,65 +10911,150 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
         status_label = "runner-failed"
     elif contract is not None and contract["mismatch"]:
         if contract["source"] == "declared":
-            # Exact contract, exact violation — indict.
-            status_label = "contract-mismatch"
-            contract_kwargs = {"spawn_contract_mismatch": True}
-            # A report-only contract has no branch clause at all; carrying
-            # `spec_branch: None` would put an empty branch accusation on the
-            # completion event for a commitment nobody made.
-            if contract["spec_branch"]:
-                contract_kwargs["spawn_contract_spec_branch"] = contract["spec_branch"]
-                contract_kwargs["spawn_contract_published_branch"] = (
-                    contract["published_branch"] or ""
-                )
-            if contract["spec_report"]:
-                contract_kwargs["spawn_contract_spec_report"] = contract["spec_report"]
-                contract_kwargs["spawn_contract_report_found"] = bool(
-                    contract["report_found"]
-                )
-            # #1097: name the clause that failed, and only that one. Both
-            # clauses failing still prints both — what stops is a satisfied
-            # clause standing beside a violated one, where the reader cannot
-            # tell which of the two is the accusation.
             branch_ok = bool(contract.get("branch_ok"))
             report_ok = bool(contract.get("report_ok"))
-            failed = (["branch"] if not branch_ok else []) + (
-                ["report"] if not report_ok else []
+            spec_branch = contract["spec_branch"]
+            published = contract["published_branch"]
+
+            # #677: a declared `branch:` is a plan, not an unconditional
+            # publish obligation — a run that never published because its
+            # accepted `cut:` bolt attested nothing needed publishing is
+            # not the same defect as one that swapped tickets. Three
+            # shapes for `published_branch is None`, and only the bolt
+            # distinguishes them:
+            #   A/name_mismatch — published, but not what was declared.
+            #     (`runner_failed` above already owns the "died before it
+            #     could" case B.)
+            #   absolved — nothing published, and the run's own accepted,
+            #     *unannotated* bolt (`task.meta["bolt"]`, stamped
+            #     `daemon.py:8757` on a clean `cut:`) says so. A bounced
+            #     bolt force-accepted at the cap-3 fallback carries
+            #     `annotated > 0` — the daemon's own dissent, not an
+            #     attestation — and must not discharge anything.
+            #   none_unresolved — nothing published, and nothing attests
+            #     why. A real deviation, but "published nothing through
+            #     the lane the daemon owns" is a different accusation
+            #     than "ended on a different branch," so it earns its own
+            #     label rather than borrowing `contract-mismatch`
+            #     (residual defect #1 on the ticket).
+            bolt = task.meta.get("bolt")
+            bolt_clean = (
+                isinstance(bolt, dict)
+                and bolt.get("accepted_at")
+                and int(bolt.get("annotated") or 0) == 0
             )
-            lines = [
-                "", "",
-                f"contract mismatch — {' and '.join(failed) or 'spec'} vs "
-                "published:",
-            ]
-            if not branch_ok:
-                lines.append(f"spec branch:       {contract['spec_branch']}")
-                lines.append(
-                    "published branch:  "
-                    f"{contract['published_branch'] or '(none)'}"
+            if branch_ok:
+                branch_verdict = "ok"
+            elif published is not None:
+                branch_verdict = "name_mismatch"
+            elif bolt_clean:
+                branch_verdict = "absolved"
+            else:
+                branch_verdict = "none_unresolved"
+
+            if branch_verdict == "absolved" and report_ok:
+                # Nothing left to indict: the whole contract discharges as
+                # a substitution the parent should know about, not a
+                # violation. Status and the mismatch flag stay untouched.
+                contract_block = (
+                    "\n\nadvisory — declared branch "
+                    f"`{spec_branch}` was never published, and this run's "
+                    f"own bolt (accepted {bolt.get('accepted_at')}, clean) "
+                    "attests nothing needed publishing: produce as "
+                    "attested, plan revised, not a contract violation."
                 )
-            elif contract["spec_branch"]:
-                lines.append(
-                    f"branch:            {contract['spec_branch']} ✓ as declared"
+            elif branch_verdict == "none_unresolved" and report_ok:
+                # The branch clause is the only failing one, and nothing
+                # explains the absence — real, but not a ticket-swap.
+                status_label = "nothing-published"
+                contract_kwargs = {"spawn_contract_spec_branch": spec_branch}
+                contract_block = (
+                    "\n\nnothing published — declared branch "
+                    f"`{spec_branch}` never received this child's work: it "
+                    "published nothing on its contract branch through the "
+                    "lane the daemon owns (not a different-branch "
+                    "mismatch, and no accepted bolt explains the gap)."
                 )
-            if not report_ok:
-                pr_suffix = f" — PR #{pr_num} shipped, no report file" if pr_num else ""
-                lines.append(
-                    f"spec report:       {contract['spec_report']} "
-                    f"(MISSING){pr_suffix}"
+            else:
+                # Every other indictable shape: a real name mismatch, a
+                # failing report clause (branch in any state), or both —
+                # indict. A discharged branch (`absolved`) still renders
+                # as its advisory sentence here rather than an accusation
+                # even when the *report* clause is what triggers the
+                # indictment: the bolt only ever spoke to the branch/
+                # produce plan, never to a specific declared report path,
+                # so a missing report is judged on its own regardless of
+                # the branch's disposition (#677 open question: yes, a
+                # clean bolt still discharges the branch half when both
+                # clauses fail — the report is a distinct commitment).
+                status_label = "contract-mismatch"
+                contract_kwargs = {"spawn_contract_mismatch": True}
+                # A report-only contract has no branch clause at all; carrying
+                # `spec_branch: None` would put an empty branch accusation on
+                # the completion event for a commitment nobody made.
+                if spec_branch:
+                    contract_kwargs["spawn_contract_spec_branch"] = spec_branch
+                    contract_kwargs["spawn_contract_published_branch"] = (
+                        published or ""
+                    )
+                if contract["spec_report"]:
+                    contract_kwargs["spawn_contract_spec_report"] = contract["spec_report"]
+                    contract_kwargs["spawn_contract_report_found"] = bool(
+                        contract["report_found"]
+                    )
+                # #1097: name the clause that failed, and only that one.
+                # Both clauses failing still prints both — what stops is a
+                # satisfied (or discharged) clause standing beside a
+                # violated one, where the reader cannot tell which of the
+                # two is the accusation.
+                branch_accused = branch_verdict in ("name_mismatch", "none_unresolved")
+                failed = (["branch"] if branch_accused else []) + (
+                    ["report"] if not report_ok else []
                 )
-                # #1136: a strand that spent its whole context window may
-                # still have shipped a PR before running out — `pr_suffix`
-                # above already says so, a true "something's missing"
-                # sentence a parent can act on, rather than one that reads
-                # as if nothing happened at all. The prose-shape note below
-                # is a separate concern (was `spec_report` ever a checkable
-                # path?) and stays regardless of PR status.
-                lines.extend(_unstattable_report_note(contract["spec_report"]))
-            elif contract["spec_report"]:
-                lines.append(
-                    f"report:            {contract['spec_report']} ✓ written"
-                )
-            contract_block = "\n".join(lines)
+                lines = [
+                    "", "",
+                    f"contract mismatch — {' and '.join(failed) or 'spec'} vs "
+                    "published:",
+                ]
+                if branch_verdict == "name_mismatch":
+                    lines.append(f"spec branch:       {spec_branch}")
+                    lines.append(f"published branch:  {published or '(none)'}")
+                elif branch_verdict == "none_unresolved":
+                    lines.append(
+                        f"branch:            {spec_branch} — published "
+                        "nothing on its contract branch through the lane "
+                        "the daemon owns"
+                    )
+                elif branch_verdict == "absolved":
+                    lines.append(
+                        f"branch:            {spec_branch} — never "
+                        f"published, but bolt accepted "
+                        f"{bolt.get('accepted_at')} (clean, produce as "
+                        "attested); not charged"
+                    )
+                elif spec_branch:
+                    lines.append(
+                        f"branch:            {spec_branch} ✓ as declared"
+                    )
+                if not report_ok:
+                    pr_suffix = f" — PR #{pr_num} shipped, no report file" if pr_num else ""
+                    lines.append(
+                        f"spec report:       {contract['spec_report']} "
+                        f"(MISSING){pr_suffix}"
+                    )
+                    # #1136: a strand that spent its whole context window may
+                    # still have shipped a PR before running out — `pr_suffix`
+                    # above already says so, a true "something's missing"
+                    # sentence a parent can act on, rather than one that reads
+                    # as if nothing happened at all. The prose-shape note below
+                    # is a separate concern (was `spec_report` ever a checkable
+                    # path?) and stays regardless of PR status.
+                    lines.extend(_unstattable_report_note(contract["spec_report"]))
+                elif contract["spec_report"]:
+                    lines.append(
+                        f"report:            {contract['spec_report']} ✓ written"
+                    )
+                contract_block = "\n".join(lines)
         else:
             # Fuzzy read (first `brr/<slug>` in prose) — annotate only.
             # Status and the mismatch flag stay untouched: a scanned read

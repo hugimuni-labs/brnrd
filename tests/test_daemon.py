@@ -2769,6 +2769,135 @@ def test_notify_spawn_parent_declared_branch_mismatch_still_indicts(tmp_path):
     assert "status=contract-mismatch" in note["body"]
 
 
+def test_notify_spawn_parent_clean_bolt_discharges_unpublished_branch(tmp_path):
+    """#677: the live 2026-08-15 case — a declared `branch:` never
+    published because the run's own accepted, unannotated `cut:` bolt
+    attested nothing needed publishing (a deliberate no-code-change
+    verdict). That is a substitution the parent should know about, not
+    the ticket-swap violation `contract-mismatch` names: status stays
+    whatever the run finished as, and the event-layer flag must not be
+    set."""
+    inbox = tmp_path / ".brr" / "inbox"
+    task = Run(
+        id="run-child", event_id="evt-child",
+        body="investigate; change nothing unless reproduced",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "spawn_contract_branch": "brr/the-render-that-moved-underneath",
+            "bolt": {"accepted_at": "2026-08-15T21:01:33Z", "annotated": 0},
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert "spawn_contract_mismatch" not in note
+    assert "status=done" in note["body"]
+    assert "contract-mismatch" not in note["body"]
+    assert "advisory" in note["body"]
+    assert "brr/the-render-that-moved-underneath" in note["body"]
+    assert "2026-08-15T21:01:33Z" in note["body"]
+
+
+def test_notify_spawn_parent_bounced_bolt_does_not_discharge(tmp_path):
+    """#677-negative (guard the guard): a bolt force-accepted at the
+    cap-3 bounce fallback carries `annotated > 0` — the daemon's own
+    dissent, not a clean attestation — and must not discharge the branch
+    clause the way an accepted, unannotated bolt does. This is half the
+    guard: without the `annotated == 0` check, a run could dodge the
+    contract check by cutting a bolt the daemon itself disputed. It
+    falls to the same "nothing published, nothing attests why" bucket a
+    run with no bolt at all gets — not silently waved through as
+    `absolved`, and not the ticket-swap `contract-mismatch` label
+    either, since "no bolt" and "a bolt the daemon didn't accept
+    cleanly" are the same evidentiary state: neither one testifies that
+    nothing needed publishing."""
+    inbox = tmp_path / ".brr" / "inbox"
+    task = Run(
+        id="run-child", event_id="evt-child",
+        body="do the thing",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "spawn_contract_branch": "brr/declared-slug",
+            "bolt": {"accepted_at": "2026-08-15T21:01:33Z", "annotated": 2},
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert "spawn_contract_mismatch" not in note
+    assert note.get("spawn_status") == "nothing-published"
+    assert "status=nothing-published" in note["body"]
+    assert "advisory" not in note["body"]
+    assert "contract-mismatch" not in note["body"]
+
+
+def test_notify_spawn_parent_unpublished_with_no_bolt_gets_its_own_label(tmp_path):
+    """#677 residual defect #1: nothing published, and nothing attests
+    why — a real deviation, but not a branch-*name* disagreement. Gets
+    its own status label (not `contract-mismatch`, not the ticket-swap
+    accusation) and wording that says what actually happened."""
+    inbox = tmp_path / ".brr" / "inbox"
+    task = Run(
+        id="run-child", event_id="evt-child",
+        body="do the thing",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "spawn_contract_branch": "brr/declared-slug",
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert "spawn_contract_mismatch" not in note
+    assert note.get("spawn_status") == "nothing-published"
+    assert "status=nothing-published" in note["body"]
+    assert "contract-mismatch" not in note["body"]
+    assert "published nothing on its contract branch" in note["body"]
+    assert "brr/declared-slug" in note["body"]
+
+
+def test_notify_spawn_parent_clean_bolt_discharges_branch_even_when_report_fails(tmp_path):
+    """#677 open decision: when both clauses fail, does a clean bolt
+    still discharge the branch half? Yes — the bolt attests the branch/
+    produce plan, never a specific declared `report:` path, which is an
+    independent, checkable filesystem fact. So the overall status still
+    indicts (the report really is missing), but the branch line reads as
+    the discharge sentence, not a `spec branch:`/`published branch:`
+    accusation pair."""
+    inbox = tmp_path / ".brr" / "inbox"
+    task = Run(
+        id="run-child", event_id="evt-child",
+        body="investigate and write it up",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "spawn_contract_branch": "brr/the-render-that-moved-underneath",
+            "spawn_contract_report": str(tmp_path / "never-written.md"),
+            "bolt": {"accepted_at": "2026-08-15T21:01:33Z", "annotated": 0},
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert note["spawn_contract_mismatch"] is True
+    assert "status=contract-mismatch" in note["body"]
+    assert "never published, but bolt accepted" in note["body"]
+    assert "spec branch:" not in note["body"]
+    assert "published branch:" not in note["body"]
+    assert "MISSING" in note["body"]
+
+
 def test_a_kept_branch_is_not_printed_as_an_accusation(tmp_path):
     """#1097: the perfect worker indicted for its parent's typo.
 
