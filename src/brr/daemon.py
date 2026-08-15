@@ -5991,6 +5991,24 @@ def _write_live_portal_state(
         stats = output_stats or {}
         card_text = (card_state or {}).get("last", "")
         pending_files = _outbox_message_files(outbox_dir)
+        # Oldest-pending age (#1379): free here — ``pending_files`` is
+        # already sorted oldest-mtime-first by ``_outbox_message_files``, so
+        # the first entry (if any) is the oldest staged-but-undrained file
+        # without a second directory scan. ``do.py``'s ``await_verdict``
+        # QUEUED branch surfaces this so "still queued" can say *how long*
+        # instead of reading identically whether the daemon is 2 seconds or
+        # 40 minutes behind — the latter being exactly the poison-file wedge
+        # this age exists to make visible even after #1379's per-file guard
+        # stops it from ever reaching zero throughput.
+        oldest_pending_age_seconds: float | None = None
+        if pending_files and outbox_dir is not None:
+            try:
+                oldest_pending_age_seconds = max(
+                    0.0,
+                    time.time() - (outbox_dir / pending_files[0]).stat().st_mtime,
+                )
+            except OSError:
+                oldest_pending_age_seconds = None
         elapsed = (
             int(time.monotonic() - start_monotonic)
             if start_monotonic is not None else None
@@ -6123,6 +6141,10 @@ def _write_live_portal_state(
                     or stats.get("outbound")
                 ),
                 "pending_outbox_files": pending_files,
+                "oldest_pending_age_seconds": (
+                    round(oldest_pending_age_seconds, 1)
+                    if oldest_pending_age_seconds is not None else None
+                ),
             },
             "delivery": _live_delivery_projection(
                 task, cfg, brr_dir,
@@ -6855,6 +6877,93 @@ def _retire_outbox_staging(path: Path) -> None:
         path.replace(target)
     except OSError:
         pass
+
+
+def _quarantine_poison_outbox_file(path: Path) -> None:
+    """Move a staging file whose processing raised aside, evidence kept (#1379).
+
+    Mirrors ``_retire_outbox_staging``'s accepted-file move, but to its own
+    ``.poisoned/`` sibling rather than ``.processed/``. Both
+    ``_drain_outbox`` and ``_outbox_message_files`` (the ``pending_outbox_files``
+    lister) apply the identical dotfile-prefix exclusion to
+    ``outbox_dir.iterdir()``, so a file living under ``.poisoned/`` is
+    invisible to both the next drain tick and the pending count — it stops
+    being retried every ~10s forever, without silently vanishing: it stays
+    on disk, readable, for whoever investigates the poison. The open
+    alternative (leave it in place for perpetual retry, or delete it
+    outright) is discussed in the accompanying report; this call site is
+    the one place that decision is enacted.
+    """
+    try:
+        target_dir = path.parent / ".poisoned"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / path.name
+        if target.exists():
+            target = target_dir / f"{time.time_ns()}-{path.name}"
+        path.replace(target)
+    except OSError:
+        pass
+
+
+class _OutboxEntryGuard:
+    """Per-file exception boundary for ``_drain_outbox``'s dispatch (#1379).
+
+    ``_drain_outbox``'s docstring has long claimed "errors are swallowed: a
+    drain bug must never break a run" — true only for the sort and the
+    ``read_text`` call; everything past that (``protocol.parse_outbox_message``,
+    ``_queue_spawn_request``, ``_stage_outbound``, ``_deliver_out_of_bound``,
+    ``protocol.write_partial``, ``message_store.transition``,
+    ``conversations.append_artifact``, ``_resolve_event_target``) propagated
+    straight out of the per-file loop into ``_invoke_with_heartbeat``'s
+    blanket ``except Exception: pass``. One poison file didn't just cost
+    itself — it abandoned the *whole tick*: every other staged file that
+    tick, ``_write_live_portal_state`` (the last statement of both
+    ``_emit_heartbeat`` and ``_emit_flush``), and the flush ack all
+    skipped. And because the drain and the lister both sort
+    oldest-mtime-first, the same file wedges every subsequent tick too —
+    identically, forever.
+
+    Used as ``with _OutboxEntryGuard(outbox_dir, fpath): ...`` around each
+    verb branch's *body* — never around a branch's own ``if fm.get(...)``
+    selector, which stays an unwrapped top-level statement of
+    ``_drain_outbox``'s ``for`` loop on purpose:
+    ``test_outbox_routing_keys_cover_every_verb_the_drain_handles`` derives
+    the routing vocabulary by AST-scanning exactly that top level, and
+    nesting a selector under this guard's ``with`` would make it invisible
+    to that scan. A caller whose branch can fall through to shared logic
+    below it (the ``cut:`` branch) checks ``.tripped`` and continues the
+    loop explicitly instead of falling through with a possibly half-built
+    ``fm``/``body``.
+
+    On exception: records what happened to ``notices`` (the channel a
+    resident already re-reads at plan boundaries and before closeout,
+    naming the exception type and the filename) and quarantines the file
+    via ``_quarantine_poison_outbox_file`` — never re-raises.
+    """
+
+    def __init__(self, outbox_dir: Path | None, fpath: Path) -> None:
+        self._outbox_dir = outbox_dir
+        self._fpath = fpath
+        self.tripped = False
+
+    def __enter__(self) -> "_OutboxEntryGuard":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        if exc_type is None:
+            return False
+        self.tripped = True
+        _record_outbox_notice(
+            self._outbox_dir,
+            f"drain error: {exc_type.__name__}: {exc} processing "
+            f"{self._fpath.name} — file quarantined to .poisoned/, tick "
+            "continuing",
+            kind="dropped",
+            lifetime="run",
+            source_file=self._fpath.name,
+        )
+        _quarantine_poison_outbox_file(self._fpath)
+        return True
 
 
 def _stage_outbound(
@@ -8265,149 +8374,165 @@ def _drain_outbox(
         # with no opening fence. The strict parser silently misrouted the
         # latter (leaked selector text, reply on the lead event); see
         # ``protocol.parse_outbox_message``.
-        fm, body = protocol.parse_outbox_message(text)
-        body = body.strip()
+        #
+        # Guarded (#1379): a malformed staging file must cost itself, not
+        # the tick — see ``_OutboxEntryGuard``. ``fm``/``body`` are unset on
+        # a tripped parse, so this one explicitly re-checks and continues
+        # rather than falling into the dispatch below with half state.
+        parse_guard = _OutboxEntryGuard(outbox_dir, fpath)
+        with parse_guard:
+            fm, body = protocol.parse_outbox_message(text)
+            body = body.strip()
+        if parse_guard.tripped:
+            continue
         if _runner_policy_proposal_requested(fm):
-            if _queue_runner_policy_proposal(
-                emit,
-                task,
-                responses_dir,
-                event_id,
-                fm,
-                body,
-                account_context=account_context,
-            ):
-                promoted += 1
-                if stats is not None:
-                    stats["current"] = stats.get("current", 0) + 1
-                    stats["runner_policy"] = stats.get("runner_policy", 0) + 1
-            _retire_outbox_staging(fpath)
+            with _OutboxEntryGuard(outbox_dir, fpath):
+                if _queue_runner_policy_proposal(
+                    emit,
+                    task,
+                    responses_dir,
+                    event_id,
+                    fm,
+                    body,
+                    account_context=account_context,
+                ):
+                    promoted += 1
+                    if stats is not None:
+                        stats["current"] = stats.get("current", 0) + 1
+                        stats["runner_policy"] = stats.get("runner_policy", 0) + 1
+                _retire_outbox_staging(fpath)
             continue
         if _config_change_requested(fm):
-            if _queue_config_change_proposal(
-                emit,
-                task,
-                repo_root,
-                responses_dir,
-                event_id,
-                fm,
-                body,
-                account_context=account_context,
-            ):
-                promoted += 1
-                if stats is not None:
-                    stats["current"] = stats.get("current", 0) + 1
-                    stats["config_change"] = stats.get("config_change", 0) + 1
-            _retire_outbox_staging(fpath)
+            with _OutboxEntryGuard(outbox_dir, fpath):
+                if _queue_config_change_proposal(
+                    emit,
+                    task,
+                    repo_root,
+                    responses_dir,
+                    event_id,
+                    fm,
+                    body,
+                    account_context=account_context,
+                ):
+                    promoted += 1
+                    if stats is not None:
+                        stats["current"] = stats.get("current", 0) + 1
+                        stats["config_change"] = stats.get("config_change", 0) + 1
+                _retire_outbox_staging(fpath)
             continue
         if _truthy(fm.get("respawn")):
-            dispatched = _queue_respawn_request(
-                emit, task, repo_root, inbox_dir, event_id, fm, body, outbox_dir,
-            )
-            if dispatched:
-                promoted += 1
-                message_path, _blocked = _stage_outbound(
-                    task, account_context,
-                    body=body or task.body,
-                    kind="dispatch",
-                    target_gate="respawn",
-                    source_ref=str(fpath),
+            with _OutboxEntryGuard(outbox_dir, fpath):
+                dispatched = _queue_respawn_request(
+                    emit, task, repo_root, inbox_dir, event_id, fm, body, outbox_dir,
                 )
-                if message_path:
-                    message_store.transition(
-                        message_path, message_store.DELIVERED,
-                        gate="dispatch", platform_message_id="respawn-event",
+                if dispatched:
+                    promoted += 1
+                    message_path, _blocked = _stage_outbound(
+                        task, account_context,
+                        body=body or task.body,
+                        kind="dispatch",
+                        target_gate="respawn",
+                        source_ref=str(fpath),
                     )
-                if stats is not None:
-                    stats["respawn"] = stats.get("respawn", 0) + 1
-            _retire_outbox_staging(fpath)
+                    if message_path:
+                        message_store.transition(
+                            message_path, message_store.DELIVERED,
+                            gate="dispatch", platform_message_id="respawn-event",
+                        )
+                    if stats is not None:
+                        stats["respawn"] = stats.get("respawn", 0) + 1
+                _retire_outbox_staging(fpath)
             continue
         if _truthy(fm.get("spawn")):
-            dispatched = _queue_spawn_request(
-                emit, task, inbox_dir, event_id, fm, body, outbox_dir,
-            )
-            if dispatched:
-                promoted += 1
-                message_path, _blocked = _stage_outbound(
-                    task, account_context,
-                    body=body,
-                    kind="dispatch",
-                    target_gate="spawn",
-                    source_ref=str(fpath),
+            with _OutboxEntryGuard(outbox_dir, fpath):
+                dispatched = _queue_spawn_request(
+                    emit, task, inbox_dir, event_id, fm, body, outbox_dir,
                 )
-                if message_path:
-                    message_store.transition(
-                        message_path, message_store.DELIVERED,
-                        gate="dispatch", platform_message_id="spawn-event",
+                if dispatched:
+                    promoted += 1
+                    message_path, _blocked = _stage_outbound(
+                        task, account_context,
+                        body=body,
+                        kind="dispatch",
+                        target_gate="spawn",
+                        source_ref=str(fpath),
                     )
-                if stats is not None:
-                    stats["spawn"] = stats.get("spawn", 0) + 1
-            _retire_outbox_staging(fpath)
+                    if message_path:
+                        message_store.transition(
+                            message_path, message_store.DELIVERED,
+                            gate="dispatch", platform_message_id="spawn-event",
+                        )
+                    if stats is not None:
+                        stats["spawn"] = stats.get("spawn", 0) + 1
+                _retire_outbox_staging(fpath)
             continue
         if str(fm.get("to") or "").strip():
-            handled = _queue_child_message(
-                emit, task, inbox_dir, event_id, fm, body, outbox_dir,
-            )
-            if handled:
-                promoted += 1
-                message_path, _blocked = _stage_outbound(
-                    task, account_context,
-                    body=body,
-                    kind="dispatch",
-                    target_gate="spawn-message",
-                    source_ref=str(fpath),
+            with _OutboxEntryGuard(outbox_dir, fpath):
+                handled = _queue_child_message(
+                    emit, task, inbox_dir, event_id, fm, body, outbox_dir,
                 )
-                if message_path:
-                    message_store.transition(
-                        message_path, message_store.DELIVERED,
-                        gate="dispatch", platform_message_id="spawn-message-event",
+                if handled:
+                    promoted += 1
+                    message_path, _blocked = _stage_outbound(
+                        task, account_context,
+                        body=body,
+                        kind="dispatch",
+                        target_gate="spawn-message",
+                        source_ref=str(fpath),
                     )
-                if stats is not None:
-                    stats["spawn_message"] = stats.get("spawn_message", 0) + 1
-            _retire_outbox_staging(fpath)
+                    if message_path:
+                        message_store.transition(
+                            message_path, message_store.DELIVERED,
+                            gate="dispatch", platform_message_id="spawn-message-event",
+                        )
+                    if stats is not None:
+                        stats["spawn_message"] = stats.get("spawn_message", 0) + 1
+                _retire_outbox_staging(fpath)
             continue
         if str(fm.get("stop") or "").strip():
-            handled = _queue_stop_request(
-                emit, task, inbox_dir, event_id, fm, body, outbox_dir,
-            )
-            if handled:
-                promoted += 1
-                message_path, _blocked = _stage_outbound(
-                    task, account_context,
-                    body=body or f"stop {fm.get('stop')}",
-                    kind="dispatch",
-                    target_gate="stop",
-                    source_ref=str(fpath),
+            with _OutboxEntryGuard(outbox_dir, fpath):
+                handled = _queue_stop_request(
+                    emit, task, inbox_dir, event_id, fm, body, outbox_dir,
                 )
-                if message_path:
-                    message_store.transition(
-                        message_path, message_store.DELIVERED,
-                        gate="dispatch", platform_message_id="stop-request",
+                if handled:
+                    promoted += 1
+                    message_path, _blocked = _stage_outbound(
+                        task, account_context,
+                        body=body or f"stop {fm.get('stop')}",
+                        kind="dispatch",
+                        target_gate="stop",
+                        source_ref=str(fpath),
                     )
-                if stats is not None:
-                    stats["stop"] = stats.get("stop", 0) + 1
-            _retire_outbox_staging(fpath)
+                    if message_path:
+                        message_store.transition(
+                            message_path, message_store.DELIVERED,
+                            gate="dispatch", platform_message_id="stop-request",
+                        )
+                    if stats is not None:
+                        stats["stop"] = stats.get("stop", 0) + 1
+                _retire_outbox_staging(fpath)
             continue
         note_target = str(fm.get("note") or "").strip()
         if note_target:
             # Close-without-speaking (the design's ``noted`` state): retire
             # a pending event deliberately with no outbound message. Same
             # union resolution as ``event:``; refusals land in notices.
-            noted_id = _note_event_closed(
-                task, address_sources, note_target, body, outbox_dir,
-                current_event_id=event_id,
-            )
-            if noted_id:
-                promoted += 1
-                if stats is not None:
-                    stats["note"] = stats.get("note", 0) + 1
-                emit(
-                    "event_noted",
-                    run_id=task.id,
-                    event_id=event_id,
-                    target_event=noted_id,
+            with _OutboxEntryGuard(outbox_dir, fpath):
+                noted_id = _note_event_closed(
+                    task, address_sources, note_target, body, outbox_dir,
+                    current_event_id=event_id,
                 )
-            _retire_outbox_staging(fpath)
+                if noted_id:
+                    promoted += 1
+                    if stats is not None:
+                        stats["note"] = stats.get("note", 0) + 1
+                    emit(
+                        "event_noted",
+                        run_id=task.id,
+                        event_id=event_id,
+                        target_event=noted_id,
+                    )
+                _retire_outbox_staging(fpath)
             continue
         if "await" in fm:
             # A select, not a sleep (#959), with nothing left for the caller
@@ -8425,83 +8550,84 @@ def _drain_outbox(
             # a strand blocked on a subprocess — with only a shell sleep
             # loop, which is the exact boundary-free stretch #959 exists to
             # end.
-            file_path, timeout_seconds, error = await_verb.parse_await(fm)
-            if error:
-                _record_outbox_notice(
-                    outbox_dir, f"await dropped: {error}", kind="dropped",
-                    lifetime="run",
+            with _OutboxEntryGuard(outbox_dir, fpath):
+                file_path, timeout_seconds, error = await_verb.parse_await(fm)
+                if error:
+                    _record_outbox_notice(
+                        outbox_dir, f"await dropped: {error}", kind="dropped",
+                        lifetime="run",
+                    )
+                    _retire_outbox_staging(fpath)
+                    continue
+                # #1327: a `spawn_completed` the daemon already rendered to this
+                # run (stamped `observed_by` in `_pending_events_for_agent`)
+                # never flips out of `status: pending` until run end (the
+                # #1146 stamp is not removal) — so it stays in every later
+                # tick's pending set and resolves every subsequent wait
+                # instantly, forever. Snapshot those ids at arm time; the
+                # resolve side excludes exactly this set, so the wait fires
+                # only on what is genuinely new since arming.
+                #
+                # The snapshot is deliberately narrow: **only** a retired
+                # self-parented completion this run has already observed. It is
+                # NOT "everything pending right now". Excluding a live
+                # correspondent's message that happened to be pending at arm
+                # time would make the wait sleep straight through them, and
+                # `prompts/daemon-substrate.md` promises the opposite in as many
+                # words — "any *other* pending event resolves it the same way …
+                # the queue never starves". The wider class (any event pending
+                # before arming) is a separate design call and is not taken here.
+                #
+                # Note the call below is not a pure read: `_pending_events_for_agent`
+                # writes `observed_by`/`observed_at` via `protocol.update_event_meta`
+                # for unobserved self-parented completions. In a live wake the
+                # heartbeat has almost always stamped them already, so this only
+                # ever pulls that write slightly earlier — but it is a write, and
+                # a future reader should not have to discover that.
+                armed_pending = (
+                    _pending_events_for_agent(
+                        inbox_dir, event_id,
+                        strand=_is_strand(task.meta),
+                        account_context=account_context,
+                        repo_label=task.meta.get("repo_label"),
+                        observer_run_id=task.id,
+                    )
+                    if inbox_dir is not None else []
+                )
+                task.meta["await"] = {
+                    "file": file_path,
+                    "timeout_seconds": timeout_seconds,
+                    "armed_at": time.time(),
+                    # An exact generation stamp, not a timestamp: `armed_at`
+                    # renders to whole seconds, and `brnrd await` re-arms on
+                    # every call — two calls inside one second would otherwise
+                    # be indistinguishable, and the CLI would read the *previous*
+                    # call's sticky-resolved outcome as this call's answer.
+                    "generation": str(time.time_ns()),
+                    "resolved": False,
+                    "capped": False,
+                    "armed_pending_ids": sorted(
+                        {
+                            str(ev["id"])
+                            for ev in armed_pending
+                            if ev.get("id")
+                            and ev.get("source") == "spawn_completed"
+                            and str(ev.get("spawn_parent_run_id") or "") == task.id
+                            and ev.get("observed_by")
+                        }
+                    ),
+                }
+                promoted += 1
+                if stats is not None:
+                    stats["await"] = stats.get("await", 0) + 1
+                emit(
+                    "await_armed",
+                    run_id=task.id,
+                    event_id=event_id,
+                    file=file_path,
+                    timeout_seconds=timeout_seconds,
                 )
                 _retire_outbox_staging(fpath)
-                continue
-            # #1327: a `spawn_completed` the daemon already rendered to this
-            # run (stamped `observed_by` in `_pending_events_for_agent`)
-            # never flips out of `status: pending` until run end (the
-            # #1146 stamp is not removal) — so it stays in every later
-            # tick's pending set and resolves every subsequent wait
-            # instantly, forever. Snapshot those ids at arm time; the
-            # resolve side excludes exactly this set, so the wait fires
-            # only on what is genuinely new since arming.
-            #
-            # The snapshot is deliberately narrow: **only** a retired
-            # self-parented completion this run has already observed. It is
-            # NOT "everything pending right now". Excluding a live
-            # correspondent's message that happened to be pending at arm
-            # time would make the wait sleep straight through them, and
-            # `prompts/daemon-substrate.md` promises the opposite in as many
-            # words — "any *other* pending event resolves it the same way …
-            # the queue never starves". The wider class (any event pending
-            # before arming) is a separate design call and is not taken here.
-            #
-            # Note the call below is not a pure read: `_pending_events_for_agent`
-            # writes `observed_by`/`observed_at` via `protocol.update_event_meta`
-            # for unobserved self-parented completions. In a live wake the
-            # heartbeat has almost always stamped them already, so this only
-            # ever pulls that write slightly earlier — but it is a write, and
-            # a future reader should not have to discover that.
-            armed_pending = (
-                _pending_events_for_agent(
-                    inbox_dir, event_id,
-                    strand=_is_strand(task.meta),
-                    account_context=account_context,
-                    repo_label=task.meta.get("repo_label"),
-                    observer_run_id=task.id,
-                )
-                if inbox_dir is not None else []
-            )
-            task.meta["await"] = {
-                "file": file_path,
-                "timeout_seconds": timeout_seconds,
-                "armed_at": time.time(),
-                # An exact generation stamp, not a timestamp: `armed_at`
-                # renders to whole seconds, and `brnrd await` re-arms on
-                # every call — two calls inside one second would otherwise
-                # be indistinguishable, and the CLI would read the *previous*
-                # call's sticky-resolved outcome as this call's answer.
-                "generation": str(time.time_ns()),
-                "resolved": False,
-                "capped": False,
-                "armed_pending_ids": sorted(
-                    {
-                        str(ev["id"])
-                        for ev in armed_pending
-                        if ev.get("id")
-                        and ev.get("source") == "spawn_completed"
-                        and str(ev.get("spawn_parent_run_id") or "") == task.id
-                        and ev.get("observed_by")
-                    }
-                ),
-            }
-            promoted += 1
-            if stats is not None:
-                stats["await"] = stats.get("await", 0) + 1
-            emit(
-                "await_armed",
-                run_id=task.id,
-                event_id=event_id,
-                file=file_path,
-                timeout_seconds=timeout_seconds,
-            )
-            _retire_outbox_staging(fpath)
             continue
         if "cut" in fm:
             # The bolt (kb/design-the-bolt.md): a run's completion,
@@ -8515,460 +8641,477 @@ def _drain_outbox(
             # in ``asks`` itself — dispositions are recorded intent;
             # ``note:``/``event:`` remain the only verbs that actually
             # retire or reply to an event.
-            declaration, parse_error = cut_verb.parse_cut(fm)
-            if parse_error:
-                _record_outbox_notice(
-                    outbox_dir, f"cut dropped: {parse_error}",
-                    kind="dropped", lifetime="run", source_file=fpath.name,
-                )
-                _retire_outbox_staging(fpath)
-                continue
-            pending_events = (
-                _pending_events_for_agent(
-                    inbox_dir, event_id,
-                    strand=(
-                        _is_strand(task.meta) if hasattr(task, "meta") else False
-                    ),
-                    account_context=account_context,
-                    repo_label=(
-                        task.meta.get("repo_label")
-                        if hasattr(task, "meta") else None
-                    ),
-                    observer_run_id=task.id,
-                )
-                if inbox_dir is not None else []
-            )
-            mismatches = _cut_mismatches(
-                task, declaration,
-                pending_events=pending_events,
-                repo_root=repo_root,
-                outbox_dir=outbox_dir,
-                reply_text=body,
-            )
-            if (
-                declaration == cut_verb.CutDeclaration()
-                and _declaration_shaped_cut_body(body)
-            ):
-                mismatches.insert(
-                    0,
-                    "declaration-shaped body — staging casualty, not a woven reply",
-                )
-            if mismatches:
-                bounces_so_far = int(
-                    (task.meta.get("cut_bounces") or 0)
-                    if hasattr(task, "meta") else 0
-                )
-                if bounces_so_far + 1 < _CUT_BOUNCE_CAP:
-                    if hasattr(task, "meta"):
-                        task.meta["cut_bounces"] = bounces_so_far + 1
+            #
+            # Guarded (#1379), but this branch can fall through (no
+            # `continue`) into the shared gate/event tail below — so unlike
+            # every other branch here, a tripped guard must `continue`
+            # explicitly rather than let a half-built `declaration`/`body`
+            # fall into that shared logic.
+            cut_guard = _OutboxEntryGuard(outbox_dir, fpath)
+            with cut_guard:
+                declaration, parse_error = cut_verb.parse_cut(fm)
+                if parse_error:
                     _record_outbox_notice(
-                        outbox_dir,
-                        "cut bounced: " + " · ".join(mismatches),
-                        kind="refused", lifetime="run", source_file=fpath.name,
+                        outbox_dir, f"cut dropped: {parse_error}",
+                        kind="dropped", lifetime="run", source_file=fpath.name,
                     )
                     _retire_outbox_staging(fpath)
                     continue
-                # Cap reached: accept anyway rather than hold the run
-                # hostage — a guard may only assert what an artifact
-                # proves, and remedy severity matches signal confidence.
-                if hasattr(task, "meta"):
-                    task.meta["cut_bounces"] = bounces_so_far + 1
-            annotated = len(mismatches)
-            accepted_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            if hasattr(task, "meta"):
-                task.meta["bolt"] = {
-                    "accepted_at": accepted_at,
-                    "annotated": annotated,
-                    **cut_verb.durable_declaration(
-                        declaration,
-                        dissent=mismatches if annotated else (),
-                    ),
-                }
-            if stats is not None:
-                stats["cut"] = stats.get("cut", 0) + 1
-            emit(
-                "cut_accepted",
-                run_id=task.id,
-                event_id=event_id,
-                annotated=annotated,
-            )
-            if annotated:
-                # Machine-spoken, never the resident's voice (the design's
-                # own rule) — a trailing block the daemon appends, never
-                # folded into the woven body it did not write.
-                plural = "s" if annotated != 1 else ""
-                body = (
-                    (body.rstrip("\n") + "\n\n" if body.strip() else "")
-                    + "---\n"
-                    + f"daemon: {annotated} check{plural} unresolved — "
-                    + " · ".join(mismatches)
+                pending_events = (
+                    _pending_events_for_agent(
+                        inbox_dir, event_id,
+                        strand=(
+                            _is_strand(task.meta) if hasattr(task, "meta") else False
+                        ),
+                        account_context=account_context,
+                        repo_label=(
+                            task.meta.get("repo_label")
+                            if hasattr(task, "meta") else None
+                        ),
+                        observer_run_id=task.id,
+                    )
+                    if inbox_dir is not None else []
                 )
-            # Deliver on the current event through the existing `event:`
-            # lane — the verified lane until #1205's fresh-send primitive
-            # exists (design doc §The porcelain). Falling through (no
-            # `continue`) reuses the general reply block below verbatim —
-            # its cross-inbox/redirect/stats machinery, unduplicated.
-            # Force-address the current event regardless of what the
-            # declaration file happened to also carry.
-            fm.pop("event", None)
-            fm.pop("gate", None)
+                mismatches = _cut_mismatches(
+                    task, declaration,
+                    pending_events=pending_events,
+                    repo_root=repo_root,
+                    outbox_dir=outbox_dir,
+                    reply_text=body,
+                )
+                if (
+                    declaration == cut_verb.CutDeclaration()
+                    and _declaration_shaped_cut_body(body)
+                ):
+                    mismatches.insert(
+                        0,
+                        "declaration-shaped body — staging casualty, not a woven reply",
+                    )
+                if mismatches:
+                    bounces_so_far = int(
+                        (task.meta.get("cut_bounces") or 0)
+                        if hasattr(task, "meta") else 0
+                    )
+                    if bounces_so_far + 1 < _CUT_BOUNCE_CAP:
+                        if hasattr(task, "meta"):
+                            task.meta["cut_bounces"] = bounces_so_far + 1
+                        _record_outbox_notice(
+                            outbox_dir,
+                            "cut bounced: " + " · ".join(mismatches),
+                            kind="refused", lifetime="run", source_file=fpath.name,
+                        )
+                        _retire_outbox_staging(fpath)
+                        continue
+                    # Cap reached: accept anyway rather than hold the run
+                    # hostage — a guard may only assert what an artifact
+                    # proves, and remedy severity matches signal confidence.
+                    if hasattr(task, "meta"):
+                        task.meta["cut_bounces"] = bounces_so_far + 1
+                annotated = len(mismatches)
+                accepted_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                if hasattr(task, "meta"):
+                    task.meta["bolt"] = {
+                        "accepted_at": accepted_at,
+                        "annotated": annotated,
+                        **cut_verb.durable_declaration(
+                            declaration,
+                            dissent=mismatches if annotated else (),
+                        ),
+                    }
+                if stats is not None:
+                    stats["cut"] = stats.get("cut", 0) + 1
+                emit(
+                    "cut_accepted",
+                    run_id=task.id,
+                    event_id=event_id,
+                    annotated=annotated,
+                )
+                if annotated:
+                    # Machine-spoken, never the resident's voice (the design's
+                    # own rule) — a trailing block the daemon appends, never
+                    # folded into the woven body it did not write.
+                    plural = "s" if annotated != 1 else ""
+                    body = (
+                        (body.rstrip("\n") + "\n\n" if body.strip() else "")
+                        + "---\n"
+                        + f"daemon: {annotated} check{plural} unresolved — "
+                        + " · ".join(mismatches)
+                    )
+                # Deliver on the current event through the existing `event:`
+                # lane — the verified lane until #1205's fresh-send primitive
+                # exists (design doc §The porcelain). Falling through (no
+                # `continue`) reuses the general reply block below verbatim —
+                # its cross-inbox/redirect/stats machinery, unduplicated.
+                # Force-address the current event regardless of what the
+                # declaration file happened to also carry.
+                fm.pop("event", None)
+                fm.pop("gate", None)
+            if cut_guard.tripped:
+                continue
         gate = str(fm.get("gate") or "").strip()
         if gate:
             # Gate-addressed: an agent-initiated message to a destination
             # with no waiting event (a scheduled ping, an out-of-bound
             # note). Synthesize an already-`done` event the gate delivers
             # and cleans up; it never wakes a thought.
-            gate_available = _gate_can_deliver(emit.brr_dir, gate)
-            message_path, blocked = _stage_outbound(
-                task,
-                account_context,
-                body=body,
-                kind="outbound",
-                target_gate=gate,
-                target_thread=str(fm.get("thread") or ""),
-                source_ref=str(fpath),
-                status=(
-                    message_store.PENDING
-                    if gate_available else message_store.UNDELIVERABLE
-                ),
-                reason=(
-                    "" if gate_available
-                    else f"gate {gate!r} is not deliverable on this account"
-                ),
-                outbox_dir=outbox_dir,
-            )
-            if blocked:
+            with _OutboxEntryGuard(outbox_dir, fpath):
+                gate_available = _gate_can_deliver(emit.brr_dir, gate)
+                message_path, blocked = _stage_outbound(
+                    task,
+                    account_context,
+                    body=body,
+                    kind="outbound",
+                    target_gate=gate,
+                    target_thread=str(fm.get("thread") or ""),
+                    source_ref=str(fpath),
+                    status=(
+                        message_store.PENDING
+                        if gate_available else message_store.UNDELIVERABLE
+                    ),
+                    reason=(
+                        "" if gate_available
+                        else f"gate {gate!r} is not deliverable on this account"
+                    ),
+                    outbox_dir=outbox_dir,
+                )
+                if blocked:
+                    _retire_outbox_staging(fpath)
+                    continue
+                if _deliver_out_of_bound(
+                    emit, task, responses_dir, inbox_dir, event_id, gate, fm, body,
+                    outbox_dir, message_path=message_path,
+                ):
+                    promoted += 1
+                    if stats is not None:
+                        stats["outbound"] = stats.get("outbound", 0) + 1
+                        stats["delivered"] = stats.get("delivered", 0) + 1
                 _retire_outbox_staging(fpath)
-                continue
-            if _deliver_out_of_bound(
-                emit, task, responses_dir, inbox_dir, event_id, gate, fm, body,
-                outbox_dir, message_path=message_path,
-            ):
-                promoted += 1
-                if stats is not None:
-                    stats["outbound"] = stats.get("outbound", 0) + 1
-                    stats["delivered"] = stats.get("delivered", 0) + 1
-            _retire_outbox_staging(fpath)
             continue
         raw_target = str(fm.get("event") or "").strip()
         raw_target = raw_target or event_id
-        # Short-id addressing (#906 fast-follow): the letter chrome renders
-        # a shortened id (``evt-…8jwi``), and the resident's reply naturally
-        # reconstructs that same short form — including for a self-reply,
-        # where the mismatch used to misfire ``cross`` and bounce the reply
-        # as "not pending". Resolve before computing ``cross`` so a short
-        # form of *this* event or another pending one both land correctly.
-        # Resolution spans the whole inbox union (#936) — a telegram-woken
-        # run can close a cloud letter and vice versa — and an ambiguous
-        # short id (shared tail across pending events, within or across
-        # inboxes) is refused, never guessed.
-        resolved_event, target_responses, ambiguous = _resolve_event_target(
-            address_sources, raw_target,
-        )
-        if ambiguous:
-            candidates = ", ".join(
-                hooks_mod._short_event_id(ev.get("id")) for ev in ambiguous
+        # The unconditional `event:` reply tail (#1379) — no explicit
+        # `continue` needed after the `with`: this is the last thing the
+        # loop does with this `fpath`, success or quarantined alike, so
+        # falling out of the block already lands back at `for fpath in
+        # entries:`.
+        with _OutboxEntryGuard(outbox_dir, fpath):
+            # Short-id addressing (#906 fast-follow): the letter chrome renders
+            # a shortened id (``evt-…8jwi``), and the resident's reply naturally
+            # reconstructs that same short form — including for a self-reply,
+            # where the mismatch used to misfire ``cross`` and bounce the reply
+            # as "not pending". Resolve before computing ``cross`` so a short
+            # form of *this* event or another pending one both land correctly.
+            # Resolution spans the whole inbox union (#936) — a telegram-woken
+            # run can close a cloud letter and vice versa — and an ambiguous
+            # short id (shared tail across pending events, within or across
+            # inboxes) is refused, never guessed.
+            resolved_event, target_responses, ambiguous = _resolve_event_target(
+                address_sources, raw_target,
             )
-            _record_outbox_notice(
-                outbox_dir,
-                f"reply dropped: event {raw_target} is ambiguous — matches "
-                f"{len(ambiguous)} pending events ({candidates}); address "
-                "the full id — the message was NOT delivered",
-                # Text says "dropped"; this is the ambiguous-target
-                # refusal, same shape as `_note_event_closed`'s.
-                kind="refused",
-                lifetime="run",
+            if ambiguous:
+                candidates = ", ".join(
+                    hooks_mod._short_event_id(ev.get("id")) for ev in ambiguous
+                )
+                _record_outbox_notice(
+                    outbox_dir,
+                    f"reply dropped: event {raw_target} is ambiguous — matches "
+                    f"{len(ambiguous)} pending events ({candidates}); address "
+                    "the full id — the message was NOT delivered",
+                    # Text says "dropped"; this is the ambiguous-target
+                    # refusal, same shape as `_note_event_closed`'s.
+                    kind="refused",
+                    lifetime="run",
+                )
+                _stage_outbound(
+                    task,
+                    account_context,
+                    body=body,
+                    kind="interim",
+                    target_event=raw_target,
+                    source_ref=str(fpath),
+                    status=message_store.UNDELIVERABLE,
+                    reason=f"event {raw_target} is ambiguous ({candidates})",
+                )
+                _retire_outbox_staging(fpath)
+                continue
+            if (
+                resolved_event is not None
+                # ``getattr``: this is the hot path every reply drain walks, and
+                # an AttributeError here would break replies wholesale. A record
+                # without ``meta`` is not a strand.
+                and _is_strand(getattr(task, "meta", None))
+                and not _strand_may_address(resolved_event, event_id)
+            ):
+                # The mail-reading hole, closed. Inbound isolation is enforced
+                # on the read side (`_pending_events_for_agent`); this is the
+                # same boundary on the write side. `gate:` is deliberately NOT
+                # guarded — a strand may speak to a human whenever the work
+                # demands it — but it may not *answer another thread's letter*,
+                # which would retire someone else's pending event under the
+                # strand's hand and land in a conversation it cannot even read.
+                short = hooks_mod._short_event_id(resolved_event.get("id"))
+                _record_outbox_notice(
+                    outbox_dir,
+                    f"reply refused: event {short} belongs to another thread — a "
+                    "strand-stack run may only answer its own waking event or a "
+                    "parent's `to:` steer. To reach a human directly, use "
+                    "`gate: <name>`; to report back, your terminal stream is "
+                    "already the return value your dispatcher collects. The "
+                    "message was NOT delivered.",
+                    kind="refused",
+                    lifetime="run",
+                )
+                _stage_outbound(
+                    task,
+                    account_context,
+                    body=body,
+                    kind="interim",
+                    target_event=raw_target,
+                    source_ref=str(fpath),
+                    status=message_store.UNDELIVERABLE,
+                    reason=(
+                        f"event {short} is not addressable by a strand-stack run"
+                    ),
+                )
+                _retire_outbox_staging(fpath)
+                continue
+            target = (
+                str(resolved_event.get("id") or "") if resolved_event else raw_target
             )
-            _stage_outbound(
-                task,
-                account_context,
-                body=body,
-                kind="interim",
-                target_event=raw_target,
-                source_ref=str(fpath),
-                status=message_store.UNDELIVERABLE,
-                reason=f"event {raw_target} is ambiguous ({candidates})",
+            cross = target != event_id
+            target_event = resolved_event if cross else None
+            # A cross-inbox target's partials must land in the responses dir
+            # its own delivery loop reads (the one paired with its inbox), or
+            # the reply would sit in a queue nobody polls.
+            target_responses_dir = (
+                target_responses
+                if cross and target_event is not None and target_responses is not None
+                else responses_dir
             )
-            _retire_outbox_staging(fpath)
-            continue
-        if (
-            resolved_event is not None
-            # ``getattr``: this is the hot path every reply drain walks, and
-            # an AttributeError here would break replies wholesale. A record
-            # without ``meta`` is not a strand.
-            and _is_strand(getattr(task, "meta", None))
-            and not _strand_may_address(resolved_event, event_id)
-        ):
-            # The mail-reading hole, closed. Inbound isolation is enforced
-            # on the read side (`_pending_events_for_agent`); this is the
-            # same boundary on the write side. `gate:` is deliberately NOT
-            # guarded — a strand may speak to a human whenever the work
-            # demands it — but it may not *answer another thread's letter*,
-            # which would retire someone else's pending event under the
-            # strand's hand and land in a conversation it cannot even read.
-            short = hooks_mod._short_event_id(resolved_event.get("id"))
-            _record_outbox_notice(
-                outbox_dir,
-                f"reply refused: event {short} belongs to another thread — a "
-                "strand-stack run may only answer its own waking event or a "
-                "parent's `to:` steer. To reach a human directly, use "
-                "`gate: <name>`; to report back, your terminal stream is "
-                "already the return value your dispatcher collects. The "
-                "message was NOT delivered.",
-                kind="refused",
-                lifetime="run",
+            if cross and target_event is None:
+                # Unknown or non-pending target — don't deliver to the wrong
+                # thread; drop with a console note that names the actual cause
+                # (#936: "already handled, or the id is wrong" hid a third
+                # cause, the wrong inbox — now impossible, and the remaining
+                # two are stated apart).
+                cause = _event_refusal_cause(address_sources, raw_target, target)
+                _record_outbox_notice(
+                    outbox_dir,
+                    f"reply dropped: {cause} — the message was NOT delivered",
+                    kind="refused",
+                    lifetime="run",
+                )
+                _stage_outbound(
+                    task,
+                    account_context,
+                    body=body,
+                    kind="interim",
+                    target_event=target,
+                    source_ref=str(fpath),
+                    status=message_store.UNDELIVERABLE,
+                    reason=cause,
+                )
+                _retire_outbox_staging(fpath)
+                continue
+            target_source = str(
+                (target_event or {}).get("source") or getattr(task, "source", "")
             )
-            _stage_outbound(
-                task,
-                account_context,
-                body=body,
-                kind="interim",
-                target_event=raw_target,
-                source_ref=str(fpath),
-                status=message_store.UNDELIVERABLE,
-                reason=(
-                    f"event {short} is not addressable by a strand-stack run"
-                ),
+            own_source = str(getattr(task, "source", "") or "")
+            redirected = False
+            if (
+                cross
+                and target_event is not None
+                and target_source
+                and target_source != own_source
+                and _gate_owns_source(target_source)
+                and not _gate_can_deliver(emit.brr_dir, target_source)
+            ):
+                # Cross-gate, not reachable from this run (#578): a real gate
+                # owns the target event, but it's neither this run's own gate
+                # nor configured/running here — staging a reply for it would
+                # sit ``pending`` in a store nobody polls. Record the foreign
+                # target as explicitly undeliverable, retire it exactly like
+                # any other cross reply, and redirect the body onto this run's
+                # own live gate instead, prefixed with its origin, so the
+                # answer still reaches someone rather than nobody.
+                _stage_outbound(
+                    task,
+                    account_context,
+                    body=body,
+                    kind="interim",
+                    target_event=target,
+                    target_gate=target_source,
+                    target_thread=str(target_event.get("conversation_key") or ""),
+                    source_ref=str(fpath),
+                    status=message_store.UNDELIVERABLE,
+                    reason=(
+                        f"gate {target_source!r} is not reachable from this run "
+                        "— redirected to the run's own gate"
+                    ),
+                )
+                _set_event_status_if_present(target_event, "done")
+                _record_outbox_notice(
+                    outbox_dir,
+                    f"reply redirected: event {target} is owned by gate "
+                    f"{target_source!r}, not reachable from this run — delivered "
+                    "on this run's own gate instead, prefixed with its origin",
+                    # Delivered, and *not where it was addressed*. Content ✓,
+                    # lifecycle ✓, addressing ✗ — and addressing is the one of
+                    # the three the resident is told to check `notices` for. A
+                    # run that believes its answer reached the asker, when it
+                    # reached a different lane, has an unanswered correspondent
+                    # and possibly a reader who should not have had the text.
+                    # Counts, therefore, and says which failed.
+                    kind="redirected",
+                    lifetime="run",
+                )
+                summary = _short_event_summary(target_event)
+                origin_note = (
+                    f"re: {summary} — originally on {target_source}\n\n"
+                    if summary else f"re: an event on {target_source}\n\n"
+                )
+                body = origin_note + body
+                target = event_id
+                cross = False
+                target_event = None
+                target_responses_dir = responses_dir
+                target_source = own_source
+                redirected = True
+            # Interim replies ride the target event's own gate. Dispatch-tree
+            # sources (spawn, spawn_completed, dispatch_message) have no gate and
+            # no collector for interims — only a strand's *terminal* report is
+            # collected — so a partial written here would orphan and the record
+            # would sit pending forever. Say so at staging time instead — but
+            # only about a source we can actually see: an absent one is unknown,
+            # not impossible.
+            deliverable = not target_source or _gate_owns_source(target_source)
+            undeliverable_reason = (
+                f"no gate owns {target_source or 'unknown'} events; route via "
+                "gate:<name> if a person must read it"
             )
-            _retire_outbox_staging(fpath)
-            continue
-        target = (
-            str(resolved_event.get("id") or "") if resolved_event else raw_target
-        )
-        cross = target != event_id
-        target_event = resolved_event if cross else None
-        # A cross-inbox target's partials must land in the responses dir
-        # its own delivery loop reads (the one paired with its inbox), or
-        # the reply would sit in a queue nobody polls.
-        target_responses_dir = (
-            target_responses
-            if cross and target_event is not None and target_responses is not None
-            else responses_dir
-        )
-        if cross and target_event is None:
-            # Unknown or non-pending target — don't deliver to the wrong
-            # thread; drop with a console note that names the actual cause
-            # (#936: "already handled, or the id is wrong" hid a third
-            # cause, the wrong inbox — now impossible, and the remaining
-            # two are stated apart).
-            cause = _event_refusal_cause(address_sources, raw_target, target)
-            _record_outbox_notice(
-                outbox_dir,
-                f"reply dropped: {cause} — the message was NOT delivered",
-                kind="refused",
-                lifetime="run",
-            )
-            _stage_outbound(
-                task,
-                account_context,
-                body=body,
-                kind="interim",
-                target_event=target,
-                source_ref=str(fpath),
-                status=message_store.UNDELIVERABLE,
-                reason=cause,
-            )
-            _retire_outbox_staging(fpath)
-            continue
-        target_source = str(
-            (target_event or {}).get("source") or getattr(task, "source", "")
-        )
-        own_source = str(getattr(task, "source", "") or "")
-        redirected = False
-        if (
-            cross
-            and target_event is not None
-            and target_source
-            and target_source != own_source
-            and _gate_owns_source(target_source)
-            and not _gate_can_deliver(emit.brr_dir, target_source)
-        ):
-            # Cross-gate, not reachable from this run (#578): a real gate
-            # owns the target event, but it's neither this run's own gate
-            # nor configured/running here — staging a reply for it would
-            # sit ``pending`` in a store nobody polls. Record the foreign
-            # target as explicitly undeliverable, retire it exactly like
-            # any other cross reply, and redirect the body onto this run's
-            # own live gate instead, prefixed with its origin, so the
-            # answer still reaches someone rather than nobody.
-            _stage_outbound(
+            message_path, blocked = _stage_outbound(
                 task,
                 account_context,
                 body=body,
                 kind="interim",
                 target_event=target,
                 target_gate=target_source,
-                target_thread=str(target_event.get("conversation_key") or ""),
-                source_ref=str(fpath),
-                status=message_store.UNDELIVERABLE,
+                target_thread=str(
+                    (target_event or {}).get("conversation_key")
+                    or getattr(task, "conversation_key", "")
+                ),
+                # A redirect already staged one durable row for the foreign
+                # target above (``source_ref=str(fpath)``); this second row is
+                # the redirected delivery itself and needs its own identity, or
+                # ``stage``'s idempotency-by-source_ref would just hand back
+                # that first (undeliverable) row instead of creating this one.
+                source_ref=str(fpath) + ("#redirect" if redirected else ""),
+                status=(
+                    message_store.PENDING if deliverable
+                    else message_store.UNDELIVERABLE
+                ),
                 reason=(
-                    f"gate {target_source!r} is not reachable from this run "
-                    "— redirected to the run's own gate"
+                    "" if deliverable else
+                    undeliverable_reason
                 ),
+                outbox_dir=outbox_dir,
             )
-            _set_event_status_if_present(target_event, "done")
-            _record_outbox_notice(
-                outbox_dir,
-                f"reply redirected: event {target} is owned by gate "
-                f"{target_source!r}, not reachable from this run — delivered "
-                "on this run's own gate instead, prefixed with its origin",
-                # Delivered, and *not where it was addressed*. Content ✓,
-                # lifecycle ✓, addressing ✗ — and addressing is the one of
-                # the three the resident is told to check `notices` for. A
-                # run that believes its answer reached the asker, when it
-                # reached a different lane, has an unanswered correspondent
-                # and possibly a reader who should not have had the text.
-                # Counts, therefore, and says which failed.
-                kind="redirected",
-                lifetime="run",
+            if blocked:
+                _retire_outbox_staging(fpath)
+                continue
+            # The retire below is guarded by ``cross and target_event is not None``;
+            # ``not deliverable`` is *wider* than that, because ``target_source``
+            # falls back to the run's own source when there is no cross target — so
+            # a plain outbox message from any gate-less run (schedule: every
+            # self-woken run) lands here with nothing to retire. One predicate, both
+            # readers, so the notice cannot claim a retire the inbox never made.
+            # Asserting one optimistically is the worse failure: it tells a resident
+            # its waking event is handled while it is still pending.
+            retires_target = not deliverable and cross and target_event is not None
+            if not deliverable:
+                # Daemon-minted sources (spawn_completed, schedule) have no correspondent,
+                # so an undeliverable reply is not a loss — use kind="advisory" rather than
+                # "dropped" to avoid inflating the dropped/refused count (#1351). Other
+                # gateless sources represent a genuine absence of delivery plumbing.
+                notice_kind = (
+                    "advisory"
+                    if target_source in ("spawn_completed", "schedule")
+                    else "dropped"
+                )
+                _record_outbox_notice(
+                    outbox_dir,
+                    (
+                        f"event {target} retired done; reply text staged "
+                        f"undeliverable — {undeliverable_reason}"
+                        if retires_target else
+                        f"reply text staged undeliverable — {undeliverable_reason}"
+                    ),
+                    kind=notice_kind,
+                    lifetime="run",
+                )
+            ppath = (
+                protocol.write_partial(
+                    target_responses_dir, target, body, message_path=message_path,
+                )
+                if body and deliverable else None
             )
-            summary = _short_event_summary(target_event)
-            origin_note = (
-                f"re: {summary} — originally on {target_source}\n\n"
-                if summary else f"re: an event on {target_source}\n\n"
-            )
-            body = origin_note + body
-            target = event_id
-            cross = False
-            target_event = None
-            target_responses_dir = responses_dir
-            target_source = own_source
-            redirected = True
-        # Interim replies ride the target event's own gate. Dispatch-tree
-        # sources (spawn, spawn_completed, dispatch_message) have no gate and
-        # no collector for interims — only a strand's *terminal* report is
-        # collected — so a partial written here would orphan and the record
-        # would sit pending forever. Say so at staging time instead — but
-        # only about a source we can actually see: an absent one is unknown,
-        # not impossible.
-        deliverable = not target_source or _gate_owns_source(target_source)
-        undeliverable_reason = (
-            f"no gate owns {target_source or 'unknown'} events; route via "
-            "gate:<name> if a person must read it"
-        )
-        message_path, blocked = _stage_outbound(
-            task,
-            account_context,
-            body=body,
-            kind="interim",
-            target_event=target,
-            target_gate=target_source,
-            target_thread=str(
-                (target_event or {}).get("conversation_key")
-                or getattr(task, "conversation_key", "")
-            ),
-            # A redirect already staged one durable row for the foreign
-            # target above (``source_ref=str(fpath)``); this second row is
-            # the redirected delivery itself and needs its own identity, or
-            # ``stage``'s idempotency-by-source_ref would just hand back
-            # that first (undeliverable) row instead of creating this one.
-            source_ref=str(fpath) + ("#redirect" if redirected else ""),
-            status=(
-                message_store.PENDING if deliverable
-                else message_store.UNDELIVERABLE
-            ),
-            reason=(
-                "" if deliverable else
-                undeliverable_reason
-            ),
-            outbox_dir=outbox_dir,
-        )
-        if blocked:
             _retire_outbox_staging(fpath)
-            continue
-        # The retire below is guarded by ``cross and target_event is not None``;
-        # ``not deliverable`` is *wider* than that, because ``target_source``
-        # falls back to the run's own source when there is no cross target — so
-        # a plain outbox message from any gate-less run (schedule: every
-        # self-woken run) lands here with nothing to retire. One predicate, both
-        # readers, so the notice cannot claim a retire the inbox never made.
-        # Asserting one optimistically is the worse failure: it tells a resident
-        # its waking event is handled while it is still pending.
-        retires_target = not deliverable and cross and target_event is not None
-        if not deliverable:
-            # Daemon-minted sources (spawn_completed, schedule) have no correspondent,
-            # so an undeliverable reply is not a loss — use kind="advisory" rather than
-            # "dropped" to avoid inflating the dropped/refused count (#1351). Other
-            # gateless sources represent a genuine absence of delivery plumbing.
-            notice_kind = (
-                "advisory"
-                if target_source in ("spawn_completed", "schedule")
-                else "dropped"
-            )
-            _record_outbox_notice(
-                outbox_dir,
-                (
-                    f"event {target} retired done; reply text staged "
-                    f"undeliverable — {undeliverable_reason}"
-                    if retires_target else
-                    f"reply text staged undeliverable — {undeliverable_reason}"
-                ),
-                kind=notice_kind,
-                lifetime="run",
-            )
-        ppath = (
-            protocol.write_partial(
-                target_responses_dir, target, body, message_path=message_path,
-            )
-            if body and deliverable else None
-        )
-        _retire_outbox_staging(fpath)
-        if retires_target:
-            # Nothing will deliver this, but the resident *did* answer it:
-            # retire the event so the unowned-source inbox stops growing
-            # (#454), with the text preserved as an undeliverable record.
-            _set_event_status_if_present(target_event, "done")
-        if not ppath:
-            continue
-        promoted += 1
-        if stats is not None:
-            key = "other" if cross else "current"
-            stats[key] = stats.get(key, 0) + 1
-            # #743. ``current`` is *not* "a message reached a correspondent":
-            # a parked ``runner_policy`` / ``config_change`` proposal
-            # increments it too. ``delivered`` counts only the writes that
-            # put text in front of a reader, so the terminal-route
-            # classification can ask that question directly instead of
-            # subtracting the proposal verbs — a subtraction the next verb
-            # added would silently rejoin.
-            stats["delivered"] = stats.get("delivered", 0) + 1
-        if not cross:
-            # Remember what was already delivered to the waking thread so the
-            # terminal-stream dispatch can skip an exact duplicate — the
-            # "deliver via outbox *and* restate on stdout" double-post the old
-            # required-terminal-reply contract used to push residents into.
-            # In-process only (a dynamic attribute, never serialized).
-            digests = getattr(task, "_delivered_current_digests", None)
-            if digests is None:
-                digests = set()
-                task._delivered_current_digests = digests  # type: ignore[attr-defined]
-            digests.add(hashlib.sha256(body.encode("utf-8")).hexdigest())
-        if cross and target_event is not None:
-            _set_event_status_if_present(target_event, "done")
-        artifact_key = emit.conversation_key
-        artifact_event_id = event_id
-        if cross and target_event is not None:
-            artifact_key = conversations.conversation_key_for_event(target_event) or ""
-            artifact_event_id = target
+            if retires_target:
+                # Nothing will deliver this, but the resident *did* answer it:
+                # retire the event so the unowned-source inbox stops growing
+                # (#454), with the text preserved as an undeliverable record.
+                _set_event_status_if_present(target_event, "done")
+            if not ppath:
+                continue
+            promoted += 1
+            if stats is not None:
+                key = "other" if cross else "current"
+                stats[key] = stats.get(key, 0) + 1
+                # #743. ``current`` is *not* "a message reached a correspondent":
+                # a parked ``runner_policy`` / ``config_change`` proposal
+                # increments it too. ``delivered`` counts only the writes that
+                # put text in front of a reader, so the terminal-route
+                # classification can ask that question directly instead of
+                # subtracting the proposal verbs — a subtraction the next verb
+                # added would silently rejoin.
+                stats["delivered"] = stats.get("delivered", 0) + 1
+            if not cross:
+                # Remember what was already delivered to the waking thread so the
+                # terminal-stream dispatch can skip an exact duplicate — the
+                # "deliver via outbox *and* restate on stdout" double-post the old
+                # required-terminal-reply contract used to push residents into.
+                # In-process only (a dynamic attribute, never serialized).
+                digests = getattr(task, "_delivered_current_digests", None)
+                if digests is None:
+                    digests = set()
+                    task._delivered_current_digests = digests  # type: ignore[attr-defined]
+                digests.add(hashlib.sha256(body.encode("utf-8")).hexdigest())
+            if cross and target_event is not None:
+                _set_event_status_if_present(target_event, "done")
+            artifact_key = emit.conversation_key
+            artifact_event_id = event_id
+            if cross and target_event is not None:
+                artifact_key = conversations.conversation_key_for_event(target_event) or ""
+                artifact_event_id = target
+                if artifact_key:
+                    conversations.append_event(emit.brr_dir, artifact_key, target_event)
             if artifact_key:
-                conversations.append_event(emit.brr_dir, artifact_key, target_event)
-        if artifact_key:
-            conversations.append_artifact(
-                emit.brr_dir, artifact_key,
-                kind="interim_response",
-                path=str(ppath),
+                conversations.append_artifact(
+                    emit.brr_dir, artifact_key,
+                    kind="interim_response",
+                    path=str(ppath),
+                    run_id=task.id,
+                    event_id=artifact_event_id,
+                    label=(f"reply:{target}" if cross else f"interim:{event_id}"),
+                    body=body,
+                )
+            emit(
+                "interim_response",
                 run_id=task.id,
-                event_id=artifact_event_id,
-                label=(f"reply:{target}" if cross else f"interim:{event_id}"),
-                body=body,
+                event_id=event_id,
+                path=str(ppath),
+                target_event=(target if cross else None),
             )
-        emit(
-            "interim_response",
-            run_id=task.id,
-            event_id=event_id,
-            path=str(ppath),
-            target_event=(target if cross else None),
-        )
     return promoted
 
 
