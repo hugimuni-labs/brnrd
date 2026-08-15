@@ -170,7 +170,7 @@ and the reply are yours.
   menu, or it is the bare state (`done` | `continuing` | `blocked`).
 - **linger** — the *when*; `await:` above owns the verb. Conversation clearly
   live ⇒ deliver via outbox, then hold the slot with `brnrd await --timeout
-  <horizon>` rather than a hand-rolled poll loop. Horizon ~10–15m past last
+  <horizon>` rather than a hand-rolled poll loop. Horizon ~30m past last
   delivery; longer vigils are scheduled wakes. Once the runner exits nothing
   holds the slot — a follow-up becomes the **next run**, same conversation,
   only the process resets.
