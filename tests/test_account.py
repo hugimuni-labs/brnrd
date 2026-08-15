@@ -332,6 +332,123 @@ def test_corpus_files_omits_readings_when_none_exist(tmp_path):
     assert not any(p.endswith(".readings.jsonl") for p in paths)
 
 
+# ── home_manifest (front_door's missing "your memory" step) ───────────
+
+
+def test_home_manifest_counts_a_populated_home(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    home = tmp_path / "account-home"
+    ctx = account.resolve_context(repo, {"home.path": str(home), "repo.label": "Gurio/brr"})
+
+    # kb pages: two, nested the way home knowledge actually splits.
+    knowledge_root = account.knowledge_path(ctx)
+    kb = knowledge_root / account.REPOS_PATH / "Gurio__brr"
+    kb.mkdir(parents=True, exist_ok=True)
+    (kb / "design.md").write_text("# Design", encoding="utf-8")
+    (knowledge_root / "index.md").write_text("# kb index", encoding="utf-8")
+
+    # warp items: one real item, one non-.md file that must not count.
+    warp = account.work_surface_path(ctx) / "warp"
+    warp.mkdir(parents=True, exist_ok=True)
+    (warp / "w-1.md").write_text("# Ship\n\ntype: action\n", encoding="utf-8")
+    (warp / "w-1.readings.jsonl").write_text("{}\n", encoding="utf-8")
+
+    # topics: one.
+    topics = account.work_surface_path(ctx) / "topics"
+    topics.mkdir(parents=True, exist_ok=True)
+    (topics / "shipping.md").write_text("# shipping", encoding="utf-8")
+
+    # run records: three run directories across two repo slugs.
+    for run_id in ("run-1", "run-2"):
+        run_path = account.run_dir(ctx, "Gurio/brr", run_id)
+        run_path.mkdir(parents=True, exist_ok=True)
+        (run_path / "state.md").write_text("# State", encoding="utf-8")
+    other_run = account.run_dir(ctx, "Gurio/other", "run-9")
+    other_run.mkdir(parents=True, exist_ok=True)
+
+    # surface pages: the auto-seeded index.md plus one authored page.
+    (account.work_surface_path(ctx) / "workflow.md").write_text("gating", encoding="utf-8")
+
+    manifest = account.home_manifest(ctx)
+
+    assert manifest.kb_pages == 2
+    assert manifest.warp_items == 1
+    assert manifest.topics == 1
+    assert manifest.run_records == 3
+    # surface/ is walked recursively, so this also picks up warp/w-1.md and
+    # topics/shipping.md — index.md (seeded) + workflow.md + those two.
+    assert manifest.surface_pages == 4
+    assert manifest.commit_count >= 1  # the founding commit resolve_context makes
+    assert manifest.origin_url is None
+    assert manifest.knowledge_origin_url is None
+    assert manifest.has_memory is True
+    assert manifest.fully_linked is False
+
+
+def test_home_manifest_missing_directories_count_zero_not_raise(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    home = tmp_path / "account-home"
+    # create=False: nothing on disk yet, not even the home root itself.
+    ctx = account.resolve_context(
+        repo, {"home.path": str(home), "repo.label": "Gurio/brr"}, create=False,
+    )
+    assert not home.exists()
+
+    manifest = account.home_manifest(ctx)
+
+    assert manifest == account.HomeManifest(
+        kb_pages=0, warp_items=0, topics=0, run_records=0,
+        surface_pages=0, commit_count=0, origin_url=None, knowledge_origin_url=None,
+    )
+    assert manifest.has_memory is False
+    assert manifest.fully_linked is False
+
+
+def test_home_manifest_reports_the_actual_origin_url_not_a_guessed_name(tmp_path):
+    """home_link.py lets an operator name these backup repos anything
+    (``--dominion-name`` / ``--knowledge-name``), so the manifest must read
+    the real git remote rather than constructing an ``owner/brnrd-home``
+    string — a name is a guess, a URL is a fact git can state."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    home = tmp_path / "account-home"
+    ctx = account.resolve_context(repo, {"home.path": str(home), "repo.label": "Gurio/brr"})
+
+    def _add_origin_and_read_back(repo_root, url):
+        # ``git remote get-url`` — the same call ``account._origin_url``
+        # makes — expands any local ``url.*.insteadOf`` rewrite (a sandbox
+        # may force SSH -> HTTPS for egress reasons); reading the ground
+        # truth back the identical way keeps this test a check on *our*
+        # code, not on this machine's git config, while still pinning "the
+        # actual git-reported URL, never a constructed name".
+        subprocess.run(["git", "remote", "add", "origin", url], cwd=repo_root, check=True)
+        return subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=repo_root, check=True, capture_output=True, text=True,
+        ).stdout.strip()
+
+    dominion_url = _add_origin_and_read_back(home, "git@github.com:someone/my-brain.git")
+
+    knowledge_root = account.knowledge_path(ctx)
+    knowledge_root.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=knowledge_root, check=True)
+    knowledge_url = _add_origin_and_read_back(
+        knowledge_root, "git@github.com:someone/my-brain-knowledge.git",
+    )
+
+    manifest = account.home_manifest(ctx)
+    assert manifest.origin_url == dominion_url
+    assert manifest.knowledge_origin_url == knowledge_url
+    assert manifest.fully_linked is True
+    assert "brnrd-home" not in (manifest.origin_url or "")
+    assert "my-brain" in manifest.origin_url  # the operator's own chosen name, not a default
+
+
 def test_default_home_is_repo_derived_project_home(monkeypatch, tmp_path):
     state_home = tmp_path / "state"
     monkeypatch.setenv("XDG_STATE_HOME", str(state_home))

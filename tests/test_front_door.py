@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import builtins
 from pathlib import Path
+import subprocess
 
 import pytest
 
-from brr import front_door
+from brr import account, front_door
 from brr.cli import main
 
 from _helpers import init_git_repo
@@ -287,6 +288,146 @@ def test_ci_is_never_treated_as_a_typist(monkeypatch):
     assert front_door.interactive() is True
     monkeypatch.setenv("CI", "true")
     assert front_door.interactive() is False
+
+
+# ── Memory (front_door._step_memory) ───────────────────────────────
+#
+# The missing step this closes (measured 2026-08-14): the ladder said
+# nothing about where a resident's memory lives, so a second-machine setup
+# with an empty, silently-scaffolded home rendered identically to one
+# holding years of kb pages and run history. Never blocks setup — it only
+# names the home and, honestly, what it holds.
+
+
+def test_step_memory_renders_the_manifest_line_for_a_populated_home(repo, capsys):
+    ctx = account.resolve_context(repo, {})
+    (account.work_surface_path(ctx) / "warp").mkdir(parents=True, exist_ok=True)
+    (account.work_surface_path(ctx) / "warp" / "w-1.md").write_text(
+        "# Ship\n\ntype: action\n", encoding="utf-8",
+    )
+    kb = account.knowledge_path(ctx)
+    kb.mkdir(parents=True, exist_ok=True)
+    (kb / "design.md").write_text("# Design", encoding="utf-8")
+
+    result = front_door._step_memory(repo, tty=False)
+
+    out = capsys.readouterr().out
+    assert str(account.context_home_root(ctx)) in out
+    assert "1 kb page · 1 warp item · 0 topics · 0 run records" in out
+    assert result is True
+
+
+def test_the_manifest_line_agrees_with_itself_about_number(repo, capsys):
+    """One page is not "1 kb pages".
+
+    This step's whole job is making a home legible at a glance; a count
+    that disagrees with its own noun spends some of the credibility the
+    number is there to earn. Pins both sides of the boundary at once so a
+    future edit cannot fix one and break the other.
+    """
+    ctx = account.resolve_context(repo, {})
+    topics = account.work_surface_path(ctx) / "topics"
+    topics.mkdir(parents=True, exist_ok=True)
+    for name in ("a.md", "b.md"):
+        (topics / name).write_text("# t", encoding="utf-8")
+    kb = account.knowledge_path(ctx)
+    kb.mkdir(parents=True, exist_ok=True)
+    (kb / "design.md").write_text("# Design", encoding="utf-8")
+
+    front_door._step_memory(repo, tty=False)
+
+    out = capsys.readouterr().out
+    assert "1 kb page ·" in out and "1 kb pages" not in out
+    assert "2 topics" in out
+    assert "0 warp items" in out  # zero takes the plural, as English does
+
+
+def test_step_memory_renders_the_new_resident_line_for_an_empty_home(repo, capsys):
+    # create=False by construction (front_door never seeds a home to
+    # report on it) — nothing on disk, so this is the "genuinely new
+    # resident" path even though resolve_context happily names a path.
+    result = front_door._step_memory(repo, tty=False)
+
+    out = capsys.readouterr().out
+    assert "starting with no memory yet" in out
+    assert "brnrd home link" in out
+    assert "kb pages" not in out  # no manifest line on the empty path
+    assert result is True
+
+
+def test_step_memory_notes_local_only_on_a_non_tty(repo, capsys):
+    ctx = account.resolve_context(repo, {})
+    (account.knowledge_path(ctx) / "index.md").parent.mkdir(parents=True, exist_ok=True)
+    (account.knowledge_path(ctx) / "index.md").write_text("# kb", encoding="utf-8")
+
+    result = front_door._step_memory(repo, tty=False)
+
+    out = capsys.readouterr().out
+    assert "local-only" in out
+    assert "brnrd home link" in out
+    assert result is True
+
+
+def test_step_memory_skips_the_local_only_note_when_fully_linked(repo, capsys):
+    ctx = account.resolve_context(repo, {})
+    (account.knowledge_path(ctx)).mkdir(parents=True, exist_ok=True)
+    (account.knowledge_path(ctx) / "index.md").write_text("# kb", encoding="utf-8")
+    subprocess.run(
+        ["git", "remote", "add", "origin", "git@github.com:someone/my-brain.git"],
+        cwd=account.context_home_root(ctx), check=True,
+    )
+    # Both repos need an origin — the dominion above, and the (separate,
+    # independently-linked) knowledge repo here.
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=account.knowledge_path(ctx), check=True)
+    subprocess.run(
+        ["git", "remote", "add", "origin", "git@github.com:someone/my-brain-knowledge.git"],
+        cwd=account.knowledge_path(ctx), check=True,
+    )
+
+    result = front_door._step_memory(repo, tty=False)
+
+    out = capsys.readouterr().out
+    assert "local-only" not in out
+    assert result is True
+
+
+def test_step_memory_offers_to_link_on_a_tty(repo, capsys, monkeypatch):
+    """Mirrors ``_step_account``'s own ``_ask`` then ``_invoke`` shape:
+    ``home_link.link_home`` already does the whole idempotent job in one
+    call, so a local-only home on a real terminal gets offered the fix
+    instead of only being told the command to type."""
+    ctx = account.resolve_context(repo, {})
+    kb = account.knowledge_path(ctx)
+    kb.mkdir(parents=True, exist_ok=True)
+    (kb / "design.md").write_text("# Design", encoding="utf-8")
+    monkeypatch.setattr(builtins, "input", _answering("y"))
+    invoked = []
+    monkeypatch.setattr(front_door, "_invoke", lambda argv: invoked.append(argv))
+
+    result = front_door._step_memory(repo, tty=True)
+
+    out = capsys.readouterr().out
+    assert "back it up to private GitHub repos now?" in out
+    assert invoked == [["home", "link"]]
+    assert result is True
+
+
+def test_declining_the_link_offer_changes_nothing(repo, capsys, monkeypatch):
+    ctx = account.resolve_context(repo, {})
+    kb = account.knowledge_path(ctx)
+    kb.mkdir(parents=True, exist_ok=True)
+    (kb / "design.md").write_text("# Design", encoding="utf-8")
+    monkeypatch.setattr(builtins, "input", _answering("n"))
+    monkeypatch.setattr(
+        front_door, "_invoke",
+        lambda argv: pytest.fail(f"ran {argv} on a declined offer"),
+    )
+
+    result = front_door._step_memory(repo, tty=True)
+
+    out = capsys.readouterr().out
+    assert "skipped" in out
+    assert result is True
 
 
 def test_an_interrupted_question_stops_the_whole_ladder(repo, capsys, monkeypatch):
