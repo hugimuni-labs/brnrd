@@ -190,7 +190,19 @@ def test_render_update_edits_existing_message(tmp_path, monkeypatch):
     assert last_edit[2].get("parse_mode") == "HTML"
 
 
-def test_render_update_falls_back_to_send_when_edit_fails(tmp_path, monkeypatch):
+def test_render_update_falls_back_to_send_when_the_message_is_actually_gone(
+    tmp_path, monkeypatch,
+):
+    """Only a *confirmed*-gone message (``CardGone``) should mint a replacement.
+
+    Before the 2026-08-15 card-storm fix this test raised a bare
+    ``RuntimeError`` and asserted the same fall-back — which was the bug: a
+    transport hiccup and an actually-deleted message looked identical, so a
+    night of server 502s minted a fresh status message on every failed
+    edit. Raising Telegram's typed "message to edit not found" response
+    here is what the gate can actually trust as gone; see the sibling test
+    below for what a generic hiccup does instead (nothing).
+    """
     brr_dir = tmp_path / ".brr"
     _save_token(brr_dir)
     task = _seed_run(brr_dir, "task-tg-3", chat_id=777)
@@ -205,7 +217,9 @@ def test_render_update_falls_back_to_send_when_edit_fails(tmp_path, monkeypatch)
         if method == "editMessageText":
             if fail_edit["flag"]:
                 fail_edit["flag"] = False
-                raise RuntimeError("message gone")
+                raise telegram._TelegramMessageGone(
+                    "Bad Request: message to edit not found"
+                )
             return {"result": {"message_id": params["message_id"]}}
         return {}
 
@@ -214,8 +228,8 @@ def test_render_update_falls_back_to_send_when_edit_fails(tmp_path, monkeypatch)
     _emit(brr_dir, task.conversation_key, "run_created", run_id=task.id,
           branch="auto", env="host")
     # attempt_started actually changes the rendered card (preparing →
-    # running), so the gate tries to edit; the stub raises, which forces
-    # the fall-back sendMessage.
+    # running), so the gate tries to edit; the stub raises "gone", which
+    # forces the fall-back sendMessage.
     _emit(brr_dir, task.conversation_key, "attempt_started", run_id=task.id,
           attempt=1)
 
@@ -223,6 +237,43 @@ def test_render_update_falls_back_to_send_when_edit_fails(tmp_path, monkeypatch)
     assert methods.count("sendMessage") == 2
     entry = telegram._load_progress_for_run(brr_dir, task.id)
     assert entry["message_id"] != 201
+
+
+def test_render_update_does_not_fall_back_on_a_generic_edit_failure(
+    tmp_path, monkeypatch,
+):
+    """The other half of the same fix: a transport hiccup keeps retrying
+    the same edit next render instead of minting a duplicate card."""
+    brr_dir = tmp_path / ".brr"
+    _save_token(brr_dir)
+    task = _seed_run(brr_dir, "task-tg-3b", chat_id=778)
+
+    api_calls: list[tuple] = []
+    fail_edit = {"flag": True}
+
+    def fake_api_call(token, method, params=None):
+        api_calls.append((token, method, params))
+        if method == "sendMessage":
+            return {"result": {"message_id": 200 + len(api_calls)}}
+        if method == "editMessageText":
+            if fail_edit["flag"]:
+                fail_edit["flag"] = False
+                raise RuntimeError("502 Bad Gateway")
+            return {"result": {"message_id": params["message_id"]}}
+        return {}
+
+    monkeypatch.setattr(telegram, "_api_call", fake_api_call)
+
+    _emit(brr_dir, task.conversation_key, "run_created", run_id=task.id,
+          branch="auto", env="host")
+    entry_before = telegram._load_progress_for_run(brr_dir, task.id)
+    _emit(brr_dir, task.conversation_key, "attempt_started", run_id=task.id,
+          attempt=1)
+
+    methods = [m for _, m, _ in api_calls]
+    assert methods.count("sendMessage") == 1, "no fall-back send for a mere hiccup"
+    entry_after = telegram._load_progress_for_run(brr_dir, task.id)
+    assert entry_after["message_id"] == entry_before["message_id"]
 
 
 def test_render_update_ignores_non_telegram_tasks(tmp_path, monkeypatch):
