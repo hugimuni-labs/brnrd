@@ -2,7 +2,7 @@
 	import { resolve } from '$app/paths';
 	import { DOCS_URL } from './publicStats';
 	import { splitPairingCommand } from './repos';
-	import type { ConnectedRepo, GitHubInstallation } from './repos';
+	import type { ConnectedRepo, GitHubInstallation, MachinesSummary } from './repos';
 
 	// The cold start (2026-08-03). Reported from a real signup on the
 	// deployed dashboard: "two screens - no clarity on the installation, or
@@ -66,11 +66,13 @@
 	// without a frontend deploy — the exact drift this trace measured,
 	// closed at its cause.
 	//
-	// Named, not yet closed (same trace): this block gates on repo-scoped
-	// `daemon_status` only, so an account-level paired machine with no
-	// enabled repo reads "nothing is paired yet" while the capabilities
-	// board below lists the very machine. Needs machines on this
-	// component's wire — filed with the trace, not hacked around here.
+	// Fourth trace, 2026-08-16 (design-machines-and-guests.md R1, #1365):
+	// closes the gap the third trace named but didn't fix. `machines` below
+	// is the account-level presence `GET /v1/dashboard/repos` now carries
+	// (`_session._machine_views`, additive) — a paired-but-repo-less
+	// machine no longer reads as the classic "nothing is paired yet": it
+	// gets its own honest middle state, `pairedNoRepo` below, instead of
+	// either vanishing (the bug) or claiming a repo is enabled (a lie).
 	interface Props {
 		// `null` = the repos fetch hasn't landed. Render nothing rather than
 		// flashing a cold start at an account that has fifteen repos: the
@@ -87,9 +89,14 @@
 		// here: two copies of one command line drift apart the first time the
 		// CLI renames a verb.
 		pairCommand?: string | null;
+		// Account-level daemon presence (`_session._machine_views`, #1365).
+		// `undefined`/`null` = an older backend that predates this field —
+		// falls back to the pre-fix, repo-scoped-only gate below, same
+		// "absent means unknown, not false" contract `installations` uses.
+		machines?: MachinesSummary | null;
 	}
 
-	let { repos, installations = null, pairCommand = null }: Props = $props();
+	let { repos, installations = null, pairCommand = null, machines = null }: Props = $props();
 
 	const INSTALL_COMMAND = 'npm install -g brnrd';
 
@@ -117,13 +124,28 @@
 		)
 	);
 
+	// #1365: account-level pairing, from the same fetch. `machines` absent
+	// (older backend) reads as "unknown" — never treated as paired, so an
+	// old backend keeps today's repo-scoped-only behavior exactly, not a
+	// regression toward the bug this exists to fix.
+	let machinePaired = $derived(machines?.paired === true);
+
 	// The block survives until the last *observable* step is done. That is
 	// daemon-pairing, not repo-enablement — an enabled repo with no daemon
 	// is precisely the state the old `repos.length === 0` check hid. (Chat
 	// gate / Telegram pairing is deliberately not part of this gate: it is
 	// optional infrastructure — self-hosted gates and local execution are
 	// the standing free path — not a requirement for a working daemon.)
-	let cold = $derived(repos !== null && !daemonEverPaired);
+	//
+	// #1365: `daemonEverPaired` alone is repo-scoped — true only once a
+	// *connected repo* carries a daemon. `machinePaired` is the account-
+	// level fact underneath it: a daemon can pair before any repo is
+	// enabled (the iMac trace's own fixture), and that machine must not
+	// read as "nothing is paired yet" just because no repo row exists yet
+	// to carry the signal. `cold` now requires *both* to be false; the
+	// paired-but-repo-less gap in between is `pairedNoRepo`.
+	let cold = $derived(repos !== null && !daemonEverPaired && !machinePaired);
+	let pairedNoRepo = $derived(repos !== null && !daemonEverPaired && machinePaired);
 
 	// #1277a: the pairing command's first line is `cd <repo>` before any
 	// checkout is known — a literal placeholder no shell can run — handed
@@ -242,6 +264,55 @@
 		</p>
 
 		<p class="mt-2 font-mono text-[11px] text-ink-mute">
+			Self-hosting, gates, and the agent CLIs brnrd drives —
+			<a class="text-sky-400 underline hover:text-sky-300" href={DOCS_URL} rel="external">docs</a>.
+		</p>
+	</section>
+{:else if pairedNoRepo}
+	<!-- #1365: a machine has paired at the account level (`machines.paired`)
+	     but no repo carries a daemon yet — the honest middle state between
+	     `cold` and gone. Same panel/eyebrow/heading typography as `cold`
+	     above; only the copy and the single step differ, so this reads as a
+	     sibling of the cold-start block rather than a new visual language. -->
+	<section
+		class="panel ignite mt-4 p-4"
+		style="--ignite-delay: 60ms"
+		aria-labelledby="paired-no-repo-heading"
+	>
+		<p class="eyebrow">the cold start</p>
+		<h2 id="paired-no-repo-heading" class="font-mono text-sm font-semibold text-amber-100">
+			machine paired, no repo enabled yet
+		</h2>
+		<p class="mt-2 text-sm text-stone-400">
+			A daemon has already paired on this account. This board has nothing to show until it runs in a
+			repo checkout.
+		</p>
+
+		<div class="mt-4">
+			<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">enable a repo</p>
+			{#if pairCommand}
+				{#if pairParts?.setupLine}
+					<p class="mt-1.5 font-mono text-[11px] text-ink-mute">from the repo checkout:</p>
+				{/if}
+				<div class="mt-1.5 flex items-start gap-2">
+					<pre
+						class="min-w-0 grow border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] wrap-anywhere whitespace-pre-wrap text-stone-300"><code
+							>{pairParts?.runnable ?? pairCommand}</code
+						></pre>
+					<button
+						type="button"
+						class="shrink-0 cursor-pointer border border-stone-800 px-2 py-2 font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+						onclick={() => copy('pair', pairParts?.runnable ?? pairCommand ?? '')}
+						>{copied === 'pair' ? 'copied' : 'copy'}</button
+					>
+				</div>
+			{/if}
+			<p class="mt-1.5 text-sm text-stone-400">
+				Same command as pairing — running it in a checkout also enables that repo.
+			</p>
+		</div>
+
+		<p class="mt-4 border-t border-stone-800 pt-3 font-mono text-[11px] text-ink-mute">
 			Self-hosting, gates, and the agent CLIs brnrd drives —
 			<a class="text-sky-400 underline hover:text-sky-300" href={DOCS_URL} rel="external">docs</a>.
 		</p>
