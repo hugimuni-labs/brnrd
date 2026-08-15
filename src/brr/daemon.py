@@ -10085,21 +10085,20 @@ def _primary_dominion_candidate(
     because attribution needs the ``capture_root`` — the git repo
     ``_capture_dominion`` commits — and the schedule lives at a *path
     inside* that repo, not at its root.
+
+    ``account_context`` is forwarded rather than hand-built into an extra
+    candidate (#1409, extending #1405/#1407's pattern): this call runs once
+    per run, not once per tick, so the redundant ``account.resolve_context``
+    re-derivation ``resident_dominion_candidates`` would otherwise do isn't
+    the hot-loop cost #1405 measured, but the label it derives when given no
+    ``repo_label=`` override — ``account.repo_label(repo_root, cfg)`` — is
+    exactly what this function used to hand-build here, so forwarding makes
+    the function's own first candidate byte-identical to the old manual one
+    instead of a second, hand-duplicated path to the same answer.
     """
-    candidates = dominion.resident_dominion_candidates(repo_root, cfg)
-    if account_context is not None and account_context.enabled:
-        try:
-            repo_label = account.repo_label(repo_root, cfg)
-            candidates.insert(
-                0,
-                dominion.ResidentDominion(
-                    path=account.repo_dominion_path(account_context, repo_label),
-                    capture_root=account_context.dominion_repo,
-                    label="account",
-                ),
-            )
-        except Exception:  # noqa: BLE001 - account resolution is best-effort here
-            pass
+    candidates = dominion.resident_dominion_candidates(
+        repo_root, cfg, account_context=account_context,
+    )
     for c in candidates:
         if c.path.is_dir():
             return c
@@ -11493,13 +11492,32 @@ def _capture_dominion(
     at sleep so they survive to the next wake without the agent running a
     commit dance. The legacy repo-local dominion is still captured when present
     so partially migrated installs do not lose notes.
+
+    ``account_context`` is forwarded to ``resident_dominion_candidates`` so
+    it reuses the already-resolved context instead of re-deriving its own
+    (#1409, same spirit as #1405/#1407). The manual ``insert(0, …)`` below
+    stays, unlike its sibling in ``_primary_dominion_candidate``: this
+    candidate's ``repo_label`` comes from ``task.meta["repo_label"]`` (set
+    via ``_repo_label``, which prefers the *event's* own repo identity —
+    ``github_repo`` / ``repo_full_name`` / … — over config) or the account's
+    default repo, not from ``account.repo_label(repo_root, cfg)`` (config
+    and git-remote only, no event awareness) that
+    ``resident_dominion_candidates`` derives internally when no
+    ``repo_label=`` override is passed. The two can genuinely disagree, so
+    this candidate's ``path`` is not provably identical to the forwarded
+    call's own first candidate — only ``capture_root`` is (always
+    ``account_context.dominion_repo``), which is all this function's own
+    loop below reads. Kept anyway: a future reader of ``.path`` should see
+    the run's own repo attribution, not silently fall back to config/git.
     """
     if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
         return
     push = bool(
         cfg.get("dominion.push_on_capture", cfg.get("dominion_push_on_capture", True))
     )
-    candidates = dominion.resident_dominion_candidates(repo_root, cfg)
+    candidates = dominion.resident_dominion_candidates(
+        repo_root, cfg, account_context=account_context,
+    )
     if account_context is not None and account_context.enabled:
         candidates.insert(
             0,

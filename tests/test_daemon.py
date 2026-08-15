@@ -9673,6 +9673,116 @@ def test_capture_dominion_commits_account_home(tmp_path):
     assert log == "brnrd-home: capture account memory after run run-capture"
 
 
+def test_primary_dominion_candidate_matches_forwarded_account_context(tmp_path):
+    """#1409: forwarding ``account_context`` must reproduce the old hand-built candidate.
+
+    ``_primary_dominion_candidate`` used to hand-build an extra
+    ``ResidentDominion`` (``repo_label = account.repo_label(repo_root, cfg)``)
+    and ``insert(0, …)`` it ahead of whatever ``resident_dominion_candidates``
+    derived on its own. That is exactly the label ``resident_dominion_
+    candidates`` derives internally when given ``account_context=`` but no
+    ``repo_label=`` override, so the hand-built insert is provably a
+    duplicate once the context is forwarded — this asserts the *path* and
+    *capture_root* the caller now gets are the same values the old manual
+    insert would have produced.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    cfg = {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")}
+    ctx = daemon.account.resolve_context(repo, cfg)
+    repo_dom = daemon.account.repo_dominion_path(ctx, "Gurio/brr")
+    daemon.dominion.seed_account_dominion(repo_dom)
+
+    candidate = daemon._primary_dominion_candidate(repo, cfg, ctx)
+
+    assert candidate is not None
+    assert candidate.path == repo_dom
+    assert candidate.capture_root == ctx.dominion_repo
+
+
+def test_primary_dominion_candidate_reuses_context_instead_of_rederiving(
+    tmp_path, monkeypatch,
+):
+    """#1409: the equivalence above holds because forwarding *replaces*
+    re-derivation, not merely because ``account.resolve_context`` happens to
+    be deterministic. Pin the mechanism directly: break a *fresh*
+    ``resolve_context`` call and confirm ``_primary_dominion_candidate``
+    still succeeds using the already-resolved context it was handed.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    cfg = {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")}
+    ctx = daemon.account.resolve_context(repo, cfg)
+    repo_dom = daemon.account.repo_dominion_path(ctx, "Gurio/brr")
+    daemon.dominion.seed_account_dominion(repo_dom)
+
+    def _boom(*_a, **_k):
+        raise AssertionError(
+            "resolve_context re-derived instead of reusing the forwarded context"
+        )
+
+    monkeypatch.setattr(daemon.account, "resolve_context", _boom)
+
+    candidate = daemon._primary_dominion_candidate(repo, cfg, ctx)
+
+    assert candidate is not None
+    assert candidate.path == repo_dom
+    assert candidate.capture_root == ctx.dominion_repo
+
+
+def test_capture_dominion_repo_label_can_diverge_from_config_label(tmp_path):
+    """#1409: ``_capture_dominion``'s manual insert is *not* provably a duplicate.
+
+    Unlike ``_primary_dominion_candidate``, this candidate's ``repo_label``
+    is sourced from ``task.meta["repo_label"]`` (event-aware, via
+    ``_repo_label``) rather than ``account.repo_label(repo_root, cfg)``
+    (config/git-remote only) — the two genuinely disagree here, so the
+    manual insert stays. This proves the divergence and that capture still
+    lands correctly (on the shared ``capture_root``) despite it.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    cfg = {"home.path": str(tmp_path / "account-home")}  # no repo.label configured
+    ctx = daemon.account.resolve_context(repo, cfg)
+
+    auto_candidates = daemon.dominion.resident_dominion_candidates(
+        repo, cfg, account_context=ctx,
+    )
+    auto_path = auto_candidates[0].path
+
+    task_meta_label = "Explicit/EventRepo"
+    expected_manual_path = daemon.account.repo_dominion_path(ctx, task_meta_label)
+    # The two label sources really do disagree — this is why the insert
+    # in `_capture_dominion` stays instead of being removed like its
+    # sibling in `_primary_dominion_candidate`.
+    assert auto_path != expected_manual_path
+
+    daemon.dominion.seed_account_dominion(expected_manual_path)
+    (expected_manual_path / "notes.md").write_text("captured\n", encoding="utf-8")
+    task = Run(
+        id="run-diverge",
+        event_id="evt-diverge",
+        body="capture divergent label",
+        source="telegram",
+        status="done",
+        meta={"repo_label": task_meta_label},
+    )
+
+    daemon._capture_dominion(repo, cfg, task, account_context=ctx)
+
+    log = subprocess.run(
+        ["git", "log", "-1", "--pretty=%s"],
+        cwd=ctx.dominion_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert log == "brnrd-home: capture account memory after run run-diverge"
+
+
 def test_finalize_captures_after_finished_run_state(monkeypatch, tmp_path):
     event = {"id": "evt-final", "source": "telegram", "status": "done"}
     task = Run(

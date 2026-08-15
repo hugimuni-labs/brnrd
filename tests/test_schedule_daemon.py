@@ -75,6 +75,47 @@ def test_fire_due_reads_account_dominion_before_legacy(tmp_path):
     assert pending[0]["repo_label"] == "Gurio/brr"
 
 
+def test_schedule_attribution_finds_account_dominion_via_forwarded_context(tmp_path):
+    """#1409: schedule attribution must resolve the *account*-scoped schedule.md.
+
+    ``_attribute_schedule_entries`` -> ``_schedule_entries_touched_by_run`` ->
+    ``_primary_dominion_candidate`` used to hand-build a duplicate candidate
+    for this. Now it forwards ``account_context`` straight into
+    ``resident_dominion_candidates`` instead — this test is the guard: it
+    drives the real attribution seam end to end against an account-scoped
+    (not legacy) dominion, so a broken forward (wrong path, wrong
+    capture_root) shows up as a missing tier record, not a passing test that
+    never touched the account path at all.
+    """
+    from brr.run import Run
+
+    repo = _repo(tmp_path)
+    brr_dir = repo / ".brr"
+    home = tmp_path / "account-home"
+    cfg = {"home.path": str(home), "repo.label": "Gurio/brr"}
+    ctx = account.resolve_context(repo, cfg)
+    repo_dom = account.repo_dominion_path(ctx, "Gurio/brr")
+    dominion.seed_account_dominion(repo_dom)
+    _write_schedule(repo_dom, "## Nightly Sweep\nevery: 6h\nsweep\n")
+    dominion.commit(
+        ctx.dominion_repo,
+        "brnrd-home: capture account memory after run run-attrib",
+    )
+    task = Run(
+        id="run-attrib",
+        event_id="evt-attrib",
+        body="sweep",
+        source="telegram",
+        status="done",
+        meta={"repo_label": "Gurio/brr", "trust_tier": "operator"},
+    )
+
+    daemon._attribute_schedule_entries(task, brr_dir, repo, cfg, ctx)
+
+    tier_map = schedule.load_state(brr_dir).get(schedule._TIER_BY_ENTRY_KEY) or {}
+    assert tier_map.get("nightly-sweep", {}).get("tier") == "operator"
+
+
 def test_fire_due_threads_with_default_conversation_key(tmp_path):
     repo = _repo(tmp_path)
     brr_dir = repo / ".brr"
