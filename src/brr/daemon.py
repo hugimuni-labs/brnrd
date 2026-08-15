@@ -443,15 +443,30 @@ def _publish_tree_mismatch(repo_root: Path) -> dict | None:
     #726's own post-mortem was five correct guards nobody could prove were
     wired, and a sixth reporting channel would repeat it exactly.
 
-    ``None`` from :func:`gitops.toplevel` is a mismatch, not a pass. It is
-    the same contamination one step later — ``core.worktree`` left pointing
-    at a torn-down worktree, which is how the incident was finally noticed —
-    and more generally, *I cannot tell which tree this is* is not a
-    confirmation that it is the right one.
+    ``None`` from :func:`gitops.toplevel` is a mismatch, not a pass, but it
+    is not on its own a confirmed #746 (fix #1408): ``toplevel``'s own
+    docstring narrows what ``None`` means to "git declined to answer" — on
+    a git new enough to carry #1108's fix, a *repointed* ``core.worktree``
+    resolves to a real (if wrong) path, caught below by the ``same`` check,
+    never by this branch. What lands here as ``None`` is ordinarily "this
+    is not a git repository at all" — every ``tests/test_daemon.py`` run
+    against an un-``git init``ed ``tmp_path`` scaffold takes this path, not
+    #746's. A cheap probe (``gitops.is_working_tree``, one more
+    ``rev-parse`` — this runs once at publish, not per tick) tells "no repo
+    here" apart from "a repo that still would not name a toplevel", which
+    *is* still worth a #746 nod since nothing else explains it once a repo
+    is confirmed present. ``cause`` carries the distinction downstream so a
+    message can name only what was actually established.
     """
     seen = gitops.toplevel(repo_root)
     if seen is None:
-        return {"kind": _PUBLISH_TREE_MISMATCH, "expected": str(repo_root), "seen": ""}
+        cause = "core-worktree-unknown" if gitops.is_working_tree(repo_root) else "not-a-repo"
+        return {
+            "kind": _PUBLISH_TREE_MISMATCH,
+            "expected": str(repo_root),
+            "seen": "",
+            "cause": cause,
+        }
     # Physical paths on both sides: git reports the resolved toplevel, and a
     # repo_root reached through a symlink (/tmp on macOS) would otherwise
     # read as contaminated on every run.
@@ -465,7 +480,36 @@ def _publish_tree_mismatch(repo_root: Path) -> dict | None:
         "kind": _PUBLISH_TREE_MISMATCH,
         "expected": str(Path(repo_root)),
         "seen": str(seen),
+        "cause": "core-worktree-mismatch",
     }
+
+
+def _publish_tree_cause_note(cause: str) -> str:
+    """One clause naming exactly what a publish-tree mismatch's ``cause`` established.
+
+    fix #1408: callers used to print the #746 ``core.worktree`` diagnosis
+    for every ``None`` from :func:`gitops.toplevel`, including "this is not
+    a git repository at all" — the common case in ``tests/test_daemon.py``,
+    where nothing was ever ``git init``ed. ``cause`` (set by
+    :func:`_publish_tree_mismatch`) distinguishes what the probe actually
+    found; this is the fact established, without the confident wrong
+    branch. Shared by the daemon-log print in ``_refuse_publish`` and the
+    completion-note render below so the two surfaces can't drift apart
+    again.
+    """
+    if cause == "not-a-repo":
+        return "this path is not a git repository at all"
+    if cause == "core-worktree-unknown":
+        return (
+            "this is a working tree but git would not name a toplevel for "
+            "it — a repointed core.worktree (#746) on an older git, or "
+            "some other cause; the two could not be told apart from here"
+        )
+    return (
+        "something wrote core.worktree into the shared git dir; a "
+        "worktree isolates files, not .git/config, so every git command "
+        "there is currently operating on another tree and exiting 0 (#746)"
+    )
 
 
 def _refuse_publish(task: Run, repo_root: Path, lane: str) -> dict | None:
@@ -504,11 +548,11 @@ def _refuse_publish(task: Run, repo_root: Path, lane: str) -> dict | None:
         detail["superseded"] = superseded
     task.meta["stray_host_write_detail"] = json.dumps(detail, sort_keys=True)
     seen = mismatch["seen"] or "<git would not say>"
+    cause_note = _publish_tree_cause_note(mismatch.get("cause", "core-worktree-mismatch"))
     print(
         f"[brnrd] run {task.id}: REFUSING {lane} — {repo_root} is not the tree "
-        f"git resolves for it (--show-toplevel says {seen}). Something wrote "
-        f"core.worktree into the shared git dir; nothing is pushed from here "
-        f"until it is unset (#746)."
+        f"git resolves for it (--show-toplevel says {seen}): {cause_note}. "
+        f"Nothing is pushed from here until this is resolved."
     )
     return mismatch
 
@@ -10987,19 +11031,24 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
             )
         elif stray_kind == _PUBLISH_TREE_MISMATCH:
             status_label = "publish-refused"
+            # fix #1408: the cause distinguishes a genuine #746 repoint from
+            # "not a git repository at all" — see ``_publish_tree_cause_note``.
+            cause = detail.get("cause", "core-worktree-mismatch")
+            cause_note = _publish_tree_cause_note(cause)
+            repair = (
+                " Unset it (`git config --unset core.worktree`) before "
+                "trusting anything git says there."
+                if cause == "core-worktree-mismatch"
+                else ""
+            )
             stray_block = (
                 "\n\nPUBLISH REFUSED — the shared host checkout at "
                 f"{detail.get('expected', '?')} is not the tree git resolves "
                 f"for it (--show-toplevel says "
                 f"{detail.get('seen') or '<git would not say>'}), so nothing "
                 f"was pushed from it ({detail.get('lane', 'publish')} lane).\n"
-                "Something wrote `core.worktree` into the *shared* git dir — "
-                "a worktree isolates files, not `.git/config`. Every git "
-                "command in that checkout is currently operating on another "
-                "tree and exiting 0. Unset it "
-                "(`git config --unset core.worktree`) before trusting "
-                "anything git says there; this child's work is still on its "
-                "own branch, unpublished (#746)."
+                f"{cause_note[0].upper()}{cause_note[1:]}.{repair} This "
+                "child's work is still on its own branch, unpublished."
             )
         else:  # host-head-moved — unattributed, the weakest arm
             stray_block = (
