@@ -572,6 +572,108 @@ def test_media_group_album_coalesces_into_one_event(env):
     assert len(telegram_events[0]["attachments"]) == 3
 
 
+def test_concurrent_album_webhooks_do_not_lose_attachments(monkeypatch, tmp_path):
+    """#1396 — the merge path this PR adds (`_find_open_media_group` +
+    `inbox.enqueue`'s read-modify-write of ``attachments_json``) has no row
+    lock. Telegram delivers each item of one album as its own webhook call;
+    ``telegram_webhook`` is a sync ``def``, so Starlette runs concurrent
+    calls in its threadpool for real, and the engine is built with
+    ``check_same_thread: False`` (db.py). Two items landing in overlapping
+    requests can both read the same ``attachments_json``, both append, and
+    the later commit overwrites the earlier — one photo silently gone.
+
+    Drives the *real* caller path: genuine OS threads calling
+    ``client.post`` (not asyncio tasks), barrier-synced to force maximum
+    overlap, against a **file-backed** sqlite db — db.py's own docstring on
+    ``make_engine`` documents that ``:memory:`` is pinned to a ``StaticPool``
+    sharing one connection across every session, which is not an honest
+    model of concurrent callers (see also `tests/test_brnrd_inbox.py::env`).
+    Repeated over many trials and every attachment must survive every trial.
+    """
+    import json
+    import threading
+
+    monkeypatch.setattr(
+        "brnrd.platforms.telegram.send_message",
+        lambda token, chat_id, text, **kw: None,
+    )
+    settings = Settings(
+        database_url=f"sqlite:///{tmp_path / 'race.db'}",
+        telegram_bot_token="bot:TOKEN",
+        telegram_webhook_secret=_SECRET,
+        inbox_long_poll_max_s=0.2,
+        inbox_poll_interval_s=0.02,
+        # 20 trials x 5 items/album would blow the default free-tier burst
+        # ceiling (6/min) long before the race window is exercised at all —
+        # this test is about the merge race, not the admission throttle, so
+        # lift both bounds well past what it drives.
+        limit_free_events_per_minute=10_000,
+        limit_abuse_events_per_minute=10_000,
+    )
+    app = create_app(settings)
+    client = TestClient(app)
+
+    acc = _account(client)
+    rid = _repo(client, acc)
+    code = _tg_pair_code(client, acc, rid)
+    client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
+
+    N = 5  # items per album
+    TRIALS = 20
+    lost_trials = 0
+    total_lost = 0
+
+    for trial in range(TRIALS):
+        group_id = f"race-{trial}"
+        barrier = threading.Barrier(N)
+        errors: list[BaseException] = []
+
+        def _send(i, group_id=group_id, trial=trial):
+            try:
+                barrier.wait(timeout=5)
+                update = _message(555, "", message_id=10_000 + trial * 100 + i)
+                msg = update["message"]
+                del msg["text"]
+                msg["photo"] = [
+                    {"file_id": f"f-{trial}-{i}", "width": 900, "height": 600, "file_size": 1000}
+                ]
+                msg["media_group_id"] = group_id
+                r = client.post("/v1/webhooks/telegram", json=update, headers=_HDR)
+                r.raise_for_status()
+            except BaseException as exc:  # noqa: BLE001 - surfaced below
+                errors.append(exc)
+
+        threads = [threading.Thread(target=_send, args=(i,)) for i in range(N)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        if errors:
+            raise errors[0]
+
+        with app.state.SessionLocal() as db:
+            events = list(
+                db.execute(select(Event).where(Event.source == "telegram")).scalars()
+            )
+        matching = [
+            e for e in events
+            if json.loads(e.reply_to or "{}").get("media_group_id") == group_id
+        ]
+        seen_ids = {
+            p["file_id"]
+            for e in matching
+            for p in json.loads(e.attachments_json or "[]")
+        }
+        if len(seen_ids) != N:
+            lost_trials += 1
+            total_lost += N - len(seen_ids)
+
+    assert lost_trials == 0, (
+        f"lost an attachment in {lost_trials}/{TRIALS} trials "
+        f"({total_lost} attachments lost total, {N} items/album)"
+    )
+
+
 def test_captionless_photo_enqueues_pointer_with_empty_body(env, monkeypatch):
     """#525 — a captionless *image* is a valid message now (the image carries
     the content, matching the local gate); no more "can't see media" reply."""
