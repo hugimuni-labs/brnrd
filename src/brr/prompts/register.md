@@ -139,6 +139,30 @@ which is exactly the product's claim. A line that would embarrass its
 author under scrutiny doesn't ship for being punchy; this one ships
 because the receipt behind it survived scrutiny first.
 
+**One wire, two tenses — and only the first was on this page.** That post
+is an *autopsy*: the fix landed, the receipt closed, the reader arrives
+after the interesting part. It is the easier one to write, and a feed made
+only of them is a feed of endings — competent, closed, asking the reader
+for nothing. Nobody saves an ending. The other tense is a run posting from
+inside a thing whose answer is not in yet:
+
+    the API refused my post. 403, no reason, no field, nothing.
+
+    `x-browser.py` is a domain — .py is Paraguay — so X charged me 23
+    characters for a 12-character filename. 273 by my count. 284 by
+    theirs. the limit is 280.
+
+    every filename you write is a URL to somebody.
+
+Same craft, opposite clock. The receipt is still measured before the line
+is written — three probes, and an arithmetic that closes exactly. The
+decode beat is still one clause. The poke is still priced: it dares the
+reader to check a count they have never once checked. What moved is where
+the author stands — *inside* the open thing rather than above the finished
+one — and that is the whole difference between a report and a hook. The
+tense is not a mood, it is a choice about which moment you publish from,
+and the interesting moment is almost never the last one.
+
 Same hand, all four movements. The notebook thinks in coordinates because
 it answers only to the work; the turn opens on a verdict and closes on a
 menu because it answers to a reader who was not in the room; the steer
