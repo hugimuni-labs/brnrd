@@ -1442,38 +1442,95 @@ def test_list_project_homes_empty_when_nothing_scaffolded_yet(tmp_path):
 
 # ── envoy shims: import guards and documentation ──────────────────────
 
-def test_envoy_shims_have_import_error_guards():
-    """Ensure the three envoy shims (x-post.py, x-read.py, x-browser.py)
-    have try/except guards around the brr imports, so they fail legibly
-    when the interpreter cannot import brr, rather than surfacing a bare
-    ModuleNotFoundError.
+def test_envoy_shim_without_brr_names_the_fix_instead_of_a_traceback():
+    """Drive each shim with an interpreter that genuinely cannot import
+    ``brr`` and assert what a human actually sees.
+
+    Asserting the *source* contains ``try:``/``except ModuleNotFoundError``
+    would pass on a guard that swallows the error, re-raises the wrong
+    thing, or names no remedy — and would fail on a correct refactor. So
+    this runs the real script under a meta-path finder that makes ``brr``
+    genuinely unimportable, and reads stderr the way the reader does.
+
+    The measured defect (2026-08-15): the login shell's ``python3`` is not
+    the interpreter the daemon runs, so a reader following the docs got a
+    bare ``ModuleNotFoundError`` from a file whose whole premise is legible
+    failure.
     """
+    import subprocess
+    import sys
+    import tempfile
     from pathlib import Path
 
     repo_root = Path(__file__).parent.parent
-    shim_names = ["x-post.py", "x-read.py", "x-browser.py"]
+    blocker = (
+        "import sys\n"
+        "class _NoBrr:\n"
+        "    def find_spec(self, fullname, path=None, target=None):\n"
+        "        if fullname == 'brr' or fullname.startswith('brr.'):\n"
+        "            raise ModuleNotFoundError(\"No module named 'brr'\", name='brr')\n"
+        "        return None\n"
+        "sys.meta_path.insert(0, _NoBrr())\n"
+    )
 
-    for shim_name in shim_names:
-        shim_path = repo_root / "examples" / "envoy" / shim_name
-        assert shim_path.exists(), f"shim {shim_name} not found at {shim_path}"
-        content = shim_path.read_text(encoding="utf-8")
+    with tempfile.TemporaryDirectory() as tmp:
+        (Path(tmp) / "sitecustomize.py").write_text(blocker, encoding="utf-8")
+        env = {"PATH": "/usr/bin:/bin", "PYTHONPATH": tmp}
 
-        # Guard 1: must have a try/except around the brr import
-        assert "try:" in content, f"{shim_name}: missing try block around import"
-        assert "except ModuleNotFoundError" in content, (
-            f"{shim_name}: missing ModuleNotFoundError handler"
-        )
-        assert "raise SystemExit" in content, (
-            f"{shim_name}: missing SystemExit in error handler"
-        )
-        # Guard 2: the error message must name the issue and the fix
-        assert "cannot import" in content, (
-            f"{shim_name}: error message must name the import problem"
-        )
-        assert (".venv/bin/python3" in content or "<python-with-brr>" in content), (
-            f"{shim_name}: error message must hint at the solution "
-            "(usually .venv/bin/python3)"
-        )
+        for shim_name in ("x-post.py", "x-read.py", "x-browser.py"):
+            shim = repo_root / "examples" / "envoy" / shim_name
+            proc = subprocess.run(
+                [sys.executable, str(shim), "--help"],
+                capture_output=True, text=True, env=env, timeout=60,
+            )
+            out = proc.stdout + proc.stderr
+
+            assert proc.returncode != 0, f"{shim_name}: exited 0 without brr"
+            # a human-readable refusal, not an interpreter traceback
+            assert "Traceback (most recent call last)" not in out, (
+                f"{shim_name}: leaked a traceback instead of a message"
+            )
+            # and it names the actual fix: which interpreter to use
+            assert "brr" in out, f"{shim_name}: message never mentions brr"
+            assert "python3" in out, (
+                f"{shim_name}: message never names an interpreter to use"
+            )
+
+
+def test_envoy_shim_blocker_itself_works(tmp_path):
+    """The guard above is only evidence if the blocker really blocks.
+
+    Without this, a broken blocker turns the test into a no-op that passes
+    over an unguarded shim — the classic sanity assertion a guard keyed on
+    absence needs.
+    """
+    import subprocess
+    import sys
+
+    blocker = (
+        "import sys\n"
+        "class _NoBrr:\n"
+        "    def find_spec(self, fullname, path=None, target=None):\n"
+        "        if fullname == 'brr' or fullname.startswith('brr.'):\n"
+        "            raise ModuleNotFoundError(\"No module named 'brr'\", name='brr')\n"
+        "        return None\n"
+        "sys.meta_path.insert(0, _NoBrr())\n"
+    )
+    (tmp_path / "sitecustomize.py").write_text(blocker, encoding="utf-8")
+
+    # unblocked: brr imports fine under this interpreter
+    ok = subprocess.run(
+        [sys.executable, "-c", "import brr"], capture_output=True, text=True, timeout=60
+    )
+    assert ok.returncode == 0, "brr is not importable at all — test is meaningless"
+
+    # blocked: the same import now fails
+    blocked = subprocess.run(
+        [sys.executable, "-c", "import brr"],
+        capture_output=True, text=True, timeout=60,
+        env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(tmp_path)},
+    )
+    assert blocked.returncode != 0, "the blocker did not block — every guard above is a no-op"
 
 
 def test_envoy_readme_does_not_regress_to_bare_python3_commands():
