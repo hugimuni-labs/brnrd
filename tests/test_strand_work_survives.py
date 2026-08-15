@@ -48,6 +48,18 @@ def host(tmp_path):
     return repo
 
 
+@pytest.fixture(autouse=True)
+def _clean_run_controls():
+    """The live-strand-handoff half (#1197) registers `_run_controls` rows —
+    same module-global registry `test_daemon.py` clears; clear it here too
+    so a row minted by one test can't leak into another's `owned_children`."""
+    with daemon._run_controls_lock:
+        daemon._run_controls.clear()
+    yield
+    with daemon._run_controls_lock:
+        daemon._run_controls.clear()
+
+
 def _strand(run_id="run-1298-child", *, status="done"):
     return Run(
         id=run_id, event_id=f"evt-{run_id}", body="spec",
@@ -354,3 +366,122 @@ def test_no_head_at_all_is_a_measurable_no(tmp_path):
     empty.mkdir()
 
     assert worktree.has_commits_beyond(empty, "main") is False
+
+
+# ── half 5: a live strand needs a declared handoff, not just a finished
+# one (#1197) ──────────────────────────────────────────────────────────
+#
+# Half 4 above closes the case where a dispatched child *finished* and its
+# promised branch is nowhere to be found — `_stranded_strands`, driven off
+# the disk-persisted `Run` records under the shared `.brr/runs`. This half
+# is the sibling gap named in #1197: a bolt landing while a child is still
+# *running* said nothing machine-checkable about whether the parent named
+# the handoff or simply dropped the thread. That check reads a different,
+# in-process registry — `_run_controls` / `_owned_child_controls` — the same
+# one `hooks._live_child_handover_line` renders and `portal-state.json`'s
+# `resources.coexisting_runs.owned_children` carries. The two mechanisms
+# must not double-indict the same child: a live child is this half's
+# question, a terminal one with no salvaged branch is half 4's.
+
+
+def _register_live_child(event_id, parent_run_id, *, child_run_id=None):
+    daemon._register_run_control(event_id, parent_run_id)
+    if child_run_id:
+        daemon._bind_run_control(event_id, child_run_id)
+
+
+def test_a_bolt_bounces_on_a_live_strand_with_no_strands_row():
+    parent = Run(id="run-1197-parent", event_id="evt-p", body="", env="host")
+    _register_live_child("evt-1197-child", parent.id, child_run_id="run-1197-child")
+    assert daemon._owned_child_controls(parent.id), (
+        "fixture must register a live owned child or the check below "
+        "would pass vacuously over an empty set"
+    )
+
+    found = daemon._cut_mismatches(
+        parent, cut_verb.CutDeclaration(),
+        pending_events=[], repo_root=None, outbox_dir=None,
+    )
+
+    assert any(
+        "run-1197-child" in m and "undispositioned" in m for m in found
+    )
+
+
+def test_a_bolt_accepts_a_declared_handoff_for_a_live_strand():
+    parent = Run(id="run-1197-parent", event_id="evt-p", body="", env="host")
+    _register_live_child("evt-1197-child", parent.id, child_run_id="run-1197-child")
+
+    declared = cut_verb.CutDeclaration(
+        strands=(
+            cut_verb.StrandDisposition(
+                run="run-1197-child",
+                disposition="handoff — the next wake on this thread converges it",
+            ),
+        ),
+    )
+
+    assert daemon._cut_mismatches(
+        parent, declared, pending_events=[], repo_root=None, outbox_dir=None,
+    ) == []
+
+
+def test_a_bolt_bounces_on_a_strands_row_naming_a_run_that_is_not_a_live_child():
+    parent = Run(id="run-1197-parent", event_id="evt-p", body="", env="host")
+    # No live children registered at all.
+
+    declared = cut_verb.CutDeclaration(
+        strands=(
+            cut_verb.StrandDisposition(run="run-not-mine", disposition="converged"),
+        ),
+    )
+
+    found = daemon._cut_mismatches(
+        parent, declared, pending_events=[], repo_root=None, outbox_dir=None,
+    )
+
+    assert any(
+        "run-not-mine" in m and "not a live child" in m for m in found
+    )
+
+
+def test_a_finished_child_needs_no_strands_row_and_the_two_checks_dont_double_indict(
+    host,
+):
+    """A terminal child with no salvaged branch is half 4's complaint
+    (`_stranded_strands`, `owed: strand ... unsalvaged`) — never this half's
+    (`strands: ... undispositioned`), because a run that already finished and
+    was retired from `_run_controls` is no longer a *live* owned child at all."""
+    parent = Run(id="run-1197-parent", event_id="evt-p", body="", env="host")
+    _child_run(host, "run-1197-lost", parent.id, branch="brr/the-lost-work")
+    # The finished child is never registered live — `_retire_run_control`
+    # pops a real one at completion; simulating "never registered" is the
+    # same end state without reaching into daemon internals for the pop.
+    assert daemon._owned_child_controls(parent.id) == [], (
+        "fixture must leave no live owned children or this test would not "
+        "isolate half 4's complaint from half 5's"
+    )
+
+    found = daemon._cut_mismatches(
+        parent, _clean_cut(), pending_events=[], repo_root=host, outbox_dir=None,
+    )
+
+    assert any("unsalvaged" in m for m in found)
+    assert not any("undispositioned" in m for m in found)
+    assert not any("not a live child" in m for m in found)
+
+
+def test_a_bolt_ignores_a_stopped_child_control():
+    """`stop:` marks a control ``stopped`` without popping it (#1197's other
+    live-registry consumer, `_spawn_child_armed`, reads the same flag) — the
+    strands check must honour it exactly as `_owned_child_controls` does."""
+    parent = Run(id="run-1197-parent", event_id="evt-p", body="", env="host")
+    _register_live_child("evt-1197-child", parent.id, child_run_id="run-1197-child")
+    with daemon._run_controls_lock:
+        daemon._run_controls["evt-1197-child"]["stopped"] = True
+    assert daemon._owned_child_controls(parent.id) == []
+
+    assert daemon._cut_mismatches(
+        parent, cut_verb.CutDeclaration(),
+        pending_events=[], repo_root=None, outbox_dir=None,
+    ) == []
