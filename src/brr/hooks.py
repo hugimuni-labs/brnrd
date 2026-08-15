@@ -5433,6 +5433,19 @@ def _rooted_write_neutral(
             # If outbox_dir cannot resolve, fall through to the block below —
             # this is a question for the tool call itself, not this predicate.
             pass
+    # #1410: Carve out writes to the shared `.brr/reports/` directory. The
+    # daemon declares the report path in the `report:` contract when
+    # dispatching a strand, and the strand should be allowed to write there.
+    # This is the daemon's own shared runtime location for collect reports.
+    if host_root is not None:
+        try:
+            reports_dir = (host_root / ".brr" / "reports").resolve()
+            if reports_dir in resolved.parents or resolved == reports_dir:
+                return result
+        except OSError:
+            # If reports_dir cannot resolve, fall through to the block below —
+            # this is a question for the tool call itself, not this predicate.
+            pass
     result["block"] = True
     if resolved.name in _CONTROL_FILES:
         # #1318: a recognised control-file name refused only because it
