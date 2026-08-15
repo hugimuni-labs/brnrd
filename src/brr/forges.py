@@ -300,21 +300,30 @@ def view_blob_url(
 def commit_url(
     remote_url: str,
     sha: str,
+    repo_path: str | None = None,
     *,
     override_kind: str | None = None,
     override_url_base: str | None = None,
 ) -> str | None:
     """Return a clickable URL for commit *sha* on the forge, or ``None``.
 
-    Unlike :func:`thread_url` (which takes an explicit ``repo_path`` because
-    an issue/PR reference can point at a different repo than the one the
-    daemon is running in), a commit relic is always local to *remote_url* —
-    the run's own origin — so owner/repo come from the same parse as
-    :func:`view_branch_url`.
+    The forge *kind* and web *host* come from the configured ``origin``
+    remote (so self-hosted overrides apply), but the ``owner/repo`` comes
+    from *repo_path* when provided — the repo the commit is actually in,
+    which may differ from origin on a multi-repo project. Defaults to
+    origin's owner/repo when *repo_path* is None, matching the prior
+    behaviour for auto-derived commits (which are always local).
     """
     sha = (sha or "").strip()
     if not sha or not _is_url_safe_branch(sha):
         return None
+    path = (repo_path or "").strip().strip("/") if repo_path else None
+    if path and "/" not in path:
+        path = None
+    if path:
+        owner, _, repo = path.rpartition("/")
+        if not owner or not repo:
+            path = None
     match = detect_forge(
         remote_url,
         override_kind=override_kind,
@@ -325,6 +334,9 @@ def commit_url(
     template = _COMMIT_TEMPLATES.get(match.kind)
     if template is None:
         return None
+    if path:
+        owner, _, repo = path.rpartition("/")
+        return template.format(host=match.host, owner=owner, repo=repo, sha=sha)
     return template.format(host=match.host, owner=match.owner, repo=match.repo, sha=sha)
 
 
