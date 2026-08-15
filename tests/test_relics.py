@@ -1024,6 +1024,22 @@ def _github_repo(tmp_path: Path, name: str = "repo") -> Path:
     return repo
 
 
+def _head_sha(repo: Path) -> str:
+    """A sha that actually exists in *repo*.
+
+    Fixtures here used to reach for placeholder hex (``0123456789abcdef``).
+    That was fine while nothing asked whether a reported sha was real, and
+    stopped being fine with #1368: an undeclared commit relic is now linked
+    to this repo only if it resolves in this repo, so a placeholder sha is
+    no longer a stand-in for a real one — it is a *different case*. Tests
+    that mean "a commit this run made" say so with a real sha.
+    """
+    return subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+
 def test_collect_links_reported_issue_relic(tmp_path: Path):
     repo = _github_repo(tmp_path)
     outbox = tmp_path / "outbox"
@@ -1042,15 +1058,19 @@ def test_collect_links_reported_pr_and_commit_relics(tmp_path: Path):
     repo = _github_repo(tmp_path)
     outbox = tmp_path / "outbox"
     outbox.mkdir()
+    sha = _head_sha(repo)
     relics.append(outbox, "pr", number=571)
-    relics.append(outbox, "commit", sha="0123456789abcdef")
+    relics.append(outbox, "commit", sha=sha)
 
     out = relics.collect(repo, branch=None, seed_ref=None, outbox_dir=outbox)
     urls = {r["kind"]: r.get("url") for r in out}
 
+    # Fixture repaired for #1368, assertion unchanged: this test always meant
+    # "a commit this run made gets linked", and now says it with a sha that
+    # exists. The placeholder it used before now exercises the other branch.
     assert urls == {
         "pr": "https://github.com/Gurio/brr/pull/571",
-        "commit": "https://github.com/Gurio/brr/commit/0123456789abcdef",
+        "commit": f"https://github.com/Gurio/brr/commit/{sha}",
     }
 
 
@@ -1191,8 +1211,15 @@ def test_collect_links_self_reported_commit_to_foreign_repo(tmp_path: Path):
 
 
 def test_collect_commit_without_remote_renders_unlinked(tmp_path: Path):
-    """When a repo has no configured remote, an unresolvable commit renders
-    without a link rather than a confident 404."""
+    """A repo with no remote at all derives no commit URL.
+
+    Real coverage, but note what it does NOT prove: there is no forge here,
+    so *every* kind renders unlinked. The case #1368 was actually filed
+    about — a repo that HAS a remote, and a commit sha that is not in it —
+    is covered by ``test_undeclared_commit_not_in_this_repo_renders_unlinked``
+    below. Keeping both, because a green test over the degenerate case is
+    what let the confident 404 survive a passing suite once already.
+    """
     # A repo with no remote (no attested forge)
     repo = tmp_path / "bare"
     from _helpers import init_git_repo, commit_files
@@ -1218,20 +1245,152 @@ def test_dedupe_keeps_commits_in_different_repos_apart(tmp_path: Path):
     repo = _github_repo(tmp_path)
     outbox = tmp_path / "outbox"
     outbox.mkdir()
-    # Commit in brnrd (execution repo)
-    relics.append(outbox, "commit", sha="abc1234567890", subject="work in brnrd")
-    # Same short-sha prefix (abc1234) but in knowledge repo
+    # A real commit in the execution repo, and a foreign one that shares its
+    # 7-char prefix. Both arms use shas the collector can actually reason
+    # about: the local one resolves here, the foreign one is declared.
+    local = _head_sha(repo)
+    foreign = local[:7] + "abcdef"
+    relics.append(outbox, "commit", sha=local, subject="work in brnrd")
     relics.append(
-        outbox, "commit", sha="abc1234abcdef", subject="work in knowledge",
+        outbox, "commit", sha=foreign, subject="work in knowledge",
         repo="hugimuni-labs/brnrd-knowledge",
     )
 
     out = relics.collect(repo, branch=None, seed_ref=None, outbox_dir=outbox)
 
-    # Both commits should survive; they don't dedupe
+    # Both commits survive: same short-sha prefix, different repos.
     commits = [r for r in out if r["kind"] == "commit"]
-    assert len(commits) == 2
-    # First commit links to execution repo
-    assert commits[0].get("url") == "https://github.com/Gurio/brr/commit/abc1234567890"
-    # Second commit links to knowledge repo
-    assert commits[1].get("url") == "https://github.com/hugimuni-labs/brnrd-knowledge/commit/abc1234abcdef"
+    assert len(commits) == 2, f"a shared 7-char prefix collapsed two repos: {commits!r}"
+    assert commits[0].get("url") == f"https://github.com/Gurio/brr/commit/{local}"
+    assert commits[1].get("url") == (
+        f"https://github.com/hugimuni-labs/brnrd-knowledge/commit/{foreign}"
+    )
+
+
+def test_undeclared_commit_not_in_this_repo_renders_unlinked(tmp_path: Path):
+    """#1368's own case: a real forge, and a sha that is not in this repo.
+
+    The measured incident — a commit that landed in the knowledge repo was
+    rendered as ``<execution-repo>/commit/<sha>`` and 404'd for the
+    maintainer. With no ``repo`` on the record, "the execution repo" is an
+    assumption; this asserts the assumption is checked before it becomes a
+    link. ``git rev-parse`` is local and offline, so the check costs no
+    network.
+    """
+    from _helpers import init_git_repo, commit_files
+
+    repo = tmp_path / "exec"
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "1"}, message="seed")
+    subprocess.run(
+        ["git", "-C", str(repo), "remote", "add", "origin",
+         "https://github.com/hugimuni-labs/brnrd.git"],
+        check=True,
+    )
+
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    relics.append(outbox, "commit", sha="a81e063", subject="kb: the memory beat")
+
+    out = relics.collect(repo, branch=None, seed_ref=None, outbox_dir=outbox)
+    commits = [r for r in out if r.get("kind") == "commit" and r.get("sha") == "a81e063"]
+    assert len(commits) == 1
+    assert not commits[0].get("url"), (
+        "a sha that does not resolve in this checkout must render as text, "
+        f"not as a confident link: {commits[0].get('url')!r}"
+    )
+
+
+def test_undeclared_commit_that_is_local_still_links(tmp_path: Path):
+    """The other side of the same guard — no link is lost.
+
+    The verification must not cost links for the ordinary case: a commit
+    the run actually made, reported without a ``repo`` field, still links
+    to the execution repo.
+    """
+    from _helpers import init_git_repo, commit_files
+
+    repo = tmp_path / "exec"
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "1"}, message="seed")
+    subprocess.run(
+        ["git", "-C", str(repo), "remote", "add", "origin",
+         "https://github.com/hugimuni-labs/brnrd.git"],
+        check=True,
+    )
+    sha = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    relics.append(outbox, "commit", sha=sha, subject="a real local commit")
+
+    out = relics.collect(repo, branch=None, seed_ref=None, outbox_dir=outbox)
+    commits = [r for r in out if r.get("kind") == "commit"]
+    assert commits, "the local commit relic vanished"
+    assert commits[0]["url"] == (
+        f"https://github.com/hugimuni-labs/brnrd/commit/{sha}"
+    )
+
+
+def test_optional_repo_field_does_not_split_one_relic_in_two(tmp_path: Path):
+    """``repo`` is optional and means "this checkout" when absent.
+
+    So keying dedup on its raw presence gives one PR two identities and
+    renders it twice — which is what a repo-in-the-key change introduces if
+    the field is read rather than resolved. One fact, one key.
+    """
+    from _helpers import init_git_repo, commit_files
+
+    repo = tmp_path / "exec"
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "1"}, message="seed")
+    subprocess.run(
+        ["git", "-C", str(repo), "remote", "add", "origin",
+         "https://github.com/hugimuni-labs/brnrd.git"],
+        check=True,
+    )
+
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    relics.append(outbox, "pr", number=1368)
+    relics.append(outbox, "pr", number=1368, repo="hugimuni-labs/brnrd")
+
+    out = relics.collect(repo, branch=None, seed_ref=None, outbox_dir=outbox)
+    prs = [r for r in out if r.get("kind") == "pr" and r.get("number") == 1368]
+    assert len(prs) == 1, (
+        "the same PR, reported once bare and once naming its own repo, must "
+        f"collapse to one row; got {len(prs)}: {prs!r}"
+    )
+
+
+def test_a_genuinely_foreign_pr_still_keeps_its_own_row(tmp_path: Path):
+    """The guard above must not over-collapse: same number, different project.
+
+    Without this, resolving ``repo`` before keying could be "fixed" by
+    dropping it from the key entirely, which would merge two unrelated PRs.
+    """
+    from _helpers import init_git_repo, commit_files
+
+    repo = tmp_path / "exec"
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "1"}, message="seed")
+    subprocess.run(
+        ["git", "-C", str(repo), "remote", "add", "origin",
+         "https://github.com/hugimuni-labs/brnrd.git"],
+        check=True,
+    )
+
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    relics.append(outbox, "pr", number=7)
+    relics.append(outbox, "pr", number=7, repo="someone-else/other-project")
+
+    out = relics.collect(repo, branch=None, seed_ref=None, outbox_dir=outbox)
+    prs = [r for r in out if r.get("kind") == "pr" and r.get("number") == 7]
+    assert len(prs) == 2, (
+        "PR #7 here and PR #7 in another project are two different facts; "
+        f"got {len(prs)}"
+    )
