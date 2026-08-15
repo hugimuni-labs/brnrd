@@ -11037,7 +11037,7 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
             cause_note = _publish_tree_cause_note(cause)
             repair = (
                 " Unset it (`git config --unset core.worktree`) before "
-                "trusting anything git says there;"
+                "trusting anything git says there."
                 if cause == "core-worktree-mismatch"
                 else ""
             )
@@ -11047,7 +11047,7 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
                 f"for it (--show-toplevel says "
                 f"{detail.get('seen') or '<git would not say>'}), so nothing "
                 f"was pushed from it ({detail.get('lane', 'publish')} lane).\n"
-                f"{cause_note[0].upper()}{cause_note[1:]}.{repair} this "
+                f"{cause_note[0].upper()}{cause_note[1:]}.{repair} This "
                 "child's work is still on its own branch, unpublished."
             )
         else:  # host-head-moved — unattributed, the weakest arm
