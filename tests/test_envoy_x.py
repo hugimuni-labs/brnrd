@@ -136,6 +136,140 @@ def test_dry_run_json_shape_carries_the_would_post_payload(tmp_path, monkeypatch
     assert payload == {"would_post": {"text": "hi", "reply": {"in_reply_to_tweet_id": "42"}}}
 
 
+# ── weighted length: X counts twitter-text weight, not len() ──────────
+#
+# The defect measured live 2026-08-15: a post that passes len() <= 280
+# still gets a fieldless 403 from X, because ".py" (and ".sh"/".md"/
+# ".io"/".dev"/".ai") is a live TLD and a bare "word.py" token parses as
+# a link — charged a flat 23 (TRANSFORMED_URL_LENGTH), not its own
+# length. The four cases below are the exact measured probes from the
+# ticket, reconstructed at fixed lengths so the arithmetic (273 - 12 +
+# 23 == 284) is asserted, not just eyeballed. The network is never
+# touched -- these exercise weighted_length()/link_charges() directly,
+# never urlopen.
+
+
+def _padded(token: str, total_len: int) -> str:
+    """*token*, a space, then filler to hit exactly *total_len* chars."""
+    filler = "b" * (total_len - len(token) - 1)
+    text = f"{token} {filler}"
+    assert len(text) == total_len
+    return text
+
+
+def test_weighted_length_charges_a_dotted_filename_as_a_link():
+    # "x-browser.py" -- .py is Paraguay's ccTLD, so this parses as a URL
+    # and is charged the flat 23 instead of its own 12-char weight.
+    text = _padded("x-browser.py", 273)
+    assert len(text) == 273
+    assert envoy_x.weighted_length(text) == 284  # 273 - 12 + 23
+    assert envoy_x.link_charges(text) == [("x-browser.py", 23)]
+
+
+def test_weighted_length_matches_len_when_the_dot_is_removed():
+    # Same text, ".py" -> "-py": no dot, no TLD, no link -- weighted
+    # length now equals len() exactly, same as the live 200 result.
+    text = _padded("x-browser-py", 273)
+    assert len(text) == 273
+    assert envoy_x.weighted_length(text) == 273
+    assert envoy_x.link_charges(text) == []
+
+
+def test_weighted_length_padded_past_280_still_refuses_without_a_link():
+    # The same non-link text, 11 chars longer (284): over the real limit
+    # on its own merits, no link involved -- confirms the check isn't
+    # solely a link-detector, it's a length check that also sees links.
+    text = _padded("x-browser-py", 284)
+    assert envoy_x.weighted_length(text) == 284
+    assert envoy_x.link_charges(text) == []
+
+
+def test_weighted_length_280_filler_fits():
+    text = "b" * 280
+    assert envoy_x.weighted_length(text) == 280
+
+
+def test_link_charges_ignores_a_dotted_token_that_is_not_a_real_tld():
+    # ".log" is not a TLD (checked against the upstream gTLD/ccTLD table)
+    # -- stays plain text, no link charge, matching real X behaviour.
+    text = "see notes.log for details"
+    assert envoy_x.link_charges(text) == []
+    assert envoy_x.weighted_length(text) == len(text)
+
+
+def test_explicit_scheme_always_counts_as_a_link_even_with_a_fake_tld():
+    # twitter-text trusts an explicit http(s):// scheme without
+    # re-validating the TLD -- "example.notatld" alone wouldn't link,
+    # but with a scheme in front it always does.
+    text = "see https://example.notatld/path for details"
+    charges = envoy_x.link_charges(text)
+    assert charges == [("https://example.notatld/path", 23)]
+
+
+@pytest.mark.parametrize(
+    "text,expected_weighted",
+    [
+        ("plain ascii, nothing dotted", 27),
+        ("x-browser.py", 23),  # the whole token is one link, cost 23
+        ("x-browser-py", 12),  # no dot after the hyphen swap -> literal
+        ("config.log", 10),  # ".log" is not a TLD -> literal
+        ("see docs.md now", 15 - 7 + 23),  # ".md" (Moldova) is a live TLD
+        ("http://example.zz/x", 23),  # scheme always counts, fake TLD irrelevant
+    ],
+)
+def test_weighted_length_table(text, expected_weighted):
+    assert envoy_x.weighted_length(text) == expected_weighted
+
+
+# ── pre-flight refusal: before any write call, dry-run included ──────
+
+
+def test_overlength_post_refuses_before_touching_the_wire(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    _refusing_urlopen(monkeypatch)
+    text = _padded("x-browser.py", 273)  # weighted 284, over the limit
+    with pytest.raises(SystemExit) as exc:
+        envoy_x.run_post([text], paths)
+    msg = str(exc.value)
+    assert "284" in msg
+    assert "280" in msg
+    assert "273" in msg  # the raw len(), named so it isn't confused for the real count
+    assert "x-browser.py" in msg
+    assert not paths.log.exists()
+
+
+def test_overlength_dry_run_also_refuses_so_the_preview_is_honest(tmp_path, monkeypatch):
+    # The whole point: a post that used to pass --dry-run and then get
+    # refused live now refuses at --dry-run too.
+    paths = _paths(tmp_path)
+    _refusing_urlopen(monkeypatch)
+    text = _padded("x-browser.py", 273)
+    with pytest.raises(SystemExit, match="284"):
+        envoy_x.run_post([text, "--dry-run"], paths)
+
+
+def test_within_limit_link_text_still_dry_runs_and_names_the_charge(tmp_path, monkeypatch, capsys):
+    paths = _paths(tmp_path)
+    _refusing_urlopen(monkeypatch)
+    envoy_x.run_post(["see x-browser.py", "--dry-run"], paths)
+    out = capsys.readouterr().out
+    assert "dry-run" in out
+    # len() is 16, weighted is 16 - 12 + 23 == 27 -- both should be visible.
+    assert "16" in out
+    assert "27" in out
+    assert "x-browser.py" in out
+
+
+def test_dry_run_json_shape_is_unaffected_by_weighted_length(tmp_path, monkeypatch, capsys):
+    # The --json dry-run payload contract (test above) doesn't grow a
+    # weighted-length field -- it's the would-post payload only.
+    paths = _paths(tmp_path)
+    _refusing_urlopen(monkeypatch)
+    envoy_x.run_post(["see x-browser.py", "--dry-run", "--json"], paths)
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {"would_post": {"text": "see x-browser.py"}}
+
+
 # ── reply threading ──────────────────────────────────────────────────
 
 
