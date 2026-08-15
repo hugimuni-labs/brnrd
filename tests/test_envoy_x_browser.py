@@ -362,11 +362,15 @@ def test_draft_requires_text(tmp_path):
 
 def test_read_prints_structured_json_headless(tmp_path, capsys):
     paths = _paths(tmp_path)
-    driver = _FakeDriver(read_value={"author": "@a", "text": "hi", "timestamp": "t", "metrics": {}})
+    driver = _FakeDriver(
+        whoami_value="brnrd_resident",
+        read_value={"author": "@a", "text": "hi", "timestamp": "t", "metrics": {}},
+    )
     envoy_x_browser.run(
         ["read", "https://x.com/a/status/1"], paths, driver_factory=_factory_for(driver),
     )
     assert driver.headless is True
+    assert "whoami" in driver.calls
     out = json.loads(capsys.readouterr().out)
     assert out["author"] == "@a"
     assert out["url"] == "https://x.com/a/status/1"
@@ -374,11 +378,75 @@ def test_read_prints_structured_json_headless(tmp_path, capsys):
 
 def test_search_prints_structured_json_headless(tmp_path, capsys):
     paths = _paths(tmp_path)
-    driver = _FakeDriver(search_value=[{"author": "@a", "text": "hi"}])
+    driver = _FakeDriver(whoami_value="brnrd_resident", search_value=[{"author": "@a", "text": "hi"}])
     envoy_x_browser.run(["search", "brnrd"], paths, driver_factory=_factory_for(driver))
     assert driver.headless is True
+    assert "whoami" in driver.calls
     out = json.loads(capsys.readouterr().out)
     assert out == [{"author": "@a", "text": "hi"}]
+
+
+def test_search_returns_a_real_empty_result_when_logged_in(tmp_path, capsys):
+    """A genuine "logged in, nothing matched" search must stay expressible
+    — the whole point is that this and the logged-out case below are no
+    longer byte-identical."""
+    paths = _paths(tmp_path)
+    driver = _FakeDriver(whoami_value="brnrd_resident", search_value=[])
+    envoy_x_browser.run(["search", "brnrd"], paths, driver_factory=_factory_for(driver))
+    assert ("search", "brnrd") in driver.calls
+    out = json.loads(capsys.readouterr().out)
+    assert out == []
+
+
+# ── read / search: a dead session refuses instead of scraping blind ────
+
+
+def test_read_refuses_when_logged_out(tmp_path):
+    """The defect this pins: a logged-out session must not come back as a
+    well-formed, null-filled ``read`` result. Neutering ``_require_session``
+    (or dropping its call in ``_run_read``) turns this red — a driver whose
+    ``read_url`` would otherwise be reached and happily return the
+    null-filled shape."""
+    paths = _paths(tmp_path)
+    driver = _FakeDriver(whoami_value=None)
+    with pytest.raises(SystemExit) as exc:
+        envoy_x_browser.run(
+            ["read", "https://x.com/a/status/1"], paths, driver_factory=_factory_for(driver),
+        )
+    assert "not logged in" in str(exc.value) or "no active X session" in str(exc.value)
+    assert "whoami" in driver.calls
+    assert not any(isinstance(c, tuple) and c[0] == "read_url" for c in driver.calls)
+
+
+def test_search_refuses_when_logged_out(tmp_path):
+    """Same defect, the ``search`` half: a dead session must not come back
+    as an empty-but-successful result list — that shape is byte-identical
+    to a real empty search otherwise."""
+    paths = _paths(tmp_path)
+    driver = _FakeDriver(whoami_value=None)
+    with pytest.raises(SystemExit) as exc:
+        envoy_x_browser.run(["search", "brnrd"], paths, driver_factory=_factory_for(driver))
+    assert "not logged in" in str(exc.value) or "no active X session" in str(exc.value)
+    assert "whoami" in driver.calls
+    assert not any(isinstance(c, tuple) and c[0] == "search" for c in driver.calls)
+
+
+def test_read_and_search_reuse_the_same_driver_for_the_session_check(tmp_path):
+    """``_require_session`` must consult ``whoami()`` on the driver the
+    verb already opened, never a second browser — the factory is called
+    exactly once either way."""
+    paths = _paths(tmp_path)
+    driver = _FakeDriver(whoami_value="brnrd_resident", read_value={"text": "hi"})
+    calls = {"n": 0}
+
+    def counting_factory(p, *, headless):  # noqa: ARG001
+        calls["n"] += 1
+        return driver
+
+    envoy_x_browser.run(
+        ["read", "https://x.com/a/status/1"], paths, driver_factory=counting_factory,
+    )
+    assert calls["n"] == 1
 
 
 # ── login: waits for the human, verifies, reports the handle ──────────
