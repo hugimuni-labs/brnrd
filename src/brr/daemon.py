@@ -7573,6 +7573,102 @@ def _queue_child_message(
     return True
 
 
+#: #1389 — measured burst: a text, five photos, a follow-up text, 7 events
+#: in 3 seconds from one Telegram utterance. Wide enough to catch a real
+#: burst, narrow enough that two genuinely separate messages a few quiet
+#: seconds apart in the same conversation don't get swept together.
+_UTTERANCE_SWEEP_WINDOW_S = 3.0
+
+
+def _utterance_sibling_events(inbox_dir: Path, anchor: dict) -> list[dict]:
+    """Other still-**pending** events from *anchor*'s conversation, created
+    within :data:`_UTTERANCE_SWEEP_WINDOW_S` of it (#1389).
+
+    Deliberately narrow both ways — this is the fluke guardrail from the
+    issue ("avoid the scenarios where a daemon-side fluke rendered some
+    messages unanswerable"), not a hedge:
+
+    - **same conversation only.** A pending event from a different
+      correspondent is never touched, however close in time — a coincidence
+      on this daemon must never make a stranger's message unanswerable.
+    - **status == "pending" only**, not "processing". A sibling that
+      already spawned its own run is a live process; this function only
+      ever retires letters nothing has picked up yet.
+    """
+    anchor_conv = conversations.conversation_key_for_event(anchor)
+    anchor_ts = protocol._parse_iso_epoch(anchor.get("created"))
+    if not anchor_conv or anchor_ts is None:
+        return []
+    anchor_id = anchor.get("id")
+    siblings = []
+    for ev in protocol.list_pending(inbox_dir):
+        if ev.get("id") == anchor_id or ev.get("status") != "pending":
+            continue
+        if conversations.conversation_key_for_event(ev) != anchor_conv:
+            continue
+        ts = protocol._parse_iso_epoch(ev.get("created"))
+        if ts is None or abs(ts - anchor_ts) > _UTTERANCE_SWEEP_WINDOW_S:
+            continue
+        siblings.append(ev)
+    return siblings
+
+
+def _sweep_utterance_siblings(
+    inbox_dir: Path,
+    responses_dir: Path | None,
+    anchor: dict,
+    *,
+    run_id: str,
+) -> int:
+    """Retire *anchor*'s utterance siblings and post one aggregate line.
+
+    Reached only from a **user**-initiated stop of a **resident** thought
+    (#1389) — see the guard at the ``_apply_run_stop`` call site. Never a
+    crash, a timeout, a daemon restart, or a parent's ``stop:`` of its own
+    strand: those never call this. Siblings are retired to ``status:
+    cancelled`` — the same terminal word a spawned child's own
+    never-started dispatch event already uses (see the
+    ``cancelled-before-start`` branch just below this function) — so a
+    swept letter stays visible in history, never silently deleted. The
+    aggregate line is the run's own final word: it never produced a
+    terminal reply of its own, so this becomes the one reply on its
+    waking event, appended after anything already written there rather
+    than overwriting it (a response can, rarely, already exist if the kill
+    lands the same instant the run was finishing on its own).
+    """
+    siblings = _utterance_sibling_events(inbox_dir, anchor)
+    if not siblings:
+        return 0
+    anchor_id = str(anchor.get("id") or "")
+    for ev in siblings:
+        try:
+            protocol.set_status(ev, "cancelled")
+            protocol.update_event_meta(
+                ev, swept_by_run=run_id, swept_with_event=anchor_id,
+            )
+        except OSError:
+            continue
+    count = len(siblings)
+    if responses_dir is not None and anchor_id:
+        plural = "" if count == 1 else "s"
+        note = (
+            f"cancelled with the run: {count} sibling event{plural} from "
+            "your message — resend anything still wanted"
+        )
+        try:
+            existing = (
+                protocol.read_response(responses_dir, anchor_id)
+                if protocol.response_exists(responses_dir, anchor_id)
+                else None
+            )
+            body = f"{existing}\n\n{note}" if existing else note
+            protocol.write_response(responses_dir, anchor_id, body)
+            _set_event_status_if_present(anchor, "done")
+        except OSError as exc:
+            print(f"[brnrd] utterance sweep reply failed for {anchor_id}: {exc}")
+    return count
+
+
 def _apply_run_stop(
     control: dict,
     inbox_dir: Path | None,
@@ -7580,6 +7676,7 @@ def _apply_run_stop(
     stopped_by: str,
     reason: str = "",
     conversation_key: str = "",
+    responses_dir: Path | None = None,
 ) -> str:
     """Dispatch the kill for an already-authorized stop. Returns the stage.
 
@@ -7597,6 +7694,16 @@ def _apply_run_stop(
     where the flag lands before the subprocess registers. Never dispatched:
     cancel the inbox event so it never starts and post the completion note
     right here, since no future will ever exist to reap.
+
+    #1389: a **user**-initiated stop of a **resident** thought (never a
+    strand, never the ``stop:`` verb — those pass ``stopped_by`` as a run
+    id, not the literal ``"user"``) also sweeps the waking event's
+    utterance siblings — other pending events from the same conversation
+    that arrived in the same short burst — so the maintainer cancelling one
+    run out of a photo-album burst does not spend the next five minutes
+    killing the rest by hand. See ``_sweep_utterance_siblings``; the guard
+    below is deliberately narrow (crash, timeout, and daemon-restart paths
+    never reach this function with ``stopped_by == "user"``).
     """
     with _run_controls_lock:
         already_stopped = bool(control.get("stopped"))
@@ -7605,6 +7712,20 @@ def _apply_run_stop(
         if reason:
             control["stop_reason"] = reason
     spawn_event_id = str(control["event_id"])
+    if (
+        not already_stopped
+        and stopped_by == "user"
+        and control.get("parent_run_id") is None
+        and inbox_dir is not None
+    ):
+        anchor = _find_pending_event(inbox_dir, spawn_event_id)
+        if anchor is not None:
+            _sweep_utterance_siblings(
+                inbox_dir,
+                responses_dir,
+                anchor,
+                run_id=str(control.get("run_id") or spawn_event_id),
+            )
     child_run_id = control.get("run_id")
     if child_run_id is None and inbox_dir is not None:
         pending = _find_pending_event(inbox_dir, spawn_event_id)

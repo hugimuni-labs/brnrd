@@ -1621,6 +1621,11 @@ def _dispatch_run_stops(brr_dir: Path, inbox_dir: Path | None, requests: list) -
             inbox_dir,
             stopped_by="user",
             reason="stopped from the dashboard",
+            # #1389: lets a resident's own waking event carry the utterance
+            # sweep's aggregate reply — the same fixed layout every other
+            # caller in this module derives (`daemon.py`'s own
+            # ``responses_dir = brr_dir / "responses"``).
+            responses_dir=brr_dir / "responses",
         )
         run_stop_request.record_consumed(brr_dir, request["request_id"])
         print(f"[brnrd:cloud] stop {run_id} ({stage}) by account owner")

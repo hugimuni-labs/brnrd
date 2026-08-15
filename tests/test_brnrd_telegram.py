@@ -514,6 +514,64 @@ def test_photo_caption_enqueues_with_attachment_pointer(env):
         ]
 
 
+def test_media_group_album_coalesces_into_one_event(env):
+    """#1389 — a Telegram album (one text/caption plus N photos) arrives as
+    N separate webhook calls sharing ``media_group_id``; previously each
+    became its own event — a five-photo send was five events, five future
+    runs. They now fold into one event carrying every attachment pointer,
+    with whichever item carried the caption supplying the body."""
+    app, client, _ = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    code = _tg_pair_code(client, acc, rid)
+    client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
+
+    def _photo_update(message_id, file_id, *, caption=None):
+        update = _message(555, "", message_id=message_id)
+        msg = update["message"]
+        del msg["text"]
+        if caption is not None:
+            msg["caption"] = caption
+        msg["photo"] = [{"file_id": file_id, "width": 900, "height": 600, "file_size": 1000}]
+        msg["media_group_id"] = "album-42"
+        return update
+
+    r1 = client.post(
+        "/v1/webhooks/telegram", json=_photo_update(50, "f1"), headers=_HDR
+    )
+    r2 = client.post(
+        "/v1/webhooks/telegram",
+        json=_photo_update(51, "f2", caption="look at these"),
+        headers=_HDR,
+    )
+    r3 = client.post(
+        "/v1/webhooks/telegram", json=_photo_update(52, "f3"), headers=_HDR
+    )
+    assert r1.status_code == r2.status_code == r3.status_code == 200
+
+    with app.state.SessionLocal() as db:
+        events = list(
+            db.execute(select(Event).where(Event.source == "telegram")).scalars()
+        )
+        assert len(events) == 1
+        event = events[0]
+        assert event.body == "look at these"
+        from brnrd import inbox as inbox_service
+        assert [p["file_id"] for p in inbox_service.attachments_of(event)] == [
+            "f1", "f2", "f3",
+        ]
+
+    # Drained to the daemon exactly once — the merge happened before the
+    # event ever reached the queue, not as a daemon-side dedup.
+    dmn = _daemon_headers(client, acc, rid)
+    drained = client.get(
+        "/v1/daemons/inbox", params={"since": 0, "wait": 0}, headers=dmn
+    ).json()
+    telegram_events = [e for e in drained["events"] if e.get("body") == "look at these"]
+    assert len(telegram_events) == 1
+    assert len(telegram_events[0]["attachments"]) == 3
+
+
 def test_captionless_photo_enqueues_pointer_with_empty_body(env, monkeypatch):
     """#525 — a captionless *image* is a valid message now (the image carries
     the content, matching the local gate); no more "can't see media" reply."""

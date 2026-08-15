@@ -207,13 +207,94 @@ def attachments_of(event: Event) -> list[dict[str, Any]]:
     return _loads_list(event.attachments_json)
 
 
-def enqueue(db: Session, *, repo_id: str, body: str, source: str = "dev", reply_to: dict[str, Any] | None = None, attachments: list[dict[str, Any]] | None = None) -> Event:
+#: #1389 — how long a still-queued event stays eligible to absorb a later
+#: item from the same Telegram album. Telegram delivers every item of one
+#: send as a burst of separate webhook calls; the measured spread (7 events
+#: in 3s) is well inside this, so the window is generous rather than tight
+#: — a merge that *doesn't* happen because the window was too short is a
+#: silent regression to today's one-event-per-photo behaviour, never a lost
+#: message (matched against a **queued** row only, see below); a window
+#: that's too generous just risks matching a media_group_id Telegram
+#: reused, which it does not do.
+_MEDIA_GROUP_MERGE_WINDOW = timedelta(seconds=15)
+
+
+def _find_open_media_group(
+    db: Session, *, repo_id: str, media_group_id: str,
+) -> Event | None:
+    """The most recent still-**queued** event carrying *media_group_id*.
+
+    Queued-only is the load-bearing choice: an event that already answered
+    (``responded``) is done, and merging into it would silently discard
+    whatever the reply already said. Matching against a queued row instead
+    means the worst case for a merge that misses its window is *today's*
+    behaviour — one more event, never a dropped attachment (the #1389
+    guardrail against a daemon- or server-side fluke rendering a message
+    unanswerable).
+    """
+    cutoff = datetime.now(timezone.utc) - _MEDIA_GROUP_MERGE_WINDOW
+    candidates = db.execute(
+        select(Event)
+        .where(
+            Event.repo_id == repo_id,
+            Event.status == Event.STATUS_QUEUED,
+            Event.source == "telegram",
+            Event.created_at >= cutoff,
+        )
+        .order_by(Event.seq.desc())
+    ).scalars()
+    for event in candidates:
+        if _loads(event.reply_to).get("media_group_id") == media_group_id:
+            return event
+    return None
+
+
+def enqueue(
+    db: Session,
+    *,
+    repo_id: str,
+    body: str,
+    source: str = "dev",
+    reply_to: dict[str, Any] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
+    media_group_id: str | None = None,
+) -> Event:
+    """Queue one inbound event, or fold it into an open Telegram album.
+
+    *media_group_id*, when given, is Telegram's own album marker (#1389):
+    a still-queued event already carrying the same marker in its
+    ``reply_to`` absorbs this message's body (only if it hadn't one — a
+    caption can land on any item of an album) and attachment pointers
+    instead of minting a second event, so a five-photo send becomes one
+    event with five attachments rather than five events with one photo
+    each. No match ⇒ an ordinary new event, with the marker folded into
+    its own ``reply_to`` so a *later* item in the same album can find it.
+    """
+    media_group_id = str(media_group_id or "").strip() or None
+    if media_group_id:
+        existing = _find_open_media_group(
+            db, repo_id=repo_id, media_group_id=media_group_id,
+        )
+        if existing is not None:
+            if body and not (existing.body or "").strip():
+                existing.body = body
+            if attachments:
+                merged = attachments_of(existing)
+                merged.extend(attachments)
+                existing.attachments_json = json.dumps(merged)
+            db.add(existing)
+            db.commit()
+            db.refresh(existing)
+            return existing
+    reply_to = dict(reply_to or {})
+    if media_group_id:
+        reply_to["media_group_id"] = media_group_id
     event = Event(
         event_id=ids.event_id(),
         repo_id=repo_id,
         source=source,
         body=body,
-        reply_to=json.dumps(reply_to or {}),
+        reply_to=json.dumps(reply_to),
         attachments_json=json.dumps(attachments or []),
         status=Event.STATUS_QUEUED,
     )
