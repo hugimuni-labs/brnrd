@@ -7236,6 +7236,47 @@ def test_portal_state_await_resolves_on_any_pending_event(tmp_path):
     assert payload["await"]["which"] is None
 
 
+def test_portal_state_await_excludes_a_completion_pending_before_arming(tmp_path):
+    """#1327: a ``spawn_completed`` event this run already rendered — and
+    stamped ``observed_by`` (#1146) — never leaves ``status: pending`` until
+    run end; the stamp is not removal. Arming a wait *after* that must not
+    resolve on it instantly: the snapshot taken at arm time excludes exactly
+    this id, so the wait fires only on what's new since arming.
+
+    Before the fix this returns ``resolved: True, outcome: "event"`` — the
+    verb becomes a no-op for the rest of the parent's life.
+    """
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-parent", event_id="evt-1", body="", source="telegram")
+    completed = protocol.create_event(
+        inbox_dir, "spawn_completed", "child finished",
+        spawn_parent_run_id=task.id,
+    )
+    completed_id = completed.stem
+
+    # One prior tick renders + stamps the completion `observed_by` this
+    # parent — the ordinary "surfaced to the run" path, before any wait is
+    # ever armed.
+    daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+
+    # Arm as `_drain_outbox` would: snapshotting this moment's pending set
+    # into `armed_pending_ids`. The completion above is already in it.
+    task.meta["await"] = _armed(
+        armed_at=time.time(), armed_pending_ids=[completed_id],
+    )
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["await"]["resolved"] is False
+
+
 def test_portal_state_await_carries_a_generation_stamp(tmp_path):
     """``brnrd await`` re-arms on every call and ``armed_at`` renders to whole
     seconds — without an exact generation the CLI cannot tell a fresh arming
@@ -10525,8 +10566,13 @@ def test_capture_control_files_keeps_a_file_at_exactly_the_cap(tmp_path):
 # ── _drain_outbox: await: (#959, collapsed by #1187) ──────────────────
 
 
-def _drain_await(tmp_path, frontmatter, *, meta=None, stats=None):
-    """Stage one ``await:`` directive and drain it; returns (promoted, task, outbox)."""
+def _drain_await(tmp_path, frontmatter, *, meta=None, stats=None, pre_pending=()):
+    """Stage one ``await:`` directive and drain it; returns (promoted, task, outbox).
+
+    *pre_pending*, when given, is a list of ``(source, event_meta)`` pairs
+    created in the inbox *before* the directive is drained — events already
+    pending at arm time, for exercising the #1327 snapshot.
+    """
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
@@ -10534,6 +10580,8 @@ def _drain_await(tmp_path, frontmatter, *, meta=None, stats=None):
     outbox.mkdir(parents=True)
     path = protocol.create_event(inbox, "telegram", "original", status="processing")
     event_id = path.stem
+    for pre_source, pre_meta in pre_pending:
+        protocol.create_event(inbox, pre_source, "pre-existing", **(pre_meta or {}))
     (outbox / "await.md").write_text(frontmatter, encoding="utf-8")
     task = Run(
         id="run-parent", event_id=event_id, body="original", source="telegram",
@@ -10633,6 +10681,72 @@ def test_drain_outbox_await_key_present_with_empty_value_still_arms(tmp_path):
     assert promoted == 1
     assert task.meta["await"]["file"] is None
     assert task.meta["await"]["timeout_seconds"] == 600.0
+
+
+def test_drain_outbox_await_arm_snapshots_currently_pending_ids(tmp_path):
+    """#1327: arm time records which events are pending *right now*, so a
+    fact this run already had in hand at arming — e.g. a ``spawn_completed``
+    it already rendered and stamped ``observed_by`` in an earlier tick —
+    cannot phantom-resolve every later tick's evaluation. See the resolve
+    side's regression test,
+    ``test_portal_state_await_excludes_a_completion_pending_before_arming``.
+    """
+    promoted, task, _outbox = _drain_await(
+        tmp_path, "---\nawait: true\ntimeout: 20m\n---\n",
+        pre_pending=[("spawn_completed", {"spawn_parent_run_id": "run-parent"})],
+    )
+
+    assert promoted == 1
+    assert len(task.meta["await"]["armed_pending_ids"]) == 1
+
+
+def test_drain_outbox_await_arm_snapshot_ignores_a_correspondents_message(tmp_path):
+    """The snapshot is the *defect class*, not "everything pending now".
+
+    #1327 is about a retired self-parented `spawn_completed`, which stays
+    `status: pending` until run end because the #1146 observation stamp is
+    not removal. A live correspondent's message is not that: it is pending
+    because nobody has answered it. Excluding it would make the wait sleep
+    straight through the person who wrote it, and
+    `prompts/daemon-substrate.md` promises the opposite in as many words —
+    "any *other* pending event resolves it the same way ... the queue never
+    starves".
+
+    Added on convergence: the first implementation snapshotted every pending
+    id, and all three of its own tests went green over this, because each was
+    derived from the implementation's shape rather than from the contract.
+    """
+    promoted, task, _outbox = _drain_await(
+        tmp_path, "---\nawait: true\ntimeout: 20m\n---\n",
+        pre_pending=[("telegram", None)],
+    )
+
+    assert promoted == 1
+    assert task.meta["await"]["armed_pending_ids"] == []
+
+
+def test_drain_outbox_await_arm_snapshot_ignores_another_parents_completion(tmp_path):
+    """A completion belonging to some *other* parent is not this run's fact
+    to have had in hand, so it never enters the snapshot either."""
+    promoted, task, _outbox = _drain_await(
+        tmp_path, "---\nawait: true\ntimeout: 20m\n---\n",
+        pre_pending=[("spawn_completed", {"spawn_parent_run_id": "run-somebody-else"})],
+    )
+
+    assert promoted == 1
+    assert task.meta["await"]["armed_pending_ids"] == []
+
+
+def test_drain_outbox_await_arm_snapshot_is_empty_with_nothing_pending(tmp_path):
+    """The ordinary case — nothing was already waiting — snapshots nothing,
+    so a plain ``await:`` still resolves on the very next event exactly as
+    it always has."""
+    promoted, task, _outbox = _drain_await(
+        tmp_path, "---\nawait: true\ntimeout: 20m\n---\n",
+    )
+
+    assert promoted == 1
+    assert task.meta["await"]["armed_pending_ids"] == []
 
 
 # ── cut: / the bolt (design-the-bolt.md) ─────────────────────────────
