@@ -546,6 +546,17 @@ def _run_check(args: list[str], paths: Paths, factory: DriverFactory) -> None:
         error = str(exc)
     status = {
         "logged_in_as": handle,
+        # Which profile was actually asked. This shim resolves its paths from
+        # its *own* directory, and more than one copy of it exists (the repo's
+        # examples/envoy/ copy and an account's own). Run the wrong one and it
+        # finds an empty profile beside itself and reports `logged_in_as: null`
+        # — byte-identical to a live copy whose session died. Measured
+        # 2026-08-15: a human logged in through the account copy, a check ran
+        # the repo copy, and the answer read as "the login did not take."
+        # Naming the directory is what separates the two, and the third case
+        # (a session that really is dead) keeps the same field to disagree
+        # with.
+        "profile_dir": str(paths.profile_dir),
         "kill_switch": killed,
         "send_env_armed": os.environ.get("BRR_X_BROWSER_SEND") == "1",
         **cap,
@@ -557,7 +568,8 @@ def _run_check(args: list[str], paths: Paths, factory: DriverFactory) -> None:
         return
     who = f"@{handle}" if handle else "not logged in"
     print(
-        f"{who} · kill-switch {'ON' if killed else 'off'} · "
+        f"{who} · profile {paths.profile_dir} · "
+        f"kill-switch {'ON' if killed else 'off'} · "
         f"cap {cap['used']}/{cap['cap']} used this hour, {cap['remaining']} left"
         + (f" · error: {error}" if error else "")
     )
