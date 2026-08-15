@@ -471,6 +471,47 @@ def _refuse_if_killed(paths: Paths) -> None:
         )
 
 
+def _require_session(driver: Any, verb: str) -> None:
+    """Refuse a scrape verb outright when the session is dead.
+
+    X will not render a tweet or a search result page to a logged-out
+    browser — it silently redirects to ``/login`` instead — so a scraper
+    that doesn't check first gets a well-formed, empty-looking result
+    indistinguishable from "logged in, genuinely nothing here." That is
+    the defect this guards: a consumer counting mentions or checking
+    ``len(results)`` cannot tell "the account went blind" from "no one
+    replied," and a session that expires unattended (cookies age out
+    weeks into a schedule tick) fails silent instead of loud.
+
+    Reuses :meth:`whoami` — the same probe :func:`_run_check` already
+    trusts — on the **same driver instance** the calling verb opened, so
+    this never launches a second browser. A hard refusal (matching how
+    :func:`_playwright_driver` handles a missing playwright install) beats
+    an annotated result here: an annotation is a key a `len(results)`-only
+    consumer can simply never read, which is the same silence in a new
+    costume. A ``SystemExit`` cannot be skipped that way — the caller gets
+    a non-zero exit and an actionable fix instead of data to misinterpret.
+
+    The refusal names **both** causes on purpose. :meth:`whoami` returns
+    ``None`` for a redirect to ``/login`` *and* for a profile link that did
+    not resolve inside its 5s timeout, and those are different worlds: one
+    needs a login, the other needs a retry. A remedy is part of a
+    diagnostic's truth claim — a message confidently naming the login
+    branch sends its reader to re-authenticate a session that was never
+    dead, which is this same defect one layer up.
+    """
+    if driver.whoami() is None:
+        raise SystemExit(
+            f"refusing: no X session confirmed — `{verb}` cannot tell a "
+            "logged-out session from a genuinely empty result, so it "
+            "refuses rather than hand back a look-alike. Two causes look "
+            "identical from here: the session is dead, or X did not render "
+            "the profile link inside whoami's timeout. Run "
+            "`x-browser.py login` if a browser shows you logged out; retry "
+            "once if it does not."
+        )
+
+
 def _run_login(args: list[str], paths: Paths, factory: DriverFactory) -> None:
     if "-h" in args or "--help" in args:
         raise SystemExit(LOGIN_USAGE.strip())
@@ -529,6 +570,7 @@ def _run_read(args: list[str], paths: Paths, factory: DriverFactory) -> None:
     rest = [a for a in args if a != "--json"]
     url = _parse_single_arg(rest, READ_USAGE, "url")
     with factory(paths, headless=True) as driver:
+        _require_session(driver, "read")
         data = driver.read_url(url)
     print(json.dumps(data))
 
@@ -540,6 +582,7 @@ def _run_search(args: list[str], paths: Paths, factory: DriverFactory) -> None:
     rest = [a for a in args if a != "--json"]
     query = _parse_single_arg(rest, SEARCH_USAGE, "query")
     with factory(paths, headless=True) as driver:
+        _require_session(driver, "search")
         rows = driver.search(query)
     print(json.dumps(rows))
 
