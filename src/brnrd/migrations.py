@@ -96,6 +96,16 @@ def _migrate_accounts(conn: Connection) -> None:
     if _column_exists(conn, "accounts", "password_hash"):
         conn.execute(text("ALTER TABLE accounts ALTER COLUMN password_hash DROP NOT NULL"))
 
+    # w-57 (2026-08-16): brnrd stopped collecting a login email — nothing
+    # writes this column any more (see routers/accounts.py::
+    # account_for_github_identity). One-time backfill nulls out whatever a
+    # prior deploy already collected; idempotent (a WHERE-filtered UPDATE
+    # against all-NULL rows touches nothing on every run after the first).
+    # The column itself stays — nullable, unindexed reads elsewhere still
+    # reference it (account_deletion.py's tombstone write) — dropping it is
+    # a follow-up once nothing in the codebase reads it at all.
+    conn.execute(text("UPDATE accounts SET email = NULL WHERE email IS NOT NULL"))
+
     conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_accounts_github_id ON accounts (github_id)"))
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_accounts_github_login ON accounts (github_login)"))
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_accounts_email ON accounts (email)"))
