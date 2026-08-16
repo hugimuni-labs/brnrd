@@ -101,6 +101,39 @@ def test_scan_item_ids_two_doors():
     assert items.scan_item_ids(body) == ["w-2", "w-10", "hand-named"]
 
 
+def test_scan_item_ids_widens_the_enumeration_separator_set(tmp_path: Path):
+    """#1436 facet 2: `scan_item_ids('the w-14/w-45/w-46/w-47 cluster')` lost
+    three of four ids to the slash. The full separator set the issue names
+    — `/` `,` `·` `+` `&` and whitespace — must each carry the enumeration
+    through, individually and mixed."""
+    assert items.scan_item_ids(
+        "the w-14/w-45/w-46/w-47 cluster"
+    ) == ["w-14", "w-45", "w-46", "w-47"]
+    assert items.scan_item_ids("w-1,w-2") == ["w-1", "w-2"]
+    assert items.scan_item_ids("w-1·w-2") == ["w-1", "w-2"]
+    assert items.scan_item_ids("w-1+w-2") == ["w-1", "w-2"]
+    assert items.scan_item_ids("w-1&w-2") == ["w-1", "w-2"]
+    assert items.scan_item_ids("w-1 w-2") == ["w-1", "w-2"]
+    assert items.scan_item_ids(
+        "please look at w-45/w-46, w-47·w-48+w-49&w-50"
+    ) == ["w-45", "w-46", "w-47", "w-48", "w-49", "w-50"]
+
+
+def test_scan_item_ids_still_refuses_an_id_embedded_in_a_longer_token(
+    tmp_path: Path,
+):
+    """The widened separator set must not widen *into* a token or a path —
+    only a genuine boundary counts. `docs/w-45-notes.md` stays unmatched
+    (the trailing `-notes` is the tell, not the leading `/`); `xw-45`
+    (embedded in a longer word) and `w-450` (a different, longer id) never
+    contribute a spurious `w-45`."""
+    body = (
+        "see docs/w-45-notes.md for background, not xw-45, "
+        "and w-450 is a different item entirely"
+    )
+    assert items.scan_item_ids(body) == ["w-450"]
+
+
 def test_allocate_id_never_reuses_even_done_items(tmp_path: Path):
     root = _warp(tmp_path)
     assert items.allocate_id(root) == "w-1"

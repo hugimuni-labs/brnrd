@@ -91,7 +91,25 @@ _ROW_RE = re.compile(
 #: bare tokens (``w-42`` collides with nothing English); a hand-named item
 #: is addressed explicitly on its own ``item: <id>`` line — the same line
 #: the dashboard's copy-prompt affordance appends.
-_SCAN_TOKEN_RE = re.compile(r"(?<![\w/-])(w-\d+)(?![\w-])")
+#:
+#: The lookaround boundary decides what counts as "inside a longer token"
+#: (must not match) versus "separated by punctuation" (must match) — #1436
+#: facet 2. ``/`` is deliberately *not* in the excluded set: a human
+#: enumeration (``w-45/w-46/w-47``) uses it as a separator between ids, and
+#: leaving it excluded silently dropped every id but the first
+#: (``scan_item_ids('w-14/w-45/w-46/w-47') == ['w-14']`` before this
+#: change). ``,`` ``·`` ``+`` ``&`` and whitespace were never excluded —
+#: they already worked. ``\w`` and ``-`` stay excluded: they are what
+#: distinguishes a *separator* from an id being read out of a longer token
+#: (``xw-45``) or a path segment sharing an id's stem plus a suffix
+#: (``docs/w-45-notes.md``, still unmatched — the trailing ``-notes`` is
+#: caught by the lookahead, not the leading ``/``). Left deliberately
+#: unhandled: a shorthand enumeration that drops the repeated prefix
+#: (``w-45/46/47`` matching only ``w-45``) — nothing in the issue or its
+#: acceptance list asks for it, and guessing a prefix onto a bare number
+#: is exactly the kind of guess this module's docstring says an id is
+#: never subject to.
+_SCAN_TOKEN_RE = re.compile(r"(?<![\w-])(w-\d+)(?![\w-])")
 _SCAN_LINE_RE = re.compile(r"^item:[ \t]*([a-z0-9][a-z0-9-]*)[ \t]*$", re.MULTILINE)
 
 
