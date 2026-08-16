@@ -245,3 +245,90 @@ def test_commit_marks_unclassified_push_failure_as_unclassified(tmp_path):
     assert f"unclassified reason against {missing} over local" in reason
     assert str(path) in reason
     assert "diverged" not in reason
+
+
+# ── Never-linked: no remote at all, not a push failure (#1423) ───────
+
+
+def test_never_linked_marker_round_trip(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    brr_dir.mkdir()
+    assert dominion.never_linked(brr_dir, tmp_path) is None
+    dominion.mark_never_linked(brr_dir)
+    # The raw marker is set, but the getter is gated on the repo carrying
+    # real content — an unrelated empty tmp_path has 0 commits.
+    assert dominion.never_linked(brr_dir, tmp_path) is None
+    dominion.clear_never_linked(brr_dir)
+
+
+def test_ensure_dominion_marks_never_linked_but_getter_stays_quiet_at_birth(
+    tmp_path,
+):
+    """A freshly-seeded dominion has no remote — the marker is written
+    honestly at birth, but the getter withholds it until there is real
+    memory to warn about. (The legacy repo-local dominion seeds *two*
+    commits at birth — an orphan root plus a seed commit — so this asserts
+    the getter's own behaviour, not a specific founding count.)"""
+    repo = _repo(tmp_path)
+    path = dominion.ensure_dominion(repo, push=False)
+
+    # This first look is also what anchors the baseline every later look
+    # compares against (`gitops.read_or_seed_baseline`) — production reads
+    # it the same way, via the very next wake's prompt build, before that
+    # wake's own capture has committed anything new.
+    assert dominion.never_linked(path.parent, path) is None
+
+
+def test_commit_marks_never_linked_once_real_content_follows_birth(tmp_path):
+    """The ongoing capture path (dominion.commit, called after every
+    thought) is where the marker becomes visible: once the dominion holds
+    a real commit *beyond* the one the birth-anchored baseline saw, and
+    still has no remote, the getter reports it."""
+    repo = _repo(tmp_path)
+    path = dominion.ensure_dominion(repo, push=False)
+    # Anchor the baseline at the pristine, just-born state (see the birth
+    # test above) before any real content exists.
+    assert dominion.never_linked(path.parent, path) is None
+
+    (path / "pain.md").write_text("slow rebuild keeps biting\n", encoding="utf-8")
+    assert dominion.commit(path, "capture pain", remote=None, push=False) is True
+
+    reason = dominion.never_linked(path.parent, path)
+    assert reason is not None
+    assert "brnrd home link" in reason
+    assert "no git remote is configured" in reason
+
+
+def test_commit_clears_never_linked_once_a_remote_is_wired(tmp_path):
+    remote = _bare_remote(tmp_path)
+    clone = _clone(remote, tmp_path / "a", name="A")
+    path = dominion.ensure_dominion(clone, push=True)
+    brr_dir = path.parent
+    # Simulate a prior wake that found no remote at all.
+    dominion.mark_never_linked(brr_dir)
+    (path / "note.md").write_text("fresh\n", encoding="utf-8")
+
+    assert dominion.commit(
+        path, "capture", remote=gitops.default_remote(clone),
+        branch="brr-home", push=True,
+    ) is True
+
+    assert dominion.never_linked(brr_dir, path) is None
+
+
+def test_commit_marks_never_linked_even_when_push_is_off(tmp_path):
+    """The daemon's real caller ANDs ``push`` with ``bool(remote)`` before
+    calling in — so a no-remote capture always arrives with ``push=False``.
+    The marking logic must not be gated on ``push``, or it never fires in
+    production (#1423's fix shape names this exact site)."""
+    repo = _repo(tmp_path)
+    path = dominion.ensure_dominion(repo, push=False)
+    assert dominion.never_linked(path.parent, path) is None  # anchors baseline
+
+    (path / "note.md").write_text("more\n", encoding="utf-8")
+    dominion.commit(path, "capture one", remote=None, push=False)
+    (path / "note2.md").write_text("even more\n", encoding="utf-8")
+
+    assert dominion.commit(path, "capture two", remote=None, push=False) is True
+
+    assert dominion.never_linked(path.parent, path) is not None
