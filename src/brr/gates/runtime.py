@@ -34,12 +34,35 @@ def state_path(brr_dir: Path, gate: str) -> Path:
 
 
 def load_state(brr_dir: Path, gate: str) -> dict:
+    """A gate's persisted state, or ``{}`` for absent/corrupt/malshaped.
+
+    Mirrors :func:`load_health`'s defensiveness (a few lines below, same
+    file, same job for the sibling ``*.health.json``) — this function used
+    to be the one loader in this neighbourhood that assumed its own file
+    back: a state file that happens to parse to something other than a
+    JSON object (``null``, a stray string, a leftover from a schema this
+    gate no longer writes) came straight back as that value, and every
+    ``is_configured()`` in ``gates/*.py`` immediately calls ``state.get(...)``
+    or ``"x" in state`` on it — an ``AttributeError``/``TypeError`` one
+    frame from here, on every caller, every tick (#1386: the daemon's own
+    quota-publish tick calls ``configured_gates`` on each of five built-in
+    gates per PUT, and only ``ImportError``/``OSError``/``ValueError``/
+    ``json.JSONDecodeError`` were ever anticipated there — not the shape
+    mismatch a non-dict *parses cleanly* into). A malformed state file is
+    exactly the "not configured yet" case every caller here already
+    handles for the *absent* file; this makes the malshaped one degrade
+    the same honest way instead of taking the whole publish tick down.
+    """
     path = state_path(brr_dir, gate)
-    if path.exists():
-        if os.name == "posix":
-            path.chmod(_PRIVATE_STATE_MODE)
-        return json.loads(path.read_text(encoding="utf-8"))
-    return {}
+    if not path.exists():
+        return {}
+    if os.name == "posix":
+        path.chmod(_PRIVATE_STATE_MODE)
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def save_state(brr_dir: Path, gate: str, state: dict) -> None:
