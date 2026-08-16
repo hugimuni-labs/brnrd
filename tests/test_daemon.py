@@ -11839,3 +11839,115 @@ def test_portal_state_bolt_projects_annotated_count(tmp_path):
     )
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["bolt"]["annotated"] == 2
+
+
+# ── THE WELD ignition source guard (#1383) ────────────────────────────────
+#
+# #972's ignition half fires on an event's own body; #1383 found a
+# `source: schedule` recurring entry's *agenda* prose ("the w-14/w-45/…
+# cluster") getting scanned as if it were a task, welding every firing's
+# produce onto whatever ids the agenda happened to name. The fix that
+# narrowed to "not schedule" still missed `source: spawn` — a dispatched
+# strand's own spec is equally brnrd's prose about work, not a
+# correspondent's — caught live when `run-260816-2051-l00q`'s own spawn
+# event ignited two items it was never asked to touch. `_weld_ignition_body`
+# asserts the property (source in `protocol.INTERNAL_SOURCES` ⇒ brnrd's own
+# writing, never a correspondent addressing a task) instead of enumerating
+# members, and `_weld_ignite` is the exact call `_run_worker` makes — these
+# tests drive that function, not `items.scan_item_ids` in isolation.
+
+_WELD_ITEM_TEXT = """# A gate chip
+
+type: action
+refs: hugimuni-labs/brnrd#1
+prompt: Ship the gate chip.
+
+Body text for the item file itself; irrelevant to ignition.
+"""
+
+
+def _warp_dir_with_item(tmp_path: Path, item_id: str = "w-8") -> Path:
+    warp = tmp_path / "surface" / "warp"
+    warp.mkdir(parents=True)
+    (warp / f"{item_id}.md").write_text(_WELD_ITEM_TEXT, encoding="utf-8")
+    return warp
+
+
+def _account_ctx_for_warp(tmp_path: Path) -> "daemon.account.AccountContext":
+    return daemon.account.AccountContext(
+        account_id="default",
+        dominion_repo=tmp_path,
+        dispatch_inbox=tmp_path / "dispatch" / "inbox",
+        responses_dir=tmp_path / "dispatch" / "responses",
+        runs_dir=tmp_path / "runs",
+        repos={},
+        default_repo=daemon.account.AccountRepo(label="Gurio/brr", root=tmp_path),
+    )
+
+
+@pytest.mark.parametrize(
+    "source", sorted(protocol.INTERNAL_SOURCES),
+)
+def test_weld_ignition_body_empty_for_every_internal_source(source):
+    """Every brnrd-minted source (#1118's completeness-tested set) is
+    system-authored prose, not a correspondent's task — including `spawn`,
+    the member the narrower "not schedule" guard missed."""
+    body = daemon._weld_ignition_body({"source": source, "body": "please do w-8"})
+    assert body == ""
+
+
+@pytest.mark.parametrize("source", ["telegram", "github", "slack", "signal", "cloud"])
+def test_weld_ignition_body_passes_through_for_correspondent_sources(source):
+    """A gate-ingress source is never in `INTERNAL_SOURCES` (nor could a
+    future one be, without becoming a `create_event` call this package's
+    own AST completeness test would catch) — it stays ignition-eligible
+    with no edit to this predicate."""
+    body = daemon._weld_ignition_body({"source": source, "body": "please do w-8"})
+    assert body == "please do w-8"
+
+
+def test_weld_ignite_schedule_source_leaves_item_unchanged(tmp_path):
+    warp = _warp_dir_with_item(tmp_path)
+    ctx = _account_ctx_for_warp(tmp_path)
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    event = {
+        "source": "schedule",
+        "body": "the w-14/w-45/w-46/w-47 cluster and w-8 count as docket",
+    }
+
+    resolved = daemon._weld_ignite(event, ctx, outbox, "run-agenda-1")
+
+    assert resolved == []
+    assert "taken:" not in (warp / "w-8.md").read_text(encoding="utf-8")
+
+
+def test_weld_ignite_spawn_source_leaves_item_unchanged(tmp_path):
+    """The case the parent's own measurement caught: a `spawn:` dispatch's
+    spec quoting an id as a citation must not ignite it either."""
+    warp = _warp_dir_with_item(tmp_path)
+    ctx = _account_ctx_for_warp(tmp_path)
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    event = {
+        "source": "spawn",
+        "body": "Read the issue; it quotes the w-14/w-45/w-46/w-47 cluster and w-8.",
+    }
+
+    resolved = daemon._weld_ignite(event, ctx, outbox, "run-spawn-1")
+
+    assert resolved == []
+    assert "taken:" not in (warp / "w-8.md").read_text(encoding="utf-8")
+
+
+def test_weld_ignite_correspondent_source_still_ignites(tmp_path):
+    warp = _warp_dir_with_item(tmp_path)
+    ctx = _account_ctx_for_warp(tmp_path)
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    event = {"source": "telegram", "body": "please pick up w-8 today"}
+
+    resolved = daemon._weld_ignite(event, ctx, outbox, "run-user-1")
+
+    assert resolved == ["w-8"]
+    assert "taken: run-user-1" in (warp / "w-8.md").read_text(encoding="utf-8")
