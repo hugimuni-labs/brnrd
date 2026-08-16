@@ -30,7 +30,12 @@
 	// 2026-07-31: hosting moved off Upsun/Platform.sh (`ch-1`, Switzerland) to
 	// Scaleway SAS (`fr-par`, France); §5 updated to name the new sub-processor
 	// and the intra-EU basis that replaces the Switzerland adequacy decision.
-	const LAST_UPDATED = '2026-07-31';
+	// 2026-08-16 (w-57): brnrd stopped requesting GitHub's `user:email` scope
+	// and stopped storing an email at all — §3 and §5 updated; Stripe now
+	// collects a billing email directly from the payer at checkout instead of
+	// receiving one forwarded by us. §8's tombstone list dropped "email"
+	// accordingly (the column is never populated to begin with now).
+	const LAST_UPDATED = '2026-08-16';
 </script>
 
 <svelte:head><title>brnrd privacy notice</title></svelte:head>
@@ -149,12 +154,12 @@
 					<div>
 						<p class="font-mono text-xs tracking-wide text-ink-quiet uppercase">Account identity</p>
 						<p>
-							Your GitHub numeric id, login, and — if your GitHub account exposes one — your email
-							address, received when you sign in through GitHub. We request the
-							<code class="font-mono text-xs text-amber-200">user:email</code> scope and nothing wider.
-							Also the date and version of the beta terms you accepted, which we keep to show that acceptance
-							happened (legal obligation and our legitimate interest in being able to evidence it, Article
-							6(1)(c) and 6(1)(f)).
+							Your GitHub numeric id and login, received when you sign in through GitHub. We do not
+							request GitHub's <code class="font-mono text-xs text-amber-200">user:email</code> scope and
+							do not receive or store your email address — if you subscribe, Stripe collects a billing
+							email directly from you at checkout instead; see §5. Also the date and version of the beta
+							terms you accepted, which we keep to show that acceptance happened (legal obligation and
+							our legitimate interest in being able to evidence it, Article 6(1)(c) and 6(1)(f)).
 						</p>
 					</div>
 					<div>
@@ -329,8 +334,10 @@
 					</li>
 					<li>
 						<strong class="text-stone-200">Stripe</strong> — payments, as merchant of record. Receives
-						your email address and your brnrd account id, and nothing else from us. United States; transfers
-						rely on the EU-US Data Privacy Framework and standard contractual clauses.
+						your brnrd account id from us, and nothing else. If you subscribe, Stripe collects your
+						billing email directly from you during checkout — we never hold it and never forward it.
+						United States; transfers rely on the EU-US Data Privacy Framework and standard contractual
+						clauses.
 					</li>
 					<li>
 						<strong class="text-stone-200">GitHub</strong> — sign-in and repository access. United States;
@@ -416,7 +423,7 @@
 					immediately rather than at period end, and then clears every account-keyed store we hold. Two
 					things survive it deliberately, and you should know which: the append-only billing ledger, whose
 					statutory retention period we have not yet had confirmed by counsel, and the account row it
-					hangs off — that row's identifying columns (GitHub id, login, email, Stripe customer id) are
+					hangs off — that row's identifying columns (GitHub id, login, Stripe customer id) are
 					blanked and the row is left as a tombstone, because the ledger's reference to it has to stay
 					valid. Stripe keeps its own copy of your invoice history under its own retention, not ours.
 					If you would rather we did it by hand, email us and we will, within the statutory month.
