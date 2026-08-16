@@ -11951,3 +11951,71 @@ def test_weld_ignite_correspondent_source_still_ignites(tmp_path):
 
     assert resolved == ["w-8"]
     assert "taken: run-user-1" in (warp / "w-8.md").read_text(encoding="utf-8")
+
+
+# ── THE WELD ignition item-state guard (#1436 facet 1) ────────────────────
+#
+# `w-14` closed 2026-08-13 and was ignited eleven more times after that —
+# every one of them a `source: schedule` / `source: spawn` firing that
+# #1435's source guard now stops. But nothing about the source guard says a
+# *correspondent* naming a done item is any different: ignition claims work
+# is starting, and a closed item has no work to start, whatever addressed
+# it. This is a property of the item, checked independently of — and in
+# addition to — the source guard: a correspondent source (which #1435
+# deliberately leaves ignition-eligible) must still refuse a done item.
+
+_WELD_DONE_ITEM_TEXT = """# A gate chip
+
+type: action
+done: 2026-08-13 run-old
+
+Body text for the item file itself; irrelevant to ignition.
+"""
+
+_WELD_RETIRED_ITEM_TEXT = """# A gate chip
+
+type: action
+retired: 2026-08-13 superseded
+
+Body text for the item file itself; irrelevant to ignition.
+"""
+
+
+def test_weld_ignite_done_item_leaves_item_unchanged_even_from_a_correspondent(
+    tmp_path,
+):
+    """The acceptance case verbatim: a `done:` item stays untouched no
+    matter the source — including a live correspondent, which #1435's
+    source guard alone would wave through."""
+    warp = _warp_dir_with_item(tmp_path)
+    (warp / "w-8.md").write_text(_WELD_DONE_ITEM_TEXT, encoding="utf-8")
+    ctx = _account_ctx_for_warp(tmp_path)
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    event = {"source": "telegram", "body": "please pick up w-8 today"}
+
+    resolved = daemon._weld_ignite(event, ctx, outbox, "run-user-2")
+
+    assert resolved == []
+    text = (warp / "w-8.md").read_text(encoding="utf-8")
+    assert "taken:" not in text
+    relics_file = outbox / ".relics.jsonl"
+    assert not relics_file.exists() or "w-8" not in relics_file.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_weld_ignite_retired_item_also_not_a_candidate(tmp_path):
+    """A retired item is equally closed — no work left to start — so the
+    same item-state guard covers it, not just `done:`."""
+    warp = _warp_dir_with_item(tmp_path)
+    (warp / "w-8.md").write_text(_WELD_RETIRED_ITEM_TEXT, encoding="utf-8")
+    ctx = _account_ctx_for_warp(tmp_path)
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    event = {"source": "telegram", "body": "please pick up w-8 today"}
+
+    resolved = daemon._weld_ignite(event, ctx, outbox, "run-user-3")
+
+    assert resolved == []
+    assert "taken:" not in (warp / "w-8.md").read_text(encoding="utf-8")

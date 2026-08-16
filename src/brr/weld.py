@@ -19,10 +19,16 @@ manifest (``.relics.jsonl``) with no new store:
   *reference*, never a copy of the other side's content.
 
 Ids are never guessed: an id that does not resolve to an item file is
-skipped with a log line, and nothing is written for it. Item files are
-authored surface, so every edit is row-scoped; the surface commit rides
-the existing capture net (``daemon._capture_dominion``) — this module
-never commits or pushes.
+skipped with a log line, and nothing is written for it. Nor is a resolved
+id automatically a candidate — ignition claims work is starting, and a
+``done:`` (or ``retired:``) item has no work left to start (#1436); that
+guard is a property of the *item*, checked here at resolution time,
+independent of and in addition to the source guard the daemon's own
+``_weld_ignition_body`` applies to the event body before it ever reaches
+this function — both must hold, neither substitutes for the other. Item
+files are authored surface, so every edit is row-scoped; the surface
+commit rides the existing capture net (``daemon._capture_dominion``) —
+this module never commits or pushes.
 """
 
 from __future__ import annotations
@@ -107,12 +113,18 @@ def annotate_ignition(
     body: str,
 ) -> list[str]:
     """Ignition, the item's half: scan *body* for item ids; for each one
-    that resolves, append an ``item`` relic to the run's manifest and a
-    ``taken: <run_id>`` row to the item. Returns the resolved ids.
+    that resolves *and is still open*, append an ``item`` relic to the
+    run's manifest and a ``taken: <run_id>`` row to the item. Returns the
+    resolved ids.
 
     Unresolvable ids are skipped with a log line naming them — never
-    guessed, never a partial write. Idempotent against the manifest and
-    against the item file (``items.mark_taken``).
+    guessed, never a partial write. A resolved id whose item is already
+    ``done:`` or ``retired:`` (#1436) is skipped the same way: ignition is
+    a claim that work is starting, and a closed item has no work left to
+    start, regardless of who or what named it — a correspondent typing the
+    id tomorrow is exactly as unable to re-open it as a stale schedule
+    firing was. Idempotent against the manifest and against the item file
+    (``items.mark_taken``).
     """
     if warp_root is None or not body:
         return []
@@ -131,6 +143,13 @@ def annotate_ignition(
             print(
                 f"[brnrd] weld: item id {address!r} does not resolve "
                 f"under {warp_root} — skipped"
+            )
+            continue
+        item = items.parse_item(target)
+        if item is not None and item.state != "open":
+            print(
+                f"[brnrd] weld: item id {address!r} is {item.state} — "
+                "not a candidate, skipped"
             )
             continue
         if address not in already:
