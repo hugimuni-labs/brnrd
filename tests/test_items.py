@@ -7,6 +7,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from brr import items
 
 
@@ -101,32 +103,68 @@ def test_scan_item_ids_two_doors():
     assert items.scan_item_ids(body) == ["w-2", "w-10", "hand-named"]
 
 
-def test_scan_item_ids_widens_the_enumeration_separator_set(tmp_path: Path):
-    """#1436 facet 2: `scan_item_ids('the w-14/w-45/w-46/w-47 cluster')` lost
-    three of four ids to the slash. The full separator set the issue names
-    — `/` `,` `·` `+` `&` and whitespace — must each carry the enumeration
-    through, individually and mixed."""
-    assert items.scan_item_ids(
-        "the w-14/w-45/w-46/w-47 cluster"
-    ) == ["w-14", "w-45", "w-46", "w-47"]
-    assert items.scan_item_ids("w-1,w-2") == ["w-1", "w-2"]
-    assert items.scan_item_ids("w-1·w-2") == ["w-1", "w-2"]
-    assert items.scan_item_ids("w-1+w-2") == ["w-1", "w-2"]
-    assert items.scan_item_ids("w-1&w-2") == ["w-1", "w-2"]
-    assert items.scan_item_ids("w-1 w-2") == ["w-1", "w-2"]
-    assert items.scan_item_ids(
-        "please look at w-45/w-46, w-47·w-48+w-49&w-50"
-    ) == ["w-45", "w-46", "w-47", "w-48", "w-49", "w-50"]
+# #1436 facet 2, in two passes:
+#
+# Pass 1 widened the enumeration separator set by dropping `/` from
+# `_SCAN_TOKEN_RE`'s lookbehind — and, unreviewed, that also widened into
+# every real path this system uses to refer to an item's own file
+# (`surface/warp/w-45.md` — the schedule agenda and this very issue's spec
+# both name items that way). A correspondent writing that path is exactly
+# the body #1435's source guard leaves ignition-eligible, so the
+# over-match was live, not theoretical. Caught in review, run against the
+# actual scanner rather than read off the first pass's own report.
+#
+# Pass 2 (below): a leading `/` is a separator only when the id
+# immediately before it was itself accepted (`w-45/w-46`); otherwise it's
+# a path segment and the whole candidate is rejected regardless of what
+# follows (`surface/warp/w-45.md`, `kb/w-45.md`, a bare URL). A trailing
+# `.<ext>` shape disqualifies unconditionally — a filename is never an id,
+# including the pre-existing `w-45.md` case, which matched before either
+# pass touched this regex; kept `[]` here for one consistent rule rather
+# than a path-prefix-dependent split. See `_SCAN_CANDIDATE_RE`'s docstring
+# comment in `items.py` for the full discriminator.
+@pytest.mark.parametrize(
+    "body, expected",
+    [
+        # The original defect (facet 2's whole reason to exist): a
+        # slash-enumeration must not lose everything after the first id.
+        ("the w-14/w-45/w-46/w-47 cluster", ["w-14", "w-45", "w-46", "w-47"]),
+        ("w-45/w-46", ["w-45", "w-46"]),
+        # The rest of the separator set the issue named — none of these
+        # were ever broken, but they're asserted alongside the slash so
+        # the whole set lives in one table.
+        ("w-1,w-2", ["w-1", "w-2"]),
+        ("w-1·w-2", ["w-1", "w-2"]),
+        ("w-1+w-2", ["w-1", "w-2"]),
+        ("w-1&w-2", ["w-1", "w-2"]),
+        ("w-1 w-2", ["w-1", "w-2"]),
+        (
+            "please look at w-45/w-46, w-47·w-48+w-49&w-50",
+            ["w-45", "w-46", "w-47", "w-48", "w-49", "w-50"],
+        ),
+        # The over-match a follow-up review caught: pass 1's widened `/`
+        # also matched inside a real path. Must all come back empty.
+        ("surface/warp/w-45.md", []),
+        ("kb/w-45.md", []),
+        ("https://example.com/w-12", []),
+        # The pre-existing (pass-1-independent) filename case — resolved
+        # here as "never an id", not left as pass 1's inherited behavior.
+        ("w-45.md", []),
+        # Untouched negatives from the original spec: embedded in a
+        # longer token or a hyphen-suffixed path segment.
+        ("docs/w-45-notes.md", []),
+        ("xw-45", []),
+        ("w-450", ["w-450"]),
+    ],
+)
+def test_scan_item_ids_enumeration_and_path_boundary(body, expected):
+    assert items.scan_item_ids(body) == expected
 
 
-def test_scan_item_ids_still_refuses_an_id_embedded_in_a_longer_token(
-    tmp_path: Path,
-):
-    """The widened separator set must not widen *into* a token or a path —
-    only a genuine boundary counts. `docs/w-45-notes.md` stays unmatched
-    (the trailing `-notes` is the tell, not the leading `/`); `xw-45`
-    (embedded in a longer word) and `w-450` (a different, longer id) never
-    contribute a spurious `w-45`."""
+def test_scan_item_ids_mixed_prose_with_embedded_negatives():
+    """The negatives hold inside a full sentence too, not just in
+    isolation — `docs/w-45-notes.md`, `xw-45`, and `w-450` each still
+    resolve the way their standalone case does when surrounded by prose."""
     body = (
         "see docs/w-45-notes.md for background, not xw-45, "
         "and w-450 is a different item entirely"
