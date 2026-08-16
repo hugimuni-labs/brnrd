@@ -368,21 +368,34 @@ def test_step_memory_notes_local_only_on_a_non_tty(repo, capsys):
     assert result is True
 
 
-def test_step_memory_skips_the_local_only_note_when_fully_linked(repo, capsys):
+def test_step_memory_skips_the_local_only_note_when_fully_linked(repo, capsys, tmp_path):
+    """`fully_linked` requires an actual push, not just a wired origin
+    (#1422) — so this positive case needs a remote that can genuinely
+    receive one, not a fake unreachable GitHub URL."""
     ctx = account.resolve_context(repo, {})
     (account.knowledge_path(ctx)).mkdir(parents=True, exist_ok=True)
     (account.knowledge_path(ctx) / "index.md").write_text("# kb", encoding="utf-8")
+
+    def _push_to_a_real_bare_remote(repo_root: Path, name: str) -> None:
+        remote = tmp_path / f"{name}.git"
+        subprocess.run(["git", "init", "--bare", "-q", "-b", "main", str(remote)], check=True)
+        subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=repo_root, check=True)
+        subprocess.run(
+            ["git", "push", "-u", "origin", "HEAD:refs/heads/main"],
+            cwd=repo_root, check=True, capture_output=True,
+        )
+
+    # dominion already carries the founding commit `resolve_context` seeds.
+    _push_to_a_real_bare_remote(account.context_home_root(ctx), "dominion-remote")
+    # the (separate, independently-linked) knowledge repo needs its own.
+    init_git_repo(account.knowledge_path(ctx))
     subprocess.run(
-        ["git", "remote", "add", "origin", "git@github.com:someone/my-brain.git"],
-        cwd=account.context_home_root(ctx), check=True,
+        ["git", "add", "-A"], cwd=account.knowledge_path(ctx), check=True,
     )
-    # Both repos need an origin — the dominion above, and the (separate,
-    # independently-linked) knowledge repo here.
-    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=account.knowledge_path(ctx), check=True)
     subprocess.run(
-        ["git", "remote", "add", "origin", "git@github.com:someone/my-brain-knowledge.git"],
-        cwd=account.knowledge_path(ctx), check=True,
+        ["git", "commit", "-q", "-m", "founding"], cwd=account.knowledge_path(ctx), check=True,
     )
+    _push_to_a_real_bare_remote(account.knowledge_path(ctx), "knowledge-remote")
 
     result = front_door._step_memory(repo, tty=False)
 
