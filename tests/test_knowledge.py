@@ -381,11 +381,17 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
-def _capture_chain(tmp_path: Path, *, checkout: bool = True) -> tuple[Path, dict, Path]:
+def _capture_chain(
+    tmp_path: Path, *, checkout: bool = True, remote: bool = True,
+) -> tuple[Path, dict, Path]:
     """repo(+checkout) → account knowledge (non-bare) → a bare local 'forge'.
 
     A real push chain, no network: the bare repo stands in for GitHub, so
     the test asserts on what actually landed there rather than on a mock.
+    ``remote=False`` leaves the account knowledge repo with no remote at
+    all — the never-linked shape (#1423) — rather than wiring it to
+    *forge*; the returned *forge* path exists either way but is unused by
+    a caller passing ``remote=False``.
     """
     repo = tmp_path / "repo"
     init_git_repo(repo)
@@ -400,8 +406,9 @@ def _capture_chain(tmp_path: Path, *, checkout: bool = True) -> tuple[Path, dict
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=knowledge_repo, check=True)
     _git(knowledge_repo, "add", "-A")
     _git(knowledge_repo, "commit", "-q", "-m", "seed knowledge")
-    _git(knowledge_repo, "remote", "add", "origin", str(forge))
-    _git(knowledge_repo, "push", "-q", "-u", "origin", "main")
+    if remote:
+        _git(knowledge_repo, "remote", "add", "origin", str(forge))
+        _git(knowledge_repo, "push", "-q", "-u", "origin", "main")
 
     if checkout:
         subprocess.run(
@@ -796,6 +803,92 @@ def test_capture_marks_unclassified_push_failure_as_unclassified(tmp_path):
     assert f"unclassified reason against {missing} over local" in reason
     assert str(knowledge_repo) in reason
     assert "diverged" not in reason
+
+
+# ── Never-linked: no remote at all, not a push failure (#1423) ───────
+
+
+def test_capture_marks_never_linked_when_the_account_repo_has_no_remote(tmp_path):
+    """A home with no remote at all skips the push silently — but the
+    getter withholds the fact until the repo carries real content beyond
+    its seed commit (anchored the first time the getter looks, same as a
+    wake's prompt build does before that wake's own capture runs)."""
+    repo, cfg, _forge = _capture_chain(tmp_path, checkout=False, remote=False)
+    brr_dir = repo / ".brr"
+    knowledge_repo = tmp_path / "home" / "knowledge"
+
+    assert knowledge.capture(repo, "kb: capture", cfg=cfg) is False
+    assert knowledge.needs_sync(brr_dir) is None
+    # First look anchors the baseline at the pristine, just-seeded state.
+    assert knowledge.never_linked(brr_dir, knowledge_repo) is None
+
+    page = knowledge_repo / "repos" / "Gurio__brr" / "mine.md"
+    page.write_text("a durable thought, except it isn't\n", encoding="utf-8")
+    assert knowledge.capture(repo, "kb: capture", cfg=cfg) is True
+
+    reason = knowledge.never_linked(brr_dir, knowledge_repo)
+    assert reason is not None
+    assert "brnrd home link" in reason
+    assert "no git remote is configured" in reason
+
+
+def test_capture_clears_never_linked_once_a_remote_is_wired(tmp_path):
+    repo, cfg, forge = _capture_chain(tmp_path, checkout=False, remote=False)
+    brr_dir = repo / ".brr"
+    knowledge_repo = tmp_path / "home" / "knowledge"
+    # Simulate a prior wake that found no remote and had real content.
+    knowledge.mark_never_linked(brr_dir)
+
+    _git(knowledge_repo, "remote", "add", "origin", str(forge))
+    _git(knowledge_repo, "push", "-q", "-u", "origin", "main")
+    assert knowledge.capture(repo, "kb: capture", cfg=cfg) is False
+
+    assert knowledge.never_linked(brr_dir, knowledge_repo) is None
+
+
+def test_knowledge_sources_block_renders_never_linked_once_content_follows(
+    tmp_path,
+):
+    """The wake-time counterpart of the capture-net tests above: the banner
+    stays quiet until there's real memory, then names the remedy — and
+    never doubles up with the ``needs_sync`` banner, which is its own
+    dedicated block (see ``TestSyncMarkerBannerSpeaksItsClass`` /
+    ``TestNeverLinkedBanner`` in ``test_prompts.py`` for the dominion
+    side of the same predicate)."""
+    from brr import config as conf
+    from brr.prompts import _build_knowledge_sources_block
+
+    repo, cfg, _forge = _capture_chain(tmp_path, checkout=False, remote=False)
+    conf.write_config(repo, cfg)
+    knowledge_repo = tmp_path / "home" / "knowledge"
+
+    # First render anchors the baseline at the pristine, just-seeded state.
+    block = _build_knowledge_sources_block(repo)
+    assert "has never been linked" not in block
+
+    page = knowledge_repo / "repos" / "Gurio__brr" / "mine.md"
+    page.write_text("a durable thought, except it isn't\n", encoding="utf-8")
+    assert knowledge.capture(repo, "kb: capture", cfg=cfg) is True
+
+    block = _build_knowledge_sources_block(repo)
+    assert "**the knowledge remote has never been linked**" in block
+    assert "brnrd home link" in block
+    assert "fetch, merge / resolve" not in block
+
+
+def test_knowledge_sources_block_omits_never_linked_when_remote_present(
+    tmp_path,
+):
+    from brr import config as conf
+    from brr.prompts import _build_knowledge_sources_block
+
+    repo, cfg, _forge = _capture_chain(tmp_path, checkout=False, remote=True)
+    conf.write_config(repo, cfg)
+
+    assert knowledge.capture(repo, "kb: capture", cfg=cfg) is False
+    block = _build_knowledge_sources_block(repo)
+
+    assert "has never been linked" not in block
 
 
 # ── The mirror reads current (#659) ──────────────────────────────────
