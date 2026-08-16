@@ -141,7 +141,12 @@ class Settings:
 
     github_oauth_client_id: str = _env_first("BRNRD_GITHUB_OAUTH_CLIENT_ID", "GITHUB_CLIENT_ID")
     github_oauth_client_secret: str = _env_first("BRNRD_GITHUB_OAUTH_CLIENT_SECRET", "GITHUB_CLIENT_SECRET")
-    github_oauth_scope: str = os.environ.get("BRNRD_GITHUB_OAUTH_SCOPE", "user:email")
+    # w-57 (2026-08-16): dropped `user:email` — brnrd no longer collects a
+    # login email at all (see oauth.py, kb decision). Empty means "no scope
+    # requested", which is enough: `/user` already returns the token
+    # owner's own id/login with no scope, and nothing here reads email
+    # anymore.
+    github_oauth_scope: str = os.environ.get("BRNRD_GITHUB_OAUTH_SCOPE", "")
     github_oauth_authorize_url: str = os.environ.get("BRNRD_GITHUB_OAUTH_AUTHORIZE_URL", "https://github.com/login/oauth/authorize")
     github_oauth_token_url: str = os.environ.get("BRNRD_GITHUB_OAUTH_TOKEN_URL", "https://github.com/login/oauth/access_token")
     github_api_base_url: str = os.environ.get("BRNRD_GITHUB_API_BASE_URL", "https://api.github.com")

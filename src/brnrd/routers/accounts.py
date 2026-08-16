@@ -74,15 +74,19 @@ def activity_out(row: ActivityRecord) -> schemas.ActivityRecordOut:
 
 
 def account_for_github_identity(db: Session, identity: GitHubIdentity) -> Account:
+    # w-57 (2026-08-16): never writes `Account.email` — brnrd stopped
+    # collecting it. Deliberately not even ``account.email = identity.email``
+    # (identity.email is always ``None`` now, see oauth.fetch_identity): an
+    # existing row's column is left exactly as it was, so a pre-migration
+    # residual value is never re-synced or "resurrected" by a later login.
     account = db.execute(select(Account).where(Account.github_id == identity.github_id)).scalar_one_or_none()
     if account is None:
-        account = Account(id=ids.account_id(), github_id=identity.github_id, github_login=identity.login, email=identity.email)
+        account = Account(id=ids.account_id(), github_id=identity.github_id, github_login=identity.login)
         db.add(account)
         db.commit()
         db.refresh(account)
         return account
     account.github_login = identity.login
-    account.email = identity.email
     db.commit()
     db.refresh(account)
     return account
