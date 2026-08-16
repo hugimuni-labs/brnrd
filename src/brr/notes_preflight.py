@@ -6,8 +6,8 @@ when not, zero model cost.** Where the kb preflight reads the shared
 knowledge graph, this reads the surfaces :mod:`brr.notes` registers — the
 run's control files, the dominion, the work surface.
 
-Three checks, one per measured failure, and deliberately no speculative
-fourth:
+Four checks, one per measured failure, and deliberately no speculative
+fifth:
 
 - ``inert-pitfall`` / ``unindexed-pitfall-section`` — a ``## `` section in
   ``pitfalls.md`` that the matcher will never fire on. (#985: a lesson
@@ -22,6 +22,13 @@ fourth:
   declares a staleness predicate *and its own enforcement* ("checked the
   same way: deterministically, differentially, silent when clean") and
   nothing implemented it. This is that.
+- ``never-linked`` — a dominion or knowledge repo that has never had a git
+  remote, so brr's best-effort capture push has never had anywhere to go.
+  (#1423: the skip was silent at every site — no marker, no banner, no
+  deterministic row — so a home that never left one machine rendered
+  identically to a healthy one.) Mirrors the wake-time banners
+  (:func:`brr.dominion.never_linked` / :func:`brr.knowledge.never_linked`)
+  rather than re-deriving the predicate.
 
 And one that is about the *scan*, not about any surface —
 ``home-unresolved`` / ``surface-root-empty`` (:func:`check_roots`). It
@@ -812,6 +819,90 @@ def check_signatures(
     return out
 
 
+# ── 4. Never-linked home ─────────────────────────────────────────────
+
+
+def check_never_linked(
+    repo_root: Path, cfg: dict[str, Any] | None = None,
+) -> list[Finding]:
+    """A dominion or knowledge repo carrying no git remote at all (#1423).
+
+    The deterministic twin of the wake-time banners
+    (``prompts._build_dominion_block`` / ``_build_knowledge_sources_block``):
+    same predicate, same source of truth (:func:`brr.dominion.never_linked` /
+    :func:`brr.knowledge.never_linked`), read here instead of re-derived, so
+    a resident that skims straight to "notes health" and never reads the
+    dominion/knowledge prose still sees the fact. Same gate too — silent
+    until the repo carries a commit beyond its founding one, so a fresh
+    install with nothing written yet reports nothing.
+
+    Deduplicated by ``capture_root`` the same way
+    ``daemon._capture_dominion`` dedupes before committing: an
+    account-scoped candidate whose ``path`` is a namespaced subdirectory of
+    a *shared* dominion repo would otherwise report the same repo's
+    never-linked status once per resident sharing it.
+    """
+    from . import account
+    from . import dominion as dominion_mod
+    from . import gitops
+    from . import knowledge as knowledge_mod
+
+    if cfg is None:
+        try:
+            from . import config as conf
+
+            cfg = conf.load_config(repo_root)
+        except Exception:
+            cfg = {}
+
+    out: list[Finding] = []
+
+    try:
+        seen: set[Path] = set()
+        for candidate in dominion_mod.resident_dominion_candidates(repo_root, cfg):
+            root = candidate.capture_root
+            if not root.is_dir():
+                continue
+            try:
+                key = root.resolve()
+            except OSError:
+                key = root
+            if key in seen:
+                continue
+            seen.add(key)
+            reason = dominion_mod.never_linked(root.parent, root)
+            if not reason:
+                continue
+            where = f" (dominion `{candidate.label}`)" if candidate.label else ""
+            out.append(Finding(
+                type="never-linked",
+                target=str(root),
+                description=f"{reason}{where}.",
+                severity="warning",
+            ))
+    except Exception:
+        pass
+
+    try:
+        ctx = account.resolve_context(repo_root, cfg, create=False)
+        home_knowledge = account.knowledge_path(ctx)
+        if home_knowledge.is_dir():
+            reason = knowledge_mod.never_linked(
+                gitops.shared_brr_dir(repo_root), home_knowledge,
+            )
+            if reason:
+                out.append(Finding(
+                    type="never-linked",
+                    target=str(home_knowledge),
+                    description=f"{reason} (account knowledge repo).",
+                    severity="warning",
+                ))
+    except Exception:
+        pass
+
+    return out
+
+
 # ── The scan ─────────────────────────────────────────────────────────
 
 
@@ -917,6 +1008,8 @@ def scan_scoped(
                 ))
     except Exception:
         pass
+
+    out.extend(check_never_linked(repo_root, cfg))
 
     from .kb_preflight import _SEVERITY_RANK
 

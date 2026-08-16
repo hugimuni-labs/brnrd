@@ -1080,6 +1080,19 @@ def _build_dominion_block(repo_root: Path) -> str:
                 "Until it lands, this memory lives on one machine only."
             ),
         )
+    else:
+        # Mutually exclusive with `diverged` by construction — the marker
+        # this reads is only ever set while `needs_sync`'s is unset (see
+        # `dominion.commit`) — but the `else` still says so rather than
+        # relying on that invariant silently: a remote that has diverged
+        # keeps its own banner and this one never doubles up on it.
+        unlinked = dominion.never_linked(
+            chosen.capture_root.parent, chosen.capture_root,
+        )
+        if unlinked:
+            sync_note = "\n\n" + _never_linked_banner(
+                subject="your dominion", repo_path=str(chosen.capture_root),
+            )
     if chosen.legacy:
         location = (
             f"Your dominion is the legacy repo-local working memory at `{path}`. "
@@ -2297,28 +2310,76 @@ def _build_knowledge_sources_block(repo_root: Path) -> str:
     of the knowledge repo was rejected. A marker nothing surfaces is a
     guardrail that doesn't guard: the whole point of not swallowing a
     rejected push is that the next resident awake sees it and reconciles.
+
+    Falls back to the never-linked banner when there was no push to fail —
+    the account knowledge repo has no remote at all (#1423). The two
+    warnings are mutually exclusive by construction (the never-linked
+    marker is only set while the repo has no remote; `needs_sync` is only
+    set while it has one and a push just failed), so at most one renders.
     """
 
+    from . import account
     from . import config as conf
     from . import gitops
     from . import knowledge
 
     cfg = conf.load_config(repo_root)
     block = knowledge.render_injection(repo_root, cfg)
-    diverged = knowledge.needs_sync(gitops.shared_brr_dir(repo_root))
-    if not diverged:
+    brr_dir = gitops.shared_brr_dir(repo_root)
+    diverged = knowledge.needs_sync(brr_dir)
+    if diverged:
+        warning = _sync_marker_banner(
+            status=knowledge.needs_sync_status(brr_dir),
+            reason=diverged,
+            subject="the knowledge remote",
+            repo_path=str(brr_dir),
+            stakes=(
+                "Until it lands, the kb pages this run writes will not reach "
+                "the archive, and they will not be linkable."
+            ),
+        )
+        return f"{warning}\n\n{block}" if block else warning
+    try:
+        home_knowledge = account.knowledge_path(
+            account.resolve_context(repo_root, cfg, create=False),
+        )
+    except Exception:  # noqa: BLE001 - a wake block must never break on this
+        home_knowledge = None
+    unlinked = (
+        knowledge.never_linked(brr_dir, home_knowledge)
+        if home_knowledge is not None else None
+    )
+    if not unlinked:
         return block
-    warning = _sync_marker_banner(
-        status=knowledge.needs_sync_status(gitops.shared_brr_dir(repo_root)),
-        reason=diverged,
-        subject="the knowledge remote",
-        repo_path=str(gitops.shared_brr_dir(repo_root)),
-        stakes=(
-            "Until it lands, the kb pages this run writes will not reach the "
-            "archive, and they will not be linkable."
-        ),
+    warning = _never_linked_banner(
+        subject="the knowledge remote", repo_path=str(home_knowledge),
     )
     return f"{warning}\n\n{block}" if block else warning
+
+
+def _never_linked_banner(*, subject: str, repo_path: str) -> str:
+    """One standing status line for a repo that has never had a remote (#1423).
+
+    Deliberately **not** built from :func:`_sync_marker_banner` — that one
+    renders a *push failure*: an attempt was made and it didn't land, so it
+    carries a classified reason and a stakes clause about what's pending.
+    This one renders a standing *state*: no attempt was ever possible,
+    because there has never been anywhere to push to. Different fact,
+    different remedy (`brnrd home link`, not "reconcile the remote"), so it
+    reads differently rather than being squeezed into the same shape with a
+    placeholder reason.
+
+    Byte-stable for a given *subject* / *repo_path* pair (no timestamp, no
+    run-scoped detail) so the line reads as the same ambient fact on every
+    wake it renders on, not a fresh event each time.
+    """
+    return (
+        f"**{subject} has never been linked** — `{repo_path}` carries no git "
+        "remote, so brr has never had anywhere to push this memory; it has "
+        "lived on this machine only since it began. Not a push failure to "
+        "reconcile — there is no remote to reconcile against. "
+        "`brnrd home link` is the whole remedy."
+    )
 
 
 def _sync_marker_banner(

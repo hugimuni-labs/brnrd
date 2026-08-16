@@ -4919,6 +4919,74 @@ class TestSyncMarkerBannerSpeaksItsClass:
         assert dominion.needs_sync_status(path.parent) is None
 
 
+class TestNeverLinkedBanner:
+    """The wake banner for a dominion that has never had a remote (#1423).
+
+    A standing state, not a push failure: no attempt to reconcile, no
+    classified reason — the whole remedy is ``brnrd home link``. Rendered
+    only once the dominion carries real content beyond its founding
+    commit(s), and never alongside the ``needs_sync`` banner.
+    """
+
+    @staticmethod
+    def _dominion(tmp_path):
+        return TestSyncMarkerBannerSpeaksItsClass._dominion(tmp_path)
+
+    def test_absent_at_birth(self, tmp_path):
+        """The marker is set (a fresh install genuinely has no remote), but
+        the banner stays quiet until there's memory to warn about — and
+        this first render is also what anchors the baseline."""
+        from brr import dominion
+        from brr.prompts import _build_dominion_block
+
+        repo, path = self._dominion(tmp_path)
+        dominion.mark_never_linked(path.parent)
+
+        block = _build_dominion_block(repo)
+
+        assert "has never been linked" not in block
+
+    def test_renders_once_real_content_follows_birth(self, tmp_path):
+        from brr import dominion
+        from brr.prompts import _build_dominion_block
+
+        repo, path = self._dominion(tmp_path)
+        dominion.mark_never_linked(path.parent)
+        _build_dominion_block(repo)  # anchors the baseline at birth
+
+        (path / "pain.md").write_text("slow rebuild keeps biting\n", encoding="utf-8")
+        assert dominion.commit(path, "capture", remote=None, push=False) is True
+
+        block = _build_dominion_block(repo)
+
+        assert "**your dominion has never been linked**" in block
+        assert "brnrd home link" in block
+        # Not the push-failure banner's vocabulary — this is a different
+        # fact with a different remedy, not a merge to do.
+        assert "fetch, merge / resolve" not in block
+        assert "has diverged" not in block
+
+    def test_needs_sync_takes_precedence_and_suppresses_never_linked(
+        self, tmp_path,
+    ):
+        """Mutually exclusive by construction at the writers (never-linked
+        is only set while there's no remote; needs_sync only while there
+        is one), but the *renderer*'s own precedence is asserted directly
+        here rather than trusted — a reader must never see both banners."""
+        from brr import dominion
+        from brr.prompts import _build_dominion_block
+
+        repo, path = self._dominion(tmp_path)
+        dominion.mark_never_linked(path.parent)
+        assert dominion.commit(path, "capture", remote=None, push=False) is True
+        dominion.mark_needs_sync(path.parent, "push of main to origin failed")
+
+        block = _build_dominion_block(repo)
+
+        assert "has never been linked" not in block
+        assert "could not push" in block
+
+
 # ── an inert pitfall on the wake surface (#985) ──────────────────────
 #
 # Driven through `_build_notes_health_block` — the function that actually
