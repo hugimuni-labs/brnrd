@@ -992,6 +992,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="skip the boot prompt and print only the boundaries")
     p.set_defaults(func=cmd_prompts_wake)
 
+    p = prompts_sub.add_parser(
+        "replay",
+        help="rebuild a captured run's prompt under modified prompt files "
+             "and report which blocks would have changed — w-56 rung 1. "
+             "Substitutes only file-backed blocks (run.md, weave.md, "
+             "register.md, daemon-substrate.md, identity-core.md, "
+             "diffense.md, introspection.md, the portals.md verb-grammar "
+             "extract); every other byte of the captured wake is held "
+             "identical. Refuses rather than guessing when the captured "
+             "run's block layout cannot be verified (e.g. a boot.mount "
+             "run, whose file-backed blocks never entered prompt.md's own "
+             "text).")
+    p.add_argument("run_id", help="run id to replay (must have a captured prompt.md + boot-score.json)")
+    p.add_argument(
+        "--prompts", required=True, metavar="DIR",
+        help="directory of replacement prompt files, named like the "
+             "bundled originals (weave.md, daemon-substrate.md, ...)")
+    p.add_argument(
+        "--block", action="append", default=None, metavar="BLOCK_KEY",
+        help="restrict substitution to this block_key (repeatable); every "
+             "other file-backed block still reports as unchanged")
+    p.add_argument(
+        "--json", action="store_true",
+        help="emit machine-readable JSON instead of a human diff")
+    p.set_defaults(func=cmd_prompts_replay)
+
     bench_p = sub.add_parser(
         "bench",
         help="probe daemon/runner seams with a scripted lesser-light run")
@@ -1484,6 +1510,59 @@ def cmd_prompts_wake(args):
             limit=getattr(args, "boundaries", None),
         )
     )
+    return 0
+
+
+def cmd_prompts_replay(args):
+    """``brnrd replay <run-id> --prompts <dir> [--block NAME]... [--json]``.
+
+    w-56 rung 1 — rebuild a captured run's ``prompt.md`` with its
+    file-backed blocks substituted from ``--prompts <dir>``, print the
+    substitution roster and diff, hold every other byte identical. See
+    :mod:`brr.replay` for the locate mechanism and why it refuses rather
+    than guesses on a run it cannot verify.
+    """
+    import json
+    import sys
+
+    from . import replay as replay_mod
+
+    repo_root = _maybe_repo_root()
+    if repo_root is None:
+        print("brnrd: not inside a git repository", file=sys.stderr)
+        return 1
+    # `shared_brr_dir`, not a bare `repo_root / ".brr"`: inside a linked
+    # worktree (where a strand's own run always executes) the runtime dir
+    # — including `runs/` — lives beside the *host* checkout's common git
+    # dir, not under the worktree itself. `cmd_prompts_wake` above uses the
+    # bare form and is consequently unable to find its own run's directory
+    # from inside a worktree; noted in the rung-1 report rather than fixed
+    # here (out of this change's scope — `_wake_dump`'s caller, not the
+    # function itself, and a pre-existing behavior this task didn't ask
+    # for).
+    runs_dir = _brr_dir_for_repo(repo_root) / "runs"
+    run_dir = runs_dir / args.run_id
+    if not run_dir.is_dir():
+        print(f"brnrd: unknown run {args.run_id!r} (looked under {runs_dir})", file=sys.stderr)
+        return 1
+
+    prompts_dir = Path(args.prompts)
+    if not prompts_dir.is_dir():
+        print(f"brnrd: --prompts {args.prompts!r} is not a directory", file=sys.stderr)
+        return 1
+
+    try:
+        result = replay_mod.plan_replacement(
+            run_dir, prompts_dir, block_filter=getattr(args, "block", None)
+        )
+    except replay_mod.ReplayLocateError as exc:
+        print(f"replay: {exc}", file=sys.stderr)
+        return 1
+
+    if getattr(args, "json", False):
+        print(json.dumps(replay_mod.to_dict(result), indent=2))
+    else:
+        sys.stdout.write(replay_mod.format_human(result))
     return 0
 
 
