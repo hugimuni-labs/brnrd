@@ -155,8 +155,8 @@
 						<p class="font-mono text-xs tracking-wide text-ink-quiet uppercase">Account identity</p>
 						<p>
 							Your GitHub numeric id and login, received when you sign in through GitHub. We do not
-							request GitHub's <code class="font-mono text-xs text-amber-200">user:email</code> scope and
-							do not receive or store your email address — if you subscribe, Stripe collects a billing
+							request GitHub's <code class="font-mono text-xs text-amber-200">user:email</code> scope
+							and do not receive or store your email address — if you subscribe, Stripe collects a billing
 							email directly from you at checkout instead; see §5. Also the date and version of the beta
 							terms you accepted, which we keep to show that acceptance happened (legal obligation and
 							our legitimate interest in being able to evidence it, Article 6(1)(c) and 6(1)(f)).
@@ -334,10 +334,9 @@
 					</li>
 					<li>
 						<strong class="text-stone-200">Stripe</strong> — payments, as merchant of record. Receives
-						your brnrd account id from us, and nothing else. If you subscribe, Stripe collects your
-						billing email directly from you during checkout — we never hold it and never forward it.
-						United States; transfers rely on the EU-US Data Privacy Framework and standard contractual
-						clauses.
+						your brnrd account id from us, and nothing else. If you subscribe, Stripe collects your billing
+						email directly from you during checkout — we never hold it and never forward it. United States;
+						transfers rely on the EU-US Data Privacy Framework and standard contractual clauses.
 					</li>
 					<li>
 						<strong class="text-stone-200">GitHub</strong> — sign-in and repository access. United States;
@@ -423,10 +422,10 @@
 					immediately rather than at period end, and then clears every account-keyed store we hold. Two
 					things survive it deliberately, and you should know which: the append-only billing ledger, whose
 					statutory retention period we have not yet had confirmed by counsel, and the account row it
-					hangs off — that row's identifying columns (GitHub id, login, Stripe customer id) are
-					blanked and the row is left as a tombstone, because the ledger's reference to it has to stay
-					valid. Stripe keeps its own copy of your invoice history under its own retention, not ours.
-					If you would rather we did it by hand, email us and we will, within the statutory month.
+					hangs off — that row's identifying columns (GitHub id, login, Stripe customer id) are blanked
+					and the row is left as a tombstone, because the ledger's reference to it has to stay valid.
+					Stripe keeps its own copy of your invoice history under its own retention, not ours. If you
+					would rather we did it by hand, email us and we will, within the statutory month.
 				</p>
 				<p class="mt-2">
 					You can also complain to the French supervisory authority, the
