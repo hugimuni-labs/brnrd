@@ -26,6 +26,12 @@ class OAuthError(RuntimeError):
 class GitHubIdentity:
     github_id: str
     login: str
+    # w-57 (2026-08-16): always ``None`` now. brnrd stopped requesting
+    # `user:email` and stopped reading GitHub's own `email` field off
+    # `/user` — see fetch_identity(). The field stays on this dataclass
+    # (rather than being deleted) only because a wide set of call sites
+    # still pass it positionally/by keyword; nothing sets it to anything
+    # but ``None``.
     email: str | None = None
     # Kept only for the callback request so installation discovery can use
     # GitHub's user-scoped view.  Account records never persist this token.
@@ -116,45 +122,29 @@ def _fetch_json(settings: Settings, token: str, path: str):
             url, headers=_github_headers(token, settings), timeout=15.0
         )
         response.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        if exc.response.status_code in {403, 404} and path == "/user/emails":
-            return []
-        raise OAuthError("GitHub identity lookup failed") from exc
     except httpx.HTTPError as exc:
         raise OAuthError("GitHub identity lookup failed") from exc
     return response.json()
 
 
-def _primary_verified_email(items) -> str | None:
-    verified = [
-        item for item in items
-        if isinstance(item, dict) and item.get("email") and item.get("verified")
-    ]
-    for item in verified:
-        if item.get("primary"):
-            return str(item["email"]).strip().lower()
-    if verified:
-        return str(verified[0]["email"]).strip().lower()
-    return None
-
-
 def fetch_identity(settings: Settings, token: str) -> GitHubIdentity:
+    """Resolve the authenticated user's id/login from GitHub.
+
+    w-57 (2026-08-16): deliberately does not read ``/user``'s own ``email``
+    field or fall back to ``/user/emails`` — brnrd stopped collecting a
+    login email at all (kb decision, maintainer-signed 2026-08-16). Stripe
+    now collects a billing email directly from the payer at checkout
+    instead (see ``routers/billing.py::_ensure_customer``).
+    """
     user = _fetch_json(settings, token, "/user")
     github_id = user.get("id")
     login = user.get("login")
     if github_id is None or not login:
         raise OAuthError("GitHub identity response was missing id/login")
 
-    email = user.get("email")
-    if email:
-        email = str(email).strip().lower()
-    else:
-        email = _primary_verified_email(_fetch_json(settings, token, "/user/emails"))
-
     return GitHubIdentity(
         github_id=str(github_id),
         login=str(login),
-        email=email,
         access_token=token,
     )
 
