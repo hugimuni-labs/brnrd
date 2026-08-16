@@ -209,6 +209,46 @@ def test_topup_checkout_payload_carries_product_tax_code(monkeypatch):
     )
 
 
+def test_subscription_checkout_creates_customer_with_no_email(monkeypatch):
+    """w-57 (2026-08-16): the Stripe forward is gone — driven through the
+    real `POST /v1/accounts/subscription/checkout` caller, not the helper
+    directly, so this fails if any layer between the route and
+    `stripe_api._post` reintroduces an email. `_account`'s `email=` kwarg
+    below is the pre-w-57 test-seeding convention; it deliberately does
+    *not* land on the account any more (see test_brnrd_web.py's
+    fresh-login test), so this also proves the forward stays cut even when
+    the account happens to have been seeded with an email string in the
+    test helper's call.
+    """
+    client = _client()
+    headers = _account(client)
+    calls = []
+
+    def fake_post(settings, path, data):
+        calls.append((path, dict(data)))
+        if path == "/customers":
+            return {"id": "cus_new"}
+        return {"url": "https://checkout.stripe.example/s"}
+
+    monkeypatch.setattr(stripe_api, "_post", fake_post)
+    out = client.post(
+        "/v1/accounts/subscription/checkout", json={"cadence": "monthly"}, headers=headers
+    )
+    assert out.status_code == 200
+
+    customer_calls = [data for path, data in calls if path == "/customers"]
+    assert len(customer_calls) == 1
+    assert "email" not in customer_calls[0]
+
+    checkout_calls = [data for path, data in calls if path == "/checkout/sessions"]
+    assert len(checkout_calls) == 1
+    assert "customer_email" not in checkout_calls[0]
+    # No email on file for the customer we just created ⇒ Stripe Checkout
+    # collects one from the payer directly and attaches it to that
+    # Customer — Stripe's documented default, not something brnrd sets.
+    assert checkout_calls[0]["customer"] == "cus_new"
+
+
 def test_topup_grants_credits_idempotently():
     client = _client()
     headers = _account(client)
