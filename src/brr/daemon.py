@@ -2785,6 +2785,71 @@ def _stray_host_write(task: Run, repo_root: Path) -> dict | None:
     return None
 
 
+def _weld_ignition_body(event: dict) -> str:
+    """The text THE WELD's ignition half (below) is allowed to scan for
+    warp item ids.
+
+    Only a *correspondent-authored* body can address an item — a user
+    message or a forge comment naming an id is how someone asks for it.
+    A *system-authored* body — brnrd's own prose about work, not a
+    correspondent's — never addresses an item even when it names one:
+    a schedule entry's standing agenda lists ids as examples to consider
+    (#1383), and a `spawn:` dispatch's own spec can equally quote an id as
+    a citation rather than a task (the measurement that widened this fix:
+    `run-260816-2051-l00q`'s own `source: spawn` event ignited two items
+    it was never asked to work).
+
+    `protocol.INTERNAL_SOURCES` already draws exactly this line for a
+    different consumer (`trust.py`'s owner/stranger tiering): every source
+    in it is "written by brnrd's own code" — schedule, spawn, respawn, a
+    spawn's completion note, a steer to a child, a bench scenario, an
+    install wake — never a correspondent typing into a gate. Reusing it
+    here means a new internally-minted source is automatically excluded
+    (`tests/test_trust.py`'s AST completeness check keeps that set
+    honest) and a new *correspondent* ingress path (a gate) is never in
+    it, so it stays ignition-eligible with no edit at this call site
+    either. Asserting the property beats enumerating today's two known
+    non-igniting sources, which is exactly what under-covered `spawn`.
+    """
+    if str(event.get("source") or "") in protocol.INTERNAL_SOURCES:
+        return ""
+    return str(event.get("body") or "")
+
+
+def _weld_ignite(
+    event: dict,
+    account_context: "account.AccountContext | None",
+    outbox_dir: Path,
+    run_id: str,
+) -> list[str]:
+    """THE WELD, ignition half (#972): an event body naming a warp item
+    address (`layer#slug`) ignites that item — the run's manifest gains an
+    `item` relic and the item gains its `taken: run-…` residue, before the
+    runner ever wakes. Deliberately the event's *own* body (via
+    `_weld_ignition_body`, narrowed #1383), not the woven burst body a
+    caller might assemble from siblings: a sibling's mention is the
+    sibling's ignition, and crediting it here would re-run the
+    agenda-lock defect by another route. Best-effort — the weld must
+    never block the run.
+    """
+    try:
+        ignited_items = weld.annotate_ignition(
+            weld.warp_dir(account_context),
+            outbox_dir,
+            run_id=run_id,
+            body=_weld_ignition_body(event),
+        )
+        if ignited_items:
+            print(
+                f"[brnrd] run {run_id}: weld ignition — "
+                + ", ".join(ignited_items)
+            )
+        return ignited_items
+    except Exception as exc:  # noqa: BLE001 - annotation is never a run failure
+        print(f"[brnrd] run {run_id}: weld ignition failed: {exc}")
+        return []
+
+
 def _run_worker(
     event: dict,
     repo_root: Path,
@@ -3136,27 +3201,10 @@ def _run_worker(
     outbox_dir.mkdir(parents=True, exist_ok=True)
     inbox_dir = inbox_dir or (brr_dir / "inbox")
 
-    # THE WELD, ignition half (#972): an event body naming a warp item
-    # address (`layer#slug`) ignites that item — the run's manifest gains an
-    # `item` relic and the item gains its `taken: run-…` residue, before the
-    # runner ever wakes. Deliberately the event's *own* body, not the woven
-    # burst body assembled below: a sibling's mention is the sibling's
-    # ignition, and crediting it here would re-run the agenda-lock defect by
-    # another route. Best-effort — the weld must never block the run.
-    try:
-        ignited_items = weld.annotate_ignition(
-            weld.warp_dir(account_context),
-            outbox_dir,
-            run_id=task.id,
-            body=str(event.get("body") or ""),
-        )
-        if ignited_items:
-            print(
-                f"[brnrd] run {task.id}: weld ignition — "
-                + ", ".join(ignited_items)
-            )
-    except Exception as exc:  # noqa: BLE001 - annotation is never a run failure
-        print(f"[brnrd] run {task.id}: weld ignition failed: {exc}")
+    # THE WELD, ignition half (#972, narrowed #1383) — see
+    # `_weld_ignition_body` / `_weld_ignite` above for the guard and its
+    # reasoning. Best-effort — the weld must never block the run.
+    _weld_ignite(event, account_context, outbox_dir, task.id)
 
     # #533: a security-defining key (`runner_cmd`, `trust.*`, `docker.*`,
     # `solitary.*`, `environment`/`env`/`default_env`) set in the
