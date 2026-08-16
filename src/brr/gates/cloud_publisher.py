@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import time
+import traceback
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -1109,6 +1110,16 @@ def _repo_initialised_snapshot(brr_dir: Path) -> dict[str, bool]:
     return {"agents_md_missing": agents_md_missing, "kb_missing": kb_missing}
 
 
+# Failure causes this process has already given a full traceback to, so a
+# repeating one costs one traceback total rather than one per tick (#1386:
+# 4,860 byte-identical one-line prints overnight, and not one of them named
+# the raising line — the same deduped-as-noise signature #818 already named,
+# with a real starved lane hiding under it). Same "warn once" shape as
+# ``_publish_scope_warned`` above — a module-level set, keyed on what makes
+# two occurrences the *same* cause rather than merely the same message text.
+_quota_publish_causes_seen: set[str] = set()
+
+
 @_publish_lane("quota")
 def _publish_quota(brr_dir: Path, inbox_dir: Path | None, state: dict) -> None:
     if not (state.get("token") and state.get("brnrd_url")):
@@ -1129,7 +1140,19 @@ def _publish_quota(brr_dir: Path, inbox_dir: Path | None, state: dict) -> None:
             timeout=10,
         )
     except Exception as e:
-        print(f"[brnrd:cloud] quota publish failed: {e}")
+        # Identity, not just text: the traceback's own frame is the cause,
+        # and `repr` on top of the type name catches two exceptions that
+        # stringify identically but raise from different lines (e.g. two
+        # bare `KeyError()`s render the same `str(e)`, "").
+        cause = f"{type(e).__module__}.{type(e).__qualname__}: {e!r}"
+        if cause not in _quota_publish_causes_seen:
+            _quota_publish_causes_seen.add(cause)
+            print(
+                f"[brnrd:cloud] quota publish failed: {e}\n"
+                f"{traceback.format_exc()}"
+            )
+        else:
+            print(f"[brnrd:cloud] quota publish failed: {e}")
 
 
 def _runners_snapshot(brr_dir: Path) -> dict[str, Any]:
