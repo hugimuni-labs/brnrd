@@ -940,6 +940,32 @@ def branch_upstream(repo_root: Path, branch: str) -> str | None:
     return value or None
 
 
+def has_pushed_upstream(repo_root: Path) -> bool:
+    """Whether *repo_root*'s checked-out branch has ever pushed successfully.
+
+    Reads a record git itself already writes — ``git push -u`` sets the
+    local upstream-tracking config on success, and only on success — rather
+    than asking the network. A caller deciding "does this repo still need a
+    push" gets that answer for free, with no ``git ls-remote`` round trip
+    for the common case of a healthy, already-pushed repo (#1422: origin
+    being merely *wired* was previously read as "linked", so a first push
+    that failed left every later run believing it had nothing left to do).
+
+    No commits yet, no ``.git``, a detached/unborn HEAD, or any git failure
+    all read as False — "no record of a push" is the safe default for a
+    caller about to decide whether one is needed.
+    """
+    if not (repo_root / ".git").exists():
+        return False
+    branch = current_branch(repo_root)
+    if branch == "HEAD":
+        result = _git(repo_root, "symbolic-ref", "--short", "HEAD", check=False)
+        branch = result.stdout.strip() if result.returncode == 0 else ""
+        if not branch:
+            return False
+    return branch_upstream(repo_root, branch) is not None
+
+
 def branch_remote(repo_root: Path, branch: str) -> str | None:
     """Return the configured remote for *branch*, if one exists."""
     result = _git(repo_root, "config", f"branch.{branch}.remote", check=False)
