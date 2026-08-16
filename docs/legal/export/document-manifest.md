@@ -13,7 +13,7 @@ Hash snapshot:
 
 - Date: 2026-08-16
 - Source revision (parent of this export-only change):
-  `785bcea7c32281ff786040245a640e29fa7a49ec`
+  `c1e35441aff4c43c98ab4e9497ae99fcceb0a391`
 - Algorithm: SHA-256 over raw repository file bytes
 - Machine-readable list: [`SHA256SUMS`](SHA256SUMS)
 - Verification from the repository root:
@@ -41,7 +41,7 @@ hashes below remain authoritative for the snapshot if a deployed page changes.
 | Terms of Service — exact current acceptance pin | [`src/brnrd/legal/tos-2026-07-24-r3.txt`](../../../src/brnrd/legal/tos-2026-07-24-r3.txt) | `3a752022d307f241f07a3cc0ff8401b0f66d06124e1bc9d50e9d003db311760b` |
 | Hosted-Execution Beta Terms — rendered source | [`src/frontend/src/routes/beta-hosted-execution/+page.svelte`](../../../src/frontend/src/routes/beta-hosted-execution/+page.svelte) | `c86191bde58adb66cea09c90f0632e899a1bd9ff9f484954f70a3fda4b79a9f1` |
 | Hosted-Execution Beta Terms — exact current acceptance pin | [`src/brnrd/legal/hosted-execution-2026-07-08.txt`](../../../src/brnrd/legal/hosted-execution-2026-07-08.txt) | `4c6b86ba299b9f37b5b1ec5eabe1632919f8a359fea7b6e83408bad70260d94e` |
-| Privacy Notice | [`src/frontend/src/routes/privacy/+page.svelte`](../../../src/frontend/src/routes/privacy/+page.svelte) | `4cd488282bec34a63aee4c0f253545cf19a23d0fbd3776641ad972670ebfbeb8` |
+| Privacy Notice | [`src/frontend/src/routes/privacy/+page.svelte`](../../../src/frontend/src/routes/privacy/+page.svelte) | `6ef74574fd32b6e36d0688d5cee695c3a95f975441883955c7df34a9b2d69b3f` |
 | Legal Notice / *mentions légales* | [`src/frontend/src/routes/legal-notice/+page.svelte`](../../../src/frontend/src/routes/legal-notice/+page.svelte) | `cbbfae6ecb231148d5fa63828c592cc81d005d1472ff2ec795667b5c899c28c6` |
 | K-bis-backed company and host facts rendered by the Legal Notice | [`src/frontend/src/lib/legalNotice.ts`](../../../src/frontend/src/lib/legalNotice.ts) | `e2fc3b4c0c956e35f151c6bd52cc5f256b1f123e2b50574a6794280c0b1d6d20` |
 | Sub-processor list | [`src/frontend/src/routes/sub-processors/+page.svelte`](../../../src/frontend/src/routes/sub-processors/+page.svelte) | `22108856edeec8982213147926d678b6237bc5073257cfce0b86e4813436930e` |
