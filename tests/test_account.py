@@ -445,9 +445,46 @@ def test_home_manifest_reports_the_actual_origin_url_not_a_guessed_name(tmp_path
     manifest = account.home_manifest(ctx)
     assert manifest.origin_url == dominion_url
     assert manifest.knowledge_origin_url == knowledge_url
-    assert manifest.fully_linked is True
+    # Wired, never pushed (#1422): a bare `remote add` must not read as
+    # linked — that's exactly the sticky bug this field exists to close.
+    assert manifest.origin_pushed is False
+    assert manifest.knowledge_origin_pushed is False
+    assert manifest.fully_linked is False
     assert "brnrd-home" not in (manifest.origin_url or "")
     assert "my-brain" in manifest.origin_url  # the operator's own chosen name, not a default
+
+
+def test_fully_linked_requires_an_actual_push_not_just_a_wired_origin(tmp_path):
+    """The positive case of the test above: once a push has actually
+    landed (the local upstream-tracking record `git push -u` writes),
+    `fully_linked` reads True — origin_pushed tracks reality, not intent."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    home = tmp_path / "account-home"
+    ctx = account.resolve_context(repo, {"home.path": str(home), "repo.label": "Gurio/brr"})
+
+    def _push_to_a_real_bare_remote(repo_root: Path, name: str) -> None:
+        remote = tmp_path / f"{name}.git"
+        subprocess.run(["git", "init", "--bare", "-q", "-b", "main", str(remote)], check=True)
+        subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=repo_root, check=True)
+        subprocess.run(
+            ["git", "push", "-u", "origin", "HEAD:refs/heads/main"],
+            cwd=repo_root, check=True, capture_output=True,
+        )
+
+    # `resolve_context` already seeded `home` (the dominion repo) with a
+    # founding commit — only `knowledge_root` needs one of its own.
+    _push_to_a_real_bare_remote(home, "dominion-remote")
+    knowledge_root = account.knowledge_path(ctx)
+    init_git_repo(knowledge_root)
+    commit_files(knowledge_root, {"index.md": "# kb\n"})
+    _push_to_a_real_bare_remote(knowledge_root, "knowledge-remote")
+
+    manifest = account.home_manifest(ctx)
+    assert manifest.origin_pushed is True
+    assert manifest.knowledge_origin_pushed is True
+    assert manifest.fully_linked is True
 
 
 def test_default_home_is_repo_derived_project_home(monkeypatch, tmp_path):

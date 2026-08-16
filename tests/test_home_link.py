@@ -58,8 +58,10 @@ def _strip_ambient_git_url_rewrites(monkeypatch):
 # ── idempotent re-run ───────────────────────────────────────────────────
 
 
-def test_already_linked_repos_need_no_gh_at_all(tmp_path, monkeypatch):
-    """A fully-linked home re-run touches no network and asks nothing of gh."""
+def test_already_linked_and_pushed_repos_need_no_gh_and_no_further_push(tmp_path, monkeypatch):
+    """A healthy, already-pushed home re-run touches no network and asks
+    nothing of gh: the local upstream-tracking record a prior `git push -u`
+    left behind is enough (#1422 — no `git ls-remote` probe needed either)."""
     monkeypatch.setattr(home_link, "_run_gh", _fail_if_called)
 
     home = tmp_path / "home"
@@ -67,6 +69,53 @@ def test_already_linked_repos_need_no_gh_at_all(tmp_path, monkeypatch):
     knowledge_root = account.knowledge_path(ctx)
     knowledge_root.mkdir(parents=True, exist_ok=True)
     home_link._ensure_git_repo(knowledge_root)
+    subprocess.run(["git", "commit", "--allow-empty", "-q", "-m", "founding"],
+                    cwd=knowledge_root, check=True,
+                    env=home_link.gitops.bot_identity_env(home_link._noninteractive_git_env()))
+
+    dominion_remote = _bare_repo(tmp_path, "dominion-remote")
+    knowledge_remote = _bare_repo(tmp_path, "knowledge-remote")
+    for repo_path, remote in ((ctx.dominion_repo, dominion_remote), (knowledge_root, knowledge_remote)):
+        subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=repo_path, check=True)
+        subprocess.run(["git", "push", "-u", "origin", "HEAD:refs/heads/main"],
+                        cwd=repo_path, check=True, capture_output=True)
+
+    push_calls = []
+    real_run = subprocess.run
+
+    def spy_run(cmd, *args, **kwargs):
+        if cmd[:2] == ["git", "push"]:
+            push_calls.append(cmd)
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(home_link.subprocess, "run", spy_run)
+
+    results = home_link.link_home(tmp_path / "repo", _cfg(home))
+
+    assert {r.slot: r.action for r in results} == {
+        "dominion": "already-linked",
+        "knowledge": "already-linked",
+    }
+    assert all(r.pushed for r in results)
+    assert {r.slot: r.remote_url for r in results} == {
+        "dominion": str(dominion_remote),
+        "knowledge": str(knowledge_remote),
+    }
+    assert push_calls == [], "an already-pushed repo must not push again"
+
+
+def test_already_linked_but_never_pushed_retries_the_push(tmp_path, monkeypatch):
+    """The sticky bug (#1422): origin wired (e.g. by a prior run whose push
+    failed) but nothing ever reached the remote — must retry, not report
+    `already-linked, pushed=False` forever."""
+    home = tmp_path / "home"
+    ctx = account.resolve_context(tmp_path / "repo", _cfg(home))
+    knowledge_root = account.knowledge_path(ctx)
+    knowledge_root.mkdir(parents=True, exist_ok=True)
+    home_link._ensure_git_repo(knowledge_root)
+    subprocess.run(["git", "commit", "--allow-empty", "-q", "-m", "founding"],
+                    cwd=knowledge_root, check=True,
+                    env=home_link.gitops.bot_identity_env(home_link._noninteractive_git_env()))
 
     dominion_remote = _bare_repo(tmp_path, "dominion-remote")
     knowledge_remote = _bare_repo(tmp_path, "knowledge-remote")
@@ -75,17 +124,28 @@ def test_already_linked_repos_need_no_gh_at_all(tmp_path, monkeypatch):
     subprocess.run(["git", "remote", "add", "origin", str(knowledge_remote)],
                     cwd=knowledge_root, check=True)
 
+    def fake_run_gh(args):
+        if args[:2] in (["auth", "status"], ["auth", "setup-git"]):
+            return _cp(0)
+        raise AssertionError(f"unexpected gh call: {args}")
+
+    monkeypatch.setattr(home_link, "_run_gh", fake_run_gh)
+
     results = home_link.link_home(tmp_path / "repo", _cfg(home))
 
     assert {r.slot: r.action for r in results} == {
         "dominion": "already-linked",
         "knowledge": "already-linked",
     }
-    assert all(not r.pushed for r in results)
-    assert {r.slot: r.remote_url for r in results} == {
-        "dominion": str(dominion_remote),
-        "knowledge": str(knowledge_remote),
-    }
+    assert all(r.pushed for r in results), "never-pushed-but-wired repos must be pushed on this run"
+    for remote in (dominion_remote, knowledge_remote):
+        log = subprocess.run(
+            ["git", "log", "--oneline", "main"], cwd=remote,
+            capture_output=True, text=True, check=True,
+        )
+        assert log.stdout.strip(), f"{remote} should have actually received the retried push"
+    assert account.gitops.has_pushed_upstream(ctx.dominion_repo) is True
+    assert account.gitops.has_pushed_upstream(knowledge_root) is True
 
 
 # ── adopt-existing-repo path ────────────────────────────────────────────
@@ -245,6 +305,28 @@ def test_push_failure_names_the_repo_and_leaves_origin_wired(tmp_path, monkeypat
     knowledge_root = account.knowledge_path(ctx)
     # origin is left wired on the failed repo too — half-wired, but said plainly
     assert gitops.default_remote(knowledge_root) == "origin"
+
+    # ── the retry (#1422): fix what made the push unreachable, run again
+    # through the real caller (no `_link_one` involved this run — both
+    # slots now hit the `existing_remote` branch) — the second run must
+    # actually push, not report `already-linked, pushed=False` forever.
+    subprocess.run(
+        ["git", "init", "--bare", "-q", "-b", "main", str(bogus_knowledge_target)], check=True,
+    )
+
+    second_results = home_link.link_home(repo_root, _cfg(home))
+
+    assert {r.slot: r.action for r in second_results} == {
+        "dominion": "already-linked",
+        "knowledge": "already-linked",
+    }
+    assert all(r.pushed for r in second_results), "the second run must report the retried push"
+    for remote in (dominion_remote, bogus_knowledge_target):
+        log = subprocess.run(
+            ["git", "log", "--oneline", "main"], cwd=remote,
+            capture_output=True, text=True, check=True,
+        )
+        assert log.stdout.strip()
 
 
 # ── owner resolution ─────────────────────────────────────────────────────
