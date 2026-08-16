@@ -411,6 +411,52 @@ def _link_one(
     return RepoLinkResult(slot=slot, path=repo_path, remote_url=url, action=action, pushed=True)
 
 
+def _retry_push_if_needed(
+    *,
+    slot: str,
+    repo_path: Path,
+    url: str,
+    ssh: bool,
+    prepare_push: Callable[[], None] | None,
+) -> RepoLinkResult:
+    """The already-linked branch's own push attempt (#1422).
+
+    ``existing_remote`` only proves ``origin`` is wired, not that anything
+    ever reached it: a first-run push failure (origin wired at :377, push
+    failed at :402-410) used to leave every later ``link_home`` call
+    reporting ``already-linked, pushed=False`` forever, with nothing that
+    ever retried. This is the retry.
+
+    Zero-network on the common healthy case: :func:`gitops.has_pushed_upstream`
+    reads the local upstream-tracking record ``git push -u`` itself writes
+    on success — a free, already-there "was this ever pushed" fact, not a
+    ``git ls-remote`` probe run on every call. Only a repo with **no** such
+    record attempts a push, reusing :func:`_push_current` with the same
+    founding-message machinery :func:`_link_one` uses for a first link — so
+    an interrupted repo with no commit yet still gets one, exactly as a
+    fresh link would.
+    """
+    if gitops.has_pushed_upstream(repo_path):
+        return RepoLinkResult(
+            slot=slot, path=repo_path, remote_url=url, action="already-linked", pushed=True,
+        )
+
+    if not ssh and prepare_push is not None:
+        prepare_push()
+
+    ok, detail = _push_current(
+        repo_path, "origin", founding_message=repo_deed.founding_commit_message(slot),
+    )
+    if not ok:
+        raise HomeLinkError(
+            f"{slot}: origin is wired to {url} but the push failed: {detail} — "
+            f"{_push_remedy(ssh=ssh)}"
+        )
+    return RepoLinkResult(
+        slot=slot, path=repo_path, remote_url=url, action="already-linked", pushed=True,
+    )
+
+
 # ── entry point ─────────────────────────────────────────────────────────
 
 
@@ -428,18 +474,22 @@ def link_home(
     Does the whole two-repo job in one call — no per-repo prompting. Each
     of the dominion and knowledge repos, independently:
 
-    - already has an ``origin`` → reported as ``"already-linked"``, left
-      untouched (no forced re-push).
+    - already has an ``origin`` **and** a record of a successful push
+      (:func:`gitops.has_pushed_upstream`) → reported as
+      ``"already-linked"``, ``pushed=True``, left untouched (no network).
+    - already has an ``origin`` but no such record (a first push that
+      never landed, #1422) → ``"already-linked"``, and this call retries
+      the push before returning.
     - no origin, but ``owner/name`` already exists on GitHub → adopted:
       origin wired, pushed.
     - no origin, no existing repo → created ``--private``, wired, pushed.
 
     The GitHub owner is resolved lazily — only when a repo actually needs
-    ``gh`` (create/adopt) — so a fully-linked re-run needs no ``gh`` call
-    at all, and needs no network. Raises :class:`HomeLinkError` with a
-    specific, actionable message on any failure; a repo whose origin was
-    wired but whose initial push then failed is named exactly that in the
-    message (never silently half-wired).
+    ``gh`` (create/adopt) — so a healthy, already-pushed re-run needs no
+    ``gh`` call at all, and needs no network. Raises :class:`HomeLinkError`
+    with a specific, actionable message on any failure; a repo whose
+    origin was wired but whose push then failed is named exactly that in
+    the message (never silently half-wired, and never silently un-retried).
 
     *on_result* fires immediately after each repo finishes, so a caller
     that then hits a HomeLinkError on the second repo still knows the
@@ -485,8 +535,9 @@ def link_home(
         existing_remote = gitops.default_remote(path)
         if existing_remote:
             url = gitops.remote_url(path, existing_remote) or ""
-            result = RepoLinkResult(
-                slot=slot, path=path, remote_url=url, action="already-linked", pushed=False,
+            result = _retry_push_if_needed(
+                slot=slot, repo_path=path, url=url, ssh=use_ssh,
+                prepare_push=None if use_ssh else _prepare_https_push,
             )
         else:
             if resolved_owner is None:
