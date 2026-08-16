@@ -174,6 +174,50 @@ def test_server_fingerprint_corrupt_file_reads_as_absent(tmp_path):
     assert runtime.load_server_fingerprint(brr_dir, "cloud") is None
 
 
+@pytest.mark.parametrize(
+    "raw",
+    ["null", "[]", '"a-legacy-token-string"', "5", "{not json"],
+    ids=["null", "list", "string", "number", "invalid-json"],
+)
+def test_load_state_reads_a_non_dict_or_corrupt_file_as_absent(tmp_path, raw):
+    """#1386 defect 1: ``load_state`` used to hand back whatever ``json.loads``
+    parsed to, unlike its sibling :func:`runtime.load_health` a few lines
+    below (which already guards with ``isinstance(value, dict)``). Every
+    ``is_configured()`` across ``gates/*.py`` calls ``state.get(...)`` or
+    ``"x" in state`` on the result without a type check of its own, so a
+    state file that parses cleanly to something other than a JSON object —
+    or doesn't parse at all — crashed every caller with an
+    ``AttributeError``/``TypeError`` one frame past this function, on every
+    call, forever."""
+    brr_dir = tmp_path / ".brr"
+    path = runtime.state_path(brr_dir, "telegram")
+    path.parent.mkdir(parents=True)
+    path.write_text(raw, encoding="utf-8")
+
+    assert runtime.load_state(brr_dir, "telegram") == {}
+
+
+def test_configured_gates_skips_a_gate_with_malformed_state_instead_of_crashing(
+    tmp_path,
+):
+    """The real caller chain #1386 actually crashed through: the daemon's
+    quota-publish tick calls ``configured_gates`` once per PUT, over every
+    built-in gate — one malformed state file used to take the whole tick
+    down (caught only by ``_publish_quota``'s own blanket except, which
+    then misreported it as a quota-snapshot failure). A malformed gate is
+    "not configured", the same honest answer an absent one already gets;
+    the *other*, healthy gates must still be reported."""
+    brr_dir = tmp_path / ".brr"
+    gates_dir = brr_dir / "gates"
+    gates_dir.mkdir(parents=True)
+    (gates_dir / "telegram.json").write_text("null", encoding="utf-8")
+    (gates_dir / "github.json").write_text(
+        json.dumps({"repo": "o/r", "token": "ghp_x"}), encoding="utf-8"
+    )
+
+    assert runtime.configured_gates(brr_dir) == ["github"]
+
+
 #: Stands in for "a poll that just succeeded" inside the parametrize table
 #: below, and is replaced with a real timestamp *when the test runs*.
 #:

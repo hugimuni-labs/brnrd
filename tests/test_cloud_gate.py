@@ -1129,6 +1129,97 @@ def test_loop_publishes_quota_snapshot(tmp_path, monkeypatch):
     ]
 
 
+def test_loop_publishes_quota_snapshot_survives_malformed_gate_state(
+    tmp_path, monkeypatch
+):
+    """#1386 defect 1, driven through the real caller: `_publish_quota`'s
+    blanket except used to catch and misreport crashes that had nothing to
+    do with quota at all — `_gate_health_snapshot` (`configured_gates` ->
+    a gate's `is_configured`) crashed on any gate whose `<gate>.json`
+    happened to parse to something other than a JSON object, taking the
+    *whole* PUT down (shells, gates, repo_* facts, all of it) and printing
+    "quota publish failed: 'NoneType' object has no attribute 'get'" —
+    the exact 4,860-line signature measured in the issue.
+
+    Absent usage state alone was never enough to reproduce the crash
+    (`_claude_quota_shell`/`_codex_quota_shell` already degrade to `None`
+    cleanly on a cold cache); a malformed gate state file is the real
+    ``.get`` on a `None`, in the same tick, caught by the same except.
+    """
+    from brnrd.models import Daemon as DaemonModel
+
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    client, _ = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    daemon_headers = {"Authorization": f"Bearer {token}"}
+    assert client.post(
+        "/v1/daemons/register",
+        json={"daemon_name": "laptop"},
+        headers=daemon_headers,
+    ).status_code == 200
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+    monkeypatch.setattr(cloud.codex_usage, "probe_rate_limits", lambda **kw: None)
+    monkeypatch.setattr(cloud.codex_status, "load_levels", lambda *a, **k: {})
+
+    # No usage state at all (the issue's own hypothesis) *and* a gate state
+    # file that parses cleanly to `null` — a leftover shape from a schema
+    # this gate no longer writes, or a hand-edited reset.
+    (brr_dir / "gates").mkdir(parents=True, exist_ok=True)
+    (brr_dir / "gates" / "telegram.json").write_text("null", encoding="utf-8")
+
+    cloud._dashboard_publish_tick(brr_dir, inbox_dir)
+
+    with client.app.state.SessionLocal() as db:
+        daemon = db.query(DaemonModel).filter(DaemonModel.repo_id == pid).one()
+        # The PUT actually landed — the tick did not abandon the publish the
+        # way a caught-and-swallowed exception would have.
+        assert daemon.quota_updated_at is not None
+        shells = json.loads(daemon.quota_json)
+        gates = json.loads(daemon.gate_health_json)
+    # No usage evidence yet: an honestly empty shell list, not a crash.
+    assert shells == []
+    # The malformed gate reads as "not configured" (same as absent) and is
+    # simply missing from the health rows rather than taking the rest down —
+    # "cloud" is still there (its own state, written above, is well-formed).
+    assert [row["gate"] for row in gates] == ["cloud"]
+
+
+def test_publish_quota_logs_traceback_once_per_distinct_failure_cause(
+    tmp_path, monkeypatch, capsys
+):
+    """#1386 defect 2: the blanket except printed one identical
+    "quota publish failed: <message>" line per tick and never once named
+    the raising line — 4,860 copies, no traceback, a real starved lane
+    hiding underneath. A *distinct* cause now earns exactly one traceback;
+    every further occurrence (this one included) still gets the short
+    line, so the tick's failing/healthy status stays visible without a
+    per-tick traceback flood."""
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd.invalid", "token": "tok", "repo_id": "x", "since": 0},
+    )
+
+    def boom(*a, **kw):
+        raise RuntimeError("synthetic publish failure")
+
+    monkeypatch.setattr(cloud, "_request", boom)
+
+    for _ in range(3):
+        cloud._publish_quota(brr_dir, inbox_dir, cloud._load_state(brr_dir))
+
+    out = capsys.readouterr().out
+    assert out.count("quota publish failed: synthetic publish failure") == 3
+    assert out.count("Traceback (most recent call last):") == 1
+
+
 def test_loop_publishes_repo_initialised_facts(tmp_path, monkeypatch):
     """#1268: `agents_md_missing`/`kb_missing` piggyback on the same quota
     tick as `gates` — computed from the repo root the daemon's own `.brr`
