@@ -28,6 +28,14 @@ class Account(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     github_id: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     github_login: Mapped[str] = mapped_column(String(255), index=True)
+    # w-57 (2026-08-16): dead going forward. brnrd stopped requesting the
+    # `user:email` GitHub scope and stopped writing this column
+    # (routers/accounts.py::account_for_github_identity); migrations.py
+    # backfills every existing row to NULL. Left in place, nullable, rather
+    # than dropped this PR: account_deletion.py's Art-17 tombstone still
+    # clears it by name (a no-op now, and harmless), and dropping a column
+    # a running deploy might still reference needs its own migration once
+    # nothing reads it at all.
     email: Mapped[str | None] = mapped_column(String(320), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     # Terms acceptance is NOT a column pair here any more (#735). It was

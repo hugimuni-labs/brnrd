@@ -78,11 +78,12 @@ def _request(settings: Settings, method: str, path: str, data: dict | None) -> d
     return body
 
 
-def create_customer(settings: Settings, *, account_id: str, email: str | None) -> dict:
-    data: dict = {"metadata[brnrd_account_id]": account_id}
-    if email:
-        data["email"] = email
-    return _post(settings, "/customers", data)
+def create_customer(settings: Settings, *, account_id: str) -> dict:
+    # w-57 (2026-08-16): deliberately no email — brnrd doesn't collect one
+    # any more. A Customer with no email on file makes Stripe Checkout
+    # collect it directly from the payer at checkout time instead (see
+    # routers/billing.py::_ensure_customer).
+    return _post(settings, "/customers", {"metadata[brnrd_account_id]": account_id})
 
 
 def create_subscription_checkout(

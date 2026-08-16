@@ -46,7 +46,13 @@ def _live_subscription(db: Session, account_id: str) -> Subscription | None:
 def _ensure_customer(db: Session, settings, account: Account) -> str:
     if account.stripe_customer_id:
         return account.stripe_customer_id
-    customer = stripe_api.create_customer(settings, account_id=account.id, email=account.email)
+    # w-57 (2026-08-16): no email forwarded — brnrd no longer holds one to
+    # forward. The Customer is created with no email on file, so Stripe
+    # Checkout collects it directly from the payer and attaches it to the
+    # Customer itself (Stripe's documented default: a Checkout Session
+    # collects email whenever the associated Customer doesn't already have
+    # one, and saves what's entered back onto that Customer).
+    customer = stripe_api.create_customer(settings, account_id=account.id)
     account.stripe_customer_id = customer.get("id")
     db.commit()
     return account.stripe_customer_id
