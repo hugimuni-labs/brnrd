@@ -219,7 +219,38 @@ def _migrate_channel_routes(conn: Connection) -> None:
     # #409 — authorization principal for the default-closed Telegram gate;
     # existing rows land NULL (no principal), which is deliberately
     # unauthorized until the chat is re-paired via /start.
-    conn.execute(text("ALTER TABLE channel_routes ADD COLUMN IF NOT EXISTS paired_user_id INTEGER"))
+    # #1392 — models.py now declares BigInteger (Telegram user ids crossed
+    # 2**31-1 in 2021); a fresh table already gets it right via create_all,
+    # but an existing INTEGER column needs widening the same way #1377
+    # widened events.response_ms.
+    conn.execute(text("ALTER TABLE channel_routes ADD COLUMN IF NOT EXISTS paired_user_id BIGINT"))
+    _widen_channel_routes_paired_user_id(conn)
+
+
+def _widen_channel_routes_paired_user_id(conn: Connection) -> None:
+    data_type = conn.execute(
+        text(
+            """
+            SELECT data_type
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'channel_routes'
+              AND column_name = 'paired_user_id'
+            """
+        )
+    ).scalar_one_or_none()
+    if data_type is None:
+        # create_all already made the column the right width on a fresh DB.
+        return
+    if data_type != "integer":
+        # Already bigint (or wider) — nothing to do. A guard that fires on
+        # every type, including bigint, would silently pass over nothing
+        # forever if this ever got renamed away from the intended check.
+        assert data_type == "bigint", (
+            f"unexpected channel_routes.paired_user_id data_type: {data_type!r}"
+        )
+        return
+    conn.execute(text("ALTER TABLE channel_routes ALTER COLUMN paired_user_id TYPE BIGINT"))
 
 
 def _migrate_events(conn: Connection) -> None:
