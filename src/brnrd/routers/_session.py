@@ -13,6 +13,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 from sqlalchemy import delete, select
+from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
 from brnrd import github_marker, ids, limits, oauth, publish_scope, terms
@@ -760,11 +761,22 @@ def _disconnect_repo_core(db: Session, account_id: str, repo_id: str) -> str:
     repo = db.execute(select(Repo).where(Repo.id == repo_id, Repo.account_id == account_id)).scalar_one_or_none()
     if repo is None:
         raise HTTPException(status_code=404, detail="repo not found")
+    # #1457 — a chat's pairing belongs to the *account*, so disconnecting a
+    # repo un-pins any route pointing at it instead of deleting the route:
+    # the chat stays paired and falls back to account-level resolution
+    # (`webhooks._route_target_repo`). Deleting here was the old shape,
+    # where losing your one repo silently killed the whole conversation.
+    db.execute(
+        sa_update(ChannelRoute)
+        .where(ChannelRoute.repo_id == repo.id)
+        .values(repo_id=None)
+        .execution_options(synchronize_session=False)
+    )
     # Every repo-FK table, ordered so nothing is deleted while a surviving row
     # still references it: ActivityRecord points at tokens/daemons, Daemon at
     # tokens (#502 — ActivityRecord and ConfigChangeRequest were missing here,
     # so a disconnect with live activity rows died on the FK).
-    for model in (ActivityRecord, ConfigChangeRequest, Daemon, Event, ChannelRoute, TgPairCode, PairRequest, Token):
+    for model in (ActivityRecord, ConfigChangeRequest, Daemon, Event, TgPairCode, PairRequest, Token):
         db.execute(delete(model).where(model.repo_id == repo.id))
     db.delete(repo)
     # #502: the corpus mirror is account-level; when the last repo disconnects
