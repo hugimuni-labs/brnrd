@@ -290,6 +290,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--json", action="store_true",
                    help="emit machine-readable JSON instead of text")
+    p.add_argument("--resolve", action="store_true",
+                   help="look up the current state of each close ref on the forge")
     p.set_defaults(func=cmd_close_check)
 
     gate_help = f"gate name ({', '.join(GATES)})"
@@ -4181,6 +4183,7 @@ def cmd_close_check(args):
     """
     import json as _json
     import sys as _sys
+    import subprocess as _subprocess
 
     if args.path in ("-", ""):
         text = _sys.stdin.read()
@@ -4195,7 +4198,36 @@ def cmd_close_check(args):
         label = str(path)
 
     findings = closekeyword.check(text, channel=args.channel)
+    refs = closekeyword.extract_close_refs(text, channel=args.channel)
+
+    # When --resolve is requested, look up the state of each ref
+    ref_states = {}
+    if args.resolve and refs:
+        for ref in refs:
+            try:
+                result = _subprocess.run(
+                    ["gh", "issue", "view", ref.ref, "--json", "state"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if result.returncode == 0:
+                    state_data = _json.loads(result.stdout)
+                    ref_states[ref.ref] = state_data.get("state", "UNKNOWN")
+                else:
+                    ref_states[ref.ref] = "NOT_FOUND"
+            except Exception:
+                ref_states[ref.ref] = "UNKNOWN"
+
     if args.json:
+        refs_data = [
+            {
+                "ref": r.ref,
+                "line_number": r.line_number,
+                **({"state": ref_states.get(r.ref)} if args.resolve else {}),
+            }
+            for r in refs
+        ]
         print(_json.dumps({
             "ok": not findings,
             "source": label,
@@ -4210,14 +4242,26 @@ def cmd_close_check(args):
                 }
                 for f in findings
             ],
+            "close_refs": refs_data,
         }))
         return 1 if findings else 0
 
-    if not findings:
-        print(f"[brnrd close-check] {label}: clean ({args.channel})")
-        return 0
-    print(closekeyword.render(findings, channel=args.channel))
-    return 1
+    if findings:
+        print(closekeyword.render(findings, channel=args.channel))
+        return 1
+
+    # No findings: display what will be closed
+    if refs:
+        print(f"[brnrd close-check] {label}: will close {len(refs)} issue(s) ({args.channel})")
+        for ref in refs:
+            state_suffix = ""
+            if args.resolve:
+                state = ref_states.get(ref.ref, "UNKNOWN")
+                state_suffix = f" ({state})"
+            print(f"  Closes #{ref.ref}{state_suffix}")
+    else:
+        print(f"[brnrd close-check] {label}: no close keywords ({args.channel})")
+    return 0
 
 
 def cmd_review(args):
