@@ -53,6 +53,7 @@ def test_resolve_context_creates_account_home_and_registry(tmp_path):
         "/.brr/",
         "/security.config",
         "/account/gates/cloud.token",
+        "/account/x-browser-profile/",
         "*.tmp",
     ]
 
@@ -444,9 +445,46 @@ def test_home_manifest_reports_the_actual_origin_url_not_a_guessed_name(tmp_path
     manifest = account.home_manifest(ctx)
     assert manifest.origin_url == dominion_url
     assert manifest.knowledge_origin_url == knowledge_url
-    assert manifest.fully_linked is True
+    # Wired, never pushed (#1422): a bare `remote add` must not read as
+    # linked — that's exactly the sticky bug this field exists to close.
+    assert manifest.origin_pushed is False
+    assert manifest.knowledge_origin_pushed is False
+    assert manifest.fully_linked is False
     assert "brnrd-home" not in (manifest.origin_url or "")
     assert "my-brain" in manifest.origin_url  # the operator's own chosen name, not a default
+
+
+def test_fully_linked_requires_an_actual_push_not_just_a_wired_origin(tmp_path):
+    """The positive case of the test above: once a push has actually
+    landed (the local upstream-tracking record `git push -u` writes),
+    `fully_linked` reads True — origin_pushed tracks reality, not intent."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    home = tmp_path / "account-home"
+    ctx = account.resolve_context(repo, {"home.path": str(home), "repo.label": "Gurio/brr"})
+
+    def _push_to_a_real_bare_remote(repo_root: Path, name: str) -> None:
+        remote = tmp_path / f"{name}.git"
+        subprocess.run(["git", "init", "--bare", "-q", "-b", "main", str(remote)], check=True)
+        subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=repo_root, check=True)
+        subprocess.run(
+            ["git", "push", "-u", "origin", "HEAD:refs/heads/main"],
+            cwd=repo_root, check=True, capture_output=True,
+        )
+
+    # `resolve_context` already seeded `home` (the dominion repo) with a
+    # founding commit — only `knowledge_root` needs one of its own.
+    _push_to_a_real_bare_remote(home, "dominion-remote")
+    knowledge_root = account.knowledge_path(ctx)
+    init_git_repo(knowledge_root)
+    commit_files(knowledge_root, {"index.md": "# kb\n"})
+    _push_to_a_real_bare_remote(knowledge_root, "knowledge-remote")
+
+    manifest = account.home_manifest(ctx)
+    assert manifest.origin_pushed is True
+    assert manifest.knowledge_origin_pushed is True
+    assert manifest.fully_linked is True
 
 
 def test_default_home_is_repo_derived_project_home(monkeypatch, tmp_path):
@@ -1437,3 +1475,165 @@ def test_list_project_homes_finds_every_scaffolded_home(monkeypatch, tmp_path):
 
 def test_list_project_homes_empty_when_nothing_scaffolded_yet(tmp_path):
     assert account.list_project_homes(tmp_path / "nowhere") == []
+
+
+# ── envoy shims: import guards and documentation ──────────────────────
+
+def test_envoy_shim_without_brr_names_the_fix_instead_of_a_traceback():
+    """Drive each shim with an interpreter that genuinely cannot import
+    ``brr`` and assert what a human actually sees.
+
+    Asserting the *source* contains ``try:``/``except ModuleNotFoundError``
+    would pass on a guard that swallows the error, re-raises the wrong
+    thing, or names no remedy — and would fail on a correct refactor. So
+    this runs the real script under a meta-path finder that makes ``brr``
+    genuinely unimportable, and reads stderr the way the reader does.
+
+    The measured defect (2026-08-15): the login shell's ``python3`` is not
+    the interpreter the daemon runs, so a reader following the docs got a
+    bare ``ModuleNotFoundError`` from a file whose whole premise is legible
+    failure.
+    """
+    import subprocess
+    import sys
+    import tempfile
+    from pathlib import Path
+
+    repo_root = Path(__file__).parent.parent
+    blocker = (
+        "import sys\n"
+        "class _NoBrr:\n"
+        "    def find_spec(self, fullname, path=None, target=None):\n"
+        "        if fullname == 'brr' or fullname.startswith('brr.'):\n"
+        "            raise ModuleNotFoundError(\"No module named 'brr'\", name='brr')\n"
+        "        return None\n"
+        "sys.meta_path.insert(0, _NoBrr())\n"
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        (Path(tmp) / "sitecustomize.py").write_text(blocker, encoding="utf-8")
+        env = {"PATH": "/usr/bin:/bin", "PYTHONPATH": tmp}
+
+        for shim_name in ("x-post.py", "x-read.py", "x-browser.py"):
+            shim = repo_root / "examples" / "envoy" / shim_name
+            proc = subprocess.run(
+                [sys.executable, str(shim), "--help"],
+                capture_output=True, text=True, env=env, timeout=60,
+            )
+            out = proc.stdout + proc.stderr
+
+            assert proc.returncode != 0, f"{shim_name}: exited 0 without brr"
+            # a human-readable refusal, not an interpreter traceback
+            assert "Traceback (most recent call last)" not in out, (
+                f"{shim_name}: leaked a traceback instead of a message"
+            )
+            # and it names the actual fix: which interpreter to use
+            assert "brr" in out, f"{shim_name}: message never mentions brr"
+            assert "python3" in out, (
+                f"{shim_name}: message never names an interpreter to use"
+            )
+
+
+def test_envoy_shim_blocker_itself_works(tmp_path):
+    """The guard above is only evidence if the blocker really blocks.
+
+    Without this, a broken blocker turns the test into a no-op that passes
+    over an unguarded shim — the classic sanity assertion a guard keyed on
+    absence needs.
+    """
+    import subprocess
+    import sys
+
+    blocker = (
+        "import sys\n"
+        "class _NoBrr:\n"
+        "    def find_spec(self, fullname, path=None, target=None):\n"
+        "        if fullname == 'brr' or fullname.startswith('brr.'):\n"
+        "            raise ModuleNotFoundError(\"No module named 'brr'\", name='brr')\n"
+        "        return None\n"
+        "sys.meta_path.insert(0, _NoBrr())\n"
+    )
+    (tmp_path / "sitecustomize.py").write_text(blocker, encoding="utf-8")
+
+    # unblocked: brr imports fine under this interpreter
+    ok = subprocess.run(
+        [sys.executable, "-c", "import brr"], capture_output=True, text=True, timeout=60
+    )
+    assert ok.returncode == 0, "brr is not importable at all — test is meaningless"
+
+    # blocked: the same import now fails
+    blocked = subprocess.run(
+        [sys.executable, "-c", "import brr"],
+        capture_output=True, text=True, timeout=60,
+        env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(tmp_path)},
+    )
+    assert blocked.returncode != 0, "the blocker did not block — every guard above is a no-op"
+
+
+def test_envoy_readme_does_not_regress_to_bare_python3_commands():
+    """Lint the README for command lines that *start* with a bare ``python3``.
+
+    The first version of this guard blocklisted the substrings
+    ``"python3 x-post.py"`` / ``x-read`` / ``x-browser`` — which is wrong in
+    both directions at once, and the wrong-in-the-good-direction half is the
+    one that bites. ``<repo>/.venv/bin/python3 x-post.py`` *contains*
+    ``python3 x-post.py``, so the guard rejected the exact invocation the
+    same commit recommends; and the regression the README actually carried,
+    ``python3 ~/brnrd/account/x-post.py``, was in no blocklist at all. A
+    guard has to be able to fire on the real defect and stay silent on the
+    real fix, or it is a coin toss with a docstring.
+
+    So: anchor on the *start of a command line*, which is where an
+    interpreter is named, and let any path-qualified python through.
+    """
+    import re
+    from pathlib import Path
+
+    repo_root = Path(__file__).parent.parent
+    readme_path = repo_root / "examples" / "envoy" / "README.md"
+    assert readme_path.exists(), f"README not found at {readme_path}"
+    content = readme_path.read_text(encoding="utf-8")
+
+    assert "brr" in content.lower(), "README must mention brr requirement"
+    assert (
+        "importable" in content.lower() or "interpreter" in content.lower()
+    ), "README must clarify which interpreter to use"
+
+    # A command line whose first token is a bare `python3` (no directory
+    # component) invoking one of these scripts. `.venv/bin/python3 x-post.py`
+    # and `<python-with-brr> x-post.py` both carry a prefix and pass.
+    bare = re.compile(r"(?m)^[\s`>*\-]*python3\s+\S*(x-post|x-read|x-browser)\.py")
+    offenders = [m.group(0).strip() for m in bare.finditer(content)]
+    assert not offenders, (
+        "README regressed to a bare system `python3` for the envoy shims: "
+        f"{offenders} -- name an interpreter where brr is importable"
+    )
+
+
+def test_the_readme_lint_can_actually_fire():
+    """The lint above is keyed on absence; without this it can go green over
+    a README that says anything at all.
+
+    Drives both directions on synthetic text: the regression form the README
+    once carried must trip it, and the two recommended forms must not.
+    """
+    import re
+
+    bare = re.compile(r"(?m)^[\s`>*\-]*python3\s+\S*(x-post|x-read|x-browser)\.py")
+
+    must_fire = [
+        'python3 ~/brnrd/account/x-post.py "text"',
+        "    python3 x-browser.py login",
+        "- python3 x-read.py --json",
+    ]
+    for line in must_fire:
+        assert bare.search(line), f"lint failed to catch a real regression: {line!r}"
+
+    must_not_fire = [
+        "<repo>/.venv/bin/python3 x-post.py …",
+        "<python-with-brr> x-browser.py login",
+        "/usr/local/bin/python3 x-read.py",
+        "run it with python3 if you like, but name the interpreter",
+    ]
+    for line in must_not_fire:
+        assert not bare.search(line), f"lint fired on a correct form: {line!r}"

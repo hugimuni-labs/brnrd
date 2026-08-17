@@ -992,6 +992,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="skip the boot prompt and print only the boundaries")
     p.set_defaults(func=cmd_prompts_wake)
 
+    p = prompts_sub.add_parser(
+        "replay",
+        help="rebuild a captured run's prompt under modified prompt files "
+             "and report which blocks would have changed — w-56 rung 1. "
+             "Substitutes only file-backed blocks (run.md, weave.md, "
+             "register.md, daemon-substrate.md, identity-core.md, "
+             "diffense.md, introspection.md, the portals.md verb-grammar "
+             "extract); every other byte of the captured wake is held "
+             "identical. Refuses rather than guessing when the captured "
+             "run's block layout cannot be verified (e.g. a boot.mount "
+             "run, whose file-backed blocks never entered prompt.md's own "
+             "text).")
+    p.add_argument("run_id", help="run id to replay (must have a captured prompt.md + boot-score.json)")
+    p.add_argument(
+        "--prompts", required=True, metavar="DIR",
+        help="directory of replacement prompt files, named like the "
+             "bundled originals (weave.md, daemon-substrate.md, ...)")
+    p.add_argument(
+        "--block", action="append", default=None, metavar="BLOCK_KEY",
+        help="restrict substitution to this block_key (repeatable); every "
+             "other file-backed block still reports as unchanged")
+    p.add_argument(
+        "--json", action="store_true",
+        help="emit machine-readable JSON instead of a human diff")
+    p.set_defaults(func=cmd_prompts_replay)
+
     bench_p = sub.add_parser(
         "bench",
         help="probe daemon/runner seams with a scripted lesser-light run")
@@ -1484,6 +1510,59 @@ def cmd_prompts_wake(args):
             limit=getattr(args, "boundaries", None),
         )
     )
+    return 0
+
+
+def cmd_prompts_replay(args):
+    """``brnrd replay <run-id> --prompts <dir> [--block NAME]... [--json]``.
+
+    w-56 rung 1 — rebuild a captured run's ``prompt.md`` with its
+    file-backed blocks substituted from ``--prompts <dir>``, print the
+    substitution roster and diff, hold every other byte identical. See
+    :mod:`brr.replay` for the locate mechanism and why it refuses rather
+    than guesses on a run it cannot verify.
+    """
+    import json
+    import sys
+
+    from . import replay as replay_mod
+
+    repo_root = _maybe_repo_root()
+    if repo_root is None:
+        print("brnrd: not inside a git repository", file=sys.stderr)
+        return 1
+    # `shared_brr_dir`, not a bare `repo_root / ".brr"`: inside a linked
+    # worktree (where a strand's own run always executes) the runtime dir
+    # — including `runs/` — lives beside the *host* checkout's common git
+    # dir, not under the worktree itself. `cmd_prompts_wake` above uses the
+    # bare form and is consequently unable to find its own run's directory
+    # from inside a worktree; noted in the rung-1 report rather than fixed
+    # here (out of this change's scope — `_wake_dump`'s caller, not the
+    # function itself, and a pre-existing behavior this task didn't ask
+    # for).
+    runs_dir = _brr_dir_for_repo(repo_root) / "runs"
+    run_dir = runs_dir / args.run_id
+    if not run_dir.is_dir():
+        print(f"brnrd: unknown run {args.run_id!r} (looked under {runs_dir})", file=sys.stderr)
+        return 1
+
+    prompts_dir = Path(args.prompts)
+    if not prompts_dir.is_dir():
+        print(f"brnrd: --prompts {args.prompts!r} is not a directory", file=sys.stderr)
+        return 1
+
+    try:
+        result = replay_mod.plan_replacement(
+            run_dir, prompts_dir, block_filter=getattr(args, "block", None)
+        )
+    except replay_mod.ReplayLocateError as exc:
+        print(f"replay: {exc}", file=sys.stderr)
+        return 1
+
+    if getattr(args, "json", False):
+        print(json.dumps(replay_mod.to_dict(result), indent=2))
+    else:
+        sys.stdout.write(replay_mod.format_human(result))
     return 0
 
 
@@ -2473,7 +2552,7 @@ def _do_render(verb: str, label: str, status: str, detail: str) -> tuple[str, bo
     if status == do_mod.OK:
         return f"{verb} {label} ✓", True
     if status == do_mod.QUEUED:
-        return f"{verb} {label} ? still queued", False
+        return f"{verb} {label} ? {detail or 'still queued'}", False
     return f"{verb} {label} ✗ {detail}", False
 
 
@@ -3818,6 +3897,42 @@ def _await_default_timeout(payload: dict) -> float:
     return max(_AWAIT_MIN_TIMEOUT_SECONDS, remaining)
 
 
+def _await_continued_timeout(previous: dict) -> float | None:
+    """Seconds left on a *standing* arming, or ``None`` when there isn't one.
+
+    ``pending`` is this **call's** ceiling, never the wait's: the daemon's
+    arming is still up, with its own deadline, and *call again* continues the
+    same vigil. Re-deriving the default from the run's remaining budget on
+    each re-call silently re-arms it longer every time — a deliberate
+    12-minute hold becomes hours by the third call, with nothing on any
+    surface saying so.
+
+    Inheriting is not a convenience; it is the verb's own design rule applied
+    to its own re-call. ``spawn:<id>`` died because it asked the caller to
+    restate what the daemon already tracks (#1187), and the deadline is
+    tracked — it is in ``portal-state.json`` before this process starts. An
+    explicit ``--timeout`` still wins: that is the caller deliberately
+    re-arming, which is a different act from continuing.
+    """
+    if not previous.get("armed") or previous.get("resolved"):
+        return None
+    raw = previous.get("deadline")
+    if not isinstance(raw, str):
+        return None
+    from datetime import datetime, timezone
+
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    import time as _time
+
+    remaining = parsed.timestamp() - _time.time()
+    return remaining if remaining > 0 else None
+
+
 def _await_parse_timeout(raw: str) -> float | None:
     """``30m`` / ``1h30m`` / a bare number of seconds → seconds, or ``None``."""
     from . import schedule as schedule_mod
@@ -3884,6 +3999,9 @@ def cmd_await(args):
         )
         return 1
 
+    previous = payload.get("await") if isinstance(payload.get("await"), dict) else {}
+    previous_generation = previous.get("generation")
+
     if args.timeout is not None:
         timeout_seconds = _await_parse_timeout(str(args.timeout))
         if timeout_seconds is None or timeout_seconds <= 0:
@@ -3894,10 +4012,11 @@ def cmd_await(args):
             )
             return 1
     else:
-        timeout_seconds = _await_default_timeout(payload)
-
-    previous = payload.get("await") if isinstance(payload.get("await"), dict) else {}
-    previous_generation = previous.get("generation")
+        # A bare re-call *continues* the standing vigil at its own deadline;
+        # only a first call falls through to the budget-derived default.
+        timeout_seconds = (
+            _await_continued_timeout(previous) or _await_default_timeout(payload)
+        )
 
     before = do_mod.notices_of(payload)
     staged = do_mod.stage_await(
@@ -4028,7 +4147,7 @@ def cmd_cut(args):
             print(f"[brnrd cut] accepted — {where}")
         return 0
     if status == do_mod.QUEUED:
-        print("[brnrd cut] ? still queued", file=sys.stderr)
+        print(f"[brnrd cut] ? {detail or 'still queued'}", file=sys.stderr)
         return 1
     print(f"[brnrd cut] bounced — {detail}", file=sys.stderr)
     return 1
