@@ -3,8 +3,11 @@ import test from 'node:test';
 
 import {
 	connectRepo,
+	fetchPairedChats,
+	fetchTelegramPairStatus,
 	mintAccountTelegramPair,
 	ReposAuthError,
+	revokePairedChat,
 	setPublishLayers,
 	splitPairingCommand,
 	telegramPairLabel
@@ -144,4 +147,78 @@ test('mintAccountTelegramPair raises ReposAuthError on 401', async () => {
 test('mintAccountTelegramPair raises on a non-401 error status', async () => {
 	const impl = fakeFetch(503, { detail: 'could not allocate pair code' });
 	await assert.rejects(() => mintAccountTelegramPair(impl), /telegram pair mint failed: 503/);
+});
+
+// #1464 — the minting session's outcome readback: ColdStart polls this by
+// the pair_code it just minted, keyed to whoever's session minted it.
+test('fetchTelegramPairStatus reads the code as a path segment', async () => {
+	const impl = fakeFetch(200, { consumed: false, display: null });
+	const result = await fetchTelegramPairStatus('PK-AB12', impl);
+	assert.equal(calls(impl)[0].url, '/v1/dashboard/telegram-pair/PK-AB12');
+	assert.deepEqual(result, { consumed: false, display: null });
+});
+
+test('fetchTelegramPairStatus carries the redeemed display through untouched', async () => {
+	const impl = fakeFetch(200, { consumed: true, display: '@ada_l' });
+	const result = await fetchTelegramPairStatus('PK-AB12', impl);
+	assert.deepEqual(result, { consumed: true, display: '@ada_l' });
+});
+
+test('fetchTelegramPairStatus raises ReposAuthError on 401', async () => {
+	const impl = fakeFetch(401, { detail: 'unauthenticated' });
+	await assert.rejects(() => fetchTelegramPairStatus('PK-AB12', impl), ReposAuthError);
+});
+
+test('fetchTelegramPairStatus raises on a non-401 error status (e.g. a code minted by another account)', async () => {
+	const impl = fakeFetch(404, { detail: 'unknown pair code' });
+	await assert.rejects(
+		() => fetchTelegramPairStatus('PK-AB12', impl),
+		/pair status fetch failed: 404/
+	);
+});
+
+// #1464 — the paired-chats list: platform / chat title / principal display
+// / paired-at, one row per ChannelRoute.
+test('fetchPairedChats reads the account-scoped list endpoint', async () => {
+	const impl = fakeFetch(200, {
+		paired_chats: [
+			{
+				id: 'chan_1',
+				platform: 'telegram',
+				chat_title: null,
+				principal_display: '@ada_l',
+				paired_at: '2026-08-17T20:00:00+00:00',
+				paired_at_label: '5m ago',
+				repo_full_name: null
+			}
+		]
+	});
+	const result = await fetchPairedChats(impl);
+	assert.equal(calls(impl)[0].url, '/v1/dashboard/paired-chats');
+	assert.equal(result.paired_chats.length, 1);
+	assert.equal(result.paired_chats[0].principal_display, '@ada_l');
+});
+
+test('fetchPairedChats raises ReposAuthError on 401', async () => {
+	const impl = fakeFetch(401, { detail: 'unauthenticated' });
+	await assert.rejects(() => fetchPairedChats(impl), ReposAuthError);
+});
+
+// #1464 — revoke deletes the ChannelRoute outright (kills the principal,
+// not #1459's repo-unpin); a DELETE with no body.
+test('revokePairedChat DELETEs the route by id, escaped as a path segment', async () => {
+	const impl = fakeFetch(200, { ok: true });
+	await revokePairedChat('chan/../x', impl);
+	assert.equal(calls(impl)[0].url, '/v1/dashboard/paired-chats/chan%2F..%2Fx');
+	assert.equal(calls(impl)[0].init?.method, 'DELETE');
+});
+
+test('revokePairedChat raises ReposAuthError on 401', async () => {
+	const impl = fakeFetch(401, { detail: 'unauthenticated' });
+	await assert.rejects(() => revokePairedChat('chan_1', impl), ReposAuthError);
+});
+
+test('revokePairedChat raises on a non-401 error status (e.g. a route owned by another account)', async () => {
+	const impl = fakeFetch(404, { detail: 'paired chat not found' });
+	await assert.rejects(() => revokePairedChat('chan_1', impl), /revoke failed: 404/);
 });

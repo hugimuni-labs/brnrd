@@ -54,6 +54,11 @@ class ParsedMessage:
     # of them); a caller that wants to coalesce an album into one event
     # reads this field, nothing heuristic.
     media_group_id: str | None = None
+    # #1464 — the chat's `title`, when Telegram's update carries one (group
+    # and supergroup chats only; a private chat has no title concept and
+    # the field is absent from the payload). "" — never `None` — when
+    # absent, matching every other string field on this dataclass.
+    chat_title: str = ""
 
 
 def _safe_filename(name: str, fallback: str) -> str:
@@ -132,6 +137,7 @@ def parse_update(payload: dict) -> ParsedMessage | None:
     return ParsedMessage(
         chat_id=str(chat_id),
         chat_type=str((msg.get("chat") or {}).get("type") or ""),
+        chat_title=sanitize_meta_str(str((msg.get("chat") or {}).get("title") or "")),
         text=text,
         message_date=message_date,
         message_id=msg.get("message_id"),

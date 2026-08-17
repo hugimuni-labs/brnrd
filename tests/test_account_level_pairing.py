@@ -173,7 +173,9 @@ def test_account_code_pairs_route_with_no_repo_pin(env):
     assert route.paired_user_id == 42
     # No repos yet: the confirmation names the one step that stands
     # between here and work, and is honest that nothing is queued.
-    assert "Paired with your account" in sends[-1]["text"]
+    # #1464 — the reply also names the bound GitHub login, not just "your
+    # account": a wrong-account bind is now visible in the message itself.
+    assert "Paired with octocat's brnrd account" in sends[-1]["text"]
     assert "no project is connected" in sends[-1]["text"].lower()
 
 
@@ -186,7 +188,7 @@ def test_account_code_with_repos_names_the_resolved_target(env):
 
     _post(client, _message(1002, f"/start {code}"))
 
-    assert "Paired with your account" in sends[-1]["text"]
+    assert "Paired with octocat's brnrd account" in sends[-1]["text"]
     assert "Gurio/solo" in sends[-1]["text"]
 
 
@@ -332,4 +334,5 @@ def test_repo_scoped_code_still_pins(env):
 
     route = _route(app, 1009)
     assert route.repo_id == repo_id
-    assert "Paired with repo 'Gurio/classic'" in sends[-1]["text"]
+    # #1464 — names the bound account too, not just the repo.
+    assert "Paired with octocat's brnrd account, repo 'Gurio/classic'" in sends[-1]["text"]
