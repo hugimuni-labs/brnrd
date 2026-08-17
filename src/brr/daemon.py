@@ -2341,6 +2341,44 @@ def _sticky_wake_note(event: dict) -> str:
 _ACCOUNT_SCOPED_GATES: frozenset[str] = frozenset({"cloud"})
 
 
+def gate_dirs(
+    gate: str,
+    *,
+    inbox_dir: Path | None,
+    responses_dir: Path,
+    account_context: account.AccountContext | None,
+) -> tuple[Path | None, Path]:
+    """``(inbox_dir, responses_dir)`` a message synthesized for *gate* must land in.
+
+    The one place :data:`_ACCOUNT_SCOPED_GATES` is consulted (#1444 — the
+    same routing rule was hand-derived three times in a week because there
+    was no callable resolver forcing a caller to ask instead of re-deriving
+    it locally). Every site that mints an already-`done` event addressed to
+    a gate must call this rather than checking the set itself;
+    `tests/test_daemon.py::test_account_scoped_routing_has_one_consumer`
+    enforces that structurally.
+
+    *inbox_dir*/*responses_dir* are the caller's own defaults — right for
+    every per-repo gate, since `_start_account_gates` runs one delivery
+    thread per repo reading exactly that repo's own inbox. *gate* in
+    :data:`_ACCOUNT_SCOPED_GATES` (today: `cloud`) is the one exception:
+    its single delivery thread reads only `account_context.dispatch_inbox`/
+    `.responses_dir`, account-wide — a caller whose *own* triggering event
+    lived elsewhere (a scheduled firing, a strand, any non-cloud-sourced
+    dispatch) would otherwise synthesize the `done` event into a directory
+    that thread never polls: accepted, captured, `status: pending` forever,
+    no error, no notice (#1437). Route to the account pair whenever one
+    exists, regardless of where the caller itself came from.
+    """
+    if (
+        gate in _ACCOUNT_SCOPED_GATES
+        and account_context is not None
+        and account_context.enabled
+    ):
+        return account_context.dispatch_inbox, account_context.responses_dir
+    return inbox_dir, responses_dir
+
+
 def _start_account_gates(
     account_context: account.AccountContext,
     default_repo_root: Path,
@@ -9839,25 +9877,16 @@ def _deliver_out_of_bound(
     one core behind both out-of-bound pings and scheduled delivery.
     Returns True when queued.
 
-    *inbox_dir*/*responses_dir* default to **this run's own** pair — right
-    for every per-repo gate, since `_start_account_gates` runs one thread
-    per repo reading exactly that repo's own inbox. `gate` in
-    :data:`_ACCOUNT_SCOPED_GATES` (today: `cloud`) is the one exception:
-    its single delivery thread reads only `account_context.dispatch_inbox`/
-    `.responses_dir`, account-wide — a run whose *own* triggering event
-    lived elsewhere (a scheduled firing, a strand, any non-cloud-sourced
-    dispatch) would otherwise synthesize the `done` event into a directory
-    that thread never polls: accepted, captured, `status: pending`
-    forever, no error, no notice (#1437). Route to the account pair
-    whenever one exists, regardless of where this run itself came from.
+    *inbox_dir*/*responses_dir* default to **this run's own** pair; see
+    :func:`gate_dirs` — the resolver this function defers to — for when and
+    why that default is overridden.
     """
-    if (
-        gate in _ACCOUNT_SCOPED_GATES
-        and account_context is not None
-        and account_context.enabled
-    ):
-        inbox_dir = account_context.dispatch_inbox
-        responses_dir = account_context.responses_dir
+    inbox_dir, responses_dir = gate_dirs(
+        gate,
+        inbox_dir=inbox_dir,
+        responses_dir=responses_dir,
+        account_context=account_context,
+    )
     if inbox_dir is None or not body:
         _record_outbox_notice(
             outbox_dir, f"gate message dropped: gate {gate!r} had no body/inbox",
