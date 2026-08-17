@@ -182,6 +182,17 @@ def reply_to_of(event: Event) -> dict[str, Any]:
     return _loads(event.reply_to)
 
 
+def decode_reply_to(blob: str | None) -> dict[str, Any]:
+    """:func:`reply_to_of`'s decode, off the raw column value.
+
+    For a caller that only pulled ``Event.reply_to`` itself (a scan over
+    many rows, e.g. #1205's most-recently-active-conversation lookup) rather
+    than a full ``Event`` — the two exist so neither has to instantiate the
+    other just to reach ``_loads``.
+    """
+    return _loads(blob or "")
+
+
 def _loads_list(blob: str | None) -> list[dict[str, Any]]:
     if not blob:
         return []
