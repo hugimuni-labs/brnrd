@@ -2009,7 +2009,11 @@ def test_dashboard_publish_tick_noop_without_configured_state(tmp_path):
 def test_run_loop_starts_dashboard_publish_thread(tmp_path, monkeypatch):
     """The fast publish loop has to actually be wired into `run_loop`, not
     just exist as a dead function — assert the thread it spawns runs
-    `_dashboard_publish_loop` with this run's `brr_dir`/`inbox_dir`."""
+    `_dashboard_publish_loop` with this run's `brr_dir`/`inbox_dir`/
+    `responses_dir`. The third arg matters on its own (#1396, re-opening
+    #1437): without it threaded through, the dashboard publish thread had
+    no way to know account mode's real responses dir diverges from
+    `brr_dir / "responses"`, and downstream code rebuilt the wrong one."""
     brr_dir = tmp_path / ".brr"
     inbox_dir = brr_dir / "inbox"
     responses_dir = brr_dir / "responses"
@@ -2040,7 +2044,7 @@ def test_run_loop_starts_dashboard_publish_thread(tmp_path, monkeypatch):
     assert len(started) == 1
     target, args, daemon, name = started[0]
     assert target is cloud._dashboard_publish_loop
-    assert args == (brr_dir, inbox_dir)
+    assert args == (brr_dir, inbox_dir, responses_dir)
     assert daemon is True
     assert name == "cloud-dashboard-publish"
 

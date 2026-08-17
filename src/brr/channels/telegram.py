@@ -49,6 +49,11 @@ class ParsedMessage:
     # room-membership grant (w-52): authorization may widen only when the
     # chat is verifiably a group, and this field is the verification.
     chat_type: str = ""
+    # #1389 — Telegram's own album marker: every message in one
+    # multi-photo send shares this id. `None` for an ordinary message (most
+    # of them); a caller that wants to coalesce an album into one event
+    # reads this field, nothing heuristic.
+    media_group_id: str | None = None
 
 
 def _safe_filename(name: str, fallback: str) -> str:
@@ -138,6 +143,9 @@ def parse_update(payload: dict) -> ParsedMessage | None:
         is_edit=is_edit,
         has_media=has_media,
         attachments=extract_attachments(msg),
+        media_group_id=(
+            str(msg["media_group_id"]) if msg.get("media_group_id") is not None else None
+        ),
     )
 
 
