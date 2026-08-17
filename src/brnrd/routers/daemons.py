@@ -6,6 +6,7 @@ import json
 import mimetypes
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
+from typing import Any, Callable
 
 import anyio
 import httpx
@@ -788,6 +789,126 @@ def post_response(request: Request, payload: schemas.ResponsePost, principal: Pr
         raise HTTPException(status_code=404, detail="event not found for this account")
     _touch_daemon(db, principal)
     return schemas.ResponseAck(event_id=payload.event_id, forwarded=True)
+
+
+#: How many of the account's most recent events the fresh-send resolver
+#: scans looking for a platform match, oldest cut off first. A bound, not a
+#: tune: `/v1/daemons/inbox` learned the same lesson the hard way (#1004's
+#: sibling incident) — an unbounded "most recent" scan over a busy, mixed-
+#: platform account is a full-table walk waiting for the day one exists.
+_MESSAGE_SCAN_LIMIT = 200
+
+
+def _account_repo_ids(db: Session, account_id: str) -> set[str]:
+    return set(db.execute(select(Repo.id).where(Repo.account_id == account_id)).scalars())
+
+
+def _most_recent_reply_to(db: Session, account_id: str, platform: str) -> dict[str, Any] | None:
+    """The account's most recently active *platform* conversation address.
+
+    #1205's fresh-send primitive has no inbound event to answer against, so
+    it borrows the address of whichever conversation last had one — read
+    straight off the events table's own ``reply_to`` targets, the same
+    per-event addressing every ordinary reply already resolves through
+    (``inbox_service.reply_to_of``). Deliberately **not** ``ChannelRoute``:
+    that table records *pairing* (when a chat first linked a repo), never
+    *activity* (which chat spoke last) — resolving "most recently active"
+    from it would be guessing from the wrong column. The issue that asked
+    for this endpoint said it plainly: study what the server can already
+    answer before inventing a new table to hold a fact one already carries.
+    """
+    repo_ids = _account_repo_ids(db, account_id)
+    if not repo_ids:
+        return None
+    rows = db.execute(
+        select(Event.reply_to)
+        .where(Event.repo_id.in_(repo_ids))
+        # `seq` (autoincrement) as the tiebreak: two events minted within
+        # the same `created_at` tick (same-millisecond enqueues, a burst)
+        # would otherwise order arbitrarily against each other.
+        .order_by(Event.created_at.desc(), Event.seq.desc())
+        .limit(_MESSAGE_SCAN_LIMIT)
+    ).scalars()
+    for blob in rows:
+        reply_to = inbox_service.decode_reply_to(blob)
+        if reply_to.get("platform") == platform and reply_to.get("chat_id") not in (None, ""):
+            return reply_to
+    return None
+
+
+def _telegram_fresh_send(settings, reply_to: dict[str, Any], body_markdown: str) -> str:
+    if not settings.telegram_bot_token:
+        raise HTTPException(status_code=503, detail="telegram is not configured on this deployment")
+    from ..platforms import telegram as tg
+
+    message_id = tg.send_fresh_message(
+        settings.telegram_bot_token,
+        reply_to["chat_id"],
+        body_markdown,
+        topic_id=reply_to.get("topic_id") or None,
+    )
+    if message_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="telegram accepted the send but returned no message id",
+        )
+    return message_id
+
+
+# One platform -> resolver mapping, in the shape ``inbox.make_default_forwarder``'s
+# own ``handlers`` table already uses for the *reply* direction (#1205): the set
+# of platforms this endpoint can actually originate a fresh send on is exactly
+# this dict's keys, so adding one is adding one entry here rather than widening
+# an ``if platform != "telegram"`` that would silently overclaim coverage for
+# whatever comes after it. Telegram is the only lane wired today — everything
+# else answers 501, honestly, instead of a hardcoded single-platform check
+# dressed up as the full matrix.
+_MESSAGE_SENDERS: dict[str, Callable[[Any, dict[str, Any], str], str]] = {
+    "telegram": _telegram_fresh_send,
+}
+
+
+@router.post("/messages", response_model=schemas.MessageAck)
+def post_message(
+    request: Request,
+    payload: schemas.MessagePost,
+    principal: Principal = Depends(require_daemon),
+    db: Session = Depends(get_db),
+):
+    """#1205's fresh-send primitive — an unaddressed send, no inbound event.
+
+    Keyed on platform chat identity rather than an ``event_id``:
+    ``_most_recent_reply_to`` resolves the account's most recently active
+    conversation on ``payload.platform``. A platform with no resolver in
+    ``_MESSAGE_SENDERS`` is an honest 501; a resolver that finds nothing to
+    address is an honest 404 — neither path ever returns 200 having sent
+    nothing, the exact failure mode this endpoint exists to retire (see the
+    issue's "corpses on disk" autopsy).
+    """
+    settings = request.app.state.settings
+    handler = _MESSAGE_SENDERS.get(payload.platform)
+    if handler is None:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=f"platform {payload.platform!r} has no fresh-send primitive yet",
+        )
+    reply_to = _most_recent_reply_to(db, principal.account_id, payload.platform)
+    if reply_to is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no resolvable {payload.platform} conversation for this account",
+        )
+    try:
+        message_id = handler(settings, reply_to, payload.body_markdown)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=_safe_detail(f"{payload.platform} send failed: {e}"),
+        ) from e
+    _touch_daemon(db, principal)
+    return schemas.MessageAck(platform=payload.platform, message_id=message_id)
 
 
 @router.post("/card", response_model=schemas.CardAck)

@@ -153,13 +153,17 @@ def test_closed_run_row_carries_the_bounded_bolt_declaration(tmp_path, monkeypat
         "spend_declared": "~$2, 20m",
         "next": "issue #1",
         "dissent": ["evt-ask declared answered but is still pending"],
+        "strands": [{"run": "run-child", "disposition": "converged"}],
     }
     path = run_ledger.append_closed_run(tmp_path, task, {})
 
     row = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
     assert row["bolt_declaration"] == {
         key: task.meta["bolt"][key]
-        for key in ("asks", "owed", "decisions", "spend_declared", "next", "dissent")
+        for key in (
+            "asks", "owed", "decisions", "spend_declared", "next", "dissent",
+            "strands",
+        )
     }
     assert "produce" not in row["bolt_declaration"]
 

@@ -116,16 +116,19 @@ for _compat_name in (*_CREDENTIAL_COMPAT_NAMES, *_PUBLISHER_COMPAT_NAMES):
 del _compat_name
 del _compat_module
 
-#: #1205: the relay API is reply-shaped (``POST /v1/daemons/responses``,
-#: keyed on an inbound event's ``cloud_event_id`` — see ``post()`` in
-#: ``_deliver_responses`` below, which raises ``PermanentDeliveryError`` with
-#: no address to post against). There is no fresh-send primitive yet, so an
-#: *unaddressed* cloud send is structurally impossible today — the daemon
-#: reads this declaration (never a hardcoded gate-name check) to refuse the
+#: #1205: the relay API used to be reply-shaped only (``POST
+#: /v1/daemons/responses``, keyed on an inbound event's ``cloud_event_id``)
+#: — an *unaddressed* cloud send was structurally impossible, and the daemon
+#: read this declaration (never a hardcoded gate-name check) to refuse the
 #: attempt loudly at synthesis instead of queueing it into a drawer this
-#: gate's own delivery loop will never open. Absent on every other built-in
-#: gate, which defaults to capable and is unaffected by this module.
-CAN_SEND_UNADDRESSED = False
+#: gate's own delivery loop would never open. The server grew a fresh-send
+#: primitive (``POST /v1/daemons/messages``, keyed on platform chat identity
+#: rather than an event) to retire that impossibility — see ``post()`` in
+#: ``_deliver_responses`` below, which now falls back to it whenever the
+#: synthesized event carries no ``cloud_event_id``. True here means what it
+#: means on every other built-in gate: capable, the default this attribute
+#: exists to let a gate opt *out* of, not into.
+CAN_SEND_UNADDRESSED = True
 
 _POLL_WAIT_S = 25
 _HTTP_TIMEOUT_S = 60
@@ -475,11 +478,19 @@ def is_configured(brr_dir: Path) -> bool:
 
 
 def addressed(fm: Mapping[str, object]) -> bool:
-    """True when *fm* carries what an out-of-bound cloud send needs.
+    """True when *fm* carries a reply-shaped cloud address (a ``cloud_event_id``).
 
-    Consulted only when :data:`CAN_SEND_UNADDRESSED` is False (i.e. always,
-    for this gate) — ``post()``'s own address key, named once here rather
-    than as a string a caller in ``daemon.py`` has to remember matches it.
+    Pre-#1205 this was consulted on every out-of-bound cloud send, back when
+    :data:`CAN_SEND_UNADDRESSED` was ``False`` and an unaddressed message had
+    no other way to go out. Now that the fresh-send primitive exists,
+    ``daemon._gate_addressed`` only reaches this predicate for a gate whose
+    module still declares itself incapable — which cloud no longer does — so
+    this stays live as the hook a *future* reply-shaped-only gate would
+    implement, and as the still-true answer to "does *fm* carry a
+    cloud_event_id" for any caller that wants that specifically (``post()``
+    below, for one: it still prefers the addressed reply lane when the
+    event carries the id, and falls to the fresh-send lane only when it
+    doesn't).
     """
     return bool(fm.get("cloud_event_id"))
 
@@ -1175,12 +1186,37 @@ def _deliver_responses(brr_dir: Path, inbox_dir: Path, responses_dir: Path, stat
     def post(event: dict, body: str, status: str) -> dict:
         cloud_event_id = event.get("cloud_event_id")
         if not cloud_event_id:
-            # No address, no future in which this posts. Retrying it at the
-            # poll cadence is what kept one such event alive for 36 hours.
-            raise runtime.PermanentDeliveryError(
-                "the event carries no cloud_event_id, so there is nothing to "
-                "post it against"
-            )
+            # #1205: no inbound event to answer against — the fresh-send
+            # primitive, keyed on platform chat identity instead of an
+            # event id. `cloud_platform` carries this synthesized event's
+            # own addressing meta when a caller set one
+            # (`_deliver_out_of_bound`'s `target_meta`); default to
+            # telegram — the only platform the server can originate a
+            # fresh send on today — when it didn't, which is the common
+            # shape: `notify.gate`'s fallback path never sets one.
+            platform = str(event.get("cloud_platform") or "") or "telegram"
+            limit = _RESPONSE_LIMITS.get(platform)
+            if limit is not None:
+                body = delivery.resolve_overflow(
+                    body,
+                    limit=limit,
+                    gist_fn=delivery.post_gist,
+                    cache=overflow_cache,
+                )
+            try:
+                return _request(
+                    state["brnrd_url"], "POST", "/v1/daemons/messages",
+                    token=state["token"],
+                    json={"body_markdown": body, "platform": platform},
+                )
+            except RuntimeError as e:
+                if getattr(e, "status_code", None) == 501:
+                    # No resolver wired for this platform server-side — a
+                    # future retry cannot change that without a server
+                    # deploy, same posture as the missing-address case this
+                    # replaced.
+                    raise runtime.PermanentDeliveryError(str(e)) from e
+                raise
         limit = _RESPONSE_LIMITS.get(event.get("cloud_platform") or "")
         if limit is not None:
             body = delivery.resolve_overflow(
