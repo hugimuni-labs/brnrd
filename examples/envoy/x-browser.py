@@ -14,14 +14,15 @@ convention next to it is also owner-only). ``brr`` and ``playwright`` must
 both be importable from wherever this runs — ``pip install playwright &&
 playwright install chromium`` if the second one isn't there yet; the
 ``check`` verb below reports that error legibly if it's missing rather
-than crashing partway through a launch.
+than crashing partway through a launch. Run this script with an interpreter
+where ``brr`` is importable (usually ``<repo>/.venv/bin/python3``).
 
-    python3 x-browser.py login                       -> one-time human login
-    python3 x-browser.py check                        -> session live? as whom? cap left?
-    python3 x-browser.py read <url>                    -> structured JSON
-    python3 x-browser.py search <query>                -> structured JSON
-    python3 x-browser.py draft <url> --text "<s>"       -> screenshot only, never sends
-    python3 x-browser.py send <url> --text "<s>" --confirm
+    <python-with-brr> x-browser.py login                       -> one-time human login
+    <python-with-brr> x-browser.py check                        -> session live? as whom? cap left?
+    <python-with-brr> x-browser.py read <url>                    -> structured JSON
+    <python-with-brr> x-browser.py search <query>                -> structured JSON
+    <python-with-brr> x-browser.py draft <url> --text "<s>"       -> screenshot only, never sends
+    <python-with-brr> x-browser.py send <url> --text "<s>" --confirm
         -> ships disarmed: also needs BRR_X_BROWSER_SEND=1 in the environment,
            and refuses past the hourly cap
 
@@ -32,7 +33,29 @@ guard in ``brr.envoy_x_browser`` for the two independent brakes on `send`.
 import os
 import sys
 
-from brr import envoy_x_browser
+try:
+    from brr import envoy_x_browser
+except ImportError as exc:
+    # Only claim "wrong interpreter" when brr itself is what is missing.
+    # A ModuleNotFoundError raised *inside* brr names some other module, and
+    # telling that reader to switch interpreters sends them to a remedy that
+    # cannot work -- the message would contradict the very check it tells
+    # them to run. An ImportError that is not a ModuleNotFoundError (a stale
+    # or half-copied install where ``brr`` imports but the submodule is gone)
+    # carries name="brr" and is caught here on purpose: it used to fall
+    # through as a bare traceback, which is the thing this guard exists to
+    # stop.
+    _missing = getattr(exc, "name", None)
+    if _missing and _missing != "brr" and not _missing.startswith("brr."):
+        raise
+    raise SystemExit(
+        "x-browser.py needs the brr package, and this interpreter cannot import it.\n"
+        f"  you ran: {sys.executable}\n"
+        "Use an interpreter that already has brr -- usually <repo>/.venv/bin/python3 --\n"
+        "or install brr into this one: pip install -e <repo>\n"
+        "The system python3 on PATH usually cannot import brr; that is the common\n"
+        "cause, but a checkout that was never installed anywhere lands here too."
+    ) from exc
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
