@@ -2331,6 +2331,16 @@ def _sticky_wake_note(event: dict) -> str:
     return "conversation-sticky from an earlier dashboard tap"
 
 
+#: Gates whose delivery thread is account-wide, not per-repo — today only
+#: `cloud`, started exactly once against `account_context.dispatch_inbox`/
+#: `.responses_dir` (below) and excluded from every per-repo `start_for`
+#: call. Any code that synthesizes a `done` event for one of these gates
+#: (`_deliver_out_of_bound`) must land it in that same pair of directories,
+#: not whatever `inbox_dir`/`responses_dir` the current run happened to
+#: inherit from its own triggering event — see #1437.
+_ACCOUNT_SCOPED_GATES: frozenset[str] = frozenset({"cloud"})
+
+
 def _start_account_gates(
     account_context: account.AccountContext,
     default_repo_root: Path,
@@ -2360,7 +2370,7 @@ def _start_account_gates(
             account_context.dominion_repo,
             account_context.dispatch_inbox,
             account_context.responses_dir,
-            frozenset({"cloud"}),
+            _ACCOUNT_SCOPED_GATES,
         )
         for repo in account_context.repos.values():
             brr_dir = gitops.shared_brr_dir(repo.root)
@@ -2368,7 +2378,7 @@ def _start_account_gates(
                 brr_dir,
                 brr_dir / "inbox",
                 brr_dir / "responses",
-                frozenset({"cloud"}),
+                _ACCOUNT_SCOPED_GATES,
             )
         # The cloud connection is account-owned and drains all account repos,
         # but its collectors still need a real repo runtime as their local
@@ -2381,7 +2391,7 @@ def _start_account_gates(
                 account_context.dispatch_inbox,
                 account_context.responses_dir,
                 frozenset(),
-                frozenset({"cloud"}),
+                _ACCOUNT_SCOPED_GATES,
             )
         )
     else:
@@ -4607,6 +4617,7 @@ def _run_worker(
                     gate_fallback_delivered = _deliver_out_of_bound(
                         emit, task, responses_dir, inbox_dir, eid,
                         notify_gate, {}, fallback_body, outbox_dir=outbox_dir,
+                        account_context=account_context,
                     )
                     if gate_fallback_delivered:
                         output_stats["outbound"] = output_stats.get("outbound", 0) + 1
@@ -8872,6 +8883,7 @@ def _drain_outbox(
                 if _deliver_out_of_bound(
                     emit, task, responses_dir, inbox_dir, event_id, gate, fm, body,
                     outbox_dir, message_path=message_path,
+                    account_context=account_context,
                 ):
                     promoted += 1
                     if stats is not None:
@@ -9661,6 +9673,7 @@ def _deliver_out_of_bound(
     body: str,
     outbox_dir: Path | None = None,
     message_path: Path | None = None,
+    account_context: account.AccountContext | None = None,
 ) -> bool:
     """Queue an agent-initiated message to a gate destination.
 
@@ -9672,7 +9685,26 @@ def _deliver_out_of_bound(
     and cleans it up; being `done` it never spawns a thought. This is the
     one core behind both out-of-bound pings and scheduled delivery.
     Returns True when queued.
+
+    *inbox_dir*/*responses_dir* default to **this run's own** pair — right
+    for every per-repo gate, since `_start_account_gates` runs one thread
+    per repo reading exactly that repo's own inbox. `gate` in
+    :data:`_ACCOUNT_SCOPED_GATES` (today: `cloud`) is the one exception:
+    its single delivery thread reads only `account_context.dispatch_inbox`/
+    `.responses_dir`, account-wide — a run whose *own* triggering event
+    lived elsewhere (a scheduled firing, a strand, any non-cloud-sourced
+    dispatch) would otherwise synthesize the `done` event into a directory
+    that thread never polls: accepted, captured, `status: pending`
+    forever, no error, no notice (#1437). Route to the account pair
+    whenever one exists, regardless of where this run itself came from.
     """
+    if (
+        gate in _ACCOUNT_SCOPED_GATES
+        and account_context is not None
+        and account_context.enabled
+    ):
+        inbox_dir = account_context.dispatch_inbox
+        responses_dir = account_context.responses_dir
     if inbox_dir is None or not body:
         _record_outbox_notice(
             outbox_dir, f"gate message dropped: gate {gate!r} had no body/inbox",
