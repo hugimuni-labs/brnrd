@@ -6,7 +6,7 @@ about:
 - redemption stamps a display label (and, when the platform supplies one,
   a chat title) onto the `ChannelRoute` it creates/updates, and onto the
   `TgPairCode` it consumed;
-- `GET /v1/dashboard/telegram-pair/{code}` lets the minting session read
+- `GET /v1/dashboard/pair/{code}` lets the minting session read
   that back while its panel is still open;
 - `GET /v1/dashboard/paired-chats` lists every route on the account, and
   `DELETE /v1/dashboard/paired-chats/{id}` revokes one — which must stop
@@ -179,7 +179,7 @@ def test_pair_status_before_redeem_is_unconsumed(env):
     _login_session(client, headers)
     code = _account_code(client)
 
-    r = client.get(f"/v1/dashboard/telegram-pair/{code}")
+    r = client.get(f"/v1/dashboard/pair/{code}")
     assert r.status_code == 200, r.text
     assert r.json() == {"consumed": False, "display": None}
 
@@ -191,7 +191,7 @@ def test_pair_status_after_redeem_carries_the_display(env):
     code = _account_code(client)
     _post(client, _message(2005, f"/start {code}", username="ada_l"))
 
-    r = client.get(f"/v1/dashboard/telegram-pair/{code}")
+    r = client.get(f"/v1/dashboard/pair/{code}")
     assert r.status_code == 200, r.text
     assert r.json() == {"consumed": True, "display": "@ada_l"}
 
@@ -199,7 +199,7 @@ def test_pair_status_after_redeem_carries_the_display(env):
 def test_pair_status_requires_a_session(env):
     app, client, sends = env
     code = _account_code_as(env)
-    r = client.get(f"/v1/dashboard/telegram-pair/{code}")
+    r = client.get(f"/v1/dashboard/pair/{code}")
     assert r.status_code == 401
 
 
@@ -222,7 +222,7 @@ def test_pair_status_scoped_to_the_minting_account(env):
 
     other_headers = _account(client, login="mallory")
     _login_session(client, other_headers)
-    r = client.get(f"/v1/dashboard/telegram-pair/{code}")
+    r = client.get(f"/v1/dashboard/pair/{code}")
     assert r.status_code == 404
 
 
@@ -230,7 +230,7 @@ def test_pair_status_unknown_code_is_404(env):
     app, client, sends = env
     headers = _account(client)
     _login_session(client, headers)
-    r = client.get("/v1/dashboard/telegram-pair/PK-NOPE")
+    r = client.get("/v1/dashboard/pair/PK-NOPE")
     assert r.status_code == 404
 
 

@@ -148,12 +148,100 @@ def test_account_mint_needs_no_repo_and_builds_the_deep_link(env):
         assert pc.repo_id is None
 
 
+# ── #1465: the generalized mint, `POST /v1/dashboard/pair` ────────────
+
+
+def test_generalized_pair_requires_a_session(env):
+    app, client, sends = env
+    r = client.post("/v1/dashboard/pair", json={"platform": "telegram"})
+    assert r.status_code == 401
+
+
+def test_generalized_pair_defaults_to_telegram_with_no_body(env):
+    app, client, sends = env
+    headers = _account(client)
+    _login_session(client, headers)
+    r = client.post("/v1/dashboard/pair")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["platform"] == "telegram"
+    assert body["deep_link"] == f"https://t.me/brnrd_bot?start={body['pair_code']}"
+
+
+def test_generalized_pair_mints_a_whatsapp_deep_link_when_configured(monkeypatch):
+    app, client, sends = _make_client(
+        monkeypatch, whatsapp_access_token="tok", whatsapp_phone_number_id="123"
+    )
+    # No lifespan has run against this bare TestClient (see
+    # `messenger_doors.py`'s module docstring), so the WhatsApp identity
+    # rides the request's own cache slot directly — the same seam
+    # `_messenger_identities` reads for a request that finds nothing
+    # startup-derived.
+    from brnrd.messenger_doors import MessengerIdentities
+
+    app.state.messenger_identities = MessengerIdentities(
+        telegram_bot_username="brnrd_bot", whatsapp_e164="15551234567"
+    )
+    headers = _account(client)
+    _login_session(client, headers)
+    r = client.post("/v1/dashboard/pair", json={"platform": "whatsapp"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["platform"] == "whatsapp"
+    assert body["deep_link"] == f"https://wa.me/15551234567?text={body['pair_code']}"
+    assert "your account" in body["instructions"]
+    with app.state.SessionLocal() as db:
+        pc = db.execute(select(TgPairCode).where(TgPairCode.code == body["pair_code"])).scalar_one()
+        assert pc.repo_id is None
+
+
+def test_generalized_pair_refuses_a_platform_with_no_deep_link_door(env):
+    app, client, sends = env
+    headers = _account(client)
+    _login_session(client, headers)
+    r = client.post("/v1/dashboard/pair", json={"platform": "slack"})
+    assert r.status_code == 409
+
+
+def test_generalized_pair_refuses_an_unknown_platform(env):
+    app, client, sends = env
+    headers = _account(client)
+    _login_session(client, headers)
+    r = client.post("/v1/dashboard/pair", json={"platform": "carrier-pigeon"})
+    assert r.status_code == 404
+
+
+def test_generalized_pair_refuses_whatsapp_when_unconfigured(env):
+    """Telegram is configured in the `env` fixture, WhatsApp is not — the
+    registry must say so per-platform, never a single account-wide switch."""
+    app, client, sends = env
+    headers = _account(client)
+    _login_session(client, headers)
+    r = client.post("/v1/dashboard/pair", json={"platform": "whatsapp"})
+    assert r.status_code == 409
+
+
 def test_dashboard_repos_carries_the_bot_username(env):
     app, client, sends = env
     headers = _account(client)
     _login_session(client, headers)
     body = client.get("/v1/dashboard/repos").json()
     assert body["telegram_bot_username"] == "brnrd_bot"
+
+
+def test_dashboard_repos_carries_the_registry_derived_messenger_doors(env):
+    """#1465 — the wire array every connector's `deep_link_available` flag
+    rides; the registry test in `test_messenger_doors.py` covers the
+    module itself, this covers it reaching the wire unmodified."""
+    app, client, sends = env
+    headers = _account(client)
+    _login_session(client, headers)
+    body = client.get("/v1/dashboard/repos").json()
+    doors = {d["platform"]: d["deep_link_available"] for d in body["messenger_doors"]}
+    assert doors["telegram"] is True  # `env` configures a valid bot username
+    assert doors["whatsapp"] is False  # not configured in this fixture
+    assert doors["slack"] is False
+    assert doors["signal"] is False
 
 
 def test_invalid_bot_username_rides_the_wire_as_empty(monkeypatch):
