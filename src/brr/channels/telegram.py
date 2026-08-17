@@ -172,13 +172,93 @@ def pair_code_from_text(text: str) -> str | None:
     return match.group(1) if match else None
 
 
+#: The marker every "this had to be cut" path stamps on the last thing it
+#: kept, so a reader can tell content loss from a message that just ends.
+#: One literal, reused by :func:`split_message`'s ``max_chunks`` overflow and
+#: by ``gates/delivery.py``'s single-message truncate-or-gist policy, so the
+#: two surfaces don't drift to two different words for the same event.
+TRUNCATION_MARKER = "\n\n[truncated]"
+
+
+def utf16_len(text: str) -> int:
+    """Length of *text* in UTF-16 code units.
+
+    Telegram's Bot API documents its character limits (message text,
+    captions, ``MessageEntity.offset``) in UTF-16 code units, not Unicode
+    code points. Python's ``len()`` agrees with that count for every
+    character in the Basic Multilingual Plane but undercounts by one for
+    each character outside it — most emoji included: an astral code point
+    is two UTF-16 units but one Python ``str`` index. A split built on
+    ``len()`` alone can hand Telegram a chunk that measures under the
+    budget in Python and over it on the wire, and the send 400s instead
+    of landing.
+    """
+    if text.isascii():
+        return len(text)
+    return sum(2 if ord(ch) > 0xFFFF else 1 for ch in text)
+
+
+def _utf16_prefix_end(text: str, limit: int) -> int:
+    """Largest ``i`` such that ``utf16_len(text[:i]) <= limit``."""
+    if utf16_len(text) <= limit:
+        return len(text)
+    units = 0
+    for i, ch in enumerate(text):
+        units += 2 if ord(ch) > 0xFFFF else 1
+        if units > limit:
+            return i
+    return len(text)
+
+
+def trim_to_limit(text: str, limit: int) -> str:
+    """The longest prefix of *text* within *limit* UTF-16 units.
+
+    Prefers to end at a line break, then a space, over a mid-word cut.
+    Shared by :func:`split_message`'s single-line fallback and by the
+    daemon's gist-or-truncate overflow policy (``gates/delivery.py``'s
+    ``resolve_overflow``) — one boundary rule for every "this has to fit
+    in one message" path, rather than each caller cutting blind at an
+    index and calling it done.
+    """
+    cut = _utf16_prefix_end(text, limit)
+    if cut >= len(text):
+        return text
+    nl = text.rfind("\n", 0, cut)
+    if nl > 0:
+        return text[:nl]
+    sp = text.rfind(" ", 0, cut)
+    if sp > 0:
+        return text[:sp]
+    return text[:cut]
+
+
+_FENCE_MARK = "```"
+
+
+def _open_fence(text: str) -> str | None:
+    """The opening delimiter line if *text* ends inside an unclosed fence.
+
+    Toggles on every line that starts, after stripping leading
+    whitespace, with a triple backtick: the first such line in a run is
+    an opener, the next a closer, and so on. Returns the *exact* opening
+    line (backticks plus any language tag, e.g. ` ```python `) so a
+    reopened fence keeps its syntax highlighting; ``None`` when the text
+    is fence-balanced.
+    """
+    open_line: str | None = None
+    for line in text.split("\n"):
+        if line.lstrip().startswith(_FENCE_MARK):
+            open_line = None if open_line is not None else line.lstrip()
+    return open_line
+
+
 @dataclass(frozen=True)
 class MessagePolicy:
     """A home's explicit policy for splitting an outbound body."""
 
     limit: int | None
     max_chunks: int | None = None
-    truncation_marker: str = "\n\n[truncated]"
+    truncation_marker: str = TRUNCATION_MARKER
 
 
 def split_message(
@@ -186,24 +266,67 @@ def split_message(
     limit: int = 4000,
     *,
     max_chunks: int | None = 12,
-    truncation_marker: str = "\n\n[truncated]",
+    truncation_marker: str = TRUNCATION_MARKER,
 ) -> list[str]:
-    """Split text at line boundaries and optionally cap the fan-out."""
+    """Split text into platform-sized chunks, never mid-word, fence-safe.
+
+    A cut prefers the last line boundary within *limit* UTF-16 units
+    (Telegram's own accounting — see :func:`utf16_len`); a single line
+    longer than the limit falls back to :func:`trim_to_limit`'s
+    word-boundary rule rather than an index cut. A markdown code fence
+    left open at a cut is closed at the end of its chunk and reopened
+    (same language tag) at the start of the next, so every chunk renders
+    as valid markdown standing alone instead of leaking an unclosed
+    fence into every following message.
+    """
+    close_reserve = len(_FENCE_MARK) + 1  # "\n```"
     parts: list[str] = []
     remaining = text
+    reopen: str | None = None
     while remaining:
-        if len(remaining) <= limit:
-            parts.append(remaining)
-            break
-        cut = remaining.rfind("\n", 0, limit)
-        if cut <= 0:
-            cut = limit
-        parts.append(remaining[:cut])
-        remaining = remaining[cut:].lstrip("\n")
+        prefix = f"{reopen}\n" if reopen else ""
+        budget = max(1, limit - utf16_len(prefix))
+        if utf16_len(remaining) <= budget:
+            chunk = remaining
+            rest_after = ""
+        else:
+            cut = _utf16_prefix_end(remaining, budget)
+            nl = remaining.rfind("\n", 0, cut)
+            chunk = remaining[:nl] if nl > 0 else trim_to_limit(remaining, budget)
+            # A fence left open only matters when more text is still
+            # coming — reserving close-marker room on every cut (even the
+            # common case with no fence at all) would waste it for
+            # nothing, so it's spent only where `_open_fence` says it's
+            # actually owed.
+            if chunk and _open_fence(prefix + chunk) and remaining[len(chunk):].lstrip("\n"):
+                shrink_budget = max(1, budget - close_reserve)
+                if utf16_len(chunk) > shrink_budget:
+                    cut2 = _utf16_prefix_end(chunk, shrink_budget)
+                    nl2 = chunk.rfind("\n", 0, cut2)
+                    shrunk = chunk[:nl2] if nl2 > 0 else trim_to_limit(chunk, shrink_budget)
+                    if shrunk:
+                        chunk = shrunk
+            if not chunk:
+                # Budget too small even for one boundary-respecting
+                # character — a pathological *limit*, or a reopened fence
+                # line that alone ate nearly all of it. Advance by exactly
+                # one character rather than spin forever re-cutting an
+                # empty chunk.
+                chunk = remaining[:1]
+            rest_after = remaining[len(chunk):].lstrip("\n")
+        body = prefix + chunk
+        still_open = _open_fence(body)
+        if still_open and rest_after:
+            body += "\n" + _FENCE_MARK
+            reopen = still_open
+        else:
+            reopen = None
+        parts.append(body)
+        remaining = rest_after
     if max_chunks is not None and len(parts) > max_chunks:
         parts = parts[:max_chunks]
         marker = truncation_marker
-        parts[-1] = parts[-1][: limit - len(marker)].rstrip() + marker
+        parts[-1] = trim_to_limit(parts[-1], limit - utf16_len(marker)) + marker
     return parts or [""]
 
 

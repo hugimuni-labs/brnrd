@@ -39,9 +39,38 @@ def test_overflow_offloads_to_a_gist_link():
 
 
 def test_overflow_truncates_when_the_gist_cannot_be_made():
-    out = delivery.resolve_overflow("x" * 50, limit=10, gist_fn=lambda _t: None)
-    assert out == "x" * 10 + "\n\n[truncated]"
-    assert len(out) <= 10 + len("\n\n[truncated]")
+    # No line/space boundary inside "x" * 50 short of the limit, so the
+    # word-boundary trim falls through to the same hard cut as before —
+    # what changed is that the *whole* returned string (body + marker) now
+    # stays within `limit`, instead of the marker landing past it (the old
+    # code returned `text[:limit] + marker`, 16 chars *over* budget here).
+    marker = "\n\n[truncated]"
+    out = delivery.resolve_overflow("x" * 50, limit=30, gist_fn=lambda _t: None)
+    assert out == "x" * (30 - len(marker)) + marker
+    assert len(out) <= 30
+
+
+def test_overflow_truncate_prefers_a_line_boundary_over_mid_word():
+    body = "keep this line\nand this half gets cut mid-word-right-here"
+    out = delivery.resolve_overflow(body, limit=35, gist_fn=lambda _t: None)
+    assert out == "keep this line\n\n[truncated]"
+    assert "mid-word" not in out
+
+
+def test_overflow_truncate_measures_utf16_units_not_python_len():
+    # U+1F600 (😀) is one Python character but two UTF-16 code units —
+    # ``resolve_overflow`` must budget on the platform's own count, not
+    # Python's, or a chunk that "fits" here 400s on the wire.
+    from brr.channels.telegram import utf16_len
+
+    emoji = "\U0001F600"
+    body = emoji * 20  # 20 chars, 40 UTF-16 units — over the limit below
+    marker = "\n\n[truncated]"
+    out = delivery.resolve_overflow(body, limit=24, gist_fn=lambda _t: None)
+
+    assert utf16_len(out) <= 24
+    assert out.endswith(marker)
+    assert out == emoji * 5 + marker
 
 
 def test_post_gist_creates_a_secret_gist(monkeypatch):

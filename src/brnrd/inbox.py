@@ -13,6 +13,8 @@ import anyio
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
+from brr.channels.telegram import TRUNCATION_MARKER, trim_to_limit, utf16_len
+
 from . import github_summons, ids
 from .models import Event
 
@@ -132,11 +134,28 @@ def make_default_forwarder(settings) -> Forwarder:
         chat_id = reply_to.get("chat_id")
         if not chat_id:
             return
+        body = item.body
+        # `whatsapp.send_message` deliberately never splits (v1 scope: one
+        # free-form text send, no multi-message fan-out — see its own
+        # docstring). Its module comment used to say the daemon's own
+        # `gates/cloud.py` `_RESPONSE_LIMITS` always caps this first, which
+        # is only true when a self-hosted daemon relays through the cloud
+        # gate — a fully hosted resident answers on WhatsApp straight
+        # through this forwarder, nothing upstream of it ever measured the
+        # body, and an over-length reply used to reach Meta's API raw and
+        # come back a plain send failure (#the-wire-that-cuts-at-4096: the
+        # same gap Telegram's forwarder doesn't have, because it chunks).
+        # A trim here, not a chunk — matching the gist-or-truncate policy
+        # this platform already committed to (`delivery.resolve_overflow`),
+        # so a long reply still lands instead of erroring the whole event.
+        if utf16_len(body) > whatsapp.MAX_BODY_LEN:
+            budget = whatsapp.MAX_BODY_LEN - utf16_len(TRUNCATION_MARKER)
+            body = trim_to_limit(body, budget) + TRUNCATION_MARKER
         whatsapp.send_message(
             settings.whatsapp_access_token,
             settings.whatsapp_phone_number_id,
             str(chat_id),
-            item.body,
+            body,
             api_base_url=settings.whatsapp_api_base_url,
             api_version=settings.whatsapp_api_version,
             reply_to_message_id=reply_to.get("message_id") or None,
