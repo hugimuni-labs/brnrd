@@ -66,6 +66,14 @@ def _withheld_lane(repos: list[Repo], lane: str) -> dict[str, Any]:
     Takes the repo list the caller already loaded. Every one of the seven
     callers is on the 2 s dashboard poll, so a signature that re-queried would
     have spent a round trip per lane per tick to answer "not withheld".
+
+    ``unrecorded_ids``/``opted_out_ids`` ride alongside the name lists,
+    same order, so the in-place consent popover can call
+    ``POST /v1/repos/{id}/publish-layers`` directly instead of sending the
+    reader to ``/repos`` to resolve a name back to an id by hand. Additive:
+    a name list with no id twin (there isn't one — both are minted from the
+    same ``repos_without_publish_consent`` call) never occurs, but a caller
+    reading only the name keys sees no shape change.
     """
     if lane not in publish_scope.lanes_withheld(repos):
         return {}
@@ -73,8 +81,10 @@ def _withheld_lane(repos: list[Repo], lane: str) -> dict[str, Any]:
     marker: dict[str, Any] = {"lane": lane}
     if blocked.unrecorded:
         marker["unrecorded"] = list(blocked.unrecorded)
+        marker["unrecorded_ids"] = list(blocked.unrecorded_ids)
     if blocked.opted_out:
         marker["opted_out"] = list(blocked.opted_out)
+        marker["opted_out_ids"] = list(blocked.opted_out_ids)
     return {"withheld": marker}
 
 
