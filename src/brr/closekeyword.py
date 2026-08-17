@@ -332,6 +332,54 @@ def check(text: str, *, channel: str = PR_BODY.label) -> list[Finding]:
     return findings
 
 
+@dataclass(frozen=True)
+class CloseRef:
+    """A close reference extracted from a line: the ref number and its line."""
+
+    ref: str  # e.g., "1433"
+    line_number: int
+
+
+def extract_close_refs(text: str, *, channel: str = PR_BODY.label) -> list[CloseRef]:
+    """Extract all close refs that will close issues in *text*.
+
+    Returns refs found in lines with valid close-keyword syntax (lines that
+    don't fire any of the RULES). Each ref is extracted from a close keyword
+    line that passes validation.
+    """
+    if channel not in CHANNELS:
+        raise ValueError(f"unknown channel {channel!r}")
+
+    # First, check which lines have syntax errors
+    findings = check(text, channel=channel)
+    bad_lines = {f.line_number for f in findings}
+
+    # Now extract refs from valid lines (lines with close keywords but no errors)
+    any_pattern = compile_pattern(ANY)
+    linestart_pattern = compile_pattern(LINESTART)
+    # Pattern to extract all #NNN refs
+    ref_pattern = re.compile(r"#(\d+)", re.IGNORECASE)
+
+    refs: list[CloseRef] = []
+    for number, line in enumerate(text.split("\n"), start=1):
+        # Skip lines with syntax errors
+        if number in bad_lines:
+            continue
+        # Only process lines that have a close keyword at all
+        if any_pattern.search(line) is None:
+            continue
+        # Only process lines with valid syntax (matching LINESTART)
+        if linestart_pattern.search(line) is None:
+            continue
+
+        # Extract all refs from this valid close-keyword line
+        for match in ref_pattern.finditer(line):
+            ref_num = match.group(1)
+            refs.append(CloseRef(ref=ref_num, line_number=number))
+
+    return refs
+
+
 def render(findings: list[Finding], *, channel: str = PR_BODY.label) -> str:
     """Render *findings* in the hook's own diagnosis shape."""
     chan = CHANNELS[channel]

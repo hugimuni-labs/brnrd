@@ -290,6 +290,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--json", action="store_true",
                    help="emit machine-readable JSON instead of text")
+    p.add_argument("--resolve", action="store_true",
+                   help="look up the current state of each close ref on the forge")
+    p.add_argument("--repo", metavar="OWNER/NAME",
+                   help="repo --resolve looks the refs up in (default: whatever "
+                        "gh resolves from the working directory)")
     p.set_defaults(func=cmd_close_check)
 
     gate_help = f"gate name ({', '.join(GATES)})"
@@ -4181,6 +4186,7 @@ def cmd_close_check(args):
     """
     import json as _json
     import sys as _sys
+    import subprocess as _subprocess
 
     if args.path in ("-", ""):
         text = _sys.stdin.read()
@@ -4195,7 +4201,58 @@ def cmd_close_check(args):
         label = str(path)
 
     findings = closekeyword.check(text, channel=args.channel)
+    refs = closekeyword.extract_close_refs(text, channel=args.channel)
+
+    # When --resolve is requested, look up the state of each ref.
+    #
+    # #1433 — the whole point of this command is that a verdict must not read
+    # as a safety clearance it did not earn, so the lookup's *failure* wording
+    # is as load-bearing as its success wording. `NOT_FOUND` says "this ref
+    # does not exist", which a reader takes as *harmless*. An unauthenticated
+    # `gh`, a missing `gh`, the wrong working directory, a rate limit or a dead
+    # network all exit non-zero too — and answering `NOT_FOUND` to any of them
+    # is a confident lie in the optimistic direction about a live open issue.
+    # Driven, 2026-08-17, against two genuinely OPEN issues: an empty
+    # `GH_CONFIG_DIR` reported `NOT_FOUND` for both, and so did running from a
+    # directory outside the repo.
+    #
+    # So `NOT_FOUND` is claimed only when gh says *that specific thing*
+    # ("Could not resolve to an issue or pull request with the number of N");
+    # every other non-zero exit is `UNKNOWN`. A remedy is part of a
+    # diagnostic's truth claim: cannot tell which case ⇒ name the ambiguity,
+    # never the confident branch.
+    ref_states = {}
+    if args.resolve and refs:
+        for ref in refs:
+            cmd = ["gh", "issue", "view", ref.ref, "--json", "state"]
+            if args.repo:
+                # Without this, gh resolves against the *working directory's*
+                # repo — so the same body checked from two places can get two
+                # answers, and neither says which repo it answered about.
+                cmd += ["--repo", args.repo]
+            try:
+                result = _subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=5,
+                )
+                if result.returncode == 0:
+                    state_data = _json.loads(result.stdout)
+                    ref_states[ref.ref] = state_data.get("state", "UNKNOWN")
+                elif "could not resolve to an issue" in (result.stderr or "").lower():
+                    ref_states[ref.ref] = "NOT_FOUND"
+                else:
+                    ref_states[ref.ref] = "UNKNOWN"
+            except Exception:
+                ref_states[ref.ref] = "UNKNOWN"
+
     if args.json:
+        refs_data = [
+            {
+                "ref": r.ref,
+                "line_number": r.line_number,
+                **({"state": ref_states.get(r.ref)} if args.resolve else {}),
+            }
+            for r in refs
+        ]
         print(_json.dumps({
             "ok": not findings,
             "source": label,
@@ -4210,14 +4267,26 @@ def cmd_close_check(args):
                 }
                 for f in findings
             ],
+            "close_refs": refs_data,
         }))
         return 1 if findings else 0
 
-    if not findings:
-        print(f"[brnrd close-check] {label}: clean ({args.channel})")
-        return 0
-    print(closekeyword.render(findings, channel=args.channel))
-    return 1
+    if findings:
+        print(closekeyword.render(findings, channel=args.channel))
+        return 1
+
+    # No findings: display what will be closed
+    if refs:
+        print(f"[brnrd close-check] {label}: will close {len(refs)} issue(s) ({args.channel})")
+        for ref in refs:
+            state_suffix = ""
+            if args.resolve:
+                state = ref_states.get(ref.ref, "UNKNOWN")
+                state_suffix = f" ({state})"
+            print(f"  Closes #{ref.ref}{state_suffix}")
+    else:
+        print(f"[brnrd close-check] {label}: no close keywords ({args.channel})")
+    return 0
 
 
 def cmd_review(args):
