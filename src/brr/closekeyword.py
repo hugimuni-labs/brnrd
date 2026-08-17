@@ -71,17 +71,18 @@ from dataclasses import dataclass
 #
 # ANY: keyword + #NNN anywhere in the line (word-bounded so it doesn't fire
 # inside a longer word like "disclosed").  A line that doesn't match this at
-# all needs no further check.
+# all needs no further check. Supports both single-repo (#NNN) and cross-repo
+# (owner/repo#NNN) syntax.
 ANY = (
     "(^|[^[:alnum:]_])(close[sd]?|fix(es|ed)?|resolve[sd]?)"
-    "[[:space:]]+#[[:digit:]]+"
+    "[[:space:]]+([[:alnum:]._-]+/[[:alnum:]._-]+)?#[[:digit:]]+"
 )
 # LINESTART: the same pair, anchored to the start of the line (leading
 # whitespace allowed) — the one position GitHub-closing intent can be stated
-# unambiguously.
+# unambiguously. Supports both single-repo and cross-repo close syntax.
 LINESTART = (
     "^[[:space:]]*(close[sd]?|fix(es|ed)?|resolve[sd]?)"
-    "[[:space:]]+#[[:digit:]]+"
+    "[[:space:]]+([[:alnum:]._-]+/[[:alnum:]._-]+)?#[[:digit:]]+"
 )
 # CLEAN: what a line-start close is *allowed* to look like, whole — a positive
 # rule (#657), replacing #652's negative _BRR_TRAILING.  The negative shape
@@ -121,9 +122,11 @@ LINESTART = (
 # Residual, knowingly accepted: `Closes #413: partially` passes.  It is the
 # price of the ":" allowance — the guard cannot tell a subject from a qualifier
 # once a colon is legal.  Not covered.  Do not read the rule as covering it.
+# Updated to support cross-repo close syntax (owner/repo#NNN).
 CLEAN = (
     "^[[:space:]]*(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+"
-    "#[[:digit:]]+(,[[:space:]]*#[[:digit:]]+)*([.]?[[:space:]]*$|:)"
+    "([[:alnum:]._-]+/[[:alnum:]._-]+)?#[[:digit:]]+(,[[:space:]]*"
+    "([[:alnum:]._-]+/[[:alnum:]._-]+)?#[[:digit:]]+)*([.]?[[:space:]]*$|:)"
 )
 # COLONCLOSE: the one hole the ":" allowance opens that is not a qualifier but
 # a *second close*.  `Fix #533: split config and closes #534` clears CLEAN at
@@ -134,10 +137,14 @@ CLEAN = (
 # — it reaches only a shape the repo has never written.  Two alternatives after
 # the colon so a keyword can sit flush against it (`:closes #2`) or anywhere
 # later, and neither fires inside a longer word ("disclosed").
+# Updated to support cross-repo close syntax in both the initial and colon-separated closes.
 COLONCLOSE = (
     "^[[:space:]]*(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+"
-    "#[[:digit:]]+(,[[:space:]]*#[[:digit:]]+)*:([[:space:]]*|.*[^[:alnum:]_])"
-    "(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#[[:digit:]]+"
+    "([[:alnum:]._-]+/[[:alnum:]._-]+)?#[[:digit:]]+"
+    "(,[[:space:]]*([[:alnum:]._-]+/[[:alnum:]._-]+)?#[[:digit:]]+)*:"
+    "([[:space:]]*|.*[^[:alnum:]_])"
+    "(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+"
+    "([[:alnum:]._-]+/[[:alnum:]._-]+)?#[[:digit:]]+"
 )
 
 
@@ -334,10 +341,16 @@ def check(text: str, *, channel: str = PR_BODY.label) -> list[Finding]:
 
 @dataclass(frozen=True)
 class CloseRef:
-    """A close reference extracted from a line: the ref number and its line."""
+    """A close reference extracted from a line: the ref number and its line.
 
-    ref: str  # e.g., "1433"
+    The *repo* field is optional and set when the close uses cross-repo syntax
+    (owner/repo#NNN). When None, the close is a single-repo reference (#NNN)
+    and should resolve based on context (--repo override or current working dir).
+    """
+
+    ref: str  # e.g., "1433" or "414" from "owner/repo#414"
     line_number: int
+    repo: str | None = None  # e.g., "owner/repo" if specified, else None
 
 
 def extract_close_refs(text: str, *, channel: str = PR_BODY.label) -> list[CloseRef]:
@@ -346,6 +359,9 @@ def extract_close_refs(text: str, *, channel: str = PR_BODY.label) -> list[Close
     Returns refs found in lines with valid close-keyword syntax (lines that
     don't fire any of the RULES). Each ref is extracted from a close keyword
     line that passes validation.
+
+    For cross-repo closes (owner/repo#NNN), the *repo* field is populated.
+    For single-repo closes (#NNN), the *repo* field is None.
     """
     if channel not in CHANNELS:
         raise ValueError(f"unknown channel {channel!r}")
@@ -357,8 +373,8 @@ def extract_close_refs(text: str, *, channel: str = PR_BODY.label) -> list[Close
     # Now extract refs from valid lines (lines with close keywords but no errors)
     any_pattern = compile_pattern(ANY)
     linestart_pattern = compile_pattern(LINESTART)
-    # Pattern to extract all #NNN refs
-    ref_pattern = re.compile(r"#(\d+)", re.IGNORECASE)
+    # Pattern to extract refs with optional owner/repo prefix (owner/repo)?#NNN
+    ref_pattern = re.compile(r"([a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+)?#(\d+)", re.IGNORECASE)
 
     refs: list[CloseRef] = []
     for number, line in enumerate(text.split("\n"), start=1):
@@ -374,8 +390,9 @@ def extract_close_refs(text: str, *, channel: str = PR_BODY.label) -> list[Close
 
         # Extract all refs from this valid close-keyword line
         for match in ref_pattern.finditer(line):
-            ref_num = match.group(1)
-            refs.append(CloseRef(ref=ref_num, line_number=number))
+            repo_part = match.group(1)  # owner/repo if present, None otherwise
+            ref_num = match.group(2)    # the ref number
+            refs.append(CloseRef(ref=ref_num, line_number=number, repo=repo_part))
 
     return refs
 
