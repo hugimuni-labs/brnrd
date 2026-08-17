@@ -90,7 +90,8 @@
 		type Capability,
 		type ConnectedRepo,
 		type GitHubInstallation,
-		type MachinesSummary
+		type MachinesSummary,
+		type MessengerDoor
 	} from '$lib/repos';
 	import CapabilityPanel from '$lib/CapabilityPanel.svelte';
 	import Landing from '$lib/Landing.svelte';
@@ -166,12 +167,13 @@
 	// no repo enabled yet" apart from "nothing paired at all" without a
 	// second round-trip to `GET /v1/machines`.
 	let machines = $state<MachinesSummary | null>(null);
-	// #1457, same `/v1/dashboard/repos` fetch: the account's Telegram bot
-	// handle, undecorated. `""` = unset or shape-invalid; absent key (an
-	// older backend) also falls to `null` — both read as "no deep link
-	// constructible" in ColdStart's mobile CTA, same "absent means unknown"
-	// contract `machines` already set for this response.
-	let telegramBotUsername = $state<string | null>(null);
+	// #1465, same `/v1/dashboard/repos` fetch: the registry-derived
+	// connector set — every declared messenger door with its own
+	// `deep_link_available` flag. `null` = an older backend that predates
+	// this field, same "absent means unknown" contract `machines` already
+	// set for this response — ColdStart's mobile CTA reads through to the
+	// honest-intermediate copy either way.
+	let messengerDoors = $state<MessengerDoor[] | null>(null);
 	// Threaded into AccountDeletion's confirmation label — the same
 	// `/v1/dashboard/repos` fetch that populates connectedRepos already
 	// carries it, so this costs no extra round trip.
@@ -1178,7 +1180,7 @@
 				accountId = repos.account.id;
 				capabilities = repos.capabilities ?? null;
 				machines = repos.machines ?? null;
-				telegramBotUsername = repos.telegram_bot_username ?? null;
+				messengerDoors = repos.messenger_doors ?? null;
 			} catch (e) {
 				if (!(e instanceof ReposAuthError)) {
 					runnersError = e instanceof Error ? e.message : 'project list fetch failed';
@@ -1369,7 +1371,7 @@
 			{installations}
 			pairCommand={pairingCommand}
 			{machines}
-			{telegramBotUsername}
+			{messengerDoors}
 		/>
 
 		<PublishConsentNotice repos={connectedRepos} />

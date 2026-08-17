@@ -47,6 +47,24 @@ def _maybe_register_telegram_webhook(settings: Settings) -> None:
         print(f"[brnrd] telegram webhook registration failed: {e}")
 
 
+def _derive_messenger_identities(settings: Settings):
+    """#1465 — same seam, same failure posture as the webhook registration
+    above: a startup-only, best-effort read (getMe / the WhatsApp Cloud
+    API's phone lookup), never blocking boot on a slow or unreachable
+    upstream. `messenger_doors.derive_messenger_identities` already
+    catches per-platform failures; this wrapper is belt-and-suspenders
+    against anything else going wrong in a way that must never take the
+    app down. See `messenger_doors.py`'s module docstring for why this
+    must stay a lifespan-only call and never move into a request path."""
+    from .messenger_doors import MessengerIdentities, derive_messenger_identities
+
+    try:
+        return derive_messenger_identities(settings)
+    except Exception as e:
+        print(f"[brnrd] messenger identity derivation failed: {e}")
+        return MessengerIdentities()
+
+
 def create_app(
     settings: Settings | None = None,
     *,
@@ -57,6 +75,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         _maybe_register_telegram_webhook(settings)
+        _app.state.messenger_identities = _derive_messenger_identities(settings)
         yield
 
     # Same source as `brnrd --version` and the dashboard's `daemon_version`

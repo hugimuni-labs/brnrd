@@ -1349,6 +1349,12 @@ def test_startup_registers_hosted_telegram_webhook(monkeypatch):
             }
         ),
     )
+    # #1465 — startup now also derives the messenger-door identities
+    # (`messenger_doors.derive_messenger_identities`), which for a truthy
+    # `telegram_bot_token` means a real `getMe` call unless stubbed; this
+    # test only cares about webhook registration, so keep it offline and
+    # deterministic like `set_webhook` above.
+    monkeypatch.setattr("brnrd.platforms.telegram.fetch_bot_username", lambda *a, **k: None)
     settings = Settings(
         database_url="sqlite:///:memory:",
         public_base_url="https://brnrd.dev/",
@@ -1375,6 +1381,9 @@ def test_startup_skips_telegram_webhook_for_local_http(monkeypatch):
         "brnrd.platforms.telegram.set_webhook",
         lambda *a, **k: calls.append({"args": a, "kwargs": k}),
     )
+    # #1465 — same reason as the sibling test above: keep startup's
+    # messenger-identity derivation offline here too.
+    monkeypatch.setattr("brnrd.platforms.telegram.fetch_bot_username", lambda *a, **k: None)
     settings = Settings(
         database_url="sqlite:///:memory:",
         public_base_url="http://localhost:8000",

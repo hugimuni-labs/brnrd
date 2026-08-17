@@ -143,6 +143,19 @@ export interface MachinesSummary {
 	any_enabled_repo: boolean;
 }
 
+// #1465 — the messenger-door registry (`brnrd.messenger_doors`, backend),
+// mirrored here typed: one row per connector, `deep_link_available` the
+// one flag ColdStart needs to decide whether a tappable door exists for
+// it. No label/icon on the wire on purpose (same "no user-facing copy in
+// the registry" rule `Capability` follows above) — the renderer owns
+// those, same small roster idiom `supportMatrix.ts`'s `DOORS` already
+// uses. A connector this roster doesn't recognize yet renders nothing
+// rather than crashing — same fail-safe posture as `doorRows` there.
+export interface MessengerDoor {
+	platform: string;
+	deep_link_available: boolean;
+}
+
 export interface ReposResponse {
 	generated_at: string;
 	account: RepoAccount;
@@ -171,15 +184,20 @@ export interface ReposResponse {
 	// `capabilities` above — `ColdStart.svelte` falls back to its pre-#1365
 	// repo-scoped-only gate when this is missing.
 	machines?: MachinesSummary;
-	// #1457 — the account's Telegram bot handle, undecorated (no `@`,
-	// already `lstrip`'d server-side). `""` means unset *or* shape-invalid
-	// (`_wire_telegram_bot_username`, `dashboard.py`) — render the honest-
-	// intermediate fallback either way, the two are indistinguishable from
-	// here and both mean "no deep link is constructible". A non-empty value
-	// is a valid handle. Absent key = an older backend that predates this
-	// field, same "absent means unknown" contract as `machines` above —
-	// `ColdStart.svelte` keeps its pre-#1457 honest-intermediate copy
-	// unchanged rather than guessing a handle that isn't on the wire.
+	// #1465 — the registry-derived connector set: every declared messenger
+	// door with its own `deep_link_available` flag. `ColdStart.svelte`
+	// renders whichever doors are available, generically — a new connector
+	// joins this array server-side with no frontend edit. Absent on an
+	// older backend, same "absent means unknown, render nothing tappable"
+	// contract as `machines`/`capabilities` above.
+	messenger_doors?: MessengerDoor[];
+	// Deprecated (#1465): superseded by
+	// `messenger_doors.find(d => d.platform === 'telegram')?.deep_link_available`.
+	// Kept one release so a client caching this response across the deploy
+	// doesn't regress; `ColdStart.svelte` no longer reads this field.
+	// `""` means unset *or* shape-invalid (`dashboard.py`) — the two are
+	// indistinguishable from here and both mean "no deep link is
+	// constructible". Absent key = an older backend that predates #1457.
 	telegram_bot_username?: string;
 }
 
@@ -345,7 +363,9 @@ export interface TelegramPairStarted {
 // 404s without a connected repo) — this is the one the mobile cold-start
 // CTA calls, since it works with zero repos connected. Codes expire in
 // ~600s server-side (`settings.pair_ttl_s`); call this on tap, never ahead
-// of it.
+// of it. Superseded as ColdStart's own call site by
+// `mintAccountMessengerPair('telegram')` below (#1465) — kept for any
+// other caller and its own test coverage.
 export async function mintAccountTelegramPair(
 	fetchImpl: typeof fetch = fetch
 ): Promise<TelegramPairStarted> {
@@ -361,6 +381,43 @@ export async function mintAccountTelegramPair(
 		throw new Error(`telegram pair mint failed: ${res.status}`);
 	}
 	return (await res.json()) as TelegramPairStarted;
+}
+
+// #1465 — `schemas.MessengerPairStarted` on the wire, verbatim
+// (`dashboard.py`'s `dashboard_pair_api`). The registry-generalized twin
+// of `TelegramPairStarted` above: same shape plus which `platform` it
+// minted for, since the endpoint itself is no longer platform-specific.
+export interface MessengerPairStarted {
+	pair_code: string;
+	instructions: string;
+	deep_link: string | null;
+	platform: string;
+}
+
+// #1465 — account-level mint: `POST /v1/dashboard/pair`, `{platform}`
+// body, session-cookie auth. The one call ColdStart's messenger door uses
+// for every available connector — a 409 means the requested platform has
+// no deep-link door configured on this deployment (`messenger_doors`'s own
+// `deep_link_available` flag said so already; the caller should not be
+// offering the button in the first place, but the endpoint still refuses
+// rather than minting a code nobody can act on).
+export async function mintAccountMessengerPair(
+	platform: string,
+	fetchImpl: typeof fetch = fetch
+): Promise<MessengerPairStarted> {
+	const res = await fetchImpl('/v1/dashboard/pair', {
+		method: 'POST',
+		credentials: 'include',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify({ platform })
+	});
+	if (res.status === 401) {
+		throw new ReposAuthError('not signed in');
+	}
+	if (!res.ok) {
+		throw new Error(`${platform} pair mint failed: ${res.status}`);
+	}
+	return (await res.json()) as MessengerPairStarted;
 }
 
 export function disconnectRepo(

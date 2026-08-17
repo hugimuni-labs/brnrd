@@ -190,6 +190,30 @@ def set_webhook(
         raise
 
 
+def fetch_bot_username(token: str, *, timeout: float = 10.0) -> str | None:
+    """`getMe` — the bot's own username, ground truth for the deep-link
+    door (#1465, mirroring the same seam `set_webhook` above already uses,
+    same failure posture: this is a startup call, never a per-request
+    one — see `messenger_doors.py`'s module docstring).
+
+    `None` on any failure (network, timeout, non-2xx, malformed response)
+    — side-effect-free, safe to call speculatively; the caller decides the
+    fallback.
+    """
+    try:
+        resp = httpx.post(_API.format(token=token, method="getMe"), timeout=timeout)
+        resp.raise_for_status()
+    except httpx.HTTPError:
+        return None
+    try:
+        payload = resp.json()
+    except ValueError:
+        return None
+    result = payload.get("result") if isinstance(payload, dict) else None
+    username = result.get("username") if isinstance(result, dict) else None
+    return username if isinstance(username, str) and username else None
+
+
 class CardGone(RuntimeError):
     """A progress card cannot be edited (deleted or expired)."""
 
