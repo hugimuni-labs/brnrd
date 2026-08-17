@@ -32,6 +32,7 @@
 	import { DOCS_URL } from '$lib/publicStats';
 	import { STATUS_GOOD, STATUS_UNKNOWN, STATUS_WARN, statusDotStyle } from '$lib/statusPalette';
 	import MarkerNotice from '$lib/MarkerNotice.svelte';
+	import PairedChats from '$lib/PairedChats.svelte';
 
 	let data = $state<ReposResponse | null>(null);
 	let error = $state<string | null>(null);
@@ -1040,5 +1041,12 @@
 				</div>
 			</form>
 		</section>
+
+		<!-- #1464 — account-level, not per-repo: every ChannelRoute this
+		     account carries, with a revoke button. Placed after the repo
+		     panels rather than inside one — a paired chat outlives any
+		     single repo pin (#1457), and the component renders nothing of
+		     its own when the account has nothing paired yet. -->
+		<PairedChats />
 	{/if}
 </div>
