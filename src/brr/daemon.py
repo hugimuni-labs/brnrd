@@ -8017,6 +8017,7 @@ def _queue_spawn_request(
     fm: dict,
     body: str,
     outbox_dir: Path | None = None,
+    account_context: account.AccountContext | None = None,
 ) -> bool:
     """Queue a concurrent strand-stack child (``spawn:``, slice 1).
 
@@ -8210,7 +8211,27 @@ def _queue_spawn_request(
         meta["spawn_contract_report"] = contract_report
     if title:
         meta["title"] = title
-    if task.meta.get("repo_label"):
+    # #1458: optional ``repo:`` key names a target repo for the child to
+    # dispatch into, overriding the inherited parent repo. Absent, the child
+    # inherits the parent's repo_label unchanged. Unknown label is refused
+    # immediately, naming both the requested label and the labels the daemon
+    # serves, so the dispatcher can correct and resubmit rather than waiting
+    # for the strand to inherit the wrong repo, fail to find its target
+    # resources, and fail its own work downstream.
+    requested_repo = str(fm.get("repo") or "").strip()
+    if requested_repo:
+        if account_context and not account_context.repo_for_label(requested_repo):
+            served = ", ".join(sorted(account_context.repos.keys()))
+            _record_outbox_notice(
+                outbox_dir,
+                f"spawn refused: repo: {requested_repo!r} is not a served repo. "
+                f"The daemon serves: {served}.",
+                kind="refused",
+                lifetime="run",
+            )
+            return False
+        meta["repo_label"] = requested_repo
+    elif task.meta.get("repo_label"):
         meta["repo_label"] = task.meta["repo_label"]
     reason = str(fm.get("reason") or "").strip()
     # Reuses the exact meta keys _pending_events_for_agent already excludes
@@ -8772,6 +8793,7 @@ def _drain_outbox(
             with _OutboxEntryGuard(outbox_dir, fpath):
                 dispatched = _queue_spawn_request(
                     emit, task, inbox_dir, event_id, fm, body, outbox_dir,
+                    account_context=account_context,
                 )
                 if dispatched:
                     promoted += 1
