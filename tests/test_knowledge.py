@@ -3,7 +3,7 @@
 from pathlib import Path
 import subprocess
 
-from brr import account, daemon, knowledge
+from brr import account, daemon, gitops, knowledge
 from brr.prompts import _build_knowledge_sources_block
 from brr.run import Run
 
@@ -84,6 +84,29 @@ def test_kb_url_resolves_two_hop_local_origin_to_forge(tmp_path):
 
 def test_kb_url_returns_none_when_remote_chain_has_no_forge(tmp_path):
     repo, cfg = _knowledge_remote_chain(tmp_path, forge=False)
+
+    assert knowledge.kb_base_url(repo, cfg) is None
+    assert knowledge.kb_page_url(repo, "design-managed-delivery.md", cfg) is None
+
+
+def test_kb_url_returns_none_rather_than_raising_when_branch_probe_fails(
+    tmp_path, monkeypatch,
+):
+    """#1340: ``_knowledge_forge_location`` (which both URL helpers funnel
+    through) has no try/except of its own around
+    ``gitops.current_branch`` — the three public callers
+    (``kb_base_url``, ``kb_page_url``, ``knowledge_file_url``) are
+    best-effort link resolvers with an established "no link, not a crash"
+    contract, so a genuine git failure must land the same way any other
+    unresolvable case already does: ``None``, not an uncaught raise
+    reaching a card/URL renderer three calls up.
+    """
+    repo, cfg = _knowledge_remote_chain(tmp_path, forge=True)
+
+    def _raise(_repo_root):
+        raise gitops.CurrentBranchUnresolvable("simulated")
+
+    monkeypatch.setattr(gitops, "current_branch", _raise)
 
     assert knowledge.kb_base_url(repo, cfg) is None
     assert knowledge.kb_page_url(repo, "design-managed-delivery.md", cfg) is None

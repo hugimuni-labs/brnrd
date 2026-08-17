@@ -115,7 +115,13 @@ def _knowledge_forge_location(
     if scope_path == ".":
         scope_path = ""
 
-    branch = gitops.current_branch(git_root)
+    try:
+        branch = gitops.current_branch(git_root)
+    except gitops.CurrentBranchUnresolvable:
+        # Best-effort resolver (see the None returns above) — a link that
+        # can't be built is just no link, not a crash for a card/URL
+        # renderer three callers up.
+        return None
     seen: set[Path] = set()
     for _ in range(8):
         try:
