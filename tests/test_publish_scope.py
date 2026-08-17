@@ -900,9 +900,13 @@ def test_consent_absence_distinguishes_unrecorded_from_explicit_none():
         json={"repo_full_name": "Gurio/off", "publish_layers": "none"},
     )
     with client.app.state.SessionLocal() as db:
-        absence = publish_scope.repos_without_publish_consent(_connected_repos(db, _account_id(client)))
+        repos = _connected_repos(db, _account_id(client))
+        absence = publish_scope.repos_without_publish_consent(repos)
     assert absence.unrecorded == ("Gurio/legacy",)
     assert absence.opted_out == ("Gurio/off",)
+    by_name = {repo.repo_full_name: repo.id for repo in repos}
+    assert absence.unrecorded_ids == (by_name["Gurio/legacy"],)
+    assert absence.opted_out_ids == (by_name["Gurio/off"],)
 
 
 _WITHHELD_DASHBOARD_LANES = [
@@ -929,13 +933,20 @@ def test_dashboard_empty_lane_marks_consent_without_repeating_account_state(lane
         "/v1/repos/connect",
         json={"repo_full_name": "Gurio/off", "publish_layers": "none"},
     )
+    with client.app.state.SessionLocal() as db:
+        by_name = {
+            repo.repo_full_name: repo.id
+            for repo in _connected_repos(db, _account_id(client))
+        }
 
     body = client.get(path).json()
 
     assert body["withheld"] == {
         "lane": lane,
         "unrecorded": ["Gurio/legacy"],
+        "unrecorded_ids": [by_name["Gurio/legacy"]],
         "opted_out": ["Gurio/off"],
+        "opted_out_ids": [by_name["Gurio/off"]],
     }
 
 
@@ -953,10 +964,18 @@ def test_withheld_marker_omits_an_absence_category_that_is_empty():
         json={"repo_full_name": "Gurio/off", "publish_layers": "none"},
     )
 
+    with client.app.state.SessionLocal() as db:
+        [off_id] = [
+            repo.id
+            for repo in _connected_repos(db, _account_id(client))
+            if repo.repo_full_name == "Gurio/off"
+        ]
+
     marker = client.get("/v1/dashboard/activity").json()["withheld"]
 
-    assert marker == {"lane": "activity", "opted_out": ["Gurio/off"]}
+    assert marker == {"lane": "activity", "opted_out": ["Gurio/off"], "opted_out_ids": [off_id]}
     assert "unrecorded" not in marker
+    assert "unrecorded_ids" not in marker
 
 
 def test_dashboard_omits_withheld_when_any_repo_permits_the_lane():
