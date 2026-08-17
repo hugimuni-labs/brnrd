@@ -15,12 +15,27 @@ from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 
 from brnrd import create_app, ids  # noqa: E402
-from brnrd.config import Settings  # noqa: E402
+from brnrd.app import _maybe_derive_telegram_bot_username  # noqa: E402
+from brnrd.config import Settings, _derived_telegram_usernames  # noqa: E402
 from brnrd.models import ChannelRoute, Event, Repo, TgPairCode  # noqa: E402
 from _helpers import brnrd_account_headers  # noqa: E402
 
 _SECRET = "webhook-secret"
 _HDR = {"X-Telegram-Bot-Api-Secret-Token": _SECRET}
+
+
+@pytest.fixture(autouse=True)
+def _isolate_telegram_derived_username():
+    """Clear config.py's getMe-derived-username cache around each test.
+
+    It's a module-level dict keyed by token (#1463) so it can outlive one
+    request — exactly the state that must not leak between tests that
+    happen to share a literal token string (most of this file uses
+    ``"bot:TOKEN"``).
+    """
+    _derived_telegram_usernames.clear()
+    yield
+    _derived_telegram_usernames.clear()
 
 
 def _make_client(monkeypatch, **overrides):
@@ -391,6 +406,87 @@ def test_valid_bot_username_construction_is_quiet(caplog):
     caplog.set_level(logging.WARNING, logger="brnrd.config")
     Settings(database_url="sqlite:///:memory:", telegram_bot_username="brnrd_bot")
     assert caplog.records == []
+
+
+# ── #1463: getMe-derived username, through the callers ───────────────
+
+
+def test_derived_username_wins_over_invalid_env_and_mints_deep_link(monkeypatch):
+    """The prod-shaped case (#1242): the env var carries the hyphenated
+    GitHub-login spelling, which never resolves to a Telegram entity — but
+    the token's own `getMe` does, so the derived value must be what
+    actually reaches the deep link, not the env fallback's ``""``."""
+    monkeypatch.setattr(
+        "brnrd.platforms.telegram.get_me",
+        lambda token, *, timeout=10.0: {"id": 1, "username": "brnrd_bot", "is_bot": True},
+    )
+    app, client, _ = _make_client(monkeypatch, telegram_bot_username="brnrd-bot")
+    _maybe_derive_telegram_bot_username(app.state.settings)
+
+    acc = _account(client)
+    rid = _repo(client, acc, name="myrepo")
+    r = client.post("/v1/accounts/pair/telegram", json={"repo_id": rid}, headers=acc)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["deep_link"] == f"https://t.me/brnrd_bot?start={body['pair_code']}"
+
+
+def test_getme_unreachable_falls_back_to_valid_env(monkeypatch):
+    def _boom(token, *, timeout=10.0):
+        raise TimeoutError("getMe timed out")
+
+    monkeypatch.setattr("brnrd.platforms.telegram.get_me", _boom)
+    app, client, _ = _make_client(monkeypatch, telegram_bot_username="brnrd_bot")
+    _maybe_derive_telegram_bot_username(app.state.settings)  # never blocks, never raises
+
+    acc = _account(client)
+    rid = _repo(client, acc, name="myrepo")
+    r = client.post("/v1/accounts/pair/telegram", json={"repo_id": rid}, headers=acc)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["deep_link"] == f"https://t.me/brnrd_bot?start={body['pair_code']}"
+
+
+def test_getme_and_env_both_invalid_yields_empty(monkeypatch):
+    monkeypatch.setattr(
+        "brnrd.platforms.telegram.get_me",
+        lambda token, *, timeout=10.0: {"id": 1, "username": "no", "is_bot": True},  # too short
+    )
+    app, client, _ = _make_client(monkeypatch, telegram_bot_username="brnrd-bot")
+    _maybe_derive_telegram_bot_username(app.state.settings)
+
+    acc = _account(client)
+    rid = _repo(client, acc, name="myrepo")
+    r = client.post("/v1/accounts/pair/telegram", json={"repo_id": rid}, headers=acc)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["deep_link"] is None
+    assert "t.me" not in body["instructions"]
+
+
+def test_getme_disagreement_with_env_warns_once(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "brnrd.platforms.telegram.get_me",
+        lambda token, *, timeout=10.0: {"id": 1, "username": "real_bot", "is_bot": True},
+    )
+    app, client, _ = _make_client(monkeypatch, telegram_bot_username="stale_bot")
+    _maybe_derive_telegram_bot_username(app.state.settings)
+    out = capsys.readouterr().out
+    assert "disagrees" in out
+    assert "real_bot" in out
+
+
+def test_getme_never_blocks_startup_on_missing_token(monkeypatch):
+    """No token ⇒ nothing to derive from; the call is a same-turn no-op,
+    never a network attempt."""
+    called = []
+    monkeypatch.setattr(
+        "brnrd.platforms.telegram.get_me",
+        lambda token, *, timeout=10.0: called.append(token) or {"username": "x"},
+    )
+    settings = Settings(database_url="sqlite:///:memory:", telegram_bot_token="")
+    _maybe_derive_telegram_bot_username(settings)
+    assert called == []
 
 
 def test_unset_bot_username_construction_is_quiet(caplog):
