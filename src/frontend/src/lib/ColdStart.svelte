@@ -1,8 +1,13 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { DOCS_URL } from './publicStats';
-	import { splitPairingCommand } from './repos';
-	import type { ConnectedRepo, GitHubInstallation, MachinesSummary } from './repos';
+	import { mintAccountTelegramPair, splitPairingCommand } from './repos';
+	import type {
+		ConnectedRepo,
+		GitHubInstallation,
+		MachinesSummary,
+		TelegramPairStarted
+	} from './repos';
 
 	// The cold start (2026-08-03). Reported from a real signup on the
 	// deployed dashboard: "two screens - no clarity on the installation, or
@@ -78,20 +83,34 @@
 	// task's own framing): a visitor arriving on a phone cannot run either
 	// step below — no terminal exists there. The spec's own prior was "lead
 	// the mobile CTA with the messenger door" (Telegram/WhatsApp), argued
-	// down here against what the server actually offers: `TgPairCode.repo_id`
-	// is required (`models.py`), both `telegram_pair_core` and
-	// `_pair_repo_telegram_core` (`routers/pairing.py`, `routers/repo_actions.py`)
-	// 404 without an already-connected `Repo`, and `settings.telegram_bot_username`
-	// never rides `/v1/dashboard/repos` or any other wire payload — so this
-	// component cannot construct even a bare `t.me/<bot>` link on its own,
-	// let alone a working `?start=` deep link, for an account with no repo
-	// yet. A phone visitor is, today, always upstream of that gate. So the
-	// mobile CTA states the honest intermediate — the messenger door opens
-	// once a repo is enabled, not before, machine-paired or not — instead
-	// of rendering a link with nothing behind it; the install ladder
+	// down here against what the server actually offered *that day*:
+	// `TgPairCode.repo_id` was required (`models.py`), both
+	// `telegram_pair_core` and `_pair_repo_telegram_core`
+	// (`routers/pairing.py`, `routers/repo_actions.py`) 404'd without an
+	// already-connected `Repo`, and `settings.telegram_bot_username` rode
+	// no wire payload — so this component could not construct even a bare
+	// `t.me/<bot>` link on its own, let alone a working `?start=` deep
+	// link, for an account with no repo yet. So the mobile CTA stated the
+	// honest intermediate instead of a link with nothing behind it.
+	//
+	// Same day, later (#1457, "the link becomes constructible"): both gaps
+	// closed. `telegram_pair_core` now mints an *account-level* code
+	// (`repo_id=None` — the chat binds to the account, which project
+	// answers is resolved per message) via `POST /v1/dashboard/telegram-pair`,
+	// and `telegram_bot_username` rides `GET /v1/dashboard/repos` (`""` =
+	// unset or shape-invalid, same "absent means unknown" contract
+	// `machines` already set). The prior's premise is gone, so the mobile
+	// CTA flips to the real door: `telegramBotUsername` non-empty ⇒ a
+	// tappable button mints on tap (never pre-minted — codes expire in
+	// ~600s) and navigates to the returned `deep_link`; a failed mint or a
+	// `null` deep_link falls back to the returned `pair_code` +
+	// `instructions` rendered inline, since the code alone still binds the
+	// chat even when the link can't be built. Falsy `telegramBotUsername`
+	// (unset bot, or an older backend that omits the key entirely) keeps
+	// this trace's honest-intermediate copy unchanged — the install ladder
 	// survives underneath as a demoted, informational "on your computer"
-	// note (the pairing command is not copy-actionable there — nothing on
-	// a phone can run it).
+	// note either way (the pairing command is not copy-actionable there —
+	// nothing on a phone can run it).
 	interface Props {
 		// `null` = the repos fetch hasn't landed. Render nothing rather than
 		// flashing a cold start at an account that has fifteen repos: the
@@ -122,6 +141,12 @@
 		// the one detector, with one seam for the one environment that
 		// can't run it.
 		mobileOverride?: boolean | null;
+		// #1457 — the account's Telegram bot handle, from the same
+		// `/v1/dashboard/repos` fetch, undecorated (no `@`). `""` = unset or
+		// shape-invalid — render the honest-intermediate fallback, same as
+		// an absent key (an older backend that predates this field). A
+		// non-empty value is what unlocks the tappable mobile CTA below.
+		telegramBotUsername?: string | null;
 	}
 
 	let {
@@ -129,7 +154,8 @@
 		installations = null,
 		pairCommand = null,
 		machines = null,
-		mobileOverride = null
+		mobileOverride = null,
+		telegramBotUsername = null
 	}: Props = $props();
 
 	// Coarse pointer / UA-CH, client-side only — no new server state, no
@@ -207,6 +233,40 @@
 	let copied = $state<string | null>(null);
 	let copyTimer: ReturnType<typeof setTimeout> | undefined;
 
+	// #1457 — the messenger door's own mint state. `minting` gates the
+	// button so a second tap mid-flight can't stack a second mint; a
+	// successful mint with a `deep_link` never sets `mintOutcome` — it
+	// navigates away instead — so `mintOutcome` being set always means
+	// "show the code, the link didn't come with one". `mintFailed` is the
+	// separate case where the POST itself never landed (network, 401,
+	// non-2xx) — there is no `pair_code` to fall back to there, only a
+	// plain retry prompt.
+	let minting = $state(false);
+	let mintOutcome = $state<TelegramPairStarted | null>(null);
+	let mintFailed = $state(false);
+
+	// Mint on tap, never on render — codes expire in ~600s server-side
+	// (`settings.pair_ttl_s`), so pre-minting on a panel that might sit
+	// open for minutes would hand out a code already halfway to stale.
+	async function openMessengerDoor() {
+		minting = true;
+		mintFailed = false;
+		try {
+			const started = await mintAccountTelegramPair();
+			if (started.deep_link) {
+				window.location.assign(started.deep_link);
+				return;
+			}
+			// No link this bot handle can build (#1242's shape check failed
+			// server-side) — the code alone still binds the chat.
+			mintOutcome = started;
+		} catch {
+			mintFailed = true;
+		} finally {
+			minting = false;
+		}
+	}
+
 	async function copy(key: string, text: string) {
 		try {
 			await navigator.clipboard.writeText(text);
@@ -218,7 +278,40 @@
 			// The command is still there to select by hand.
 		}
 	}
+
+	// #1457 — the tappable door's body, shared between the `cold` and
+	// `pairedNoRepo` mobile sections below: both read `telegramBotUsername`
+	// the same way and mint through the same account-level endpoint, so the
+	// interactive half (copy, button, mint-outcome rendering) is one
+	// snippet instead of two near-identical copies drifting apart the next
+	// time either state's wording changes. Each caller still owns its own
+	// fallback copy — that half genuinely differs per state.
 </script>
+
+{#snippet messengerDoorCta()}
+	<p class="mt-1.5 text-sm text-stone-300">
+		brnrd talks back in Telegram — no laptop needed. Tap through and hit Start; setup below can
+		wait.
+	</p>
+	<button
+		type="button"
+		data-testid="open-telegram"
+		class="mt-3 inline-flex cursor-pointer items-center border border-amber-800/50 bg-amber-950/20 px-3 py-2 font-mono text-[11px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/40 hover:text-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+		onclick={openMessengerDoor}
+		disabled={minting}>{minting ? 'opening…' : 'open telegram'}</button
+	>
+	{#if mintOutcome}
+		<div class="mt-3 border border-stone-800 bg-stone-950/50 p-2" data-testid="pair-code-fallback">
+			<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">your code</p>
+			<p class="mt-1 font-mono text-sm text-amber-100">{mintOutcome.pair_code}</p>
+			<p class="mt-1.5 text-sm text-stone-400">{mintOutcome.instructions}</p>
+		</div>
+	{:else if mintFailed}
+		<p class="mt-2 text-sm text-stone-400" data-testid="mint-failed">
+			Couldn't reach brnrd — try again.
+		</p>
+	{/if}
+{/snippet}
 
 {#if cold}
 	<section
@@ -236,23 +329,27 @@
 		</p>
 
 		{#if isMobile}
-			<!-- Fifth trace (2026-08-17, origin-aware onboarding): neither step
-			     below runs from a phone — no terminal exists there. The door a
-			     phone CAN use leads first, honestly: no account-level messenger
-			     deep-link is mintable pre-repo today (see the detector's comment
-			     above), so this states the true unlock condition instead of a
-			     link with nothing behind it. The ladder survives underneath as
-			     reference, demoted — not copy-actionable; nothing here runs from
-			     a phone regardless. -->
+			<!-- Fifth trace (2026-08-17, origin-aware onboarding), flipped
+			     same day by #1457 (see the doc comment above): neither step
+			     below runs from a phone — no terminal exists there — so the
+			     door a phone CAN use leads first. `telegramBotUsername` set
+			     ⇒ a real tappable door; unset ⇒ the honest-intermediate copy
+			     this trace originally shipped. The ladder survives underneath
+			     as reference either way, demoted — not copy-actionable;
+			     nothing here runs from a phone regardless. -->
 			<div class="mt-4 border border-amber-900/30 bg-amber-950/10 p-3" data-testid="messenger-door">
 				<p class="font-mono text-[11px] tracking-wide text-amber-200/80 uppercase">
 					the messenger door
 				</p>
-				<p class="mt-1.5 text-sm text-stone-300">
-					brnrd talks back in Telegram or WhatsApp once a repo is enabled — no laptop needed after
-					that. It opens on a computer, not from here: install the CLI, then run
-					<code>brnrd</code> in a checkout.
-				</p>
+				{#if telegramBotUsername}
+					{@render messengerDoorCta()}
+				{:else}
+					<p class="mt-1.5 text-sm text-stone-300">
+						brnrd talks back in Telegram or WhatsApp once a repo is enabled — no laptop needed after
+						that. It opens on a computer, not from here: install the CLI, then run
+						<code>brnrd</code> in a checkout.
+					</p>
+				{/if}
 			</div>
 
 			<p class="mt-4 font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
@@ -375,19 +472,22 @@
 		</p>
 
 		{#if isMobile}
-			<!-- Same honest-intermediate reasoning as the `cold` branch above: a
-			     paired machine does not unlock the messenger door on its own —
-			     `telegram_pair_core` still 404s without a resolvable repo — so
-			     the remaining gap is named plainly rather than pointed at a link
-			     that would still 404. -->
+			<!-- Same gate as the `cold` branch above, same fix: #1457 mints
+			     account-level, so a paired-but-repo-less account unlocks the
+			     door exactly like a fully-cold one does — `telegramBotUsername`
+			     is the only thing this branch still asks, not repo state. -->
 			<div class="mt-4 border border-amber-900/30 bg-amber-950/10 p-3" data-testid="messenger-door">
 				<p class="font-mono text-[11px] tracking-wide text-amber-200/80 uppercase">
 					the messenger door
 				</p>
-				<p class="mt-1.5 text-sm text-stone-300">
-					A machine has paired, but the door still waits on a repo — enabling one is what's left,
-					and it happens on a computer, not from here.
-				</p>
+				{#if telegramBotUsername}
+					{@render messengerDoorCta()}
+				{:else}
+					<p class="mt-1.5 text-sm text-stone-300">
+						A machine has paired, but the door still waits on a repo — enabling one is what's left,
+						and it happens on a computer, not from here.
+					</p>
+				{/if}
 			</div>
 
 			<p class="mt-4 font-mono text-[11px] tracking-wide text-ink-quiet uppercase">

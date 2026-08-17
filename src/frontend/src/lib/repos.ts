@@ -171,6 +171,16 @@ export interface ReposResponse {
 	// `capabilities` above — `ColdStart.svelte` falls back to its pre-#1365
 	// repo-scoped-only gate when this is missing.
 	machines?: MachinesSummary;
+	// #1457 — the account's Telegram bot handle, undecorated (no `@`,
+	// already `lstrip`'d server-side). `""` means unset *or* shape-invalid
+	// (`_wire_telegram_bot_username`, `dashboard.py`) — render the honest-
+	// intermediate fallback either way, the two are indistinguishable from
+	// here and both mean "no deep link is constructible". A non-empty value
+	// is a valid handle. Absent key = an older backend that predates this
+	// field, same "absent means unknown" contract as `machines` above —
+	// `ColdStart.svelte` keeps its pre-#1457 honest-intermediate copy
+	// unchanged rather than guessing a handle that isn't on the wire.
+	telegram_bot_username?: string;
 }
 
 // #1277a: `pairing_command`/`setup_command` is two lines — a scene-setting
@@ -317,6 +327,40 @@ export function pairRepoTelegram(
 	fetchImpl: typeof fetch = fetch
 ): Promise<RepoActionResponse> {
 	return postRepoAction(`/v1/repos/${encodeURIComponent(repoId)}/telegram-pair`, {}, fetchImpl);
+}
+
+// #1457 — `schemas.TelegramPairStarted` on the wire, verbatim (`pairing.py`).
+// `deep_link` is `null` when the configured bot handle is unset or fails
+// the same shape check `telegram_bot_username` on `ReposResponse` already
+// passed — a deep link built on a bad handle is worse than none, so the
+// caller falls back to `pair_code` + `instructions` in that case.
+export interface TelegramPairStarted {
+	pair_code: string;
+	instructions: string;
+	deep_link: string | null;
+}
+
+// #1457 — account-level mint: `POST /v1/dashboard/telegram-pair`, no body,
+// session-cookie auth. Distinct from `pairRepoTelegram` above (repo-scoped,
+// 404s without a connected repo) — this is the one the mobile cold-start
+// CTA calls, since it works with zero repos connected. Codes expire in
+// ~600s server-side (`settings.pair_ttl_s`); call this on tap, never ahead
+// of it.
+export async function mintAccountTelegramPair(
+	fetchImpl: typeof fetch = fetch
+): Promise<TelegramPairStarted> {
+	const res = await fetchImpl('/v1/dashboard/telegram-pair', {
+		method: 'POST',
+		credentials: 'include',
+		headers: { 'content-type': 'application/json' }
+	});
+	if (res.status === 401) {
+		throw new ReposAuthError('not signed in');
+	}
+	if (!res.ok) {
+		throw new Error(`telegram pair mint failed: ${res.status}`);
+	}
+	return (await res.json()) as TelegramPairStarted;
 }
 
 export function disconnectRepo(

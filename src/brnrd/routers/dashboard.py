@@ -12,6 +12,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from brnrd import github_marker, publish_scope, run_stop_requests, wake_requests
+from brnrd.config import telegram_username_is_valid
+from brnrd.routers.pairing import telegram_pair_core
 from brnrd.activity_records import dedupe_activity_records, fresh_activity_records
 from brnrd.auth import get_db
 from brnrd.capabilities import evaluate_capabilities
@@ -863,6 +865,29 @@ def _machines_summary_out(db: Session, account_id: str) -> dict[str, Any]:
     }
 
 
+def _wire_telegram_bot_username(settings) -> str:
+    username = settings.telegram_bot_username.lstrip("@")
+    return username if telegram_username_is_valid(username) else ""
+
+
+@router.post("/v1/dashboard/telegram-pair")
+def dashboard_telegram_pair_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """#1457 — mint an *account-level* pair code from the browser session.
+
+    The repo-scoped mints (`/v1/pair/telegram`, repo actions) all 404
+    without a connected repo, which made the messenger door unconstructible
+    for exactly the visitor who needs it most — a phone signup with no
+    machine and no repo. This endpoint needs only the session: the code it
+    mints binds the chat to the account, and which project answers is
+    resolved per message (`webhooks._route_target_repo`).
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    started = telegram_pair_core(db, request.app.state.settings, account_id, None)
+    return JSONResponse(started.model_dump())
+
+
 @router.get("/v1/dashboard/repos")
 def dashboard_repos_api(
     request: Request,
@@ -924,6 +949,13 @@ def dashboard_repos_api(
             # no repo row to read the command off. Account-level like
             # `install_url` and `github_app_slug` beside it.
             "pairing_command": pairing_command(PAIR_REPO_PLACEHOLDER),
+            # #1457 — the bot handle, on the wire at last: without it the
+            # frontend cannot construct `t.me/<bot>?start=<code>` and the
+            # mobile cold start stays a description of a door instead of a
+            # door. Empty when unset *or* shape-invalid (#1242 — a deep
+            # link built on a bad handle is worse than none); absent-means-
+            # unknown on older backends, same contract as `machines`.
+            "telegram_bot_username": _wire_telegram_bot_username(settings),
             # design-machines-and-guests.md R1 / #1365 — account-level
             # machine presence, additive: a backend that predates this still
             # omits the key and the frontend falls back to the pre-fix,

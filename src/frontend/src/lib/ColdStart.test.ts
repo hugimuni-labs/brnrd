@@ -30,7 +30,13 @@ async function renderColdStart(
 	// `svelte/server`, so `null` here renders the desktop branch exactly
 	// like every call site below always has. Tests below pass `true`/
 	// `false` explicitly to pin the mobile branch without a browser.
-	mobileOverride: boolean | null = null
+	mobileOverride: boolean | null = null,
+	// #1457: defaults to `null`, same "absent/empty reads as unknown, keep
+	// today's copy" contract the component gives the prop — every existing
+	// call site below still exercises the pre-#1457 honest-intermediate
+	// mobile copy unchanged. Tests below pass a real handle to pin the
+	// tappable branch.
+	telegramBotUsername: string | null = null
 ): Promise<string> {
 	const source = readFileSync(componentPath, 'utf8');
 	const compiled = compile(source, { generate: 'server', runes: true, name: 'ColdStart' });
@@ -46,7 +52,7 @@ async function renderColdStart(
 	try {
 		const module = await import(`${generated}?t=${process.pid}`);
 		return render(module.default, {
-			props: { repos, pairCommand, installations, machines, mobileOverride }
+			props: { repos, pairCommand, installations, machines, mobileOverride, telegramBotUsername }
 		}).body;
 	} finally {
 		rmSync(generated, { force: true });
@@ -450,4 +456,72 @@ test('mobile arrival with no pairCommand drops the second reference box, not the
 	const html = await renderColdStart([], null, null, null, true);
 	ok(html.includes('the messenger door'));
 	equal(html.split('<pre').length - 1, 1, 'only the install command renders — no empty pair box');
+});
+
+// #1457 — the link becomes constructible: a backend that carries a real bot
+// handle flips the mobile CTA from the honest-intermediate copy to a
+// tappable door. Three renderings of the wire contract, pinned separately
+// since each means something different: a valid handle, an explicitly
+// empty one (unset or shape-invalid server-side), and an older backend
+// that never sends the key at all.
+
+test('new backend with a bot username renders the tappable door, not the honest intermediate', async () => {
+	const html = await renderColdStart([], undefined, null, null, true, 'brnrdbot');
+	ok(html.includes('the messenger door'));
+	ok(html.includes('data-testid="open-telegram"'), 'the tap affordance renders');
+	ok(html.includes('open telegram'), 'the button carries the real CTA copy');
+	ok(
+		!html.includes('once a repo is enabled'),
+		'the honest-intermediate copy is gone once a real door exists'
+	);
+});
+
+test('an empty telegram_bot_username (unset or shape-invalid) keeps the honest-intermediate fallback', async () => {
+	const html = await renderColdStart([], undefined, null, null, true, '');
+	ok(html.includes('the messenger door'));
+	ok(!html.includes('data-testid="open-telegram"'), 'no tap affordance without a real handle');
+	ok(html.includes('once a repo is enabled'), 'the pre-#1457 copy still renders');
+});
+
+test("an absent telegram_bot_username (older backend) renders exactly today's copy", async () => {
+	// `undefined` — the same shape a caller gets from `repos.telegram_bot_username`
+	// on a response that predates #1457 and omits the key entirely.
+	const withAbsent = await renderColdStart([], undefined, null, null, true, undefined as never);
+	const withExplicitNull = await renderColdStart([], undefined, null, null, true, null);
+	equal(withAbsent, withExplicitNull, 'an omitted key renders identically to the explicit default');
+	ok(!withAbsent.includes('data-testid="open-telegram"'));
+	ok(withAbsent.includes('once a repo is enabled'));
+});
+
+// Same flip, same reasoning, in the paired-no-repo state: #1457 mints
+// account-level, so this state's door unlocks on `telegramBotUsername`
+// alone too, not on enabling a repo first.
+test('paired-no-repo state also renders the tappable door once a bot username is present', async () => {
+	const html = await renderColdStart(
+		[],
+		undefined,
+		null,
+		{ paired: true, any_enabled_repo: false },
+		true,
+		'brnrdbot'
+	);
+	ok(html.includes('machine paired, no repo enabled yet'));
+	ok(html.includes('data-testid="open-telegram"'));
+	ok(!html.includes('still waits on a repo'), 'the stale repo-gated copy is gone');
+});
+
+// The constraint: "the desktop path stays byte-identical." `telegramBotUsername`
+// is read only inside the `isMobile` branches, so a desktop render must not
+// change at all regardless of its value.
+test('desktop rendering is unaffected by telegramBotUsername', async () => {
+	const withoutUsername = await renderColdStart([repo({ daemon_status: 'missing' })]);
+	const withUsername = await renderColdStart(
+		[repo({ daemon_status: 'missing' })],
+		undefined,
+		null,
+		null,
+		false,
+		'brnrdbot'
+	);
+	equal(withUsername, withoutUsername, 'desktop HTML is byte-identical either way');
 });

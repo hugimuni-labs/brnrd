@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { connectRepo, setPublishLayers, splitPairingCommand, telegramPairLabel } from './repos.ts';
+import {
+	connectRepo,
+	mintAccountTelegramPair,
+	ReposAuthError,
+	setPublishLayers,
+	splitPairingCommand,
+	telegramPairLabel
+} from './repos.ts';
 
 function fakeFetch(status: number, body: unknown): typeof fetch {
 	const calls: { url: string; init?: RequestInit }[] = [];
@@ -93,4 +100,48 @@ test('telegramPairLabel: paired and idle reads the disclosed "re-pair"', () => {
 
 test('telegramPairLabel: paired and busy reads "re-pairing"', () => {
 	assert.equal(telegramPairLabel(true, true), 're-pairing Telegram');
+});
+
+// #1457 — the account-level mint the mobile cold-start CTA calls, distinct
+// from the repo-scoped `pairRepoTelegram` above (`/v1/repos/<id>/telegram-
+// pair`, 404s with no connected repo). No body, session-cookie auth only.
+test('mintAccountTelegramPair posts to the account-level endpoint with no body', async () => {
+	const impl = fakeFetch(200, {
+		pair_code: 'ABCD1234',
+		instructions: 'send /start ABCD1234',
+		deep_link: 'https://t.me/brnrdbot?start=ABCD1234'
+	});
+	const result = await mintAccountTelegramPair(impl);
+	assert.equal(calls(impl)[0].url, '/v1/dashboard/telegram-pair');
+	assert.equal(calls(impl)[0].init?.method, 'POST');
+	assert.equal(calls(impl)[0].init?.body, undefined);
+	assert.deepEqual(result, {
+		pair_code: 'ABCD1234',
+		instructions: 'send /start ABCD1234',
+		deep_link: 'https://t.me/brnrdbot?start=ABCD1234'
+	});
+});
+
+// A bot handle that failed #1242's shape check server-side mints a code
+// with no deep link — the caller (ColdStart.svelte) falls back to showing
+// the code itself, so the wire shape allowing `deep_link: null` must round
+// trip untouched, not get coerced into an empty string or dropped.
+test('mintAccountTelegramPair carries a null deep_link through untouched', async () => {
+	const impl = fakeFetch(200, {
+		pair_code: 'WXYZ5678',
+		instructions: 'send /start WXYZ5678',
+		deep_link: null
+	});
+	const result = await mintAccountTelegramPair(impl);
+	assert.equal(result.deep_link, null);
+});
+
+test('mintAccountTelegramPair raises ReposAuthError on 401', async () => {
+	const impl = fakeFetch(401, { detail: 'unauthenticated' });
+	await assert.rejects(() => mintAccountTelegramPair(impl), ReposAuthError);
+});
+
+test('mintAccountTelegramPair raises on a non-401 error status', async () => {
+	const impl = fakeFetch(503, { detail: 'could not allocate pair code' });
+	await assert.rejects(() => mintAccountTelegramPair(impl), /telegram pair mint failed: 503/);
 });
