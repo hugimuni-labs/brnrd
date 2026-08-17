@@ -8200,10 +8200,6 @@ def _cut_mismatches(
         live_child_ids.add(child_id)
         if child_id not in declared_strands:
             mismatches.append(f"strands: {child_id} is live and undispositioned")
-    for run_id in sorted(set(declared_strands) - live_child_ids):
-        mismatches.append(
-            f"strands: {run_id} is not a live child of this run"
-        )
 
     return mismatches
 

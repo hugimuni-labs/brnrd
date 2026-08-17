@@ -321,7 +321,7 @@ def bolt_declaration_value(bolt_meta: Any) -> dict[str, Any] | None:
             "omitted": True,
             "reason": str(bolt_meta.get("reason") or "persistence limits exceeded"),
         }
-    fields = ("asks", "owed", "decisions", "spend_declared", "next", "dissent")
+    fields = ("asks", "owed", "decisions", "spend_declared", "next", "dissent", "strands")
     return {field: bolt_meta.get(field) for field in fields}
 
 

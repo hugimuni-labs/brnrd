@@ -426,23 +426,29 @@ def test_a_bolt_accepts_a_declared_handoff_for_a_live_strand():
     ) == []
 
 
-def test_a_bolt_bounces_on_a_strands_row_naming_a_run_that_is_not_a_live_child():
+def test_a_bolt_accepts_a_strands_row_naming_a_reaped_or_stopped_child():
+    """A child that is no longer live (converged, stopped, abandoned) is
+    correctly declared as such. The disposition names the state directly:
+    `converged` and `stopped` describe children that are by construction not
+    live (reaped from _run_controls or flagged for stop), so declaring them
+    honestly passes cleanly. The check forces the declaration, not the
+    liveness state."""
     parent = Run(id="run-1197-parent", event_id="evt-p", body="", env="host")
-    # No live children registered at all.
+    # No live children registered at all — this child finished and was reaped.
 
     declared = cut_verb.CutDeclaration(
         strands=(
-            cut_verb.StrandDisposition(run="run-not-mine", disposition="converged"),
+            cut_verb.StrandDisposition(
+                run="run-converged-child",
+                disposition="converged — read whole, merged abc1234",
+            ),
         ),
     )
 
-    found = daemon._cut_mismatches(
+    # Declaring a finished child as 'converged' is honest and passes cleanly.
+    assert daemon._cut_mismatches(
         parent, declared, pending_events=[], repo_root=None, outbox_dir=None,
-    )
-
-    assert any(
-        "run-not-mine" in m and "not a live child" in m for m in found
-    )
+    ) == []
 
 
 def test_a_finished_child_needs_no_strands_row_and_the_two_checks_dont_double_indict(
