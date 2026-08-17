@@ -120,6 +120,33 @@ def test_capture_dominion_helper_commits_when_dirty(tmp_path):
     assert not gitops.worktree_dirty(path)
 
 
+def test_capture_dominion_helper_survives_branch_probe_failure(
+    tmp_path, monkeypatch,
+):
+    """#1340: daemon._capture_dominion has no local try/except of its own
+    around the ``gitops.current_branch`` call — a raise there, uncaught,
+    would abort every remaining dominion candidate's capture in the same
+    loop (and, worse, would very likely surface as an uncaught
+    "worker_crash" for what is purely post-run housekeeping). The commit
+    itself must still happen even when the branch name can't be measured.
+    """
+    repo = _repo(tmp_path)
+    path = dominion.ensure_dominion(repo, push=False)
+    (path / "focus.md").write_text("current focus\n", encoding="utf-8")
+    head_before = gitops.rev_parse(path, "HEAD")
+
+    def _raise(_repo_root):
+        raise gitops.CurrentBranchUnresolvable("simulated")
+
+    monkeypatch.setattr(gitops, "current_branch", _raise)
+
+    task = Run(id="t1", event_id="e1", body="b", source="telegram")
+    daemon._capture_dominion(repo, {"dominion.push_on_capture": False}, task)
+
+    assert gitops.rev_parse(path, "HEAD") != head_before
+    assert not gitops.worktree_dirty(path)
+
+
 def test_capture_dominion_helper_respects_disabled(tmp_path):
     repo = _repo(tmp_path)
     path = dominion.ensure_dominion(repo, push=False)
@@ -332,3 +359,36 @@ def test_commit_marks_never_linked_even_when_push_is_off(tmp_path):
     assert dominion.commit(path, "capture two", remote=None, push=False) is True
 
     assert dominion.never_linked(path.parent, path) is not None
+
+
+# ── #1340: a current_branch probe failure must not mask a real commit ──
+
+
+def test_commit_reports_the_real_commit_even_when_branch_probe_fails(
+    tmp_path, monkeypatch,
+):
+    """``branch=None`` + ``push=True`` makes ``commit`` resolve the push
+    target itself via ``gitops.current_branch`` (dominion.py, the ``target
+    = branch or gitops.current_branch(...)`` line). Before #1340, a git
+    failure there answered "HEAD" and the ``target != "HEAD"`` guard just
+    skipped the push, leaving ``committed``'s real value to reach the
+    return. A unit test on ``current_branch`` alone can't show this site
+    specifically — only calling through ``dominion.commit`` with the probe
+    actually raising can.
+    """
+    remote = _bare_remote(tmp_path)
+    clone = _clone(remote, tmp_path / "a", name="A")
+    path = dominion.ensure_dominion(clone, push=True)
+    (path / "note.md").write_text("fresh\n", encoding="utf-8")
+
+    def _raise(_repo_root):
+        raise gitops.CurrentBranchUnresolvable("simulated")
+
+    monkeypatch.setattr(gitops, "current_branch", _raise)
+
+    # branch=None (not supplied) forces the internal current_branch() call.
+    committed = dominion.commit(
+        path, "capture", remote=gitops.default_remote(clone), push=True,
+    )
+    assert committed is True  # the local commit is real and must be reported
+    assert not gitops.worktree_dirty(path)  # the commit actually landed

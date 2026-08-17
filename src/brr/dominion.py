@@ -464,7 +464,16 @@ def commit(
         else:
             mark_never_linked(brr_dir)
         if push and remote:
-            target = branch or gitops.current_branch(dominion_dir)
+            try:
+                target = branch or gitops.current_branch(dominion_dir)
+            except gitops.CurrentBranchUnresolvable:
+                # A probe failure here must not read as "nothing happened":
+                # `committed` above may already be True, and the outer
+                # `except Exception: return False` below would otherwise
+                # discard that real result just because the *optional* push
+                # step couldn't name a branch. Same degrade as the old
+                # "HEAD" sentinel (skip the push, keep `committed`'s value).
+                target = None
             # Push after a real commit, or to settle a standing divergence
             # (clean tree but a marker is set — the agent may have just
             # reconciled). Otherwise leave the network alone.

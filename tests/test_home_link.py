@@ -625,3 +625,24 @@ def test_push_failure_message_carries_stderr_and_a_specific_remedy(tmp_path, mon
     assert "does-not-exist-as-a-repo" in message
     # a concrete remedy — gh is available in this fake, so the gh-flavoured one
     assert "gh auth setup-git" in message or "gh auth login" in message
+
+
+def test_current_or_symbolic_branch_survives_a_current_branch_probe_failure(
+    tmp_path, monkeypatch,
+):
+    """#1340: this function's whole contract is "always return a string" —
+    unlike ``gitops.current_branch``, which now raises on a genuine
+    measurement failure. A unit test on ``current_branch`` alone can't
+    show this call site specifically falls back to its own symbolic-ref
+    probe instead of letting the raise escape.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    home_link._ensure_git_repo(repo)  # git init -b main, no commit yet
+
+    def _raise(_repo_root):
+        raise gitops.CurrentBranchUnresolvable("simulated")
+
+    monkeypatch.setattr(gitops, "current_branch", _raise)
+
+    assert home_link._current_or_symbolic_branch(repo) == "main"

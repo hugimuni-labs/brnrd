@@ -516,12 +516,69 @@ def ensure_git_repo() -> Path:
     return root
 
 
+class CurrentBranchUnresolvable(RuntimeError):
+    """git could not determine the branch checked out in *repo_root* (#1340).
+
+    ``rev-parse --abbrev-ref HEAD`` fails (non-zero exit) for two
+    unrelated reasons, and the pre-fix code collapsed both into the same
+    ``"HEAD"`` string it also uses for a genuine, successfully-measured
+    detached HEAD (``rev-parse --abbrev-ref HEAD`` exits **0** and prints
+    literal ``HEAD`` for a real detached checkout — that case never reaches
+    this exception at all):
+
+    - **unborn HEAD** — a fresh repo or an orphan branch with no commit
+      yet. HEAD is a perfectly good symbolic ref (``refs/heads/main``); it
+      just doesn't resolve to a commit. ``git symbolic-ref --quiet --short
+      HEAD`` still answers with the real branch name here, and
+      :func:`current_branch` uses that as the return value rather than
+      raising — three call sites (``home_link._current_or_symbolic_branch``,
+      ``account.run_state_blob_url``, this module's own
+      ``has_pushed_upstream``) had already hand-rolled this exact fallback
+      independently, which is what told us it belongs in the probe itself.
+    - **a genuine measurement failure** — no repository, a corrupt config,
+      a dead worktree pin, a permission error. ``symbolic-ref`` fails here
+      too (verified: a repo with no readable ``.git/HEAD`` fails both
+      probes identically), which is the only case this class is raised
+      for.
+
+    Raised rather than answered, for the same reason
+    :class:`worktree.BranchUnresolvable` is (#1302, the same bug class one
+    probe over): a bare ``"HEAD"`` here is already the sentence "this repo
+    is on a detached HEAD", and callers that read it as a safe fallback
+    would silently act on a failure to measure as if it were a measurement.
+    Every caller of :func:`current_branch` must either catch this
+    (typically ``except CurrentBranchUnresolvable`` or a broader
+    ``RuntimeError`` / ``Exception`` this already satisfies) or mark
+    deliberate propagation at the call site with a
+    ``# current-branch: propagates`` comment — see
+    ``tests/test_gitops.py::test_every_current_branch_caller_handles_the_raise``,
+    which scans every call site fresh rather than checking a fixed list, so
+    a caller added after this fix is still held to the same contract.
+    """
+
+
 def current_branch(repo_root: Path) -> str:
-    """Return the current branch name, or ``HEAD`` when detached."""
+    """Return the current branch name, or ``HEAD`` when genuinely detached.
+
+    Raises :class:`CurrentBranchUnresolvable` when git cannot determine the
+    branch at all — see that class's docstring for the two ways
+    ``rev-parse --abbrev-ref HEAD`` can fail and why only one of them
+    raises.
+    """
     result = _git(repo_root, "rev-parse", "--abbrev-ref", "HEAD", check=False)
-    if result.returncode != 0:
-        return "HEAD"
-    return result.stdout.strip() or "HEAD"
+    if result.returncode == 0:
+        return result.stdout.strip() or "HEAD"
+    symbolic = _git(
+        repo_root, "symbolic-ref", "--quiet", "--short", "HEAD", check=False,
+    )
+    if symbolic.returncode == 0:
+        name = symbolic.stdout.strip()
+        if name:
+            return name
+    detail = (result.stderr or result.stdout or "").strip() or "no detail"
+    raise CurrentBranchUnresolvable(
+        f"cannot determine current branch in {repo_root}: {detail}"
+    )
 
 
 def rev_parse(repo_root: Path, ref: str) -> str | None:
@@ -846,7 +903,13 @@ def default_branch(repo_root: Path) -> str | None:
         if branch_exists(repo_root, candidate):
             return candidate
 
-    current = current_branch(repo_root)
+    try:
+        current = current_branch(repo_root)
+    except CurrentBranchUnresolvable:
+        # Best-effort function: a probe failure is no worse than the
+        # already-handled "nothing resolved" case below, which the
+        # rev_parse fallback also answers correctly for a broken repo.
+        return "HEAD" if rev_parse(repo_root, "HEAD") else None
     if current != "HEAD":
         return current
     return "HEAD" if rev_parse(repo_root, "HEAD") else None
@@ -924,7 +987,20 @@ def fast_forward_branch(
             detail=f"{source_ref} is not a fast-forward of {branch}",
         )
 
-    if current_branch(repo_root) == branch:
+    try:
+        checked_out_branch = current_branch(repo_root)
+    except CurrentBranchUnresolvable as exc:
+        # Whether *branch* is the checked-out one decides which of two
+        # mutation strategies runs below (an in-place ``merge --ff-only``
+        # vs. a raw ``update-ref``); guessing wrong when git can't even
+        # answer risks running ``update-ref`` against a branch some other
+        # process actually has checked out. Refuse instead of guessing.
+        return BranchUpdateResult(
+            success=False,
+            branch=branch,
+            detail=f"cannot determine checked-out branch: {exc}",
+        )
+    if checked_out_branch == branch:
         result = _git(repo_root, "merge", "--ff-only", source_ref, check=False)
         if result.returncode == 0:
             commit = rev_parse(repo_root, "HEAD") or source_oid
@@ -986,7 +1062,13 @@ def has_pushed_upstream(repo_root: Path) -> bool:
     """
     if not (repo_root / ".git").exists():
         return False
-    branch = current_branch(repo_root)
+    try:
+        branch = current_branch(repo_root)
+    except CurrentBranchUnresolvable:
+        # Docstring above already promises "any git failure reads as
+        # False" — this is that promise, now that the probe raises
+        # instead of quietly returning a sentinel.
+        return False
     if branch == "HEAD":
         result = _git(repo_root, "symbolic-ref", "--short", "HEAD", check=False)
         branch = result.stdout.strip() if result.returncode == 0 else ""

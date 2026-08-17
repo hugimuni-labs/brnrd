@@ -269,12 +269,21 @@ def _ensure_git_repo(path: Path) -> bool:
 def _current_or_symbolic_branch(repo_path: Path) -> str:
     """Return the checked-out branch name, including on an unborn HEAD.
 
-    ``gitops.current_branch`` uses ``rev-parse --abbrev-ref HEAD``, which
-    fails on a brand-new repo with no commits yet (returns ``"HEAD"``
-    here) — the same unborn-branch case ``account.run_state_blob_url``
-    already works around with ``symbolic-ref``.
+    ``gitops.current_branch`` itself now resolves an unborn HEAD (a
+    brand-new repo with no commits yet) to the real branch name via its
+    own internal ``symbolic-ref`` fallback (#1340), so the local re-probe
+    below is a backstop for two narrower cases only: a genuine measurement
+    failure (``gitops.current_branch`` raises ``CurrentBranchUnresolvable``
+    rather than returning a sentinel now) and a real detached HEAD (which
+    legitimately has no branch name to give). Both still want *some*
+    string back — this function's contract is "always answer", unlike
+    ``gitops.current_branch``'s "answer or raise" — so both funnel into the
+    same symbolic-ref-then-``"main"`` fallback that already existed here.
     """
-    branch = gitops.current_branch(repo_path)
+    try:
+        branch = gitops.current_branch(repo_path)
+    except gitops.CurrentBranchUnresolvable:
+        branch = ""
     if branch and branch != "HEAD":
         return branch
     result = subprocess.run(

@@ -3,7 +3,9 @@
 import subprocess
 from pathlib import Path
 
-from brr import branching
+import pytest
+
+from brr import branching, gitops
 
 from _helpers import commit_files, init_git_repo
 
@@ -28,6 +30,32 @@ def test_default_fallback_preserves_run_branch_from_default_seed(tmp_path):
     assert plan.target_branch is None
     assert plan.source == "fallback:preserve"
     assert plan.host_context_branch == "feature/host"
+
+
+def test_resolve_publish_plan_propagates_an_unresolvable_current_branch(
+    tmp_path, monkeypatch,
+):
+    """#1340: this is a deliberate design choice, not an oversight — see
+    the propagation comment on ``branching.resolve_publish_plan``'s own
+    ``gitops.current_branch`` call. This runs from inside
+    ``daemon._run_worker`` before any run work has started; that
+    function's own outer crash handler turns an uncaught exception here
+    into a cleanly deferred/errored run, which beats silently seeding a
+    run off a host branch git couldn't actually name. Locked in here so a
+    future "helpfully" added local try/except doesn't quietly change the
+    failure mode back to a silent mis-seed.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+
+    def _raise(_repo_root):
+        raise gitops.CurrentBranchUnresolvable("simulated")
+
+    monkeypatch.setattr(gitops, "current_branch", _raise)
+
+    with pytest.raises(gitops.CurrentBranchUnresolvable):
+        branching.resolve_publish_plan(repo, {}, {})
 
 
 def test_structured_event_branch_names_target_branch(tmp_path):

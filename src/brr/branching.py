@@ -101,8 +101,14 @@ def resolve_publish_plan(
     Deliberately does not look at conversation history, parse free-text
     instructions, or run an LLM. Anything beyond a structured event
     field belongs to the worker agent.
+
+    Deliberately lets ``gitops.CurrentBranchUnresolvable`` propagate
+    (#1340): this runs before any run work has started, from inside
+    ``daemon._run_worker``, whose own crash handler turns an uncaught
+    exception here into a cleanly deferred/errored run rather than a
+    silent mis-seed off a host branch git couldn't actually name.
     """
-    host_branch = gitops.current_branch(repo_root)
+    host_branch = gitops.current_branch(repo_root)  # current-branch: propagates
     host_context = host_branch if host_branch != "HEAD" else None
     default_seed = _default_seed(repo_root, host_branch)
 
