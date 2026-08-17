@@ -112,6 +112,22 @@ class TelegramPairStarted(BaseModel):
     deep_link: str | None = None
 
 
+class MessengerPairStarted(BaseModel):
+    """`POST /v1/dashboard/pair`'s response — the registry-generalized
+    twin of `TelegramPairStarted` above, carrying which platform it minted
+    for since the endpoint itself is no longer platform-specific. The
+    request body has no schema of its own: `dashboard_pair_api` parses
+    `{"platform": str}` by hand (`await request.json()`), matching this
+    router's own established convention for POST bodies
+    (`dashboard_runners_wake_request` does the same) rather than
+    `pairing.py`'s pydantic-`Body` one."""
+
+    pair_code: str
+    instructions: str
+    deep_link: str | None = None
+    platform: str
+
+
 class PairStatus(BaseModel):
     status: str
     account_id: str | None = None

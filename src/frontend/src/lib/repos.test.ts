@@ -3,8 +3,9 @@ import test from 'node:test';
 
 import {
 	connectRepo,
+	mintAccountMessengerPair,
 	fetchPairedChats,
-	fetchTelegramPairStatus,
+	fetchPairStatus,
 	mintAccountTelegramPair,
 	ReposAuthError,
 	revokePairedChat,
@@ -149,32 +150,72 @@ test('mintAccountTelegramPair raises on a non-401 error status', async () => {
 	await assert.rejects(() => mintAccountTelegramPair(impl), /telegram pair mint failed: 503/);
 });
 
+// #1465 — the registry-generalized mint ColdStart's messenger door actually
+// calls now: one endpoint, a `platform` body, any connector the wire's
+// `messenger_doors` declared `deep_link_available` for.
+test('mintAccountMessengerPair posts the platform in the body', async () => {
+	const impl = fakeFetch(200, {
+		pair_code: 'ABCD1234',
+		instructions: 'text ABCD1234 to your brnrd WhatsApp number',
+		deep_link: 'https://wa.me/15551234567?text=ABCD1234',
+		platform: 'whatsapp'
+	});
+	const result = await mintAccountMessengerPair('whatsapp', impl);
+	assert.equal(calls(impl)[0].url, '/v1/dashboard/pair');
+	assert.equal(calls(impl)[0].init?.method, 'POST');
+	assert.deepEqual(JSON.parse(String(calls(impl)[0].init?.body)), { platform: 'whatsapp' });
+	assert.equal(result.platform, 'whatsapp');
+	assert.equal(result.deep_link, 'https://wa.me/15551234567?text=ABCD1234');
+});
+
+test('mintAccountMessengerPair carries a null deep_link through untouched', async () => {
+	const impl = fakeFetch(200, {
+		pair_code: 'WXYZ5678',
+		instructions: 'send /start WXYZ5678',
+		deep_link: null,
+		platform: 'telegram'
+	});
+	const result = await mintAccountMessengerPair('telegram', impl);
+	assert.equal(result.deep_link, null);
+});
+
+test('mintAccountMessengerPair raises ReposAuthError on 401', async () => {
+	const impl = fakeFetch(401, { detail: 'unauthenticated' });
+	await assert.rejects(() => mintAccountMessengerPair('telegram', impl), ReposAuthError);
+});
+
+test('mintAccountMessengerPair raises on a non-401 error status, naming the platform', async () => {
+	const impl = fakeFetch(409, {
+		detail: 'slack has no deep-link door configured on this deployment'
+	});
+	await assert.rejects(
+		() => mintAccountMessengerPair('slack', impl),
+		/slack pair mint failed: 409/
+	);
+});
 // #1464 — the minting session's outcome readback: ColdStart polls this by
 // the pair_code it just minted, keyed to whoever's session minted it.
-test('fetchTelegramPairStatus reads the code as a path segment', async () => {
+test('fetchPairStatus reads the code as a path segment', async () => {
 	const impl = fakeFetch(200, { consumed: false, display: null });
-	const result = await fetchTelegramPairStatus('PK-AB12', impl);
-	assert.equal(calls(impl)[0].url, '/v1/dashboard/telegram-pair/PK-AB12');
+	const result = await fetchPairStatus('PK-AB12', impl);
+	assert.equal(calls(impl)[0].url, '/v1/dashboard/pair/PK-AB12');
 	assert.deepEqual(result, { consumed: false, display: null });
 });
 
-test('fetchTelegramPairStatus carries the redeemed display through untouched', async () => {
+test('fetchPairStatus carries the redeemed display through untouched', async () => {
 	const impl = fakeFetch(200, { consumed: true, display: '@ada_l' });
-	const result = await fetchTelegramPairStatus('PK-AB12', impl);
+	const result = await fetchPairStatus('PK-AB12', impl);
 	assert.deepEqual(result, { consumed: true, display: '@ada_l' });
 });
 
-test('fetchTelegramPairStatus raises ReposAuthError on 401', async () => {
+test('fetchPairStatus raises ReposAuthError on 401', async () => {
 	const impl = fakeFetch(401, { detail: 'unauthenticated' });
-	await assert.rejects(() => fetchTelegramPairStatus('PK-AB12', impl), ReposAuthError);
+	await assert.rejects(() => fetchPairStatus('PK-AB12', impl), ReposAuthError);
 });
 
-test('fetchTelegramPairStatus raises on a non-401 error status (e.g. a code minted by another account)', async () => {
+test('fetchPairStatus raises on a non-401 error status (e.g. a code minted by another account)', async () => {
 	const impl = fakeFetch(404, { detail: 'unknown pair code' });
-	await assert.rejects(
-		() => fetchTelegramPairStatus('PK-AB12', impl),
-		/pair status fetch failed: 404/
-	);
+	await assert.rejects(() => fetchPairStatus('PK-AB12', impl), /pair status fetch failed: 404/);
 });
 
 // #1464 — the paired-chats list: platform / chat title / principal display

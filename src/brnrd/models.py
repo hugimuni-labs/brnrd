@@ -473,7 +473,7 @@ class TgPairCode(Base):
     # #1464 — the principal display captured at redemption (mirrors
     # `ChannelRoute.paired_user_display` at the same instant), so the
     # session that minted this code can read back *who* redeemed it:
-    # `GET /v1/dashboard/telegram-pair/{code}` polls this row. `None` until
+    # `GET /v1/dashboard/pair/{code}` polls this row. `None` until
     # consumed; stays `None` forever for a code that expires unused.
     redeemed_display: Mapped[str | None] = mapped_column(String(255), nullable=True)
 

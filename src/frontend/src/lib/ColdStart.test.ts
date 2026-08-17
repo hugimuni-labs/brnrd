@@ -7,7 +7,7 @@ import { after, test } from 'node:test';
 import { compile } from 'svelte/compiler';
 import { render } from 'svelte/server';
 import { DOCS_URL } from './publicStats.ts';
-import type { ConnectedRepo, GitHubInstallation, MachinesSummary } from './repos.ts';
+import type { ConnectedRepo, GitHubInstallation, MachinesSummary, MessengerDoor } from './repos.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const componentPath = join(here, 'ColdStart.svelte');
@@ -31,12 +31,12 @@ async function renderColdStart(
 	// like every call site below always has. Tests below pass `true`/
 	// `false` explicitly to pin the mobile branch without a browser.
 	mobileOverride: boolean | null = null,
-	// #1457: defaults to `null`, same "absent/empty reads as unknown, keep
+	// #1465: defaults to `null`, same "absent/empty reads as unknown, keep
 	// today's copy" contract the component gives the prop — every existing
-	// call site below still exercises the pre-#1457 honest-intermediate
-	// mobile copy unchanged. Tests below pass a real handle to pin the
-	// tappable branch.
-	telegramBotUsername: string | null = null
+	// call site below still exercises the pre-#1465 honest-intermediate
+	// mobile copy unchanged. Tests below pass a real registry array to pin
+	// the tappable branch.
+	messengerDoors: MessengerDoor[] | null = null
 ): Promise<string> {
 	const source = readFileSync(componentPath, 'utf8');
 	const compiled = compile(source, { generate: 'server', runes: true, name: 'ColdStart' });
@@ -52,7 +52,7 @@ async function renderColdStart(
 	try {
 		const module = await import(`${generated}?t=${process.pid}`);
 		return render(module.default, {
-			props: { repos, pairCommand, installations, machines, mobileOverride, telegramBotUsername }
+			props: { repos, pairCommand, installations, machines, mobileOverride, messengerDoors }
 		}).body;
 	} finally {
 		rmSync(generated, { force: true });
@@ -458,15 +458,17 @@ test('mobile arrival with no pairCommand drops the second reference box, not the
 	equal(html.split('<pre').length - 1, 1, 'only the install command renders — no empty pair box');
 });
 
-// #1457 — the link becomes constructible: a backend that carries a real bot
-// handle flips the mobile CTA from the honest-intermediate copy to a
-// tappable door. Three renderings of the wire contract, pinned separately
-// since each means something different: a valid handle, an explicitly
-// empty one (unset or shape-invalid server-side), and an older backend
-// that never sends the key at all.
+// #1457 (generalized #1465) — the link becomes constructible: a backend
+// that carries an available messenger door flips the mobile CTA from the
+// honest-intermediate copy to a tappable door. Three renderings of the
+// wire contract, pinned separately since each means something different:
+// an available door, a door the registry declares unavailable, and an
+// older backend that never sends the field at all.
 
-test('new backend with a bot username renders the tappable door, not the honest intermediate', async () => {
-	const html = await renderColdStart([], undefined, null, null, true, 'brnrdbot');
+test('a backend with an available telegram door renders the tappable door, not the honest intermediate', async () => {
+	const html = await renderColdStart([], undefined, null, null, true, [
+		{ platform: 'telegram', deep_link_available: true }
+	]);
 	ok(html.includes('the messenger door'));
 	ok(html.includes('data-testid="open-telegram"'), 'the tap affordance renders');
 	ok(html.includes('open telegram'), 'the button carries the real CTA copy');
@@ -476,16 +478,20 @@ test('new backend with a bot username renders the tappable door, not the honest 
 	);
 });
 
-test('an empty telegram_bot_username (unset or shape-invalid) keeps the honest-intermediate fallback', async () => {
-	const html = await renderColdStart([], undefined, null, null, true, '');
+test('a registry with no available door keeps the honest-intermediate fallback', async () => {
+	const html = await renderColdStart([], undefined, null, null, true, [
+		{ platform: 'telegram', deep_link_available: false },
+		{ platform: 'whatsapp', deep_link_available: false }
+	]);
 	ok(html.includes('the messenger door'));
-	ok(!html.includes('data-testid="open-telegram"'), 'no tap affordance without a real handle');
+	ok(!html.includes('data-testid="open-telegram"'), 'no tap affordance without an available door');
 	ok(html.includes('once a repo is enabled'), 'the pre-#1457 copy still renders');
+	ok(!html.includes('Telegram or WhatsApp'), '#1465: no longer promises a platform nothing backs');
 });
 
-test("an absent telegram_bot_username (older backend) renders exactly today's copy", async () => {
-	// `undefined` — the same shape a caller gets from `repos.telegram_bot_username`
-	// on a response that predates #1457 and omits the key entirely.
+test("an absent messenger_doors field (older backend) renders exactly today's copy", async () => {
+	// `undefined` — the same shape a caller gets from `repos.messenger_doors`
+	// on a response that predates #1465 and omits the key entirely.
 	const withAbsent = await renderColdStart([], undefined, null, null, true, undefined as never);
 	const withExplicitNull = await renderColdStart([], undefined, null, null, true, null);
 	equal(withAbsent, withExplicitNull, 'an omitted key renders identically to the explicit default');
@@ -493,35 +499,54 @@ test("an absent telegram_bot_username (older backend) renders exactly today's co
 	ok(withAbsent.includes('once a repo is enabled'));
 });
 
+test('a registry with an available whatsapp door renders its own tappable button', async () => {
+	const html = await renderColdStart([], undefined, null, null, true, [
+		{ platform: 'telegram', deep_link_available: false },
+		{ platform: 'whatsapp', deep_link_available: true }
+	]);
+	ok(html.includes('data-testid="open-whatsapp"'), 'the whatsapp tap affordance renders');
+	ok(html.includes('open whatsapp'));
+	ok(!html.includes('data-testid="open-telegram"'), 'telegram stays unavailable, no button for it');
+});
+
+test('both doors available render two tappable buttons, no hand-picked primary', async () => {
+	const html = await renderColdStart([], undefined, null, null, true, [
+		{ platform: 'telegram', deep_link_available: true },
+		{ platform: 'whatsapp', deep_link_available: true }
+	]);
+	ok(html.includes('data-testid="open-telegram"'));
+	ok(html.includes('data-testid="open-whatsapp"'));
+});
+
 // Same flip, same reasoning, in the paired-no-repo state: #1457 mints
-// account-level, so this state's door unlocks on `telegramBotUsername`
+// account-level, so this state's door unlocks on `messengerDoors` (#1465)
 // alone too, not on enabling a repo first.
-test('paired-no-repo state also renders the tappable door once a bot username is present', async () => {
+test('paired-no-repo state also renders the tappable door once one is available', async () => {
 	const html = await renderColdStart(
 		[],
 		undefined,
 		null,
 		{ paired: true, any_enabled_repo: false },
 		true,
-		'brnrdbot'
+		[{ platform: 'telegram', deep_link_available: true }]
 	);
 	ok(html.includes('machine paired, no repo enabled yet'));
 	ok(html.includes('data-testid="open-telegram"'));
 	ok(!html.includes('still waits on a repo'), 'the stale repo-gated copy is gone');
 });
 
-// The constraint: "the desktop path stays byte-identical." `telegramBotUsername`
+// The constraint: "the desktop path stays byte-identical." `messengerDoors`
 // is read only inside the `isMobile` branches, so a desktop render must not
 // change at all regardless of its value.
-test('desktop rendering is unaffected by telegramBotUsername', async () => {
-	const withoutUsername = await renderColdStart([repo({ daemon_status: 'missing' })]);
-	const withUsername = await renderColdStart(
+test('desktop rendering is unaffected by messengerDoors', async () => {
+	const withoutDoors = await renderColdStart([repo({ daemon_status: 'missing' })]);
+	const withDoors = await renderColdStart(
 		[repo({ daemon_status: 'missing' })],
 		undefined,
 		null,
 		null,
 		false,
-		'brnrdbot'
+		[{ platform: 'telegram', deep_link_available: true }]
 	);
-	equal(withUsername, withoutUsername, 'desktop HTML is byte-identical either way');
+	equal(withDoors, withoutDoors, 'desktop HTML is byte-identical either way');
 });
