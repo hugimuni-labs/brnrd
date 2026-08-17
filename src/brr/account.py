@@ -1677,10 +1677,15 @@ def run_state_blob_url(
         url = gitops.remote_url(ctx.dominion_repo, remote)
         if not url:
             return None
+        # gitops.current_branch resolves an unborn dominion (git init, no
+        # commit yet) to its real branch name internally now (#1340), so
+        # this only remains reachable for a genuine detached HEAD; the
+        # outer `except Exception: return None` below also catches
+        # gitops.CurrentBranchUnresolvable for a true measurement failure,
+        # which is a better answer than the "main" guess this used to fall
+        # back to.
         branch = gitops.current_branch(ctx.dominion_repo)
         if branch in ("", "HEAD"):
-            # An account dominion can sit on an unborn branch (git init, no
-            # commit yet); ``symbolic-ref`` still names it ("main").
             res = subprocess.run(
                 ["git", "symbolic-ref", "--short", "HEAD"],
                 cwd=ctx.dominion_repo,
