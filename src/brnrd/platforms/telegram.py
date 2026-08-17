@@ -134,6 +134,42 @@ def send_message(
     )
 
 
+def send_fresh_message(
+    token: str,
+    chat_id: str | int,
+    text: str,
+    *,
+    topic_id: int | None = None,
+    timeout: float = 30.0,
+) -> str | None:
+    """Unaddressed send (#1205's fresh-send primitive) — no reply target.
+
+    Same chunking policy as :func:`send_message`, but that function returns
+    ``None``: it exists only to *forward* an already-addressed reply, where
+    nothing downstream reads the platform id back. A fresh send has no
+    inbound event to attach a receipt to, so its caller (the daemon
+    endpoint) needs the id to hand back — the last chunk's, the one Telegram
+    actually rendered as the tail of what the correspondent sees.
+    """
+    results = transport.send_message(
+        lambda method, params, call_timeout: _post_json(
+            token, method, params, call_timeout
+        ),
+        chat_id,
+        text,
+        policy=transport.MessagePolicy(limit=_MAX_LEN, max_chunks=_MAX_CHUNKS),
+        topic_id=topic_id,
+        timeout=timeout,
+    )
+    if not results:
+        return None
+    last_result = results[-1].get("result") if isinstance(results[-1], dict) else None
+    message_id = (
+        last_result.get("message_id") if isinstance(last_result, dict) else None
+    )
+    return None if message_id is None else str(message_id)
+
+
 def set_webhook(
     token: str,
     url: str,

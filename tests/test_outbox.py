@@ -335,10 +335,17 @@ class TestDrainOutbox:
     ):
         """#1205: the drawer the courier never opens, closed at synthesis.
 
-        ``gate: cloud`` with no ``cloud_event_id`` used to synthesize a
-        `done` cloud event no delivery loop would ever visit — silent,
-        structurally impossible. It must now be refused loudly instead: no
-        event, a notice naming the two lanes that actually work.
+        A gate that declares itself unaddressed-incapable and carries no
+        addressing of its own (``cloud_event_id`` — what would make it a
+        *reply*) used to synthesize a `done` event no delivery loop would
+        ever visit — silent, structurally impossible. It must be refused
+        loudly instead: no event, a notice naming the two lanes that
+        actually work. ``cloud`` was the real example of this until
+        #1205's server-side fresh-send primitive retired its incapability
+        (see ``test_now_capable_gate_with_no_addressing_synthesizes_a_fresh_send``
+        below for what a real ``gate: cloud`` does today) — this pins the
+        *filtering logic* against a monkeypatched incapable predicate
+        instead of leaning on whichever gate happens to be incapable now.
         """
         brr_dir = tmp_path / ".brr"
         responses = brr_dir / "responses"
@@ -351,6 +358,9 @@ class TestDrainOutbox:
         # cloud reads as configured/deliverable here (real capability check
         # is the thing under test, not plumbing availability).
         monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
+        monkeypatch.setattr(
+            daemon, "_gate_can_send_unaddressed", lambda gate: gate != "cloud",
+        )
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
@@ -368,13 +378,47 @@ class TestDrainOutbox:
         assert "interim on the current event" in text
         assert "event: <id>" in text
 
+    def test_now_capable_gate_with_no_addressing_synthesizes_a_fresh_send(
+        self, tmp_path, monkeypatch,
+    ):
+        """#1205: cloud declares itself capable now (the server-side
+        fresh-send primitive backs it) — a ``gate: cloud`` with no address
+        is exactly the shape that primitive exists for, and must synthesize
+        a `done` event like any other capable gate rather than being
+        refused. No ``account_context`` in this harness, so the event lands
+        in the same ``inbox_dir`` passed in — the drawer-routing fix only
+        redirects when an account context says cloud's own loop drains a
+        different one (``TestNotifyGateFallback`` in ``test_daemon.py``
+        covers that path end to end)."""
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        inbox.mkdir(parents=True)
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        (outbox / "ping.md").write_text(
+            "---\ngate: cloud\n---\nunaddressed ping\n")
+        monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id="evt-A")
+        task = types.SimpleNamespace(id="task-A")
+        n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
+
+        assert n == 1
+        [ev] = protocol.list_done(inbox, "cloud")
+        assert not ev.get("cloud_event_id")
+        assert protocol.read_response(responses, ev["id"]).strip() == "unaddressed ping"
+
     def test_incapable_gate_with_its_own_addressing_still_queues(
         self, tmp_path, monkeypatch,
     ):
-        """Same incapable gate, but the message carries its own address
-        (``cloud_event_id`` — what would make it a *reply*, not a fresh
-        send): the capability check must not block what the gate actually
-        can do."""
+        """A gate carrying its own address (``cloud_event_id`` — what would
+        make it a *reply*, not a fresh send) still queues regardless of
+        capability: the capability check must not block what the gate
+        actually can do. Monkeypatches incapability directly rather than
+        leaning on ``cloud`` — real ``cloud`` is capable since #1205's
+        server-side half landed."""
         brr_dir = tmp_path / ".brr"
         responses = brr_dir / "responses"
         inbox = brr_dir / "inbox"
@@ -384,6 +428,9 @@ class TestDrainOutbox:
         (outbox / "ping.md").write_text(
             "---\ngate: cloud\ncloud_event_id: cev-123\n---\naddressed reply\n")
         monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
+        monkeypatch.setattr(
+            daemon, "_gate_can_send_unaddressed", lambda gate: gate != "cloud",
+        )
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
@@ -2268,18 +2315,33 @@ def test_resolve_notify_gate_infers_the_single_configured_user_chat_gate(
 
 
 # ── #1205: capability, not name — an unaddressed-incapable gate never wins ─
+#
+# `cloud` was the one real example of an unaddressed-incapable gate when
+# these were first written (its relay API was reply-shaped, no fresh-send
+# primitive existed) — the tests below monkeypatched `_gate_can_deliver`
+# and imported the real module to exercise `_gate_can_send_unaddressed`
+# unfaked. #1205's server-side half retired that incapability: cloud now
+# declares `CAN_SEND_UNADDRESSED = True`, backed by `POST
+# /v1/daemons/messages`. The *filtering logic* this suite exists to pin —
+# an incapable candidate must never win single-gate inference, explicit
+# selection, or the several-candidates tiebreak — still needs a real
+# example to exercise it against, so these now monkeypatch
+# `_gate_can_send_unaddressed` directly instead of leaning on whichever
+# gate happens to be incapable today.
 
 
 def test_resolve_notify_gate_skips_an_incapable_sole_candidate(
     tmp_path, monkeypatch,
 ):
-    # cloud is real-imported here (never faked): `CAN_SEND_UNADDRESSED =
-    # False` lives on the module itself, and this fallback never carries
-    # addressing of its own — so being the *only* configured gate must not
-    # be enough. Resolves like "no candidate", never a synthesized event
+    # Being the *only* configured gate must not be enough when it declares
+    # itself unaddressed-incapable — this fallback never carries addressing
+    # of its own. Resolves like "no candidate", never a synthesized event
     # nothing will ever deliver.
     monkeypatch.setattr(
         daemon, "_gate_can_deliver", lambda _brr, gate: gate == "cloud",
+    )
+    monkeypatch.setattr(
+        daemon, "_gate_can_send_unaddressed", lambda gate: gate != "cloud",
     )
     assert daemon._resolve_notify_gate({}, tmp_path) == ""
 
@@ -2287,12 +2349,16 @@ def test_resolve_notify_gate_skips_an_incapable_sole_candidate(
 def test_resolve_notify_gate_falls_through_an_incapable_candidate(
     tmp_path, monkeypatch,
 ):
-    # cloud + telegram configured: cloud is filtered out by capability
-    # before the "how many candidates" count is even taken, so this reads
-    # as single-gate inference (telegram), not "several — ambiguous".
+    # cloud + telegram configured, cloud incapable: cloud is filtered out
+    # by capability before the "how many candidates" count is even taken,
+    # so this reads as single-gate inference (telegram), not "several —
+    # ambiguous".
     monkeypatch.setattr(
         daemon, "_gate_can_deliver",
         lambda _brr, gate: gate in ("cloud", "telegram"),
+    )
+    monkeypatch.setattr(
+        daemon, "_gate_can_send_unaddressed", lambda gate: gate != "cloud",
     )
     assert daemon._resolve_notify_gate({}, tmp_path) == "telegram"
 
@@ -2300,20 +2366,25 @@ def test_resolve_notify_gate_falls_through_an_incapable_candidate(
 def test_resolve_notify_gate_explicit_incapable_key_resolves_to_nothing(
     tmp_path, monkeypatch,
 ):
-    # An operator naming `notify.gate=cloud` explicitly still cannot make
-    # an unaddressed send possible — explicit config wins the *selection*,
+    # An operator naming an incapable gate explicitly still cannot make an
+    # unaddressed send possible — explicit config wins the *selection*,
     # never the physics.
     monkeypatch.setattr(daemon, "_gate_can_deliver", lambda _brr, gate: True)
+    monkeypatch.setattr(
+        daemon, "_gate_can_send_unaddressed", lambda gate: gate != "cloud",
+    )
     assert daemon._resolve_notify_gate(
         {"notify.gate": "cloud"}, tmp_path) == ""
 
 
 def test_gate_can_send_unaddressed_defaults_true_for_every_other_gate():
     # Absent `CAN_SEND_UNADDRESSED` -> capable, preserving today's behavior
-    # for every gate that hasn't opted out.
-    for gate in ("telegram", "slack", "github", "signal", "forge"):
+    # for every gate that hasn't opted out. `cloud` now also reads True —
+    # #1205's fresh-send primitive retired its incapability — so no
+    # built-in gate declares itself incapable any more; the filtering logic
+    # above is pinned against a monkeypatched predicate instead.
+    for gate in ("telegram", "slack", "github", "signal", "forge", "cloud"):
         assert daemon._gate_can_send_unaddressed(gate) is True
-    assert daemon._gate_can_send_unaddressed("cloud") is False
 
 
 def test_resolve_notify_gate_zero_or_several_candidates_resolve_to_nothing(

@@ -25,10 +25,13 @@ the gate that will carry it, plus that gate's own addressing meta (a
 Telegram chat id, a Slack channel, …) — indistinguishable in shape from an
 ordinary inbound message on that channel, except its body is code-composed
 rather than typed by the human. The account's ``cloud`` relay is
-deliberately excluded as a target: its API is reply-shaped
-(``gates.cloud.addressed`` requires a ``cloud_event_id`` to answer, and
-there is nothing yet to answer at connect time), so it cannot originate a
-first message — see :func:`door_for_greeting`.
+deliberately excluded as a target: even with #1205's fresh-send primitive
+(``gates.cloud.CAN_SEND_UNADDRESSED``), that primitive resolves against the
+account's *prior* event history, and there is nothing yet to resolve at
+connect time — a brand-new pairing's first message has no history to borrow
+an address from. :func:`door_for_greeting` reads a gate's own locally
+cached pairing state instead (a Telegram chat id, a Slack channel), which
+cloud has none of — see :func:`door_for_greeting`.
 
 **Why the event also stamps ``trust_tier="owner"``.** ``trust.resolve_tier``
 fails closed: any ingress-gate source (``telegram``, ``slack``, …) with no
