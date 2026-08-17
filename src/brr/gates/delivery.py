@@ -26,6 +26,7 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Protocol
 
+from ..channels.telegram import TRUNCATION_MARKER, trim_to_limit, utf16_len
 from . import runtime
 
 
@@ -110,18 +111,28 @@ def resolve_overflow(
     gist_fn: Callable[[str], str | None],
     cache: OverflowCache | None = None,
 ) -> str:
-    """Return platform-ready text that fits within *limit* characters.
+    """Return platform-ready text that fits within *limit* UTF-16 units.
 
     Within budget: the text unchanged. Over budget: offload to a gist
     (``gist_fn`` returns a URL or None) and return a short link; if the
-    gist can't be created, return a hard-truncated body with a marker.
-    The offload keeps large content on the user's own GitHub.
+    gist can't be created, return a body trimmed at the last line or word
+    boundary within budget (never mid-word) with a trailing marker — the
+    *whole* returned string, marker included, still fits *limit*. The
+    offload keeps large content on the user's own GitHub.
+
+    *limit* is measured the way the chat platforms that call this (Telegram,
+    WhatsApp) measure their own caps — UTF-16 code units, not Python
+    ``len()`` — via :func:`brr.channels.telegram.utf16_len`; the trim
+    helpers are named for their Telegram origin but are plain text-boundary
+    logic, reused here so the truncate-fallback and the multi-message
+    chunker in ``channels/telegram.py`` don't each grow their own idea of
+    "cut cleanly" (#the-wire-that-cuts-at-4096).
 
     With a *cache*, a repeat call for the same text reuses the gist minted
     the first time — so a retried delivery posts an identical body instead of
     minting a gist and defeating the receiver's dedupe (see the module note).
     """
-    if len(text) <= limit:
+    if utf16_len(text) <= limit:
         return text
     if cache is not None:
         known = cache.get(text)
@@ -132,7 +143,7 @@ def resolve_overflow(
         if cache is not None:
             cache.put(text, url)
         return f"Result: {url}"
-    return text[:limit] + "\n\n[truncated]"
+    return trim_to_limit(text, limit - utf16_len(TRUNCATION_MARKER)) + TRUNCATION_MARKER
 
 
 def post_gist(content: str, filename: str = "result.md") -> str | None:
