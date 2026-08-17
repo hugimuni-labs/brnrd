@@ -3858,7 +3858,9 @@ def _live_child_handover_line(payload: dict[str, Any]) -> str | None:
     rows = sorted(dict.fromkeys(rows))
     return (
         f"- ▷ {len(rows)} child run(s) still live — {', '.join(rows)} — "
-        "steering them passes to the next run on this thread."
+        "steering them passes to the next run on this thread. Cutting "
+        "here needs a `strands:` row per child (handoff / converged / "
+        "stopped / abandoned), or the bolt bounces on it."
     )
 
 
