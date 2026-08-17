@@ -687,6 +687,23 @@ def _authorized(settings, parsed: tg.ParsedMessage, route: ChannelRoute) -> bool
     return parsed.user_id in settings.telegram_authz_allowlist
 
 
+def _telegram_display_name(parsed: tg.ParsedMessage) -> str:
+    """Best-effort human label for a Telegram principal (#1464): the
+    `@username` (stable, and what the paired human recognises themselves
+    by) when Telegram supplies one, else the first name it always does.
+    Rendering only — never the authorization principal (`paired_user_id`
+    stays that)."""
+    return f"@{parsed.username}" if parsed.username else parsed.user
+
+
+def _whatsapp_display_name(parsed: "wa.ParsedMessage") -> str:
+    """Same job as `_telegram_display_name`, WhatsApp shape: the Cloud API
+    hands over the sender's profile name in `ParsedMessage.user`; the
+    number itself (`user_id`/`chat_id`) is the fallback when a contact has
+    none set."""
+    return parsed.user or parsed.user_id or parsed.chat_id
+
+
 def _handle_start(db: Session, settings, parsed: tg.ParsedMessage, code: str) -> None:
     if parsed.user_id is None:
         # Anonymous admin / channel-post sender_chat — no personal
@@ -708,31 +725,45 @@ def _handle_start(db: Session, settings, parsed: tg.ParsedMessage, code: str) ->
         _reply(settings, parsed, "Invalid or expired pair code.")
         return
     topic_id = _topic_key(parsed)
+    display = _telegram_display_name(parsed)
+    chat_title = parsed.chat_title or None
     existing = db.execute(select(ChannelRoute).where(ChannelRoute.platform == "telegram", ChannelRoute.channel_id == parsed.chat_id, ChannelRoute.topic_id == topic_id)).scalar_one_or_none()
     if existing is not None and existing.account_id != pc.account_id:
         _reply(settings, parsed, "This chat/topic is already paired to another account.")
         return
     if existing is None:
-        existing = ChannelRoute(id=ids.channel_route_id(), platform="telegram", channel_id=parsed.chat_id, topic_id=topic_id, account_id=pc.account_id, repo_id=pc.repo_id, paired_user_id=parsed.user_id)
+        existing = ChannelRoute(id=ids.channel_route_id(), platform="telegram", channel_id=parsed.chat_id, topic_id=topic_id, account_id=pc.account_id, repo_id=pc.repo_id, paired_user_id=parsed.user_id, paired_user_display=display, chat_title=chat_title)
         db.add(existing)
     else:
         existing.account_id = pc.account_id
         existing.repo_id = pc.repo_id
         existing.paired_user_id = parsed.user_id
+        existing.paired_user_display = display
+        existing.chat_title = chat_title
     pc.consumed = True
+    # #1464 — the minting session's outcome readback: who redeemed *this*
+    # code, so a browser panel still open can show it (see
+    # `dashboard.dashboard_telegram_pair_status_api`).
+    pc.redeemed_display = display
     repo = db.get(Repo, pc.repo_id) if pc.repo_id is not None else None
+    account = db.get(Account, pc.account_id)
     db.commit()
+    # #1464 — name the bound identity in the very message that creates the
+    # bind: a wrong-account/wrong-phone redeem (the maintainer's own live
+    # trace) is now visible in-band instead of only discoverable later on
+    # the paired-chats surface.
+    login = account.github_login if account is not None else "your"
     if pc.repo_id is None:
         # #1457 — account-level pairing. Name what happens next in the very
         # first exchange: either the auto-routing that is now live, or the
         # one step (connect a project) that stands between here and work.
         target = _route_target_repo(db, existing)
         if target is None:
-            _reply(settings, parsed, "Paired with your account — this chat now reaches your brnrd resident. " + _NO_REPO_YET_TEXT)
+            _reply(settings, parsed, f"Paired with {login}'s brnrd account — this chat now reaches your resident. " + _NO_REPO_YET_TEXT)
         else:
-            _reply(settings, parsed, f"Paired with your account. Send me tasks anytime — I'll route them to the right project (currently '{target.repo_full_name}'; /repo owner/name pins one, /repo auto un-pins).")
+            _reply(settings, parsed, f"Paired with {login}'s brnrd account. Send me tasks anytime — I'll route them to the right project (currently '{target.repo_full_name}'; /repo owner/name pins one, /repo auto un-pins).")
         return
-    _reply(settings, parsed, f"Paired with repo '{repo.repo_full_name if repo else pc.repo_id}'. Send me tasks anytime.")
+    _reply(settings, parsed, f"Paired with {login}'s brnrd account, repo '{repo.repo_full_name if repo else pc.repo_id}'. Send me tasks anytime.")
 
 
 def _apply_chat_migration(db: Session, migration: tuple[str, str]) -> None:
@@ -898,26 +929,33 @@ def _handle_whatsapp_pair(
         _wa_audit(trace, "pair_rejected", "reason=bound_elsewhere")
         _wa_reply(settings, parsed, "This chat is already paired to another account.")
         return
+    display = _whatsapp_display_name(parsed)
     if existing is None:
-        existing = ChannelRoute(id=ids.channel_route_id(), platform="whatsapp", channel_id=parsed.chat_id, topic_id=None, account_id=pc.account_id, repo_id=pc.repo_id)
+        existing = ChannelRoute(id=ids.channel_route_id(), platform="whatsapp", channel_id=parsed.chat_id, topic_id=None, account_id=pc.account_id, repo_id=pc.repo_id, paired_user_display=display)
         db.add(existing)
     else:
         existing.account_id = pc.account_id
         existing.repo_id = pc.repo_id
+        existing.paired_user_display = display
     pc.consumed = True
+    # #1464 — see the matching Telegram branch in `_handle_start`.
+    pc.redeemed_display = display
     repo = db.get(Repo, pc.repo_id) if pc.repo_id is not None else None
+    account = db.get(Account, pc.account_id)
     db.commit()
     _wa_audit(trace, "paired")
+    # #1464 — name the bound identity, same rule as the Telegram arm.
+    login = account.github_login if account is not None else "your"
     if pc.repo_id is None:
         # #1457 — account-level pairing, WhatsApp shape: no slash commands
         # here, so the confirmation names the auto-routing only.
         target = _route_target_repo(db, existing)
         if target is None:
-            _wa_reply(settings, parsed, "Paired with your account — this chat now reaches your brnrd resident. " + _NO_REPO_YET_TEXT)
+            _wa_reply(settings, parsed, f"Paired with {login}'s brnrd account — this chat now reaches your resident. " + _NO_REPO_YET_TEXT)
         else:
-            _wa_reply(settings, parsed, f"Paired with your account. Send me tasks anytime — I'll route them to the right project (currently '{target.repo_full_name}').")
+            _wa_reply(settings, parsed, f"Paired with {login}'s brnrd account. Send me tasks anytime — I'll route them to the right project (currently '{target.repo_full_name}').")
         return
-    _wa_reply(settings, parsed, f"Paired with repo '{repo.repo_full_name if repo else pc.repo_id}'. Send me tasks anytime.")
+    _wa_reply(settings, parsed, f"Paired with {login}'s brnrd account, repo '{repo.repo_full_name if repo else pc.repo_id}'. Send me tasks anytime.")
 
 
 @router.get("/whatsapp")

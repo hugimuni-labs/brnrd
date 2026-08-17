@@ -595,7 +595,8 @@ def test_account_code_pairs_without_a_repo_and_resolves_later(env):
             select(ChannelRoute).where(ChannelRoute.platform == "whatsapp")
         ).scalar_one()
         assert route.repo_id is None
-    assert "Paired with your account" in sends[-1]["text"]
+    # #1464 — names the bound GitHub login too, same rule as Telegram.
+    assert "Paired with octocat's brnrd account" in sends[-1]["text"]
 
     # No repos yet: the drop is spoken, not silent — and nothing queues.
     _post(client, _message("15550001111", "do the thing", message_id="wamid.t2"))

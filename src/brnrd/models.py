@@ -413,6 +413,22 @@ class ChannelRoute(Base):
     # very first `/start` (see `migrations._widen_channel_routes_paired_user_id`
     # for the same widen applied to existing rows).
     paired_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # #1464 — a best-effort human label for the paired-chats surface: the
+    # Telegram `@username` (falls back to the first name Telegram always
+    # supplies) or the WhatsApp profile name, captured at the moment of
+    # pairing. Rendering only — `paired_user_id` above stays the sole
+    # authorization principal; this column is never read by `_authorized`.
+    # Nullable because it predates rows written before this column existed
+    # and because a re-pair always refreshes it, so a stale display is only
+    # ever "no display captured yet", never a wrong one left behind.
+    paired_user_display: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # The chat's own title, captured at pairing time, when the platform
+    # supplies one (Telegram group/supergroup `chat.title`). A private
+    # Telegram chat and every WhatsApp route carry no title concept at all
+    # — `None` there means "not applicable", not "unknown"; nothing
+    # re-fetches this later, so a chat later renamed keeps the name it had
+    # when it paired.
+    chat_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 
 class GitHubInstallation(Base):
@@ -454,6 +470,12 @@ class TgPairCode(Base):
     consumed: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime)
+    # #1464 — the principal display captured at redemption (mirrors
+    # `ChannelRoute.paired_user_display` at the same instant), so the
+    # session that minted this code can read back *who* redeemed it:
+    # `GET /v1/dashboard/pair/{code}` polls this row. `None` until
+    # consumed; stays `None` forever for a code that expires unused.
+    redeemed_display: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 
 class PairRequest(Base):

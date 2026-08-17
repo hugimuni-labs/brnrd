@@ -1,7 +1,8 @@
 <script lang="ts">
+	import { onDestroy } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { DOCS_URL } from './publicStats';
-	import { mintAccountMessengerPair, splitPairingCommand } from './repos';
+	import { fetchPairStatus, mintAccountMessengerPair, splitPairingCommand } from './repos';
 	import type {
 		ConnectedRepo,
 		GitHubInstallation,
@@ -283,14 +284,71 @@
 	let mintOutcomes = $state<Record<string, MessengerPairStarted>>({});
 	let mintFailedPlatforms = $state<Record<string, boolean>>({});
 
+	// #1464 — the mint's own outcome, read back while this panel is still
+	// open: the one moment a hijacked or wrong-phone redeem (the
+	// maintainer's own live trace, #1464's issue) is caught by the person
+	// who minted the code. Keyed per platform like every other mint state
+	// here (#1465) — more than one door can be tapped in one session, and
+	// a Telegram redeem must not light up the WhatsApp button. An entry
+	// appears once and stays — a consumed code never un-consumes; its
+	// `display` is `null` when the redeem captured no name (a legacy
+	// route, or one predating #1464), rendered as a generic "paired"
+	// rather than blank.
+	let pairedOutcomes = $state<Record<string, { display: string | null }>>({});
+	const pollTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+	const pollDeadlines: Record<string, number> = {};
+
+	function stopPolling(platform: string) {
+		clearTimeout(pollTimers[platform]);
+		delete pollTimers[platform];
+	}
+
+	function stopAllPolling() {
+		for (const platform of Object.keys(pollTimers)) stopPolling(platform);
+	}
+
+	// Deliberately not a fixed-count loop: `openMessengerDoor` below may
+	// navigate the tab away (a mobile deep link) and back, and this keeps
+	// polling across that gap for as long as the code could still be live
+	// (~600s TTL server-side, `settings.pair_ttl_s`, plus slack) — the
+	// exact span the "while the panel is open" ask covers, including the
+	// panel being backgrounded mid-flight.
+	async function pollPairStatus(platform: string, code: string) {
+		if (Date.now() > pollDeadlines[platform]) {
+			stopPolling(platform);
+			return;
+		}
+		try {
+			const status = await fetchPairStatus(code);
+			if (status.consumed) {
+				pairedOutcomes = { ...pairedOutcomes, [platform]: { display: status.display } };
+				stopPolling(platform);
+				return;
+			}
+		} catch {
+			// Transient (network blip, a 401 from a session that expired
+			// mid-flight) — keep trying until the deadline; a permanent
+			// auth failure just polls harmlessly to a stop.
+		}
+		pollTimers[platform] = setTimeout(() => pollPairStatus(platform, code), 3000);
+	}
+
+	onDestroy(stopAllPolling);
+
 	// Mint on tap, never on render — codes expire in ~600s server-side
 	// (`settings.pair_ttl_s`), so pre-minting on a panel that might sit
 	// open for minutes would hand out a code already halfway to stale.
 	async function openMessengerDoor(platform: string) {
 		mintingPlatform = platform;
 		mintFailedPlatforms = { ...mintFailedPlatforms, [platform]: false };
+		pairedOutcomes = Object.fromEntries(
+			Object.entries(pairedOutcomes).filter(([p]) => p !== platform)
+		);
 		try {
 			const started = await mintAccountMessengerPair(platform);
+			pollDeadlines[platform] = Date.now() + 630_000;
+			stopPolling(platform);
+			pollPairStatus(platform, started.pair_code);
 			if (started.deep_link) {
 				window.location.assign(started.deep_link);
 				return;
@@ -338,12 +396,30 @@
 		data-testid={`open-${platform}`}
 		class="mt-3 inline-flex cursor-pointer items-center border border-amber-800/50 bg-amber-950/20 px-3 py-2 font-mono text-[11px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/40 hover:text-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
 		onclick={() => openMessengerDoor(platform)}
-		disabled={mintingPlatform === platform}
+		disabled={mintingPlatform === platform || !!pairedOutcomes[platform]}
 		>{mintingPlatform === platform
 			? 'opening…'
-			: `open ${doorLabel(platform).toLowerCase()}`}</button
+			: pairedOutcomes[platform]
+				? 'paired'
+				: `open ${doorLabel(platform).toLowerCase()}`}</button
 	>
-	{#if mintOutcomes[platform]}
+	{#if pairedOutcomes[platform]}
+		<!-- #1464 — the redeem outcome, read back live: the moment a
+		     hijacked or wrong-phone tap is caught by the person who minted
+		     the code, right here where they can still act on it. -->
+		<div
+			class="mt-3 border border-emerald-800/50 bg-emerald-950/20 p-2"
+			data-testid={`pair-outcome-${platform}`}
+		>
+			<p class="font-mono text-[11px] tracking-wide text-emerald-300/80 uppercase">paired</p>
+			<p class="mt-1 text-sm text-emerald-100">
+				{pairedOutcomes[platform].display ?? '(no name reported)'}
+			</p>
+			<p class="mt-1.5 text-sm text-stone-400">
+				Not you? Revoke it from the paired-chats list once you're on a computer.
+			</p>
+		</div>
+	{:else if mintOutcomes[platform]}
 		<div class="mt-3 border border-stone-800 bg-stone-950/50 p-2" data-testid="pair-code-fallback">
 			<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">your code</p>
 			<p class="mt-1 font-mono text-sm text-amber-100">{mintOutcomes[platform].pair_code}</p>

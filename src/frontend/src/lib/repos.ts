@@ -426,3 +426,82 @@ export function disconnectRepo(
 ): Promise<RepoActionResponse> {
 	return postRepoAction(`/v1/repos/${encodeURIComponent(repoId)}/disconnect`, {}, fetchImpl);
 }
+
+// #1464 — the minting session's outcome readback: `GET
+// /v1/dashboard/pair/{code}` (`dashboard.py`), scoped to the
+// account that minted the code. `display` is `null` until redeemed (or
+// forever, for a code that expires unused); `consumed` alone is enough to
+// stop polling.
+export interface TelegramPairStatus {
+	consumed: boolean;
+	display: string | null;
+}
+
+export async function fetchPairStatus(
+	code: string,
+	fetchImpl: typeof fetch = fetch
+): Promise<TelegramPairStatus> {
+	const res = await fetchImpl(`/v1/dashboard/pair/${encodeURIComponent(code)}`, {
+		credentials: 'include'
+	});
+	if (res.status === 401) {
+		throw new ReposAuthError('not signed in');
+	}
+	if (!res.ok) {
+		throw new Error(`pair status fetch failed: ${res.status}`);
+	}
+	return (await res.json()) as TelegramPairStatus;
+}
+
+// #1464 — one row per `ChannelRoute` this account carries, the transparency
+// half of the floor. `chat_title` is `null` for a private Telegram chat or
+// any WhatsApp route (no title concept there — see `models.ChannelRoute`),
+// distinct from an empty string; `repo_full_name` is `null` for an
+// account-level route (repo resolved per message) and set for a pinned or
+// legacy repo-scoped one.
+export interface PairedChat {
+	id: string;
+	platform: string;
+	chat_title: string | null;
+	principal_display: string | null;
+	paired_at: string | null;
+	paired_at_label: string;
+	repo_full_name: string | null;
+}
+
+export interface PairedChatsResponse {
+	paired_chats: PairedChat[];
+}
+
+export async function fetchPairedChats(
+	fetchImpl: typeof fetch = fetch
+): Promise<PairedChatsResponse> {
+	const res = await fetchImpl('/v1/dashboard/paired-chats', { credentials: 'include' });
+	if (res.status === 401) {
+		throw new ReposAuthError('not signed in');
+	}
+	if (!res.ok) {
+		throw new Error(`paired chats fetch failed: ${res.status}`);
+	}
+	return (await res.json()) as PairedChatsResponse;
+}
+
+// #1464 — the revoke half: deletes the `ChannelRoute` row outright (kills
+// the principal — not #1459's repo-unpin). `DELETE
+// /v1/dashboard/paired-chats/{id}`, session-auth, scoped to the owning
+// account server-side.
+export async function revokePairedChat(
+	routeId: string,
+	fetchImpl: typeof fetch = fetch
+): Promise<void> {
+	const res = await fetchImpl(`/v1/dashboard/paired-chats/${encodeURIComponent(routeId)}`, {
+		method: 'DELETE',
+		credentials: 'include'
+	});
+	if (res.status === 401) {
+		throw new ReposAuthError('not signed in');
+	}
+	if (!res.ok) {
+		throw new Error(`revoke failed: ${res.status}`);
+	}
+}
