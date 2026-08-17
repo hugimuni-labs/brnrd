@@ -10522,6 +10522,202 @@ def test_reply_to_a_stale_event_leaves_a_notice(tmp_path):
     assert "NOT delivered" in notices[0]["text"]
 
 
+def test_drain_outbox_spawn_repo_absent_inherits_parent(tmp_path):
+    """Absent ``repo:`` frontmatter key, child inherits parent's repo_label.
+
+    This is today's behavior (#1458: baseline unchanged when repo: is unset).
+    """
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(
+        inbox,
+        "telegram",
+        "original task",
+        status="processing",
+        conversation_key="telegram:42:",
+    )
+    event_id = path.stem
+    (outbox / "spawn.md").write_text(
+        "---\nspawn: true\n---\nchild task\n",
+        encoding="utf-8",
+    )
+    task = Run(
+        id="run-parent",
+        event_id=event_id,
+        body="original task",
+        source="telegram",
+        conversation_key="telegram:42:",
+        meta={"repo_label": "Gurio/brr"},
+    )
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        task,
+        responses,
+        event_id,
+        outbox,
+        inbox,
+    )
+
+    assert promoted == 1
+    spawned = [
+        ev for ev in protocol.list_pending(inbox)
+        if ev.get("spawn_parent_run_id") == "run-parent"
+    ][0]
+    assert spawned["repo_label"] == "Gurio/brr"
+
+
+def test_drain_outbox_spawn_repo_valid_dispatches_to_sibling(tmp_path):
+    """Valid ``repo:`` frontmatter dispatches child into target repo.
+
+    #1458: cross-repo strand dispatch. When account serves multiple repos,
+    repo: <label> overrides the inherited parent repo.
+    """
+    # Initialize two git repos
+    repo_one = tmp_path / "repo-one"
+    repo_two = tmp_path / "repo-two"
+    init_git_repo(repo_one)
+    init_git_repo(repo_two)
+
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(
+        inbox,
+        "telegram",
+        "original task",
+        status="processing",
+        conversation_key="telegram:42:",
+    )
+    event_id = path.stem
+    (outbox / "spawn.md").write_text(
+        "---\nspawn: true\nrepo: acme/repo-two\n---\nwork for repo-two\n",
+        encoding="utf-8",
+    )
+    task = Run(
+        id="run-parent",
+        event_id=event_id,
+        body="original task",
+        source="telegram",
+        conversation_key="telegram:42:",
+        meta={"repo_label": "acme/repo-one"},
+    )
+    # Account serves two repos
+    home = tmp_path / "account-home"
+    account_ctx = daemon.account.AccountContext(
+        account_id="default",
+        dominion_repo=home,
+        dispatch_inbox=home / "dispatch" / "inbox",
+        responses_dir=home / "dispatch" / "responses",
+        runs_dir=home / "runs",
+        repos={
+            "acme/repo-one": daemon.account.AccountRepo(
+                label="acme/repo-one", root=repo_one
+            ),
+            "acme/repo-two": daemon.account.AccountRepo(
+                label="acme/repo-two", root=repo_two
+            ),
+        },
+        default_repo=daemon.account.AccountRepo(
+            label="acme/repo-one", root=repo_one
+        ),
+    )
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        task,
+        responses,
+        event_id,
+        outbox,
+        inbox,
+        account_context=account_ctx,
+    )
+
+    assert promoted == 1
+    spawned = [
+        ev for ev in protocol.list_pending(inbox)
+        if ev.get("spawn_parent_run_id") == "run-parent"
+    ][0]
+    # Child dispatches into the target repo, not the parent's
+    assert spawned["repo_label"] == "acme/repo-two"
+
+
+def test_drain_outbox_spawn_repo_unknown_refused(tmp_path):
+    """Unknown ``repo:`` label is refused with notice naming served repos.
+
+    #1458: fail early rather than letting strand dispatch into wrong repo
+    or inherit parent when that was not intended.
+    """
+    # Initialize two git repos
+    repo_one = tmp_path / "repo-one"
+    repo_two = tmp_path / "repo-two"
+    init_git_repo(repo_one)
+    init_git_repo(repo_two)
+
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "task", status="processing")
+    event_id = path.stem
+    (outbox / "spawn.md").write_text(
+        "---\nspawn: true\nrepo: acme/nonexistent\n---\nwork\n",
+        encoding="utf-8",
+    )
+    task = Run(
+        id="run-parent",
+        event_id=event_id,
+        body="task",
+        source="telegram",
+        meta={"repo_label": "acme/repo-one"},
+    )
+    # Account serves specific repos
+    home = tmp_path / "account-home"
+    account_ctx = daemon.account.AccountContext(
+        account_id="default",
+        dominion_repo=home,
+        dispatch_inbox=home / "dispatch" / "inbox",
+        responses_dir=home / "dispatch" / "responses",
+        runs_dir=home / "runs",
+        repos={
+            "acme/repo-one": daemon.account.AccountRepo(
+                label="acme/repo-one", root=repo_one
+            ),
+            "acme/repo-two": daemon.account.AccountRepo(
+                label="acme/repo-two", root=repo_two
+            ),
+        },
+        default_repo=daemon.account.AccountRepo(
+            label="acme/repo-one", root=repo_one
+        ),
+    )
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, None, event_id),
+        task,
+        responses,
+        event_id,
+        outbox,
+        inbox,
+        account_context=account_ctx,
+    )
+
+    assert promoted == 0  # Spawn refused, not promoted
+    notices = daemon._read_outbox_notices(outbox)
+    assert len(notices) == 1
+    assert "acme/nonexistent" in notices[0]["text"]
+    assert "not a served repo" in notices[0]["text"]
+    # Notice should list the served repos
+    assert "acme/repo-one" in notices[0]["text"]
+    assert "acme/repo-two" in notices[0]["text"]
+
+
 def test_worker_boot_prompt_excludes_foreign_pending_events(
     tmp_path, monkeypatch,
 ):
