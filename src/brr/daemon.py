@@ -3083,7 +3083,14 @@ def _run_worker(
     # name its head branch via ``branch_target`` for free.
     if is_home_root:
         sync_result = sync.SyncResult()
-        host_branch = gitops.current_branch(repo_root)
+        # Same reasoning as branching.resolve_publish_plan's sibling probe
+        # in the ``else`` branch below: this is the first thing
+        # _run_worker does, nothing has run yet, and the outer crash
+        # handler around _run_worker (see its "worker_crash" defer/backoff
+        # path) turns an uncaught failure here into a cleanly deferred run
+        # instead of a silent mis-seed off a host branch git couldn't
+        # actually name.
+        host_branch = gitops.current_branch(repo_root)  # current-branch: propagates
         seed = host_branch if host_branch != "HEAD" else "HEAD"
         branch_plan = branching.PublishPlan(
             seed_ref=seed,
@@ -11932,7 +11939,17 @@ def _capture_dominion(
             continue
         seen_roots.add(key)
         remote = gitops.default_remote(root)
-        branch = gitops.current_branch(root)
+        try:
+            branch = gitops.current_branch(root)
+        except gitops.CurrentBranchUnresolvable:
+            # No local try/except further up this loop — a raise here
+            # would abort every remaining candidate's capture too, and
+            # (worse) would very likely propagate out of _run_worker as an
+            # uncaught "worker_crash" for what is purely post-run
+            # housekeeping. Degrade the same way the old "HEAD" sentinel
+            # did: hand dominion.commit no branch and let its own resolve
+            # (which now has the same try/except, see dominion.py) decide.
+            branch = None
         if branch == "HEAD":
             branch = None
         message = (

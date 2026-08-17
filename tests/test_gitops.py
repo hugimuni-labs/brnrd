@@ -3,6 +3,8 @@
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from brr.gitops import (
     BOT_EMAIL,
     BOT_NAME,
@@ -1991,3 +1993,245 @@ def test_main_worktree_root_is_none_outside_a_git_checkout(tmp_path):
     plain.mkdir()
 
     assert main_worktree_root(plain) is None
+
+
+# ── #1340: current_branch's failure vs. state distinction ──────────────
+#
+# The pre-fix bug: ``rev-parse --abbrev-ref HEAD`` failing (non-zero exit)
+# collapsed into the same "HEAD" string a genuine detached HEAD also
+# returns — so every caller downstream read a git failure as a state.
+# A genuine detached HEAD never actually reaches the failure branch at all
+# (``rev-parse --abbrev-ref HEAD`` exits 0 and prints "HEAD" for it); the
+# two things that *do* fail alike are an unborn HEAD (fresh repo, no
+# commit yet — a real, common, benign state) and an actual measurement
+# failure. The tests below establish, against real git, that those two are
+# in fact distinguishable via ``symbolic-ref``, then verify the function's
+# resulting contract.
+
+
+def test_current_branch_on_unborn_head_resolves_the_real_branch_name(tmp_path):
+    """A fresh repo with no commits is not detached — it's on `main`."""
+    repo = tmp_path / "unborn"
+    init_git_repo(repo)  # git init -b main, no commit
+    assert current_branch(repo) == "main"
+
+
+def test_current_branch_on_real_detached_head_returns_HEAD(tmp_path):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    first = commit_files(repo, {"a.txt": "1\n"}, message="first")
+    commit_files(repo, {"a.txt": "2\n"}, message="second")
+    subprocess.run(
+        ["git", "checkout", first], cwd=repo, check=True, capture_output=True,
+    )
+    assert current_branch(repo) == "HEAD"
+
+
+def test_current_branch_raises_when_git_genuinely_cannot_answer(tmp_path):
+    """Neither `rev-parse --abbrev-ref HEAD` nor `symbolic-ref` can answer.
+
+    Verified against real git 2.43: a repo whose ``.git/HEAD`` is missing
+    fails *both* probes identically (git no longer even recognises the
+    directory as a repository) — the case that must raise rather than
+    silently answer "HEAD", indistinguishable from the unborn/detached
+    cases above.
+    """
+    repo = tmp_path / "broken"
+    init_git_repo(repo)
+    (repo / ".git" / "HEAD").unlink()
+    with pytest.raises(gitops.CurrentBranchUnresolvable):
+        current_branch(repo)
+
+
+def test_current_branch_not_a_repo_at_all_raises(tmp_path):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    with pytest.raises(gitops.CurrentBranchUnresolvable):
+        current_branch(plain)
+
+
+# ── Callers: the fix must not just move the bug to a new crash site ────
+#
+# "Tests go through the caller the defect reaches, not only through
+# current_branch directly" (#1340's own instruction) — a unit test on
+# current_branch alone can't show that a caller mistook a raise for
+# something it should catch, or vice versa. These monkeypatch
+# gitops.current_branch itself so the caller's own handling is what's
+# under test, independent of which real git state would trigger it.
+
+
+def test_default_branch_survives_current_branch_failure(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)  # no main/master to find, no remote — reaches current_branch
+
+    def _raise(_repo_root):
+        raise gitops.CurrentBranchUnresolvable("simulated")
+
+    monkeypatch.setattr(gitops, "current_branch", _raise)
+    # No commit exists either, so the final rev_parse(HEAD) fallback also
+    # can't resolve — best-effort function, honest None instead of a raise.
+    assert gitops.default_branch(repo) is None
+
+
+def test_fast_forward_branch_refuses_instead_of_guessing_on_probe_failure(
+    tmp_path, monkeypatch,
+):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "1\n"}, message="base")
+    subprocess.run(
+        ["git", "branch", "topic"], cwd=repo, check=True, capture_output=True,
+    )
+    commit_files(repo, {"a.txt": "2\n"}, message="advance main")
+
+    def _raise(_repo_root):
+        raise gitops.CurrentBranchUnresolvable("simulated")
+
+    monkeypatch.setattr(gitops, "current_branch", _raise)
+    result = gitops.fast_forward_branch(repo, "topic", "main")
+    # Whether `topic` is the checked-out branch decides between two
+    # different mutation strategies — guessing wrong when git can't answer
+    # risks update-ref against a branch actually checked out elsewhere.
+    # Refusing is the only safe answer.
+    assert result.success is False
+    assert "current" in result.detail.lower() or "branch" in result.detail.lower()
+
+
+def test_has_pushed_upstream_reads_probe_failure_as_false(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "1\n"}, message="base")
+
+    def _raise(_repo_root):
+        raise gitops.CurrentBranchUnresolvable("simulated")
+
+    monkeypatch.setattr(gitops, "current_branch", _raise)
+    # Docstring already promises "any git failure reads as False" —
+    # this is that promise, now that the probe raises instead of
+    # returning a sentinel.
+    assert gitops.has_pushed_upstream(repo) is False
+
+
+def test_every_current_branch_caller_handles_the_raise():
+    """Structural guard: every call site, found fresh, not a fixed list.
+
+    #1340's own warning: "a class defined by listing its members meets the
+    member nobody listed" — a test that hardcodes today's known call
+    sites goes green over the fifteenth site a future change adds. This
+    walks every ``.py`` file under ``src/brr`` at test time and requires
+    each call to either sit inside a ``try`` that catches
+    ``CurrentBranchUnresolvable`` (or a broader ``RuntimeError`` /
+    ``Exception`` — the class is a ``RuntimeError``, so either already
+    catches it) or carry an explicit ``# current-branch: propagates``
+    comment on the call line, marking a conscious decision to let it
+    reach the caller's own crash handling instead of a silent oversight.
+
+    The final assertion is the guard's own sanity check: if
+    ``current_branch`` is ever renamed, the AST matcher below would
+    silently match nothing and this test would vacuously pass, reporting
+    a clean bill of health for a codebase it never actually looked at.
+    Asserting a floor count turns that into a loud failure instead.
+    """
+    import ast
+
+    src_root = Path(gitops.__file__).resolve().parent
+    propagates_marker = "current-branch: propagates"
+    # A handler catches the raise if it's CurrentBranchUnresolvable itself
+    # or anything it's an instance of (RuntimeError, Exception,
+    # BaseException) — checked by name since resolving arbitrary handler
+    # expressions to a live type via pure AST isn't worth the complexity
+    # this guard needs to stay readable.
+    catching_names = {
+        "CurrentBranchUnresolvable",
+        "RuntimeError",
+        "Exception",
+        "BaseException",
+    }
+
+    unhandled: list[str] = []
+    total_calls_found = 0
+
+    for path in sorted(src_root.rglob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        try:
+            tree = ast.parse(text, filename=str(path))
+        except SyntaxError:
+            continue
+        lines = text.splitlines()
+        parents: dict[int, ast.AST] = {}
+        for node in ast.walk(tree):
+            for child in ast.iter_child_nodes(node):
+                parents[id(child)] = node
+
+        def _is_current_branch_call(node: ast.AST, *, in_gitops: bool) -> bool:
+            if not isinstance(node, ast.Call):
+                return False
+            fn = node.func
+            if isinstance(fn, ast.Attribute) and fn.attr == "current_branch":
+                return isinstance(fn.value, ast.Name) and fn.value.id == "gitops"
+            if in_gitops and isinstance(fn, ast.Name) and fn.id == "current_branch":
+                return True
+            return False
+
+        def _enclosing_try_catches(node: ast.AST) -> bool:
+            current = node
+            while id(current) in parents:
+                current = parents[id(current)]
+                if isinstance(current, ast.Try):
+                    for handler in current.handlers:
+                        if handler.type is None:  # bare `except:`
+                            return True
+                        # `except gitops.CurrentBranchUnresolvable:` stores
+                        # the exception name as an Attribute's `.attr`
+                        # string, not a bare Name — collect both forms
+                        # (also handles a tuple of exception types, which
+                        # ast.walk descends into either way).
+                        names = [
+                            n.id for n in ast.walk(handler.type)
+                            if isinstance(n, ast.Name)
+                        ] + [
+                            n.attr for n in ast.walk(handler.type)
+                            if isinstance(n, ast.Attribute)
+                        ]
+                        if any(n in catching_names for n in names):
+                            return True
+                if isinstance(current, ast.FunctionDef):
+                    # A call inside `def current_branch` itself (the
+                    # definition, not a call site) — never reached, since
+                    # the definition body has no ast.Call to itself, but
+                    # stop climbing at function boundaries regardless: a
+                    # try in an *outer* function does not protect a call
+                    # inside a nested one.
+                    break
+            return False
+
+        in_gitops = path == Path(gitops.__file__).resolve()
+        for node in ast.walk(tree):
+            if not _is_current_branch_call(node, in_gitops=in_gitops):
+                continue
+            # Skip the function definition site itself (`def current_branch`
+            # has no self-call, but guard anyway for safety).
+            total_calls_found += 1
+            line_idx = node.lineno - 1
+            line_text = lines[line_idx] if 0 <= line_idx < len(lines) else ""
+            if propagates_marker in line_text:
+                continue
+            if _enclosing_try_catches(node):
+                continue
+            unhandled.append(f"{path.relative_to(src_root.parent.parent)}:{node.lineno}")
+
+    # Sanity floor: #1340's audit found 14 external call sites plus 3
+    # inside gitops.py itself. A future rename that silently zeroes out
+    # `total_calls_found` must fail loudly here, not read as "all clean".
+    assert total_calls_found >= 15, (
+        f"expected to find at least 15 gitops.current_branch call sites, "
+        f"found {total_calls_found} — has current_branch been renamed? "
+        f"(this assertion is the guard's own sanity check, #1340)"
+    )
+    assert not unhandled, (
+        "gitops.current_branch call site(s) with no visible failure "
+        "handling — wrap in try/except catching CurrentBranchUnresolvable "
+        "(or a broader RuntimeError/Exception), or mark deliberate "
+        "propagation with a `# current-branch: propagates` comment on the "
+        "call line:\n  " + "\n  ".join(unhandled)
+    )
