@@ -8237,10 +8237,13 @@ def _cut_mismatches(
       it reads off the same ``relics_list``.
     - **strands** (#1197): every live entry in :func:`_owned_child_controls`
       must appear as a ``strands:`` key naming one of a closed disposition
-      set (``handoff`` / ``converged`` / ``stopped`` / ``abandoned``); a key
-      naming a run that is not a live owned child of this run is named too.
-      No *repo_root* or *outbox_dir* gate — the child registry is in-process
-      state, always readable.
+      set (``handoff`` / ``converged`` / ``stopped`` / ``abandoned``). A key
+      naming a run that is *not* live is deliberately **not** flagged: two of
+      those four dispositions describe children that are by construction
+      reaped or stopped, so forbidding the state would reject the vocabulary
+      this same check ships. Same posture as **asks** above — force the
+      declaration, never police it. No *repo_root* or *outbox_dir* gate — the
+      child registry is in-process state, always readable.
     - **topic-per-run** (the-run-that-claims-its-thread): no ``.topics``
       claim and no ``item`` relic on this run's own ``.relics.jsonl`` is
       named ``topicless: ...``. No *repo_root* gate, unlike
@@ -8404,12 +8407,10 @@ def _cut_mismatches(
     declared_strands: dict[str, cut_verb.StrandDisposition] = {}
     for row in declaration.strands:
         declared_strands.setdefault(row.run, row)
-    live_child_ids: set[str] = set()
     for entry in _owned_child_controls(task.id):
         child_id = str(entry.get("run_id") or entry.get("event_id") or "").strip()
         if not child_id:
             continue
-        live_child_ids.add(child_id)
         if child_id not in declared_strands:
             mismatches.append(f"strands: {child_id} is live and undispositioned")
 
