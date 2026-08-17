@@ -26,7 +26,7 @@ from .. import (
     limits,
     stripe_api,
 )
-from ..models import Account, ChannelRoute, Daemon, Repo, StripeEvent, TgPairCode
+from ..models import Account, ChannelRoute, Daemon, Event, Repo, StripeEvent, TgPairCode
 from ..platforms import github as gh
 from ..platforms import telegram as tg
 from ..platforms import whatsapp as wa
@@ -87,6 +87,16 @@ _NO_RUNNER_TEXT = (
     "daemon), with claude or codex installed and logged in so it has a "
     "runner to use — brnrd runners doctor checks that. Your message is "
     "saved; I'll answer once a daemon is online."
+)
+# #1457 — an account-level pairing succeeded but the account has no repos,
+# so a task message has no project to run against. The message is NOT
+# queued (an event needs a repo lane for a daemon to drain) — say the drop
+# out loud rather than letting a silent success-shape imply delivery.
+_NO_REPO_YET_TEXT = (
+    "I hear you — but no project is connected to your account yet, so I "
+    "have nowhere to run. Connect a repository at brnrd.dev (or install "
+    "the CLI and run brnrd in a checkout on your computer). Messages sent "
+    "before that aren't queued, so resend once it's connected."
 )
 _BACKLOG_GRACE = timedelta(seconds=1)
 
@@ -152,6 +162,51 @@ def _message_precedes_route(parsed: "tg.ParsedMessage | wa.ParsedMessage", route
 
 def _account_repos(db: Session, account_id: str) -> list[Repo]:
     return list(db.execute(select(Repo).where(Repo.account_id == account_id).order_by(Repo.repo_full_name)).scalars())
+
+
+def _route_target_repo(db: Session, route: ChannelRoute) -> Repo | None:
+    """#1457 — the repo a message on this route runs against.
+
+    A chat is paired to an *account*; the repo is routing, not identity.
+    Resolution order, first hit wins:
+
+    1. the route's own pin (``/repo owner/name``, or a legacy repo-scoped
+       pairing — same row, same meaning),
+    2. the account's sole repo,
+    3. the repo of the account's most recent event — where the
+       conversation already lives,
+    4. the most recently updated repo.
+
+    ``None`` only when the account has no repos at all; the caller answers
+    with the onboarding nudge, never a silent drop. A pinned repo that no
+    longer exists falls through to account-level resolution instead of
+    dead-ending the chat — the pairing belongs to the account and outlives
+    any one repo.
+
+    This resolution is the wire-side stand-in for the standing direction
+    (one persona resident per account, deciding placement itself); when a
+    resident-side router exists, rungs 2–4 collapse into it.
+    """
+    if route.repo_id is not None:
+        pinned = db.get(Repo, route.repo_id)
+        if pinned is not None:
+            return pinned
+    repos = _account_repos(db, route.account_id)
+    if not repos:
+        return None
+    if len(repos) == 1:
+        return repos[0]
+    recent_repo_id = db.execute(
+        select(Event.repo_id)
+        .where(Event.repo_id.in_([r.id for r in repos]))
+        .order_by(Event.seq.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if recent_repo_id is not None:
+        for repo in repos:
+            if repo.id == recent_repo_id:
+                return repo
+    return max(repos, key=lambda r: r.updated_at or r.created_at)
 
 
 def _find_repo(repos: list[Repo], name: str) -> Repo | None:
@@ -665,8 +720,18 @@ def _handle_start(db: Session, settings, parsed: tg.ParsedMessage, code: str) ->
         existing.repo_id = pc.repo_id
         existing.paired_user_id = parsed.user_id
     pc.consumed = True
-    repo = db.get(Repo, pc.repo_id)
+    repo = db.get(Repo, pc.repo_id) if pc.repo_id is not None else None
     db.commit()
+    if pc.repo_id is None:
+        # #1457 — account-level pairing. Name what happens next in the very
+        # first exchange: either the auto-routing that is now live, or the
+        # one step (connect a project) that stands between here and work.
+        target = _route_target_repo(db, existing)
+        if target is None:
+            _reply(settings, parsed, "Paired with your account — this chat now reaches your brnrd resident. " + _NO_REPO_YET_TEXT)
+        else:
+            _reply(settings, parsed, f"Paired with your account. Send me tasks anytime — I'll route them to the right project (currently '{target.repo_full_name}'; /repo owner/name pins one, /repo auto un-pins).")
+        return
     _reply(settings, parsed, f"Paired with repo '{repo.repo_full_name if repo else pc.repo_id}'. Send me tasks anytime.")
 
 
@@ -690,12 +755,27 @@ def _handle_command(db: Session, settings, parsed: tg.ParsedMessage, command: st
         _reply(settings, parsed, _UNPAIRED_TEXT)
         return True
     repos = _account_repos(db, route.account_id)
-    current = db.get(Repo, route.repo_id)
     if command == "repos":
         _reply(settings, parsed, _repo_list_text(repos, route.repo_id))
         return True
     if command == "status":
-        _reply(settings, parsed, f"Active repo: {current.repo_full_name if current else '<missing>'}. Use /repo owner/name to switch.")
+        # #1457 — an account-level route has no pin; report the resolution
+        # honestly as auto, never as a fixed repo it might not be tomorrow.
+        resolved = _route_target_repo(db, route)
+        if route.repo_id is None:
+            state = f"auto → '{resolved.repo_full_name}'" if resolved else "auto (no repos connected yet)"
+            _reply(settings, parsed, f"Active repo: {state}. Use /repo owner/name to pin one.")
+        else:
+            current = db.get(Repo, route.repo_id)
+            _reply(settings, parsed, f"Active repo: {current.repo_full_name if current else '<missing>'}. Use /repo owner/name to switch, /repo auto to let me route.")
+        return True
+    if args.strip().casefold() == "auto":
+        # #1457 — clear the pin: back to account-level resolution.
+        route.repo_id = None
+        db.commit()
+        resolved = _route_target_repo(db, route)
+        tail = f" (currently '{resolved.repo_full_name}')" if resolved else ""
+        _reply(settings, parsed, f"Un-pinned — I'll route each message to the project that fits{tail}.")
         return True
     repo = _find_repo(repos, args)
     if repo is None:
@@ -825,9 +905,18 @@ def _handle_whatsapp_pair(
         existing.account_id = pc.account_id
         existing.repo_id = pc.repo_id
     pc.consumed = True
-    repo = db.get(Repo, pc.repo_id)
+    repo = db.get(Repo, pc.repo_id) if pc.repo_id is not None else None
     db.commit()
     _wa_audit(trace, "paired")
+    if pc.repo_id is None:
+        # #1457 — account-level pairing, WhatsApp shape: no slash commands
+        # here, so the confirmation names the auto-routing only.
+        target = _route_target_repo(db, existing)
+        if target is None:
+            _wa_reply(settings, parsed, "Paired with your account — this chat now reaches your brnrd resident. " + _NO_REPO_YET_TEXT)
+        else:
+            _wa_reply(settings, parsed, f"Paired with your account. Send me tasks anytime — I'll route them to the right project (currently '{target.repo_full_name}').")
+        return
     _wa_reply(settings, parsed, f"Paired with repo '{repo.repo_full_name if repo else pc.repo_id}'. Send me tasks anytime.")
 
 
@@ -896,10 +985,11 @@ async def whatsapp_webhook(request: Request, x_hub_signature_256: str | None = H
             _wa_audit(trace, "unpaired")
             _wa_reply(settings, parsed, _WA_UNPAIRED_TEXT)
             return {"ok": True}
-        repo = db.get(Repo, route.repo_id)
+        # #1457 — resolution, not address: pin → sole repo → recency.
+        repo = _route_target_repo(db, route)
         if repo is None:
-            _wa_audit(trace, "rejected", "reason=missing_repo")
-            _wa_reply(settings, parsed, "This chat's active repo no longer exists. Pair again from the dashboard.")
+            _wa_audit(trace, "rejected", "reason=no_repo_on_account")
+            _wa_reply(settings, parsed, _NO_REPO_YET_TEXT)
             return {"ok": True}
         if not parsed.text and not parsed.attachments:
             # v1 doesn't ingest WhatsApp media at all (no attachment
@@ -921,7 +1011,7 @@ async def whatsapp_webhook(request: Request, x_hub_signature_256: str | None = H
             _wa_audit(trace, "rejected", f"reason=limit:{decision.reason}")
             _wa_reply(settings, parsed, decision.message)
             return {"ok": True}
-        _enqueue_whatsapp_event(db, parsed, repo_id=route.repo_id, body=body)
+        _enqueue_whatsapp_event(db, parsed, repo_id=repo.id, body=body)
         _wa_audit(trace, "enqueued")
     return {"ok": True}
 
@@ -977,9 +1067,10 @@ def telegram_webhook(request: Request, payload: dict, x_telegram_bot_api_secret_
         if route is None:
             _reply(settings, parsed, _UNPAIRED_TEXT)
             return {"ok": True}
-        repo = db.get(Repo, route.repo_id)
+        # #1457 — resolution, not address: pin → sole repo → recency.
+        repo = _route_target_repo(db, route)
         if repo is None:
-            _reply(settings, parsed, "This chat's active repo no longer exists. Use /repo owner/name to select another one.")
+            _reply(settings, parsed, _NO_REPO_YET_TEXT)
             return {"ok": True}
         # #409 — default-closed authorization gate: the sender must be the
         # chat's paired principal or explicitly allowlisted. This is the
@@ -1018,7 +1109,7 @@ def telegram_webhook(request: Request, payload: dict, x_telegram_bot_api_secret_
             # #1282 — still enqueue (a daemon that comes online later drains
             # it normally); the nudge is additive, not a rejection.
             _reply(settings, parsed, _NO_RUNNER_TEXT)
-        _enqueue_telegram_event(db, parsed, repo_id=route.repo_id, body=body)
+        _enqueue_telegram_event(db, parsed, repo_id=repo.id, body=body)
     return {"ok": True}
 
 

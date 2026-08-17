@@ -52,7 +52,11 @@ async function shootColdStart(browser, contextOpts, label) {
 		const url = new URL(route.request().url());
 		const body = ROUTES[url.pathname];
 		if (body) {
-			await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+			await route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify(body)
+			});
 		} else {
 			await route.fulfill({ status: 404, contentType: 'application/json', body: '{}' });
 		}
