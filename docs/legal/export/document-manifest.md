@@ -11,9 +11,9 @@ population was empty of third parties, so no re-acceptance was owed).
 
 Hash snapshot:
 
-- Date: 2026-08-16
+- Date: 2026-08-17
 - Source revision (parent of this export-only change):
-  `c1e35441aff4c43c98ab4e9497ae99fcceb0a391`
+  `7b5fe0378751879f415041b68f03beed04e17e9f`
 - Algorithm: SHA-256 over raw repository file bytes
 - Machine-readable list: [`SHA256SUMS`](SHA256SUMS)
 - Verification from the repository root:
@@ -64,7 +64,7 @@ factual statements in the pack.
 | [`src/brnrd/routers/billing.py`](../../../src/brnrd/routers/billing.py) | Authenticated checkout endpoint and server-side cohort/price selection | `7f48441625121444b016a8498f17995ef17fcf1f165ce73569c66d293f5ac39f` |
 | [`src/brnrd/stripe_api.py`](../../../src/brnrd/stripe_api.py) | Stripe Checkout payload and Managed Payments / merchant-of-record behavior | `dda318565da597f6c808151c265991b59b2f0b9581e0a6a478811d8d3181ce1f` |
 | [`src/brnrd/terms.py`](../../../src/brnrd/terms.py) | Immutable legal-text pins, versions, and SHA-256 acceptance evidence | `3196627add4fd431e74eafa88ba1a67a6ff5c35fa98f00a910185e015ed60526` |
-| [`src/brnrd/routers/_session.py`](../../../src/brnrd/routers/_session.py) | Per-document acceptance status, re-consent predicate, and mirror deletion on last disconnect | `30e99103cb90a2e9bbd9fc9e9d2d0d24900953cc0ec93e3b63686d3446d6c2c2` |
+| [`src/brnrd/routers/_session.py`](../../../src/brnrd/routers/_session.py) | Per-document acceptance status, re-consent predicate, and mirror deletion on last disconnect | `d9b170b898fd91c7c99a51b574cdfd82f1a43e6d3964ce99fbdccfeee99c81af` |
 
 ## External context pointers
 
