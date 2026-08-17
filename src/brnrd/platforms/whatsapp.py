@@ -54,6 +54,52 @@ def _messages_url(api_base_url: str, api_version: str, phone_number_id: str) -> 
     return f"{api_base_url.rstrip('/')}/{api_version}/{phone_number_id}/messages"
 
 
+def _phone_number_url(api_base_url: str, api_version: str, phone_number_id: str) -> str:
+    return f"{api_base_url.rstrip('/')}/{api_version}/{phone_number_id}"
+
+
+def fetch_display_phone_number(
+    api_base_url: str,
+    api_version: str,
+    phone_number_id: str,
+    access_token: str,
+    *,
+    timeout: float = 10.0,
+) -> str | None:
+    """The Cloud API's own read of this phone number's
+    ``display_phone_number`` (#1465) — ground truth for the ``wa.me``
+    deep-link door, the same derive-don't-retype pattern Telegram's
+    ``getMe`` mirrors (#1463): no hand-typed ``BRNRD_WHATSAPP_NUMBER`` env
+    var to drift out of sync with the configured phone number id. This is
+    a startup call, never a per-request one — see
+    ``messenger_doors.py``'s module docstring.
+
+    ``None`` on any failure (network, timeout, non-2xx, malformed
+    response) — side-effect-free, safe to call speculatively; the caller
+    decides the fallback. The returned value is Meta's own formatting
+    (e.g. ``"+1 555-123-4567"``, spaces/dashes included) — callers that
+    need bare E.164 digits for a ``wa.me`` link strip it themselves
+    (``messenger_doors._digits_only``).
+    """
+    url = _phone_number_url(api_base_url, api_version, phone_number_id)
+    try:
+        resp = httpx.get(
+            url,
+            params={"fields": "display_phone_number"},
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+    except httpx.HTTPError:
+        return None
+    try:
+        payload = resp.json()
+    except ValueError:
+        return None
+    number = payload.get("display_phone_number") if isinstance(payload, dict) else None
+    return number if isinstance(number, str) and number else None
+
+
 def _raise_for_response(resp: httpx.Response) -> None:
     if resp.status_code < 400:
         return

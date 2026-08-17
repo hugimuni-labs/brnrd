@@ -12,12 +12,18 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from brnrd import github_marker, publish_scope, run_stop_requests, wake_requests
-from brnrd.config import telegram_username_is_valid
 from brnrd.routers.pairing import telegram_pair_core
 from brnrd.activity_records import dedupe_activity_records, fresh_activity_records
 from brnrd.auth import get_db
 from brnrd.capabilities import evaluate_capabilities
+from brnrd.messenger_doors import (
+    env_only_identities,
+    mint_deep_link,
+    pair_instructions,
+)
+from brnrd.messenger_doors import messenger_doors as list_messenger_doors
 from brnrd.models import Account, ActivityRecord, ConfigChangeRequest, Daemon, Event, GitHubInstalledRepo, Repo
+from brnrd import schemas
 
 from ._session import (
     _account_id,
@@ -865,9 +871,19 @@ def _machines_summary_out(db: Session, account_id: str) -> dict[str, Any]:
     }
 
 
-def _wire_telegram_bot_username(settings) -> str:
-    username = settings.telegram_bot_username.lstrip("@")
-    return username if telegram_username_is_valid(username) else ""
+def _messenger_identities(request: Request, settings):
+    """The registry's ground truth for this request (#1465). Startup
+    (`app.py`'s lifespan) derives it once and caches it on
+    `app.state.messenger_identities`; a request that finds nothing there —
+    chiefly this test suite's bare `TestClient(app)`, which never runs the
+    ASGI lifespan — reads the env-only fallback instead. **Never derive
+    here**: `messenger_doors.py`'s module docstring is the full reasoning,
+    but in short, a request path must not make a live getMe / WhatsApp
+    Cloud API call."""
+    cached = getattr(request.app.state, "messenger_identities", None)
+    if cached is not None:
+        return cached
+    return env_only_identities(settings)
 
 
 @router.post("/v1/dashboard/telegram-pair")
@@ -886,6 +902,57 @@ def dashboard_telegram_pair_api(request: Request, db: Session = Depends(get_db))
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
     started = telegram_pair_core(db, request.app.state.settings, account_id, None)
     return JSONResponse(started.model_dump())
+
+
+@router.post("/v1/dashboard/pair")
+async def dashboard_pair_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """#1465 — the registry-generalized mint: one endpoint, a `platform`
+    field, covering every connector `messenger_doors` declares
+    `deep_link_available` for (Telegram, WhatsApp today) instead of one
+    endpoint per platform. `telegram-pair` above stays live rather than
+    becoming a thin alias — it predates this by a day (#1457) and the
+    just-shipped frontend consumer still calls it directly; nothing forces
+    its removal. This is the door a *new* connector actually joins
+    through: its registry entry alone is what makes `platform=<new>` work
+    here, no new route.
+
+    Mints the same account-level, channel-neutral pair code
+    `dashboard_telegram_pair_api` does (`telegram_pair_core`, `repo_id`
+    unset — #1237: the code itself carries no platform, only the response
+    shaping below does) and reshapes the response for the requested
+    platform instead of hardcoding Telegram's.
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    try:
+        payload = await request.json()
+    except ValueError:
+        payload = None
+    platform = str((payload or {}).get("platform") or "telegram").strip().lower()
+    settings = request.app.state.settings
+    identities = _messenger_identities(request, settings)
+    doors_by_platform = {d.platform: d for d in list_messenger_doors(identities)}
+    door = doors_by_platform.get(platform)
+    if door is None:
+        return JSONResponse({"detail": f"unknown messenger platform {platform!r}"}, status_code=404)
+    if not door.deep_link_available:
+        return JSONResponse(
+            {"detail": f"{platform} has no deep-link door configured on this deployment"},
+            status_code=409,
+        )
+    started = telegram_pair_core(db, settings, account_id, None)
+    code = started.pair_code
+    deep_link = mint_deep_link(platform, identities, code)
+    instructions = pair_instructions(platform, code, deep_link)
+    return JSONResponse(
+        schemas.MessengerPairStarted(
+            pair_code=code,
+            instructions=instructions,
+            deep_link=deep_link,
+            platform=platform,
+        ).model_dump()
+    )
 
 
 @router.get("/v1/dashboard/repos")
@@ -911,6 +978,7 @@ def dashboard_repos_api(
     if _github_background_refresh_needed(request, db, account.id):
         _start_github_background_refresh(request, account.id)
     settings = request.app.state.settings
+    identities = _messenger_identities(request, settings)
     repos = _repos(db, account.id)
     repo_views = _repo_views(db, repos)
     installed = _installed_repos(db, account.id)
@@ -949,13 +1017,24 @@ def dashboard_repos_api(
             # no repo row to read the command off. Account-level like
             # `install_url` and `github_app_slug` beside it.
             "pairing_command": pairing_command(PAIR_REPO_PLACEHOLDER),
-            # #1457 — the bot handle, on the wire at last: without it the
-            # frontend cannot construct `t.me/<bot>?start=<code>` and the
-            # mobile cold start stays a description of a door instead of a
-            # door. Empty when unset *or* shape-invalid (#1242 — a deep
-            # link built on a bad handle is worse than none); absent-means-
-            # unknown on older backends, same contract as `machines`.
-            "telegram_bot_username": _wire_telegram_bot_username(settings),
+            # #1465 — the registry-derived connector set: every declared
+            # messenger door (Telegram, WhatsApp, Slack, Signal today —
+            # `messenger_doors.PLATFORMS`), each with its own
+            # `deep_link_available` flag. No user-facing copy here (see
+            # `messenger_doors.py`'s module docstring) — the renderer picks
+            # labels/icons per platform. A new connector joins this array
+            # the moment its registry entry exists, with no frontend edit.
+            "messenger_doors": [d.to_wire() for d in list_messenger_doors(identities)],
+            # Deprecated (#1465), kept one release: superseded by
+            # `messenger_doors[platform=telegram].deep_link_available` +
+            # the generalized `POST /v1/dashboard/pair`. Left in place so
+            # the just-shipped (#1457) frontend consumer doesn't break
+            # underneath itself; `""` when unset *or* shape-invalid (#1242
+            # — a deep link built on a bad handle is worse than none), same
+            # contract as before, now backed by `identities` (getMe-derived
+            # when reachable, env fallback otherwise) rather than raw
+            # settings alone.
+            "telegram_bot_username": identities.telegram_bot_username,
             # design-machines-and-guests.md R1 / #1365 — account-level
             # machine presence, additive: a backend that predates this still
             # omits the key and the frontend falls back to the pre-fix,

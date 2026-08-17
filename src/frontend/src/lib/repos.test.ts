@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
 	connectRepo,
+	mintAccountMessengerPair,
 	mintAccountTelegramPair,
 	ReposAuthError,
 	setPublishLayers,
@@ -144,4 +145,48 @@ test('mintAccountTelegramPair raises ReposAuthError on 401', async () => {
 test('mintAccountTelegramPair raises on a non-401 error status', async () => {
 	const impl = fakeFetch(503, { detail: 'could not allocate pair code' });
 	await assert.rejects(() => mintAccountTelegramPair(impl), /telegram pair mint failed: 503/);
+});
+
+// #1465 — the registry-generalized mint ColdStart's messenger door actually
+// calls now: one endpoint, a `platform` body, any connector the wire's
+// `messenger_doors` declared `deep_link_available` for.
+test('mintAccountMessengerPair posts the platform in the body', async () => {
+	const impl = fakeFetch(200, {
+		pair_code: 'ABCD1234',
+		instructions: 'text ABCD1234 to your brnrd WhatsApp number',
+		deep_link: 'https://wa.me/15551234567?text=ABCD1234',
+		platform: 'whatsapp'
+	});
+	const result = await mintAccountMessengerPair('whatsapp', impl);
+	assert.equal(calls(impl)[0].url, '/v1/dashboard/pair');
+	assert.equal(calls(impl)[0].init?.method, 'POST');
+	assert.deepEqual(JSON.parse(String(calls(impl)[0].init?.body)), { platform: 'whatsapp' });
+	assert.equal(result.platform, 'whatsapp');
+	assert.equal(result.deep_link, 'https://wa.me/15551234567?text=ABCD1234');
+});
+
+test('mintAccountMessengerPair carries a null deep_link through untouched', async () => {
+	const impl = fakeFetch(200, {
+		pair_code: 'WXYZ5678',
+		instructions: 'send /start WXYZ5678',
+		deep_link: null,
+		platform: 'telegram'
+	});
+	const result = await mintAccountMessengerPair('telegram', impl);
+	assert.equal(result.deep_link, null);
+});
+
+test('mintAccountMessengerPair raises ReposAuthError on 401', async () => {
+	const impl = fakeFetch(401, { detail: 'unauthenticated' });
+	await assert.rejects(() => mintAccountMessengerPair('telegram', impl), ReposAuthError);
+});
+
+test('mintAccountMessengerPair raises on a non-401 error status, naming the platform', async () => {
+	const impl = fakeFetch(409, {
+		detail: 'slack has no deep-link door configured on this deployment'
+	});
+	await assert.rejects(
+		() => mintAccountMessengerPair('slack', impl),
+		/slack pair mint failed: 409/
+	);
 });
