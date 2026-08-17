@@ -25,12 +25,22 @@ from sqlalchemy import select  # noqa: E402
 
 from brnrd import create_app, ids  # noqa: E402
 from brnrd import inbox as inbox_service  # noqa: E402
-from brnrd.config import Settings  # noqa: E402
+from brnrd.app import _maybe_derive_telegram_bot_username  # noqa: E402
+from brnrd.config import Settings, _derived_telegram_usernames  # noqa: E402
 from brnrd.models import ChannelRoute, Event, Repo, TgPairCode  # noqa: E402
 from _helpers import brnrd_account_headers  # noqa: E402
 
 _SECRET = "webhook-secret"
 _HDR = {"X-Telegram-Bot-Api-Secret-Token": _SECRET}
+
+
+@pytest.fixture(autouse=True)
+def _isolate_telegram_derived_username():
+    """See the twin fixture in test_brnrd_telegram.py — same cache, same
+    cross-test leak risk from reusing the literal token ``"bot:TOKEN"``."""
+    _derived_telegram_usernames.clear()
+    yield
+    _derived_telegram_usernames.clear()
 
 
 def _make_client(monkeypatch, **overrides):
@@ -242,6 +252,22 @@ def test_invalid_bot_username_rides_the_wire_as_empty(monkeypatch):
     _login_session(client, headers)
     body = client.get("/v1/dashboard/repos").json()
     assert body["telegram_bot_username"] == ""
+
+
+def test_dashboard_repos_carries_the_derived_bot_username(monkeypatch):
+    """#1463, through the dashboard caller: a getMe-derived username must
+    reach `GET /v1/dashboard/repos`'s wire field even when the env var is
+    the invalid, hyphenated GitHub-login spelling (#1242's prod shape)."""
+    monkeypatch.setattr(
+        "brnrd.platforms.telegram.get_me",
+        lambda token, *, timeout=10.0: {"id": 1, "username": "real_bot", "is_bot": True},
+    )
+    app, client, sends = _make_client(monkeypatch, telegram_bot_username="stale-bot")
+    _maybe_derive_telegram_bot_username(app.state.settings)
+    headers = _account(client)
+    _login_session(client, headers)
+    body = client.get("/v1/dashboard/repos").json()
+    assert body["telegram_bot_username"] == "real_bot"
 
 
 # ── consuming an account-level code ──────────────────────────────────

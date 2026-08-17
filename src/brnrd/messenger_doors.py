@@ -9,15 +9,22 @@ house rule `capabilities.py` states for its own catalog: the renderer
 (frontend, this module's own `pair_instructions`) owns every sentence,
 `MessengerDoor` is a flat capability flag.
 
-Telegram and WhatsApp identities are derived from the token/credentials
-already configured (Telegram's own `getMe`, the WhatsApp Cloud API's own
-phone-number lookup) rather than a second hand-typed env var — the
-#1242 -> #1463 lesson: a config knob duplicating a fact the token already
-carries is fixed once and drifts forever. Derivation is attempted exactly
-once, at app startup (`app.py`'s lifespan, next to the existing Telegram
-webhook registration — same seam, same failure posture: short timeout,
-warn and fall back on failure, never block boot), and the result is
-cached on `app.state.messenger_identities`.
+Telegram and WhatsApp identities both come from credentials already
+configured rather than a second hand-typed env var — the #1242 -> #1463
+lesson: a config knob duplicating a fact the token already carries is
+fixed once and drifts forever.
+
+**Telegram's half is not derived here.** #1463 already owns that
+derivation (`app.py`'s `_maybe_derive_telegram_bot_username`, cached by
+token, read back through `config.telegram_effective_bot_username`), and
+one fact with two derivations is one fact repaired once and wrong twice
+— two startup `getMe` calls, two caches, two answers to disagree. So
+this module *reads* that function and derives only the WhatsApp number,
+whose lookup has no other owner. The startup call (`app.py`'s lifespan,
+after #1463's derivation and beside the Telegram webhook registration —
+same seam, same failure posture: short timeout, warn and fall back on
+failure, never block boot) caches the pair on
+`app.state.messenger_identities`.
 
 **This module never makes a network call from inside a request.** Every
 `derive_*` function below is a startup-only call — `app.py`'s lifespan is
@@ -38,7 +45,7 @@ import re
 from dataclasses import dataclass
 from typing import Callable
 
-from .config import Settings, telegram_username_is_valid
+from .config import Settings, telegram_effective_bot_username
 
 logger = logging.getLogger(__name__)
 
@@ -66,12 +73,16 @@ class MessengerDoor:
 
 
 def env_only_identities(settings: Settings) -> MessengerIdentities:
-    """The pre-derivation fallback: whatever is already hand-configured,
-    shape-checked, no network — what a request sees whenever startup's
-    derivation hasn't populated `app.state` (see module docstring)."""
-    username = settings.telegram_bot_username.lstrip("@")
+    """The zero-network identities: what a request sees whenever startup's
+    derivation hasn't populated `app.state` (see module docstring).
+
+    Telegram's username comes from `config.telegram_effective_bot_username`
+    — #1463's single source of truth, which already prefers the
+    startup-derived `getMe` reading over a shape-valid env value and
+    returns `""` when neither is usable. Reading it costs no network: the
+    derivation happened once at startup and this is the memo."""
     return MessengerIdentities(
-        telegram_bot_username=username if telegram_username_is_valid(username) else "",
+        telegram_bot_username=telegram_effective_bot_username(settings),
         # No hand-typed WhatsApp number env var exists to fall back to —
         # that omission is #1465's own point (#1242 -> #1463's lesson,
         # applied from the start instead of retrofitted): the Cloud API
@@ -88,38 +99,6 @@ def _digits_only(raw: str) -> str:
     """`wa.me/<E.164>` wants bare digits, no `+` — Meta's own
     `display_phone_number` comes back formatted (`"+1 555-123-4567"`)."""
     return "".join(_DIGITS_RE.findall(raw))
-
-
-def derive_telegram_bot_username(settings: Settings, *, timeout: float = 5.0) -> str:
-    """`getMe`-derived wins when reachable — ground truth; a shape-valid
-    env value is the fallback when `getMe` is unreachable, unset, or the
-    token is empty. `""` only when neither source yields a valid shape
-    (#1242's invariant, unchanged). **Network call — startup only** (see
-    module docstring)."""
-    fallback = env_only_identities(settings).telegram_bot_username
-    if not settings.telegram_bot_token:
-        return fallback
-    from .platforms import telegram
-
-    try:
-        derived = telegram.fetch_bot_username(settings.telegram_bot_token, timeout=timeout)
-    except Exception:  # noqa: BLE001 - startup must never crash on this
-        derived = None
-    if not derived or not telegram_username_is_valid(derived):
-        if not derived:
-            logger.warning(
-                "telegram getMe did not return a usable bot username — "
-                "falling back to BRNRD_TELEGRAM_BOT_USERNAME"
-            )
-        return fallback
-    if fallback and derived != fallback:
-        logger.warning(
-            "telegram getMe reports username %r, disagreeing with "
-            "BRNRD_TELEGRAM_BOT_USERNAME=%r — the getMe reading wins",
-            derived,
-            settings.telegram_bot_username,
-        )
-    return derived
 
 
 def derive_whatsapp_number(settings: Settings, *, timeout: float = 5.0) -> str:
@@ -157,7 +136,9 @@ def derive_messenger_identities(settings: Settings, *, timeout: float = 5.0) -> 
     """Called once, at startup (`app.py`'s lifespan). **Never call this
     from inside a request handler** — see module docstring."""
     return MessengerIdentities(
-        telegram_bot_username=derive_telegram_bot_username(settings, timeout=timeout),
+        # Not derived here — read from #1463's own derivation, which
+        # `app.py`'s lifespan ran immediately before this call.
+        telegram_bot_username=telegram_effective_bot_username(settings),
         whatsapp_e164=derive_whatsapp_number(settings, timeout=timeout),
     )
 
