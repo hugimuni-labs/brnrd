@@ -78,6 +78,26 @@ HOUR_SECONDS = 3600.0
 LOGIN_URL = "https://x.com/login"
 HOME_URL = "https://x.com/home"
 SEARCH_URL = "https://x.com/search"
+# How long to wait for X's client-side search render before calling a query
+# empty. Generous on purpose: a false `[]` is indistinguishable from a real
+# one at the CLI, so the cost of waiting too long is a slow command and the
+# cost of waiting too little is a lie.
+SEARCH_RESULT_TIMEOUT_MS = 15000
+
+#: The narrower of X's two cookie-banner answers. Named rather than inlined
+#: because it is a *choice made inside someone else's account*, and a choice
+#: like that belongs where a reader can find and change it.
+CONSENT_REFUSE_LABEL = "Refuse non-essential cookies"
+
+#: The banner renders client-side like everything else on X, so a `count()`
+#: taken at `domcontentloaded` answers 0 and the dismissal silently skips —
+#: the same not-waiting bug as the search above, in the same file, found the
+#: same night. Short: a profile that has already answered renders no banner
+#: and every verb pays this once.
+CONSENT_BANNER_TIMEOUT_MS = 4000
+
+#: How long to wait for the focal post's inline reply box to render.
+COMPOSER_TIMEOUT_MS = 15000
 
 TOP_USAGE = """\
 Usage: envoy-x-browser login
@@ -431,18 +451,95 @@ class _PlaywrightDriver:
         url = f"{SEARCH_URL}?{urllib.parse.urlencode({'q': query, 'src': 'typed_query', 'f': 'live'})}"
         self._page.goto(url, wait_until="domcontentloaded")
         articles = self._page.locator('article[data-testid="tweet"]')
+        # X renders search results client-side, so at `domcontentloaded` there
+        # are zero articles on the page and `count()` — which does NOT
+        # auto-wait, unlike every locator call in `read_url` above — answered
+        # 0 every time. The verb returned `[]` for every query ever run
+        # through it, including ones with obvious live matches, and an empty
+        # list reads exactly like "nothing found". Wait for the first result
+        # before counting; a genuine no-match times out here and still
+        # returns `[]`, which is the one case that empty list is allowed to
+        # mean.
+        try:
+            articles.first.wait_for(state="visible", timeout=SEARCH_RESULT_TIMEOUT_MS)
+        except Exception:  # noqa: BLE001 - a real no-match, or a search wall
+            return []
         rows = []
         for i in range(min(articles.count(), 20)):
             article = articles.nth(i)
             rows.append({
                 "author": self._first_text(article, '[data-testid="User-Name"]'),
                 "text": self._first_text(article, '[data-testid="tweetText"]'),
+                # The permalink, because a result you cannot open is not a
+                # result: `read` and `draft`/`send` all take a URL, so a
+                # search that returns only author+text hands the caller a
+                # list it has no verb for. X puts the canonical
+                # `/<handle>/status/<id>` on the timestamp's own anchor.
+                "url": self._status_url(article),
             })
         return rows
 
+    def _status_url(self, article: Any) -> str | None:
+        """The `/status/<id>` permalink for one rendered article, or ``None``.
+
+        ``None`` is honest here rather than fatal: a promoted post or a
+        rendering X changes tomorrow simply has no link this way, and one
+        unlinkable row must not lose the caller the other nineteen.
+        """
+        try:
+            href = article.locator('a:has(time)').first.get_attribute("href", timeout=2000)
+        except Exception:  # noqa: BLE001
+            return None
+        if not href or "/status/" not in href:
+            return None
+        return href if href.startswith("http") else f"https://x.com{href}"
+
+    def _dismiss_consent(self) -> None:
+        """Answer X's cookie banner, or every click on the page is swallowed.
+
+        The banner renders inside ``#layers`` — the same stacking context
+        the composer uses — and intercepts pointer events for the whole
+        document, so ``open_reply_composer``'s click below never reaches
+        the reply button and Playwright retries until it times out. The
+        read verbs never noticed because they only read text. This is what
+        a silently dead reply lane looks like from the inside.
+
+        **Refuse, never accept.** The resident is acting inside someone
+        else's account; when a consent dialog offers a narrower and a
+        wider choice, the narrower one is the only one that is ours to
+        make. Answered once per persistent profile; a no-op every time
+        after that, and a no-op if X renders no banner at all.
+        """
+        button = self._page.get_by_role("button", name=CONSENT_REFUSE_LABEL).first
+        try:
+            button.wait_for(state="visible", timeout=CONSENT_BANNER_TIMEOUT_MS)
+        except Exception:  # noqa: BLE001 - no banner: answered already, or none shown
+            return
+        try:
+            button.click(timeout=3000)
+            self._page.wait_for_timeout(500)
+        except Exception:  # noqa: BLE001 - never block a verb on the banner
+            pass
+
     def open_reply_composer(self, url: str) -> None:
+        """Focus the reply box **bound to the post at *url***.
+
+        Deliberately the inline composer under the focal post, and not the
+        modal behind the reply button: ``[data-testid="reply"]`` matches
+        every reply button rendered on the page, and ``.first`` on any
+        status that quotes or embeds another post is *that* post's button.
+        Measured 2026-08-17 on a status by ``@saen_dev`` quoting an
+        article — the modal opened captioned "Replying to @beamnxw", for a
+        URL naming neither. A reply lane that can silently address a
+        different post is worse than no reply lane, because the failure is
+        invisible from the calling side and public from everyone else's.
+        The inline box is bound to the focal post by construction.
+        """
         self._page.goto(url, wait_until="domcontentloaded")
-        self._page.locator('[data-testid="reply"]').first.click()
+        self._dismiss_consent()
+        box = self._page.locator('[data-testid="tweetTextarea_0"]').first
+        box.wait_for(state="visible", timeout=COMPOSER_TIMEOUT_MS)
+        box.click()
 
     def fill_text(self, text: str) -> None:
         box = self._page.locator('[data-testid="tweetTextarea_0"]').first
@@ -454,7 +551,17 @@ class _PlaywrightDriver:
         self._page.screenshot(path=str(path))
 
     def click_send(self) -> None:
-        self._page.locator('[data-testid="tweetButton"]').first.click()
+        # The inline composer's own button is `tweetButtonInline`; the modal's
+        # is `tweetButton`. `open_reply_composer` uses the inline box, so try
+        # that first and keep the modal one as the fallback — a caller that
+        # opened a modal some other way still sends.
+        inline = self._page.locator('[data-testid="tweetButtonInline"]').first
+        try:
+            inline.wait_for(state="visible", timeout=5000)
+        except Exception:  # noqa: BLE001 - not the inline composer, then
+            self._page.locator('[data-testid="tweetButton"]').first.click()
+            return
+        inline.click()
 
 
 DriverFactory = Callable[..., Any]
