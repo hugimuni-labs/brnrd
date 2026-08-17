@@ -3000,6 +3000,102 @@ def test_close_check_resolve_with_unreachable_forge(tmp_path, capsys, monkeypatc
     assert "Closes #1433 (UNKNOWN)" in out
 
 
+def _mock_gh(returncode, stdout="", stderr=""):
+    """A fake ``gh`` invocation with the exit code and streams a caller sets."""
+    import subprocess as subprocess_module
+
+    class _R:
+        pass
+
+    r = _R()
+    r.returncode, r.stdout, r.stderr = returncode, stdout, stderr
+    return subprocess_module, lambda *a, **k: r
+
+
+def test_close_check_resolve_says_unknown_when_gh_is_not_authenticated(
+    tmp_path, capsys, monkeypatch,
+):
+    """#1433 — the failure wording is the product, not a detail.
+
+    Every non-zero ``gh`` exit used to render ``NOT_FOUND``, which a reader
+    takes as *harmless — that ref does not exist*. Driven 2026-08-17 against
+    two genuinely OPEN issues: an empty ``GH_CONFIG_DIR`` reported
+    ``NOT_FOUND`` for both, and so did running from a directory outside the
+    repo. That is a confident lie in the optimistic direction inside a command
+    whose entire purpose is that a verdict must not over-promise.
+
+    This pins the unauthenticated shape, which is the one a resident meets:
+    it must say ``UNKNOWN``, never ``NOT_FOUND``.
+    """
+    body = tmp_path / "body.md"
+    body.write_text("Ships the fix.\n\nCloses #1433.\n")
+    mod, fake = _mock_gh(
+        4,
+        stderr=(
+            "To get started with GitHub CLI, please run:  gh auth login\n"
+            "Alternatively, populate the GH_TOKEN environment variable...\n"
+        ),
+    )
+    monkeypatch.setattr(mod, "run", fake)
+
+    assert main(["close-check", str(body), "--resolve"]) == 0
+    out = capsys.readouterr().out
+    assert "Closes #1433 (UNKNOWN)" in out
+    assert "NOT_FOUND" not in out
+
+
+def test_close_check_resolve_still_says_not_found_for_a_real_missing_ref(
+    tmp_path, capsys, monkeypatch,
+):
+    """The other half, and it has to be here or the guard above goes green on
+    a version that answers ``UNKNOWN`` to everything and knows nothing.
+
+    ``gh``'s own wording for a genuine miss (verbatim, 2026-08-17):
+    ``GraphQL: Could not resolve to an issue or pull request with the number
+    of N.``
+    """
+    body = tmp_path / "body.md"
+    body.write_text("Ships the fix.\n\nCloses #999999.\n")
+    mod, fake = _mock_gh(
+        1,
+        stderr=(
+            "GraphQL: Could not resolve to an issue or pull request with the "
+            "number of 999999. (repository.issue)\n"
+        ),
+    )
+    monkeypatch.setattr(mod, "run", fake)
+
+    assert main(["close-check", str(body), "--resolve"]) == 0
+    assert "Closes #999999 (NOT_FOUND)" in capsys.readouterr().out
+
+
+def test_close_check_resolve_scopes_the_lookup_to_repo_when_asked(
+    tmp_path, capsys, monkeypatch,
+):
+    """Without ``--repo``, gh answers about whatever repo the *working
+    directory* happens to be — so one body checked from two places gets two
+    verdicts and neither says which repo it answered about."""
+    body = tmp_path / "body.md"
+    body.write_text("Ships the fix.\n\nCloses #1433.\n")
+    seen: list[list[str]] = []
+    import subprocess as subprocess_module
+
+    class _R:
+        returncode, stdout, stderr = 0, '{"state":"OPEN"}', ""
+
+    def fake(cmd, *a, **k):
+        seen.append(list(cmd))
+        return _R()
+
+    monkeypatch.setattr(subprocess_module, "run", fake)
+
+    assert main([
+        "close-check", str(body), "--resolve", "--repo", "hugimuni-labs/brnrd",
+    ]) == 0
+    assert "Closes #1433 (OPEN)" in capsys.readouterr().out
+    assert seen and seen[0][-2:] == ["--repo", "hugimuni-labs/brnrd"]
+
+
 # ── The spelling the launcher earned (npx) ──────────────────────────
 #
 # `npx brnrd` execs a binary inside a managed venv under
