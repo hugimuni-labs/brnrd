@@ -24,7 +24,13 @@ async function renderColdStart(
 	// unknown, not paired" contract the component itself gives the prop —
 	// so every existing call site below still exercises the pre-#1365
 	// repo-scoped-only gate unchanged.
-	machines: MachinesSummary | null = null
+	machines: MachinesSummary | null = null,
+	// Origin-aware onboarding (2026-08-17): defaults to `null`, which reads
+	// through to real client detection — `$effect` never runs under
+	// `svelte/server`, so `null` here renders the desktop branch exactly
+	// like every call site below always has. Tests below pass `true`/
+	// `false` explicitly to pin the mobile branch without a browser.
+	mobileOverride: boolean | null = null
 ): Promise<string> {
 	const source = readFileSync(componentPath, 'utf8');
 	const compiled = compile(source, { generate: 'server', runes: true, name: 'ColdStart' });
@@ -39,7 +45,9 @@ async function renderColdStart(
 	writeFileSync(generated, runnable);
 	try {
 		const module = await import(`${generated}?t=${process.pid}`);
-		return render(module.default, { props: { repos, pairCommand, installations, machines } }).body;
+		return render(module.default, {
+			props: { repos, pairCommand, installations, machines, mobileOverride }
+		}).body;
 	} finally {
 		rmSync(generated, { force: true });
 	}
@@ -369,4 +377,77 @@ test('no frontend source points at the retired docs host', () => {
 		if ((e as { status?: number }).status !== 1) throw e;
 	}
 	deepEqual(hits, []);
+});
+
+// Origin-aware onboarding (2026-08-17): a phone arrival gets a different
+// primary CTA — the sections below pin the desktop branch as an explicit
+// no-op and the mobile branch's reordering, rather than relying only on
+// every pre-existing test above defaulting `mobileOverride` to `null`.
+
+// `mobileOverride: false` must render byte-identical to the omitted default
+// (`null`) — the one proof that "on desktop, NOTHING changes" holds for the
+// explicit as well as the implicit non-touch case, not just for whichever
+// one the older tests above happen to exercise.
+test('desktop (mobileOverride: false) renders identically to the default (null) case', async () => {
+	const withDefault = await renderColdStart([repo({ daemon_status: 'missing' })]);
+	const withExplicitFalse = await renderColdStart(
+		[repo({ daemon_status: 'missing' })],
+		undefined,
+		null,
+		null,
+		false
+	);
+	equal(withExplicitFalse, withDefault);
+	ok(!withDefault.includes('the messenger door'), 'the desktop branch never mentions the CTA');
+});
+
+// The reordering itself: on mobile, the messenger-door panel renders before
+// the demoted install ladder, and the ladder's own numbered "01"/"02" rungs
+// (and their copy buttons) are gone — replaced by plain reference text, not
+// a second copy of the same interactive ladder.
+test('mobile arrival leads with the messenger door, install ladder demoted to reference', async () => {
+	const html = await renderColdStart([], undefined, null, null, true);
+	ok(html.includes('the cold start'));
+	const doorAt = html.indexOf('the messenger door');
+	const computerAt = html.indexOf('on your computer');
+	ok(doorAt >= 0 && computerAt >= 0, 'both the CTA and the demoted note render');
+	ok(doorAt < computerAt, 'the messenger door leads — install is demoted beneath it');
+	ok(
+		!html.includes('opens once a machine pairs'),
+		'the CTA states the real unlock condition (a repo), not a stale one'
+	);
+	ok(html.includes('npm install -g brnrd'), 'the install command still renders, as reference');
+	ok(!html.includes('text-amber-200/80">01<'), 'the numbered ladder rung is gone on mobile');
+	ok(!html.includes('>copy<'), 'the demoted note is informational — no copy affordance');
+});
+
+// Same reordering for the account-paired-but-repo-less middle state: the
+// messenger door still can't be wired (repo, not machine pairing, is what
+// `telegram_pair_core` actually gates on), so mobile gets the same honest
+// framing here too, ahead of the demoted "enable a repo" command.
+test('mobile arrival in the paired-no-repo state also leads with the messenger door', async () => {
+	const html = await renderColdStart(
+		[],
+		undefined,
+		null,
+		{ paired: true, any_enabled_repo: false },
+		true
+	);
+	ok(html.includes('machine paired, no repo enabled yet'));
+	const doorAt = html.indexOf('the messenger door');
+	const computerAt = html.indexOf('on your computer');
+	ok(doorAt >= 0 && computerAt >= 0);
+	ok(doorAt < computerAt);
+	ok(html.includes('still waits on a repo'), 'names the actual remaining gap, not a fake link');
+	ok(!html.includes('>copy<'), 'no copy affordance in the demoted reference note');
+});
+
+// A mobile arrival with a still-cold account and no `pairCommand` at all
+// (backend hasn't landed the fetch yet) must not render an empty terminal
+// box pretending to hold the pairing line — same contract the desktop
+// "missing pairing command" test above pins, carried into the mobile branch.
+test('mobile arrival with no pairCommand drops the second reference box, not the CTA', async () => {
+	const html = await renderColdStart([], null, null, null, true);
+	ok(html.includes('the messenger door'));
+	equal(html.split('<pre').length - 1, 1, 'only the install command renders — no empty pair box');
 });
