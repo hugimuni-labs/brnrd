@@ -183,7 +183,7 @@ def _publish_lane(name: str) -> Callable:
     pass instead of once per lane.
     """
 
-    def register(fn: Callable[[Path, Path | None, dict], None]) -> Callable:
+    def register(fn: Callable[[Path, Path | None, dict, Path], None]) -> Callable:
         @functools.wraps(fn)
         def guarded(
             brr_dir: Path,
@@ -191,12 +191,19 @@ def _publish_lane(name: str) -> Callable:
             state: dict,
             *,
             lanes: frozenset[str] | None = None,
+            responses_dir: Path | None = None,
         ) -> None:
             if lanes is None:
                 lanes, _slices = _resolve_publish_scopes(_publish_config(brr_dir))
             if name not in lanes:
                 return
-            fn(brr_dir, inbox_dir, state)
+            # #1396/#1437 — every lane gets the same fixed layout by
+            # default (``brr_dir / "responses"``), which is only correct
+            # outside account mode. `_dashboard_publish_tick` resolves the
+            # real one (`cloud.run_loop`'s own `responses_dir`, which
+            # diverges in account mode) and threads it through here so a
+            # lane never has to rebuild it itself.
+            fn(brr_dir, inbox_dir, state, responses_dir if responses_dir is not None else brr_dir / "responses")
 
         guarded.lane = name  # type: ignore[attr-defined]
         _PUBLISH_LANES[name] = guarded
@@ -205,7 +212,7 @@ def _publish_lane(name: str) -> Callable:
     return register
 
 
-def _dashboard_publish_tick(brr_dir: Path, inbox_dir: Path) -> None:
+def _dashboard_publish_tick(brr_dir: Path, inbox_dir: Path, responses_dir: Path | None = None) -> None:
     """One publish pass — see ``_dashboard_publish_loop`` for why it exists.
 
     Split out from the loop so a test can drive a single tick without
@@ -225,6 +232,13 @@ def _dashboard_publish_tick(brr_dir: Path, inbox_dir: Path) -> None:
       latency-sensitive datum in the tick — the user is watching the run burn
       while they wait. Behind the slower publishes it inherits exactly the
       staleness that ate a tap on 2026-07-11.
+
+    *responses_dir*, when omitted, defaults to ``brr_dir / "responses"`` —
+    correct outside account mode, and preserved so a direct 2-arg call (this
+    file's own tests drive most of them that way) keeps working. account
+    mode's real value diverges (``account_context.responses_dir``) and rides
+    down from ``cloud.run_loop`` via ``_dashboard_publish_loop`` — see #1396 /
+    #1437, and the ``_publish_lane`` docstring for where this is threaded to.
     """
     state = _context().load_state(brr_dir)
     if not (state.get("token") and state.get("brnrd_url")):
@@ -235,10 +249,10 @@ def _dashboard_publish_tick(brr_dir: Path, inbox_dir: Path) -> None:
     if not lanes:
         return
     for lane in _PUBLISH_TICK_ORDER:
-        _PUBLISH_LANES[lane](brr_dir, inbox_dir, state, lanes=lanes)
+        _PUBLISH_LANES[lane](brr_dir, inbox_dir, state, lanes=lanes, responses_dir=responses_dir)
 
 
-def _dashboard_publish_loop(brr_dir: Path, inbox_dir: Path) -> None:
+def _dashboard_publish_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path | None = None) -> None:
     """Publish the dashboard snapshots on their own short cadence.
 
     This thread is the *only* publisher. ``_loop_once`` used to publish once
@@ -251,10 +265,17 @@ def _dashboard_publish_loop(brr_dir: Path, inbox_dir: Path) -> None:
     dashboard": `_loop_once`'s cadence is capped at ``_POLL_WAIT_S`` (25s,
     chosen for chat responsiveness) whether or not any inbox event ever
     arrives. See kb/plan-loom-realtime-build.md slice 0.
+
+    *responses_dir* is ``cloud.run_loop``'s own value, passed through
+    unchanged (see ``_dashboard_publish_tick``'s docstring) — this thread
+    used to be started with only ``(brr_dir, inbox_dir)``, so anything
+    downstream that needed a responses dir had to rebuild
+    ``brr_dir / "responses"`` and got it wrong in account mode (#1396,
+    re-opening #1437 a third time in one week).
     """
     while True:
         try:
-            _dashboard_publish_tick(brr_dir, inbox_dir)
+            _dashboard_publish_tick(brr_dir, inbox_dir, responses_dir)
         except Exception as e:
             print(f"[brnrd:cloud] dashboard publish loop error: {e}")
         time.sleep(_DASHBOARD_PUBLISH_INTERVAL_S)
@@ -464,7 +485,7 @@ def _activity_snapshot(brr_dir: Path, inbox_dir: Path) -> list[dict[str, Any]]:
 
 
 @_publish_lane("activity")
-def _publish_activity(brr_dir: Path, inbox_dir: Path, state: dict) -> None:
+def _publish_activity(brr_dir: Path, inbox_dir: Path, state: dict, responses_dir: Path) -> None:
     if not (state.get("token") and state.get("brnrd_url")):
         return
     try:
@@ -639,7 +660,7 @@ def _corpus_payload(files: list) -> list[dict]:
 
 
 @_publish_lane("corpus")
-def _publish_corpus(brr_dir: Path, inbox_dir: Path | None, state: dict) -> None:
+def _publish_corpus(brr_dir: Path, inbox_dir: Path | None, state: dict, responses_dir: Path) -> None:
     if not (state.get("token") and state.get("brnrd_url")):
         return
     resolved = _corpus_resolve(brr_dir)
@@ -1121,7 +1142,7 @@ _quota_publish_causes_seen: set[str] = set()
 
 
 @_publish_lane("quota")
-def _publish_quota(brr_dir: Path, inbox_dir: Path | None, state: dict) -> None:
+def _publish_quota(brr_dir: Path, inbox_dir: Path | None, state: dict, responses_dir: Path) -> None:
     if not (state.get("token") and state.get("brnrd_url")):
         return
     try:
@@ -1216,7 +1237,7 @@ def _runners_snapshot(brr_dir: Path) -> dict[str, Any]:
 
 
 @_publish_lane("runners")
-def _publish_runners(brr_dir: Path, inbox_dir: Path | None, state: dict) -> None:
+def _publish_runners(brr_dir: Path, inbox_dir: Path | None, state: dict, responses_dir: Path) -> None:
     if not (state.get("token") and state.get("brnrd_url")):
         return
     payload = _context().runners_snapshot(brr_dir)
@@ -1586,7 +1607,9 @@ def _spawn_pool_width(brr_dir: Path) -> int:
     return _max_concurrent_spawns(cfg)
 
 
-def _dispatch_run_stops(brr_dir: Path, inbox_dir: Path | None, requests: list) -> None:
+def _dispatch_run_stops(
+    brr_dir: Path, inbox_dir: Path | None, requests: list, responses_dir: Path | None = None,
+) -> None:
     """Apply user-issued stops served on the live-runs publish (#476).
 
     The seam where a dashboard tap becomes a dead process. Everything about
@@ -1621,6 +1644,16 @@ def _dispatch_run_stops(brr_dir: Path, inbox_dir: Path | None, requests: list) -
             inbox_dir,
             stopped_by="user",
             reason="stopped from the dashboard",
+            # #1389: lets a resident's own waking event carry the utterance
+            # sweep's aggregate reply. #1396/#1437: this must be the real
+            # responses dir threaded down from `cloud.run_loop`, not a
+            # rebuilt `brr_dir / "responses"` — in account mode those
+            # diverge (the cloud gate's `brr_dir` is the default repo's
+            # `.brr`, its responses dir is the account's), and a reply
+            # landing in a directory no gate thread polls closes the event
+            # (`_set_event_status_if_present(anchor, "done")` still fires)
+            # while delivering nothing, with no error anywhere.
+            responses_dir=responses_dir if responses_dir is not None else brr_dir / "responses",
         )
         run_stop_request.record_consumed(brr_dir, request["request_id"])
         print(f"[brnrd:cloud] stop {run_id} ({stage}) by account owner")
@@ -1655,7 +1688,7 @@ def _report_live_runs_losses(body: Any) -> None:
 
 
 @_publish_lane("live_runs")
-def _publish_live_runs(brr_dir: Path, inbox_dir: Path | None, state: dict) -> None:
+def _publish_live_runs(brr_dir: Path, inbox_dir: Path | None, state: dict, responses_dir: Path) -> None:
     if not (state.get("token") and state.get("brnrd_url")):
         return
     # #476 wyrd §3: ack the stops already dispatched into the kill path, and
@@ -1698,7 +1731,7 @@ def _publish_live_runs(brr_dir: Path, inbox_dir: Path | None, state: dict) -> No
         brr_dir, served if isinstance(served, list) else [],
     )
     if pending:
-        _dispatch_run_stops(brr_dir, inbox_dir, pending)
+        _dispatch_run_stops(brr_dir, inbox_dir, pending, responses_dir)
 
 
 def _github_repo_label(label: str, repo_root: Path) -> str | None:
@@ -1811,7 +1844,7 @@ def _pr_review_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
 
 
 @_publish_lane("pr_review_queue")
-def _publish_pr_review_queue(brr_dir: Path, inbox_dir: Path | None, state: dict) -> None:
+def _publish_pr_review_queue(brr_dir: Path, inbox_dir: Path | None, state: dict, responses_dir: Path) -> None:
     if not (state.get("token") and state.get("brnrd_url")):
         return
     try:
@@ -1857,7 +1890,7 @@ def _run_ledger_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
 
 
 @_publish_lane("run_ledger")
-def _publish_run_ledger(brr_dir: Path, inbox_dir: Path | None, state: dict) -> None:
+def _publish_run_ledger(brr_dir: Path, inbox_dir: Path | None, state: dict, responses_dir: Path) -> None:
     if not (state.get("token") and state.get("brnrd_url")):
         return
     try:

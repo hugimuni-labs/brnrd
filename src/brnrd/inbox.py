@@ -207,13 +207,256 @@ def attachments_of(event: Event) -> list[dict[str, Any]]:
     return _loads_list(event.attachments_json)
 
 
-def enqueue(db: Session, *, repo_id: str, body: str, source: str = "dev", reply_to: dict[str, Any] | None = None, attachments: list[dict[str, Any]] | None = None) -> Event:
+#: #1389 — how long a still-queued event stays eligible to absorb a later
+#: item from the same Telegram album. Telegram delivers every item of one
+#: send as a burst of separate webhook calls; the measured spread (7 events
+#: in 3s) is well inside this, so the window is generous rather than tight
+#: — a merge that *doesn't* happen because the window was too short is a
+#: silent regression to today's one-event-per-photo behaviour, never a lost
+#: message (matched against a **queued** row only, see below); a window
+#: that's too generous just risks matching a media_group_id Telegram
+#: reused, which it does not do.
+_MEDIA_GROUP_MERGE_WINDOW = timedelta(seconds=15)
+
+#: Bound on compare-and-swap retries for a concurrent album merge (see
+#: ``_merge_into_open_media_group`` below). Exhausting it is not an error —
+#: it degrades to "no open event found", the same outcome as a merge that
+#: misses its window, so the caller mints a fresh event. Generous relative
+#: to the largest real album (Telegram caps at 10 items) since a spurious
+#: extra event costs nothing and a dropped attachment is the one outcome
+#: this exists to rule out.
+_MEDIA_GROUP_MERGE_MAX_ATTEMPTS = 12
+
+
+def _find_open_media_group(
+    db: Session, *, repo_id: str, media_group_id: str, chat_id: Any = None,
+) -> Event | None:
+    """The most recent still-**queued** event carrying *media_group_id*.
+
+    Queued-only is the load-bearing choice: an event that already answered
+    (``responded``) is done, and merging into it would silently discard
+    whatever the reply already said. Matching against a queued row instead
+    means the worst case for a merge that misses its window is *today's*
+    behaviour — one more event, never a dropped attachment (the #1389
+    guardrail against a daemon- or server-side fluke rendering a message
+    unanswerable).
+
+    *chat_id*, when given, additionally scopes the match: Telegram's
+    ``media_group_id`` is unique per send, but the merge itself was only
+    ever scoped by ``repo_id`` — and two chats can share one repo (a group
+    and a DM both wired to the same project). Without this, a `#1396`
+    review found that a `media_group_id` collision across those two chats
+    would fold one chat's photo into the other's event. `reply_to` already
+    carries ``chat_id`` for every Telegram event, so this costs nothing to
+    check.
+    """
+    cutoff = datetime.now(timezone.utc) - _MEDIA_GROUP_MERGE_WINDOW
+    candidates = db.execute(
+        select(Event)
+        .where(
+            Event.repo_id == repo_id,
+            Event.status == Event.STATUS_QUEUED,
+            Event.source == "telegram",
+            Event.created_at >= cutoff,
+        )
+        .order_by(Event.seq.desc())
+    ).scalars()
+    for event in candidates:
+        meta = _loads(event.reply_to)
+        if meta.get("media_group_id") != media_group_id:
+            continue
+        if chat_id is not None and meta.get("chat_id") != chat_id:
+            continue
+        return event
+    return None
+
+
+def _merge_into_open_media_group(
+    db: Session,
+    *,
+    repo_id: str,
+    media_group_id: str,
+    body: str,
+    attachments: list[dict[str, Any]] | None,
+    chat_id: Any = None,
+) -> Event | None:
+    """Fold *body* / *attachments* into the open media-group event, or
+    ``None`` (no open event — the caller mints a fresh one).
+
+    #1396 — ``_find_open_media_group``'s SELECT carries no row lock, and
+    Telegram delivers each album item as its own webhook call that
+    ``telegram_webhook`` (a sync ``def``) runs genuinely concurrently in
+    Starlette's threadpool: two overlapping calls could both read the same
+    ``attachments_json``, both append, and the later commit silently
+    overwrite the earlier — one photo gone. Measured: 1-5/20 concurrent
+    5-item-album trials lost an attachment before this fix
+    (``tests/test_brnrd_telegram.py::test_concurrent_album_webhooks_do_not_lose_attachments``).
+
+    ``with_for_update()`` is not the fix here: this service runs on SQLite
+    in dev/test (``run_startup_migrations`` skips entirely for any
+    non-Postgres dialect, so SQLite is a live target, not just a CI
+    artifact) and SQLite has no row-level locking at all — a FOR UPDATE
+    clause is silently dropped, which would make this file's own tests
+    pass while proving nothing about the box that ran them.
+
+    So: compare-and-swap instead of a lock — but the swap is a **reinsert +
+    delete**, not an in-place ``UPDATE``, for a second reason a #1396
+    review caught: an in-place update never touches ``seq``, and delivery
+    is ``Event.seq > since`` (see ``fetch_since`` / ``_QUEUED_ONLY_RATIONALE``
+    below). A daemon that already long-polled item 1 past its cursor would
+    never see items 2..N merge in — they landed in the database with no
+    seq the delivery predicate reads, so a connected daemon delivers 1
+    event carrying 1 photo while the server holds N. Reinserting mints a
+    fresh ``seq`` at the tail of the table, so the merged event re-enters
+    any cursor's delivery window exactly the way a brand-new event would.
+    (The account-mode gate side of this — reconciling an already-ingested
+    ``cloud_event_id`` whose attachment set grew — is `cloud.py`'s
+    ``_loop_once``; see the report.)
+
+    **Reinsert-then-delete, not delete-then-reinsert** — the order is
+    load-bearing, not cosmetic. ``seq`` is a plain autoincrement primary
+    key, not a true never-reuse sequence: on SQLite, a bare ``INTEGER
+    PRIMARY KEY`` hands out ``max(existing rowids) + 1``, so deleting the
+    table's one open row and inserting its replacement *after* can hand
+    back the **exact seq the delete just freed** — proven live by this
+    file's own interleaved-drain test, which stayed red with a delete-
+    first ordering even though the merge itself was correct (one row,
+    right attachments) because that row's seq never actually advanced.
+    Inserting the replacement *while the original row still occupies the
+    table's current max* sidesteps the recycling on every backend, not
+    only ones without a true sequence — Postgres never reuses a dispensed
+    ``SERIAL``/``IDENTITY`` value either way, so this ordering costs it
+    nothing. The one wrinkle: ``event_id`` is ``UNIQUE``, so the
+    replacement can't yet carry the real one while the original row still
+    holds it — it's inserted under a throwaway placeholder, renamed to the
+    real ``event_id`` only after the original row is gone (still inside
+    the same transaction; the whole three-statement sequence commits or
+    rolls back together).
+
+    The CAS re-checks ``body`` in the ``WHERE`` as well as
+    ``attachments_json`` — a second #1396 finding: a mixed photo+video
+    album has one item merge with ``attachments=None`` and a non-empty
+    annotated body (the video branch), so an attachments-only CAS let a
+    racing photo item's stale-``body`` write silently overwrite that
+    annotation even though its own ``WHERE`` still matched. Guarding both
+    columns means either racer's write is rejected the moment *either*
+    field it read is no longer current.
+
+    When two merges race, at most one DELETE's WHERE still matches
+    (rowcount 1); the other's matches nothing (rowcount 0, and the whole
+    attempt — including its already-flushed placeholder insert — is
+    rolled back, so no orphaned placeholder row survives) and it retries
+    against freshly re-read state. Atomic on every backend this service
+    runs — a single row-scoped DELETE is race-free relative to any other
+    statement, SQLite and Postgres alike, with no reliance on isolation
+    level or backend-specific locking syntax.
+    """
+    for _ in range(_MEDIA_GROUP_MERGE_MAX_ATTEMPTS):
+        existing = _find_open_media_group(
+            db, repo_id=repo_id, media_group_id=media_group_id, chat_id=chat_id,
+        )
+        if existing is None:
+            return None
+        new_body = existing.body
+        if body and not (existing.body or "").strip():
+            new_body = body
+        new_attachments_json = existing.attachments_json
+        if attachments:
+            merged = attachments_of(existing)
+            merged.extend(attachments)
+            new_attachments_json = json.dumps(merged)
+        if new_body == existing.body and new_attachments_json == existing.attachments_json:
+            return existing
+        # Insert first, under a placeholder id — see the docstring for why
+        # this ordering (not delete-then-insert) is what actually secures a
+        # fresh, never-reused seq.
+        replacement = Event(
+            event_id=f"_merging_{ids.event_id()}",
+            repo_id=existing.repo_id,
+            runtime_id=existing.runtime_id,
+            source=existing.source,
+            body=new_body,
+            reply_to=existing.reply_to,
+            status=existing.status,
+            created_at=existing.created_at,
+            response_status=existing.response_status,
+            response_len=existing.response_len,
+            response_ms=existing.response_ms,
+            responded_at=existing.responded_at,
+            response_sha=existing.response_sha,
+            conversation_id=existing.conversation_id,
+            attachments_json=new_attachments_json,
+        )
+        db.add(replacement)
+        db.flush()  # assigns replacement.seq without committing
+        result = db.execute(
+            delete(Event).where(
+                Event.seq == existing.seq,
+                Event.body == existing.body,
+                Event.attachments_json == existing.attachments_json,
+            )
+        )
+        if result.rowcount != 1:
+            # Lost the race: another merge (or a response) landed between
+            # our read and our write. Its commit is authoritative — never
+            # overwrite it with a merge computed from data that's now
+            # stale. Roll back (discards the placeholder insert above too)
+            # and retry against freshly re-read state.
+            db.rollback()
+            continue
+        db.execute(
+            update(Event)
+            .where(Event.seq == replacement.seq)
+            .values(event_id=existing.event_id)
+        )
+        db.commit()
+        db.refresh(replacement)
+        return replacement
+    return None
+
+
+def enqueue(
+    db: Session,
+    *,
+    repo_id: str,
+    body: str,
+    source: str = "dev",
+    reply_to: dict[str, Any] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
+    media_group_id: str | None = None,
+) -> Event:
+    """Queue one inbound event, or fold it into an open Telegram album.
+
+    *media_group_id*, when given, is Telegram's own album marker (#1389):
+    a still-queued event already carrying the same marker in its
+    ``reply_to`` absorbs this message's body (only if it hadn't one — a
+    caption can land on any item of an album) and attachment pointers
+    instead of minting a second event, so a five-photo send becomes one
+    event with five attachments rather than five events with one photo
+    each. No match ⇒ an ordinary new event, with the marker folded into
+    its own ``reply_to`` so a *later* item in the same album can find it.
+    """
+    media_group_id = str(media_group_id or "").strip() or None
+    if media_group_id:
+        merged_event = _merge_into_open_media_group(
+            db,
+            repo_id=repo_id,
+            media_group_id=media_group_id,
+            body=body,
+            attachments=attachments,
+            chat_id=(reply_to or {}).get("chat_id"),
+        )
+        if merged_event is not None:
+            return merged_event
+    reply_to = dict(reply_to or {})
+    if media_group_id:
+        reply_to["media_group_id"] = media_group_id
     event = Event(
         event_id=ids.event_id(),
         repo_id=repo_id,
         source=source,
         body=body,
-        reply_to=json.dumps(reply_to or {}),
+        reply_to=json.dumps(reply_to),
         attachments_json=json.dumps(attachments or []),
         status=Event.STATUS_QUEUED,
     )

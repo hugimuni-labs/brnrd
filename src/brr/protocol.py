@@ -638,6 +638,68 @@ def known_origin_ids(inbox_dir: Path, meta_key: str) -> set[str]:
     return seen
 
 
+def known_origin_events(inbox_dir: Path, meta_key: str) -> dict[str, dict[str, Any]]:
+    """Like :func:`known_origin_ids`, keyed to the local event dict itself.
+
+    #1396 — a caller that only needs *whether* an upstream id was seen wants
+    :func:`known_origin_ids`; a caller that needs to act on the local copy
+    (fold in attachments an upstream merge added after this daemon already
+    ingested the event once) needs the event dict too, so it isn't re-read
+    from disk a second time. Same one-id-per-file assumption as
+    :func:`known_origin_ids` — the ingestion path this pairs with
+    (``gates/cloud.py``'s ``_loop_once``) never creates a second local file
+    for one upstream id, so "last one wins" on a duplicate never triggers in
+    practice.
+    """
+    seen: dict[str, dict[str, Any]] = {}
+    if not inbox_dir.exists():
+        return seen
+    for entry in os.scandir(inbox_dir):
+        if not entry.name.endswith(".md"):
+            continue
+        ev = _read_event(Path(entry.path))
+        if not ev:
+            continue
+        value = str(ev.get(meta_key) or "").strip()
+        if value:
+            seen[value] = ev
+    return seen
+
+
+def append_event_attachments(
+    inbox_dir: Path, event: dict[str, Any], new_files: list[Path],
+) -> list[str]:
+    """Move *new_files* into *event*'s attachment dir and extend its
+    ``attachments:`` field. Returns the filenames actually added.
+
+    Companion to :func:`create_event`'s own attachment handling, for the
+    #1396 reconcile: an event already ingested from an upstream source
+    (Telegram, via ``gates/cloud.py``) can grow more attachments on a later
+    poll when an album item merges into it server-side after this daemon
+    already ingested an earlier item. Appends only — existing names are
+    never touched or renumbered, so anything already resolved via
+    :func:`event_attachment_paths` keeps resolving.
+    """
+    if not new_files:
+        return []
+    eid = str(event.get("id") or "")
+    adir = attachments_dir_for_event(inbox_dir, eid)
+    adir.mkdir(parents=True, exist_ok=True)
+    existing_names = event_attachment_names(event)
+    added: list[str] = []
+    for offset, src in enumerate(new_files):
+        src = Path(src)
+        # Always index-prefixed from the running count — disambiguates from
+        # whatever is already on disk (including a single un-prefixed
+        # original) without needing to rename anything that's already there.
+        name = f"{len(existing_names) + offset:02d}-{src.name}"
+        dest = adir / name
+        shutil.move(str(src), str(dest))
+        added.append(name)
+    update_event_meta(event, attachments=",".join(existing_names + added))
+    return added
+
+
 def _parse_iso_epoch(value: object) -> float | None:
     """Parse the event ``defer_until`` timestamp, returning epoch seconds."""
     if value is None:
