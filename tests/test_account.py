@@ -1534,10 +1534,22 @@ def test_envoy_shim_blocker_itself_works(tmp_path):
 
 
 def test_envoy_readme_does_not_regress_to_bare_python3_commands():
-    """Ensure examples/envoy/README.md does not regress to bare `python3`
-    invocations in its examples — the documentation must guide users to an
-    interpreter where brr is importable.
+    """Lint the README for command lines that *start* with a bare ``python3``.
+
+    The first version of this guard blocklisted the substrings
+    ``"python3 x-post.py"`` / ``x-read`` / ``x-browser`` — which is wrong in
+    both directions at once, and the wrong-in-the-good-direction half is the
+    one that bites. ``<repo>/.venv/bin/python3 x-post.py`` *contains*
+    ``python3 x-post.py``, so the guard rejected the exact invocation the
+    same commit recommends; and the regression the README actually carried,
+    ``python3 ~/brnrd/account/x-post.py``, was in no blocklist at all. A
+    guard has to be able to fire on the real defect and stay silent on the
+    real fix, or it is a coin toss with a docstring.
+
+    So: anchor on the *start of a command line*, which is where an
+    interpreter is named, and let any path-qualified python through.
     """
+    import re
     from pathlib import Path
 
     repo_root = Path(__file__).parent.parent
@@ -1545,23 +1557,46 @@ def test_envoy_readme_does_not_regress_to_bare_python3_commands():
     assert readme_path.exists(), f"README not found at {readme_path}"
     content = readme_path.read_text(encoding="utf-8")
 
-    # The README's install steps should name the requirement clearly
     assert "brr" in content.lower(), "README must mention brr requirement"
     assert (
-        "importable" in content.lower()
-        or "interpreter" in content.lower()
+        "importable" in content.lower() or "interpreter" in content.lower()
     ), "README must clarify which interpreter to use"
 
-    # Reject bare python3 invocations in examples (lines that look like commands)
-    # OK patterns: <python-with-brr>, .venv/bin/python3, etc.
-    # NOT OK: just "python3 x-post.py" or "python3 x-read.py" or "python3 x-browser.py"
-    bad_patterns = [
-        "python3 x-post.py",
-        "python3 x-read.py",
-        "python3 x-browser.py",
+    # A command line whose first token is a bare `python3` (no directory
+    # component) invoking one of these scripts. `.venv/bin/python3 x-post.py`
+    # and `<python-with-brr> x-post.py` both carry a prefix and pass.
+    bare = re.compile(r"(?m)^[\s`>*\-]*python3\s+\S*(x-post|x-read|x-browser)\.py")
+    offenders = [m.group(0).strip() for m in bare.finditer(content)]
+    assert not offenders, (
+        "README regressed to a bare system `python3` for the envoy shims: "
+        f"{offenders} -- name an interpreter where brr is importable"
+    )
+
+
+def test_the_readme_lint_can_actually_fire():
+    """The lint above is keyed on absence; without this it can go green over
+    a README that says anything at all.
+
+    Drives both directions on synthetic text: the regression form the README
+    once carried must trip it, and the two recommended forms must not.
+    """
+    import re
+
+    bare = re.compile(r"(?m)^[\s`>*\-]*python3\s+\S*(x-post|x-read|x-browser)\.py")
+
+    must_fire = [
+        'python3 ~/brnrd/account/x-post.py "text"',
+        "    python3 x-browser.py login",
+        "- python3 x-read.py --json",
     ]
-    for pattern in bad_patterns:
-        assert pattern not in content, (
-            f"README regressed: contains bare '{pattern}' "
-            f"instead of directing to an interpreter where brr is importable"
-        )
+    for line in must_fire:
+        assert bare.search(line), f"lint failed to catch a real regression: {line!r}"
+
+    must_not_fire = [
+        "<repo>/.venv/bin/python3 x-post.py …",
+        "<python-with-brr> x-browser.py login",
+        "/usr/local/bin/python3 x-read.py",
+        "run it with python3 if you like, but name the interpreter",
+    ]
+    for line in must_not_fire:
+        assert not bare.search(line), f"lint fired on a correct form: {line!r}"

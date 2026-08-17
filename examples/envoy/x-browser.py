@@ -35,14 +35,26 @@ import sys
 
 try:
     from brr import envoy_x_browser
-except ModuleNotFoundError as exc:
+except ImportError as exc:
+    # Only claim "wrong interpreter" when brr itself is what is missing.
+    # A ModuleNotFoundError raised *inside* brr names some other module, and
+    # telling that reader to switch interpreters sends them to a remedy that
+    # cannot work -- the message would contradict the very check it tells
+    # them to run. An ImportError that is not a ModuleNotFoundError (a stale
+    # or half-copied install where ``brr`` imports but the submodule is gone)
+    # carries name="brr" and is caught here on purpose: it used to fall
+    # through as a bare traceback, which is the thing this guard exists to
+    # stop.
+    _missing = getattr(exc, "name", None)
+    if _missing and _missing != "brr" and not _missing.startswith("brr."):
+        raise
     raise SystemExit(
-        "x-browser.py needs the brr package: this interpreter cannot import it. "
-        "Run the script with an interpreter that has brr installed, usually:\n"
-        "  <repo>/.venv/bin/python3 x-browser.py […]\n"
-        "or wherever 'python3 -c import\\ brr' works in your environment.\n"
-        "The system 'python3' on the PATH often cannot import brr; "
-        "that is usually the issue, not the package."
+        "x-browser.py needs the brr package, and this interpreter cannot import it.\n"
+        f"  you ran: {sys.executable}\n"
+        "Use an interpreter that already has brr -- usually <repo>/.venv/bin/python3 --\n"
+        "or install brr into this one: pip install -e <repo>\n"
+        "The system python3 on PATH usually cannot import brr; that is the common\n"
+        "cause, but a checkout that was never installed anywhere lands here too."
     ) from exc
 
 HERE = os.path.dirname(os.path.abspath(__file__))
