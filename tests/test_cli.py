@@ -266,6 +266,59 @@ def test_relic_pr_accepts_a_hash_prefix_and_a_url(tmp_path, monkeypatch):
     assert numbers == [42, 43]
 
 
+def test_relic_pr_keeps_the_repo_a_url_names(tmp_path, monkeypatch, capsys):
+    """#1461: a full PR URL names its own ``owner/repo`` — kept, not reduced
+    to a bare number the way ``forges.parse_pull_request_number`` used to
+    throw it away."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    assert main(["relic", "pr", "https://github.com/hugimuni-labs/brnrd/pull/1461"]) == 0
+    assert _relic_lines(outbox) == [
+        {"kind": "pr", "number": 1461, "repo": "hugimuni-labs/brnrd"},
+    ]
+    assert "pr #1461 in hugimuni-labs/brnrd" in capsys.readouterr().out
+
+
+def test_relic_pr_explicit_repo_wins_over_the_url(tmp_path, monkeypatch):
+    """An explicit ``--repo`` is a declaration; it outranks a URL's own
+    reading, the same "declaration outranks inference" order
+    ``_ForgeLinks._thread_repo`` already uses for every other relic kind."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    assert main([
+        "relic", "pr", "https://github.com/hugimuni-labs/brnrd/pull/1461",
+        "--repo", "hugimuni-labs/fork",
+    ]) == 0
+    assert _relic_lines(outbox) == [
+        {"kind": "pr", "number": 1461, "repo": "hugimuni-labs/fork"},
+    ]
+
+
+def test_relic_pr_bare_number_stays_repo_less(tmp_path, monkeypatch):
+    """A bare number or ``#N`` names no repo — it means this checkout's own
+    origin, same as always, and carries no ``repo`` key at all."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    assert main(["relic", "pr", "#42"]) == 0
+    assert _relic_lines(outbox) == [{"kind": "pr", "number": 42}]
+
+
+def test_relic_pr_refuses_a_malformed_repo(tmp_path, monkeypatch, capsys):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    assert main(["relic", "pr", "1175", "--repo", "brnrd"]) == 1
+    assert "owner/name" in capsys.readouterr().err
+    assert not (outbox / ".relics.jsonl").exists()
+
+
 def test_relic_pr_refuses_unparseable_input(tmp_path, monkeypatch, capsys):
     outbox = tmp_path / "outbox"
     outbox.mkdir()
