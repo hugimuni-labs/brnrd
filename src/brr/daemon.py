@@ -7573,41 +7573,66 @@ def _queue_child_message(
     return True
 
 
-#: #1389 — measured burst: a text, five photos, a follow-up text, 7 events
-#: in 3 seconds from one Telegram utterance. Wide enough to catch a real
-#: burst, narrow enough that two genuinely separate messages a few quiet
-#: seconds apart in the same conversation don't get swept together.
-_UTTERANCE_SWEEP_WINDOW_S = 3.0
-
-
 def _utterance_sibling_events(inbox_dir: Path, anchor: dict) -> list[dict]:
-    """Other still-**pending** events from *anchor*'s conversation, created
-    within :data:`_UTTERANCE_SWEEP_WINDOW_S` of it (#1389).
+    """Other still-**pending** events from *anchor*'s own burst (#1389,
+    tightened by #1396).
 
     Deliberately narrow both ways — this is the fluke guardrail from the
     issue ("avoid the scenarios where a daemon-side fluke rendered some
     messages unanswerable"), not a hedge:
 
-    - **same conversation only.** A pending event from a different
-      correspondent is never touched, however close in time — a coincidence
-      on this daemon must never make a stranger's message unanswerable.
+    - **same thread, reusing `_events_share_thread`** rather than a private
+      redefinition of "one utterance" — this used to compare
+      `conversation_key_for_event` directly, a second private copy of the
+      predicate `_weave_burst_siblings_into_body` already uses to decide
+      which pending events belong in one wake's prompt (#1396 review).
+    - **same correspondent too, when the anchor's own identity resolves.**
+      `conversation_key` alone is chat-scoped — one key for every
+      participant of a Telegram group or supergroup — so matching on it
+      alone let the account owner cancelling their own run also sweep a
+      *different* person's message sent moments later in the same group
+      (#1396). Every channel that reaches this path already carries enough
+      to resolve `correspondent_key_for_event` (native gates set
+      `<channel>_user_id` directly; the cloud relay copies it into
+      `cloud_user_id` — see `gates/cloud.py`'s `_origin_meta`), so this
+      costs nothing extra to check. Falls back to thread-only matching only
+      when the anchor's own correspondent key doesn't resolve (a channel
+      with no identity concept at all), never when the *sibling's* doesn't
+      — an unidentifiable sibling in an identified anchor's thread is never
+      swept.
     - **status == "pending" only**, not "processing". A sibling that
       already spawned its own run is a live process; this function only
       ever retires letters nothing has picked up yet.
+    - **`_event_mtime`, not the `created` field.** `created` is written at
+      second granularity (`protocol.py`'s `strftime("%Y-%m-%dT%H:%M:%SZ")`),
+      so a window measured against it is really one second wider than
+      stated depending on sub-second alignment. `_event_mtime` (file mtime)
+      is what the weave predicate above already uses for the same reason,
+      spread over the same `max(burst_window, burst_max_wait)` window —
+      reused here rather than the sweep's own separate
+      `_UTTERANCE_SWEEP_WINDOW_S=3.0` constant, which measured a narrower
+      slice of the exact same "did these arrive together" question the
+      weave already answers.
     """
     anchor_conv = conversations.conversation_key_for_event(anchor)
-    anchor_ts = protocol._parse_iso_epoch(anchor.get("created"))
-    if not anchor_conv or anchor_ts is None:
+    anchor_corr = conversations.correspondent_key_for_event(anchor)
+    if not anchor_conv:
         return []
+    anchor_mtime = _event_mtime(anchor)
+    max_spread = max(_BURST_WINDOW_DEFAULT, _BURST_MAX_WAIT_DEFAULT)
     anchor_id = anchor.get("id")
     siblings = []
     for ev in protocol.list_pending(inbox_dir):
         if ev.get("id") == anchor_id or ev.get("status") != "pending":
             continue
-        if conversations.conversation_key_for_event(ev) != anchor_conv:
+        if not _events_share_thread(
+            anchor, ev, correspondent_key=anchor_corr or "", conversation_key=anchor_conv,
+        ):
             continue
-        ts = protocol._parse_iso_epoch(ev.get("created"))
-        if ts is None or abs(ts - anchor_ts) > _UTTERANCE_SWEEP_WINDOW_S:
+        if anchor_corr and conversations.correspondent_key_for_event(ev) != anchor_corr:
+            continue
+        mtime = _event_mtime(ev)
+        if anchor_mtime > 0 and mtime > 0 and abs(mtime - anchor_mtime) > max_spread:
             continue
         siblings.append(ev)
     return siblings

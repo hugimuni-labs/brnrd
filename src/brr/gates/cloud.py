@@ -754,7 +754,10 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     _try_refresh_publishing_credential(state, force=True, brr_dir=brr_dir)
     threading.Thread(
         target=_dashboard_publish_loop,
-        args=(brr_dir, inbox_dir),
+        # #1396/#1437: this run's own responses_dir, not the fixed
+        # `brr_dir / "responses"` layout — account mode's real value
+        # diverges (see `_dashboard_publish_tick`'s docstring).
+        args=(brr_dir, inbox_dir, responses_dir),
         daemon=True,
         name="cloud-dashboard-publish",
     ).start()
@@ -1024,6 +1027,55 @@ def _annotate_failures(
     return f"{body}\n\n{joined}" if body else joined
 
 
+def _reconcile_grown_attachments(
+    state: dict, inbox_dir: Path, local_event: dict, ev: dict,
+) -> bool:
+    """Fold newly-arrived attachments into an already-ingested event.
+
+    #1396 — a merged Telegram album item bumps the server-side event's
+    ``seq`` so it re-enters this daemon's delivery window
+    (``inbox_service._merge_into_open_media_group``), but its *identity* —
+    ``event_id`` — never changes; that is the whole point, one logical
+    message rather than several. Treating any already-seen
+    ``cloud_event_id`` as a pure replay (the pre-#1396 behaviour, and the
+    finding this closes) silently drops that growth: the poll re-serves 3
+    photos, this daemon already has 1 on disk from an earlier poll, and the
+    other 2 vanish with no error anywhere. This reconciles instead — the
+    merge only ever *appends* attachments server-side
+    (``attachments_of(existing) + attachments``), so anything beyond the
+    count already local is new by construction; download just that tail and
+    fold it in. Returns ``True`` on a real reconcile (something appended),
+    ``False`` when there was nothing new — the caller's replay-drop path
+    still applies to an honest replay.
+    """
+    already = len(protocol.event_attachment_names(local_event))
+    names = _attachment_names(ev.get("attachments"))
+    if not names or len(names) <= already:
+        return False
+    event_id = str(ev.get("event_id") or "")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        new_files: list[Path] = []
+        failed: list[str] = []
+        for i in range(already, len(names)):
+            dest = Path(tmpdir) / f"{i:02d}-{names[i]}"
+            if _download_attachment(state["brnrd_url"], state["token"], event_id, i, dest):
+                new_files.append(dest)
+            else:
+                failed.append(names[i])
+        added = protocol.append_event_attachments(inbox_dir, local_event, new_files)
+    if failed:
+        print(
+            f"[brnrd:cloud] event {event_id} grew {len(failed)} attachment(s) this "
+            f"daemon could not fetch on reconcile — {failed}"
+        )
+    if added:
+        print(
+            f"[brnrd:cloud] event {event_id} gained {len(added)} attachment(s) from "
+            "a merged album item"
+        )
+    return bool(added)
+
+
 def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     state = _load_state(brr_dir)
     since = state.get("since", 0)
@@ -1044,13 +1096,21 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     # 339 events replayed in a single poll, every one of them already
     # answered, 120 of them still sitting in this very directory stamped
     # ``delivered``. The daemon had the evidence and never looked at it.
-    seen = protocol.known_origin_ids(inbox_dir, "cloud_event_id") if events else set()
+    known = protocol.known_origin_events(inbox_dir, "cloud_event_id") if events else {}
     replayed = 0
     for ev in events:
-        if str(ev.get("event_id") or "") in seen:
-            # Already ingested under some earlier cursor — dropping it here is
-            # what makes a cursor reset cost nothing.
-            replayed += 1
+        local_event = known.get(str(ev.get("event_id") or ""))
+        if local_event is not None:
+            # Already ingested under some earlier cursor — normally what
+            # makes a cursor reset cost nothing. But the *same* event_id can
+            # legitimately re-arrive carrying more attachments than it did
+            # the first time (a Telegram album item merging into it
+            # server-side, #1396's `_merge_into_open_media_group`, bumps its
+            # seq to re-enter this daemon's delivery window without changing
+            # its identity) — that growth must be folded in, not dropped as
+            # an ordinary replay.
+            if not _reconcile_grown_attachments(state, inbox_dir, local_event, ev):
+                replayed += 1
             continue
         _log_raw_attachments_observation(ev)
         # #525 — pointers become local files *now*, at ingestion time: the
