@@ -17,7 +17,17 @@ from brnrd.routers.pairing import telegram_pair_core
 from brnrd.activity_records import dedupe_activity_records, fresh_activity_records
 from brnrd.auth import get_db
 from brnrd.capabilities import evaluate_capabilities
-from brnrd.models import Account, ActivityRecord, ConfigChangeRequest, Daemon, Event, GitHubInstalledRepo, Repo
+from brnrd.models import (
+    Account,
+    ActivityRecord,
+    ChannelRoute,
+    ConfigChangeRequest,
+    Daemon,
+    Event,
+    GitHubInstalledRepo,
+    Repo,
+    TgPairCode,
+)
 
 from ._session import (
     _account_id,
@@ -886,6 +896,104 @@ def dashboard_telegram_pair_api(request: Request, db: Session = Depends(get_db))
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
     started = telegram_pair_core(db, request.app.state.settings, account_id, None)
     return JSONResponse(started.model_dump())
+
+
+@router.get("/v1/dashboard/telegram-pair/{code}")
+def dashboard_telegram_pair_status_api(code: str, request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """#1464 — the minting session's outcome readback.
+
+    The one moment a hijacked or wrong-phone redeem is caught by the person
+    who minted the code: ColdStart polls this while its panel is open,
+    keyed on the `pair_code` the mint above already handed it. Scoped to
+    the *minting* account — a code belongs to whoever minted it, and a
+    session for a different account learns nothing about it, not even
+    whether it exists (a 404 either way).
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    pc = db.execute(
+        select(TgPairCode).where(TgPairCode.code == code, TgPairCode.account_id == account_id)
+    ).scalar_one_or_none()
+    if pc is None:
+        return JSONResponse({"detail": "unknown pair code"}, status_code=404)
+    return JSONResponse({"consumed": bool(pc.consumed), "display": pc.redeemed_display})
+
+
+def _paired_chat_out(route: ChannelRoute, *, repo_full_name: str | None) -> dict[str, Any]:
+    return {
+        "id": route.id,
+        "platform": route.platform,
+        # None = a private/untitled chat (Telegram) or any WhatsApp route —
+        # see `models.ChannelRoute.chat_title`; the frontend renders that
+        # distinctly from an empty string, never as "untitled".
+        "chat_title": route.chat_title,
+        # None = a route written before #409's principal column, or before
+        # #1464 started capturing a display — authorizes nobody either way
+        # (see `webhooks._authorized`), so it is safe to revoke sight
+        # unseen; the row still belongs in this list precisely because it
+        # is the one a reader most wants a revoke button on.
+        "principal_display": route.paired_user_display,
+        "paired_at": _iso(route.created_at),
+        "paired_at_label": _age_label(route.created_at),
+        # None = account-level (repo resolved per message); a name = pinned.
+        "repo_full_name": repo_full_name,
+    }
+
+
+@router.get("/v1/dashboard/paired-chats")
+def dashboard_paired_chats_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """#1464 — the transparency + revocation floor: every `ChannelRoute`
+    that can reach this account's resident, in one list, with what a
+    reader needs to recognise and revoke one (platform / chat title if
+    known / principal display / paired-at). Session-scoped; a route
+    belongs to the account, never a repo, so this reads the whole account
+    the same way `_account_channel_directory` does for the repo panel."""
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    routes = list(
+        db.execute(select(ChannelRoute).where(ChannelRoute.account_id == account_id).order_by(ChannelRoute.created_at.desc())).scalars()
+    )
+    repo_ids = {r.repo_id for r in routes if r.repo_id is not None}
+    repos_by_id = {r.id: r for r in db.execute(select(Repo).where(Repo.id.in_(repo_ids))).scalars()} if repo_ids else {}
+    return JSONResponse(
+        {
+            "paired_chats": [
+                _paired_chat_out(route, repo_full_name=(repos_by_id.get(route.repo_id).repo_full_name if route.repo_id and repos_by_id.get(route.repo_id) else None))
+                for route in routes
+            ]
+        }
+    )
+
+
+@router.delete("/v1/dashboard/paired-chats/{route_id}")
+def dashboard_paired_chat_revoke_api(route_id: str, request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """#1464 — the revoke half of the floor. Deletes the `ChannelRoute` row
+    outright rather than clearing `paired_user_id`: the chat/topic must
+    stop authorizing *and* stop existing as a routing target, the same
+    "re-pair from scratch" state a chat that was never paired is in. This
+    is deliberately **not** #1459's disconnect semantics (which un-pins a
+    *repo* from a route, leaving the pairing itself intact) — revoke kills
+    the principal, full stop.
+
+    The authz consequence is structural, not a flag this endpoint sets:
+    `webhooks._channel_route` looks the row up by `(platform, channel_id,
+    topic_id)` on every inbound message, so a deleted row makes the next
+    message from that chat read as never-paired — `_UNPAIRED_TEXT`, not a
+    silently-refused one.
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    route = db.execute(
+        select(ChannelRoute).where(ChannelRoute.id == route_id, ChannelRoute.account_id == account_id)
+    ).scalar_one_or_none()
+    if route is None:
+        return JSONResponse({"detail": "paired chat not found"}, status_code=404)
+    db.delete(route)
+    db.commit()
+    return JSONResponse({"ok": True})
 
 
 @router.get("/v1/dashboard/repos")
