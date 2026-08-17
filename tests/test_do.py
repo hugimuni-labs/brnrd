@@ -695,6 +695,29 @@ def test_cut_refuses_incident_lenient_shape_before_staging(
     assert list(outbox.glob("do-*-cut-*.md")) == []
 
 
+def test_cut_refuses_a_strands_row_stranded_in_the_lenient_body(
+    tmp_path, monkeypatch, capsys,
+):
+    """`strands:` (#1197) is a declaration key exactly like `asks:` — a row
+    for it stranded after the lenient fence is the same staging casualty,
+    not a legal minimal bolt with machine text swallowed into the body."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    declaration = tmp_path / "bolt.md"
+    declaration.write_text(
+        "cut: true\n---\nstrands:\n"
+        "  run-child: handoff — the next wake converges it\n",
+        encoding="utf-8",
+    )
+
+    assert main(["cut", str(declaration), "--timeout", "0.01"]) == 1
+    err = capsys.readouterr().err
+    assert "invalid cut declaration shape" in err
+    assert list(outbox.glob("do-*-cut-*.md")) == []
+
+
 def test_cut_refuses_bullet_list_inside_canonical_declaration(
     tmp_path, monkeypatch, capsys,
 ):
