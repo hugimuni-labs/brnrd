@@ -73,6 +73,25 @@
 	// machine no longer reads as the classic "nothing is paired yet": it
 	// gets its own honest middle state, `pairedNoRepo` below, instead of
 	// either vanishing (the bug) or claiming a repo is enabled (a lie).
+	//
+	// Fifth trace, 2026-08-17 (origin-aware onboarding, the dispatched
+	// task's own framing): a visitor arriving on a phone cannot run either
+	// step below — no terminal exists there. The spec's own prior was "lead
+	// the mobile CTA with the messenger door" (Telegram/WhatsApp), argued
+	// down here against what the server actually offers: `TgPairCode.repo_id`
+	// is required (`models.py`), both `telegram_pair_core` and
+	// `_pair_repo_telegram_core` (`routers/pairing.py`, `routers/repo_actions.py`)
+	// 404 without an already-connected `Repo`, and `settings.telegram_bot_username`
+	// never rides `/v1/dashboard/repos` or any other wire payload — so this
+	// component cannot construct even a bare `t.me/<bot>` link on its own,
+	// let alone a working `?start=` deep link, for an account with no repo
+	// yet. A phone visitor is, today, always upstream of that gate. So the
+	// mobile CTA states the honest intermediate — the messenger door opens
+	// once a repo is enabled, not before, machine-paired or not — instead
+	// of rendering a link with nothing behind it; the install ladder
+	// survives underneath as a demoted, informational "on your computer"
+	// note (the pairing command is not copy-actionable there — nothing on
+	// a phone can run it).
 	interface Props {
 		// `null` = the repos fetch hasn't landed. Render nothing rather than
 		// flashing a cold start at an account that has fifteen repos: the
@@ -94,9 +113,40 @@
 		// falls back to the pre-fix, repo-scoped-only gate below, same
 		// "absent means unknown, not false" contract `installations` uses.
 		machines?: MachinesSummary | null;
+		// Test/SSR-injectable override for the client-derived mobile signal
+		// below. `svelte/server` (the SSR harness every test in this file
+		// renders through) never runs `$effect` and has no `window` — so the
+		// real detector can't fire there. `undefined`/`null` means "detect
+		// for real" (the runtime default); a test passes `true`/`false` to
+		// pin one branch without a browser. Not a second notion of mobile —
+		// the one detector, with one seam for the one environment that
+		// can't run it.
+		mobileOverride?: boolean | null;
 	}
 
-	let { repos, installations = null, pairCommand = null, machines = null }: Props = $props();
+	let {
+		repos,
+		installations = null,
+		pairCommand = null,
+		machines = null,
+		mobileOverride = null
+	}: Props = $props();
+
+	// Coarse pointer / UA-CH, client-side only — no new server state, no
+	// User-Agent sniffing on the backend. `pointer: coarse` is the primary
+	// signal (a touchscreen with no precise pointer alongside it); UA-CH's
+	// `navigator.userAgentData.mobile` is read too since Chromium ships it
+	// and it costs nothing extra to check. Neither is asked for on a host
+	// that lacks it (`matchMedia`/`userAgentData` both optional-chained) —
+	// this never throws on an older browser, it just reads as desktop.
+	let detectedMobile = $state(false);
+	$effect(() => {
+		if (typeof window === 'undefined') return;
+		const coarse = window.matchMedia?.('(pointer: coarse)').matches ?? false;
+		const uaMobile = (navigator as { userAgentData?: { mobile?: boolean } }).userAgentData?.mobile;
+		detectedMobile = coarse || uaMobile === true;
+	});
+	let isMobile = $derived(mobileOverride ?? detectedMobile);
 
 	const INSTALL_COMMAND = 'npm install -g brnrd';
 
@@ -185,66 +235,102 @@
 			order.
 		</p>
 
-		<ol class="mt-4 flex flex-col gap-4">
-			<li>
-				<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
-					<span class="text-amber-200/80">01</span> install the cli
+		{#if isMobile}
+			<!-- Fifth trace (2026-08-17, origin-aware onboarding): neither step
+			     below runs from a phone — no terminal exists there. The door a
+			     phone CAN use leads first, honestly: no account-level messenger
+			     deep-link is mintable pre-repo today (see the detector's comment
+			     above), so this states the true unlock condition instead of a
+			     link with nothing behind it. The ladder survives underneath as
+			     reference, demoted — not copy-actionable; nothing here runs from
+			     a phone regardless. -->
+			<div class="mt-4 border border-amber-900/30 bg-amber-950/10 p-3" data-testid="messenger-door">
+				<p class="font-mono text-[11px] tracking-wide text-amber-200/80 uppercase">
+					the messenger door
 				</p>
-				<div class="mt-1.5 flex items-start gap-2">
-					<pre
-						class="min-w-0 grow border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] wrap-anywhere whitespace-pre-wrap text-stone-300"><code
-							>{INSTALL_COMMAND}</code
-						></pre>
-					<button
-						type="button"
-						class="shrink-0 cursor-pointer border border-stone-800 px-2 py-2 font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-						onclick={() => copy('install', INSTALL_COMMAND)}
-						>{copied === 'install' ? 'copied' : 'copy'}</button
-					>
-				</div>
-				<p class="mt-1 font-mono text-[11px] text-ink-mute">
-					or <code class="text-stone-400">uv tool install brnrd</code> ·
-					<code class="text-stone-400">pipx install brnrd</code>
+				<p class="mt-1.5 text-sm text-stone-300">
+					brnrd talks back in Telegram or WhatsApp once a repo is enabled — no laptop needed after
+					that. It opens on a computer, not from here: install the CLI, then run
+					<code>brnrd</code> in a checkout.
 				</p>
-			</li>
+			</div>
 
-			<li>
-				<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
-					<span class="text-amber-200/80">02</span> run <code>brnrd</code> — the guided setup
-				</p>
-				{#if pairCommand}
-					{#if pairParts?.setupLine}
-						<!-- #1277a: scene-setting, not copyable — the box below hands
-						     over only the line that is unconditionally runnable. -->
-						<p class="mt-1.5 font-mono text-[11px] text-ink-mute">from your repo checkout:</p>
-					{/if}
-					<!-- Wrapped, not scrolled (driven on a 390px phone, 2026-08-03):
-					     `overflow-x-auto` clipped the middle line to "brnrd account
-					     connect https://brnrd.de" with no visible tell, which is a
-					     plausible-looking wrong domain on the one command that has
-					     to be right. A soft wrap keeps every character on screen and
-					     the copy button hands over the real string regardless. -->
+			<p class="mt-4 font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
+				on your computer
+			</p>
+			<p class="mt-1.5 text-sm text-stone-400">For reference — nothing below runs from a phone:</p>
+			<pre
+				class="mt-1.5 border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] wrap-anywhere whitespace-pre-wrap text-ink-mute"><code
+					>{INSTALL_COMMAND}</code
+				></pre>
+			{#if pairParts?.runnable ?? pairCommand}
+				<pre
+					class="mt-1.5 border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] wrap-anywhere whitespace-pre-wrap text-ink-mute"><code
+						>{pairParts?.runnable ?? pairCommand}</code
+					></pre>
+			{/if}
+		{:else}
+			<ol class="mt-4 flex flex-col gap-4">
+				<li>
+					<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
+						<span class="text-amber-200/80">01</span> install the cli
+					</p>
 					<div class="mt-1.5 flex items-start gap-2">
 						<pre
 							class="min-w-0 grow border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] wrap-anywhere whitespace-pre-wrap text-stone-300"><code
-								>{pairParts?.runnable ?? pairCommand}</code
+								>{INSTALL_COMMAND}</code
 							></pre>
 						<button
 							type="button"
 							class="shrink-0 cursor-pointer border border-stone-800 px-2 py-2 font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-							onclick={() => copy('pair', pairParts?.runnable ?? pairCommand ?? '')}
-							>{copied === 'pair' ? 'copied' : 'copy'}</button
+							onclick={() => copy('install', INSTALL_COMMAND)}
+							>{copied === 'install' ? 'copied' : 'copy'}</button
 						>
 					</div>
-				{/if}
-				<p class="mt-1.5 text-sm text-stone-400">
-					In the checkout, after 01. One word, narrated: it pairs this machine (printing a link back
-					here to approve), names your doors, and queues the first run — the one that writes your
-					repo's <code>AGENTS.md</code>. Re-run it any time; it resumes from whatever step is
-					standing. Execution never leaves your machine.
-				</p>
-			</li>
-		</ol>
+					<p class="mt-1 font-mono text-[11px] text-ink-mute">
+						or <code class="text-stone-400">uv tool install brnrd</code> ·
+						<code class="text-stone-400">pipx install brnrd</code>
+					</p>
+				</li>
+
+				<li>
+					<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
+						<span class="text-amber-200/80">02</span> run <code>brnrd</code> — the guided setup
+					</p>
+					{#if pairCommand}
+						{#if pairParts?.setupLine}
+							<!-- #1277a: scene-setting, not copyable — the box below hands
+							     over only the line that is unconditionally runnable. -->
+							<p class="mt-1.5 font-mono text-[11px] text-ink-mute">from your repo checkout:</p>
+						{/if}
+						<!-- Wrapped, not scrolled (driven on a 390px phone, 2026-08-03):
+						     `overflow-x-auto` clipped the middle line to "brnrd account
+						     connect https://brnrd.de" with no visible tell, which is a
+						     plausible-looking wrong domain on the one command that has
+						     to be right. A soft wrap keeps every character on screen and
+						     the copy button hands over the real string regardless. -->
+						<div class="mt-1.5 flex items-start gap-2">
+							<pre
+								class="min-w-0 grow border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] wrap-anywhere whitespace-pre-wrap text-stone-300"><code
+									>{pairParts?.runnable ?? pairCommand}</code
+								></pre>
+							<button
+								type="button"
+								class="shrink-0 cursor-pointer border border-stone-800 px-2 py-2 font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+								onclick={() => copy('pair', pairParts?.runnable ?? pairCommand ?? '')}
+								>{copied === 'pair' ? 'copied' : 'copy'}</button
+							>
+						</div>
+					{/if}
+					<p class="mt-1.5 text-sm text-stone-400">
+						In the checkout, after 01. One word, narrated: it pairs this machine (printing a link
+						back here to approve), names your doors, and queues the first run — the one that writes
+						your repo's <code>AGENTS.md</code>. Re-run it any time; it resumes from whatever step is
+						standing. Execution never leaves your machine.
+					</p>
+				</li>
+			</ol>
+		{/if}
 
 		<p class="mt-4 border-t border-stone-800 pt-3 font-mono text-[11px] text-ink-mute">
 			{#if appInstalled}
@@ -288,29 +374,60 @@
 			repo checkout.
 		</p>
 
-		<div class="mt-4">
-			<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">enable a repo</p>
-			{#if pairCommand}
-				{#if pairParts?.setupLine}
-					<p class="mt-1.5 font-mono text-[11px] text-ink-mute">from the repo checkout:</p>
-				{/if}
-				<div class="mt-1.5 flex items-start gap-2">
-					<pre
-						class="min-w-0 grow border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] wrap-anywhere whitespace-pre-wrap text-stone-300"><code
-							>{pairParts?.runnable ?? pairCommand}</code
-						></pre>
-					<button
-						type="button"
-						class="shrink-0 cursor-pointer border border-stone-800 px-2 py-2 font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-						onclick={() => copy('pair', pairParts?.runnable ?? pairCommand ?? '')}
-						>{copied === 'pair' ? 'copied' : 'copy'}</button
-					>
-				</div>
+		{#if isMobile}
+			<!-- Same honest-intermediate reasoning as the `cold` branch above: a
+			     paired machine does not unlock the messenger door on its own —
+			     `telegram_pair_core` still 404s without a resolvable repo — so
+			     the remaining gap is named plainly rather than pointed at a link
+			     that would still 404. -->
+			<div class="mt-4 border border-amber-900/30 bg-amber-950/10 p-3" data-testid="messenger-door">
+				<p class="font-mono text-[11px] tracking-wide text-amber-200/80 uppercase">
+					the messenger door
+				</p>
+				<p class="mt-1.5 text-sm text-stone-300">
+					A machine has paired, but the door still waits on a repo — enabling one is what's left,
+					and it happens on a computer, not from here.
+				</p>
+			</div>
+
+			<p class="mt-4 font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
+				on your computer
+			</p>
+			{#if pairParts?.runnable ?? pairCommand}
+				<pre
+					class="mt-1.5 border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] wrap-anywhere whitespace-pre-wrap text-ink-mute"><code
+						>{pairParts?.runnable ?? pairCommand}</code
+					></pre>
 			{/if}
 			<p class="mt-1.5 text-sm text-stone-400">
-				Same command as pairing — running it in a checkout also enables that repo.
+				Same command as pairing — running it in a checkout also enables that repo. For reference;
+				nothing here runs from a phone.
 			</p>
-		</div>
+		{:else}
+			<div class="mt-4">
+				<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">enable a repo</p>
+				{#if pairCommand}
+					{#if pairParts?.setupLine}
+						<p class="mt-1.5 font-mono text-[11px] text-ink-mute">from the repo checkout:</p>
+					{/if}
+					<div class="mt-1.5 flex items-start gap-2">
+						<pre
+							class="min-w-0 grow border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] wrap-anywhere whitespace-pre-wrap text-stone-300"><code
+								>{pairParts?.runnable ?? pairCommand}</code
+							></pre>
+						<button
+							type="button"
+							class="shrink-0 cursor-pointer border border-stone-800 px-2 py-2 font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+							onclick={() => copy('pair', pairParts?.runnable ?? pairCommand ?? '')}
+							>{copied === 'pair' ? 'copied' : 'copy'}</button
+						>
+					</div>
+				{/if}
+				<p class="mt-1.5 text-sm text-stone-400">
+					Same command as pairing — running it in a checkout also enables that repo.
+				</p>
+			</div>
+		{/if}
 
 		<p class="mt-4 border-t border-stone-800 pt-3 font-mono text-[11px] text-ink-mute">
 			Self-hosting, gates, and the agent CLIs brnrd drives —
