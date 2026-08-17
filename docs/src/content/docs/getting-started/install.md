@@ -63,13 +63,6 @@ that's already standing. In order:
 - queues the first run: a conversation, not a form, that writes the
   repository's contract (`AGENTS.md`) with you.
 
-If the [GitHub CLI](https://cli.github.com/) (`gh`) is already installed and
-signed in, that first run reads that identity — the same `gh auth token` /
-`gh api user` resolution the GitHub gate uses — and states who you are
-before continuing. No brnrd account, no token entry, and no separate step:
-`gh` not installed or not signed in just means it continues without stating
-an identity, same as any other optional step here.
-
 Re-run `brnrd` any time; it resumes from whatever step is still standing,
 and a finished repo gets a four-line receipt instead of repeating setup.
 Execution never leaves your machine.
@@ -86,9 +79,13 @@ runs it right there, in the terminal — nothing else installed or connected.
 :::note[A single repo, no account]
 `brnrd init` is the narrower verb bare `brnrd` replaced as the default
 teaching path here — it still works: the same `.brr/` setup and interview,
-synchronous, in the terminal, with no account or door required. Reach for
-it when you want one repo adopted without any of the steps above. See
-[CLI reference](../../reference/cli/).
+synchronous, in the terminal, with no account or door required. If the
+[GitHub CLI](https://cli.github.com/) (`gh`) is installed and signed in,
+init reads that identity — the same `gh auth token` / `gh api user`
+resolution the GitHub gate uses — and states who you are before
+continuing; `gh` missing or signed out just means it continues without
+stating one. Reach for init when you want one repo adopted without any of
+the steps above. See [CLI reference](../../reference/cli/).
 :::
 
 ## Next
