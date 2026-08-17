@@ -2194,9 +2194,21 @@ def test_response_limit_registered_for_whatsapp():
     assert cloud._RESPONSE_LIMITS["whatsapp"] < 4096
 
 
-def test_loop_skips_delivery_without_cloud_event_id(tmp_path, monkeypatch):
-    # A foreign event (no cloud_event_id) must not be posted to brnrd;
-    # it is logged + skipped, leaving its files in place for triage.
+def test_unaddressed_event_reaches_the_fresh_send_endpoint_not_a_dead_end(
+    tmp_path, monkeypatch, capsys,
+):
+    # #1205: an event with no cloud_event_id used to be structurally
+    # unpostable — ``post()`` raised ``PermanentDeliveryError`` before any
+    # network call, and the daemon-side refusal in ``_deliver_out_of_bound``
+    # now keeps most of these from ever reaching this gate at all. The ones
+    # that still do (a hand-rolled cloud event with no address, or a
+    # daemon-version skew) now reach the real fresh-send endpoint instead
+    # of failing locally — this account has no telegram conversation
+    # history, so the server answers 404, and the event stays queued for
+    # retry rather than being closed on a fabricated success. The stdout
+    # line is the tell: it names the *server's* refusal reason, not the old
+    # local "no cloud_event_id" one, proving the call actually left this
+    # process.
     brr_dir = tmp_path / ".brr"
     inbox_dir = brr_dir / "inbox"
     responses_dir = brr_dir / "responses"
@@ -2217,6 +2229,49 @@ def test_loop_skips_delivery_without_cloud_event_id(tmp_path, monkeypatch):
     cloud._loop_once(brr_dir, inbox_dir, responses_dir)
     assert forwarder.items == []
     assert ev.exists()
+    assert "no resolvable telegram conversation" in capsys.readouterr().out
+
+
+def test_unaddressed_event_resolves_against_the_accounts_own_telegram_history(
+    tmp_path, monkeypatch, capsys,
+):
+    # Same shape as above, but this account *does* have telegram history —
+    # a prior inbound event enqueued through the ordinary path. The
+    # fresh-send resolver finds it and gets as far as the platform sender;
+    # this test app has no telegram bot token configured, so it stops at
+    # an honest 503 rather than a silent success — but reaching that point
+    # at all proves `_most_recent_reply_to` resolved a real address end to
+    # end through the live server, not a mock.
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    client, forwarder = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 99},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+    enq = client.post(
+        "/v1/_dev/enqueue",
+        json={
+            "repo_id": pid, "body": "hello there",
+            "reply_to": {"platform": "telegram", "chat_id": 42},
+        },
+        headers=acc,
+    )
+    assert enq.status_code == 201, enq.text
+
+    ev = protocol.create_event(inbox_dir, source="cloud", body="orphan")
+    event = protocol.list_pending(inbox_dir)[0]
+    protocol.set_status(event, "done")
+    protocol.write_response(responses_dir, event["id"], "x")
+
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+    assert forwarder.items == []
+    assert ev.exists()
+    assert "telegram is not configured" in capsys.readouterr().out
 
 
 def test_render_update_relays_card_through_the_cloud_transport(tmp_path, monkeypatch):
