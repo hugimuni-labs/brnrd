@@ -228,10 +228,17 @@ def test_recency_resolves_among_many(env):
     app, client, sends = env
     headers = _account(client)
     _login_session(client, headers)
-    _repo(client, headers, "alpha")
+    alpha = _repo(client, headers, "alpha")
     beta = _repo(client, headers, "beta")
     with app.state.SessionLocal() as db:
         inbox_service.enqueue(db, repo_id=beta, body="prior work", source="test")
+        # Deliberately make the *fallback* rung (updated_at) point at alpha
+        # while the event recency points at beta: a test where both rungs
+        # agree proves the ordering the code incidentally has, not the rule.
+        now = datetime.now(timezone.utc)
+        db.get(Repo, alpha).updated_at = now + timedelta(minutes=5)
+        db.get(Repo, beta).updated_at = now - timedelta(days=1)
+        db.commit()
     code = _account_code(client)
     _post(client, _message(1005, f"/start {code}"))
 
