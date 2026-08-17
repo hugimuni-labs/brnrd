@@ -338,6 +338,36 @@ def test_collect_drops_unverified_reported_kb_url(tmp_path: Path, monkeypatch):
     assert out == [{"kind": "kb", "path": "new.md"}]
 
 
+def test_collect_leaves_a_cross_repo_kb_relics_own_url_alone(tmp_path: Path, monkeypatch):
+    """#1461: `knowledge.kb_page_url` only ever resolves against *this run's
+    own* checkout/scope — it cannot look up a sibling repo's kb location.
+    A ``kb`` relic naming a different ``repo`` must not be run through the
+    pop-and-replace resolver at all: before the fix, every cross-scope kb
+    page had its resident-supplied URL silently destroyed and replaced with
+    nothing, rendering as if it had never been given a link."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    relics.append(
+        outbox, "kb", path="design-sibling-thing.md",
+        repo="hugimuni-labs/sibling-knowledge",
+        url="https://example.test/sibling/blob/main/design-sibling-thing.md",
+    )
+
+    def _boom(*_a, **_k):
+        raise AssertionError("kb_page_url must not be called for a foreign-repo kb relic")
+
+    monkeypatch.setattr(relics.knowledge, "kb_page_url", _boom)
+
+    out = relics.collect(tmp_path, branch=None, seed_ref=None, outbox_dir=outbox)
+
+    assert out == [{
+        "kind": "kb",
+        "path": "design-sibling-thing.md",
+        "repo": "hugimuni-labs/sibling-knowledge",
+        "url": "https://example.test/sibling/blob/main/design-sibling-thing.md",
+    }]
+
+
 # ── dedupe ───────────────────────────────────────────────────────────
 
 
@@ -346,12 +376,16 @@ def test_collect_recovers_reported_pr_from_ref_url(tmp_path: Path):
     with no ``number`` but a full-URL ``ref`` used to be dropped by the
     numberless-pr filter. It now survives, carries the number parsed out
     of ``ref``, and collapses with an auto-derived row for the same
-    number instead of doubling."""
+    number instead of doubling — when the ref names the checkout's own
+    origin repo, same as the auto-derived ``.pr`` row always has (#1461:
+    a ref naming a *different* repo is a distinct PR, not the same one
+    guessed to match — see
+    ``test_collect_does_not_dedupe_reported_pr_from_a_different_repo``)."""
     repo = tmp_path / "repo"
     init_git_repo(repo)
     commit_files(repo, {"a.txt": "1"}, message="seed")
     subprocess.run(
-        ["git", "remote", "add", "origin", "git@github.com:Gurio/brr.git"],
+        ["git", "remote", "add", "origin", "git@github.com:hugimuni-labs/brnrd.git"],
         cwd=repo, check=True,
     )
 
@@ -371,6 +405,42 @@ def test_collect_recovers_reported_pr_from_ref_url(tmp_path: Path):
     assert prs[0]["url"]
     # the resident's own annotation survives the merge with the auto row
     assert prs[0]["summary"] == "self-reported"
+
+
+def test_collect_does_not_dedupe_reported_pr_from_a_different_repo(tmp_path: Path):
+    """#1461: a self-reported ``pr`` row whose ``ref`` URL names a *different*
+    project than this checkout's origin keeps its own repo identity — and
+    must not collapse with the auto-derived ``.pr`` row for the same number,
+    which is always about origin. Before the fix, ``_normalise_reported_pr``
+    threw the ref URL's ``owner/repo`` away, so both rows keyed on the same
+    (kind, number) pair and merged into one row silently mislabeled with
+    origin's URL — a same-number PR in another project rendered as if it
+    were this checkout's own."""
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "1"}, message="seed")
+    subprocess.run(
+        ["git", "remote", "add", "origin", "git@github.com:Gurio/brr.git"],
+        cwd=repo, check=True,
+    )
+
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    (outbox / ".pr").write_text("1175\n", encoding="utf-8")
+    relics.append(
+        outbox, "pr",
+        ref="https://github.com/hugimuni-labs/brnrd/pull/1175",
+        summary="sibling-repo PR",
+    )
+
+    out = relics.collect(repo, branch=None, seed_ref=None, outbox_dir=outbox)
+    prs = [r for r in out if r["kind"] == "pr"]
+    assert len(prs) == 2
+    by_repo = {r.get("repo"): r for r in prs}
+    assert by_repo[None]["url"] == "https://github.com/Gurio/brr/pull/1175"
+    sibling = by_repo["hugimuni-labs/brnrd"]
+    assert sibling["url"] == "https://github.com/hugimuni-labs/brnrd/pull/1175"
+    assert sibling["summary"] == "sibling-repo PR"
 
 
 def test_collect_still_drops_pr_relic_with_unparseable_ref(tmp_path: Path):
@@ -1264,6 +1334,31 @@ def test_dedupe_keeps_commits_in_different_repos_apart(tmp_path: Path):
     assert commits[0].get("url") == f"https://github.com/Gurio/brr/commit/{local}"
     assert commits[1].get("url") == (
         f"https://github.com/hugimuni-labs/brnrd-knowledge/commit/{foreign}"
+    )
+
+
+def test_dedupe_keeps_branches_in_different_repos_apart(tmp_path: Path):
+    """#1461: two projects can each have their own ``main`` (or, as here,
+    the same feature-branch name) — the repo must be part of the branch
+    dedup key exactly like it already is for commit/pr/issue/merge, or a
+    sibling repo's branch relic silently collapses into this checkout's own
+    same-named one and picks up the wrong URL."""
+    repo = _github_repo(tmp_path)
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    relics.append(outbox, "branch", name="brr/shared-name")
+    relics.append(
+        outbox, "branch", name="brr/shared-name",
+        repo="hugimuni-labs/brnrd-knowledge",
+    )
+
+    out = relics.collect(repo, branch=None, seed_ref=None, outbox_dir=outbox)
+
+    branches = [r for r in out if r["kind"] == "branch"]
+    assert len(branches) == 2, f"same branch name collapsed two repos: {branches!r}"
+    assert branches[0].get("url") == "https://github.com/Gurio/brr/tree/brr/shared-name"
+    assert branches[1].get("url") == (
+        "https://github.com/hugimuni-labs/brnrd-knowledge/tree/brr/shared-name"
     )
 
 

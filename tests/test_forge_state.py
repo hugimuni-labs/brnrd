@@ -92,6 +92,50 @@ def test_parse_pull_request_number_rejects_ambiguous_values(value):
     assert forges.parse_pull_request_number(value) is None
 
 
+# ── parse_pull_request_ref (#1461) ─────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("274", (None, "274")),
+        ("#274", (None, "274")),
+        ("https://github.com/hugimuni-labs/brnrd/pull/1461", ("hugimuni-labs/brnrd", "1461")),
+        (
+            "https://gitlab.com/group/sub/repo/-/merge_requests/4",
+            ("group/sub/repo", "4"),
+        ),
+        (
+            "https://bitbucket.org/Gurio/brr/pull-requests/274",
+            ("Gurio/brr", "274"),
+        ),
+    ],
+)
+def test_parse_pull_request_ref_keeps_the_urls_repo(value, expected):
+    """A bare number/``#N`` names no repo (the caller's own checkout is the
+    only one in play); a full URL's ``owner/repo`` — including a GitLab
+    subgroup's nested path — survives instead of being thrown away, the
+    defect #1461's headline finding named against every one of this
+    function's callers."""
+    assert forges.parse_pull_request_ref(value) == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["ea35206", "prefix 274", "not-a-url/pull/274", "https://x/pulls/274"],
+)
+def test_parse_pull_request_ref_rejects_ambiguous_values(value):
+    assert forges.parse_pull_request_ref(value) is None
+
+
+def test_parse_pull_request_number_is_the_repo_dropping_projection():
+    """The still-common bare-number reader is exactly the second element of
+    :func:`forges.parse_pull_request_ref` — never a second parser to drift
+    from the first."""
+    url = "https://github.com/hugimuni-labs/brnrd/pull/1461"
+    assert forges.parse_pull_request_number(url) == forges.parse_pull_request_ref(url)[1]
+
+
 @pytest.mark.parametrize(
     "remote, repo, number",
     [

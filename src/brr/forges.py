@@ -121,9 +121,15 @@ _PULL_REQUEST_TEMPLATES: dict[str, str] = {
 }
 
 _PULL_REQUEST_NUMBER_RE = re.compile(r"(?:#)?([1-9]\d*)")
+# ``repo`` captures everything before the pull/merge-request marker (with its
+# trailing slash) so a caller that wants the URL's ``owner/repo`` — not just
+# the bare number — can recover it without a second regex. GitLab subgroups
+# (``group/sub/repo``) keep working: the repeated group is greedy, so it
+# swallows every ``segment/`` it can before backtracking to let the literal
+# marker match, same as when this was one anonymous group.
 _PULL_REQUEST_PATH_RE = re.compile(
-    r"^/(?:[^/]+/){2,}(?:pull|pulls|pull-requests|-/merge_requests)/"
-    r"([1-9]\d*)(?:/|$)"
+    r"^/(?P<repo>(?:[^/]+/){2,})(?:pull|pulls|pull-requests|-/merge_requests)/"
+    r"(?P<number>[1-9]\d*)(?:/|$)"
 )
 
 
@@ -225,11 +231,22 @@ def detect_forge(
 def view_branch_url(
     remote_url: str,
     branch: str,
+    repo_path: str | None = None,
     *,
     override_kind: str | None = None,
     override_url_base: str | None = None,
 ) -> str | None:
     """Return a clickable URL for *branch* on the forge, or ``None``.
+
+    The forge *kind* and web *host* come from the configured ``origin``
+    remote (so self-hosted overrides apply), but the ``owner/repo`` comes
+    from *repo_path* when provided — the repo the branch actually lives in,
+    which may differ from origin on a multi-repo project (a strand
+    dispatched into a sibling repo via ``spawn: repo:``). Defaults to
+    origin's owner/repo when *repo_path* is ``None``, matching every
+    caller's prior behaviour (a local branch is always this checkout's).
+    Same ``repo_path`` shape as :func:`commit_url` / :func:`thread_url` /
+    :func:`pull_request_url` — those three grew it for the same reason.
 
     Returns ``None`` for empty branch names, unparseable remotes,
     unknown forge kinds, or branch names that look unsafe to drop
@@ -238,6 +255,9 @@ def view_branch_url(
     """
     if not branch or not _is_url_safe_branch(branch):
         return None
+    path = (repo_path or "").strip().strip("/") if repo_path else None
+    if path and "/" not in path:
+        path = None
     match = detect_forge(
         remote_url,
         override_kind=override_kind,
@@ -248,6 +268,9 @@ def view_branch_url(
     template = _BRANCH_TEMPLATES.get(match.kind)
     if template is None:
         return None
+    if path:
+        owner, _, repo = path.rpartition("/")
+        return template.format(host=match.host, owner=owner, repo=repo, branch=branch)
     return template.format(
         host=match.host,
         owner=match.owner,
@@ -416,6 +439,33 @@ def pull_request_url(
     return template.format(host=match.host, owner=owner, repo=repo, number=num)
 
 
+def parse_pull_request_ref(value: str) -> tuple[str | None, str] | None:
+    """Read a PR/MR number *and*, when derivable, the repo it lives in.
+
+    Same input grammar as :func:`parse_pull_request_number` — a bare number
+    (``274``), ``#274``, or a full HTTP(S) URL in any forge-native shape
+    :func:`pull_request_url` emits — but a URL's ``owner/repo`` survives
+    instead of being thrown away. Returns ``(repo_path, number)`` where
+    ``repo_path`` is ``None`` for the bare-number/``#N`` forms (the caller's
+    own checkout is the only repo in play) and the parsed ``owner/repo`` for
+    a URL (GitLab subgroups keep their nested path, e.g.
+    ``group/sub/repo``). Returns ``None`` when nothing parses — same refusal
+    cases as :func:`parse_pull_request_number`.
+    """
+    text = (value or "").strip()
+    match = _PULL_REQUEST_NUMBER_RE.fullmatch(text)
+    if match:
+        return None, match.group(1)
+    parsed = urlsplit(text)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    match = _PULL_REQUEST_PATH_RE.fullmatch(parsed.path)
+    if not match:
+        return None
+    repo_path = match.group("repo").strip("/")
+    return (repo_path or None), match.group("number")
+
+
 def parse_pull_request_number(value: str) -> str | None:
     """Read a PR/MR number from a control-file value, or return ``None``.
 
@@ -424,16 +474,14 @@ def parse_pull_request_number(value: str) -> str | None:
     :func:`pull_request_url`. Requiring the whole scalar or a URL with at
     least ``owner/repo`` path segments keeps commit shas such as ``ea35206``
     and arbitrary trailing digits from masquerading as PRs.
+
+    Thin wrapper over :func:`parse_pull_request_ref` for the (still common)
+    callers that only want the number and are willing to have a URL's repo
+    identity thrown away — new callers that might touch a sibling repo
+    should call :func:`parse_pull_request_ref` directly instead.
     """
-    text = (value or "").strip()
-    match = _PULL_REQUEST_NUMBER_RE.fullmatch(text)
-    if match:
-        return match.group(1)
-    parsed = urlsplit(text)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        return None
-    match = _PULL_REQUEST_PATH_RE.fullmatch(parsed.path)
-    return match.group(1) if match else None
+    parsed = parse_pull_request_ref(value)
+    return parsed[1] if parsed else None
 
 
 # ── Internals ────────────────────────────────────────────────────────
