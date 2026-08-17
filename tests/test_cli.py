@@ -2930,7 +2930,9 @@ def test_close_check_passes_a_clean_body(tmp_path, capsys):
     body.write_text("Ships the whole thing.\n\nCloses #839.\n")
 
     assert main(["close-check", str(body)]) == 0
-    assert "clean (pr-body)" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "will close 1 issue(s) (pr-body)" in out
+    assert "Closes #839" in out
 
 
 def test_close_check_json_carries_the_rule_and_line(tmp_path, capsys):
@@ -2957,6 +2959,45 @@ def test_close_check_reads_stdin_and_honours_the_channel(monkeypatch, capsys):
 def test_close_check_missing_file_is_a_clean_error(tmp_path, capsys):
     assert main(["close-check", str(tmp_path / "nope.md")]) == 2
     assert "[brnrd close-check]" in capsys.readouterr().out
+
+
+def test_close_check_enumerates_two_close_keywords(tmp_path, capsys):
+    body = tmp_path / "body.md"
+    body.write_text("Ships the fix.\n\nCloses #1433, #1434.\n")
+
+    assert main(["close-check", str(body)]) == 0
+    out = capsys.readouterr().out
+    assert "will close 2 issue(s) (pr-body)" in out
+    assert "Closes #1433" in out
+    assert "Closes #1434" in out
+
+
+def test_close_check_no_close_keywords(tmp_path, capsys):
+    body = tmp_path / "body.md"
+    body.write_text("Ships the feature.\n\nThis is a great change.\n")
+
+    assert main(["close-check", str(body)]) == 0
+    out = capsys.readouterr().out
+    assert "no close keywords (pr-body)" in out
+
+
+def test_close_check_resolve_with_unreachable_forge(tmp_path, capsys, monkeypatch):
+    """Test --resolve when forge is unreachable."""
+    body = tmp_path / "body.md"
+    body.write_text("Ships the fix.\n\nCloses #1433.\n")
+
+    # Mock subprocess.run to simulate unreachable forge
+    import subprocess as subprocess_module
+
+    def mock_run(*args, **kwargs):
+        # Simulate forge unreachable
+        raise Exception("Connection refused")
+
+    monkeypatch.setattr(subprocess_module, "run", mock_run)
+
+    assert main(["close-check", str(body), "--resolve"]) == 0
+    out = capsys.readouterr().out
+    assert "Closes #1433 (UNKNOWN)" in out
 
 
 # ── The spelling the launcher earned (npx) ──────────────────────────
