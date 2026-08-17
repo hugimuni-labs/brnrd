@@ -57,6 +57,23 @@ def test_bot_identity_uses_the_stable_github_numeric_id_form():
     assert BOT_EMAIL == "289761152+brnrd-bot@users.noreply.github.com"
 
 
+def test_commit_count_zero_for_missing_or_uninitialized_repo(tmp_path):
+    assert gitops.commit_count(tmp_path / "nowhere") == 0
+    bare_dir = tmp_path / "not-a-repo"
+    bare_dir.mkdir()
+    assert gitops.commit_count(bare_dir) == 0
+
+
+def test_commit_count_tracks_the_real_history_length(tmp_path):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    assert gitops.commit_count(repo) == 0
+    commit_files(repo, {"a.md": "1\n"}, message="one")
+    assert gitops.commit_count(repo) == 1
+    commit_files(repo, {"b.md": "2\n"}, message="two")
+    assert gitops.commit_count(repo) == 2
+
+
 def test_push_branch_success_is_structured_and_truthy(tmp_path):
     repo = _committed_repo(tmp_path)
     remote = tmp_path / "remote.git"

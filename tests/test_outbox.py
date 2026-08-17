@@ -29,7 +29,7 @@ from brr import (
 from brr.envs import RunContext
 from brr.run import Run
 
-from _helpers import write_repo_scaffold
+from _helpers import init_git_repo, write_repo_scaffold
 
 
 def _emit(brr_dir, key, ptype, **payload):
@@ -395,6 +395,76 @@ class TestDrainOutbox:
         assert ev["cloud_event_id"] == "cev-123"
         assert protocol.read_response(responses, ev["id"]).strip() == "addressed reply"
         assert daemon._read_outbox_notices(outbox) == []
+
+    def test_gate_cloud_addressed_message_lands_where_the_cloud_thread_reads(
+        self, tmp_path, monkeypatch,
+    ):
+        """#1437: ``gate: cloud`` + ``cloud_event_id`` must synthesize its
+        `done` event in the inbox the account's single cloud gate thread
+        actually polls — not wherever *this* run's own triggering event
+        happened to live.
+
+        ``_start_account_gates`` starts exactly one cloud thread, account-
+        wide, reading ``account_context.dispatch_inbox`` — every other repo's
+        gate start explicitly excludes ``"cloud"``. A run dispatched from a
+        registered repo's own inbox (a scheduled ``at:``/``every:`` firing,
+        a strand, anything not itself cloud-sourced) that stages a `gate:
+        cloud` reply was writing the synthesized event into *that* run's own
+        ``inbox_dir`` instead — a directory no gate thread ever reads for
+        ``source: cloud``. Accepted, captured, ``status: pending`` forever;
+        never delivered, never refused, no notice (the third-state defect
+        this issue reports).
+        """
+        home = tmp_path / "home"
+        repo_root = tmp_path / "repo"
+        init_git_repo(repo_root)
+        account_context = account.HomeContext(
+            account_id="acc_test",
+            dominion_repo=home,
+            dispatch_inbox=home / "dispatch" / "inbox",
+            responses_dir=home / "dispatch" / "responses",
+            runs_dir=home / "runs",
+            repos={"r": account.AccountRepo(label="r", root=repo_root)},
+            default_repo=account.AccountRepo(label="r", root=repo_root),
+            home_root=home,
+        )
+        account_context.dispatch_inbox.mkdir(parents=True)
+        account_context.responses_dir.mkdir(parents=True)
+
+        # This run's own triggering event lived in the *repo's* own inbox —
+        # a scheduled firing, not a cloud-sourced pending event — which is
+        # exactly the mismatch: `inbox_dir` here is not the cloud gate's
+        # inbox at all.
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        inbox.mkdir(parents=True)
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        (outbox / "ping.md").write_text(
+            "---\ngate: cloud\ncloud_event_id: cev-123\n---\naddressed reply\n")
+        monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id="evt-A")
+        task = types.SimpleNamespace(id="task-A", meta={"repo_label": "r"})
+        n = daemon._drain_outbox(
+            emit, task, responses, "evt-A", outbox, inbox,
+            account_context=account_context,
+        )
+
+        assert n == 1
+        assert daemon._read_outbox_notices(outbox) == []
+        # Nothing was synthesized in the run's own (wrong) inbox — the
+        # cloud gate thread never scans it.
+        assert protocol.list_done(inbox, "cloud") == []
+        # The event landed where the account's one cloud thread actually
+        # reads, with its response alongside it in the matching dir.
+        [ev] = protocol.list_done(account_context.dispatch_inbox, "cloud")
+        assert ev["cloud_event_id"] == "cev-123"
+        assert protocol.read_response(
+            account_context.responses_dir, ev["id"]
+        ).strip() == "addressed reply"
 
     def test_forge_gate_alias_queues_github_pull_request_event(
         self, tmp_path, monkeypatch,

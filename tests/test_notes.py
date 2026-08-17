@@ -929,6 +929,86 @@ class TestTheScanKnowsWhatItCouldNotSee:
         assert scope_at < findings_at, "the denominator must precede the list"
 
 
+# ── check 4: never-linked home (#1423) ────────────────────────────────
+
+
+class TestNeverLinked:
+    """The deterministic twin of the wake-time banners.
+
+    Same predicate, same source of truth (:func:`brr.dominion.never_linked`
+    / :func:`brr.knowledge.never_linked`) — see ``TestNeverLinkedBanner`` in
+    ``test_prompts.py`` for the rendered-prose side of this. Needs a *real*
+    git-backed dominion (``dominion.ensure_dominion``), not the synthetic
+    plain-directory fixture the rest of this module uses — the check reads
+    actual git history, and a directory with no ``.git`` is correctly
+    invisible to it.
+    """
+
+    @staticmethod
+    def _repo_with_dominion(tmp_path):
+        import _helpers
+
+        repo = tmp_path / "repo"
+        _helpers.init_git_repo(repo)
+        _helpers.commit_files(repo, {"README.md": "x\n"})
+        path = dominion.ensure_dominion(repo, push=False)
+        return repo, path
+
+    def test_absent_at_birth(self, tmp_path):
+        repo, path = self._repo_with_dominion(tmp_path)
+        dominion.mark_never_linked(path.parent)
+
+        assert notes_preflight.check_never_linked(repo, {}) == []
+
+    def test_names_the_dominion_once_real_content_follows(self, tmp_path):
+        repo, path = self._repo_with_dominion(tmp_path)
+        dominion.mark_never_linked(path.parent)
+        notes_preflight.check_never_linked(repo, {})  # anchors the baseline
+
+        (path / "pain.md").write_text("slow rebuild keeps biting\n", encoding="utf-8")
+        assert dominion.commit(path, "capture", remote=None, push=False) is True
+
+        findings = notes_preflight.check_never_linked(repo, {})
+        assert [f.type for f in findings] == ["never-linked"]
+        assert str(path) in findings[0].target
+        assert "brnrd home link" in findings[0].description
+        assert findings[0].severity == "warning"
+
+    def test_silent_once_a_remote_is_wired(self, tmp_path):
+        repo, path = self._repo_with_dominion(tmp_path)
+        dominion.mark_never_linked(path.parent)
+        notes_preflight.check_never_linked(repo, {})
+        (path / "pain.md").write_text("more\n", encoding="utf-8")
+        dominion.commit(path, "capture", remote=None, push=False)
+        assert notes_preflight.check_never_linked(repo, {}) != []
+
+        remote = tmp_path / "remote.git"
+        subprocess.run(
+            ["git", "init", "-q", "--bare", "-b", "main", str(remote)], check=True,
+        )
+        subprocess.run(
+            ["git", "remote", "add", "origin", str(remote)], cwd=path, check=True,
+        )
+        # A clean-tree capture still clears the marker: linking is a fact
+        # about the remote, not about whether this particular call had
+        # something new to commit.
+        assert dominion.commit(
+            path, "capture", remote="origin", branch="brr-home", push=True,
+        ) is False
+
+        assert notes_preflight.check_never_linked(repo, {}) == []
+
+    def test_reaches_the_full_scan(self, tmp_path):
+        repo, path = self._repo_with_dominion(tmp_path)
+        dominion.mark_never_linked(path.parent)
+        notes_preflight.check_never_linked(repo, {})
+        (path / "pain.md").write_text("more\n", encoding="utf-8")
+        dominion.commit(path, "capture", remote=None, push=False)
+
+        findings = notes_preflight.scan(repo, {})
+        assert any(f.type == "never-linked" for f in findings)
+
+
 class TestScanAndBlock:
     def test_a_clean_account_renders_no_block(self, tmp_path):
         """Silent when clean — the whole contract in one assertion."""

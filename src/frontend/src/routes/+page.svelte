@@ -89,7 +89,8 @@
 		fetchRepos,
 		type Capability,
 		type ConnectedRepo,
-		type GitHubInstallation
+		type GitHubInstallation,
+		type MachinesSummary
 	} from '$lib/repos';
 	import CapabilityPanel from '$lib/CapabilityPanel.svelte';
 	import Landing from '$lib/Landing.svelte';
@@ -160,6 +161,11 @@
 	// backend that predates #1156 leaves this `null` and the panel renders
 	// nothing rather than an empty shell (`repos.ts` capabilities? comment).
 	let capabilities = $state<Capability[] | null>(null);
+	// design-machines-and-guests.md R1 / #1365, same `/v1/dashboard/repos`
+	// fetch: account-level daemon presence, so ColdStart can tell "paired,
+	// no repo enabled yet" apart from "nothing paired at all" without a
+	// second round-trip to `GET /v1/machines`.
+	let machines = $state<MachinesSummary | null>(null);
 	// Threaded into AccountDeletion's confirmation label — the same
 	// `/v1/dashboard/repos` fetch that populates connectedRepos already
 	// carries it, so this costs no extra round trip.
@@ -1165,6 +1171,7 @@
 				githubLogin = repos.account.github_login;
 				accountId = repos.account.id;
 				capabilities = repos.capabilities ?? null;
+				machines = repos.machines ?? null;
 			} catch (e) {
 				if (!(e instanceof ReposAuthError)) {
 					runnersError = e instanceof Error ? e.message : 'project list fetch failed';
@@ -1350,7 +1357,7 @@
 		     consent notice read, never a second notion of "empty" — and
 		     leaves by itself once a daemon registers, not the moment a repo
 		     is merely enabled (#1084). -->
-		<ColdStart repos={connectedRepos} {installations} pairCommand={pairingCommand} />
+		<ColdStart repos={connectedRepos} {installations} pairCommand={pairingCommand} {machines} />
 
 		<PublishConsentNotice repos={connectedRepos} />
 

@@ -15,6 +15,17 @@ CHECKOUT_DIRNAME = ".brnrd-kb"
 # directory, and a second spelling of this name is how one gets left behind.
 REPLIES_DIRNAME = account.REPLIES_PATH
 SYNC_MARKER_FILE = "knowledge.needs-sync"
+# Deliberately a *different* marker file from SYNC_MARKER_FILE, not a status
+# value layered onto it: "never linked a remote at all" and "linked but the
+# last push failed" carry different remedies (``brnrd home link`` vs.
+# reconcile-the-diverged-remote), and folding them into one predicate is the
+# bug class #1423 exists to stop this repo from re-finding.
+NEVER_LINKED_MARKER_FILE = "knowledge.never-linked"
+# The commit count observed the first time `never_linked` looked — see
+# `gitops.read_or_seed_baseline`. Not a hard-coded founding-commit count:
+# see the identical note on `dominion.FOUNDING_COMMIT_COUNT_FILE`, which
+# this mirrors for the knowledge repo's own (differently-shaped) birth.
+FOUNDING_COMMIT_COUNT_FILE = "knowledge.founding-commits"
 CAPTURE_LOCK_FILE = "knowledge.capture.lock"
 _MAX_SOURCE_BYTES = 2048
 _MAX_TOTAL_BYTES = 6144
@@ -826,6 +837,63 @@ def clear_needs_sync(brr_dir: Path) -> None:
     gitops.clear_sync_marker(brr_dir, SYNC_MARKER_FILE)
 
 
+_NEVER_LINKED_REASON = (
+    "no git remote is configured for the account knowledge repo; "
+    "`brnrd home link` wires one so this memory survives off this machine"
+)
+
+
+def mark_never_linked(brr_dir: Path) -> None:
+    """Record that the account knowledge repo carries no remote at all.
+
+    A distinct marker from :func:`mark_needs_sync` (#1423), not a status
+    layered onto it: "never linked" and "linked but a push just failed" are
+    different facts with different remedies (``brnrd home link`` vs.
+    reconcile-the-diverged-remote), and one predicate that is True for both
+    is the bug class this repo keeps re-finding.
+    """
+    gitops.write_sync_marker(brr_dir, NEVER_LINKED_MARKER_FILE, _NEVER_LINKED_REASON)
+
+
+def clear_never_linked(brr_dir: Path) -> None:
+    gitops.clear_sync_marker(brr_dir, NEVER_LINKED_MARKER_FILE)
+
+
+def never_linked(brr_dir: Path, repo_path: Path) -> str | None:
+    """The never-linked reason, or ``None`` when linked or not yet worth saying.
+
+    The marker is written the instant a capture finds no remote — true even
+    for a repo holding nothing but its founding commit. Rendering that as a
+    wake warning would caution about unbacked *emptiness* rather than
+    unbacked *memory*, so this getter — not the write site — gates the raw
+    fact on "has this repo done anything since it was born" (mirrors
+    :attr:`brr.account.HomeManifest.has_memory`'s reasoning, narrowed to
+    *this* repo's own commit history via
+    :func:`brr.gitops.read_or_seed_baseline`: dominion and knowledge are two
+    separate repos with two separate founding shapes, so each is checked on
+    its own rather than against a shared hard-coded count).
+
+    **The baseline is anchored on every call, marker or not** — never
+    short-circuited behind "is the marker even set right now". A repo
+    checked for the first time in the very run that both loses its remote
+    *and* gains new content would otherwise anchor its baseline already
+    inflated by that content (the marker write and the real commit can
+    land in the same capture call), permanently hiding the fact. Calling
+    this every wake — which the banner render already does — anchors it
+    early instead.
+    """
+    current = gitops.commit_count(repo_path)
+    baseline = gitops.read_or_seed_baseline(
+        brr_dir, FOUNDING_COMMIT_COUNT_FILE, current,
+    )
+    reason = gitops.read_sync_marker(brr_dir, NEVER_LINKED_MARKER_FILE)
+    if reason is None:
+        return None
+    if current <= baseline:
+        return None
+    return reason
+
+
 def capture(
     repo_root: Path,
     message: str,
@@ -848,7 +916,11 @@ def capture(
     :func:`brr.dominion.commit`: a clean chain is a no-op, a failed forge
     push sets a classified ``needs_sync`` marker, and a successful push
     clears it. Only non-fast-forward rejection asks the resident to reconcile
-    refs; access and reachability failures say what actually broke.
+    refs; access and reachability failures say what actually broke. A repo
+    with **no remote at all** is a third, distinct shape (#1423): there was
+    never a push to fail, so it sets :func:`mark_never_linked` instead of
+    ``needs_sync`` — a different fact (nothing to reconcile) with a
+    different remedy (``brnrd home link``, not fetch/merge/push).
 
     ``mirror_notes``, when supplied, is extended with the reason the
     ``.brnrd-kb/`` mirror was left behind, if it was (#659) — a stale mirror
@@ -950,7 +1022,9 @@ def capture(
             #    durable off this machine.
             remote = gitops.default_remote(home_knowledge)
             if not remote:
+                mark_never_linked(brr_dir)
                 return moved
+            clear_never_linked(brr_dir)
             if _ahead_of_upstream(home_knowledge) or needs_sync(brr_dir):
                 push_result = gitops.push_branch(home_knowledge, remote, branch)
                 if push_result:

@@ -378,7 +378,12 @@ def test_do_note_still_queued_when_never_consumed(tmp_path, monkeypatch, capsys)
     monkeypatch.setattr(time, "sleep", lambda s: ticks.append(s))
 
     assert main(["do", "--note", "evt-1", "--timeout", "0.2"]) == 1
-    assert capsys.readouterr().out.strip() == "note evt-1 ? still queued"
+    out = capsys.readouterr().out.strip()
+    # #1379: the QUEUED detail now names how long the staged file has been
+    # sitting there (the staging file's own mtime, real wall clock) rather
+    # than reading identically whether the daemon is 2s or 40m behind.
+    assert out.startswith("note evt-1 ? still queued (")
+    assert out.endswith("s)")
     assert ticks  # the wait actually polled, not a bare no-op
 
 
@@ -844,7 +849,10 @@ def test_cut_still_queued_when_never_consumed(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(time, "sleep", lambda s: ticks.append(s))
 
     assert main(["cut", str(declaration), "--timeout", "0.2"]) == 1
-    assert capsys.readouterr().err.strip() == "[brnrd cut] ? still queued"
+    err = capsys.readouterr().err.strip()
+    # #1379: same age-naming detail as the `do --note` QUEUED case.
+    assert err.startswith("[brnrd cut] ? still queued (")
+    assert err.endswith("s)")
     assert ticks
 
 

@@ -1201,6 +1201,147 @@ def test_run_worker_accepts_current_outbox_reply_without_stdout(
     ] == ["handled through outbox"]
 
 
+def test_poison_outbox_file_does_not_wedge_the_flush_tick(tmp_path, monkeypatch):
+    """#1379: one bad staging file must cost itself, not the whole tick.
+
+    Driven through the *real* caller the defect lives in —
+    ``_invoke_with_heartbeat``'s boundary-flush poll firing the actual
+    ``_emit_flush`` closure ``_run_worker`` built, which calls the real
+    ``_drain_outbox`` — not a hand-built ``_drain_outbox(...)`` call. The
+    stub runner stages a poison file (crafted to raise inside
+    ``_resolve_event_target``, one of the calls the drain's own docstring
+    used to claim were guarded and weren't) ahead of a healthy plain-reply
+    file, writes the ``.flush`` signal ``_invoke_with_heartbeat`` polls
+    for, then sleeps past one ``_FLUSH_POLL_INTERVAL`` tick — long enough
+    for the real flush-triggered drain to run while the "runner" is still
+    "alive" — and snapshots the outbox *before* returning, isolating this
+    from the unrelated post-return recovery drain a few lines below it in
+    ``_run_worker``.
+
+    Pre-fix, the poison file's exception would propagate out of
+    ``_drain_outbox`` into ``_invoke_with_heartbeat``'s blanket
+    ``except Exception: pass``, abandoning the whole tick: the healthy
+    file never promoted, ``_write_live_portal_state`` never reached (its
+    call sits after the drain in both ``_emit_heartbeat`` and
+    ``_emit_flush``), and the file retried identically forever since the
+    drain always sorts oldest-mtime-first.
+    """
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-1379")
+    _stub_env_isolated(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        daemon.runner, "resolve_runner_profile",
+        lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root),
+    )
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts,
+        "build_daemon_prompt",
+        lambda task, eid, rp, root, **kw: "PROMPT",
+    )
+    base_env = envs.get_env("worktree")
+
+    # A targeted poison: only the file addressed to this exact sentinel
+    # event id blows up inside `_resolve_event_target` (one of the calls
+    # `_drain_outbox`'s own docstring claimed, falsely, were guarded) —
+    # the healthy file (no `event:` field, defaults to the current event)
+    # is unaffected and drains through the real function.
+    real_resolve = daemon._resolve_event_target
+
+    def _boom_resolve(address_sources, raw_target):
+        if raw_target == "evt-1379-poison-target":
+            raise RuntimeError("synthetic poison for #1379's drain guard test")
+        return real_resolve(address_sources, raw_target)
+
+    monkeypatch.setattr(daemon, "_resolve_event_target", _boom_resolve)
+
+    snapshot: dict = {}
+
+    def fake_invoke(_self, ctx, runner_name, invocation, cfg=None, *, trace=False):
+        outbox_dir = Path(ctx.outbox_host)
+        outbox_dir.mkdir(parents=True, exist_ok=True)
+        # Oldest first — the exact shape that wedges the pre-fix drain
+        # (both it and the pending-count lister sort oldest-mtime-first).
+        poison = outbox_dir / "poison.md"
+        poison.write_text(
+            "---\nevent: evt-1379-poison-target\n---\nnever delivered\n",
+            encoding="utf-8",
+        )
+        old = time.time() - 5
+        os.utime(poison, (old, old))
+        healthy = outbox_dir / "healthy.md"
+        healthy.write_text("plain reply, no frontmatter\n", encoding="utf-8")
+        newer = time.time() - 4
+        os.utime(healthy, (newer, newer))
+        (outbox_dir / ".flush").write_text("tok-1379\n", encoding="utf-8")
+        # > 1 `_FLUSH_POLL_INTERVAL` (1.0s) tick, so the real poll loop in
+        # `_invoke_with_heartbeat` observes the flush signal and fires the
+        # real `_emit_flush` while this "runner" is still "alive".
+        time.sleep(1.3)
+        poisoned_dir = outbox_dir / ".poisoned"
+        processed_dir = outbox_dir / ".processed"
+        snapshot["poisoned"] = (
+            sorted(p.name for p in poisoned_dir.glob("*"))
+            if poisoned_dir.is_dir() else []
+        )
+        snapshot["processed"] = (
+            sorted(p.name for p in processed_dir.glob("*"))
+            if processed_dir.is_dir() else []
+        )
+        state_path = outbox_dir / "portal-state.json"
+        snapshot["portal_state"] = (
+            json.loads(state_path.read_text(encoding="utf-8"))
+            if state_path.exists() else None
+        )
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("ok\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation,
+            runner_name=runner_name,
+            command=["mock"],
+            stdout="ok\n",
+            stderr="",
+            returncode=0,
+            trace_dir=None,
+            artifacts=[],
+        )
+
+    monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+    task = daemon._run_worker(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 1,
+    )
+
+    # The run itself completed — no uncaught exception blew through
+    # `_run_worker` (the pre-fix failure mode the post-return recovery
+    # drain would have hit a second time, this time with nothing to catch
+    # it).
+    assert task.status == "done"
+
+    # Snapshotted *during* the flush tick, before the post-return recovery
+    # drain runs — this is specifically the `_emit_flush` -> `_drain_outbox`
+    # path #1379 is about.
+    assert snapshot["poisoned"] == ["poison.md"], (
+        "the poison file must be quarantined off the drain's own glob, "
+        "not retried forever nor left drifting in the live outbox dir"
+    )
+    assert snapshot["processed"] == ["healthy.md"], (
+        "the healthy file must still drain in the same tick — one file's "
+        "failure costs that file, not its neighbours"
+    )
+    portal_state = snapshot["portal_state"]
+    assert portal_state is not None, (
+        "_write_live_portal_state must still run this tick — pre-fix, the "
+        "poison file's exception abandoned the whole tick before this call"
+    )
+    assert portal_state["outbound"]["replies_current"] == 1
+    notice_texts = [n.get("text", "") for n in portal_state.get("notices", [])]
+    assert any(
+        "RuntimeError" in text and "poison.md" in text
+        for text in notice_texts
+    ), f"no notice named the poison file's exception + filename: {notice_texts}"
+
+
 def test_drain_outbox_queues_respawn_request(tmp_path):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
@@ -2626,6 +2767,135 @@ def test_notify_spawn_parent_declared_branch_mismatch_still_indicts(tmp_path):
     assert note["spawn_contract_spec_branch"] == "brr/declared-slug"
     assert note["spawn_contract_published_branch"] == "brr/actually-published"
     assert "status=contract-mismatch" in note["body"]
+
+
+def test_notify_spawn_parent_clean_bolt_discharges_unpublished_branch(tmp_path):
+    """#677: the live 2026-08-15 case — a declared `branch:` never
+    published because the run's own accepted, unannotated `cut:` bolt
+    attested nothing needed publishing (a deliberate no-code-change
+    verdict). That is a substitution the parent should know about, not
+    the ticket-swap violation `contract-mismatch` names: status stays
+    whatever the run finished as, and the event-layer flag must not be
+    set."""
+    inbox = tmp_path / ".brr" / "inbox"
+    task = Run(
+        id="run-child", event_id="evt-child",
+        body="investigate; change nothing unless reproduced",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "spawn_contract_branch": "brr/the-render-that-moved-underneath",
+            "bolt": {"accepted_at": "2026-08-15T21:01:33Z", "annotated": 0},
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert "spawn_contract_mismatch" not in note
+    assert "status=done" in note["body"]
+    assert "contract-mismatch" not in note["body"]
+    assert "advisory" in note["body"]
+    assert "brr/the-render-that-moved-underneath" in note["body"]
+    assert "2026-08-15T21:01:33Z" in note["body"]
+
+
+def test_notify_spawn_parent_bounced_bolt_does_not_discharge(tmp_path):
+    """#677-negative (guard the guard): a bolt force-accepted at the
+    cap-3 bounce fallback carries `annotated > 0` — the daemon's own
+    dissent, not a clean attestation — and must not discharge the branch
+    clause the way an accepted, unannotated bolt does. This is half the
+    guard: without the `annotated == 0` check, a run could dodge the
+    contract check by cutting a bolt the daemon itself disputed. It
+    falls to the same "nothing published, nothing attests why" bucket a
+    run with no bolt at all gets — not silently waved through as
+    `absolved`, and not the ticket-swap `contract-mismatch` label
+    either, since "no bolt" and "a bolt the daemon didn't accept
+    cleanly" are the same evidentiary state: neither one testifies that
+    nothing needed publishing."""
+    inbox = tmp_path / ".brr" / "inbox"
+    task = Run(
+        id="run-child", event_id="evt-child",
+        body="do the thing",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "spawn_contract_branch": "brr/declared-slug",
+            "bolt": {"accepted_at": "2026-08-15T21:01:33Z", "annotated": 2},
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert "spawn_contract_mismatch" not in note
+    assert note.get("spawn_status") == "nothing-published"
+    assert "status=nothing-published" in note["body"]
+    assert "advisory" not in note["body"]
+    assert "contract-mismatch" not in note["body"]
+
+
+def test_notify_spawn_parent_unpublished_with_no_bolt_gets_its_own_label(tmp_path):
+    """#677 residual defect #1: nothing published, and nothing attests
+    why — a real deviation, but not a branch-*name* disagreement. Gets
+    its own status label (not `contract-mismatch`, not the ticket-swap
+    accusation) and wording that says what actually happened."""
+    inbox = tmp_path / ".brr" / "inbox"
+    task = Run(
+        id="run-child", event_id="evt-child",
+        body="do the thing",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "spawn_contract_branch": "brr/declared-slug",
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert "spawn_contract_mismatch" not in note
+    assert note.get("spawn_status") == "nothing-published"
+    assert "status=nothing-published" in note["body"]
+    assert "contract-mismatch" not in note["body"]
+    assert "published nothing on its contract branch" in note["body"]
+    assert "brr/declared-slug" in note["body"]
+
+
+def test_notify_spawn_parent_clean_bolt_discharges_branch_even_when_report_fails(tmp_path):
+    """#677 open decision: when both clauses fail, does a clean bolt
+    still discharge the branch half? Yes — the bolt attests the branch/
+    produce plan, never a specific declared `report:` path, which is an
+    independent, checkable filesystem fact. So the overall status still
+    indicts (the report really is missing), but the branch line reads as
+    the discharge sentence, not a `spec branch:`/`published branch:`
+    accusation pair."""
+    inbox = tmp_path / ".brr" / "inbox"
+    task = Run(
+        id="run-child", event_id="evt-child",
+        body="investigate and write it up",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "spawn_contract_branch": "brr/the-render-that-moved-underneath",
+            "spawn_contract_report": str(tmp_path / "never-written.md"),
+            "bolt": {"accepted_at": "2026-08-15T21:01:33Z", "annotated": 0},
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert note["spawn_contract_mismatch"] is True
+    assert "status=contract-mismatch" in note["body"]
+    assert "never published, but bolt accepted" in note["body"]
+    assert "spec branch:" not in note["body"]
+    assert "published branch:" not in note["body"]
+    assert "MISSING" in note["body"]
 
 
 def test_a_kept_branch_is_not_printed_as_an_accusation(tmp_path):
@@ -6303,6 +6573,59 @@ def test_publish_pushes_first_publish_branch_when_commit_probe_times_out(
     assert "pushing brr/new-work" in out
 
 
+def test_refuse_publish_does_not_blame_746_for_a_missing_repo(tmp_path, capsys):
+    """#1408: ``gitops.toplevel`` returns ``None`` for two different causes —
+    a repointed ``core.worktree`` (#746) *and* "this is not a git repository
+    at all" — and ``_refuse_publish`` used to print the confident #746
+    diagnosis for both. ``tmp_path`` here is never ``git init``ed (the exact
+    shape every other test in this module hits when a repo isn't set up),
+    so this is the ordinary case, not the exotic one — and the message must
+    not assert a cause the code never established.
+    """
+    task = Run(id="run-1408a", event_id="evt-1408a", body="x", status="done")
+
+    mismatch = daemon._refuse_publish(task, tmp_path, "publish")
+
+    assert mismatch is not None
+    assert mismatch["cause"] == "not-a-repo"
+    out = capsys.readouterr().out
+    assert "REFUSING publish" in out
+    assert "#746" not in out
+    assert "core.worktree" not in out
+    detail = json.loads(task.meta["stray_host_write_detail"])
+    assert detail["cause"] == "not-a-repo"
+
+
+def test_refuse_publish_names_746_for_a_genuine_core_worktree_repoint(
+    tmp_path, capsys,
+):
+    """The other side of #1408: a *real* ``core.worktree`` repoint — the
+    shared git dir's config pointed at some other tree, exactly #746's
+    incident — must still land the #746 diagnosis, because this time the
+    code actually established it: ``gitops.toplevel`` resolves a real path
+    that disagrees with ``repo_root``, not ``None``.
+    """
+    repo = tmp_path / "repo"
+    other = tmp_path / "elsewhere"
+    init_git_repo(repo)
+    other.mkdir()
+    subprocess.run(
+        ["git", "config", "core.worktree", str(other)], cwd=repo, check=True,
+    )
+    task = Run(id="run-1408b", event_id="evt-1408b", body="x", status="done")
+
+    mismatch = daemon._refuse_publish(task, repo, "publish")
+
+    assert mismatch is not None
+    assert mismatch["cause"] == "core-worktree-mismatch"
+    out = capsys.readouterr().out
+    assert "REFUSING publish" in out
+    assert "#746" in out
+    assert "core.worktree" in out
+    detail = json.loads(task.meta["stray_host_write_detail"])
+    assert detail["cause"] == "core-worktree-mismatch"
+
+
 def test_worker_finalize_tolerates_gate_cleanup_after_response(
     tmp_path, monkeypatch,
 ):
@@ -9532,6 +9855,116 @@ def test_capture_dominion_commits_account_home(tmp_path):
     assert log == "brnrd-home: capture account memory after run run-capture"
 
 
+def test_primary_dominion_candidate_matches_forwarded_account_context(tmp_path):
+    """#1409: forwarding ``account_context`` must reproduce the old hand-built candidate.
+
+    ``_primary_dominion_candidate`` used to hand-build an extra
+    ``ResidentDominion`` (``repo_label = account.repo_label(repo_root, cfg)``)
+    and ``insert(0, …)`` it ahead of whatever ``resident_dominion_candidates``
+    derived on its own. That is exactly the label ``resident_dominion_
+    candidates`` derives internally when given ``account_context=`` but no
+    ``repo_label=`` override, so the hand-built insert is provably a
+    duplicate once the context is forwarded — this asserts the *path* and
+    *capture_root* the caller now gets are the same values the old manual
+    insert would have produced.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    cfg = {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")}
+    ctx = daemon.account.resolve_context(repo, cfg)
+    repo_dom = daemon.account.repo_dominion_path(ctx, "Gurio/brr")
+    daemon.dominion.seed_account_dominion(repo_dom)
+
+    candidate = daemon._primary_dominion_candidate(repo, cfg, ctx)
+
+    assert candidate is not None
+    assert candidate.path == repo_dom
+    assert candidate.capture_root == ctx.dominion_repo
+
+
+def test_primary_dominion_candidate_reuses_context_instead_of_rederiving(
+    tmp_path, monkeypatch,
+):
+    """#1409: the equivalence above holds because forwarding *replaces*
+    re-derivation, not merely because ``account.resolve_context`` happens to
+    be deterministic. Pin the mechanism directly: break a *fresh*
+    ``resolve_context`` call and confirm ``_primary_dominion_candidate``
+    still succeeds using the already-resolved context it was handed.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    cfg = {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")}
+    ctx = daemon.account.resolve_context(repo, cfg)
+    repo_dom = daemon.account.repo_dominion_path(ctx, "Gurio/brr")
+    daemon.dominion.seed_account_dominion(repo_dom)
+
+    def _boom(*_a, **_k):
+        raise AssertionError(
+            "resolve_context re-derived instead of reusing the forwarded context"
+        )
+
+    monkeypatch.setattr(daemon.account, "resolve_context", _boom)
+
+    candidate = daemon._primary_dominion_candidate(repo, cfg, ctx)
+
+    assert candidate is not None
+    assert candidate.path == repo_dom
+    assert candidate.capture_root == ctx.dominion_repo
+
+
+def test_capture_dominion_repo_label_can_diverge_from_config_label(tmp_path):
+    """#1409: ``_capture_dominion``'s manual insert is *not* provably a duplicate.
+
+    Unlike ``_primary_dominion_candidate``, this candidate's ``repo_label``
+    is sourced from ``task.meta["repo_label"]`` (event-aware, via
+    ``_repo_label``) rather than ``account.repo_label(repo_root, cfg)``
+    (config/git-remote only) — the two genuinely disagree here, so the
+    manual insert stays. This proves the divergence and that capture still
+    lands correctly (on the shared ``capture_root``) despite it.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    cfg = {"home.path": str(tmp_path / "account-home")}  # no repo.label configured
+    ctx = daemon.account.resolve_context(repo, cfg)
+
+    auto_candidates = daemon.dominion.resident_dominion_candidates(
+        repo, cfg, account_context=ctx,
+    )
+    auto_path = auto_candidates[0].path
+
+    task_meta_label = "Explicit/EventRepo"
+    expected_manual_path = daemon.account.repo_dominion_path(ctx, task_meta_label)
+    # The two label sources really do disagree — this is why the insert
+    # in `_capture_dominion` stays instead of being removed like its
+    # sibling in `_primary_dominion_candidate`.
+    assert auto_path != expected_manual_path
+
+    daemon.dominion.seed_account_dominion(expected_manual_path)
+    (expected_manual_path / "notes.md").write_text("captured\n", encoding="utf-8")
+    task = Run(
+        id="run-diverge",
+        event_id="evt-diverge",
+        body="capture divergent label",
+        source="telegram",
+        status="done",
+        meta={"repo_label": task_meta_label},
+    )
+
+    daemon._capture_dominion(repo, cfg, task, account_context=ctx)
+
+    log = subprocess.run(
+        ["git", "log", "-1", "--pretty=%s"],
+        cwd=ctx.dominion_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert log == "brnrd-home: capture account memory after run run-diverge"
+
+
 def test_finalize_captures_after_finished_run_state(monkeypatch, tmp_path):
     event = {"id": "evt-final", "source": "telegram", "status": "done"}
     task = Run(
@@ -11406,3 +11839,183 @@ def test_portal_state_bolt_projects_annotated_count(tmp_path):
     )
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["bolt"]["annotated"] == 2
+
+
+# ── THE WELD ignition source guard (#1383) ────────────────────────────────
+#
+# #972's ignition half fires on an event's own body; #1383 found a
+# `source: schedule` recurring entry's *agenda* prose ("the w-14/w-45/…
+# cluster") getting scanned as if it were a task, welding every firing's
+# produce onto whatever ids the agenda happened to name. The fix that
+# narrowed to "not schedule" still missed `source: spawn` — a dispatched
+# strand's own spec is equally brnrd's prose about work, not a
+# correspondent's — caught live when `run-260816-2051-l00q`'s own spawn
+# event ignited two items it was never asked to touch. `_weld_ignition_body`
+# asserts the property (source in `protocol.INTERNAL_SOURCES` ⇒ brnrd's own
+# writing, never a correspondent addressing a task) instead of enumerating
+# members, and `_weld_ignite` is the exact call `_run_worker` makes — these
+# tests drive that function, not `items.scan_item_ids` in isolation.
+
+_WELD_ITEM_TEXT = """# A gate chip
+
+type: action
+refs: hugimuni-labs/brnrd#1
+prompt: Ship the gate chip.
+
+Body text for the item file itself; irrelevant to ignition.
+"""
+
+
+def _warp_dir_with_item(tmp_path: Path, item_id: str = "w-8") -> Path:
+    warp = tmp_path / "surface" / "warp"
+    warp.mkdir(parents=True)
+    (warp / f"{item_id}.md").write_text(_WELD_ITEM_TEXT, encoding="utf-8")
+    return warp
+
+
+def _account_ctx_for_warp(tmp_path: Path) -> "daemon.account.AccountContext":
+    return daemon.account.AccountContext(
+        account_id="default",
+        dominion_repo=tmp_path,
+        dispatch_inbox=tmp_path / "dispatch" / "inbox",
+        responses_dir=tmp_path / "dispatch" / "responses",
+        runs_dir=tmp_path / "runs",
+        repos={},
+        default_repo=daemon.account.AccountRepo(label="Gurio/brr", root=tmp_path),
+    )
+
+
+@pytest.mark.parametrize(
+    "source", sorted(protocol.INTERNAL_SOURCES),
+)
+def test_weld_ignition_body_empty_for_every_internal_source(source):
+    """Every brnrd-minted source (#1118's completeness-tested set) is
+    system-authored prose, not a correspondent's task — including `spawn`,
+    the member the narrower "not schedule" guard missed."""
+    body = daemon._weld_ignition_body({"source": source, "body": "please do w-8"})
+    assert body == ""
+
+
+@pytest.mark.parametrize("source", ["telegram", "github", "slack", "signal", "cloud"])
+def test_weld_ignition_body_passes_through_for_correspondent_sources(source):
+    """A gate-ingress source is never in `INTERNAL_SOURCES` (nor could a
+    future one be, without becoming a `create_event` call this package's
+    own AST completeness test would catch) — it stays ignition-eligible
+    with no edit to this predicate."""
+    body = daemon._weld_ignition_body({"source": source, "body": "please do w-8"})
+    assert body == "please do w-8"
+
+
+def test_weld_ignite_schedule_source_leaves_item_unchanged(tmp_path):
+    warp = _warp_dir_with_item(tmp_path)
+    ctx = _account_ctx_for_warp(tmp_path)
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    event = {
+        "source": "schedule",
+        "body": "the w-14/w-45/w-46/w-47 cluster and w-8 count as docket",
+    }
+
+    resolved = daemon._weld_ignite(event, ctx, outbox, "run-agenda-1")
+
+    assert resolved == []
+    assert "taken:" not in (warp / "w-8.md").read_text(encoding="utf-8")
+
+
+def test_weld_ignite_spawn_source_leaves_item_unchanged(tmp_path):
+    """The case the parent's own measurement caught: a `spawn:` dispatch's
+    spec quoting an id as a citation must not ignite it either."""
+    warp = _warp_dir_with_item(tmp_path)
+    ctx = _account_ctx_for_warp(tmp_path)
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    event = {
+        "source": "spawn",
+        "body": "Read the issue; it quotes the w-14/w-45/w-46/w-47 cluster and w-8.",
+    }
+
+    resolved = daemon._weld_ignite(event, ctx, outbox, "run-spawn-1")
+
+    assert resolved == []
+    assert "taken:" not in (warp / "w-8.md").read_text(encoding="utf-8")
+
+
+def test_weld_ignite_correspondent_source_still_ignites(tmp_path):
+    warp = _warp_dir_with_item(tmp_path)
+    ctx = _account_ctx_for_warp(tmp_path)
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    event = {"source": "telegram", "body": "please pick up w-8 today"}
+
+    resolved = daemon._weld_ignite(event, ctx, outbox, "run-user-1")
+
+    assert resolved == ["w-8"]
+    assert "taken: run-user-1" in (warp / "w-8.md").read_text(encoding="utf-8")
+
+
+# ── THE WELD ignition item-state guard (#1436 facet 1) ────────────────────
+#
+# `w-14` closed 2026-08-13 and was ignited eleven more times after that —
+# every one of them a `source: schedule` / `source: spawn` firing that
+# #1435's source guard now stops. But nothing about the source guard says a
+# *correspondent* naming a done item is any different: ignition claims work
+# is starting, and a closed item has no work to start, whatever addressed
+# it. This is a property of the item, checked independently of — and in
+# addition to — the source guard: a correspondent source (which #1435
+# deliberately leaves ignition-eligible) must still refuse a done item.
+
+_WELD_DONE_ITEM_TEXT = """# A gate chip
+
+type: action
+done: 2026-08-13 run-old
+
+Body text for the item file itself; irrelevant to ignition.
+"""
+
+_WELD_RETIRED_ITEM_TEXT = """# A gate chip
+
+type: action
+retired: 2026-08-13 superseded
+
+Body text for the item file itself; irrelevant to ignition.
+"""
+
+
+def test_weld_ignite_done_item_leaves_item_unchanged_even_from_a_correspondent(
+    tmp_path,
+):
+    """The acceptance case verbatim: a `done:` item stays untouched no
+    matter the source — including a live correspondent, which #1435's
+    source guard alone would wave through."""
+    warp = _warp_dir_with_item(tmp_path)
+    (warp / "w-8.md").write_text(_WELD_DONE_ITEM_TEXT, encoding="utf-8")
+    ctx = _account_ctx_for_warp(tmp_path)
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    event = {"source": "telegram", "body": "please pick up w-8 today"}
+
+    resolved = daemon._weld_ignite(event, ctx, outbox, "run-user-2")
+
+    assert resolved == []
+    text = (warp / "w-8.md").read_text(encoding="utf-8")
+    assert "taken:" not in text
+    relics_file = outbox / ".relics.jsonl"
+    assert not relics_file.exists() or "w-8" not in relics_file.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_weld_ignite_retired_item_also_not_a_candidate(tmp_path):
+    """A retired item is equally closed — no work left to start — so the
+    same item-state guard covers it, not just `done:`."""
+    warp = _warp_dir_with_item(tmp_path)
+    (warp / "w-8.md").write_text(_WELD_RETIRED_ITEM_TEXT, encoding="utf-8")
+    ctx = _account_ctx_for_warp(tmp_path)
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    event = {"source": "telegram", "body": "please pick up w-8 today"}
+
+    resolved = daemon._weld_ignite(event, ctx, outbox, "run-user-3")
+
+    assert resolved == []
+    assert "taken:" not in (warp / "w-8.md").read_text(encoding="utf-8")

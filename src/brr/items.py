@@ -91,8 +91,84 @@ _ROW_RE = re.compile(
 #: bare tokens (``w-42`` collides with nothing English); a hand-named item
 #: is addressed explicitly on its own ``item: <id>`` line — the same line
 #: the dashboard's copy-prompt affordance appends.
-_SCAN_TOKEN_RE = re.compile(r"(?<![\w/-])(w-\d+)(?![\w-])")
+#:
+#: `/` is genuinely ambiguous and is the whole reason bare-regex boundary
+#: exclusion (#1436 facet 2's first pass) doesn't work: it is both the
+#: enumeration separator (`w-45/w-46/w-47`, which must widen) *and* the
+#: path separator this system's own vocabulary uses for an item's real
+#: file (`surface/warp/w-45.md` — the exact shape the dispatching
+#: schedule entry and the issue's own spec use to refer to an item, so
+#: this is not a hypothetical). Excluding `/` outright (the pre-#1436
+#: shape) broke the enumeration; allowing it outright (facet 2's first
+#: landed fix) re-opened ignition on a correspondent typing a path — a
+#: regression a follow-up review caught by running the scanner against
+#: this system's own reference shape, not by re-reading the regex.
+#:
+#: The discriminator, `_scan_bare_tokens` below: a leading `/` is a
+#: separator *only when the id immediately before it was itself accepted*
+#: (`w-45/w-46` — the first `w-45` stands on its own, so the second reads
+#: as an enumeration member); otherwise it is a path segment
+#: (`surface/warp/w-45.md`, `kb/w-45.md`, `https://x/w-12` — nothing
+#: before the `/` was itself an accepted id) and the candidate is
+#: rejected regardless of what follows. Independently, a trailing
+#: `.<ext>`-shaped suffix (dot, then a letter, then a short alnum run —
+#: `.md`, `.py`, `.jsonl`, not `.2`/`.45`, which read as a decimal, not an
+#: extension) always disqualifies: a filename never becomes an item id no
+#: matter how it was reached. This also flips `w-45.md` (no path prefix)
+#: from matching to not — it matched before this change (the lookahead
+#: never excluded `.`), but a "sometimes filename, sometimes id" split
+#: that depends only on an accidental leading path segment is worse than
+#: one consistent rule, and the corpus this scan actually reads
+#: (schedule agendas, correspondent messages, spec bodies) never refers
+#: to an item by a bare `<id>.md` with intent to ignite it — every real
+#: reference either omits the extension or carries the `surface/warp/`
+#: prefix this rule already excludes.
+#:
+#: `\w` and `-` stay excluded on both sides — what still blocks an id
+#: embedded in a longer token (`xw-45`, `w-450`). Left deliberately
+#: unhandled: a shorthand enumeration that drops the repeated prefix
+#: (`w-45/46/47` matching only `w-45`) — nothing in the issue or its
+#: acceptance list asks for it, and guessing a prefix onto a bare number
+#: is exactly the kind of guess this module's docstring says an id is
+#: never subject to.
+_SCAN_CANDIDATE_RE = re.compile(r"w-\d+")
 _SCAN_LINE_RE = re.compile(r"^item:[ \t]*([a-z0-9][a-z0-9-]*)[ \t]*$", re.MULTILINE)
+#: A trailing filename-extension shape: dot, a letter, then a short
+#: alnum run, not itself followed by more word chars or another dot (so
+#: `.md` qualifies; `.2`, `.45` — a decimal, not an extension — do not,
+#: since they start with a digit rather than a letter).
+_FILENAME_EXT_RE = re.compile(r"^\.[A-Za-z][A-Za-z0-9]{0,7}(?![\w.])")
+
+
+def _scan_bare_tokens(text: str) -> list[str]:
+    """Bare ``w-<N>`` ids in *text*, unique, first-mention order — the
+    boundary-aware half of :func:`scan_item_ids`. See the comment above
+    ``_SCAN_CANDIDATE_RE`` for the discriminator this implements; a single
+    lookaround regex cannot express it because whether a leading ``/`` is
+    a separator depends on whether the *previous* candidate was itself
+    accepted — a variable-width condition Python's ``re`` lookbehind
+    cannot carry, so this scans candidates left to right instead and
+    threads that one bit of state (``last_accepted_end``) through.
+    """
+    seen: list[str] = []
+    last_accepted_end: int | None = None
+    for match in _SCAN_CANDIDATE_RE.finditer(text):
+        start, end = match.span()
+        prev_char = text[start - 1] if start > 0 else ""
+        if prev_char and (prev_char.isalnum() or prev_char in "_-"):
+            continue  # embedded in a longer token, e.g. `xw-45`
+        if prev_char == "/" and last_accepted_end != start - 1:
+            continue  # a path segment, e.g. `surface/warp/w-45.md`
+        next_char = text[end] if end < len(text) else ""
+        if next_char and (next_char.isalnum() or next_char in "_-"):
+            continue  # embedded in a longer token, e.g. `w-450`, `w-45-notes`
+        if next_char == "." and _FILENAME_EXT_RE.match(text[end:]):
+            continue  # a filename, e.g. `w-45.md`
+        last_accepted_end = end
+        token = match.group(0)
+        if token not in seen:
+            seen.append(token)
+    return seen
 
 
 @dataclass
@@ -255,10 +331,7 @@ def scan_item_ids(text: str) -> list[str]:
     lines (any legal id — the address line the copy-prompt affordance
     appends). Grammar-level only; resolution is the caller's second gate.
     """
-    seen: list[str] = []
-    for match in _SCAN_TOKEN_RE.finditer(text or ""):
-        if match.group(1) not in seen:
-            seen.append(match.group(1))
+    seen = _scan_bare_tokens(text or "")
     for match in _SCAN_LINE_RE.finditer(text or ""):
         if match.group(1) not in seen:
             seen.append(match.group(1))

@@ -19,7 +19,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from . import gitops
+from . import envoy_x_browser, gitops
 
 DEFAULT_REPO_LABEL = "local/default"
 HOME_ROOT_LABEL = "home"
@@ -94,6 +94,17 @@ SECURITY_CONFIG_FILENAME = "security.config"
 CLOUD_TOKEN_FILENAME = "cloud.token"
 _CLOUD_TOKEN_RELPATH = f"{ACCOUNT_GATES_PATH}/{CLOUD_TOKEN_FILENAME}"
 
+# The X browser envoy's persistent Chromium profile (``envoy_x_browser.
+# Paths.profile_dir``, installed at ``account/x-browser-profile/`` beside
+# the ``x-browser.py`` shim — see ``examples/envoy/README.md``). It holds
+# live session cookies: leaked, it *is* the account, the same class of
+# secret as the cloud gate's bearer token above, so it gets the same
+# never-tracked treatment rather than riding the home's default
+# commit-everything-as-memory behaviour. Sourced from ``envoy_x_browser.
+# PROFILE_DIRNAME`` rather than a second literal, so the two modules
+# cannot drift apart silently.
+_BROWSER_PROFILE_RELPATH = f"account/{envoy_x_browser.PROFILE_DIRNAME}"
+
 GITIGNORE = f"""\
 /dispatch/inbox/
 /dispatch/queue/
@@ -102,6 +113,7 @@ GITIGNORE = f"""\
 /.brr/
 /{SECURITY_CONFIG_FILENAME}
 /{_CLOUD_TOKEN_RELPATH}
+/{_BROWSER_PROFILE_RELPATH}/
 *.tmp
 """
 
@@ -1176,6 +1188,14 @@ class HomeManifest:
     #: ... stay separate"). ``None`` when knowledge isn't its own git repo
     #: yet, or has no ``origin``.
     knowledge_origin_url: str | None
+    #: Whether the dominion repo has ever pushed successfully —
+    #: ``gitops.has_pushed_upstream``'s local upstream-tracking read, not a
+    #: network probe. False whenever ``origin_url`` is None (#1422: an
+    #: ``origin`` being merely *wired* used to be read as "linked", so a
+    #: first push that failed left this reading True forever).
+    origin_pushed: bool = False
+    #: Same fact for the knowledge repo.
+    knowledge_origin_pushed: bool = False
 
     @property
     def has_memory(self) -> bool:
@@ -1194,14 +1214,25 @@ class HomeManifest:
 
     @property
     def fully_linked(self) -> bool:
-        """Whether both home-scoped repos already carry an ``origin``.
+        """Whether both home-scoped repos are wired **and** actually reached the remote.
 
         ``home_link.link_home`` wires both the dominion and the knowledge
         repo in one idempotent call, so "should we offer to link" only
         needs to know whether *either* is still local-only.
+
+        Non-null ``origin_url`` alone used to be the whole test — but
+        ``home_link._link_one`` wires ``origin`` *before* the initial push,
+        so a repo whose first push failed carried a non-null origin forever
+        even though nothing had ever reached the remote (#1422). Requiring
+        ``origin_pushed`` / ``knowledge_origin_pushed`` too keeps this in
+        step with what ``home_link.link_home``'s own already-linked branch
+        now checks before it decides whether to retry.
         """
 
-        return self.origin_url is not None and self.knowledge_origin_url is not None
+        return (
+            self.origin_url is not None and self.origin_pushed
+            and self.knowledge_origin_url is not None and self.knowledge_origin_pushed
+        )
 
 
 def _count_markdown_files(root: Path | None) -> int:
@@ -1300,20 +1331,26 @@ def home_manifest(ctx: HomeContext) -> HomeManifest:
     - ``commit_count`` — the dominion repo's own commit count.
     - ``origin_url`` / ``knowledge_origin_url`` — each repo's actual
       ``origin`` URL (see :func:`_origin_url`), never a guessed name.
+    - ``origin_pushed`` / ``knowledge_origin_pushed`` — whether each repo
+      has ever pushed successfully (:func:`gitops.has_pushed_upstream`),
+      never a network probe.
     """
 
     from . import items
 
     home_root = context_home_root(ctx)
+    knowledge_root = knowledge_path(ctx)
     return HomeManifest(
-        kb_pages=len(_discover_markdown(knowledge_path(ctx))),
+        kb_pages=len(_discover_markdown(knowledge_root)),
         warp_items=_count_markdown_files(items.warp_dir(ctx)),
         topics=_count_markdown_files(items.topics_dir(ctx)),
         run_records=_count_run_records(ctx.runs_dir),
         surface_pages=len(_discover_markdown(work_surface_path(ctx))),
         commit_count=_commit_count(home_root),
         origin_url=_origin_url(home_root),
-        knowledge_origin_url=_origin_url(knowledge_path(ctx)),
+        knowledge_origin_url=_origin_url(knowledge_root),
+        origin_pushed=gitops.has_pushed_upstream(home_root),
+        knowledge_origin_pushed=gitops.has_pushed_upstream(knowledge_root),
     )
 
 
