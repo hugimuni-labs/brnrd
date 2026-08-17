@@ -299,21 +299,39 @@ def _merge_into_open_media_group(
     clause is silently dropped, which would make this file's own tests
     pass while proving nothing about the box that ran them.
 
-    So: compare-and-swap instead of a lock — but the swap is a **delete +
-    reinsert**, not an in-place ``UPDATE``, for a second reason a #1396
+    So: compare-and-swap instead of a lock — but the swap is a **reinsert +
+    delete**, not an in-place ``UPDATE``, for a second reason a #1396
     review caught: an in-place update never touches ``seq``, and delivery
     is ``Event.seq > since`` (see ``fetch_since`` / ``_QUEUED_ONLY_RATIONALE``
     below). A daemon that already long-polled item 1 past its cursor would
     never see items 2..N merge in — they landed in the database with no
     seq the delivery predicate reads, so a connected daemon delivers 1
-    event carrying 1 photo while the server holds N. Deleting the row and
-    reinserting it with the same ``event_id`` (so it stays one logical
-    message; ``event_id``, not ``seq``, is the stable identity every other
-    reader keys on) mints a fresh autoincremented ``seq`` at the tail of
-    the table, so the merged event re-enters any cursor's delivery window
-    exactly the way a brand-new event would. (The account-mode gate side of
-    this — reconciling an already-ingested ``cloud_event_id`` whose
-    attachment set grew — is `cloud.py`'s ``_loop_once``; see the report.)
+    event carrying 1 photo while the server holds N. Reinserting mints a
+    fresh ``seq`` at the tail of the table, so the merged event re-enters
+    any cursor's delivery window exactly the way a brand-new event would.
+    (The account-mode gate side of this — reconciling an already-ingested
+    ``cloud_event_id`` whose attachment set grew — is `cloud.py`'s
+    ``_loop_once``; see the report.)
+
+    **Reinsert-then-delete, not delete-then-reinsert** — the order is
+    load-bearing, not cosmetic. ``seq`` is a plain autoincrement primary
+    key, not a true never-reuse sequence: on SQLite, a bare ``INTEGER
+    PRIMARY KEY`` hands out ``max(existing rowids) + 1``, so deleting the
+    table's one open row and inserting its replacement *after* can hand
+    back the **exact seq the delete just freed** — proven live by this
+    file's own interleaved-drain test, which stayed red with a delete-
+    first ordering even though the merge itself was correct (one row,
+    right attachments) because that row's seq never actually advanced.
+    Inserting the replacement *while the original row still occupies the
+    table's current max* sidesteps the recycling on every backend, not
+    only ones without a true sequence — Postgres never reuses a dispensed
+    ``SERIAL``/``IDENTITY`` value either way, so this ordering costs it
+    nothing. The one wrinkle: ``event_id`` is ``UNIQUE``, so the
+    replacement can't yet carry the real one while the original row still
+    holds it — it's inserted under a throwaway placeholder, renamed to the
+    real ``event_id`` only after the original row is gone (still inside
+    the same transaction; the whole three-statement sequence commits or
+    rolls back together).
 
     The CAS re-checks ``body`` in the ``WHERE`` as well as
     ``attachments_json`` — a second #1396 finding: a mixed photo+video
@@ -325,12 +343,13 @@ def _merge_into_open_media_group(
     field it read is no longer current.
 
     When two merges race, at most one DELETE's WHERE still matches
-    (rowcount 1); the other's matches nothing (rowcount 0, its computed
-    merge is discarded, never written) and it retries against freshly
-    re-read state. Atomic on every backend this service runs — a single
-    row-scoped DELETE is race-free relative to any other statement, SQLite
-    and Postgres alike, with no reliance on isolation level or
-    backend-specific locking syntax.
+    (rowcount 1); the other's matches nothing (rowcount 0, and the whole
+    attempt — including its already-flushed placeholder insert — is
+    rolled back, so no orphaned placeholder row survives) and it retries
+    against freshly re-read state. Atomic on every backend this service
+    runs — a single row-scoped DELETE is race-free relative to any other
+    statement, SQLite and Postgres alike, with no reliance on isolation
+    level or backend-specific locking syntax.
     """
     for _ in range(_MEDIA_GROUP_MERGE_MAX_ATTEMPTS):
         existing = _find_open_media_group(
@@ -348,23 +367,11 @@ def _merge_into_open_media_group(
             new_attachments_json = json.dumps(merged)
         if new_body == existing.body and new_attachments_json == existing.attachments_json:
             return existing
-        result = db.execute(
-            delete(Event).where(
-                Event.seq == existing.seq,
-                Event.body == existing.body,
-                Event.attachments_json == existing.attachments_json,
-            )
-        )
-        if result.rowcount != 1:
-            # Lost the race: another merge (or a response) landed between
-            # our read and our write. Its commit is authoritative — never
-            # overwrite it with a merge computed from data that's now
-            # stale. Roll back (nothing else was written this iteration)
-            # and retry against freshly re-read state.
-            db.rollback()
-            continue
+        # Insert first, under a placeholder id — see the docstring for why
+        # this ordering (not delete-then-insert) is what actually secures a
+        # fresh, never-reused seq.
         replacement = Event(
-            event_id=existing.event_id,
+            event_id=f"_merging_{ids.event_id()}",
             repo_id=existing.repo_id,
             runtime_id=existing.runtime_id,
             source=existing.source,
@@ -381,6 +388,27 @@ def _merge_into_open_media_group(
             attachments_json=new_attachments_json,
         )
         db.add(replacement)
+        db.flush()  # assigns replacement.seq without committing
+        result = db.execute(
+            delete(Event).where(
+                Event.seq == existing.seq,
+                Event.body == existing.body,
+                Event.attachments_json == existing.attachments_json,
+            )
+        )
+        if result.rowcount != 1:
+            # Lost the race: another merge (or a response) landed between
+            # our read and our write. Its commit is authoritative — never
+            # overwrite it with a merge computed from data that's now
+            # stale. Roll back (discards the placeholder insert above too)
+            # and retry against freshly re-read state.
+            db.rollback()
+            continue
+        db.execute(
+            update(Event)
+            .where(Event.seq == replacement.seq)
+            .values(event_id=existing.event_id)
+        )
         db.commit()
         db.refresh(replacement)
         return replacement

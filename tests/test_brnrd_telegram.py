@@ -572,6 +572,88 @@ def test_media_group_album_coalesces_into_one_event(env):
     assert len(telegram_events[0]["attachments"]) == 3
 
 
+def test_merged_album_item_stays_deliverable_after_an_interleaved_drain(env):
+    """#1396 finding 1 — a merge that mutates the row *in place* never bumps
+    ``Event.seq``, and delivery is ``Event.seq > since``. A daemon that is
+    already long-polling can drain item 1 (advancing its cursor past that
+    row's seq) *before* item 2 merges into it — the album isn't fully
+    arrived yet, so this is the common case, not an edge case. Interleaves a
+    drain between the first and second item of
+    ``test_media_group_album_coalesces_into_one_event``'s own album to prove
+    the second photo is still reachable afterwards.
+
+    Pre-fix (an in-place ``UPDATE`` that only ever touches ``body`` /
+    ``attachments_json``), this went red exactly as the review predicted:
+    the second drain came back with **zero** events, because the merged
+    row's ``seq`` never advanced past the cursor the first drain had already
+    consumed — the second photo was in the database and permanently
+    unreachable over this API. Verified live on this branch's pre-fix tip
+    (commit `9e833cda`, the last commit before the #1396 fix): swapping
+    `_merge_into_open_media_group`'s delete+reinsert back for the original
+    in-place `UPDATE` reproduces that exact failure —
+    ``assert len(second_drain["events"]) == 1`` raised
+    ``AssertionError: assert 0 == 1``.
+    """
+    app, client, _ = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    code = _tg_pair_code(client, acc, rid)
+    client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
+    dmn = _daemon_headers(client, acc, rid)
+
+    def _photo_update(message_id, file_id, *, caption=None):
+        update = _message(555, "", message_id=message_id)
+        msg = update["message"]
+        del msg["text"]
+        if caption is not None:
+            msg["caption"] = caption
+        msg["photo"] = [{"file_id": file_id, "width": 900, "height": 600, "file_size": 1000}]
+        msg["media_group_id"] = "album-interleaved"
+        return update
+
+    # Item 1 arrives and mints a fresh event.
+    r1 = client.post(
+        "/v1/webhooks/telegram", json=_photo_update(60, "f1"), headers=_HDR
+    )
+    assert r1.status_code == 200
+
+    # A daemon already long-polling drains it *before* item 2 arrives — the
+    # interleaving the review named. Its cursor now sits at item 1's seq.
+    first_drain = client.get(
+        "/v1/daemons/inbox", params={"since": 0, "wait": 0}, headers=dmn
+    ).json()
+    assert len(first_drain["events"]) == 1
+    cursor = first_drain["cursor"]
+
+    # Item 2 merges into the same (already-delivered) event.
+    r2 = client.post(
+        "/v1/webhooks/telegram",
+        json=_photo_update(61, "f2", caption="look at these"),
+        headers=_HDR,
+    )
+    assert r2.status_code == 200
+
+    with app.state.SessionLocal() as db:
+        events = list(
+            db.execute(select(Event).where(Event.source == "telegram")).scalars()
+        )
+        assert len(events) == 1, "the merge must still land in the one event, not a second"
+        from brnrd import inbox as inbox_service
+        assert [p["file_id"] for p in inbox_service.attachments_of(events[0])] == ["f1", "f2"]
+
+    # The daemon polls again from its already-advanced cursor. The merged
+    # growth must still be reachable — this is the assertion that was red
+    # pre-fix (see docstring).
+    second_drain = client.get(
+        "/v1/daemons/inbox", params={"since": cursor, "wait": 0}, headers=dmn
+    ).json()
+    assert len(second_drain["events"]) == 1, (
+        "the merged album item never re-entered delivery — the second photo "
+        "is in the database and permanently unreachable over this cursor"
+    )
+    assert len(second_drain["events"][0]["attachments"]) == 2
+
+
 def test_concurrent_album_webhooks_do_not_lose_attachments(monkeypatch, tmp_path):
     """#1396 — the merge path this PR adds (`_find_open_media_group` +
     `inbox.enqueue`'s read-modify-write of ``attachments_json``) has no row
@@ -589,6 +671,19 @@ def test_concurrent_album_webhooks_do_not_lose_attachments(monkeypatch, tmp_path
     sharing one connection across every session, which is not an honest
     model of concurrent callers (see also `tests/test_brnrd_inbox.py::env`).
     Repeated over many trials and every attachment must survive every trial.
+
+    One item per album is a **video**, not a photo (#1396 finding 2): a
+    video has ``has_media=True`` but ``extract_attachments`` returns
+    nothing for it (`brr/channels/telegram.py` only converts photos and
+    image documents to pointers), so it merges with ``attachments=None``
+    and a non-empty *annotated* body (the
+    ``"[attached media not ingested...]"`` suffix webhooks.py appends).
+    That is the exact shape the CAS hole missed: a merge guarded only by
+    ``attachments_json`` lets a racing photo item's stale-``body`` write
+    silently wipe that annotation, because the photo item's own CAS
+    ``WHERE`` still matches (it never touched attachments either). Every
+    trial must therefore keep *both* — every photo file id, and the video's
+    annotation text somewhere in the final merged event's body.
     """
     import json
     import threading
@@ -603,7 +698,7 @@ def test_concurrent_album_webhooks_do_not_lose_attachments(monkeypatch, tmp_path
         telegram_webhook_secret=_SECRET,
         inbox_long_poll_max_s=0.2,
         inbox_poll_interval_s=0.02,
-        # 20 trials x 5 items/album would blow the default free-tier burst
+        # 20 trials x 6 items/album would blow the default free-tier burst
         # ceiling (6/min) long before the race window is exercised at all —
         # this test is about the merge race, not the admission throttle, so
         # lift both bounds well past what it drives.
@@ -618,32 +713,44 @@ def test_concurrent_album_webhooks_do_not_lose_attachments(monkeypatch, tmp_path
     code = _tg_pair_code(client, acc, rid)
     client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
 
-    N = 5  # items per album
+    N = 5  # photo items per album
+    _VIDEO_MARKER = "attached media not ingested"
     TRIALS = 20
     lost_trials = 0
     total_lost = 0
+    lost_video_annotation_trials = 0
 
     for trial in range(TRIALS):
         group_id = f"race-{trial}"
-        barrier = threading.Barrier(N)
+        barrier = threading.Barrier(N + 1)
         errors: list[BaseException] = []
 
         def _send(i, group_id=group_id, trial=trial):
             try:
                 barrier.wait(timeout=5)
-                update = _message(555, "", message_id=10_000 + trial * 100 + i)
-                msg = update["message"]
-                del msg["text"]
-                msg["photo"] = [
-                    {"file_id": f"f-{trial}-{i}", "width": 900, "height": 600, "file_size": 1000}
-                ]
+                if i == N:
+                    # The one video item — see docstring.
+                    update = _message(
+                        555, f"trial {trial} video", message_id=10_000 + trial * 100 + i,
+                    )
+                    msg = update["message"]
+                    del msg["text"]
+                    msg["caption"] = f"trial {trial} video"
+                    msg["video"] = {"file_id": f"vid-{trial}", "duration": 3}
+                else:
+                    update = _message(555, "", message_id=10_000 + trial * 100 + i)
+                    msg = update["message"]
+                    del msg["text"]
+                    msg["photo"] = [
+                        {"file_id": f"f-{trial}-{i}", "width": 900, "height": 600, "file_size": 1000}
+                    ]
                 msg["media_group_id"] = group_id
                 r = client.post("/v1/webhooks/telegram", json=update, headers=_HDR)
                 r.raise_for_status()
             except BaseException as exc:  # noqa: BLE001 - surfaced below
                 errors.append(exc)
 
-        threads = [threading.Thread(target=_send, args=(i,)) for i in range(N)]
+        threads = [threading.Thread(target=_send, args=(i,)) for i in range(N + 1)]
         for t in threads:
             t.start()
         for t in threads:
@@ -667,10 +774,17 @@ def test_concurrent_album_webhooks_do_not_lose_attachments(monkeypatch, tmp_path
         if len(seen_ids) != N:
             lost_trials += 1
             total_lost += N - len(seen_ids)
+        if not any(_VIDEO_MARKER in (e.body or "") for e in matching):
+            lost_video_annotation_trials += 1
 
     assert lost_trials == 0, (
         f"lost an attachment in {lost_trials}/{TRIALS} trials "
         f"({total_lost} attachments lost total, {N} items/album)"
+    )
+    assert lost_video_annotation_trials == 0, (
+        f"a racing photo item wiped the video's annotated body in "
+        f"{lost_video_annotation_trials}/{TRIALS} trials — the CAS hole #1396 "
+        "finding 2 named"
     )
 
 
