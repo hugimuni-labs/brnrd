@@ -43,31 +43,50 @@ key of its own.
 Self-hosted gates and local execution are free. No brnrd account is needed to
 use them.
 
-## `brnrd init`
+## Run `brnrd`
 
 ```bash
-brnrd init
+brnrd
 ```
 
-Run this once, from the repository you want brnrd to work in. It sets up a
-`.brr/` directory, detects your coding-agent CLI, and hands you an interview
-that writes the repository's contract (`AGENTS.md`) with you.
+Run this once, from the repository you want brnrd to work in. Bare `brnrd`
+is the guided setup: it narrates each step as it runs it, prints the exact
+command for anything it can't do without you, and never redoes a step
+that's already standing. In order:
 
-If the [GitHub CLI](https://cli.github.com/) (`gh`) is already installed and
-signed in, `brnrd init` reads that identity — the same `gh auth token` / `gh
-api user` resolution the GitHub gate uses — and states who you are before
-continuing. No brnrd account, no token entry, and no separate step: `gh` not
-installed or not signed in just means init continues without stating an
-identity, same as any other optional step here.
+- checks for a coding-agent CLI on your `PATH`;
+- pairs this machine with your brnrd account — a link you approve in your
+  browser — then installs and starts the background service;
+- picks where resident memory lives;
+- offers a door (Telegram, Slack, or Signal) so brnrd can reach you without
+  a terminal open;
+- queues the first run: a conversation, not a form, that writes the
+  repository's contract (`AGENTS.md`) with you.
 
-The interview leaves a working resident behind. A quick sanity check, if you
-want one:
+Re-run `brnrd` any time; it resumes from whatever step is still standing,
+and a finished repo gets a four-line receipt instead of repeating setup.
+Execution never leaves your machine.
+
+A quick sanity check, once a coding-agent CLI is on `PATH`, that doesn't
+wait on any of the above:
 
 ```bash
 brnrd run "summarize the test layout; do not change files"
 ```
 
 runs it right there, in the terminal — nothing else installed or connected.
+
+:::note[A single repo, no account]
+`brnrd init` is the narrower verb bare `brnrd` replaced as the default
+teaching path here — it still works: the same `.brr/` setup and interview,
+synchronous, in the terminal, with no account or door required. If the
+[GitHub CLI](https://cli.github.com/) (`gh`) is installed and signed in,
+init reads that identity — the same `gh auth token` / `gh api user`
+resolution the GitHub gate uses — and states who you are before
+continuing; `gh` missing or signed out just means it continues without
+stating one. Reach for init when you want one repo adopted without any of
+the steps above. See [CLI reference](../../reference/cli/).
+:::
 
 ## Next
 
@@ -78,7 +97,7 @@ chat gate, an identity that isn't you — or skip straight to
 ## Trying it without installing
 
 ```bash
-npx brnrd init
+npx brnrd
 ```
 
 `npx` runs brnrd once without adding anything to your `PATH`, so there is no

@@ -35,9 +35,9 @@ The first recorded end-to-end demo is tracked in
 ## No gate yet
 
 Without a connected channel, `brnrd run "<task>"` is a synchronous
-fallback — the same repository contract and runner `brnrd init` just set
-up, driving the same coding-agent CLI, one task at a time, right here in
-the terminal:
+fallback — the same repository contract and runner the guided `brnrd`
+setup just walked you through, driving the same coding-agent CLI, one task
+at a time, right here in the terminal:
 
 ```bash
 brnrd run "summarize the test layout; do not change files"
