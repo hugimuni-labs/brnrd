@@ -170,6 +170,20 @@ def send_fresh_message(
     return None if message_id is None else str(message_id)
 
 
+def get_me(token: str, *, timeout: float = 10.0) -> dict:
+    """Fetch the bot's own identity via `getMe` — read-only, no side effects.
+
+    Ground truth for the bot's username (#1463): the token defines the bot,
+    so this beats a hand-typed env duplicate. Returns `{}` on any failure
+    shape (non-dict payload, missing ``result``) rather than raising for
+    that case; a transport-level failure (timeout, non-2xx) still raises,
+    same as every other call in this module, for the caller to catch.
+    """
+    payload = _post_json(token, "getMe", {}, timeout)
+    result = payload.get("result")
+    return result if isinstance(result, dict) else {}
+
+
 def set_webhook(
     token: str,
     url: str,
