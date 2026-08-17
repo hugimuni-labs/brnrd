@@ -393,7 +393,14 @@ class ChannelRoute(Base):
     channel_id: Mapped[str] = mapped_column(String(64), index=True)
     topic_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
-    repo_id: Mapped[str] = mapped_column(ForeignKey("repos.id"), index=True)
+    # #1457 — the chat's pairing is to the *account*; the repo is a routing
+    # detail. NULL = account-level route: the target repo is resolved at
+    # message time (`routers/webhooks.py::_route_target_repo` — explicit
+    # `/repo` pin first, else the account's own activity decides). A
+    # non-NULL value is a per-chat pin, set by `/repo owner/name` and
+    # cleared by `/repo auto`. Legacy repo-scoped routes keep working
+    # unchanged — a pin and a legacy binding are the same row.
+    repo_id: Mapped[str | None] = mapped_column(ForeignKey("repos.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     # #409 — the Telegram user id who paired this chat/topic via `/start`.
     # The sole authorization principal for enqueueing a run from this route
@@ -439,7 +446,11 @@ class TgPairCode(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     code: Mapped[str] = mapped_column(String(16), unique=True, index=True)
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"))
-    repo_id: Mapped[str] = mapped_column(ForeignKey("repos.id"))
+    # #1457 — NULL = an account-level code: consuming it binds the chat to
+    # the account with no repo pin (`ChannelRoute.repo_id` NULL). Minted by
+    # the session-auth dashboard endpoint so a phone visitor with no repo
+    # yet still gets a constructible `t.me/<bot>?start=<code>` deep link.
+    repo_id: Mapped[str | None] = mapped_column(ForeignKey("repos.id"), nullable=True)
     consumed: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime)
