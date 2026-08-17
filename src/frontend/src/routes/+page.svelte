@@ -166,6 +166,12 @@
 	// no repo enabled yet" apart from "nothing paired at all" without a
 	// second round-trip to `GET /v1/machines`.
 	let machines = $state<MachinesSummary | null>(null);
+	// #1457, same `/v1/dashboard/repos` fetch: the account's Telegram bot
+	// handle, undecorated. `""` = unset or shape-invalid; absent key (an
+	// older backend) also falls to `null` — both read as "no deep link
+	// constructible" in ColdStart's mobile CTA, same "absent means unknown"
+	// contract `machines` already set for this response.
+	let telegramBotUsername = $state<string | null>(null);
 	// Threaded into AccountDeletion's confirmation label — the same
 	// `/v1/dashboard/repos` fetch that populates connectedRepos already
 	// carries it, so this costs no extra round trip.
@@ -1172,6 +1178,7 @@
 				accountId = repos.account.id;
 				capabilities = repos.capabilities ?? null;
 				machines = repos.machines ?? null;
+				telegramBotUsername = repos.telegram_bot_username ?? null;
 			} catch (e) {
 				if (!(e instanceof ReposAuthError)) {
 					runnersError = e instanceof Error ? e.message : 'project list fetch failed';
@@ -1357,7 +1364,13 @@
 		     consent notice read, never a second notion of "empty" — and
 		     leaves by itself once a daemon registers, not the moment a repo
 		     is merely enabled (#1084). -->
-		<ColdStart repos={connectedRepos} {installations} pairCommand={pairingCommand} {machines} />
+		<ColdStart
+			repos={connectedRepos}
+			{installations}
+			pairCommand={pairingCommand}
+			{machines}
+			{telegramBotUsername}
+		/>
 
 		<PublishConsentNotice repos={connectedRepos} />
 
