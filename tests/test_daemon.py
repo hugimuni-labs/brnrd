@@ -5557,6 +5557,152 @@ class TestNotifyGateFallback:
         assert protocol.list_done(inbox_dir, "telegram") == []
 
 
+# ── #1444: the account-scoped routing rule has exactly one home ────────────
+
+
+def test_gate_dirs_routes_account_scoped_gate_to_the_account_pair(tmp_path):
+    ctx = types.SimpleNamespace(
+        enabled=True,
+        dispatch_inbox=tmp_path / "account-inbox",
+        responses_dir=tmp_path / "account-responses",
+    )
+    own_inbox = tmp_path / "repo-inbox"
+    own_responses = tmp_path / "repo-responses"
+
+    inbox, responses = daemon.gate_dirs(
+        "cloud", inbox_dir=own_inbox, responses_dir=own_responses,
+        account_context=ctx,
+    )
+    assert inbox == ctx.dispatch_inbox
+    assert responses == ctx.responses_dir
+
+
+@pytest.mark.parametrize(
+    "ctx",
+    [
+        None,
+        types.SimpleNamespace(
+            enabled=False, dispatch_inbox=Path("x"), responses_dir=Path("y"),
+        ),
+    ],
+    ids=["no-account-context", "account-context-disabled"],
+)
+def test_gate_dirs_falls_back_to_the_callers_own_pair(tmp_path, ctx):
+    own_inbox = tmp_path / "repo-inbox"
+    own_responses = tmp_path / "repo-responses"
+
+    inbox, responses = daemon.gate_dirs(
+        "cloud", inbox_dir=own_inbox, responses_dir=own_responses,
+        account_context=ctx,
+    )
+    assert inbox == own_inbox
+    assert responses == own_responses
+
+
+def test_gate_dirs_leaves_a_non_account_scoped_gate_alone(tmp_path):
+    # A capable, enabled account context must not hijack a gate that was
+    # never in ``_ACCOUNT_SCOPED_GATES`` — telegram's delivery thread reads
+    # its own per-repo pair regardless of account mode.
+    ctx = types.SimpleNamespace(
+        enabled=True,
+        dispatch_inbox=tmp_path / "account-inbox",
+        responses_dir=tmp_path / "account-responses",
+    )
+    own_inbox = tmp_path / "repo-inbox"
+    own_responses = tmp_path / "repo-responses"
+
+    inbox, responses = daemon.gate_dirs(
+        "telegram", inbox_dir=own_inbox, responses_dir=own_responses,
+        account_context=ctx,
+    )
+    assert inbox == own_inbox
+    assert responses == own_responses
+
+
+def test_account_scoped_routing_has_one_consumer():
+    """#1444: one routing rule, three implementations in a week, no home.
+
+    ``_ACCOUNT_SCOPED_GATES`` is the owning module's declaration of which
+    gates route to the account-wide pair instead of a repo-local one. The
+    defect the ticket files is not any single wrong answer — it's that nothing
+    stopped a new call site from re-deriving that same membership test
+    locally, which is exactly how three implementations landed in a week (the
+    third one wrong, per #1437). This AST-walks every module in the package
+    and asserts the *only* function that ever tests membership (``in`` /
+    ``not in``) against ``_ACCOUNT_SCOPED_GATES`` is :func:`daemon.gate_dirs`
+    — the resolver every synthesis site must call instead. A second site
+    doing ``gate in _ACCOUNT_SCOPED_GATES`` by hand — even a correct one —
+    is the duplication this test exists to catch before it ships. Merely
+    *passing the set along* (``_start_account_gates`` hands it to
+    ``_start_gates`` as its ``excluded`` set — a different, legitimate
+    consumer that decides which gate *threads* start, not which *directory
+    pair* a synthesized message lands in) is not a membership test and is
+    not flagged.
+
+    Drive red: neuter by adding a second membership check anywhere in the
+    package (e.g. re-inline the old check in ``_deliver_out_of_bound``
+    instead of calling ``gate_dirs``).
+    """
+    import ast
+
+    class _ConsumerFinder(ast.NodeVisitor):
+        """Collects the enclosing function name for every membership test."""
+
+        def __init__(self):
+            self.stack: list[str] = []
+            self.hits: list[str] = []
+
+        def _visit_fn(self, node):
+            self.stack.append(node.name)
+            self.generic_visit(node)
+            self.stack.pop()
+
+        visit_FunctionDef = _visit_fn
+        visit_AsyncFunctionDef = _visit_fn
+
+        @staticmethod
+        def _names_the_set(expr) -> bool:
+            return isinstance(expr, ast.Name) and expr.id == "_ACCOUNT_SCOPED_GATES"
+
+        def visit_Compare(self, node):
+            operands = [node.left, *node.comparators]
+            if any(
+                isinstance(op, (ast.In, ast.NotIn)) for op in node.ops
+            ) and any(self._names_the_set(operand) for operand in operands):
+                self.hits.append(self.stack[-1] if self.stack else "<module>")
+            self.generic_visit(node)
+
+    pkg = Path(daemon.__file__).parent
+    hits: list[str] = []
+    for path in sorted(pkg.rglob("*.py")):
+        finder = _ConsumerFinder()
+        finder.visit(ast.parse(path.read_text(encoding="utf-8")))
+        hits.extend(finder.hits)
+
+    # Sanity: the scan must actually find the resolver's own membership
+    # test, or a rename of either name has silently disarmed this guard —
+    # the same failure mode ``test_every_minted_source_is_declared``
+    # (test_trust.py) guards against for its own AST walk.
+    assert "gate_dirs" in hits, (
+        "scan found no `in _ACCOUNT_SCOPED_GATES` test inside gate_dirs — "
+        f"the guard has stopped scanning: {hits}"
+    )
+    # Sanity: the set itself must still be non-empty, or a rename/emptying
+    # of _ACCOUNT_SCOPED_GATES would make this whole guard vacuous.
+    assert daemon._ACCOUNT_SCOPED_GATES, (
+        "_ACCOUNT_SCOPED_GATES is empty — the routing rule this guard "
+        "protects no longer applies to anything, which likely means the "
+        "set was renamed out from under this test"
+    )
+
+    other_consumers = sorted(set(hits) - {"gate_dirs"})
+    assert not other_consumers, (
+        "_ACCOUNT_SCOPED_GATES is read outside gate_dirs, in "
+        f"{other_consumers} — route through daemon.gate_dirs() instead of "
+        "re-deriving the membership test locally (#1444)"
+    )
+
+
 def test_run_worker_calls_sync_before_resolving_branch_plan(
     tmp_path, monkeypatch,
 ):
