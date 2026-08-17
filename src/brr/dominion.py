@@ -27,6 +27,18 @@ SELF_INJECT_FILE = "self-inject"
 PLAYBOOK_FILE = "playbook.md"
 COMMIT_LOCK_FILE = "dominion.commit.lock"
 SYNC_MARKER_FILE = "dominion.needs-sync"
+# Deliberately a *different* marker file from SYNC_MARKER_FILE, not a status
+# value layered onto it: "never linked a remote at all" and "linked but the
+# last push failed" carry different remedies (``brnrd home link`` vs.
+# reconcile-the-diverged-remote), and folding them into one predicate is the
+# bug class #1423 exists to stop this repo from re-finding.
+NEVER_LINKED_MARKER_FILE = "dominion.never-linked"
+# The commit count observed the first time `never_linked` looked — see
+# `gitops.read_or_seed_baseline`. Deliberately not a hard-coded founding
+# count: the legacy repo-local dominion seeds two commits at birth (an
+# orphan root plus a seed commit) while the account-scoped dominion seeds
+# one, and a constant correct for one is wrong for the other.
+FOUNDING_COMMIT_COUNT_FILE = "dominion.founding-commits"
 # Total UTF-8 budget for the wake-time self-inject digest. Sized to fit
 # the living playbook seed in full with headroom for the agent's own entries
 # (recent pain, current focus); the agent can re-tune what it injects, and a
@@ -124,12 +136,26 @@ def resident_dominion_candidates(
     *,
     repo_label: str | None = None,
     include_legacy: bool = True,
+    account_context: "account.AccountContext | None" = None,
 ) -> list[ResidentDominion]:
     """Return resident-memory locations, newest account path first.
 
     The account-scoped path is authoritative when present. The repo-local
     orphan-branch path remains a fallback so partially migrated installs can
     still wake with their old memory instead of going blank.
+
+    *account_context*, when a caller already has one resolved, is reused as
+    is rather than re-derived: ``account.resolve_context`` recomputes repo
+    identity from scratch, including a `git` subprocess fallback for a repo
+    with no matching remote, and a caller in a per-tick loop (the daemon's
+    ``_fire_due_schedules``, on every scan) that skips this parameter pays
+    that cost again on every call for an answer that cannot have changed
+    since the daemon's own startup resolution (#1405 — measured on an idle
+    machine as the dominant, and highly variable, per-tick cost: up to
+    ~9-10 redundant resolutions per second-scale daemon run, individual
+    calls ranging 20ms-400ms, entirely subprocess-spawn-bound). A caller
+    with no context handy (CLI entry points, prompt assembly) still gets
+    one derived here, unchanged.
     """
 
     if cfg is None:
@@ -143,7 +169,9 @@ def resident_dominion_candidates(
     try:
         from . import account
 
-        ctx = account.resolve_context(repo_root, cfg, create=False)
+        ctx = account_context if account_context is not None else account.resolve_context(
+            repo_root, cfg, create=False,
+        )
         if ctx.enabled:
             label = repo_label or account.repo_label(repo_root, cfg)
             candidates.append(
@@ -255,6 +283,17 @@ def ensure_dominion(
     gitops.add_worktree(repo_root, path, branch=branch)
     _seed(path)
     gitops.commit_all(path, f"{branch}: seed dominion")
+    if remote:
+        clear_never_linked(path.parent)
+    else:
+        # Written at the birth of a fresh dominion, same as every later
+        # ``commit()`` call finds it. ``never_linked()``'s own getter gate
+        # (commit_count > 1) keeps a brand-new, remote-less dominion — one
+        # commit, the founding "seed dominion" — from rendering a wake
+        # warning about memory that doesn't exist yet; the fact still
+        # becomes true the moment the resident writes something real and
+        # the next capture confirms there is still nowhere for it to go.
+        mark_never_linked(path.parent)
     if push and remote:
         gitops.push_branch(repo_root, remote, branch)
     return path
@@ -302,6 +341,62 @@ def needs_sync(brr_dir: Path) -> str | None:
     return gitops.read_sync_marker(brr_dir, SYNC_MARKER_FILE)
 
 
+_NEVER_LINKED_REASON = (
+    "no git remote is configured for the dominion; "
+    "`brnrd home link` wires one so this memory survives off this machine"
+)
+
+
+def mark_never_linked(brr_dir: Path) -> None:
+    """Record that the dominion repo carries no remote at all.
+
+    A distinct marker from :func:`mark_needs_sync` (#1423), not a status
+    layered onto it: "never linked" and "linked but a push just failed" are
+    different facts with different remedies (``brnrd home link`` vs.
+    reconcile-the-diverged-remote), and one predicate that is True for both
+    is the bug class this repo keeps re-finding.
+    """
+    gitops.write_sync_marker(brr_dir, NEVER_LINKED_MARKER_FILE, _NEVER_LINKED_REASON)
+
+
+def clear_never_linked(brr_dir: Path) -> None:
+    gitops.clear_sync_marker(brr_dir, NEVER_LINKED_MARKER_FILE)
+
+
+def never_linked(brr_dir: Path, repo_path: Path) -> str | None:
+    """The never-linked reason, or ``None`` when linked or not yet worth saying.
+
+    The marker is written the instant a capture finds no remote — true even
+    for a dominion holding nothing but its founding commit(s). Rendering
+    that as a wake warning would caution about unbacked *emptiness* rather
+    than unbacked *memory*, so this getter — not the write site — gates the
+    raw fact on "has this dominion done anything since it was born" (mirrors
+    :attr:`brr.account.HomeManifest.has_memory`'s reasoning, narrowed to
+    *this* repo's own commit history via
+    :func:`brr.gitops.read_or_seed_baseline` rather than a hard-coded
+    founding-commit count).
+
+    **The baseline is anchored on every call, marker or not** — never
+    short-circuited behind "is the marker even set right now". A dominion
+    checked for the first time in the very run that both loses its remote
+    *and* gains new content would otherwise anchor its baseline already
+    inflated by that content (the marker write and the real commit can
+    land in the same capture call), permanently hiding the fact. Calling
+    this every wake — which the banner render already does — anchors it
+    early instead.
+    """
+    current = gitops.commit_count(repo_path)
+    baseline = gitops.read_or_seed_baseline(
+        brr_dir, FOUNDING_COMMIT_COUNT_FILE, current,
+    )
+    reason = gitops.read_sync_marker(brr_dir, NEVER_LINKED_MARKER_FILE)
+    if reason is None:
+        return None
+    if current <= baseline:
+        return None
+    return reason
+
+
 def commit(
     dominion_dir: Path,
     message: str,
@@ -337,6 +432,15 @@ def commit(
     only for a non-fast-forward rejection. A successful push clears the
     marker — including a clean-tree no-op push, so a resident that repaired
     the failure out-of-band clears its stale marker on the next capture.
+
+    **No remote at all is a different fact from a failed push** (#1423): a
+    caller-supplied *remote* of ``None`` means there was never anywhere to
+    push *to*, evaluated on every call independent of *push* (the daemon's
+    real caller already ANDs ``push`` with ``bool(remote)`` before calling
+    in, so a no-remote capture always arrives with ``push=False`` — the
+    marking would never fire if it waited for *push* to be true). Sets
+    :func:`mark_never_linked` instead of ``needs_sync``: "never linked"
+    and "linked but a push just failed" carry different remedies.
     """
     if not dominion_dir.is_dir():
         return False
@@ -350,6 +454,15 @@ def commit(
                 committed = gitops.commit_all(
                     dominion_dir, message, conversation_id=conversation_id,
                 )
+        # Never-linked is evaluated on *every* call, independent of `push` —
+        # a caller that resolved `remote=None` because there truly is none
+        # (the daemon's capture loop always does) still deserves the marker
+        # even on a run that chose not to push, exactly as a caller that has
+        # a remote clears it whether or not this particular call pushes.
+        if remote:
+            clear_never_linked(brr_dir)
+        else:
+            mark_never_linked(brr_dir)
         if push and remote:
             target = branch or gitops.current_branch(dominion_dir)
             # Push after a real commit, or to settle a standing divergence

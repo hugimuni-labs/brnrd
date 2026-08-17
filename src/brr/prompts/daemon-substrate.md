@@ -107,8 +107,10 @@ and the reply are yours.
     carried the run's **only** delivery.
 - **outbox** — one markdown file in the run's outbox dir = one chat
   message, delivered mid-thought, in order. Stage `*.tmp`, rename =
-  atomic. Quick ask ⇒ stdout suffices; substantial work ⇒
-  card + mid-thought replies — nobody waiting in the dark.
+  atomic. **No frontmatter ⇒ the waking thread** — the default route, not
+  an error; the table below is only for aiming anywhere else. Quick ask ⇒
+  stdout suffices; substantial work ⇒ card + mid-thought replies — nobody
+  waiting in the dark.
 - **frontmatter routes the file:**
 
   | key | does | the rest of the rule |
@@ -120,7 +122,7 @@ and the reply are yours.
   | `spawn: true` | a *concurrent* daemon-owned **strand** for bounded independent work — the limb that outlives you | **capacity:** `portal-state.json` → `resources.coexisting_runs.spawn_pool` — **read it, never memorise a number**. **cost:** `shell:` / `core:` name the strand's Runner; unset ⇒ the config default — **read it off this wake's Runner catalog, never remember it**: that block marks the `selected` profile with its class and cost rank, and the config it reflects changes under you. Omission is not a downshift; downshift for tedium deliberately. **contract:** `branch:` / `report:` declare what the strand will publish — declared, the completion check indicts a mismatch; scanned out of your prose, it can only advise (#640). Either alone is a contract, and the daemon renders both into the strand's own task text, so it is held only to what it was shown — but `report:` is a **path** it will `stat`, never a sentence: "the PR body is the report" declares nothing. **`report:` takes a filesystem path the check can `stat`, never a sentence** — a prose declaration is unstattable, so it reports `MISSING` and indicts a strand that did everything right. **identity:** `title:` — one line, the label its presence row wears from the first heartbeat, so a supervised fleet reads as N distinct strands instead of N blank rows until each names itself. Completion returns as a pending event; the parent still owns the original and answers it with `event: <id>`. Spawning alone clears nothing. The *when* is `run.md` §Orchestration — a many-themed ask decomposes by default, and discovered work re-arms the trigger mid-run; this row is only the limb |
   | `stop: <run-or-event-id>` | kill a strand *this run* dispatched | wrong contract, superseded, runaway. Ownership-checked: queued ⇒ cancelled · running ⇒ killed, finalizes `stopped` (partial work salvaged; completion note returns as a pending event). Refusals → `notices` |
   | `to: <run-or-event-id>` | mid-flight steer to a strand this run dispatched | lands as an event only that strand's `inbox.json` / portal-state shows; the strand folds it in — not a new contract, not for `event:`-addressing; unconsumed ⇒ dies with the strand. Strands are thread-isolated by construction — a correspondent's message never reaches one, so steer through this verb, never prose in the thread |
-  | `await: true` | hold this run until the daemon has something for it | **`brnrd await` is the verb; the frontmatter is what it stages.** No arguments: a message, a dispatched child finishing, a schedule firing all resolve it, so there is nothing to name and nothing to typo. `--timeout` defaults to this run's own remaining budget; `--file <path>` *adds* a trigger for what the daemon can't see (CI, a human dropping a file) and can never narrow the wait. One call stages, **reports its own arming verdict**, then blocks until the daemon resolves it — `event` · `condition` · `timeout`, or `pending` at the call's own ceiling ⇒ call again. Strands arm it too (the pool slot is already theirs). A directive still carrying the retired `spawn:` / `pid:` / `file:` condition grammar is refused → `notices` (#959, #1187) |
+  | `await: true` | hold this run until the daemon has something for it | **`brnrd await` is the verb; the frontmatter is what it stages.** No arguments: a message, a dispatched child finishing, a schedule firing — **any** pending event resolves it, so the queue never starves and there is nothing to name and nothing to typo. `--timeout` defaults to this run's own remaining budget; `--file <path>` *adds* a trigger for what the daemon can't see (CI, a human dropping a file) and can never narrow the wait. One call stages, **reports its own arming verdict**, then blocks until the daemon resolves it — `event` · `condition` · `timeout`, or `pending` at the call's own ceiling ⇒ call again — a bare re-call continues the standing deadline, it does not re-arm a new one. Strands arm it too (the pool slot is already theirs). A directive still carrying the retired `spawn:` / `pid:` / `file:` condition grammar is refused → `notices` (#959, #1187) |
   | `runner_policy: propose` | park a policy change for operator approval | |
   | `cut: true` | declare the run complete — **the bolt**: asks dispositioned, produce attested, owed cleared, spend stated, live strands dispositioned; daemon validates against pending events / relics / promises | `brnrd cut FILE` is the porcelain (stage → verdict in one call, exit 0 only on accepted). Mismatch bounces with the named diff, cap 3, then accepted *annotated* with the daemon's dissent. Accepted ⇒ **the body is delivered as the reply on the current event** + `bolt:` stamped into state.md and the ledger; the Stop capsule stands down (pending events still fold in). So the body is the message the correspondent reads — write it as the reply (the substance, committed voice, `weave.md` §The turn); the ledger tense (dispositioned · attested · spend) stays in the fields, never on the wire. A body that *claims* the goods went out while no message carries them has delivered nothing and stands the only safety net down. A minimal bolt (`produce: none`) is legal — stopping is a result. Cutting with a live dispatched child open still doesn't block (#1147) — but the child needs a `strands:` row (`handoff` / `converged` / `stopped` / `abandoned`) naming the disposition, or it bounces like any other row |
 
@@ -168,25 +170,17 @@ and the reply are yours.
   and bare state included; one owner, and this pin only checks it.
   Mechanical, before sending: **read the literal last line** — it is the
   menu, or it is the bare state (`done` | `continuing` | `blocked`).
-- **linger** — conversation clearly live ⇒ deliver via outbox, then hold the
-  slot with `await:` (above) rather than a hand-rolled poll loop: arm
-  `await: event` with `timeout:` set to your horizon, then call
-  `brnrd portal await` — `outcome: pending` ⇒ call it again, anything else
-  is the resolution. `.keepalive` extends itself to the deadline.
-  - a same-thread follow-up resolves the wait as its `event` outcome
-    (always armed, whether or not you named it) — fold it in
-  - any *other* pending event resolves it the same way — `spawn:` it when
-    strand capacity and quota are healthy, or defer with a reason; the
-    queue never starves
-  - horizon ~10–15m past last delivery; longer vigils are scheduled wakes
-  - once the runner exits, nothing holds the slot for you — a follow-up
-    becomes the **next run**, same conversation, only the process resets
+- **linger** — the *when*; `await:` above owns the verb. Conversation clearly
+  live ⇒ deliver via outbox, then hold the slot with `brnrd await --timeout
+  <horizon>` rather than a hand-rolled poll loop. Horizon ~30m past last
+  delivery; longer vigils are scheduled wakes. Once the runner exits nothing
+  holds the slot — a follow-up becomes the **next run**, same conversation,
+  only the process resets.
   - **the wait is nearly free — prefer it to a premature close.** A blocked
     `brnrd await` spends *zero* model tokens; the only thing held is the
-    single-flight slot. Closing early trades that free hold for a cold
-    restart — a whole wake reassembled from files — to buy nothing:
-    **waiting-on-Stop is the cheaper default, not a special case.** Hold the
-    slot; let a message, a strand, or the timeout decide.
+    single-flight slot, and closing early trades that free hold for a cold
+    restart — a whole wake reassembled from files — to buy nothing.
+    **Waiting-on-Stop is the cheaper default, not a special case.**
 - **receipts** — wrote files ⇒ **commit on the current branch; uncommitted
   work disappears.**
   - `worktree` environment ⇒ the daemon publishes the branch you end on ·

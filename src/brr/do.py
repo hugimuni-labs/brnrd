@@ -498,7 +498,23 @@ def await_verdict(
             sleep(min(poll_seconds, max(0.0, deadline - clock())))
             continue
         if clock() >= deadline:
-            return QUEUED, "still queued"
+            # #1379: *how long*, not just *whether* — a file wedged behind
+            # a poison entry for 40 minutes must not read identically to
+            # one the daemon is 2 seconds behind on. ``staged_path`` is
+            # this call's own directive, provably still on disk right here
+            # (the branch above already ruled out "gone"), so its own
+            # ``st_mtime`` is the exact wait this caller has been living,
+            # no read of the portal-state facet required. Real wall clock
+            # (``time.time()``), not the injectable *clock* — ``st_mtime``
+            # is always wall time regardless of what a test fakes *clock*
+            # to. No threshold-based wording switch: report the number,
+            # let the reader judge (a fixed magnitude here is a drift bomb
+            # the docstring for this change explicitly warns against).
+            try:
+                age_seconds = max(0.0, time.time() - staged_path.stat().st_mtime)
+                return QUEUED, f"still queued ({int(age_seconds)}s)"
+            except OSError:
+                return QUEUED, "still queued"
         sleep(min(poll_seconds, max(0.0, deadline - clock())))
 
 

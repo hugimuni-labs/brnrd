@@ -1050,12 +1050,32 @@ class TestDeadlineAndHumanTime:
         ``self.writer(body); self._offer_reply()``) — so it lands as work
         time, not thinking time: rec 1's accounting alone gives this tick no
         slack (awaiting time this round is ~0, and the budget is exactly
-        spent). Only rec 3's skip saves it. No thread races: the bump is on
+        spent). Only rec 3's skip saves it on *that* tick — the bump is on
         the same thread, in the statement right before the read it protects.
+
+        What rec 3 does *not* promise is that the run finishes afterward:
+        the background thread here is this test's fake runner, and it must
+        exit before ``run()``'s next ``while thread.is_alive()`` check, or
+        the *following* tick (``just_replied`` now false, clock still
+        frozen exactly at the deadline) kills the wake for real —
+        correctly: that tick is ordinary budget enforcement, not the one
+        rec 3 covers. An earlier version of this test raced that exit
+        against the main loop's own polling by having the fake runner poll
+        ``inbox.json`` on a ``time.sleep(0.01)`` cadence — the same
+        granularity as ``poll_interval`` — which made "did the runner
+        thread finish before the next tick" a coin flip (~47% local fail
+        rate, unrelated to anything rec 1/rec 3 accounts for). Signalling
+        the reply directly from ``reader()`` (main thread, the instant it
+        is captured) instead of round-tripping through a polled file gives
+        the fake runner thread a multi-statement head start on the main
+        loop's own post-reply bookkeeping, so it is reliably done well
+        inside one ``poll_interval`` — deterministic by construction, not
+        a widened timeout.
         """
         repo = _repo(tmp_path)
         clock = [0.0]
         monkeypatch.setattr(init_wake.time, "monotonic", lambda: clock[0])
+        reply_captured = threading.Event()
 
         def writer(_body):
             # The wake's own work burned the whole 1800s budget before it
@@ -1064,16 +1084,13 @@ class TestDeadlineAndHumanTime:
             clock[0] = 1800.0
 
         def reader():
+            reply_captured.set()  # signal first, before any further work
             return "go ahead"  # answers instantly: ~0 thinking time
 
         def script(invocation):
             outbox = Path(invocation.env["BRR_OUTBOX_DIR"])
             _write_outbox(outbox, "01.md", "shall I proceed?")
-            for _ in range(500):
-                events = json.loads((outbox / "inbox.json").read_text())["events"]
-                if events:
-                    break
-                time.sleep(0.01)
+            reply_captured.wait(5)
             # The thread ends right here — no tick after the reply lands
             # other than the one under test.
 

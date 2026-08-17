@@ -140,6 +140,35 @@ def _read_sync_marker_parts(
     return None, text
 
 
+def read_or_seed_baseline(brr_dir: Path, name: str, current: int) -> int:
+    """Return the integer recorded at ``brr_dir/name``, seeding it if absent.
+
+    A "first time we looked" anchor for a count that only means something
+    relative to where it started — e.g. "commits beyond the founding
+    commit(s)" (:func:`brr.dominion.never_linked` /
+    :func:`brr.knowledge.never_linked`), where the founding shape itself
+    isn't a fixed number worth hard-coding (the legacy repo-local dominion
+    seeds two commits at birth — an orphan root plus a seed commit — while
+    the account-scoped dominion and the knowledge repo each seed one;
+    a caller comparing against either constant is wrong for the other).
+    Missing or unparseable ⇒ *current* is written as the new baseline and
+    returned, so the very next call this repo makes reports "nothing beyond
+    the baseline yet" rather than "everything since commit zero" — correct
+    both for a dominion this code just created and for one that already
+    existed before this function did.
+    """
+    path = brr_dir / name
+    try:
+        return int(path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        try:
+            brr_dir.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"{current}\n", encoding="utf-8")
+        except OSError:
+            pass
+        return current
+
+
 @dataclass
 class BranchUpdateResult:
     """Result of fast-forwarding a local branch to another ref."""
@@ -940,6 +969,32 @@ def branch_upstream(repo_root: Path, branch: str) -> str | None:
     return value or None
 
 
+def has_pushed_upstream(repo_root: Path) -> bool:
+    """Whether *repo_root*'s checked-out branch has ever pushed successfully.
+
+    Reads a record git itself already writes — ``git push -u`` sets the
+    local upstream-tracking config on success, and only on success — rather
+    than asking the network. A caller deciding "does this repo still need a
+    push" gets that answer for free, with no ``git ls-remote`` round trip
+    for the common case of a healthy, already-pushed repo (#1422: origin
+    being merely *wired* was previously read as "linked", so a first push
+    that failed left every later run believing it had nothing left to do).
+
+    No commits yet, no ``.git``, a detached/unborn HEAD, or any git failure
+    all read as False — "no record of a push" is the safe default for a
+    caller about to decide whether one is needed.
+    """
+    if not (repo_root / ".git").exists():
+        return False
+    branch = current_branch(repo_root)
+    if branch == "HEAD":
+        result = _git(repo_root, "symbolic-ref", "--short", "HEAD", check=False)
+        branch = result.stdout.strip() if result.returncode == 0 else ""
+        if not branch:
+            return False
+    return branch_upstream(repo_root, branch) is not None
+
+
 def branch_remote(repo_root: Path, branch: str) -> str | None:
     """Return the configured remote for *branch*, if one exists."""
     result = _git(repo_root, "config", f"branch.{branch}.remote", check=False)
@@ -958,6 +1013,26 @@ def default_remote(repo_root: Path) -> str | None:
     if "origin" in remotes:
         return "origin"
     return remotes[0] if remotes else None
+
+
+def commit_count(repo_root: Path) -> int:
+    """Total commits reachable from HEAD — 0 for no repo or no commits yet.
+
+    Shared by any caller that needs to tell "just created" (a founding /
+    seed commit and nothing else) from "has real content" — see
+    ``dominion.never_linked`` / ``knowledge.never_linked``, which gate the
+    never-linked wake banner on this so a fresh install with no work yet
+    doesn't render a warning about unbacked emptiness.
+    """
+    if not (Path(repo_root) / ".git").exists():
+        return 0
+    result = _git(repo_root, "rev-list", "--count", "HEAD", check=False)
+    if result.returncode != 0:
+        return 0
+    try:
+        return int(result.stdout.strip())
+    except ValueError:
+        return 0
 
 
 def remote_url(repo_root: Path, remote: str) -> str | None:

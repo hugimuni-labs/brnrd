@@ -18,6 +18,7 @@ from brnrd import create_app, terms  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.models import Account, PairRequest, Repo, TermsAcceptance, TgPairCode  # noqa: E402
 from brnrd.oauth import GitHubIdentity, OAuthError  # noqa: E402
+from brnrd.routers.accounts import account_for_github_identity  # noqa: E402
 from _helpers import brnrd_account_headers  # noqa: E402
 
 _EMAIL = "owner@example.com"
@@ -251,7 +252,11 @@ def test_github_login_redirect_uses_state_and_pkce(client):
     assert query["client_id"] == ["gh-client"]
     assert query["redirect_uri"] == ["https://brnrd.example/auth/github/callback"]
     assert query["code_challenge_method"] == ["S256"]
-    assert query["scope"] == ["user:email"]
+    # w-57 (2026-08-16): brnrd stopped requesting `user:email` — the login
+    # scope-check dropped the scope param entirely rather than swap it for
+    # a narrower one, since `/user` already returns the token owner's own
+    # id/login with no scope at all.
+    assert "scope" not in query
     assert query["state"][0]
     assert query["code_challenge"][0]
 
@@ -337,7 +342,12 @@ def test_github_callback_does_not_gate_login_on_hosted_terms(client, monkeypatch
             select(Account).where(Account.github_id == _GITHUB_ID)
         ).scalar_one()
         assert account.github_login == _LOGIN
-        assert account.email == _EMAIL
+        # w-57 (2026-08-16): no email persisted on a fresh login, even
+        # though the fake `resolve_identity` above hands back one — brnrd
+        # no longer writes `Account.email` at all (the real
+        # `oauth.fetch_identity` never populates `GitHubIdentity.email`
+        # either; this monkeypatch stands in for that boundary).
+        assert account.email is None
         assert _acceptances(client, terms.DOC_HOSTED) == []
         repos = db.execute(
             select(Repo).where(Repo.account_id == account.id)
@@ -353,6 +363,34 @@ def test_github_callback_does_not_gate_login_on_hosted_terms(client, monkeypatch
     # surface eventually offers hosted execution.
     status = client.get("/v1/dashboard/terms-status").json()
     assert status["documents"]["hosted-execution"]["needs_accept"] is True
+
+
+def test_existing_account_login_does_not_resurrect_email(client):
+    """w-57 (2026-08-16): a residual pre-migration email is never re-synced.
+
+    Seeds an account the way a pre-w-57 deploy could have left one — email
+    populated — bypassing the migration on purpose to isolate the login
+    path's own behaviour from the startup backfill's. A later login (any
+    identity; GitHubIdentity.email is always ``None`` from the real OAuth
+    path now) must leave the residual value exactly alone: not nulled by
+    the login itself, not overwritten by whatever the identity carries.
+    account_deletion.py's Art-17 sweep is the only code path allowed to
+    touch it after this.
+    """
+    with client.app.state.SessionLocal() as db:
+        account = account_for_github_identity(
+            db, GitHubIdentity(github_id=_GITHUB_ID, login=_LOGIN)
+        )
+        account.email = "residual@example.com"
+        db.commit()
+
+        account_for_github_identity(
+            db, GitHubIdentity(github_id=_GITHUB_ID, login=_LOGIN)
+        )
+
+        db.refresh(account)
+        assert account.email == "residual@example.com"
+        assert account.github_login == _LOGIN
 
 
 def test_hosted_terms_acceptance_still_records_after_ungated_login(client, monkeypatch):

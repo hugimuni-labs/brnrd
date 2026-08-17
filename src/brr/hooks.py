@@ -1913,6 +1913,19 @@ EVENTS_SEEN_KEY = "events_seen"
 # of `bolt A/T asks` survives an event's own disposition.
 EVENTS_SEEN_ALL_KEY = "events_seen_all_ids"
 
+# Hook-state key: the bar-path pending sermon's own "did the SET change"
+# ledger — ``{"ids": [sorted action-event ids], "count": N}`` as of the
+# *previous* laden post-tool boundary. Deliberately its own key rather than
+# reusing EVENTS_SEEN_KEY: that ledger tracks *body* content per id (for the
+# letter-chrome collapse), while this one only asks whether the pending
+# *set* moved, so the full instruction sentence
+# ("Address each below with an `event:` reply...") can compress to a
+# one-liner on a boundary where nothing about the obligation set changed.
+# Pruned to the current set on every laden boundary (full or compact) by
+# :func:`_pending_set_changed` — never grows unbounded, same discipline as
+# EVENTS_SEEN_KEY.
+PENDING_SENTENCE_SET_KEY = "pending_sentence_set"
+
 # Hook-state key: per-detail-line consecutive-render streak, for the
 # compression-on-repeat rule (#1116 residue, design-the-live-loop.md §1). One
 # entry per compressible OBLIGATION detail line (``notices`` / ``running_long``
@@ -2158,7 +2171,11 @@ def _render_event_rows(
     total = len(events)
     rendered_events = events[:_PENDING_EVENT_ROWS_MAX]
     # Counted from what the loop *kept* — non-dict entries are skipped below,
-    # and an omitted count taken from the slice would under-report.
+    # and an omitted count taken from the slice would under-report. A
+    # collapsed `seen ×N · unchanged` row is still a rendered row (the event
+    # is accounted for on screen, just compactly) — it must bump this
+    # counter exactly like a full row, or the elision line below double-
+    # counts it: emitted *and* claimed omitted (#1116 residue's own bug).
     rendered = 0
     rows: list[str] = []
     for ev in rendered_events:
@@ -2168,6 +2185,7 @@ def _render_event_rows(
         status = (decision or {}).get("status") or "new"
         shown = int((decision or {}).get("shown") or 0)
         if status == "seen":
+            rendered += 1
             rows.append(f"- {_event_seen_line(ev, shown)}")
             continue
         body = _event_body(ev)
@@ -2269,6 +2287,50 @@ def _commit_events_seen_all(state: dict[str, Any], ids: Any) -> int:
             seen_ids.add(eid)
     state[EVENTS_SEEN_ALL_KEY] = sorted(seen_ids)
     return len(seen_ids)
+
+
+def _pending_set_changed(
+    state: dict[str, Any], action_events: list[Any], action_pending: int
+) -> bool:
+    """Bar-path only: has the pending obligation *set* moved since the last
+    laden boundary — not each event's body (that's :data:`EVENTS_SEEN_KEY`),
+    just membership?
+
+    True on the first laden boundary this run (no stored snapshot yet), any
+    id present now that wasn't in the previous boundary's snapshot, or a
+    plain count increase (the fallback for a pending event that carries no
+    ``id`` at all, so it never shows up in the id-set comparison but still
+    moves the count). A pure count *decrease* — an event got answered,
+    nothing new arrived — is deliberately **not** a change: the compact
+    line's own numbers already carry that fact.
+
+    Always commits the current snapshot (pruning to the current set, same
+    discipline as :data:`EVENTS_SEEN_KEY`), whether this boundary rendered
+    full or compact — "since the last render" means the immediately prior
+    boundary, not the last time the full sentence happened to fire.
+    """
+    current_ids = sorted(
+        {
+            str(ev.get("id"))
+            for ev in action_events
+            if isinstance(ev, dict) and ev.get("id")
+        }
+    )
+    stored = state.get(PENDING_SENTENCE_SET_KEY)
+    if isinstance(stored, dict):
+        stored_ids = stored.get("ids") if isinstance(stored.get("ids"), list) else []
+        stored_count = int(stored.get("count") or 0)
+        changed = (
+            bool(set(current_ids) - set(stored_ids))
+            or action_pending > stored_count
+        )
+    else:
+        changed = True
+    state[PENDING_SENTENCE_SET_KEY] = {
+        "ids": current_ids,
+        "count": int(action_pending),
+    }
+    return changed
 
 
 def _bump_repeat_streaks(
@@ -2400,6 +2462,7 @@ def _render_bar(
     bolt_asks_total: int | None = None,
     bolt_edge: bool = False,
     repeat_streaks: dict[str, int] | None = None,
+    pending_set_changed: bool = True,
 ) -> str | None:
     """The mid-run (``post-tool``) status bar: one line + obligation details.
 
@@ -2422,6 +2485,18 @@ def _render_bar(
     observed; they are facts, not obligations, and are reported separately
     rather than counted against *pending*. *armed* is the #904 armed
     dated-letters projection — see :func:`_render_armed_rows`.
+
+    *pending_set_changed* (:func:`_pending_set_changed`, caller-owned per the
+    same "run state, not snapshot state" division of labour as *plan_edge* /
+    *route_edge*) gates the pending-events header between its two forms: the
+    full instruction sentence on the pending SET's own edge (first laden
+    boundary, a new event id, or a count increase), a one-line compact count
+    on a boundary where the set stands unchanged from the one before it. The
+    per-event rows below the header (:func:`_render_event_rows`) and their
+    own seen/changed collapse are untouched by this — this only controls
+    which header sentence precedes them. Defaults ``True`` so a caller that
+    never computed the edge (a direct :func:`format_delta` call, most
+    existing tests) gets the conservative always-full behaviour.
 
     *mood_prompt* is the blank-mood nudge's once-per-run latch, owned by the
     caller (:func:`compute_neutral`) for ``plan_edge``'s reason: "has this
@@ -2586,12 +2661,24 @@ def _render_bar(
         # Same framing fix as the prose form (2026-07-05): a bare count reads
         # as ambient telemetry, so non-zero pending gets an explicit verb —
         # applies *more* here, since a dense bar habituates faster than prose.
-        details.append(
-            f"{pending} pending event(s), {pending_files} undelivered outbox "
-            "file(s). Address each below with an `event:` reply, or retire it "
-            "deliberately with `note:`, before your next plan boundary or "
-            "closeout."
-        )
+        # The full sentence is the pending SET's own edge (`pending_set_changed`,
+        # caller-owned — first laden boundary / new id / count increase); an
+        # unchanged set repeats nothing new, so it gets the compact one-liner
+        # instead — this obligation still bypasses content dedup entirely (it
+        # must keep appearing until discharged), what changes is only which of
+        # the two forms it appears in.
+        if pending_set_changed:
+            details.append(
+                f"{pending} pending event(s), {pending_files} undelivered outbox "
+                "file(s). Address each below with an `event:` reply, or retire it "
+                "deliberately with `note:`, before your next plan boundary or "
+                "closeout."
+            )
+        else:
+            details.append(
+                f"{pending} pending event(s), {pending_files} undelivered outbox "
+                "file(s) — `event:`/`note:` each before closeout."
+            )
         details.extend(_render_event_rows(events, event_seen, inbox_pointer))
     if finished_spawns:
         # Finished spawns are facts, not obligations — the parent already
@@ -2832,6 +2919,7 @@ def format_delta(
     bolt_asks_total: int | None = None,
     bolt_edge: bool = False,
     repeat_streaks: dict[str, int] | None = None,
+    pending_set_changed: bool = True,
     no_reply_streak: int = 0,
     no_reply_capped: bool = False,
 ) -> str | None:
@@ -2987,6 +3075,7 @@ def format_delta(
             route=route, route_edge=route_edge, route_prompt=route_prompt,
             bolt_asks_total=bolt_asks_total, bolt_edge=bolt_edge,
             repeat_streaks=repeat_streaks,
+            pending_set_changed=pending_set_changed,
         )
 
     lines: list[str] = []
@@ -4649,6 +4738,20 @@ def compute_neutral(
             for decision in (event_decisions or {}).values()
         )
 
+        # The pending sermon's own set-changed edge (bar path only — seed and
+        # stop keep the full sentence unconditionally): full instruction
+        # sentence on the pending SET's own edge, compact one-liner on a
+        # boundary where it stands unchanged from the one before it. Skipped
+        # (and left at its unused default) when nothing is pending — the
+        # detail line this gates does not render at all in that case, so
+        # there is nothing to compress and nothing worth pruning the ledger
+        # over.
+        pending_set_changed = (
+            _pending_set_changed(state, action_events, action_pending)
+            if action_pending
+            else True
+        )
+
         # Compression-on-repeat (#1116 residue, design-the-live-loop.md §1):
         # advance each compressible detail line's consecutive-laden-boundary
         # streak, off the exact same "due" reads `_has_post_tool_obligations`
@@ -4692,6 +4795,7 @@ def compute_neutral(
                 route=route, route_edge=route_edge, route_prompt=route_prompt,
                 bolt_asks_total=bolt_asks_total, bolt_edge=bolt_edge,
                 repeat_streaks=repeat_streaks,
+                pending_set_changed=pending_set_changed,
             )
             state["last_token"] = token
             if ambient_emit and inject is not None:
@@ -5433,6 +5537,19 @@ def _rooted_write_neutral(
                 return result
         except OSError:
             # If outbox_dir cannot resolve, fall through to the block below —
+            # this is a question for the tool call itself, not this predicate.
+            pass
+    # #1410: Carve out writes to the shared `.brr/reports/` directory. The
+    # daemon declares the report path in the `report:` contract when
+    # dispatching a strand, and the strand should be allowed to write there.
+    # This is the daemon's own shared runtime location for collect reports.
+    if host_root is not None:
+        try:
+            reports_dir = (host_root / ".brr" / "reports").resolve()
+            if reports_dir in resolved.parents or resolved == reports_dir:
+                return result
+        except OSError:
+            # If reports_dir cannot resolve, fall through to the block below —
             # this is a question for the tool call itself, not this predicate.
             pass
     result["block"] = True
