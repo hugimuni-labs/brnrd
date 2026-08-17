@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from brnrd import github_marker, publish_scope, run_stop_requests, wake_requests
-from brnrd.config import telegram_username_is_valid
+from brnrd.config import telegram_effective_bot_username
 from brnrd.routers.pairing import telegram_pair_core
 from brnrd.activity_records import dedupe_activity_records, fresh_activity_records
 from brnrd.auth import get_db
@@ -866,8 +866,7 @@ def _machines_summary_out(db: Session, account_id: str) -> dict[str, Any]:
 
 
 def _wire_telegram_bot_username(settings) -> str:
-    username = settings.telegram_bot_username.lstrip("@")
-    return username if telegram_username_is_valid(username) else ""
+    return telegram_effective_bot_username(settings)
 
 
 @router.post("/v1/dashboard/telegram-pair")

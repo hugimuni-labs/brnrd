@@ -9,7 +9,7 @@ from brr import __version__
 from fastapi import FastAPI
 from starlette.staticfiles import StaticFiles
 
-from .config import Settings, get_settings
+from .config import Settings, get_settings, record_telegram_derived_bot_username, telegram_username_is_valid
 from .db import Base, make_engine, make_session_factory
 from .inbox import Forwarder, make_default_forwarder
 from .migrations import run_startup_migrations
@@ -23,6 +23,41 @@ from .security_headers import CSPReportOnlyMiddleware, HSTSMiddleware, csp_repor
 from .spa import backend_namespaces, declared_paths, mount_frontend, resolve_frontend_dir
 
 _STATIC_DIR = Path(__file__).with_name("static")
+
+
+def _maybe_derive_telegram_bot_username(settings: Settings) -> None:
+    """Derive the bot's username from its own token via `getMe` (#1463).
+
+    Same seam and posture as `_maybe_register_telegram_webhook` below: short
+    timeout, side-effect-free, never blocks startup, one warning on
+    failure. The token defines the bot, so a successful call here beats
+    `BRNRD_TELEGRAM_BOT_USERNAME` — a hand-typed duplicate of a fact the
+    token already carries, and one that has already drifted invisibly
+    twice (#1242, then again nine days later against a different
+    consumer). The derived value is cached in `config.py`, keyed by token;
+    `config.telegram_effective_bot_username` is what every consumer reads.
+    """
+    if not settings.telegram_bot_token:
+        return
+    from .platforms import telegram
+
+    try:
+        me = telegram.get_me(settings.telegram_bot_token, timeout=10.0)
+    except Exception as e:
+        print(f"[brnrd] telegram getMe failed: {e}")
+        return
+    username = str(me.get("username") or "").lstrip("@")
+    if not username or not telegram_username_is_valid(username):
+        print(f"[brnrd] telegram getMe returned no usable username: {me!r}")
+        return
+    env_username = settings.telegram_bot_username.lstrip("@")
+    if env_username and telegram_username_is_valid(env_username) and env_username != username:
+        print(
+            f"[brnrd] BRNRD_TELEGRAM_BOT_USERNAME={settings.telegram_bot_username!r} "
+            f"disagrees with the token's own getMe username (@{username}) — "
+            "using the token-derived value; update or remove the env var."
+        )
+    record_telegram_derived_bot_username(settings.telegram_bot_token, username)
 
 
 def _maybe_register_telegram_webhook(settings: Settings) -> None:
@@ -56,6 +91,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        _maybe_derive_telegram_bot_username(settings)
         _maybe_register_telegram_webhook(settings)
         yield
 

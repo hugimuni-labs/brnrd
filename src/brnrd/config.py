@@ -28,6 +28,25 @@ def telegram_username_is_valid(username: str) -> bool:
     return bool(_TELEGRAM_USERNAME_RE.match(username))
 
 
+# #1463 — the token defines the bot, and Telegram's own `getMe` returns its
+# username, so a hand-typed `BRNRD_TELEGRAM_BOT_USERNAME` is at best a
+# duplicate of a fact the token already carries and at worst a stale one
+# (#1242: the ops act to fix a bad env value never happened, and the same
+# class of bug resurfaced nine days later against a different consumer).
+# `app._maybe_derive_telegram_bot_username` populates this once at startup
+# (short-timeout, side-effect-free `getMe` call, same posture as
+# `_maybe_register_telegram_webhook` beside it); keyed by token so a token
+# rotation can't serve a stale derived username, and so the module-level
+# cache stays a process-lifetime memo rather than something a per-request
+# read has to fetch itself.
+_derived_telegram_usernames: dict[str, str] = {}
+
+
+def record_telegram_derived_bot_username(token: str, username: str) -> None:
+    """Cache a `getMe`-derived bot username, keyed by the token that produced it."""
+    _derived_telegram_usernames[token] = username
+
+
 def _env_float(name: str, default: float) -> float:
     try:
         return float(os.environ[name])
@@ -217,16 +236,41 @@ class Settings:
         # own fixture value) rather than only at the pairing mint, so a
         # misconfigured deploy is visible in the boot log before the first
         # user ever hits the broken deep link.
+        # This runs at Settings() construction, before app startup has had a
+        # chance to derive a username from the token (#1463) — every real
+        # boot constructs Settings exactly once, then derives afterwards, so
+        # there is nothing yet to prefer over the raw env read here. The
+        # warning text below reflects that: an invalid env value is now only
+        # ever a *fallback* problem, not necessarily a fatal one.
         username = self.telegram_bot_username.lstrip("@")
         if username and not telegram_username_is_valid(username):
             logger.warning(
                 "BRNRD_TELEGRAM_BOT_USERNAME=%r is not a valid Telegram "
                 "username (must match [A-Za-z0-9_]{5,32}, no hyphens) — "
-                "no Telegram deep link will be minted until this is fixed; "
-                "pairing falls back to manual /start instructions.",
+                "unusable as a fallback. A deep link still mints if the bot "
+                "token's own getMe call resolves a username at startup; "
+                "otherwise pairing falls back to manual /start instructions.",
                 self.telegram_bot_username,
             )
 
 
 def get_settings() -> Settings:
     return Settings()
+
+
+def telegram_effective_bot_username(settings: Settings) -> str:
+    """The bot's username: token-derived (`getMe`) when available, env as fallback.
+
+    `getMe` is ground truth — the token defines the bot — so a cached
+    derived value always wins over `BRNRD_TELEGRAM_BOT_USERNAME` once one
+    exists. Falls back to a shape-valid env value when nothing has been
+    derived yet (token unset, or the startup `getMe` call hasn't run or
+    failed), and to `""` when neither source yields a usable shape (#1463).
+    Every consumer reads this instead of `settings.telegram_bot_username`
+    directly.
+    """
+    derived = _derived_telegram_usernames.get(settings.telegram_bot_token, "")
+    if derived:
+        return derived
+    env_username = settings.telegram_bot_username.lstrip("@")
+    return env_username if telegram_username_is_valid(env_username) else ""
