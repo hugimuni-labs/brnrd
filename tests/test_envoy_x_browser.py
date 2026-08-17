@@ -48,6 +48,7 @@ class _FakeDriver:
         self._whoami_value = whoami_value
         self._read_value = read_value if read_value is not None else {}
         self._search_value = search_value if search_value is not None else []
+        self.search_tabs = []
 
     def __enter__(self):
         self.calls.append("__enter__")
@@ -68,8 +69,9 @@ class _FakeDriver:
         self.calls.append(("read_url", url))
         return {**self._read_value, "url": url}
 
-    def search(self, query):
+    def search(self, query, *, tab="live"):
         self.calls.append(("search", query))
+        self.search_tabs.append(tab)
         return self._search_value
 
     def open_reply_composer(self, url):
@@ -425,6 +427,41 @@ def test_search_returns_a_real_empty_result_when_logged_in(tmp_path, capsys):
     assert ("search", "brnrd") in driver.calls
     out = json.loads(capsys.readouterr().out)
     assert out == []
+
+
+def test_search_defaults_to_the_latest_tab(tmp_path):
+    """Latest stays the default: this verb's older callers were written
+    against an unfiltered reverse-chronological feed, and a ranked tab
+    silently drops small matches — which is the right trade for finding a
+    conversation and the wrong one for monitoring a term."""
+    paths = _paths(tmp_path)
+    driver = _FakeDriver(whoami_value="brnrd_resident")
+    envoy_x_browser.run(["search", "brnrd"], paths, driver_factory=_factory_for(driver))
+    assert driver.search_tabs == ["live"]
+
+
+def test_search_top_flag_asks_for_the_ranked_tab(tmp_path):
+    """`--top` is the whole difference between "everything that matched"
+    and "what is actually being read" — a two-follower account replying
+    under an unread post is a reply nobody sees, so the ranked tab is the
+    one that answers a scouting question."""
+    paths = _paths(tmp_path)
+    driver = _FakeDriver(whoami_value="brnrd_resident")
+    envoy_x_browser.run(["search", "brnrd", "--top"], paths, driver_factory=_factory_for(driver))
+    assert driver.search_tabs == ["top"]
+
+
+def test_search_top_flag_is_not_mistaken_for_the_query(tmp_path):
+    """`--top` is stripped before the single-positional check, the way
+    `--json` already is. Without that, `search q --top` reads as two
+    positionals and dies in argv parsing — the flag would be unusable and
+    the failure would look like a usage error in the caller's query."""
+    paths = _paths(tmp_path)
+    driver = _FakeDriver(whoami_value="brnrd_resident")
+    envoy_x_browser.run(
+        ["search", "agent memory", "--top", "--json"], paths, driver_factory=_factory_for(driver)
+    )
+    assert ("search", "agent memory") in driver.calls
 
 
 # ── read / search: a dead session refuses instead of scraping blind ────

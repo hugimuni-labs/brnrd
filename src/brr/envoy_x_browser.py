@@ -78,6 +78,15 @@ HOUR_SECONDS = 3600.0
 LOGIN_URL = "https://x.com/login"
 HOME_URL = "https://x.com/home"
 SEARCH_URL = "https://x.com/search"
+
+#: X's search tabs, as the `f=` parameter names them. `live` is Latest —
+#: reverse-chronological, unfiltered, and what this verb has always used;
+#: `top` is the ranked tab. They answer different questions and neither is
+#: a better default: Latest is right for *monitoring a term* (nothing is
+#: dropped for being small), Top is right for *finding a conversation worth
+#: joining* (a two-follower account replying under an unread post is a
+#: reply nobody sees). The caller knows which question it is asking.
+SEARCH_TABS = {"live": "live", "top": "top"}
 # How long to wait for X's client-side search render before calling a query
 # empty. Generous on purpose: a false `[]` is indistinguishable from a real
 # one at the CLI, so the cost of waiting too long is a slow command and the
@@ -103,7 +112,7 @@ TOP_USAGE = """\
 Usage: envoy-x-browser login
        envoy-x-browser check [--json]
        envoy-x-browser read <url> [--json]
-       envoy-x-browser search <query> [--json]
+       envoy-x-browser search <query> [--top] [--json]
        envoy-x-browser draft <url> --text "<s>"
        envoy-x-browser send <url> --text "<s>" --confirm
 
@@ -135,9 +144,13 @@ metrics if rendered.\
 """
 
 SEARCH_USAGE = """\
-Usage: envoy-x-browser search <query> [--json]
+Usage: envoy-x-browser search <query> [--top] [--json]
 
-Returns structured results for a live search.\
+Returns structured results for a search: author, text, permalink.
+Default is X's *Latest* tab — reverse-chronological, everything that
+matched, however small. `--top` asks for X's *Top* tab instead: ranked by
+engagement, which is the only one of the two that answers "what is
+actually being read about this right now."\
 """
 
 DRAFT_USAGE = """\
@@ -447,8 +460,9 @@ class _PlaywrightDriver:
             "metrics": metrics,
         }
 
-    def search(self, query: str) -> list[dict[str, Any]]:
-        url = f"{SEARCH_URL}?{urllib.parse.urlencode({'q': query, 'src': 'typed_query', 'f': 'live'})}"
+    def search(self, query: str, *, tab: str = "live") -> list[dict[str, Any]]:
+        params = {"q": query, "src": "typed_query", "f": SEARCH_TABS[tab]}
+        url = f"{SEARCH_URL}?{urllib.parse.urlencode(params)}"
         self._page.goto(url, wait_until="domcontentloaded")
         articles = self._page.locator('article[data-testid="tweet"]')
         # X renders search results client-side, so at `domcontentloaded` there
@@ -698,11 +712,12 @@ def _run_search(args: list[str], paths: Paths, factory: DriverFactory) -> None:
     if "-h" in args or "--help" in args:
         raise SystemExit(SEARCH_USAGE.strip())
     _refuse_if_killed(paths)
-    rest = [a for a in args if a != "--json"]
+    tab = "top" if "--top" in args else "live"
+    rest = [a for a in args if a not in ("--json", "--top")]
     query = _parse_single_arg(rest, SEARCH_USAGE, "query")
     with factory(paths, headless=True) as driver:
         _require_session(driver, "search")
-        rows = driver.search(query)
+        rows = driver.search(query, tab=tab)
     print(json.dumps(rows))
 
 
