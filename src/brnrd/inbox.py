@@ -229,7 +229,7 @@ _MEDIA_GROUP_MERGE_MAX_ATTEMPTS = 12
 
 
 def _find_open_media_group(
-    db: Session, *, repo_id: str, media_group_id: str,
+    db: Session, *, repo_id: str, media_group_id: str, chat_id: Any = None,
 ) -> Event | None:
     """The most recent still-**queued** event carrying *media_group_id*.
 
@@ -240,6 +240,15 @@ def _find_open_media_group(
     behaviour — one more event, never a dropped attachment (the #1389
     guardrail against a daemon- or server-side fluke rendering a message
     unanswerable).
+
+    *chat_id*, when given, additionally scopes the match: Telegram's
+    ``media_group_id`` is unique per send, but the merge itself was only
+    ever scoped by ``repo_id`` — and two chats can share one repo (a group
+    and a DM both wired to the same project). Without this, a `#1396`
+    review found that a `media_group_id` collision across those two chats
+    would fold one chat's photo into the other's event. `reply_to` already
+    carries ``chat_id`` for every Telegram event, so this costs nothing to
+    check.
     """
     cutoff = datetime.now(timezone.utc) - _MEDIA_GROUP_MERGE_WINDOW
     candidates = db.execute(
@@ -253,8 +262,12 @@ def _find_open_media_group(
         .order_by(Event.seq.desc())
     ).scalars()
     for event in candidates:
-        if _loads(event.reply_to).get("media_group_id") == media_group_id:
-            return event
+        meta = _loads(event.reply_to)
+        if meta.get("media_group_id") != media_group_id:
+            continue
+        if chat_id is not None and meta.get("chat_id") != chat_id:
+            continue
+        return event
     return None
 
 
@@ -265,6 +278,7 @@ def _merge_into_open_media_group(
     media_group_id: str,
     body: str,
     attachments: list[dict[str, Any]] | None,
+    chat_id: Any = None,
 ) -> Event | None:
     """Fold *body* / *attachments* into the open media-group event, or
     ``None`` (no open event — the caller mints a fresh one).
@@ -285,19 +299,42 @@ def _merge_into_open_media_group(
     clause is silently dropped, which would make this file's own tests
     pass while proving nothing about the box that ran them.
 
-    So: compare-and-swap instead of a lock. The UPDATE's WHERE re-checks
-    ``attachments_json`` against the exact value just read; when two
-    merges race, at most one UPDATE's WHERE still matches (rowcount 1),
-    the other's matches nothing (rowcount 0, its computed merge is
-    discarded, never written) and it retries against freshly re-read
-    state. Atomic on every backend this service runs — a single
-    row-scoped UPDATE is race-free relative to any other statement,
-    SQLite and Postgres alike, with no reliance on isolation level or
+    So: compare-and-swap instead of a lock — but the swap is a **delete +
+    reinsert**, not an in-place ``UPDATE``, for a second reason a #1396
+    review caught: an in-place update never touches ``seq``, and delivery
+    is ``Event.seq > since`` (see ``fetch_since`` / ``_QUEUED_ONLY_RATIONALE``
+    below). A daemon that already long-polled item 1 past its cursor would
+    never see items 2..N merge in — they landed in the database with no
+    seq the delivery predicate reads, so a connected daemon delivers 1
+    event carrying 1 photo while the server holds N. Deleting the row and
+    reinserting it with the same ``event_id`` (so it stays one logical
+    message; ``event_id``, not ``seq``, is the stable identity every other
+    reader keys on) mints a fresh autoincremented ``seq`` at the tail of
+    the table, so the merged event re-enters any cursor's delivery window
+    exactly the way a brand-new event would. (The account-mode gate side of
+    this — reconciling an already-ingested ``cloud_event_id`` whose
+    attachment set grew — is `cloud.py`'s ``_loop_once``; see the report.)
+
+    The CAS re-checks ``body`` in the ``WHERE`` as well as
+    ``attachments_json`` — a second #1396 finding: a mixed photo+video
+    album has one item merge with ``attachments=None`` and a non-empty
+    annotated body (the video branch), so an attachments-only CAS let a
+    racing photo item's stale-``body`` write silently overwrite that
+    annotation even though its own ``WHERE`` still matched. Guarding both
+    columns means either racer's write is rejected the moment *either*
+    field it read is no longer current.
+
+    When two merges race, at most one DELETE's WHERE still matches
+    (rowcount 1); the other's matches nothing (rowcount 0, its computed
+    merge is discarded, never written) and it retries against freshly
+    re-read state. Atomic on every backend this service runs — a single
+    row-scoped DELETE is race-free relative to any other statement, SQLite
+    and Postgres alike, with no reliance on isolation level or
     backend-specific locking syntax.
     """
     for _ in range(_MEDIA_GROUP_MERGE_MAX_ATTEMPTS):
         existing = _find_open_media_group(
-            db, repo_id=repo_id, media_group_id=media_group_id,
+            db, repo_id=repo_id, media_group_id=media_group_id, chat_id=chat_id,
         )
         if existing is None:
             return None
@@ -312,21 +349,41 @@ def _merge_into_open_media_group(
         if new_body == existing.body and new_attachments_json == existing.attachments_json:
             return existing
         result = db.execute(
-            update(Event)
-            .where(
+            delete(Event).where(
                 Event.seq == existing.seq,
+                Event.body == existing.body,
                 Event.attachments_json == existing.attachments_json,
             )
-            .values(body=new_body, attachments_json=new_attachments_json)
         )
+        if result.rowcount != 1:
+            # Lost the race: another merge (or a response) landed between
+            # our read and our write. Its commit is authoritative — never
+            # overwrite it with a merge computed from data that's now
+            # stale. Roll back (nothing else was written this iteration)
+            # and retry against freshly re-read state.
+            db.rollback()
+            continue
+        replacement = Event(
+            event_id=existing.event_id,
+            repo_id=existing.repo_id,
+            runtime_id=existing.runtime_id,
+            source=existing.source,
+            body=new_body,
+            reply_to=existing.reply_to,
+            status=existing.status,
+            created_at=existing.created_at,
+            response_status=existing.response_status,
+            response_len=existing.response_len,
+            response_ms=existing.response_ms,
+            responded_at=existing.responded_at,
+            response_sha=existing.response_sha,
+            conversation_id=existing.conversation_id,
+            attachments_json=new_attachments_json,
+        )
+        db.add(replacement)
         db.commit()
-        if result.rowcount == 1:
-            db.refresh(existing)
-            return existing
-        # Lost the race: another merge landed between our read and our
-        # write. Its commit is authoritative — never overwrite it with a
-        # merge computed from data that's now stale. Re-read and retry.
-        db.expire(existing)
+        db.refresh(replacement)
+        return replacement
     return None
 
 
@@ -359,6 +416,7 @@ def enqueue(
             media_group_id=media_group_id,
             body=body,
             attachments=attachments,
+            chat_id=(reply_to or {}).get("chat_id"),
         )
         if merged_event is not None:
             return merged_event
