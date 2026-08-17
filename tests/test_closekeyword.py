@@ -252,3 +252,55 @@ def test_render_commit_msg_channel_keeps_the_hooks_bypass():
 def test_unknown_channel_is_an_error_not_a_silent_default():
     with pytest.raises(ValueError):
         closekeyword.check("Closes #1.", channel="issue-comment")
+
+
+# ── extract_close_refs: enumerate what will be closed ──────────────────────
+
+
+def test_extract_close_refs_single_ref():
+    """Extract a single close ref from clean syntax."""
+    text = "Ships the fix.\n\nCloses #839.\n"
+    refs = closekeyword.extract_close_refs(text, channel="pr-body")
+    assert len(refs) == 1
+    assert refs[0].ref == "839"
+    assert refs[0].line_number == 3
+
+
+def test_extract_close_refs_multiple_refs_on_one_line():
+    """Extract multiple refs from a comma-separated list."""
+    text = "Ships the fixes.\n\nCloses #1433, #1434.\n"
+    refs = closekeyword.extract_close_refs(text, channel="pr-body")
+    assert len(refs) == 2
+    assert refs[0].ref == "1433"
+    assert refs[1].ref == "1434"
+    assert refs[0].line_number == 3
+    assert refs[1].line_number == 3
+
+
+def test_extract_close_refs_ignores_syntax_errors():
+    """Don't extract refs from lines with syntax errors."""
+    # "Closes #749 move 5" has a tail error
+    text = "Closes #749 move 5 (the ticket stays open for moves 1-4).\n"
+    refs = closekeyword.extract_close_refs(text, channel="pr-body")
+    assert refs == []
+
+
+def test_extract_close_refs_empty_when_no_closes():
+    """Return empty list when no close keywords."""
+    text = "Ships the feature.\n\nThis is a great change.\n"
+    refs = closekeyword.extract_close_refs(text, channel="pr-body")
+    assert refs == []
+
+
+def test_extract_close_refs_with_subject_after_colon():
+    """Extract refs from 'Fix #NNN: subject' format."""
+    text = "Fix #839: split config\n"
+    refs = closekeyword.extract_close_refs(text, channel="pr-body")
+    assert len(refs) == 1
+    assert refs[0].ref == "839"
+
+
+def test_extract_close_refs_unknown_channel_is_an_error():
+    """extract_close_refs should validate the channel."""
+    with pytest.raises(ValueError):
+        closekeyword.extract_close_refs("Closes #1.", channel="invalid")
