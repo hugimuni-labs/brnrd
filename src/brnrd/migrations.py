@@ -231,12 +231,19 @@ def _migrate_channel_routes(conn: Connection) -> None:
     # time", so the column may no longer be NOT NULL. Existing rows keep
     # their value (they become per-chat pins, semantics unchanged).
     conn.execute(text("ALTER TABLE channel_routes ALTER COLUMN repo_id DROP NOT NULL"))
+    # #1464 — the paired-chats surface's display columns; see models.py for
+    # what each means. Existing rows land NULL (no display/title captured
+    # before this shipped) — harmless, since both are rendering-only.
+    conn.execute(text("ALTER TABLE channel_routes ADD COLUMN IF NOT EXISTS paired_user_display VARCHAR(255)"))
+    conn.execute(text("ALTER TABLE channel_routes ADD COLUMN IF NOT EXISTS chat_title VARCHAR(255)"))
 
 
 def _migrate_tg_pair_codes(conn: Connection) -> None:
     # #1457 — account-level pair codes carry no repo; see the matching
     # channel_routes DROP NOT NULL above for what a NULL means downstream.
     conn.execute(text("ALTER TABLE tg_pair_codes ALTER COLUMN repo_id DROP NOT NULL"))
+    # #1464 — the minting session's outcome readback; see models.py.
+    conn.execute(text("ALTER TABLE tg_pair_codes ADD COLUMN IF NOT EXISTS redeemed_display VARCHAR(255)"))
 
 
 def _widen_channel_routes_paired_user_id(conn: Connection) -> None:
