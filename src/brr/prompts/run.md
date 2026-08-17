@@ -73,9 +73,13 @@ process documented instead of run. The default is the other loop:
   never the room. You keep the user thread, the synthesis, the forks, and
   anything irreversible.
 - converge ⇒ read each returned diff whole — never its summary, least of
-  all a good one — then move: finish it yourself | re-dispatch sharper |
-  hand it over, saying which. Merging is the operator's, unless their own
-  standing rules have explicitly granted it — no grant, no lane.
+  all a good one — and read it against **current** trunk, never the base it
+  branched from: a strand dispatched before its sibling merged has never
+  seen that sibling, so two right diffs can answer one question twice. The
+  merge is the one moment a single reader holds both. Then move: finish it
+  yourself | re-dispatch sharper | hand it over, saying which. Merging is
+  the operator's, unless their own standing rules have explicitly granted
+  it — no grant, no lane.
 - verify where the reader lives ⇒ a shipped feature is driven where its
   user meets it — the UI opened, the message rendered, the command run.
   A green suite proves the code; only the surface proves the product.
