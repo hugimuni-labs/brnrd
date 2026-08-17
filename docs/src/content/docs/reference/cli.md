@@ -10,7 +10,8 @@ This page reflects the public command tree printed by the installed CLI on
 
 | Command | Purpose |
 |---|---|
-| `brnrd init [url]` | Set up a repo; the interview runs by default on a TTY. |
+| `brnrd` (no arguments) | Narrated guided setup: checks for a Runner, pairs your account (approve in browser), picks memory, offers a door, and queues the first run that writes `AGENTS.md`. Resumable; the default onboarding path. |
+| `brnrd init [url]` | Set up a repo directly, no account or door needed; the interview runs by default on a TTY. |
 | `brnrd run "<instruction>"` | Run one task through the configured Runner. |
 | `brnrd review <pack>` | Validate or project a diffense review pack; supports `--check`, `--pr-body`, `--pr-title`, `--relay`, and `--json`. |
 | `brnrd up [--foreground] [--dev-reload]` | Start the daemon; shortcut for `daemon up`. |
