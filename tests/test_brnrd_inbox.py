@@ -1105,6 +1105,74 @@ def test_forwarder_table_routes_whatsapp(monkeypatch):
     assert kw["reply_to_message_id"] == "wamid.abc"
 
 
+def test_forwarder_table_trims_an_over_length_whatsapp_body(monkeypatch):
+    """#the-wire-that-cuts-at-4096: a fully hosted resident has no
+    self-hosted daemon in front of it trimming the body to
+    ``gates/cloud.py``'s ``_RESPONSE_LIMITS`` — this forwarder is the only
+    thing standing between an over-4096-char reply and a raw Meta API
+    rejection. It must trim at a boundary (never mid-word) and land the
+    whole thing, marker included, at or under WhatsApp's own cap.
+    """
+    from brnrd.inbox import ForwardItem, make_default_forwarder
+    from brnrd.platforms import whatsapp
+
+    sent = []
+    monkeypatch.setattr(
+        "brnrd.platforms.whatsapp.send_message",
+        lambda token, phone_id, to, text, **kw: sent.append(text),
+    )
+    forwarder = make_default_forwarder(
+        Settings(
+            database_url="sqlite:///:memory:",
+            whatsapp_access_token="wa_tok",
+            whatsapp_phone_number_id="pid1",
+        )
+    )
+    body = ("word " * 1000).strip()  # well past 4096, plenty of word boundaries
+    forwarder(
+        ForwardItem(
+            event_id="e1",
+            reply_to={"platform": "whatsapp", "chat_id": "155"},
+            body=body,
+            status="done",
+        )
+    )
+
+    assert len(sent) == 1
+    delivered = sent[0]
+    assert len(delivered) <= whatsapp.MAX_BODY_LEN
+    assert delivered.endswith("[truncated]")
+    trimmed_body = delivered[: -len("\n\n[truncated]")]
+    assert trimmed_body.endswith("word")  # cut after a whole word, never mid-word
+
+
+def test_forwarder_table_leaves_a_body_within_the_whatsapp_limit_untouched(monkeypatch):
+    from brnrd.inbox import ForwardItem, make_default_forwarder
+
+    sent = []
+    monkeypatch.setattr(
+        "brnrd.platforms.whatsapp.send_message",
+        lambda token, phone_id, to, text, **kw: sent.append(text),
+    )
+    forwarder = make_default_forwarder(
+        Settings(
+            database_url="sqlite:///:memory:",
+            whatsapp_access_token="wa_tok",
+            whatsapp_phone_number_id="pid1",
+        )
+    )
+    forwarder(
+        ForwardItem(
+            event_id="e1",
+            reply_to={"platform": "whatsapp", "chat_id": "155"},
+            body="well within budget",
+            status="done",
+        )
+    )
+
+    assert sent == ["well within budget"]
+
+
 def test_forwarder_table_skips_whatsapp_without_credentials():
     from brnrd.inbox import ForwardItem, make_default_forwarder
 

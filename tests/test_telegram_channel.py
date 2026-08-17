@@ -1,4 +1,5 @@
 from brr.channels import telegram
+from brr.channels.telegram import split_message, utf16_len
 
 
 def test_parse_update_normalizes_identity_caption_and_largest_photo():
@@ -79,3 +80,96 @@ def test_redact_secrets_covers_any_structural_bot_token():
     assert telegram.redact_secrets(f"failed at /bot{token}/sendMessage") == (
         "failed at /bot<redacted>/sendMessage"
     )
+
+
+# ── split_message: #the-wire-that-cuts-at-4096 ─────────────────────────
+#
+# A resident's long reply through the hosted forward path (or the local
+# gate's own card send) truncated silently around 4,100 chars, mid-word.
+# These pin the shape a fix must hold: word/line-boundary cuts, fence
+# safety across a split, the exact-limit edge, and UTF-16 accounting
+# (Telegram's own unit, not Python's `len()`).
+
+
+def test_split_message_over_limit_never_cuts_mid_word():
+    # One long run with no newlines anywhere — the case that used to fall
+    # straight through to an index cut (`remaining[:limit]`).
+    words = (
+        "supercalifragilisticexpialidocious workspace deployment pipeline "
+        "integration testing framework orchestration "
+    ) * 60
+    text = words.strip()
+    assert utf16_len(text) > 4096
+
+    parts = split_message(text, limit=4096, max_chunks=12)
+
+    assert len(parts) > 1
+    assert all(utf16_len(p) <= 4096 for p in parts)
+    # Every chunk boundary lands on a word boundary: reassembling with a
+    # single space between chunks reproduces the source, modulo the
+    # whitespace the split itself consumed at the seam.
+    rejoined = "".join(parts)
+    assert rejoined.replace(" ", "") == text.replace(" ", "")
+    # The reported symptom, directly: "workspace" never appears split as
+    # "workspa" at the end of one chunk and "ce" at the start of the next.
+    for cut_index in range(len(parts) - 1):
+        assert not parts[cut_index].endswith("workspa")
+
+
+def test_split_message_exact_limit_stays_one_chunk():
+    text = "a" * 4096
+    parts = split_message(text, limit=4096, max_chunks=12)
+    assert parts == [text]
+
+
+def test_split_message_one_over_limit_splits_in_two():
+    text = "a" * 4097
+    parts = split_message(text, limit=4096, max_chunks=12)
+    assert len(parts) == 2
+    assert all(utf16_len(p) <= 4096 for p in parts)
+    assert "".join(parts) == text
+
+
+def test_split_message_preserves_and_reopens_a_spanning_code_fence():
+    body = (
+        "intro\n```python\n"
+        + "\n".join(f"line {i}" for i in range(80))
+        + "\n```\noutro"
+    )
+    parts = split_message(body, limit=120, max_chunks=30)
+
+    assert len(parts) > 1
+    assert all(utf16_len(p) <= 120 for p in parts)
+
+    def fence_count(chunk: str) -> int:
+        return sum(1 for line in chunk.split("\n") if line.lstrip().startswith("```"))
+
+    # Every delivered chunk is independently balanced — no chunk leaves an
+    # open fence bleeding its formatting into the rest of the chat.
+    assert all(fence_count(p) % 2 == 0 for p in parts)
+    assert parts[0].startswith("intro\n```python\n")
+    assert parts[-1].rstrip().endswith("outro")
+
+    # No code line lost, duplicated, or reordered by the close/reopen.
+    kept = [
+        stripped
+        for p in parts
+        for stripped in p.split("\n")
+        if stripped.startswith("line ")
+    ]
+    assert kept == [f"line {i}" for i in range(80)]
+
+
+def test_split_message_utf16_accounts_for_astral_emoji():
+    # U+1F600 is one Python character but two UTF-16 code units — the unit
+    # Telegram's own limit actually counts in.
+    emoji = "\U0001F600"
+    text = emoji * 3000  # 3000 chars, 6000 UTF-16 units: over a 4096 limit
+    assert len(text) < 4096  # a len()-only budget would call this one chunk
+    assert utf16_len(text) > 4096
+
+    parts = split_message(text, limit=4096, max_chunks=12)
+
+    assert len(parts) > 1
+    assert all(utf16_len(p) <= 4096 for p in parts)
+    assert "".join(parts) == text

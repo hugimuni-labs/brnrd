@@ -452,11 +452,17 @@ def test_deliver_overflows_long_body_through_resolve_overflow(tmp_path, monkeypa
         brr_dir, inbox_dir, responses_dir, "http://127.0.0.1:8080", "+15550000000",
     )
 
+    # No line/space boundary anywhere in a run of "x"s, so this still falls
+    # through to a hard cut — but the *whole* delivered message (body +
+    # marker) now stays within `_MAX_SIGNAL_LEN`, where it used to run
+    # `len(marker)` chars over (#the-wire-that-cuts-at-4096).
+    marker = "\n\n[truncated]"
     assert sent == [{
-        "message": "x" * signal._MAX_SIGNAL_LEN + "\n\n[truncated]",
+        "message": "x" * (signal._MAX_SIGNAL_LEN - len(marker)) + marker,
         "number": "+15550000000",
         "recipients": ["+15551111111"],
     }]
+    assert len(sent[0]["message"]) == signal._MAX_SIGNAL_LEN
 
 
 # ── run_loop wiring ────────────────────────────────────────────────

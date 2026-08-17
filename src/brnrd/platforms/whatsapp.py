@@ -33,10 +33,14 @@ import httpx
 WINDOW_CLOSED_ERROR_CODE = 131047
 
 # WhatsApp rejects a text message body over 4096 chars; overflow past this
-# is handled daemon-side (``brr/gates/cloud.py`` ``_RESPONSE_LIMITS``), same
-# split as Telegram's ``_MAX_LEN``/chunking versus the daemon's gist
-# fallback — WhatsApp gets the gist-or-truncate treatment rather than
-# Telegram's multi-message fan-out, so this client never itself splits.
+# is a trim-or-gist policy, never Telegram's multi-message fan-out, so this
+# client itself never splits. Two callers apply that policy ahead of this
+# one, each for the leg it can see: a self-hosted daemon relaying through
+# the cloud gate trims before the body ever leaves the machine
+# (``brr/gates/cloud.py`` ``_RESPONSE_LIMITS``); a fully hosted resident has
+# no such daemon in front of it, so ``brnrd.inbox``'s own forwarder trims
+# right before this call. Same limit, same boundary-safe trim
+# (``brr.channels.telegram.trim_to_limit``), two vantage points.
 MAX_BODY_LEN = 4096
 
 
