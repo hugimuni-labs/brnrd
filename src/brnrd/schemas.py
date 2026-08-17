@@ -281,6 +281,23 @@ class CardAck(BaseModel):
     message_id: int | None = None
 
 
+class MessagePost(BaseModel):
+    """#1205's fresh-send primitive: an unaddressed send, no inbound event.
+
+    ``platform`` defaults to ``telegram`` — the only wired lane today; an
+    unresolvable/unsupported one is an honest 501 at the router, not a
+    silently-ignored field.
+    """
+
+    body_markdown: str = Field(min_length=1)
+    platform: str = Field(default="telegram", min_length=1, max_length=32)
+
+
+class MessageAck(BaseModel):
+    platform: str
+    message_id: str
+
+
 class ActivityRecordIn(BaseModel):
     id: str = Field(min_length=1, max_length=128)
     kind: str = Field(default="run", min_length=1, max_length=32)
