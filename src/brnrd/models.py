@@ -401,7 +401,11 @@ class ChannelRoute(Base):
     # created before the security fix landed predate the column — a route
     # with no principal authorizes nobody (default-closed), so those chats
     # must be re-paired.
-    paired_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # #1392 — BigInteger, not Integer: Telegram user ids crossed 2**31-1
+    # around 2021, so a 32-bit column silently fails a brand-new account's
+    # very first `/start` (see `migrations._widen_channel_routes_paired_user_id`
+    # for the same widen applied to existing rows).
+    paired_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
 
 class GitHubInstallation(Base):
