@@ -11538,6 +11538,14 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
     # "what did the child deliver?" and are in a distinct namespace from
     # spawn_contract_* (which answers "did it meet its declared spec?").
     produce_kwargs: dict = {}
+    # #1461: the repo the child actually ran in — set at dispatch (#1458's
+    # `repo:` key, inherited from the parent when unset), so it is known for
+    # every strand, not only a cross-repo one. Carried once and attached
+    # alongside whichever produce handle names something that lives in that
+    # repo, so a parent reading `spawn_published_branch` / `spawn_pr_number`
+    # off a fleet of children never has to assume "my own repo" for a branch
+    # or PR number that may belong to a sibling project.
+    child_repo = str(task.meta.get("repo_label") or "").strip()
     # A completion status is useful only after the Run reached a terminal
     # state. Keep pending/running absent rather than turning "not determined"
     # into a misleading completion fact.
@@ -11545,6 +11553,8 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
         produce_kwargs["spawn_status"] = status_label
     if published_branch:
         produce_kwargs["spawn_published_branch"] = published_branch
+        if child_repo:
+            produce_kwargs["spawn_repo"] = child_repo
     # Same shape as the reply-byte exception below: a *measured* zero is a
     # fact, so the structured key carries it too. A parent should never have
     # to parse the prose line to learn something the frontmatter can state.
@@ -11565,6 +11575,8 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
     # report-missing branch could reference it too.)
     if pr_num:
         produce_kwargs["spawn_pr_number"] = pr_num
+        if child_repo:
+            produce_kwargs["spawn_repo"] = child_repo
     # #703: structured alongside the prose block, same "absent stays absent"
     # rule — a run with nothing stray carries no key at all, never a "clean"
     # or a False that a reader has to distinguish from "never checked".
