@@ -102,41 +102,40 @@ def test_env_only_identities_never_carries_a_whatsapp_number():
     assert messenger_doors.env_only_identities(settings).whatsapp_e164 == ""
 
 
-# --- derive_telegram_bot_username (startup-only, mocked network) -----------
+# --- the telegram half is #1463's, read not re-derived ----------------------
 
 
-def test_derive_telegram_skips_the_network_call_with_no_token():
-    settings = _settings(telegram_bot_username="brnrd_bot")
-    # No monkeypatch of `fetch_bot_username` at all — if this attempted a
-    # real network call with no token it would raise/hang; reaching the
-    # assertion at all proves it took the short-circuit path.
-    assert messenger_doors.derive_telegram_bot_username(settings) == "brnrd_bot"
+def test_telegram_identity_reads_the_getme_derived_value(monkeypatch):
+    """#1465 does not derive Telegram's username — #1463 does, once, at
+    startup, and caches it by token. Both entry points here read that one
+    memo, so there is no second derivation to disagree with it."""
+    from brnrd import config
 
-
-def test_derive_telegram_prefers_getme_over_env(monkeypatch):
-    monkeypatch.setattr(messenger_doors_telegram(), "fetch_bot_username", lambda token, timeout=10.0: "from_getme")
-    settings = _settings(telegram_bot_token="t", telegram_bot_username="from_env")
-    assert messenger_doors.derive_telegram_bot_username(settings) == "from_getme"
-
-
-def test_derive_telegram_falls_back_to_env_when_getme_fails(monkeypatch):
-    monkeypatch.setattr(messenger_doors_telegram(), "fetch_bot_username", lambda token, timeout=10.0: None)
-    settings = _settings(telegram_bot_token="t", telegram_bot_username="brnrd_bot")
-    assert messenger_doors.derive_telegram_bot_username(settings) == "brnrd_bot"
-
-
-def test_derive_telegram_falls_back_to_env_when_getme_returns_an_invalid_shape(monkeypatch):
-    monkeypatch.setattr(
-        messenger_doors_telegram(), "fetch_bot_username", lambda token, timeout=10.0: "bad-shape-name"
+    settings = _settings(telegram_bot_token="tok", telegram_bot_username="from_env")
+    monkeypatch.setitem(config._derived_telegram_usernames, "tok", "from_getme")
+    assert messenger_doors.env_only_identities(settings).telegram_bot_username == "from_getme"
+    assert (
+        messenger_doors.derive_messenger_identities(settings).telegram_bot_username == "from_getme"
     )
-    settings = _settings(telegram_bot_token="t", telegram_bot_username="brnrd_bot")
-    assert messenger_doors.derive_telegram_bot_username(settings) == "brnrd_bot"
 
 
-def test_derive_telegram_is_empty_when_neither_source_is_valid(monkeypatch):
-    monkeypatch.setattr(messenger_doors_telegram(), "fetch_bot_username", lambda token, timeout=10.0: None)
-    settings = _settings(telegram_bot_token="t", telegram_bot_username="")
-    assert messenger_doors.derive_telegram_bot_username(settings) == ""
+def test_telegram_identity_falls_back_to_a_shape_valid_env_value():
+    settings = _settings(telegram_bot_token="untouched-token", telegram_bot_username="brnrd_bot")
+    assert messenger_doors.env_only_identities(settings).telegram_bot_username == "brnrd_bot"
+
+
+def test_deriving_identities_makes_no_telegram_network_call(monkeypatch):
+    """The regression this guards: a second `getMe` call at startup. If
+    anything in `derive_messenger_identities` reached Telegram, this would
+    raise instead of returning."""
+    from brnrd.platforms import telegram as tg
+
+    def _explode(*a, **k):
+        raise AssertionError("messenger_doors must not call Telegram")
+
+    monkeypatch.setattr(tg.httpx, "post", _explode)
+    settings = _settings(telegram_bot_token="tok", telegram_bot_username="brnrd_bot")
+    assert messenger_doors.derive_messenger_identities(settings).telegram_bot_username == "brnrd_bot"
 
 
 def messenger_doors_telegram():

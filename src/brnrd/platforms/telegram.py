@@ -170,6 +170,20 @@ def send_fresh_message(
     return None if message_id is None else str(message_id)
 
 
+def get_me(token: str, *, timeout: float = 10.0) -> dict:
+    """Fetch the bot's own identity via `getMe` — read-only, no side effects.
+
+    Ground truth for the bot's username (#1463): the token defines the bot,
+    so this beats a hand-typed env duplicate. Returns `{}` on any failure
+    shape (non-dict payload, missing ``result``) rather than raising for
+    that case; a transport-level failure (timeout, non-2xx) still raises,
+    same as every other call in this module, for the caller to catch.
+    """
+    payload = _post_json(token, "getMe", {}, timeout)
+    result = payload.get("result")
+    return result if isinstance(result, dict) else {}
+
+
 def set_webhook(
     token: str,
     url: str,
@@ -188,30 +202,6 @@ def set_webhook(
     except httpx.HTTPError as exc:
         _redact_http_error(exc)
         raise
-
-
-def fetch_bot_username(token: str, *, timeout: float = 10.0) -> str | None:
-    """`getMe` — the bot's own username, ground truth for the deep-link
-    door (#1465, mirroring the same seam `set_webhook` above already uses,
-    same failure posture: this is a startup call, never a per-request
-    one — see `messenger_doors.py`'s module docstring).
-
-    `None` on any failure (network, timeout, non-2xx, malformed response)
-    — side-effect-free, safe to call speculatively; the caller decides the
-    fallback.
-    """
-    try:
-        resp = httpx.post(_API.format(token=token, method="getMe"), timeout=timeout)
-        resp.raise_for_status()
-    except httpx.HTTPError:
-        return None
-    try:
-        payload = resp.json()
-    except ValueError:
-        return None
-    result = payload.get("result") if isinstance(payload, dict) else None
-    username = result.get("username") if isinstance(result, dict) else None
-    return username if isinstance(username, str) and username else None
 
 
 class CardGone(RuntimeError):
