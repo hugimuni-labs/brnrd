@@ -518,11 +518,12 @@ class _ForgeLinks:
             override_url_base=self.override_url_base,
         )
 
-    def branch(self, name: Any) -> str | None:
+    def branch(self, name: Any, repo: Any = None) -> str | None:
+        path = self._thread_repo(repo)
         if not self.remote_url or not name:
             return None
         return forges.view_branch_url(
-            self.remote_url, str(name),
+            self.remote_url, str(name), path,
             override_kind=self.override_kind,
             override_url_base=self.override_url_base,
         )
@@ -582,7 +583,7 @@ def link_reported(
         elif kind == "commit" and record.get("sha"):
             url = links.commit(record["sha"], record.get("repo"))
         elif kind == "branch" and record.get("name"):
-            url = links.branch(record["name"])
+            url = links.branch(record["name"], record.get("repo"))
         elif kind == "merge":
             url = (
                 links.pull_request(record["pr"], record.get("repo")) if record.get("pr") else None
@@ -716,7 +717,8 @@ def _identity(
     auto-derived ``git log --format=%h`` short sha still meet.
 
     The repo is part of the key — two projects' commits can share a
-    short-sha prefix, and two projects' PRs certainly share numbers. But it
+    short-sha prefix, two projects' PRs certainly share numbers, and two
+    projects can each have their own ``main``. But it
     is **resolved before keying, never read raw**: ``repo`` is optional in
     the grammar and means "this checkout" when absent, so keying on its raw
     presence would give one PR two identities — ``("pr", "1368")`` and
@@ -760,7 +762,12 @@ def _identity(
         return ("merge", sha[:7])
     if kind == "branch":
         name = str(record.get("name") or "")
-        return ("branch", name) if name else None
+        if not name:
+            return None
+        repo = _repo()
+        if repo:
+            return ("branch", name, str(repo))
+        return ("branch", name)
     if kind in {"kb", "file"}:
         path = str(record.get("path") or "")
         return (kind, path) if path else None
@@ -823,30 +830,43 @@ def _normalise_reported_pr(record: dict[str, Any]) -> dict[str, Any]:
     on a kept promise (observed live, run-260806-2208-y0kf: 3 PRs made,
     only 1 reached the run node's Produce).
 
-    Tries :func:`forges.parse_pull_request_number` on ``url`` first, then
+    Tries :func:`forges.parse_pull_request_ref` on ``url`` first, then
     ``ref`` — it already accepts a bare number, ``#N``, or a full forge
-    URL. On success, sets ``number``; if the row still has no ``url`` and
-    ``ref`` is itself an http(s) URL, copies it to ``url`` too — an
-    explicit URL is honoured as-is, same contract :func:`link_reported`
-    already extends to a resident-supplied ``url``. A row where neither
-    field parses is returned unchanged, still numberless — that one stays
-    dropped: unrenderable and undedupable.
+    URL, and (#1461) keeps a URL's own ``owner/repo`` instead of reducing
+    it to a bare number. On success, sets ``number``; if the row still has
+    no ``url`` and ``ref`` is itself an http(s) URL, copies it to ``url``
+    too — an explicit URL is honoured as-is, same contract
+    :func:`link_reported` already extends to a resident-supplied ``url``. A
+    row where neither field parses is returned unchanged, still numberless
+    — that one stays dropped: unrenderable and undedupable.
+
+    Repo backfill runs even when ``number`` is already set, so a resident
+    who hand-wrote ``{"kind": "pr", "number": 5, "url": "…/other/pull/5"}``
+    still gets ``repo`` recovered from the URL rather than dedupe-keying
+    against this checkout's origin (see :func:`_identity`) — an explicit
+    ``repo`` on the record always wins and is never overwritten.
 
     Mutates and returns *record* in place, matching this module's other
     single-record normalisers (:func:`link_reported`'s loop body).
     """
-    if record.get("kind") != "pr" or record.get("number"):
+    if record.get("kind") != "pr":
+        return record
+    if record.get("number") and record.get("repo"):
         return record
     parsed = None
     url = record.get("url")
     if url:
-        parsed = forges.parse_pull_request_number(str(url))
+        parsed = forges.parse_pull_request_ref(str(url))
     ref = record.get("ref")
     if parsed is None and ref:
-        parsed = forges.parse_pull_request_number(str(ref))
+        parsed = forges.parse_pull_request_ref(str(ref))
     if parsed is None:
         return record
-    record["number"] = int(parsed)
+    repo, number = parsed
+    if not record.get("number"):
+        record["number"] = int(number)
+    if repo and not record.get("repo"):
+        record["repo"] = repo
     if not record.get("url") and isinstance(ref, str) and ref.startswith(("http://", "https://")):
         record["url"] = ref
     return record
@@ -885,6 +905,19 @@ def collect(
     if repo_root is not None:
         for record in rest_reported:
             if record.get("kind") != "kb":
+                continue
+            # #1461: `knowledge.kb_page_url` only ever resolves a page
+            # against *this run's own* checkout/scope — it has no way to
+            # look up a sibling repo's kb location. A record naming a
+            # ``repo`` other than this one is a declaration the resolver
+            # cannot check, so leave whatever URL the resident supplied
+            # alone (the module docstring's own contract: "supply one
+            # explicitly only to point somewhere the daemon cannot
+            # derive") rather than popping it and replacing it with
+            # nothing, which silently rendered every cross-scope kb page
+            # as if it had never been given a link at all.
+            record_repo = str(record.get("repo") or "").strip()
+            if record_repo and record_repo != links.repo_path:
                 continue
             url = knowledge.kb_page_url(repo_root, str(record.get("path") or ""))
             # A reported URL is only trustworthy if the page's current blob

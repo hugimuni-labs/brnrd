@@ -575,6 +575,10 @@ def build_parser() -> argparse.ArgumentParser:
         "pr", help="record a PR this run opened, beyond the `.pr` control")
     p.add_argument("number", help="PR number, #N, or a full forge URL")
     p.add_argument(
+        "--repo", default=None, metavar="owner/name",
+        help="the PR's project, when it is not this checkout's origin — "
+             "inferred from a full URL's own owner/repo when omitted")
+    p.add_argument(
         "--summary", default=None, metavar="TEXT",
         help="one line describing the PR")
     p.set_defaults(func=cmd_relic_pr)
@@ -2051,10 +2055,21 @@ def cmd_relic_pr(args):
     parses, so it silently under-counted against the promise blueprint.
     This is that front door, the same shape as :func:`cmd_relic_issue`:
     parse the number (bare, ``#N``, or a full forge URL, via
-    :func:`forges.parse_pull_request_number`), refuse with the shape it
+    :func:`forges.parse_pull_request_ref`), refuse with the shape it
     wanted on failure, and confirm the file actually grew rather than
     reporting the intent — ``relics.append`` is best-effort by design,
     right at closeout and wrong at a prompt.
+
+    #1461: a full PR URL names its own ``owner/repo`` — the repo a sibling
+    strand (or a resident recording a PR on a project other than this
+    checkout's origin) actually opened the PR in. Reducing that to a bare
+    number, the way :func:`forges.parse_pull_request_number` used to be the
+    only option, threw the one fact away that a multi-repo run needs kept.
+    ``--repo`` mirrors :func:`cmd_relic_issue`'s flag — explicit and wins
+    over a URL's own reading, the same "declaration outranks inference"
+    order :func:`relics._ForgeLinks._thread_repo` already uses; omitted, a
+    URL's own ``owner/repo`` is kept rather than discarded, and a bare
+    number/``#N`` still means "this checkout's origin", unchanged.
     """
     import sys
 
@@ -2073,7 +2088,7 @@ def cmd_relic_pr(args):
         return 1
 
     raw = str(getattr(args, "number", "") or "").strip()
-    parsed = forges.parse_pull_request_number(raw)
+    parsed = forges.parse_pull_request_ref(raw)
     if not parsed:
         print(
             f"[brnrd relic] not a PR number or URL: {raw!r} — want a "
@@ -2084,7 +2099,19 @@ def cmd_relic_pr(args):
             file=sys.stderr,
         )
         return 1
-    number = int(parsed)
+    url_repo, number_text = parsed
+    number = int(number_text)
+
+    repo = str(getattr(args, "repo", None) or "").strip().strip("/")
+    if repo and repo.count("/") != 1:
+        print(
+            f"[brnrd relic] not a repo: {repo!r} — want owner/name, e.g. "
+            "`--repo hugimuni-labs/brnrd`. Nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+    if not repo and url_repo:
+        repo = url_repo
 
     summary = str(getattr(args, "summary", None) or "").strip() or None
 
@@ -2093,7 +2120,8 @@ def cmd_relic_pr(args):
         before = control.stat().st_size
     except OSError:
         before = 0
-    relics.append(outbox_dir, "pr", number=number, summary=summary)
+    relics.append(outbox_dir, "pr", number=number, summary=summary,
+                  repo=repo or None)
     try:
         after = control.stat().st_size
     except OSError:
@@ -2105,7 +2133,8 @@ def cmd_relic_pr(args):
             file=sys.stderr,
         )
         return 1
-    print(f"[brnrd relic] pr #{number}")
+    where = f" in {repo}" if repo else ""
+    print(f"[brnrd relic] pr #{number}{where}")
     return 0
 
 

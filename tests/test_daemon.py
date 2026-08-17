@@ -3372,6 +3372,74 @@ def test_notify_spawn_parent_clean_reap_carries_produce_handles(tmp_path):
     assert note.get("spawn_report_found") is True
 
 
+def test_notify_spawn_parent_qualifies_produce_with_child_repo(tmp_path):
+    """#1461: a child dispatched into a sibling repo (#1458's `repo:` key)
+    stamps `spawn_repo` alongside `spawn_published_branch` /
+    `spawn_pr_number` — a parent reading these off a fleet of children must
+    not assume its own repo for produce that may live somewhere else.
+
+    Same-repo children (no `repo_label` on meta) must not gain the key —
+    ``test_notify_spawn_parent_clean_reap_carries_produce_handles`` already
+    pins that shape; this only covers the branch where the label is known.
+    """
+    inbox = tmp_path / ".brr" / "inbox"
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-child"
+    outbox_dir.mkdir(parents=True, exist_ok=True)
+    (outbox_dir / ".pr").write_text("647\n", encoding="utf-8")
+    task = Run(
+        id="run-child", event_id="evt-child",
+        body="",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "publish_branch": "brr/orientation-ledger",
+            "outbox_path": str(outbox_dir),
+            "repo_label": "hugimuni-labs/sibling",
+        },
+    )
+
+    daemon._capture_pr_handle(task, outbox_dir)
+    daemon._remove_outbox(outbox_dir)
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert note.get("spawn_published_branch") == "brr/orientation-ledger"
+    assert str(note.get("spawn_pr_number")) == "647"
+    assert note.get("spawn_repo") == "hugimuni-labs/sibling"
+
+
+def test_notify_spawn_parent_qualifies_branch_only_reap_with_child_repo(tmp_path):
+    """Isolates the branch arm of the #1461 qualification from the PR arm:
+    no `.pr` file at all here, so a fixture that only wired ``spawn_repo``
+    into the PR branch (and left the published-branch branch unqualified)
+    would pass the combined fixture above — both branches independently
+    set the same key with the same value there — but fails this one."""
+    inbox = tmp_path / ".brr" / "inbox"
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-child"
+    outbox_dir.mkdir(parents=True, exist_ok=True)
+    task = Run(
+        id="run-child", event_id="evt-child",
+        body="",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "publish_branch": "brr/orientation-ledger",
+            "outbox_path": str(outbox_dir),
+            "repo_label": "hugimuni-labs/sibling",
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert note.get("spawn_published_branch") == "brr/orientation-ledger"
+    assert "spawn_pr_number" not in note
+    assert note.get("spawn_repo") == "hugimuni-labs/sibling"
+
+
 def test_notify_spawn_parent_pr_survives_outbox_teardown(tmp_path):
     """The `.pr` control is gone by the time the parent reaps — the handle
     must have been captured before teardown, or it is lost by construction.
