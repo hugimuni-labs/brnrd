@@ -1331,3 +1331,150 @@ def test_the_handler_list_above_matches_the_routing_table():
         "a platform was added to the routing table without extending "
         "test_every_forward_handler_tolerates_an_incomplete_reply_to"
     )
+
+
+# ── #1205 — POST /v1/daemons/messages, the fresh-send primitive ──────────
+#
+# Unlike `/v1/daemons/responses` above, this endpoint carries no event_id:
+# resolution is keyed on platform chat identity, borrowed from whichever of
+# the account's own events was most recently active on that platform.
+
+
+def test_fresh_send_reaches_the_most_recently_active_telegram_conversation(
+    env, monkeypatch,
+):
+    app, client, forwarder = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
+
+    # Oldest first — the resolver must prefer the newest, not the first.
+    older = client.post(
+        "/v1/_dev/enqueue",
+        json={
+            "repo_id": rid, "body": "first",
+            "reply_to": {"platform": "telegram", "chat_id": 111},
+        },
+        headers=acc,
+    )
+    assert older.status_code == 201, older.text
+    newer = client.post(
+        "/v1/_dev/enqueue",
+        json={
+            "repo_id": rid, "body": "second",
+            "reply_to": {"platform": "telegram", "chat_id": 222, "topic_id": 5},
+        },
+        headers=acc,
+    )
+    assert newer.status_code == 201, newer.text
+
+    sent = []
+    monkeypatch.setitem(
+        daemon_routes._MESSAGE_SENDERS,
+        "telegram",
+        lambda settings, reply_to, body: sent.append((reply_to, body)) or "999",
+    )
+
+    resp = client.post(
+        "/v1/daemons/messages",
+        json={"body_markdown": "unaddressed hello", "platform": "telegram"},
+        headers=dmn,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"platform": "telegram", "message_id": "999"}
+    [(reply_to, body)] = sent
+    assert reply_to["chat_id"] == 222
+    assert reply_to.get("topic_id") == 5
+    assert body == "unaddressed hello"
+
+
+def test_fresh_send_no_resolvable_conversation_is_honest_404_never_a_silent_200(env):
+    app, client, forwarder = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
+
+    # A github-addressed event exists, but nothing telegram-shaped does.
+    enq = client.post(
+        "/v1/_dev/enqueue",
+        json={"repo_id": rid, "body": "issue chatter", "reply_to": {"platform": "github"}},
+        headers=acc,
+    )
+    assert enq.status_code == 201, enq.text
+
+    resp = client.post(
+        "/v1/daemons/messages",
+        json={"body_markdown": "hello?", "platform": "telegram"},
+        headers=dmn,
+    )
+    assert resp.status_code == 404, resp.text
+
+
+def test_fresh_send_unimplemented_platform_is_honest_501(env):
+    app, client, forwarder = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
+
+    resp = client.post(
+        "/v1/daemons/messages",
+        json={"body_markdown": "hello?", "platform": "signal"},
+        headers=dmn,
+    )
+    assert resp.status_code == 501, resp.text
+
+
+def test_fresh_send_never_resolves_a_different_accounts_conversation(env):
+    app, client, forwarder = env
+    other_acc = _account(client, email="other@b.com")
+    other_rid = _repo(client, other_acc, name="other-repo")
+    client.post(
+        "/v1/_dev/enqueue",
+        json={
+            "repo_id": other_rid, "body": "not yours",
+            "reply_to": {"platform": "telegram", "chat_id": 999},
+        },
+        headers=other_acc,
+    )
+
+    acc = _account(client, email="mine@b.com")
+    rid = _repo(client, acc, name="mine")
+    dmn = _connect(client, acc, rid)
+
+    resp = client.post(
+        "/v1/daemons/messages",
+        json={"body_markdown": "hello?", "platform": "telegram"},
+        headers=dmn,
+    )
+    # This account has no telegram history of its own — the other account's
+    # conversation must never leak across the boundary as a fallback.
+    assert resp.status_code == 404, resp.text
+
+
+def test_fresh_send_registry_matches_what_this_test_module_covers():
+    """Guard the guard, same shape as the forwarder-table test above."""
+    import inspect
+
+    source = inspect.getsource(daemon_routes)
+    table = source.split(
+        "_MESSAGE_SENDERS: dict[str, Callable[[Any, dict[str, Any], str], str]] = {", 1,
+    )[1]
+    table = table.split("}", 1)[0]
+    registered = {
+        line.split('"')[1] for line in table.splitlines() if line.strip().startswith('"')
+    }
+    assert registered == {"telegram"}, (
+        "a platform was added to the fresh-send registry without extending "
+        "the coverage above"
+    )
+
+
+def test_telegram_fresh_send_without_a_bot_token_is_honest_503(monkeypatch):
+    class _Settings:
+        telegram_bot_token = None
+
+    with pytest.raises(Exception) as exc_info:
+        daemon_routes._telegram_fresh_send(
+            _Settings(), {"chat_id": 1}, "hello",
+        )
+    assert getattr(exc_info.value, "status_code", None) == 503
