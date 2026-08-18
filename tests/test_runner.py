@@ -2752,3 +2752,52 @@ class TestIdleSleepDoctorWarning:
         monkeypatch.setattr(runner_mod.shutil, "which", lambda name: None)
 
         assert runner_mod.idle_sleep_doctor_warning() is None
+
+
+class TestHostSuspendIsRetryable:
+    """#1485 — the sentence and the behaviour have to agree.
+
+    `reason_prefix(HOST_SUSPENDED)` tells a correspondent a retry is
+    coming. Before this, `retryable_reason` only ever fired for missing
+    artifacts or a transport signature, and the measured host-suspend text
+    matches neither — so the promise was made and never kept.
+    """
+
+    def _result(self, detail: str, *, returncode: int = 1):
+        return runner_mod.RunnerResult(
+            invocation=runner_mod.RunnerInvocation(
+                kind="task", label="t", prompt="p", repo_root=Path("."),
+            ),
+            runner_name="claude",
+            command=["claude"],
+            stdout="",
+            stderr=detail,
+            returncode=returncode,
+            trace_dir=None,
+            artifacts=[],
+        )
+
+    def test_measured_sleep_string_is_retryable(self):
+        # The exact text captured on 2026-08-18, twice, verbatim.
+        result = self._result(
+            "API Error: Your computer went to sleep mid-response. "
+            "The response above may be incomplete."
+        )
+        assert result.host_suspended is True
+        reason = result.retry_reason()
+        assert reason is not None, (
+            "a host suspend must be retryable — reason_prefix(HOST_SUSPENDED) "
+            "tells the correspondent a retry is happening, and a sentence "
+            "that describes a behaviour the code lacks is the defect"
+        )
+        assert "suspended" in reason
+
+    def test_clean_exit_is_not_retryable_even_with_the_signature(self):
+        result = self._result("computer went to sleep", returncode=0)
+        assert result.host_suspended is False
+        assert result.retry_reason() is None
+
+    def test_unrelated_failure_stays_unretryable(self):
+        result = self._result("command not found: claude", returncode=127)
+        assert result.host_suspended is False
+        assert result.retry_reason() is None

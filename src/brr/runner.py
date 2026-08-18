@@ -775,6 +775,17 @@ class RunnerResult:
         return self.returncode == 124
 
     @property
+    def host_suspended(self) -> bool:
+        """Whether the host slept out from under this attempt (#1485).
+
+        Same guards as ``transport_failure``: only a *failed, non-timeout*
+        attempt has anything to classify.
+        """
+        if self.ok or self.timed_out:
+            return False
+        return runner_failures.looks_like_host_suspend(self._failure_text())
+
+    @property
     def transport_failure(self) -> bool:
         """Whether this failure is a dropped connection rather than a verdict.
 
@@ -862,6 +873,19 @@ class RunnerResult:
             return None
         if self.timed_out:
             return None
+        if self.host_suspended:
+            # Checked before transport, and retryable for a stronger reason
+            # than transport is: the failure is provably environmental (the
+            # runner named its own cause), and the condition that produced
+            # it is actively suppressed for the retry's own lifetime by the
+            # power assertion started alongside the subprocess. Without this
+            # arm, `reason_prefix(HOST_SUSPENDED)` promised a retry that
+            # never happened — a sentence a correspondent reads as a
+            # behaviour (#1485).
+            return (
+                "the host suspended mid-response: the machine slept while "
+                "the turn was in flight"
+            )
         if self.transport_failure:
             return (
                 "transport failure mid-response: the model connection "
