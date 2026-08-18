@@ -2539,13 +2539,50 @@ class TestPowerAssertion:
     constructed -- never on source text.
     """
 
-    def _invoke(self, tmp_path, monkeypatch, *, platform, which_map):
-        """Run one real ``invoke_runner`` call and return every Popen argv
-        it produced, in call order (index 0 is always the runner itself --
-        the power assertion, if any, is started only after it)."""
+    #: Every process this class is allowed to reason about: the fake runner
+    #: itself, plus the two idle-sleep inhibitors #1485 may construct.
+    _OWN_BINARIES = ("mock", "caffeinate", "systemd-inhibit")
+
+    @classmethod
+    def _own(cls, calls):
+        """The subset of the global Popen capture that *this* invocation made.
+
+        ``monkeypatch.setattr(runner_mod.subprocess, "Popen", ...)`` patches
+        an attribute on the shared ``subprocess`` module, so the capture is
+        process-wide, not call-scoped: anything else running in the same
+        interpreter during the window lands in it too. On CI that is exactly
+        what happened -- a ``git worktree list --porcelain`` from a
+        background thread appeared at index 0 and broke five assertions that
+        had indexed into the raw list. ``invoke_runner`` never shells out to
+        git (``grep -n worktree src/brr/runner.py`` is empty), so the call
+        was never this code's.
+
+        These tests passed on the authoring machine and failed on CI, which
+        is the whole lesson: **an index into a process-wide capture is not a
+        coordinate.** Select by what the process *is*. The ordering claim
+        that matters -- the companion starts only after the runner -- is
+        preserved, and asserted on the selected list.
+        """
+        return [c for c in calls if c and c[0] in cls._OWN_BINARIES]
+
+    def _invoke(
+        self, tmp_path, monkeypatch, *, platform, which_map, foreign=(),
+    ):
+        """Run one real ``invoke_runner`` call and return the Popen argvs it
+        produced, in call order (index 0 is always the runner itself -- the
+        power assertion, if any, is started only after it). Foreign calls
+        captured by the process-wide patch are filtered out; see ``_own``.
+
+        ``foreign`` injects argvs into the shared capture ahead of the first
+        real call, reproducing what CI saw. It is a test of the *harness*,
+        not of the product -- but the harness is what broke.
+        """
         calls = []
+        pending_foreign = [list(f) for f in foreign]
 
         def _fake_popen(cmd, **kwargs):
+            while pending_foreign:
+                calls.append(pending_foreign.pop(0))
             calls.append(list(cmd))
             return _fake_proc(kwargs, out="ok\n")
 
@@ -2561,7 +2598,7 @@ class TestPowerAssertion:
         )
         result = invoke_runner("mock", invocation, {"runner_cmd": ["mock"]})
         assert result.ok
-        return calls
+        return self._own(calls)
 
     def test_darwin_constructs_caffeinate_dash_i_dash_w_runner_pid(
         self, tmp_path, monkeypatch,
@@ -2578,6 +2615,7 @@ class TestPowerAssertion:
         )
 
         assert len(calls) == 2
+        assert calls[0] == ["mock"]  # the runner is started first, always
         runner_pid = _fake_proc({}).pid  # the shared fixture's fixed pid
         assert calls[1] == ["caffeinate", "-i", "-w", str(runner_pid)]
 
@@ -2624,6 +2662,7 @@ class TestPowerAssertion:
         )
 
         assert len(calls) == 2
+        assert calls[0] == ["mock"]  # the runner is started first, always
         assert calls[1][0] == "systemd-inhibit"
         assert "--what=idle:sleep" in calls[1]
         runner_pid = _fake_proc({}).pid
@@ -2634,6 +2673,52 @@ class TestPowerAssertion:
     ):
         calls = self._invoke(
             tmp_path, monkeypatch, platform="linux", which_map={},
+        )
+
+        assert calls == [["mock"]]
+
+    def test_foreign_popen_in_the_shared_capture_does_not_move_the_runner(
+        self, tmp_path, monkeypatch,
+    ):
+        """The regression these tests were missing, and the reason four of
+        them went red on CI while passing on the authoring machine.
+
+        ``monkeypatch.setattr(runner_mod.subprocess, "Popen", ...)`` patches
+        the shared module attribute, so anything else in the interpreter
+        lands in the same list. CI captured a ``git worktree list
+        --porcelain`` at index 0 -- a call ``invoke_runner`` does not make
+        and cannot make (runner.py names no worktree code) -- and every
+        assertion that had indexed into the raw capture shifted by one.
+
+        Injecting that exact argv must change nothing about what this class
+        concludes. On the parent commit this test fails with
+        ``assert 3 == 2``, which is CI's own error verbatim."""
+        calls = self._invoke(
+            tmp_path, monkeypatch,
+            platform="darwin", which_map={"caffeinate": "/usr/bin/caffeinate"},
+            foreign=[["git", "worktree", "list", "--porcelain"]],
+        )
+
+        assert len(calls) == 2
+        assert calls[0] == ["mock"]
+        runner_pid = _fake_proc({}).pid
+        assert calls[1] == ["caffeinate", "-i", "-w", str(runner_pid)]
+
+    def test_foreign_popen_does_not_invent_a_power_assertion(
+        self, tmp_path, monkeypatch,
+    ):
+        """The negative direction of the same guard: the filter must not
+        turn a foreign call into evidence that nothing was constructed, nor
+        hide that something was. On a platform with no inhibitor, a foreign
+        argv in the capture still leaves exactly one own-process call."""
+        calls = self._invoke(
+            tmp_path, monkeypatch,
+            platform="win32",
+            which_map={
+                "caffeinate": "/usr/bin/caffeinate",
+                "systemd-inhibit": "/usr/bin/systemd-inhibit",
+            },
+            foreign=[["git", "worktree", "list", "--porcelain"]],
         )
 
         assert calls == [["mock"]]
