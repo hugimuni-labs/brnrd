@@ -22,6 +22,7 @@ build their own dominion, work surface, and git repo under ``tmp_path``.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -690,6 +691,46 @@ class TestSignatureFindings:
         assert "maintainer" in stale[0].description
         assert "resident" in stale[0].description
         assert "PRs stay open until review clears" in stale[0].description
+
+    def test_the_quote_fence_outruns_backticks_inside_the_removed_line(
+        self, tmp_path,
+    ):
+        """The quote is arbitrary file content, and CommonMark closes a code
+        span on a backtick string of **equal** length — so a fixed ``-wide
+        fence spills a removed line that carries its own ``double`` span
+        into the description as markup. The fence must outrun the longest
+        run inside it. Driven through the real caller because the bug is in
+        the rendered description, which is the only thing a wake reads.
+        """
+        repo = tmp_path / "home"
+        repo.mkdir()
+        _git(repo, "init", "-q", "-b", "main")
+        clause = "- reversible calls are the ``resident``'s to take."
+        page = _SIGNED_PAGE.replace(
+            "- reversible calls are the resident's to take.", clause,
+        )
+        path = repo / "workflow.md"
+        _commit(repo, path, page, "2026-07-16", "sign it")
+        _commit(
+            repo, path,
+            page.replace(clause, "- reversible calls are the operator's."),
+            "2026-07-20", "rewrite it",
+        )
+
+        findings = notes_preflight.check_signatures(
+            path, repo_dir=repo, rel_path="workflow.md",
+        )
+        stale = [f for f in findings if f.type == "stale-signature"]
+        assert len(stale) == 1
+        desc = stale[0].description
+        assert clause in desc
+
+        # The property, not the implementation: the fence run that opens the
+        # quote is strictly longer than every backtick run inside it.
+        opener = re.search(r"the removed text: (`+)", desc)
+        assert opener is not None, desc
+        inner = max(len(m) for m in re.findall(r"`+", clause))
+        assert len(opener.group(1)) > inner, (opener.group(1), inner)
 
     def test_a_rename_softens_severity_and_names_the_old_path(self, tmp_path):
         """#1476 shape 1: a rename that fixes a path line inside a signed

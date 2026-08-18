@@ -883,12 +883,18 @@ def check_signatures(
         who = ", ".join(f"{sig.signed_by} ({sig.date})" for sig in stale)
         plural = "" if rewrite.replaced_lines == 1 else "s"
         quote = rewrite.removed_text.replace("\n", " / ")
-        # The quoted line is arbitrary file content and may itself contain a
-        # backtick (e.g. a removed line that names a path in code font) —
-        # fence with a wider run so the quote can't prematurely close the
-        # span it sits in (CommonMark's own rule for nesting code spans).
-        fence = "``" if "`" in quote else "`"
-        pad = " " if fence == "``" else ""
+        # The quoted line is arbitrary file content and may itself contain
+        # backticks (e.g. a removed line that names a path in code font), so
+        # the fence has to be *longer than the longest run inside it* —
+        # CommonMark closes a code span on a backtick string of **equal**
+        # length, which is why a fixed ``-wide fence is not enough: a quoted
+        # line carrying ``foo`` would close the span at its own first pair
+        # and spill the rest into the description as markup.
+        longest = max((len(m) for m in re.findall(r"`+", quote)), default=0)
+        fence = "`" * (longest + 1)
+        # A span whose content touches a backtick needs the padding space
+        # CommonMark strips back off again; harmless when it isn't needed.
+        pad = " " if longest else ""
         quote_span = f"{fence}{pad}{quote}{pad}{fence}"
         if rewrite.renamed_from is not None:
             # A rewrite landing inside a rename is usually the rename's own
