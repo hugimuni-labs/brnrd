@@ -115,12 +115,54 @@ def skeleton(face: str = "rest") -> str:
     return "".join(parts)
 
 
+# ── the resting frame ───────────────────────────────────────────────────────
+# Slots 2-4 are the state, and `brnrd` is the state called *at rest* — so the
+# same five slots must also spell the name.  Straight strokes, angular joins,
+# spurs where a rune would carry one; the middle three sit at x-height so the
+# two staves keep the mark's silhouette across both frames.
+
+XTOP = BOWL_TOP                      # x-height — the same line b's bowl starts on
+
+
+def letter_r(x: float, mirror: bool = False) -> str:
+    s = -1 if mirror else 1
+    stem = x - s * 10
+    return f"""
+    <path d="M {stem} {XTOP} V {BASELINE}"/>
+    <path d="M {stem} {XTOP + 30} L {x + s * 30} {XTOP}"/>"""
+
+
+def letter_n(x: float) -> str:
+    left, right = x - 25, x + 25
+    return f"""
+    <path d="M {left} {XTOP} V {BASELINE}"/>
+    <path d="M {right} {XTOP + 24} V {BASELINE}"/>
+    <path d="M {left} {XTOP + 24} L {x} {XTOP} L {right} {XTOP + 24}"/>"""
+
+
+def resting() -> str:
+    """b r n ᴙ d — the name, in the same five slots as the face.
+
+    The fourth letter is reversed, which is not decoration: it is the same
+    mirror ``bRnЯd`` already performs on the site, and it makes the resting
+    frame bilaterally symmetric about the identical axis the face uses.
+    """
+    return "".join([
+        stave(SLOTS[0] - STAVE_INSET, -1),
+        letter_r(SLOTS[1]),
+        letter_n(SLOTS[2]),
+        letter_r(SLOTS[3], mirror=True),
+        stave(SLOTS[4] + STAVE_INSET, +1),
+    ])
+
+
 STROKE_ATTRS = (f'fill="none" stroke-width="{STROKE}" '
                 'stroke-linecap="round" stroke-linejoin="round"')
 
 
 def stone_svg(face: str = "rest") -> str:
     """Identity at rest: incised, molten, on rock.  Avatar, favicon, print."""
+    body = resting() if face == "name" else skeleton(face)
     return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{BOARD}" height="{BOARD}" viewBox="0 0 {BOARD} {BOARD}">
   <title>brnrd — the five-slot mark, stone register</title>
   <defs>
@@ -134,7 +176,7 @@ def stone_svg(face: str = "rest") -> str:
     </filter>
   </defs>
   <rect width="{BOARD}" height="{BOARD}" rx="112" fill="{STONE}"/>
-  <g {STROKE_ATTRS} stroke="url(#molten)" filter="url(#heat)">{skeleton(face)}
+  <g {STROKE_ATTRS} stroke="url(#molten)" filter="url(#heat)">{body}
   </g>
 </svg>
 """
@@ -146,7 +188,8 @@ def aberration_svg(face: str = "rest") -> str:
     Three passes of one path set — the site's existing boot palette, kept
     exactly (`src/frontend/src/lib/assets/favicon.svg`).
     """
-    body = skeleton(face)
+    body = (resting() if face == "name" else skeleton(face)).replace(
+        'fill="url(#molten)"', f'fill="{CREAM}"')
     ghost = lambda colour, dx: (
         f'<g {STROKE_ATTRS} stroke="{colour}" opacity="0.55" '
         f'transform="translate({dx},0)">{body}</g>')
@@ -197,4 +240,6 @@ if __name__ == "__main__":
     (OUT / f"mark-stone{suffix}.svg").write_text(stone_svg("rest"))
     (OUT / f"mark-screen{suffix}.svg").write_text(aberration_svg("rest"))
     (OUT / f"states{suffix}.svg").write_text(sheet_svg())
+    (OUT / f"wordmark-stone{suffix}.svg").write_text(stone_svg("name"))
+    (OUT / f"wordmark-screen{suffix}.svg").write_text(aberration_svg("name"))
     print(f"wrote crown={CROWN}")
