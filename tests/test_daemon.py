@@ -8851,6 +8851,151 @@ def test_cloud_dispatch_uses_explicit_then_thread_sticky_then_default(tmp_path):
     ) == (repo_a, "Gurio/a")
 
 
+
+def test_run_worker_says_the_repo_label_it_could_not_find(tmp_path, monkeypatch):
+    """#1472: an unserved repo label must not be swallowed at ingress.
+
+    The arrangement is the one #1472 says no test builds — a multi-repo
+    account plus a label neither side agrees on — and it is *derived*, not
+    hand-picked, because the derivation is the whole reason the case is
+    reachable. For a checkout with no remote the server names the repo
+    ``local/<slug>-<6hex>`` (``gates/cloud.local_repo_identity``) while the
+    daemon registers the same folder under ``account.repo_label``'s bare
+    ``repo_root.name``. The two cannot agree, so an event carrying the
+    server's label arrives at a daemon that does not serve it.
+
+    What is asserted here is only the *saying*. The seeding stays exactly
+    as it was — ``_repo_for_event`` still hands back the fallback tree with
+    the unresolved label riding along — because whether an unresolvable
+    label should refuse the dispatch instead is the product call #1472
+    leaves open. Rewriting this test to expect a refusal would be deciding
+    that question in a test file.
+
+    And the classifier is checked at the *renderer*, not one step short of
+    it: the assertion runs the run's own ``portal-state.json`` through
+    ``hooks.format_delta(..., seed=True)``, the SessionStart block that is
+    the first thing the resident reads. A notice that is written but never
+    rendered is the same silence in a different file.
+    """
+    from brr import hooks
+    from brr.gates import cloud
+
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+    write_repo_scaffold(repo_a)
+    write_repo_scaffold(repo_b)
+
+    # The daemon's own derivation for each remote-less checkout — bare
+    # directory name (account.repo_label's last fallback).
+    label_a = daemon.account.repo_label(repo_a)
+    label_b = daemon.account.repo_label(repo_b)
+    assert (label_a, label_b) == ("repo-a", "repo-b")
+
+    # The server's derivation for the *same* folder. Not equal to the
+    # daemon's, and it cannot be made equal — that is the bug's generator.
+    server_label_b = cloud.local_repo_identity(repo_b)
+    assert server_label_b.startswith("local/repo-b-")
+    assert server_label_b != label_b
+
+    ctx = daemon.account.resolve_context(
+        repo_a,
+        {
+            "repo.label": label_a,
+            "home.path": str(tmp_path / "account-home"),
+            f"account.repo.{label_b}": str(repo_b),
+        },
+    )
+    assert sorted(ctx.repos.keys()) == [label_a, label_b]
+
+    event = make_event(
+        repo_a,
+        eid="evt-unserved-label",
+        source="cloud",
+        repo=server_label_b,
+    )
+
+    # Behaviour unchanged, and pinned so a future "fix" that starts
+    # refusing has to come past this line deliberately: the run still
+    # seeds in the fallback tree, still carrying the label it could not
+    # resolve.
+    assert daemon._repo_for_event(
+        ctx,
+        event,
+        fallback_repo_root=repo_a,
+        fallback_label=label_a,
+    ) == (repo_a, server_label_b)
+
+    _stub_env_isolated(monkeypatch, repo_a)
+    monkeypatch.setattr(
+        daemon.runner,
+        "resolve_runner_profile",
+        lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root),
+    )
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts, "build_daemon_prompt",
+        lambda task, eid, rp, root, **kw: "PROMPT",
+    )
+    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("ok\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name,
+            command=["mock"], stdout="ok\n", stderr="",
+            returncode=0, trace_dir=None, artifacts=[],
+        )
+
+    base_env = envs.get_env("worktree")
+    monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+    task = daemon._run_worker(
+        event,
+        repo_a,
+        repo_a / ".brr" / "responses",
+        {"repo.label": label_a},
+        0,
+        account_context=ctx,
+    )
+    assert task.meta["repo_label"] == server_label_b
+
+    outbox_dir = repo_a / ".brr" / "outbox" / "evt-unserved-label"
+    notices = [
+        json.loads(line)
+        for line in (outbox_dir / ".notices.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        if line.strip()
+    ]
+    matching = [n for n in notices if server_label_b in n.get("text", "")]
+    assert matching, notices
+    record = matching[0]
+    # The same two facts `spawn: repo:` refuses with — the label asked for
+    # and the set actually served. Either alone leaves the reader guessing
+    # what to correct it to.
+    assert server_label_b in record["text"]
+    assert label_a in record["text"] and label_b in record["text"]
+    # Dispatched, not where it was addressed; a fresh per-event miss, so it
+    # must reach the `!N` count rather than sit in the standing bucket the
+    # bar deliberately does not alarm on.
+    assert record["kind"] == "redirected"
+    assert record["lifetime"] == "run"
+    assert hooks._counted_notices(notices)
+
+    # The renderer half. This is the assertion that would still be missing
+    # if the notice were written into a file nobody renders.
+    portal = json.loads(
+        (outbox_dir / "portal-state.json").read_text(encoding="utf-8")
+    )
+    assert any(
+        server_label_b in n.get("text", "") for n in portal["notices"]
+    ), portal["notices"]
+    seed_block = hooks.format_delta(portal, seed=True)
+    assert seed_block is not None
+    assert server_label_b in seed_block
+    assert "is not a served repo" in seed_block
+
 def test_account_starts_one_cloud_gate_on_default_repo_runtime(
     tmp_path, monkeypatch,
 ):
