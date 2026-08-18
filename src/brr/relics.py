@@ -528,6 +528,56 @@ class _ForgeLinks:
             override_url_base=self.override_url_base,
         )
 
+    def _path_is_local(self, ref: str, relpath: str) -> bool:
+        """Does *relpath* actually exist in this checkout, at *ref*?
+
+        Sibling of :meth:`_sha_is_local` for a ``file`` relic's ``path``:
+        local and offline, checked against the tree the link will actually
+        point at (not the working copy or the index — see
+        :func:`gitops.path_exists_at_ref`), so a path that was never
+        committed, or was written outside this repo entirely (``/tmp/…``,
+        a share), cannot render a confident 404.
+
+        ``True`` when unverifiable (no repo root, or no ref to check
+        against) for the same reason :meth:`_sha_is_local` returns ``True``
+        in that case: unverifiable is not the same fact as absent.
+        """
+        if self.repo_root is None or not ref:
+            return True
+        try:
+            return gitops.path_exists_at_ref(self.repo_root, ref, relpath)
+        except Exception:
+            return True
+
+    def blob(self, path: Any, repo: Any = None, *, branch: str | None = None) -> str | None:
+        """A file's forge blob URL, or ``None`` when this checkout cannot attest it.
+
+        Mirrors :meth:`commit`'s stance (#1370, the link half of the file
+        relic): a record naming a foreign ``repo`` is a declaration, honoured
+        without a local check — there is nothing here to verify a foreign
+        project's tree against. A record naming no repo means "this
+        checkout's file" is an assumption, and it is checked before it
+        becomes a link: the path must actually resolve in *this* tree at
+        *branch* (see :meth:`_path_is_local`).
+
+        Unlike a commit (self-sufficient — a sha needs no ref to name a
+        forge URL), a blob URL always needs a branch/ref to view the file
+        *on*. No *branch* ⇒ no link, same as no remote or no path: nothing
+        here guesses a ref the caller did not supply.
+        """
+        path_str = str(path or "").strip()
+        target = self._thread_repo(repo)
+        if not self.remote_url or not path_str or not target or not branch:
+            return None
+        declared = "/" in str(repo or "").strip().strip("/")
+        if not declared and not self._path_is_local(branch, path_str):
+            return None
+        return forges.view_blob_url(
+            self.remote_url, branch, path_str, target,
+            override_kind=self.override_kind,
+            override_url_base=self.override_url_base,
+        )
+
 
 def forge_links(repo_root: Path | None) -> _ForgeLinks:
     """Build the URL resolver for *repo_root*'s origin remote.
@@ -557,9 +607,9 @@ def forge_links(repo_root: Path | None) -> _ForgeLinks:
 
 
 def link_reported(
-    records: list[dict[str, Any]], links: _ForgeLinks,
+    records: list[dict[str, Any]], links: _ForgeLinks, *, branch: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Fill in the forge ``url`` for self-reported issue/PR/commit/merge relics.
+    """Fill in the forge ``url`` for self-reported issue/PR/commit/merge/file relics.
 
     The resident writes ``{"kind": "issue", "number": 566, "action":
     "opened"}`` and nothing more — the ``.relics.jsonl`` grammar explicitly
@@ -570,6 +620,11 @@ def link_reported(
     An explicit ``url`` on the record is honoured as-is (the resident may be
     pointing at a *different* forge than origin); records whose URL cannot
     be attested are returned untouched.
+
+    *branch* is the run's own tracked branch (``relics.collect``'s own
+    ``branch`` argument, forwarded) — the only kind that needs it is
+    ``file``: a blob URL names a ref to view the file *on*, and nothing here
+    guesses one (#1370).
     """
     for record in records:
         if not isinstance(record, dict) or str(record.get("url") or "").strip():
@@ -588,6 +643,8 @@ def link_reported(
             url = (
                 links.pull_request(record["pr"], record.get("repo")) if record.get("pr") else None
             ) or links.commit(record.get("sha"), record.get("repo"))
+        elif kind == "file" and record.get("path"):
+            url = links.blob(record["path"], record.get("repo"), branch=branch)
         if url:
             record["url"] = url
     return records
@@ -927,7 +984,7 @@ def collect(
             record.pop("url", None)
             if url:
                 record["url"] = url
-        link_reported(rest_reported, links)
+        link_reported(rest_reported, links, branch=branch)
     auto = derive_auto(
         repo_root, branch=branch, seed_ref=seed_ref, outbox_dir=outbox_dir,
         links=links, commit_run_id=commit_run_id,
