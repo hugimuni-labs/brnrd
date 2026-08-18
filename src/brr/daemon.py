@@ -5363,7 +5363,7 @@ def _processing_event_is_orphaned(
 ) -> bool:
     """True when a ``status: processing`` event's owning run is provably dead.
 
-    Layer 2 of #1493 ("the event nobody could see"): layer 1
+    Layer 2 of #1496 ("the event nobody could see"): layer 1
     (``_mark_interrupted_runs``) resets a retry-eligible orphaned event back
     to ``pending`` at boot, but only fires on a daemon restart. A worker
     thread killed without the daemon process dying — a SIGKILLed strand, a
@@ -5513,7 +5513,7 @@ def _pending_events_for_agent(
             if ev.get("id") == current_event_id:
                 continue
             if ev.get("status") != "pending":
-                # Layer 2 of #1493 ("the event nobody could see"): a
+                # Layer 2 of #1496 ("the event nobody could see"): a
                 # "processing" event is normally still mid-flight and
                 # correctly hidden here — its own run's wake already has
                 # it. But when that run is provably dead (a SIGKILLed
@@ -13636,7 +13636,7 @@ def _mark_interrupted_runs(
     still dispatchable).
 
     It used to deliberately touch **no event state** — the retry path was
-    meant to stay exactly as it was. That left a second gap open (#1493,
+    meant to stay exactly as it was. That left a second gap open (#1496,
     "the event nobody could see"): the still-``processing`` event genuinely
     stays dispatch-eligible (``protocol.list_dispatchable`` treats
     ``pending``/``processing`` alike), but the *resident's own* pending
@@ -14837,7 +14837,7 @@ def _event_created_epoch(event: dict) -> float | None:
 def _event_queue_sort_key(event: dict) -> tuple[float, float]:
     """Queue order for the resident's own pending view — oldest first.
 
-    #1493 follow-on: file mtime alone is a proxy for age that any status
+    #1496 follow-on: file mtime alone is a proxy for age that any status
     write invalidates — a re-queue, a defer, a plain meta update all bump
     it, sending an event to the back of its own line (measured live: an
     event dispatched at 14:58:06Z sorted *after* one created 15:33:51Z

@@ -4952,7 +4952,7 @@ def _format_pending_events(
         rendered += 1
         bullets.append(f"- {eid}{src}{sep}")
         if ev.get("orphaned"):
-            # #1493 ("the event nobody could see"): daemon._pending_events_
+            # #1496 ("the event nobody could see"): daemon._pending_events_
             # for_agent only lets a `status: processing` event through this
             # filter when it proved the run that was dispatched to answer it
             # is dead. Marked here, explicitly — mixing it silently into

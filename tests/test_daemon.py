@@ -1540,7 +1540,7 @@ def _pending_processing_event(inbox, body="orphaned"):
 
 
 def test_pending_events_for_agent_surfaces_orphaned_processing_event(tmp_path):
-    """#1493 ("the event nobody could see") layer 2: a ``status:
+    """#1496 ("the event nobody could see") layer 2: a ``status:
     processing`` event survives even when layer 1's boot-time sweep never
     ran — a worker thread killed without the whole daemon dying (a
     SIGKILLed strand, a crashed subprocess the main loop survives) leaves
@@ -1611,7 +1611,7 @@ def test_pending_events_for_agent_hides_processing_event_with_no_run_id(tmp_path
 
 
 def test_pending_events_for_agent_orders_by_created_not_mtime(tmp_path):
-    """Steer fold-in (#1493): queue order is the event's own ``created``
+    """Steer fold-in (#1496): queue order is the event's own ``created``
     stamp, not file mtime — any later status/meta write bumps mtime and
     would otherwise send a retried event to the back of its own line.
     Reproduces the measured shape: the older (by ``created``) event's file
@@ -4621,7 +4621,7 @@ def test_interrupted_marker_retry_tail_follows_event_state(tmp_path):
 
 
 def test_interrupted_marker_resets_retry_eligible_event_to_pending(tmp_path):
-    """#1493 ("the event nobody could see") layer 1: a still-dispatchable
+    """#1496 ("the event nobody could see") layer 1: a still-dispatchable
     event left behind by an interrupted run must not stay invisible to the
     resident's own pending view, which filters strictly on
     ``status == "pending"`` (``_pending_events_for_agent``). Flipping it
