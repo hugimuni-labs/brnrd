@@ -5478,13 +5478,26 @@ def _pending_events_for_agent(
 
     events: list[dict] = []
     now_ts = time.time()
+    # Lazy, keyed by resolved ``.brr`` dir rather than by source: most
+    # events in a drawer are plain "pending" and never touch this, so the
+    # presence-dir scan only happens once a "processing" candidate actually
+    # needs it. Keying on the *resolved* dir (not the source drawer) matters
+    # for the account dispatch inbox below, where two events from the same
+    # drawer can resolve to two different repos.
+    live_run_ids_cache: dict[Path, set[str]] = {}
+
+    def _live_run_ids_for(brr_dir: Path) -> set[str]:
+        cached = live_run_ids_cache.get(brr_dir)
+        if cached is None:
+            cached = {
+                str(entry.get("run_id") or "")
+                for entry in presence.list_active(brr_dir, now=now_ts)
+            }
+            live_run_ids_cache[brr_dir] = cached
+        return cached
+
     for source_inbox, source_label, account_scoped in sources:
         source_brr_dir = source_inbox.parent
-        # Lazy — most events in a drawer are plain "pending" and never
-        # touch this, so the presence-dir scan only happens once a
-        # "processing" candidate actually needs it, and then once per
-        # source rather than once per event.
-        live_run_ids: set[str] | None = None
         for ev in protocol.list_pending(source_inbox):
             event_label = account.event_repo_label(ev)
             if repo_label and event_label and event_label != repo_label:
@@ -5512,15 +5525,25 @@ def _pending_events_for_agent(
                 # into what reads as fresh mail.
                 if ev.get("status") != "processing":
                     continue
-                if live_run_ids is None:
-                    live_run_ids = {
-                        str(entry.get("run_id") or "")
-                        for entry in presence.list_active(
-                            source_brr_dir, now=now_ts,
-                        )
-                    }
+                event_brr_dir = source_brr_dir
+                if account_scoped and account_context is not None:
+                    # The account dispatch drawer is not a repo's own
+                    # `.brr` dir — an unlabeled event living there can
+                    # still have been dispatched to any served repo
+                    # (`_repo_for_event`'s own cloud-thread-history /
+                    # inbox-path resolution, mirrored here), so the run
+                    # manifest to check lives under *that* repo, not under
+                    # the drawer itself.
+                    resolved_root, _resolved_label = _repo_for_event(
+                        account_context, ev,
+                        fallback_repo_root=account_context.default_repo.root,
+                        fallback_label=account_context.default_repo.label,
+                    )
+                    event_brr_dir = gitops.shared_brr_dir(resolved_root)
                 if not _processing_event_is_orphaned(
-                    ev, source_brr_dir, live_run_ids=live_run_ids, now=now_ts,
+                    ev, event_brr_dir,
+                    live_run_ids=_live_run_ids_for(event_brr_dir),
+                    now=now_ts,
                 ):
                     continue
                 # Visibly marked — never mixed silently into fresh mail.
