@@ -763,6 +763,19 @@ def test_await_errors_without_live_portal_state(tmp_path, capsys):
     assert "no live portal-state.json" in capsys.readouterr().err
 
 
+def test_await_explicit_bad_outbox_names_the_path(tmp_path, capsys):
+    """#1337: an explicit ``--outbox`` that resolves to no directory is a
+    caller mistake and must say so, distinct from the legitimate "no live
+    portal-state.json" read for an absent env-derived run above.
+    """
+    bad = tmp_path / "does-not-exist"
+
+    assert main(["await", "--outbox", str(bad)]) == 1
+    err = capsys.readouterr().err
+    assert "no such directory" in err
+    assert "no live portal-state.json" not in err
+
+
 def test_await_rejects_an_unparseable_timeout(tmp_path, capsys):
     outbox = _await_outbox(tmp_path)
 

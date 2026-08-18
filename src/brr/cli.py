@@ -1860,6 +1860,34 @@ def _wake_outbox_dir() -> Path | None:
     return hooks.HookContext(dict(os.environ)).outbox_dir
 
 
+def _resolve_explicit_outbox(raw: str) -> tuple[Path | None, str | None]:
+    """Absolutize and validate an *explicit* ``--outbox`` argument.
+
+    Call this only for a caller-typed ``--outbox`` value — never for the
+    env-derived fallback (``_wake_outbox_dir()``), which must stay lenient:
+    an absent live run there is a legitimate "nothing to report", and
+    ``do.read_portal_state`` is deliberately built to read that case as
+    absence rather than error. An *explicit* path that isn't a real
+    directory is unambiguously a caller mistake, so this fails loud, naming
+    the path it tried, instead of a relative ``Path`` surviving unresolved
+    into I/O and surfacing as a raw ``OSError`` traceback deep inside
+    ``tempfile.mkstemp`` (issue #1337).
+
+    Resolution base is deliberately left as plain ``Path.resolve()``
+    (process cwd) — *which* anchor a relative ``--outbox`` should resolve
+    against (cwd vs. a repo-root env var) is a design call out of scope for
+    this fix; this only turns a late, ugly crash into an early, named one
+    at the same resolved path.
+
+    Returns ``(path, None)`` on success, or ``(None, message)`` naming the
+    resolved path that failed the ``is_dir()`` check.
+    """
+    resolved = Path(raw).expanduser().resolve()
+    if not resolved.is_dir():
+        return None, f"--outbox {raw!r} resolved to {resolved} — no such directory"
+    return resolved, None
+
+
 def cmd_mood(args):
     """Resolve a feeling to a face and write `.mood` in one shot.
 
@@ -1893,7 +1921,13 @@ def cmd_mood(args):
     from . import hooks
 
     explicit = str(getattr(args, "outbox", "") or "").strip()
-    outbox_dir = Path(explicit) if explicit else _wake_outbox_dir()
+    if explicit:
+        outbox_dir, outbox_error = _resolve_explicit_outbox(explicit)
+        if outbox_error:
+            print(f"[brnrd mood] {outbox_error}. Nothing was written.", file=sys.stderr)
+            return 1
+    else:
+        outbox_dir = _wake_outbox_dir()
     if outbox_dir is None:
         print(
             "[brnrd mood] no run outbox in this environment — `brnrd mood` "
@@ -2693,7 +2727,14 @@ def cmd_do(args):
     notes = args.note or []
     has_verbs = bool(args.mood or notes or replies or gates or args.card)
 
-    outbox_dir = Path(args.outbox) if args.outbox else _wake_outbox_dir()
+    explicit_outbox = str(getattr(args, "outbox", "") or "").strip()
+    if explicit_outbox:
+        outbox_dir, outbox_error = _resolve_explicit_outbox(explicit_outbox)
+        if outbox_error:
+            print(f"[brnrd do] {outbox_error}. Nothing was staged.", file=sys.stderr)
+            return 1
+    else:
+        outbox_dir = _wake_outbox_dir()
 
     if not has_verbs:
         if outbox_dir is None:
@@ -4016,7 +4057,14 @@ def cmd_await(args):
 
     from . import do as do_mod
 
-    outbox_dir = Path(args.outbox) if args.outbox else _wake_outbox_dir()
+    explicit_outbox = str(getattr(args, "outbox", "") or "").strip()
+    if explicit_outbox:
+        outbox_dir, outbox_error = _resolve_explicit_outbox(explicit_outbox)
+        if outbox_error:
+            print(f"[brnrd await] {outbox_error}", file=sys.stderr)
+            return 1
+    else:
+        outbox_dir = _wake_outbox_dir()
     if outbox_dir is None:
         print(
             "[brnrd await] no run outbox in this environment — `brnrd await` "
@@ -4119,7 +4167,14 @@ def cmd_cut(args):
 
     from . import do as do_mod
 
-    outbox_dir = Path(args.outbox) if args.outbox else _wake_outbox_dir()
+    explicit_outbox = str(getattr(args, "outbox", "") or "").strip()
+    if explicit_outbox:
+        outbox_dir, outbox_error = _resolve_explicit_outbox(explicit_outbox)
+        if outbox_error:
+            print(f"[brnrd cut] {outbox_error}. Nothing was written.", file=sys.stderr)
+            return 1
+    else:
+        outbox_dir = _wake_outbox_dir()
     if outbox_dir is None:
         print(
             "[brnrd cut] no run outbox in this environment — `brnrd cut` "
