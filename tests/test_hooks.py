@@ -15,7 +15,7 @@ from brr import card, hooks, portals
 def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None, produce=None,
             resources=None, budget=None, outbound=None, card=None,
             name=None, current_event="evt-1", current_event_replyable=True,
-            notices=None, schedule=None):
+            notices=None, schedule=None, delivery=None):
     # ``current_event`` mirrors production: the daemon always writes the key,
     # set for an addressed run and None for an unaddressed one (a scheduled
     # wake). Pass ``current_event=None`` to model the unaddressed shape — the
@@ -59,6 +59,8 @@ def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None, produce=N
         payload["name"] = name
     if schedule is not None:
         payload["schedule"] = schedule
+    if delivery is not None:
+        payload["delivery"] = delivery
     path = tmp_path / "portal-state.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
@@ -801,15 +803,93 @@ def test_stop_gate_less_and_silent_names_body_only_stdout(tmp_path):
     # run — but with the true mechanic, not the addressed-run one: nobody
     # dispatches the final message, it is kept as the run's body only, and
     # the fix is a user gate rather than "end on the reply".
+    #
+    # No ``delivery`` block on this portal state (an older/partial payload,
+    # or a residency with nothing configured) — #1481's "none resolvable"
+    # case: the sentence must not name a gate it cannot back up.
     _portal(tmp_path, token="t1", pending=0, current_event_replyable=False)
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert "nothing communicated on any thread yet" in ctx
     assert "no gate owns this waking event" in ctx
     assert "body/message store only" in ctx
-    assert "gate: telegram" in ctx
+    assert "a configured user gate if this run has something to say" in ctx
+    assert "gate: telegram" not in ctx
+    assert "`gate:" not in ctx
     # The addressed-run promise must not leak into the gate-less wording.
     assert "dispatches your final message to the waking thread" not in ctx
+
+
+def test_stop_gate_less_and_silent_names_the_resolved_gate(tmp_path):
+    # #1481: the sentence names whichever gate ``delivery.gate`` actually
+    # resolves to on this run — the shape ``_live_delivery_projection``
+    # writes to ``portal-state.json`` in production, reproduced here rather
+    # than a bespoke fixture shape.
+    _portal(
+        tmp_path, token="t1", pending=0, current_event_replyable=False,
+        delivery={
+            "known": True, "would_land": True, "route": "gate-fallback",
+            "gate": "cloud", "already_delivered": False, "reason": None,
+        },
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "no gate owns this waking event" in ctx
+    assert "gate (`gate: cloud`) if this run has something to say" in ctx
+    assert "telegram" not in ctx
+
+
+def test_stop_gate_less_and_delivered_names_the_resolved_gate(tmp_path):
+    # Same live-resolved name, other call site (#1481): the routing-fact
+    # arm's ``Content the reader must see rides a `gate: <name>` delivery``
+    # sentence.
+    ctx = _stop(
+        tmp_path, token="t1", current_event_replyable=False,
+        outbound=_DELIVERED,
+        delivery={
+            "known": True, "would_land": True, "route": "gate-fallback",
+            "gate": "cloud", "already_delivered": True, "reason": None,
+        },
+    )
+    assert _ROUTING in ctx
+    assert "rides a `gate: cloud` delivery" in ctx
+    assert "telegram" not in ctx
+
+
+def test_stop_gate_less_and_delivered_names_no_gate_when_unresolvable(tmp_path):
+    # The load-bearing case: no gate resolves (an unconfigured residency,
+    # or one whose only gate can't currently deliver) ⇒ say "a configured
+    # gate" and invent no example, on the routing-fact arm this time.
+    ctx = _stop(
+        tmp_path, token="t1", current_event_replyable=False,
+        outbound=_DELIVERED,
+        delivery={
+            "known": True, "would_land": False, "route": "undeliverable",
+            "gate": None, "already_delivered": True,
+            "reason": "no gate owns cli events",
+        },
+    )
+    assert _ROUTING in ctx
+    assert "rides a configured gate delivery" in ctx
+    assert "telegram" not in ctx
+    assert "`gate:" not in ctx
+
+
+def test_stop_gate_name_resolution_does_not_move_the_firing_arm(tmp_path):
+    # #1481 only changes what a sentence names, never which sentence fires
+    # (the un-clearable-nag reasoning in #728/#1142/#562 is not this
+    # change's to touch). A gate-owned, addressed run must keep the
+    # addressed-run wording regardless of what ``delivery.gate`` says.
+    ctx = _stop(
+        tmp_path, token="t1", current_event_replyable=True,
+        delivery={
+            "known": True, "would_land": True, "route": "dispatch-edge",
+            "gate": "cloud", "already_delivered": False, "reason": None,
+        },
+    )
+    assert "dispatches your final message to the waking thread" in ctx
+    assert "no gate owns this waking event" not in ctx
+    assert _ROUTING not in ctx
 
 
 def test_stop_gate_owned_event_keeps_addressed_wording(tmp_path):

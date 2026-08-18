@@ -491,6 +491,30 @@ def _stop_is_gate_less(portal: dict[str, Any]) -> bool:
     )
 
 
+def _stop_gate_name(portal: dict[str, Any]) -> str:
+    """The gate name the closeout capsule's delivery block may cite (#1481).
+
+    ``portal["delivery"]["gate"]`` is ``daemon._live_delivery_projection``'s
+    own resolved answer to "which gate would actually carry a mid-run
+    ``gate:`` directive on this run's config, right now" — the same
+    question the two hardcoded-``telegram`` sentences below used to answer
+    with a literal instead of a fact. Reusing that field (rather than
+    re-deriving from ``.brr/gates/`` on disk) keeps this in step with the
+    same runtime resolution the routing sentences around it describe,
+    including cases where a gate is configured but currently can't
+    deliver.
+
+    Empty string when nothing resolves — the caller drops the example
+    rather than inventing one: a named instruction that is wrong is worse
+    than an unnamed one the reader looks up.
+    """
+    delivery = (
+        portal.get("delivery") if isinstance(portal.get("delivery"), dict) else {}
+    )
+    name = delivery.get("gate")
+    return name.strip() if isinstance(name, str) and name.strip() else ""
+
+
 def _stop_no_reply_due(portal: dict[str, Any]) -> bool:
     """True when the closeout will render the "no reply yet" line (#1142).
 
@@ -3292,12 +3316,18 @@ def format_delta(
         # addressed-run behavior rather than inventing a gate-less run.
         gate_less = replyable is False
         if not any_delivery:
+            # #1481: the example directive names whichever gate
+            # ``delivery.gate`` actually resolves to on this run, not a
+            # literal — an unresolvable gate drops the parenthetical
+            # rather than naming one that would only be refused.
+            gate_name = _stop_gate_name(payload)
+            gate_example = f" (`gate: {gate_name}`)" if gate_name else ""
             lines.append(
                 "- delivery: nothing communicated on any thread yet — no "
                 "gate owns this waking event, so nothing dispatches your "
                 "final message: it is captured to the response path as this "
                 "run's body/message store only. Report on a configured user "
-                "gate (`gate: telegram`) if this run has something to say. A "
+                f"gate{gate_example} if this run has something to say. A "
                 "run that ends silent everywhere is surfaced as a failure."
                 if gate_less else
                 # #743. This used to end "end on the reply itself (no outbox
@@ -3399,12 +3429,16 @@ def format_delta(
             # gate delivery re-renders the briefing, and an unlatched line
             # would nag hardest at the runs delivering most. That is #562's
             # exact signature.
+            # #1481: same live-resolved gate name as the silence arm above —
+            # "configured gate" with no example when nothing resolves.
+            gate_name = _stop_gate_name(payload)
+            gate_clause = f"`gate: {gate_name}`" if gate_name else "configured gate"
             lines.append(
                 "- delivery: routing fact, stated once — no gate owns this "
                 "waking event, so nothing dispatches your final message "
                 "however much has already gone out: stdout is captured to "
                 "the response path as this run's body/message store only. "
-                "Content the reader must see rides a `gate: telegram` "
+                f"Content the reader must see rides a {gate_clause} "
                 "delivery, and the closeout is not exempt. Not a chore — "
                 "this is the run's topology and cannot be cleared."
             )
