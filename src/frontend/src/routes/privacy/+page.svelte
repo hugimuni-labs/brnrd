@@ -35,7 +35,25 @@
 	// collects a billing email directly from the payer at checkout instead of
 	// receiving one forwarded by us. §8's tombstone list dropped "email"
 	// accordingly (the column is never populated to begin with now).
-	const LAST_UPDATED = '2026-08-16';
+	// 2026-08-18 (w-63): correctness pass naming the stored class where the
+	// opt-in is given. Three gaps, all of them the same shape — a mechanism
+	// stated somewhere else in the tree and not here:
+	//   §3 named only the daemon-local `publish.layers` and not the
+	//     server-side per-repo consent recorded at connect (default `none`,
+	//     `publish_scope.py:46`), and listed run *bodies* without the run
+	//     state and message transcripts that ship in the same slice
+	//     (`src/brr/account.py:1136`, `src/brr/message_store.py:149`).
+	//   §4's message-text row read as if null-after-reply were the whole
+	//     retention. With the corpus lane on, the same text is also part of
+	//     the mirrored run page for the run-mirror window — SECURITY.md and
+	//     /beta-hosted-execution both say so; this table did not.
+	//   §4's mirror and telemetry rows omitted the consent-narrowing purge
+	//     (`publish_scope.py:296-318`) and the fact that a snapshot has no
+	//     timer of its own — a daemon that stops publishing leaves its last
+	//     one standing.
+	// No duration changed, and no new commitment was made: every sentence
+	// added states a mechanism that already exists in the code.
+	const LAST_UPDATED = '2026-08-18';
 </script>
 
 <svelte:head><title>brnrd privacy notice</title></svelte:head>
@@ -187,14 +205,24 @@
 						<p>
 							If you run <code class="font-mono text-xs text-amber-200">brnrd account connect</code
 							>, your daemon publishes snapshots so the dashboard can render: your work-surface and
-							knowledge pages and per-run bodies as whole Markdown documents; a ledger of finished
-							runs with commit subjects, branch names, file paths on your machine and the agent's
-							own prose summary; the live progress note of each running thought; your runner
-							catalogue; and your quota windows, which include real billing figures from your model
-							provider and reset labels carrying your timezone. What may be mirrored at all is yours
-							to bound with
-							<code class="font-mono text-xs text-amber-200">publish.layers</code>; the full
-							lane-by-lane inventory is in our public
+							knowledge pages, and per-run bodies, run state and the message transcripts inside each
+							run, as whole Markdown documents; a ledger of finished runs with commit subjects,
+							branch names, file paths on your machine and the agent's own prose summary; the live
+							progress note of each running thought; your runner catalogue; and your quota windows,
+							which include real billing figures from your model provider and reset labels carrying
+							your timezone.
+						</p>
+						<p class="mt-2">
+							Two independent controls bound what may be mirrored at all, and they have opposite
+							defaults, which is worth knowing before you rely on either.
+							<code class="font-mono text-xs text-amber-200">publish.layers</code> in your own
+							<code class="font-mono text-xs text-amber-200">.brr/config</code> governs what your
+							daemon collects, and unset it collects everything. The
+							<strong class="text-stone-200">publish scope you record per repository</strong> when
+							you connect it is the second, and we re-check it on our side at every publish: a
+							brand-new connect defaults to <strong class="text-stone-200">none</strong>, so a
+							repository mirrors nothing until you widen it, and one that never recorded a scope
+							stays paused rather than open. The full lane-by-lane inventory is in our public
 							<a
 								class="text-sky-400 underline"
 								href="https://github.com/hugimuni-labs/brnrd/blob/main/SECURITY.md"
@@ -246,8 +274,12 @@
 							<tr class="border-b border-stone-900">
 								<td class="py-2 pr-4">The text of a message you sent through a gate</td>
 								<td class="py-2"
-									>Erased the moment your daemon's reply is delivered. If nothing ever answers it,
-									erased after {TTL_QUEUED_BODY_DAYS} days.</td
+									>Erased from the relay queue the moment your daemon's reply is delivered. If
+									nothing ever answers it, erased after {TTL_QUEUED_BODY_DAYS} days.
+									<strong class="text-stone-200">Read this row with the mirror row below.</strong>
+									If your daemon mirrors run pages, the same message text is also part of the mirrored
+									run page and stays there for the run-mirror window. On a connected daemon that window,
+									not this erasure, is the effective retention for message text.</td
 								>
 							</tr>
 							<tr class="border-b border-stone-900">
@@ -271,8 +303,11 @@
 								<td class="py-2 pr-4">Dashboard mirror — your pages and run bodies</td>
 								<td class="py-2"
 									>No timer. It is a cache, replaced wholesale each time your daemon publishes, and
-									deleted in full when your last repository is disconnected. Your daemon stops
-									mirroring run pages older than {TTL_RUN_MIRROR_DAYS} days by default.</td
+									deleted in full when your last repository is disconnected. Narrowing a
+									repository's publish scope deletes the part you withdrew straight away, in the
+									same database transaction as the change itself. Your daemon stops mirroring run
+									pages older than {TTL_RUN_MIRROR_DAYS} days by default — that bound is on run pages
+									only, and your work-surface and knowledge pages have no age bound at all.</td
 								>
 							</tr>
 							<tr class="border-b border-stone-900">
@@ -286,7 +321,11 @@
 								<td class="py-2 pr-4"
 									>Daemon telemetry — runners, quota, live runs, progress notes</td
 								>
-								<td class="py-2">Overwritten by the next publish. No history is kept.</td>
+								<td class="py-2"
+									>Overwritten by the next publish; no history is kept. There is no timer on it
+									either — if your daemon stops publishing, the last snapshot stands until you
+									narrow the scope, disconnect the repository, or delete the account.</td
+								>
 							</tr>
 							<tr class="border-b border-stone-900">
 								<td class="py-2 pr-4">Your sign-in session</td>
