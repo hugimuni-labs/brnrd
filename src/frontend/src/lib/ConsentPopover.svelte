@@ -77,9 +77,20 @@
 				aria-label="close">close</button
 			>
 		</div>
+		<!-- The stored class, named where the opt-in is given (w-63). "Renders
+		     there" was true and incomplete: the payload is not drawn and dropped,
+		     it is stored — `Account.surface_json` for the corpus lane, the `Daemon`
+		     row for the other six — with no timer of its own. What ends it is an
+		     act, not a clock: narrowing this scope purges the withdrawn part in the
+		     same transaction as the consent change (`publish_scope.py:296-318`),
+		     and disconnecting clears the rest (`_session.py:786-791`). A consent
+		     dialog that names the leaving but not the keeping asks for the wrong
+		     permission. -->
 		<p class="mt-2 text-stone-400">
 			Enabling this here shares <strong class="text-stone-200">{shareClause}</strong> with your brnrd.dev
-			dashboard — it leaves this machine and renders there, unredacted, for this account.
+			dashboard — it leaves this machine and is stored there, unredacted, for this account. There is no
+			timer on it: each publish replaces the last copy, and what deletes it is narrowing this scope again
+			or disconnecting the repo.
 		</p>
 		{#if gaps.length === 0}
 			<p class="mt-3 text-stone-400">
