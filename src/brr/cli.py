@@ -3799,6 +3799,10 @@ def cmd_runners_doctor(args):
                 f"(shell={r.get('shell')})"
             )
 
+    idle_sleep_warning = runner_mod.idle_sleep_doctor_warning()
+    if idle_sleep_warning:
+        issues.append(idle_sleep_warning)
+
     if not issues:
         print("brnrd runners doctor: catalog is healthy ✓")
         return 0
