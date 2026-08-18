@@ -237,6 +237,33 @@ def test_view_branch_url_honors_overrides_together():
     assert url == "https://git.internal.example.com/team/repo/-/tree/brr/feature"
 
 
+def test_view_branch_url_repo_path_overrides_origin():
+    """#1461: same shape as ``commit_url``/``thread_url``/``pull_request_url``
+    — the forge kind/host still come from origin, but ``owner/repo`` follows
+    *repo_path* when given, for a branch that lives in a sibling project."""
+    url = forges.view_branch_url(
+        "git@github.com:Gurio/brr.git", "brr/feature", "hugimuni-labs/sibling",
+    )
+    assert url == "https://github.com/hugimuni-labs/sibling/tree/brr/feature"
+
+
+def test_view_branch_url_repo_path_none_keeps_origin():
+    """No *repo_path* ⇒ origin's own owner/repo, unchanged from every caller's
+    prior behaviour (a local branch is always this checkout's own)."""
+    assert forges.view_branch_url(
+        "git@github.com:Gurio/brr.git", "brr/feature",
+    ) == "https://github.com/Gurio/brr/tree/brr/feature"
+
+
+def test_view_branch_url_malformed_repo_path_falls_back_to_origin():
+    """A *repo_path* with no ``/`` (unparseable) degrades to origin rather
+    than emitting a broken URL — same tolerance ``commit_url`` applies."""
+    url = forges.view_branch_url(
+        "git@github.com:Gurio/brr.git", "main", "noslash",
+    )
+    assert url == "https://github.com/Gurio/brr/tree/main"
+
+
 def test_view_branch_url_url_base_strips_scheme_and_slash():
     """``forge.url_base = https://gitlab.example.com/`` and ``gitlab.example.com``
     must both produce the same URL — the function normalises the input."""

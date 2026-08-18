@@ -1,7 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { connectRepo, setPublishLayers, splitPairingCommand, telegramPairLabel } from './repos.ts';
+import {
+	connectRepo,
+	mintAccountMessengerPair,
+	fetchPairedChats,
+	fetchPairStatus,
+	mintAccountTelegramPair,
+	ReposAuthError,
+	revokePairedChat,
+	setPublishLayers,
+	splitPairingCommand,
+	telegramPairLabel
+} from './repos.ts';
 
 function fakeFetch(status: number, body: unknown): typeof fetch {
 	const calls: { url: string; init?: RequestInit }[] = [];
@@ -93,4 +104,162 @@ test('telegramPairLabel: paired and idle reads the disclosed "re-pair"', () => {
 
 test('telegramPairLabel: paired and busy reads "re-pairing"', () => {
 	assert.equal(telegramPairLabel(true, true), 're-pairing Telegram');
+});
+
+// #1457 — the account-level mint the mobile cold-start CTA calls, distinct
+// from the repo-scoped `pairRepoTelegram` above (`/v1/repos/<id>/telegram-
+// pair`, 404s with no connected repo). No body, session-cookie auth only.
+test('mintAccountTelegramPair posts to the account-level endpoint with no body', async () => {
+	const impl = fakeFetch(200, {
+		pair_code: 'ABCD1234',
+		instructions: 'send /start ABCD1234',
+		deep_link: 'https://t.me/brnrdbot?start=ABCD1234'
+	});
+	const result = await mintAccountTelegramPair(impl);
+	assert.equal(calls(impl)[0].url, '/v1/dashboard/telegram-pair');
+	assert.equal(calls(impl)[0].init?.method, 'POST');
+	assert.equal(calls(impl)[0].init?.body, undefined);
+	assert.deepEqual(result, {
+		pair_code: 'ABCD1234',
+		instructions: 'send /start ABCD1234',
+		deep_link: 'https://t.me/brnrdbot?start=ABCD1234'
+	});
+});
+
+// A bot handle that failed #1242's shape check server-side mints a code
+// with no deep link — the caller (ColdStart.svelte) falls back to showing
+// the code itself, so the wire shape allowing `deep_link: null` must round
+// trip untouched, not get coerced into an empty string or dropped.
+test('mintAccountTelegramPair carries a null deep_link through untouched', async () => {
+	const impl = fakeFetch(200, {
+		pair_code: 'WXYZ5678',
+		instructions: 'send /start WXYZ5678',
+		deep_link: null
+	});
+	const result = await mintAccountTelegramPair(impl);
+	assert.equal(result.deep_link, null);
+});
+
+test('mintAccountTelegramPair raises ReposAuthError on 401', async () => {
+	const impl = fakeFetch(401, { detail: 'unauthenticated' });
+	await assert.rejects(() => mintAccountTelegramPair(impl), ReposAuthError);
+});
+
+test('mintAccountTelegramPair raises on a non-401 error status', async () => {
+	const impl = fakeFetch(503, { detail: 'could not allocate pair code' });
+	await assert.rejects(() => mintAccountTelegramPair(impl), /telegram pair mint failed: 503/);
+});
+
+// #1465 — the registry-generalized mint ColdStart's messenger door actually
+// calls now: one endpoint, a `platform` body, any connector the wire's
+// `messenger_doors` declared `deep_link_available` for.
+test('mintAccountMessengerPair posts the platform in the body', async () => {
+	const impl = fakeFetch(200, {
+		pair_code: 'ABCD1234',
+		instructions: 'text ABCD1234 to your brnrd WhatsApp number',
+		deep_link: 'https://wa.me/15551234567?text=ABCD1234',
+		platform: 'whatsapp'
+	});
+	const result = await mintAccountMessengerPair('whatsapp', impl);
+	assert.equal(calls(impl)[0].url, '/v1/dashboard/pair');
+	assert.equal(calls(impl)[0].init?.method, 'POST');
+	assert.deepEqual(JSON.parse(String(calls(impl)[0].init?.body)), { platform: 'whatsapp' });
+	assert.equal(result.platform, 'whatsapp');
+	assert.equal(result.deep_link, 'https://wa.me/15551234567?text=ABCD1234');
+});
+
+test('mintAccountMessengerPair carries a null deep_link through untouched', async () => {
+	const impl = fakeFetch(200, {
+		pair_code: 'WXYZ5678',
+		instructions: 'send /start WXYZ5678',
+		deep_link: null,
+		platform: 'telegram'
+	});
+	const result = await mintAccountMessengerPair('telegram', impl);
+	assert.equal(result.deep_link, null);
+});
+
+test('mintAccountMessengerPair raises ReposAuthError on 401', async () => {
+	const impl = fakeFetch(401, { detail: 'unauthenticated' });
+	await assert.rejects(() => mintAccountMessengerPair('telegram', impl), ReposAuthError);
+});
+
+test('mintAccountMessengerPair raises on a non-401 error status, naming the platform', async () => {
+	const impl = fakeFetch(409, {
+		detail: 'slack has no deep-link door configured on this deployment'
+	});
+	await assert.rejects(
+		() => mintAccountMessengerPair('slack', impl),
+		/slack pair mint failed: 409/
+	);
+});
+// #1464 — the minting session's outcome readback: ColdStart polls this by
+// the pair_code it just minted, keyed to whoever's session minted it.
+test('fetchPairStatus reads the code as a path segment', async () => {
+	const impl = fakeFetch(200, { consumed: false, display: null });
+	const result = await fetchPairStatus('PK-AB12', impl);
+	assert.equal(calls(impl)[0].url, '/v1/dashboard/pair/PK-AB12');
+	assert.deepEqual(result, { consumed: false, display: null });
+});
+
+test('fetchPairStatus carries the redeemed display through untouched', async () => {
+	const impl = fakeFetch(200, { consumed: true, display: '@ada_l' });
+	const result = await fetchPairStatus('PK-AB12', impl);
+	assert.deepEqual(result, { consumed: true, display: '@ada_l' });
+});
+
+test('fetchPairStatus raises ReposAuthError on 401', async () => {
+	const impl = fakeFetch(401, { detail: 'unauthenticated' });
+	await assert.rejects(() => fetchPairStatus('PK-AB12', impl), ReposAuthError);
+});
+
+test('fetchPairStatus raises on a non-401 error status (e.g. a code minted by another account)', async () => {
+	const impl = fakeFetch(404, { detail: 'unknown pair code' });
+	await assert.rejects(() => fetchPairStatus('PK-AB12', impl), /pair status fetch failed: 404/);
+});
+
+// #1464 — the paired-chats list: platform / chat title / principal display
+// / paired-at, one row per ChannelRoute.
+test('fetchPairedChats reads the account-scoped list endpoint', async () => {
+	const impl = fakeFetch(200, {
+		paired_chats: [
+			{
+				id: 'chan_1',
+				platform: 'telegram',
+				chat_title: null,
+				principal_display: '@ada_l',
+				paired_at: '2026-08-17T20:00:00+00:00',
+				paired_at_label: '5m ago',
+				repo_full_name: null
+			}
+		]
+	});
+	const result = await fetchPairedChats(impl);
+	assert.equal(calls(impl)[0].url, '/v1/dashboard/paired-chats');
+	assert.equal(result.paired_chats.length, 1);
+	assert.equal(result.paired_chats[0].principal_display, '@ada_l');
+});
+
+test('fetchPairedChats raises ReposAuthError on 401', async () => {
+	const impl = fakeFetch(401, { detail: 'unauthenticated' });
+	await assert.rejects(() => fetchPairedChats(impl), ReposAuthError);
+});
+
+// #1464 — revoke deletes the ChannelRoute outright (kills the principal,
+// not #1459's repo-unpin); a DELETE with no body.
+test('revokePairedChat DELETEs the route by id, escaped as a path segment', async () => {
+	const impl = fakeFetch(200, { ok: true });
+	await revokePairedChat('chan/../x', impl);
+	assert.equal(calls(impl)[0].url, '/v1/dashboard/paired-chats/chan%2F..%2Fx');
+	assert.equal(calls(impl)[0].init?.method, 'DELETE');
+});
+
+test('revokePairedChat raises ReposAuthError on 401', async () => {
+	const impl = fakeFetch(401, { detail: 'unauthenticated' });
+	await assert.rejects(() => revokePairedChat('chan_1', impl), ReposAuthError);
+});
+
+test('revokePairedChat raises on a non-401 error status (e.g. a route owned by another account)', async () => {
+	const impl = fakeFetch(404, { detail: 'paired chat not found' });
+	await assert.rejects(() => revokePairedChat('chan_1', impl), /revoke failed: 404/);
 });
