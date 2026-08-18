@@ -32,6 +32,18 @@ Two palettes, both his:
 The first ties the parent to the product; the second lets the parent stand
 apart. That is the actual decision underneath the colour question.
 
+**Where the crossings sit is geometry, not taste.** A straight leg crosses a
+vertical exactly once, so the stems alone can only weave the mark in one band.
+Six crossings need three strokes doing the work: the legs cross the stems high,
+the bar crosses the stems at its own height, and the bar crosses the legs low —
+which is why `CROSS` sits at 302 rather than at the optical middle. Move the bar
+up and the bottom half comes apart; that was the first draft's actual defect,
+and no amount of widening the M fixed it.
+
+The M levels with the stems rather than overshooting them: same cap height,
+same feet, one silhouette. Only the valley drops below, which is the single
+place the mark is allowed to break its own box.
+
 One trap, the same family as the brnrd mark's: **`mix-blend-mode` has to sit on
 the drawing group, not only on the isolating parent.** A parent alone
 establishes the group and blends it against the page, leaving its children in
