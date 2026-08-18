@@ -447,6 +447,13 @@ class _PlaywrightDriver:
         self._pw: Any = None
         self._context: Any = None
         self._page: Any = None
+        # Set by `_goto_composer`; `click_send` refuses to guess without
+        # them. `None` is the honest pre-open state — a send that reaches
+        # this class without a composer having been opened is a bug, and it
+        # should read as one rather than fall through to a page-wide
+        # `.first` on a send button.
+        self._composer_scope: Any = None
+        self._send_testid: str | None = None
 
     def __enter__(self) -> "_PlaywrightDriver":
         self._paths.profile_dir.mkdir(parents=True, exist_ok=True)
@@ -585,6 +592,23 @@ class _PlaywrightDriver:
         box = self._page.locator('[data-testid="tweetTextarea_0"]').first
         box.wait_for(state="visible", timeout=COMPOSER_TIMEOUT_MS)
         box.click()
+        # Remember *which* composer this is, so `click_send` presses this
+        # one's button and not another on the same page. The compose modal
+        # is a `[role="dialog"]` rendered over the live home timeline —
+        # and that timeline carries its own inline composer, with its own
+        # `tweetButtonInline`, which Playwright considers perfectly
+        # visible even behind an overlay. Scoping is not
+        # tidiness here: an unscoped `.first` on a *send* button is a
+        # public act aimed by DOM order.
+        dialog = self._page.locator(
+            '[role="dialog"]:has([data-testid="tweetTextarea_0"])'
+        ).first
+        if dialog.count():
+            self._composer_scope = dialog
+            self._send_testid = "tweetButton"
+        else:
+            self._composer_scope = self._page
+            self._send_testid = "tweetButtonInline"
 
     def _dismiss_consent(self) -> None:
         """Answer X's cookie banner, or every click on the page is swallowed.
@@ -657,22 +681,28 @@ class _PlaywrightDriver:
     def click_send(self) -> str | None:
         """Click send; best-effort return the new post's id.
 
-        **Two buttons, because there are two composers.** The inline reply
+        **Two buttons, because there are two composers — and the choice
+        is made where the composer was opened, not here.** The inline reply
         box under a focal post carries ``tweetButtonInline``; the
-        full-screen compose modal carries ``tweetButton``. Try the inline
-        one first — :meth:`open_reply_composer` deliberately uses the
-        inline box, since the modal behind a page's reply button can belong
-        to a quoted post rather than the one the caller named — and keep
-        the modal button as the fallback so the compose lane and any caller
-        that opened a modal another way still sends.
+        full-screen compose modal carries ``tweetButton``.
+        :meth:`_goto_composer` records which one it opened and the element
+        that scopes it, and this method presses that. Trying one testid
+        page-wide and falling back to the other is the version that ships a
+        public misfire: the compose modal renders over the live home
+        timeline, whose own inline composer carries ``tweetButtonInline``
+        and is "visible" to a query that does not know an overlay is on top
+        of it. ``.first`` on a *send* button is aiming by DOM order.
 
         X shows a confirmation toast with a "View" link to the new post
         (``.../status/<id>``) after a send. This is read on a short timeout
-        and the id parsed out of it when present — but the toast is UI, not
-        an API contract, and it is unverified against a live send (no test
-        here is allowed to actually post). Anything short of a clean href
-        returns ``None`` rather than guessing: the receipt this feeds must
-        be able to say "no id" honestly.
+        and the id parsed out of it when present. The toast is UI, not an
+        API contract, and no test here is allowed to actually post — so it
+        was verified the only way left: a live send on 2026-08-18T00:11Z
+        returned ``2089505353159381235``, and reading that id back gave the
+        posted text, this account as author, and a timestamp one second off
+        the receipt's. Anything short of a clean href returns ``None``
+        rather than guessing: the receipt this feeds must be able to say
+        "no id" honestly.
 
         **The href is scoped to the toast, never to the page.** A bare
         ``a[href*="/status/"]`` search takes ``.first`` across the whole
@@ -682,12 +712,24 @@ class _PlaywrightDriver:
         is only honest if the alternative cannot be a *wrong* id. Same
         defect class as the reply button above, one layer over.
         """
-        inline = self._page.locator('[data-testid="tweetButtonInline"]').first
+        if self._composer_scope is None or self._send_testid is None:
+            raise RuntimeError(
+                "click_send called before a composer was opened — "
+                "open_reply_composer/open_post_composer record which button "
+                "belongs to which composer, and pressing one without that is "
+                "aiming a public act by DOM order"
+            )
+        scope, testid = self._composer_scope, self._send_testid
+        button = scope.locator(f'[data-testid="{testid}"]').first
         try:
-            inline.wait_for(state="visible", timeout=5000)
-            inline.click()
-        except Exception:  # noqa: BLE001 - not the inline composer, then
-            self._page.locator('[data-testid="tweetButton"]').first.click()
+            button.wait_for(state="visible", timeout=5000)
+            button.click()
+        except Exception:  # noqa: BLE001 - fall back to the other composer's button
+            scope.locator(
+                '[data-testid="tweetButton"]'
+                if testid == "tweetButtonInline"
+                else '[data-testid="tweetButtonInline"]'
+            ).first.click()
         try:
             href = (
                 self._page.locator('[data-testid="toast"]')
