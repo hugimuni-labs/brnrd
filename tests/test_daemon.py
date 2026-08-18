@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from brr import daemon, envs, presence, promises, protocol, release_availability
+from brr import runner_failures
 from brr import schedule as schedule_mod
 from brr.run import Run
 from brr.runner import RunnerResult
@@ -4498,6 +4499,60 @@ def test_interrupted_marker_retry_tail_follows_event_state(tmp_path):
     fm = protocol.parse_frontmatter(
         Path(event["_path"]).read_text(encoding="utf-8"))
     assert fm.get("status") == "error"
+
+
+def test_interrupted_marker_stamps_retry_provenance_on_the_event(tmp_path):
+    """#1491: the run that eventually picks this event back up must be
+    able to say *why* it's a retry. The manifest fields
+    (``failure_kind``/``interrupted_at``) die with the old run's own
+    record; only a write onto the event itself survives the redispatch."""
+    event, task = _frozen_run(tmp_path, conv_key="telegram:101:")
+    ctx = daemon.account.resolve_context(tmp_path, {})
+
+    assert daemon._mark_interrupted_runs(ctx, tmp_path, {}) == 1
+
+    fm = protocol.parse_frontmatter(
+        Path(event["_path"]).read_text(encoding="utf-8"))
+    assert fm.get("retry_of") == task.id
+    assert fm.get("retry_reason") == "host_interrupted"
+
+
+def test_interrupted_marker_leaves_no_retry_stamp_on_a_retired_event(tmp_path):
+    """The counterpart of ``…retry_tail_follows_event_state``: an event
+    that is no longer dispatchable gets no retry-provenance write either —
+    stamping "retry of" onto an event nothing will ever redispatch would
+    be a fact about a retry that never happens."""
+    event, _task = _frozen_run(tmp_path, conv_key="telegram:103:")
+    ctx = daemon.account.resolve_context(tmp_path, {})
+    protocol.set_status(event, "error")
+
+    assert daemon._mark_interrupted_runs(ctx, tmp_path, {}) == 1
+
+    fm = protocol.parse_frontmatter(
+        Path(event["_path"]).read_text(encoding="utf-8"))
+    assert "retry_of" not in fm
+    assert "retry_reason" not in fm
+
+
+def test_record_retry_provenance_accumulates_additively(tmp_path):
+    """An event interrupted more than once keeps both prior attempts —
+    comma-joined, positionally paired — rather than the second overwriting
+    the first. Re-stamping the same run id is a no-op, not a duplicate."""
+    event, _task = _frozen_run(tmp_path, conv_key="telegram:104:")
+
+    daemon._record_retry_provenance(event, "run-A", runner_failures.HOST_INTERRUPTED)
+    daemon._record_retry_provenance(event, "run-B", runner_failures.TIMED_OUT)
+
+    assert event.get("retry_of") == "run-A,run-B"
+    assert event.get("retry_reason") == "host_interrupted,timed_out"
+
+    daemon._record_retry_provenance(event, "run-B", runner_failures.TIMED_OUT)
+    assert event.get("retry_of") == "run-A,run-B", "re-stamping must not duplicate"
+
+    fm = protocol.parse_frontmatter(
+        Path(event["_path"]).read_text(encoding="utf-8"))
+    assert fm.get("retry_of") == "run-A,run-B"
+    assert fm.get("retry_reason") == "host_interrupted,timed_out"
 
 
 def _account_context_for_policy(tmp_path):

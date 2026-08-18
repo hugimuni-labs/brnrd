@@ -158,6 +158,7 @@ def format_retry_note(retry_of: str | None, retry_reason: str | None) -> str | N
     noun = "retry of" if len(parts) == 1 else "retries of (in order)"
     return f"{noun} {', '.join(parts)}"
 
+
 # ── Authority layers (ordered most → least authoritative) ─────────────────────
 
 AUTHORITY_CONTRACT = "contract"    # product-owned operational contract (run.md, weave.md)

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time as _time
 from pathlib import Path
 
 from brr import continuity as cont_mod
@@ -31,7 +32,10 @@ from brr.bootscore import (
     BootHost,
     BootScore,
     ContractEntry,
+    event_age_seconds,
+    format_event_age,
     format_kernel,
+    format_retry_note,
 )
 
 
@@ -77,6 +81,124 @@ def test_attention_line_names_the_gate_not_the_runner() -> None:
     # The exact shape of the original bug: the runner note leaking onto the
     # attention line, where it asserted a falsehood in the wake's hottest slot.
     assert "spool rack" not in att
+
+
+# ── Wake age and retry provenance (#1491) ──────────────────────────────────
+#
+# A run couldn't tell a six-hour-old message from a live one: the wake
+# carried no event timestamp anywhere. #1491's own measurement — an
+# `evt-…-bpgk` sent 14:58:06Z, woken at 21:04:03Z (6h06m) — is used verbatim
+# below as the canonical stale case.
+
+
+def test_event_age_seconds_parses_and_degrades_on_bad_input() -> None:
+    assert event_age_seconds(None) is None
+    assert event_age_seconds("") is None
+    assert event_age_seconds("not-a-timestamp") is None
+    now = 1_800_000_000.0
+    created = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(now - 3661))
+    age = event_age_seconds(created, now=now)
+    assert age is not None
+    assert abs(age - 3661) < 1.5
+
+
+def test_format_event_age_below_threshold_is_the_stamp_alone() -> None:
+    # Below EVENT_AGE_STALE_SECONDS: the stamp reads as "just now" to anyone
+    # glancing at a clock, so the common (fresh-event) path stays quiet —
+    # no elapsed half, no wording.
+    rendered = format_event_age("2026-08-18T21:33:00Z", 12.0)
+    assert rendered == "sent 2026-08-18T21:33:00Z"
+
+
+def test_format_event_age_above_threshold_names_elapsed_and_cause() -> None:
+    rendered = format_event_age("2026-08-18T14:58:06Z", 6 * 3600 + 6 * 60)
+    assert rendered == (
+        "sent 2026-08-18T14:58:06Z (6h06m ago) — the daemon was only "
+        "asleep; this reached you late, not live"
+    )
+
+
+def test_format_event_age_none_when_unknown() -> None:
+    assert format_event_age(None, None) is None
+    assert format_event_age("2026-08-18T21:33:00Z", None) is None
+
+
+def test_format_retry_note_single_multiple_and_absent() -> None:
+    assert format_retry_note(None, None) is None
+    assert (
+        format_retry_note("run-260818-1834-lcu3", "host_interrupted")
+        == "retry of run-260818-1834-lcu3 (host interrupt)"
+    )
+    assert format_retry_note("run-A,run-B", "host_interrupted,timed_out") == (
+        "retries of (in order) run-A (host interrupt), run-B (timed out)"
+    )
+    # An unmapped reason still renders (underscores turned to spaces)
+    # rather than silently dropping the fact.
+    assert (
+        format_retry_note("run-A", "provider_error")
+        == "retry of run-A (provider error)"
+    )
+    # No reason recorded still names the run.
+    assert format_retry_note("run-A", None) == "retry of run-A"
+
+
+def test_attention_line_stale_event_renders_age_and_soft_language() -> None:
+    """The regression this issue names, pinned at the kernel: past the
+    threshold the attention line must not leave the reader to do
+    arithmetic, and must say *why* in words a skim won't miss."""
+    out = _kernel(
+        attention=BootAttention(
+            event_ids=("evt-1787065086940542000-bpgk",),
+            source_gate="telegram",
+            created="2026-08-18T14:58:06Z",
+            age_seconds=6 * 3600 + 6 * 60,
+        ),
+    )
+    att = next(ln for ln in out.splitlines() if ln.startswith("attention:"))
+    assert "via telegram" in att
+    assert "sent 2026-08-18T14:58:06Z" in att
+    assert "6h06m ago" in att
+    assert "daemon was only asleep" in att
+
+
+def test_attention_line_fresh_event_stays_quiet() -> None:
+    """The common path: a fresh event renders neither an elapsed age nor
+    the threshold wording — the stamp alone is enough."""
+    out = _kernel(
+        attention=BootAttention(
+            event_ids=("evt-fresh",),
+            source_gate="telegram",
+            created="2026-08-18T21:33:00Z",
+            age_seconds=12.0,
+        ),
+    )
+    att = next(ln for ln in out.splitlines() if ln.startswith("attention:"))
+    assert "sent 2026-08-18T21:33:00Z" in att
+    assert "ago" not in att
+    assert "asleep" not in att
+
+
+def test_attention_line_missing_created_degrades_quietly() -> None:
+    """No ``created`` (an ad-hoc/test caller, an event predating this
+    field) renders exactly like today's output — no age line, no crash."""
+    out = _kernel(
+        attention=BootAttention(event_ids=("evt-x",), source_gate="telegram"),
+    )
+    att = next(ln for ln in out.splitlines() if ln.startswith("attention:"))
+    assert att == "attention: evt-x · via telegram"
+
+
+def test_attention_line_renders_retry_provenance() -> None:
+    out = _kernel(
+        attention=BootAttention(
+            event_ids=("evt-1787065086940542000-bpgk",),
+            source_gate="telegram",
+            retry_of="run-260818-1834-lcu3",
+            retry_reason="host_interrupted",
+        ),
+    )
+    att = next(ln for ln in out.splitlines() if ln.startswith("attention:"))
+    assert "retry of run-260818-1834-lcu3 (host interrupt)" in att
 
 
 # ── The queue is the resident's, and only the resident's ──────────────────────
