@@ -12,10 +12,28 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from brnrd import github_marker, publish_scope, run_stop_requests, wake_requests
+from brnrd.routers.pairing import telegram_pair_core
 from brnrd.activity_records import dedupe_activity_records, fresh_activity_records
 from brnrd.auth import get_db
 from brnrd.capabilities import evaluate_capabilities
-from brnrd.models import Account, ActivityRecord, ConfigChangeRequest, Daemon, Event, GitHubInstalledRepo, Repo
+from brnrd.messenger_doors import (
+    env_only_identities,
+    mint_deep_link,
+    pair_instructions,
+)
+from brnrd.messenger_doors import messenger_doors as list_messenger_doors
+from brnrd.models import (
+    Account,
+    ActivityRecord,
+    ChannelRoute,
+    ConfigChangeRequest,
+    Daemon,
+    Event,
+    GitHubInstalledRepo,
+    Repo,
+    TgPairCode,
+)
+from brnrd import schemas
 
 from ._session import (
     _account_id,
@@ -873,6 +891,197 @@ def _machines_summary_out(db: Session, account_id: str) -> dict[str, Any]:
     }
 
 
+def _messenger_identities(request: Request, settings):
+    """The registry's ground truth for this request (#1465). Startup
+    (`app.py`'s lifespan) derives it once and caches it on
+    `app.state.messenger_identities`; a request that finds nothing there —
+    chiefly this test suite's bare `TestClient(app)`, which never runs the
+    ASGI lifespan — reads the env-only fallback instead. **Never derive
+    here**: `messenger_doors.py`'s module docstring is the full reasoning,
+    but in short, a request path must not make a live getMe / WhatsApp
+    Cloud API call."""
+    cached = getattr(request.app.state, "messenger_identities", None)
+    if cached is not None:
+        return cached
+    return env_only_identities(settings)
+
+
+@router.post("/v1/dashboard/telegram-pair")
+def dashboard_telegram_pair_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """#1457 — mint an *account-level* pair code from the browser session.
+
+    The repo-scoped mints (`/v1/pair/telegram`, repo actions) all 404
+    without a connected repo, which made the messenger door unconstructible
+    for exactly the visitor who needs it most — a phone signup with no
+    machine and no repo. This endpoint needs only the session: the code it
+    mints binds the chat to the account, and which project answers is
+    resolved per message (`webhooks._route_target_repo`).
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    started = telegram_pair_core(db, request.app.state.settings, account_id, None)
+    return JSONResponse(started.model_dump())
+
+
+@router.post("/v1/dashboard/pair")
+async def dashboard_pair_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """#1465 — the registry-generalized mint: one endpoint, a `platform`
+    field, covering every connector `messenger_doors` declares
+    `deep_link_available` for (Telegram, WhatsApp today) instead of one
+    endpoint per platform. `telegram-pair` above stays live rather than
+    becoming a thin alias — it predates this by a day (#1457) and the
+    just-shipped frontend consumer still calls it directly; nothing forces
+    its removal. This is the door a *new* connector actually joins
+    through: its registry entry alone is what makes `platform=<new>` work
+    here, no new route.
+
+    Mints the same account-level, channel-neutral pair code
+    `dashboard_telegram_pair_api` does (`telegram_pair_core`, `repo_id`
+    unset — #1237: the code itself carries no platform, only the response
+    shaping below does) and reshapes the response for the requested
+    platform instead of hardcoding Telegram's.
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    try:
+        payload = await request.json()
+    except ValueError:
+        payload = None
+    platform = str((payload or {}).get("platform") or "telegram").strip().lower()
+    settings = request.app.state.settings
+    identities = _messenger_identities(request, settings)
+    doors_by_platform = {d.platform: d for d in list_messenger_doors(identities)}
+    door = doors_by_platform.get(platform)
+    if door is None:
+        return JSONResponse({"detail": f"unknown messenger platform {platform!r}"}, status_code=404)
+    if not door.deep_link_available:
+        return JSONResponse(
+            {"detail": f"{platform} has no deep-link door configured on this deployment"},
+            status_code=409,
+        )
+    started = telegram_pair_core(db, settings, account_id, None)
+    code = started.pair_code
+    deep_link = mint_deep_link(platform, identities, code)
+    instructions = pair_instructions(platform, code, deep_link)
+    return JSONResponse(
+        schemas.MessengerPairStarted(
+            pair_code=code,
+            instructions=instructions,
+            deep_link=deep_link,
+            platform=platform,
+        ).model_dump()
+    )
+
+
+@router.get("/v1/dashboard/pair/{code}")
+def dashboard_pair_status_api(code: str, request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """#1464 — the minting session's outcome readback.
+
+    The one moment a hijacked or wrong-phone redeem is caught by the person
+    who minted the code: ColdStart polls this while its panel is open,
+    keyed on the `pair_code` the mint above already handed it. Scoped to
+    the *minting* account — a code belongs to whoever minted it, and a
+    session for a different account learns nothing about it, not even
+    whether it exists (a 404 either way).
+
+    Sits on `/pair/{code}`, not `/telegram-pair/{code}`: the code itself is
+    channel-neutral (#1237) and `POST /v1/dashboard/pair` above mints one
+    for whichever platform asked, so a WhatsApp redeem reads back through
+    exactly this route. Naming it after Telegram would have been the
+    registry's own special-case bug (#1465) in a second colour.
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    pc = db.execute(
+        select(TgPairCode).where(TgPairCode.code == code, TgPairCode.account_id == account_id)
+    ).scalar_one_or_none()
+    if pc is None:
+        return JSONResponse({"detail": "unknown pair code"}, status_code=404)
+    return JSONResponse({"consumed": bool(pc.consumed), "display": pc.redeemed_display})
+
+
+def _paired_chat_out(route: ChannelRoute, *, repo_full_name: str | None) -> dict[str, Any]:
+    return {
+        "id": route.id,
+        "platform": route.platform,
+        # None = a private/untitled chat (Telegram) or any WhatsApp route —
+        # see `models.ChannelRoute.chat_title`; the frontend renders that
+        # distinctly from an empty string, never as "untitled".
+        "chat_title": route.chat_title,
+        # None = a route written before #409's principal column, or before
+        # #1464 started capturing a display — authorizes nobody either way
+        # (see `webhooks._authorized`), so it is safe to revoke sight
+        # unseen; the row still belongs in this list precisely because it
+        # is the one a reader most wants a revoke button on.
+        "principal_display": route.paired_user_display,
+        "paired_at": _iso(route.created_at),
+        "paired_at_label": _age_label(route.created_at),
+        # None = account-level (repo resolved per message); a name = pinned.
+        "repo_full_name": repo_full_name,
+    }
+
+
+@router.get("/v1/dashboard/paired-chats")
+def dashboard_paired_chats_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """#1464 — the transparency + revocation floor: every `ChannelRoute`
+    that can reach this account's resident, in one list, with what a
+    reader needs to recognise and revoke one (platform / chat title if
+    known / principal display / paired-at). Session-scoped; a route
+    belongs to the account, never a repo, so this reads the whole account
+    the same way `_account_channel_directory` does for the repo panel."""
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    routes = list(
+        db.execute(select(ChannelRoute).where(ChannelRoute.account_id == account_id).order_by(ChannelRoute.created_at.desc())).scalars()
+    )
+    repo_ids = {r.repo_id for r in routes if r.repo_id is not None}
+    repos_by_id = {r.id: r for r in db.execute(select(Repo).where(Repo.id.in_(repo_ids))).scalars()} if repo_ids else {}
+    return JSONResponse(
+        {
+            "paired_chats": [
+                _paired_chat_out(route, repo_full_name=(repos_by_id.get(route.repo_id).repo_full_name if route.repo_id and repos_by_id.get(route.repo_id) else None))
+                for route in routes
+            ]
+        }
+    )
+
+
+@router.delete("/v1/dashboard/paired-chats/{route_id}")
+def dashboard_paired_chat_revoke_api(route_id: str, request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """#1464 — the revoke half of the floor. Deletes the `ChannelRoute` row
+    outright rather than clearing `paired_user_id`: the chat/topic must
+    stop authorizing *and* stop existing as a routing target, the same
+    "re-pair from scratch" state a chat that was never paired is in. This
+    is deliberately **not** #1459's disconnect semantics (which un-pins a
+    *repo* from a route, leaving the pairing itself intact) — revoke kills
+    the principal, full stop.
+
+    The authz consequence is structural, not a flag this endpoint sets:
+    `webhooks._channel_route` looks the row up by `(platform, channel_id,
+    topic_id)` on every inbound message, so a deleted row makes the next
+    message from that chat read as never-paired — `_UNPAIRED_TEXT`, not a
+    silently-refused one.
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    route = db.execute(
+        select(ChannelRoute).where(ChannelRoute.id == route_id, ChannelRoute.account_id == account_id)
+    ).scalar_one_or_none()
+    if route is None:
+        return JSONResponse({"detail": "paired chat not found"}, status_code=404)
+    db.delete(route)
+    db.commit()
+    return JSONResponse({"ok": True})
+
+
 @router.get("/v1/dashboard/repos")
 def dashboard_repos_api(
     request: Request,
@@ -896,6 +1105,7 @@ def dashboard_repos_api(
     if _github_background_refresh_needed(request, db, account.id):
         _start_github_background_refresh(request, account.id)
     settings = request.app.state.settings
+    identities = _messenger_identities(request, settings)
     repos = _repos(db, account.id)
     repo_views = _repo_views(db, repos)
     installed = _installed_repos(db, account.id)
@@ -934,6 +1144,24 @@ def dashboard_repos_api(
             # no repo row to read the command off. Account-level like
             # `install_url` and `github_app_slug` beside it.
             "pairing_command": pairing_command(PAIR_REPO_PLACEHOLDER),
+            # #1465 — the registry-derived connector set: every declared
+            # messenger door (Telegram, WhatsApp, Slack, Signal today —
+            # `messenger_doors.PLATFORMS`), each with its own
+            # `deep_link_available` flag. No user-facing copy here (see
+            # `messenger_doors.py`'s module docstring) — the renderer picks
+            # labels/icons per platform. A new connector joins this array
+            # the moment its registry entry exists, with no frontend edit.
+            "messenger_doors": [d.to_wire() for d in list_messenger_doors(identities)],
+            # Deprecated (#1465), kept one release: superseded by
+            # `messenger_doors[platform=telegram].deep_link_available` +
+            # the generalized `POST /v1/dashboard/pair`. Left in place so
+            # the just-shipped (#1457) frontend consumer doesn't break
+            # underneath itself; `""` when unset *or* shape-invalid (#1242
+            # — a deep link built on a bad handle is worse than none), same
+            # contract as before, now backed by `identities` (getMe-derived
+            # when reachable, env fallback otherwise) rather than raw
+            # settings alone.
+            "telegram_bot_username": identities.telegram_bot_username,
             # design-machines-and-guests.md R1 / #1365 — account-level
             # machine presence, additive: a backend that predates this still
             # omits the key and the frontend falls back to the pre-fix,

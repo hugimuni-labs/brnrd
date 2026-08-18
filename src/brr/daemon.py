@@ -8017,6 +8017,7 @@ def _queue_spawn_request(
     fm: dict,
     body: str,
     outbox_dir: Path | None = None,
+    account_context: account.AccountContext | None = None,
 ) -> bool:
     """Queue a concurrent strand-stack child (``spawn:``, slice 1).
 
@@ -8210,7 +8211,27 @@ def _queue_spawn_request(
         meta["spawn_contract_report"] = contract_report
     if title:
         meta["title"] = title
-    if task.meta.get("repo_label"):
+    # #1458: optional ``repo:`` key names a target repo for the child to
+    # dispatch into, overriding the inherited parent repo. Absent, the child
+    # inherits the parent's repo_label unchanged. Unknown label is refused
+    # immediately, naming both the requested label and the labels the daemon
+    # serves, so the dispatcher can correct and resubmit rather than waiting
+    # for the strand to inherit the wrong repo, fail to find its target
+    # resources, and fail its own work downstream.
+    requested_repo = str(fm.get("repo") or "").strip()
+    if requested_repo:
+        if account_context and not account_context.repo_for_label(requested_repo):
+            served = ", ".join(sorted(account_context.repos.keys()))
+            _record_outbox_notice(
+                outbox_dir,
+                f"spawn refused: repo: {requested_repo!r} is not a served repo. "
+                f"The daemon serves: {served}.",
+                kind="refused",
+                lifetime="run",
+            )
+            return False
+        meta["repo_label"] = requested_repo
+    elif task.meta.get("repo_label"):
         meta["repo_label"] = task.meta["repo_label"]
     reason = str(fm.get("reason") or "").strip()
     # Reuses the exact meta keys _pending_events_for_agent already excludes
@@ -8772,6 +8793,7 @@ def _drain_outbox(
             with _OutboxEntryGuard(outbox_dir, fpath):
                 dispatched = _queue_spawn_request(
                     emit, task, inbox_dir, event_id, fm, body, outbox_dir,
+                    account_context=account_context,
                 )
                 if dispatched:
                     promoted += 1
@@ -11516,6 +11538,14 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
     # "what did the child deliver?" and are in a distinct namespace from
     # spawn_contract_* (which answers "did it meet its declared spec?").
     produce_kwargs: dict = {}
+    # #1461: the repo the child actually ran in — set at dispatch (#1458's
+    # `repo:` key, inherited from the parent when unset), so it is known for
+    # every strand, not only a cross-repo one. Carried once and attached
+    # alongside whichever produce handle names something that lives in that
+    # repo, so a parent reading `spawn_published_branch` / `spawn_pr_number`
+    # off a fleet of children never has to assume "my own repo" for a branch
+    # or PR number that may belong to a sibling project.
+    child_repo = str(task.meta.get("repo_label") or "").strip()
     # A completion status is useful only after the Run reached a terminal
     # state. Keep pending/running absent rather than turning "not determined"
     # into a misleading completion fact.
@@ -11523,6 +11553,8 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
         produce_kwargs["spawn_status"] = status_label
     if published_branch:
         produce_kwargs["spawn_published_branch"] = published_branch
+        if child_repo:
+            produce_kwargs["spawn_repo"] = child_repo
     # Same shape as the reply-byte exception below: a *measured* zero is a
     # fact, so the structured key carries it too. A parent should never have
     # to parse the prose line to learn something the frontmatter can state.
@@ -11543,6 +11575,8 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
     # report-missing branch could reference it too.)
     if pr_num:
         produce_kwargs["spawn_pr_number"] = pr_num
+        if child_repo:
+            produce_kwargs["spawn_repo"] = child_repo
     # #703: structured alongside the prose block, same "absent stays absent"
     # rule — a run with nothing stray carries no key at all, never a "clean"
     # or a False that a reader has to distinguish from "never checked".

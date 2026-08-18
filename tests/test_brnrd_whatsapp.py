@@ -570,3 +570,43 @@ def test_parse_update_flags_media_types_without_text():
     assert parsed is not None
     assert parsed.has_media is True
     assert parsed.text == ""
+
+
+# ── #1457: account-level codes on the WhatsApp lane ───────────────────
+
+
+def _account_session(client, headers):
+    token = headers["Authorization"].removeprefix("Bearer ")
+    client.cookies.set("brnrd_session", token)
+
+
+def test_account_code_pairs_without_a_repo_and_resolves_later(env):
+    """The account-level branch, WhatsApp shape: a repo-less code binds the
+    chat to the account (route.repo_id NULL); once a repo exists, a message
+    resolves to it at message time."""
+    app, client, sends = env
+    headers = _account(client)
+    _account_session(client, headers)
+    code = client.post("/v1/dashboard/telegram-pair").json()["pair_code"]
+
+    _post(client, _message("15550001111", code))
+    with app.state.SessionLocal() as db:
+        route = db.execute(
+            select(ChannelRoute).where(ChannelRoute.platform == "whatsapp")
+        ).scalar_one()
+        assert route.repo_id is None
+    # #1464 — names the bound GitHub login too, same rule as Telegram.
+    assert "Paired with octocat's brnrd account" in sends[-1]["text"]
+
+    # No repos yet: the drop is spoken, not silent — and nothing queues.
+    _post(client, _message("15550001111", "do the thing", message_id="wamid.t2"))
+    with app.state.SessionLocal() as db:
+        assert list(db.execute(select(Event)).scalars()) == []
+    assert "nowhere to run" in sends[-1]["text"]
+
+    # A repo appears; the same route now resolves without re-pairing.
+    repo_id = _repo(client, headers, "late")
+    _post(client, _message("15550001111", "now do it", message_id="wamid.t3"))
+    with app.state.SessionLocal() as db:
+        events = list(db.execute(select(Event)).scalars())
+        assert [e.repo_id for e in events] == [repo_id]

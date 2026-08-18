@@ -90,7 +90,8 @@
 		type Capability,
 		type ConnectedRepo,
 		type GitHubInstallation,
-		type MachinesSummary
+		type MachinesSummary,
+		type MessengerDoor
 	} from '$lib/repos';
 	import CapabilityPanel from '$lib/CapabilityPanel.svelte';
 	import Landing from '$lib/Landing.svelte';
@@ -166,6 +167,13 @@
 	// no repo enabled yet" apart from "nothing paired at all" without a
 	// second round-trip to `GET /v1/machines`.
 	let machines = $state<MachinesSummary | null>(null);
+	// #1465, same `/v1/dashboard/repos` fetch: the registry-derived
+	// connector set — every declared messenger door with its own
+	// `deep_link_available` flag. `null` = an older backend that predates
+	// this field, same "absent means unknown" contract `machines` already
+	// set for this response — ColdStart's mobile CTA reads through to the
+	// honest-intermediate copy either way.
+	let messengerDoors = $state<MessengerDoor[] | null>(null);
 	// Threaded into AccountDeletion's confirmation label — the same
 	// `/v1/dashboard/repos` fetch that populates connectedRepos already
 	// carries it, so this costs no extra round trip.
@@ -1172,6 +1180,7 @@
 				accountId = repos.account.id;
 				capabilities = repos.capabilities ?? null;
 				machines = repos.machines ?? null;
+				messengerDoors = repos.messenger_doors ?? null;
 			} catch (e) {
 				if (!(e instanceof ReposAuthError)) {
 					runnersError = e instanceof Error ? e.message : 'project list fetch failed';
@@ -1357,7 +1366,13 @@
 		     consent notice read, never a second notion of "empty" — and
 		     leaves by itself once a daemon registers, not the moment a repo
 		     is merely enabled (#1084). -->
-		<ColdStart repos={connectedRepos} {installations} pairCommand={pairingCommand} {machines} />
+		<ColdStart
+			repos={connectedRepos}
+			{installations}
+			pairCommand={pairingCommand}
+			{machines}
+			{messengerDoors}
+		/>
 
 		<PublishConsentNotice repos={connectedRepos} />
 

@@ -129,6 +129,17 @@ _CORPUS = (
     "nothing to see here",
     "",
     "#749 was shut by a keyword with a tail on line 30",
+    # Cross-repo close syntax
+    "Closes owner/repo#42.",
+    "Closes owner/repo#42",
+    "Closes owner/repo#42, other/repo#43",
+    "Closes #42, owner/repo#43",
+    "Closes owner/repo#42, #43",
+    "Fix owner/repo#42: split config",
+    "Fix owner/repo#42: split config and closes #534",
+    "  Closes owner/repo#42.",
+    "Closes org-name/repo-name#42.",
+    "Closes owner_name/repo.name#42.",
 )
 
 
@@ -304,3 +315,115 @@ def test_extract_close_refs_unknown_channel_is_an_error():
     """extract_close_refs should validate the channel."""
     with pytest.raises(ValueError):
         closekeyword.extract_close_refs("Closes #1.", channel="invalid")
+
+
+# ── cross-repo close syntax support (issue #1462) ────────────────────────────
+
+# Test that cross-repo syntax is recognized as valid close-keyword lines
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        # Single cross-repo close
+        "Closes owner/repo#42.",
+        "Closes owner/repo#42",
+        # Multiple cross-repo closes
+        "Closes owner/repo#42, other/repo#43",
+        # Mixed single and cross-repo
+        "Closes #42, owner/repo#43",
+        "Closes owner/repo#42, #43",
+        # Cross-repo with subject after colon
+        "Fix owner/repo#42: split config",
+        # Uppercase
+        "CLOSES owner/repo#42.",
+        # Different keyword forms
+        "Closed owner/repo#42.",
+        "Fixes owner/repo#42.",
+        "Fixed owner/repo#42.",
+        "Resolves owner/repo#42.",
+        "Resolved owner/repo#42.",
+        # With leading whitespace
+        "  Closes owner/repo#42.",
+        # Hyphenated owner/repo names
+        "Closes org-name/repo-name#42.",
+        # Underscored and dotted names
+        "Closes owner_name/repo.name#42.",
+    ],
+)
+def test_cross_repo_closes_are_valid_clean_lines(line):
+    """Cross-repo close syntax should pass validation."""
+    assert closekeyword.check(line, channel="pr-body") == []
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        # Cross-repo with invalid tail
+        "Closes owner/repo#42 and more",
+        # Cross-repo with narrative after close
+        "Closes owner/repo#42 partially",
+    ],
+)
+def test_cross_repo_closes_with_invalid_tail_are_caught(line):
+    """Cross-repo closes with trailing prose should be caught."""
+    findings = closekeyword.check(line, channel="pr-body")
+    assert len(findings) > 0
+    assert findings[0].rule == "tail"
+
+
+def test_extract_cross_repo_close_ref():
+    """Extract a cross-repo close ref from clean syntax."""
+    text = "Ships the fix.\n\nCloses owner/repo#1234.\n"
+    refs = closekeyword.extract_close_refs(text, channel="pr-body")
+    assert len(refs) == 1
+    assert refs[0].ref == "1234"
+    assert refs[0].repo == "owner/repo"
+    assert refs[0].line_number == 3
+
+
+def test_extract_cross_repo_multiple_refs():
+    """Extract multiple cross-repo refs from a comma-separated list."""
+    text = "Ships the fixes.\n\nCloses owner/repo#1433, other/repo#1434.\n"
+    refs = closekeyword.extract_close_refs(text, channel="pr-body")
+    assert len(refs) == 2
+    assert refs[0].ref == "1433"
+    assert refs[0].repo == "owner/repo"
+    assert refs[1].ref == "1434"
+    assert refs[1].repo == "other/repo"
+    assert refs[0].line_number == 3
+    assert refs[1].line_number == 3
+
+
+def test_extract_mixed_single_and_cross_repo_refs():
+    """Extract mixed single-repo and cross-repo refs."""
+    text = "Ships the fixes.\n\nCloses #1433, owner/repo#1434.\n"
+    refs = closekeyword.extract_close_refs(text, channel="pr-body")
+    assert len(refs) == 2
+    # First ref is single-repo
+    assert refs[0].ref == "1433"
+    assert refs[0].repo is None
+    # Second ref is cross-repo
+    assert refs[1].ref == "1434"
+    assert refs[1].repo == "owner/repo"
+
+
+def test_extract_cross_repo_with_subject_after_colon():
+    """Extract cross-repo ref from 'Fix owner/repo#NNN: subject' format."""
+    text = "Fix owner/repo#839: split config\n"
+    refs = closekeyword.extract_close_refs(text, channel="pr-body")
+    assert len(refs) == 1
+    assert refs[0].ref == "839"
+    assert refs[0].repo == "owner/repo"
+
+
+def test_cross_repo_with_special_chars_in_names():
+    """Extract cross-repo refs with hyphens, underscores, and dots in names."""
+    text = (
+        "Closes org-name/repo-name#42, "
+        "owner_name/repo.name#43.\n"
+    )
+    refs = closekeyword.extract_close_refs(text, channel="pr-body")
+    assert len(refs) == 2
+    assert refs[0].repo == "org-name/repo-name"
+    assert refs[1].repo == "owner_name/repo.name"

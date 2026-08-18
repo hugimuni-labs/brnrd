@@ -3372,6 +3372,74 @@ def test_notify_spawn_parent_clean_reap_carries_produce_handles(tmp_path):
     assert note.get("spawn_report_found") is True
 
 
+def test_notify_spawn_parent_qualifies_produce_with_child_repo(tmp_path):
+    """#1461: a child dispatched into a sibling repo (#1458's `repo:` key)
+    stamps `spawn_repo` alongside `spawn_published_branch` /
+    `spawn_pr_number` — a parent reading these off a fleet of children must
+    not assume its own repo for produce that may live somewhere else.
+
+    Same-repo children (no `repo_label` on meta) must not gain the key —
+    ``test_notify_spawn_parent_clean_reap_carries_produce_handles`` already
+    pins that shape; this only covers the branch where the label is known.
+    """
+    inbox = tmp_path / ".brr" / "inbox"
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-child"
+    outbox_dir.mkdir(parents=True, exist_ok=True)
+    (outbox_dir / ".pr").write_text("647\n", encoding="utf-8")
+    task = Run(
+        id="run-child", event_id="evt-child",
+        body="",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "publish_branch": "brr/orientation-ledger",
+            "outbox_path": str(outbox_dir),
+            "repo_label": "hugimuni-labs/sibling",
+        },
+    )
+
+    daemon._capture_pr_handle(task, outbox_dir)
+    daemon._remove_outbox(outbox_dir)
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert note.get("spawn_published_branch") == "brr/orientation-ledger"
+    assert str(note.get("spawn_pr_number")) == "647"
+    assert note.get("spawn_repo") == "hugimuni-labs/sibling"
+
+
+def test_notify_spawn_parent_qualifies_branch_only_reap_with_child_repo(tmp_path):
+    """Isolates the branch arm of the #1461 qualification from the PR arm:
+    no `.pr` file at all here, so a fixture that only wired ``spawn_repo``
+    into the PR branch (and left the published-branch branch unqualified)
+    would pass the combined fixture above — both branches independently
+    set the same key with the same value there — but fails this one."""
+    inbox = tmp_path / ".brr" / "inbox"
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-child"
+    outbox_dir.mkdir(parents=True, exist_ok=True)
+    task = Run(
+        id="run-child", event_id="evt-child",
+        body="",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "publish_branch": "brr/orientation-ledger",
+            "outbox_path": str(outbox_dir),
+            "repo_label": "hugimuni-labs/sibling",
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert note.get("spawn_published_branch") == "brr/orientation-ledger"
+    assert "spawn_pr_number" not in note
+    assert note.get("spawn_repo") == "hugimuni-labs/sibling"
+
+
 def test_notify_spawn_parent_pr_survives_outbox_teardown(tmp_path):
     """The `.pr` control is gone by the time the parent reaps — the handle
     must have been captured before teardown, or it is lost by construction.
@@ -10520,6 +10588,202 @@ def test_reply_to_a_stale_event_leaves_a_notice(tmp_path):
     assert len(notices) == 1
     assert "evt-does-not-exist" in notices[0]["text"]
     assert "NOT delivered" in notices[0]["text"]
+
+
+def test_drain_outbox_spawn_repo_absent_inherits_parent(tmp_path):
+    """Absent ``repo:`` frontmatter key, child inherits parent's repo_label.
+
+    This is today's behavior (#1458: baseline unchanged when repo: is unset).
+    """
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(
+        inbox,
+        "telegram",
+        "original task",
+        status="processing",
+        conversation_key="telegram:42:",
+    )
+    event_id = path.stem
+    (outbox / "spawn.md").write_text(
+        "---\nspawn: true\n---\nchild task\n",
+        encoding="utf-8",
+    )
+    task = Run(
+        id="run-parent",
+        event_id=event_id,
+        body="original task",
+        source="telegram",
+        conversation_key="telegram:42:",
+        meta={"repo_label": "Gurio/brr"},
+    )
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        task,
+        responses,
+        event_id,
+        outbox,
+        inbox,
+    )
+
+    assert promoted == 1
+    spawned = [
+        ev for ev in protocol.list_pending(inbox)
+        if ev.get("spawn_parent_run_id") == "run-parent"
+    ][0]
+    assert spawned["repo_label"] == "Gurio/brr"
+
+
+def test_drain_outbox_spawn_repo_valid_dispatches_to_sibling(tmp_path):
+    """Valid ``repo:`` frontmatter dispatches child into target repo.
+
+    #1458: cross-repo strand dispatch. When account serves multiple repos,
+    repo: <label> overrides the inherited parent repo.
+    """
+    # Initialize two git repos
+    repo_one = tmp_path / "repo-one"
+    repo_two = tmp_path / "repo-two"
+    init_git_repo(repo_one)
+    init_git_repo(repo_two)
+
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(
+        inbox,
+        "telegram",
+        "original task",
+        status="processing",
+        conversation_key="telegram:42:",
+    )
+    event_id = path.stem
+    (outbox / "spawn.md").write_text(
+        "---\nspawn: true\nrepo: acme/repo-two\n---\nwork for repo-two\n",
+        encoding="utf-8",
+    )
+    task = Run(
+        id="run-parent",
+        event_id=event_id,
+        body="original task",
+        source="telegram",
+        conversation_key="telegram:42:",
+        meta={"repo_label": "acme/repo-one"},
+    )
+    # Account serves two repos
+    home = tmp_path / "account-home"
+    account_ctx = daemon.account.AccountContext(
+        account_id="default",
+        dominion_repo=home,
+        dispatch_inbox=home / "dispatch" / "inbox",
+        responses_dir=home / "dispatch" / "responses",
+        runs_dir=home / "runs",
+        repos={
+            "acme/repo-one": daemon.account.AccountRepo(
+                label="acme/repo-one", root=repo_one
+            ),
+            "acme/repo-two": daemon.account.AccountRepo(
+                label="acme/repo-two", root=repo_two
+            ),
+        },
+        default_repo=daemon.account.AccountRepo(
+            label="acme/repo-one", root=repo_one
+        ),
+    )
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        task,
+        responses,
+        event_id,
+        outbox,
+        inbox,
+        account_context=account_ctx,
+    )
+
+    assert promoted == 1
+    spawned = [
+        ev for ev in protocol.list_pending(inbox)
+        if ev.get("spawn_parent_run_id") == "run-parent"
+    ][0]
+    # Child dispatches into the target repo, not the parent's
+    assert spawned["repo_label"] == "acme/repo-two"
+
+
+def test_drain_outbox_spawn_repo_unknown_refused(tmp_path):
+    """Unknown ``repo:`` label is refused with notice naming served repos.
+
+    #1458: fail early rather than letting strand dispatch into wrong repo
+    or inherit parent when that was not intended.
+    """
+    # Initialize two git repos
+    repo_one = tmp_path / "repo-one"
+    repo_two = tmp_path / "repo-two"
+    init_git_repo(repo_one)
+    init_git_repo(repo_two)
+
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "task", status="processing")
+    event_id = path.stem
+    (outbox / "spawn.md").write_text(
+        "---\nspawn: true\nrepo: acme/nonexistent\n---\nwork\n",
+        encoding="utf-8",
+    )
+    task = Run(
+        id="run-parent",
+        event_id=event_id,
+        body="task",
+        source="telegram",
+        meta={"repo_label": "acme/repo-one"},
+    )
+    # Account serves specific repos
+    home = tmp_path / "account-home"
+    account_ctx = daemon.account.AccountContext(
+        account_id="default",
+        dominion_repo=home,
+        dispatch_inbox=home / "dispatch" / "inbox",
+        responses_dir=home / "dispatch" / "responses",
+        runs_dir=home / "runs",
+        repos={
+            "acme/repo-one": daemon.account.AccountRepo(
+                label="acme/repo-one", root=repo_one
+            ),
+            "acme/repo-two": daemon.account.AccountRepo(
+                label="acme/repo-two", root=repo_two
+            ),
+        },
+        default_repo=daemon.account.AccountRepo(
+            label="acme/repo-one", root=repo_one
+        ),
+    )
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, None, event_id),
+        task,
+        responses,
+        event_id,
+        outbox,
+        inbox,
+        account_context=account_ctx,
+    )
+
+    assert promoted == 0  # Spawn refused, not promoted
+    notices = daemon._read_outbox_notices(outbox)
+    assert len(notices) == 1
+    assert "acme/nonexistent" in notices[0]["text"]
+    assert "not a served repo" in notices[0]["text"]
+    # Notice should list the served repos
+    assert "acme/repo-one" in notices[0]["text"]
+    assert "acme/repo-two" in notices[0]["text"]
 
 
 def test_worker_boot_prompt_excludes_foreign_pending_events(

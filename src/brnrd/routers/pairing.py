@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from .. import ids, schemas
 from ..auth import Principal, get_db, require_account
-from ..config import telegram_username_is_valid
+from ..config import telegram_effective_bot_username
 from ..models import PairRequest, Repo, TgPairCode, Token
 from ..security import hash_token
 
@@ -207,23 +207,27 @@ def approve_pair(code: str, payload: schemas.PairApprove, principal: Principal =
     return schemas.PairStatus(status="approved", account_id=principal.account_id, repo_id=repo_id)
 
 
-def _telegram_pair_response(settings: Any, repo: Repo, code: str) -> schemas.TelegramPairStarted:
-    username = settings.telegram_bot_username.lstrip("@")
-    # #1242 — an invalid-shape username (e.g. the hyphenated GitHub login
-    # spelling) resolves to no Telegram entity at all; a deep link built on
-    # it is worse than no link, so mint none and let the `else` branch
-    # below lead with the manual `/start <code>` path instead.
-    deep_link = f"https://t.me/{username}?start={code}" if username and telegram_username_is_valid(username) else None
+def _telegram_pair_response(settings: Any, repo: Repo | None, code: str) -> schemas.TelegramPairStarted:
+    # #1463 — token-derived (getMe) when available, env as fallback. #1242 —
+    # an invalid-shape username (e.g. the hyphenated GitHub login spelling)
+    # resolves to no Telegram entity at all; a deep link built on it is
+    # worse than no link, so an unusable value mints none and the `else`
+    # branch below leads with the manual `/start <code>` path instead.
+    username = telegram_effective_bot_username(settings)
+    deep_link = f"https://t.me/{username}?start={code}" if username else None
+    # #1457 — repo is None for an account-level code: the chat binds to the
+    # account itself; which project answers is resolved per message.
+    target = f"repo '{repo.repo_full_name}'" if repo is not None else "your account"
     if deep_link:
         instructions = (
             f"Open {deep_link}, then press Start if Telegram prompts. "
             f"If Telegram only opens the chat, send `/start {code}` to "
-            f"bind this chat to repo '{repo.repo_full_name}'."
+            f"bind this chat to {target}."
         )
     else:
         instructions = (
             f"Send `/start {code}` to your brnrd Telegram bot to bind this "
-            f"chat to repo '{repo.repo_full_name}'."
+            f"chat to {target}."
         )
     instructions += (
         f" For WhatsApp, text `{code}` by itself — no `/start` and no other "
@@ -256,17 +260,23 @@ def _active_telegram_pair(db: Session, account_id: str, repo_id: str) -> TgPairC
     return None
 
 
-def telegram_pair_core(db: Session, settings: Any, account_id: str, repo_id: str) -> schemas.TelegramPairStarted:
-    repo = db.execute(select(Repo).where(Repo.id == repo_id, Repo.account_id == account_id)).scalar_one_or_none()
-    if repo is None:
-        raise HTTPException(status_code=404, detail="repo not found")
+def telegram_pair_core(db: Session, settings: Any, account_id: str, repo_id: str | None) -> schemas.TelegramPairStarted:
+    """Mint a pair code. ``repo_id=None`` mints an account-level code
+    (#1457): consuming it binds the chat to the account with no repo pin,
+    so it works for an account that has no repos yet — the mobile
+    cold-start deep link's whole reason to exist."""
+    repo = None
+    if repo_id is not None:
+        repo = db.execute(select(Repo).where(Repo.id == repo_id, Repo.account_id == account_id)).scalar_one_or_none()
+        if repo is None:
+            raise HTTPException(status_code=404, detail="repo not found")
     for _ in range(8):
         code = ids.tg_pair_code()
         if not db.execute(select(TgPairCode).where(TgPairCode.code == code)).scalar_one_or_none():
             break
     else:
         raise HTTPException(status_code=503, detail="could not allocate pair code")
-    db.add(TgPairCode(id=ids.tg_pair_code_id(), code=code, account_id=account_id, repo_id=repo.id, expires_at=datetime.now(timezone.utc) + timedelta(seconds=settings.pair_ttl_s)))
+    db.add(TgPairCode(id=ids.tg_pair_code_id(), code=code, account_id=account_id, repo_id=repo.id if repo is not None else None, expires_at=datetime.now(timezone.utc) + timedelta(seconds=settings.pair_ttl_s)))
     db.commit()
     return _telegram_pair_response(settings, repo, code)
 
