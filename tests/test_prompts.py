@@ -1428,6 +1428,24 @@ class TestPromptBuilding:
         assert "announced, not fetched" in prompt
         assert "ghost.png" in prompt
 
+    def test_daemon_prompt_flags_orphaned_pending_event(self, tmp_path):
+        """#1493 ("the event nobody could see") layer 2: an event surfaced
+        because its dispatched run is provably dead must render as a
+        distinguishable "orphaned" line — mixing it silently into fresh
+        mail is the exact failure the fix exists to end."""
+        prompt = build_daemon_prompt(
+            "work on A", "evt-A", "/tmp/resp.md", tmp_path,
+            outbox_path="/repo/.brr/outbox/evt-A",
+            run_id="task-A",
+            pending_events=[
+                {"id": "evt-B", "source": "telegram", "summary": "orphaned",
+                 "orphaned": True},
+            ],
+        )
+        assert "evt-B" in prompt
+        assert "orphaned" in prompt
+        assert "survivor" in prompt
+
     def test_format_pending_events_caps_at_40_with_honest_elision_line(self):
         # 1,203 pending events once rendered 165.9 KB into a 252.7 KB wake —
         # the replay ate the thought that was supposed to handle it. 100

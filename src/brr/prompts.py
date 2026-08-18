@@ -5094,6 +5094,19 @@ def _format_pending_events(
         sep = f": {summary}" if summary else ""
         rendered += 1
         bullets.append(f"- {eid}{src}{sep}")
+        if ev.get("orphaned"):
+            # #1493 ("the event nobody could see"): daemon._pending_events_
+            # for_agent only lets a `status: processing` event through this
+            # filter when it proved the run that was dispatched to answer it
+            # is dead. Marked here, explicitly — mixing it silently into
+            # fresh mail is the exact failure this fix exists to end; a
+            # resident reading this needs to know it's a survivor, not a
+            # new arrival someone is waiting on for the first time.
+            bullets.append(
+                "  - orphaned: the run this event was dispatched to died "
+                "mid-flight (interrupted/crashed) before answering it — "
+                "this is a survivor being re-offered, not a fresh arrival"
+            )
         paths = ev.get("attachment_paths")
         if isinstance(paths, list) and paths:
             bullets.extend(f"  - attachment: {p}" for p in paths)
