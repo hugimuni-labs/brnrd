@@ -4309,6 +4309,14 @@ def _run_worker(
             present=present_snapshot,
             event_body=event_body_for_prompt,
             event_attachments=protocol.event_attachment_paths(event),
+            # #1491: the waking event's own age and retry history — read off
+            # the event dict, never recomputed. ``created`` is stamped once
+            # by ``protocol.create_event`` and never rewritten; ``retry_of``/
+            # ``retry_reason`` are ``_mark_interrupted_runs``'s additive
+            # stamp, absent on a first attempt.
+            event_created=event.get("created"),
+            event_retry_of=event.get("retry_of"),
+            event_retry_reason=event.get("retry_reason"),
             budget_seconds=budget_seconds,
             runner_medium=(
                 f"{runner_name} ({runner_wake_note})"
@@ -13571,6 +13579,35 @@ def _recorded_pid_alive(task: Run) -> bool:
     return bool(pid and presence.pid_alive(pid))
 
 
+def _record_retry_provenance(event: dict, run_id: str, failure_kind: str) -> None:
+    """Append a prior interrupted attempt onto *event*, additively (#1491).
+
+    Event frontmatter is flat (``protocol.update_event_meta``), so history
+    across more than one retry lives as two comma-joined, positionally
+    paired lists — ``retry_of`` (run ids) and ``retry_reason`` (the
+    ``runner_failures`` kind each died of) — rather than one field a second
+    interruption would overwrite. An event interrupted twice must still be
+    able to name *both* prior runs, not just the most recent.
+
+    Idempotent by run id: ``_mark_interrupted_runs`` only ever calls this
+    once per manifest (the status transition to ``error`` is itself
+    one-shot — see that function's docstring), but a duplicate call for the
+    same ``run_id`` is a no-op rather than a repeated entry, in case that
+    invariant ever loosens.
+    """
+    existing_of = [r for r in str(event.get("retry_of") or "").split(",") if r]
+    if run_id in existing_of:
+        return
+    existing_reason = [r for r in str(event.get("retry_reason") or "").split(",") if r]
+    existing_of.append(run_id)
+    existing_reason.append(failure_kind)
+    protocol.update_event_meta(
+        event,
+        retry_of=",".join(existing_of),
+        retry_reason=",".join(existing_reason),
+    )
+
+
 def _mark_interrupted_runs(
     account_context: account.AccountContext,
     repo_root: Path,
@@ -13622,13 +13659,15 @@ def _mark_interrupted_runs(
     marked_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(timestamp))
     # Events still eligible for the main loop's crash-recovery re-dispatch:
     # the honest basis for the card's "retrying" tail. Read, not asserted —
-    # the sweep never changes event state.
-    retry_eligible: set[str] = set()
+    # the sweep never changes event *status*. Keyed to the live event dict
+    # (not just its id) so #1491's retry-provenance stamp below can write
+    # onto the same object the re-dispatch will read.
+    retry_eligible: dict[str, dict] = {}
     try:
         for target in _dispatchable_targets(account_context, repo_root, cfg):
             eid = str(target.event.get("id") or "")
             if eid:
-                retry_eligible.add(eid)
+                retry_eligible[eid] = target.event
     except Exception:  # noqa: BLE001 - retry hint is advisory, never blocking
         pass
     roots: dict[Path, Path] = {}
@@ -13678,6 +13717,25 @@ def _mark_interrupted_runs(
                     "safety horizon"
                 )
             will_retry = bool(task.event_id and task.event_id in retry_eligible)
+            if will_retry:
+                # #1491: the retry path already recovers the *work* (the
+                # event re-dispatches); this recovers the *story* — so the
+                # run that picks the event back up can say "retry of run-X,
+                # interrupted by host suspend" instead of answering cold, as
+                # if nothing had happened yet. Deliberately best-effort and
+                # never blocking: an event write failing here must not stop
+                # the card from getting its own "interrupted" packet below.
+                try:
+                    _record_retry_provenance(
+                        retry_eligible[task.event_id],
+                        task.id,
+                        runner_failures.HOST_INTERRUPTED,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    print(
+                        f"[brnrd] retry-provenance stamp failed for "
+                        f"{task.event_id}: {exc}"
+                    )
             # Status first, packet after — same order as the spawn
             # reconciliation sweep: a crash between the two loses one card
             # update; the reverse order would re-emit on every restart

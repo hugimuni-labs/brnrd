@@ -3488,6 +3488,9 @@ def build_boot_score(
     runner_core: str | None = None,
     environment: str | None = None,
     event_ids: tuple[str, ...] = (),
+    event_created: str | None = None,
+    event_retry_of: str | None = None,
+    event_retry_reason: str | None = None,
     body_provenance: str | None = None,
     source_gate: str | None = None,
     continuity: "BootContinuity | None" = None,
@@ -3542,7 +3545,7 @@ def build_boot_score(
     """
     from .bootscore import (
         BootScore, BootBody, BootHost, BootAttention, BootContinuity, BootPosture,
-        DEPTH_COMPACT, SCHEMA_VERSION,
+        DEPTH_COMPACT, SCHEMA_VERSION, event_age_seconds,
     )
 
     effective_root = repo_root if repo_root is not None else Path.cwd()
@@ -3658,7 +3661,14 @@ def build_boot_score(
             kb_missing=kb_missing,
         ),
         continuity=continuity if continuity is not None else BootContinuity(),
-        attention=BootAttention(event_ids=event_ids, source_gate=source_gate),
+        attention=BootAttention(
+            event_ids=event_ids,
+            source_gate=source_gate,
+            created=event_created,
+            age_seconds=event_age_seconds(event_created),
+            retry_of=event_retry_of,
+            retry_reason=event_retry_reason,
+        ),
         posture=BootPosture(
             pending_count=pending_count,
             budget=budget,
@@ -3713,6 +3723,9 @@ def build_daemon_prompt_with_score(
     runner_core = kwargs.get("runner_core")
     body_provenance = kwargs.get("body_provenance")
     source_gate = kwargs.get("source_gate")
+    event_created = kwargs.get("event_created")
+    event_retry_of = kwargs.get("event_retry_of")
+    event_retry_reason = kwargs.get("event_retry_reason")
     continuity = kwargs.get("continuity")
     environment = kwargs.get("environment")
     strand = bool(kwargs.get("strand", False))
@@ -3839,6 +3852,9 @@ def build_daemon_prompt_with_score(
         continuity=continuity,
         environment=str(environment) if environment else None,
         event_ids=(event_id,),
+        event_created=str(event_created) if event_created else None,
+        event_retry_of=str(event_retry_of) if event_retry_of else None,
+        event_retry_reason=str(event_retry_reason) if event_retry_reason else None,
         pending_count=len(pending_events),
         budget=f"{budget_seconds // 60}m" if budget_seconds else None,
         quota=str(runner_quota) if runner_quota else None,
@@ -4319,6 +4335,9 @@ def build_daemon_prompt(
     present: list[dict[str, Any]] | None = None,
     event_body: str | None = None,
     event_attachments: list[Path] | None = None,
+    event_created: str | None = None,
+    event_retry_of: str | None = None,
+    event_retry_reason: str | None = None,
     budget_seconds: int | None = None,
     runner_medium: str | None = None,
     runner_quota: str | None = None,
@@ -4411,6 +4430,9 @@ def build_daemon_prompt(
         present=present,
         event_body=event_body,
         event_attachments=event_attachments,
+        event_created=event_created,
+        event_retry_of=event_retry_of,
+        event_retry_reason=event_retry_reason,
         diffense=diffense,
     )
     trailer = bundle.rstrip()
@@ -4477,6 +4499,9 @@ def build_daemon_prompt(
         continuity=continuity,
         environment=environment,
         event_ids=(event_id,) if event_id else (),
+        event_created=event_created,
+        event_retry_of=event_retry_of,
+        event_retry_reason=event_retry_reason,
         pending_count=len(pending_events or []),
         budget=f"{budget_seconds // 60}m" if budget_seconds else None,
         quota=runner_quota,
@@ -4698,6 +4723,9 @@ def _build_run_context_bundle(
     present: list[dict[str, Any]] | None = None,
     event_body: str | None,
     event_attachments: list[Path] | None = None,
+    event_created: str | None = None,
+    event_retry_of: str | None = None,
+    event_retry_reason: str | None = None,
     diffense: bool = False,
 ) -> str:
     """Assemble the human-readable Run Context Bundle for the daemon prompt.
@@ -4785,6 +4813,21 @@ def _build_run_context_bundle(
     sections.append("")
     sections.append("### Run")
     sections.append(f"- Event: {event_id}")
+    # #1491: the age travels with the event past the boot kernel's own
+    # trimming — the kernel line is the first thing read, but it is not the
+    # only thing a wake reads, and a run that skims past it must still be
+    # able to find the same fact here. Same helpers as `format_kernel`'s
+    # attention line, so the two surfaces cannot report a different age for
+    # the same event.
+    from .bootscore import event_age_seconds, format_event_age, format_retry_note
+
+    age_seconds = event_age_seconds(event_created)
+    age_note = format_event_age(event_created, age_seconds)
+    if age_note:
+        sections.append(f"- Event {age_note}")
+    retry_note = format_retry_note(event_retry_of, event_retry_reason)
+    if retry_note:
+        sections.append(f"- Event {retry_note}")
     if run_id:
         sections.append(f"- Run ID: {run_id}")
     sections.append(f"- Execution root: {repo_root}")
@@ -5022,6 +5065,8 @@ def _format_pending_events(
     # an id are skipped below, and an omitted count taken from the slice
     # would then under-report. A truncation that misstates its own size is
     # the same lie as one that says nothing.
+    from .bootscore import EVENT_AGE_STALE_SECONDS, event_age_seconds
+
     rendered = 0
     bullets: list[str] = []
     for ev in rendered_events:
@@ -5032,7 +5077,20 @@ def _format_pending_events(
         summary = " ".join(str(ev.get("summary") or "").split())
         if len(summary) > 140:
             summary = summary[:137].rstrip() + "..."
-        src = f" ({source})" if source else ""
+        # #1491: `created` already rides in every pending-event record
+        # (`daemon._pending_event_record` copies it) — this was purely a
+        # dropped field read. Compact by design (this can be a list of many
+        # events): only past the same soft threshold `format_kernel` uses
+        # for the waking event, and just the elapsed half — the id already
+        # anchors the reader to `brnrd do --reply <id>` if they want the
+        # full stamp.
+        age_seconds = event_age_seconds(ev.get("created"))
+        age = ""
+        if age_seconds is not None and age_seconds >= EVENT_AGE_STALE_SECONDS:
+            hours = int(age_seconds // 3600)
+            minutes = int((age_seconds % 3600) // 60)
+            age = f", {hours}h{minutes:02d}m old"
+        src = f" ({source}{age})" if source else (f" ({age.lstrip(', ')})" if age else "")
         sep = f": {summary}" if summary else ""
         rendered += 1
         bullets.append(f"- {eid}{src}{sep}")
