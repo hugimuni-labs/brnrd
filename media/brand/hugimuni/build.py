@@ -23,9 +23,11 @@ BOARD = 512
 AXIS = BOARD / 2
 LEFT, RIGHT = 152, 360                # the shared stems
 TOP, BOTTOM = 156, 356
-CROSS = 262                           # H's crossbar
-OVERHANG = 30                         # the crossbar runs past both stems
-RISE, DIP = 30, 34                    # M overshoots the stems at both ends
+CROSS = 302                           # H's crossbar
+OVERHANG = 34                         # the crossbar runs past both stems
+SPREAD = 50                           # M's shoulders sit outside the stems, so
+RISE, DIP = 0, 62                    # each leg crosses its stem low, not at
+                                      # the very top where nothing reads as woven
 STROKE = 30
 GHOST = 5                             # aberration offset on the shared stems
 INK = "#0c0906"
@@ -51,8 +53,9 @@ STEMS = f'<path d="M {LEFT} {TOP} V {BOTTOM}"/><path d="M {RIGHT} {TOP} V {BOTTO
 # instead of one sitting inside the other — which is the difference between a
 # monogram and two letters parked in the same box.
 BAR_H = f'<path d="M {LEFT - OVERHANG} {CROSS} H {RIGHT + OVERHANG}"/>'
-VEE_M = (f'<path d="M {LEFT - 18} {TOP - RISE} '
-         f'L {AXIS} {BOTTOM + DIP} L {RIGHT + 18} {TOP - RISE}"/>')
+def vee_m() -> str:
+    return (f'<path d="M {LEFT - SPREAD} {TOP - RISE} '
+            f'L {AXIS} {BOTTOM + DIP} L {RIGHT + SPREAD} {TOP - RISE}"/>')
 
 
 def svg(name: str) -> str:
@@ -64,13 +67,16 @@ def svg(name: str) -> str:
     <g {ATTRS} stroke="{a}" transform="translate({-GHOST},0)">{STEMS}</g>
     <g {ATTRS} stroke="{b}" transform="translate({GHOST},0)">{STEMS}</g>
     <g {ATTRS} stroke="{a}">{BAR_H}</g>
-    <g {ATTRS} stroke="{b}">{VEE_M}</g>
+    <g {ATTRS} stroke="{b}">{vee_m()}</g>
   </g>
 </svg>
 """
 
 
 if __name__ == "__main__":
+    import sys
+    if len(sys.argv) > 1:
+        globals()["SPREAD"] = int(sys.argv[1])
     for name in PALETTES:
         (OUT / f"hugimuni-{name}.svg").write_text(svg(name))
     print("wrote", " ".join(f"hugimuni-{n}.svg" for n in PALETTES))
