@@ -19,18 +19,20 @@ token discipline.
 
 **The guardrails, in one place, because they're the load-bearing part:**
 
-- ``send`` ships **disarmed**: it refuses unless *both* ``--confirm``
-  (argv) and ``BRR_X_BROWSER_SEND=1`` (environment) are present, and
-  refuses independently if the hourly cap (:data:`DEFAULT_HOURLY_CAP`
-  unless overridden by ``Paths.config``) is spent. Neither arm alone is
-  enough, on purpose — an argv typo or a leaked env var must not be
-  sufficient on its own to post.
+- ``send`` and ``post`` both ship **disarmed**: each refuses unless
+  *both* ``--confirm`` (argv) and ``BRR_X_BROWSER_SEND=1`` (environment)
+  are present, and refuses independently if the hourly cap
+  (:data:`DEFAULT_HOURLY_CAP` unless overridden by ``Paths.config``,
+  shared by both verbs) is spent. Neither arm alone is enough, on
+  purpose — an argv typo or a leaked env var must not be sufficient on
+  its own to post.
 - A **kill switch** — the mere *presence* of ``Paths.kill_switch`` — is
   checked before every verb except ``check`` and refuses immediately, no
   browser launched, no side effects.
-- ``draft`` fills the composer, screenshots it, and **stops**. It never
-  calls the driver's ``click_send``; that call exists in exactly one
-  place in this module (:func:`_run_send`).
+- ``draft``/``draft-post`` fill the composer, screenshot it, and
+  **stop**. Neither calls the driver's ``click_send``; that call exists
+  in exactly two places in this module — the disarmed, capped, guarded
+  verbs :func:`_run_send` and :func:`_run_post` — never in a draft path.
 - The profile directory holds live session cookies — the whole account,
   if it leaks. It is created mode ``0700`` and the account home's own
   ``.gitignore`` (``account.py``'s ``GITIGNORE``) excludes it by name;
@@ -47,12 +49,26 @@ token discipline.
 ``(paths, *, headless) -> driver`` returning a context-managed object
 shaped like the methods :class:`_PlaywrightDriver` implements
 (``whoami``, ``wait_for_manual_login``, ``read_url``, ``search``,
-``open_reply_composer``, ``fill_text``, ``screenshot``, ``click_send``).
-Tests inject a fake at this seam and never touch a real browser — the
-guardrail logic (kill switch, cap arithmetic, the disarmed-send refusal,
-argv guards, the receipt-log shape) is exercised without Playwright
-installed, which is also why none of it lives inside
-:class:`_PlaywrightDriver`.
+``open_reply_composer``, ``open_post_composer``, ``fill_text``,
+``screenshot``, ``click_send``). Tests inject a fake at this seam and
+never touch a real browser — the guardrail logic (kill switch, cap
+arithmetic, the disarmed-send refusal, argv guards, the receipt-log
+shape) is exercised without Playwright installed, which is also why
+none of it lives inside :class:`_PlaywrightDriver`.
+
+**Two write lanes, same vocabulary, same guardrails.** ``draft``/``send``
+fill and (optionally) submit the **reply** box at a target URL;
+``draft-post``/``post`` do the identical fill-then-stop or
+fill-then-submit dance against ``x.com/compose/post`` instead — an
+**original**, no target URL, no ``open_reply_composer`` call. They share
+every guardrail function (``_send_arming``, ``_refuse_if_killed``,
+``cap_status``/``_record_send``) rather than duplicating them, so the
+hourly cap is one shared bucket across both lanes and the kill switch
+and disarmed-send checks cannot drift between them. Kept as two verb
+pairs rather than one branching on "was a URL given" — a reply and an
+original are different acts, and a typo that turns one into the other
+(dropping a URL argument, say) is exactly the failure this whole module
+exists to make hard.
 """
 
 from __future__ import annotations
@@ -78,17 +94,50 @@ HOUR_SECONDS = 3600.0
 LOGIN_URL = "https://x.com/login"
 HOME_URL = "https://x.com/home"
 SEARCH_URL = "https://x.com/search"
+COMPOSE_URL = "https://x.com/compose/post"
+
+#: X's search tabs, as the `f=` parameter names them. `live` is Latest —
+#: reverse-chronological, unfiltered, and what this verb has always used;
+#: `top` is the ranked tab. They answer different questions and neither is
+#: a better default: Latest is right for *monitoring a term* (nothing is
+#: dropped for being small), Top is right for *finding a conversation worth
+#: joining* (a two-follower account replying under an unread post is a
+#: reply nobody sees). The caller knows which question it is asking.
+SEARCH_TABS = {"live": "live", "top": "top"}
+# How long to wait for X's client-side search render before calling a query
+# empty. Generous on purpose: a false `[]` is indistinguishable from a real
+# one at the CLI, so the cost of waiting too long is a slow command and the
+# cost of waiting too little is a lie.
+SEARCH_RESULT_TIMEOUT_MS = 15000
+
+#: The narrower of X's two cookie-banner answers. Named rather than inlined
+#: because it is a *choice made inside someone else's account*, and a choice
+#: like that belongs where a reader can find and change it.
+CONSENT_REFUSE_LABEL = "Refuse non-essential cookies"
+
+#: The banner renders client-side like everything else on X, so a `count()`
+#: taken at `domcontentloaded` answers 0 and the dismissal silently skips —
+#: the same not-waiting bug as the search above, in the same file, found the
+#: same night. Short: a profile that has already answered renders no banner
+#: and every verb pays this once.
+CONSENT_BANNER_TIMEOUT_MS = 4000
+
+#: How long to wait for the focal post's inline reply box to render.
+COMPOSER_TIMEOUT_MS = 15000
 
 TOP_USAGE = """\
 Usage: envoy-x-browser login
        envoy-x-browser check [--json]
        envoy-x-browser read <url> [--json]
-       envoy-x-browser search <query> [--json]
+       envoy-x-browser search <query> [--top] [--json]
        envoy-x-browser draft <url> --text "<s>"
        envoy-x-browser send <url> --text "<s>" --confirm
+       envoy-x-browser draft-post --text "<s>"
+       envoy-x-browser post --text "<s>" --confirm
 
-send ships disarmed: BRR_X_BROWSER_SEND=1 in the environment AND --confirm
-on argv are both required, and it still refuses past the hourly cap.
+send/post ship disarmed: BRR_X_BROWSER_SEND=1 in the environment AND
+--confirm on argv are both required, and both still refuse past the
+hourly cap (one shared bucket across both verbs).
 A kill-switch file (see Paths.kill_switch) refuses every verb but check.\
 """
 
@@ -115,9 +164,13 @@ metrics if rendered.\
 """
 
 SEARCH_USAGE = """\
-Usage: envoy-x-browser search <query> [--json]
+Usage: envoy-x-browser search <query> [--top] [--json]
 
-Returns structured results for a live search.\
+Returns structured results for a search: author, text, permalink.
+Default is X's *Latest* tab — reverse-chronological, everything that
+matched, however small. `--top` asks for X's *Top* tab instead: ranked by
+engagement, which is the only one of the two that answers "what is
+actually being read about this right now."\
 """
 
 DRAFT_USAGE = """\
@@ -133,6 +186,22 @@ Usage: envoy-x-browser send <url> --text "<s>" --confirm
 Ships disarmed: refuses unless BOTH --confirm (this argv) and
 BRR_X_BROWSER_SEND=1 (environment) are present, and refuses independently
 once the hourly cap is spent.\
+"""
+
+DRAFT_POST_USAGE = """\
+Usage: envoy-x-browser draft-post --text "<s>"
+
+Opens the compose box (an original post, no reply target), fills <s>,
+screenshots the result to a path this prints, and stops. Never sends.\
+"""
+
+POST_USAGE = """\
+Usage: envoy-x-browser post --text "<s>" --confirm
+
+Ships disarmed: refuses unless BOTH --confirm (this argv) and
+BRR_X_BROWSER_SEND=1 (environment) are present, and refuses independently
+once the hourly cap is spent (shared with the reply lane's `send`).
+Posts an original — no reply target, no <url> argument.\
 """
 
 
@@ -311,6 +380,30 @@ def _parse_url_and_text(args: list[str], usage: str) -> tuple[str, str]:
     return url, text
 
 
+def _parse_text_only(args: list[str], usage: str) -> str:
+    """Same ``--text`` extraction as :func:`_parse_url_and_text`, minus the
+    url — the compose lane has no reply target to name. A leftover
+    positional argument after ``--text`` is pulled out refuses rather than
+    being silently ignored, since a stray url-shaped argument here usually
+    means the caller meant ``send``/``draft``, not this verb."""
+    if not args or "-h" in args or "--help" in args:
+        raise SystemExit(usage.strip())
+    args = list(args)
+    if "--text" not in args:
+        raise SystemExit(usage.strip() + "\n(missing --text)")
+    i = args.index("--text")
+    if i + 1 >= len(args):
+        raise SystemExit(usage.strip() + "\n(--text needs a value)")
+    text = args[i + 1]
+    del args[i : i + 2]
+    if args:
+        raise SystemExit(
+            usage.strip() + "\n(no positional arguments expected — this "
+            "verb has no reply target; did you mean `send`/`draft`?)"
+        )
+    return _dash_guard(text, "text")
+
+
 # ── the receipt trail (shared with the API lane) ────────────────────────
 
 
@@ -354,6 +447,13 @@ class _PlaywrightDriver:
         self._pw: Any = None
         self._context: Any = None
         self._page: Any = None
+        # Set by `_goto_composer`; `click_send` refuses to guess without
+        # them. `None` is the honest pre-open state — a send that reaches
+        # this class without a composer having been opened is a bug, and it
+        # should read as one rather than fall through to a page-wide
+        # `.first` on a send button.
+        self._composer_scope: Any = None
+        self._send_testid: str | None = None
 
     def __enter__(self) -> "_PlaywrightDriver":
         self._paths.profile_dir.mkdir(parents=True, exist_ok=True)
@@ -427,22 +527,147 @@ class _PlaywrightDriver:
             "metrics": metrics,
         }
 
-    def search(self, query: str) -> list[dict[str, Any]]:
-        url = f"{SEARCH_URL}?{urllib.parse.urlencode({'q': query, 'src': 'typed_query', 'f': 'live'})}"
+    def search(self, query: str, *, tab: str = "live") -> list[dict[str, Any]]:
+        params = {"q": query, "src": "typed_query", "f": SEARCH_TABS[tab]}
+        url = f"{SEARCH_URL}?{urllib.parse.urlencode(params)}"
         self._page.goto(url, wait_until="domcontentloaded")
         articles = self._page.locator('article[data-testid="tweet"]')
+        # X renders search results client-side, so at `domcontentloaded` there
+        # are zero articles on the page and `count()` — which does NOT
+        # auto-wait, unlike every locator call in `read_url` above — answered
+        # 0 every time. The verb returned `[]` for every query ever run
+        # through it, including ones with obvious live matches, and an empty
+        # list reads exactly like "nothing found". Wait for the first result
+        # before counting; a genuine no-match times out here and still
+        # returns `[]`, which is the one case that empty list is allowed to
+        # mean.
+        try:
+            articles.first.wait_for(state="visible", timeout=SEARCH_RESULT_TIMEOUT_MS)
+        except Exception:  # noqa: BLE001 - a real no-match, or a search wall
+            return []
         rows = []
         for i in range(min(articles.count(), 20)):
             article = articles.nth(i)
             rows.append({
                 "author": self._first_text(article, '[data-testid="User-Name"]'),
                 "text": self._first_text(article, '[data-testid="tweetText"]'),
+                # The permalink, because a result you cannot open is not a
+                # result: `read` and `draft`/`send` all take a URL, so a
+                # search that returns only author+text hands the caller a
+                # list it has no verb for. X puts the canonical
+                # `/<handle>/status/<id>` on the timestamp's own anchor.
+                "url": self._status_url(article),
             })
         return rows
 
-    def open_reply_composer(self, url: str) -> None:
+    def _status_url(self, article: Any) -> str | None:
+        """The `/status/<id>` permalink for one rendered article, or ``None``.
+
+        ``None`` is honest here rather than fatal: a promoted post or a
+        rendering X changes tomorrow simply has no link this way, and one
+        unlinkable row must not lose the caller the other nineteen.
+        """
+        try:
+            href = article.locator('a:has(time)').first.get_attribute("href", timeout=2000)
+        except Exception:  # noqa: BLE001
+            return None
+        if not href or "/status/" not in href:
+            return None
+        return href if href.startswith("http") else f"https://x.com{href}"
+
+    def _goto_composer(self, url: str) -> None:
+        """Navigate to *url* and leave a focused, typable composer behind.
+
+        **One door for every lane**, and that is the point rather than a
+        tidiness preference. Both write lanes need the same three things in
+        the same order — navigate, answer the consent banner, wait for the
+        text box — and the two were built a branch apart, each correct, each
+        knowing only its own. Enumerating "the composers that must dismiss
+        consent" is a list, and a list meets the member nobody added to it;
+        a single door is a structural property. A third lane either comes
+        through here or is not a composer.
+        """
         self._page.goto(url, wait_until="domcontentloaded")
-        self._page.locator('[data-testid="reply"]').first.click()
+        self._dismiss_consent()
+        box = self._page.locator('[data-testid="tweetTextarea_0"]').first
+        box.wait_for(state="visible", timeout=COMPOSER_TIMEOUT_MS)
+        box.click()
+        # Remember *which* composer this is, so `click_send` presses this
+        # one's button and not another on the same page. The compose modal
+        # is a `[role="dialog"]` rendered over the live home timeline —
+        # and that timeline carries its own inline composer, with its own
+        # `tweetButtonInline`, which Playwright considers perfectly
+        # visible even behind an overlay. Scoping is not
+        # tidiness here: an unscoped `.first` on a *send* button is a
+        # public act aimed by DOM order.
+        dialog = self._page.locator(
+            '[role="dialog"]:has([data-testid="tweetTextarea_0"])'
+        ).first
+        if dialog.count():
+            self._composer_scope = dialog
+            self._send_testid = "tweetButton"
+        else:
+            self._composer_scope = self._page
+            self._send_testid = "tweetButtonInline"
+
+    def _dismiss_consent(self) -> None:
+        """Answer X's cookie banner, or every click on the page is swallowed.
+
+        The banner renders inside ``#layers`` — the same stacking context
+        the composer uses — and intercepts pointer events for the whole
+        document, so ``open_reply_composer``'s click below never reaches
+        the reply button and Playwright retries until it times out. The
+        read verbs never noticed because they only read text. This is what
+        a silently dead reply lane looks like from the inside.
+
+        **Refuse, never accept.** The resident is acting inside someone
+        else's account; when a consent dialog offers a narrower and a
+        wider choice, the narrower one is the only one that is ours to
+        make. Answered once per persistent profile; a no-op every time
+        after that, and a no-op if X renders no banner at all.
+        """
+        button = self._page.get_by_role("button", name=CONSENT_REFUSE_LABEL).first
+        try:
+            button.wait_for(state="visible", timeout=CONSENT_BANNER_TIMEOUT_MS)
+        except Exception:  # noqa: BLE001 - no banner: answered already, or none shown
+            return
+        try:
+            button.click(timeout=3000)
+            self._page.wait_for_timeout(500)
+        except Exception:  # noqa: BLE001 - never block a verb on the banner
+            pass
+
+    def open_reply_composer(self, url: str) -> None:
+        """Focus the reply box **bound to the post at *url***.
+
+        Deliberately the inline composer under the focal post, and not the
+        modal behind the reply button: ``[data-testid="reply"]`` matches
+        every reply button rendered on the page, and ``.first`` on any
+        status that quotes or embeds another post is *that* post's button.
+        Measured 2026-08-17 on a status by ``@saen_dev`` quoting an
+        article — the modal opened captioned "Replying to @beamnxw", for a
+        URL naming neither. A reply lane that can silently address a
+        different post is worse than no reply lane, because the failure is
+        invisible from the calling side and public from everyone else's.
+        The inline box is bound to the focal post by construction.
+        """
+        self._goto_composer(url)
+
+    def open_post_composer(self) -> None:
+        """The compose lane's counterpart to :meth:`open_reply_composer` —
+        no target url, because an original has nothing to reply to. X's
+        full-screen composer at :data:`COMPOSE_URL` renders the same
+        ``tweetTextarea_0`` / ``tweetButton`` testids the reply modal does,
+        so :meth:`fill_text` / :meth:`screenshot` / :meth:`click_send` are
+        shared unmodified across both lanes.
+
+        Answers the consent banner for the same reason the reply lane does
+        — it renders inside ``#layers`` and intercepts pointer events
+        document-wide, so without this the send click is swallowed and
+        Playwright retries to timeout. This lane was written on a branch
+        that predated that finding; the two arrived correct and separately
+        and the collision only exists in the merge."""
+        self._goto_composer(COMPOSE_URL)
 
     def fill_text(self, text: str) -> None:
         box = self._page.locator('[data-testid="tweetTextarea_0"]').first
@@ -453,8 +678,69 @@ class _PlaywrightDriver:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._page.screenshot(path=str(path))
 
-    def click_send(self) -> None:
-        self._page.locator('[data-testid="tweetButton"]').first.click()
+    def click_send(self) -> str | None:
+        """Click send; best-effort return the new post's id.
+
+        **Two buttons, because there are two composers — and the choice
+        is made where the composer was opened, not here.** The inline reply
+        box under a focal post carries ``tweetButtonInline``; the
+        full-screen compose modal carries ``tweetButton``.
+        :meth:`_goto_composer` records which one it opened and the element
+        that scopes it, and this method presses that. Trying one testid
+        page-wide and falling back to the other is the version that ships a
+        public misfire: the compose modal renders over the live home
+        timeline, whose own inline composer carries ``tweetButtonInline``
+        and is "visible" to a query that does not know an overlay is on top
+        of it. ``.first`` on a *send* button is aiming by DOM order.
+
+        X shows a confirmation toast with a "View" link to the new post
+        (``.../status/<id>``) after a send. This is read on a short timeout
+        and the id parsed out of it when present. The toast is UI, not an
+        API contract, and no test here is allowed to actually post — so it
+        was verified the only way left: a live send on 2026-08-18T00:11Z
+        returned ``2089505353159381235``, and reading that id back gave the
+        posted text, this account as author, and a timestamp one second off
+        the receipt's. Anything short of a clean href returns ``None``
+        rather than guessing: the receipt this feeds must be able to say
+        "no id" honestly.
+
+        **The href is scoped to the toast, never to the page.** A bare
+        ``a[href*="/status/"]`` search takes ``.first`` across the whole
+        document, and the compose modal renders over the home timeline —
+        so the first status link on the page is somebody else's post, and
+        the receipt would name it with total confidence. Honest ``None``
+        is only honest if the alternative cannot be a *wrong* id. Same
+        defect class as the reply button above, one layer over.
+        """
+        if self._composer_scope is None or self._send_testid is None:
+            raise RuntimeError(
+                "click_send called before a composer was opened — "
+                "open_reply_composer/open_post_composer record which button "
+                "belongs to which composer, and pressing one without that is "
+                "aiming a public act by DOM order"
+            )
+        scope, testid = self._composer_scope, self._send_testid
+        button = scope.locator(f'[data-testid="{testid}"]').first
+        try:
+            button.wait_for(state="visible", timeout=5000)
+            button.click()
+        except Exception:  # noqa: BLE001 - fall back to the other composer's button
+            scope.locator(
+                '[data-testid="tweetButton"]'
+                if testid == "tweetButtonInline"
+                else '[data-testid="tweetButtonInline"]'
+            ).first.click()
+        try:
+            href = (
+                self._page.locator('[data-testid="toast"]')
+                .locator('a[href*="/status/"]')
+                .first.get_attribute("href", timeout=5000)
+            )
+        except Exception:  # noqa: BLE001 - best-effort; absence is honest, not fatal
+            return None
+        if not href or "/status/" not in href:
+            return None
+        return href.rstrip("/").split("/")[-1] or None
 
 
 DriverFactory = Callable[..., Any]
@@ -591,11 +877,12 @@ def _run_search(args: list[str], paths: Paths, factory: DriverFactory) -> None:
     if "-h" in args or "--help" in args:
         raise SystemExit(SEARCH_USAGE.strip())
     _refuse_if_killed(paths)
-    rest = [a for a in args if a != "--json"]
+    tab = "top" if "--top" in args else "live"
+    rest = [a for a in args if a not in ("--json", "--top")]
     query = _parse_single_arg(rest, SEARCH_USAGE, "query")
     with factory(paths, headless=True) as driver:
         _require_session(driver, "search")
-        rows = driver.search(query)
+        rows = driver.search(query, tab=tab)
     print(json.dumps(rows))
 
 
@@ -611,6 +898,60 @@ def _run_draft(args: list[str], paths: Paths, factory: DriverFactory) -> None:
         driver.fill_text(text)
         driver.screenshot(shot_path)
     print(str(shot_path))
+
+
+def _run_draft_post(args: list[str], paths: Paths, factory: DriverFactory) -> None:
+    if "-h" in args or "--help" in args:
+        raise SystemExit(DRAFT_POST_USAGE.strip())
+    _refuse_if_killed(paths)
+    text = _parse_text_only(args, DRAFT_POST_USAGE)
+    paths.shots_dir.mkdir(parents=True, exist_ok=True)
+    shot_path = paths.shots_dir / f"draft-post-{int(time.time())}.png"
+    with factory(paths, headless=False) as driver:
+        driver.open_post_composer()
+        driver.fill_text(text)
+        driver.screenshot(shot_path)
+    print(str(shot_path))
+
+
+def _run_post(args: list[str], paths: Paths, factory: DriverFactory) -> None:
+    if "-h" in args or "--help" in args:
+        raise SystemExit(POST_USAGE.strip())
+    _refuse_if_killed(paths)
+    armed, missing, rest = _send_arming(args)
+    text = _parse_text_only(rest, POST_USAGE)
+    if not armed:
+        raise SystemExit(
+            "refusing: post is disarmed — missing " + ", ".join(missing) +
+            ". Both --confirm (argv) and BRR_X_BROWSER_SEND=1 (env) are "
+            "required; neither arm alone is enough."
+        )
+    cap = cap_status(paths)
+    if cap["remaining"] <= 0:
+        raise SystemExit(
+            f"refusing: hourly cap reached ({cap['used']}/{cap['cap']} sent "
+            "in the last hour)"
+        )
+    with factory(paths, headless=False) as driver:
+        driver.open_post_composer()
+        driver.fill_text(text)
+        post_id = driver.click_send()
+    _record_send(paths)
+    _append_receipt(paths, {
+        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "lane": "browser",
+        "kind": "post",
+        "text": text,
+        "confirm": True,
+        # Explicit absence, never invented — the toast-scrape in
+        # _PlaywrightDriver.click_send() returns None on anything short of
+        # a clean id, and that None is written here, not papered over.
+        "post_id": post_id,
+    })
+    print(
+        f"posted (browser lane) · id {post_id}" if post_id
+        else "posted (browser lane) · id unknown (page did not yield one)"
+    )
 
 
 def _run_send(args: list[str], paths: Paths, factory: DriverFactory) -> None:
@@ -655,6 +996,8 @@ _VERBS: dict[str, Callable[[list[str], Paths, DriverFactory], None]] = {
     "search": _run_search,
     "draft": _run_draft,
     "send": _run_send,
+    "draft-post": _run_draft_post,
+    "post": _run_post,
 }
 
 
