@@ -187,6 +187,23 @@ def test_is_tracked(tmp_path, monkeypatch):
     assert is_tracked(Path("nonexistent.txt")) is False
 
 
+def test_path_exists_at_ref(tmp_path):
+    """#1370: the local, offline check ``relics._ForgeLinks.blob`` uses
+    before linking a ``file`` relic — must read the tree of *ref*, not the
+    working copy or the index, so an uncommitted or unpushed file never
+    passes."""
+    repo = _committed_repo(tmp_path)
+    assert gitops.path_exists_at_ref(repo, "main", "README.md") is True
+    assert gitops.path_exists_at_ref(repo, "main", "nonexistent.txt") is False
+    # A leading slash (as an absolute path degrades to, once stripped) must
+    # not falsely resolve against the repo root.
+    assert gitops.path_exists_at_ref(repo, "main", "/README.md") is True
+    # A staged-but-uncommitted file is not yet in the branch's tree.
+    (repo / "staged.txt").write_text("new", encoding="utf-8")
+    subprocess.run(["git", "add", "staged.txt"], cwd=repo, check=True)
+    assert gitops.path_exists_at_ref(repo, "main", "staged.txt") is False
+
+
 def test_fast_forward_branch_updates_checked_out_target(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
