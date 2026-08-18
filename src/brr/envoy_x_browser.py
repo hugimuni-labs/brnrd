@@ -19,18 +19,20 @@ token discipline.
 
 **The guardrails, in one place, because they're the load-bearing part:**
 
-- ``send`` ships **disarmed**: it refuses unless *both* ``--confirm``
-  (argv) and ``BRR_X_BROWSER_SEND=1`` (environment) are present, and
-  refuses independently if the hourly cap (:data:`DEFAULT_HOURLY_CAP`
-  unless overridden by ``Paths.config``) is spent. Neither arm alone is
-  enough, on purpose — an argv typo or a leaked env var must not be
-  sufficient on its own to post.
+- ``send`` and ``post`` both ship **disarmed**: each refuses unless
+  *both* ``--confirm`` (argv) and ``BRR_X_BROWSER_SEND=1`` (environment)
+  are present, and refuses independently if the hourly cap
+  (:data:`DEFAULT_HOURLY_CAP` unless overridden by ``Paths.config``,
+  shared by both verbs) is spent. Neither arm alone is enough, on
+  purpose — an argv typo or a leaked env var must not be sufficient on
+  its own to post.
 - A **kill switch** — the mere *presence* of ``Paths.kill_switch`` — is
   checked before every verb except ``check`` and refuses immediately, no
   browser launched, no side effects.
-- ``draft`` fills the composer, screenshots it, and **stops**. It never
-  calls the driver's ``click_send``; that call exists in exactly one
-  place in this module (:func:`_run_send`).
+- ``draft``/``draft-post`` fill the composer, screenshot it, and
+  **stop**. Neither calls the driver's ``click_send``; that call exists
+  in exactly two places in this module — the disarmed, capped, guarded
+  verbs :func:`_run_send` and :func:`_run_post` — never in a draft path.
 - The profile directory holds live session cookies — the whole account,
   if it leaks. It is created mode ``0700`` and the account home's own
   ``.gitignore`` (``account.py``'s ``GITIGNORE``) excludes it by name;
@@ -47,12 +49,26 @@ token discipline.
 ``(paths, *, headless) -> driver`` returning a context-managed object
 shaped like the methods :class:`_PlaywrightDriver` implements
 (``whoami``, ``wait_for_manual_login``, ``read_url``, ``search``,
-``open_reply_composer``, ``fill_text``, ``screenshot``, ``click_send``).
-Tests inject a fake at this seam and never touch a real browser — the
-guardrail logic (kill switch, cap arithmetic, the disarmed-send refusal,
-argv guards, the receipt-log shape) is exercised without Playwright
-installed, which is also why none of it lives inside
-:class:`_PlaywrightDriver`.
+``open_reply_composer``, ``open_post_composer``, ``fill_text``,
+``screenshot``, ``click_send``). Tests inject a fake at this seam and
+never touch a real browser — the guardrail logic (kill switch, cap
+arithmetic, the disarmed-send refusal, argv guards, the receipt-log
+shape) is exercised without Playwright installed, which is also why
+none of it lives inside :class:`_PlaywrightDriver`.
+
+**Two write lanes, same vocabulary, same guardrails.** ``draft``/``send``
+fill and (optionally) submit the **reply** box at a target URL;
+``draft-post``/``post`` do the identical fill-then-stop or
+fill-then-submit dance against ``x.com/compose/post`` instead — an
+**original**, no target URL, no ``open_reply_composer`` call. They share
+every guardrail function (``_send_arming``, ``_refuse_if_killed``,
+``cap_status``/``_record_send``) rather than duplicating them, so the
+hourly cap is one shared bucket across both lanes and the kill switch
+and disarmed-send checks cannot drift between them. Kept as two verb
+pairs rather than one branching on "was a URL given" — a reply and an
+original are different acts, and a typo that turns one into the other
+(dropping a URL argument, say) is exactly the failure this whole module
+exists to make hard.
 """
 
 from __future__ import annotations
@@ -78,6 +94,7 @@ HOUR_SECONDS = 3600.0
 LOGIN_URL = "https://x.com/login"
 HOME_URL = "https://x.com/home"
 SEARCH_URL = "https://x.com/search"
+COMPOSE_URL = "https://x.com/compose/post"
 
 TOP_USAGE = """\
 Usage: envoy-x-browser login
@@ -86,9 +103,12 @@ Usage: envoy-x-browser login
        envoy-x-browser search <query> [--json]
        envoy-x-browser draft <url> --text "<s>"
        envoy-x-browser send <url> --text "<s>" --confirm
+       envoy-x-browser draft-post --text "<s>"
+       envoy-x-browser post --text "<s>" --confirm
 
-send ships disarmed: BRR_X_BROWSER_SEND=1 in the environment AND --confirm
-on argv are both required, and it still refuses past the hourly cap.
+send/post ship disarmed: BRR_X_BROWSER_SEND=1 in the environment AND
+--confirm on argv are both required, and both still refuse past the
+hourly cap (one shared bucket across both verbs).
 A kill-switch file (see Paths.kill_switch) refuses every verb but check.\
 """
 
@@ -133,6 +153,22 @@ Usage: envoy-x-browser send <url> --text "<s>" --confirm
 Ships disarmed: refuses unless BOTH --confirm (this argv) and
 BRR_X_BROWSER_SEND=1 (environment) are present, and refuses independently
 once the hourly cap is spent.\
+"""
+
+DRAFT_POST_USAGE = """\
+Usage: envoy-x-browser draft-post --text "<s>"
+
+Opens the compose box (an original post, no reply target), fills <s>,
+screenshots the result to a path this prints, and stops. Never sends.\
+"""
+
+POST_USAGE = """\
+Usage: envoy-x-browser post --text "<s>" --confirm
+
+Ships disarmed: refuses unless BOTH --confirm (this argv) and
+BRR_X_BROWSER_SEND=1 (environment) are present, and refuses independently
+once the hourly cap is spent (shared with the reply lane's `send`).
+Posts an original — no reply target, no <url> argument.\
 """
 
 
@@ -311,6 +347,30 @@ def _parse_url_and_text(args: list[str], usage: str) -> tuple[str, str]:
     return url, text
 
 
+def _parse_text_only(args: list[str], usage: str) -> str:
+    """Same ``--text`` extraction as :func:`_parse_url_and_text`, minus the
+    url — the compose lane has no reply target to name. A leftover
+    positional argument after ``--text`` is pulled out refuses rather than
+    being silently ignored, since a stray url-shaped argument here usually
+    means the caller meant ``send``/``draft``, not this verb."""
+    if not args or "-h" in args or "--help" in args:
+        raise SystemExit(usage.strip())
+    args = list(args)
+    if "--text" not in args:
+        raise SystemExit(usage.strip() + "\n(missing --text)")
+    i = args.index("--text")
+    if i + 1 >= len(args):
+        raise SystemExit(usage.strip() + "\n(--text needs a value)")
+    text = args[i + 1]
+    del args[i : i + 2]
+    if args:
+        raise SystemExit(
+            usage.strip() + "\n(no positional arguments expected — this "
+            "verb has no reply target; did you mean `send`/`draft`?)"
+        )
+    return _dash_guard(text, "text")
+
+
 # ── the receipt trail (shared with the API lane) ────────────────────────
 
 
@@ -444,6 +504,15 @@ class _PlaywrightDriver:
         self._page.goto(url, wait_until="domcontentloaded")
         self._page.locator('[data-testid="reply"]').first.click()
 
+    def open_post_composer(self) -> None:
+        """The compose lane's counterpart to :meth:`open_reply_composer` —
+        no target url, because an original has nothing to reply to. X's
+        full-screen composer at :data:`COMPOSE_URL` renders the same
+        ``tweetTextarea_0`` / ``tweetButton`` testids the reply modal does,
+        so :meth:`fill_text` / :meth:`screenshot` / :meth:`click_send` are
+        shared unmodified across both lanes."""
+        self._page.goto(COMPOSE_URL, wait_until="domcontentloaded")
+
     def fill_text(self, text: str) -> None:
         box = self._page.locator('[data-testid="tweetTextarea_0"]').first
         box.click()
@@ -453,8 +522,31 @@ class _PlaywrightDriver:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._page.screenshot(path=str(path))
 
-    def click_send(self) -> None:
+    def click_send(self) -> str | None:
+        """Click send; best-effort return the new post's id.
+
+        X shows a confirmation toast with a "View" link to the new post
+        (``.../status/<id>``) after a send. This is read on a short timeout
+        and the id parsed out of it when present — but the toast is UI, not
+        an API contract, and reading it is unverified against a live send
+        (see this module's guardrail: no test here is allowed to actually
+        post). Anything short of a clean href — no toast, a redirect, a
+        selector miss — returns ``None`` rather than guessing: the receipt
+        this feeds must be able to say "no id" honestly, never fabricate
+        one. The reply lane calls this too and has always ignored the
+        return value; only the compose lane (:func:`_run_post`) reads it,
+        because only there is the new post's id otherwise unknown (a reply
+        receipt already names its parent via the target url)."""
         self._page.locator('[data-testid="tweetButton"]').first.click()
+        try:
+            href = self._page.locator('a[href*="/status/"]').first.get_attribute(
+                "href", timeout=5000
+            )
+        except Exception:  # noqa: BLE001 - best-effort; absence is honest, not fatal
+            return None
+        if not href:
+            return None
+        return href.rstrip("/").split("/")[-1] or None
 
 
 DriverFactory = Callable[..., Any]
@@ -613,6 +705,60 @@ def _run_draft(args: list[str], paths: Paths, factory: DriverFactory) -> None:
     print(str(shot_path))
 
 
+def _run_draft_post(args: list[str], paths: Paths, factory: DriverFactory) -> None:
+    if "-h" in args or "--help" in args:
+        raise SystemExit(DRAFT_POST_USAGE.strip())
+    _refuse_if_killed(paths)
+    text = _parse_text_only(args, DRAFT_POST_USAGE)
+    paths.shots_dir.mkdir(parents=True, exist_ok=True)
+    shot_path = paths.shots_dir / f"draft-post-{int(time.time())}.png"
+    with factory(paths, headless=False) as driver:
+        driver.open_post_composer()
+        driver.fill_text(text)
+        driver.screenshot(shot_path)
+    print(str(shot_path))
+
+
+def _run_post(args: list[str], paths: Paths, factory: DriverFactory) -> None:
+    if "-h" in args or "--help" in args:
+        raise SystemExit(POST_USAGE.strip())
+    _refuse_if_killed(paths)
+    armed, missing, rest = _send_arming(args)
+    text = _parse_text_only(rest, POST_USAGE)
+    if not armed:
+        raise SystemExit(
+            "refusing: post is disarmed — missing " + ", ".join(missing) +
+            ". Both --confirm (argv) and BRR_X_BROWSER_SEND=1 (env) are "
+            "required; neither arm alone is enough."
+        )
+    cap = cap_status(paths)
+    if cap["remaining"] <= 0:
+        raise SystemExit(
+            f"refusing: hourly cap reached ({cap['used']}/{cap['cap']} sent "
+            "in the last hour)"
+        )
+    with factory(paths, headless=False) as driver:
+        driver.open_post_composer()
+        driver.fill_text(text)
+        post_id = driver.click_send()
+    _record_send(paths)
+    _append_receipt(paths, {
+        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "lane": "browser",
+        "kind": "post",
+        "text": text,
+        "confirm": True,
+        # Explicit absence, never invented — the toast-scrape in
+        # _PlaywrightDriver.click_send() returns None on anything short of
+        # a clean id, and that None is written here, not papered over.
+        "post_id": post_id,
+    })
+    print(
+        f"posted (browser lane) · id {post_id}" if post_id
+        else "posted (browser lane) · id unknown (page did not yield one)"
+    )
+
+
 def _run_send(args: list[str], paths: Paths, factory: DriverFactory) -> None:
     if "-h" in args or "--help" in args:
         raise SystemExit(SEND_USAGE.strip())
@@ -655,6 +801,8 @@ _VERBS: dict[str, Callable[[list[str], Paths, DriverFactory], None]] = {
     "search": _run_search,
     "draft": _run_draft,
     "send": _run_send,
+    "draft-post": _run_draft_post,
+    "post": _run_post,
 }
 
 
