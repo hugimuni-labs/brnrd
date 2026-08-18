@@ -542,6 +542,63 @@ def test_capture_never_walks_the_hearth(tmp_path):
     )
 
 
+def test_capture_reports_the_sha_it_actually_landed_on_the_forge(tmp_path):
+    """#1368, auto-attribution half: ``committed_shas`` is the fact
+    ``_ForgeLinks.commit``'s declared-repo happy path needs — the sha
+    ``knowledge.capture`` just pushed, read from the knowledge repo's own
+    HEAD after a real push chain (the ``_capture_chain`` fixture), not
+    guessed or threaded through a flag."""
+    repo, cfg, forge = _capture_chain(tmp_path)
+    page = repo / ".brnrd-kb" / "repos" / "Gurio__brr" / "design-new.md"
+    page.write_text("a durable thought\n", encoding="utf-8")
+
+    committed_shas: list[str] = []
+    assert knowledge.capture(
+        repo, "kb: capture", cfg=cfg, committed_shas=committed_shas,
+    ) is True
+
+    forge_head = subprocess.run(
+        ["git", "rev-parse", "main"],
+        cwd=forge, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert committed_shas == [forge_head]
+
+
+def test_capture_is_a_noop_and_reports_no_sha_on_a_clean_chain(tmp_path):
+    repo, cfg, _forge = _capture_chain(tmp_path)
+
+    committed_shas: list[str] = []
+    assert knowledge.capture(
+        repo, "kb: capture", cfg=cfg, committed_shas=committed_shas,
+    ) is False
+    assert committed_shas == []
+
+
+def test_capture_reports_no_sha_when_the_forge_push_is_rejected(tmp_path):
+    """The other side of the fact: a diverged/rejected push means the local
+    HEAD is *not* actually on the remote, so declaring it as the pushed
+    commit would 404 exactly like an undeclared execution-repo guess does.
+    ``committed_shas`` must stay empty until the divergence is reconciled —
+    a fresh ``@{upstream}..HEAD`` re-check, not ``push_result`` alone,
+    matters here: this scenario sets a stale ``needs_sync`` marker from a
+    single failed push and must not credit HEAD just because a later,
+    unrelated call retries and *that* push also fails."""
+    repo, cfg, forge = _capture_chain(tmp_path)
+    other = tmp_path / "other"
+    subprocess.run(["git", "clone", "-q", str(forge), str(other)], check=True)
+    (other / "elsewhere.md").write_text("from another machine\n", encoding="utf-8")
+    _git(other, "add", "-A")
+    _git(other, "commit", "-q", "-m", "diverge")
+    _git(other, "push", "-q", "origin", "main")
+
+    (repo / ".brnrd-kb" / "repos" / "Gurio__brr" / "mine.md").write_text("x\n", encoding="utf-8")
+    committed_shas: list[str] = []
+    knowledge.capture(repo, "kb: capture", cfg=cfg, committed_shas=committed_shas)
+
+    assert committed_shas == []
+    assert not _forge_has(forge, "repos/Gurio__brr/mine.md")
+
+
 def test_committed_pages_in_window_credits_resident_committed_pages(tmp_path):
     """#538: a page the resident *commits* mid-run is invisible to the
     dirty-vs-HEAD capture diff; the run-start OID window still sees it —

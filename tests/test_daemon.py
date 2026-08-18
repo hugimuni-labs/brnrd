@@ -727,6 +727,101 @@ def test_capture_knowledge_still_credits_a_run_with_no_live_ancestor(
     ]
 
 
+def test_capture_knowledge_reports_a_declared_commit_relic_for_the_landed_sha(
+    tmp_path, monkeypatch,
+):
+    """#1368, auto-attribution half: the capture net's own commit relic
+    must carry the *knowledge* repo's own remote label, not the execution
+    repo's — the declaration ``_ForgeLinks.commit`` needs to link it
+    instead of guessing against ``tmp_path`` (this test's execution repo)
+    and 404ing."""
+    task = Run(id="run-sha", event_id="evt-sha", body="work")
+    outbox = tmp_path / ".brr" / "outbox" / task.event_id
+    outbox.mkdir(parents=True)
+
+    def fake_capture(*_args, captured_pages, committed_shas, **_kwargs):
+        committed_shas.append("a81e0631234567890abcdef1234567890abcdef")
+        return True
+
+    monkeypatch.setattr(daemon.knowledge, "capture", fake_capture)
+    monkeypatch.setattr(
+        daemon.knowledge, "committed_pages_in_window", lambda *_a, **_k: [],
+    )
+    monkeypatch.setattr(
+        daemon, "_knowledge_repo_label",
+        lambda *_a, **_k: "hugimuni-labs/brnrd-knowledge",
+    )
+
+    daemon._capture_knowledge(tmp_path, {}, task, outbox_dir=outbox)
+
+    assert daemon.relics.read_reported(outbox) == [
+        {
+            "kind": "commit",
+            "sha": "a81e0631234567890abcdef1234567890abcdef",
+            "repo": "hugimuni-labs/brnrd-knowledge",
+        },
+    ]
+
+
+def test_capture_knowledge_writes_no_commit_relic_without_a_declarable_repo(
+    tmp_path, monkeypatch,
+):
+    """A knowledge repo with no resolvable remote label has no fact to
+    declare — silence, not a guess (mirrors ``knowledge.capture``'s own
+    ``mark_never_linked`` posture for the no-remote case)."""
+    task = Run(id="run-no-remote", event_id="evt-no-remote", body="work")
+    outbox = tmp_path / ".brr" / "outbox" / task.event_id
+    outbox.mkdir(parents=True)
+
+    def fake_capture(*_args, captured_pages, committed_shas, **_kwargs):
+        committed_shas.append("deadbeef" * 5)
+        return True
+
+    monkeypatch.setattr(daemon.knowledge, "capture", fake_capture)
+    monkeypatch.setattr(
+        daemon.knowledge, "committed_pages_in_window", lambda *_a, **_k: [],
+    )
+    monkeypatch.setattr(daemon, "_knowledge_repo_label", lambda *_a, **_k: None)
+
+    daemon._capture_knowledge(tmp_path, {}, task, outbox_dir=outbox)
+
+    assert daemon.relics.read_reported(outbox) == []
+
+
+def test_capture_knowledge_defers_the_commit_relic_to_a_live_ancestor_too(
+    tmp_path, monkeypatch,
+):
+    """The commit relic is the same sweep event as the kb-page deferral
+    (#1276) — crediting it to the strand as well as the ancestor's own
+    future capture call would double-report the one commit."""
+    runs_dir = tmp_path / ".brr" / "runs"
+    _persist_run_manifest(runs_dir, "run-parent", "running")
+    child = Run(
+        id="run-child-sha", event_id="evt-child-sha", body="child work",
+        meta={"spawn_parent_run_id": "run-parent", "kb_start_oid": "a" * 40},
+    )
+    outbox = tmp_path / ".brr" / "outbox" / child.event_id
+    outbox.mkdir(parents=True)
+
+    def fake_capture(*_args, captured_pages, committed_shas, run_id=None, **_kwargs):
+        captured_pages.append("parent-authored.md")
+        committed_shas.append("deadbeef" * 5)
+        return True
+
+    monkeypatch.setattr(daemon.knowledge, "capture", fake_capture)
+    monkeypatch.setattr(
+        daemon.knowledge, "committed_pages_in_window", lambda *_a, **_k: [],
+    )
+    monkeypatch.setattr(
+        daemon, "_knowledge_repo_label",
+        lambda *_a, **_k: "hugimuni-labs/brnrd-knowledge",
+    )
+
+    daemon._capture_knowledge(tmp_path, {}, child, outbox_dir=outbox)
+
+    assert daemon.relics.read_reported(outbox) == []
+
+
 def test_capture_knowledge_stopped_run_suppresses_shared_window_sweep(
     tmp_path, monkeypatch,
 ):
