@@ -4,7 +4,7 @@
   <g style="mix-blend-mode:screen">
     <g fill="none" stroke-width="30" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#ff6f61" transform="translate(-5,0)"><path d="M 152 156 V 356"/><path d="M 360 156 V 356"/></g>
     <g fill="none" stroke-width="30" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#3ec9bd" transform="translate(5,0)"><path d="M 152 156 V 356"/><path d="M 360 156 V 356"/></g>
-    <g fill="none" stroke-width="30" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#ff6f61"><path d="M 118 302 H 394"/></g>
-    <g fill="none" stroke-width="30" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#3ec9bd"><path d="M 102 156 L 256.0 418 L 410 156"/></g>
+    <g fill="none" stroke-width="30" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#ff6f61"><path d="M 118 268 H 394"/></g>
+    <g fill="none" stroke-width="30" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#3ec9bd"><path d="M 102 156 L 256.0 366 L 410 156"/></g>
   </g>
 </svg>

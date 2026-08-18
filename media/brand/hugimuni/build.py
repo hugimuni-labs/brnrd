@@ -23,10 +23,10 @@ BOARD = 512
 AXIS = BOARD / 2
 LEFT, RIGHT = 152, 360                # the shared stems
 TOP, BOTTOM = 156, 356
-CROSS = 302                           # H's crossbar
+CROSS = 268                           # H's crossbar
 OVERHANG = 34                         # the crossbar runs past both stems
 SPREAD = 50                           # M's shoulders sit outside the stems, so
-RISE, DIP = 0, 62                    # each leg crosses its stem low, not at
+RISE, DIP = 0, 10                    # each leg crosses its stem low, not at
                                       # the very top where nothing reads as woven
 STROKE = 30
 GHOST = 5                             # aberration offset on the shared stems
