@@ -911,6 +911,7 @@ def capture(
     conversation_id: str | None = None,
     run_id: str | None = None,
     mirror_notes: list[str] | None = None,
+    committed_shas: list[str] | None = None,
 ) -> bool:
     """Commit and push the knowledge chain. Best-effort; never raises.
 
@@ -931,6 +932,17 @@ def capture(
     ``mirror_notes``, when supplied, is extended with the reason the
     ``.brnrd-kb/`` mirror was left behind, if it was (#659) — a stale mirror
     reads clean, so the skip has to be said out loud somewhere.
+
+    ``committed_shas``, when supplied, is extended with the account-knowledge
+    repo's own HEAD sha, but only when that HEAD is actually confirmed
+    reflected on its own remote (a fresh ``@{upstream}..HEAD`` re-check,
+    never assumed from ``push_result`` alone — a retried push of an
+    unrelated stale ``needs_sync`` marker must not credit *this* HEAD as
+    pushed when it was already there). This is the fact #1368's auto-
+    attribution half is missing: the caller can turn it straight into a
+    declared ``{"kind": "commit", "sha": ..., "repo": ...}`` relic without
+    guessing which project the sha belongs to — the repo is read from this
+    same repo's own remote at the call site, not the execution repo.
     """
 
     try:
@@ -1048,6 +1060,19 @@ def capture(
                         ),
                         status=push_result.status.value,
                     )
+            # A fresh re-check, not a flag threaded through the branches
+            # above: the only fact that matters is "does the remote have
+            # this HEAD right now", and re-asking it here is cheap (no
+            # network — a local ref comparison) and correct regardless of
+            # which of steps 1-4 actually moved the needle.
+            if (
+                committed_shas is not None
+                and moved
+                and not _ahead_of_upstream(home_knowledge)
+            ):
+                head_sha = gitops.rev_parse(home_knowledge, "HEAD")
+                if head_sha:
+                    committed_shas.append(head_sha)
     except Exception:  # noqa: BLE001 - capture is best-effort, never fatal
         return moved
     return moved

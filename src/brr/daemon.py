@@ -11927,6 +11927,7 @@ def _capture_knowledge(
     sweep_run_id = live_ancestor or task.id
 
     captured_pages: list[str] = []
+    committed_shas: list[str] = []
     mirror_notes: list[str] = []
     moved = knowledge.capture(
         repo_root, f"brnrd-kb: capture knowledge after run {task.id}", cfg=cfg,
@@ -11934,6 +11935,7 @@ def _capture_knowledge(
         conversation_id=task.conversation_key or None,
         run_id=sweep_run_id,
         mirror_notes=mirror_notes,
+        committed_shas=committed_shas,
     )
     if moved:
         print(f"[brnrd] knowledge: captured kb after {task.id}")
@@ -11960,6 +11962,11 @@ def _capture_knowledge(
                 f"swept by {task.id} to live ancestor {live_ancestor} (#1276)"
             )
         captured_pages = []
+        # The sweep commit's sha (if any) is the ancestor's to claim too —
+        # its own future capture call runs the same ``knowledge.capture``
+        # under its own identity and gets its own accurate HEAD reading;
+        # crediting it here as well would double-report the same commit.
+        committed_shas = []
 
     # Union in pages the resident committed mid-run (#538): everything the
     # knowledge repo took between the run-start stamp and now, scoped to
@@ -11976,9 +11983,10 @@ def _capture_knowledge(
         if page not in seen_pages:
             captured_pages.append(page)
             seen_pages.add(page)
+    reported = relics.read_reported(outbox_dir)
     reported_kb_paths = {
         str(record.get("path") or "").removeprefix("kb/")
-        for record in relics.read_reported(outbox_dir)
+        for record in reported
         if record.get("kind") == "kb"
     }
     for page in captured_pages:
@@ -11988,6 +11996,46 @@ def _capture_knowledge(
         relics.append(
             outbox_dir, "kb", path=page, **({"url": url} if url else {}),
         )
+
+    if committed_shas:
+        # #1368, auto-attribution half: the capture net above just committed
+        # and pushed the knowledge repo — declare the repo it actually
+        # pushed to, read fresh from that repo's own remote (never the
+        # execution repo, never a config constant), so a knowledge-repo
+        # commit relic arrives declared and ``_ForgeLinks.commit``'s
+        # existing happy path (relics.py:484-487) links it instead of
+        # guessing and 404ing.
+        repo_label = _knowledge_repo_label(repo_root, cfg)
+        if repo_label:
+            reported_commit_shas = {
+                str(record.get("sha") or "")
+                for record in reported
+                if record.get("kind") == "commit"
+            }
+            for sha in committed_shas:
+                if sha in reported_commit_shas:
+                    continue
+                relics.append(outbox_dir, "commit", sha=sha, repo=repo_label)
+
+
+def _knowledge_repo_label(repo_root: Path, cfg: dict) -> str | None:
+    """``owner/repo`` for the account-knowledge repo's own remote.
+
+    Read fresh at call time from that repo's own git config — never
+    inferred from the execution repo, and never a config constant, because
+    that guess is exactly what shipped the 404 #1368 measured. ``None``
+    when there is no knowledge repo checked out here, or its remote isn't a
+    recognised forge (best-effort, matches ``knowledge.capture``'s own
+    early-return posture).
+    """
+    try:
+        ctx = account.resolve_context(repo_root, cfg, create=False)
+        home_knowledge = account.knowledge_path(ctx)
+    except Exception:  # noqa: BLE001 - relic attribution must never break the thought
+        return None
+    if not (home_knowledge / ".git").exists():
+        return None
+    return relics.forge_links(home_knowledge).repo_path
 
 
 def _weld_capture(
