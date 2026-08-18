@@ -429,6 +429,157 @@ def kill_active() -> bool:
     return _kill_procs(procs)
 
 
+def _power_assertion_command(pid: int, label: str) -> list[str] | None:
+    """Argv for a companion process that inhibits idle *system* sleep while
+    *pid* (the runner subprocess) is alive, or ``None`` when this host has
+    nothing to offer (#1485).
+
+    A sleeping host kills whatever runner subprocess it caught mid-flight --
+    measured 2026-08-18: three runs killed across four hours of a laptop
+    cycling idle-sleep, each reporting a raw "computer went to sleep"
+    API error to the correspondent. Comfort, not a precondition: every
+    branch below is allowed to come back empty, and the caller must treat
+    that identically to a successful no-op.
+
+    - **Darwin**: ``caffeinate -i -w <pid>``. ``-i`` blocks idle *system*
+      sleep only -- display sleep, and anything the user did deliberately
+      (closing the lid, choosing Sleep from the menu), is untouched. ``-w
+      <pid>`` ties the assertion's own lifetime to the runner subprocess,
+      not to brr: if the daemon itself crashes, caffeinate still exits the
+      moment the pid it is watching does, so a dead daemon can never pin
+      the machine awake forever.
+    - **Linux**: ``systemd-inhibit`` has no ``-w <pid>`` of its own, so it
+      wraps a shell loop that polls *pid* every 5s and exits the moment it's
+      gone -- giving it the same self-terminating property as ``-w`` above,
+      deliberately, rather than trusting the caller's own cleanup alone.
+    - Anything else -- an unrecognised platform, or the platform's own
+      binary missing from PATH -- returns ``None``.
+    """
+    if sys.platform == "darwin":
+        if shutil.which("caffeinate") is None:
+            return None
+        return ["caffeinate", "-i", "-w", str(pid)]
+    if sys.platform.startswith("linux"):
+        if shutil.which("systemd-inhibit") is None:
+            return None
+        return [
+            "systemd-inhibit", "--what=idle:sleep", "--who=brnrd",
+            f"--why={label}", "sh", "-c",
+            'while kill -0 "$1" 2>/dev/null; do sleep 5; done',
+            "_", str(pid),
+        ]
+    return None
+
+
+def _start_power_assertion(pid: int, label: str) -> subprocess.Popen | None:
+    """Best-effort idle-sleep inhibitor for the runner subprocess at *pid*.
+
+    Never raises and never blocks the caller: an unsupported platform, a
+    missing binary, or a failed ``Popen`` all collapse to ``None``, which
+    the caller treats exactly like "nothing to clean up later" (#1485).
+    The ``try`` wraps command construction too, deliberately wider than the
+    ``Popen`` call alone -- this is a comfort, never a precondition, so no
+    exception from this helper is allowed to reach the caller.
+    """
+    try:
+        command = _power_assertion_command(pid, label)
+        if command is None:
+            return None
+        return subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return None
+
+
+def _stop_power_assertion(proc: subprocess.Popen | None) -> None:
+    """Tear down a companion started by :func:`_start_power_assertion`.
+
+    Both companions are self-terminating once the watched pid exits (see
+    the docstring above), so this is normally just reaping an already-dead
+    process -- but a runner that dies by exception, not by ``wait()``
+    returning, still must not leak the companion, so this always fires.
+    """
+    if proc is None:
+        return
+    try:
+        if proc.poll() is None:
+            proc.terminate()
+        proc.wait(timeout=5)
+    except Exception:
+        try:
+            proc.kill()
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+
+
+# Below this, an idle-sleep timer this short risks catching an unattended
+# run mid-flight even with the per-run assertion above in place (a missing
+# `caffeinate` binary, a run that outlives its own assertion somehow) --
+# worth a doctor nag; at or above it, or disabled (``0``), the machine's own
+# posture is no longer the likely culprit. Not load-bearing for correctness,
+# only for how eagerly `brnrd runners doctor` speaks up (#1485).
+_SHORT_IDLE_SLEEP_MINUTES = 60
+
+
+def macos_idle_sleep_minutes() -> int | None:
+    """AC-power idle-sleep timeout in minutes, from ``pmset -g custom``.
+
+    ``None`` on anything but Darwin, when ``pmset`` is missing, or when its
+    output doesn't parse -- skip rather than guess (#1485), same rule the
+    Linux/other doctor path follows by never running this at all.
+    """
+    if sys.platform != "darwin":
+        return None
+    if shutil.which("pmset") is None:
+        return None
+    try:
+        completed = subprocess.run(
+            ["pmset", "-g", "custom"],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    in_ac_section = False
+    for line in completed.stdout.splitlines():
+        if not line.startswith((" ", "\t")):
+            # A flush-left line is a new power-source header, e.g.
+            # "AC Power:" / "Battery Power:" -- everything indented under it
+            # belongs to that source until the next one.
+            in_ac_section = line.strip().startswith("AC Power")
+            continue
+        if not in_ac_section:
+            continue
+        parts = line.split()
+        if len(parts) == 2 and parts[0] == "sleep" and parts[1].isdigit():
+            return int(parts[1])
+    return None
+
+
+def idle_sleep_doctor_warning() -> str | None:
+    """A ``brnrd runners doctor`` line when AC-power idle sleep is short and
+    nonzero, or ``None`` when there's nothing to say (#1485).
+
+    ``0`` means idle sleep is off outright -- the healthy state. Names the
+    remedy verbatim rather than describing the risk, so the fix is a copy
+    away.
+    """
+    minutes = macos_idle_sleep_minutes()
+    if not minutes:
+        return None
+    if minutes >= _SHORT_IDLE_SLEEP_MINUTES:
+        return None
+    return (
+        f"AC-power idle sleep is set to {minutes} minute(s) -- an "
+        "unattended run risks the host suspending mid-run (#1485). "
+        "Remedy: sudo pmset -a sleep 0"
+    )
+
+
 DEFAULT_RUNNER_TIMEOUT = 7200
 
 
@@ -2117,9 +2268,10 @@ def invoke_runner(
     try:
         with open(out_path, "w", encoding="utf-8") as f_out, \
                 open(err_path, "w", encoding="utf-8") as f_err:
+            invocation_label = invocation.label or f"invoke-{id(invocation)}"
             proc_key, proc = start_registered_process(
                 cmd,
-                invocation.label or f"invoke-{id(invocation)}",
+                invocation_label,
                 cwd=invocation.cwd,
                 stdin=(
                     subprocess.PIPE if prompt_stdin is not None
@@ -2130,6 +2282,12 @@ def invoke_runner(
                 text=True,
                 env=proc_env,
             )
+            # Comfort, not a precondition (#1485): keep the host awake for as
+            # long as this subprocess runs. Every failure mode -- no runner
+            # on this platform, binary missing, Popen error -- collapses to
+            # ``None`` inside the helper and this run proceeds exactly as it
+            # would have before this existed.
+            power_assertion = _start_power_assertion(proc.pid, invocation_label)
             if prompt_stdin is not None and proc.stdin is not None:
                 # Cannot deadlock: stdout/stderr are *files*, not pipes, so the child
                 # is never blocked on a full pipe we are not draining. It reads the
@@ -2156,6 +2314,7 @@ def invoke_runner(
     finally:
         if "proc_key" in locals() and "proc" in locals():
             _clear_active_proc(proc_key, proc)
+        _stop_power_assertion(locals().get("power_assertion"))
 
     if returncode != 127:
         stdout = _read_capture(out_path)

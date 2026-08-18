@@ -33,6 +33,15 @@ INTERRUPTED = "interrupted"
 # interrupted-run marker (#316), after proving the dispatching process
 # is gone.
 HOST_INTERRUPTED = "host_interrupted"
+# The runner *did* run, and its own text says the host suspended out from
+# under it mid-request -- distinct from HOST_INTERRUPTED (daemon-restart
+# proof, #316, never produced here) and from TRANSPORT_ERROR (a dropped
+# connection with no stated cause): this is the one failure kind whose
+# text names its own cause, so the correspondent-facing reply can say
+# "the host went to sleep" instead of relaying a raw API error string
+# (#1485; the exact string measured 2026-08-18: "API Error: Your computer
+# went to sleep mid-response.").
+HOST_SUSPENDED = "host_suspended"
 
 
 _QUOTA_PATTERNS = (
@@ -114,6 +123,19 @@ _TRANSPORT_PATTERNS = (
     r"\bincomplete chunked read\b",
 )
 
+# Host-suspend signatures (#1485) -- the wording a Shell prints when the
+# in-flight request died because the *machine* slept, not because the
+# provider or the network did anything. Checked ahead of every other list:
+# it is the most specific signal available (the runner is naming its own
+# cause), so it must win over a generic transport/provider match on the
+# same text.
+_HOST_SUSPEND_PATTERNS = (
+    r"\bcomputer went to sleep\b",
+    r"\bsystem went to sleep\b",
+    r"\bwent to sleep mid-response\b",
+    r"\bmachine (?:was )?(?:asleep|suspended)\b",
+)
+
 
 def looks_like_transport_failure(text: str | None) -> bool:
     """Whether *text* carries a transport signature (case-insensitive).
@@ -151,6 +173,8 @@ def classify_failure(
     if text:
         if "turn interrupted" in text:
             return INTERRUPTED
+        if _matches_any(text, _HOST_SUSPEND_PATTERNS):
+            return HOST_SUSPENDED
         if _matches_any(text, _QUOTA_PATTERNS):
             return QUOTA_EXHAUSTED
         # Before AUTH: an egress denial answers 403, and `\b403\b` is an
@@ -190,6 +214,11 @@ def reason_prefix(kind: str) -> str:
         INTERRUPTED: "runner was interrupted (external kill or shell interrupt)",
         HOST_INTERRUPTED: (
             "run was interrupted by a host/daemon restart mid-flight"
+        ),
+        HOST_SUSPENDED: (
+            "the host went to sleep mid-run (#1485) — retrying now that a "
+            "power assertion holds the machine awake for a runner's "
+            "lifetime should avoid a repeat"
         ),
     }.get(kind, "runner failed")
 
