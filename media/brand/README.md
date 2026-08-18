@@ -26,6 +26,22 @@ should resemble the resident's avatar. They are the same mark in different
 frames: the company wears the resting frame, the resident wears the live one.
 No resemblance to engineer.
 
+## The two frames
+
+The five slots spell the name *and* carry the face, so the mark has two
+resting-vs-awake frames and both are drawn:
+
+- **`wordmark-*`** — `brnᴙd`, the resting frame. All five slots are letters,
+  built from straight strokes and angular joins, with the two staves keeping
+  the silhouette. The fourth letter is reversed, which is not decoration: it is
+  the same mirror `bRnЯd` already performs on the site, and it makes the
+  resting frame bilaterally symmetric about the identical axis the face uses.
+- **`mark-*`** — `b·_·d`, the awake frame. Slots 2–4 become the state.
+
+The first draft of this file shipped only the awake frame, which is how a
+five-slot argument managed to drop three letters. The maintainer's hand-drawn
+sketch is what put the resting frame back.
+
 ## What changed, and what didn't
 
 The current logo is a power button whose stem is elaborated into a stave. The
