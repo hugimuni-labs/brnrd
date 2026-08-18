@@ -21,7 +21,7 @@ OUT = Path(__file__).parent
 
 BOARD = 512
 AXIS = BOARD / 2
-LEFT, RIGHT = 152, 360                # the shared stems
+LEFT, RIGHT = 172, 340                # the shared stems
 TOP, BOTTOM = 156, 356
 CROSS = 268                           # H's crossbar
 OVERHANG = 34                         # the crossbar runs past both stems
@@ -53,9 +53,21 @@ STEMS = f'<path d="M {LEFT} {TOP} V {BOTTOM}"/><path d="M {RIGHT} {TOP} V {BOTTO
 # instead of one sitting inside the other — which is the difference between a
 # monogram and two letters parked in the same box.
 BAR_H = f'<path d="M {LEFT - OVERHANG} {CROSS} H {RIGHT + OVERHANG}"/>'
+TAIL = 30                             # how far each leg runs past the other
+
+
 def vee_m() -> str:
-    return (f'<path d="M {LEFT - SPREAD} {TOP - RISE} '
-            f'L {AXIS} {BOTTOM + DIP} L {RIGHT + SPREAD} {TOP - RISE}"/>')
+    """Two legs that *cross*, not a V that meets.
+
+    His read, and it is the one that finally answers "the bottom is not
+    properly intersected": a V's two strokes touch at a vertex and stop, and
+    a vertex is not a crossing. Running each leg past the other puts a real
+    intersection at the foot of the mark, so the weave closes at both ends
+    instead of only at the top.
+    """
+    drop = BOTTOM + DIP
+    return (f'<path d="M {LEFT - SPREAD} {TOP - RISE} L {AXIS + TAIL} {drop}"/>'
+            f'<path d="M {RIGHT + SPREAD} {TOP - RISE} L {AXIS - TAIL} {drop}"/>')
 
 
 def svg(name: str) -> str:
