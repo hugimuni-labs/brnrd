@@ -112,7 +112,76 @@ def test_do_outbox_flag_overrides_environment(tmp_path, monkeypatch, capsys):
     assert "run=run-1" in capsys.readouterr().out
 
 
+def test_do_explicit_bad_outbox_names_the_path_when_staging(tmp_path, monkeypatch, capsys):
+    """A relative ``--outbox`` that resolves nowhere from the current cwd is a
+    caller mistake, not a crash. Repro shape from #1337: cwd inside the
+    outbox, then the same relative path re-passed to ``--outbox`` doubles
+    against cwd (`<outbox>/.brr/outbox/<evt>`) instead of naming itself —
+    precedent for `monkeypatch.chdir` mid-test: tests/test_cli.py:52, :1113.
+    """
+    outbox = tmp_path / ".brr" / "outbox" / "evt-1"
+    outbox.mkdir(parents=True)
+    monkeypatch.delenv("BRR_OUTBOX_DIR", raising=False)
+    monkeypatch.delenv("BRR_PORTAL_STATE", raising=False)
+    monkeypatch.chdir(outbox)
+    relative = ".brr/outbox/evt-1"
+
+    assert main(["do", "--outbox", relative, "--note", "evt-1"]) == 1
+    err = capsys.readouterr().err
+    assert relative in err
+    assert str(outbox / relative) in err
+    assert "no such directory" in err
+    assert "Nothing was staged" in err
+
+
+def test_do_bare_explicit_bad_outbox_is_not_silently_swallowed(tmp_path, monkeypatch, capsys):
+    """The asymmetry #1337 named: bare `brnrd do` (no verbs) used to read a bad
+    explicit ``--outbox`` back as an innocent "no live portal-state.json"
+    absence, identical to the legitimate no-run case. An *explicit* argument
+    that fails to resolve must say so instead — only the env-derived
+    fallback stays lenient.
+    """
+    monkeypatch.delenv("BRR_OUTBOX_DIR", raising=False)
+    monkeypatch.delenv("BRR_PORTAL_STATE", raising=False)
+    bad = tmp_path / "does-not-exist"
+
+    assert main(["do", "--outbox", str(bad)]) == 1
+    err = capsys.readouterr().err
+    assert "no such directory" in err
+    assert "no live portal-state.json" not in err
+
+
+def test_do_env_derived_absent_outbox_still_reads_as_absence(tmp_path, monkeypatch, capsys):
+    """The leniency this fix must not touch: a live-run env var pointing at a
+    directory that no longer exists (e.g. a stale ``BRR_OUTBOX_DIR`` from a
+    finished run) is the legitimate "nothing to report" case, not a caller
+    typo — `do.read_portal_state`'s ``OSError`` swallow is correct here and
+    must stay untouched by the new explicit-argument check.
+    """
+    stale = tmp_path / "long-gone"
+    monkeypatch.setenv("BRR_OUTBOX_DIR", str(stale))
+    monkeypatch.delenv("BRR_PORTAL_STATE", raising=False)
+
+    assert main(["do"]) == 1
+    err = capsys.readouterr().err
+    assert "no live portal-state.json" in err
+    assert "no such directory" not in err
+
+
 # ── --mood ───────────────────────────────────────────────────────────
+
+
+def test_mood_command_explicit_bad_outbox_names_the_path(tmp_path, capsys):
+    """`brnrd mood` is the standalone verb (`cli.cmd_mood`), not `do
+    --mood` — it shares the same `Path(explicit) if explicit else
+    _wake_outbox_dir()` shape #1337 names, so it needs the same check.
+    """
+    bad = tmp_path / "does-not-exist"
+
+    assert main(["mood", "focused", "--outbox", str(bad)]) == 1
+    err = capsys.readouterr().err
+    assert "no such directory" in err
+    assert "Nothing was written" in err
 
 
 def test_do_mood_resolves_and_writes_the_control_file(tmp_path, monkeypatch, capsys):
@@ -600,6 +669,23 @@ def test_cut_errors_without_an_outbox(monkeypatch, capsys, tmp_path):
 
     assert main(["cut", str(declaration), "--timeout", "0.01"]) == 1
     assert "no run outbox" in capsys.readouterr().err
+
+
+def test_cut_explicit_bad_outbox_names_the_path(tmp_path, monkeypatch, capsys):
+    """#1337: sibling of `do`/`await` coverage above — `cut` shares the same
+    ``Path(args.outbox) if args.outbox else _wake_outbox_dir()`` one-liner
+    the ticket names, so it needs the same explicit-argument check.
+    """
+    monkeypatch.delenv("BRR_OUTBOX_DIR", raising=False)
+    monkeypatch.delenv("BRR_PORTAL_STATE", raising=False)
+    declaration = tmp_path / "bolt.md"
+    declaration.write_text("---\n---\nDone.\n", encoding="utf-8")
+    bad = tmp_path / "does-not-exist"
+
+    assert main(["cut", str(declaration), "--outbox", str(bad)]) == 1
+    err = capsys.readouterr().err
+    assert "no such directory" in err
+    assert "Nothing was written" in err
 
 
 def test_cut_errors_for_a_missing_file(tmp_path, monkeypatch, capsys):
