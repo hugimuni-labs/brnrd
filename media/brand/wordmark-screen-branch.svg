@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>brnrd — the five-slot mark, screen register</title>
+  <rect width="512" height="512" rx="112" fill="#0c0906"/>
+  <g fill="none" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" stroke="#ff3b30" opacity="0.55" transform="translate(-7,0)">
+    <path d="M 72.0 92 V 420"/>
+    <path d="M 72.0 146 L 34.0 96"/>
+    <path d="M 72.0 146 L 110.0 96"/>
+    <path d="M 48.0 196 H 96.0"/>
+    <path d="M 48.0 236 H 96.0"/>
+    <path d="M 72.0 308 a 62 56.0 0 0 1 0 112"/>
+    <path d="M 164.0 308 V 420"/>
+    <path d="M 164.0 312 L 202.0 288"/>
+    <path d="M 231.0 308 V 420"/>
+    <path d="M 281.0 322 V 420"/>
+    <path d="M 231.0 322 L 256.0 308 L 281.0 322"/>
+    <path d="M 348.0 308 V 420"/>
+    <path d="M 348.0 312 L 310.0 288"/>
+    <path d="M 440.0 92 V 420"/>
+    <path d="M 440.0 146 L 402.0 96"/>
+    <path d="M 440.0 146 L 478.0 96"/>
+    <path d="M 416.0 196 H 464.0"/>
+    <path d="M 416.0 236 H 464.0"/>
+    <path d="M 440.0 308 a 62 56.0 0 0 0 0 112"/></g>
+  <g fill="none" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" stroke="#3ad8e6" opacity="0.55" transform="translate(7,0)">
+    <path d="M 72.0 92 V 420"/>
+    <path d="M 72.0 146 L 34.0 96"/>
+    <path d="M 72.0 146 L 110.0 96"/>
+    <path d="M 48.0 196 H 96.0"/>
+    <path d="M 48.0 236 H 96.0"/>
+    <path d="M 72.0 308 a 62 56.0 0 0 1 0 112"/>
+    <path d="M 164.0 308 V 420"/>
+    <path d="M 164.0 312 L 202.0 288"/>
+    <path d="M 231.0 308 V 420"/>
+    <path d="M 281.0 322 V 420"/>
+    <path d="M 231.0 322 L 256.0 308 L 281.0 322"/>
+    <path d="M 348.0 308 V 420"/>
+    <path d="M 348.0 312 L 310.0 288"/>
+    <path d="M 440.0 92 V 420"/>
+    <path d="M 440.0 146 L 402.0 96"/>
+    <path d="M 440.0 146 L 478.0 96"/>
+    <path d="M 416.0 196 H 464.0"/>
+    <path d="M 416.0 236 H 464.0"/>
+    <path d="M 440.0 308 a 62 56.0 0 0 0 0 112"/></g>
+  <g fill="none" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" stroke="#f2ece1">
+    <path d="M 72.0 92 V 420"/>
+    <path d="M 72.0 146 L 34.0 96"/>
+    <path d="M 72.0 146 L 110.0 96"/>
+    <path d="M 48.0 196 H 96.0"/>
+    <path d="M 48.0 236 H 96.0"/>
+    <path d="M 72.0 308 a 62 56.0 0 0 1 0 112"/>
+    <path d="M 164.0 308 V 420"/>
+    <path d="M 164.0 312 L 202.0 288"/>
+    <path d="M 231.0 308 V 420"/>
+    <path d="M 281.0 322 V 420"/>
+    <path d="M 231.0 322 L 256.0 308 L 281.0 322"/>
+    <path d="M 348.0 308 V 420"/>
+    <path d="M 348.0 312 L 310.0 288"/>
+    <path d="M 440.0 92 V 420"/>
+    <path d="M 440.0 146 L 402.0 96"/>
+    <path d="M 440.0 146 L 478.0 96"/>
+    <path d="M 416.0 196 H 464.0"/>
+    <path d="M 416.0 236 H 464.0"/>
+    <path d="M 440.0 308 a 62 56.0 0 0 0 0 112"/></g>
+</svg>

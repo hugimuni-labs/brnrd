@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>hugimuni — H and M on shared stems (coral-turquoise)</title>
+  <rect width="512" height="512" rx="112" fill="#0c0906"/>
+  <g style="mix-blend-mode:screen">
+    <g fill="none" stroke-width="30" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#ff6f61" transform="translate(-5,0)"><path d="M 172 156 V 356"/><path d="M 340 156 V 356"/></g>
+    <g fill="none" stroke-width="30" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#3ec9bd" transform="translate(5,0)"><path d="M 172 156 V 356"/><path d="M 340 156 V 356"/></g>
+    <g fill="none" stroke-width="30" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#ff6f61"><path d="M 138 268 H 374"/></g>
+    <g fill="none" stroke-width="30" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#3ec9bd"><path d="M 122 156 L 286.0 366"/><path d="M 390 156 L 226.0 366"/></g>
+  </g>
+</svg>
