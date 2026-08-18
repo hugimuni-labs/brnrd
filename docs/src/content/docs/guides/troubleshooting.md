@@ -39,6 +39,29 @@ brnrd runners list --all
 Authenticate the selected Claude Code or Codex CLI outside brnrd, then
 retry.
 
+## A run died and the error mentions sleep
+
+If a run comes back with something like *"your computer went to sleep
+mid-response"*, take it literally. The agent CLI is reporting that its own
+process was suspended, and it is usually right.
+
+On macOS, `pmset -g log | grep -E "Sleep|DarkWake"` shows the transitions with
+timestamps — line up a dead run's start and end against them. A machine set to
+idle-sleep will wake briefly every fifteen minutes or so for maintenance, and a
+daemon that starts a run inside one of those windows gets about forty-five
+seconds before the machine sleeps on top of it. The symptom looks like an
+unstable agent or a flaky network; the cause is one setting.
+
+The fix is in [Prerequisites](../../getting-started/prerequisites/#5-a-machine-that-stays-awake):
+
+```bash
+sudo pmset -a sleep 0 disksleep 0
+```
+
+While the machine is asleep, its daemon publishes no heartbeat, so the chat bot
+may also tell you no daemon is online and suggest re-pairing. Do not re-pair —
+queued messages drain by themselves as soon as the machine is awake again.
+
 ## Update
 
 There is no `brnrd update` command. Use the installer that owns the tool:
