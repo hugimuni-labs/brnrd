@@ -49,10 +49,19 @@ export function laneForWithheld(withheld: WithheldLane): PublishLane | null {
 
 // `PUBLISH_LANES` labels read "Corpus & knowledge — authored pages, kb, run
 // bodies" — the em-dash splits a short name from the honest what-it-carries
-// clause. The popover wants only the second half (the name already sits in
-// the dialog heading); this is the one place that split happens; do not
-// re-derive it a second way elsewhere.
+// clause. Both halves are read by the popover (name in the heading, clause in
+// the sentence), so both come from here: one split, one place. The dialog used
+// to re-run the same regex inline for the heading, which is the shape this
+// module's own note forbids — two derivations of one label, free to disagree
+// the moment the separator changes.
+const LANE_LABEL_SPLIT = /\s+—\s+/;
+
+export function laneName(lane: PublishLane): string {
+	const [name] = lane.label.split(LANE_LABEL_SPLIT);
+	return name ?? lane.label;
+}
+
 export function laneShareClause(lane: PublishLane): string {
-	const [, clause] = lane.label.split(/\s+—\s+/);
+	const [, clause] = lane.label.split(LANE_LABEL_SPLIT);
 	return clause ?? lane.label;
 }

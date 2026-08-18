@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { consentGapRepos, laneForWithheld, laneShareClause } from './consentGap.ts';
+import { consentGapRepos, laneForWithheld, laneName, laneShareClause } from './consentGap.ts';
 import { PUBLISH_LANES } from './publishScope.ts';
 import type { WithheldLane } from './withheld.ts';
 
@@ -74,4 +74,23 @@ test('laneShareClause splits the label after the em dash', () => {
 
 test('laneShareClause falls back to the whole label when there is no dash', () => {
 	assert.equal(laneShareClause({ value: 'x', label: 'no dash here' }), 'no dash here');
+});
+
+// The heading half of the same split. Pinned here because the dialog used to
+// re-run the regex inline: with only `laneShareClause` covered, a change to the
+// separator would keep this test green while the heading silently rendered the
+// whole label.
+test('laneName takes the short half of the label, before the em dash', () => {
+	const corpus = PUBLISH_LANES.find((l) => l.value === 'corpus')!;
+	assert.equal(laneName(corpus), 'Corpus & knowledge');
+});
+
+test('laneName falls back to the whole label when there is no dash', () => {
+	assert.equal(laneName({ value: 'x', label: 'no dash here' }), 'no dash here');
+});
+
+test('the two halves come from one split — together they rebuild every label', () => {
+	for (const lane of PUBLISH_LANES) {
+		assert.equal(`${laneName(lane)} — ${laneShareClause(lane)}`, lane.label);
+	}
 });

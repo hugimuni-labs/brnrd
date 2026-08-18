@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import type { WithheldLane } from './withheld';
-	import { consentGapRepos, laneForWithheld, laneShareClause } from './consentGap';
+	import { consentGapRepos, laneForWithheld, laneName, laneShareClause } from './consentGap';
 	import { setPublishLayers, type RepoActionResponse } from './repos';
 
 	interface Props {
@@ -20,7 +20,7 @@
 	let justEnabled = $state<Set<string>>(new Set());
 
 	let lane = $derived(laneForWithheld(withheld));
-	let laneName = $derived(lane ? lane.label.split(/\s+—\s+/)[0] : withheld.lane);
+	let heading = $derived(lane ? laneName(lane) : withheld.lane);
 	let shareClause = $derived(lane ? laneShareClause(lane) : "this lane's data");
 	let gaps = $derived(consentGapRepos(withheld).filter((repo) => !justEnabled.has(repo.id)));
 
@@ -69,7 +69,7 @@
 				id="consent-dialog-heading-{withheld.lane}"
 				class="font-mono text-sm font-semibold text-amber-100"
 			>
-				{laneName}
+				{heading}
 			</h2>
 			<button
 				type="submit"
