@@ -203,6 +203,34 @@ def test_view_blob_url_returns_none_for_unknown_remote():
     ) is None
 
 
+def test_view_blob_url_repo_path_overrides_origin():
+    """#1370: same shape as ``commit_url``/``thread_url``/``view_branch_url``
+    — the forge kind/host still come from origin, but ``owner/repo`` follows
+    *repo_path* when given, for a file that lives in a sibling project."""
+    url = forges.view_blob_url(
+        "git@github.com:Gurio/brr.git", "main", "README.md",
+        "hugimuni-labs/sibling",
+    )
+    assert url == "https://github.com/hugimuni-labs/sibling/blob/main/README.md"
+
+
+def test_view_blob_url_repo_path_none_keeps_origin():
+    """No *repo_path* ⇒ origin's own owner/repo, unchanged from every caller's
+    prior behaviour (``knowledge.py``'s three call sites never pass one)."""
+    assert forges.view_blob_url(
+        "git@github.com:Gurio/brr.git", "main", "README.md",
+    ) == "https://github.com/Gurio/brr/blob/main/README.md"
+
+
+def test_view_blob_url_malformed_repo_path_falls_back_to_origin():
+    """A *repo_path* with no ``/`` (unparseable) degrades to origin rather
+    than emitting a broken URL — same tolerance ``commit_url`` applies."""
+    url = forges.view_blob_url(
+        "git@github.com:Gurio/brr.git", "main", "README.md", "noslash",
+    )
+    assert url == "https://github.com/Gurio/brr/blob/main/README.md"
+
+
 def test_view_branch_url_returns_none_for_unknown_remote():
     """No template for a bare ``git.example.com`` means no link — the
     daemon stays quiet rather than emit a guessed URL."""

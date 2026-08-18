@@ -283,6 +283,7 @@ def view_blob_url(
     remote_url: str,
     branch: str,
     rel_path: str,
+    repo_path: str | None = None,
     *,
     override_kind: str | None = None,
     override_url_base: str | None = None,
@@ -295,12 +296,24 @@ def view_blob_url(
     whitespace or control characters into the URL. Returns ``None`` for empty
     or unsafe inputs, unparseable remotes, or unknown forge kinds — the caller
     surfaces the URL when present and stays quiet otherwise.
+
+    The forge *kind* and web *host* come from the configured ``origin``
+    remote, but the ``owner/repo`` comes from *repo_path* when provided —
+    same ``repo_path`` shape as :func:`commit_url` / :func:`thread_url` /
+    :func:`pull_request_url` / :func:`view_branch_url`, all of which grew it
+    for a multi-repo project (a strand dispatched into a sibling repo, or a
+    relic declaring a foreign ``owner/repo``). Defaults to origin's
+    owner/repo when *repo_path* is ``None``, matching every caller's prior
+    behaviour.
     """
     rel = (rel_path or "").strip().lstrip("/")
     if not branch or not _is_url_safe_branch(branch):
         return None
     if not rel or not _is_url_safe_branch(rel):
         return None
+    path = (repo_path or "").strip().strip("/") if repo_path else None
+    if path and "/" not in path:
+        path = None
     match = detect_forge(
         remote_url,
         override_kind=override_kind,
@@ -311,6 +324,9 @@ def view_blob_url(
     template = _BLOB_TEMPLATES.get(match.kind)
     if template is None:
         return None
+    if path:
+        owner, _, repo = path.rpartition("/")
+        return template.format(host=match.host, owner=owner, repo=repo, branch=branch, path=rel)
     return template.format(
         host=match.host,
         owner=match.owner,

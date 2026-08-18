@@ -1430,6 +1430,68 @@ def test_undeclared_commit_that_is_local_still_links(tmp_path: Path):
     )
 
 
+def test_collect_links_a_file_relic_that_resolves_in_this_checkout(tmp_path: Path):
+    """#1370, link half: a ``file`` relic whose path really is tracked in
+    this checkout, on the branch being collected, gets a forge blob URL —
+    same treatment ``kb`` pages and every other linked kind already get."""
+    repo = _github_repo(tmp_path)
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    relics.append(outbox, "file", path="a.txt")
+
+    out = relics.collect(repo, branch="main", seed_ref="main", outbox_dir=outbox)
+
+    files = [r for r in out if r["kind"] == "file"]
+    assert len(files) == 1
+    assert files[0]["url"] == "https://github.com/Gurio/brr/blob/main/a.txt"
+    body = relics.render_markdown(out)
+    assert "- 📄 [a.txt](https://github.com/Gurio/brr/blob/main/a.txt)" in body
+
+
+def test_collect_file_relic_with_no_resolvable_path_renders_bare(tmp_path: Path):
+    """The honesty rule is load-bearing (#1370): a path that names nothing
+    followable in this checkout — never committed here, or an artifact
+    handed off by an absolute path outside the repo entirely — stays plain
+    text. Never a guessed link, never a confident 404."""
+    repo = _github_repo(tmp_path)
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    relics.append(outbox, "file", path="/tmp/brr-report.md")
+
+    out = relics.collect(repo, branch="main", seed_ref="main", outbox_dir=outbox)
+
+    files = [r for r in out if r["kind"] == "file"]
+    assert len(files) == 1
+    assert not files[0].get("url")
+    rendered = "\n".join(relics.render_markdown(out))
+    assert "](" not in rendered
+    assert "brr-report.md" in rendered
+
+
+def test_collect_still_links_existing_kinds_alongside_a_file_relic(tmp_path: Path):
+    """A file relic riding in the same manifest must not disturb how
+    issue/commit/branch relics already link — ``link_reported`` grew one
+    more ``elif`` arm for ``file``, not a rewrite of the others (#1370)."""
+    repo = _github_repo(tmp_path)
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    sha = _head_sha(repo)
+    relics.append(outbox, "issue", number=566, action="opened")
+    relics.append(outbox, "commit", sha=sha, subject="seed")
+    relics.append(outbox, "branch", name="brr/some-branch")
+    relics.append(outbox, "file", path="a.txt")
+
+    out = relics.collect(repo, branch="main", seed_ref="main", outbox_dir=outbox)
+
+    by_kind = {r["kind"]: r for r in out}
+    assert by_kind["issue"]["url"] == "https://github.com/Gurio/brr/issues/566"
+    assert by_kind["commit"]["url"] == f"https://github.com/Gurio/brr/commit/{sha}"
+    assert by_kind["branch"]["url"] == (
+        "https://github.com/Gurio/brr/tree/brr/some-branch"
+    )
+    assert by_kind["file"]["url"] == "https://github.com/Gurio/brr/blob/main/a.txt"
+
+
 def test_optional_repo_field_does_not_split_one_relic_in_two(tmp_path: Path):
     """``repo`` is optional and means "this checkout" when absent.
 
