@@ -628,8 +628,117 @@ class TestSignatureFindings:
         )
         stale = [f for f in findings if f.type == "stale-signature"]
         assert [f.target for f in stale] == ["workflow.md §Autonomy"]
+        assert stale[0].severity == "warning"
         assert "1 line" in stale[0].description
         assert "2026-07-20" in stale[0].description
+        # #1476: the finding quotes the removed (old) line rather than
+        # delegating to a `git show` — a rename commit prints the whole
+        # file as an addition, so that delegation is not evidence at all.
+        assert "the resident's to take" in stale[0].description
+        assert "git show" not in stale[0].description
+
+    def test_a_genuine_multiline_rewrite_of_both_signed_text_stays_warning(
+        self, tmp_path,
+    ):
+        """#1476 shape 2: no rename anywhere in the commit ⇒ `warning`
+        stands, and the quote carries every replaced line, not just the
+        first — the reader is meant to be able to judge the whole clause
+        from the finding, not just its opening word.
+        """
+        repo = tmp_path / "home"
+        repo.mkdir()
+        _git(repo, "init", "-q", "-b", "main")
+        # A second signer covering the same clause — the real #1476 shape
+        # ("both" signed §Gating and merges) — so `who` names two signers.
+        # The clause itself starts multi-line so the *rewrite* removes more
+        # than one line (a single-line original can only ever contribute
+        # one `-` line to the diff, however long its replacement is).
+        page = _SIGNED_PAGE.replace(
+            "## Gating and merges\n\n- PRs stay the delivery vehicle.\n",
+            "## Gating and merges\n\n"
+            "- PRs stay open until review clears,\n"
+            "  and a bot-authored PR cannot approve its own diff,\n"
+            "  so the draft/ready split is structural, not a preference.\n",
+        ).replace(
+            "    basis: \"work gating is not the best way anyway\"\n",
+            "    basis: \"work gating is not the best way anyway\"\n"
+            "    signed-by: resident\n"
+            "    date: 2026-07-17\n"
+            "    scope: Gating and merges — same clause, second signer\n"
+            "    basis: agreed\n",
+        )
+        path = repo / "workflow.md"
+        _commit(repo, path, page, "2026-07-16", "sign it")
+        _commit(
+            repo, path,
+            page.replace(
+                "- PRs stay open until review clears,\n"
+                "  and a bot-authored PR cannot approve its own diff,\n"
+                "  so the draft/ready split is structural, not a preference.\n",
+                "- ready-for-review is the verdict; nothing else moves a PR\n"
+                "  out of draft.\n",
+            ),
+            "2026-07-25", "rewrite the gating clause",
+        )
+        findings = notes_preflight.check_signatures(
+            path, repo_dir=repo, rel_path="workflow.md",
+        )
+        stale = [f for f in findings if f.type == "stale-signature"]
+        assert [f.target for f in stale] == ["workflow.md §Gating and merges"]
+        assert stale[0].severity == "warning"
+        assert "3 lines" in stale[0].description
+        assert "maintainer" in stale[0].description
+        assert "resident" in stale[0].description
+        assert "PRs stay open until review clears" in stale[0].description
+
+    def test_a_rename_softens_severity_and_names_the_old_path(self, tmp_path):
+        """#1476 shape 1: a rename that fixes a path line inside a signed
+        section ⇒ the finding survives (never suppressed), drops to
+        `info`, names the rename, and quotes the removed line.
+        """
+        repo = tmp_path / "home"
+        repo.mkdir()
+        _git(repo, "init", "-q", "-b", "main")
+        old_path = repo / "old_workflow.md"
+        _commit(repo, old_path, _SIGNED_PAGE, "2026-07-16", "sign it")
+
+        # A real move: `git mv` plus, in the same commit, a self-referential
+        # path fixup inside the already-signed §Autonomy section — the
+        # shape a repo reorganisation actually produces.
+        _git(repo, "mv", "old_workflow.md", "workflow.md")
+        new_path = repo / "workflow.md"
+        new_path.write_text(
+            _SIGNED_PAGE.replace(
+                "- reversible calls are the resident's to take.",
+                "- reversible calls (see old_workflow.md) are the "
+                "resident's to take.",
+            ),
+            encoding="utf-8",
+        )
+        _git(repo, "add", "-A")
+        stamp = "2026-07-20T12:00:00+00:00"
+        subprocess.run(
+            ["git", "commit", "-m", "move the file, fix the self-reference",
+             f"--date={stamp}"],
+            cwd=repo, check=True,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env={
+                "PATH": "/usr/bin:/bin:/usr/local/bin",
+                "HOME": str(repo),
+                "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+                "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",
+                "GIT_AUTHOR_DATE": stamp, "GIT_COMMITTER_DATE": stamp,
+            },
+        )
+
+        findings = notes_preflight.check_signatures(
+            new_path, repo_dir=repo, rel_path="workflow.md",
+        )
+        stale = [f for f in findings if f.type == "stale-signature"]
+        assert [f.target for f in stale] == ["workflow.md §Autonomy"]
+        assert stale[0].severity == "info"
+        assert "old_workflow.md" in stale[0].description
+        assert "resident's to take." in stale[0].description
 
     def test_an_append_beside_signed_text_is_not_stale(self, tmp_path):
         """The 2026-07-25 amendment, enforced.

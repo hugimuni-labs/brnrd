@@ -563,6 +563,19 @@ def _section_ranges(text: str) -> list[tuple[str, int, int]]:
     return out
 
 
+#: Ceiling on the removed-line text a finding quotes — "wake-affordable",
+#: not "the whole hunk". `replaced_lines` already tells the reader whether
+#: the quote below is all of it or a truncated slice (#1476).
+_REMOVED_TEXT_LIMIT = 240
+
+
+def _truncate_removed(lines: list[str]) -> str:
+    text = "\n".join(lines)
+    if len(text) <= _REMOVED_TEXT_LIMIT:
+        return text
+    return text[: _REMOVED_TEXT_LIMIT - 1].rstrip() + "…"
+
+
 @dataclass(frozen=True)
 class _Rewrite:
     """The newest commit that *replaced* text in a line range."""
@@ -577,6 +590,68 @@ class _Rewrite:
     reader which one they are about to spend a re-signing round on. It is
     the difference between annotating and accusing.
     """
+    removed_text: str = ""
+    """The removed (``-``) line(s) verbatim, newline-joined and truncated to
+    :data:`_REMOVED_TEXT_LIMIT`.
+
+    #1476: a count alone tells the reader *that* signed text was replaced
+    and never *which*, so a path-string rename fixup, a signer amending
+    their own line, and a six-line clause rewrite all rendered as the same
+    accusation. This is the finding's own evidence instead of a delegated
+    ``git show`` — which, for a rename commit, prints the whole file as an
+    addition and is not evidence of anything.
+    """
+    renamed_from: str | None = None
+    """The path this file was renamed from, in the same commit that
+    replaced the text — set only when git's own rename heuristic pairs an
+    add against a delete for this exact new path (see :func:`_renamed_from`).
+
+    A rewrite landing inside a rename is usually the rename's own path
+    fixup, not a unilateral edit — the caller uses this to soften severity,
+    **never** to drop the finding: annotate, don't suppress (#1476).
+    """
+
+
+def _renamed_from(repo_dir: Path, rel_path: str, sha: str) -> str | None:
+    """The commit's old path for ``rel_path``, when ``sha``'s diff is a
+    rename that produced it — ``None`` for every other case (not a rename,
+    git unavailable, path untracked at that commit).
+
+    Deliberately **not** pathspec-limited to ``rel_path``. Git's rename
+    detection pairs an add against a delete across the *whole* commit;
+    restricting ``--name-status`` to the new path alone removes the old
+    path from consideration and git reports a plain ``A`` instead of an
+    ``R`` — checked directly against this issue's own cited commit
+    (5e2e2068): pathspec-limited to ``surface/workflow.md`` it reads
+    ``A surface/workflow.md``; unrestricted it reads
+    ``R097 workflow.md surface/workflow.md``. So this reads the whole
+    commit's name-status and filters by new path itself.
+
+    ``--find-renames`` over a second ``git log --follow`` walk: this runs
+    once per rewrite already being reported (a git-decided rename, cheap,
+    and only paid once there is a finding to annotate), not once per commit
+    in the file's entire history.
+    """
+    from . import gitops
+
+    try:
+        proc = subprocess.run(
+            ["git", "show", "--format=", "--name-status", "--find-renames", sha],
+            cwd=repo_dir, check=False,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+            env=gitops.explicit_repo_env(),
+        )
+    except (OSError, ValueError):
+        return None
+    if proc.returncode != 0:
+        return None
+    for line in proc.stdout.splitlines():
+        if not line.startswith("R"):
+            continue
+        parts = line.split("\t")
+        if len(parts) == 3 and parts[2] == rel_path:
+            return parts[1]
+    return None
 
 
 def _head_section_ranges(
@@ -657,7 +732,7 @@ def _last_rewrite(
 
     sha = date = ""
     hit_sha = hit_date = ""
-    replaced = 0
+    removed: list[str] = []
     for line in proc.stdout.splitlines():
         if line.startswith("\x00"):
             # `git log` is newest-first, so the first commit carrying a
@@ -673,10 +748,16 @@ def _last_rewrite(
             continue
         if line.startswith("-"):
             hit_sha, hit_date = sha, date.strip()
-            replaced += 1
+            removed.append(line[1:])
     if not hit_sha:
         return None
-    return _Rewrite(sha=hit_sha[:8], date=hit_date, replaced_lines=replaced)
+    return _Rewrite(
+        sha=hit_sha[:8],
+        date=hit_date,
+        replaced_lines=len(removed),
+        removed_text=_truncate_removed(removed),
+        renamed_from=_renamed_from(repo_dir, rel_path, hit_sha),
+    )
 
 
 def check_signatures(
@@ -801,20 +882,43 @@ def check_signatures(
             continue
         who = ", ".join(f"{sig.signed_by} ({sig.date})" for sig in stale)
         plural = "" if rewrite.replaced_lines == 1 else "s"
+        quote = rewrite.removed_text.replace("\n", " / ")
+        # The quoted line is arbitrary file content and may itself contain a
+        # backtick (e.g. a removed line that names a path in code font) —
+        # fence with a wider run so the quote can't prematurely close the
+        # span it sits in (CommonMark's own rule for nesting code spans).
+        fence = "``" if "`" in quote else "`"
+        pad = " " if fence == "``" else ""
+        quote_span = f"{fence}{pad}{quote}{pad}{fence}"
+        if rewrite.renamed_from is not None:
+            # A rewrite landing inside a rename is usually the rename's own
+            # path fixup — annotate with lowered confidence, never suppress
+            # (#1476: guessing intent to drop a finding fails in the
+            # confident direction on a real unilateral edit that happens to
+            # ride a rename commit).
+            provenance = (
+                f"in `{rewrite.sha}`, a commit that renamed "
+                f"`{rewrite.renamed_from}` → `{rel_path}` (likely that "
+                "rename's own path fixup — read the quote before treating "
+                "it as more)"
+            )
+            severity = "info"
+        else:
+            provenance = f"in `{rewrite.sha}`"
+            severity = "warning"
         out.append(Finding(
             type="stale-signature",
             target=f"{path.name} §{title}",
             description=(
                 f"{rewrite.replaced_lines} line{plural} of signed text in this "
                 f"section {'was' if rewrite.replaced_lines == 1 else 'were'} "
-                f"**replaced** on {rewrite.date} in `{rewrite.sha}`, after "
-                f"{who} signed it. "
+                f"**replaced** on {rewrite.date} {provenance}, after {who} "
+                f"signed it — the removed text: {quote_span}. "
                 "Re-sign or amend — never assume the counterpart still agrees "
                 "with text they have not read. (An addition beside signed "
-                "text is exempt and does not reach this line; `git show "
-                f"{rewrite.sha}` is the whole evidence.)"
+                "text is exempt and does not reach this line.)"
             ),
-            severity="warning",
+            severity=severity,
         ))
     return out
 
