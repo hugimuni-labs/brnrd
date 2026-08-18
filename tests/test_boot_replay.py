@@ -1014,3 +1014,62 @@ class TestBootScore:
         assert payload["posture"]["branch"] == "brr/x"
         assert payload["posture"]["pending_count"] == 2
         assert payload["hooks"] and payload["contracts"]
+
+    def test_boot_score_computes_event_age_once_at_build_time(self, empty_repo):
+        """#1491: the elapsed half is a fact asked *once*, here — same shape
+        as ``BootHost.image_stale`` — not recomputed from the wall clock
+        every time a persisted score is re-rendered later."""
+        import time
+
+        from brr.prompts import build_boot_score
+
+        created = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ",
+            time.gmtime(time.time() - 6 * 3600 - 6 * 60),
+        )
+        score = build_boot_score(
+            empty_repo, event_ids=("evt-bpgk",), event_created=created,
+        )
+        assert score.attention.created == created
+        assert score.attention.age_seconds is not None
+        # Real wall clock on both sides of the subtraction — generous slop
+        # (build_boot_score itself walks the filesystem) for however long
+        # the call and the surrounding suite take on a loaded CI box.
+        assert abs(score.attention.age_seconds - (6 * 3600 + 6 * 60)) < 60
+
+    def test_boot_score_fresh_event_has_no_stale_age(self, empty_repo):
+        import time
+
+        from brr.prompts import build_boot_score
+
+        created = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        score = build_boot_score(
+            empty_repo, event_ids=("evt-fresh",), event_created=created,
+        )
+        assert score.attention.age_seconds is not None
+        assert score.attention.age_seconds < 60
+
+    def test_boot_score_degrades_on_missing_or_unparseable_created(self, empty_repo):
+        from brr.prompts import build_boot_score
+
+        no_created = build_boot_score(empty_repo, event_ids=("evt-a",))
+        assert no_created.attention.created is None
+        assert no_created.attention.age_seconds is None
+
+        bad_created = build_boot_score(
+            empty_repo, event_ids=("evt-b",), event_created="not-a-timestamp",
+        )
+        assert bad_created.attention.created == "not-a-timestamp"
+        assert bad_created.attention.age_seconds is None
+
+    def test_boot_score_carries_retry_provenance(self, empty_repo):
+        from brr.prompts import build_boot_score
+
+        score = build_boot_score(
+            empty_repo,
+            event_ids=("evt-bpgk",),
+            event_retry_of="run-260818-1834-lcu3",
+            event_retry_reason="host_interrupted",
+        )
+        assert score.attention.retry_of == "run-260818-1834-lcu3"
+        assert score.attention.retry_reason == "host_interrupted"

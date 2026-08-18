@@ -13557,8 +13557,13 @@ def _mark_interrupted_runs(
     ``failure_kind`` (``host_interrupted``) and emits the terminal
     ``failed`` packet the dead daemon never got to send, so the frozen
     card re-renders as "interrupted" (plus a retry note when the event is
-    still dispatchable). It deliberately touches **no event state** — the
-    retry path stays exactly as it was.
+    still dispatchable). It deliberately touches no *dispatch* state on the
+    event — the retry path (which event, when it fires) stays exactly as it
+    was. It does write one thing onto the event itself (#1491): when the
+    event is still dispatchable, it appends this run's id and failure kind
+    to the event's own ``retry_of``/``retry_reason`` history, additively —
+    see :func:`_record_retry_provenance` — so the run that eventually picks
+    the event back up can say *why* it is a retry, not just answer cold.
 
     Proof discipline mirrors ``_reconcile_orphaned_spawn_dispatches``
     below, conservative by construction:
