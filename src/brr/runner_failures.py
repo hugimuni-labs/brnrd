@@ -137,6 +137,19 @@ _HOST_SUSPEND_PATTERNS = (
 )
 
 
+def looks_like_host_suspend(text: str | None) -> bool:
+    """Whether *text* says the host itself slept mid-request (#1485).
+
+    Its own predicate rather than a member of ``_TRANSPORT_PATTERNS``,
+    because the two want opposite things from the same shape: transport is
+    a guess about an unexplained drop, this is the runner naming its own
+    cause. ``classify_failure`` needs them distinct to label the failure,
+    and ``RunnerResult.retryable_reason`` needs this one to reach a
+    different sentence.
+    """
+    return bool(text) and _matches_any(text, _HOST_SUSPEND_PATTERNS)
+
+
 def looks_like_transport_failure(text: str | None) -> bool:
     """Whether *text* carries a transport signature (case-insensitive).
 
@@ -216,9 +229,9 @@ def reason_prefix(kind: str) -> str:
             "run was interrupted by a host/daemon restart mid-flight"
         ),
         HOST_SUSPENDED: (
-            "the host went to sleep mid-run (#1485) — retrying now that a "
-            "power assertion holds the machine awake for a runner's "
-            "lifetime should avoid a repeat"
+            "the host went to sleep mid-run (#1485); a power assertion now "
+            "holds the machine awake for a runner's lifetime, so the retry "
+            "should get through"
         ),
     }.get(kind, "runner failed")
 
