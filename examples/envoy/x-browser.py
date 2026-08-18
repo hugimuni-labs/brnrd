@@ -25,6 +25,9 @@ where ``brr`` is importable (usually ``<repo>/.venv/bin/python3``).
     <python-with-brr> x-browser.py send <url> --text "<s>" --confirm
         -> ships disarmed: also needs BRR_X_BROWSER_SEND=1 in the environment,
            and refuses past the hourly cap
+    <python-with-brr> x-browser.py draft-post --text "<s>"        -> compose, no reply target; screenshot only
+    <python-with-brr> x-browser.py post --text "<s>" --confirm
+        -> the compose lane's send: same two brakes, same hourly cap bucket
 
 Nothing here posts by default — see ``x-browser.disabled`` (kill switch,
 presence alone refuses every verb but ``check``) and the disarmed-send
