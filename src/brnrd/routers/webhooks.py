@@ -78,8 +78,11 @@ _PAIR_CODE_EXPIRED_TEXT = "This pairing code expired — run brnrd account conne
 # installs/starts the persistent daemon service (see
 # `src/brr/docs/account-daemon.md`); the runner itself is autodetected
 # `claude` / `codex` on that machine's PATH, hence the doctor pointer. See
-# `_account_has_online_daemon` for why this checks liveness, not runner
-# reporting.
+# `_account_daemon_status` for why this checks liveness, not runner
+# reporting, and for why it only ever fires this text for an account whose
+# daemon has *never* checked in — the "your machine is only asleep" branch
+# right below it is #1486's fix for the other case: a paired account whose
+# daemon has gone quiet.
 _NO_RUNNER_TEXT = (
     "I'm bound to this chat but no daemon of yours is online right now, so "
     "nothing is listening for this message yet. Run brnrd account connect "
@@ -87,6 +90,20 @@ _NO_RUNNER_TEXT = (
     "daemon), with claude or codex installed and logged in so it has a "
     "runner to use — brnrd runners doctor checks that. Your message is "
     "saved; I'll answer once a daemon is online."
+)
+# #1486 — a *paired* account whose daemon has gone quiet (asleep, offline,
+# rebooting) is a completely different situation from never-paired, and
+# every remedy `_NO_RUNNER_TEXT` names is destructive here: the maintainer's
+# own live incident was re-running `brnrd account connect` on a healthy
+# laptop because this branch used to collapse into that text too. State the
+# fact (when it was last seen) and stop — no `brnrd account connect`, no
+# `brnrd runners doctor`, nothing to run. Waiting is the correct fix, and
+# the queue already does that on its own.
+_STALE_DAEMON_TEXT = (
+    "I'm bound to this chat, but your daemon {last_seen_label} and isn't "
+    "reachable right now — could be asleep, offline, or between reboots. "
+    "Nothing to do on your end: your message is saved and I'll answer the "
+    "moment it checks back in."
 )
 # #1457 — an account-level pairing succeeded but the account has no repos,
 # so a task message has no project to run against. The message is NOT
@@ -249,6 +266,36 @@ def _enqueue_telegram_event(db: Session, parsed: tg.ParsedMessage, *, repo_id: s
 _DAEMON_ONLINE_AFTER = timedelta(minutes=2)
 
 
+def _account_daemon_status(db: Session, account_id: str) -> tuple[bool, datetime | None]:
+    """(is a daemon online now, most recent heartbeat across the account's daemons).
+
+    One query, one source of truth, feeding both `_account_has_online_daemon`
+    (the liveness boolean, unchanged) and #1486's three-way reply split,
+    which needs the *timestamp* the boolean was throwing away — the account
+    with a daemon that checked in 6 minutes ago and the account that has
+    never had a daemon at all both used to read as plain "not online", and
+    the sentence printed for one was destructive advice for the other. The
+    second element of the tuple is `None` **iff** the account has never had
+    a `Daemon` row at all (no register call, ever) — that is the one honest
+    way to tell "never paired" from "paired, gone quiet", and it comes from
+    the exact same rows the liveness check already reads, not a second
+    signal that could disagree with it.
+    """
+    now = datetime.now(timezone.utc)
+    daemons = db.execute(select(Daemon).where(Daemon.account_id == account_id)).scalars().all()
+    online = False
+    last_seen_at: datetime | None = None
+    for daemon in daemons:
+        last_seen = daemon.last_seen_at
+        if last_seen is not None and last_seen.tzinfo is None:
+            last_seen = last_seen.replace(tzinfo=timezone.utc)
+        if last_seen is not None and (last_seen_at is None or last_seen > last_seen_at):
+            last_seen_at = last_seen
+        if bool(daemon.online) and last_seen is not None and now - last_seen <= _DAEMON_ONLINE_AFTER:
+            online = True
+    return online, last_seen_at
+
+
 def _account_has_online_daemon(db: Session, account_id: str) -> bool:
     """True iff the account has a daemon with a fresh heartbeat.
 
@@ -268,17 +315,38 @@ def _account_has_online_daemon(db: Session, account_id: str) -> bool:
     honest binary signal available here — narrower than the real ask (it
     won't catch "online but genuinely has no runner"), but it's the
     unambiguous, unmistakably-true half: nobody has ever picked this
-    account's queue up.
+    account's queue up. Thin wrapper over `_account_daemon_status` so the
+    two can't drift; kept as its own name because it's the one other code
+    (and #1486's own kept-as-today case 3, "online, no runner") still only
+    ever needs the boolean half.
     """
-    now = datetime.now(timezone.utc)
-    daemons = db.execute(select(Daemon).where(Daemon.account_id == account_id)).scalars().all()
-    for daemon in daemons:
-        last_seen = daemon.last_seen_at
-        if last_seen is not None and last_seen.tzinfo is None:
-            last_seen = last_seen.replace(tzinfo=timezone.utc)
-        if bool(daemon.online) and last_seen is not None and now - last_seen <= _DAEMON_ONLINE_AFTER:
-            return True
-    return False
+    return _account_daemon_status(db, account_id)[0]
+
+
+def _last_seen_label(last_seen_at: datetime) -> str:
+    """"last checked in 6 minutes ago" — a fact the reader can act on.
+
+    Local rather than importing `_session._age_label`, which renders the
+    same shape: that module pulls in oauth/terms/github_marker for the
+    web dashboard, and this is the webhook's synchronous request path —
+    same reasoning `_DAEMON_ONLINE_AFTER`'s own comment gives for not
+    importing `capabilities.py` here for one threshold.
+    """
+    seconds = max(0, int((datetime.now(timezone.utc) - last_seen_at).total_seconds()))
+    minutes = seconds // 60
+    if minutes < 1:
+        return "last checked in just now"
+    if minutes == 1:
+        return "last checked in 1 minute ago"
+    if minutes < 60:
+        return f"last checked in {minutes} minutes ago"
+    hours = minutes // 60
+    if hours == 1:
+        return "last checked in 1 hour ago"
+    if hours < 48:
+        return f"last checked in {hours} hours ago"
+    days = hours // 24
+    return "last checked in 1 day ago" if days == 1 else f"last checked in {days} days ago"
 
 
 def _github_mention_candidates(settings) -> list[str]:
@@ -1143,10 +1211,19 @@ def telegram_webhook(request: Request, payload: dict, x_telegram_bot_api_secret_
             _audit_reject(parsed, reason=f"limit:{decision.reason}")
             _reply(settings, parsed, decision.message)
             return {"ok": True}
-        if not _account_has_online_daemon(db, route.account_id):
-            # #1282 — still enqueue (a daemon that comes online later drains
-            # it normally); the nudge is additive, not a rejection.
-            _reply(settings, parsed, _NO_RUNNER_TEXT)
+        online, last_seen_at = _account_daemon_status(db, route.account_id)
+        if not online:
+            # #1282 / #1486 — still enqueue either way (a daemon that comes
+            # online later drains it normally); the nudge is additive, not a
+            # rejection. Which text depends on whether this account has ever
+            # had a daemon check in at all: `last_seen_at is None` is the
+            # never-paired case `_NO_RUNNER_TEXT` was always meant for;
+            # otherwise it's a paired daemon gone quiet, and #1486 is exactly
+            # about not handing that case the never-paired remedy.
+            if last_seen_at is None:
+                _reply(settings, parsed, _NO_RUNNER_TEXT)
+            else:
+                _reply(settings, parsed, _STALE_DAEMON_TEXT.format(last_seen_label=_last_seen_label(last_seen_at)))
         _enqueue_telegram_event(db, parsed, repo_id=repo.id, body=body)
     return {"ok": True}
 
