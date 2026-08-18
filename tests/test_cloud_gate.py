@@ -1129,6 +1129,201 @@ def test_loop_publishes_quota_snapshot(tmp_path, monkeypatch):
     ]
 
 
+def test_loop_publishes_quota_cold_daemon_with_shared_snapshot(tmp_path, monkeypatch):
+    """#1386 residue 2: a cold daemon — no Claude run has ever completed, so
+    no per-run outbox dir exists — still publishes a real Claude quota
+    reading when the durable account-shared dir (``brr_dir`` itself, the
+    same slot ``claude_status`` already caches its own snapshot into) has
+    one. Before the fix, `_claude_quota_shell` only ever looked at
+    `latest_claude_usage_outbox_dir`, found nothing, and passed `None`
+    straight through — the shell went missing forever, not just cold.
+    """
+    import json as json_mod
+
+    from brnrd.models import Daemon as DaemonModel
+
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    client, _ = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    daemon_headers = {"Authorization": f"Bearer {token}"}
+    assert client.post(
+        "/v1/daemons/register",
+        json={"daemon_name": "laptop"},
+        headers=daemon_headers,
+    ).status_code == 200
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+    monkeypatch.setattr(cloud.codex_usage, "probe_rate_limits", lambda **kw: None)
+    monkeypatch.setattr(cloud.codex_status, "load_levels", lambda *a, **k: {})
+
+    # No `brr_dir/outbox/*/` at all — `latest_claude_usage_outbox_dir` finds
+    # nothing. The shared-dir fixture lives directly in `brr_dir`, exactly
+    # where `claude_usage.load_or_refresh_snapshot(brr_dir, ...)` now reads
+    # (and where `codex_usage`'s cold path and `claude_status._shared_dir`
+    # already write, per the sibling readers in the same module).
+    brr_dir.mkdir(parents=True, exist_ok=True)
+    (brr_dir / ".claude-usage-levels.json").write_text(
+        json_mod.dumps(
+            {
+                "quota": {
+                    "buckets": {
+                        "session": {"remaining_percentage": 77.0},
+                        "week": {"remaining_percentage": 55.0},
+                    }
+                },
+                "session_reset": "resets 9:00PM",
+                "week_reset": "resets Jul 10",
+                "session_resets_at": 1783360000.0,
+                "week_resets_at": 1783900000.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cloud._dashboard_publish_tick(brr_dir, inbox_dir)
+
+    with client.app.state.SessionLocal() as db:
+        daemon = db.query(DaemonModel).filter(DaemonModel.repo_id == pid).one()
+        shells = {row["shell"]: row for row in json_mod.loads(daemon.quota_json)}
+    assert shells["claude"]["status"] == "known"
+    assert shells["claude"]["windows"][0]["percent"] == 77.0
+    assert shells["claude"]["windows"][1]["percent"] == 55.0
+
+
+def test_loop_publishes_quota_cold_daemon_with_no_evidence_omits_claude(
+    tmp_path, monkeypatch
+):
+    """#1386 residue 2's boundary, not residue 1: a cold daemon with *no*
+    cached reading anywhere — no run outbox, no shared-dir fixture — still
+    has to fall through to the live PTY scrape (`claude_usage.capture_levels`,
+    stubbed here rather than actually spawned) and, when that scrape itself
+    comes back empty, the shell stays **omitted**, exactly as #632 standing
+    decision 2 requires. This is the case a placeholder `status: unknown`
+    row (residue 1, explicitly out of scope) would have changed; this fix
+    must not.
+    """
+    from brnrd.models import Daemon as DaemonModel
+
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    client, _ = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    daemon_headers = {"Authorization": f"Bearer {token}"}
+    assert client.post(
+        "/v1/daemons/register",
+        json={"daemon_name": "laptop"},
+        headers=daemon_headers,
+    ).status_code == 200
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+    monkeypatch.setattr(cloud.codex_usage, "probe_rate_limits", lambda **kw: None)
+    monkeypatch.setattr(cloud.codex_status, "load_levels", lambda *a, **k: {})
+    # Stand in for a logged-out / unavailable `claude` binary — a unit test
+    # must never actually spawn the PTY probe. No `quota` key at all, same
+    # shape `capture_levels` itself returns on a parse miss.
+    monkeypatch.setattr(
+        cloud.claude_usage,
+        "capture_levels",
+        lambda **kw: {"source": "claude /usage PTY", "error": "no claude available"},
+    )
+
+    cloud._dashboard_publish_tick(brr_dir, inbox_dir)
+
+    with client.app.state.SessionLocal() as db:
+        daemon = db.query(DaemonModel).filter(DaemonModel.repo_id == pid).one()
+        shells = json.loads(daemon.quota_json)
+    # #632 standing decision 2, unchanged by this fix: no evidence ⇒ omitted,
+    # never a fabricated zero or an "unknown" placeholder row.
+    assert shells == []
+
+
+def test_loop_publishes_quota_warm_outbox_wins_over_shared_fallback(
+    tmp_path, monkeypatch
+):
+    """The existing warm path — a prior run's own outbox dir present — is
+    unchanged by the cold fallback: when both a run-scoped snapshot and a
+    stale shared-dir snapshot exist, the run-scoped one still wins, exactly
+    as `latest_claude_usage_outbox_dir`'s freshest-mtime contract promises.
+    The fallback in `_claude_quota_shell` only ever fires with `or`, after
+    the real lookup already came back `None`.
+    """
+    import json as json_mod
+
+    from brnrd.models import Daemon as DaemonModel
+
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    client, _ = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    daemon_headers = {"Authorization": f"Bearer {token}"}
+    assert client.post(
+        "/v1/daemons/register",
+        json={"daemon_name": "laptop"},
+        headers=daemon_headers,
+    ).status_code == 200
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+    monkeypatch.setattr(cloud.codex_usage, "probe_rate_limits", lambda **kw: None)
+    monkeypatch.setattr(cloud.codex_status, "load_levels", lambda *a, **k: {})
+
+    # A stale shared-dir fixture, superseded by a fresher per-run snapshot —
+    # the run-scoped reading must be what publishes.
+    brr_dir.mkdir(parents=True, exist_ok=True)
+    (brr_dir / ".claude-usage-levels.json").write_text(
+        json_mod.dumps(
+            {
+                "quota": {
+                    "buckets": {
+                        "session": {"remaining_percentage": 1.0},
+                        "week": {"remaining_percentage": 1.0},
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    run_outbox = brr_dir / "outbox" / "evt-quota-run"
+    run_outbox.mkdir(parents=True)
+    (run_outbox / ".claude-usage-levels.json").write_text(
+        json_mod.dumps(
+            {
+                "quota": {
+                    "buckets": {
+                        "session": {"remaining_percentage": 61.0},
+                        "week": {"remaining_percentage": 48.0},
+                    }
+                },
+                "session_reset": "resets 9:00PM",
+                "week_reset": "resets Jul 10",
+                "session_resets_at": 1783360000.0,
+                "week_resets_at": 1783900000.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cloud._dashboard_publish_tick(brr_dir, inbox_dir)
+
+    with client.app.state.SessionLocal() as db:
+        daemon = db.query(DaemonModel).filter(DaemonModel.repo_id == pid).one()
+        shells = {row["shell"]: row for row in json_mod.loads(daemon.quota_json)}
+    assert shells["claude"]["windows"][0]["percent"] == 61.0
+    assert shells["claude"]["windows"][1]["percent"] == 48.0
+
+
 def test_loop_publishes_quota_snapshot_survives_malformed_gate_state(
     tmp_path, monkeypatch
 ):

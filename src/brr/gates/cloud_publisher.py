@@ -895,16 +895,25 @@ def _claude_week_model_windows(
 
 
 def _claude_quota_shell(brr_dir: Path) -> dict[str, Any] | None:
-    outbox_dir = runner_quota.latest_claude_usage_outbox_dir(brr_dir)
-    levels = (
-        claude_usage.load_or_refresh_snapshot(
-            outbox_dir,
-            cwd=brr_dir,
-            max_age_seconds=_CLAUDE_QUOTA_PUBLISH_MAX_AGE_SECONDS,
-            timeout_seconds=10.0,
-            wait_for_credits=True,
-        )
-        if outbox_dir else None
+    # A prior run's per-run outbox dir is preferred when one exists (freshest
+    # cache, and the shape every warm reading has used since #1027). A cold
+    # daemon — no Claude run has ever completed — has none, and used to stop
+    # here: `load_or_refresh_snapshot` returns `None` for `outbox_dir is
+    # None` without ever attempting the PTY `/usage` scrape, which needs no
+    # prior run at all (`claude_usage.capture_levels(cwd=…)`). Fall back to
+    # `brr_dir` itself — the same durable account-shared directory
+    # `claude_status` already caches its own snapshot into (`_shared_dir`,
+    # `BRR_SHARED_DIR`, wired at `daemon.py:3803`, read a few lines below in
+    # `_claude_credits_block`) and the same pattern `_codex_quota_shell`
+    # above already uses cold (`codex_usage.load_or_refresh_snapshot(brr_dir,
+    # …)`). No second cache location minted — this is the one slot, reused.
+    outbox_dir = runner_quota.latest_claude_usage_outbox_dir(brr_dir) or brr_dir
+    levels = claude_usage.load_or_refresh_snapshot(
+        outbox_dir,
+        cwd=brr_dir,
+        max_age_seconds=_CLAUDE_QUOTA_PUBLISH_MAX_AGE_SECONDS,
+        timeout_seconds=10.0,
+        wait_for_credits=True,
     )
     usage_samples.record(brr_dir, "claude", levels)
     quota = levels.get("quota") if isinstance(levels, dict) else None
