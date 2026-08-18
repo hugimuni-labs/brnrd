@@ -3483,7 +3483,6 @@ def _run_worker(
             lifetime="run",
         )
 
-
     print(f"[brnrd] run {task.id} (event {eid}): env={task.env}")
 
     task.meta["response_path"] = str(resp_path)
