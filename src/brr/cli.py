@@ -2638,41 +2638,29 @@ def _do_mood(do_mod, emo, outbox_dir: Path, feeling: str, note: str | None) -> t
     return f"mood {glyph} {resolved.name} ✓", True
 
 
-def _do_note(do_mod, outbox_dir: Path, event_id: str, index: int, timeout: float) -> tuple[str, bool]:
+def _do_stage_note(do_mod, outbox_dir: Path, event_id: str, index: int):
+    """Stage one ``note:`` directive without waiting — see the batch note on
+    :func:`cmd_do` for why staging and waiting are split (#1337)."""
     from . import hooks as hooks_mod
 
     short = hooks_mod._short_event_id(event_id)
-    before = do_mod.notices_of(do_mod.read_portal_state(outbox_dir))
     path = do_mod.stage_note(outbox_dir, event_id, index=index)
-    status, detail = do_mod.await_verdict(
-        outbox_dir, path, before, ("note", event_id), timeout_seconds=timeout,
-    )
-    return _do_render("note", short, status, detail)
+    return "note", short, do_mod.Directive(path, ("note", event_id))
 
 
-def _do_reply(
-    do_mod, outbox_dir: Path, event_id: str, body: str, index: int, timeout: float,
-) -> tuple[str, bool]:
+def _do_stage_reply(do_mod, outbox_dir: Path, event_id: str, body: str, index: int):
+    """Stage one ``event:`` reply directive without waiting."""
     from . import hooks as hooks_mod
 
     short = hooks_mod._short_event_id(event_id)
-    before = do_mod.notices_of(do_mod.read_portal_state(outbox_dir))
     path = do_mod.stage_reply(outbox_dir, event_id, body, index=index)
-    status, detail = do_mod.await_verdict(
-        outbox_dir, path, before, ("reply", event_id), timeout_seconds=timeout,
-    )
-    return _do_render("reply", short, status, detail)
+    return "reply", short, do_mod.Directive(path, ("reply", event_id))
 
 
-def _do_gate(
-    do_mod, outbox_dir: Path, gate_name: str, body: str, index: int, timeout: float,
-) -> tuple[str, bool]:
-    before = do_mod.notices_of(do_mod.read_portal_state(outbox_dir))
+def _do_stage_gate(do_mod, outbox_dir: Path, gate_name: str, body: str, index: int):
+    """Stage one ``gate:`` directive without waiting."""
     path = do_mod.stage_gate(outbox_dir, gate_name, body, index=index)
-    status, detail = do_mod.await_verdict(
-        outbox_dir, path, before, ("gate", gate_name), timeout_seconds=timeout,
-    )
-    return _do_render("gate", gate_name, status, detail)
+    return "gate", gate_name, do_mod.Directive(path, ("gate", gate_name))
 
 
 def _do_card(do_mod, outbox_dir: Path, filename: str) -> tuple[str, bool]:
@@ -2695,6 +2683,10 @@ def cmd_do(args):
     ``brr.do``'s module docstring for the verdict-observation contract per
     verb and its one named daemon-side gap (a notice carries no
     per-directive source id, so correlation is a text-substring heuristic).
+
+    ``--note``/``--reply``/``--gate`` directives are staged together, then
+    waited on together via :func:`do.await_verdict_batch` — N verbs share
+    one ``--timeout`` deadline, not N independent ones (#1337).
 
     ``-- <command> [args…]`` (split out of argv in ``main`` before this
     parser ever sees it) runs after the verbs are staged: verdict lines move
@@ -2773,20 +2765,36 @@ def cmd_do(args):
             segments.append(seg)
             any_failed = any_failed or not ok
 
-        for i, event_id in enumerate(notes):
-            seg, ok = _do_note(do_mod, outbox_dir, event_id, i, timeout)
-            segments.append(seg)
-            any_failed = any_failed or not ok
-
-        for i, (event_id, body) in enumerate(replies):
-            seg, ok = _do_reply(do_mod, outbox_dir, event_id, body, i, timeout)
-            segments.append(seg)
-            any_failed = any_failed or not ok
-
-        for i, (gate_name, body) in enumerate(gates):
-            seg, ok = _do_gate(do_mod, outbox_dir, gate_name, body, i, timeout)
-            segments.append(seg)
-            any_failed = any_failed or not ok
+        # Stage every note/reply/gate directive first, then wait once
+        # against one shared deadline (#1337, second half): the daemon's
+        # drain clears the whole outbox in one heartbeat tick, so N
+        # directives staged together should cost roughly one `--timeout`
+        # wait, not N sequential ones. `before` is one notices snapshot
+        # taken before the *first* stage — re-snapshotting per verb, the
+        # way the old sequential calls did, would make an earlier verb's
+        # own drain invisible to a later verb's notices diff.
+        if notes or replies or gates:
+            before = do_mod.notices_of(do_mod.read_portal_state(outbox_dir))
+            waitable = [
+                _do_stage_note(do_mod, outbox_dir, event_id, i)
+                for i, event_id in enumerate(notes)
+            ]
+            waitable += [
+                _do_stage_reply(do_mod, outbox_dir, event_id, body, i)
+                for i, (event_id, body) in enumerate(replies)
+            ]
+            waitable += [
+                _do_stage_gate(do_mod, outbox_dir, gate_name, body, i)
+                for i, (gate_name, body) in enumerate(gates)
+            ]
+            verdicts = do_mod.await_verdict_batch(
+                outbox_dir, [entry[2] for entry in waitable], before,
+                timeout_seconds=timeout,
+            )
+            for (verb, label, _directive), (status, detail) in zip(waitable, verdicts):
+                seg, ok = _do_render(verb, label, status, detail)
+                segments.append(seg)
+                any_failed = any_failed or not ok
 
         if args.card:
             seg, ok = _do_card(do_mod, outbox_dir, args.card)
