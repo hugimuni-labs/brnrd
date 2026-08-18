@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2168" height="512" viewBox="0 0 2168 512">
+  <title>brnrd — one skeleton, four states</title>
+  <defs>
+    <linearGradient id="molten" gradientUnits="userSpaceOnUse" x1="0" y1="80" x2="0" y2="430">
+      <stop offset="0" stop-color="#ff9a1f"/>
+      <stop offset="1" stop-color="#ff6a00"/>
+    </linearGradient>
+    <filter id="heat" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="10" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <g transform="translate(0,0)">
+    <rect width="512" height="512" rx="112" fill="#0c0906"/>
+    <g fill="none" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" stroke="url(#molten)" filter="url(#heat)">
+    <path d="M 72.0 92 V 420"/>
+    <path d="M 40.0 132 H 104.0"/>
+    <path d="M 40.0 132 V 100"/>
+    <path d="M 104.0 132 V 100"/>
+    <path d="M 48.0 196 H 96.0"/>
+    <path d="M 48.0 236 H 96.0"/>
+    <path d="M 72.0 276 a 62 72.0 0 0 1 0 144"/>
+    <path d="M 440.0 92 V 420"/>
+    <path d="M 408.0 132 H 472.0"/>
+    <path d="M 408.0 132 V 100"/>
+    <path d="M 472.0 132 V 100"/>
+    <path d="M 416.0 196 H 464.0"/>
+    <path d="M 416.0 236 H 464.0"/>
+    <path d="M 440.0 276 a 62 72.0 0 0 0 0 144"/><circle cx="176.0" cy="322" r="15" fill="url(#molten)" stroke="none"/><path d="M 208.0 390 H 304.0"/><circle cx="336.0" cy="322" r="15" fill="url(#molten)" stroke="none"/>
+    </g>
+  </g>
+  <g transform="translate(552,0)">
+    <rect width="512" height="512" rx="112" fill="#0c0906"/>
+    <g fill="none" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" stroke="url(#molten)" filter="url(#heat)">
+    <path d="M 72.0 92 V 420"/>
+    <path d="M 40.0 132 H 104.0"/>
+    <path d="M 40.0 132 V 100"/>
+    <path d="M 104.0 132 V 100"/>
+    <path d="M 48.0 196 H 96.0"/>
+    <path d="M 48.0 236 H 96.0"/>
+    <path d="M 72.0 276 a 62 72.0 0 0 1 0 144"/>
+    <path d="M 440.0 92 V 420"/>
+    <path d="M 408.0 132 H 472.0"/>
+    <path d="M 408.0 132 V 100"/>
+    <path d="M 472.0 132 V 100"/>
+    <path d="M 416.0 196 H 464.0"/>
+    <path d="M 416.0 236 H 464.0"/>
+    <path d="M 440.0 276 a 62 72.0 0 0 0 0 144"/><path d="M 176.0 300 a 22 22 0 1 0 0.01 0" fill="none"/><path d="M 208.0 390 H 304.0"/><path d="M 336.0 300 a 22 22 0 1 0 0.01 0" fill="none"/>
+    </g>
+  </g>
+  <g transform="translate(1104,0)">
+    <rect width="512" height="512" rx="112" fill="#0c0906"/>
+    <g fill="none" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" stroke="url(#molten)" filter="url(#heat)">
+    <path d="M 72.0 92 V 420"/>
+    <path d="M 40.0 132 H 104.0"/>
+    <path d="M 40.0 132 V 100"/>
+    <path d="M 104.0 132 V 100"/>
+    <path d="M 48.0 196 H 96.0"/>
+    <path d="M 48.0 236 H 96.0"/>
+    <path d="M 72.0 276 a 62 72.0 0 0 1 0 144"/>
+    <path d="M 440.0 92 V 420"/>
+    <path d="M 408.0 132 H 472.0"/>
+    <path d="M 408.0 132 V 100"/>
+    <path d="M 472.0 132 V 100"/>
+    <path d="M 416.0 196 H 464.0"/>
+    <path d="M 416.0 236 H 464.0"/>
+    <path d="M 440.0 276 a 62 72.0 0 0 0 0 144"/><path d="M 156.0 322 H 196.0"/><path d="M 208.0 390 H 304.0"/><path d="M 316.0 322 H 356.0"/>
+    </g>
+  </g>
+  <g transform="translate(1656,0)">
+    <rect width="512" height="512" rx="112" fill="#0c0906"/>
+    <g fill="none" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" stroke="url(#molten)" filter="url(#heat)">
+    <path d="M 72.0 92 V 420"/>
+    <path d="M 40.0 132 H 104.0"/>
+    <path d="M 40.0 132 V 100"/>
+    <path d="M 104.0 132 V 100"/>
+    <path d="M 48.0 196 H 96.0"/>
+    <path d="M 48.0 236 H 96.0"/>
+    <path d="M 72.0 276 a 62 72.0 0 0 1 0 144"/>
+    <path d="M 440.0 92 V 420"/>
+    <path d="M 408.0 132 H 472.0"/>
+    <path d="M 408.0 132 V 100"/>
+    <path d="M 472.0 132 V 100"/>
+    <path d="M 416.0 196 H 464.0"/>
+    <path d="M 416.0 236 H 464.0"/>
+    <path d="M 440.0 276 a 62 72.0 0 0 0 0 144"/><circle cx="176.0" cy="322" r="15" fill="url(#molten)" stroke="none"/><path d="M 208.0 390 H 304.0"/><path d="M 208.0 362 H 304.0"/><circle cx="336.0" cy="322" r="15" fill="url(#molten)" stroke="none"/>
+    </g>
+  </g>
+</svg>
