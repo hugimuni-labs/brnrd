@@ -1914,6 +1914,43 @@ def _repo_for_event(
     return fallback_repo_root, fallback_label
 
 
+def _unserved_repo_label(
+    account_context: account.AccountContext | None,
+    event: dict,
+) -> str | None:
+    """The repo label this event asked for and the daemon does not serve.
+
+    #1472: the read half of :func:`_repo_for_event`'s last line. That
+    function answers *which tree does this event run in* and, for an
+    explicit label it cannot resolve, answers ``fallback_repo_root`` — the
+    default repo's tree — while handing back the label unchanged. The
+    seeding is deliberate and unchanged here; what was missing is anyone
+    saying so. ``spawn: repo:`` asks the identical question six thousand
+    lines down (``_queue_spawn_request``) and refuses it by name; ingress
+    swallowed it.
+
+    Returns the requested label only in the case that is actually wrong:
+    an explicit selector, not the account home, and not a served repo.
+    ``None`` for every resolvable label and for the no-selector path, so a
+    caller can treat a truthy return as "this run is about to seed
+    somewhere other than where it was addressed".
+
+    Pure and side-effect free on purpose. :func:`_dispatchable_targets`
+    calls ``_repo_for_event`` on every poll tick, and a notice written
+    there would re-fire for the life of the event with no run outbox to
+    land in; the one place with both a reader and a single firing is
+    :func:`_run_worker`, after it has created that outbox dir.
+    """
+    if account_context is None or not account_context.enabled:
+        return None
+    label = account.event_repo_label(event)
+    if not label or account.is_home_label(label):
+        return None
+    if account_context.repo_for_label(label) is not None:
+        return None
+    return label
+
+
 def _dispatchable_inbox_sources(
     account_context: account.AccountContext,
     default_repo_root: Path,
@@ -3387,6 +3424,59 @@ def _run_worker(
             kind="dropped",
             lifetime="standing",
         )
+
+    # #1472: the ingress twin of `spawn: repo:`'s refusal, and the same
+    # sentence. `_repo_for_event` resolves an explicit repo label it does
+    # not serve by seeding the run in the *default* repo's tree while
+    # handing the unresolved label back — so `task.meta["repo_label"]`, the
+    # card, the relics and the branch all report a project this run is not
+    # in. On a single-repo account the fallback happens to be right, which
+    # is why it reads as working; the two labels are derived independently
+    # on the server (`gates/cloud.py::local_repo_identity`) and here
+    # (`account.repo_label`) and for a remote-less checkout they cannot
+    # agree, so the wrong case is reachable, not hypothetical.
+    #
+    # The seeding is left exactly as it was. Whether an unresolvable label
+    # should *refuse* the dispatch rather than mis-seed it is a product
+    # call #1472 leaves open (a run in the wrong tree can push a branch to
+    # the wrong project); this only ends the silence around it. Visible the
+    # same two ways as the notices above, and for the #524 reason: a portal
+    # notice the run reads at its own first boundary (`hooks.py` renders
+    # notice text in full on the seed and Stop boundaries, so this lands in
+    # the resident's opening screen, not only in a file someone might open),
+    # and a host-side WARNING for an operator tailing logs.
+    unserved_label = _unserved_repo_label(account_context, event)
+    if unserved_label and account_context is not None:
+        landed_label = next(
+            (
+                repo.label
+                for repo in account_context.repos.values()
+                if repo.root == repo_root
+            ),
+            repo_root.name,
+        )
+        served = ", ".join(sorted(account_context.repos.keys()))
+        print(
+            f"[brnrd] WARNING: run {task.id} (event {eid}): repo "
+            f"{unserved_label!r} is not a served repo — the daemon serves: "
+            f"{served}. Seeded in {landed_label!r} instead."
+        )
+        _record_outbox_notice(
+            outbox_dir,
+            f"repo: {unserved_label!r} is not a served repo. The daemon "
+            f"serves: {served}. This event named it anyway, so the run "
+            f"seeded in {landed_label!r}'s tree — the branch, relics and kb "
+            f"writes of this run land there, not in {unserved_label!r}.",
+            # Dispatched, and *not where it was addressed* — the same
+            # content-yes / addressing-no shape the redirected gate reply
+            # below is classed as. Lifetime "run", not "standing": this is
+            # one event's routing miss, fresh and worth the `!N` alarm, not
+            # a permanent property of the environment that would re-fire
+            # every wake and habituate.
+            kind="redirected",
+            lifetime="run",
+        )
+
 
     print(f"[brnrd] run {task.id} (event {eid}): env={task.env}")
 
