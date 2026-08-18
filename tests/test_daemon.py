@@ -1534,6 +1534,126 @@ def test_pending_events_for_agent_excludes_own_respawn(tmp_path):
     assert [ev["id"] for ev in events] == [real_followup.stem]
 
 
+def _pending_processing_event(inbox, body="orphaned"):
+    """Stage a ``status: processing`` event and return its live dict."""
+    path = protocol.create_event(inbox, "telegram", body, status="processing")
+    return next(e for e in protocol.list_pending(inbox) if Path(e["_path"]) == path)
+
+
+def test_pending_events_for_agent_surfaces_orphaned_processing_event(tmp_path):
+    """#1493 ("the event nobody could see") layer 2: a ``status:
+    processing`` event survives even when layer 1's boot-time sweep never
+    ran — a worker thread killed without the whole daemon dying (a
+    SIGKILLed strand, a crashed subprocess the main loop survives) leaves
+    the identical shape with no restart to trigger that sweep. The
+    resident's own pending view must be able to prove the owning run is
+    dead through the ``run_id`` meta stamped at dispatch, and surface the
+    event — visibly marked, never mixed silently into fresh mail."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    runs_dir = brr_dir / "runs"
+    current = protocol.create_event(inbox, "telegram", "current task")
+    current_id = current.stem
+    orphan = _pending_processing_event(inbox, "orphaned by a dead worker")
+    dead_task = Run(
+        id="run-dead-owner", event_id=orphan["id"],
+        body="orphaned by a dead worker", source="telegram",
+    )
+    dead_task.meta["pid"] = _dead_pid()
+    dead_task.save(runs_dir)
+    protocol.update_event_meta(orphan, run_id=dead_task.id)
+    _age_path(runs_dir / dead_task.id / "run.md", 25 * 3600)
+
+    events = daemon._pending_events_for_agent(inbox, current_id)
+
+    assert [ev["id"] for ev in events] == [orphan["id"]]
+    assert events[0]["orphaned"] is True
+
+
+def test_pending_events_for_agent_hides_live_processing_event(tmp_path):
+    """The counterpart guard layer 2's own docstring calls out: a
+    ``processing`` event whose run is genuinely still in flight (live
+    presence) must stay invisible — the regression this protects against is
+    every concurrent dispatch turning into phantom mail."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    runs_dir = brr_dir / "runs"
+    current = protocol.create_event(inbox, "telegram", "current task")
+    current_id = current.stem
+    live = _pending_processing_event(inbox, "still running")
+    live_task = Run(
+        id="run-still-live", event_id=live["id"],
+        body="still running", source="telegram",
+    )
+    live_task.save(runs_dir)
+    presence.register(
+        brr_dir, kind="daemon", run_id=live_task.id, pid=os.getpid(),
+    )
+    protocol.update_event_meta(live, run_id=live_task.id)
+
+    events = daemon._pending_events_for_agent(inbox, current_id)
+
+    assert events == []
+
+
+def test_pending_events_for_agent_hides_processing_event_with_no_run_id(tmp_path):
+    """No ``run_id`` meta at all is "not provably orphaned", never
+    "orphaned" — positive proof only, same discipline as
+    ``_mark_interrupted_runs``."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    current = protocol.create_event(inbox, "telegram", "current task")
+    current_id = current.stem
+    _pending_processing_event(inbox, "no run_id stamped yet")
+
+    events = daemon._pending_events_for_agent(inbox, current_id)
+
+    assert events == []
+
+
+def test_pending_events_for_agent_orders_by_created_not_mtime(tmp_path):
+    """Steer fold-in (#1493): queue order is the event's own ``created``
+    stamp, not file mtime — any later status/meta write bumps mtime and
+    would otherwise send a retried event to the back of its own line.
+    Reproduces the measured shape: the older (by ``created``) event's file
+    was touched more recently than the newer one's."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    current = protocol.create_event(inbox, "telegram", "current task")
+    current_id = current.stem
+    older_path = protocol.create_event(inbox, "telegram", "older, created first")
+    older = next(e for e in protocol.list_pending(inbox) if Path(e["_path"]) == older_path)
+    newer_path = protocol.create_event(inbox, "telegram", "newer, created second")
+    newer = next(e for e in protocol.list_pending(inbox) if Path(e["_path"]) == newer_path)
+    protocol.update_event_meta(older, created="2026-08-18T14:58:06Z")
+    protocol.update_event_meta(newer, created="2026-08-18T15:33:51Z")
+    # Reverse the mtime relationship relative to `created`.
+    _age_path(Path(newer["_path"]), 3600)
+
+    events = daemon._pending_events_for_agent(inbox, current_id)
+
+    assert [ev["id"] for ev in events] == [older["id"], newer["id"]]
+
+
+def test_pending_events_for_agent_missing_created_falls_back_to_mtime(tmp_path):
+    """A missing/unparseable ``created`` degrades to the old mtime
+    ordering — never a crash, never a free pass to the front of the
+    queue."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    current = protocol.create_event(inbox, "telegram", "current task")
+    current_id = current.stem
+    first_path = protocol.create_event(inbox, "telegram", "first, has created")
+    first = next(e for e in protocol.list_pending(inbox) if Path(e["_path"]) == first_path)
+    second_path = protocol.create_event(inbox, "telegram", "second, missing created")
+    second = next(e for e in protocol.list_pending(inbox) if Path(e["_path"]) == second_path)
+    protocol.update_event_meta(second, created=None)
+
+    events = daemon._pending_events_for_agent(inbox, current_id)
+
+    assert [ev["id"] for ev in events] == [first["id"], second["id"]]
+
+
 def test_pending_event_record_carries_local_attachment_path(tmp_path):
     """A folded-in event's downloaded attachment gets an openable path.
 
@@ -4501,6 +4621,28 @@ def test_interrupted_marker_retry_tail_follows_event_state(tmp_path):
     assert fm.get("status") == "error"
 
 
+def test_interrupted_marker_resets_retry_eligible_event_to_pending(tmp_path):
+    """#1493 ("the event nobody could see") layer 1: a still-dispatchable
+    event left behind by an interrupted run must not stay invisible to the
+    resident's own pending view, which filters strictly on
+    ``status == "pending"`` (``_pending_events_for_agent``). Flipping it
+    back to ``pending`` costs nothing on the retry side — ``pending`` is
+    exactly as dispatch-eligible as ``processing``
+    (``protocol.list_dispatchable``) — and ends the blind spot."""
+    event, _task = _frozen_run(tmp_path, conv_key="telegram:101:")
+    inbox = tmp_path / ".brr" / "inbox"
+    ctx = daemon.account.resolve_context(tmp_path, {})
+
+    assert daemon._mark_interrupted_runs(ctx, tmp_path, {}) == 1
+
+    fm = protocol.parse_frontmatter(
+        Path(event["_path"]).read_text(encoding="utf-8"))
+    assert fm.get("status") == "pending"
+    assert event["id"] in {e["id"] for e in protocol.list_dispatchable(inbox)}
+    visible = daemon._pending_events_for_agent(inbox, "evt-someone-elses-wake")
+    assert event["id"] in {e["id"] for e in visible}
+
+
 def test_interrupted_marker_stamps_retry_provenance_on_the_event(tmp_path):
     """#1491: the run that eventually picks this event back up must be
     able to say *why* it's a retry. The manifest fields
@@ -4515,6 +4657,57 @@ def test_interrupted_marker_stamps_retry_provenance_on_the_event(tmp_path):
         Path(event["_path"]).read_text(encoding="utf-8"))
     assert fm.get("retry_of") == task.id
     assert fm.get("retry_reason") == "host_interrupted"
+
+
+def test_interrupted_marker_leaves_orphaned_spawn_dispatch_processing(tmp_path):
+    """The one call site that distinguishes ``processing`` from ``pending``
+    in a way that matters: ``_reconcile_orphaned_spawn_dispatches`` (boot-
+    ordered right after this sweep) requires ``status == "processing"`` to
+    find a crashed strand's own dispatch event and notify its parent.
+    Resetting it to ``pending`` here first would make that sweep silently
+    skip it — the crash notification would be lost, and the event would
+    instead quietly re-spawn a duplicate strand later with nobody told why.
+    So this exact shape (``spawn_immediate`` + ``spawn_parent_run_id``, no
+    ``spawn_message_for_event``) is carved out of the status-reset half of
+    layer 1, and the dedicated sweep still resolves it end to end. The
+    retry-provenance stamp (#1491) is not part of that carve-out — it is
+    additive and does not touch dispatch state, so it still lands here too."""
+    spawn_event = _stuck_spawn_dispatch(tmp_path, conv_key="telegram:102:")
+    brr_dir = tmp_path / ".brr"
+    runs_dir = brr_dir / "runs"
+    strand_task = Run(
+        id="run-strand-orphan", event_id=spawn_event["id"],
+        body="bounded concurrent task", source="spawn",
+    )
+    strand_task.meta["pid"] = _dead_pid()
+    strand_task.save(runs_dir)
+    _age_path(Path(spawn_event["_path"]), 25 * 3600)
+    _age_path(runs_dir / "run-strand-orphan" / "run.md", 25 * 3600)
+    # Closed-ledger proof rather than relying on manifest-mtime ancientness
+    # for the second sweep: `_mark_interrupted_runs` itself (below) rewrites
+    # the strand's manifest — a pre-existing, unrelated write — which would
+    # otherwise refresh the very mtime `_reconcile_orphaned_spawn_dispatches`
+    # reads for its own staleness proof in the same pass.
+    ledger_path = daemon.run_ledger.ledger_path(tmp_path)
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(
+        json.dumps({"run_id": "run-strand-orphan"}) + "\n", encoding="utf-8",
+    )
+    ctx = daemon.account.resolve_context(tmp_path, {})
+
+    assert daemon._mark_interrupted_runs(ctx, tmp_path, {}) == 1
+
+    fm = protocol.parse_frontmatter(
+        Path(spawn_event["_path"]).read_text(encoding="utf-8"))
+    assert fm.get("status") == "processing"
+    assert fm.get("retry_of") == "run-strand-orphan"
+    assert fm.get("retry_reason") == "host_interrupted"
+    # The dedicated sweep still does its job, undisturbed.
+    assert daemon._reconcile_orphaned_spawn_dispatches(ctx, tmp_path, {}) == 1
+    inbox = brr_dir / "inbox"
+    notes = [e for e in protocol.list_pending(inbox) if e.get("spawn_failed")]
+    assert len(notes) == 1
+    assert notes[0]["conversation_key"] == "telegram:102:"
 
 
 def test_interrupted_marker_leaves_no_retry_stamp_on_a_retired_event(tmp_path):
