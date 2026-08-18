@@ -42,13 +42,17 @@ class _FakeDriver:
     on ``headless`` and on the call log after the run.
     """
 
-    def __init__(self, *, whoami_value=None, read_value=None, search_value=None):
+    def __init__(
+        self, *, whoami_value=None, read_value=None, search_value=None,
+        click_send_return=None,
+    ):
         self.calls: list = []
         self.headless: bool | None = None
         self._whoami_value = whoami_value
         self._read_value = read_value if read_value is not None else {}
         self._search_value = search_value if search_value is not None else []
         self.search_tabs = []
+        self._click_send_return = click_send_return
 
     def __enter__(self):
         self.calls.append("__enter__")
@@ -77,6 +81,9 @@ class _FakeDriver:
     def open_reply_composer(self, url):
         self.calls.append(("open_reply_composer", url))
 
+    def open_post_composer(self):
+        self.calls.append("open_post_composer")
+
     def fill_text(self, text):
         self.calls.append(("fill_text", text))
 
@@ -87,6 +94,7 @@ class _FakeDriver:
 
     def click_send(self):
         self.calls.append("click_send")
+        return self._click_send_return
 
 
 def _factory_for(driver: _FakeDriver):
@@ -115,6 +123,8 @@ def _armed_env(monkeypatch):
         ["search", "--help"],
         ["draft", "-h"],
         ["send", "--help"],
+        ["draft-post", "-h"],
+        ["post", "--help"],
     ],
 )
 def test_help_never_creates_a_driver(tmp_path, argv):
@@ -233,6 +243,196 @@ def test_send_proceeds_when_both_arms_present_and_under_cap(tmp_path, monkeypatc
     assert "click_send" in driver.calls
 
 
+# ── the compose lane: post/draft-post, same guardrails, no target url ──
+
+
+def test_post_refuses_dash_led_text(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    monkeypatch.setenv("BRR_X_BROWSER_SEND", "1")
+    with pytest.raises(SystemExit) as exc:
+        envoy_x_browser.run(
+            ["post", "--confirm", "--text", "-rf /"],
+            paths, driver_factory=_refusing_factory,
+        )
+    assert "looks like a flag" in str(exc.value)
+
+
+def test_draft_post_leading_space_escapes_the_dash_guard(tmp_path):
+    paths = _paths(tmp_path)
+    driver = _FakeDriver()
+    envoy_x_browser.run(
+        ["draft-post", "--text", " -not a flag"],
+        paths, driver_factory=_factory_for(driver),
+    )
+    assert ("fill_text", "-not a flag") in driver.calls
+
+
+def test_draft_post_requires_text(tmp_path):
+    paths = _paths(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        envoy_x_browser.run(["draft-post"], paths, driver_factory=_refusing_factory)
+    assert "--text" in str(exc.value)
+
+
+def test_post_rejects_a_stray_positional_url(tmp_path, monkeypatch):
+    """The compose lane has no reply target — a leftover positional after
+    ``--text`` usually means the caller meant ``send``/``draft`` and typed
+    the wrong verb, so this refuses instead of silently dropping it."""
+    paths = _paths(tmp_path)
+    monkeypatch.setenv("BRR_X_BROWSER_SEND", "1")
+    with pytest.raises(SystemExit) as exc:
+        envoy_x_browser.run(
+            ["post", "--confirm", "--text", "hi", "https://x.com/a/status/1"],
+            paths, driver_factory=_refusing_factory,
+        )
+    assert "no reply target" in str(exc.value)
+
+
+def test_post_refuses_with_neither_arm(tmp_path):
+    paths = _paths(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        envoy_x_browser.run(
+            ["post", "--text", "hi"], paths, driver_factory=_refusing_factory,
+        )
+    msg = str(exc.value)
+    assert "--confirm" in msg and "BRR_X_BROWSER_SEND=1" in msg
+
+
+def test_post_refuses_with_only_confirm_flag(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    monkeypatch.delenv("BRR_X_BROWSER_SEND", raising=False)
+    with pytest.raises(SystemExit) as exc:
+        envoy_x_browser.run(
+            ["post", "--text", "hi", "--confirm"],
+            paths, driver_factory=_refusing_factory,
+        )
+    assert "BRR_X_BROWSER_SEND=1" in str(exc.value)
+
+
+def test_post_refuses_with_only_env_armed(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    _armed_env(monkeypatch)
+    with pytest.raises(SystemExit) as exc:
+        envoy_x_browser.run(
+            ["post", "--text", "hi"], paths, driver_factory=_refusing_factory,
+        )
+    assert "--confirm" in str(exc.value)
+
+
+def test_post_proceeds_when_both_arms_present_and_under_cap(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    _armed_env(monkeypatch)
+    driver = _FakeDriver()
+    envoy_x_browser.run(
+        ["post", "--text", "hi", "--confirm"],
+        paths, driver_factory=_factory_for(driver),
+    )
+    assert driver.headless is False
+    assert "open_post_composer" in driver.calls
+    assert ("fill_text", "hi") in driver.calls
+    assert "click_send" in driver.calls
+    # The compose lane must ask for the compose url, never the reply modal.
+    assert not any(
+        isinstance(c, tuple) and c[0] == "open_reply_composer" for c in driver.calls
+    )
+
+
+def test_draft_post_never_calls_click_send(tmp_path, capsys):
+    paths = _paths(tmp_path)
+    driver = _FakeDriver()
+    envoy_x_browser.run(
+        ["draft-post", "--text", "hello there"],
+        paths, driver_factory=_factory_for(driver),
+    )
+    assert "click_send" not in driver.calls
+    assert "open_post_composer" in driver.calls
+    assert ("fill_text", "hello there") in driver.calls
+    printed = capsys.readouterr().out.strip()
+    assert Path(printed).exists()
+    assert Path(printed).parent == paths.shots_dir
+
+
+def test_post_and_send_share_the_same_hourly_cap_bucket(tmp_path, monkeypatch):
+    """The task's own framing: post counts against the cap "exactly as a
+    reply" — one shared bucket, not a second cap that would let a caller
+    dodge the limit by alternating verbs."""
+    paths = _paths(tmp_path)
+    _armed_env(monkeypatch)
+    paths.config.write_text(json.dumps({"hourly_cap": 1}), encoding="utf-8")
+    envoy_x_browser.run(
+        ["send", "https://x.com/a/status/1", "--text", "hi", "--confirm"],
+        paths, driver_factory=_factory_for(_FakeDriver()),
+    )
+    with pytest.raises(SystemExit) as exc:
+        envoy_x_browser.run(
+            ["post", "--text", "hi", "--confirm"],
+            paths, driver_factory=_refusing_factory,
+        )
+    assert "cap" in str(exc.value)
+
+
+def test_post_refuses_past_cap_even_when_armed(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    _armed_env(monkeypatch)
+    now = time.time()
+    paths.config.write_text(json.dumps({"hourly_cap": 1}), encoding="utf-8")
+    paths.state.write_text(json.dumps({"sends": [now]}), encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        envoy_x_browser.run(
+            ["post", "--text", "hi", "--confirm"],
+            paths, driver_factory=_refusing_factory,
+        )
+    assert "cap" in str(exc.value)
+
+
+def test_post_receipt_records_post_id_when_driver_yields_one(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    _armed_env(monkeypatch)
+    driver = _FakeDriver(click_send_return="1234567890")
+    envoy_x_browser.run(
+        ["post", "--text", "hi", "--confirm"],
+        paths, driver_factory=_factory_for(driver),
+    )
+    lines = paths.log.read_text(encoding="utf-8").strip().splitlines()
+    record = json.loads(lines[0])
+    assert record["lane"] == "browser"
+    assert record["kind"] == "post"
+    assert record["text"] == "hi"
+    assert record["confirm"] is True
+    assert record["post_id"] == "1234567890"
+
+
+def test_post_receipt_records_explicit_absence_not_a_guess(tmp_path, monkeypatch):
+    """The task's own constraint: never invent an id. A driver that yields
+    nothing must produce a `post_id: null` field a reader can see, not a
+    missing key that reads as "forgot to check"."""
+    paths = _paths(tmp_path)
+    _armed_env(monkeypatch)
+    driver = _FakeDriver(click_send_return=None)
+    envoy_x_browser.run(
+        ["post", "--text", "hi", "--confirm"],
+        paths, driver_factory=_factory_for(driver),
+    )
+    lines = paths.log.read_text(encoding="utf-8").strip().splitlines()
+    record = json.loads(lines[0])
+    assert "post_id" in record
+    assert record["post_id"] is None
+
+
+def test_post_receipt_appends_to_the_shared_api_lane_log(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    _armed_env(monkeypatch)
+    with open(paths.log, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"lane": "api", "id": "1"}) + "\n")
+    driver = _FakeDriver()
+    envoy_x_browser.run(
+        ["post", "--text", "hi", "--confirm"],
+        paths, driver_factory=_factory_for(driver),
+    )
+    lines = [json.loads(line) for line in paths.log.read_text(encoding="utf-8").splitlines()]
+    assert [r.get("lane") for r in lines] == ["api", "browser"]
+
+
 # ── the hourly cap: arithmetic + enforcement even when armed ─────────
 
 
@@ -303,6 +503,8 @@ def test_record_send_appends_and_prunes(tmp_path):
         ["search", "q"],
         ["draft", "https://x.com/a/status/1", "--text", "hi"],
         ["send", "https://x.com/a/status/1", "--text", "hi", "--confirm"],
+        ["draft-post", "--text", "hi"],
+        ["post", "--text", "hi", "--confirm"],
     ],
 )
 def test_kill_switch_refuses_every_verb_but_check(tmp_path, monkeypatch, argv):
