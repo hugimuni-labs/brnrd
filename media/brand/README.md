@@ -38,6 +38,13 @@ resting-vs-awake frames and both are drawn:
   resting frame bilaterally symmetric about the identical axis the face uses.
 - **`mark-*`** — `b·_·d`, the awake frame. Slots 2–4 become the state.
 
+And the two frames are not two drawings. `b|^n^|d` is the resting word with
+**the n lowered and the r-stems taken away** — the `^` that reads as an eye is
+the same spur the `r` wears in the word. Nothing is swapped between frames;
+parts move. Which is what a mark that animates on live state has to be, and it
+is also already in `WinkWordmark`'s own frame list: `b^n^d` sits there beside
+`b-n-d`, holding for 1400ms, and nobody had drawn it.
+
 The first draft of this file shipped only the awake frame, which is how a
 five-slot argument managed to drop three letters. The maintainer's hand-drawn
 sketch is what put the resting frame back.
@@ -88,11 +95,12 @@ the layer that renders, not only at the layer that authors.
 
 The stave's crown, rendered both ways:
 
-- **`branch`** (default) — two arms rising off the stem, closer to an actual
-  rune. Stops the pair reading as cutlery at favicon size.
+- **`none`** (default) — bare bars. What the mark looks like once the crown is
+  taken off, which is where the sketch round landed.
+- **`branch`** — two arms rising off the stem, closer to an actual rune.
 - **`fork`** — the current logo's square trident, kept verbatim.
 
-Files without a suffix are `branch`; `-fork` files are the other one.
+Unsuffixed files are `none`; `-branch` and `-fork` are the other two.
 
 ## On generating rather than drawing
 
