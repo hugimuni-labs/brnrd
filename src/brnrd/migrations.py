@@ -215,6 +215,14 @@ def _migrate_daemons(conn: Connection) -> None:
 def _migrate_runner_wake_requests(conn: Connection) -> None:
     conn.execute(text("ALTER TABLE runner_wake_requests ADD COLUMN IF NOT EXISTS repo_label VARCHAR(255)"))
     conn.execute(text("ALTER TABLE runner_wake_requests ADD COLUMN IF NOT EXISTS environment VARCHAR(32)"))
+    # #1492: starvation bound (counter) + visibility (last blocked reason).
+    conn.execute(
+        text(
+            "ALTER TABLE runner_wake_requests "
+            "ADD COLUMN IF NOT EXISTS parked_after_refusals INTEGER NOT NULL DEFAULT 0"
+        )
+    )
+    conn.execute(text("ALTER TABLE runner_wake_requests ADD COLUMN IF NOT EXISTS blocked_reason VARCHAR(255)"))
 
 
 def _migrate_channel_routes(conn: Connection) -> None:
