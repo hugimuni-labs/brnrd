@@ -1184,7 +1184,7 @@ class TestCommandBuilding:
         assert cmd == ["mock", "--flag", "do work"]
 
 
-def _fake_proc(popen_kwargs: dict, *, out: str = "", err: str = "", code: int = 0):
+def _fake_proc(popen_kwargs: dict, *, out: str = "", err: str = "", code: int = 0, pid: int = 4242):
     """A stand-in child that writes to the stream *files* it was handed.
 
     ``invoke_runner`` no longer collects output from ``communicate()`` -- it points
@@ -1192,6 +1192,10 @@ def _fake_proc(popen_kwargs: dict, *, out: str = "", err: str = "", code: int = 
     so a runner killed mid-flight still leaves its words on disk (2026-07-14,
     run-260714-1442-hgc3: exit 143, zero bytes, cause unfindable for a week).
     A fake child must therefore *write*, exactly as a real one does.
+
+    ``pid`` is a fixed default rather than a real OS pid -- ``invoke_runner``
+    reads it to start the #1485 power-assertion companion, and every caller
+    of this fixture needs *some* int there, not necessarily a unique one.
     """
     # `monkeypatch.setattr(runner_mod.subprocess, "Popen", ...)` patches the *module*,
     # so it also catches `subprocess.run()` calls made elsewhere on the way in --
@@ -1206,6 +1210,9 @@ def _fake_proc(popen_kwargs: dict, *, out: str = "", err: str = "", code: int = 
     class _FakeProc:
         returncode = code
         stdin = None
+
+        def __init__(self):
+            self.pid = pid
 
         def wait(self, timeout=None):
             return code
@@ -1727,6 +1734,22 @@ class TestFailureDetailRedaction:
         assert runner_failures.classify_failure(
             exit_code=1, detail="the model is overloaded",
         ) == runner_failures.PROVIDER_ERROR
+
+    def test_host_suspend_signature_is_named_not_a_raw_transport_error(self):
+        """#1485: the verbatim string measured 2026-08-18 across three dead
+        runs (``run-260818-1516-ayln``, ``run-260818-1648-k718``). It must
+        not fall through to the generic transport/runner bucket -- the
+        whole point is the correspondent reading "the host went to sleep"
+        instead of an API error string that means nothing to them."""
+        from brr import runner_failures
+
+        assert runner_failures.classify_failure(
+            exit_code=1,
+            detail="API Error: Your computer went to sleep mid-response.",
+        ) == runner_failures.HOST_SUSPENDED
+        prefix = runner_failures.reason_prefix(runner_failures.HOST_SUSPENDED)
+        assert "went to sleep" in prefix
+        assert "API Error" not in prefix
 
     def test_a_proxy_403_is_an_egress_denial_not_an_auth_failure(self):
         """#1118: the sentence that named the wrong cause.
@@ -2499,3 +2522,233 @@ class TestExtractCodexThreadId:
         assert _extract_codex_thread_id(
             '{"type":"thread.started","thread_id":""}'
         ) is None
+
+
+class TestPowerAssertion:
+    """#1485: an idle-sleeping host kills whatever runner subprocess it caught
+    mid-flight. ``invoke_runner`` -- the same choke point ``HostEnv``,
+    ``WorktreeEnv``, and therefore every resident *and* strand run funnel
+    through (there is exactly one call site for ``start_registered_process``)
+    -- must start a companion process that inhibits idle system sleep for as
+    long as the runner subprocess is alive.
+
+    Every test here drives ``invoke_runner`` itself (the actual
+    runner-launch path daemon.py's worker eventually reaches through
+    ``env_backend.invoke``), never ``_start_power_assertion`` /
+    ``_power_assertion_command`` directly, and asserts on the argv actually
+    constructed -- never on source text.
+    """
+
+    def _invoke(self, tmp_path, monkeypatch, *, platform, which_map):
+        """Run one real ``invoke_runner`` call and return every Popen argv
+        it produced, in call order (index 0 is always the runner itself --
+        the power assertion, if any, is started only after it)."""
+        calls = []
+
+        def _fake_popen(cmd, **kwargs):
+            calls.append(list(cmd))
+            return _fake_proc(kwargs, out="ok\n")
+
+        monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
+        monkeypatch.setattr(runner_mod.sys, "platform", platform)
+        monkeypatch.setattr(
+            runner_mod.shutil, "which", lambda name: which_map.get(name),
+        )
+        (tmp_path / ".brr").mkdir()
+        invocation = RunnerInvocation(
+            kind="executor", label="power-assert-run", prompt="x",
+            cwd=tmp_path, repo_root=tmp_path,
+        )
+        result = invoke_runner("mock", invocation, {"runner_cmd": ["mock"]})
+        assert result.ok
+        return calls
+
+    def test_darwin_constructs_caffeinate_dash_i_dash_w_runner_pid(
+        self, tmp_path, monkeypatch,
+    ):
+        """The exact defect: a runner subprocess with nothing holding the
+        host awake. On Darwin with ``caffeinate`` on PATH, ``invoke_runner``
+        must spawn a second process, ``caffeinate -i -w <the runner's own
+        pid>`` -- ``-i`` (idle system sleep only, never display sleep) and
+        ``-w`` (tied to the runner, not the daemon) both asserted literally,
+        not just "some caffeinate call happened"."""
+        calls = self._invoke(
+            tmp_path, monkeypatch,
+            platform="darwin", which_map={"caffeinate": "/usr/bin/caffeinate"},
+        )
+
+        assert len(calls) == 2
+        runner_pid = _fake_proc({}).pid  # the shared fixture's fixed pid
+        assert calls[1] == ["caffeinate", "-i", "-w", str(runner_pid)]
+
+    def test_non_darwin_non_linux_platform_constructs_nothing(
+        self, tmp_path, monkeypatch,
+    ):
+        """A platform with no known idle-sleep inhibitor (e.g. Windows) must
+        leave the runner as the only process started -- no crash, no
+        spurious second Popen call, even though both binaries "exist" here
+        (proving the platform gate, not PATH lookup, is what refuses)."""
+        calls = self._invoke(
+            tmp_path, monkeypatch,
+            platform="win32",
+            which_map={
+                "caffeinate": "/usr/bin/caffeinate",
+                "systemd-inhibit": "/usr/bin/systemd-inhibit",
+            },
+        )
+
+        assert calls == [["mock"]]
+
+    def test_darwin_missing_caffeinate_binary_leaves_run_unaffected(
+        self, tmp_path, monkeypatch,
+    ):
+        """Absent binary is a no-op, not a failure (#1485 scope: "comfort,
+        not a precondition") -- the run still completes and only the runner
+        itself was ever launched."""
+        calls = self._invoke(
+            tmp_path, monkeypatch, platform="darwin", which_map={},
+        )
+
+        assert calls == [["mock"]]
+
+    def test_linux_constructs_systemd_inhibit_watching_runner_pid(
+        self, tmp_path, monkeypatch,
+    ):
+        """Linux has no ``-w <pid>``, so the constructed command must still
+        name the runner's own pid somewhere in its argv (the poll loop) --
+        proving the substitution happened, not just that some argv shipped."""
+        calls = self._invoke(
+            tmp_path, monkeypatch,
+            platform="linux",
+            which_map={"systemd-inhibit": "/usr/bin/systemd-inhibit"},
+        )
+
+        assert len(calls) == 2
+        assert calls[1][0] == "systemd-inhibit"
+        assert "--what=idle:sleep" in calls[1]
+        runner_pid = _fake_proc({}).pid
+        assert calls[1][-1] == str(runner_pid)
+
+    def test_linux_missing_systemd_inhibit_binary_leaves_run_unaffected(
+        self, tmp_path, monkeypatch,
+    ):
+        calls = self._invoke(
+            tmp_path, monkeypatch, platform="linux", which_map={},
+        )
+
+        assert calls == [["mock"]]
+
+    def test_power_assertion_companion_is_reaped_before_invoke_runner_returns(
+        self, tmp_path, monkeypatch,
+    ):
+        """A companion process that outlives its own runner is exactly the
+        leak #1485's own fix must not introduce. ``invoke_runner`` must
+        terminate it in its ``finally`` before returning, not leave it for
+        someone else to notice."""
+        terminated = []
+
+        def _fake_popen(cmd, **kwargs):
+            if cmd and cmd[0] == "caffeinate":
+                class _Companion:
+                    def poll(self):
+                        return None  # still "running" until terminated
+
+                    def terminate(self):
+                        terminated.append(True)
+
+                    def wait(self, timeout=None):
+                        return 0
+
+                return _Companion()
+            return _fake_proc(kwargs, out="ok\n")
+
+        monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
+        monkeypatch.setattr(runner_mod.sys, "platform", "darwin")
+        monkeypatch.setattr(
+            runner_mod.shutil, "which",
+            lambda name: "/usr/bin/caffeinate" if name == "caffeinate" else None,
+        )
+        (tmp_path / ".brr").mkdir()
+        invocation = RunnerInvocation(
+            kind="executor", label="power-assert-cleanup", prompt="x",
+            cwd=tmp_path, repo_root=tmp_path,
+        )
+
+        result = invoke_runner("mock", invocation, {"runner_cmd": ["mock"]})
+
+        assert result.ok
+        assert terminated == [True]
+
+
+class TestIdleSleepDoctorWarning:
+    """#1485 item 2: ``brnrd runners doctor`` should name a short, nonzero
+    AC-power idle-sleep timeout and the exact remedy -- the same host
+    posture that let three runs die on 2026-08-18. Drives the real
+    ``pmset -g custom`` parser (``macos_idle_sleep_minutes``) with a faked
+    ``subprocess.run``, never hand-parsed fixture text asserted separately
+    from the function under test.
+    """
+
+    _AC_SECTION = (
+        "Battery Power:\n"
+        " lidwake              1\n"
+        " sleep                10\n"
+        "AC Power:\n"
+        " lidwake              1\n"
+        " sleep                {sleep}\n"
+        " womp                 0\n"
+    )
+
+    def _run(self, monkeypatch, *, platform, which, sleep_minutes, returncode=0):
+        import subprocess as _subprocess
+
+        class _Completed:
+            def __init__(self, stdout):
+                self.stdout = stdout
+                self.returncode = returncode
+
+        def _fake_run(cmd, **kwargs):
+            assert cmd == ["pmset", "-g", "custom"]
+            return _Completed(self._AC_SECTION.format(sleep=sleep_minutes))
+
+        monkeypatch.setattr(runner_mod.sys, "platform", platform)
+        monkeypatch.setattr(
+            runner_mod.shutil, "which",
+            lambda name: which if name == "pmset" else None,
+        )
+        monkeypatch.setattr(runner_mod.subprocess, "run", _fake_run)
+        return runner_mod.idle_sleep_doctor_warning()
+
+    def test_short_nonzero_sleep_warns_with_remedy_verbatim(self, monkeypatch):
+        warning = self._run(
+            monkeypatch, platform="darwin", which="/usr/bin/pmset", sleep_minutes=1,
+        )
+
+        assert warning is not None
+        assert "1 minute" in warning
+        assert "sudo pmset -a sleep 0" in warning
+
+    def test_sleep_disabled_is_silent(self, monkeypatch):
+        assert self._run(
+            monkeypatch, platform="darwin", which="/usr/bin/pmset", sleep_minutes=0,
+        ) is None
+
+    def test_long_sleep_timer_is_silent(self, monkeypatch):
+        assert self._run(
+            monkeypatch, platform="darwin", which="/usr/bin/pmset", sleep_minutes=120,
+        ) is None
+
+    def test_non_darwin_never_shells_out(self, monkeypatch):
+        def _fail_run(cmd, **kwargs):
+            raise AssertionError("must not run pmset off Darwin")
+
+        monkeypatch.setattr(runner_mod.sys, "platform", "linux")
+        monkeypatch.setattr(runner_mod.subprocess, "run", _fail_run)
+
+        assert runner_mod.idle_sleep_doctor_warning() is None
+
+    def test_missing_pmset_binary_is_silent(self, monkeypatch):
+        monkeypatch.setattr(runner_mod.sys, "platform", "darwin")
+        monkeypatch.setattr(runner_mod.shutil, "which", lambda name: None)
+
+        assert runner_mod.idle_sleep_doctor_warning() is None
