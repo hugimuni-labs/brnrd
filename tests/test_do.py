@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from brr import do as do_mod
 from brr.cli import main
 
 
@@ -470,6 +471,130 @@ def test_do_timeout_flag_bounds_every_sleep_call(tmp_path, monkeypatch, capsys):
     # default `DEFAULT_TIMEOUT_SECONDS`.
     assert seen
     assert all(s <= 0.05 + 1e-6 for s in seen)
+
+
+# ── batched wait: N verbs share one deadline, not N (#1337) ─────────
+
+
+class _FakeClock:
+    """A monotonic clock that only advances when something sleeps — keeps
+    the elapsed-time assertion below instant while still exercising the
+    real polling loop body (mirrors ``tests/test_cli.py``'s ``_FakeClock``
+    for ``brnrd await``)."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+def test_do_n_verbs_share_one_wait_not_n(tmp_path, monkeypatch, capsys):
+    """The defect's second half, pinned: before this fix, staging and
+    waiting were fused per verb (the old ``cli.py`` ``_do_note``/
+    ``_do_reply``/``_do_gate``), so N verbs against a daemon that never
+    drains cost N independent ``--timeout`` waits run back to back — three
+    ``--note`` directives, none of them ever consumed, would run the clock
+    to ~3x ``--timeout``. Batched, they share one deadline: this asserts
+    the *simulated* elapsed time lands at ~1x ``--timeout``, not 3x,
+    without any real wall-clock wait.
+    """
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+
+    clock = _FakeClock()
+    monkeypatch.setattr(time, "sleep", clock.sleep)
+    monkeypatch.setattr(time, "monotonic", clock.monotonic)
+
+    rc = main([
+        "do",
+        "--note", "evt-1", "--note", "evt-2", "--note", "evt-3",
+        "--timeout", "5",
+    ])
+    assert rc == 1
+    parts = capsys.readouterr().out.strip().split(" · ")
+    assert len(parts) == 3
+    for i, part in enumerate(parts, start=1):
+        assert part.startswith(f"note evt-{i} ? still queued (")
+        assert part.endswith("s)")
+
+    # The old fused shape would have run the simulated clock to
+    # ~3 * 5 = 15s (one full timeout per verb, sequentially). Batched, the
+    # three directives share one deadline: elapsed lands at ~1 timeout,
+    # with slack only for the final partial poll interval.
+    assert clock.now < 5 + do_mod.POLL_INTERVAL_SECONDS + 1e-6
+
+
+def test_do_n_verbs_all_staged_before_the_shared_wait_begins(tmp_path, monkeypatch, capsys):
+    """The other half of the contract: every directive in the batch is
+    staged *before* the shared wait starts polling — not stage-one,
+    wait-one, stage-next. A sleep spy checks how many of the batch's own
+    staged files already exist by the time the very first poll fires; the
+    old fused shape would see only 1 (note #1 — note #2 isn't staged until
+    note #1's own wait loop returns).
+    """
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+
+    seen_at_first_sleep = {}
+
+    def _sleep(_seconds):
+        seen_at_first_sleep.setdefault(
+            "count", len(list(outbox.glob("do-*-note-*.md"))),
+        )
+
+    monkeypatch.setattr(time, "sleep", _sleep)
+
+    main(["do", "--note", "evt-1", "--note", "evt-2", "--note", "evt-3", "--timeout", "0.05"])
+    assert seen_at_first_sleep.get("count") == 3
+
+
+def test_do_batched_notice_fails_at_most_one_directive(tmp_path, monkeypatch, capsys):
+    """Batching widens the pre-existing substring-correlation gap
+    (``do.py``'s module docstring): with several directives unconsumed at
+    once, one fresh notice whose text happens to satisfy more than one
+    directive's needles could otherwise fail every directive it textually
+    matches, not just the one it actually names. ``evt-11``'s notice text
+    contains ``evt-1`` as a literal substring, so both directives' needle
+    tuples match the same single notice — a real, not contrived, collision
+    shape. The claim-once cap means only one directive (stage order) is
+    charged with it.
+    """
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    notice = {
+        "at": "2026-08-08T00:00:00Z", "kind": "refused",
+        "text": "note dropped: event evt-11 not found in any inbox",
+    }
+
+    def _sleep(_seconds):
+        for p in outbox.glob("do-*-note-*.md"):
+            p.unlink()
+        payload = json.loads((outbox / "portal-state.json").read_text(encoding="utf-8"))
+        payload.setdefault("notices", []).append(notice)
+        (outbox / "portal-state.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setattr(time, "sleep", _sleep)
+
+    assert main(["do", "--note", "evt-1", "--note", "evt-11"]) == 1
+    out = capsys.readouterr().out.strip()
+    parts = out.split(" · ")
+    assert len(parts) == 2
+    failed = [p for p in parts if "✗" in p]
+    ok = [p for p in parts if "✓" in p]
+    # exactly one of the two is charged with the notice, never both.
+    assert len(failed) == 1
+    assert len(ok) == 1
+    assert failed[0].startswith("note evt-1 ✗")  # stage order decides
 
 
 # ── multiple verbs, ordering, and pairing errors ────────────────────

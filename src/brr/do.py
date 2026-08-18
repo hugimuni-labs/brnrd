@@ -63,7 +63,7 @@ import json
 import math
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from . import protocol
 
@@ -516,6 +516,135 @@ def await_verdict(
             except OSError:
                 return QUEUED, "still queued"
         sleep(min(poll_seconds, max(0.0, deadline - clock())))
+
+
+class Directive(NamedTuple):
+    """One staged file :func:`await_verdict_batch` is watching for.
+
+    Mirrors the three arguments :func:`await_verdict` takes per-call
+    (*staged_path*, *needles*, *source_file*) so a batch caller builds this
+    once at stage time and never re-derives it during the wait.
+    """
+
+    staged_path: Path
+    needles: tuple[str, ...]
+    source_file: str | None = None
+
+
+def await_verdict_batch(
+    outbox_dir: Path,
+    directives: list[Directive],
+    before_notices: list[dict[str, Any]],
+    *,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    poll_seconds: float = POLL_INTERVAL_SECONDS,
+    sleep=None,
+    clock=None,
+) -> list[tuple[str, str]]:
+    """:func:`await_verdict`, fanned out over *directives* against one shared deadline.
+
+    The fix for the other half of #1337: staging N directives and then
+    calling :func:`await_verdict` once per directive costs N independent
+    `timeout_seconds` waits in the worst case (a wedged/slow daemon), even
+    though the daemon's own drain clears the whole outbox in one heartbeat
+    tick. This computes **one** `deadline` up front and polls every
+    still-pending directive against it in the same loop — N directives cost
+    one wait, not N.
+
+    Each iteration reads `portal-state.json` **at most once** (only when at
+    least one directive's staged file has disappeared and therefore needs a
+    notice check), never once per pending directive — the second coupling
+    the task names, alongside the single shared *before_notices* snapshot
+    the caller must already take once before staging the first directive
+    (so an earlier directive's own drain doesn't blind a later directive's
+    diff — see :func:`new_notices`).
+
+    Per-directive state otherwise replays :func:`await_verdict` exactly: a
+    directive whose file is gone gets the same #1219 grace window (an
+    iteration count, not a second wall-clock deadline) before a notice-less
+    read is trusted as :data:`OK`; a fresh matching notice at any point
+    still returns :data:`FAILED` immediately; a directive whose file is
+    still on disk when the shared deadline passes reports :data:`QUEUED`
+    with its own staged file's age, exactly as the single-directive path
+    does (#1379).
+
+    **Batching widens the correlation gap named in this module's own
+    docstring, and this function caps the amplification rather than closing
+    it.** :func:`await_verdict` only ever has one directive in flight, so
+    the substring-heuristic ``_notice_matches`` risks misattributing a
+    notice to *the wrong single directive* at worst. Here, up to *n*
+    directives can be simultaneously unconsumed against one shared
+    *before_notices* snapshot, so one fresh notice whose text happens to
+    satisfy more than one directive's ``needles`` (e.g. event ids ``evt-1``
+    and ``evt-11`` — the latter's notice text contains the former as a
+    literal substring) could previously have failed *every* directive it
+    textually matched, not just one. This function claims each matched
+    notice for at most one directive (stage order — the same order
+    *directives* was built in — decides which one when several are gone in
+    the same poll tick), so one real refusal can now amplify into at most
+    one false :data:`FAILED` verdict instead of N. It does **not** decide
+    *which* directive a genuinely ambiguous notice truly belongs to — that
+    identity question is exactly the daemon-side ``source_file`` gap this
+    module's docstring already names as out of scope here.
+
+    Returns a list of ``(status, detail)`` pairs, one per entry of
+    *directives*, in the same order.
+    """
+    sleep = sleep or time.sleep
+    clock = clock or time.monotonic
+    deadline = clock() + max(0.0, timeout_seconds)
+    n = len(directives)
+    results: list[tuple[str, str] | None] = [None] * n
+    grace_polls_left: list[int | None] = [None] * n
+    claimed_notices: set[tuple] = set()
+
+    def _pending() -> list[int]:
+        return [i for i in range(n) if results[i] is None]
+
+    while True:
+        pending = _pending()
+        if not pending:
+            break
+
+        gone = [i for i in pending if not directives[i].staged_path.exists()]
+        if gone:
+            payload = read_portal_state(outbox_dir)
+            fresh = new_notices(before_notices, notices_of(payload))
+            for i in gone:
+                directive = directives[i]
+                available = [nt for nt in fresh if _notice_key(nt) not in claimed_notices]
+                hit = find_matching_notice(
+                    available, directive.needles, source_file=directive.source_file,
+                )
+                if hit is not None:
+                    claimed_notices.add(_notice_key(hit))
+                    kind = hit.get("kind") or "refused"
+                    results[i] = (FAILED, f"{kind}: {hit.get('text')}")
+                    continue
+                if grace_polls_left[i] is None:
+                    grace_polls_left[i] = _grace_poll_count(NOTICE_GRACE_SECONDS, poll_seconds)
+                if grace_polls_left[i] <= 0 or clock() >= deadline:
+                    results[i] = (OK, "")
+                    continue
+                grace_polls_left[i] -= 1
+
+        pending = _pending()
+        if not pending:
+            break
+
+        if clock() >= deadline:
+            for i in pending:
+                staged_path = directives[i].staged_path
+                try:
+                    age_seconds = max(0.0, time.time() - staged_path.stat().st_mtime)
+                    results[i] = (QUEUED, f"still queued ({int(age_seconds)}s)")
+                except OSError:
+                    results[i] = (QUEUED, "still queued")
+            break
+
+        sleep(min(poll_seconds, max(0.0, deadline - clock())))
+
+    return results  # type: ignore[return-value]  # every slot filled above
 
 
 def await_bolt_facet(
