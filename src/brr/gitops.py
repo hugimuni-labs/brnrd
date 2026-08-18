@@ -590,6 +590,23 @@ def rev_parse(repo_root: Path, ref: str) -> str | None:
     return value or None
 
 
+def path_exists_at_ref(repo_root: Path, ref: str, relpath: str) -> bool:
+    """Does *relpath* exist as a blob in the tree of *ref*?
+
+    Local and offline — ``git cat-file -e <ref>:<relpath>`` reads the object
+    database, never the network — so it is cheap enough to ask before
+    linking a file relic to a specific branch (see ``relics._ForgeLinks.blob``,
+    #1370). Deliberately checks the tree of *ref* rather than the working
+    copy or the index: a staged-but-uncommitted or not-yet-pushed file would
+    pass an index-based check while still 404ing on the forge.
+    """
+    relpath = (relpath or "").strip().lstrip("/")
+    if not ref or not relpath:
+        return False
+    result = _git(repo_root, "cat-file", "-e", f"{ref}:{relpath}", check=False)
+    return result.returncode == 0
+
+
 def absolute_git_dir(repo_root: Path) -> Path | None:
     """The absolute ``.git`` directory serving *repo_root*, or None.
 
