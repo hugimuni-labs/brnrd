@@ -8993,8 +8993,17 @@ def test_run_worker_says_the_repo_label_it_could_not_find(tmp_path, monkeypatch)
     ), portal["notices"]
     seed_block = hooks.format_delta(portal, seed=True)
     assert seed_block is not None
-    assert server_label_b in seed_block
     assert "is not a served repo" in seed_block
+    # Past the renderer's own 220-character truncation, not merely into it.
+    # The seed block caps notice text (``hooks._NOTICE_TEXT_CAP``), so a
+    # message that says the remedy after the consequence would render as a
+    # complaint with the correction cut off. Both load-bearing facts have
+    # to survive the cut on their own.
+    truncated = record["text"][: hooks._NOTICE_TEXT_CAP]
+    assert server_label_b in truncated
+    assert label_a in truncated and label_b in truncated
+    assert server_label_b in seed_block
+    assert label_a in seed_block and label_b in seed_block
 
 def test_account_starts_one_cloud_gate_on_default_repo_runtime(
     tmp_path, monkeypatch,

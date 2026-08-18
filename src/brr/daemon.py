@@ -3463,10 +3463,16 @@ def _run_worker(
         )
         _record_outbox_notice(
             outbox_dir,
+            # Front-loaded on purpose. `hooks._NOTICE_TEXT_CAP` truncates a
+            # notice at 220 characters in the seed block, so the two facts
+            # that make this correctable — the label asked for and the set
+            # served — are said before the consequence clause, and it is the
+            # consequence that gets cut on a long-labelled account, never
+            # the remedy.
             f"repo: {unserved_label!r} is not a served repo. The daemon "
-            f"serves: {served}. This event named it anyway, so the run "
-            f"seeded in {landed_label!r}'s tree — the branch, relics and kb "
-            f"writes of this run land there, not in {unserved_label!r}.",
+            f"serves: {served}. The run seeded in the tree of "
+            f"{landed_label!r} instead — its branch, relics and kb writes "
+            f"land there, not in {unserved_label!r}.",
             # Dispatched, and *not where it was addressed* — the same
             # content-yes / addressing-no shape the redirected gate reply
             # below is classed as. Lifetime "run", not "standing": this is
