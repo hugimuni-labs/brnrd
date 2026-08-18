@@ -17,7 +17,7 @@ from sqlalchemy import select  # noqa: E402
 from brnrd import create_app, ids  # noqa: E402
 from brnrd.app import _maybe_derive_telegram_bot_username  # noqa: E402
 from brnrd.config import Settings, _derived_telegram_usernames  # noqa: E402
-from brnrd.models import ChannelRoute, Event, Repo, TgPairCode  # noqa: E402
+from brnrd.models import ChannelRoute, Daemon, Event, Repo, TgPairCode  # noqa: E402
 from _helpers import brnrd_account_headers  # noqa: E402
 
 _SECRET = "webhook-secret"
@@ -498,7 +498,10 @@ def test_unset_bot_username_construction_is_quiet(caplog):
 def test_no_daemon_online_gets_a_nudge_and_still_enqueues(env):
     """#1282 — a bound chat whose account has never had a daemon check in
     must not go silent: it still gets a reply, and the message still
-    enqueues (a daemon that shows up later drains it normally)."""
+    enqueues (a daemon that shows up later drains it normally). #1486's
+    never-paired branch — the one case that keeps `_NO_RUNNER_TEXT`'s
+    `account connect` remedy; see the stale-heartbeat sibling test below
+    for the branch that must never say that."""
     app, client, sends = env
     acc = _account(client)
     rid = _repo(client, acc)
@@ -541,6 +544,61 @@ def test_online_daemon_suppresses_the_no_daemon_nudge(env):
     )
     assert r.status_code == 200
     assert sends == []
+
+
+def test_stale_daemon_heartbeat_names_last_seen_and_no_remedy(env):
+    """#1486 — the live incident: a *paired* account whose daemon has gone
+    quiet (asleep, offline, rebooting) is not the same as never-paired, and
+    every remedy `_NO_RUNNER_TEXT` names is destructive against a working
+    install that only needs to be left alone. Measured 2026-08-18: the
+    maintainer re-ran `brnrd account connect` on a healthy laptop because
+    this branch used to hand out that exact instruction. The negative
+    assertion on `account connect` is the whole point of the issue — this
+    reply must never suggest re-pairing a live account."""
+    app, client, sends = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    code = _tg_pair_code(client, acc, rid)
+    client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
+    sends.clear()  # drop the pairing confirmation
+
+    dmn = _daemon_headers(client, acc, rid)
+    _register_daemon(client, dmn)
+
+    # Age the heartbeat past `_DAEMON_ONLINE_AFTER` (2 minutes) without
+    # touching `online` — a genuinely-asleep host stops heartbeating, it
+    # doesn't flip a flag announcing its own absence.
+    with app.state.SessionLocal() as db:
+        daemon = db.execute(select(Daemon)).scalar_one()
+        daemon.last_seen_at = datetime.now(timezone.utc) - timedelta(minutes=6)
+        db.commit()
+
+    r = client.post(
+        "/v1/webhooks/telegram",
+        json=_message(555, "do the thing", message_id=45),
+        headers=_HDR,
+    )
+    assert r.status_code == 200
+    assert sends
+    text = sends[0]["text"]
+    assert "account connect" not in text, (
+        "the stale-heartbeat branch must never hand out the pairing remedy — "
+        "re-pairing a live account to fix a sleeping laptop is strictly worse "
+        "than waiting, and is exactly the live incident #1486 reports (the "
+        f"reply sent was: {text!r})"
+    )
+    assert "runners doctor" not in text, (
+        "no remedy at all is correct here, not a different remedy "
+        f"(the reply sent was: {text!r})"
+    )
+    assert "6 minutes ago" in text, (
+        "the reply must name when the daemon was last seen as a fact the "
+        f"reader can act on, not just claim it's unreachable (got: {text!r})"
+    )
+
+    with app.state.SessionLocal() as db:
+        event = db.execute(select(Event).where(Event.source == "telegram")).scalar_one()
+        assert event.body == "do the thing"  # still queued — a daemon that wakes up drains it
 
 
 def test_bound_chat_message_enqueues_with_reply_to(env):
