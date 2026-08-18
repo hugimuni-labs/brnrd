@@ -13,23 +13,19 @@
   <rect width="512" height="512" rx="112" fill="#0c0906"/>
   <g fill="none" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" stroke="url(#molten)" filter="url(#heat)">
     <path d="M 72.0 92 V 420"/>
-    <path d="M 72.0 146 L 34.0 96"/>
-    <path d="M 72.0 146 L 110.0 96"/>
     <path d="M 48.0 196 H 96.0"/>
     <path d="M 48.0 236 H 96.0"/>
-    <path d="M 72.0 276 a 62 72.0 0 0 1 0 144"/>
-    <path d="M 166.0 276 V 420"/>
-    <path d="M 166.0 306 L 206.0 276"/>
-    <path d="M 231.0 276 V 420"/>
-    <path d="M 281.0 300 V 420"/>
-    <path d="M 231.0 300 L 256.0 276 L 281.0 300"/>
-    <path d="M 346.0 276 V 420"/>
-    <path d="M 346.0 306 L 306.0 276"/>
+    <path d="M 72.0 308 a 62 56.0 0 0 1 0 112"/>
+    <path d="M 164.0 308 V 420"/>
+    <path d="M 164.0 312 L 202.0 288"/>
+    <path d="M 231.0 308 V 420"/>
+    <path d="M 281.0 322 V 420"/>
+    <path d="M 231.0 322 L 256.0 308 L 281.0 322"/>
+    <path d="M 348.0 308 V 420"/>
+    <path d="M 348.0 312 L 310.0 288"/>
     <path d="M 440.0 92 V 420"/>
-    <path d="M 440.0 146 L 402.0 96"/>
-    <path d="M 440.0 146 L 478.0 96"/>
     <path d="M 416.0 196 H 464.0"/>
     <path d="M 416.0 236 H 464.0"/>
-    <path d="M 440.0 276 a 62 72.0 0 0 0 0 144"/>
+    <path d="M 440.0 308 a 62 56.0 0 0 0 0 112"/>
   </g>
 </svg>

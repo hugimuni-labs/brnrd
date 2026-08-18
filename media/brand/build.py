@@ -25,7 +25,7 @@ SLOTS = [AXIS + (i - 2) * SLOT for i in range(5)]   # 96, 176, 256, 336, 416
 
 STAVE_TOP = 92                       # the stone stands taller than the letter
 BASELINE = 420
-BOWL_TOP = 276
+BOWL_TOP = 308   # bowls are true half-circles: BOWL_W == (BASELINE-BOWL_TOP)/2
 BOWL_W = 62                          # how far the bowl reaches off its stave
 STAVE_INSET = 24                     # the stave sits at its cell's outer edge,
                                      # the way a b's ascender does in its cell
@@ -39,8 +39,8 @@ RED = "#ff3b30"
 CYAN = "#3ad8e6"
 
 
-CROWN = "branch"                     # "fork" = the current logo's trident
-                                     # "branch" = Algiz-style rising arms
+CROWN = "none"                       # "none" = bare bars · "branch" =
+                                     # Algiz arms · "fork" = the logo's trident
 
 
 def crown(x: float) -> str:
@@ -50,6 +50,8 @@ def crown(x: float) -> str:
     replaces it with two arms rising off the stem, which is closer to an
     actual rune and stops the pair reading as cutlery at small sizes.
     """
+    if CROWN == "none":
+        return ""
     if CROWN == "fork":
         arm = 32
         return f"""
@@ -82,6 +84,8 @@ def stave(x: float, flip: int) -> str:
 FACES = {
     # slot 2, slot 3, slot 4 — the state, drawn.  Names are emote handles.
     "rest":     ("dot", "bar", "dot"),      # b·_·d — awake, nothing wrong
+    "up":       ("peak", "bar", "peak"),    # b^_^d — the r's own shape, smiling
+    "kawaii":   ("peak", "lown", "peak"),   # b^n^d — the word with the n dropped
     "wide":     ("ring", "bar", "ring"),    # bˋoˊd — surprised, caught out
     "flat":     ("dash", "bar", "dash"),    # b-_-d — grinding, unamused
     "grip":     ("dot", "grit", "dot"),     # grip_ — the flake ends this wake
@@ -95,6 +99,16 @@ def glyph(kind: str, x: float) -> str:
     if kind == "dot":
         return (f'<circle cx="{x}" cy="{EYE_Y}" r="{EYE_R}" '
                 f'fill="url(#molten)" stroke="none"/>')
+    if kind == "lown":
+        # `b|^n^|d` with the n dropped — his read, and the one that fuses the
+        # two frames: the awake face is the resting word with the n lowered
+        # and the r-stems taken away.  Nothing is swapped, only moved.
+        left, right, top = x - 26, x + 26, MOUTH_Y - 26
+        return (f'<path d="M {left} {top + 14} V {MOUTH_Y + 14}"/>'
+                f'<path d="M {right} {top + 14} V {MOUTH_Y + 14}"/>'
+                f'<path d="M {left} {top + 14} L {x} {top} L {right} {top + 14}"/>')
+    if kind == "peak":
+        return f'<path d="M {x - 26} {EYE_Y + 24} L {x} {EYE_Y} L {x + 26} {EYE_Y + 24}"/>'
     if kind == "ring":
         return (f'<path d="M {x} {EYE_Y - 22} a 22 22 0 1 0 0.01 0" '
                 f'fill="none"/>')
@@ -125,19 +139,26 @@ XTOP = BOWL_TOP                      # x-height — the same line b's bowl start
 
 
 def letter_r(x: float, mirror: bool = False) -> str:
+    """A caret with a tail.
+
+    His note: *"r is like ^ in |^_^|"*.  So the letter and the eye are one
+    shape — which `WinkWordmark`'s own frame list already assumed: `b^n^d`
+    sits in it beside `b-n-d`.  The tail is what makes it an `r` in the word;
+    drop the tail and the same peak is the awake frame's eye.
+    """
     s = -1 if mirror else 1
-    stem = x - s * 10
+    stem = x - s * 12
     return f"""
     <path d="M {stem} {XTOP} V {BASELINE}"/>
-    <path d="M {stem} {XTOP + 30} L {x + s * 30} {XTOP}"/>"""
+    <path d="M {stem} {XTOP + 4} L {x + s * 26} {XTOP - 20}"/>"""
 
 
 def letter_n(x: float) -> str:
     left, right = x - 25, x + 25
     return f"""
     <path d="M {left} {XTOP} V {BASELINE}"/>
-    <path d="M {right} {XTOP + 24} V {BASELINE}"/>
-    <path d="M {left} {XTOP + 24} L {x} {XTOP} L {right} {XTOP + 24}"/>"""
+    <path d="M {right} {XTOP + 14} V {BASELINE}"/>
+    <path d="M {left} {XTOP + 14} L {x} {XTOP} L {right} {XTOP + 14}"/>"""
 
 
 def resting() -> str:
@@ -236,7 +257,7 @@ def sheet_svg() -> str:
 if __name__ == "__main__":
     import sys
     globals()["CROWN"] = sys.argv[1] if len(sys.argv) > 1 else CROWN
-    suffix = "" if CROWN == "branch" else "-fork"
+    suffix = "" if CROWN == "none" else f"-{CROWN}"
     (OUT / f"mark-stone{suffix}.svg").write_text(stone_svg("rest"))
     (OUT / f"mark-screen{suffix}.svg").write_text(aberration_svg("rest"))
     (OUT / f"states{suffix}.svg").write_text(sheet_svg())

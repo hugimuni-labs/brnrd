@@ -8,14 +8,14 @@
     <path d="M 104.0 132 V 100"/>
     <path d="M 48.0 196 H 96.0"/>
     <path d="M 48.0 236 H 96.0"/>
-    <path d="M 72.0 276 a 62 72.0 0 0 1 0 144"/>
+    <path d="M 72.0 308 a 62 56.0 0 0 1 0 112"/>
     <path d="M 440.0 92 V 420"/>
     <path d="M 408.0 132 H 472.0"/>
     <path d="M 408.0 132 V 100"/>
     <path d="M 472.0 132 V 100"/>
     <path d="M 416.0 196 H 464.0"/>
     <path d="M 416.0 236 H 464.0"/>
-    <path d="M 440.0 276 a 62 72.0 0 0 0 0 144"/><circle cx="176.0" cy="322" r="15" fill="#f2ece1" stroke="none"/><path d="M 208.0 390 H 304.0"/><circle cx="336.0" cy="322" r="15" fill="#f2ece1" stroke="none"/></g>
+    <path d="M 440.0 308 a 62 56.0 0 0 0 0 112"/><circle cx="176.0" cy="322" r="15" fill="#f2ece1" stroke="none"/><path d="M 208.0 390 H 304.0"/><circle cx="336.0" cy="322" r="15" fill="#f2ece1" stroke="none"/></g>
   <g fill="none" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" stroke="#3ad8e6" opacity="0.55" transform="translate(7,0)">
     <path d="M 72.0 92 V 420"/>
     <path d="M 40.0 132 H 104.0"/>
@@ -23,14 +23,14 @@
     <path d="M 104.0 132 V 100"/>
     <path d="M 48.0 196 H 96.0"/>
     <path d="M 48.0 236 H 96.0"/>
-    <path d="M 72.0 276 a 62 72.0 0 0 1 0 144"/>
+    <path d="M 72.0 308 a 62 56.0 0 0 1 0 112"/>
     <path d="M 440.0 92 V 420"/>
     <path d="M 408.0 132 H 472.0"/>
     <path d="M 408.0 132 V 100"/>
     <path d="M 472.0 132 V 100"/>
     <path d="M 416.0 196 H 464.0"/>
     <path d="M 416.0 236 H 464.0"/>
-    <path d="M 440.0 276 a 62 72.0 0 0 0 0 144"/><circle cx="176.0" cy="322" r="15" fill="#f2ece1" stroke="none"/><path d="M 208.0 390 H 304.0"/><circle cx="336.0" cy="322" r="15" fill="#f2ece1" stroke="none"/></g>
+    <path d="M 440.0 308 a 62 56.0 0 0 0 0 112"/><circle cx="176.0" cy="322" r="15" fill="#f2ece1" stroke="none"/><path d="M 208.0 390 H 304.0"/><circle cx="336.0" cy="322" r="15" fill="#f2ece1" stroke="none"/></g>
   <g fill="none" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" stroke="#f2ece1">
     <path d="M 72.0 92 V 420"/>
     <path d="M 40.0 132 H 104.0"/>
@@ -38,12 +38,12 @@
     <path d="M 104.0 132 V 100"/>
     <path d="M 48.0 196 H 96.0"/>
     <path d="M 48.0 236 H 96.0"/>
-    <path d="M 72.0 276 a 62 72.0 0 0 1 0 144"/>
+    <path d="M 72.0 308 a 62 56.0 0 0 1 0 112"/>
     <path d="M 440.0 92 V 420"/>
     <path d="M 408.0 132 H 472.0"/>
     <path d="M 408.0 132 V 100"/>
     <path d="M 472.0 132 V 100"/>
     <path d="M 416.0 196 H 464.0"/>
     <path d="M 416.0 236 H 464.0"/>
-    <path d="M 440.0 276 a 62 72.0 0 0 0 0 144"/><circle cx="176.0" cy="322" r="15" fill="#f2ece1" stroke="none"/><path d="M 208.0 390 H 304.0"/><circle cx="336.0" cy="322" r="15" fill="#f2ece1" stroke="none"/></g>
+    <path d="M 440.0 308 a 62 56.0 0 0 0 0 112"/><circle cx="176.0" cy="322" r="15" fill="#f2ece1" stroke="none"/><path d="M 208.0 390 H 304.0"/><circle cx="336.0" cy="322" r="15" fill="#f2ece1" stroke="none"/></g>
 </svg>
