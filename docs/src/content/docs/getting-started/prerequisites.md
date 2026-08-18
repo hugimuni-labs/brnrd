@@ -57,4 +57,33 @@ More of a Python person? The install page also offers
 [pipx](https://pipx.pypa.io/stable/installation/) — brnrd itself runs on
 Python 3.10+.
 
+## 5. A machine that stays awake
+
+brnrd runs on your computer, so your computer's sleep settings are part of the
+setup. A run can take an hour; if the machine idle-sleeps in the middle of one,
+the agent process is suspended and the run dies. The error you get back blames
+the agent CLI, which makes this easy to misdiagnose for a long time.
+
+**macOS.** Check the current setting, then turn idle sleep off:
+
+```bash
+pmset -g custom | grep -A20 'AC Power' | grep ' sleep'
+sudo pmset -a sleep 0 disksleep 0
+```
+
+`sleep 0` means *never sleep the machine while on mains*. Leave `displaysleep`
+alone — the screen going dark is fine and saves the same power; it is the
+machine going dark that ends runs. On a laptop, closing the lid still sleeps it;
+if you want runs to survive a closed lid, keep it plugged in and open, or use
+`caffeinate -i` while work is in flight.
+
+**Linux.** The equivalent is usually:
+
+```bash
+sudo systemctl mask sleep.target suspend.target hibernate.target
+```
+
+or the sleep settings in your desktop environment's power panel. A headless
+server or VM normally needs nothing.
+
 That is the whole toolbox. You are ready to [install brnrd](../install/).
