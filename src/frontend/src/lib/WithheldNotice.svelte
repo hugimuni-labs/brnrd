@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { optedOutClause, unrecordedClause } from './publishScope';
+	import { consentGapRepos } from './consentGap';
+	import ConsentPopover from './ConsentPopover.svelte';
 	import type { WithheldLane } from './withheld';
 
 	interface Props {
@@ -18,6 +20,13 @@
 	// "this panel is empty because of it").
 	let unrecorded = $derived(unrecordedClause(withheld.unrecorded ?? []));
 	let optedOut = $derived(optedOutClause(withheld.opted_out ?? []));
+	// The in-place act needs a real repo id to call publish-layers with —
+	// `consentGapRepos` drops any name that arrived without one (an older
+	// backend, mid-deploy). Empty ⇒ no dead button; the /repos link below
+	// still covers it.
+	let canActInPlace = $derived(consentGapRepos(withheld).length > 0);
+
+	let popover: ConsentPopover | undefined = $state();
 </script>
 
 <p class={className}>
@@ -28,16 +37,27 @@
 		paused — no publish scope
 	{:else}
 		{#if unrecorded !== null}
-			<!-- WithheldNotice only receives repo *names* from the server
-			     (`withheld.unrecorded`/`opted_out` on the dashboard endpoints),
-			     never ids, so unlike PublishConsentNotice it cannot build a
-			     `/repos?scope=<id>` deep link to the specific row. A plain
-			     /repos link still gets the owner to the page that fixes it. -->
+			<!-- The clause still names repos only, but WithheldLane now also
+			     carries `unrecorded_ids`/`opted_out_ids` in parallel — enough
+			     for the in-place act below; the /repos deep link by id stays
+			     PublishConsentNotice's own trick (it starts from ConnectedRepo,
+			     which always has an id). A plain /repos link still gets the
+			     owner to the page that covers everything this dialog doesn't. -->
 			paused — {unrecorded}. One scope on the
 			<a class="underline hover:text-amber-100" href={resolve('/repos')}>repos page</a> reopens this.
 		{/if}
 		{#if optedOut !== null}
 			{unrecorded !== null ? '' : 'paused — '}{optedOut}.
 		{/if}
+		{#if canActInPlace}
+			<button
+				type="button"
+				class="cursor-pointer underline hover:text-amber-100"
+				onclick={() => popover?.open()}>Or fix it here.</button
+			>
+		{/if}
 	{/if}
 </p>
+{#if canActInPlace}
+	<ConsentPopover bind:this={popover} {withheld} />
+{/if}

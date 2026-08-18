@@ -49,10 +49,20 @@ _KNOWN_TOKENS = frozenset(LANES) | frozenset(CORPUS_SLICES) | {OFF}
 
 
 class ReposWithoutPublishConsent(NamedTuple):
-    """Connected repo labels split by why they permit no publish lanes."""
+    """Connected repo labels split by why they permit no publish lanes.
+
+    ``unrecorded_ids``/``opted_out_ids`` run parallel to ``unrecorded``/
+    ``opted_out`` (same order, same length) rather than replacing the
+    name-only tuples — the two lists were already a public contract
+    (``test_consent_absence_distinguishes_unrecorded_from_explicit_none``
+    asserts plain name tuples) and the dashboard consent popover is the
+    first reader that needs the id half to act in place.
+    """
 
     unrecorded: tuple[str, ...]
     opted_out: tuple[str, ...]
+    unrecorded_ids: tuple[str, ...] = ()
+    opted_out_ids: tuple[str, ...] = ()
 
 
 def normalize_publish_layers(raw: str | None) -> str:
@@ -367,14 +377,19 @@ def repos_without_publish_consent(repos: list[Repo]) -> ReposWithoutPublishConse
     us no". Same list-in, list-out contract as ``lanes_withheld``.
     """
     unrecorded = sorted(
-        (repo.repo_full_name for repo in repos if repo.publish_layers is None),
-        key=str.casefold,
+        ((repo.repo_full_name, repo.id) for repo in repos if repo.publish_layers is None),
+        key=lambda pair: pair[0].casefold(),
     )
     opted_out = sorted(
-        (repo.repo_full_name for repo in repos if repo.publish_layers == OFF),
-        key=str.casefold,
+        ((repo.repo_full_name, repo.id) for repo in repos if repo.publish_layers == OFF),
+        key=lambda pair: pair[0].casefold(),
     )
-    return ReposWithoutPublishConsent(tuple(unrecorded), tuple(opted_out))
+    return ReposWithoutPublishConsent(
+        unrecorded=tuple(name for name, _id in unrecorded),
+        opted_out=tuple(name for name, _id in opted_out),
+        unrecorded_ids=tuple(id_ for _name, id_ in unrecorded),
+        opted_out_ids=tuple(id_ for _name, id_ in opted_out),
+    )
 
 
 def lane_permitted(db: Session, *, repo_id: str | None, lane: str) -> bool:
