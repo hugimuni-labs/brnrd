@@ -137,3 +137,33 @@ def _no_codex_app_server_probe(monkeypatch):
     # Yielded so a test that *means* to exercise the real probe (its
     # never-raises contract) can reach past the patch for it.
     yield real_probe
+
+
+@pytest.fixture(autouse=True)
+def _no_real_power_assertion(monkeypatch):
+    """Never spawn a real ``caffeinate``/``systemd-inhibit`` from the unit
+    suite (#1485).
+
+    ``invoke_runner`` starts a companion power-assertion process alongside
+    every runner subprocess it launches, found via ``shutil.which``. On a
+    real macOS (or systemd-inhibit-equipped Linux) dev/CI box that binary is
+    often genuinely present, so an unpatched suite would spawn a real
+    companion process per ``invoke_runner`` call -- and worse, land a
+    *second* ``subprocess.Popen`` call through whatever fake a test
+    installed, silently clobbering a ``captured["cmd"] = cmd``-shaped dict
+    that assumed exactly one call. Delegates to the real ``shutil.which``
+    for every other name, so real shell detection (``claude``, ``codex``,
+    ...) is untouched. Tests exercising the power assertion itself
+    (``TestPowerAssertion``) patch this back locally.
+    """
+    from brr import runner as runner_mod
+
+    real_which = runner_mod.shutil.which
+
+    def _which(name, *args, **kwargs):
+        if name in ("caffeinate", "systemd-inhibit"):
+            return None
+        return real_which(name, *args, **kwargs)
+
+    monkeypatch.setattr(runner_mod.shutil, "which", _which)
+    yield

@@ -950,6 +950,7 @@ _ATTEMPT_STATUS_LABELS: dict[str, str] = {
     "core_mismatch": "wrong Core",
     "interrupted": "interrupted",
     "host_interrupted": "host interrupted",
+    "host_suspended": "host went to sleep",
 }
 
 
