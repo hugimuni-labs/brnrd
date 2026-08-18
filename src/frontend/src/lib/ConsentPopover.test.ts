@@ -51,6 +51,28 @@ test('names the lane and states the share honestly, from the publishScope vocabu
 	ok(html.includes('leaves this machine'));
 });
 
+// WORDING GUARD — a code change cannot turn this red, only an edit to the
+// dialog. "It leaves this machine and renders there" was the copy through
+// #1453, and it was true and incomplete: the payload is not drawn and
+// dropped, it is stored (`Account.surface_json` for the corpus lane, the
+// `Daemon` row for the other six) with no timer of its own, and what ends it
+// is an act — narrowing the scope, disconnecting the repo — never a clock.
+// A consent dialog that names the leaving but not the keeping asks for the
+// wrong permission, so the keeping is pinned here (w-63).
+test('the dialog names the keeping, not only the leaving', async () => {
+	const html = await renderPopover({
+		lane: 'corpus',
+		unrecorded: ['Gurio/BeCenter'],
+		unrecorded_ids: ['repo-1']
+	});
+	// Collapsed, because the source is prettier-wrapped and a claim must not
+	// become unpinnable by landing either side of a line break.
+	const copy = html.replace(/\s+/g, ' ');
+	ok(copy.includes('is stored there'));
+	ok(copy.includes('There is no timer on it'));
+	ok(copy.includes('narrowing this scope again or disconnecting the repo'));
+});
+
 test('an unrecorded repo gets its own row and an enable action', async () => {
 	const html = await renderPopover({
 		lane: 'quota',
