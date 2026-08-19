@@ -895,6 +895,43 @@ def branch_head(repo_root: Path, branch: str) -> str | None:
     return rev_parse(repo_root, f"refs/heads/{branch}")
 
 
+def branches_with_commit_times(
+    repo_root: Path, namespace: str,
+) -> list[tuple[str, float | None]]:
+    """Local branches under *namespace* with their tip commit timestamps."""
+    result = _git(
+        repo_root, "for-each-ref",
+        "--format=%(refname:short)%00%(committerdate:unix)",
+        f"refs/heads/{namespace.rstrip('/')}/", check=False,
+    )
+    if result.returncode != 0:
+        return []
+    branches: list[tuple[str, float | None]] = []
+    for line in result.stdout.splitlines():
+        name, sep, raw_timestamp = line.partition("\0")
+        if not name:
+            continue
+        try:
+            timestamp = float(raw_timestamp) if sep else None
+        except ValueError:
+            timestamp = None
+        branches.append((name, timestamp))
+    return branches
+
+
+def ahead_count(repo_root: Path, base: str, branch: str) -> int | None:
+    """Number of commits reachable from *branch* but not *base*."""
+    result = _git(
+        repo_root, "rev-list", "--count", f"{base}..{branch}", check=False,
+    )
+    if result.returncode != 0:
+        return None
+    try:
+        return int(result.stdout.strip())
+    except ValueError:
+        return None
+
+
 def valid_branch_name(repo_root: Path, branch: str) -> bool:
     """Return True when *branch* is acceptable as a local branch name."""
     if not branch or branch == "HEAD":
