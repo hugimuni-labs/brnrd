@@ -1508,53 +1508,59 @@
 			     At rest the head keeps the old seam as its own margin; docked,
 			     the margin collapses and the head magnets flush under the rail
 			     (`machineDockTop`'s old 8px reclaim, now just layout). -->
-			<div
-				class="ignite machine-dock -mx-6 bg-stone-950/95 px-6 backdrop-blur-sm {machineDocked
-					? ''
-					: 'mt-6'}"
-				style="--ignite-delay: 250ms"
-				aria-label="the machine"
-			>
-				<!-- Keyed on the dock verdict: docking is what changes this line's
+			<!-- The bench's handle and body must read as one disclosure. Keeping
+			     the machine here while the body remains deliberately outside the
+			     sticky stack split that pair, so park this one-line dock while a
+			     pick is open; it returns unchanged when the bench closes. -->
+			{#if !benchOpen}
+				<div
+					class="ignite machine-dock -mx-6 bg-stone-950/95 px-6 backdrop-blur-sm {machineDocked
+						? ''
+						: 'mt-6'}"
+					style="--ignite-delay: 250ms"
+					aria-label="the machine"
+				>
+					<!-- Keyed on the dock verdict: docking is what changes this line's
 				     form — pointer or disclosure — so it is what the redraw marks.
 				     A run selected anywhere on the loom outranks the lead for the
 				     head's face and name (`machineHeadRun`). -->
-				{#key machineDocked}
-					<div in:glitchReveal={{ duration: 200 }}>
-						<RunBlock
-							burning={burningRows}
-							armed={armedRows}
-							open={machineExpanded}
-							docked={machineDocked}
-							error={liveRunsError}
-							stale={liveRunsStale}
-							onToggle={onMachineToggle}
-							selectedId={loomSelection?.kind === 'run' ? loomSelection.id : null}
-							{crossingIndex}
-							topicFaces={topicFaceMap}
-						/>
-					</div>
-				{/key}
-				<!-- The bar that knows the section: the stack's own footer line,
+					{#key machineDocked}
+						<div in:glitchReveal={{ duration: 200 }}>
+							<RunBlock
+								burning={burningRows}
+								armed={armedRows}
+								open={machineExpanded}
+								docked={machineDocked}
+								error={liveRunsError}
+								stale={liveRunsStale}
+								onToggle={onMachineToggle}
+								selectedId={loomSelection?.kind === 'run' ? loomSelection.id : null}
+								{crossingIndex}
+								topicFaces={topicFaceMap}
+							/>
+						</div>
+					{/key}
+					<!-- The bar that knows the section: the stack's own footer line,
 				     ember because this one line answers "where am I". Renders only
 				     once the stack has actually collapsed and a tracked heading
 				     has scrolled up to meet it. -->
-				{#if showSectionLabel && activeSection}
-					<a
-						href={`#${activeSection.id}`}
-						class="-mx-1 mt-1 flex items-baseline gap-1.5 border-t border-stone-800/80 px-1 pt-1 pb-1 font-mono text-[10px] tracking-wide text-amber-300/90 hover:text-amber-200"
-						onclick={(event) => {
-							event.preventDefault();
-							document
-								.getElementById(activeSection!.id)
-								?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-						}}
-					>
-						<span aria-hidden="true">↓</span>
-						{activeSection.label}
-					</a>
-				{/if}
-			</div>
+					{#if showSectionLabel && activeSection}
+						<a
+							href={`#${activeSection.id}`}
+							class="-mx-1 mt-1 flex items-baseline gap-1.5 border-t border-stone-800/80 px-1 pt-1 pb-1 font-mono text-[10px] tracking-wide text-amber-300/90 hover:text-amber-200"
+							onclick={(event) => {
+								event.preventDefault();
+								document
+									.getElementById(activeSection!.id)
+									?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+							}}
+						>
+							<span aria-hidden="true">↓</span>
+							{activeSection.label}
+						</a>
+					{/if}
+				</div>
+			{/if}
 		</div>
 		<!-- The one surviving spacer (`stackReserve`): a sticky container is
 		     still in flow, so without this the rail condensing would move the
