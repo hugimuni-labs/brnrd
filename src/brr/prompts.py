@@ -4795,6 +4795,14 @@ def _build_run_context_bundle(
             "background + poll); extend the deadline if you genuinely need "
             "longer (see Delivery contract)."
         )
+    else:
+        sections.append(
+            "- Budget: no time limit — nothing configured "
+            "`runner.timeout_seconds`, so brr will not kill this thought on "
+            "a clock. Still bound uncertain long-running commands yourself "
+            "(own timeout, or background + poll); a hung shell now holds "
+            "the single-flight slot until stopped by hand."
+        )
     if context_path:
         sections.append(
             f"- Runtime recovery: {context_path} "
@@ -4906,11 +4914,12 @@ def _build_run_context_bundle(
                 "goes through `.card` / outbox / `gate:`; stdout stays the "
                 "plain current-thread fallback"
             )
-        if budget_seconds:
-            sections.append(
-                f"- keepalive: `{outbox_path}/.keepalive` — first line "
-                "ISO-8601 or `+<duration>` (`+30m`); rewrite to extend"
-            )
+        sections.append(
+            f"- keepalive: `{outbox_path}/.keepalive` — first line "
+            "ISO-8601 or `+<duration>` (`+30m`); rewrite to extend"
+            + ("" if budget_seconds else " an `await:` wait (no runtime "
+               "budget is configured, so there is no deadline to outlast)")
+        )
         sections.append(
             f"- card/run body: `{outbox_path}/.card` — resident-owned Markdown "
             "write-head; keep `## Now` current for the live projection, preserve "

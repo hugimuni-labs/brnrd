@@ -583,24 +583,28 @@ def idle_sleep_doctor_warning() -> str | None:
 DEFAULT_RUNNER_TIMEOUT = 7200
 
 
-def runner_timeout(cfg: dict[str, Any] | None) -> int:
-    """Return the runner subprocess timeout in seconds.
+def runner_timeout(cfg: dict[str, Any] | None) -> int | None:
+    """Return the runner subprocess timeout in seconds, or ``None`` for no limit.
 
     Reads ``runner.timeout_seconds`` (or legacy ``runner_timeout_seconds``)
-    from *cfg*; falls back to :data:`DEFAULT_RUNNER_TIMEOUT`. xhigh-reasoning
-    models like gpt-5.5 routinely need 10+ minutes on a complex task, and the
-    old 600s default was killing live work mid-run; a 1h follow-up default
-    still cut long implementation/research sessions short without a human
-    knowing to extend `.keepalive`, so this is now a 2h soft ceiling rather
-    than a target (2026-07-06; the daemon's hard cap auto-scales off this —
-    `max(budget*4, budget+3600)` — so 7200s here still yields an 8h backstop
-    for runaway-process reclamation).
+    from *cfg*. **Unset ⇒ no limit at all** — no deadline, no hard cap, no
+    budget kill (2026-08-19, maintainer decision on evt-1787157701347647000-xw3c:
+    "remove a time limit by default, completely, only if a user explicitly
+    sets it in the config"). A value the operator actually wrote is honored
+    exactly as before; a *malformed* explicit value (0, negative, non-numeric)
+    is treated as a config mistake rather than an opt-out and falls back to
+    :data:`DEFAULT_RUNNER_TIMEOUT` (2h), same as pre-2026-08-19 behavior —
+    xhigh-reasoning models like gpt-5.5 routinely need 10+ minutes on a
+    complex task, and a silent 0s/negative timeout would kill live work
+    instantly rather than communicate "no limit". The daemon's hard cap
+    auto-scales off whatever this returns (`max(budget*4, budget+3600)`) when
+    a budget exists at all; `None` here means no hard cap either.
     """
     if not cfg:
-        return DEFAULT_RUNNER_TIMEOUT
+        return None
     raw = cfg.get("runner.timeout_seconds", cfg.get("runner_timeout_seconds"))
     if raw is None:
-        return DEFAULT_RUNNER_TIMEOUT
+        return None
     try:
         value = int(raw)
     except (TypeError, ValueError):

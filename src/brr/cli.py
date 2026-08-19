@@ -3597,7 +3597,9 @@ def _print_notes_map(
     return 1 if findings else 0
 
 
-def _fmt_duration(seconds: object) -> str:
+def _fmt_duration(seconds: object, *, none_label: str = "-") -> str:
+    if seconds is None:
+        return none_label
     try:
         secs = int(float(seconds))
     except (TypeError, ValueError):
@@ -3642,7 +3644,7 @@ def _format_portal_state(payload: dict) -> str:
         + ("" if outbound.get("any_sent") else "  ⚠ nothing sent yet"),
         "budget: "
         f"elapsed={_fmt_duration(budget.get('elapsed_seconds'))} "
-        f"limit={_fmt_duration(budget.get('budget_seconds'))} "
+        f"limit={_fmt_duration(budget.get('budget_seconds'), none_label='no limit')} "
         f"keepalive={(budget.get('keepalive') or {}).get('status', '-')}"
         + ("  ⚠ running long" if budget.get("long_running") else ""),
     ]

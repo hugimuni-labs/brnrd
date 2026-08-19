@@ -682,6 +682,25 @@ def test_format_portal_state_surfaces_missing_data():
     assert "unavailable" not in out
 
 
+def test_format_portal_state_renders_no_limit_for_null_budget():
+    """2026-08-19: an unset ``runner.timeout_seconds`` sends
+    ``budget_seconds: null`` through portal-state — the compact status
+    line must say "no limit", not the bare "-" a plain duration formatter
+    would render for None."""
+    from brr.cli import _format_portal_state
+
+    out = _format_portal_state({
+        "run": {"id": "run-1", "event_id": "evt-1", "phase": "running"},
+        "attention": {"pending_event_count": 0, "pending_outbox_file_count": 0},
+        "outbound": {"replies_current": 0, "replies_other": 0,
+                     "outbound_messages": 0, "any_sent": True},
+        "budget": {"elapsed_seconds": 90, "budget_seconds": None,
+                   "long_running": False, "keepalive": {"status": "-"}},
+    })
+    assert "limit=no limit" in out
+    assert "running long" not in out
+
+
 def test_portal_state_errors_without_file(capsys, monkeypatch):
     monkeypatch.delenv("BRR_PORTAL_STATE", raising=False)
     monkeypatch.setattr("brr.cli._maybe_brr_dir", lambda: None)
