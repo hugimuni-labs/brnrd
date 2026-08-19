@@ -37,6 +37,7 @@
 	import type { MessengerDoor, MessengerPairStarted } from './repos';
 	import {
 		countdown,
+		conversationLink,
 		doorLabel,
 		doorOffCopy,
 		doorOffHasEnablePath,
@@ -171,6 +172,7 @@
 						{@const outcome = mintOutcomes[door.platform]}
 						{@const paired = pairedOutcomes[door.platform]}
 						{@const ttl = mintTtlSeconds[door.platform]}
+						{@const chatLink = outcome ? conversationLink(outcome.deep_link) : null}
 						{@const cd = outcome && ttl ? countdown(outcome.expires_at, nowMs, ttl) : null}
 						<!-- Lit: a round, glowing, *alive* marker — the visual
 						     opposite of the dark door's flat square below, by
@@ -188,18 +190,26 @@
 
 						{#if paired}
 							<div
-								class="mt-3 border border-emerald-800/50 bg-emerald-950/20 p-2"
+								class="mt-3 border border-emerald-700/60 bg-emerald-950/30 p-4"
 								data-testid={`paired-${door.platform}`}
+								aria-live="polite"
 							>
-								<p class="font-mono text-[11px] tracking-wide text-emerald-300/80 uppercase">
-									paired
+								<div class="flex items-center gap-2">
+									<span class="text-lg text-emerald-300" aria-hidden="true">✓</span>
+									<p class="font-mono text-base font-semibold text-emerald-100">connected</p>
+								</div>
+								<p class="mt-2 text-sm text-stone-300">
+									{paired.display ?? 'Your chat'} is ready. Say hello to your resident.
 								</p>
-								<p class="mt-1 text-sm text-emerald-100">
-									{paired.display ?? '(no name reported)'}
-								</p>
-								<p class="mt-1.5 text-sm text-stone-400">
-									Not you? Revoke it below, under paired chats.
-								</p>
+								{#if chatLink}
+									<a
+										class="mt-4 flex min-h-11 w-full items-center justify-center border border-emerald-500/70 bg-emerald-900/50 px-4 py-3 font-mono text-sm font-semibold tracking-wide text-emerald-50 uppercase hover:bg-emerald-800/60"
+										href={chatLink}
+										target="_blank"
+										rel="external noreferrer"
+										data-testid={`hello-${door.platform}`}>say hello</a
+									>
+								{/if}
 							</div>
 							<button
 								type="button"
