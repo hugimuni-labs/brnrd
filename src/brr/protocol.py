@@ -700,8 +700,15 @@ def append_event_attachments(
     return added
 
 
-def _parse_iso_epoch(value: object) -> float | None:
-    """Parse the event ``defer_until`` timestamp, returning epoch seconds."""
+def parse_iso_epoch(value: object) -> float | None:
+    """Parse an ISO-8601 stamp (``Z`` or offset variant) to epoch seconds.
+
+    Originally private to this module's own ``defer_until`` handling;
+    promoted (reconciling #1495/#1500) because ``bootscore.event_age_seconds``
+    needed the identical ``Z``-suffix-to-``+00:00`` parse for the event's
+    ``created`` stamp — same frontmatter, same shape, no reason for a second
+    copy. Missing/unparseable ⇒ ``None``, never a guess or a crash.
+    """
     if value is None:
         return None
     candidate = str(value).strip()
@@ -724,7 +731,7 @@ def event_is_deferred(event: dict[str, Any], now: float | None = None) -> bool:
     Invalid timestamps degrade to "not deferred" so a malformed event does
     not disappear from dispatch forever.
     """
-    until = _parse_iso_epoch(event.get("defer_until"))
+    until = parse_iso_epoch(event.get("defer_until"))
     if until is None:
         return False
     return until > (time.time() if now is None else now)
