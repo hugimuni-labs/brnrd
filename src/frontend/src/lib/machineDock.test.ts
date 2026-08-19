@@ -5,8 +5,7 @@ import {
 	machineBodyOnScreen,
 	machineHeadFields,
 	machineHeadRun,
-	machineTapVerdict,
-	railKeepsLivePick
+	machineTapVerdict
 } from './machineDock.ts';
 import { tapVerdict } from './collapse.ts';
 
@@ -130,18 +129,10 @@ test('a fold always happens with the lane on screen', () => {
 	}
 });
 
-test('the rail drops its live-pick row once the machine docks beneath it', () => {
-	// One fact, one surface. Printing both puts the same run's name at two
-	// y-positions eight pixels apart, which is the objection his own
-	// correction removed: "not the collapsed rack + oneline main runner info,
-	// as it is now, but a collapsed fuel + collapsed oneline machine stuck to
-	// it."
-	assert.equal(railKeepsLivePick(true), false);
-});
-
-test('a rail with no machine beneath it keeps the row', () => {
-	assert.equal(railKeepsLivePick(false), true);
-});
+// The rail's own live-pick row, and `railKeepsLivePick` with it, were removed
+// 2026-08-19 ('clear the ground under the rail'): the machine dock is the
+// only surface that answers "what is burning" now, so the two assertions
+// that lived here certified a row no code path can render.
 
 // One frame, two moods: the machine block borrows the selection.
 
