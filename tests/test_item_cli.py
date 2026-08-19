@@ -159,3 +159,56 @@ def test_goal_show_renders_latest_delta_and_sample_count(tmp_path, monkeypatch, 
     assert "tickets: 15" in out
     assert "vs previous" in out
     assert "2 samples" in out
+
+
+def test_goal_record_accepts_a_basis_flag(tmp_path, monkeypatch, capsys):
+    _repo_with_home(tmp_path, monkeypatch)
+    _new_goal(metric="impressions", target="1000", horizon="Q4")
+    capsys.readouterr()
+
+    rc = main(
+        [
+            "goal", "record", "g-1", "impressions", "147",
+            "--source", "x-api", "--basis", "window5",
+        ]
+    )
+    assert rc == 0
+    from brr import cli as cli_mod
+    from brr import items as items_mod
+
+    warp_root, err = cli_mod._item_context()
+    assert err is None
+    readings = items_mod.load_readings(warp_root, "g-1")
+    assert readings[-1].basis == "window5"
+
+
+def test_goal_show_marks_a_refused_cross_basis_delta(tmp_path, monkeypatch, capsys):
+    # The live bug's shape reproduced through the CLI end to end: same
+    # key, same source, two denominators — `goal show` must say the
+    # comparison was refused, not print a number that isn't one.
+    _repo_with_home(tmp_path, monkeypatch)
+    _new_goal(metric="impressions", target="1000", horizon="Q4")
+    capsys.readouterr()
+
+    main(
+        [
+            "goal", "record", "g-1", "impressions", "333",
+            "--source", "x-api", "--basis", "lifetime",
+        ]
+    )
+    capsys.readouterr()
+    main(
+        [
+            "goal", "record", "g-1", "impressions", "147",
+            "--source", "x-api", "--basis", "window5",
+        ]
+    )
+    capsys.readouterr()
+
+    rc = main(["goal", "show", "g-1"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "impressions: 147" in out
+    assert "Δ refused: basis differs" in out
+    assert "Δ-186" not in out
+    assert "Δ+" not in out and "Δ-" not in out
