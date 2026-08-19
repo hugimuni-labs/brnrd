@@ -304,7 +304,16 @@ def _by_fallback_capability(
     """
 
     def key(runner: RunnerProfile) -> tuple[int, int, float, int, str]:
-        class_distance = current_class_rank - runner.class_rank
+        # An unknown current class (a legacy bare-``shell=`` profile has
+        # ``cost_class None``, which ranks *past* every local class) would
+        # make the distance term prefer the strongest installed core —
+        # silent cost escalation, the exact move this function's contract
+        # forbids. No class to be near ⇒ the term goes neutral and the
+        # old capability/cost ordering decides alone.
+        known = current_class_rank < len(_LOCAL_CLASS_ORDER)
+        class_distance = (
+            current_class_rank - runner.class_rank if known else 0
+        )
         if runner.capability_score is None:
             return (class_distance, 1, 0.0, runner.rank, runner.name)
         return (class_distance, 0, -runner.capability_score, runner.rank, runner.name)
