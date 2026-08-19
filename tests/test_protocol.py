@@ -315,6 +315,36 @@ class TestEvents:
 
         assert [ev["body"] for ev in dispatchable] == ["expired", "invalid"]
 
+    def test_list_pending_orders_by_created_not_mtime(self, tmp_path):
+        """#1497: ``list_pending``'s own "oldest first" claim, not just the
+        daemon's resident view or dispatch sort built on top of it — this is
+        the function ``_defer_pending_siblings_after_failure`` stages
+        sibling backoff directly off ("oldest first ⇒ released first"), so
+        a wrong order here mis-staggers retries, not just cosmetic reading
+        order. Same measured shape as the daemon-level fixes: the older (by
+        ``created``) event's file was touched more recently than the
+        younger sibling's."""
+        import os
+        import time
+
+        inbox = tmp_path / "inbox"
+        older_path = protocol.create_event(inbox, "test", "older, created first")
+        older = next(
+            e for e in protocol.list_pending(inbox) if Path(e["_path"]) == older_path
+        )
+        newer_path = protocol.create_event(inbox, "test", "newer, created second")
+        newer = next(
+            e for e in protocol.list_pending(inbox) if Path(e["_path"]) == newer_path
+        )
+        protocol.update_event_meta(older, created="2026-08-18T14:58:06Z")
+        protocol.update_event_meta(newer, created="2026-08-18T15:33:51Z")
+        old_time = time.time() - 3600
+        os.utime(newer_path, (old_time, old_time))
+
+        events = protocol.list_pending(inbox)
+
+        assert [ev["id"] for ev in events] == [older["id"], newer["id"]]
+
 
 class TestAttachments:
     """Image attachments — event files referencing local downloaded files.
