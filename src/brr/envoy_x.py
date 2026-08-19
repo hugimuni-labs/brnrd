@@ -27,6 +27,21 @@ hardcoded account**. Same discipline the twin scripts had:
   refused; a leading space is the deliberate escape hatch for text that
   legitimately starts with a dash.
 - a reply threads through ``--reply-to <id>``.
+- a post/reply receipt row also carries ``post_id`` (the id of *the post
+  this row created* — always present, honestly ``None`` if the API
+  response didn't carry one) and, when that id exists, ``self_url``
+  (``https://x.com/i/status/<id>`` — the account-agnostic canonical form,
+  omitted rather than built around a missing id). Same key names the
+  browser lane's ``envoy_x_browser.py`` writes, so a reader of the shared
+  receipt log sees one schema across both lanes even though this lane
+  never needs a handle to build its own link.
+- ``--form <label>`` on ``post`` records the caller's rhetorical form
+  verbatim in the receipt row, absent when not passed; free text, guarded
+  the same way the post text itself is.
+- ``run_read`` surfaces ``bookmark_count`` from the ``public_metrics`` it
+  already requests for the account's own recent posts — no extra request —
+  shown only when the field is present in the response, never defaulted
+  to 0.
 
 The human-readable receipt line prints ``https://x.com/i/status/<id>`` —
 X's account-agnostic canonical status link — rather than a hardcoded
@@ -52,6 +67,7 @@ API = "https://api.x.com/2"
 POST_USAGE = """\
 Usage: envoy-x post "text"                  -> tweet
        envoy-x post "text" --reply-to <id>  -> reply in thread
+       envoy-x post "text" --form <label>   -> record a rhetorical form
        envoy-x post "text" --dry-run        -> print what would post
        envoy-x post delete <tweet-id>       -> delete a post
        add --json for the raw API response
@@ -59,13 +75,20 @@ Usage: envoy-x post "text"                  -> tweet
 Every post appends one line to the receipt log beside the account env
 file (what went out, when, in reply to what; a delete appends
 action: deleted), so a reader can audit the mouth without the platform's
-cooperation.\
+cooperation. `post_id`/`self_url` name the id and canonical URL of the
+post this call itself created (honest absence, never invented, if the
+API response didn't carry one); `form` is free text, recorded verbatim,
+present only when passed — same keys the browser lane's `send`/`post`
+write, so a reader aggregating across both lanes sees one schema.\
 """
 
 READ_USAGE = """\
 Usage: envoy-x read           -> mentions since last look + metrics
        envoy-x read --all     -> ignore the since-cursor this once
-       envoy-x read --json    -> machine shape\
+       envoy-x read --json    -> machine shape
+
+Own-post metrics include bookmarks when the API response carries a
+bookmark_count (shown only then — never defaulted to 0).\
 """
 
 
@@ -477,6 +500,26 @@ def run_post(argv: list[str], paths: Paths) -> None:
         i = args.index("--reply-to")
         reply_to = args[i + 1]
         del args[i : i + 2]
+    form = None
+    if "--form" in args:
+        i = args.index("--form")
+        if i + 1 >= len(args):
+            raise SystemExit(
+                POST_USAGE.strip().split("\n", 1)[0] + "\n(--form needs a value)"
+            )
+        form = args[i + 1]
+        del args[i : i + 2]
+        # Same escape hatch as the text guard just below: a form label is
+        # free text on an argv that also carries a public act, so it gets
+        # the same dash-shaped-flag refusal.
+        if form.startswith(" -"):
+            form = form[1:]
+        elif form.startswith("-"):
+            raise SystemExit(
+                "refusing: form starts with '-' — looks like a flag, not a "
+                "form label. Quote deliberately dash-led text as ' -…' with "
+                "a leading space."
+            )
     if len(args) != 1 or not args[0].strip():
         raise SystemExit(
             POST_USAGE.strip().split("\n", 1)[0] + "\n(one non-empty text argument required)"
@@ -517,10 +560,30 @@ def run_post(argv: list[str], paths: Paths) -> None:
 
     out = post(payload, token(paths.env), paths)
     tweet_id = (out.get("data") or {}).get("id")
-    _append_receipt(paths.log, {
+    record: dict[str, Any] = {
         "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "id": tweet_id, "reply_to": reply_to, "text": text,
-    })
+        # `post_id` — the same key the browser lane's `_run_send`/
+        # `_run_post` write, present unconditionally (explicit absence,
+        # never invented, matching that lane's contract) so a reader
+        # doesn't need a lane-specific alias for "the id of the post this
+        # row created". The API response carries this directly — no
+        # scrape needed, and strictly better evidence than the browser
+        # lane's toast parse.
+        "post_id": tweet_id,
+    }
+    if tweet_id:
+        # The account-agnostic canonical form this module already prints
+        # below (`https://x.com/i/status/<id>`), not a handle-based URL:
+        # this call has no account identity to hardcode (see the module
+        # docstring) and asking for one would cost an extra `/users/me`
+        # request the browser lane's `whoami()` page-load trade doesn't
+        # have an equivalent for here. Same key, same meaning, an
+        # honestly different shape per lane.
+        record["self_url"] = f"https://x.com/i/status/{tweet_id}"
+    if form:
+        record["form"] = form
+    _append_receipt(paths.log, record)
     if as_json:
         print(json.dumps(out))
     else:
@@ -593,8 +656,21 @@ def run_read(argv: list[str], paths: Paths) -> None:
     for t in tweets.get("data") or []:
         m = t.get("public_metrics", {})
         text = t["text"].replace("\n", " ")
+        # bookmark_count rides the same `public_metrics` object the four
+        # fields above already read — X returns it for the authenticated
+        # owner's own tweets at no extra request cost, and this loop
+        # already only sees the account's own recent tweets. It was
+        # simply never read out. Shown only when the key is present
+        # (never defaulted to 0 the way its siblings are here): the field
+        # is absent, not zero, for a response that didn't carry it —
+        # unexercised against a live response in this change (the token
+        # backing this account has been dead — 401/400 — since 2026-08-17;
+        # re-auth is a human-at-a-browser step, see the receipt-log
+        # report), so this stays deliberately conservative rather than
+        # assume the same always-present shape the other four have.
+        bookmarks = f" · bookmarks {m['bookmark_count']}" if "bookmark_count" in m else ""
         print(f"own · {text[:60]!r} · ❤ {m.get('like_count', 0)} · rt {m.get('retweet_count', 0)} · "
-              f"replies {m.get('reply_count', 0)} · views {m.get('impression_count', 0)}")
+              f"replies {m.get('reply_count', 0)} · views {m.get('impression_count', 0)}{bookmarks}")
 
 
 def main_read(argv: list[str], home_dir: Path | str) -> None:

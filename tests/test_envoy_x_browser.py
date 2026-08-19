@@ -433,6 +433,211 @@ def test_post_receipt_appends_to_the_shared_api_lane_log(tmp_path, monkeypatch):
     assert [r.get("lane") for r in lines] == ["api", "browser"]
 
 
+# ── the reply lane's own defect: no address, ever, until now ──────────
+
+
+def test_send_receipt_records_post_id_when_driver_yields_one(tmp_path, monkeypatch):
+    """The defect this whole task exists to fix: `_run_send` used to throw
+    away `click_send()`'s return value entirely. A reply now gets the same
+    honest-id contract `_run_post` already had."""
+    paths = _paths(tmp_path)
+    _armed_env(monkeypatch)
+    driver = _FakeDriver(click_send_return="1234567890")
+    envoy_x_browser.run(
+        ["send", "https://x.com/a/status/1", "--text", "hi", "--confirm"],
+        paths, driver_factory=_factory_for(driver),
+    )
+    record = json.loads(paths.log.read_text(encoding="utf-8").strip().splitlines()[0])
+    assert record["post_id"] == "1234567890"
+    # `url` keeps its established meaning in a reply row -- the post being
+    # replied to, not the one this row created. The collision this change
+    # deliberately resolves additively, not by rename.
+    assert record["url"] == "https://x.com/a/status/1"
+
+
+def test_send_receipt_records_explicit_absence_not_a_guess(tmp_path, monkeypatch):
+    """Same contract `_run_post`'s comment already states: a driver that
+    yields nothing produces an honest `post_id: null`, never an id
+    invented from the reply target's own url."""
+    paths = _paths(tmp_path)
+    _armed_env(monkeypatch)
+    driver = _FakeDriver(click_send_return=None)
+    envoy_x_browser.run(
+        ["send", "https://x.com/a/status/1", "--text", "hi", "--confirm"],
+        paths, driver_factory=_factory_for(driver),
+    )
+    record = json.loads(paths.log.read_text(encoding="utf-8").strip().splitlines()[0])
+    assert "post_id" in record
+    assert record["post_id"] is None
+    assert "self_url" not in record
+
+
+# ── self_url: the canonical address of the post this row created ──────
+
+
+def test_send_receipt_records_self_url_from_the_live_handle(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    _armed_env(monkeypatch)
+    driver = _FakeDriver(click_send_return="42", whoami_value="brnrd_resident")
+    envoy_x_browser.run(
+        ["send", "https://x.com/a/status/1", "--text", "hi", "--confirm"],
+        paths, driver_factory=_factory_for(driver),
+    )
+    record = json.loads(paths.log.read_text(encoding="utf-8").strip().splitlines()[0])
+    assert record["self_url"] == "https://x.com/brnrd_resident/status/42"
+    assert "whoami" in driver.calls
+
+
+def test_post_receipt_records_self_url_from_the_live_handle(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    _armed_env(monkeypatch)
+    driver = _FakeDriver(click_send_return="42", whoami_value="brnrd_resident")
+    envoy_x_browser.run(
+        ["post", "--text", "hi", "--confirm"],
+        paths, driver_factory=_factory_for(driver),
+    )
+    record = json.loads(paths.log.read_text(encoding="utf-8").strip().splitlines()[0])
+    assert record["self_url"] == "https://x.com/brnrd_resident/status/42"
+
+
+def test_self_url_omitted_when_post_id_is_none(tmp_path, monkeypatch):
+    """Never a URL built around a missing id -- the key must be absent
+    entirely, not present as null and not guessed. whoami() must not even
+    be asked to resolve a handle for an id that doesn't exist."""
+    paths = _paths(tmp_path)
+    _armed_env(monkeypatch)
+    driver = _FakeDriver(click_send_return=None, whoami_value="brnrd_resident")
+    envoy_x_browser.run(
+        ["post", "--text", "hi", "--confirm"],
+        paths, driver_factory=_factory_for(driver),
+    )
+    record = json.loads(paths.log.read_text(encoding="utf-8").strip().splitlines()[0])
+    assert "self_url" not in record
+    assert "whoami" not in driver.calls
+
+
+def test_self_url_omitted_when_whoami_fails(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    _armed_env(monkeypatch)
+    driver = _FakeDriver(click_send_return="42", whoami_value=None)
+    envoy_x_browser.run(
+        ["post", "--text", "hi", "--confirm"],
+        paths, driver_factory=_factory_for(driver),
+    )
+    record = json.loads(paths.log.read_text(encoding="utf-8").strip().splitlines()[0])
+    assert record["post_id"] == "42"
+    assert "self_url" not in record
+
+
+# ── --form: caller-supplied rhetorical form, free text, never an arm ──
+
+
+def test_form_recorded_verbatim_on_send(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    _armed_env(monkeypatch)
+    driver = _FakeDriver()
+    envoy_x_browser.run(
+        ["send", "https://x.com/a/status/1", "--text", "hi", "--confirm",
+         "--form", "the open question"],
+        paths, driver_factory=_factory_for(driver),
+    )
+    record = json.loads(paths.log.read_text(encoding="utf-8").strip().splitlines()[0])
+    assert record["form"] == "the open question"
+
+
+def test_form_recorded_verbatim_on_post(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    _armed_env(monkeypatch)
+    driver = _FakeDriver()
+    envoy_x_browser.run(
+        ["post", "--text", "hi", "--confirm", "--form", "the measured number"],
+        paths, driver_factory=_factory_for(driver),
+    )
+    record = json.loads(paths.log.read_text(encoding="utf-8").strip().splitlines()[0])
+    assert record["form"] == "the measured number"
+
+
+def test_form_absent_when_not_passed(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    _armed_env(monkeypatch)
+    driver = _FakeDriver()
+    envoy_x_browser.run(
+        ["post", "--text", "hi", "--confirm"],
+        paths, driver_factory=_factory_for(driver),
+    )
+    record = json.loads(paths.log.read_text(encoding="utf-8").strip().splitlines()[0])
+    assert "form" not in record
+
+
+def test_form_refuses_dash_led_value(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    monkeypatch.setenv("BRR_X_BROWSER_SEND", "1")
+    with pytest.raises(SystemExit) as exc:
+        envoy_x_browser.run(
+            ["post", "--confirm", "--text", "hi", "--form", "-rf /"],
+            paths, driver_factory=_refusing_factory,
+        )
+    assert "looks like a flag" in str(exc.value)
+
+
+def test_form_leading_space_escapes_the_dash_guard(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    _armed_env(monkeypatch)
+    driver = _FakeDriver()
+    envoy_x_browser.run(
+        ["post", "--text", "hi", "--confirm", "--form", " -not a flag"],
+        paths, driver_factory=_factory_for(driver),
+    )
+    record = json.loads(paths.log.read_text(encoding="utf-8").strip().splitlines()[0])
+    assert record["form"] == "-not a flag"
+
+
+def test_form_cannot_arm_send_alone(tmp_path):
+    """The task's own explicit constraint: --form must not be able to
+    substitute for --confirm or BRR_X_BROWSER_SEND=1 -- it is checked and
+    recorded, never read by the arming guard, and the driver must never be
+    constructed on this path."""
+    paths = _paths(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        envoy_x_browser.run(
+            ["send", "https://x.com/a/status/1", "--text", "hi",
+             "--form", "the artifact"],
+            paths, driver_factory=_refusing_factory,
+        )
+    msg = str(exc.value)
+    assert "--confirm" in msg and "BRR_X_BROWSER_SEND=1" in msg
+
+
+def test_form_cannot_arm_post_alone(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    monkeypatch.delenv("BRR_X_BROWSER_SEND", raising=False)
+    with pytest.raises(SystemExit) as exc:
+        envoy_x_browser.run(
+            ["post", "--text", "hi", "--form", "the artifact"],
+            paths, driver_factory=_refusing_factory,
+        )
+    msg = str(exc.value)
+    assert "--confirm" in msg and "BRR_X_BROWSER_SEND=1" in msg
+
+
+def test_draft_and_draft_post_refuse_a_stray_form_flag(tmp_path):
+    """draft/draft-post write no receipt row at all -- a --form flag there
+    would be argv nobody reads, so it is deliberately not offered (see the
+    module docstring). A stray --form falls through to the existing
+    leftover-positional refusal rather than being silently swallowed."""
+    paths = _paths(tmp_path)
+    with pytest.raises(SystemExit):
+        envoy_x_browser.run(
+            ["draft", "https://x.com/a/status/1", "--text", "hi", "--form", "x"],
+            paths, driver_factory=_refusing_factory,
+        )
+    with pytest.raises(SystemExit):
+        envoy_x_browser.run(
+            ["draft-post", "--text", "hi", "--form", "x"],
+            paths, driver_factory=_refusing_factory,
+        )
+
+
 # ── the hourly cap: arithmetic + enforcement even when armed ─────────
 
 
