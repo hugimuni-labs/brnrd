@@ -5,7 +5,6 @@ import {
 	type QuotaShell,
 	type QuotaWindow
 } from './quota.ts';
-import { isCollapsed } from './collapse.ts';
 import { liveSticky, type RunnerProfile, type RunnerSticky, type WakeRequest } from './runners.ts';
 
 export type RunnerBlockKind = 'requested' | 'sticky' | 'default';
@@ -250,36 +249,11 @@ export function fuelRows(shells: QuotaShell[], nowMs: number = Date.now()): Fuel
 	);
 }
 
-/**
- * Does the rail render as its one-line slim bar?
- *
- * THE PICKER YOU CANNOT REACH (2026-08-02). This used to be
- * `condensed && !pinnedOpen`, spelled inline in the component — and it let the
- * page's *scroll verdict* take back a panel the reader had opened by hand.
- * Expanding the rack and scrolling one pixel past the sentinel unmounted the
- * whole strip, spool rack included; since the rack is the last block of that
- * panel and the strong cores are its last rows, the bottom spool could not be
- * tapped at all. Reaching it needed the page scroll that deleted it.
- *
- * The rule, and the reason this is a function rather than an expression: a
- * reader's own open outranks the scroll verdict, and both ways of opening —
- * pinning the slim bar, or expanding the rack — are equally the reader's.
- * Enumerating them inline is how the second one got left out.
- *
- * A thin wrapper over `collapse.isCollapsed` (2026-08-03, the rack answers
- * everywhere): the rule above generalises past this component — it is the
- * same one the machine's dock answers — so the verdict itself now lives in
- * `collapse.ts` and this function only translates the rail's own vocabulary
- * into it.
- */
-export function railIsSlim(state: {
-	condensed: boolean;
-	pinnedOpen: boolean;
-	expanded: boolean;
-}): boolean {
-	return isCollapsed({
-		open: state.expanded,
-		scrolledPast: state.condensed,
-		pinnedOpen: state.pinnedOpen
-	});
-}
+// `railIsSlim` (THE PICKER YOU CANNOT REACH, 2026-08-02) is gone with the
+// form it used to pick between. w-68's gauge has exactly one render: one
+// line, fixed height, sticky forever, no disclosure — so there is no longer
+// a scroll verdict to override and nothing for a reader's own `open` to
+// outrank. `collapse.ts`'s `isCollapsed`/`tapVerdict` rules still stand for
+// the machine dock, which keeps its own full/docked distinction; the rail
+// simply stopped needing them. See `git log` on this file for the function
+// this replaced.

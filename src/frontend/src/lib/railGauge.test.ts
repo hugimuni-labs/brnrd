@@ -6,12 +6,10 @@ import {
 	dialDasharray,
 	fuelRows,
 	quotaWindowCountLabel,
-	railIsSlim,
 	runnerBlocks,
 	slotChip,
 	stickyCountdown
-} from './controlStrip.ts';
-import { isCollapsed } from './collapse.ts';
+} from './railGauge.ts';
 import type { QuotaShell } from './quota.ts';
 import type { RunnerProfile, RunnerSticky, WakeRequest } from './runners.ts';
 
@@ -349,54 +347,10 @@ test('slotChip renders an unpublished ceiling as a question, not a guess', () =>
 	assert.equal(slotChip(2, 0).label, '2/? slots');
 });
 
-// THE PICKER YOU CANNOT REACH (2026-08-02). The rail's form has two inputs the
-// reader controls and one the page controls, and the bug was that only one of
-// the reader's two counted. These pin the rule that replaced it: scrolling may
-// condense a rail nobody touched; it may never take back a panel the reader
-// opened.
-
-test('at the top of the page the rail is never slim, whatever the reader opened', () => {
-	for (const pinnedOpen of [false, true]) {
-		for (const expanded of [false, true]) {
-			assert.equal(railIsSlim({ condensed: false, pinnedOpen, expanded }), false);
-		}
-	}
-});
-
-test('scrolled past an untouched rail, it condenses to the slim bar', () => {
-	assert.equal(railIsSlim({ condensed: true, pinnedOpen: false, expanded: false }), true);
-});
-
-test('an expanded rack survives the scroll verdict — the bug that hid the last spool', () => {
-	// He could not select `claude-fable`: it is the last row of the rack, the
-	// rack is the last block of the rail, and reaching it took the page scroll
-	// that used to unmount the whole panel.
-	assert.equal(railIsSlim({ condensed: true, pinnedOpen: false, expanded: true }), false);
-});
-
-test('pinning the slim bar open survives the scroll verdict too', () => {
-	assert.equal(railIsSlim({ condensed: true, pinnedOpen: true, expanded: false }), false);
-});
-
-// `railIsSlim` is a thin wrapper over the shared `collapse.isCollapsed`
-// (2026-08-03, the rack answers everywhere) — pin the translation itself,
-// not just the behaviour, so a future edit that reintroduces its own
-// verdict here instead of delegating shows up as a diff.
-test("railIsSlim is exactly isCollapsed under the rail's own vocabulary", () => {
-	for (const condensed of [false, true]) {
-		for (const pinnedOpen of [false, true]) {
-			for (const expanded of [false, true]) {
-				assert.equal(
-					railIsSlim({ condensed, pinnedOpen, expanded }),
-					isCollapsed({ open: expanded, scrolledPast: condensed, pinnedOpen })
-				);
-			}
-		}
-	}
-});
-
-// THE BOUNDARY THAT FLICKERED — the rail's hysteresis moved twice: first to
-// `collapse.ts` (2026-08-08, the unified scroll/settle clock), then into
-// `stickyStack.ts`'s sentinel-pair form (w-48, the stack rewrite). Its dead
-// band is now `railRawVerdict`, tested in `stickyStack.test.ts` — same rule,
-// condense and release as two different boundaries.
+// THE PICKER YOU CANNOT REACH (2026-08-02) and `railIsSlim`, its fix, are
+// both gone (w-68, the gauge/bench split, 2026-08-19): the gauge has exactly
+// one render now — one line, fixed height, sticky forever, no disclosure —
+// so there is no longer a scroll verdict for a reader's own `open` to
+// outrank. `git log` on this file carries the four tests this replaced, and
+// `collapse.ts`'s own tests still cover `isCollapsed`/`tapVerdict` for the
+// machine dock, which kept its full/docked distinction.
