@@ -27,7 +27,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from . import runner_failures
 
@@ -289,10 +289,27 @@ def _by_cost(runner: RunnerProfile) -> tuple[int, str]:
     return (runner.rank, runner.name)
 
 
-def _by_fallback_capability(runner: RunnerProfile) -> tuple[int, float, int, str]:
-    if runner.capability_score is None:
-        return (1, 0.0, runner.rank, runner.name)
-    return (0, -runner.capability_score, runner.rank, runner.name)
+def _by_fallback_capability(
+    current_class_rank: int,
+) -> "Callable[[RunnerProfile], tuple[int, int, float, int, str]]":
+    """Sort key: nearest class first, then capability, then cost, then name.
+
+    ``automatic_fallback_runner`` already filters candidates to
+    ``class_rank <= current_class_rank``, so every candidate this key sees is
+    class-legal; the distance term only decides *which* legal class wins. A
+    fallback is a substitute, not a demotion — landing two classes down when
+    a same-class or one-down peer is installed and idle is the defect this
+    key exists to close (a ``codex-full`` (strong) failure landing on
+    ``claude-haiku`` (economy) while ``claude-opus`` (strong) sat available).
+    """
+
+    def key(runner: RunnerProfile) -> tuple[int, int, float, int, str]:
+        class_distance = current_class_rank - runner.class_rank
+        if runner.capability_score is None:
+            return (class_distance, 1, 0.0, runner.rank, runner.name)
+        return (class_distance, 0, -runner.capability_score, runner.rank, runner.name)
+
+    return key
 
 
 def select_runner(
@@ -371,7 +388,9 @@ def automatic_fallback_runner(
     - only unambiguous operational failures enter it (quota/auth/provider);
     - paid relay profiles are excluded until the spend-plan consent slice lands;
     - the next Runner must be in the same or a cheaper class than the failed one,
-      so recovery does not silently escalate cost;
+      so recovery does not silently escalate cost, and among the legal classes
+      the **nearest** one to the failed Runner's own class wins — a fallback is
+      a substitute for the failed Core, not a demotion to whatever is cheapest;
     - provider outages require a different provider, while quota/auth failures
       require a different failure domain (quota source first, provider second).
 
@@ -423,7 +442,7 @@ def automatic_fallback_runner(
 
     if not candidates:
         return None
-    return sorted(candidates, key=_by_fallback_capability)[0]
+    return sorted(candidates, key=_by_fallback_capability(current_profile.class_rank))[0]
 
 
 def quality_escalation_runner(
