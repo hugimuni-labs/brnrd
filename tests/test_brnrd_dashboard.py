@@ -1913,3 +1913,273 @@ def test_dashboard_runners_api_stamps_per_row_report_freshness():
         "still honestly reporting what the retired daemon last said — "
         "daemon_stale is what tells a reader not to trust it as current"
     )
+
+
+def test_dashboard_live_runs_api_stamps_per_row_report_freshness_across_a_collision():
+    """#1505, the third of the "three more views share the identical
+    unfixed shape" #1503/#1504 named and left alone (`_live_runs_views`).
+
+    A *single-daemon* fixture proves nothing here — the whole defect is the
+    merge across daemons, so this drives two: one fresh, one retired days
+    ago, both reporting a run under the *same* id (the collision path
+    `existing["_reported_at"] >= reported_at` guards) plus the retired
+    daemon alone reporting a second, unique run that no live daemon ever
+    overwrites — the exact "merge-survives looking as fresh as the
+    account's newest report" shape #1502 first measured. The account-wide
+    `stale` flag reads green throughout (the fresh daemon reported 5s ago);
+    `daemon_stale` is the only fact that catches the zombie row.
+    """
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd.models import Daemon
+    from brnrd.routers.dashboard import _live_runs_views
+
+    client = _client()
+    token = _login(client)
+    pid_a = _create_repo(client, token, repo="Gurio/brr")
+    pid_b = _create_repo(client, token, repo="Gurio/other")
+
+    now = datetime.now(timezone.utc)
+    fresh = now - timedelta(seconds=5)
+    retired = now - timedelta(days=5)
+    with client.app.state.SessionLocal() as db:
+        db.add(
+            Daemon(
+                id="dmn-live-fresh",
+                repo_id=pid_a,
+                token_id="tok-live-fresh",
+                daemon_name="laptop",
+                live_runs_updated_at=fresh,
+                live_runs_json=json.dumps(
+                    [
+                        {
+                            "id": "pres-collide",
+                            "run_id": "run-collide",
+                            "repo_label": "Gurio/brr",
+                            "label": "Fresh label",
+                            "started_at": "2026-08-19T10:00:00Z",
+                        }
+                    ]
+                ),
+            )
+        )
+        db.add(
+            Daemon(
+                id="dmn-live-retired",
+                repo_id=pid_b,
+                token_id="tok-live-retired",
+                daemon_name="old-machine",
+                live_runs_updated_at=retired,
+                live_runs_json=json.dumps(
+                    [
+                        {
+                            "id": "pres-collide",
+                            "run_id": "run-collide",
+                            "repo_label": "Gurio/brr",
+                            "label": "Stale label",
+                            "started_at": "2026-08-14T09:00:00Z",
+                        },
+                        {
+                            "id": "pres-zombie",
+                            "run_id": "run-zombie",
+                            "repo_label": "Gurio/brr",
+                            "label": "Zombie label",
+                            "started_at": "2026-08-14T09:05:00Z",
+                        },
+                    ]
+                ),
+            )
+        )
+        db.commit()
+
+        repos = [db.get(Repo, pid_a), db.get(Repo, pid_b)]
+        view = _live_runs_views(db, repos)
+
+    # The account-wide chip reads fresh — exactly the case a reader trusting
+    # only that flag gets fooled by the zombie row below.
+    assert view["stale"] is False
+
+    by_run = {row["run_id"]: row for row in view["runs"]}
+    assert set(by_run) == {"run-collide", "run-zombie"}
+
+    # Collision: freshest report wins the row content, and its own stamp
+    # agrees with the account flag.
+    assert by_run["run-collide"]["label"] == "Fresh label"
+    assert by_run["run-collide"]["daemon_stale"] is False
+    assert by_run["run-collide"]["daemon_reported_at"] is not None
+
+    # No collision at all — only the retired daemon ever reported this run,
+    # so it merge-survives untouched. `daemon_stale` is the only signal that
+    # says not to trust it as current.
+    assert by_run["run-zombie"]["label"] == "Zombie label"
+    assert by_run["run-zombie"]["daemon_stale"] is True
+    assert by_run["run-zombie"]["daemon_reported_at"] is not None
+
+
+def test_dashboard_pr_review_queue_api_stamps_per_row_report_freshness_across_a_collision():
+    """Same shape as the live-runs sibling above, for `_pr_review_queue_views`
+    (#1505's second named site). Keyed by `repo_label#number`."""
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd.models import Daemon
+    from brnrd.routers.dashboard import _pr_review_queue_views
+
+    client = _client()
+    token = _login(client)
+    pid_a = _create_repo(client, token, repo="Gurio/brr")
+    pid_b = _create_repo(client, token, repo="Gurio/other")
+
+    now = datetime.now(timezone.utc)
+    fresh = now - timedelta(seconds=5)
+    retired = now - timedelta(days=5)
+    with client.app.state.SessionLocal() as db:
+        db.add(
+            Daemon(
+                id="dmn-pr-fresh",
+                repo_id=pid_a,
+                token_id="tok-pr-fresh",
+                daemon_name="laptop",
+                pr_review_queue_updated_at=fresh,
+                pr_review_queue_json=json.dumps(
+                    [
+                        {
+                            "number": 259,
+                            "title": "Fresh title",
+                            "url": "https://github.com/Gurio/brr/pull/259",
+                            "repo_label": "Gurio/brr",
+                            "created_at": "2026-08-19T09:00:00Z",
+                            "draft": False,
+                            "author": "gurio",
+                        }
+                    ]
+                ),
+            )
+        )
+        db.add(
+            Daemon(
+                id="dmn-pr-retired",
+                repo_id=pid_b,
+                token_id="tok-pr-retired",
+                daemon_name="old-machine",
+                pr_review_queue_updated_at=retired,
+                pr_review_queue_json=json.dumps(
+                    [
+                        {
+                            "number": 259,
+                            "title": "Stale title",
+                            "url": "https://github.com/Gurio/brr/pull/259",
+                            "repo_label": "Gurio/brr",
+                            "created_at": "2026-08-14T09:00:00Z",
+                            "draft": False,
+                            "author": "gurio",
+                        },
+                        {
+                            "number": 260,
+                            "title": "Zombie PR",
+                            "url": "https://github.com/Gurio/brr/pull/260",
+                            "repo_label": "Gurio/brr",
+                            "created_at": "2026-08-14T09:05:00Z",
+                            "draft": True,
+                            "author": "alice",
+                        },
+                    ]
+                ),
+            )
+        )
+        db.commit()
+
+        repos = [db.get(Repo, pid_a), db.get(Repo, pid_b)]
+        view = _pr_review_queue_views(db, repos)
+
+    assert view["stale"] is False
+
+    by_number = {row["number"]: row for row in view["prs"]}
+    assert set(by_number) == {259, 260}
+
+    assert by_number[259]["title"] == "Fresh title"
+    assert by_number[259]["daemon_stale"] is False
+    assert by_number[259]["daemon_reported_at"] is not None
+
+    assert by_number[260]["title"] == "Zombie PR"
+    assert by_number[260]["daemon_stale"] is True
+    assert by_number[260]["daemon_reported_at"] is not None
+
+
+def test_dashboard_run_ledger_api_stamps_per_row_report_freshness_across_a_collision():
+    """Same shape again, for `_run_ledger_views` (#1505's third named site).
+    Keyed by `run_id`."""
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd.models import Daemon
+    from brnrd.routers.dashboard import _run_ledger_views
+
+    client = _client()
+    token = _login(client)
+    pid_a = _create_repo(client, token, repo="Gurio/brr")
+    pid_b = _create_repo(client, token, repo="Gurio/other")
+
+    now = datetime.now(timezone.utc)
+    fresh = now - timedelta(seconds=5)
+    retired = now - timedelta(days=5)
+    with client.app.state.SessionLocal() as db:
+        db.add(
+            Daemon(
+                id="dmn-ledger-fresh",
+                repo_id=pid_a,
+                token_id="tok-ledger-fresh",
+                daemon_name="laptop",
+                run_ledger_updated_at=fresh,
+                run_ledger_json=json.dumps(
+                    [
+                        {
+                            "run_id": "run-collide",
+                            "ended_at": (now - timedelta(hours=1)).isoformat(),
+                            "summary": "Fresh summary",
+                        }
+                    ]
+                ),
+            )
+        )
+        db.add(
+            Daemon(
+                id="dmn-ledger-retired",
+                repo_id=pid_b,
+                token_id="tok-ledger-retired",
+                daemon_name="old-machine",
+                run_ledger_updated_at=retired,
+                run_ledger_json=json.dumps(
+                    [
+                        {
+                            "run_id": "run-collide",
+                            "ended_at": (retired - timedelta(hours=1)).isoformat(),
+                            "summary": "Stale summary",
+                        },
+                        {
+                            "run_id": "run-zombie",
+                            "ended_at": (retired - timedelta(hours=2)).isoformat(),
+                            "summary": "Zombie summary",
+                        },
+                    ]
+                ),
+            )
+        )
+        db.commit()
+
+        repos = [db.get(Repo, pid_a), db.get(Repo, pid_b)]
+        view = _run_ledger_views(db, repos, limit=10)
+
+    assert view["stale"] is False
+
+    by_run = {row["run_id"]: row for row in view["rows"]}
+    assert set(by_run) == {"run-collide", "run-zombie"}
+
+    assert by_run["run-collide"]["summary"] == "Fresh summary"
+    assert by_run["run-collide"]["daemon_stale"] is False
+    assert by_run["run-collide"]["daemon_reported_at"] is not None
+
+    assert by_run["run-zombie"]["summary"] == "Zombie summary"
+    assert by_run["run-zombie"]["daemon_stale"] is True
+    assert by_run["run-zombie"]["daemon_reported_at"] is not None
