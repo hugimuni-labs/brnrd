@@ -29,6 +29,7 @@
 		buildWarpGraph,
 		contributingCone,
 		findGoalReadingsFile,
+		formatReadingDelta,
 		formatReadingValue,
 		parseGoalReadings,
 		readingsNewestFirst,
@@ -227,7 +228,17 @@
 						<li>
 							<span class="text-stone-300">{key}:</span> latest {formatReadingValue(
 								info.latest.value
-							)} · min {formatReadingValue(info.min)} · max {formatReadingValue(info.max)}
+							)}{#if info.delta !== null}
+								<!-- comparable — latest and previous share a measurement basis -->
+								<span>&nbsp;(Δ{formatReadingDelta(info.delta)} vs previous)</span>
+							{:else if info.basisMismatch}
+								<!-- refused, not silent: latest and previous exist but measure
+								     different populations (design-goal-oriented-engineering.md,
+								     mirrors items.py's readings_index_line / `goal show`) — a
+								     blank here would read as "no change", which is the failure
+								     this branch exists to stop rendering. -->
+								<span>&nbsp;(Δ refused: basis differs from previous sample)</span>
+							{/if} · min {formatReadingValue(info.min)} · max {formatReadingValue(info.max)}
 						</li>
 					{/each}
 				</ul>

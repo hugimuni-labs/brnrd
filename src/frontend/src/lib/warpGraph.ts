@@ -418,6 +418,19 @@ export interface GoalReading {
 	value: number;
 	source: string;
 	note: string | null;
+	/** The measurement population a value was drawn from — a 5-item rolling
+	 *  window vs a lifetime sum, whatever makes two same-`key` values
+	 *  arithmetically incompatible. `null` when the writer didn't set one;
+	 *  comparisons then fall back to `source` (see `readingBasis`), mirroring
+	 *  `items.py`'s `Reading.basis` / `_reading_basis`. */
+	basis: string | null;
+}
+
+/** The value two readings must share for a Δ between them to be
+ *  constructible. Explicit `basis` wins; absent one, `source` is the best
+ *  available population signal. Mirrors `items.py`'s `_reading_basis`. */
+export function readingBasis(reading: GoalReading): string {
+	return reading.basis ? reading.basis : reading.source;
 }
 
 /** The readings-file path for a goal id — never guessed at render time,
@@ -465,7 +478,8 @@ export function parseGoalReadings(markdown: string): GoalReading[] {
 			key: r.key,
 			value,
 			source: typeof r.source === 'string' ? r.source : '',
-			note: typeof r.note === 'string' && r.note ? r.note : null
+			note: typeof r.note === 'string' && r.note ? r.note : null,
+			basis: typeof r.basis === 'string' && r.basis ? r.basis : null
 		});
 	}
 	return out;
@@ -478,10 +492,22 @@ export interface GoalReadingSummary {
 	count: number;
 	min: number;
 	max: number;
+	/** `latest`/`previous` exist but were drawn from different measurement
+	 *  bases — the comparison was refused, not merely unavailable. Distinct
+	 *  from the ordinary "no previous sample yet" case (`previous === null`),
+	 *  which leaves this `false`. Mirrors `items.py`'s
+	 *  `ReadingSummary.basis_mismatch`. */
+	basisMismatch: boolean;
 }
 
 /** Per key: latest sample, previous sample, delta, sample count, min, max —
- *  chronological by `ts`, mirroring `items.py`'s `reading_summary`. */
+ *  chronological by `ts`, mirroring `items.py`'s `reading_summary`.
+ *
+ *  A Δ is only constructed when `latest` and `previous` share a measurement
+ *  basis (`readingBasis`) — grouping by `key` alone put a lifetime sum and a
+ *  rolling-window sum, both keyed `impressions`, into the same subtraction.
+ *  A same-`key`, different-`basis` pair renders `delta: null` and
+ *  `basisMismatch: true` instead of a number that looks real. */
 export function summarizeGoalReadings(readings: GoalReading[]): Map<string, GoalReadingSummary> {
 	const byKey = new Map<string, GoalReading[]>();
 	for (const reading of readings) {
@@ -495,13 +521,15 @@ export function summarizeGoalReadings(readings: GoalReading[]): Map<string, Goal
 		const latest = ordered[ordered.length - 1];
 		const previous = ordered.length > 1 ? ordered[ordered.length - 2] : null;
 		const values = ordered.map((r) => r.value);
+		const comparable = previous !== null && readingBasis(previous) === readingBasis(latest);
 		out.set(key, {
 			latest,
 			previous,
-			delta: previous ? latest.value - previous.value : null,
+			delta: comparable ? latest.value - (previous as GoalReading).value : null,
 			count: ordered.length,
 			min: Math.min(...values),
-			max: Math.max(...values)
+			max: Math.max(...values),
+			basisMismatch: previous !== null && !comparable
 		});
 	}
 	return out;
@@ -518,6 +546,12 @@ export function readingsNewestFirst(readings: GoalReading[]): GoalReading[] {
 export function formatReadingValue(value: number): string {
 	if (Number.isInteger(value)) return String(value);
 	return value.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+/** Signed delta rendering — mirrors `items.py`'s `format_delta`. */
+export function formatReadingDelta(value: number): string {
+	const sign = value >= 0 ? '+' : '';
+	return `${sign}${formatReadingValue(value)}`;
 }
 
 /** Done and retired items, newest receipt first — the completed tab. */
