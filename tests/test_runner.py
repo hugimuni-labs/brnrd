@@ -2922,3 +2922,84 @@ class TestHostSuspendIsRetryable:
         result = self._result("command not found: claude", returncode=127)
         assert result.host_suspended is False
         assert result.retry_reason() is None
+
+
+class TestFallbackRunnerNearestClass:
+    """Regression for the measured defect (run-260819-1626-zdf0): a
+    ``codex-full`` (strong) task failing with ``auth_error`` fell back to
+    ``claude-haiku`` (economy) — the cheapest installed core, not the
+    nearest class — because ``_by_fallback_capability`` sorted the whole
+    eligible pool by cost rank whenever no candidate carried a
+    ``capability_score``. These exercise the daemon's actual callers
+    (``daemon.py:5084``'s path: ``runner.fallback_runner_profile`` /
+    ``runner.fallback_runner``) with realistic profile dicts and, crucially,
+    the no-``capability_score`` arrangement production actually has — a test
+    that only covers scored profiles proves the wrong ordering.
+    """
+
+    def _profiles(self):
+        from brr import runner_select
+
+        raw = {
+            "codex-full": {
+                "shell": "codex", "provider": "openai",
+                "quota_source": "codex-local", "class": "strong",
+                "cost_rank": 45,
+            },
+            "claude-haiku": {
+                "shell": "claude", "provider": "anthropic",
+                "quota_source": "claude-local", "class": "economy",
+                "cost_rank": 10,
+            },
+            "claude-sonnet": {
+                "shell": "claude", "provider": "anthropic",
+                "quota_source": "claude-local", "class": "balanced",
+                "cost_rank": 30,
+            },
+            "claude-opus": {
+                "shell": "claude", "provider": "anthropic",
+                "quota_source": "claude-local", "class": "strong",
+                "cost_rank": 50,
+            },
+            "claude-fable": {
+                "shell": "claude", "provider": "anthropic",
+                "quota_source": "claude-local", "class": "strong",
+                "cost_rank": 55,
+            },
+        }
+        return [
+            runner_select.runner_from_profile(name, profile)
+            for name, profile in raw.items()
+        ]
+
+    def test_fallback_runner_profile_lands_on_nearest_class(self, monkeypatch):
+        from brr import runner_select
+
+        profiles = self._profiles()
+        monkeypatch.setattr(
+            runner_mod, "available_selection_runners", lambda repo_root=None: profiles
+        )
+        current = next(p for p in profiles if p.name == "codex-full")
+
+        chosen = runner_mod.fallback_runner_profile(
+            Path("."), current, "auth_error", tried=("codex-full",),
+        )
+
+        assert chosen is not None
+        assert chosen.name == "claude-opus", (
+            "a strong task must fall to the nearest surviving strong core "
+            "(claude-opus), not the cheapest installed core overall "
+            "(claude-haiku)"
+        )
+
+    def test_fallback_runner_name_lands_on_nearest_class(self, monkeypatch):
+        profiles = self._profiles()
+        monkeypatch.setattr(
+            runner_mod, "available_selection_runners", lambda repo_root=None: profiles
+        )
+
+        chosen = runner_mod.fallback_runner(
+            Path("."), "codex-full", "auth_error", tried=("codex-full",),
+        )
+
+        assert chosen == "claude-opus"
