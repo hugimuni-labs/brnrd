@@ -62,8 +62,8 @@ function window(over: Partial<QuotaWindow> = {}): QuotaWindow {
 	return { label: 'week', used: null, limit: null, percent: 50, reset: null, ...over };
 }
 
-function shell(windows: QuotaWindow[], status = 'known'): QuotaShell {
-	return { shell: 'claude', status, windows };
+function shell(windows: QuotaWindow[], status = 'known', daemonStale = false): QuotaShell {
+	return { shell: 'claude', status, windows, daemon_stale: daemonStale };
 }
 
 function wake(scheduledFor: string | null): ScheduledWake {
@@ -463,6 +463,15 @@ describe('readTank', () => {
 		assert.equal(tank?.remainingPercent, 42);
 		assert.equal(tank?.stale, true);
 	});
+
+	it("carries the shell's daemon-report staleness separately from `stale`", () => {
+		// #1503: `daemon_stale` (this shell's own report freshness) and
+		// `status === 'stale'` (scrape-level, #237) are two distinct facts —
+		// a `known` shell can still carry a stale daemon report.
+		const tank = readTank(shell([], 'known', true), window({ resets_at: NOW / 1000 }), 0, NOW);
+		assert.equal(tank?.stale, false);
+		assert.equal(tank?.daemonStale, true);
+	});
 });
 
 describe('readTanks', () => {
@@ -485,5 +494,31 @@ describe('readTanks', () => {
 	it('drops windows with no percent instead of rendering an empty track', () => {
 		const shells: QuotaShell[] = [shell([window({ percent: null }), window({ percent: 50 })])];
 		assert.equal(readTanks(shells, [], [], NOW).length, 1);
+	});
+
+	// #1503 "the tank of dead quotas": a shell whose own daemon report is
+	// stale (a retired machine's window merge-surviving the account-wide
+	// dict) must never lead the tank line over a fresh window — even when
+	// its own verdict reads worse (a stale "exhausting" reading is not a
+	// reason to dispatch to it in preference over a live "sustainable" one).
+	it('never leads with a daemon-stale window over a fresh one, even at a worse verdict', () => {
+		const shells: QuotaShell[] = [
+			shell(
+				[window({ label: '5h', percent: 2, resets_at: NOW / 1000 + 2.5 * HOUR })],
+				'known',
+				true // daemon_stale — a retired daemon's window, verdict-worst by far
+			),
+			shell([window({ label: 'week', percent: 80, resets_at: NOW / 1000 + 3.5 * 86400 })])
+		];
+		const tanks = readTanks(shells, [], [], NOW);
+		assert.equal(tanks[0].daemonStale, false, 'the fresh window leads regardless of verdict');
+		assert.equal(tanks[1].daemonStale, true);
+	});
+
+	it('a daemon-stale window still leads when nothing fresher exists', () => {
+		const shells: QuotaShell[] = [shell([window({ label: 'week', percent: 40 })], 'known', true)];
+		const tanks = readTanks(shells, [], [], NOW);
+		assert.equal(tanks.length, 1);
+		assert.equal(tanks[0].daemonStale, true, 'the only candidate still surfaces — never hidden');
 	});
 });
