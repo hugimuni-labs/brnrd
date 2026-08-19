@@ -1429,7 +1429,7 @@ class TestPromptBuilding:
         assert "ghost.png" in prompt
 
     def test_daemon_prompt_flags_orphaned_pending_event(self, tmp_path):
-        """#1493 ("the event nobody could see") layer 2: an event surfaced
+        """#1496 ("the event nobody could see") layer 2: an event surfaced
         because its dispatched run is provably dead must render as a
         distinguishable "orphaned" line — mixing it silently into fresh
         mail is the exact failure the fix exists to end."""
