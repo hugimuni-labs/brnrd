@@ -228,7 +228,6 @@ def effective_model(entry: dict[str, Any]) -> str | None:
     return _str(entry.get("pin")) or _str(entry.get("model"))
 
 
-@lru_cache(maxsize=16)
 def probe_shell_models(
     shell_name: str,
     *,
@@ -241,15 +240,47 @@ def probe_shell_models(
     run the Shell's local help path with a short timeout, parse only model-ish
     tokens on model-related lines, and fall back to the bundled registry when
     nothing is exposed. It never touches the network intentionally.
+
+    The expensive part (the subprocess probe) is memoized; whether the Shell
+    is *on PATH at all* is not — that check runs live on every call and feeds
+    the cache key (see :func:`_probe_shell_models_cached`), so a Shell that
+    goes from absent to present is picked up on the very next call, in-process,
+    with no daemon restart and no TTL to wait out. Before this split the whole
+    function — PATH check included — sat behind one ``lru_cache``: a shell
+    probed while not yet installed memoized ``()`` for the rest of the
+    process's life, and installing the shell afterwards changed nothing until
+    a restart (#1522 — a codex-only adopter's spool rack stayed dark on a
+    working machine).
     """
     shell = shell_name.strip()
     if not shell:
         return ()
-    binary = shutil.which(shell)
+    on_path = shutil.which(shell) is not None
+    return _probe_shell_models_cached(shell, on_path, timeout=timeout)
+
+
+@lru_cache(maxsize=32)
+def _probe_shell_models_cached(
+    shell_name: str,
+    on_path: bool,
+    *,
+    timeout: float = _PROBE_TIMEOUT_S,
+) -> tuple[str, ...]:
+    """The memoized half of :func:`probe_shell_models`.
+
+    Keyed on ``on_path`` (in addition to ``shell_name``/``timeout``) so a
+    PATH flip is a cache *miss*, not a stale hit — the fix is the key, not a
+    TTL. ``probe_shell_models.cache_clear`` (below) still resets this table;
+    existing callers/tests that reach for it by that name keep working
+    unchanged.
+    """
+    if not on_path:
+        return ()
+    binary = shutil.which(shell_name)
     if not binary:
         return ()
-    models: list[str] = list(_models_from_disk(shell))
-    for cmd in _probe_commands(shell, binary):
+    models: list[str] = list(_models_from_disk(shell_name))
+    for cmd in _probe_commands(shell_name, binary):
         try:
             proc = subprocess.run(
                 cmd,
@@ -265,6 +296,14 @@ def probe_shell_models(
             _models_from_text((proc.stdout or "") + "\n" + (proc.stderr or ""))
         )
     return tuple(dict.fromkeys(models))
+
+
+# Preserve the pre-split public API: every existing caller/test reaches for
+# ``probe_shell_models.cache_clear()`` by that name (`tests/test_runner_cores.py`,
+# `tests/test_runner.py`) to reset state between probe scenarios. Proxying it
+# here means none of them need to change for the split above.
+probe_shell_models.cache_clear = _probe_shell_models_cached.cache_clear
+probe_shell_models.cache_info = _probe_shell_models_cached.cache_info
 
 
 def available_cores(
