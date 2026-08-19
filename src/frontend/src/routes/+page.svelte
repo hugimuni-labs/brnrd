@@ -758,6 +758,40 @@
 		if (typeof window === 'undefined' || !stackEl) return;
 		const height = Math.round(stackEl.getBoundingClientRect().height);
 		if (height > 0 && height !== stickyStackHeight) stickyStackHeight = height;
+
+		// THE GAP BEFORE THE HEDDLES (2026-08-19, w-68's own live defect):
+		// `stackRestHeight` only ever moved through `stackAtRest`'s
+		// ResizeObserver gate — *true* rest, nothing docked at all — so once
+		// any limb had docked it stayed frozen at whatever the page measured
+		// before the reader ever scrolled, for the rest of the session, not
+		// "one paint." The machine head docks strictly before the heddle
+		// strip in document order and its own `mt-6` margin collapses the
+		// instant it docks (a real ~24px shrink); the heddle's own added
+		// height hasn't arrived yet to backfill that, so `stackReservePx`
+		// sat open for the whole stretch between the two crossings — a gap
+		// shaped exactly like room being held for the heddles, showing
+		// *before* they ever mounted (the maintainer's report, read
+		// literally).
+		//
+		// One `requestAnimationFrame` after every settle, adopt the now-
+		// current (already-corrected, per the fix above) live height as the
+		// new rest baseline too — the stack has just repainted at this
+		// height, so nothing between here and the next transition can still
+		// be "a stale pre-transition sample." This mirrors the ONE-PAINT
+		// grace the fix above already gives `stickyStackHeight`, extended to
+		// the value the spacer compares against: a settled configuration
+		// clears its own reserve on the very next frame — bounded by a
+		// frame, not by how far apart two limbs' sentinels happen to sit in
+		// the document — instead of riding the reader's whole scroll past
+		// it. The guard (`settled === height`) drops a stale callback when a
+		// newer transition has already landed a fresher snapshot.
+		requestAnimationFrame(() => {
+			if (!stackEl) return;
+			const settled = Math.round(stackEl.getBoundingClientRect().height);
+			if (settled === height && settled > 0 && settled !== stackRestHeight) {
+				stackRestHeight = settled;
+			}
+		});
 	});
 
 	// The section frame's own quiet half of the ask — "the active section's
