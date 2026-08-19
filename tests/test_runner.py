@@ -671,9 +671,11 @@ def test_resolve_runner_auto_prefers_generated_core_profile(tmp_path, monkeypatc
         lambda name: "/usr/bin/claude" if name == "claude" else None,
     )
 
-    # The generated claude-haiku profile is cheaper than the model-less base
-    # Shell and should be the auto choice.
-    assert resolve_runner(tmp_path) == "claude-haiku"
+    # A generated Core profile beats the model-less base Shell in auto mode
+    # (the property this test exists for). Which member wins moved with the
+    # 2026-08-19 default-class change: balanced (claude-sonnet), no longer
+    # the cheapest economy core (claude-haiku).
+    assert resolve_runner(tmp_path) == "claude-sonnet"
 
 
 def test_available_runner_catalog_marks_selected_generated_core(tmp_path, monkeypatch):
