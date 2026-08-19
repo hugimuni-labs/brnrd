@@ -46,12 +46,6 @@ export const SELECTED_PINNED = 'border-l-2 border-l-stone-500 bg-stone-900/40';
  *  state to distinguish. */
 export const SELECTED_OPTION = 'border-l-2 border-l-stone-100 bg-stone-800/40';
 
-/** The gauge: the runner chip summarising what is active right now. This is
- *  a read-only status line, not a picker — it keeps the brand accent rather
- *  than the bench's shape language, because nothing here is being chosen.
- */
-export const ACTIVE_STATUS = 'border-amber-700/70 bg-amber-950/55';
-
 /** A live, time-bounded claim — SpoolRack's "riding <thread>" chip. Not a
  *  selection (nobody picked it from a list) and not the CTA (nothing to
  *  press): its own recipe, a filled dot standing in for the badges' rule. */

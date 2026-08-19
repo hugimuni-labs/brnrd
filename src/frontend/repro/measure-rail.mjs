@@ -1,18 +1,18 @@
-// w-68 prep: the rail's own instrument. Boots the real vite dev server,
-// mocks every /v1/dashboard/* route from repro/fixtures.mjs (same pattern
-// drive.mjs/repro*.mjs already use), opens the rack, and reads
-// `getBoundingClientRect()` for each of the rail's named sections at two
-// widths and two catalog/data scales — replacing "look at a screenshot and
-// say 977px" with a number a script produced.
+// w-68's own instrument, and the acceptance check for the gauge/bench split
+// it built. Boots the real vite dev server, mocks every /v1/dashboard/*
+// route from repro/fixtures.mjs (same pattern drive.mjs/repro*.mjs already
+// use), opens the bench, and reads `getBoundingClientRect()` for each named
+// section at two widths and two catalog/data scales — replacing "look at a
+// screenshot and say 977px" with a number a script produced.
 //
-// The seven content sections named in the task, plus the fold-bar control
-// (rendered only while `condensed`, so it is 0px in every capture this
-// script takes — see the report's own note on that): fold-bar · next-pick ·
-// fuel · tank · error-note · project · environment · spool-rack. Each has a
-// `data-measure="<name>"` attribute on its own container (added to
-// ControlStrip.svelte / SpoolRack.svelte for exactly this purpose — see
-// those files' git history for the pixel-parity proof that the attributes
-// alone changed nothing).
+// Section names updated for the split (2026-08-19): `fold-bar` is gone with
+// the condense/pin duality it belonged to (the gauge has exactly one form
+// now). `gauge` and `bench` are new — the two top-level surfaces the split
+// created — wrapping the same three/five sub-sections the original script
+// named: gauge → next-pick · fuel · tank; bench → error-note · project ·
+// environment · spool-rack. Each still carries its own
+// `data-measure="<name>"` attribute (`RailGauge.svelte` / `RailBench.svelte`
+// / `SpoolRack.svelte`).
 //
 // Usage:
 //   node repro/measure-rail.mjs [--stress] [--out DIR] [--port N] [--note]
@@ -61,15 +61,13 @@ const WIDTHS = [
 	{ name: 'desktop', width: 1200, height: 950 }
 ];
 
-// Render order, matching the task's own listing. `fold-bar` is included for
-// completeness (it has a `data-measure` attribute like every other section)
-// even though nothing in this script's own capture path renders it — see
-// the report.
+// Render order: the gauge's own three sub-sections, then the bench's four.
 const SECTIONS = [
-	'fold-bar',
+	'gauge',
 	'next-pick',
 	'fuel',
 	'tank',
+	'bench',
 	'error-note',
 	'project',
 	'environment',
@@ -89,8 +87,10 @@ async function waitForServer(url, tries = 60) {
 	throw new Error(`dev server never came up at ${url}`);
 }
 
-/** One measurement pass: heights of every named section, the rail's own
- * total, and whether the inner 100svh scroll container overflowed. */
+/** One measurement pass: heights of every named section, plus the gauge's
+ * own wrapper height — the acceptance number this script exists to produce
+ * post-split: "the gauge's height must be identical at default and
+ * `--stress` scale, at both widths." */
 async function measure(page) {
 	return page.evaluate((sections) => {
 		function rectHeight(el) {
@@ -100,18 +100,16 @@ async function measure(page) {
 		for (const name of sections) {
 			out.sections[name] = rectHeight(document.querySelector(`[data-measure="${name}"]`));
 		}
-		// The rail container: THE STACK's own sticky/relative wrapper is
-		// `.z-40` (repro2.mjs already keys off this same class for the same
-		// element); its first child is the `max-h-[100svh] overflow-y-auto`
-		// div ControlStrip renders inside — same convention repro2.mjs uses
-		// for `rail`/`reserve`, so this script adds no new selector
-		// convention of its own.
+		// THE STACK's own sticky wrapper is `.z-40` (repro2.mjs already keys
+		// off this same class for the same element); after the gauge/bench
+		// split (w-68) its first child is the gauge's own `-mx-6 ...` wrapper
+		// div — the bench no longer lives inside this container at all, so
+		// this number is now specifically "how tall is the sticky gauge",
+		// not "how tall is the whole expanded rail" (that question moved to
+		// `out.sections.bench`, which has no fixed-height claim to check).
 		const stack = document.querySelector('.z-40');
-		const rail = stack ? stack.firstElementChild : null;
-		out.railTotalHeight = rectHeight(rail);
-		out.railScrollHeight = rail ? rail.scrollHeight : null;
-		out.railClientHeight = rail ? rail.clientHeight : null;
-		out.railOverflowed = rail ? rail.scrollHeight > rail.clientHeight + 1 : null;
+		const gaugeWrapper = stack ? stack.firstElementChild : null;
+		out.gaugeWrapperHeight = rectHeight(gaugeWrapper);
 		return out;
 	}, SECTIONS);
 }
@@ -154,13 +152,12 @@ async function main() {
 			await page.waitForSelector('[data-measure="fuel"]', { timeout: 15000 });
 			await delay(300); // let ignite transitions settle
 
-			// Open the rack: project/environment/spool-rack (and error-note's
-			// container) only mount while `expanded` — see ControlStrip.svelte's
-			// `{#if expanded}` block. At scrollY 0 this never triggers `condensed`
-			// (onRackChange's own scroll-to-top branch is a no-op here), so
-			// `slim` stays false throughout and nothing about this click changes
-			// which measurement regime we're in.
-			await page.getByRole('button', { name: 'expand the rack' }).click();
+			// Open the bench: project/environment/spool-rack (and error-note's
+			// container) only mount while `benchOpen` — see `RailBench.svelte`'s
+			// `{#if benchOpen}` in +page.svelte. At scrollY 0 this never touches
+			// the gauge's own render (it has exactly one form now), so nothing
+			// about this click changes what `out.gaugeWrapperHeight` measures.
+			await page.getByRole('button', { name: /open the bench/ }).click();
 			await page.waitForSelector('[data-measure="spool-rack"]', { timeout: 15000 });
 			await delay(300); // glitchReveal's own transition window
 
@@ -184,7 +181,12 @@ async function main() {
 				// call (src/routes/+page.svelte ~L207), so this needs no extra
 				// route mock. It's the cheapest way to prove error-note isn't
 				// permanently a 0px section — just usually empty on a fresh load.
-				const firstRow = page.locator('[data-measure="spool-rack"] button').first();
+				// `data-role="rack-row-tap"` (not a bare `button`) since the rack
+				// is a two-stage picker now — the first plain `<button>` inside
+				// `[data-measure="spool-rack"]` is a shell tab, not a runner row.
+				const firstRow = page
+					.locator('[data-measure="spool-rack"] button[data-role="rack-row-tap"]')
+					.first();
 				if (await firstRow.count()) {
 					await firstRow.click();
 					await delay(150);
@@ -215,13 +217,12 @@ async function main() {
 	await writeFile(`${OUT}/results-${SCALE_NAME}.json`, JSON.stringify(results, null, 2));
 
 	// Human table.
-	const header = ['scale', 'width', ...SECTIONS, 'rail total', 'overflowed?'];
+	const header = ['scale', 'width', ...SECTIONS, 'gauge wrapper'];
 	const rows = results.map((r) => [
 		r.variant ? `${r.scale}+note` : r.scale,
 		r.width,
 		...SECTIONS.map((s) => (r.sections[s] === null ? '—' : String(r.sections[s]))),
-		r.railTotalHeight === null ? '—' : String(r.railTotalHeight),
-		r.railOverflowed === null ? '—' : r.railOverflowed ? 'YES' : 'no'
+		r.gaugeWrapperHeight === null ? '—' : String(r.gaugeWrapperHeight)
 	]);
 	const widths = header.map((h, i) => Math.max(h.length, ...rows.map((row) => row[i].length)));
 	const fmt = (cols) => cols.map((c, i) => c.padEnd(widths[i])).join('  ');

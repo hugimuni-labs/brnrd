@@ -151,8 +151,12 @@
 		return IDLE_ROW;
 	}
 
+	// `nextWake` already earns its own left rule from `rowClasses`
+	// (SELECTED_REQUESTED/SELECTED_PINNED) — the name text stays off the
+	// amber hue too, on the same "selection is a shape, not a colour" call,
+	// so the mark isn't restated twice on the same row through two channels.
 	function rowLabelClasses(nextWake: boolean, tappable: boolean): string {
-		if (nextWake) return 'text-amber-200';
+		if (nextWake) return 'text-stone-100';
 		return tappable ? 'text-stone-300' : 'text-ink-mute';
 	}
 
@@ -233,6 +237,7 @@
 						     exists to stop shipping. -->
 						<button
 							type="button"
+							data-role="rack-row-tap"
 							disabled={!tappable}
 							onclick={() => handleTap(profile)}
 							title={rowTitle(profile)}
