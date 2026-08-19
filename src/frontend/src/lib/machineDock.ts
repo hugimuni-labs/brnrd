@@ -221,23 +221,3 @@ export function machineTapVerdict(open: boolean, docked: boolean): MachineTapVer
 export function machineHeadRun(leadId: string | null, selectedId: string | null): string | null {
 	return selectedId ?? leadId;
 }
-
-/**
- * Whether the condensed rail should still draw its own live-pick row.
- *
- * It should not, once the machine docks beneath it. That row existed because
- * the machine block scrolled away and took the only "what is burning" with
- * it; a dock replaces it with the real thing — face, frame, armed tail — so
- * keeping both would print the same run's name at two y-positions eight
- * pixels apart. His 2026-08-02 correction is what made the two-dock shape
- * strictly better than one: *"not the collapsed rack + oneline main runner
- * info, as it is now, but a collapsed fuel + collapsed oneline machine stuck
- * to it."*
- *
- * A function rather than a deleted branch because the rail keeps the row when
- * there is no machine dock to hand it to — an embed, a narrower surface, any
- * caller that renders the rail alone.
- */
-export function railKeepsLivePick(machineDocks: boolean): boolean {
-	return !machineDocks;
-}

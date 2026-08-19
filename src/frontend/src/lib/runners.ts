@@ -1,3 +1,5 @@
+import type { WithheldLane } from './withheld';
+
 // #328 spool rack: the runner catalog as the loom's thread inventory.
 // Types mirror `GET /v1/dashboard/runners` (`src/brnrd/routers/
 // dashboard.py::dashboard_runners_api`), which merges each
@@ -97,6 +99,15 @@ export interface RunnersResponse {
 	/** #932: the conversation-sticky in force, if any — the answer to "who
 	 *  wakes next *in the bound thread*", outranking `default` there. */
 	sticky?: RunnerSticky | null;
+	/** Mirrors the endpoint, deliberately unread. `dashboard.py` emits
+	 *  `_withheld_lane(repos, "runners")` on this response, but #1281 decided
+	 *  the rail must not restate a per-lane "paused —": runners and quota are
+	 *  the same account-level publish-scope fact `PublishConsentNotice`
+	 *  already states once, with the action. Keep the field — dropping it
+	 *  makes the type stop mirroring the wire and hides the lane's own
+	 *  withheld state from the next reader (`QuotaResponse.withheld` is kept
+	 *  for exactly this reason; the two must not drift apart). */
+	withheld?: WithheldLane;
 }
 
 export class RunnersAuthError extends Error {}
