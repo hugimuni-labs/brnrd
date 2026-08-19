@@ -63,13 +63,26 @@ class MessengerIdentities:
 @dataclass(frozen=True)
 class MessengerDoor:
     """One registry row — `GET /v1/dashboard/repos`'s `messenger_doors`
-    entry, verbatim (`to_wire`)."""
+    entry, verbatim (`to_wire`).
+
+    ``reason`` is a machine code, not a sentence — same house rule as the
+    rest of this module: the renderer owns the copy, this only says *why*
+    a dark door is dark, so "no code shipped for this connector at all"
+    (Slack, Signal — no mint lane exists, ever) can read differently from
+    "the connector is built but this deployment hasn't configured its
+    identity yet" (Telegram/WhatsApp with no bot token / Cloud API creds).
+    ``None`` when the door is lit."""
 
     platform: str
     deep_link_available: bool
+    reason: str | None = None
 
     def to_wire(self) -> dict:
-        return {"platform": self.platform, "deep_link_available": self.deep_link_available}
+        return {
+            "platform": self.platform,
+            "deep_link_available": self.deep_link_available,
+            "reason": self.reason,
+        }
 
 
 def env_only_identities(settings: Settings) -> MessengerIdentities:
@@ -183,13 +196,20 @@ _REGISTRY: tuple[_DoorDef, ...] = (
 PLATFORMS: tuple[str, ...] = tuple(d.platform for d in _REGISTRY)
 
 
+_NOT_BUILT = "not_built"
+_NOT_CONFIGURED = "not_configured"
+
+
 def messenger_doors(identities: MessengerIdentities) -> list[MessengerDoor]:
     """Every connector, in registry order — the wire array
     `GET /v1/dashboard/repos` ships as `messenger_doors`."""
     doors = []
     for d in _REGISTRY:
-        value = getattr(identities, d.identity_attr) if d.identity_attr else ""
-        doors.append(MessengerDoor(d.platform, bool(value)))
+        if d.identity_attr is None:
+            doors.append(MessengerDoor(d.platform, False, _NOT_BUILT))
+            continue
+        value = getattr(identities, d.identity_attr)
+        doors.append(MessengerDoor(d.platform, bool(value), None if value else _NOT_CONFIGURED))
     return doors
 
 

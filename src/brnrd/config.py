@@ -106,6 +106,15 @@ class Settings:
     # time, and a daemon that dies mid-drain resumes instead of restarting.
     inbox_page_limit: int = _env_int("BRNRD_INBOX_PAGE_LIMIT", 200)
     pair_ttl_s: int = _env_int("BRNRD_PAIR_TTL_S", 600)
+    # The messenger-door mint's own, shorter TTL (brr/every-door-on-the-page):
+    # a `TgPairCode` is a bearer link rendered on a page and tapped from a
+    # phone picked up mid-read, not a CLI polling loop — `pair_ttl_s` above
+    # is the device-connect flow's number and stays untouched. 3 minutes
+    # (not the 30s first floated) survives the realistic "read on a laptop,
+    # walk to the phone, unlock, find the app" path with a visible countdown
+    # and one-tap remint covering the rest; still short enough that a leaked
+    # link is dead well before anyone finds it in a screenshot or a log line.
+    messenger_pair_ttl_s: int = _env_int("BRNRD_MESSENGER_PAIR_TTL_S", 180)
     pack_relay_ttl_s: int = _env_int("BRNRD_PACK_RELAY_TTL_S", 3600)
     enable_dev_endpoints: bool = os.environ.get("BRNRD_ENABLE_DEV", "1") != "0"
     # #847 — where the built SvelteKit SPA lives. Empty means "the source
