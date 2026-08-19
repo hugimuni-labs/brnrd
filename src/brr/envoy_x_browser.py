@@ -69,6 +69,35 @@ pairs rather than one branching on "was a URL given" — a reply and an
 original are different acts, and a typo that turns one into the other
 (dropping a URL argument, say) is exactly the failure this whole module
 exists to make hard.
+
+**The receipt schema, and the collision it deliberately does not touch.**
+``url`` already means two different things across the rows this log
+carries: a hand-added ``kind: "post"`` row uses it for *the account's own
+post*; a ``send``-written reply row (below) uses it for *the post being
+replied to* — someone else's. Renaming either meaning was considered and
+rejected here: rows already on disk commit to the reply-target reading,
+and no reader inside this repo was found to depend on either (see
+``kb``/the receipt-log report this change shipped with) — but an
+account-private reader outside this repo's visibility is a real
+possibility this run could not rule out, so the safer edit is additive,
+not a rename. Three new keys, unambiguous in both lanes:
+
+- ``post_id`` — the id of *the post this row created*. ``_run_post``
+  always wrote this; ``_run_send`` now does too. Honest ``None`` when the
+  toast (browser lane) or the API response (below) yielded nothing —
+  never invented from the reply target's own id.
+- ``self_url`` — the canonical URL of *the post this row created*, or
+  omitted entirely (not ``null``) when ``post_id`` is ``None``: a URL
+  built around a missing id would name nothing. The browser lane asks the
+  live session for the account handle (``whoami``) rather than trusting a
+  config constant, at the cost of one extra page load, paid *after* the
+  send/post already completed so it cannot put the act itself at risk.
+- ``form`` — the caller-supplied rhetorical form of the post (``--form
+  <label>`` on ``send``/``post``, free text, run through
+  :func:`_dash_guard` like every other free-text argument this module
+  accepts), present only when passed. Not offered on ``draft``/
+  ``draft-post``: neither writes a receipt row at all, so a ``--form``
+  flag there would be argv nobody reads.
 """
 
 from __future__ import annotations
@@ -125,19 +154,35 @@ CONSENT_BANNER_TIMEOUT_MS = 4000
 #: How long to wait for the focal post's inline reply box to render.
 COMPOSER_TIMEOUT_MS = 15000
 
+#: `_PlaywrightDriver._scrape_metrics`'s fallback when the structural
+#: action-bar-group scrape finds nothing — kept as a fallback, not the
+#: primary path, precisely because a fixed list is the failure class this
+#: exists to guard against (see that method's docstring, 2026-08-19:
+#: bookmark and impression counts were both absent from the original
+#: three-member version). `bookmark` was added here the same day the gap
+#: was found. Whether an impression/view count is ever a same-shaped
+#: action-bar member with its own `data-testid` (vs. inline text rendered
+#: some other way) was **not verified live** — no browser/session was
+#: available to this change — so it is left off this list rather than
+#: guessed at; see the receipt-log report this change shipped with for
+#: what remains open.
+_METRIC_TESTIDS_FALLBACK = ("reply", "retweet", "like", "bookmark")
+
 TOP_USAGE = """\
 Usage: envoy-x-browser login
        envoy-x-browser check [--json]
        envoy-x-browser read <url> [--json]
        envoy-x-browser search <query> [--top] [--json]
        envoy-x-browser draft <url> --text "<s>"
-       envoy-x-browser send <url> --text "<s>" --confirm
+       envoy-x-browser send <url> --text "<s>" --confirm [--form <label>]
        envoy-x-browser draft-post --text "<s>"
-       envoy-x-browser post --text "<s>" --confirm
+       envoy-x-browser post --text "<s>" --confirm [--form <label>]
 
 send/post ship disarmed: BRR_X_BROWSER_SEND=1 in the environment AND
 --confirm on argv are both required, and both still refuse past the
 hourly cap (one shared bucket across both verbs).
+--form <label> records the caller's rhetorical form for the post verbatim
+in the receipt log; free text, absent when not passed.
 A kill-switch file (see Paths.kill_switch) refuses every verb but check.\
 """
 
@@ -181,11 +226,14 @@ path this prints, and stops. Never sends.\
 """
 
 SEND_USAGE = """\
-Usage: envoy-x-browser send <url> --text "<s>" --confirm
+Usage: envoy-x-browser send <url> --text "<s>" --confirm [--form <label>]
 
 Ships disarmed: refuses unless BOTH --confirm (this argv) and
 BRR_X_BROWSER_SEND=1 (environment) are present, and refuses independently
-once the hourly cap is spent.\
+once the hourly cap is spent.
+--form <label> is free text, recorded verbatim in the receipt log as the
+caller's rhetorical form for the post; absent when not passed. It cannot
+arm anything — it is checked and recorded, never read by the arming guard.\
 """
 
 DRAFT_POST_USAGE = """\
@@ -196,12 +244,15 @@ screenshots the result to a path this prints, and stops. Never sends.\
 """
 
 POST_USAGE = """\
-Usage: envoy-x-browser post --text "<s>" --confirm
+Usage: envoy-x-browser post --text "<s>" --confirm [--form <label>]
 
 Ships disarmed: refuses unless BOTH --confirm (this argv) and
 BRR_X_BROWSER_SEND=1 (environment) are present, and refuses independently
 once the hourly cap is spent (shared with the reply lane's `send`).
-Posts an original — no reply target, no <url> argument.\
+Posts an original — no reply target, no <url> argument.
+--form <label> is free text, recorded verbatim in the receipt log as the
+caller's rhetorical form for the post; absent when not passed. It cannot
+arm anything — it is checked and recorded, never read by the arming guard.\
 """
 
 
@@ -354,6 +405,26 @@ def _dash_guard(value: str, label: str) -> str:
     return value
 
 
+def _pop_form(args: list[str], usage: str) -> tuple[list[str], str | None]:
+    """Extract an optional ``--form <label>`` pair — the caller's
+    rhetorical form for the post, free text, recorded verbatim, absent
+    when not passed. Guarded through :func:`_dash_guard` like every other
+    free-text argument this module accepts: a form label rides an argv
+    that also carries a public act, and it must not be able to read as a
+    flag any more than ``url``/``text``/``query`` can. Popped before the
+    verb's own positional parsing so a form label never gets mistaken for
+    the url or text argument."""
+    args = list(args)
+    if "--form" not in args:
+        return args, None
+    i = args.index("--form")
+    if i + 1 >= len(args):
+        raise SystemExit(usage.strip() + "\n(--form needs a value)")
+    label = args[i + 1]
+    del args[i : i + 2]
+    return args, _dash_guard(label, "form")
+
+
 def _parse_single_arg(args: list[str], usage: str, label: str) -> str:
     if not args or "-h" in args or "--help" in args:
         raise SystemExit(usage.strip())
@@ -410,6 +481,26 @@ def _parse_text_only(args: list[str], usage: str) -> str:
 def _append_receipt(paths: Paths, record: dict[str, Any]) -> None:
     with open(paths.log, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(record) + "\n")
+
+
+def _self_url(driver: Any, post_id: str | None) -> str | None:
+    """The canonical URL of *the post this call just created*, or
+    ``None`` — never a URL built around a missing id.
+
+    Needs the account handle, which this asks the live session for
+    (``driver.whoami()``) rather than trusting a config constant that
+    could drift from whichever profile is actually logged in. That costs
+    one extra page load — ``whoami`` navigates to X's home timeline to
+    read the profile link — paid *after* the send/post already
+    completed, so it cannot put the act itself at risk; the trade is one
+    slower return for a handle that cannot be stale.
+    """
+    if post_id is None:
+        return None
+    handle = driver.whoami()
+    if not handle:
+        return None
+    return f"https://x.com/{handle}/status/{post_id}"
 
 
 # ── the playwright seam ──────────────────────────────────────────────
@@ -509,8 +600,62 @@ class _PlaywrightDriver:
             timestamp = article.locator("time").first.get_attribute("datetime", timeout=5000)
         except Exception:  # noqa: BLE001
             pass
+        return {
+            "url": url,
+            "author": self._first_text(article, '[data-testid="User-Name"]'),
+            "text": self._first_text(article, '[data-testid="tweetText"]'),
+            "timestamp": timestamp,
+            "metrics": self._scrape_metrics(article),
+        }
+
+    def _scrape_metrics(self, article: Any) -> dict[str, str]:
+        """Every metric the rendered article's action bar exposes, keyed
+        by its own ``data-testid`` — structural, not enumerated.
+
+        2026-08-19: the prior version was ``for testid in ("reply",
+        "retweet", "like")`` — a three-member hard-coded list. Bookmarks
+        were not in it. Neither were impressions. A set defined by
+        listing its members meets exactly the member nobody listed, and
+        the member that got missed was the one field the account's own
+        standing goal (bookmarks per post per form) is measured on.
+
+        X renders reply/retweet/like/bookmark/share as sibling buttons
+        inside one ``[role="group"]`` action bar, each carrying its own
+        ``data-testid``. Walking that group's children picks up whichever
+        ones X actually rendered — including a future member neither this
+        code nor its author has heard of — instead of a fixed tuple that
+        silently stops enumerating the day X adds or renames one.
+
+        Falls back to :data:`_METRIC_TESTIDS_FALLBACK` (now including
+        ``bookmark``) only if the group locator itself resolves to
+        nothing — a render this hasn't seen, or a genuinely metric-less
+        article. An empty dict from the structural pass is not enough on
+        its own to trust "the page truly has none": :meth:`count` can
+        answer 0 before client-side render finishes the way it did for
+        ``search`` (this file's own history — see that verb's comment).
+        The fallback pass is the same honest-absence contract either way:
+        a metric the page did not render is missing from the dict, never
+        written as 0.
+        """
         metrics: dict[str, str] = {}
-        for testid in ("reply", "retweet", "like"):
+        try:
+            group = article.locator('[role="group"]').first
+            buttons = group.locator('[data-testid]')
+            count = buttons.count()
+        except Exception:  # noqa: BLE001 - no group rendered; fall through
+            count = 0
+        for i in range(count):
+            try:
+                button = buttons.nth(i)
+                testid = button.get_attribute("data-testid", timeout=2000)
+                label = button.get_attribute("aria-label", timeout=2000) if testid else None
+            except Exception:  # noqa: BLE001 - one bad button must not lose the rest
+                testid = label = None
+            if testid and label:
+                metrics[testid] = label
+        if metrics:
+            return metrics
+        for testid in _METRIC_TESTIDS_FALLBACK:
             try:
                 label = article.locator(f'[data-testid="{testid}"]').first.get_attribute(
                     "aria-label", timeout=2000
@@ -519,13 +664,7 @@ class _PlaywrightDriver:
                 label = None
             if label:
                 metrics[testid] = label
-        return {
-            "url": url,
-            "author": self._first_text(article, '[data-testid="User-Name"]'),
-            "text": self._first_text(article, '[data-testid="tweetText"]'),
-            "timestamp": timestamp,
-            "metrics": metrics,
-        }
+        return metrics
 
     def search(self, query: str, *, tab: str = "live") -> list[dict[str, Any]]:
         params = {"q": query, "src": "typed_query", "f": SEARCH_TABS[tab]}
@@ -919,6 +1058,7 @@ def _run_post(args: list[str], paths: Paths, factory: DriverFactory) -> None:
         raise SystemExit(POST_USAGE.strip())
     _refuse_if_killed(paths)
     armed, missing, rest = _send_arming(args)
+    rest, form = _pop_form(rest, POST_USAGE)
     text = _parse_text_only(rest, POST_USAGE)
     if not armed:
         raise SystemExit(
@@ -936,8 +1076,9 @@ def _run_post(args: list[str], paths: Paths, factory: DriverFactory) -> None:
         driver.open_post_composer()
         driver.fill_text(text)
         post_id = driver.click_send()
+        self_url = _self_url(driver, post_id)
     _record_send(paths)
-    _append_receipt(paths, {
+    record = {
         "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "lane": "browser",
         "kind": "post",
@@ -947,7 +1088,12 @@ def _run_post(args: list[str], paths: Paths, factory: DriverFactory) -> None:
         # _PlaywrightDriver.click_send() returns None on anything short of
         # a clean id, and that None is written here, not papered over.
         "post_id": post_id,
-    })
+    }
+    if self_url is not None:
+        record["self_url"] = self_url
+    if form is not None:
+        record["form"] = form
+    _append_receipt(paths, record)
     print(
         f"posted (browser lane) · id {post_id}" if post_id
         else "posted (browser lane) · id unknown (page did not yield one)"
@@ -959,6 +1105,7 @@ def _run_send(args: list[str], paths: Paths, factory: DriverFactory) -> None:
         raise SystemExit(SEND_USAGE.strip())
     _refuse_if_killed(paths)
     armed, missing, rest = _send_arming(args)
+    rest, form = _pop_form(rest, SEND_USAGE)
     url, text = _parse_url_and_text(rest, SEND_USAGE)
     if not armed:
         raise SystemExit(
@@ -975,16 +1122,34 @@ def _run_send(args: list[str], paths: Paths, factory: DriverFactory) -> None:
     with factory(paths, headless=False) as driver:
         driver.open_reply_composer(url)
         driver.fill_text(text)
-        driver.click_send()
+        # Same contract _run_post already honours: explicit absence,
+        # never invented — a reply had no address at all before this,
+        # which is the whole of this change's title.
+        post_id = driver.click_send()
+        self_url = _self_url(driver, post_id)
     _record_send(paths)
-    _append_receipt(paths, {
+    record = {
         "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "lane": "browser",
+        # `url` keeps its established meaning in this row — the post
+        # being replied to, not the one this row created. See the module
+        # docstring's "receipt schema" section for why that stays
+        # untouched: `post_id`/`self_url` below are the new, unambiguous
+        # keys, additive rather than a rename.
         "url": url,
         "text": text,
         "confirm": True,
-    })
-    print(f"sent (browser lane) · reply-to {url}")
+        "post_id": post_id,
+    }
+    if self_url is not None:
+        record["self_url"] = self_url
+    if form is not None:
+        record["form"] = form
+    _append_receipt(paths, record)
+    print(
+        f"sent (browser lane) · reply-to {url} · id {post_id}" if post_id
+        else f"sent (browser lane) · reply-to {url} · id unknown (page did not yield one)"
+    )
 
 
 # ── dispatch ─────────────────────────────────────────────────────────
