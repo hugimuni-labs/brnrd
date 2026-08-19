@@ -28,7 +28,7 @@ test('no repo policy at all renders honestly, not as a fabricated default', () =
 
 test('the bench is mobile-first: bays stack before widening at md', () => {
 	assert.match(source, /grid gap-6 md:grid-cols-2/);
-	assert.doesNotMatch(source, /class="panel[^\"]*"/);
+	assert.doesNotMatch(source, /class="panel[^"]*"/);
 });
 
 test('every bench pick and inherited rack control has a 44px floor', () => {
