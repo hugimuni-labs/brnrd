@@ -111,7 +111,9 @@
 								>
 									{dispatchable ? '' : OFF_MARK}{repo.repo_full_name}
 								</span>
-								<span class="flex shrink-0 flex-col items-end font-mono text-[10px] leading-tight uppercase sm:flex-row sm:gap-2">
+								<span
+									class="flex shrink-0 flex-col items-end font-mono text-[10px] leading-tight uppercase sm:flex-row sm:gap-2"
+								>
 									{#if repo.dispatch_default}<span class="text-sky-300">default</span>{/if}
 									<span
 										class={repo.daemon_status === 'online' ? 'text-stone-400' : 'text-ink-mute'}
@@ -142,7 +144,9 @@
 						     already carry internally (`host · default` is a real
 						     environment name). -->
 						<span class="font-mono text-sm font-medium text-stone-100">{environment.name}</span>
-						<span class="flex shrink-0 flex-col items-end font-mono text-[10px] leading-tight uppercase sm:flex-row sm:gap-2">
+						<span
+							class="flex shrink-0 flex-col items-end font-mono text-[10px] leading-tight uppercase sm:flex-row sm:gap-2"
+						>
 							{#if environment.isDefault}<span class="text-sky-300">default</span>{/if}
 							<span class="text-ink-quiet">from repo policy</span>
 						</span>
@@ -161,7 +165,9 @@
 								: OFF_ROW}"
 						>
 							<span
-								class="font-mono text-sm font-medium {option.available ? 'text-stone-300' : 'text-ink-mute'}"
+								class="font-mono text-sm font-medium {option.available
+									? 'text-stone-300'
+									: 'text-ink-mute'}"
 							>
 								{option.available ? '' : OFF_MARK}{option.name}
 							</span>
@@ -215,7 +221,9 @@
 		margin-right: 0.5rem;
 		color: rgb(120 113 108);
 	}
-	.pick-row { min-height: 44px; }
+	.pick-row {
+		min-height: 44px;
+	}
 	.spool-bay :global([data-measure='spool-rack']) {
 		border: 0;
 		border-left: 3px solid rgb(87 83 78);
