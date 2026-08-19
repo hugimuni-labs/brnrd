@@ -84,6 +84,18 @@ export interface LiveRun {
 	// it says only that: the run is still running until the daemon's next sync
 	// finalizes it as `stopped`.
 	stop_requested?: boolean;
+	// #1510 ("the mood of a dead run"): this row's own source report is older
+	// than the freshness window — server-computed (`dashboard.py::
+	// _stamp_row_freshness`), same shape as `RunnerProfile.daemon_stale`
+	// (`runners.ts`) and `QuotaShell.daemon_stale` (`quota.ts`). `_live_runs_views`
+	// merges by `run_id` across every daemon on the account, freshest report
+	// per key wins — a run reported by a daemon that then retires is keyed
+	// only by its own `run_id`, so no live daemon ever overwrites it and it
+	// merge-survives indefinitely, frozen at whatever it last reported. Any
+	// consumer picking a leading/best row out of `runs` (`latestRunMood`,
+	// `pickLane.ts::pickRows`) must skip a row with this true, or a dead run's
+	// stale data can win the pick forever.
+	daemon_stale?: boolean | null;
 }
 
 export interface LiveRunsResponse {
@@ -241,11 +253,24 @@ export function moodFace(
  *  wears one face, and a board with several burning runs should show the
  *  newest thought's — that's the one whose state the reader is watching
  *  change. Runs with an unparseable `started_at` sort oldest rather than
- *  winning by accident. */
+ *  winning by accident.
+ *
+ *  #1510: a row with `daemon_stale === true` is skipped outright, never a
+ *  candidate. `_live_runs_views` merges by `run_id` across every daemon on
+ *  the account, freshest report per key wins — a run reported by a daemon
+ *  that then retires merge-survives indefinitely, frozen at whatever
+ *  `started_at` it last had. Comparing `started_at` alone lets a dead run
+ *  with a newer wall-clock start beat a genuinely live one forever; skipping
+ *  stale rows is the same guarantee `readTanks`/`isTappable` already give
+ *  the quota tank and the spool rack. Every live run stale ⇒ no candidate at
+ *  all ⇒ `null`, which is honest: nothing here is known to be live right
+ *  now, and `wordmarkMood` below already falls back to the daemon's own
+ *  resting face in that case. */
 export function latestRunMood(runs: LiveRun[] | null | undefined): MoodFace | null {
 	let best: LiveRun | null = null;
 	let bestAt = -Infinity;
 	for (const run of runs ?? []) {
+		if (run.daemon_stale === true) continue;
 		if (!moodFace(run.mood, run.mood_glyph, run.mood_pitch, run.mood_frames, run.mood_rest))
 			continue;
 		const started = run.started_at ? Date.parse(run.started_at) : NaN;

@@ -225,6 +225,43 @@ test('a summary shaped some other way is left as it arrived', () => {
 	assert.equal(rows[0].label, 'forge review needed');
 });
 
+// #1510 ("the mood of a dead run"): `_live_runs_views` merges by `run_id`
+// across every daemon on the account and sorts the result ascending by
+// `started_at`, so `RunBlock.svelte`'s `burning[0]` is whichever picking row
+// arrives first here. A run reported by a daemon that then retires
+// merge-survives indefinitely, frozen at its last-reported `started_at` — an
+// old one, which sorts *first* in ascending order and would otherwise win
+// "the machine" head's face, name, and mood forever over a run that is
+// actually burning right now.
+test('a stale merge-survivor is dropped from the picking lane, never leads the machine head', () => {
+	const rows = pickRows({
+		liveRuns: [
+			run({
+				id: 'zombie',
+				run_id: 'zombie',
+				started_at: at(-3 * 60 * MINUTE),
+				daemon_stale: true
+			} as Partial<LiveRun>),
+			run({ id: 'fresh', run_id: 'fresh', started_at: at(-1 * MINUTE) })
+		],
+		scheduledWakes: null,
+		now: NOW
+	});
+	assert.deepEqual(
+		rows.map((row) => row.id),
+		['fresh']
+	);
+});
+
+test('every picking run stale ⇒ nothing burning, not a dead one shown as live', () => {
+	const rows = pickRows({
+		liveRuns: [run({ id: 'zombie', run_id: 'zombie', daemon_stale: true } as Partial<LiveRun>)],
+		scheduledWakes: null,
+		now: NOW
+	});
+	assert.deepEqual(rows, []);
+});
+
 test("a burning run's live topic claim rides the row's crosses (the-run-that-claims-its-thread)", () => {
 	const rows = pickRows({
 		liveRuns: [run({ topics: ['the-loom', 'the-post'] }), run({ id: 'bare', run_id: 'bare' })],
