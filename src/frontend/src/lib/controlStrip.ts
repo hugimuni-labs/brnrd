@@ -33,6 +33,12 @@ export interface FuelRow {
 	timeRemaining: number | null;
 	tooltip: string;
 	stale: boolean;
+	/** This row's *daemon report* is stale (#1503) — distinct from `stale`
+	 *  above, which is the scrape-level fact the shell payload's own
+	 *  `updated_at` carries. A retired daemon's shell can merge-survive with
+	 *  no fresh `updated_at` ever contradicting it; this is the report-level
+	 *  fact that catches that case regardless. */
+	daemonStale: boolean;
 }
 
 /** Known window lengths by compact name; a window we can't size renders
@@ -236,8 +242,9 @@ export function fuelRows(shells: QuotaShell[], nowMs: number = Date.now()): Fuel
 				percentLabel,
 				resetShort,
 				timeRemaining,
-				tooltip: `${label}: ${percent === null ? 'unknown' : `${Math.round(percent)}% left`}${reset ? ` · ${reset}` : ''}${timeRemaining === null ? '' : ` · ${Math.round(timeRemaining * 100)}% of window left`}`,
-				stale: shell.status === 'stale'
+				tooltip: `${label}: ${percent === null ? 'unknown' : `${Math.round(percent)}% left`}${reset ? ` · ${reset}` : ''}${timeRemaining === null ? '' : ` · ${Math.round(timeRemaining * 100)}% of window left`}${shell.daemon_stale === true ? " · this shell's own daemon report is outdated" : ''}`,
+				stale: shell.status === 'stale',
+				daemonStale: shell.daemon_stale === true
 			};
 		})
 	);

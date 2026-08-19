@@ -83,6 +83,13 @@ export interface Tank {
 	committedDraw: number | null;
 	committedWakes: number;
 	stale: boolean;
+	/** This window's own *daemon report* is stale (#1503, "the tank of dead
+	 *  quotas") — distinct from `stale` above, which is the shell's
+	 *  scrape-level status. A retired daemon's shell can merge-survive with
+	 *  no live daemon ever reporting the same shell name to contradict it;
+	 *  `readTanks` uses this to keep such a window from leading over a fresh
+	 *  one, the same guarantee #1502 gave the spool rack. */
+	daemonStale: boolean;
 }
 
 function compactWindowName(window: QuotaWindow): { owner: string | null; window: string } {
@@ -356,7 +363,8 @@ export function readTank(
 		headline: headlineFor(verdict, remaining, projected, exhaustsInHours, hoursLeft),
 		committedDraw,
 		committedWakes,
-		stale: shell.status === 'stale'
+		stale: shell.status === 'stale',
+		daemonStale: shell.daemon_stale === true
 	};
 }
 
@@ -393,6 +401,12 @@ export function readTanks(
 		unknown: 3
 	};
 	return tanks.sort((a, b) => {
+		// A window whose own daemon report is stale never leads over a fresh
+		// one (#1503) — sorted ahead of the verdict comparison so it can only
+		// ever win the lead slot when every candidate is equally stale (no
+		// fresher alternative exists at all).
+		const byDaemonStale = Number(a.daemonStale) - Number(b.daemonStale);
+		if (byDaemonStale !== 0) return byDaemonStale;
 		const byVerdict = order[a.verdict] - order[b.verdict];
 		if (byVerdict !== 0) return byVerdict;
 		return a.remainingPercent - b.remainingPercent;
