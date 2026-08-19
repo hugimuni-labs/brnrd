@@ -453,6 +453,45 @@ def test_quota_failure_is_classified_for_attempt_and_terminal_packets(
     assert "runner quota was exhausted" in response
 
 
+def test_auth_health_follows_real_failure_and_success_dispatches(tmp_path, monkeypatch):
+    from brr import runner_auth_health
+
+    write_repo_scaffold(tmp_path)
+    _patch_runner(monkeypatch)
+    profile = daemon.runner.resolve_runner_profile(tmp_path, {"runner": "codex"})
+
+    def _auth_failure(_ctx, runner_name, invocation, _cfg, *, trace=False):
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="", stderr="authentication failed: 401", returncode=1,
+            trace_dir=None, artifacts=[],
+        )
+
+    monkeypatch.setattr(
+        daemon.envs, "get_env",
+        lambda _name: StubWorktreeEnv(invoke_fn=_auth_failure),
+    )
+    failed_event = make_event(
+        tmp_path, eid="evt-auth-failed", body="first", telegram_chat_id=411,
+    )
+    daemon._run_worker(
+        failed_event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+    assert runner_auth_health.is_auth_failed(tmp_path, profile)
+
+    monkeypatch.setattr(
+        daemon.envs, "get_env",
+        lambda _name: StubWorktreeEnv(invoke_fn=succeed_invoke()),
+    )
+    success_event = make_event(
+        tmp_path, eid="evt-auth-cleared", body="second", telegram_chat_id=412,
+    )
+    daemon._run_worker(
+        success_event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+    assert not runner_auth_health.is_auth_failed(tmp_path, profile)
+
+
 def test_relay_candidate_rides_attempt_failure_and_terminal_response(
     tmp_path, monkeypatch,
 ):
