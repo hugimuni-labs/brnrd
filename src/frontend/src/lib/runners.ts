@@ -21,9 +21,26 @@ export interface RunnerProfile {
 	capability_freshness?: string | null;
 	generated_core?: boolean | null;
 	availability?: string | null;
+	/** Tri-state, and the type says so: `true` (verified live), `false`
+	 *  (verified dead), and — the state a row missing this field used to
+	 *  render as `true` (2026-08-19, the rack of dead spools) — `null` /
+	 *  `undefined` for "this daemon's report didn't say". Absence of a fact
+	 *  is not the fact; see `spoolRack.ts::availabilityOf`, the one place
+	 *  that turns this into a render decision. */
 	available?: boolean | null;
 	/** True on the profile the daemon resolved as its current selection. */
 	selected?: boolean | null;
+	/** When this row's own source report was last received — distinct from
+	 *  `RunnersResponse.reported_at` (the account's newest report across
+	 *  every daemon). A dict merged by profile name across daemons can hold
+	 *  a row from a daemon that retired days ago while a *different* daemon
+	 *  keeps the account-wide timestamp looking fresh (dashboard.py's
+	 *  `_runners_views`) — this is the fact that lets a reader catch that. */
+	daemon_reported_at?: string | null;
+	/** This row's own source report is older than the freshness window —
+	 *  server-computed (`dashboard.py`), same threshold as the account-wide
+	 *  `stale` flag but scored per row instead of per account. */
+	daemon_stale?: boolean | null;
 }
 
 /** A pending spool-rack tap (#328 tap-to-request): "next wake on this
