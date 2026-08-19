@@ -289,6 +289,136 @@ def test_automatic_fallback_capability_sort_keeps_class_ceiling():
     assert chosen.name == "gemini-flash"
 
 
+def test_automatic_fallback_prefers_nearest_class_not_cheapest_core():
+    # Regression for the measured defect (run-260819-1626-zdf0): codex-full
+    # (strong) fails with auth_error and none of the candidates carry a
+    # capability_score — the arrangement production actually has. The old
+    # sort fell through to cost-rank-ascending across the whole eligible
+    # pool and landed on claude-haiku (economy), the weakest installed
+    # core. The fix must land on claude-opus: strong, like the failed
+    # runner, cheapest *within* strong.
+    runners = [
+        _profile(
+            "codex-full",
+            provider="openai",
+            quota_source="codex-local",
+            **{"class": "strong", "cost_rank": 45},
+        ),
+        _profile(
+            "claude-haiku",
+            provider="anthropic",
+            quota_source="claude-local",
+            **{"class": "economy", "cost_rank": 10},
+        ),
+        _profile(
+            "claude-sonnet",
+            provider="anthropic",
+            quota_source="claude-local",
+            **{"class": "balanced", "cost_rank": 30},
+        ),
+        _profile(
+            "claude-opus",
+            provider="anthropic",
+            quota_source="claude-local",
+            **{"class": "strong", "cost_rank": 50},
+        ),
+        _profile(
+            "claude-fable",
+            provider="anthropic",
+            quota_source="claude-local",
+            **{"class": "strong", "cost_rank": 55},
+        ),
+    ]
+
+    chosen = rs.automatic_fallback_runner(
+        runners,
+        current="codex-full",
+        failure_kind="auth_error",
+        tried=("codex-full",),
+    )
+
+    assert chosen is not None
+    assert chosen.name == "claude-opus"
+
+
+def test_automatic_fallback_nearest_class_yields_to_capability_within_class():
+    # Nearest-class wins the *class* choice; capability still breaks the tie
+    # among same-class candidates once a class is settled.
+    runners = [
+        _profile(
+            "codex-full",
+            provider="openai",
+            quota_source="codex-local",
+            **{"class": "strong", "cost_rank": 45},
+        ),
+        _profile(
+            "claude-haiku",
+            provider="anthropic",
+            quota_source="claude-local",
+            **{"class": "economy", "cost_rank": 10},
+        ),
+        _profile(
+            "claude-opus",
+            provider="anthropic",
+            quota_source="claude-local",
+            capability_score=0.4,
+            **{"class": "strong", "cost_rank": 50},
+        ),
+        _profile(
+            "claude-fable",
+            provider="anthropic",
+            quota_source="claude-local",
+            capability_score=0.9,
+            **{"class": "strong", "cost_rank": 55},
+        ),
+    ]
+
+    chosen = rs.automatic_fallback_runner(
+        runners,
+        current="codex-full",
+        failure_kind="auth_error",
+        tried=("codex-full",),
+    )
+
+    assert chosen is not None
+    assert chosen.name == "claude-fable"
+
+
+def test_automatic_fallback_economy_current_stays_economy_or_nothing():
+    # Pin: an economy current never escalates class even under the new
+    # nearest-class preference — the class filter (class_rank <= current)
+    # still runs before the sort sees anything.
+    runners = [
+        _profile(
+            "codex-mini",
+            provider="openai",
+            quota_source="codex-local",
+            **{"class": "economy", "cost_rank": 20},
+        ),
+        _profile(
+            "claude-sonnet",
+            provider="anthropic",
+            quota_source="claude-local",
+            **{"class": "balanced", "cost_rank": 30},
+        ),
+        _profile(
+            "claude-opus",
+            provider="anthropic",
+            quota_source="claude-local",
+            **{"class": "strong", "cost_rank": 50},
+        ),
+    ]
+
+    chosen = rs.automatic_fallback_runner(
+        runners,
+        current="codex-mini",
+        failure_kind="quota_exhausted",
+        tried=("codex-mini",),
+    )
+
+    assert chosen is None
+
+
 def test_automatic_fallback_picks_same_or_cheaper_different_domain():
     runners = [
         _profile(
