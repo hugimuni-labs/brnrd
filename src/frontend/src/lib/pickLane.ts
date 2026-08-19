@@ -209,7 +209,20 @@ export function pickRows(input: {
 		}))
 		.slice(0, ARMED_ROW_CAP);
 
-	const picking: PickRow[] = (liveRuns ?? []).map((run) => {
+	// #1510 ("the mood of a dead run"): `_live_runs_views` merges by `run_id`
+	// across every daemon on the account and the backend sorts the result
+	// ascending by `started_at` — so an unfiltered `[0]` downstream
+	// (`RunBlock.svelte`'s "machine" head) would be whichever row has the
+	// *oldest* `started_at`, and a run reported by a daemon that has since
+	// retired merge-survives indefinitely, frozen at its last-reported (and
+	// often oldest) `started_at`. Dropped here rather than downstream: every
+	// picking row is meant to be "burning right now", and a stale report is
+	// definitionally not that — same guarantee `readTank`/`isTappable` already
+	// give the quota tank and the spool rack. `urgency` below counts this
+	// filtered list too, so a merge-survivor can't manufacture a false
+	// "several runs competing for attention" reading on its own.
+	const freshRuns = (liveRuns ?? []).filter((run) => run.daemon_stale !== true);
+	const picking: PickRow[] = freshRuns.map((run) => {
 		const id = run.run_id || run.id;
 		return {
 			id,
@@ -219,7 +232,7 @@ export function pickRows(input: {
 			clock: elapsedClock(run, now),
 			note: run.stop_requested ? 'stopping…' : null,
 			color: THERMAL_STOPS.amber,
-			urgency: (liveRuns ?? []).length > 1 ? ('attention' as const) : ('calm' as const),
+			urgency: freshRuns.length > 1 ? ('attention' as const) : ('calm' as const),
 			barFraction: 1,
 			serves: servesByRun.get(id) ?? [],
 			// A live run's threads: its own claimed topics off the wire
