@@ -4820,6 +4820,10 @@ def _build_run_context_bundle(
 
     sections.append("")
     sections.append("### Run")
+    from . import parked_branches
+    parked_line = parked_branches.render(parked_branches.detect(repo_root))
+    if parked_line:
+        sections.append(f"- {parked_line}")
     sections.append(f"- Event: {event_id}")
     # #1491: the age travels with the event past the boot kernel's own
     # trimming — the kernel line is the first thing read, but it is not the
