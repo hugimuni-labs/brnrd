@@ -580,7 +580,10 @@ def test_produce_line_is_silent_when_empty(tmp_path):
     assert "produce:" not in out["hookSpecificOutput"]["additionalContext"]
 
 
-def test_produce_only_does_not_open_mid_run_render_gate(tmp_path):
+def test_produce_renders_once_on_change_then_goes_quiet(tmp_path):
+    # w-54: a produce *change* is news worth one compact chip — the old rule
+    # ("mere produce chatter must not open the gate") survives as its second
+    # half: once rendered, an unchanged count renders nothing at all.
     path = _portal(
         tmp_path, token="t1", pending=0,
         produce={
@@ -592,7 +595,10 @@ def test_produce_only_does_not_open_mid_run_render_gate(tmp_path):
         },
     )
     payload = json.loads(path.read_text(encoding="utf-8"))
-    assert hooks.format_delta(payload) is None
+    seen: dict[str, str] = {}
+    first = hooks.format_delta(payload, rendered_chips=seen)
+    assert first is not None and "⚒2" in first.splitlines()[0]
+    assert hooks.format_delta(payload, last_chips=seen) is None
 
 
 def test_midrun_nudges_unwritten_run_name_but_stop_does_not(tmp_path):
@@ -623,14 +629,18 @@ def test_post_tool_surfaces_stale_card(tmp_path):
     assert "rewrite .card" in ctx
 
 
-def test_post_tool_silent_when_card_fresh(tmp_path):
+def test_post_tool_says_nothing_about_a_fresh_card(tmp_path):
+    # w-54: a healthy card renders no chip at all — the first boundary may
+    # still carry other first-render content (the topic nudge, the ticker),
+    # but nothing about the card.
     _portal(
         tmp_path, token="t1", pending=0,
         card={"active": True, "text": "fresh note", "age_seconds": 5,
               "stale": False},
     )
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
-    assert "hookSpecificOutput" not in out
+    ctx = (out.get("hookSpecificOutput") or {}).get("additionalContext") or ""
+    assert "card" not in ctx
 
 
 def test_seed_surfaces_resources_with_known_quota_and_gaps(tmp_path):
@@ -3327,16 +3337,22 @@ def _bar_payload(**overrides):
 
 
 def test_post_tool_bar_renders_every_segment_when_laden():
+    # w-54 grammar: the static `⌁[<face>]:` preamble (a resolved mood lives
+    # there, not in a chip), then only laden chips — no run id, no `card ok`.
     rendered = hooks.format_delta(_bar_payload(), mood="smug_")
     bar = rendered.splitlines()[0]
 
+    glyph = hooks._emote_glyph("smug_")
+    assert glyph  # the fixture is a real handle, or this pins nothing
     assert bar == (
-        "⌁ 3jy8 │ ⏱ 16/120m │ q S57·W50·F27 │ ▷1 │ rb3h │ ⇡2+3 │ ⚒4 │ "
-        "mood brnrd smug_ │ card ok"
+        f"⌁[{glyph}]: ⏱ 16/120m │ q S57·W50·F27 │ ▷1 │ rb3h │ ⇡2+3 │ ⚒4"
     )
 
 
-def test_post_tool_bar_is_quiet_when_nothing_is_laden():
+def test_post_tool_bar_is_quiet_when_chips_stand_unchanged():
+    # w-54: quiet is not "nothing is laden" — it is "nothing moved since the
+    # last rendered bar". First boundary renders everything once; the same
+    # payload against its own rendered chips injects nothing at all.
     payload = _bar_payload(
         budget={"elapsed_seconds": 60, "budget_seconds": 7200},
         outbound={"replies_current": 0, "replies_other": 0,
@@ -3344,12 +3360,15 @@ def test_post_tool_bar_is_quiet_when_nothing_is_laden():
         produce={"known": False, "counts": {}},
         resources={},
     )
-    assert hooks.format_delta(payload) is None
+    seen: dict[str, str] = {}
+    first = hooks.format_delta(payload, rendered_chips=seen)
+    assert first is not None  # everything is news exactly once
+    assert hooks.format_delta(payload, last_chips=seen) is None
 
 
-def test_post_tool_bar_short_when_only_run_id_and_budget_move():
-    # A boundary with nothing to act on still renders a *short* bar when
-    # something genuinely laden triggers it — here, a known quota bucket.
+def test_post_tool_bar_renders_only_the_chips_that_moved():
+    # The ticker moved, the quota did not: the bar carries the preamble and
+    # the one changed chip, nothing else.
     payload = _bar_payload(
         budget={"elapsed_seconds": 16 * 60, "budget_seconds": 120 * 60},
         outbound={"replies_current": 0, "replies_other": 0,
@@ -3357,9 +3376,11 @@ def test_post_tool_bar_short_when_only_run_id_and_budget_move():
         produce={"known": False, "counts": {}},
         resources={"quota": {"status": "known", "summary": "week 80% left"}},
     )
-    rendered = hooks.format_delta(payload)
-    bar = rendered.splitlines()[0]
-    assert bar == "⌁ 3jy8 │ ⏱ 16/120m │ q W80 │ card ok"
+    seen: dict[str, str] = {}
+    hooks.format_delta(payload, rendered_chips=seen)
+    payload["budget"] = {"elapsed_seconds": 17 * 60, "budget_seconds": 120 * 60}
+    rendered = hooks.format_delta(payload, last_chips=seen)
+    assert rendered.splitlines()[0] == "⌁[·]: ⏱ 17/120m"
 
 
 def test_post_tool_bar_pending_events_always_get_a_detail_line():
@@ -3610,17 +3631,18 @@ def test_armed_entry_is_due_helper_directly():
 # ── The `.mood` control channel (#566 layer 2) ───────────────────────────
 
 
-def test_post_tool_mood_renders_as_a_bar_segment(tmp_path):
-    # Display, no ask: a quiet boundary shows the face and says nothing about
-    # it. The old unconditional "·keep?" asked at every boundary, which is the
-    # habituation this module already names one segment over (2026-07-23).
+def test_post_tool_mood_renders_in_the_preamble(tmp_path):
+    # w-54: the steady face lives in the bar's one static element —
+    # `⌁[<face>]:` — not in a chip. Display, no ask, no repetition cost:
+    # the preamble decorates only lines that news already opened.
     _portal(tmp_path, token="t1", pending=1,
             events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
     (tmp_path / hooks.MOOD_NAME).write_text("bo_Od\n", encoding="utf-8")
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    # Glyph-prefixed: `bo_Od` is a real handle, so the face renders (#601 seam).
-    assert "mood b·_·d bo_Od" in ctx
+    # Glyph in the brackets: `bo_Od` is a real handle (#601 seam).
+    assert ctx.splitlines()[0].startswith("⌁[b·_·d]:")
+    assert "mood b·_·d" not in ctx  # no chip for a resolved, unsurprised face
     assert "keep?" not in ctx
     assert "←" not in ctx
 
@@ -4234,17 +4256,17 @@ def test_orient_prunes_state_paths_that_left_the_set(tmp_path):
 
 def test_orient_bar_position_is_after_quota():
     rendered = hooks.format_delta(_bar_payload(), mood="smug_", orient=(3, 5))
+    glyph = hooks._emote_glyph("smug_")
     assert rendered.splitlines()[0] == (
-        "⌁ 3jy8 │ ⏱ 16/120m │ q S57·W50·F27 │ orient 3/5 │ ▷1 │ rb3h │ "
-        "⇡2+3 │ ⚒4 │ mood brnrd smug_ │ card ok"
+        f"⌁[{glyph}]: ⏱ 16/120m │ q S57·W50·F27 │ orient 3/5 │ ▷1 │ rb3h │ "
+        "⇡2+3 │ ⚒4"
     )
 
 
-def test_orient_never_opens_the_bar_on_its_own():
-    # The same quiet payload test_post_tool_bar_is_quiet_when_nothing_is_laden
-    # pins as None must stay None with an open walk riding along: a meter is
-    # not an obligation, and a segment that could keep the bar alive at every
-    # boundary would train the exact skimming it measures.
+def test_orient_stands_quiet_while_the_walk_does_not_move():
+    # w-54's spelling of the same rule: a meter that could keep the bar
+    # alive at every boundary would train the exact skimming it measures —
+    # an unchanged `orient 0/3` is not news and renders nothing.
     payload = _bar_payload(
         budget={"elapsed_seconds": 60, "budget_seconds": 7200},
         outbound={"replies_current": 0, "replies_other": 0,
@@ -4252,8 +4274,12 @@ def test_orient_never_opens_the_bar_on_its_own():
         produce={"known": False, "counts": {}},
         resources={},
     )
-    assert hooks.format_delta(payload) is None  # the twin that proves quiet
-    assert hooks.format_delta(payload, orient=(0, 3)) is None
+    seen: dict[str, str] = {}
+    hooks.format_delta(payload, orient=(0, 3), rendered_chips=seen)
+    assert hooks.format_delta(payload, orient=(0, 3), last_chips=seen) is None
+    # A walked file is a move, and a move is news.
+    moved = hooks.format_delta(payload, orient=(1, 3), last_chips=seen)
+    assert moved is not None and "orient 1/3" in moved.splitlines()[0]
 
 
 # ── #616: notices segment and spawn_completed closeout rendering ─────────────
@@ -4286,17 +4312,21 @@ def test_notices_chip_absent_at_zero():
     assert "!" not in (rendered_empty.splitlines()[0] if rendered_empty else "")
 
 
-def test_notices_chip_position_is_after_produce_before_card():
-    """!N appears after produce (⚒) and before card — absent at zero, present
-    at 1.  Order: ... │ ⚒N │ !N │ mood ... │ card ok
+def test_notices_chip_position_is_after_produce():
+    """!N appears after produce (⚒) — absent at zero, present at 1.
+
+    The old tail anchors are gone by design (w-54): a resolved mood lives in
+    the preamble, and a healthy card renders no chip at all.
     """
     notices = [{"at": "2026-07-24T03:36:00Z", "text": "spawn dropped: no inbox"}]
     rendered = hooks.format_delta(_bar_payload(notices=notices), mood="smug_")
     bar = rendered.splitlines()[0]
     # !1 is present
     assert "!1" in bar
-    # Order: ⚒ before !1 before mood before card
-    assert bar.index("⚒") < bar.index("!1") < bar.index("mood") < bar.index("card ok")
+    # Order: ⚒ before !1; nothing about a healthy card, no mood chip
+    assert bar.index("⚒") < bar.index("!1")
+    assert "card" not in bar
+    assert "mood" not in bar
 
 
 def test_notices_chip_carries_a_discharge_detail_line():
@@ -4554,7 +4584,7 @@ def test_card_chip_meters_the_projection_not_the_file():
     chip = hooks._card_chip(
         {"active": True, "text": big_file_small_now}, card_stale=False
     )
-    assert chip == "card ok"
+    assert chip is None  # healthy: silence is the ok (w-54)
 
     small_file_big_now = "## Now\n" + "y" * (cap + 20)
     assert len(small_file_big_now) < 2 * cap
@@ -4565,13 +4595,13 @@ def test_card_chip_meters_the_projection_not_the_file():
 
     # The H1 card that started it: identical content, one heading level apart.
     h1 = "# Now\nfine\n\n# Arc\n" + "history. " * 5000
-    assert hooks._card_chip({"active": True, "text": h1}, card_stale=False) == "card ok"
+    assert hooks._card_chip({"active": True, "text": h1}, card_stale=False) is None
 
     # Unchanged verdicts.
     assert hooks._card_chip({"active": False}, card_stale=False) == "card blank"
     assert hooks._card_chip({"active": True}, card_stale=True) == "card stale"
     # A capsule with no body to measure is not a failure verdict.
-    assert hooks._card_chip({"active": True}, card_stale=False) == "card ok"
+    assert hooks._card_chip({"active": True}, card_stale=False) is None
 
 
 def test_closeout_excludes_spawn_completed_from_obligation_count():
@@ -5003,19 +5033,23 @@ def test_census_fields_degrade_one_at_a_time(tmp_path):
     assert "oldest" not in bar
 
 
-def test_census_never_opens_the_bar_on_its_own(tmp_path):
-    """A value constant for a whole run must not manufacture a boundary.
+def test_census_renders_once_then_never_again(tmp_path):
+    """A value constant for a whole run renders exactly once (w-54).
 
-    Same rule the orientation meter keeps: the census rides bars the portal
-    would have rendered anyway. Positive twin: the identical score with one
-    pending event renders it (asserted above).
+    The census is static by construction, so change-gating gives it one
+    appearance — the first rendered bar — and silence forever after: a
+    run-long constant repeated is the wallpaper the redesign strips.
     """
     _census_score(tmp_path, contracts=_CENSUS_BLOCKS, prompt_bytes=115714)
     _portal(tmp_path, token="t1", pending=0)
-    out, _ = hooks.run_hook(
+    first, _ = hooks.run_hook(
         hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
     )
-    assert "wake " not in _inject_text(out)
+    assert "wake " in _inject_text(first)
+    second, _ = hooks.run_hook(
+        hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
+    )
+    assert "wake " not in _inject_text(second)
 
 
 # ── Boundary transcript ──────────────────────────────────────────────────
@@ -5276,15 +5310,15 @@ def test_every_bar_segment_declares_its_class():
     assert hooks.SEGMENT_CLASS["pending_unknown"] == hooks.OBLIGATION
 
 
-def test_a_quiet_boundary_keeps_the_vitals_and_drops_the_wallpaper():
-    """The maintainer's rule, rendered.
+def test_a_quiet_boundary_drops_even_the_vitals_once_seen():
+    """The maintainer's w-54 rule, rendered: everything renders on change.
 
-    *Every notification is actionable and turn-off-able — unless it is a
-    necessary tick update: cost, execution time, spawns.* So a boundary
-    with no ambient news still carries cost and quota (VITAL: no
-    discharge, and losing them would cost the cost-awareness the whole
-    exemption exists for) and drops the ones that are neither news nor
-    obligation.
+    The #1116 exemption ("a vital must survive the quiet boundary") is
+    superseded by per-chip change-gating: an *unchanged* quota reading is
+    the number you already saw, and a boundary where nothing moved injects
+    nothing at all. The vital's protection survives as the other half —
+    the moment it moves, it renders, and threshold crossings still open
+    the line from the caller's side.
     """
     payload = _bar_payload(
         budget={"elapsed_seconds": 60, "budget_seconds": 7200},
@@ -5293,20 +5327,27 @@ def test_a_quiet_boundary_keeps_the_vitals_and_drops_the_wallpaper():
                   "outbound_messages": 0},
         produce={"known": False, "counts": {}},
     )
+    seen: dict[str, str] = {}
     loud = hooks.format_delta(payload, orient=(1, 3), census="wake 40 KB",
-                              ambient_emit=True)
-    quiet = hooks.format_delta(payload, orient=(1, 3), census="wake 40 KB",
-                               ambient_emit=False)
+                              rendered_chips=seen)
+    assert loud is not None
+    assert "q S80" in loud and "wake 40 KB" in loud and "orient 1/3" in loud
 
-    assert loud is not None and quiet is not None
-    # Vitals survive: this is the exemption, and it is the difference
-    # between cost-aware navigation and a number you see twice a run.
-    assert "⏱" in quiet and "q S" in quiet
-    # Obligations survive.
-    assert "orient 1/3" in quiet
-    # Wallpaper does not: a run-long constant is neither news nor a debt.
-    assert "wake 40 KB" in loud
-    assert "wake 40 KB" not in quiet
+    # Nothing moved ⇒ nothing at all — vitals included.
+    quiet = hooks.format_delta(payload, orient=(1, 3), census="wake 40 KB",
+                               last_chips=seen)
+    assert quiet is None
+
+    # A vital that moved is news again; the wallpaper stays down.
+    payload["resources"] = {
+        "quota": {"status": "known", "summary": "session 79% left"},
+    }
+    again = hooks.format_delta(payload, orient=(1, 3), census="wake 40 KB",
+                               last_chips=seen)
+    assert again is not None
+    bar = again.splitlines()[0]
+    assert "q S79" in bar
+    assert "wake 40 KB" not in bar and "orient" not in bar
 
 
 # ── The in-process subagent boundary (#1095) ─────────────────────────────
@@ -5836,3 +5877,106 @@ def test_stop_names_the_annotated_count_on_a_forced_accept(tmp_path):
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert "bolt: accepted, annotated — 2 check(s) unresolved" in ctx
+
+
+# ── w-54: the line that learned silence ──────────────────────────────────
+#
+# The 2026-08-19 statusline redesign (evt-…-xw3c, signed "lets build this
+# shape"): a static `⌁[<mood>]:` preamble, every chip change-gated, a
+# healthy card silent, no run-id chip, the ticker limitless by default, and
+# the course drift trigger — the reminder keyed to evidence of divergence
+# (work moved, route didn't) instead of a clock.
+
+
+def test_bar_preamble_forms():
+    # The one static element: the bolt, then the resident's own face.
+    assert hooks._bar_preamble(None) == "⌁[·]:"
+    assert hooks._bar_preamble("") == "⌁[·]:"
+    # A real handle renders its base frame (#601 seam).
+    assert hooks._bar_preamble("bo_Od") == "⌁[b·_·d]:"
+    # An unresolved handle is a miss, marked — never a guess, never silence.
+    assert hooks._bar_preamble("no-such-face") == "⌁[✗]:"
+
+
+def test_ticker_renders_elapsed_alone_when_no_limit_is_configured():
+    # No default time limit (w-54): the `x/ym` form exists only when the
+    # user configured one; otherwise the ticker ticks alone.
+    assert hooks._budget_chip({"elapsed_seconds": 41 * 60}) == "⏱ 41m"
+    assert hooks._budget_chip(
+        {"elapsed_seconds": 41 * 60, "budget_seconds": 120 * 60}
+    ) == "⏱ 41/120m"
+    assert hooks._budget_chip({}) is None
+
+
+def test_unresolved_mood_keeps_its_near_miss_chip():
+    # The steady face moved to the preamble, but the unresolved-handle
+    # honesty stays a chip: a face that resolves to no emote is actionable.
+    rendered = hooks.format_delta(_bar_payload(), mood="satisfied")
+    bar = rendered.splitlines()[0]
+    assert bar.startswith("⌁[✗]:")
+    assert "mood ✗ satisfied" in bar
+
+
+def test_course_drift_resurfaces_the_route_after_three_work_deltas(tmp_path):
+    # The course reminder, keyed to divergence: three work-deltas (produce
+    # movement here) with no route edit re-surface the current row once —
+    # no timer, no message-tax, and the act that clears it (editing the
+    # card) is the act it asks for.
+    (tmp_path / hooks.CARD_NAME).write_text(
+        "## Now\nbuilding\n\n## Plan\n- [x] a\n- [ ] b\n", encoding="utf-8"
+    )
+    env = _env(tmp_path)
+
+    def portal(token, commits):
+        _portal(
+            tmp_path, token=token, pending=0,
+            produce={"known": True, "counts": {"commit": commits}},
+        )
+
+    portal("t1", 0)
+    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)  # route_edge: course seen
+
+    texts = []
+    for i, tok in enumerate(["t2", "t3", "t4"], start=1):
+        portal(tok, i)
+        out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+        texts.append(_inject_text(out))
+
+    drift_mark = "the run has moved 3× since the route did"
+    assert drift_mark not in texts[0]
+    assert drift_mark not in texts[1]
+    assert drift_mark in texts[2]
+    # And the counter re-armed rather than latching: the drift boundary
+    # itself resets it, so the next delta alone does not re-fire.
+    portal("t5", 4)
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    assert drift_mark not in _inject_text(out)
+
+
+def test_course_edit_resets_the_drift_counter(tmp_path):
+    (tmp_path / hooks.CARD_NAME).write_text(
+        "## Now\nbuilding\n\n## Plan\n- [x] a\n- [ ] b\n", encoding="utf-8"
+    )
+    env = _env(tmp_path)
+
+    def portal(token, commits):
+        _portal(
+            tmp_path, token=token, pending=0,
+            produce={"known": True, "counts": {"commit": commits}},
+        )
+
+    portal("t1", 0)
+    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    portal("t2", 1)
+    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    portal("t3", 2)
+    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    # Two deltas in — the resident touches the route, which is the act the
+    # drift asks for; the counter starts over.
+    (tmp_path / hooks.CARD_NAME).write_text(
+        "## Now\nbuilding\n\n## Plan\n- [x] a\n- [x] b\n- [ ] c\n",
+        encoding="utf-8",
+    )
+    portal("t4", 3)
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    assert "the run has moved 3× since the route did" not in _inject_text(out)
