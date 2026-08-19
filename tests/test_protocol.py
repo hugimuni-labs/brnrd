@@ -1,6 +1,7 @@
 """Tests for protocol module — event/response CRUD and frontmatter parsing."""
 
 import ast
+import os
 from pathlib import Path
 
 import pytest
@@ -816,3 +817,43 @@ def test_outbox_routing_keys_cover_every_verb_the_drain_handles():
         f"actual dispatch — missing: {sorted(derived - configured)}, "
         f"stale: {sorted(configured - derived)}"
     )
+
+
+def test_pending_order_is_total_when_created_and_mtime_both_tie(tmp_path):
+    """A burst ties on `created` (whole-second) and can tie on mtime too.
+    The key must still be a *total* order, or "which sibling is third" gets
+    two different answers on two machines.
+
+    This is the regression CI caught on `5506ceb0` while the same suite was
+    green locally: with only `(created, mtime)`, a tie in both fell through
+    to `sort`'s stability, i.e. to whatever `os.scandir` yielded — arbitrary,
+    and arbitrary differently per filesystem. Here both components are tied
+    *deliberately*, so the test fails on any machine without the filename
+    tiebreak rather than only on the ones with coarse mtimes.
+
+    It matters because `_defer_pending_siblings_after_failure` stamps a
+    monotonically increasing release time by list position: a non-total order
+    means a sibling's release slot is not reproducible.
+    """
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    names = ["evt-s02", "evt-s00", "evt-s03", "evt-s01"]
+    for name in names:
+        (inbox / f"{name}.md").write_text(
+            "---\n"
+            f"id: {name}\n"
+            "source: test\n"
+            "status: pending\n"
+            "created: 2026-08-19T12:00:00Z\n"
+            "---\n\nbody\n",
+            encoding="utf-8",
+        )
+    # Every file, the same mtime to the nanosecond — the tie CI produced by
+    # simply being fast.
+    for name in names:
+        os.utime(inbox / f"{name}.md", ns=(1_700_000_000_000_000_000,
+                                           1_700_000_000_000_000_000))
+
+    order = [ev["id"] for ev in protocol.list_pending(inbox)]
+
+    assert order == ["evt-s00", "evt-s01", "evt-s02", "evt-s03"]
