@@ -534,6 +534,76 @@ describe('goal readings (design-goal-oriented-engineering.md §"a metrics block 
 		assert.equal(conversion.count, 1);
 	});
 
+	// Mirrors `tests/test_items.py`'s basis-guard cases (`items.py`'s
+	// `_reading_basis` / `reading_summary`) — the "in lockstep" comment atop
+	// this file's readings section names that Python module as the source of
+	// truth this must not drift from.
+
+	it('summarizeGoalReadings: same explicit basis renders a real delta', () => {
+		const readings = parseGoalReadings(
+			[
+				'{"ts": "2026-08-01T00:00:00Z", "key": "impressions", "value": 100, "source": "x-api", "basis": "window5"}',
+				'{"ts": "2026-08-02T00:00:00Z", "key": "impressions", "value": 150, "source": "x-api", "basis": "window5"}'
+			].join('\n')
+		);
+		const info = summarizeGoalReadings(readings).get('impressions')!;
+		assert.equal(info.delta, 50);
+		assert.equal(info.basisMismatch, false);
+	});
+
+	it('summarizeGoalReadings: cross-basis pair suppresses delta and flags basisMismatch', () => {
+		// The live bug shape: same key, same source, incompatible
+		// denominators (a lifetime sum then a 5-item window sum) — distinct
+		// `basis` values must gate the Δ even though `source` alone doesn't.
+		const readings = parseGoalReadings(
+			[
+				'{"ts": "2026-08-15T13:18:00Z", "key": "impressions", "value": 333, "source": "x-api", "basis": "lifetime"}',
+				'{"ts": "2026-08-16T20:50:00Z", "key": "impressions", "value": 147, "source": "x-api", "basis": "window5"}'
+			].join('\n')
+		);
+		const info = summarizeGoalReadings(readings).get('impressions')!;
+		assert.equal(info.delta, null);
+		assert.equal(info.basisMismatch, true);
+		// The refused comparison still surfaces both endpoints.
+		assert.equal(info.latest.value, 147);
+		assert.equal(info.previous?.value, 333);
+	});
+
+	it('summarizeGoalReadings: missing basis on both falls back to source and still compares', () => {
+		const readings = parseGoalReadings(
+			[
+				'{"ts": "2026-08-01T00:00:00Z", "key": "posts", "value": 14, "source": "x-api"}',
+				'{"ts": "2026-08-02T00:00:00Z", "key": "posts", "value": 17, "source": "x-api"}'
+			].join('\n')
+		);
+		const info = summarizeGoalReadings(readings).get('posts')!;
+		assert.equal(info.delta, 3);
+		assert.equal(info.basisMismatch, false);
+		assert.equal(readings[0].basis, null);
+
+		// And the second live-bug shape: no explicit basis, but `source`
+		// crosses a collector boundary — still caught via the fallback.
+		const crossed = parseGoalReadings(
+			[
+				'{"ts": "2026-08-01T00:00:00Z", "key": "posts", "value": 14, "source": "x-api"}',
+				'{"ts": "2026-08-02T00:00:00Z", "key": "posts", "value": 17, "source": "x-api"}',
+				'{"ts": "2026-08-03T00:00:00Z", "key": "posts", "value": 19, "source": "local-post-log"}'
+			].join('\n')
+		);
+		const crossedInfo = summarizeGoalReadings(crossed).get('posts')!;
+		assert.equal(crossedInfo.delta, null);
+		assert.equal(crossedInfo.basisMismatch, true);
+	});
+
+	it('summarizeGoalReadings: one sample has no previous — no delta, no basisMismatch', () => {
+		const readings = parseGoalReadings(
+			'{"ts": "2026-08-01T00:00:00Z", "key": "conversion", "value": 0.5, "source": "m"}'
+		);
+		const info = summarizeGoalReadings(readings).get('conversion')!;
+		assert.equal(info.delta, null);
+		assert.equal(info.basisMismatch, false);
+	});
+
 	it('readingsNewestFirst orders by ts descending without mutating the input', () => {
 		const readings = parseGoalReadings(
 			[

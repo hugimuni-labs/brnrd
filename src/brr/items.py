@@ -667,13 +667,38 @@ def render_index(
 
 @dataclass(frozen=True)
 class Reading:
-    """One parsed sample line. ``note`` is ``None`` when the line omitted it."""
+    """One parsed sample line. ``note`` is ``None`` when the line omitted it.
+
+    ``basis`` names the measurement population a value was drawn from — a
+    5-item rolling window vs a lifetime sum, replies-included vs
+    replies-excluded, whatever makes two same-``key`` values arithmetically
+    incompatible. It is distinct from ``source`` (the transport/collector
+    that produced the number): two readings can share a source and still
+    measure different populations (issue: a lifetime sum and a 5-item
+    window both recorded as ``source: x-api``), so ``source`` alone cannot
+    gate a delta. ``None`` when the writer didn't set one — comparisons then
+    fall back to ``source`` (see ``_reading_basis``), which is a superset of
+    the old, no-``basis`` behaviour, not a new default that reopens old
+    data. A caller wanting a delta to render must give both readings the
+    same explicit ``basis`` whenever they are not already drawn from the
+    same collector."""
 
     ts: str
     key: str
     value: float
     source: str
     note: str | None = None
+    basis: str | None = None
+
+
+def _reading_basis(reading: Reading) -> str:
+    """The value two readings must share for a Δ between them to be
+    constructible. Explicit ``basis`` wins; absent one, ``source`` is the
+    best available population signal — it's what already separated the
+    ``x-api`` / ``local-post-log`` post-count crossover, and it costs
+    nothing for a writer who never set ``basis`` to keep comparing the way
+    they always did."""
+    return reading.basis if reading.basis else reading.source
 
 
 def _now_iso() -> str:
@@ -706,17 +731,31 @@ def append_reading(
     *,
     source: str = "",
     note: str | None = None,
+    basis: str | None = None,
     ts: str | None = None,
 ) -> Reading:
     """Append one sample line; mints the file on first use. The caller
     resolves ``goal_id`` against a real goal first (``brnrd goal record``
     refuses an unknown id the way the item verbs do) — this function itself
     does not check, so it stays the one place both the CLI and tests can
-    write a reading without round-tripping through argument parsing."""
-    reading = Reading(ts=ts or _now_iso(), key=key, value=float(value), source=source, note=note or None)
+    write a reading without round-tripping through argument parsing.
+
+    ``basis`` — see ``Reading`` — is only written when given, same as
+    ``note``, so a plain reading stays the same three-or-four-field line it
+    always was."""
+    reading = Reading(
+        ts=ts or _now_iso(),
+        key=key,
+        value=float(value),
+        source=source,
+        note=note or None,
+        basis=basis or None,
+    )
     record = {"ts": reading.ts, "key": reading.key, "value": reading.value, "source": reading.source}
     if reading.note:
         record["note"] = reading.note
+    if reading.basis:
+        record["basis"] = reading.basis
     path = readings_path(warp_root, goal_id)
     with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(record, sort_keys=True) + "\n")
@@ -754,6 +793,7 @@ def load_readings(warp_root: Path, goal_id: str) -> list[Reading]:
                     value=float(record["value"]),
                     source=str(record.get("source", "")),
                     note=(str(record["note"]) if record.get("note") else None),
+                    basis=(str(record["basis"]) if record.get("basis") else None),
                 )
             )
         except (KeyError, TypeError, ValueError):
@@ -764,7 +804,13 @@ def load_readings(warp_root: Path, goal_id: str) -> list[Reading]:
 @dataclass(frozen=True)
 class ReadingSummary:
     """One key's summary — the shape both ``brnrd goal show`` and the
-    ``/goals/[id]`` trajectory table's per-key line need."""
+    ``/goals/[id]`` trajectory table's per-key line need.
+
+    ``delta`` is ``None`` in two distinct situations a renderer must not
+    conflate: no ``previous`` sample exists yet (nothing to diff against —
+    ``basis_mismatch`` is ``False``), or a ``previous`` sample exists but
+    measures a different population (``basis_mismatch`` is ``True`` — the
+    comparison was refused, not merely unavailable)."""
 
     latest: Reading
     previous: Reading | None
@@ -772,12 +818,21 @@ class ReadingSummary:
     count: int
     min: float
     max: float
+    basis_mismatch: bool = False
 
 
 def reading_summary(readings: list[Reading]) -> dict[str, ReadingSummary]:
     """Per key: latest sample, previous sample, delta, sample count, min,
     max — chronological by ``ts`` (a hand-edited out-of-order file sorts
-    itself back into place here rather than trusting append order)."""
+    itself back into place here rather than trusting append order).
+
+    A Δ is only constructed when ``latest`` and ``previous`` share a
+    measurement basis (``_reading_basis``) — grouping by ``key`` alone put
+    a lifetime sum and a rolling-window sum, both keyed ``impressions``,
+    into the same subtraction (issue: the wake rendered ``Δ-186`` across
+    two denominators that were never comparable). A same-``key``,
+    different-``basis`` pair now renders with ``delta=None`` and
+    ``basis_mismatch=True`` instead of a number that looks real."""
     by_key: dict[str, list[Reading]] = {}
     for reading in readings:
         by_key.setdefault(reading.key, []).append(reading)
@@ -787,13 +842,15 @@ def reading_summary(readings: list[Reading]) -> dict[str, ReadingSummary]:
         latest = ordered[-1]
         previous = ordered[-2] if len(ordered) > 1 else None
         values = [r.value for r in ordered]
+        comparable = previous is not None and _reading_basis(previous) == _reading_basis(latest)
         out[key] = ReadingSummary(
             latest=latest,
             previous=previous,
-            delta=(latest.value - previous.value) if previous is not None else None,
+            delta=(latest.value - previous.value) if comparable else None,
             count=len(ordered),
             min=min(values),
             max=max(values),
+            basis_mismatch=(previous is not None and not comparable),
         )
     return out
 
@@ -843,9 +900,15 @@ def readings_index_line(goal_id: str, warp_root: Path | None) -> str | None:
     for key in sorted(summary):
         info = summary[key]
         segment = f"{key} {format_value(info.latest.value)}"
-        if info.previous is not None:
+        if info.delta is not None:
             days = _days_between(info.previous.ts, info.latest.ts)
             segment += f" (Δ{format_delta(info.delta)} since {days}d)"
+        elif info.basis_mismatch:
+            # Silence here reads as "no change to report" — the exact
+            # surface-narrows-invisibly failure this repo already knows
+            # (AGENTS.md "An analysis names its own edges"). A refused
+            # comparison says so instead of just not showing a number.
+            segment += " (Δ refused: basis differs)"
         joiner = " · " if segments else " "
         cost = len((joiner + segment).encode("utf-8"))
         if segments and used + cost > _READINGS_LINE_BUDGET:
