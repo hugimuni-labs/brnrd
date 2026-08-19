@@ -827,6 +827,30 @@ def build_parser() -> argparse.ArgumentParser:
     do_p.add_argument(
         "--card", default=None, metavar="FILE",
         help="overwrite .card with this file's contents")
+    # The reply-debt contract (evt-1787161641746642000-s0vo, 2026-08-19):
+    # every call that carries a --reply must own exactly one of these — the
+    # explicit debt or the explicit zero. A mutually exclusive group refuses
+    # both at once with argparse's own error, before this file's code ever
+    # runs; the "neither given" refusal (only relevant when --reply is also
+    # present) is cmd_do's own, since argparse has no concept of "required
+    # only when a *different* flag repeats." One decision per call, not one
+    # per --reply — see cmd_do's docstring for why multiple replies still
+    # share a single promise/no-promise choice.
+    promise_group = do_p.add_mutually_exclusive_group()
+    promise_group.add_argument(
+        "--promise", default=None, metavar="WHAT",
+        help="with --reply: what this call's reply(ies) put the run on the "
+             "hook for, same vocabulary as `brnrd promise`: "
+             + ", ".join(_PROMISABLE) + ". Appends the same row `brnrd "
+             "promise` would, only once the reply's own drain verdict "
+             "comes back ✓")
+    promise_group.add_argument(
+        "--no-promise", dest="no_promise", action="store_true",
+        help="with --reply: the explicit zero — this call's reply(ies) "
+             "deliberately create no debt")
+    do_p.add_argument(
+        "--promise-count", type=int, default=1, metavar="N",
+        help="how many, with --promise (default 1)")
     do_p.set_defaults(func=cmd_do)
 
     # Hidden per HIDDEN_COMMANDS, same reason as `do`: a resident's own verb
@@ -2677,6 +2701,71 @@ def _do_card(do_mod, outbox_dir: Path, filename: str) -> tuple[str, bool]:
     return "card ✓", True
 
 
+def _do_promise(outbox_dir: Path, what: str, count: int) -> tuple[str, bool]:
+    """Append one blueprint row for ``do --reply --promise`` — through
+    :func:`promises.append`, the same writer ``brnrd promise`` uses, never a
+    second one (evt-1787161641746642000-s0vo: "a fact stored twice is
+    repaired once"). Mirrors ``cmd_promise``'s own validation (kind check,
+    positive count, baseline-against-produce so the promise is not
+    satisfiable by work that predates it) but renders as a
+    ``_do_render``-shaped segment rather than ``cmd_promise``'s standalone
+    message, since it joins the same summary line as the reply(ies) it is
+    attached to. Called only after the batch's reply verdict(s) come back
+    ✓ — see ``cmd_do``.
+    """
+    import json as _json
+
+    from . import promises
+
+    norm = str(what or "").strip().lower()
+    if norm == "kb_page":
+        norm = "kb"
+    if norm not in promises.PROMISABLE:
+        return (
+            f"promise {what} ✗ not promisable — want one of "
+            + ", ".join(promises.PROMISABLE),
+            False,
+        )
+    if count <= 0:
+        return (
+            f"promise {what} ✗ --promise-count must be a positive integer, "
+            f"got {count!r}",
+            False,
+        )
+
+    # Same baseline logic as `cmd_promise`: how much of `norm` the run had
+    # already produced when the promise was made, so it is not satisfiable
+    # by work that predates the claim. Unreadable snapshot -> no baseline
+    # (the lenient fallback `cmd_promise` also takes), never a guess.
+    baseline: int | None = None
+    try:
+        state = _json.loads(
+            (outbox_dir / "portal-state.json").read_text(encoding="utf-8")
+        )
+        counts = state.get("produce", {}).get("counts", {})
+        if isinstance(counts, dict):
+            baseline = int(counts.get(norm, 0) or 0)
+    except Exception:
+        baseline = None
+
+    control = outbox_dir / promises.CONTROL_NAME
+    try:
+        before = control.stat().st_size
+    except OSError:
+        before = 0
+    promises.append(
+        outbox_dir, norm, count=count, ref=None, released=False, why=None,
+        baseline=baseline,
+    )
+    try:
+        after = control.stat().st_size
+    except OSError:
+        after = before
+    if after <= before:
+        return f"promise {norm} ✗ could not append to {control}", False
+    return f"promise {norm} ✓", True
+
+
 def cmd_do(args):
     """``brnrd do`` — stage outbox verbs, read the daemon's verdict back in
     the same boundary as the act (`kb/design-...`, evts dt2m/khiw/nkq5).
@@ -2692,6 +2781,18 @@ def cmd_do(args):
     ``--note``/``--reply``/``--gate`` directives are staged together, then
     waited on together via :func:`do.await_verdict_batch` — N verbs share
     one ``--timeout`` deadline, not N independent ones (#1337).
+
+    **The reply-debt contract** (evt-1787161641746642000-s0vo, 2026-08-19).
+    A call carrying any ``--reply`` must also carry exactly one of
+    ``--promise``/``--no-promise`` — refused client-side, before anything is
+    staged, when neither is given (argparse itself refuses both at once).
+    The decision is per **call**, not per ``--reply``: several replies
+    staged together share one promise-or-none choice, so ``--promise`` (when
+    given) appends exactly one blueprint row for the whole batch, never one
+    per reply. That row is written only once every staged reply's own drain
+    verdict comes back ✓ — a refused reply must not leave a debt row for a
+    message nobody got. ``--note``/``--mood``/``--card``/pure ``--gate``
+    calls carry no such requirement; a gate handoff's debt is the PR itself.
 
     ``-- <command> [args…]`` (split out of argv in ``main`` before this
     parser ever sees it) runs after the verbs are staged: verdict lines move
@@ -2719,6 +2820,28 @@ def cmd_do(args):
     replies, gates, pairing_error = _reconstruct_do_ops(ordered_ops)
     if pairing_error:
         print(f"[brnrd do] {pairing_error}. Nothing was staged.", file=sys.stderr)
+        return 1
+
+    # The reply-debt contract: a call with any --reply must own exactly one
+    # of --promise/--no-promise (argparse's mutually-exclusive group already
+    # refuses both at once — this is the "neither given" half, which
+    # argparse has no way to express since it only applies when --reply is
+    # also present). Checked before anything is staged, so a refusal here
+    # never half-happens.
+    if replies and not (args.promise or args.no_promise):
+        print(
+            "[brnrd do] --reply needs --promise \"<what>\" or --no-promise "
+            "— every reply either creates a promise or explicitly creates "
+            "none. Nothing was staged.",
+            file=sys.stderr,
+        )
+        return 1
+    if (args.promise or args.no_promise) and not replies:
+        print(
+            "[brnrd do] --promise/--no-promise only apply to --reply. "
+            "Nothing was staged.",
+            file=sys.stderr,
+        )
         return 1
 
     notes = args.note or []
@@ -2796,8 +2919,23 @@ def cmd_do(args):
                 outbox_dir, [entry[2] for entry in waitable], before,
                 timeout_seconds=timeout,
             )
+            reply_verdicts = []
             for (verb, label, _directive), (status, detail) in zip(waitable, verdicts):
                 seg, ok = _do_render(verb, label, status, detail)
+                segments.append(seg)
+                any_failed = any_failed or not ok
+                if verb == "reply":
+                    reply_verdicts.append(status)
+
+            # The promise write: one row for the whole call (never one per
+            # --reply — see cmd_do's docstring), and only once every staged
+            # reply's own drain verdict is OK. A refused reply must not
+            # leave a debt row for a message nobody got — `--no-promise`
+            # writes nothing by design, the explicit zero.
+            if args.promise and reply_verdicts and all(
+                status == do_mod.OK for status in reply_verdicts
+            ):
+                seg, ok = _do_promise(outbox_dir, args.promise, args.promise_count)
                 segments.append(seg)
                 any_failed = any_failed or not ok
 
