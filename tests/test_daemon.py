@@ -1654,6 +1654,34 @@ def test_pending_events_for_agent_missing_created_falls_back_to_mtime(tmp_path):
     assert [ev["id"] for ev in events] == [first["id"], second["id"]]
 
 
+def test_dispatchable_targets_orders_by_created_not_mtime(tmp_path):
+    """#1497: the sibling fix to the one above, but for the function that
+    actually decides which pending event becomes the next run —
+    ``_dispatchable_targets`` (``daemon.py:2053``'s dispatch sort), not the
+    read-only resident pending view ``_pending_events_for_agent`` already
+    fixed for #1496. Same measured shape: the older (by ``created``)
+    event's file was touched more recently than the younger sibling's, by
+    an unrelated status/meta write — dispatch must still pick the older
+    one first, through the real caller the #1492 defect used, not a
+    standalone check of the sort key."""
+    write_repo_scaffold(tmp_path)
+    inbox = tmp_path / ".brr" / "inbox"
+    older_path = protocol.create_event(inbox, "telegram", "older, created first")
+    older = next(e for e in protocol.list_pending(inbox) if Path(e["_path"]) == older_path)
+    newer_path = protocol.create_event(inbox, "telegram", "newer, created second")
+    newer = next(e for e in protocol.list_pending(inbox) if Path(e["_path"]) == newer_path)
+    protocol.update_event_meta(older, created="2026-08-18T14:58:06Z")
+    protocol.update_event_meta(newer, created="2026-08-18T15:33:51Z")
+    # Reverse the mtime relationship relative to `created` — the re-queue /
+    # status write the real #1492 incident traced back to.
+    _age_path(Path(newer["_path"]), 3600)
+    ctx = daemon.account.resolve_context(tmp_path, {})
+
+    targets = daemon._dispatchable_targets(ctx, tmp_path, {})
+
+    assert [t.event["id"] for t in targets] == [older["id"], newer["id"]]
+
+
 def test_pending_event_record_carries_local_attachment_path(tmp_path):
     """A folded-in event's downloaded attachment gets an openable path.
 
@@ -4708,6 +4736,97 @@ def test_interrupted_marker_leaves_orphaned_spawn_dispatch_processing(tmp_path):
     notes = [e for e in protocol.list_pending(inbox) if e.get("spawn_failed")]
     assert len(notes) == 1
     assert notes[0]["conversation_key"] == "telegram:102:"
+
+
+def test_orphan_reconcile_uses_interrupted_at_not_refreshed_mtime(tmp_path):
+    """#1497: without a closed ledger row to fall back on, the orphan sweep
+    used to need its own independent staleness proof — and its only proof
+    was ``.stat()`` on the run manifest, which ``_mark_interrupted_runs``
+    (running moments earlier, same boot pass) had just rewritten via
+    ``task.update_status("error", ...)``. That write bumps the manifest's
+    mtime to *now*, so a genuinely 25h-dead strand read as freshly alive
+    the instant the first sweep proved it dead — the first sweep refreshing
+    the second sweep's own evidence, requiring another full
+    ``stale_after_seconds`` to elapse *from this boot* before the orphaned
+    spawn's parent would ever be told. This is the case the sibling test
+    above sidesteps with a closed-ledger fixture; here there is no ledger
+    row at all, so resolution can only come from trusting the recorded
+    ``interrupted_at`` stamp ``_mark_interrupted_runs`` already wrote,
+    instead of re-``stat()``-ing the manifest it just touched."""
+    spawn_event = _stuck_spawn_dispatch(tmp_path, conv_key="telegram:104:")
+    brr_dir = tmp_path / ".brr"
+    runs_dir = brr_dir / "runs"
+    strand_task = Run(
+        id="run-strand-orphan-2", event_id=spawn_event["id"],
+        body="bounded concurrent task", source="spawn",
+    )
+    strand_task.meta["pid"] = _dead_pid()
+    strand_task.save(runs_dir)
+    _age_path(Path(spawn_event["_path"]), 25 * 3600)
+    _age_path(runs_dir / "run-strand-orphan-2" / "run.md", 25 * 3600)
+    # No ledger row this time — deliberately, so the only path to
+    # resolution is the recorded `interrupted_at` stamp.
+    ctx = daemon.account.resolve_context(tmp_path, {})
+
+    assert daemon._mark_interrupted_runs(ctx, tmp_path, {}) == 1
+    # `_mark_interrupted_runs` just rewrote the manifest — its mtime is now
+    # "moments ago", not 25h old. A `.stat()`-only proof would see that and
+    # wait a further 24h from here; the recorded stamp must not.
+    manifest_path = daemon.run_manifest_path(runs_dir, "run-strand-orphan-2")
+    assert (time.time() - manifest_path.stat().st_mtime) < 60
+
+    assert daemon._reconcile_orphaned_spawn_dispatches(ctx, tmp_path, {}) == 1
+    inbox = brr_dir / "inbox"
+    notes = [e for e in protocol.list_pending(inbox) if e.get("spawn_failed")]
+    assert len(notes) == 1
+    assert notes[0]["conversation_key"] == "telegram:104:"
+
+
+def test_orphan_reconcile_never_claims_an_interruption_it_only_observed(tmp_path):
+    """The sweep freezes an age proxy onto manifests it merely looked at.
+    That stamp must not be able to come back as a verdict it never reached.
+
+    ``_mark_interrupted_runs`` writes ``interrupted_at`` **beside**
+    ``failure_kind: host_interrupted`` and ``interrupt_reason`` — the stamp
+    is a by-product of a conclusion. The orphan sweep writes its own
+    observation so a later boot does not re-``stat()`` a manifest this very
+    loop's ``t.save()`` has since touched. If both used one key, the
+    sweep's own "I looked at this at T" would be read back on the next
+    boot as "the interrupted-run sweep concluded host_interrupted at T",
+    and the reconcile reason a human reads would name a provenance that
+    never happened. One predicate, two reasons.
+
+    So: a run this sweep merely observed keeps ``interrupted_at`` clear,
+    and the reason it emits stays the horizon proof it actually has."""
+    spawn_event = _stuck_spawn_dispatch(tmp_path, conv_key="telegram:105:")
+    brr_dir = tmp_path / ".brr"
+    runs_dir = brr_dir / "runs"
+    strand_task = Run(
+        id="run-strand-orphan-3", event_id=spawn_event["id"],
+        body="bounded concurrent task", source="spawn",
+    )
+    strand_task.meta["pid"] = _dead_pid()
+    strand_task.save(runs_dir)
+    _age_path(Path(spawn_event["_path"]), 25 * 3600)
+    _age_path(runs_dir / "run-strand-orphan-3" / "run.md", 25 * 3600)
+    ctx = daemon.account.resolve_context(tmp_path, {})
+
+    # No `_mark_interrupted_runs` pass at all: nothing ever concluded this
+    # run was host-interrupted, so nothing may say so.
+    assert daemon._reconcile_orphaned_spawn_dispatches(ctx, tmp_path, {}) == 1
+
+    reloaded = Run.from_file(
+        daemon.run_manifest_path(runs_dir, "run-strand-orphan-3"))
+    assert "interrupted_at" not in reloaded.meta
+    assert reloaded.meta.get("failure_kind") != runner_failures.HOST_INTERRUPTED
+    assert reloaded.meta.get("orphan_sweep_observed_at")
+
+    inbox = brr_dir / "inbox"
+    notes = [e for e in protocol.list_pending(inbox) if e.get("spawn_failed")]
+    assert len(notes) == 1
+    body = notes[0].get("body") or ""
+    assert "host_interrupted" not in body
+    assert "safety horizon" in body
 
 
 def test_interrupted_marker_leaves_no_retry_stamp_on_a_retired_event(tmp_path):
