@@ -83,32 +83,23 @@
 	data-measure="gauge"
 	class="panel flex w-full items-baseline gap-x-2 px-3 py-1.5 font-mono text-[10px]"
 >
-	<!-- The scrollable half: next pick, fuel, tank. `overflow-x-auto` on
-	     *this* inner region only — not the whole gauge — because the bench
-	     toggle below must stay reachable at a glance no matter how far the
-	     catalog has scrolled the fuel grid sideways; a control that can
-	     itself scroll out of view is the failure this split exists to
-	     avoid one level up. -->
-	<div
-		class="flex min-w-0 flex-1 flex-nowrap items-baseline gap-x-3 overflow-x-auto whitespace-nowrap"
-	>
-		<span data-measure="next-pick" class="flex items-baseline gap-1.5 whitespace-nowrap">
-			<span class="tracking-[0.13em] text-ink-quiet uppercase">next pick</span>
-			{#if runners === null}
-				<span class="text-ink-quiet">loading…</span>
-			{:else if activeBlock}
-				<span class="text-amber-200" title={profileTitle(activeBlock.profile.name)}
-					>{activeBlock.profile.name}</span
-				>
-				<span class="text-ink-quiet">{activeBlock.badge}</span>
-			{:else}
-				<span class="text-ink-quiet">unavailable</span>
-			{/if}
-		</span>
-
+	<!-- Meters first, visible always (defect fixed 2026-08-19, minutes after
+	     w-68 deploy: "I really like the bench but the gauge is not there is
+	     it?" — next-pick's own text, profile name + badge + countdown, was
+	     long enough to push fuel and tank past the 390px edge on the old
+	     next-pick/fuel/tank order, so the two things a reader actually
+	     glances at were the two things hidden). Fuel and tank now render
+	     *before* next-pick and neither is allowed to shrink (`shrink-0`):
+	     the row can only ever take space away from next-pick, never from
+	     the meters. `overflow-x-auto` moves onto fuel alone, capped to
+	     `max-w-[55%]` of the row, so a pathological catalog (many
+	     shells × many quota windows) scrolls *inside its own box* instead
+	     of stretching the line — the outer row itself no longer needs to
+	     scroll for the common case, only next-pick's name ever truncates. -->
+	<div class="flex min-w-0 flex-1 flex-nowrap items-baseline gap-x-3">
 		<span
 			data-measure="fuel"
-			class="flex items-baseline gap-3 whitespace-nowrap"
+			class="flex max-w-[55%] shrink-0 items-baseline gap-3 overflow-x-auto whitespace-nowrap"
 			aria-label="quota fuel"
 		>
 			{#if shells === null}
@@ -141,16 +132,59 @@
 		</span>
 
 		{#if lead}
+			<!-- `headlineFor` (tankForecast.ts) is prose, not a fixed enum —
+			     "not enough of this window has elapsed to read a rate" reads
+			     fine as a sentence and overflowed the viewport on its own
+			     before this fix, the exact species defect 1 was filed for.
+			     Same `min-w-0 truncate` cell pattern as next-pick's name, one
+			     rung higher priority: capped wider (`max-w-[45%]` vs
+			     next-pick's uncapped flex-1) so a short verdict never
+			     truncates in practice, only a genuinely long sentence does. -->
 			<span
 				data-measure="tank"
-				class="flex items-baseline gap-2 whitespace-nowrap"
+				class="flex max-w-[45%] shrink items-baseline gap-2 whitespace-nowrap"
 				aria-label="tank forecast"
 			>
-				<span class="tracking-[0.13em] text-ink-quiet uppercase">tank</span>
-				<span style={`color: ${VERDICT_COLOR[lead.verdict]}`}>{lead.headline}</span>
-				{#if lead.stale}<span class="text-ink-mute">· last known</span>{/if}
+				<span class="shrink-0 tracking-[0.13em] text-ink-quiet uppercase">tank</span>
+				<span class="min-w-0 truncate" style={`color: ${VERDICT_COLOR[lead.verdict]}`}
+					>{lead.headline}</span
+				>
+				{#if lead.stale}<span class="shrink-0 text-ink-mute">· last known</span>{/if}
 			</span>
 		{/if}
+
+		<!-- The one shrinkable cell: `min-w-0` lets it collapse below its own
+		     content width (flex's default `min-width: auto` would otherwise
+		     refuse to shrink past the unbroken profile name), and `truncate`
+		     on the name alone — not the whole cell — keeps the "next pick"
+		     label and the countdown badge always legible, ellipsis eating
+		     only the part that grows with the catalog. `overflow-hidden`
+		     is the backstop for the pathological case (fuel and tank alone
+		     already claim the full 390px, so this cell's own flex-basis
+		     goes to zero): the label/badge are `shrink-0` by design — they
+		     never truncate — so without a clip they would paint past this
+		     box's own right edge and grow the *page's* scrollWidth, which
+		     is exactly how `next-pick`'s badge widened the viewport before
+		     this fix even after the name span itself measured 0. Clipped
+		     is legible-or-absent; overflowing is legible-and-widens-the-
+		     page, the one failure mode `measure-rail.mjs`'s scrollLeft
+		     assertion exists to catch. -->
+		<span
+			data-measure="next-pick"
+			class="flex min-w-0 flex-1 items-baseline gap-1.5 overflow-hidden"
+		>
+			<span class="shrink-0 tracking-[0.13em] text-ink-quiet uppercase">next pick</span>
+			{#if runners === null}
+				<span class="shrink-0 text-ink-quiet">loading…</span>
+			{:else if activeBlock}
+				<span class="min-w-0 truncate text-amber-200" title={profileTitle(activeBlock.profile.name)}
+					>{activeBlock.profile.name}</span
+				>
+				<span class="shrink-0 text-ink-quiet">{activeBlock.badge}</span>
+			{:else}
+				<span class="shrink-0 text-ink-quiet">unavailable</span>
+			{/if}
+		</span>
 	</div>
 
 	<button

@@ -96,6 +96,15 @@ async function measure(page) {
 		function rectHeight(el) {
 			return el ? Math.round(el.getBoundingClientRect().height * 100) / 100 : null;
 		}
+		function rect(el) {
+			if (!el) return null;
+			const r = el.getBoundingClientRect();
+			return {
+				left: Math.round(r.left * 100) / 100,
+				right: Math.round(r.right * 100) / 100,
+				width: Math.round(r.width * 100) / 100
+			};
+		}
 		const out = { sections: {} };
 		for (const name of sections) {
 			out.sections[name] = rectHeight(document.querySelector(`[data-measure="${name}"]`));
@@ -110,8 +119,35 @@ async function measure(page) {
 		const stack = document.querySelector('.z-40');
 		const gaugeWrapper = stack ? stack.firstElementChild : null;
 		out.gaugeWrapperHeight = rectHeight(gaugeWrapper);
+		// Defect 1's own acceptance numbers (fixed 2026-08-19): fuel and tank
+		// must land fully inside the viewport at `scrollLeft === 0` — the
+		// meters a reader glances at without ever meaning to touch anything,
+		// per the maintainer's report the fix was filed for.
+		out.viewportWidth = window.innerWidth;
+		out.scrollLeft = document.scrollingElement ? document.scrollingElement.scrollLeft : 0;
+		out.fuelRect = rect(document.querySelector('[data-measure="fuel"]'));
+		out.tankRect = rect(document.querySelector('[data-measure="tank"]'));
 		return out;
 	}, SECTIONS);
+}
+
+/** Defect 1's acceptance check: fuel and tank fully on-screen at
+ * `scrollLeft === 0`. Returns a list of failure strings (empty ⇒ pass). */
+function checkMetersVisible(entry) {
+	const failures = [];
+	if (entry.scrollLeft !== 0) {
+		failures.push(`scrollLeft is ${entry.scrollLeft}, expected 0`);
+	}
+	for (const name of ['fuelRect', 'tankRect']) {
+		const rect = entry[name];
+		if (!rect) continue; // no lead tank reading is legal (no `{#if lead}`)
+		if (rect.left < 0 || rect.right > entry.viewportWidth) {
+			failures.push(
+				`${name} spans [${rect.left}, ${rect.right}], outside [0, ${entry.viewportWidth}]`
+			);
+		}
+	}
+	return failures;
 }
 
 async function main() {
@@ -230,6 +266,50 @@ async function main() {
 	console.log(widths.map((w) => '-'.repeat(w)).join('  '));
 	for (const row of rows) console.log(fmt(row));
 	console.log(`\nwritten: ${OUT}/results-${SCALE_NAME}.json`);
+
+	// --- Defect 1's acceptance check --------------------------------------
+	// "extend measure-rail.mjs (or add a sibling check) to assert fuel's and
+	// tank's getBoundingClientRect() land fully inside the 390px viewport
+	// with scrollLeft === 0 — at default AND stress scale." Every captured
+	// entry (baseline and, with `--note`, the tapped variant) is checked —
+	// the bug this guards was specifically about the meters being pushed
+	// off-screen by next-pick's own unbounded text, and that text renders in
+	// every one of these variants.
+	let failed = false;
+	for (const entry of results) {
+		const label = `${entry.variant ? `${entry.scale}+note` : entry.scale}/${entry.width}`;
+		const failures = checkMetersVisible(entry);
+		if (failures.length) {
+			failed = true;
+			console.error(`✗ ${label}: ${failures.join('; ')}`);
+		} else {
+			console.log(`✓ ${label}: fuel+tank fully on-screen at scrollLeft 0`);
+		}
+	}
+
+	// The gauge's own fixed-height claim, restated as a same-run check: the
+	// two widths captured in *this* invocation must read the identical
+	// wrapper height — the number the table above already prints, just
+	// compared rather than eyeballed. Cross-scale (default vs --stress)
+	// still needs eyeballing across two separate invocations' JSON, since
+	// each run only ever measures one scale.
+	const baselineEntries = results.filter((r) => !r.variant);
+	const heights = new Set(baselineEntries.map((r) => r.gaugeWrapperHeight));
+	if (heights.size > 1) {
+		failed = true;
+		console.error(
+			`✗ gauge wrapper height is not constant across widths at ${SCALE_NAME} scale: ${[...heights].join(', ')}`
+		);
+	} else {
+		console.log(
+			`✓ gauge wrapper height constant across widths at ${SCALE_NAME} scale: ${[...heights][0]}px`
+		);
+	}
+
+	if (failed) {
+		console.error('\nmeasure-rail: acceptance check failed');
+		process.exitCode = 1;
+	}
 }
 
 main().catch((err) => {
