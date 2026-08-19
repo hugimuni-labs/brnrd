@@ -92,6 +92,7 @@ export function offReasonOf(
 function reasonText(availability: string | null): string {
 	if (availability === 'shell-not-found') return 'not installed on this daemon';
 	if (availability === 'auth-env-missing') return 'auth not configured on this daemon';
+	if (availability === 'auth-error') return 'authentication failed; log in again';
 	return 'unavailable on this daemon';
 }
 

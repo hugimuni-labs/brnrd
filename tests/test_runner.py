@@ -761,6 +761,43 @@ def test_available_runner_catalog_marks_unavailable_auth_env_profiles(
     assert by_name2["claude-bare-api-only"]["availability"] == "available"
 
 
+def test_runner_auth_error_survives_restart_and_clear(tmp_path, monkeypatch):
+    from brr import runner_auth_health
+
+    (tmp_path / ".brr").mkdir()
+    monkeypatch.setattr(runner_mod, "_profiles_cache", {
+        "codex": {"cmd": "codex exec", "shell": "codex", "provider": "openai",
+                  "quota_source": "codex-local"},
+    })
+    monkeypatch.setattr(runner_mod.shutil, "which", lambda _name: "/usr/bin/codex")
+    profile = runner_mod.resolve_runner_profile(tmp_path, {"runner": "codex"})
+    runner_auth_health.record_auth_error(tmp_path, profile)
+    row = runner_mod.available_runner_catalog(tmp_path)[0]
+    assert row["available"] is False
+    assert row["availability"] == "auth-error"
+    state_path = tmp_path / ".brr" / "runner-auth-health.json"
+    assert "codex-local" in state_path.read_text(encoding="utf-8")
+    assert runner_auth_health.is_auth_failed(tmp_path, profile)
+    runner_auth_health.clear_success(tmp_path, profile)
+    assert not runner_auth_health.is_auth_failed(tmp_path, profile)
+    assert "codex-local" not in state_path.read_text(encoding="utf-8")
+
+
+def test_runner_auth_mark_is_scoped_to_failure_domain(tmp_path):
+    from brr import runner_auth_health, runner_select
+
+    (tmp_path / ".brr").mkdir()
+    codex = runner_select.RunnerProfile(
+        name="codex", profile="codex", shell="codex", quota_source="codex-local",
+    )
+    claude = runner_select.RunnerProfile(
+        name="claude", profile="claude", shell="claude", quota_source="claude-local",
+    )
+    runner_auth_health.record_auth_error(tmp_path, codex)
+    assert runner_auth_health.is_auth_failed(tmp_path, codex)
+    assert not runner_auth_health.is_auth_failed(tmp_path, claude)
+
+
 def test_declared_profile_inherits_registry_metadata_per_field(
     tmp_path, monkeypatch,
 ):
