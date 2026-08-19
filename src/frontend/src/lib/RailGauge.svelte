@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { fuelRows, runnerBlocks, slotChip } from './railGauge';
+	import { DIAL_WEDGE_RADIUS, dialDasharray, fuelRows, runnerBlocks, slotChip } from './railGauge';
 	import { quotaLevel, type QuotaShell } from './quota';
 	import type { RunnersResponse } from './runners';
 	import type { RunLedgerRow } from './runLedger';
@@ -81,7 +81,7 @@
 
 <div
 	data-measure="gauge"
-	class="panel flex w-full items-baseline gap-x-2 px-3 py-1.5 font-mono text-[10px]"
+	class="flex min-h-[37.5px] w-full items-baseline gap-x-2 bg-stone-950/70 px-3 py-1.5 font-mono text-[10px]"
 >
 	<!-- Meters first, visible always (defect fixed 2026-08-19, minutes after
 	     w-68 deploy: "I really like the bench but the gauge is not there is
@@ -110,12 +110,45 @@
 				{#each fuel as row (row.id)}
 					{@const level = quotaLevel(row.percent)}
 					<span
-						class="whitespace-nowrap text-ink-quiet {row.stale || row.daemonStale
+						class="inline-flex items-baseline gap-1 whitespace-nowrap text-ink-quiet {row.stale ||
+						row.daemonStale
 							? 'opacity-60'
 							: ''}"
 						title={row.tooltip}
 					>
 						{row.label}
+						<span class="inline-block h-[3px] w-8 bg-stone-900" role="img" aria-label={row.tooltip}>
+							<span
+								class="block h-full transition-[width] duration-500 ease-out"
+								style={`width: ${row.percent ?? 0}%; background-color: ${LEVEL_COLOR[level]}`}
+							></span>
+						</span>
+						{#if row.timeRemaining !== null}
+							<svg
+								viewBox="0 0 12 12"
+								class="h-[9px] w-[9px] shrink-0 -rotate-90 scale-x-[-1] self-center"
+								aria-label="reset window remaining"
+							>
+								<circle
+									cx="6"
+									cy="6"
+									r="5.5"
+									fill="none"
+									stroke-width="1"
+									class="stroke-stone-800"
+								/>
+								<circle
+									cx="6"
+									cy="6"
+									r={DIAL_WEDGE_RADIUS}
+									fill="none"
+									stroke-width={DIAL_WEDGE_RADIUS * 2}
+									class="stroke-stone-500"
+									stroke-dasharray={dialDasharray(row.timeRemaining)}
+								/>
+							</svg>
+						{/if}
+						{#if row.resetShort}<span class="text-ink-quiet">↻{row.resetShort}</span>{/if}
 						<span style={`color: ${LEVEL_COLOR[level]}`}
 							>{row.percent === null ? '?' : `${Math.round(row.percent)}%`}</span
 						>
