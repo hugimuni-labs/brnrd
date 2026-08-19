@@ -4057,6 +4057,111 @@ def build_init_prompt(repo_root: Path, knowledge_shape: str = "repo") -> str:
     return f"{setup}\n\n{template}{directive}"
 
 
+#: The two places ``init-playbook.md`` still assumes a literal terminal,
+#: reconciled once for every door-carried first wake (the connect greeting
+#: and the uninitialized-repo fold below). The playbook file itself cannot
+#: be edited from a run (prompt-contract, maintainer-merged), so the
+#: reconciliation rides the code-composed preamble.
+_DOOR_WAKE_CAVEATS = (
+    "Two places in the playbook below don't apply here; read past them, "
+    "keep everything else:\n\n"
+    "- \"You have no stdin here… the person types at the terminal brnrd "
+    "owns\" — there is no separate terminal; you already have this "
+    "conversation. The mechanism it describes is otherwise exactly right: "
+    "a reply lands as a new pending event, so ask, then wait for it, under "
+    "the standing portal rules your own playbook already gives you.\n"
+    "- The gate walk's `control: gate-setup <name>` outbox verb does not "
+    "exist on this run — that is the terminal wake's own machinery, "
+    "unavailable here. If the user wants a door wired up mid-conversation, "
+    "tell them the command to run themselves (e.g. `brnrd gate setup "
+    "telegram`), or note it as a follow-up; do not emit `control:`."
+)
+
+
+def _first_wake_task_parts(
+    repo_root: Path, preamble: str, facts: dict[str, Any] | None,
+) -> str:
+    """Assemble preamble + init playbook + facts + adopter template.
+
+    The shared tail of every door-carried first wake — one assembly, so the
+    connect greeting and the uninitialized-repo fold cannot drift apart in
+    what they hand the run.
+    """
+    task_parts = [preamble + read_prompt(INIT_PLAYBOOK_NAME, repo_root).strip()]
+    if facts:
+        task_parts.append(build_init_wake_facts(facts))
+    from . import constitution
+
+    tpl_path = constitution.TEMPLATE_PATH
+    if tpl_path.exists():
+        task_parts.append(
+            "---\n\n## Adopter template (author `AGENTS.md` from this)\n\n"
+            + tpl_path.read_text(encoding="utf-8")
+        )
+    return "\n\n".join(p for p in task_parts if p)
+
+
+def collect_daemon_wake_init_facts(repo_root: Path) -> dict[str, Any]:
+    """A trimmed ``init_wake.collect_facts`` — repo/gh/gate facts only.
+
+    Runner and shell detection are dropped: a daemon-dispatched run already
+    gets its own Runner catalog and Mode block every wake — restating a
+    subset of that here would drift from, or duplicate, the standard
+    surface rather than add anything. Shared by the connect greeting and
+    the dispatch-time uninitialized-repo fold.
+    """
+    from . import init_wake
+
+    facts = init_wake.collect_facts(repo_root, runner_name="")
+    for key in ("runner_name", "detected_runners", "detected_shells", "missing_shells"):
+        facts.pop(key, None)
+    return facts
+
+
+def build_uninitialized_wake_task(
+    repo_root: Path, *, facts: dict[str, Any] | None = None,
+) -> str:
+    """The task a human-addressed run gets on a repo with no ``AGENTS.md``.
+
+    The lane the connect greeting cannot cover: a cloud-only pairing has no
+    door that can *originate* a message, so ``front_door`` truthfully says
+    "message your account's bot about this repo, and the first run takes it
+    from there" — and until 2026-08-19 nothing made that true. The first
+    inbound message woke a plain run whose wake never mentioned setup; the
+    live repro (a fresh macOS install, ``StrayUnicorn/tgtldr``) answered
+    "The room is lit; I'm here" on the cheapest core and "nothing appears
+    to need intervention" on the strongest one — the instructions were
+    missing, not the capability. The daemon now folds this task around any
+    owner-trusted, correspondent-addressed run while ``AGENTS.md`` is
+    absent; the state that triggers it ends the moment the contract is
+    committed.
+    """
+    preamble = (
+        "# First wake on an uninitialized repo\n\n"
+        "`AGENTS.md` does not exist here yet — nobody has run `brnrd init` "
+        "on this repo and no connect-time greeting reached it, so **this "
+        "run is the setup run**, whatever the message that woke you asked "
+        "for. The person on the other end is the person to interview. This "
+        "is a normal resident-operated run over an already-paired channel, "
+        "not a proxied terminal session. "
+        + _DOOR_WAKE_CAVEATS
+        + "\n\n"
+        "Open by answering the message that woke you — it is quoted under "
+        "`### Original event body` in your Run Context Bundle — then fold "
+        "the interview into that same conversation: survey the repo first, "
+        "take the beats, author `AGENTS.md` from the adopter template that "
+        "follows, seed the knowledge base, commit, and only then close. "
+        "Answering the message while skipping the setup is the measured "
+        "failure this task exists to end: every later wake would keep "
+        "waking into an unfurnished room, and the person who was promised "
+        "\"the first run takes it from there\" would be right to wonder "
+        "where it went. **The setup is the task; the message rides along "
+        "with it.**\n\n"
+        "---\n"
+    )
+    return _first_wake_task_parts(repo_root, preamble, facts)
+
+
 def build_connect_greeting_task(
     repo_root: Path, *, facts: dict[str, Any] | None = None,
 ) -> str:
@@ -4087,35 +4192,15 @@ def build_connect_greeting_task(
         "time on this repo, and — unlike the playbook right below assumes — "
         "this is a **normal resident-operated run over an already-paired "
         "door**, not a proxied terminal session (that terminal shape was "
-        "tried and rejected). Two places in the playbook below don't apply "
-        "here; read past them, keep everything else:\n\n"
-        "- \"You have no stdin here… the person types at the terminal brnrd "
-        "owns\" — there is no separate terminal; you already have this one. "
-        "The mechanism it describes is otherwise exactly right: a reply "
-        "lands as a new pending event, so ask, then wait for it, under the "
-        "standing portal rules your own playbook already gives you.\n"
-        "- The gate walk's `control: gate-setup <name>` outbox verb does not "
-        "exist on this run — that is the terminal wake's own machinery, "
-        "unavailable here. If the user wants a door wired up mid-conversation, "
-        "tell them the command to run themselves (e.g. `brnrd gate setup "
-        "telegram`), or note it as a follow-up; do not emit `control:`.\n\n"
+        "tried and rejected). "
+        + _DOOR_WAKE_CAVEATS
+        + "\n\n"
         "Everything else below — tone, survey-before-speaking, the interview "
         "beats, authoring `AGENTS.md` from the adopter template that "
         "follows, the kb seed, the closeout — applies unchanged.\n\n"
         "---\n"
     )
-    task_parts = [preamble + read_prompt(INIT_PLAYBOOK_NAME, repo_root).strip()]
-    if facts:
-        task_parts.append(build_init_wake_facts(facts))
-    from . import constitution
-
-    tpl_path = constitution.TEMPLATE_PATH
-    if tpl_path.exists():
-        task_parts.append(
-            "---\n\n## Adopter template (author `AGENTS.md` from this)\n\n"
-            + tpl_path.read_text(encoding="utf-8")
-        )
-    return "\n\n".join(p for p in task_parts if p)
+    return _first_wake_task_parts(repo_root, preamble, facts)
 
 
 def _read_preamble_with_weave(repo_root: Path) -> str:

@@ -60,6 +60,7 @@ from . import branching
 from .cli import brnrd_cmd
 from . import closekeyword
 from . import config as conf
+from . import connect_greeting
 from . import conversations
 from . import dev_reload as reload_mod
 from . import card
@@ -2935,6 +2936,43 @@ def _weld_ignite(
         return []
 
 
+def _uninitialized_first_wake_applies(
+    event: dict,
+    repo_root: Path,
+    cfg: dict,
+    *,
+    is_strand_run: bool,
+    is_home_root: bool,
+    correspondent_key: str,
+) -> bool:
+    """Whether this run should wake as the setup run (``AGENTS.md`` absent).
+
+    The dispatch-time half of "the first run takes it from there"
+    (``front_door._step_contract``'s promise on a cloud-only pairing —
+    the connect greeting covers only doors that can *originate*). Scope,
+    each exclusion deliberate:
+
+    - a **correspondent** must exist — schedule fires, spawn completions
+      and other unattributed events have nobody to interview;
+    - **owner** trust only — a stranger's message must not author the
+      repo contract from a stranger's answers;
+    - not a **strand** (its contract is its dispatched task), not the
+      **account home** (no adopter contract lives there);
+    - not the **greeting event** — its body already carries this playbook;
+    - and the init playbook must exist on this install (same guard the
+      greeting and terminal wakes use).
+    """
+    return (
+        not is_strand_run
+        and bool(correspondent_key)
+        and not is_home_root
+        and not event.get(connect_greeting.GREETING_META_KEY)
+        and trust.resolve_tier(event, cfg) == trust.OWNER
+        and not (repo_root / "AGENTS.md").exists()
+        and prompts.init_playbook_available(repo_root)
+    )
+
+
 def _run_worker(
     event: dict,
     repo_root: Path,
@@ -3512,6 +3550,39 @@ def _run_worker(
     if woven_body:
         event_body_for_prompt = woven_body
         task.body = woven_body
+
+    # "The first run takes it from there" — by mechanism, not by hope. The
+    # connect-time greeting (#1244 fork 2) covers repos with a door that can
+    # *originate*; a cloud-only pairing has none, so its first-ever wake used
+    # to arrive as a plain conversational run with no word about setup — and
+    # did none, on the cheapest and the strongest core alike (measured live,
+    # 2026-08-19: a fresh install answered "nothing appears to need
+    # intervention" over a repo with no contract). While `AGENTS.md` is
+    # absent, any owner-trusted run a human addressed IS the setup run: fold
+    # the init playbook + adopter template around the message. The trigger
+    # state ends the moment the contract is committed, and the greeting
+    # event is excluded because its body already carries the same playbook.
+    if _uninitialized_first_wake_applies(
+        event,
+        repo_root,
+        cfg,
+        is_strand_run=is_strand_run,
+        is_home_root=is_home_root,
+        correspondent_key=correspondent_key,
+    ):
+        try:
+            init_facts = prompts.collect_daemon_wake_init_facts(repo_root)
+        except Exception:  # noqa: BLE001 — facts are best-effort, never a blocker
+            init_facts = None
+        task.body = prompts.build_uninitialized_wake_task(
+            repo_root, facts=init_facts,
+        )
+        task.meta["uninitialized_repo_wake"] = True
+        print(
+            f"[brnrd] run {task.id} (event {eid}): AGENTS.md absent — "
+            "init playbook folded into this wake (first run on an "
+            "uninitialized repo)"
+        )
 
     try:
         env_backend = envs.get_env(task.env)
