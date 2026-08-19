@@ -43,7 +43,39 @@ def test_the_connector_set_is_non_empty_and_every_member_answers():
     for door in doors:
         # Every member answers: a real bool, a wire shape that round-trips.
         assert isinstance(door.deep_link_available, bool)
-        assert door.to_wire() == {"platform": door.platform, "deep_link_available": door.deep_link_available}
+        assert door.to_wire() == {
+            "platform": door.platform,
+            "deep_link_available": door.deep_link_available,
+            "reason": door.reason,
+        }
+        # A lit door carries no reason; a dark one always names one — never
+        # a silent `None` a reader could mistake for "healthy, unlabeled".
+        assert (door.reason is None) == door.deep_link_available
+
+
+def test_slack_and_signal_carry_the_not_built_reason():
+    """No mint lane exists for either, ever — distinct from a connector
+    that's built but unconfigured on this deployment (see the next test)."""
+    identities = messenger_doors.MessengerIdentities()
+    doors = {d.platform: d for d in messenger_doors.messenger_doors(identities)}
+    assert doors["slack"].reason == "not_built"
+    assert doors["signal"].reason == "not_built"
+
+
+def test_unconfigured_telegram_and_whatsapp_carry_the_not_configured_reason():
+    identities = messenger_doors.MessengerIdentities()
+    doors = {d.platform: d for d in messenger_doors.messenger_doors(identities)}
+    assert doors["telegram"].reason == "not_configured"
+    assert doors["whatsapp"].reason == "not_configured"
+
+
+def test_a_lit_door_carries_no_reason():
+    identities = messenger_doors.MessengerIdentities(
+        telegram_bot_username="brnrd_bot", whatsapp_e164="15551234567"
+    )
+    doors = {d.platform: d for d in messenger_doors.messenger_doors(identities)}
+    assert doors["telegram"].reason is None
+    assert doors["whatsapp"].reason is None
 
 
 def test_telegram_and_whatsapp_are_available_when_their_identity_is_set():
