@@ -3490,7 +3490,7 @@ def build_boot_score(
     event_ids: tuple[str, ...] = (),
     event_created: str | None = None,
     event_retry_of: str | None = None,
-    event_retry_reason: str | None = None,
+    event_retry_failure_kind: str | None = None,
     body_provenance: str | None = None,
     source_gate: str | None = None,
     continuity: "BootContinuity | None" = None,
@@ -3667,7 +3667,7 @@ def build_boot_score(
             created=event_created,
             age_seconds=event_age_seconds(event_created),
             retry_of=event_retry_of,
-            retry_reason=event_retry_reason,
+            retry_failure_kind=event_retry_failure_kind,
         ),
         posture=BootPosture(
             pending_count=pending_count,
@@ -3725,7 +3725,7 @@ def build_daemon_prompt_with_score(
     source_gate = kwargs.get("source_gate")
     event_created = kwargs.get("event_created")
     event_retry_of = kwargs.get("event_retry_of")
-    event_retry_reason = kwargs.get("event_retry_reason")
+    event_retry_failure_kind = kwargs.get("event_retry_failure_kind")
     continuity = kwargs.get("continuity")
     environment = kwargs.get("environment")
     strand = bool(kwargs.get("strand", False))
@@ -3854,7 +3854,7 @@ def build_daemon_prompt_with_score(
         event_ids=(event_id,),
         event_created=str(event_created) if event_created else None,
         event_retry_of=str(event_retry_of) if event_retry_of else None,
-        event_retry_reason=str(event_retry_reason) if event_retry_reason else None,
+        event_retry_failure_kind=str(event_retry_failure_kind) if event_retry_failure_kind else None,
         pending_count=len(pending_events),
         budget=f"{budget_seconds // 60}m" if budget_seconds else None,
         quota=str(runner_quota) if runner_quota else None,
@@ -4337,7 +4337,7 @@ def build_daemon_prompt(
     event_attachments: list[Path] | None = None,
     event_created: str | None = None,
     event_retry_of: str | None = None,
-    event_retry_reason: str | None = None,
+    event_retry_failure_kind: str | None = None,
     budget_seconds: int | None = None,
     runner_medium: str | None = None,
     runner_quota: str | None = None,
@@ -4432,7 +4432,7 @@ def build_daemon_prompt(
         event_attachments=event_attachments,
         event_created=event_created,
         event_retry_of=event_retry_of,
-        event_retry_reason=event_retry_reason,
+        event_retry_failure_kind=event_retry_failure_kind,
         diffense=diffense,
     )
     trailer = bundle.rstrip()
@@ -4501,7 +4501,7 @@ def build_daemon_prompt(
         event_ids=(event_id,) if event_id else (),
         event_created=event_created,
         event_retry_of=event_retry_of,
-        event_retry_reason=event_retry_reason,
+        event_retry_failure_kind=event_retry_failure_kind,
         pending_count=len(pending_events or []),
         budget=f"{budget_seconds // 60}m" if budget_seconds else None,
         quota=runner_quota,
@@ -4725,7 +4725,7 @@ def _build_run_context_bundle(
     event_attachments: list[Path] | None = None,
     event_created: str | None = None,
     event_retry_of: str | None = None,
-    event_retry_reason: str | None = None,
+    event_retry_failure_kind: str | None = None,
     diffense: bool = False,
 ) -> str:
     """Assemble the human-readable Run Context Bundle for the daemon prompt.
@@ -4825,7 +4825,7 @@ def _build_run_context_bundle(
     age_note = format_event_age(event_created, age_seconds)
     if age_note:
         sections.append(f"- Event {age_note}")
-    retry_note = format_retry_note(event_retry_of, event_retry_reason)
+    retry_note = format_retry_note(event_retry_of, event_retry_failure_kind)
     if retry_note:
         sections.append(f"- Event {retry_note}")
     if run_id:
@@ -5065,7 +5065,9 @@ def _format_pending_events(
     # an id are skipped below, and an omitted count taken from the slice
     # would then under-report. A truncation that misstates its own size is
     # the same lie as one that says nothing.
-    from .bootscore import EVENT_AGE_STALE_SECONDS, event_age_seconds
+    from .bootscore import (
+        EVENT_AGE_STALE_SECONDS, event_age_seconds, format_age_short,
+    )
 
     rendered = 0
     bullets: list[str] = []
@@ -5087,9 +5089,7 @@ def _format_pending_events(
         age_seconds = event_age_seconds(ev.get("created"))
         age = ""
         if age_seconds is not None and age_seconds >= EVENT_AGE_STALE_SECONDS:
-            hours = int(age_seconds // 3600)
-            minutes = int((age_seconds % 3600) // 60)
-            age = f", {hours}h{minutes:02d}m old"
+            age = f", {format_age_short(age_seconds)} old"
         src = f" ({source}{age})" if source else (f" ({age.lstrip(', ')})" if age else "")
         sep = f": {summary}" if summary else ""
         rendered += 1

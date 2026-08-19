@@ -194,7 +194,7 @@ def test_attention_line_renders_retry_provenance() -> None:
             event_ids=("evt-1787065086940542000-bpgk",),
             source_gate="telegram",
             retry_of="run-260818-1834-lcu3",
-            retry_reason="host_interrupted",
+            retry_failure_kind="host_interrupted",
         ),
     )
     att = next(ln for ln in out.splitlines() if ln.startswith("attention:"))
