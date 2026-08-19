@@ -35,6 +35,17 @@ from .models import RunnerWakeRequest
 # gone stale and a silent flip days later would surprise more than help.
 WAKE_REQUEST_TTL_S = 24 * 3600
 
+# #1492: a tap refused by the "parked after this event existed" rung this
+# many times stops losing to older events — the next claim applies it
+# outright, however the age comparison reads. Bounds a starvation the rung
+# has no other bound on: a re-queued event can survive in the dispatch queue
+# for hours, and every survival hour is another refusal for any tap that
+# happened to park behind it. Two, not one: a single refusal is the rung
+# working as designed (the very next wake after a fresh tap is often the one
+# it was parked for), so the bound has to separate "lost the normal race
+# once" from "is being starved."
+PARKED_AFTER_REFUSAL_BOUND = 2
+
 
 def _aware(value: datetime | None) -> datetime | None:
     if value is None:
@@ -51,6 +62,9 @@ def view(row: RunnerWakeRequest) -> dict:
         "environment": row.environment,
         "requested_at": created.isoformat() if created else None,
         "status": row.status,
+        # Only meaningful while pending — a decided row's story is in the
+        # claim/cancel response, not this mirror.
+        "blocked_reason": row.blocked_reason if row.status == RunnerWakeRequest.STATUS_PENDING else None,
     }
 
 
@@ -203,6 +217,23 @@ def claim(
       about. ``daemon_now`` absent (an older daemon) ⇒ the rung is skipped
       rather than guessed: this module never silently drops a tap.
 
+      **Bounded** (#1492): a tap loses this rung no more than
+      :data:`PARKED_AFTER_REFUSAL_BOUND` times. A re-queued event can sit in
+      the dispatch queue for hours with nothing to age it out on its own, so
+      an unbounded rung starves any tap that happened to park behind one —
+      refused fresh at every wake in between, for as long as the event
+      survives. Past the bound the rung stops asserting itself and the claim
+      falls through to apply. The healthy case is unaffected: the bound only
+      trips on *repeat* refusal, so a freshly parked tap still loses the
+      ordinary first race exactly as before.
+
+    Any rung that leaves the row **pending** (schedule-source, unknown
+    profile, or a parked-after-event refusal still under its bound) stamps
+    ``row.blocked_reason`` with why, so the tap's story survives between
+    refusals instead of the row just going quiet — the account's
+    tap-parked-here surface (``view()``) reads it back (#1492's "make the
+    deferral visible" half).
+
     Anything left standing applies: the row goes ``consumed`` here, in this
     transaction, before the daemon has done anything with the answer.
     ``event_id`` is recorded only in the daemon's local receipt (the row has
@@ -226,15 +257,19 @@ def claim(
         db.commit()
         return _refuse(row, request_id, "the tap expired before a wake claimed it")
 
+    def _defer(reason: str) -> dict:
+        """Refuse while the row stays pending, and remember why (#1492) —
+        the tap's story survives to the next refusal (or the next reader of
+        ``view()``) instead of the row just going quiet."""
+        row.blocked_reason = reason
+        db.commit()
+        return _refuse(row, request_id, reason)
+
     if str(source or "") == "schedule":
-        return _refuse(
-            row, request_id,
-            "a schedule-source wake never spends a dashboard tap",
-        )
+        return _defer("a schedule-source wake never spends a dashboard tap")
     if known_profiles is not None and row.profile not in known_profiles:
-        return _refuse(
-            row, request_id,
-            f"profile '{row.profile}' is not in this daemon's published rack",
+        return _defer(
+            f"profile '{row.profile}' is not in this daemon's published rack"
         )
     created = _aware(row.created_at)
     event_at = _aware(event_created)
@@ -242,14 +277,15 @@ def claim(
     if created is not None and event_at is not None and daemon_at is not None:
         tap_age = (now - created).total_seconds()
         event_age = (daemon_at - event_at).total_seconds()
-        if tap_age < event_age:
-            return _refuse(
-                row, request_id,
-                "the tap was parked after this event existed; it is for the next wake",
+        if tap_age < event_age and row.parked_after_refusals < PARKED_AFTER_REFUSAL_BOUND:
+            row.parked_after_refusals += 1
+            return _defer(
+                "the tap was parked after this event existed; it is for the next wake"
             )
 
     row.status = RunnerWakeRequest.STATUS_CONSUMED
     row.decided_at = now
+    row.blocked_reason = None
     db.commit()
     return {
         "apply": True,
