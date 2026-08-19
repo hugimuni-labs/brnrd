@@ -186,6 +186,14 @@ BAR_LAST_CHIPS_KEY = "bar_last_chips"
 COURSE_DRIFT_COUNT_KEY = "course_drift_count"
 WORK_TOKEN_KEY = "work_token"
 _COURSE_DRIFT_THRESHOLD = 3
+# The mood's own drift (his ask, evt-…-mhrx: "we should do the mood
+# staleness detection and ask to touch the face file at least"): a face
+# left standing across _MOOD_DRIFT_THRESHOLD work-deltas gets one
+# `still <face>?` ask, then the counter re-arms. Higher threshold than the
+# course — a mood legitimately outlives more work than a route row does.
+MOOD_DRIFT_COUNT_KEY = "mood_drift_count"
+MOOD_LAST_TEXT_KEY = "mood_last_text"
+_MOOD_DRIFT_THRESHOLD = 5
 
 # Budget thresholds (% used) at which the ambient bar re-emits; crossed once
 # each in the ascending direction only.
@@ -226,7 +234,10 @@ GATE_RECEIPT_NAME = gate_receipt.RECEIPT_NAME
 MOOD_NAME = ".mood"
 # The blank-mood nudge's elapsed floor: a run this young has not necessarily
 # had a moment worth a face yet, so the chip waits rather than firing at t=0.
-_MOOD_NUDGE_ELAPSED_SECONDS = 900  # ~15m
+# 0 since 2026-08-19 (evt-…-mhrx: "at the very beginning, we should also
+# hint that it's yours to change"): the nudge rides the run's first bar —
+# change-gating makes the early hint cost exactly one render.
+_MOOD_NUDGE_ELAPSED_SECONDS = 0
 # The resident's own topic claim (the-run-that-claims-its-thread). Same
 # idiom as `.mood` above — read fresh at every boundary rather than through
 # `run_ledger.read_run_topics_control` (which the daemon side uses for the
@@ -1377,23 +1388,9 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         # course's own token, is what earns a boundary.
         klass=OBLIGATION,
     ),
-    _BarSegment(
-        "bolt", "bolt",
-        "the run's completion accretion gauge (design-the-bolt.md "
-        "§Accretion): `bolt A/T asks · owed N · produce M` — A/T = asks "
-        "this run has seen that are no longer pending / total distinct asks "
-        "ever seen; owed/produce mirror the `owed`/`⚒` chips (zero parts "
-        "omitted). A derived gauge, not a new obligation to author — it "
-        "reads the same ledgers `owed`/`⚒` already read. Renders only once "
-        "the run has seen ≥1 ask or has any produce/promise; a wake that "
-        "has done nothing renders no `bolt` chip.",
-        # Obligation: an undispositioned ask or an outstanding promise is
-        # actionable and turn-off-able by disposing/shipping it — same test
-        # as `owed`/`course`. The chip itself is gateless (never opens the
-        # bar alone, like `owed`/`course`); the detail line, latched on the
-        # gauge's own token edge or a fresh event, is what earns a boundary.
-        klass=OBLIGATION,
-    ),
+    # The `bolt` chip retired 2026-08-19 (evt-…-mhrx) — it counted events
+    # while saying "asks" and restated owed/produce/pending. The bolt the
+    # design doc names lives on as the cut-validator, daemon-side.
     _BarSegment(
         "mood", "mood",
         "the mood channel's *edge* forms only (w-54): the steady face moved "
@@ -1645,6 +1642,20 @@ def _card_chip(card: dict[str, Any], card_stale: bool) -> str | None:
         size = len(card_rule.now_projection(text))
         if size > card_rule.CARD_TEXT_MAX_CHARS:
             return f"card cut {size}>{card_rule.CARD_TEXT_MAX_CHARS}"
+    # `card behind` — the run moved after the last card write, said the
+    # moment it becomes true (his ask, evt-…-mhrx: the 240s clock made the
+    # transition *look wrong* by hiding it for four minutes). The 240s
+    # grace now gates only the stale nag above; this is the bare fact,
+    # change-gated like every chip, so it costs one render per episode
+    # and vanishes the moment the card catches up.
+    moved = card.get("state_moved_seconds")
+    age = card.get("age_seconds")
+    if (
+        isinstance(moved, (int, float)) and isinstance(age, (int, float))
+        and not isinstance(moved, bool) and not isinstance(age, bool)
+        and moved < age
+    ):
+        return "card behind"
     # Healthy (or an older capsule shape with no body to measure — absence
     # of evidence of trouble is the quiet state, not a verdict to invent).
     return None
@@ -2519,6 +2530,7 @@ def _render_bar(
     last_chips: dict[str, str] | None = None,
     rendered_chips: dict[str, str] | None = None,
     route_drift: bool = False,
+    mood_drift: bool = False,
 ) -> str | None:
     """The mid-run (``post-tool``) status bar: preamble + changed chips + details.
 
@@ -2622,31 +2634,15 @@ def _render_bar(
     course_chip = course.chip(route)
     if course_chip:
         segments.append(("course", course_chip))
-    # The bolt gauge (design-the-bolt.md §Accretion): a derived reading over
-    # ledgers already read above — never re-derived, never a new obligation
-    # to author. Gateless like `owed`/`course`: the detail line below (on the
-    # gauge's own edge, or a fresh event) earns the boundary, not this chip.
-    bolt_chip = None
-    bolt_owed_total = 0
-    bolt_asks_answered = 0
-    bolt_asks_total_clamped = 0
-    if bolt_asks_total is not None:
-        bolt_asks_total_clamped = max(0, int(bolt_asks_total))
-        bolt_asks_answered = max(0, bolt_asks_total_clamped - pending)
-        bolt_owed_total = sum(plan.owed.values()) if plan is not None else 0
-        bolt_any_promise = bool(plan is not None and plan.any_promises)
-        if bolt_asks_total_clamped or bolt_owed_total or produce_total or bolt_any_promise:
-            parts: list[str] = []
-            if bolt_asks_total_clamped:
-                parts.append(f"{bolt_asks_answered}/{bolt_asks_total_clamped} asks")
-            if bolt_owed_total:
-                parts.append(f"owed {bolt_owed_total}")
-            if produce_total:
-                parts.append(f"produce {produce_total}")
-            if parts:
-                bolt_chip = "bolt " + " · ".join(parts)
-    if bolt_chip:
-        segments.append(("bolt", bolt_chip))
+    # The bolt CHIP retired 2026-08-19 (his call, evt-…-mhrx: "I honestly
+    # don't see the value… the bolt should hold the asks, not events"). It
+    # counted pending *events* while wearing the word "asks", and restated
+    # what `owed`/`⚒`/the pending rows already carry. The half that earns
+    # its life stays untouched and daemon-side: the cut-validator — the
+    # declaration diffed against attested state, bounce-cap-3 — which
+    # bounced this very run's premature closeout the evening this chip was
+    # removed. ``bolt_asks_total``/``bolt_edge`` stay accepted so callers
+    # and the seen-ledger keep working; they no longer render here.
     notices_chip = _notices_chip(notices or [])
     if notices_chip:
         segments.append(("notices", notices_chip))
@@ -2670,6 +2666,11 @@ def _render_bar(
             segments.append(("mood", f"mood {mood_text} ← {surprise}"))
         elif mood_text.startswith("✗"):
             segments.append(("mood", f"mood {mood_text}"))
+        elif mood_drift:
+            # The face stood still through _MOOD_DRIFT_THRESHOLD work-moves
+            # (his ask, evt-…-mhrx): one `still?` beside the claimed face —
+            # the ask is the mismatch check, the touch is the discharge.
+            segments.append(("mood", f"mood {mood_text} — still?"))
     elif mood_prompt:
         # The blank-mood nudge: ambient, once. See the caller's latch
         # (`MOOD_NUDGE_KEY`) and the docstring above — this branch only
@@ -2785,31 +2786,6 @@ def _render_bar(
                     "a row, or redraw the plan"
                 )
             details.append(route_line)
-    # The bolt gauge's detail line: latched on its own token edge (the
-    # accretion moved — an ask got dispositioned, a promise was made/met,
-    # produce landed), and re-rendered on ``route_prompt`` for the same
-    # "fresh event ⇒ re-render your position against it" reason the course
-    # line uses just above — a new ask is exactly the moment the
-    # undispositioned count needs to be in the loud zone. Never latched to
-    # the compression-on-repeat counters below: like `owed`/`course`, it
-    # already speaks only on its own edge, so it never repeats byte-for-byte
-    # in the first place.
-    if bolt_chip and (bolt_edge or route_prompt):
-        bolt_parts: list[str] = []
-        if bolt_asks_total_clamped:
-            bolt_parts.append(
-                f"{bolt_asks_answered}/{bolt_asks_total_clamped} asks dispositioned"
-            )
-        if bolt_owed_total:
-            bolt_parts.append(f"{bolt_owed_total} owed")
-        if produce_total:
-            bolt_parts.append(f"{produce_total} produce")
-        bolt_summary = " · ".join(bolt_parts) if bolt_parts else "the accretion gauge"
-        details.append(
-            f"- bolt: {bolt_summary} — keep the card's `## Bolt` draft "
-            "current and disposition each ask (`event:` / `note:`) as it "
-            "lands; `brnrd cut` is the closing act."
-        )
     streaks = repeat_streaks_in
     if budget.get("long_running"):
         limit = budget.get("budget_seconds")
@@ -2883,12 +2859,12 @@ def _render_bar(
         # chip was seen, so the old miss-a-quiet-boundary caps are moot.
         "card": card_stale,
         # A surprise is fresh news even when its text repeats — the caller
-        # already latches it to the clean→broken transition.
-        "mood": bool(surprise),
+        # already latches it to the clean→broken transition; a drift ask is
+        # its own edge the same way.
+        "mood": bool(surprise) or mood_drift,
         # Position trackers re-surface on their own edges even when the
         # numbers happen not to have moved.
         "course": route_edge or route_prompt or route_drift,
-        "bolt": bolt_edge or route_prompt,
         "owed": plan_edge,
     }
 
@@ -2997,6 +2973,7 @@ def format_delta(
     last_chips: dict[str, str] | None = None,
     rendered_chips: dict[str, str] | None = None,
     route_drift: bool = False,
+    mood_drift: bool = False,
 ) -> str | None:
     """Render a compact context delta from the live portal-state payload.
 
@@ -3152,7 +3129,7 @@ def format_delta(
             repeat_streaks=repeat_streaks,
             pending_set_changed=pending_set_changed,
             last_chips=last_chips, rendered_chips=rendered_chips,
-            route_drift=route_drift,
+            route_drift=route_drift, mood_drift=mood_drift,
         )
 
     lines: list[str] = []
@@ -4660,10 +4637,11 @@ def compute_neutral(
     ))
     route_drift = False
     prev_work_token = state.get(WORK_TOKEN_KEY)
+    work_moved = prev_work_token is not None and work_token != prev_work_token
     if route is not None and route.open_rows:
         if route_edge:
             state[COURSE_DRIFT_COUNT_KEY] = 0
-        elif prev_work_token is not None and work_token != prev_work_token:
+        elif work_moved:
             drift_count = int(state.get(COURSE_DRIFT_COUNT_KEY) or 0) + 1
             if drift_count >= _COURSE_DRIFT_THRESHOLD:
                 route_drift = True
@@ -4671,6 +4649,23 @@ def compute_neutral(
             state[COURSE_DRIFT_COUNT_KEY] = drift_count
     else:
         state[COURSE_DRIFT_COUNT_KEY] = 0
+    # The mood's drift, same engine (evt-…-mhrx): the face stood still while
+    # the run visibly moved. Touching `.mood` — any text change — resets;
+    # the ask re-arms after another full threshold of work-moves, so a
+    # genuinely steady mood costs one `still?` per five shipped things.
+    mood_drift = False
+    if mood:
+        if mood != state.get(MOOD_LAST_TEXT_KEY):
+            state[MOOD_DRIFT_COUNT_KEY] = 0
+        elif work_moved:
+            mood_count = int(state.get(MOOD_DRIFT_COUNT_KEY) or 0) + 1
+            if mood_count >= _MOOD_DRIFT_THRESHOLD:
+                mood_drift = True
+                mood_count = 0
+            state[MOOD_DRIFT_COUNT_KEY] = mood_count
+    else:
+        state[MOOD_DRIFT_COUNT_KEY] = 0
+    state[MOOD_LAST_TEXT_KEY] = mood
     state[WORK_TOKEN_KEY] = work_token
 
     # The bolt gauge (design-the-bolt.md §Accretion): T/A over the run's
@@ -4909,7 +4904,8 @@ def compute_neutral(
         rendered_chips: dict[str, str] = {}
         if (
             has_obligations or ambient_emit or edge or plan_edge
-            or route_edge or bolt_edge or route_drift or token_moved
+            or route_edge or bolt_edge or route_drift or mood_drift
+            or token_moved
         ):
             inject = format_delta(
                 portal, mood=mood, mood_prompt=mood_prompt,
@@ -4924,7 +4920,7 @@ def compute_neutral(
                 repeat_streaks=repeat_streaks,
                 pending_set_changed=pending_set_changed,
                 last_chips=last_chips, rendered_chips=rendered_chips,
-                route_drift=route_drift,
+                route_drift=route_drift, mood_drift=mood_drift,
             )
             state["last_token"] = token
             if ambient_emit and inject is not None:

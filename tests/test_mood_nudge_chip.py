@@ -61,13 +61,16 @@ def test_an_old_run_with_no_mood_gets_the_nudge(tmp_path):
     assert "mood?" in (out["inject"] or "")
 
 
-def test_a_young_run_gets_no_nudge_yet(tmp_path):
+def test_a_young_run_gets_the_hint_on_its_first_bar(tmp_path):
+    # The 15m floor dropped 2026-08-19 (evt-…-mhrx: "at the very beginning,
+    # we should also hint that it's yours to change") — change-gating
+    # prices the early hint at one render, so age stopped being the guard.
     ctx, outbox, portal = _ctx(tmp_path)
     portal.write_text(
         json.dumps(_portal("t1", elapsed_seconds=120)), encoding="utf-8"
     )
     out = hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})
-    assert "mood?" not in (out["inject"] or "")
+    assert "mood?" in (out["inject"] or "")
 
 
 def test_a_written_mood_forever_disqualifies_the_nudge(tmp_path):
@@ -145,26 +148,8 @@ def test_a_mood_write_that_later_clears_still_disqualifies_the_nudge(tmp_path):
     assert "mood?" not in (second["inject"] or "")
 
 
-def test_a_quiet_eligible_boundary_does_not_burn_the_latch(tmp_path):
-    """Latch on the render, not on the decision (#728's rule).
-
-    A boundary where the nudge was eligible but nothing else was laden
-    (so the whole bar stayed silent) must not spend the one-shot — the
-    chip gets its real first chance on the next boundary that actually
-    renders something.
-    """
-    ctx, outbox, portal = _ctx(tmp_path)
-    # Boundary 0 (w-54): burn the first bar young, then hold the token.
-    young = _portal("t1", elapsed_seconds=120,
-                    card={"stale": False, "state": "ok"})
-    portal.write_text(json.dumps(young), encoding="utf-8")
-    hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})
-    quiet = _portal("t1", card={"stale": False, "state": "ok"})
-    portal.write_text(json.dumps(quiet), encoding="utf-8")
-    quiet_out = hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})
-    assert quiet_out["inject"] is None
-
-    laden = _portal("t2")
-    portal.write_text(json.dumps(laden), encoding="utf-8")
-    laden_out = hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})
-    assert "mood?" in (laden_out["inject"] or "")
+# test_a_quiet_eligible_boundary_does_not_burn_the_latch retired 2026-08-19:
+# with the nudge floor at 0 the run's first rendered bar always carries
+# `mood?`, so an "eligible but never rendered" boundary is unconstructible.
+# The latch-on-render discipline itself is pinned by
+# test_the_nudge_fires_once_and_then_latches_silent above.

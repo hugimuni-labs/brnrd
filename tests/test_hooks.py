@@ -3648,11 +3648,16 @@ def test_post_tool_mood_renders_in_the_preamble(tmp_path):
 
 
 def test_post_tool_mood_absent_renders_no_segment(tmp_path):
+    # Since 2026-08-19 the blank-mood nudge rides the first bar (floor 0,
+    # evt-…-mhrx) — so an absent mood may render `mood?` once. What must
+    # never render for an absent mood is a *face*: no glyph preamble, no
+    # `mood <face>` display form, no surprise arrow.
     _portal(tmp_path, token="t1", pending=1,
             events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "mood" not in ctx
+    assert ctx.splitlines()[0].startswith("⌁[·]:")
+    assert "mood b" not in ctx and "←" not in ctx
 
 
 def test_seed_and_stop_render_mood_as_a_plain_prose_line(tmp_path):
@@ -3704,7 +3709,11 @@ def test_mood_blank_file_renders_no_segment(tmp_path):
     (tmp_path / hooks.MOOD_NAME).write_text("   \n\nsecond line\n", encoding="utf-8")
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "mood" not in ctx
+    # A blank first line is an absent mood: bare preamble, no face, no
+    # display chip. (`mood?` may not fire here — a write happened, so the
+    # ever-written latch holds; the pin is only about the face.)
+    assert ctx.splitlines()[0].startswith("⌁[·]:")
+    assert "mood ✗" not in ctx and "←" not in ctx
 
 
 def test_mood_chip_truncates_a_long_name():
@@ -3912,7 +3921,10 @@ def test_no_mood_means_no_surprise_annotation(tmp_path):
         hooks.PHASE_POST_TOOL, _batch("Exit code 1"), _env(tmp_path)
     )
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "←" not in ctx and "mood" not in ctx
+    # No face ⇒ no surprise arrow, and no face in the preamble. The
+    # first-bar `mood?` hint may legally ride (floor 0 since evt-…-mhrx).
+    assert "←" not in ctx
+    assert ctx.splitlines()[0].startswith("⌁[·]:")
 
 
 # ── The orientation ledger (#513 Slice 9) ────────────────────────────────
@@ -5600,7 +5612,12 @@ def test_bolt_chip_requires_caller_opt_in():
     assert "bolt" not in rendered.splitlines()[0]
 
 
-def test_bolt_chip_renders_asks_owed_produce_omitting_zero_parts():
+def test_bolt_chip_never_renders_since_its_retirement():
+    """The bolt CHIP retired 2026-08-19 (evt-…-mhrx, his call): it counted
+    pending *events* while wearing the word "asks", and restated what
+    `owed`/`⚒`/the pending rows already carry. The caller opt-in must now
+    be inert at any value — the cut-validator half of the bolt lives
+    daemon-side and is untouched by this."""
     from brr import promises
 
     plan = promises.blueprint([{"what": "commit", "count": 2}], {"commit": 1})
@@ -5613,47 +5630,9 @@ def test_bolt_chip_renders_asks_owed_produce_omitting_zero_parts():
     )
     rendered = hooks.format_delta(
         payload, mood="smug_", plan=plan, bolt_asks_total=3, bolt_edge=True,
-    )
-    bar = rendered.splitlines()[0]
-    # T=3 asks ever seen, 1 still pending ⇒ A=2 dispositioned. owed 1 (2
-    # promised commits, 1 landed). produce 2 (1 commit + 1 kb).
-    assert "bolt 2/3 asks · owed 1 · produce 2" in bar
-    assert "- bolt: 2/3 asks dispositioned · 1 owed · 2 produce —" in rendered
-    assert "`brnrd cut`" in rendered
-
-
-def test_bolt_chip_omits_the_asks_part_when_t_is_zero():
-    """Only produce/promise triggered it this boundary — no asks part."""
-    rendered = hooks.format_delta(
-        _bar_payload(produce={"known": True, "counts": {"commit": 2}}),
-        mood="smug_", bolt_asks_total=0,
-    )
-    bar = rendered.splitlines()[0]
-    assert "bolt produce 2" in bar
-    assert "asks" not in bar
-
-
-def test_bolt_detail_line_silent_off_its_own_edge_and_route_prompt():
-    """The chip is gateless (`owed`/`course`'s pattern); the detail line is
-    latched — it must not repeat every boundary just because the chip is
-    showing."""
-    payload = _bar_payload(produce={"known": True, "counts": {"commit": 2}})
-    rendered = hooks.format_delta(
-        payload, mood="smug_", bolt_asks_total=2, bolt_edge=False,
-    )
-    assert "bolt 2/2 asks · produce 2" in rendered.splitlines()[0]
-    assert "- bolt:" not in rendered
-
-
-def test_bolt_detail_line_rerenders_on_a_fresh_event():
-    """"fresh event ⇒ re-render your position against it" — the same trigger
-    `route_prompt` already carries for the course line."""
-    payload = _bar_payload(produce={"known": True, "counts": {"commit": 2}})
-    rendered = hooks.format_delta(
-        payload, mood="smug_", bolt_asks_total=2, bolt_edge=False,
         route_prompt=True,
     )
-    assert "- bolt:" in rendered
+    assert "bolt" not in rendered
 
 
 def test_bolt_stop_closeout_names_brnrd_cut(tmp_path):
@@ -5674,17 +5653,19 @@ def test_bolt_asks_total_accumulates_across_boundaries_and_survives_disposition(
     ev2 = {"id": "evt-1002", "source": "telegram", "summary": "second"}
 
     _portal(tmp_path, token="t1", pending=1, events=[ev1])
-    first, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    ctx1 = first["hookSpecificOutput"]["additionalContext"]
-    assert "bolt 0/1 asks" in ctx1
+    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
 
     # ev1 answered (no longer pending), ev2 arrives fresh.
     _portal(tmp_path, token="t2", pending=1, events=[ev2])
-    second, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    ctx2 = second["hookSpecificOutput"]["additionalContext"]
-    # T=2 (ev1 and ev2, ever seen), A=1 (ev1 dispositioned; ev2 still
-    # pending) — T survived ev1 leaving the pending list.
-    assert "bolt 1/2 asks" in ctx2
+    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    # The ledger is state, not chrome (the chip retired 2026-08-19): T=2 —
+    # ev1 survived leaving the pending list — read off the persisted
+    # seen-set the cut-validator's context relies on.
+    state = json.loads(
+        (tmp_path / hooks.HOOK_STATE_NAME).read_text(encoding="utf-8")
+    )
+    seen = state.get(hooks.EVENTS_SEEN_ALL_KEY) or []
+    assert set(seen) >= {"evt-1001", "evt-1002"}
 
 
 # ── Compression-on-repeat (#1116 residue, design-the-live-loop.md §1) ────────
@@ -5980,3 +5961,74 @@ def test_course_edit_resets_the_drift_counter(tmp_path):
     portal("t4", 3)
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
     assert "the run has moved 3× since the route did" not in _inject_text(out)
+
+
+def test_card_behind_renders_the_moment_the_run_outruns_it():
+    # evt-…-mhrx: the 240s clock hid the transition and "looked wrong". The
+    # bare fact renders at once; the stale nag keeps its grace period.
+    chip = hooks._card_chip(
+        {"active": True, "text": "## Now\nfine", "age_seconds": 90,
+         "state_moved_seconds": 10},
+        card_stale=False,
+    )
+    assert chip == "card behind"
+    # The card catching up clears it: written after the last move.
+    chip = hooks._card_chip(
+        {"active": True, "text": "## Now\nfine", "age_seconds": 5,
+         "state_moved_seconds": 10},
+        card_stale=False,
+    )
+    assert chip is None
+    # Stale outranks behind — the nag form owns the chip once earned.
+    chip = hooks._card_chip(
+        {"active": True, "text": "x", "age_seconds": 500,
+         "state_moved_seconds": 400},
+        card_stale=True,
+    )
+    assert chip == "card stale"
+
+
+def test_mood_drift_asks_still_beside_the_standing_face():
+    rendered = hooks.format_delta(_bar_payload(), mood="smug_", mood_drift=True)
+    bar = rendered.splitlines()[0]
+    assert "— still?" in bar
+    assert "mood" in bar
+    # Off the drift edge, a resolved face renders no chip at all.
+    quiet = hooks.format_delta(_bar_payload(), mood="smug_")
+    assert "still?" not in (quiet or "")
+
+
+def test_mood_drift_fires_after_work_moves_and_rearms(tmp_path):
+    (tmp_path / hooks.MOOD_NAME).write_text("bo_Od\n", encoding="utf-8")
+    env = _env(tmp_path)
+
+    def portal(token, commits):
+        _portal(
+            tmp_path, token=token, pending=0,
+            produce={"known": True, "counts": {"commit": commits}},
+        )
+
+    portal("t0", 0)
+    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)  # first bar
+    fired = 0
+    for i, tok in enumerate(["t1", "t2", "t3", "t4", "t5"], start=1):
+        portal(tok, i)
+        out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+        if "— still?" in _inject_text(out):
+            fired += 1
+    # Five work-moves ⇒ exactly one ask, and the counter re-armed rather
+    # than latching (the next single move does not re-fire).
+    assert fired == 1
+    portal("t6", 6)
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    assert "— still?" not in _inject_text(out)
+
+
+def test_mood_nudge_rides_the_first_bar(tmp_path):
+    # evt-…-mhrx: "at the very beginning, we should also hint that it's
+    # yours to change" — the floor dropped to 0; change-gating prices the
+    # early hint at exactly one render.
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    assert "mood?" in out["hookSpecificOutput"]["additionalContext"]
