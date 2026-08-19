@@ -11813,6 +11813,8 @@ def test_run_state_doc_carries_the_complete_bounded_bolt_declaration(tmp_path):
     ).read_text(encoding="utf-8")
 
     assert "bolt: annotated 2026-08-08T00:00:00Z" in text
+    assert "bolt_attempts: 1" in text
+    assert "bolt_bounces:" not in text
     assert "## Bolt Declaration" in text
     declaration_json = text.split("## Bolt Declaration\n\n```json\n", 1)[1].split(
         "\n```", 1,
@@ -12364,6 +12366,8 @@ def test_drain_outbox_cut_minimal_bolt_is_accepted(tmp_path):
     bolt = task.meta["bolt"]
     assert bolt["annotated"] == 0
     assert bolt["accepted_at"]
+    assert bolt["attempts"] == 1
+    assert bolt["bounces"] == []
     assert daemon._read_outbox_notices(outbox) == []
     # Delivered through the existing `event:` lane, on the current event.
     [partial_path] = protocol.list_partials(responses, event_id)
@@ -12396,7 +12400,9 @@ def test_drain_outbox_cut_bounces_double_wrapped_staging_casualty(tmp_path):
 def test_drain_outbox_cut_undispositioned_pending_event_bounces(tmp_path):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
-    protocol.create_event(inbox, source="telegram", body="a question", status="pending")
+    pending_path = protocol.create_event(
+        inbox, source="telegram", body="a question", status="pending",
+    )
 
     promoted, task, outbox, _inbox, responses, event_id = _drain_cut(
         tmp_path, "---\ncut: true\n---\nDone.\n",
@@ -12460,6 +12466,7 @@ def test_drain_outbox_cut_bounce_cap_then_accept_annotated(tmp_path):
     outbox.mkdir(parents=True)
     (outbox / ".topics").write_text("the-loom\n", encoding="utf-8")
     protocol.create_event(inbox, source="telegram", body="a question", status="pending")
+    pending_event = protocol.list_pending(inbox)[0]
     path = protocol.create_event(inbox, "telegram", "original", status="processing")
     event_id = path.stem
     task = Run(
@@ -12476,6 +12483,9 @@ def test_drain_outbox_cut_bounce_cap_then_accept_annotated(tmp_path):
         assert promoted == 0
         assert task.meta["cut_bounces"] == i
         assert "bolt" not in task.meta
+        if i == 1:
+            protocol.set_status(pending_event, "done")
+            (outbox / ".topics").unlink()
 
     (outbox / "cut3.md").write_text("---\ncut: true\n---\nDone.\n")
     promoted = daemon._drain_outbox(emit, task, responses, event_id, outbox, inbox)
@@ -12484,10 +12494,12 @@ def test_drain_outbox_cut_bounce_cap_then_accept_annotated(tmp_path):
     assert task.meta["cut_bounces"] == 3
     bolt = task.meta["bolt"]
     assert bolt["annotated"] == 1
+    assert bolt["attempts"] == 3
+    assert bolt["bounces"] == ["pending-event", "topic"]
     [partial_path] = protocol.list_partials(responses, event_id)
     body = protocol.read_partial(partial_path)
     assert "daemon: 1 check unresolved" in body
-    assert "undispositioned" in body
+    assert "topicless" in body
 
 
 def test_drain_outbox_cut_persists_declaration_and_daemon_dissent(tmp_path):
