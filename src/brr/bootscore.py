@@ -42,11 +42,142 @@ Slice 3 will extend the ``SessionStart`` capsule from the BootScore.
 
 from __future__ import annotations
 
+import time
 from dataclasses import asdict, dataclass, field, replace
+
+from . import protocol
 
 # ── Schema version ────────────────────────────────────────────────────────────
 
 SCHEMA_VERSION = "1"
+
+# ── Event age (#1491) ────────────────────────────────────────────────────────
+#
+# A run cannot tell a six-hour-old message from a live one unless the age
+# travels with it. Below this, the raw ``sent <stamp>`` reads as "just now"
+# to anyone glancing at a clock, so the elapsed half stays silent and the
+# common (fresh-event) path pays nothing. Past it, the wake cannot be left to
+# do the arithmetic itself — ``format_event_age`` spells out the elapsed time
+# and names the likely cause in words, the same register #1489's "the daemon
+# was only asleep" already uses for a stale heartbeat. One hour is plenty of
+# slack for a chat message that arrived seconds before a run picked it up
+# (queueing, a slow gate, clock skew) while still catching the case that
+# actually mattered here: a message that sat through a host suspend and woke
+# a run many hours later. Named once, here, rather than duplicated as a
+# literal at each of the three renderers that need to agree on it.
+EVENT_AGE_STALE_SECONDS = 3600.0
+
+
+def event_age_seconds(created: str | None, *, now: float | None = None) -> float | None:
+    """Elapsed seconds since an event's own ``created:`` stamp, or ``None``.
+
+    ``created`` is the UTC ``%Y-%m-%dT%H:%M:%SZ`` (or any ISO-8601 ``Z``/
+    offset variant) frontmatter :func:`protocol.create_event` stamps once and
+    never rewrites. Missing or unparseable ⇒ ``None`` — callers degrade to no
+    age line at all rather than guess or crash (a malformed or hand-edited
+    event must never take a wake down). ``now`` is a seam for tests; live
+    callers leave it unset and get the wall clock at the moment the fact is
+    asked for — the same "asked once, where the assembling happens" shape
+    :attr:`BootHost.image_stale` already uses, not a value threaded down from
+    somewhere higher that could go stale between the ask and the render.
+    """
+    if not created:
+        return None
+    epoch = protocol.parse_iso_epoch(created)
+    if epoch is None:
+        return None
+    now_ts = time.time() if now is None else now
+    return max(0.0, now_ts - epoch)
+
+
+def format_age_short(age_seconds: float) -> str:
+    """``6h06m`` — hours and zero-padded minutes, no unit ever dropped.
+
+    The one place the ``//3600`` / ``%3600//60`` arithmetic lives for an
+    event's own age. :func:`format_event_age` (the waking event's own
+    attention/Run-section line) and ``prompts._format_pending_events`` (the
+    compact age suffix on every *other* pending event in the same bundle)
+    render the same fact from the same :func:`event_age_seconds` output and
+    must agree byte for byte — reconciling #1495/#1500 found the second
+    renderer had drifted into its own hand-rolled copy of this exact
+    arithmetic despite a comment claiming otherwise. One formatter now; the
+    comment is true because the import makes it true.
+    """
+    hours = int(age_seconds // 3600)
+    minutes = int((age_seconds % 3600) // 60)
+    return f"{hours}h{minutes:02d}m"
+
+
+def format_event_age(created: str | None, age_seconds: float | None) -> str | None:
+    """Render an event's age for a wake surface, or ``None`` when unknown.
+
+    Both the absolute stamp and the elapsed time, per #1491: an absolute time
+    alone makes the reader do arithmetic, and elapsed alone loses the anchor.
+    Below :data:`EVENT_AGE_STALE_SECONDS` the stamp alone is enough — the
+    common path stays quiet, no elapsed half, no wording. Past it, the
+    elapsed time and a plain-language cause ride alongside it, matched to the
+    tonight-measured case (#1491's own comment): a message that arrived while
+    the daemon was down, not a run misbehaving.
+
+    Pure formatting from already-computed facts (``age_seconds`` is asked for
+    once, at build time, by :func:`event_age_seconds`) — no wall-clock read
+    here, so a persisted :class:`BootScore` re-rendered later reports the age
+    it had *at build time*, not one that keeps drifting under a stale JSON
+    file.
+    """
+    if not created or age_seconds is None:
+        return None
+    if age_seconds < EVENT_AGE_STALE_SECONDS:
+        return f"sent {created}"
+    return (
+        f"sent {created} ({format_age_short(age_seconds)} ago) — the daemon "
+        "was only asleep; this reached you late, not live"
+    )
+
+
+#: Compact inline label for a retry-provenance ``retry_failure_kind`` value —
+#: falls back to the raw kind (underscores turned to spaces) for anything not
+#: named here, so a future failure kind renders imperfectly rather than
+#: silently.
+_RETRY_FAILURE_KIND_SHORT: dict[str, str] = {
+    "host_interrupted": "host interrupt",
+}
+
+
+def format_retry_note(retry_of: str | None, retry_failure_kind: str | None) -> str | None:
+    """``"retry of run-X (host interrupt)"`` from an event's retry-history fields.
+
+    ``retry_of`` / ``retry_failure_kind`` are comma-joined, positionally
+    paired lists (event frontmatter is flat — see
+    ``protocol.update_event_meta``) — an event retried more than once
+    accumulates entries additively rather than overwriting the previous one,
+    so this can render a short history, not just the latest attempt.
+
+    Named ``retry_failure_kind``, not the shorter ``retry_reason`` #1500
+    first reached for: ``runner.RunnerResult.retry_reason()`` already owns
+    that name for an unrelated fact — *why the current run will be retried
+    in-loop* — while this is *what a prior interrupted run died of*. Same
+    word, two different facts, both live in ``daemon.py``; reconciling
+    #1495/#1500 renamed the newer one so a reader (and a grep) cannot
+    conflate them.
+    """
+    if not retry_of:
+        return None
+    runs = [r.strip() for r in retry_of.split(",") if r.strip()]
+    if not runs:
+        return None
+    reasons = [r.strip() for r in (retry_failure_kind or "").split(",") if r.strip()]
+    parts = []
+    for i, run_id in enumerate(runs):
+        reason = reasons[i] if i < len(reasons) else None
+        label = (
+            _RETRY_FAILURE_KIND_SHORT.get(reason, reason.replace("_", " "))
+            if reason else None
+        )
+        parts.append(f"{run_id} ({label})" if label else run_id)
+    noun = "retry of" if len(parts) == 1 else "retries of (in order)"
+    return f"{noun} {', '.join(parts)}"
+
 
 # ── Authority layers (ordered most → least authoritative) ─────────────────────
 
@@ -292,6 +423,34 @@ class BootAttention:
     """The gate the attention arrived through — ``"telegram"``, ``"github"``,
     ``"schedule"``.  *Who is talking to me*, which is the one thing the
     ``attention:`` line exists to say and the one thing it used to omit."""
+
+    created: str | None = None
+    """The waking event's own ``created:`` stamp (#1491) — carried raw so a
+    persisted score keeps the fact it was built from, not a value that would
+    keep changing if re-rendered later. ``None`` when the caller has no event
+    (a strand's own follow-up, a fixture) or the field was missing/blank."""
+
+    age_seconds: float | None = None
+    """Elapsed seconds between ``created`` and the moment this score was
+    built — asked once, here, by :func:`event_age_seconds` (see that
+    docstring: staleness of a *fact*, not staleness of the *process*, but the
+    same "ask where the assembling happens" shape as ``BootHost.image_stale``
+    next door). ``None`` when ``created`` was missing or unparseable, never a
+    guess."""
+
+    retry_of: str | None = None
+    """Comma-joined prior run id(s) this event was already attempted by,
+    before a host interrupt or crash sent it back to the queue (#1491) —
+    additive, so a twice-retried event keeps both. ``None`` on a first
+    attempt; see ``daemon._mark_interrupted_runs`` for the writer."""
+
+    retry_failure_kind: str | None = None
+    """Comma-joined, positionally paired with ``retry_of``: the
+    ``runner_failures`` kind each prior attempt died of. Named distinctly
+    from ``runner.RunnerResult.retry_reason()`` — that method answers *why
+    the current run will be retried in-loop*; this answers *what a prior
+    interrupted run died of* — two different facts that both live in
+    ``daemon.py`` and must not share a name (#1495/#1500 reconciliation)."""
 
 
 @dataclass(frozen=True)
@@ -723,6 +882,12 @@ def format_kernel(score: BootScore) -> str:
         att_line = "attention: " + ", ".join(att.event_ids)
         if att.source_gate:
             att_line += f" · via {att.source_gate}"
+        age_note = format_event_age(att.created, att.age_seconds)
+        if age_note:
+            att_line += f" · {age_note}"
+        retry_note = format_retry_note(att.retry_of, att.retry_failure_kind)
+        if retry_note:
+            att_line += f" · {retry_note}"
         lines.append(att_line)
 
     posture = score.posture

@@ -1428,6 +1428,24 @@ class TestPromptBuilding:
         assert "announced, not fetched" in prompt
         assert "ghost.png" in prompt
 
+    def test_daemon_prompt_flags_orphaned_pending_event(self, tmp_path):
+        """#1496 ("the event nobody could see") layer 2: an event surfaced
+        because its dispatched run is provably dead must render as a
+        distinguishable "orphaned" line — mixing it silently into fresh
+        mail is the exact failure the fix exists to end."""
+        prompt = build_daemon_prompt(
+            "work on A", "evt-A", "/tmp/resp.md", tmp_path,
+            outbox_path="/repo/.brr/outbox/evt-A",
+            run_id="task-A",
+            pending_events=[
+                {"id": "evt-B", "source": "telegram", "summary": "orphaned",
+                 "orphaned": True},
+            ],
+        )
+        assert "evt-B" in prompt
+        assert "orphaned" in prompt
+        assert "survivor" in prompt
+
     def test_format_pending_events_caps_at_40_with_honest_elision_line(self):
         # 1,203 pending events once rendered 165.9 KB into a 252.7 KB wake —
         # the replay ate the thought that was supposed to handle it. 100
@@ -1476,6 +1494,104 @@ class TestPromptBuilding:
         for i in range(10):
             assert f"- evt-{i} " in block
         assert "more pending events" not in block
+
+    def test_format_pending_events_flags_a_stale_other_event(self):
+        """#1491: `created` already rides in every pending-event record —
+        this was a dropped field read, not new plumbing. Compact: elapsed
+        only, past the same soft threshold the waking event's own attention
+        line uses; a fresh sibling stays quiet."""
+        import time
+
+        old_created = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 6 * 3600 - 6 * 60)
+        )
+        fresh_created = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        events = [
+            {"id": "evt-old", "source": "telegram", "summary": "old one",
+             "created": old_created},
+            {"id": "evt-new", "source": "telegram", "summary": "new one",
+             "created": fresh_created},
+            {"id": "evt-unknown", "source": "telegram", "summary": "no stamp"},
+        ]
+        block = prompts._format_pending_events(events)
+        old_line = next(ln for ln in block.splitlines() if "evt-old" in ln)
+        new_line = next(ln for ln in block.splitlines() if "evt-new" in ln)
+        unknown_line = next(ln for ln in block.splitlines() if "evt-unknown" in ln)
+        assert "6h06m old" in old_line
+        assert "old" not in new_line.replace("old one", "")
+        assert "old" not in unknown_line.replace("no stamp", "")
+
+    def test_daemon_prompt_bundle_shows_stale_event_age_and_cause(self, tmp_path):
+        """#1491's own measurement, driven through the real bundle build."""
+        import time
+
+        created = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 6 * 3600 - 6 * 60)
+        )
+        prompt = build_daemon_prompt(
+            "answer the message", "evt-bpgk", "/tmp/resp.md", tmp_path,
+            run_id="task-9",
+            event_created=created,
+        )
+        run_section = prompt.split("### Run", 1)[1].split("###", 1)[0]
+        assert f"sent {created}" in run_section
+        assert "6h06m ago" in run_section
+        assert "the daemon was only asleep" in run_section
+
+    def test_daemon_prompt_bundle_fresh_event_has_no_stale_wording(self, tmp_path):
+        import time
+
+        created = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        prompt = build_daemon_prompt(
+            "answer the message", "evt-fresh", "/tmp/resp.md", tmp_path,
+            run_id="task-9",
+            event_created=created,
+        )
+        run_section = prompt.split("### Run", 1)[1].split("###", 1)[0]
+        assert f"sent {created}" in run_section
+        assert "ago" not in run_section
+        assert "only asleep" not in run_section
+
+    def test_daemon_prompt_bundle_missing_created_adds_no_age_line(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "answer the message", "evt-none", "/tmp/resp.md", tmp_path,
+            run_id="task-9",
+        )
+        run_section = prompt.split("### Run", 1)[1].split("###", 1)[0]
+        assert "sent " not in run_section
+        assert "Event retry of" not in run_section
+
+    def test_daemon_prompt_bundle_shows_retry_provenance(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "answer the message", "evt-bpgk", "/tmp/resp.md", tmp_path,
+            run_id="task-9",
+            event_retry_of="run-260818-1834-lcu3",
+            event_retry_failure_kind="host_interrupted",
+        )
+        run_section = prompt.split("### Run", 1)[1].split("###", 1)[0]
+        assert "retry of run-260818-1834-lcu3 (host interrupt)" in run_section
+
+    def test_daemon_prompt_kernel_and_bundle_report_the_same_age(self, tmp_path):
+        """The #638-class drift this issue's coordinates warn about: the
+        persisted score (the kernel's own numbers) and the rendered bundle
+        must agree — both are fed from the same ``event_created`` at the
+        same call, never recomputed independently."""
+        import time
+
+        from brr.prompts import build_daemon_prompt_with_score
+
+        created = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 2 * 3600 - 30 * 60)
+        )
+        prompt, score = build_daemon_prompt_with_score(
+            "answer the message", "evt-drift", "/tmp/resp.md", tmp_path,
+            run_id="task-9",
+            event_created=created,
+        )
+        assert score.attention.created == created
+        assert "2h30m ago" in prompt
+        run_section = prompt.split("### Run", 1)[1].split("###", 1)[0]
+        assert "2h30m ago" in run_section
 
     def test_daemon_prompt_omits_inbox_when_no_pending_events(self, tmp_path):
         prompt = build_daemon_prompt(

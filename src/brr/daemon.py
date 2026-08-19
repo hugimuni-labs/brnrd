@@ -4309,6 +4309,17 @@ def _run_worker(
             present=present_snapshot,
             event_body=event_body_for_prompt,
             event_attachments=protocol.event_attachment_paths(event),
+            # #1491: the waking event's own age and retry history — read off
+            # the event dict, never recomputed. ``created`` is stamped once
+            # by ``protocol.create_event`` and never rewritten; ``retry_of``/
+            # ``retry_failure_kind`` are ``_mark_interrupted_runs``'s
+            # additive stamp, absent on a first attempt. Named
+            # ``retry_failure_kind``, not ``retry_reason`` — that name is
+            # ``RunnerResult.retry_reason()``'s already, for an unrelated
+            # fact (see ``_record_retry_provenance``'s docstring).
+            event_created=event.get("created"),
+            event_retry_of=event.get("retry_of"),
+            event_retry_failure_kind=event.get("retry_failure_kind"),
             budget_seconds=budget_seconds,
             runner_medium=(
                 f"{runner_name} ({runner_wake_note})"
@@ -5424,6 +5435,61 @@ def _pending_event_record(ev: dict) -> dict[str, object]:
     return out
 
 
+def _processing_event_is_orphaned(
+    event: dict,
+    brr_dir: Path,
+    *,
+    live_run_ids: set[str],
+    now: float,
+    stale_after_seconds: float = _RUN_STATE_REAP_AFTER_SECONDS,
+) -> bool:
+    """True when a ``status: processing`` event's owning run is provably dead.
+
+    Layer 2 of #1496 ("the event nobody could see"): layer 1
+    (``_mark_interrupted_runs``) resets a retry-eligible orphaned event back
+    to ``pending`` at boot, but only fires on a daemon restart. A worker
+    thread killed without the daemon process dying — a SIGKILLed strand, a
+    crashed subprocess the main loop survives — leaves the identical shape
+    (event stuck at ``processing``, nothing left to unstick it) with no
+    reboot to trigger that sweep. This is the read-side backstop:
+    ``_pending_events_for_agent`` calls it for every ``processing`` event so
+    the resident's own view stops depending on a restart to recover.
+
+    Same proof discipline as ``_mark_interrupted_runs``/``_recorded_pid_alive``
+    — presence is the live authority, the recorded dispatcher pid is next,
+    and only a manifest with neither (past the crash-recovery staleness
+    horizon) counts as proof. No ``run_id`` meta at all, or no manifest on
+    disk for it, is "not provably orphaned", never "orphaned" — a false
+    positive here would mix a live run's letter into what the resident reads
+    as fresh mail, exactly what this module's own regression test (a live
+    run's in-flight event must stay hidden) guards against.
+    """
+    run_id = str(event.get("run_id") or "").strip()
+    if not run_id:
+        return False
+    if run_id in live_run_ids:
+        return False
+    manifest = Run.from_file(run_manifest_path(brr_dir / "runs", run_id))
+    if manifest is None:
+        # Nothing to disprove liveness with — could be a genuinely stale
+        # id, but could just as easily be the narrow window between the
+        # event's `run_id` write and the manifest's own save landing.
+        # Positive proof only.
+        return False
+    if manifest.status.casefold() not in _UNFINISHED_RUN_STATUSES:
+        # The run itself already reached a terminal status; the matching
+        # event-status write that should have followed never landed —
+        # proven orphaned outright, independent of presence/pid.
+        return True
+    if _recorded_pid_alive(manifest):
+        return False
+    try:
+        modified_at = run_manifest_path(brr_dir / "runs", run_id).stat().st_mtime
+    except OSError:
+        return False
+    return (now - modified_at) >= stale_after_seconds
+
+
 def _pending_events_for_agent(
     inbox_dir: Path,
     current_event_id: str,
@@ -5489,7 +5555,17 @@ def _pending_events_for_agent(
             )
 
     events: list[dict] = []
+    now_ts = time.time()
+    # Lazy, keyed by resolved ``.brr`` dir rather than by source: most
+    # events in a drawer are plain "pending" and never touch this, so the
+    # presence-dir scan only happens once a "processing" candidate actually
+    # needs it. Keying on the *resolved* dir (not the source drawer) matters
+    # for the account dispatch inbox below, where two events from the same
+    # drawer can resolve to two different repos.
+    _live_run_ids_for = _live_run_ids_cache(now=now_ts)
+
     for source_inbox, source_label, account_scoped in sources:
+        source_brr_dir = source_inbox.parent
         for ev in protocol.list_pending(source_inbox):
             event_label = account.event_repo_label(ev)
             if repo_label and event_label and event_label != repo_label:
@@ -5505,7 +5581,41 @@ def _pending_events_for_agent(
             if ev.get("id") == current_event_id:
                 continue
             if ev.get("status") != "pending":
-                continue
+                # Layer 2 of #1496 ("the event nobody could see"): a
+                # "processing" event is normally still mid-flight and
+                # correctly hidden here — its own run's wake already has
+                # it. But when that run is provably dead (a SIGKILLed
+                # strand, a crashed worker thread — the class layer 1's
+                # boot-time sweep can't reach, because nothing rebooted),
+                # nothing else will ever surface it. Prove death before
+                # trusting it, same discipline as `_mark_interrupted_runs`
+                # — a false positive here would mix a live run's letter
+                # into what reads as fresh mail.
+                if ev.get("status") != "processing":
+                    continue
+                event_brr_dir = source_brr_dir
+                if account_scoped and account_context is not None:
+                    # The account dispatch drawer is not a repo's own
+                    # `.brr` dir — an unlabeled event living there can
+                    # still have been dispatched to any served repo
+                    # (`_repo_for_event`'s own cloud-thread-history /
+                    # inbox-path resolution, mirrored here), so the run
+                    # manifest to check lives under *that* repo, not under
+                    # the drawer itself.
+                    resolved_root, _resolved_label = _repo_for_event(
+                        account_context, ev,
+                        fallback_repo_root=account_context.default_repo.root,
+                        fallback_label=account_context.default_repo.label,
+                    )
+                    event_brr_dir = gitops.shared_brr_dir(resolved_root)
+                if not _processing_event_is_orphaned(
+                    ev, event_brr_dir,
+                    live_run_ids=_live_run_ids_for(event_brr_dir),
+                    now=now_ts,
+                ):
+                    continue
+                # Visibly marked — never mixed silently into fresh mail.
+                ev["orphaned"] = True
             if ev.get("respawned_by_run") or ev.get("respawned_from_event"):
                 continue
             # Dispatch-edge traffic (wyrd §3): a `to:` message is visible only
@@ -5535,7 +5645,7 @@ def _pending_events_for_agent(
             events.append(ev)
     return [
         _pending_event_record(ev)
-        for ev in sorted(events, key=_event_mtime)
+        for ev in sorted(events, key=_event_queue_sort_key)
     ]
 
 
@@ -13428,10 +13538,9 @@ def _reap_zombie_run_state_docs(
     timestamp = time.time() if now is None else now
     live_run_ids: set[str] = set()
     for registered in account_context.repos.values():
-        for entry in presence.list_active(gitops.shared_brr_dir(registered.root), now=timestamp):
-            run_id = str(entry.get("run_id") or "")
-            if run_id:
-                live_run_ids.add(run_id)
+        live_run_ids |= _live_run_ids(
+            gitops.shared_brr_dir(registered.root), now=timestamp,
+        )
     closed_run_ids = _closed_ledger_run_ids(account_context)
     reaped: list[Path] = []
     reaped_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(timestamp))
@@ -13501,10 +13610,7 @@ def _reap_zombie_run_manifests(
         runs_dir = brr_dir / "runs"
         if not runs_dir.is_dir():
             continue
-        live_run_ids = {
-            str(entry.get("run_id") or "")
-            for entry in presence.list_active(brr_dir, now=timestamp)
-        }
+        live_run_ids = _live_run_ids(brr_dir, now=timestamp)
         for task in list_runs(runs_dir):
             if task.status.casefold() not in _UNFINISHED_RUN_STATUSES:
                 continue
@@ -13556,6 +13662,48 @@ def _repo_ledger_run_ids(repo_root: Path) -> set[str]:
     return closed
 
 
+def _live_run_ids(brr_dir: Path, *, now: float | None = None) -> set[str]:
+    """Run ids with a live presence entry under *brr_dir* right now.
+
+    The one comprehension every boot-time sweep (and the resident's own
+    pending-mail view) needs before it can call a stuck run "provably
+    dead" — presence is the live authority the whole proof ladder in this
+    module starts from. Extracted because it had drifted into four
+    independent hand-rolled copies (the run-manifest janitor, the
+    account-state-doc janitor, ``_mark_interrupted_runs``, and
+    ``_reconcile_orphaned_spawn_dispatches``'s own cache) plus a fifth in
+    ``_pending_events_for_agent``'s local closure — a fact re-derived five
+    times gets fixed once and drifts four times.
+    """
+    return {
+        str(entry.get("run_id") or "")
+        for entry in presence.list_active(brr_dir, now=now)
+    }
+
+
+def _live_run_ids_cache(*, now: float | None = None):
+    """A memoizing ``brr_dir -> live run ids`` lookup, scoped to one sweep.
+
+    Building the presence-active set is a directory scan; several sweeps
+    below ask for it once per event or per task rather than once per
+    unique ``.brr`` dir, so this collapses repeat scans of the same dir
+    within a single pass. Same cache shape ``_reconcile_orphaned_spawn_
+    dispatches`` and ``_pending_events_for_agent`` used to hand-roll
+    independently (``dict[Path, set[str]]`` + a manual ``if brr_dir not in
+    cache`` guard each) — one memoizer, two call sites.
+    """
+    cache: dict[Path, set[str]] = {}
+
+    def get(brr_dir: Path) -> set[str]:
+        cached = cache.get(brr_dir)
+        if cached is None:
+            cached = _live_run_ids(brr_dir, now=now)
+            cache[brr_dir] = cached
+        return cached
+
+    return get
+
+
 def _recorded_pid_alive(task: Run) -> bool:
     """True when the pid persisted on a run manifest is still running.
 
@@ -13569,6 +13717,44 @@ def _recorded_pid_alive(task: Run) -> bool:
     except (TypeError, ValueError):
         pid = 0
     return bool(pid and presence.pid_alive(pid))
+
+
+def _record_retry_provenance(event: dict, run_id: str, failure_kind: str) -> None:
+    """Append a prior interrupted attempt onto *event*, additively (#1491).
+
+    Event frontmatter is flat (``protocol.update_event_meta``), so history
+    across more than one retry lives as two comma-joined, positionally
+    paired lists — ``retry_of`` (run ids) and ``retry_failure_kind`` (the
+    ``runner_failures`` kind each died of) — rather than one field a second
+    interruption would overwrite. An event interrupted twice must still be
+    able to name *both* prior runs, not just the most recent.
+
+    Named ``retry_failure_kind``, not the ``retry_reason`` #1500 first wrote
+    here: ``RunnerResult.retry_reason()`` (``runner.py``) already owns that
+    name in this same module, for an unrelated fact — *why the current run
+    will be retried in-loop*, not *what a prior interrupted run died of*.
+    Reconciling #1495/#1500 renamed the newer, narrower fact so a reader (or
+    a grep) cannot conflate the two.
+
+    Idempotent by run id: ``_mark_interrupted_runs`` only ever calls this
+    once per manifest (the status transition to ``error`` is itself
+    one-shot — see that function's docstring), but a duplicate call for the
+    same ``run_id`` is a no-op rather than a repeated entry, in case that
+    invariant ever loosens.
+    """
+    existing_of = [r for r in str(event.get("retry_of") or "").split(",") if r]
+    if run_id in existing_of:
+        return
+    existing_kind = [
+        r for r in str(event.get("retry_failure_kind") or "").split(",") if r
+    ]
+    existing_of.append(run_id)
+    existing_kind.append(failure_kind)
+    protocol.update_event_meta(
+        event,
+        retry_of=",".join(existing_of),
+        retry_failure_kind=",".join(existing_kind),
+    )
 
 
 def _mark_interrupted_runs(
@@ -13591,8 +13777,42 @@ def _mark_interrupted_runs(
     ``failure_kind`` (``host_interrupted``) and emits the terminal
     ``failed`` packet the dead daemon never got to send, so the frozen
     card re-renders as "interrupted" (plus a retry note when the event is
-    still dispatchable). It deliberately touches **no event state** — the
-    retry path stays exactly as it was.
+    still dispatchable).
+
+    It used to deliberately touch **no event state** — the retry path was
+    meant to stay exactly as it was. That paragraph is no longer true, for
+    two distinct reasons this sweep now handles side by side:
+
+    - **Visibility** (#1496, "the event nobody could see"): the still-
+      ``processing`` event genuinely stays dispatch-eligible
+      (``protocol.list_dispatchable`` treats ``pending``/``processing``
+      alike), but the *resident's own* pending view
+      (``_pending_events_for_agent``) filters strictly on
+      ``status == "pending"`` and never treated ``processing`` as visible —
+      so an orphaned event dispatched to a run this sweep just marked
+      interrupted sat dispatchable-but-invisible to any resident that
+      folded in pending mail before the retry actually landed, for however
+      long the retry took to queue. A retry-eligible orphaned event now has
+      its status flipped back to ``pending``. That is still "the retry path
+      stays exactly as it was" in the sense that matters — ``pending`` is
+      exactly as dispatch-eligible as ``processing`` — it just stops being
+      invisible while eligible. **Carved out:** an orphaned *spawn*
+      dispatch (``spawn_immediate`` + ``spawn_parent_run_id``, no
+      ``spawn_message_for_event``) is left at ``processing`` untouched —
+      that shape is ``_reconcile_orphaned_spawn_dispatches``'s own
+      territory (below, boot-ordered right after this sweep), which
+      requires ``status == "processing"`` to find the event and notify the
+      parent of the crash. Flipping it to ``pending`` here first would make
+      that sweep silently skip it, losing the crash notification and
+      letting the event re-surface as a plain dispatchable event that
+      quietly re-spawns a duplicate strand instead.
+    - **Provenance** (#1491): whenever the event is still dispatchable
+      (spawn carve-out included — the stamp is additive and does not
+      affect dispatch), this sweep appends this run's id and failure kind
+      to the event's own ``retry_of``/``retry_failure_kind`` history, additively
+      — see :func:`_record_retry_provenance` — so the run (or, for a
+      carved-out spawn dispatch, the notified parent) can say *why* this
+      is a retry, not just answer cold.
 
     Proof discipline mirrors ``_reconcile_orphaned_spawn_dispatches``
     below, conservative by construction:
@@ -13621,14 +13841,17 @@ def _mark_interrupted_runs(
     timestamp = time.time() if now is None else now
     marked_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(timestamp))
     # Events still eligible for the main loop's crash-recovery re-dispatch:
-    # the honest basis for the card's "retrying" tail. Read, not asserted —
-    # the sweep never changes event state.
-    retry_eligible: set[str] = set()
+    # the honest basis for the card's "retrying" tail, and (below) both what
+    # the visibility fix flips back to "pending" and what #1491's
+    # retry-provenance stamp writes onto. Keyed to the live event dict — not
+    # just its id — so both writes land straight on it without a second
+    # disk read.
+    retry_eligible: dict[str, dict] = {}
     try:
         for target in _dispatchable_targets(account_context, repo_root, cfg):
             eid = str(target.event.get("id") or "")
             if eid:
-                retry_eligible.add(eid)
+                retry_eligible[eid] = target.event
     except Exception:  # noqa: BLE001 - retry hint is advisory, never blocking
         pass
     roots: dict[Path, Path] = {}
@@ -13646,10 +13869,7 @@ def _mark_interrupted_runs(
         runs_dir = brr_dir / "runs"
         if not runs_dir.is_dir():
             continue
-        live_run_ids = {
-            str(entry.get("run_id") or "")
-            for entry in presence.list_active(brr_dir, now=timestamp)
-        }
+        live_run_ids = _live_run_ids(brr_dir, now=timestamp)
         for task in list_runs(runs_dir):
             if task.status.casefold() not in _UNFINISHED_RUN_STATUSES:
                 continue
@@ -13677,7 +13897,46 @@ def _mark_interrupted_runs(
                     "no recorded pid and no manifest write inside the "
                     "safety horizon"
                 )
-            will_retry = bool(task.event_id and task.event_id in retry_eligible)
+            retry_event = retry_eligible.get(task.event_id or "")
+            will_retry = bool(retry_event)
+            if will_retry:
+                # #1491: the retry path already recovers the *work* (the
+                # event re-dispatches); this recovers the *story* — so the
+                # run that picks the event back up can say "retry of run-X,
+                # interrupted by host suspend" instead of answering cold, as
+                # if nothing had happened yet. Deliberately best-effort and
+                # never blocking: an event write failing here must not stop
+                # the card from getting its own "interrupted" packet below.
+                # Fires for a carved-out spawn dispatch too — the stamp is
+                # additive and does not touch dispatch state, unlike the
+                # status reset just below.
+                try:
+                    _record_retry_provenance(
+                        retry_event, task.id, runner_failures.HOST_INTERRUPTED,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    print(
+                        f"[brnrd] retry-provenance stamp failed for "
+                        f"{task.event_id}: {exc}"
+                    )
+            if (
+                retry_event is not None
+                and str(retry_event.get("status") or "") == "processing"
+            ):
+                # #1496 ("the event nobody could see"): reset to "pending"
+                # unless `_reconcile_orphaned_spawn_dispatches` (below) owns
+                # this exact shape instead — see this function's own
+                # docstring.
+                is_orphaned_spawn_dispatch = bool(
+                    retry_event.get("spawn_immediate")
+                    and retry_event.get("spawn_parent_run_id")
+                    and not retry_event.get("spawn_message_for_event")
+                )
+                if not is_orphaned_spawn_dispatch:
+                    try:
+                        protocol.set_status(retry_event, "pending")
+                    except OSError:
+                        pass
             # Status first, packet after — same order as the spawn
             # reconciliation sweep: a crash between the two loses one card
             # update; the reverse order would re-emit on every restart
@@ -13756,7 +14015,7 @@ def _reconcile_orphaned_spawn_dispatches(
     timestamp = time.time() if now is None else now
     notified = 0
     runs_cache: dict[Path, list[Run]] = {}
-    presence_cache: dict[Path, set[str]] = {}
+    live_run_ids_for = _live_run_ids_cache(now=timestamp)
     ledger_cache: dict[Path, set[str]] = {}
     for target in _dispatchable_targets(account_context, repo_root, cfg):
         event = target.event
@@ -13774,12 +14033,7 @@ def _reconcile_orphaned_spawn_dispatches(
         if runs_dir not in runs_cache:
             runs_cache[runs_dir] = list_runs(runs_dir)
         event_runs = [t for t in runs_cache[runs_dir] if t.event_id == eid]
-        if brr_dir not in presence_cache:
-            presence_cache[brr_dir] = {
-                str(entry.get("run_id") or "")
-                for entry in presence.list_active(brr_dir, now=timestamp)
-            }
-        if any(t.id in presence_cache[brr_dir] for t in event_runs):
+        if any(t.id in live_run_ids_for(brr_dir) for t in event_runs):
             continue
         if any(_recorded_pid_alive(t) for t in event_runs):
             continue
@@ -14732,6 +14986,39 @@ def _event_mtime(event: dict) -> float:
         return path.stat().st_mtime
     except (OSError, AttributeError):
         return 0.0
+
+
+def _event_created_epoch(event: dict) -> float | None:
+    """Epoch seconds for an event's own ``created`` stamp, or ``None``.
+
+    ``created`` is written once, at ingestion (``protocol.create_event``),
+    so unlike ``_event_mtime`` — file mtime, which *any* later status/meta
+    write bumps — it is a stable proxy for arrival order. ``None`` on a
+    missing or unparseable stamp; callers fall back to ``_event_mtime``
+    rather than treating "no signal" as either oldest or newest.
+    """
+    parsed = _parse_utc_stamp(event.get("created"))
+    return parsed.timestamp() if parsed is not None else None
+
+
+def _event_queue_sort_key(event: dict) -> tuple[float, float]:
+    """Queue order for the resident's own pending view — oldest first.
+
+    #1496 follow-on: file mtime alone is a proxy for age that any status
+    write invalidates — a re-queue, a defer, a plain meta update all bump
+    it, sending an event to the back of its own line (measured live: an
+    event dispatched at 14:58:06Z sorted *after* one created 15:33:51Z
+    because the earlier one's mtime was bumped by an unrelated
+    ``status: processing`` write at 18:34Z). Sort by the event's own
+    ``created`` instead — written once, never touched again — with
+    ``_event_mtime`` as the tiebreaker for equal ``created`` values *and*
+    the fallback for any event that predates the field or fails to parse
+    it, so a missing stamp degrades to the old mtime ordering rather than
+    crashing or jumping the queue.
+    """
+    mtime = _event_mtime(event)
+    created = _event_created_epoch(event)
+    return (created if created is not None else mtime, mtime)
 
 
 def _burst_settle_delay(
