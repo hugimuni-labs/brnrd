@@ -33,7 +33,7 @@ test('the bench is mobile-first: bays stack before widening at md', () => {
 
 test('every bench pick and inherited rack control has a 44px floor', () => {
 	assert.equal((source.match(/data-role="bench-pick"/g) ?? []).length, 3);
-	assert.match(source, /\.pick-row \{ min-height: 44px; \}/);
+	assert.match(source, /\.pick-row\s*\{\s*min-height:\s*44px;?\s*\}/);
 	assert.match(source, /button\[role='tab'\][\s\S]*min-height: 44px/);
 	assert.match(source, /button\[data-role='rack-row-tap'\][\s\S]*min-height: 44px/);
 });
