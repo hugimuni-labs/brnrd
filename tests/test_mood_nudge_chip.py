@@ -96,6 +96,13 @@ def test_the_nudge_never_opens_the_gate_by_itself(tmp_path):
     against.
     """
     ctx, outbox, portal = _ctx(tmp_path)
+    # Boundary 0 (w-54): burn the first bar while the run is still too
+    # young for the nudge, so eligibility is the only new fact below.
+    young = _portal("t1", elapsed_seconds=120,
+                    card={"stale": False, "state": "ok"})
+    portal.write_text(json.dumps(young), encoding="utf-8")
+    hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})
+    # Same token, now old and moodless: eligibility alone opens nothing.
     quiet = _portal("t1", card={"stale": False, "state": "ok"})
     portal.write_text(json.dumps(quiet), encoding="utf-8")
     out = hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})
@@ -147,6 +154,11 @@ def test_a_quiet_eligible_boundary_does_not_burn_the_latch(tmp_path):
     renders something.
     """
     ctx, outbox, portal = _ctx(tmp_path)
+    # Boundary 0 (w-54): burn the first bar young, then hold the token.
+    young = _portal("t1", elapsed_seconds=120,
+                    card={"stale": False, "state": "ok"})
+    portal.write_text(json.dumps(young), encoding="utf-8")
+    hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})
     quiet = _portal("t1", card={"stale": False, "state": "ok"})
     portal.write_text(json.dumps(quiet), encoding="utf-8")
     quiet_out = hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})

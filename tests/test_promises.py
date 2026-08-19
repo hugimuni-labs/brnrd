@@ -281,7 +281,10 @@ def test_an_owed_promise_opens_the_gate_on_a_boundary_nothing_else_moved(
     ctx, outbox, portal = _ctx(tmp_path)
     portal.write_text(json.dumps(_portal("t1")), encoding="utf-8")
 
-    # Boundary 1: nothing to say.
+    # Boundary 0 (w-54): a run's first bar renders everything once — burn it.
+    hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})
+
+    # Boundary 1: same token, nothing moved — nothing to say.
     first = hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})
     assert first["inject"] is None
 
@@ -293,13 +296,14 @@ def test_an_owed_promise_opens_the_gate_on_a_boundary_nothing_else_moved(
     assert "still owed: 2 PRs — the rollout split" in second["inject"]
 
 
-def test_the_owed_line_is_latched_but_the_chip_is_not(tmp_path):
+def test_the_owed_line_and_chip_both_speak_on_the_edge_only(tmp_path):
     """An obligation that repeats every boundary trains the reader to skip it.
 
-    The standing fact rides the chip (seven characters, gateless); the line
-    speaks on the blueprint's own delta. This is the #818/#963 split at a
-    smaller scale: content dedupe cannot tell an ambient line from an unmet
-    obligation, so the latch has to be on the *fact*, not on the bytes.
+    The line speaks on the blueprint's own delta, and since w-54 the chip is
+    change-gated too: an unchanged `owed 1` is the number the reader already
+    has, so a later boundary where something *else* moved carries neither.
+    The standing fact's nets are the blueprint edge, the closeout line, and
+    the bolt's own validation at the cut.
     """
     ctx, outbox, portal = _ctx(tmp_path)
     portal.write_text(json.dumps(_portal("t1")), encoding="utf-8")
@@ -307,16 +311,18 @@ def test_the_owed_line_is_latched_but_the_chip_is_not(tmp_path):
 
     first = hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})
     assert "still owed" in (first["inject"] or "")
+    assert "owed 1" in (first["inject"] or "")
 
-    # A later boundary where something *else* moved: the chip stays, the
-    # line does not repeat.
+    # A later boundary where something *else* moved: neither the line nor
+    # the unchanged chip repeats.
     portal.write_text(
         json.dumps(_portal("t2", card={"stale": True, "state": "stale",
                                        "age_seconds": 400})),
         encoding="utf-8",
     )
     second = hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})
-    assert "owed 1" in (second["inject"] or "")
+    assert "card" in (second["inject"] or "")
+    assert "owed 1" not in (second["inject"] or "")
     assert "still owed" not in (second["inject"] or "")
 
 
