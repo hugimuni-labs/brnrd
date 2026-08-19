@@ -78,8 +78,23 @@ export const repos = {
 	github_bot_login: 'brnrd-bot',
 	notice: null,
 	setup_installation_id: '',
-	pairing_command: 'cd brnrd\nbrnrd up'
+	pairing_command: 'cd brnrd\nbrnrd up',
+	// brr/every-door-on-the-page — a mixed registry (one lit, one dark for
+	// each reason) so a repro against this fixture exercises every branch
+	// `MessengerDoors.svelte` renders without a second fixture object.
+	messenger_doors: [
+		{ platform: 'telegram', deep_link_available: true, reason: null },
+		{ platform: 'whatsapp', deep_link_available: false, reason: 'not_configured' },
+		{ platform: 'slack', deep_link_available: false, reason: 'not_built' },
+		{ platform: 'signal', deep_link_available: false, reason: 'not_built' }
+	]
 };
+
+// brr/every-door-on-the-page — `PairedChats.svelte`'s own endpoint; empty by
+// default (the component renders nothing on an empty list, same "no state
+// to fake" posture the rest of this file takes for zero-row endpoints
+// above).
+export const pairedChats = { paired_chats: [] };
 
 export const liveRuns = {
 	generated_at: now,
@@ -135,6 +150,7 @@ export const ROUTES = {
 	'/v1/dashboard/quota': quota,
 	'/v1/dashboard/runners': runners,
 	'/v1/dashboard/repos': repos,
+	'/v1/dashboard/paired-chats': pairedChats,
 	'/v1/dashboard/live-runs': liveRuns,
 	'/v1/dashboard/activity': scheduledWakes,
 	'/v1/dashboard/pr-review-queue': prReviewQueue,

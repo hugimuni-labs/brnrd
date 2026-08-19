@@ -207,7 +207,7 @@ def approve_pair(code: str, payload: schemas.PairApprove, principal: Principal =
     return schemas.PairStatus(status="approved", account_id=principal.account_id, repo_id=repo_id)
 
 
-def _telegram_pair_response(settings: Any, repo: Repo | None, code: str) -> schemas.TelegramPairStarted:
+def _telegram_pair_response(settings: Any, repo: Repo | None, code: str, expires_at: datetime) -> schemas.TelegramPairStarted:
     # #1463 — token-derived (getMe) when available, env as fallback. #1242 —
     # an invalid-shape username (e.g. the hyphenated GitHub login spelling)
     # resolves to no Telegram entity at all; a deep link built on it is
@@ -237,6 +237,7 @@ def _telegram_pair_response(settings: Any, repo: Repo | None, code: str) -> sche
         pair_code=code,
         instructions=instructions,
         deep_link=deep_link,
+        expires_at=expires_at,
     )
 
 
@@ -276,9 +277,10 @@ def telegram_pair_core(db: Session, settings: Any, account_id: str, repo_id: str
             break
     else:
         raise HTTPException(status_code=503, detail="could not allocate pair code")
-    db.add(TgPairCode(id=ids.tg_pair_code_id(), code=code, account_id=account_id, repo_id=repo.id if repo is not None else None, expires_at=datetime.now(timezone.utc) + timedelta(seconds=settings.pair_ttl_s)))
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.messenger_pair_ttl_s)
+    db.add(TgPairCode(id=ids.tg_pair_code_id(), code=code, account_id=account_id, repo_id=repo.id if repo is not None else None, expires_at=expires_at))
     db.commit()
-    return _telegram_pair_response(settings, repo, code)
+    return _telegram_pair_response(settings, repo, code, expires_at)
 
 
 def telegram_pair_for_connect(
@@ -289,7 +291,10 @@ def telegram_pair_for_connect(
         raise HTTPException(status_code=404, detail="repo not found")
     existing = _active_telegram_pair(db, account_id, repo_id)
     if existing is not None:
-        return _telegram_pair_response(settings, repo, existing.code)
+        expires = existing.expires_at
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        return _telegram_pair_response(settings, repo, existing.code, expires)
     return telegram_pair_core(db, settings, account_id, repo_id)
 
 

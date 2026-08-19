@@ -10,22 +10,11 @@
 		MessengerDoor,
 		MessengerPairStarted
 	} from './repos';
-
-	// #1465 — presentation data only (no user-facing copy lives in the
-	// backend registry, `messenger_doors.py`'s own house rule): the label
-	// this component renders for a platform the wire already vouches for
-	// via `deep_link_available`. A platform this map doesn't recognize yet
-	// still renders — its own slug, title-cased — rather than vanishing,
-	// same fail-safe posture `supportMatrix.ts`'s `doorRows` takes for an
-	// unrecognized slug.
-	const DOOR_LABELS: Record<string, string> = {
-		telegram: 'Telegram',
-		whatsapp: 'WhatsApp'
-	};
-
-	function doorLabel(platform: string): string {
-		return DOOR_LABELS[platform] ?? platform.charAt(0).toUpperCase() + platform.slice(1);
-	}
+	// brr/every-door-on-the-page — the label roster moved here so this
+	// component and the persistent `MessengerDoors.svelte` panel on
+	// `/repos` render the same word for the same platform. See that
+	// module's own doc comment for the "why this file" reasoning.
+	import { doorLabel } from './messengerDoors';
 
 	// The cold start (2026-08-03). Reported from a real signup on the
 	// deployed dashboard: "two screens - no clarity on the installation, or

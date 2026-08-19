@@ -244,6 +244,40 @@ def test_dashboard_repos_carries_the_registry_derived_messenger_doors(env):
     assert doors["signal"] is False
 
 
+def test_dashboard_repos_carries_the_off_door_reason(env):
+    """brr/every-door-on-the-page — the frontend renders every door,
+    including dark ones, with an honest reason: a connector nobody ever
+    built (slack, signal) reads differently from one this deployment just
+    hasn't configured (whatsapp here)."""
+    app, client, sends = env
+    headers = _account(client)
+    _login_session(client, headers)
+    body = client.get("/v1/dashboard/repos").json()
+    reasons = {d["platform"]: d["reason"] for d in body["messenger_doors"]}
+    assert reasons["telegram"] is None
+    assert reasons["whatsapp"] == "not_configured"
+    assert reasons["slack"] == "not_built"
+    assert reasons["signal"] == "not_built"
+
+
+def test_generalized_pair_mint_carries_a_visible_expiry(env):
+    """brr/every-door-on-the-page — the mint response needs its own
+    `expires_at` so the page can render a live countdown instead of a link
+    that just goes dead with no explanation; the deployment's short TTL
+    (`messenger_pair_ttl_s`, not `pair_ttl_s`'s device-flow number)."""
+    app, client, sends = env
+    headers = _account(client)
+    _login_session(client, headers)
+    before = datetime.now(timezone.utc)
+    r = client.post("/v1/dashboard/pair", json={"platform": "telegram"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    expires_at = datetime.fromisoformat(body["expires_at"])
+    ttl = app.state.settings.messenger_pair_ttl_s
+    assert ttl < app.state.settings.pair_ttl_s  # shorter than the device-connect flow's
+    assert before + timedelta(seconds=ttl - 5) <= expires_at <= before + timedelta(seconds=ttl + 5)
+
+
 def test_invalid_bot_username_rides_the_wire_as_empty(monkeypatch):
     # #1242's rule at the new seam: a bad handle must not let the frontend
     # construct a link that resolves to no Telegram entity.
