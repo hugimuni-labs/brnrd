@@ -1,64 +1,75 @@
-// Row/chip state chrome shared by SpoolRack and ControlStrip's project /
-// environment / runner-chip lists ("clear the ground under the rail",
-// 2026-08-19). Four different amber pairs, one disabled recipe and the idle
-// row were hand-copied across the two components with drift nobody chose —
-// this module names each state once so every site imports the same string
-// instead of retyping it. Every value here is unchanged from what its site
-// already rendered; see the commit message for which literal survived where
-// duplicates existed and which states were kept distinct on purpose.
+// Row/chip state chrome shared by SpoolRack and the bench's project /
+// environment lists (w-68, the gauge/bench split, 2026-08-19).
 //
-// THIS IS NOT THE WHOLE VOCABULARY, and reading it as closed is the way it
-// goes wrong. Audited across the frontend at extraction time: these two
-// components alone carry **seven** distinct amber recipes, of which five are
-// named here. The three that are not, all inside these same two files:
+// Two redesigns landed together, both scoped to these two components — the
+// app-wide amber sweep (nine "selected" recipes across 28 sites, the
+// primary CTA pixel-identical to one of them) is its own strand, not this
+// one:
 //
-//   `border-amber-700/70 bg-amber-950/40`  SpoolRack.svelte:294  pin badge
-//                                          when a next-wake request exists
-//   `border-amber-600/80 bg-amber-950/60`  SpoolRack.svelte:253, :285
-//                                          the "riding <thread>" sticky chip
-//                                          and the "next wake" chip
-//   `border-amber-800/60 bg-amber-950/40`  ControlStrip.svelte:268
-//                                          the "pinned open" chip
+// 1. **Selection leaves the hue channel.** Argued to the maintainer and
+//    signed on w-68: amber is the brand's press-me (the CTA), so a picker
+//    row wearing the same hue to mean "you chose this" is indistinguishable
+//    from "press this" at a glance. Selection now reads as a *shape* — a
+//    left rule — at one of two brightnesses, never a colour swap. The
+//    rack's two states (a one-shot next-wake request vs the standing pin)
+//    keep the axis the maintainer asked for: one mark, two intensities —
+//    bright for the time-boxed request, muted for the durable pin.
+// 2. **Off is designed, not dimmed.** The former `DISABLED_ROW` used
+//    `opacity-45` on the whole row — border, mark, and text together — which
+//    reads as "broken", not "deliberately unavailable" (the standing bar:
+//    "do not grey things out — design them off"). The new recipe drops the
+//    opacity filter and marks the row with a dashed border instead: a socket
+//    with nothing plugged in, not a faded photocopy of a live row.
 //
-// Each is one step off a constant below on one axis or both, which is
-// exactly how a token set drifts back into hand-copied literals. They are
-// chips rather than rows, and whether a chip is a fifth state or a rendering
-// of an existing one is a design call — it belongs to w-68's bench, not to a
-// mechanical extraction. App-wide the count is worse (nine distinct
-// "selected" amber recipes, and the primary CTA is pixel-identical to one of
-// them); that inventory is on w-68.
+// THIS IS NOT THE WHOLE VOCABULARY. Six of the seven amber recipes audited
+// inside these two components at extraction time (2026-08-19, "clear the
+// ground under the rail") converge here; a seventh — the sticky "riding
+// <thread>" chip — deliberately does not, because it names a different kind
+// of fact. w-68 signed that split too: "the sticky chip stops wearing the
+// badges' costume — it is a live state, they are labels." A badge answers
+// "which one did you pick"; the sticky chip answers "what is true right
+// now, for how much longer" — so it gets its own recipe, `LIVE_CLAIM`,
+// rather than a third intensity bolted onto the selection axis.
 
 /** SpoolRack: a one-shot "next wake" request parked on this row — the
- *  brightest of the four, since it is the most time-boxed of the states
- *  ("next wake · requested" is not the same claim as the standing pin). */
-export const SELECTED_REQUESTED = 'border-amber-600/80 bg-amber-950/40';
+ *  brighter of the rack's two marks, since it is the more time-boxed claim
+ *  ("next wake · requested" is not the same standing as the durable pin). */
+export const SELECTED_REQUESTED = 'border-l-2 border-l-stone-100 bg-stone-800/50';
 
-/** SpoolRack: the standing default/pin. Deliberately more muted than a
- *  one-shot request — see `SpoolRack.svelte`'s own comment on why the two
+/** SpoolRack: the standing default/pin. Same mark as `SELECTED_REQUESTED`,
+ *  deliberately dimmer — see `SpoolRack.svelte`'s own comment on why the two
  *  must never look the same. */
-export const SELECTED_PINNED = 'border-amber-800/70 bg-amber-950/20';
+export const SELECTED_PINNED = 'border-l-2 border-l-stone-500 bg-stone-900/40';
 
-/** ControlStrip: the currently chosen option inside a picker list (repo,
- *  environment). */
-export const SELECTED_OPTION = 'border-amber-700/70 bg-amber-950/30';
+/** The bench: the currently chosen option inside a picker list (project,
+ *  environment). One mark, one intensity — these lists carry no second
+ *  state to distinguish. */
+export const SELECTED_OPTION = 'border-l-2 border-l-stone-100 bg-stone-800/40';
 
-/** ControlStrip: the runner chip summarizing what is active right now.
- *  Same border as `SELECTED_OPTION`; a more opaque fill because it stands
- *  alone rather than inside a list of alternatives. */
-export const SELECTED_ACTIVE = 'border-amber-700/70 bg-amber-950/55';
+/** The gauge: the runner chip summarising what is active right now. This is
+ *  a read-only status line, not a picker — it keeps the brand accent rather
+ *  than the bench's shape language, because nothing here is being chosen.
+ */
+export const ACTIVE_STATUS = 'border-amber-700/70 bg-amber-950/55';
 
-/** Shared "not tappable / not selectable" recipe: SpoolRack's dead rows,
- *  ControlStrip's non-dispatchable repos and unavailable environments. */
-export const DISABLED_ROW = 'cursor-not-allowed border-stone-900/60 bg-stone-950/30 opacity-45';
+/** A live, time-bounded claim — SpoolRack's "riding <thread>" chip. Not a
+ *  selection (nobody picked it from a list) and not the CTA (nothing to
+ *  press): its own recipe, a filled dot standing in for the badges' rule. */
+export const LIVE_CLAIM = 'border-stone-600/70 bg-stone-800/70 text-stone-200';
 
-/** The unavailable-row mark, prefixed onto a label when a row cannot be
- *  acted on. */
-export const UNAVAILABLE_MARK = '✗ ';
+/** Shared "designed off" recipe: not a dimmed copy of a live row — a
+ *  distinct, deliberate rendering. Dashed border, full-opacity ink; the row
+ *  reads as "nothing plugged into this socket", not "broken". Covers every
+ *  off state on the rail: SpoolRack's unavailable/unverified rows
+ *  (collapsed to one bucket, see `spoolRack.ts::offerabilityOf` — the
+ *  distinction between "verified unavailable" and "we don't know" does not
+ *  survive to a row a reader can act on), the bench's non-dispatchable
+ *  repos, and its unavailable environments. */
+export const OFF_ROW = 'cursor-not-allowed border-dashed border-stone-700/70 bg-stone-950/40';
+
+/** The off-row mark, prefixed onto a label when a row cannot be acted on. */
+export const OFF_MARK = '✗ ';
 
 /** The idle, tappable row — the direct sibling of every state above, and
- *  the branch each of their ternaries falls through to. Named for the same
- *  reason they are: it was hand-copied four times across the two files
- *  (`SpoolRack.svelte:153`, `ControlStrip.svelte:536`, `:579`, `:601`),
- *  which was the largest surviving duplication once the four amber pairs
- *  were done. */
+ *  the branch each of their ternaries falls through to. */
 export const IDLE_ROW = 'border-stone-800/60 bg-stone-900/30 hover:border-stone-600/70';

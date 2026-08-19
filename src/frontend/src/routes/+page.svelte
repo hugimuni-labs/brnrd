@@ -13,7 +13,8 @@
 		readLastLookedAt,
 		serializeLastLookedAt
 	} from '$lib/digest';
-	import ControlStrip from '$lib/ControlStrip.svelte';
+	import RailGauge from '$lib/RailGauge.svelte';
+	import RailBench from '$lib/RailBench.svelte';
 	import ColdStart from '$lib/ColdStart.svelte';
 	import PublishConsentNotice from '$lib/PublishConsentNotice.svelte';
 	import { DOCS_URL } from '$lib/publicStats';
@@ -553,7 +554,7 @@
 	let clothHeadingEl = $state<HTMLElement | null>(null);
 	let corpusHeadingEl = $state<HTMLElement | null>(null);
 	let billingHeadingEl = $state<HTMLElement | null>(null);
-	let railOpen = $state(false);
+	let benchOpen = $state(false);
 	let clocks = $state<StackClocks>(initialStackClocks());
 	let railCondensed = $derived(clocks.rail.settled);
 	let heddleDocked = $derived(clocks.heddle.settled);
@@ -595,7 +596,7 @@
 
 		// Local authority; the reactive `clocks` is assigned only on change
 		// (reference-identity dirtying). `step` runs from listeners and
-		// timers — async, so its reads of `railOpen` are untracked and this
+		// timers — async, so its reads of `benchOpen` are untracked and this
 		// effect re-runs only when an element binding changes.
 		//
 		// Raw verdicts are computed from live rects inside `step`, never
@@ -642,7 +643,7 @@
 					docked: current.lane.settled
 				})
 			};
-			const result = stepStackClocks(current, raws, railOpen, now);
+			const result = stepStackClocks(current, raws, benchOpen, now);
 			current = result.clocks;
 			if (result.changed) clocks = result.clocks;
 			const nextSection = activeSectionFrom(
@@ -677,7 +678,7 @@
 			if (rounded !== stickyStackHeight) stickyStackHeight = rounded;
 			if (
 				stackAtRest({
-					railOpen,
+					railOpen: benchOpen,
 					railCondensed: current.rail.settled,
 					heddleDocked: current.heddle.settled,
 					machineDocked: current.lane.settled
@@ -695,7 +696,7 @@
 		window.addEventListener('resize', scheduleStep, { passive: true });
 		// `untrack`, load-bearing (THE RAIL THAT COULDN'T DECIDE, 2026-08-13):
 		// every other `step()` call runs from listeners and timers — async, so
-		// its `railOpen`/`activeSection` reads are untracked, exactly as the
+		// its `benchOpen`/`activeSection` reads are untracked, exactly as the
 		// comment at the top of this effect promises. This first call is the
 		// one synchronous exception: unwrapped, its reads made `activeSection`
 		// a dependency of this whole wiring effect, so every scroll-spy
@@ -753,7 +754,7 @@
 		void railCondensed;
 		void heddleDocked;
 		void machineDocked;
-		void railOpen;
+		void benchOpen;
 		if (typeof window === 'undefined' || !stackEl) return;
 		const height = Math.round(stackEl.getBoundingClientRect().height);
 		if (height > 0 && height !== stickyStackHeight) stickyStackHeight = height;
@@ -770,20 +771,22 @@
 		return sectionFrameLit(stackCollapsed, activeSection?.id ?? null, id);
 	}
 
-	// His proposal, verbatim: "when it's expanded, it should just somehow go to
-	// the top of the page. And when it's collapsed, go back if it's possible."
-	// Opening the rack while scrolled would otherwise leave a panel taller than
-	// the viewport pinned at `top-0` with its own bottom unreachable — the shape
-	// that made the last spool in the rack impossible to tap. Returning the
-	// reader to where they were is what makes the trip cheap enough to take.
-	// `$state`, matching `machineReturnY` below (2026-08-03, the rack answers
-	// everywhere): neither value drives a template read, so the rune buys no
-	// reactivity either one actually needs — the two were just inconsistent
-	// with each other, one plain `let` and one runed, for the same shape of
-	// job (remember a scroll position across a travel-and-return trip).
+	// His proposal, verbatim (2026-08-03): "when it's expanded, it should just
+	// somehow go to the top of the page. And when it's collapsed, go back if
+	// it's possible." w-68 (the gauge/bench split) changed *why* this still
+	// matters: the gauge is always small and always `sticky top-0` now, so
+	// opening the bench can no longer pin an unreachable-bottomed panel over
+	// the viewport (the defect this originally fixed). What survives is the
+	// plain courtesy — the bench mounts in normal flow right after the
+	// (tiny, sticky) gauge, near the top of the document, so opening it while
+	// scrolled deep into the cloth would otherwise insert a panel the reader
+	// cannot see without scrolling up by hand. `$state`, matching
+	// `machineReturnY` below: neither value drives a template read, so the
+	// rune buys no reactivity either one actually needs.
 	let railReturnY = $state<number | null>(null);
-	function onRackChange(open: boolean) {
-		railOpen = open;
+	function onBenchToggle() {
+		const open = !benchOpen;
+		benchOpen = open;
 		// Un-docking is immediate, never debounced — step the clocks in the
 		// same act, before the smooth scroll below has moved anything.
 		requestStackStep();
@@ -1382,49 +1385,45 @@
 		<CapabilityPanel {capabilities} {connectedRepos} {pairingCommand} {now} />
 
 		<div bind:this={releaseSentinel} class="h-px -mb-px" aria-hidden="true"></div>
-		<!-- THE STACK (w-48, `design-the-sticky-stack.md`): rail, docked heddle
+		<!-- THE STACK (w-48, `design-the-sticky-stack.md`): gauge, docked heddle
 		     copy, machine head, section label — one sticky container, so every
 		     slot's position is CSS layout and none of them can be painted at a
-		     wrong document coordinate (the tap-eater class this replaces). The
-		     container goes `relative` while the rack is open (#1258): the rack
-		     is a full detour, `onRackChange` lands the reader at the top, and
-		     a static panel scrolls away like any other block — its own
-		     `overflow-y-auto` keeps its bottom reachable. At scrollY 0 the two
-		     positions render identically, so nothing jumps at the toggle. -->
-		<div bind:this={stackEl} class="{railOpen ? 'relative' : 'sticky top-0'} z-40">
-			<!-- the rail: resource truth — fuel, tank, slots, the next pick —
-			     stays on top at every scroll position and condenses to one line
-			     once the reader scrolls past the whole full stack. Bottom
-			     padding is reclaimed while condensed (his magnet steer: "could
-			     we remove the space between them, almost at least, when they
-			     are collapsed and on the top?") so the docked strips beneath
-			     sit flush. -->
+		     wrong document coordinate (the tap-eater class this replaces).
+		     Unconditionally `sticky top-0` since w-68 (the gauge/bench split):
+		     the old `relative` fallback existed because an open rack could pin a
+		     panel taller than the viewport with its own bottom unreachable — the
+		     gauge cannot do that any more (one line, fixed height, by
+		     construction), and the bench that replaced the rack's picking surface
+		     mounts *outside* this container entirely, so nothing tall is ever a
+		     child of a sticky box here. See `RailBench` below, past the docking
+		     sentinels. -->
+		<div bind:this={stackEl} class="sticky top-0 z-40">
+			<!-- the gauge: resource truth — next pick, fuel, tank — one line,
+			     always, whatever the scroll position. Bottom padding is
+			     reclaimed while the stack has condensed past it (his magnet
+			     steer: "could we remove the space between them, almost at
+			     least, when they are collapsed and on the top?") so the docked
+			     strips beneath sit flush. -->
 			<!-- #1281: no per-lane "paused —" restated here — `runnersWithheld` /
 			     `quotaWithheld` are the same account-level publish-scope fact
 			     `PublishConsentNotice` already stated once, above, in the variant
 			     that carries the action (`set a scope`). -->
 			<div
-				class="ignite -mx-6 max-h-[100svh] overflow-y-auto bg-stone-950/95 px-6 pt-3 backdrop-blur-sm {railCondensed &&
-				!railOpen
+				class="ignite -mx-6 bg-stone-950/95 px-6 pt-3 backdrop-blur-sm {railCondensed && !benchOpen
 					? 'pb-0'
 					: 'pb-2'}"
 				style="--ignite-delay: 120ms"
 			>
-				<ControlStrip
+				<RailGauge
 					runners={runnersData}
-					repos={connectedRepos}
 					{shells}
-					{runnersError}
-					{runnersNote}
-					onTap={tapWakeRunner}
-					onReleaseSticky={releaseStickyRunner}
 					ledgerRows={runLedgerRows}
 					{scheduledWakes}
 					{now}
 					activeSpawns={liveRuns === null ? null : activeSpawns}
 					maxSpawns={spawnMaxConcurrent}
-					condensed={railCondensed}
-					{onRackChange}
+					{benchOpen}
+					{onBenchToggle}
 				/>
 			</div>
 
@@ -1542,6 +1541,22 @@
 		     measured off a sibling in normal flow because the head itself is
 		     always stuck. -->
 		<div bind:this={machineSentinel} class="h-px -mb-px" aria-hidden="true"></div>
+		<!-- THE BENCH (w-68, signed 2026-08-19): project · environment · core,
+		     mounted only on request, outside the sticky stack entirely — opening
+		     it never touches the gauge's own layout or the docking sentinels
+		     above, which is the whole point of pulling it out of THE STACK. Its
+		     own `panel`, free to be as tall as the catalog needs. -->
+		{#if benchOpen}
+			<RailBench
+				runners={runnersData}
+				repos={connectedRepos}
+				{runnersError}
+				{runnersNote}
+				{now}
+				onTap={tapWakeRunner}
+				onReleaseSticky={releaseStickyRunner}
+			/>
+		{/if}
 		<section class="ignite" style="--ignite-delay: 260ms" aria-label="the machine's lane">
 			{#if machineExpanded}
 				<div in:glitchReveal={{ duration: 240 }}>
@@ -1564,8 +1579,8 @@
 							selectedId={loomSelection?.kind === 'wake' ? loomSelection.id : focusRunId}
 						/>
 					</div>
-					<!-- #1281: no per-lane "paused —" restated here — see the rail's
-					     own note above `<ControlStrip>`; same fact, same fix. -->
+					<!-- #1281: no per-lane "paused —" restated here — see the gauge's
+					     own note above `<RailGauge>`; same fact, same fix. -->
 
 					<!-- The unfold: a selected strand (or the sole live one) expands in
 				     place into its run node; a selected wake into its schedule row.

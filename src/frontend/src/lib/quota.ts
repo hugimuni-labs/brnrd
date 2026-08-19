@@ -115,7 +115,7 @@ export interface QuotaShell {
 	/** When this shell's own quota report was last received — the daemon-level
 	 *  report timestamp (`Daemon.quota_updated_at`), distinct from `status ===
 	 *  'stale'` (a scrape-level fact derived from the shell payload's own
-	 *  optional `updated_at`, see `ControlStrip.svelte`'s `fuel` rows). Shells
+	 *  optional `updated_at`, see `RailGauge.svelte`'s `fuel` rows). Shells
 	 *  merge by name across every daemon on the account with no per-row expiry
 	 *  (#1503, "the tank of dead quotas" — the same shape #1502 fixed for the
 	 *  runner rack): a retired daemon's shell can sit on the tank looking as
