@@ -1,6 +1,8 @@
 <script lang="ts">
+	import { SvelteSet } from 'svelte/reactivity';
 	import { liveSticky, type RunnerProfile, type RunnerSticky, type WakeRequest } from './runners';
 	import { stickyCountdown } from './controlStrip';
+	import { availabilityOf, collapsedShellSummary, groupByShell, isTappable } from './spoolRack';
 
 	// #328 spool rack. You don't set a being's body with a dropdown; the
 	// rack shows who *can* wake and which spool is threaded (the pin).
@@ -15,6 +17,16 @@
 	// not re-tapping the requested row, which silently toggled a request
 	// away on first live use (2026-07-11). The page owns the routing;
 	// this component just reports which row was tapped.
+	//
+	// 2026-08-19 rework ("the rack of dead spools"): rows used to render
+	// `available` on any row *missing* the field, and a stale report's rows
+	// stayed tappable because the stale chip was cosmetic — a dead machine's
+	// catalog could park a wake nothing would ever serve. Availability is
+	// tri-state now (`spoolRack.ts::availabilityOf`) and tap-gating reads
+	// staleness too (`isTappable`). The rows themselves are grouped by
+	// shell — the "two-way selector" shape (shell, then its cores) a
+	// dropdown would have meant re-litigating the no-selector call above;
+	// grouping is presentation, tap semantics are untouched.
 	interface Props {
 		profiles: RunnerProfile[];
 		defaultProfile: string | null;
@@ -43,6 +55,16 @@
 	}: Props = $props();
 
 	let stickyLive = $derived(liveSticky(sticky, now));
+	let groups = $derived(groupByShell(profiles));
+	// Which collapsed (all-unavailable) shells the reader expanded by hand —
+	// still never tappable-to-request once open, only the dead rows made
+	// inspectable instead of hidden.
+	let expandedShells = new SvelteSet<string>();
+
+	function toggleShell(shell: string) {
+		if (expandedShells.has(shell)) expandedShells.delete(shell);
+		else expandedShells.add(shell);
+	}
 
 	function isSticky(profile: RunnerProfile): boolean {
 		return stickyLive !== null && stickyLive.profile === profile.name;
@@ -83,15 +105,22 @@
 	}
 
 	function handleTap(profile: RunnerProfile) {
-		if (profile.available === false) return;
+		if (!isTappable(profile, stale)) return;
 		if (onTap) onTap(profile.name);
 	}
 
 	function rowTitle(profile: RunnerProfile): string {
-		if (profile.available === false) {
+		const availability = availabilityOf(profile);
+		if (availability === 'unverified') {
+			return `${profile.name}: this daemon's report didn't say whether it's available — not tappable until it does`;
+		}
+		if (availability === 'unavailable') {
 			return profile.availability === 'shell-not-found'
 				? `${profile.shell ?? profile.name} is not installed on this daemon`
 				: `${profile.name} is unavailable: ${profile.availability ?? 'daemon policy'}`;
+		}
+		if (stale || profile.daemon_stale === true) {
+			return `${profile.name} was available as of an outdated report from its own daemon — not tappable until a fresher one lands`;
 		}
 		if (isRequested(profile)) {
 			return 'already requested — tap the default row to cancel';
@@ -101,6 +130,35 @@
 		}
 		return `next wake on ${profile.name} — one wake, cancelable until it fires`;
 	}
+
+	function rowClasses(
+		profile: RunnerProfile,
+		tappable: boolean,
+		requested: boolean,
+		pinned: boolean
+	): string {
+		if (!tappable) {
+			const availability = availabilityOf(profile);
+			return availability === 'unverified'
+				? 'cursor-not-allowed border-dashed border-stone-800/60 bg-stone-950/20 opacity-60'
+				: 'cursor-not-allowed border-stone-900/60 bg-stone-950/30 opacity-45';
+		}
+		if (requested) return 'border-amber-600/80 bg-amber-950/40';
+		if (pinned) return 'border-amber-800/70 bg-amber-950/20';
+		return 'border-stone-800/60 bg-stone-900/30 hover:border-stone-600/70';
+	}
+
+	function rowLabelClasses(nextWake: boolean, tappable: boolean, unverified: boolean): string {
+		if (nextWake) return 'text-amber-200';
+		if (unverified) return 'text-ink-quiet';
+		return tappable ? 'text-stone-300' : 'text-ink-mute';
+	}
+
+	function rowMark(availability: ReturnType<typeof availabilityOf>): string {
+		if (availability === 'unavailable') return '✗ ';
+		if (availability === 'unverified') return '? ';
+		return '';
+	}
 </script>
 
 <div class="panel p-4">
@@ -109,6 +167,7 @@
 		{#if stale}
 			<span
 				class="border border-sky-900/60 bg-sky-950/40 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-sky-300 uppercase"
+				title="the account's newest catalog report is old — no row on this rack can park a wake until a fresh one lands"
 				>stale report</span
 			>
 		{/if}
@@ -116,108 +175,146 @@
 	{#if profiles.length === 0}
 		<p class="font-mono text-xs text-ink-quiet">No daemon has reported its catalog yet.</p>
 	{:else}
-		<div class="space-y-1.5">
-			{#each profiles as profile (profile.name)}
-				{@const pinned = isPinned(profile)}
-				{@const requested = isRequested(profile)}
-				{@const nextWake = isNextWake(profile)}
-				{@const available = profile.available !== false}
-				<button
-					type="button"
-					disabled={!available}
-					onclick={() => handleTap(profile)}
-					title={rowTitle(profile)}
-					class="flex w-full flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5 border px-2 py-1.5 text-left transition-colors {available
-						? requested
-							? 'border-amber-600/80 bg-amber-950/40'
-							: pinned
-								? 'border-amber-800/70 bg-amber-950/20'
-								: 'border-stone-800/60 bg-stone-900/30 hover:border-stone-600/70'
-						: 'cursor-not-allowed border-stone-900/60 bg-stone-950/30 opacity-45'}"
-				>
-					<div class="flex items-baseline gap-3">
-						<span
-							class="font-mono text-xs font-medium tracking-wide {nextWake
-								? 'text-amber-200'
-								: available
-									? 'text-stone-300'
-									: 'text-ink-mute'}">{available ? '' : '✗ '}{profile.name}</span
-						>
-						<span class="font-mono text-[11px] text-ink-quiet"
-							>{profile.shell ?? '?'} · {coreLabel(profile)}</span
-						>
+		<div class="space-y-2.5">
+			{#each groups as group (group.shell)}
+				{@const collapsed = group.allUnavailable && !expandedShells.has(group.shell)}
+				{#if collapsed}
+					<!-- A shell with nothing installed collapses to one line instead
+					     of one dead row per core — the screenshot's 7 greyed rows,
+					     made impossible. Chevron only inspects; it never taps. -->
+					<button
+						type="button"
+						onclick={() => toggleShell(group.shell)}
+						title="expand to see this shell's cores — still not tappable, nothing here is installed"
+						class="flex w-full items-center justify-between gap-3 border border-stone-900/60 bg-stone-950/20 px-2 py-1.5 text-left font-mono text-xs text-ink-mute transition-colors hover:border-stone-700/60"
+					>
+						<span>✗ {collapsedShellSummary(group)}</span>
+						<span class="text-[10px] text-ink-quiet">▸</span>
+					</button>
+				{:else}
+					<div class="space-y-1">
+						<div class="flex items-center justify-between px-0.5">
+							<span class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase"
+								>{group.shell}</span
+							>
+							{#if group.allUnavailable}
+								<button
+									type="button"
+									onclick={() => toggleShell(group.shell)}
+									title="collapse — nothing in this shell is installed"
+									class="font-mono text-[10px] text-ink-mute hover:text-ink-quiet">▾</button
+								>
+							{/if}
+						</div>
+						<div class="space-y-1.5">
+							{#each group.profiles as profile (profile.name)}
+								{@const pinned = isPinned(profile)}
+								{@const requested = isRequested(profile)}
+								{@const nextWake = isNextWake(profile)}
+								{@const availability = availabilityOf(profile)}
+								{@const tappable = isTappable(profile, stale)}
+								<button
+									type="button"
+									disabled={!tappable}
+									onclick={() => handleTap(profile)}
+									title={rowTitle(profile)}
+									class="flex w-full flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5 border px-2 py-1.5 text-left transition-colors {rowClasses(
+										profile,
+										tappable,
+										requested,
+										pinned
+									)}"
+								>
+									<div class="flex items-baseline gap-3">
+										<span
+											class="font-mono text-xs font-medium tracking-wide {rowLabelClasses(
+												nextWake,
+												tappable,
+												availability === 'unverified'
+											)}">{rowMark(availability)}{profile.name}</span
+										>
+										<span class="font-mono text-[11px] text-ink-quiet">{coreLabel(profile)}</span>
+										{#if availability === 'available' && !tappable}
+											<span class="font-mono text-[10px] tracking-wide text-sky-400 uppercase"
+												>stale</span
+											>
+										{/if}
+									</div>
+									<div class="flex items-baseline gap-3 font-mono text-[11px]">
+										{#if isSticky(profile)}
+											<!-- #932: the claimed tap riding its conversation. Timer is the
+											     contract made visible (his 08-08 ask); ✕ is the early exit. -->
+											<span
+												class="flex items-baseline gap-1.5 border border-amber-600/80 bg-amber-950/60 px-1.5 py-0.5 text-[10px] tracking-wide text-amber-200 uppercase"
+												title={`a tapped core rides its conversation until the timer runs out — wakes in that thread dispatch here, not on the default${stickyLive?.expires_at ? ` (until ${stickyLive.expires_at})` : ''}`}
+											>
+												riding {stickyThreadLabel()}
+												{#if stickyCountdown(stickyLive, now)}
+													· {stickyCountdown(stickyLive, now)}
+												{/if}
+												{#if onReleaseSticky}
+													<span
+														role="button"
+														tabindex="0"
+														title="release now — this thread's wakes go back to the default"
+														class="cursor-pointer px-0.5 text-amber-300 hover:text-amber-100"
+														onclick={(e) => {
+															e.stopPropagation();
+															onReleaseSticky?.();
+														}}
+														onkeydown={(e) => {
+															if (e.key === 'Enter' || e.key === ' ') {
+																e.stopPropagation();
+																e.preventDefault();
+																onReleaseSticky?.();
+															}
+														}}>✕</span
+													>
+												{/if}
+											</span>
+										{/if}
+										{#if requested}
+											<!-- The parked tap: one wake, then back to the pin.
+											     Cancel = tap the default row, not this one. -->
+											<span
+												class="border border-amber-600/80 bg-amber-950/60 px-1.5 py-0.5 text-[10px] tracking-wide text-amber-200 uppercase"
+												>next wake · requested</span
+											>
+										{:else if pinned}
+											<!-- The standing pin is never a one-shot request. It may be
+											     active or temporarily superseded, but its name stays DEFAULT
+											     so the rack cannot recreate the ambiguity the header fixes. -->
+											<span
+												class="border px-1.5 py-0.5 text-[10px] tracking-wide uppercase {nextWake
+													? 'border-amber-700/70 bg-amber-950/40 text-amber-300'
+													: 'border-sky-800/70 bg-sky-950/40 text-sky-300'}">default</span
+											>
+										{/if}
+										{#if profile.class}
+											<span class="tracking-wide text-stone-400 uppercase"
+												>{CLASS_LABEL[profile.class] ?? profile.class}</span
+											>
+										{/if}
+										{#if profile.cost_rank !== null && profile.cost_rank !== undefined}
+											<span class="text-ink-quiet">rank {profile.cost_rank}</span>
+										{/if}
+										{#if profile.quota_source}
+											<span class="text-ink-mute">{profile.quota_source}</span>
+										{/if}
+										{#if profile.capability_score !== null && profile.capability_score !== undefined}
+											<span
+												class="text-ink-quiet"
+												title={profile.capability_freshness
+													? `benchmark as of ${profile.capability_freshness}`
+													: undefined}>cap {profile.capability_score}</span
+											>
+										{/if}
+									</div>
+								</button>
+							{/each}
+						</div>
 					</div>
-					<div class="flex items-baseline gap-3 font-mono text-[11px]">
-						{#if isSticky(profile)}
-							<!-- #932: the claimed tap riding its conversation. Timer is the
-							     contract made visible (his 08-08 ask); ✕ is the early exit. -->
-							<span
-								class="flex items-baseline gap-1.5 border border-amber-600/80 bg-amber-950/60 px-1.5 py-0.5 text-[10px] tracking-wide text-amber-200 uppercase"
-								title={`a tapped core rides its conversation until the timer runs out — wakes in that thread dispatch here, not on the default${stickyLive?.expires_at ? ` (until ${stickyLive.expires_at})` : ''}`}
-							>
-								riding {stickyThreadLabel()}
-								{#if stickyCountdown(stickyLive, now)}
-									· {stickyCountdown(stickyLive, now)}
-								{/if}
-								{#if onReleaseSticky}
-									<span
-										role="button"
-										tabindex="0"
-										title="release now — this thread's wakes go back to the default"
-										class="cursor-pointer px-0.5 text-amber-300 hover:text-amber-100"
-										onclick={(e) => {
-											e.stopPropagation();
-											onReleaseSticky?.();
-										}}
-										onkeydown={(e) => {
-											if (e.key === 'Enter' || e.key === ' ') {
-												e.stopPropagation();
-												e.preventDefault();
-												onReleaseSticky?.();
-											}
-										}}>✕</span
-									>
-								{/if}
-							</span>
-						{/if}
-						{#if requested}
-							<!-- The parked tap: one wake, then back to the pin.
-							     Cancel = tap the default row, not this one. -->
-							<span
-								class="border border-amber-600/80 bg-amber-950/60 px-1.5 py-0.5 text-[10px] tracking-wide text-amber-200 uppercase"
-								>next wake · requested</span
-							>
-						{:else if pinned}
-							<!-- The standing pin is never a one-shot request. It may be
-							     active or temporarily superseded, but its name stays DEFAULT
-							     so the rack cannot recreate the ambiguity the header fixes. -->
-							<span
-								class="border px-1.5 py-0.5 text-[10px] tracking-wide uppercase {nextWake
-									? 'border-amber-700/70 bg-amber-950/40 text-amber-300'
-									: 'border-sky-800/70 bg-sky-950/40 text-sky-300'}">default</span
-							>
-						{/if}
-						{#if profile.class}
-							<span class="tracking-wide text-stone-400 uppercase"
-								>{CLASS_LABEL[profile.class] ?? profile.class}</span
-							>
-						{/if}
-						{#if profile.cost_rank !== null && profile.cost_rank !== undefined}
-							<span class="text-ink-quiet">rank {profile.cost_rank}</span>
-						{/if}
-						{#if profile.quota_source}
-							<span class="text-ink-mute">{profile.quota_source}</span>
-						{/if}
-						{#if profile.capability_score !== null && profile.capability_score !== undefined}
-							<span
-								class="text-ink-quiet"
-								title={profile.capability_freshness
-									? `benchmark as of ${profile.capability_freshness}`
-									: undefined}>cap {profile.capability_score}</span
-							>
-						{/if}
-					</div>
-				</button>
+				{/if}
 			{/each}
 		</div>
 	{/if}

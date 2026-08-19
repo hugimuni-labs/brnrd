@@ -1754,3 +1754,70 @@ def test_a_row_that_is_not_even_an_object_costs_one_row():
     assert r.status_code == 200
     assert [row["id"] for row in _stored_live_runs(client, repo_id)] == ["run-a", "run-b"]
     assert [row["index"] for row in r.json()["runs_rejected"]] == [1, 2]
+
+
+def test_dashboard_runners_api_stamps_per_row_report_freshness():
+    """#1500 "the rack of dead spools" — the account-wide `stale` flag is
+
+    only ever as fresh as whichever daemon reported most recently
+    (`_runners_views`'s single `newest` tracker), but rows merge into one
+    dict *keyed by profile name* across every daemon on the account with no
+    per-row expiry. A daemon that retired never gets its rows overwritten
+    unless a live daemon happens to report a profile of the *same name* —
+    so its rows can sit on the rack looking exactly as fresh as a daemon
+    reporting every minute. `daemon_reported_at` / `daemon_stale` are the
+    per-row facts that let a reader (the frontend rack) catch that even
+    while the account-wide `stale` reads green.
+    """
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd.models import Daemon
+
+    client = _client()
+    token = _login(client, login="Gurio")
+    repo_id = _create_repo(client, token, repo="Gurio/brr")
+    now = datetime.now(timezone.utc)
+    fresh = now - timedelta(seconds=5)
+    retired = now - timedelta(days=5)
+    with client.app.state.SessionLocal() as db:
+        db.add(
+            Daemon(
+                id="dmn-fresh",
+                repo_id=repo_id,
+                token_id="tok-fresh",
+                daemon_name="laptop",
+                runners_updated_at=fresh,
+                runners_default="claude",
+                runners_json=json.dumps(
+                    [{"name": "claude", "shell": "claude", "available": True}]
+                ),
+            )
+        )
+        db.add(
+            Daemon(
+                id="dmn-retired",
+                repo_id=repo_id,
+                token_id="tok-retired",
+                daemon_name="old-machine",
+                runners_updated_at=retired,
+                runners_json=json.dumps(
+                    [{"name": "codex-gpt-5.4", "shell": "codex", "available": True}]
+                ),
+            )
+        )
+        db.commit()
+
+    body = client.get("/v1/dashboard/runners").json()
+
+    # The account-wide chip reads fresh — the live daemon reported 5s ago —
+    # exactly the case where a reader trusting only that flag gets fooled.
+    assert body["stale"] is False
+
+    by_name = {row["name"]: row for row in body["profiles"]}
+    assert by_name["claude"]["daemon_stale"] is False
+    assert by_name["codex-gpt-5.4"]["daemon_stale"] is True
+    assert by_name["codex-gpt-5.4"]["available"] is True, (
+        "still honestly reporting what the retired daemon last said — "
+        "daemon_stale is what tells a reader not to trust it as current"
+    )
