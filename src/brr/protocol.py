@@ -542,11 +542,74 @@ def _read_event(path: Path) -> dict[str, Any] | None:
 
 
 def _event_sort_key(entry: os.DirEntry) -> tuple[int, str]:
+    """``os.DirEntry`` "last touched" order — a filesystem-walk primitive,
+    not an age proof. Answers "which file did the scandir sweep see most
+    recently modified", nothing about when the event arrived. Still correct
+    for :func:`list_done` and :func:`list_active` (see their own comments);
+    :func:`list_pending` and :func:`list_noted` moved to
+    :func:`_event_queue_sort_key` instead (#1497 sweep — mtime used as a
+    proof of age)."""
     try:
         mtime = entry.stat().st_mtime_ns
     except OSError:
         mtime = 0
     return (mtime, entry.name)
+
+
+def _event_mtime(event: dict) -> float:
+    """File mtime of a pending event ≈ its arrival time. 0.0 when unknown,
+    so an unstattable event reads as old and never holds the burst window.
+
+    Moved here from ``daemon.py`` (#1497 sweep) so :func:`list_pending` and
+    :func:`list_noted` can share the same age semantics as the daemon's
+    dispatch sort and resident pending view instead of each keeping its own
+    copy; ``daemon.py`` imports this rather than redefining it.
+    """
+    path = event.get("_path")
+    try:
+        return path.stat().st_mtime
+    except (OSError, AttributeError):
+        return 0.0
+
+
+def _event_created_epoch(event: dict) -> float | None:
+    """Epoch seconds for an event's own ``created`` stamp, or ``None``.
+
+    ``created`` is written once, at ingestion (:func:`create_event`), so
+    unlike :func:`_event_mtime` — file mtime, which *any* later status/meta
+    write bumps — it is a stable proxy for arrival order. ``None`` on a
+    missing or unparseable stamp; callers fall back to :func:`_event_mtime`
+    rather than treating "no signal" as either oldest or newest. Built on
+    :func:`parse_iso_epoch`, the same ``Z``-suffix ISO-8601 parse every
+    other stamp in this module already uses.
+    """
+    return parse_iso_epoch(event.get("created"))
+
+
+def _event_queue_sort_key(event: dict) -> tuple[float, float]:
+    """Age order for a pending/noted event queue — oldest first.
+
+    #1496/#1497: file mtime alone is a proxy for age that any status write
+    invalidates — a re-queue, a defer, a plain meta update all bump it,
+    sending an event to the back of its own line (measured live: an event
+    dispatched at 14:58:06Z sorted *after* one created 15:33:51Z because the
+    earlier one's mtime was bumped by an unrelated ``status: processing``
+    write at 18:34Z). Sort by the event's own ``created`` instead — written
+    once, never touched again — with :func:`_event_mtime` as the tiebreaker
+    for equal ``created`` values *and* the fallback for any event that
+    predates the field or fails to parse it, so a missing stamp degrades to
+    the old mtime ordering rather than crashing or jumping the queue.
+
+    Shared by the daemon's dispatch sort (``daemon.py``'s
+    ``_dispatchable_targets``), its resident pending view
+    (``_pending_events_for_agent``), and this module's :func:`list_pending`
+    / :func:`list_noted` — one derivation of "how old is this event",
+    reused rather than copied at each site (#1506/#1507 is what a second
+    derivation costs).
+    """
+    mtime = _event_mtime(event)
+    created = _event_created_epoch(event)
+    return (created if created is not None else mtime, mtime)
 
 
 #: The letter's own lifecycle — the one state machine ``status:`` belongs
@@ -599,16 +662,30 @@ TERMINAL_EVENT_STATUSES = frozenset(
 
 
 def list_pending(inbox_dir: Path) -> list[dict[str, Any]]:
-    """Return events with status pending or processing, oldest first."""
+    """Return events with status pending or processing, oldest first.
+
+    "Oldest first" is an age question — when did this event arrive — not a
+    filesystem-touch question, so this sorts on :func:`_event_queue_sort_key`
+    (recorded ``created``, mtime tiebreak/fallback) rather than raw mtime
+    (#1497 sweep). Load-bearing: ``daemon.py``'s
+    ``_defer_pending_siblings_after_failure`` stages sibling backoff
+    directly off this order ("oldest first ⇒ released first"), so an event
+    whose mtime got bumped by an unrelated write (a re-queue, a defer, a
+    ``status: processing`` stamp) used to jump the stagger queue. Sorting
+    happens after the read (not on the raw ``DirEntry`` scan, unlike
+    :func:`list_done` / :func:`list_active` below) because ``created`` lives
+    in the event body, not in anything ``os.scandir`` exposes.
+    """
     if not inbox_dir.exists():
         return []
     events = []
-    for entry in sorted(os.scandir(inbox_dir), key=_event_sort_key):
+    for entry in os.scandir(inbox_dir):
         if not entry.name.endswith(".md"):
             continue
         ev = _read_event(Path(entry.path))
         if ev and ev.get("status") in ("pending", "processing"):
             events.append(ev)
+    events.sort(key=_event_queue_sort_key)
     return events
 
 
@@ -755,7 +832,19 @@ def list_dispatchable(
 
 
 def list_done(inbox_dir: Path, source: str) -> list[dict[str, Any]]:
-    """Return done events matching *source*, oldest first."""
+    """Return done events matching *source*, oldest first.
+
+    #1497 sweep classification: no production call site in this tree today
+    (only test assertions, mostly single-event or empty-list checks that
+    are order-insensitive either way — swept 2026-08-19). Left on
+    :func:`_event_sort_key` (last-touched) rather than moved to
+    :func:`_event_queue_sort_key` (age) — there is no live consumer to be
+    wrong for, so there is no defect to fix, only a docstring claim
+    ("oldest first") nothing currently exercises. Flagged, not changed: a
+    future caller that starts relying on true arrival order should switch
+    this to :func:`_event_queue_sort_key` at that point rather than assume
+    the existing sort already means that.
+    """
     if not inbox_dir.exists():
         return []
     events = []
@@ -777,6 +866,18 @@ def list_active(inbox_dir: Path, source: str) -> list[dict[str, Any]]:
     single-response run shows up here only once it reaches ``done`` (it
     has no partials while processing), so this stays behaviourally
     identical to ``list_done`` for that case.
+
+    #1497 sweep classification: ``gates/runtime.py``'s ``deliver_stream``
+    (the only production caller) sweeps **every** active event matching
+    *source* on **every** poll tick — no batch cap, no early-exit. Cross-
+    event order here only affects which of two due events posts its
+    message microseconds before the other *within the same tick*; it
+    never gates *whether* or *how soon* an event's turn comes; a bumped
+    mtime costs nothing an unbumped one wouldn't also cost next tick. That
+    is a genuine "when was this file last touched, for one sweep pass"
+    question, not an age proof — :func:`_event_sort_key` is correct here
+    and stays. Contrast :func:`list_noted` below, whose sweep *is* capped
+    and where the same mtime skew would starve the genuinely-oldest row.
     """
     if not inbox_dir.exists():
         return []
@@ -799,16 +900,29 @@ def list_noted(inbox_dir: Path, source: str) -> list[dict[str, Any]]:
     that unless someone tells it. This lister is the sweep surface for
     telling it; ``list_active`` deliberately excludes ``noted`` because
     nothing is ever *delivered* for one.
+
+    #1497 sweep classification: this **is** an age question, and unlike
+    :func:`list_active` its sweep (``gates/cloud.py``'s
+    ``_close_noted_events``) *is* batch-capped (``_NOTED_CLOSE_BATCH``) —
+    so a wrong order doesn't just cost microseconds, it can push the
+    genuinely-oldest queued row past this poll's cutoff. That row is the
+    one pinning the server's ``clamp_since`` floor (``oldest_queued - 1``
+    in ``src/brnrd/inbox.py``), so delaying its close delays the cursor
+    heal, not just this one event's own delivery — the same fairness
+    argument :func:`list_pending` already makes, crossing the local/server
+    boundary via ``cloud_event_id``. Sorted on
+    :func:`_event_queue_sort_key` accordingly.
     """
     if not inbox_dir.exists():
         return []
     events = []
-    for entry in sorted(os.scandir(inbox_dir), key=_event_sort_key):
+    for entry in os.scandir(inbox_dir):
         if not entry.name.endswith(".md"):
             continue
         ev = _read_event(Path(entry.path))
         if ev and ev.get("status") == "noted" and ev.get("source") == source:
             events.append(ev)
+    events.sort(key=_event_queue_sort_key)
     return events
 
 
