@@ -15474,6 +15474,11 @@ def start(
             # reason to exist). TTL-guarded: at most one `gh` round-trip every
             # few minutes, and never two at once.
             forge_pr_cache.refresh_if_stale_async(repo_root)
+            # Local-only cross-run sweep: once the shared forge cache is warm,
+            # name brr branches whose producing run has gone away. The helper
+            # owns process-lifetime dedup so heartbeat cadence cannot spam.
+            from . import parked_branches
+            parked_branches.warn_new(repo_root)
 
             # This is a daily, background observation; a release endpoint can
             # never delay dispatch or make the daemon unhealthy.

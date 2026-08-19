@@ -3359,6 +3359,20 @@ class TestWorkSurfaceInjection:
         assert "Work surface" in prompt
         assert "One orientation root" in prompt
 
+    def test_parked_branches_render_in_bundle_only_when_present(self, tmp_path, monkeypatch):
+        from brr import parked_branches
+
+        monkeypatch.setattr(
+            parked_branches, "detect",
+            lambda _repo: [parked_branches.ParkedBranch("brr/lost", 2, None)],
+        )
+        prompt = build_daemon_prompt("fix it", "evt-1", "/tmp/r.md", tmp_path)
+        assert "parked branches: brr/lost (2 commits, pushed age unknown)" in prompt
+
+        monkeypatch.setattr(parked_branches, "detect", lambda _repo: [])
+        prompt = build_daemon_prompt("fix it", "evt-1", "/tmp/r.md", tmp_path)
+        assert "parked branches:" not in prompt
+
     def test_scored_variant_attests_the_stale_page_among_several(self, tmp_path):
         """``work-surface`` aggregates many independently-trimmed pages into
         one ``ContractEntry`` (P1 move 1). When several pages are cut, the
