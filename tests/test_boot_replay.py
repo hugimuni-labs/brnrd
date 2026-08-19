@@ -1069,7 +1069,7 @@ class TestBootScore:
             empty_repo,
             event_ids=("evt-bpgk",),
             event_retry_of="run-260818-1834-lcu3",
-            event_retry_reason="host_interrupted",
+            event_retry_failure_kind="host_interrupted",
         )
         assert score.attention.retry_of == "run-260818-1834-lcu3"
-        assert score.attention.retry_reason == "host_interrupted"
+        assert score.attention.retry_failure_kind == "host_interrupted"

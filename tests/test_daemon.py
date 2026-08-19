@@ -4656,7 +4656,7 @@ def test_interrupted_marker_stamps_retry_provenance_on_the_event(tmp_path):
     fm = protocol.parse_frontmatter(
         Path(event["_path"]).read_text(encoding="utf-8"))
     assert fm.get("retry_of") == task.id
-    assert fm.get("retry_reason") == "host_interrupted"
+    assert fm.get("retry_failure_kind") == "host_interrupted"
 
 
 def test_interrupted_marker_leaves_orphaned_spawn_dispatch_processing(tmp_path):
@@ -4701,7 +4701,7 @@ def test_interrupted_marker_leaves_orphaned_spawn_dispatch_processing(tmp_path):
         Path(spawn_event["_path"]).read_text(encoding="utf-8"))
     assert fm.get("status") == "processing"
     assert fm.get("retry_of") == "run-strand-orphan"
-    assert fm.get("retry_reason") == "host_interrupted"
+    assert fm.get("retry_failure_kind") == "host_interrupted"
     # The dedicated sweep still does its job, undisturbed.
     assert daemon._reconcile_orphaned_spawn_dispatches(ctx, tmp_path, {}) == 1
     inbox = brr_dir / "inbox"
@@ -4724,7 +4724,7 @@ def test_interrupted_marker_leaves_no_retry_stamp_on_a_retired_event(tmp_path):
     fm = protocol.parse_frontmatter(
         Path(event["_path"]).read_text(encoding="utf-8"))
     assert "retry_of" not in fm
-    assert "retry_reason" not in fm
+    assert "retry_failure_kind" not in fm
 
 
 def test_record_retry_provenance_accumulates_additively(tmp_path):
@@ -4737,7 +4737,7 @@ def test_record_retry_provenance_accumulates_additively(tmp_path):
     daemon._record_retry_provenance(event, "run-B", runner_failures.TIMED_OUT)
 
     assert event.get("retry_of") == "run-A,run-B"
-    assert event.get("retry_reason") == "host_interrupted,timed_out"
+    assert event.get("retry_failure_kind") == "host_interrupted,timed_out"
 
     daemon._record_retry_provenance(event, "run-B", runner_failures.TIMED_OUT)
     assert event.get("retry_of") == "run-A,run-B", "re-stamping must not duplicate"
@@ -4745,7 +4745,7 @@ def test_record_retry_provenance_accumulates_additively(tmp_path):
     fm = protocol.parse_frontmatter(
         Path(event["_path"]).read_text(encoding="utf-8"))
     assert fm.get("retry_of") == "run-A,run-B"
-    assert fm.get("retry_reason") == "host_interrupted,timed_out"
+    assert fm.get("retry_failure_kind") == "host_interrupted,timed_out"
 
 
 def _account_context_for_policy(tmp_path):

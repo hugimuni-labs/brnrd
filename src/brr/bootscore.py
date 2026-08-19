@@ -44,7 +44,8 @@ from __future__ import annotations
 
 import time
 from dataclasses import asdict, dataclass, field, replace
-from datetime import datetime, timezone
+
+from . import protocol
 
 # ── Schema version ────────────────────────────────────────────────────────────
 
@@ -82,19 +83,29 @@ def event_age_seconds(created: str | None, *, now: float | None = None) -> float
     """
     if not created:
         return None
-    candidate = str(created).strip()
-    if not candidate:
+    epoch = protocol.parse_iso_epoch(created)
+    if epoch is None:
         return None
-    if candidate.endswith(("Z", "z")):
-        candidate = candidate[:-1] + "+00:00"
-    try:
-        dt = datetime.fromisoformat(candidate)
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
     now_ts = time.time() if now is None else now
-    return max(0.0, now_ts - dt.timestamp())
+    return max(0.0, now_ts - epoch)
+
+
+def format_age_short(age_seconds: float) -> str:
+    """``6h06m`` — hours and zero-padded minutes, no unit ever dropped.
+
+    The one place the ``//3600`` / ``%3600//60`` arithmetic lives for an
+    event's own age. :func:`format_event_age` (the waking event's own
+    attention/Run-section line) and ``prompts._format_pending_events`` (the
+    compact age suffix on every *other* pending event in the same bundle)
+    render the same fact from the same :func:`event_age_seconds` output and
+    must agree byte for byte — reconciling #1495/#1500 found the second
+    renderer had drifted into its own hand-rolled copy of this exact
+    arithmetic despite a comment claiming otherwise. One formatter now; the
+    comment is true because the import makes it true.
+    """
+    hours = int(age_seconds // 3600)
+    minutes = int((age_seconds % 3600) // 60)
+    return f"{hours}h{minutes:02d}m"
 
 
 def format_event_age(created: str | None, age_seconds: float | None) -> str | None:
@@ -118,42 +129,51 @@ def format_event_age(created: str | None, age_seconds: float | None) -> str | No
         return None
     if age_seconds < EVENT_AGE_STALE_SECONDS:
         return f"sent {created}"
-    hours = int(age_seconds // 3600)
-    minutes = int((age_seconds % 3600) // 60)
     return (
-        f"sent {created} ({hours}h{minutes:02d}m ago) — the daemon was only "
-        "asleep; this reached you late, not live"
+        f"sent {created} ({format_age_short(age_seconds)} ago) — the daemon "
+        "was only asleep; this reached you late, not live"
     )
 
 
-#: Compact inline label for a retry-provenance ``retry_reason`` value —
+#: Compact inline label for a retry-provenance ``retry_failure_kind`` value —
 #: falls back to the raw kind (underscores turned to spaces) for anything not
 #: named here, so a future failure kind renders imperfectly rather than
 #: silently.
-_RETRY_REASON_SHORT: dict[str, str] = {
+_RETRY_FAILURE_KIND_SHORT: dict[str, str] = {
     "host_interrupted": "host interrupt",
 }
 
 
-def format_retry_note(retry_of: str | None, retry_reason: str | None) -> str | None:
+def format_retry_note(retry_of: str | None, retry_failure_kind: str | None) -> str | None:
     """``"retry of run-X (host interrupt)"`` from an event's retry-history fields.
 
-    ``retry_of`` / ``retry_reason`` are comma-joined, positionally paired
-    lists (event frontmatter is flat — see ``protocol.update_event_meta``) —
-    an event retried more than once accumulates entries additively rather
-    than overwriting the previous one, so this can render a short history,
-    not just the latest attempt.
+    ``retry_of`` / ``retry_failure_kind`` are comma-joined, positionally
+    paired lists (event frontmatter is flat — see
+    ``protocol.update_event_meta``) — an event retried more than once
+    accumulates entries additively rather than overwriting the previous one,
+    so this can render a short history, not just the latest attempt.
+
+    Named ``retry_failure_kind``, not the shorter ``retry_reason`` #1500
+    first reached for: ``runner.RunnerResult.retry_reason()`` already owns
+    that name for an unrelated fact — *why the current run will be retried
+    in-loop* — while this is *what a prior interrupted run died of*. Same
+    word, two different facts, both live in ``daemon.py``; reconciling
+    #1495/#1500 renamed the newer one so a reader (and a grep) cannot
+    conflate them.
     """
     if not retry_of:
         return None
     runs = [r.strip() for r in retry_of.split(",") if r.strip()]
     if not runs:
         return None
-    reasons = [r.strip() for r in (retry_reason or "").split(",") if r.strip()]
+    reasons = [r.strip() for r in (retry_failure_kind or "").split(",") if r.strip()]
     parts = []
     for i, run_id in enumerate(runs):
         reason = reasons[i] if i < len(reasons) else None
-        label = _RETRY_REASON_SHORT.get(reason, reason.replace("_", " ")) if reason else None
+        label = (
+            _RETRY_FAILURE_KIND_SHORT.get(reason, reason.replace("_", " "))
+            if reason else None
+        )
         parts.append(f"{run_id} ({label})" if label else run_id)
     noun = "retry of" if len(parts) == 1 else "retries of (in order)"
     return f"{noun} {', '.join(parts)}"
@@ -424,9 +444,13 @@ class BootAttention:
     additive, so a twice-retried event keeps both. ``None`` on a first
     attempt; see ``daemon._mark_interrupted_runs`` for the writer."""
 
-    retry_reason: str | None = None
+    retry_failure_kind: str | None = None
     """Comma-joined, positionally paired with ``retry_of``: the
-    ``runner_failures`` kind each prior attempt died of."""
+    ``runner_failures`` kind each prior attempt died of. Named distinctly
+    from ``runner.RunnerResult.retry_reason()`` — that method answers *why
+    the current run will be retried in-loop*; this answers *what a prior
+    interrupted run died of* — two different facts that both live in
+    ``daemon.py`` and must not share a name (#1495/#1500 reconciliation)."""
 
 
 @dataclass(frozen=True)
@@ -861,7 +885,7 @@ def format_kernel(score: BootScore) -> str:
         age_note = format_event_age(att.created, att.age_seconds)
         if age_note:
             att_line += f" · {age_note}"
-        retry_note = format_retry_note(att.retry_of, att.retry_reason)
+        retry_note = format_retry_note(att.retry_of, att.retry_failure_kind)
         if retry_note:
             att_line += f" · {retry_note}"
         lines.append(att_line)

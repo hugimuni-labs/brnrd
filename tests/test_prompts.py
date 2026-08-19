@@ -1566,7 +1566,7 @@ class TestPromptBuilding:
             "answer the message", "evt-bpgk", "/tmp/resp.md", tmp_path,
             run_id="task-9",
             event_retry_of="run-260818-1834-lcu3",
-            event_retry_reason="host_interrupted",
+            event_retry_failure_kind="host_interrupted",
         )
         run_section = prompt.split("### Run", 1)[1].split("###", 1)[0]
         assert "retry of run-260818-1834-lcu3 (host interrupt)" in run_section
