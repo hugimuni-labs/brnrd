@@ -3831,7 +3831,11 @@ def _run_worker(
     # agent extends it by writing the keepalive control dotfile in its
     # outbox (skipped by the drain — see _drain_outbox).
     budget_seconds = runner.runner_timeout(cfg)
-    hard_cap_seconds = max(budget_seconds * 4, budget_seconds + 3600)
+    hard_cap_seconds = (
+        None
+        if budget_seconds is None
+        else max(budget_seconds * 4, budget_seconds + 3600)
+    )
     keepalive_path = outbox_dir / ".keepalive"
     card_path = outbox_dir / _CARD_CONTROL_NAME
     menu_path = outbox_dir / _LIVE_MENU_NAME

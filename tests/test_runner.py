@@ -1832,8 +1832,11 @@ class TestExtraRunnerArgs:
 
 
 class TestTimeoutConfig:
-    def test_runner_timeout_defaults_to_two_hours(self):
-        assert runner_timeout(None) == DEFAULT_RUNNER_TIMEOUT == 7200
+    def test_runner_timeout_unset_means_no_limit(self):
+        """2026-08-19 maintainer decision: no time limit by default,
+        only if a user explicitly sets one in the config."""
+        assert runner_timeout(None) is None
+        assert runner_timeout({}) is None
 
     def test_runner_timeout_reads_dotted_config_key(self):
         assert runner_timeout({"runner.timeout_seconds": 120}) == 120
@@ -1889,6 +1892,37 @@ class TestTimeoutConfig:
         # it exactly — the child gets the prompt, then EOF. What is forbidden is an
         # fd nobody ever closes, and PIPE is not that.
         assert captured["stdin"] == subprocess.PIPE
+
+    def test_invoke_runner_with_no_timeout_config_waits_forever(
+        self, tmp_path, monkeypatch,
+    ):
+        """No ``runner.timeout_seconds`` in cfg ⇒ ``proc.wait(timeout=None)`` —
+        Python's own "block indefinitely" contract, never a numeric fallback."""
+        captured: dict[str, object] = {}
+
+        def _fake_popen(*_args, **kwargs):
+            proc = _fake_proc(kwargs, out="ok\n")
+            real_wait = proc.wait
+
+            def _wait(timeout=None):
+                captured["timeout"] = timeout
+                return real_wait(timeout)
+
+            proc.wait = _wait
+            return proc
+
+        monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
+        invocation = RunnerInvocation(
+            kind="executor",
+            label="no-timeout-cfg",
+            prompt="hi",
+            cwd=tmp_path,
+            repo_root=tmp_path,
+        )
+        result = invoke_runner("mock", invocation, cfg={})
+
+        assert result.ok
+        assert captured["timeout"] is None
 
     def test_invoke_runner_timeout_message_uses_configured_value(
         self, tmp_path, monkeypatch,
