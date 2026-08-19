@@ -22,7 +22,13 @@
 		STATUS_UNKNOWN,
 		statusBarStyle
 	} from './statusPalette';
-	import { DISABLED_ROW, SELECTED_ACTIVE, SELECTED_OPTION, UNAVAILABLE_MARK } from './stateChrome';
+	import {
+		DISABLED_ROW,
+		IDLE_ROW,
+		SELECTED_ACTIVE,
+		SELECTED_OPTION,
+		UNAVAILABLE_MARK
+	} from './stateChrome';
 
 	interface Props {
 		runners: RunnersResponse | null;
@@ -533,7 +539,7 @@
 											class="flex w-full items-baseline justify-between gap-3 border px-2 py-1.5 text-left transition-colors {dispatchable
 												? selected
 													? SELECTED_OPTION
-													: 'border-stone-800/60 bg-stone-900/30 hover:border-stone-600/70'
+													: IDLE_ROW
 												: DISABLED_ROW}"
 										>
 											<span
@@ -576,7 +582,7 @@
 									class="flex w-full items-baseline justify-between gap-3 border px-2 py-1.5 text-left transition-colors {environmentSelection ===
 									null
 										? SELECTED_OPTION
-										: 'border-stone-800/60 bg-stone-900/30 hover:border-stone-600/70'}"
+										: IDLE_ROW}"
 								>
 									<!-- Named by what it resolves to, not by the mechanism:
 								     "repo policy" alone read as an alias the reader had to
@@ -598,7 +604,7 @@
 										class="flex w-full items-baseline justify-between gap-3 border px-2 py-1.5 text-left transition-colors {option.available
 											? environmentSelection === option.name
 												? SELECTED_OPTION
-												: 'border-stone-800/60 bg-stone-900/30 hover:border-stone-600/70'
+												: IDLE_ROW
 											: DISABLED_ROW}"
 									>
 										<span
