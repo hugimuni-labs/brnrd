@@ -84,17 +84,26 @@ def test_the_chip_never_opens_the_gate_by_itself(tmp_path):
     nothing else laden — must stay silent even though this run is
     topicless."""
     ctx, outbox, portal = _ctx(tmp_path)
+    # Boundary 0 (w-54): burn the first bar with a claim in place, so the
+    # chip's own eligibility is the only new fact below.
+    (outbox / hooks.TOPICS_NAME).write_text("the-loom\n", encoding="utf-8")
     quiet = _portal("t1", card={"stale": False, "state": "ok"})
     portal.write_text(json.dumps(quiet), encoding="utf-8")
+    hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})
+    # The claim disappears (fresh-read, no latch), token unchanged: a
+    # topicless run alone opens nothing.
+    (outbox / hooks.TOPICS_NAME).unlink()
     out = hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})
     assert out["inject"] is None
 
 
-def test_the_chip_caps_at_two_renders_across_many_boundaries(tmp_path):
-    """The furniture rule: a topicless run stays topicless across N laden
-    boundaries, but the chip renders at most twice — not once (unlike
-    `mood?`) and not unboundedly (the pre-steer shape this guards
-    against)."""
+def test_the_chip_renders_once_under_change_gating(tmp_path):
+    """The furniture rule, w-54 edition: a topicless run stays topicless
+    across N laden boundaries, and the chip renders exactly once — the
+    old cap of two guarded against a render landing on a boundary nobody
+    saw, and commit-on-render (the change-gate advances only when the bar
+    actually injected) closes that hole structurally. The cap remains as
+    an upper bound the gate now undershoots."""
     ctx, outbox, portal = _ctx(tmp_path)
     rendered = 0
     for i in range(6):
@@ -102,7 +111,7 @@ def test_the_chip_caps_at_two_renders_across_many_boundaries(tmp_path):
         out = hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})
         if "topic?" in (out["inject"] or ""):
             rendered += 1
-    assert rendered == 2
+    assert rendered == 1
 
 
 def test_the_chip_stops_immediately_once_a_claim_lands(tmp_path):
@@ -128,8 +137,13 @@ def test_a_quiet_eligible_boundary_does_not_burn_the_cap(tmp_path):
     mood nudge): a boundary where the chip was eligible but nothing else
     was laden must not spend one of the two renders."""
     ctx, outbox, portal = _ctx(tmp_path)
+    # Boundary 0 (w-54): burn the first bar with a claim in place.
+    (outbox / hooks.TOPICS_NAME).write_text("the-loom\n", encoding="utf-8")
     quiet = _portal("t1", card={"stale": False, "state": "ok"})
     portal.write_text(json.dumps(quiet), encoding="utf-8")
+    hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})
+    # Eligible (claim gone) but the gate never opens: no render spent.
+    (outbox / hooks.TOPICS_NAME).unlink()
     quiet_out = hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})
     assert quiet_out["inject"] is None
 
