@@ -5,6 +5,7 @@
 	import { availabilityOf, collapsedShellSummary, groupByShell, isTappable } from './spoolRack';
 	import {
 		DISABLED_ROW,
+		IDLE_ROW,
 		SELECTED_PINNED,
 		SELECTED_REQUESTED,
 		UNAVAILABLE_MARK
@@ -150,7 +151,7 @@
 		}
 		if (requested) return SELECTED_REQUESTED;
 		if (pinned) return SELECTED_PINNED;
-		return 'border-stone-800/60 bg-stone-900/30 hover:border-stone-600/70';
+		return IDLE_ROW;
 	}
 
 	function rowLabelClasses(nextWake: boolean, tappable: boolean, unverified: boolean): string {
