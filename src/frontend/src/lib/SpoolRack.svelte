@@ -172,7 +172,14 @@
 
 <div data-measure="spool-rack" class="panel p-4">
 	<div class="mb-3 flex items-center justify-between text-sm">
-		<span class="font-mono font-medium tracking-wide text-amber-200 uppercase">spool rack</span>
+		<!-- The third workshop bay wears the same label grammar as 01/02 in
+		     RailBench (found by this surface's first driven user, 2026-08-19:
+		     two numbered stone labels and then an amber unnumbered one read
+		     as two different rooms). Amber stays reserved for the DEFAULT
+		     badge and selection marks, per the selection-vs-action split. -->
+		<span class="font-mono font-bold tracking-[0.14em] uppercase" style="color: rgb(214 211 209)"
+			><span class="mr-2 text-ink-quiet">03</span>spool rack</span
+		>
 		{#if stale}
 			<span
 				class="border border-sky-900/60 bg-sky-950/40 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-sky-300 uppercase"
