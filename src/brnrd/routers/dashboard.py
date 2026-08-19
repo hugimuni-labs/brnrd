@@ -381,8 +381,8 @@ def _quota_views(db: Session, repos: list[Repo], runner_stats: list[dict[str, An
     """Real per-shell quota windows from the daemons' own reports (#237)."""
     repo_ids = {repo.id for repo in repos}
     real: dict[str, dict[str, Any]] = {}
+    now = datetime.now(timezone.utc)
     if repo_ids:
-        now = datetime.now(timezone.utc)
         daemons = db.execute(select(Daemon).where(Daemon.repo_id.in_(repo_ids))).scalars()
         for daemon in daemons:
             reported_at = _dt(daemon.quota_updated_at)
@@ -425,7 +425,24 @@ def _quota_views(db: Session, repos: list[Repo], runner_stats: list[dict[str, An
                 }
     out = list(real.values())
     for row in out:
-        row.pop("_reported_at", None)
+        # Same shape as `_runners_views` below (#1502, "the rack of dead
+        # spools"): windows merge into one dict keyed by shell *name* across
+        # every daemon on the account, with no per-row expiry — a retired
+        # daemon's window never gets overwritten unless a live daemon
+        # reports the same shell name, so it can sit on the tank looking as
+        # fresh as one reported seconds ago. Stamp the report's own
+        # freshness instead of discarding it, so a reader (the tank) can
+        # gate a window on the report that actually produced it rather than
+        # on whichever daemon in the account happened to report most
+        # recently. Reuses `_QUOTA_STALE_SECONDS` — the same threshold this
+        # function already applies to scrape-level staleness above — rather
+        # than minting a second, unrelated staleness window.
+        row_reported_at = row.pop("_reported_at", None)
+        row["daemon_reported_at"] = row_reported_at.isoformat() if row_reported_at else None
+        row["daemon_stale"] = (
+            row_reported_at is None
+            or (now - row_reported_at).total_seconds() > _QUOTA_STALE_SECONDS
+        )
     for row in runner_stats:
         shell = row["shell"]
         if shell == "unknown" or shell in real:

@@ -112,6 +112,21 @@ export interface QuotaShell {
 	/** Explicit spend posture for a shell with no `credits` block — see
 	 *  `QuotaSpend`. Absent on daemon builds older than 2026-07-13. */
 	spend?: QuotaSpend | null;
+	/** When this shell's own quota report was last received — the daemon-level
+	 *  report timestamp (`Daemon.quota_updated_at`), distinct from `status ===
+	 *  'stale'` (a scrape-level fact derived from the shell payload's own
+	 *  optional `updated_at`, see `ControlStrip.svelte`'s `fuel` rows). Shells
+	 *  merge by name across every daemon on the account with no per-row expiry
+	 *  (#1503, "the tank of dead quotas" — the same shape #1502 fixed for the
+	 *  runner rack): a retired daemon's shell can sit on the tank looking as
+	 *  fresh as the account's newest report. `daemon_reported_at` /
+	 *  `daemon_stale` are server-computed (`dashboard.py::_quota_views`) so a
+	 *  reader can gate a window on the report that actually produced it. */
+	daemon_reported_at?: string | null;
+	/** This shell's own source report is older than the freshness window —
+	 *  same threshold (`_QUOTA_STALE_SECONDS`) the scrape-level `status`
+	 *  already applies, scored against the daemon's report instead. */
+	daemon_stale?: boolean | null;
 }
 
 export interface QuotaResponse {

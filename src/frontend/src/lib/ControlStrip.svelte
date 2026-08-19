@@ -210,7 +210,7 @@
 		{#each fuel as row (row.id)}
 			{@const level = quotaLevel(row.percent)}
 			<span
-				class="whitespace-nowrap text-ink-quiet {row.stale ? 'opacity-60' : ''}"
+				class="whitespace-nowrap text-ink-quiet {row.stale || row.daemonStale ? 'opacity-60' : ''}"
 				title={row.tooltip}
 			>
 				{row.label}
@@ -381,7 +381,8 @@
 								{@const level = quotaLevel(row.percent)}
 								<div class="min-w-0" title={row.tooltip}>
 									<div
-										class="mb-0.5 flex items-baseline justify-between gap-1 font-mono text-[9px] {row.stale
+										class="mb-0.5 flex items-baseline justify-between gap-1 font-mono text-[9px] {row.stale ||
+										row.daemonStale
 											? 'text-ink-mute'
 											: 'text-stone-400'}"
 									>
@@ -397,7 +398,8 @@
 										     opposite way. -->
 												<svg
 													viewBox="0 0 12 12"
-													class="h-[9px] w-[9px] rotate-90 scale-x-[-1] {row.stale
+													class="h-[9px] w-[9px] rotate-90 scale-x-[-1] {row.stale ||
+													row.daemonStale
 														? 'opacity-40'
 														: ''}"
 													aria-hidden="true"
@@ -429,7 +431,8 @@
 									</div>
 									<div class="h-[3px] w-full bg-stone-900" role="img" aria-label={row.tooltip}>
 										<div
-											class="h-full transition-[width] duration-500 ease-out {row.stale
+											class="h-full transition-[width] duration-500 ease-out {row.stale ||
+											row.daemonStale
 												? 'opacity-50'
 												: ''}"
 											style={`width: ${row.percent ?? 0}%; ${statusBarStyle(level, LEVEL_COLOR[level])}`}
@@ -453,7 +456,9 @@
 		     Deliberately one line for the leading window only: this is a glance
 		     strip. The per-window detail is the fuel grid; the verdict is here. -->
 				<div
-					class="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-t border-stone-800/70 px-2.5 py-2 font-mono text-[10px]"
+					class="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-t border-stone-800/70 px-2.5 py-2 font-mono text-[10px] {lead.daemonStale
+						? 'opacity-60'
+						: ''}"
 					aria-label="tank forecast"
 				>
 					<span class="tracking-[0.13em] text-ink-quiet uppercase">tank</span>
@@ -493,6 +498,18 @@
 					{/if}
 					{#if lead.stale}
 						<span class="text-ink-mute">· stale report</span>
+					{/if}
+					{#if lead.daemonStale}
+						<!-- #1503: this window only leads because nothing fresher was
+						     available — `readTanks` never lets it win over a live
+						     alternative, so surfacing here means every candidate was
+						     equally stale (or this is the only shell reporting at
+						     all). -->
+						<span
+							class="text-ink-mute"
+							title="this shell's own daemon report is outdated — no fresher window was available to lead instead"
+							>· stale daemon report</span
+						>
 					{/if}
 				</div>
 			{/if}

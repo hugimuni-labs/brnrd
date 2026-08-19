@@ -714,6 +714,10 @@ def test_dashboard_renders_real_quota_and_flags_stale_reports():
         db.commit()
 
         fresh = _quota_views(db, [repo], runner_stats=[])
+        assert len(fresh) == 1
+        reported_at = fresh[0].pop("daemon_reported_at")
+        assert reported_at is not None
+        assert fresh[0].pop("daemon_stale") is False
         assert fresh == [
             {
                 "shell": "claude",
@@ -731,6 +735,12 @@ def test_dashboard_renders_real_quota_and_flags_stale_reports():
         stale = _quota_views(db, [repo], runner_stats=[])
         assert stale[0]["status"] == "stale"
         assert stale[0]["windows"][0]["percent"] is None
+        # #237's own scrape-level staleness (status/windows above) and #1503's
+        # report-level staleness are two distinct facts computed off different
+        # clocks (scrape_at vs. the daemon's report itself) but agree here
+        # because this daemon's report is the same 999s-old timestamp either
+        # way.
+        assert stale[0]["daemon_stale"] is True
 
 
 def test_dashboard_carries_the_burn_rate_and_drops_it_when_the_report_goes_stale():
@@ -982,6 +992,88 @@ def test_dashboard_quota_api_returns_real_windows():
     windows = body["runner_quotas"][0]["windows"]
     assert windows[0]["percent"] == 61.0
     assert windows[0]["resets_at"] == 1783360000.0
+
+
+def test_dashboard_quota_api_stamps_per_row_report_freshness():
+    """#1503 "the tank of dead quotas" — the same shape #1502 fixed for the
+    runner rack (`_runners_views`), one seam over. Quota windows merge into
+    one dict keyed by *shell name* across every daemon on the account, with
+    no per-row expiry: a retired daemon's shell never gets overwritten
+    unless a live daemon happens to report a shell of the same name — so a
+    codex window from a machine that has been off for days can sit on the
+    tank looking exactly as fresh as a claude window a live daemon reported
+    seconds ago. `daemon_reported_at` / `daemon_stale` are the per-row facts
+    that let a reader (the tank forecast) catch that."""
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd.models import Daemon
+
+    client = _client()
+    token = _login(client, login="Gurio")
+    repo_id = _create_repo(client, token, repo="Gurio/brr")
+    now = datetime.now(timezone.utc)
+    fresh = now - timedelta(seconds=5)
+    retired = now - timedelta(days=5)
+    with client.app.state.SessionLocal() as db:
+        db.add(
+            Daemon(
+                id="dmn-quota-fresh",
+                repo_id=repo_id,
+                token_id="tok-quota-fresh",
+                daemon_name="laptop",
+                quota_updated_at=fresh,
+                quota_json=json.dumps(
+                    [
+                        {
+                            "shell": "claude",
+                            "status": "known",
+                            "windows": [
+                                {"label": "5h window", "used": None, "limit": None, "percent": 80.0}
+                            ],
+                        }
+                    ]
+                ),
+            )
+        )
+        db.add(
+            Daemon(
+                id="dmn-quota-retired",
+                repo_id=repo_id,
+                token_id="tok-quota-retired",
+                daemon_name="old-machine",
+                quota_updated_at=retired,
+                quota_json=json.dumps(
+                    [
+                        {
+                            "shell": "codex",
+                            "status": "known",
+                            "windows": [
+                                {"label": "weekly", "used": None, "limit": None, "percent": 87.0}
+                            ],
+                        }
+                    ]
+                ),
+            )
+        )
+        db.commit()
+
+    body = client.get("/v1/dashboard/quota").json()
+    by_shell = {row["shell"]: row for row in body["runner_quotas"]}
+
+    assert by_shell["claude"]["daemon_stale"] is False
+    assert by_shell["claude"]["daemon_reported_at"] is not None
+    assert by_shell["codex"]["daemon_stale"] is True
+    assert by_shell["codex"]["daemon_reported_at"] is not None
+    # This retired daemon's own scrape-level staleness (`status`, #237's
+    # existing mechanism, keyed off the shell payload's own optional
+    # `updated_at`) agrees here and already redacts the live reading — the
+    # two mechanisms measure different clocks (scrape_at vs. the daemon's
+    # report) but land on the same verdict when a daemon has been off for
+    # days. `daemon_stale` is the fact that holds even when a shell payload
+    # carries no `updated_at` of its own to redact against.
+    assert by_shell["codex"]["status"] == "stale"
+    assert by_shell["codex"]["windows"][0]["percent"] is None
 
 
 def test_dashboard_live_runs_api_requires_login():
