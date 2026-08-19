@@ -286,6 +286,179 @@ def test_reply_threads_through_reply_to(tmp_path, monkeypatch, capsys):
     assert line["text"] == "thanks!"
 
 
+# ── post_id / self_url / form: parity with the browser lane's new keys ─
+
+
+def test_post_receipt_records_post_id_and_self_url(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    monkeypatch.setattr(
+        envoy_x, "urlopen", lambda *_a, **_kw: _Response({"data": {"id": "999"}})
+    )
+    envoy_x.run_post(["hello"], paths)
+    line = json.loads(paths.log.read_text(encoding="utf-8").strip())
+    assert line["id"] == "999"
+    assert line["post_id"] == "999"
+    assert line["self_url"] == "https://x.com/i/status/999"
+
+
+def test_reply_receipt_self_url_is_the_reply_own_post_not_the_target(tmp_path, monkeypatch):
+    """`post_id`/`self_url` always name the post *this row created* -- for
+    a reply, that's the new reply itself, never the post it replied to
+    (this module has no `url`-meaning collision to begin with: the API
+    lane never wrote a `url` key at all)."""
+    paths = _paths(tmp_path)
+    monkeypatch.setattr(
+        envoy_x, "urlopen", lambda *_a, **_kw: _Response({"data": {"id": "999"}})
+    )
+    envoy_x.run_post(["thanks!", "--reply-to", "123"], paths)
+    line = json.loads(paths.log.read_text(encoding="utf-8").strip())
+    assert line["reply_to"] == "123"
+    assert line["post_id"] == "999"
+    assert line["self_url"] == "https://x.com/i/status/999"
+
+
+def test_delete_receipt_carries_no_post_id_or_self_url(tmp_path, monkeypatch):
+    """A delete doesn't create a post -- post_id/self_url are meaningless
+    here and must not appear."""
+    paths = _paths(tmp_path)
+    monkeypatch.setattr(
+        envoy_x, "urlopen", lambda *_a, **_kw: _Response({"data": {"deleted": True}})
+    )
+    envoy_x.run_post(["delete", "555"], paths)
+    line = json.loads(paths.log.read_text(encoding="utf-8").strip())
+    assert "post_id" not in line
+    assert "self_url" not in line
+
+
+def test_form_recorded_verbatim(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    monkeypatch.setattr(
+        envoy_x, "urlopen", lambda *_a, **_kw: _Response({"data": {"id": "1"}})
+    )
+    envoy_x.run_post(["hi", "--form", "the counterintuitive claim"], paths)
+    line = json.loads(paths.log.read_text(encoding="utf-8").strip())
+    assert line["form"] == "the counterintuitive claim"
+    assert line["text"] == "hi"
+
+
+def test_form_absent_when_not_passed(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    monkeypatch.setattr(
+        envoy_x, "urlopen", lambda *_a, **_kw: _Response({"data": {"id": "1"}})
+    )
+    envoy_x.run_post(["hi"], paths)
+    line = json.loads(paths.log.read_text(encoding="utf-8").strip())
+    assert "form" not in line
+
+
+def test_form_refuses_dash_led_value(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    _refusing_urlopen(monkeypatch)
+    with pytest.raises(SystemExit, match="refusing: form starts with"):
+        envoy_x.run_post(["hi", "--form", "-rf /"], paths)
+
+
+def test_form_leading_space_escapes_the_dash_guard(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    monkeypatch.setattr(
+        envoy_x, "urlopen", lambda *_a, **_kw: _Response({"data": {"id": "1"}})
+    )
+    envoy_x.run_post(["hi", "--form", " -not a flag"], paths)
+    line = json.loads(paths.log.read_text(encoding="utf-8").strip())
+    assert line["form"] == "-not a flag"
+
+
+def test_form_does_not_reach_the_post_payload(tmp_path, monkeypatch):
+    """form is receipt-only metadata -- it must never ride the wire."""
+    paths = _paths(tmp_path)
+    seen: dict[str, Any] = {}
+
+    def fake_urlopen(req, *_a, **_kw):
+        seen["payload"] = json.loads(req.data)
+        return _Response({"data": {"id": "1"}})
+
+    monkeypatch.setattr(envoy_x, "urlopen", fake_urlopen)
+    envoy_x.run_post(["hi", "--form", "the artifact"], paths)
+    assert seen["payload"] == {"text": "hi"}
+
+
+# ── bookmark_count: surfaced from the public_metrics already fetched ──
+#
+# Mid-run steer (2026-08-19): the account's goal is bookmarks per post per
+# form, and bookmark_count was fetched in this request's own
+# tweet.fields=public_metrics param and never read back out. No extra
+# request -- these fixtures exercise the read/print path only, never a
+# live X response (the token backing this account has been dead -- 401/
+# 400 -- since 2026-08-17; see the receipt-log report).
+
+
+def test_read_human_output_shows_bookmark_count_when_present(tmp_path, monkeypatch, capsys):
+    paths = _paths(tmp_path)
+    seq = [
+        _Response({"data": {"id": "u1", "username": "brnrd_resident",
+                             "public_metrics": {"followers_count": 3}}}),
+        _Response({"data": []}),
+        _Response({"data": [{"id": "10", "text": "hi",
+                              "public_metrics": {"like_count": 2, "retweet_count": 1,
+                                                  "reply_count": 0, "impression_count": 40,
+                                                  "bookmark_count": 5}}]}),
+    ]
+
+    def fake_urlopen(_req, *_a, **_kw):
+        return seq.pop(0)
+
+    monkeypatch.setattr(envoy_x, "urlopen", fake_urlopen)
+    envoy_x.run_read([], paths)
+    out = capsys.readouterr().out
+    assert "bookmarks 5" in out
+
+
+def test_read_human_output_omits_bookmarks_when_absent(tmp_path, monkeypatch, capsys):
+    """Honest absence, never an invented zero -- a response that didn't
+    carry bookmark_count must not print `bookmarks 0`, unlike its four
+    siblings above (which already default to 0 -- an existing convention
+    this change does not touch)."""
+    paths = _paths(tmp_path)
+    seq = [
+        _Response({"data": {"id": "u1", "username": "brnrd_resident",
+                             "public_metrics": {"followers_count": 3}}}),
+        _Response({"data": []}),
+        _Response({"data": [{"id": "10", "text": "hi",
+                              "public_metrics": {"like_count": 2}}]}),
+    ]
+
+    def fake_urlopen(_req, *_a, **_kw):
+        return seq.pop(0)
+
+    monkeypatch.setattr(envoy_x, "urlopen", fake_urlopen)
+    envoy_x.run_read([], paths)
+    out = capsys.readouterr().out
+    assert "bookmarks" not in out
+
+
+def test_read_json_passes_bookmark_count_through_unfiltered(tmp_path, monkeypatch, capsys):
+    """The JSON path already surfaces whatever public_metrics the API
+    returned -- bookmark_count needed no code change there, only in the
+    human print loop, which used to cherry-pick four of the five fields
+    the same response carries."""
+    paths = _paths(tmp_path)
+    seq = [
+        _Response({"data": {"id": "u1", "username": "brnrd_resident",
+                             "public_metrics": {"followers_count": 3}}}),
+        _Response({"data": []}),
+        _Response({"data": [{"id": "10", "text": "hi",
+                              "public_metrics": {"bookmark_count": 7}}]}),
+    ]
+
+    def fake_urlopen(_req, *_a, **_kw):
+        return seq.pop(0)
+
+    monkeypatch.setattr(envoy_x, "urlopen", fake_urlopen)
+    envoy_x.run_read(["--json"], paths)
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["own_recent"][0]["public_metrics"]["bookmark_count"] == 7
+
+
 # ── the receipt trail ────────────────────────────────────────────────
 
 
