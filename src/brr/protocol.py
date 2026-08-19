@@ -586,7 +586,7 @@ def _event_created_epoch(event: dict) -> float | None:
     return parse_iso_epoch(event.get("created"))
 
 
-def _event_queue_sort_key(event: dict) -> tuple[float, float]:
+def _event_queue_sort_key(event: dict) -> tuple[float, float, str]:
     """Age order for a pending/noted event queue — oldest first.
 
     #1496/#1497: file mtime alone is a proxy for age that any status write
@@ -600,6 +600,24 @@ def _event_queue_sort_key(event: dict) -> tuple[float, float]:
     predates the field or fails to parse it, so a missing stamp degrades to
     the old mtime ordering rather than crashing or jumping the queue.
 
+    **Filename last, and it is not decoration.** ``created`` is written to
+    whole-second resolution, so a burst — 20 siblings seeded in a loop, 1,203
+    events from one herd — ties on it outright, and on a filesystem whose
+    mtime granularity is coarser than the loop it ties there too. With only
+    two components this key then falls through to ``sort``'s stability, i.e.
+    to whatever order ``os.scandir`` happened to yield: arbitrary, and
+    arbitrary *differently* on different machines. The predecessor
+    :func:`_event_sort_key` had ``entry.name`` as its final component for
+    exactly this reason and dropping it was a regression (caught by CI on
+    ``5506ceb0``, green locally on a finer-grained filesystem — which is the
+    whole tell). Event filenames carry a nanosecond stamp, so lexical order
+    over them is arrival order, and a total order is worth more here than a
+    perfect one: ``_defer_pending_siblings_after_failure`` stamps a
+    monotonically increasing release time per position, so "which sibling is
+    third" must be the same answer twice.
+
+    **A sort key is deterministic only down to its last tiebreak.**
+
     Shared by the daemon's dispatch sort (``daemon.py``'s
     ``_dispatchable_targets``), its resident pending view
     (``_pending_events_for_agent``), and this module's :func:`list_pending`
@@ -609,7 +627,9 @@ def _event_queue_sort_key(event: dict) -> tuple[float, float]:
     """
     mtime = _event_mtime(event)
     created = _event_created_epoch(event)
-    return (created if created is not None else mtime, mtime)
+    path = event.get("_path")
+    name = getattr(path, "name", "") or str(event.get("id") or "")
+    return (created if created is not None else mtime, mtime, name)
 
 
 #: The letter's own lifecycle — the one state machine ``status:`` belongs
