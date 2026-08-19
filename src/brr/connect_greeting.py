@@ -105,20 +105,9 @@ def door_for_greeting(brr_dir: Path) -> tuple[str, dict[str, object]] | None:
 
 
 def _facts(repo_root: Path) -> dict[str, Any]:
-    """A trimmed ``init_wake.collect_facts`` — repo/gh/gate facts only.
-
-    Runner and shell detection are dropped: unlike the terminal init wake,
-    this event dispatches through the *normal* daemon lifecycle, which
-    already hands every run its own Runner catalog and Mode block —
-    restating a subset of that here would drift from, or duplicate, the
-    standard surface rather than add anything.
-    """
-    from . import init_wake
-
-    facts = init_wake.collect_facts(repo_root, runner_name="")
-    for key in ("runner_name", "detected_runners", "detected_shells", "missing_shells"):
-        facts.pop(key, None)
-    return facts
+    """See :func:`prompts.collect_daemon_wake_init_facts` — shared with the
+    dispatch-time uninitialized-repo fold so the two lanes cannot drift."""
+    return prompts.collect_daemon_wake_init_facts(repo_root)
 
 
 def queue_greeting(repo_root: Path, brr_dir: Path) -> GreetingOutcome:

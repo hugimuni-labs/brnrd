@@ -313,11 +313,20 @@ def select_runner(
        silently overridden, even toward a cheaper Shell.
     2. **Fixed policy** returns the cheapest available local profile and never
        escalates; it exists for users who do not want cost-aware movement.
-    3. **Cost-aware policy** prefers the cheapest *local* profile at or below the
-       requested ``default_class`` (``economy`` when unset), falling back to the
-       cheapest local profile of any class. A **relay** (paid, brnrd-owned)
-       profile is *never* auto-selected here — relay needs spend-plan consent, so
-       it only enters via an explicit override or a later consent flow.
+    3. **Cost-aware policy** prefers the cheapest *local* profile **of the
+       target class** (``default_class``, ``balanced`` when unset), then the
+       cheapest below it, then the cheapest of any class. A **relay** (paid,
+       brnrd-owned) profile is *never* auto-selected here — relay needs
+       spend-plan consent, so it only enters via an explicit override or a
+       later consent flow.
+
+    ``default_class`` was a *ceiling* (and defaulted to ``economy``) until
+    2026-08-19: a fresh install's first-ever run dispatched on the weakest
+    installed Core, which is exactly the run that writes the repo contract
+    and the product's first impression. It is now a *target*: the default
+    run lands on the Shell's balanced/default Core, economy stays one
+    ``default_class=economy`` config line away, and escalation to strong
+    remains an explicit ask, unchanged.
 
     Returns ``None`` only when no profile is available at all.
     """
@@ -341,10 +350,11 @@ def select_runner(
     if policy == POLICY_FIXED:
         return cheapest(local)
 
-    target = default_class or ECONOMY
+    target = default_class or BALANCED
     target_rank = _LOCAL_CLASS_ORDER.get(target, len(_LOCAL_CLASS_ORDER))
+    in_class = [r for r in local if r.class_rank == target_rank]
     at_or_below = [r for r in local if r.class_rank <= target_rank]
-    return cheapest(at_or_below or local)
+    return cheapest(in_class or at_or_below or local)
 
 
 def automatic_fallback_runner(
