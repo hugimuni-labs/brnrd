@@ -2,11 +2,18 @@ import { deepEqual, equal } from 'node:assert/strict';
 import { test } from 'node:test';
 import {
 	countdown,
+	conversationLink,
 	doorLabel,
 	doorOffCopy,
 	doorOffHasEnablePath,
 	orderedDoors
 } from './messengerDoors.ts';
+
+test('conversationLink removes the one-shot pairing payload from the return door', () => {
+	equal(conversationLink('https://t.me/brnrd_bot?start=PK-AB12'), 'https://t.me/brnrd_bot');
+	equal(conversationLink('javascript:alert(1)'), null);
+	equal(conversationLink(null), null);
+});
 import type { MessengerDoor } from './repos.ts';
 
 test('doorLabel names the known platforms and title-cases an unknown one', () => {
