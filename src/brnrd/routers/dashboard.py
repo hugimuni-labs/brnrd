@@ -966,7 +966,7 @@ def dashboard_telegram_pair_api(request: Request, db: Session = Depends(get_db))
     if account_id is None:
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
     started = telegram_pair_core(db, request.app.state.settings, account_id, None)
-    return JSONResponse(started.model_dump())
+    return JSONResponse(started.model_dump(mode="json"))
 
 
 @router.post("/v1/dashboard/pair")
@@ -1016,7 +1016,8 @@ async def dashboard_pair_api(request: Request, db: Session = Depends(get_db)) ->
             instructions=instructions,
             deep_link=deep_link,
             platform=platform,
-        ).model_dump()
+            expires_at=started.expires_at,
+        ).model_dump(mode="json")
     )
 
 

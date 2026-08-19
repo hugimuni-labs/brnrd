@@ -154,6 +154,14 @@ export interface MachinesSummary {
 export interface MessengerDoor {
 	platform: string;
 	deep_link_available: boolean;
+	// brr/every-door-on-the-page — why a dark door is dark: `"not_built"`
+	// (no connector exists, Slack/Signal today) vs `"not_configured"` (the
+	// connector exists but this deployment hasn't wired its identity,
+	// Telegram/WhatsApp with no bot token / Cloud API creds). `null` for a
+	// lit door. Absent on an older backend — treat as `null`, same "no
+	// reason known" reading `messengerDoors.ts`'s `doorOffCopy` falls back
+	// to.
+	reason?: string | null;
 }
 
 export interface ReposResponse {
@@ -356,6 +364,11 @@ export interface TelegramPairStarted {
 	pair_code: string;
 	instructions: string;
 	deep_link: string | null;
+	// brr/every-door-on-the-page — when this code goes dead, so a caller can
+	// render a live countdown instead of a link that just stops working
+	// with no explanation. `settings.messenger_pair_ttl_s` out from mint
+	// (or from the still-active row a repeat mint reused).
+	expires_at: string;
 }
 
 // #1457 — account-level mint: `POST /v1/dashboard/telegram-pair`, no body,
@@ -392,6 +405,9 @@ export interface MessengerPairStarted {
 	instructions: string;
 	deep_link: string | null;
 	platform: string;
+	// brr/every-door-on-the-page — same field, same reason, as
+	// `TelegramPairStarted.expires_at` above.
+	expires_at: string;
 }
 
 // #1465 — account-level mint: `POST /v1/dashboard/pair`, `{platform}`

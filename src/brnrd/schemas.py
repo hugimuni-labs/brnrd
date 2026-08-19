@@ -110,6 +110,11 @@ class TelegramPairStarted(BaseModel):
     pair_code: str
     instructions: str
     deep_link: str | None = None
+    # brr/every-door-on-the-page: the caller needs this to render a visible
+    # countdown and know when a remint is due — `settings.messenger_pair_ttl_s`
+    # from the moment of mint (or of the still-active row this response
+    # reused, `_active_telegram_pair`), never recomputed client-side.
+    expires_at: datetime
 
 
 class MessengerPairStarted(BaseModel):
@@ -126,6 +131,7 @@ class MessengerPairStarted(BaseModel):
     instructions: str
     deep_link: str | None = None
     platform: str
+    expires_at: datetime
 
 
 class PairStatus(BaseModel):

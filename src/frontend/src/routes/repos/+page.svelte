@@ -32,6 +32,7 @@
 	import { DOCS_URL } from '$lib/publicStats';
 	import { STATUS_GOOD, STATUS_UNKNOWN, STATUS_WARN, statusDotStyle } from '$lib/statusPalette';
 	import MarkerNotice from '$lib/MarkerNotice.svelte';
+	import MessengerDoors from '$lib/MessengerDoors.svelte';
 	import PairedChats from '$lib/PairedChats.svelte';
 
 	let data = $state<ReposResponse | null>(null);
@@ -1041,6 +1042,14 @@
 				</div>
 			</form>
 		</section>
+
+		<!-- brr/every-door-on-the-page — the account-level pairing surface:
+		     every messenger door the registry declares, lit or dark, with a
+		     mint/re-mint control. Sits directly above `PairedChats` (its
+		     natural neighbour — one initiates, the other lists/revokes) and
+		     after the repo panels for the same reason `PairedChats` already
+		     does: this is account-level, not tied to any one repo card. -->
+		<MessengerDoors doors={data.messenger_doors ?? null} />
 
 		<!-- #1464 — account-level, not per-repo: every ChannelRoute this
 		     account carries, with a revoke button. Placed after the repo
