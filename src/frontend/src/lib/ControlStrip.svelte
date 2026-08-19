@@ -228,7 +228,10 @@
 	<div class="panel" in:glitchReveal={{ duration: 260 }}>
 		{#if condensed}
 			<!-- Scrolled but pinned open: the way back down is one tap. -->
-			<div class="flex justify-end border-b border-stone-800/70 px-2.5 py-1">
+			<div
+				data-measure="fold-bar"
+				class="flex justify-end border-b border-stone-800/70 px-2.5 py-1"
+			>
 				<button
 					type="button"
 					class="cursor-pointer font-mono text-[9px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
@@ -255,7 +258,10 @@
 			     reason: the full-bleed press target belongs to the header,
 			     never to a form with its own controls. -->
 			<div class="grid md:grid-cols-[minmax(13rem,0.9fr)_minmax(0,1.1fr)]">
-				<div class="min-w-0 border-b border-stone-800/70 p-2.5 md:border-r md:border-b-0">
+				<div
+					data-measure="next-pick"
+					class="min-w-0 border-b border-stone-800/70 p-2.5 md:border-r md:border-b-0"
+				>
 					<div
 						class="mb-1 flex items-center justify-between gap-2 font-mono text-[9px] tracking-[0.13em] text-ink-quiet uppercase"
 					>
@@ -329,7 +335,7 @@
 					{/if}
 				</div>
 
-				<div class="min-w-0 p-2.5" aria-label="quota fuel">
+				<div data-measure="fuel" class="min-w-0 p-2.5" aria-label="quota fuel">
 					<div
 						class="mb-1 flex items-baseline justify-between gap-2 font-mono text-[9px] tracking-[0.13em] text-ink-quiet uppercase"
 					>
@@ -434,6 +440,7 @@
 		     Deliberately one line for the leading window only: this is a glance
 		     strip. The per-window detail is the fuel grid; the verdict is here. -->
 				<div
+					data-measure="tank"
 					class="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-t border-stone-800/70 px-2.5 py-2 font-mono text-[10px] {lead.daemonStale
 						? 'opacity-60'
 						: ''}"
@@ -498,19 +505,21 @@
 				<!-- Action receipts live with the control that caused them; keeping
 			     them in the expanded rack avoids turning the glance strip into a
 			     transient status-message row. -->
-				{#if runnersError}
-					<p class="mb-2 text-sm text-red-400">{runnersError}</p>
-				{/if}
-				{#if runnersNote}
-					<p class="mb-2 font-mono text-xs text-amber-300">{runnersNote}</p>
-				{/if}
+				<div data-measure="error-note">
+					{#if runnersError}
+						<p class="mb-2 text-sm text-red-400">{runnersError}</p>
+					{/if}
+					{#if runnersNote}
+						<p class="mb-2 font-mono text-xs text-amber-300">{runnersNote}</p>
+					{/if}
+				</div>
 				{#if runners === null}
 					{#if !runnersError}
 						<p class="text-sm text-ink-quiet">Loading…</p>
 					{/if}
 				{:else}
 					<div class="mb-3 grid gap-3 lg:grid-cols-2">
-						<div class="panel p-4">
+						<div data-measure="project" class="panel p-4">
 							<div
 								class="mb-3 font-mono text-sm font-medium tracking-wide text-amber-200 uppercase"
 							>
@@ -569,7 +578,7 @@
 							{/if}
 						</div>
 
-						<div class="panel p-4">
+						<div data-measure="environment" class="panel p-4">
 							<div
 								class="mb-3 font-mono text-sm font-medium tracking-wide text-amber-200 uppercase"
 							>

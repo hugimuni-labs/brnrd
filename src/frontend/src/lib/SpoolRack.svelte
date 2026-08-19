@@ -167,7 +167,7 @@
 	}
 </script>
 
-<div class="panel p-4">
+<div data-measure="spool-rack" class="panel p-4">
 	<div class="mb-3 flex items-center justify-between text-sm">
 		<span class="font-mono font-medium tracking-wide text-amber-200 uppercase">spool rack</span>
 		{#if stale}
