@@ -135,8 +135,9 @@ create a forge repo by default.
 
 If the runner exits cleanly but produces no satisfying signal, the daemon
 retries up to `response_retries` times before failing the run. Hard failures
-(non-zero exit, timeout — controlled by `runner.timeout_seconds`, default
-3600s) are not retried. In both cases, an addressed event that would
+(non-zero exit, timeout — controlled by `runner.timeout_seconds`, unset by
+default: no time limit at all, only what an operator explicitly configures)
+are not retried. In both cases, an addressed event that would
 otherwise go silent receives an explicit terminal failure note; the run
 record remains `error`, while the inbox event is marked `done` so the gate
 can deliver and clean up.

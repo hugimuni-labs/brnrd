@@ -227,6 +227,47 @@ def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
     assert response == "plain answer\n"
 
 
+def test_run_worker_with_no_configured_timeout_reports_null_budget(tmp_path, monkeypatch):
+    """2026-08-19 maintainer decision: unset ``runner.timeout_seconds`` means
+    no deadline at all. ``cfg={}`` (as every other ``_run_worker`` test here
+    already passes) must derive ``budget_seconds``/``hard_cap_seconds`` as
+    ``None`` — not the old 7200s/28800s defaults — and portal-state must
+    carry that as JSON ``null`` while the run still completes normally."""
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-1")
+    _stub_env_isolated(monkeypatch, tmp_path)
+
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root))
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts, "build_daemon_prompt",
+        lambda task, eid, rp, root, **kw: "PROMPT",
+    )
+
+    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("done\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="done\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
+        )
+
+    monkeypatch.setattr(
+        envs.get_env("worktree").__class__, "invoke", fake_invoke, raising=False,
+    )
+
+    task = daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+
+    assert task.status == "done"
+    payload = json.loads(
+        (tmp_path / ".brr" / "outbox" / "evt-1" / "portal-state.json")
+        .read_text(encoding="utf-8")
+    )
+    assert payload["budget"]["budget_seconds"] is None
+    assert payload["budget"]["hard_cap_seconds"] is None
+    assert payload["budget"]["long_running"] is False
+
+
 def test_run_worker_installs_project_repo_run_id_hook(tmp_path, monkeypatch):
     """#575: a resident's own hand ``git commit`` inside a host run needs
     the same ``Brnrd-Run-Id`` stamping #565 gave the account-knowledge

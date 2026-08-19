@@ -276,11 +276,15 @@ stdout and writes nothing to its outbox behaves as before, while failed or
 silent addressed runs now produce an honest closeout instead of disappearing.
 A finer *silence-based* idle-kill is *not* built on this — interim
 check-ins are opportunistic, so their absence doesn't reliably mean
-wedged. The liveness budget itself (`runner.timeout_seconds`) is now
-heartbeat-enforced and agent-extensible: a long-running thought writes a
-`.keepalive` control dotfile in its outbox (an ISO time or `+30m`-style
-duration) to push the deadline out, capped at a hard ceiling, and
-shutdown kills the in-flight runner to reclaim the slot. The full
+wedged. The liveness budget itself (`runner.timeout_seconds`, unset by
+default since 2026-08-19 — no time limit unless an operator explicitly
+configures one) is heartbeat-enforced and agent-extensible when set: a
+long-running thought writes a `.keepalive` control dotfile in its outbox
+(an ISO time or `+30m`-style duration) to push the deadline out, capped at
+a hard ceiling, and shutdown kills the in-flight runner to reclaim the
+slot. With no configured budget there is no deadline to extend or hard
+ceiling to hit — a hung shell holds the single-flight slot until an
+operator kills it by hand. The full
 protocol contract lives in `kb/design-multi-response.md`; the liveness
 contract in `kb/review-daemon-coherence-2026-06.md` §2.
 
