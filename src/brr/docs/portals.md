@@ -103,6 +103,7 @@ brnrd do [--outbox DIR] [--timeout SECONDS] \
   [--mood <feeling-or-handle> [--mood-note "…"]] \
   [--note <event-id>]... \
   [--reply <event-id> --body-file FILE | --body "…"]... \
+  (--promise <what> [--promise-count N] | --no-promise) \
   [--gate <name> --body-file FILE]... \
   [--card FILE] \
   [-- <command> [args…]]
@@ -119,6 +120,27 @@ brnrd do [--outbox DIR] [--timeout SECONDS] \
   through the same `emotes.lookup` / `emotes.near_misses` this manual's
   `.mood` row already points at, so a near-miss reports candidates instead
   of writing nothing silently.
+- **Any `--reply` requires exactly one of `--promise <what>` /
+  `--no-promise`** (evt-1787161641746642000-s0vo, 2026-08-19). Neither given
+  ⇒ the call is refused client-side, before anything is staged, naming both
+  flags. Both given ⇒ argparse itself refuses (a mutually exclusive group),
+  same "nothing staged" guarantee. The decision is **per call, not per
+  `--reply`**: several replies staged together still share one
+  promise-or-none choice, so `--promise` never writes more than one
+  blueprint row per call, however many `--reply`s it carries. `--promise
+  <what>` takes the same vocabulary as `brnrd promise` (`commit`, `branch`,
+  `pr`, `merge`, `kb`, `issue`, `comment`, `message`, `file`) and appends
+  the row through `promises.append` — the exact writer `brnrd promise`
+  itself calls, so the row is byte-for-byte the same shape; `--promise-count
+  N` sets the count (default 1). That row is written **only after every
+  staged reply's own drain verdict comes back `✓`** — a refused reply must
+  not leave a debt row for a message nobody got, so a failed reply renders
+  its own `✗` and no `promise …` segment follows it. `--no-promise` is the
+  explicit zero: the reply(ies) are staged and nothing is appended.
+  `--note`, `--mood`, `--card`, and a `--reply`-free call (`--gate` alone,
+  say) carry no such requirement — a gate handoff's debt is the PR itself,
+  and `--promise`/`--no-promise` given without any `--reply` in the same
+  call is refused the same way.
 - Bare `brnrd do` (no verbs) prints a compact one-screen read of pending
   events, outbound counts, notices, the quota line, and spawn-pool
   headroom — the canonical replacement for hand-parsing
