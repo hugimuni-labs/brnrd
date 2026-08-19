@@ -56,7 +56,7 @@
 
 <div
 	data-measure="bench"
-	class="panel border-t border-stone-800/70 p-3"
+	class="workbench border-t-2 border-stone-600 bg-stone-950 px-3 py-5 sm:px-5"
 	in:glitchReveal={{ duration: 240 }}
 >
 	<div data-measure="error-note">
@@ -72,11 +72,9 @@
 			<p class="text-sm text-ink-quiet">Loading…</p>
 		{/if}
 	{:else}
-		<div class="mb-3 grid gap-3 lg:grid-cols-2">
-			<div data-measure="project" class="panel p-4">
-				<div class="mb-3 font-mono text-sm font-medium tracking-wide text-amber-200 uppercase">
-					project
-				</div>
+		<div class="bench-bays mb-5 grid gap-6 md:grid-cols-2 md:gap-5">
+			<section data-measure="project" class="bench-bay">
+				<div class="workshop-label"><span>01</span> project</div>
 				{#if repos === null}
 					<p class="font-mono text-xs text-ink-quiet">Loading account projects…</p>
 				{:else if repos.length === 0}
@@ -91,20 +89,21 @@
 							     will serve (2026-07-22 round). Same off-row grammar as the
 							     environment options below — design it off, don't dim it. -->
 							<button
+								data-role="bench-pick"
 								type="button"
 								disabled={!dispatchable}
 								title={dispatchable
 									? `next pick → ${repo.repo_full_name}`
 									: `daemon ${repo.daemon_status} — cannot take a pick`}
 								onclick={() => selectRepo(repo)}
-								class="flex w-full items-baseline justify-between gap-3 border px-2 py-1.5 text-left transition-colors {dispatchable
+								class="pick-row flex min-h-11 w-full items-center justify-between gap-4 border px-3 py-2 text-left transition-colors {dispatchable
 									? selected
 										? SELECTED_OPTION
 										: IDLE_ROW
 									: OFF_ROW}"
 							>
 								<span
-									class="truncate font-mono text-xs {!dispatchable
+									class="min-w-0 truncate font-mono text-sm font-medium {!dispatchable
 										? 'text-ink-mute'
 										: selected
 											? 'text-stone-100'
@@ -112,7 +111,7 @@
 								>
 									{dispatchable ? '' : OFF_MARK}{repo.repo_full_name}
 								</span>
-								<span class="flex shrink-0 items-baseline gap-2 font-mono text-[10px] uppercase">
+								<span class="flex shrink-0 flex-col items-end font-mono text-[10px] leading-tight uppercase sm:flex-row sm:gap-2">
 									{#if repo.dispatch_default}<span class="text-sky-300">default</span>{/if}
 									<span
 										class={repo.daemon_status === 'online' ? 'text-stone-400' : 'text-ink-mute'}
@@ -124,17 +123,16 @@
 						{/each}
 					</div>
 				{/if}
-			</div>
+			</section>
 
-			<div data-measure="environment" class="panel p-4">
-				<div class="mb-3 font-mono text-sm font-medium tracking-wide text-amber-200 uppercase">
-					environment
-				</div>
+			<section data-measure="environment" class="bench-bay">
+				<div class="workshop-label"><span>02</span> environment</div>
 				<div class="space-y-1.5">
 					<button
+						data-role="bench-pick"
 						type="button"
 						onclick={() => (environmentSelection = null)}
-						class="flex w-full items-baseline justify-between gap-3 border px-2 py-1.5 text-left transition-colors {environmentSelection ===
+						class="pick-row flex min-h-11 w-full items-center justify-between gap-4 border px-3 py-2 text-left transition-colors {environmentSelection ===
 						null
 							? SELECTED_OPTION
 							: IDLE_ROW}"
@@ -143,26 +141,27 @@
 						     never one string joined by the same `·` the name may
 						     already carry internally (`host · default` is a real
 						     environment name). -->
-						<span class="font-mono text-xs text-stone-100">{environment.name}</span>
-						<span class="flex shrink-0 items-baseline gap-2 font-mono text-[10px] uppercase">
+						<span class="font-mono text-sm font-medium text-stone-100">{environment.name}</span>
+						<span class="flex shrink-0 flex-col items-end font-mono text-[10px] leading-tight uppercase sm:flex-row sm:gap-2">
 							{#if environment.isDefault}<span class="text-sky-300">default</span>{/if}
 							<span class="text-ink-quiet">from repo policy</span>
 						</span>
 					</button>
 					{#each environmentOptions as option (option.name)}
 						<button
+							data-role="bench-pick"
 							type="button"
 							disabled={!option.available}
 							title={option.reason ?? `next wake in ${option.name}`}
 							onclick={() => (environmentSelection = option.name)}
-							class="flex w-full items-baseline justify-between gap-3 border px-2 py-1.5 text-left transition-colors {option.available
+							class="pick-row flex min-h-11 w-full items-center justify-between gap-4 border px-3 py-2 text-left transition-colors {option.available
 								? environmentSelection === option.name
 									? SELECTED_OPTION
 									: IDLE_ROW
 								: OFF_ROW}"
 						>
 							<span
-								class="font-mono text-xs {option.available ? 'text-stone-300' : 'text-ink-mute'}"
+								class="font-mono text-sm font-medium {option.available ? 'text-stone-300' : 'text-ink-mute'}"
 							>
 								{option.available ? '' : OFF_MARK}{option.name}
 							</span>
@@ -175,17 +174,68 @@
 						<p class="px-2 font-mono text-[10px] text-ink-mute">No daemon availability report.</p>
 					{/if}
 				</div>
-			</div>
+			</section>
 		</div>
-		<SpoolRack
-			profiles={runners.profiles}
-			defaultProfile={runners.default}
-			stale={runners.stale}
-			wakeRequest={runners.wake_request ?? null}
-			sticky={runners.sticky ?? null}
-			{now}
-			onTap={tapRunner}
-			{onReleaseSticky}
-		/>
+		<div class="spool-bay">
+			<SpoolRack
+				profiles={runners.profiles}
+				defaultProfile={runners.default}
+				stale={runners.stale}
+				wakeRequest={runners.wake_request ?? null}
+				sticky={runners.sticky ?? null}
+				{now}
+				onTap={tapRunner}
+				{onReleaseSticky}
+			/>
+		</div>
 	{/if}
 </div>
+
+<style>
+	.workbench {
+		background-image:
+			linear-gradient(rgb(255 255 255 / 0.025) 1px, transparent 1px),
+			linear-gradient(90deg, rgb(255 255 255 / 0.018) 1px, transparent 1px);
+		background-size: 24px 24px;
+	}
+	.bench-bay {
+		border-left: 3px solid rgb(87 83 78);
+		padding-left: 0.75rem;
+	}
+	.workshop-label {
+		margin-bottom: 0.65rem;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-size: 0.7rem;
+		font-weight: 700;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		color: rgb(214 211 209);
+	}
+	.workshop-label span {
+		margin-right: 0.5rem;
+		color: rgb(120 113 108);
+	}
+	.pick-row { min-height: 44px; }
+	.spool-bay :global([data-measure='spool-rack']) {
+		border: 0;
+		border-left: 3px solid rgb(87 83 78);
+		background: transparent;
+		box-shadow: none;
+		padding: 0 0 0 0.75rem;
+	}
+	.spool-bay :global([data-measure='spool-rack'] > div:first-child) {
+		min-height: 1.5rem;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-size: 0.7rem;
+		font-weight: 700;
+		letter-spacing: 0.14em;
+		color: rgb(214 211 209);
+	}
+	.spool-bay :global(button[role='tab']),
+	.spool-bay :global(button[data-role='rack-row-tap']) {
+		min-height: 44px;
+	}
+	.spool-bay :global(button[data-role='rack-row-tap']) {
+		padding-block: 0.6rem;
+	}
+</style>
