@@ -252,6 +252,26 @@ test('stale fuel rows render the last-known value with its scrape time', () => {
 	assert.match(rows[0].tooltip, /42% left · resets Sunday/u);
 });
 
+// #1503 "the tank of dead quotas": `daemon_stale` (this shell's own daemon
+// report freshness) is distinct from `status === 'stale'` (#237's
+// scrape-level fact) — a `known` shell can still carry a stale report from a
+// retired daemon, and the fuel row needs to dim for that reason too, with a
+// title naming why.
+test('a daemon-stale shell dims its fuel row and names the reason in the tooltip, even when `known`', () => {
+	const rows = fuelRows([
+		{
+			shell: 'codex',
+			status: 'known',
+			daemon_stale: true,
+			windows: [{ label: 'weekly', used: null, limit: null, percent: 87, reset: null }]
+		}
+	]);
+
+	assert.equal(rows[0].stale, false, 'scrape-level status is unaffected — a distinct fact');
+	assert.equal(rows[0].daemonStale, true);
+	assert.match(rows[0].tooltip, /daemon report is outdated/u);
+});
+
 test('quota window count names the rows in the fuel grid, not their shells', () => {
 	const shells: QuotaShell[] = [
 		{ shell: 'claude', status: 'known', windows: [{ label: '5h' }, { label: 'weekly' }] },
