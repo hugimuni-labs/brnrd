@@ -14009,7 +14009,8 @@ def _reconcile_orphaned_spawn_dispatches(
       ⇒ leave it alone;
     - **proof of death**: a closed ledger row for the event's run (the
       strand finished; only the reap-notify was lost), *or* a recorded
-      ``interrupted_at`` stamp already on the run's manifest (#1497 —
+      ``interrupted_at`` stamp beside a ``failure_kind`` of
+      ``host_interrupted`` on the run's manifest (#1497 —
       ``_mark_interrupted_runs`` runs immediately before this sweep in the
       same boot pass and, for any run of its own it judges dead, writes
       that stamp *and* rewrites the manifest, which bumps the manifest's
@@ -14019,9 +14020,11 @@ def _reconcile_orphaned_spawn_dispatches(
       *or* no write to the event file / run manifest for longer than
       *stale_after_seconds* (defaults to the janitors' 24h crash-recovery
       horizon — beyond any runner budget, keepalive-extended or not) — a
-      manifest with no stamp yet gets one written the first time this
-      sweep observes it, so a later boot reads that instead of `.stat()`
-      too.
+      manifest with no stamp yet gets an ``orphan_sweep_observed_at`` of
+      its own written the first time this sweep observes it, so a later
+      boot reads that instead of `.stat()` too. That one is an age proxy
+      and nothing more: it never stands in for the interrupted-run
+      sweep's verdict, because this sweep did not reach that verdict.
 
     Idempotent by the status transition itself: the sweep resolves the
     event to ``error``, and a resolved event never appears in
@@ -14073,10 +14076,37 @@ def _reconcile_orphaned_spawn_dispatches(
         newest_write = _event_mtime(event)
         already_interrupted = False
         for t in event_runs:
-            stamp_epoch = protocol.parse_iso_epoch(t.meta.get("interrupted_at"))
+            # Two different stamps, kept apart on purpose. Both answer
+            # "when", only one answers "why", and the proof string below
+            # names the why — so reading them through one key would let a
+            # stamp this sweep wrote itself come back as a claim about
+            # what `_mark_interrupted_runs` concluded. One predicate, two
+            # reasons, is how a diagnostic starts lying with a straight
+            # face.
+            #
+            #   interrupted_at            — written by `_mark_interrupted_runs`
+            #                               beside `failure_kind` and
+            #                               `interrupt_reason`. Its presence
+            #                               *is* proof of death.
+            #   orphan_sweep_observed_at  — written here, by this sweep, and
+            #                               claiming nothing but "the manifest's
+            #                               mtime, the first time I looked."
+            #                               An age proxy only; never a proof.
+            marked = t.meta.get("failure_kind") == runner_failures.HOST_INTERRUPTED
+            stamp_epoch = protocol.parse_iso_epoch(
+                t.meta.get("interrupted_at")) if marked else None
             if stamp_epoch is not None:
                 already_interrupted = True
                 newest_write = max(newest_write, stamp_epoch)
+                continue
+            observed_epoch = protocol.parse_iso_epoch(
+                t.meta.get("orphan_sweep_observed_at"))
+            if observed_epoch is not None:
+                # This sweep's own earlier observation. Frozen precisely so a
+                # later boot does not re-`stat()` a manifest that this very
+                # loop's `t.save()` has since touched — the mutable proxy the
+                # whole sweep exists to stop trusting, met one turn later.
+                newest_write = max(newest_write, observed_epoch)
                 continue
             try:
                 manifest_mtime = run_manifest_path(runs_dir, t.id).stat().st_mtime
@@ -14085,9 +14115,8 @@ def _reconcile_orphaned_spawn_dispatches(
             newest_write = max(newest_write, manifest_mtime)
             # No recorded stamp yet on this manifest — freeze this
             # observation onto it now rather than leaving future readers to
-            # re-derive from `.stat()` too, which is exactly the mutable
-            # proxy this whole sweep exists to stop trusting.
-            t.meta["interrupted_at"] = time.strftime(
+            # re-derive from `.stat()` too.
+            t.meta["orphan_sweep_observed_at"] = time.strftime(
                 "%Y-%m-%dT%H:%M:%SZ", time.gmtime(manifest_mtime))
             try:
                 t.save(runs_dir)

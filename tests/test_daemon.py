@@ -4782,6 +4782,53 @@ def test_orphan_reconcile_uses_interrupted_at_not_refreshed_mtime(tmp_path):
     assert notes[0]["conversation_key"] == "telegram:104:"
 
 
+def test_orphan_reconcile_never_claims_an_interruption_it_only_observed(tmp_path):
+    """The sweep freezes an age proxy onto manifests it merely looked at.
+    That stamp must not be able to come back as a verdict it never reached.
+
+    ``_mark_interrupted_runs`` writes ``interrupted_at`` **beside**
+    ``failure_kind: host_interrupted`` and ``interrupt_reason`` — the stamp
+    is a by-product of a conclusion. The orphan sweep writes its own
+    observation so a later boot does not re-``stat()`` a manifest this very
+    loop's ``t.save()`` has since touched. If both used one key, the
+    sweep's own "I looked at this at T" would be read back on the next
+    boot as "the interrupted-run sweep concluded host_interrupted at T",
+    and the reconcile reason a human reads would name a provenance that
+    never happened. One predicate, two reasons.
+
+    So: a run this sweep merely observed keeps ``interrupted_at`` clear,
+    and the reason it emits stays the horizon proof it actually has."""
+    spawn_event = _stuck_spawn_dispatch(tmp_path, conv_key="telegram:105:")
+    brr_dir = tmp_path / ".brr"
+    runs_dir = brr_dir / "runs"
+    strand_task = Run(
+        id="run-strand-orphan-3", event_id=spawn_event["id"],
+        body="bounded concurrent task", source="spawn",
+    )
+    strand_task.meta["pid"] = _dead_pid()
+    strand_task.save(runs_dir)
+    _age_path(Path(spawn_event["_path"]), 25 * 3600)
+    _age_path(runs_dir / "run-strand-orphan-3" / "run.md", 25 * 3600)
+    ctx = daemon.account.resolve_context(tmp_path, {})
+
+    # No `_mark_interrupted_runs` pass at all: nothing ever concluded this
+    # run was host-interrupted, so nothing may say so.
+    assert daemon._reconcile_orphaned_spawn_dispatches(ctx, tmp_path, {}) == 1
+
+    reloaded = Run.from_file(
+        daemon.run_manifest_path(runs_dir, "run-strand-orphan-3"))
+    assert "interrupted_at" not in reloaded.meta
+    assert reloaded.meta.get("failure_kind") != runner_failures.HOST_INTERRUPTED
+    assert reloaded.meta.get("orphan_sweep_observed_at")
+
+    inbox = brr_dir / "inbox"
+    notes = [e for e in protocol.list_pending(inbox) if e.get("spawn_failed")]
+    assert len(notes) == 1
+    body = notes[0].get("body") or ""
+    assert "host_interrupted" not in body
+    assert "safety horizon" in body
+
+
 def test_interrupted_marker_leaves_no_retry_stamp_on_a_retired_event(tmp_path):
     """The counterpart of ``…retry_tail_follows_event_state``: an event
     that is no longer dispatchable gets no retry-provenance write either —
