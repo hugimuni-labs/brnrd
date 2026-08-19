@@ -105,3 +105,22 @@ test('an available shell renders its cores as individual rows, grouped under one
 	const shellHeaders = body.match(/>claude</g) ?? [];
 	equal(shellHeaders.length, 1, 'the shell name renders once, as the group header, not per row');
 });
+
+// The "default"/"default" row (dead-code cleanup pass, 2026-08-19): a pinned
+// row whose core is unpinned used to print the literal word "default" twice
+// on the same line — once for `coreLabel`'s "no specific core chosen" and
+// once for the pin badge's "this is what the next wake uses" — with no way
+// for a reader to tell them apart. The fix keeps the badge's word (the
+// load-bearing one) and renames the core label; this only pins that the two
+// concepts render distinguishably, not any particular replacement word.
+test('a pinned row whose core is unpinned never prints "default" for two different meanings', async () => {
+	const body = await renderRack({
+		profiles: [{ name: 'claude', shell: 'claude', available: true, selected: true }]
+	});
+	const defaultOccurrences = (body.match(/>default</g) ?? []).length;
+	equal(
+		defaultOccurrences,
+		1,
+		'only the pin badge renders the word "default" — the core label must use different wording'
+	);
+});

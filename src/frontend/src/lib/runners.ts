@@ -1,5 +1,3 @@
-import type { WithheldLane } from './withheld';
-
 // #328 spool rack: the runner catalog as the loom's thread inventory.
 // Types mirror `GET /v1/dashboard/runners` (`src/brnrd/routers/
 // dashboard.py::dashboard_runners_api`), which merges each
@@ -99,7 +97,6 @@ export interface RunnersResponse {
 	/** #932: the conversation-sticky in force, if any — the answer to "who
 	 *  wakes next *in the bound thread*", outranking `default` there. */
 	sticky?: RunnerSticky | null;
-	withheld?: WithheldLane;
 }
 
 export class RunnersAuthError extends Error {}
