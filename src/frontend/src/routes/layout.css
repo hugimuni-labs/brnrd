@@ -317,34 +317,6 @@ body::before {
 	}
 }
 
-/* THE RACK THAT TELEPORTED (2026-08-03, his scroll-carnage screenshots).
-   The machine dock's `top` is read live off the rail's own `clientHeight`
-   (machineDock.ts `machineDockTop`) because the rail's form swap — full rail
-   to one-line slim bar — is a discrete DOM swap, not a size tween (the rail's
-   *own* condense is deliberately a clean cut, `railScrollVerdict`'s hysteresis
-   comment says so in as many words). But the dock's *position* riding that
-   number was never its own instrument: with no transition on `top`, the whole
-   stuck block — and everything the reader's eye had locked onto inside it —
-   snapped ~230px up the screen in a single frame the instant the rail
-   condensed. Driven live (390×844, real prod data): `machineTop` measured
-   305 -> 75 between two 10px scroll samples, `rackBtnTop` 13 -> 75 the same
-   frame. A still screenshot can't show this at all — it only shows both
-   resting states looking correct — which is why it read as unfixable from a
-   photo alone.
-
-   The rail's own glitch-cut stays a clean cut on purpose; only the dock's
-   *reposition* gets a glide, so the reader's eye can follow the block instead
-   of losing it. */
-.machine-dock {
-	transition: top 200ms ease-out;
-}
-
-@media (prefers-reduced-motion: reduce) {
-	.machine-dock {
-		transition: none;
-	}
-}
-
 /* Shared collapse chrome (2026-08-03, the rack answers everywhere): the rail
    and the machine block both grew a pressable disclosure header, and both
    needed the same two-part choreography — a perimeter cue that a tap is

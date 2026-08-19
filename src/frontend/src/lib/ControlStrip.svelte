@@ -9,7 +9,6 @@
 		runnerBlocks,
 		slotChip
 	} from './controlStrip';
-	import { railKeepsLivePick } from './machineDock';
 	import { quotaLevel, type QuotaShell } from './quota';
 	import type { RunnersResponse } from './runners';
 	import type { ConnectedRepo, EnvironmentOption } from './repos';
@@ -23,6 +22,7 @@
 		STATUS_UNKNOWN,
 		statusBarStyle
 	} from './statusPalette';
+	import { DISABLED_ROW, SELECTED_ACTIVE, SELECTED_OPTION, UNAVAILABLE_MARK } from './stateChrome';
 
 	interface Props {
 		runners: RunnersResponse | null;
@@ -56,24 +56,6 @@
 		 *  `pinnedOpen`: that form fits on screen, so moving the reader for it
 		 *  would cost them their place to answer a glance. */
 		onRackChange?: (open: boolean) => void;
-		/** The pick burning right now, for the slim bar (2026-08-02, THE PICK).
-		 *  The page order became the fall — warp → machine → cloth — which puts
-		 *  the machine below a screenful of intent, so "what is running" left
-		 *  the first glance. It comes back here, where the rail already answers
-		 *  every other resource question, and the rail is on screen at every
-		 *  scroll position by construction. `null` = nothing burning.
-		 *
-		 *  Superseded by `machineDocks` (his 2026-08-02 correction: "not the
-		 *  collapsed rack + oneline main runner info, as it is now, but a
-		 *  collapsed fuel + collapsed oneline machine stuck to it"). The row
-		 *  survives for a rail rendered with no machine beneath it. */
-		livePick?: { label: string; clock: string | null; extra: number } | null;
-		/** True when the machine's own one-line block docks directly under this
-		 *  rail. Then the rail is *fuel only* — the dock is a better answer to
-		 *  "what is burning" than a borrowed row, and printing both would put
-		 *  one run's name at two y-positions eight pixels apart. Verdict lives
-		 *  in `machineDock.railKeepsLivePick`, not in this component. */
-		machineDocks?: boolean;
 	}
 
 	let {
@@ -90,9 +72,7 @@
 		activeSpawns = null,
 		maxSpawns = null,
 		condensed = false,
-		onRackChange,
-		livePick = null,
-		machineDocks = false
+		onRackChange
 	}: Props = $props();
 	let expanded = $state(false);
 	let repoSelection = $state<string | null>(null);
@@ -229,14 +209,6 @@
 		{#if lead}
 			<span style={`color: ${VERDICT_COLOR[lead.verdict]}`}>{lead.verdict}</span>
 		{/if}
-		{#if livePick && railKeepsLivePick(machineDocks)}
-			<span class="ml-auto flex min-w-0 items-baseline gap-1.5 text-amber-200">
-				<span aria-hidden="true">↯</span>
-				<span class="max-w-[16ch] truncate">{livePick.label}</span>
-				{#if livePick.clock}<span class="text-amber-500/80">{livePick.clock}</span>{/if}
-				{#if livePick.extra > 0}<span class="text-amber-500/80">+{livePick.extra}</span>{/if}
-			</span>
-		{/if}
 	</button>
 {:else}
 	<!-- The rail unfolding is drawn, not tweened (his 08-02 read: "TUI
@@ -335,7 +307,7 @@
 								<span
 									title={profileTitle(block.profile.name)}
 									class="min-w-0 border px-2 py-1 font-mono {block.active
-										? 'border-amber-700/70 bg-amber-950/55 text-amber-100'
+										? `${SELECTED_ACTIVE} text-amber-100`
 										: 'border-stone-800/60 bg-stone-950/30 text-ink-quiet opacity-55'}"
 								>
 									<span class="block truncate text-[11px] font-medium">{block.profile.name}</span>
@@ -560,9 +532,9 @@
 											onclick={() => selectRepo(repo)}
 											class="flex w-full items-baseline justify-between gap-3 border px-2 py-1.5 text-left transition-colors {dispatchable
 												? selected
-													? 'border-amber-700/70 bg-amber-950/30'
+													? SELECTED_OPTION
 													: 'border-stone-800/60 bg-stone-900/30 hover:border-stone-600/70'
-												: 'cursor-not-allowed border-stone-900/60 bg-stone-950/30 opacity-45'}"
+												: DISABLED_ROW}"
 										>
 											<span
 												class="truncate font-mono text-xs {!dispatchable
@@ -571,7 +543,7 @@
 														? 'text-amber-200'
 														: 'text-stone-300'}"
 											>
-												{dispatchable ? '' : '✗ '}{repo.repo_full_name}
+												{dispatchable ? '' : UNAVAILABLE_MARK}{repo.repo_full_name}
 											</span>
 											<span
 												class="flex shrink-0 items-baseline gap-2 font-mono text-[10px] uppercase"
@@ -603,7 +575,7 @@
 									onclick={() => (environmentSelection = null)}
 									class="flex w-full items-baseline justify-between gap-3 border px-2 py-1.5 text-left transition-colors {environmentSelection ===
 									null
-										? 'border-amber-700/70 bg-amber-950/30'
+										? SELECTED_OPTION
 										: 'border-stone-800/60 bg-stone-900/30 hover:border-stone-600/70'}"
 								>
 									<!-- Named by what it resolves to, not by the mechanism:
@@ -625,16 +597,16 @@
 										onclick={() => (environmentSelection = option.name)}
 										class="flex w-full items-baseline justify-between gap-3 border px-2 py-1.5 text-left transition-colors {option.available
 											? environmentSelection === option.name
-												? 'border-amber-700/70 bg-amber-950/30'
+												? SELECTED_OPTION
 												: 'border-stone-800/60 bg-stone-900/30 hover:border-stone-600/70'
-											: 'cursor-not-allowed border-stone-900/60 bg-stone-950/30 opacity-45'}"
+											: DISABLED_ROW}"
 									>
 										<span
 											class="font-mono text-xs {option.available
 												? 'text-stone-300'
 												: 'text-ink-mute'}"
 										>
-											{option.available ? '' : '✗ '}{option.name}
+											{option.available ? '' : UNAVAILABLE_MARK}{option.name}
 										</span>
 										{#if !option.available}
 											<span class="truncate font-mono text-[10px] text-ink-mute"
