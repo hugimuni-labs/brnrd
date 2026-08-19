@@ -296,7 +296,7 @@ def test_do_reply_stages_canonical_frontmatter_and_reports_ok(
     monkeypatch.setattr(time, "sleep", _sleep)
 
     assert main([
-        "do", "--reply", "evt-9s45", "--body-file", str(body_file),
+        "do", "--reply", "evt-9s45", "--body-file", str(body_file), "--no-promise",
     ]) == 0
     assert capsys.readouterr().out.strip() == "reply evt-9s45 ✓"
     assert written["text"] == "---\nevent: evt-9s45\n---\nthe reply text\n"
@@ -309,7 +309,7 @@ def test_do_reply_inline_body(tmp_path, monkeypatch, capsys):
     _portal_state(outbox)
     monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-reply-*.md"))
 
-    assert main(["do", "--reply", "evt-1", "--body", "hello"]) == 0
+    assert main(["do", "--reply", "evt-1", "--body", "hello", "--no-promise"]) == 0
     assert capsys.readouterr().out.strip() == "reply evt-1 ✓"
 
 
@@ -327,6 +327,9 @@ def test_do_gate_stages_and_reports_ok(tmp_path, monkeypatch, capsys):
 
 
 def test_do_reply_failed_surfaces_the_matching_notice(tmp_path, monkeypatch, capsys):
+    """Also the "refused reply -> no promise row" case: a --promise is
+    given, but the reply itself is refused by the daemon, so the promise
+    must never be written — a debt row for a message nobody got."""
     outbox = tmp_path / "outbox"
     outbox.mkdir()
     _do_env(monkeypatch, outbox)
@@ -339,9 +342,145 @@ def test_do_reply_failed_surfaces_the_matching_notice(tmp_path, monkeypatch, cap
         time, "sleep", _consume_after_one_sleep(outbox, "do-*-reply-*.md", notice=notice),
     )
 
-    assert main(["do", "--reply", "evt-9", "--body", "hi"]) == 1
+    assert main(["do", "--reply", "evt-9", "--body", "hi", "--promise", "pr"]) == 1
     out = capsys.readouterr().out.strip()
     assert out.startswith("reply evt-9 ✗ refused: reply dropped: event evt-9 not found")
+    assert "promise" not in out
+    assert not (outbox / ".promises.jsonl").exists()
+
+
+# ── --reply's promise/no-promise contract (evt-…-s0vo, 2026-08-19) ─────
+
+
+def test_do_reply_without_promise_flag_is_refused_before_staging(
+    tmp_path, monkeypatch, capsys,
+):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+
+    assert main(["do", "--reply", "evt-1", "--body", "hi"]) == 1
+    err = capsys.readouterr().err
+    assert "--promise" in err
+    assert "--no-promise" in err
+    assert "Nothing was staged" in err
+    assert not list(outbox.glob("do-*.md"))
+
+
+def test_do_reply_with_both_promise_and_no_promise_is_refused_by_argparse(
+    tmp_path, monkeypatch, capsys,
+):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+
+    with pytest.raises(SystemExit):
+        main([
+            "do", "--reply", "evt-1", "--body", "hi",
+            "--promise", "pr", "--no-promise",
+        ])
+    err = capsys.readouterr().err
+    assert "not allowed with argument" in err
+    assert not list(outbox.glob("do-*.md"))
+
+
+def test_do_promise_flag_without_reply_is_refused(tmp_path, monkeypatch, capsys):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+
+    assert main(["do", "--note", "evt-1", "--promise", "pr"]) == 1
+    err = capsys.readouterr().err
+    assert "only apply to --reply" in err
+    assert not list(outbox.glob("do-*.md"))
+
+
+def test_do_reply_with_promise_stages_both_matching_brnrd_promise_shape(
+    tmp_path, monkeypatch, capsys,
+):
+    """The row `do --reply --promise` writes must match `brnrd promise`'s own
+    shape byte-for-byte — both go through `promises.append`, the single
+    writer (never a second one)."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-reply-*.md"))
+
+    assert main([
+        "do", "--reply", "evt-1", "--body", "hi", "--promise", "pr",
+    ]) == 0
+    out = capsys.readouterr().out.strip()
+    assert out == "reply evt-1 ✓ · promise pr ✓"
+
+    via_do = (outbox / ".promises.jsonl").read_text(encoding="utf-8")
+    (outbox / ".promises.jsonl").unlink()
+
+    assert main(["promise", "pr"]) == 0
+    capsys.readouterr()
+    via_promise = (outbox / ".promises.jsonl").read_text(encoding="utf-8")
+
+    assert via_do == via_promise
+
+
+def test_do_reply_with_promise_count_records_the_count(tmp_path, monkeypatch, capsys):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-reply-*.md"))
+
+    assert main([
+        "do", "--reply", "evt-1", "--body", "hi",
+        "--promise", "pr", "--promise-count", "3",
+    ]) == 0
+    row = json.loads(
+        (outbox / ".promises.jsonl").read_text(encoding="utf-8").splitlines()[0]
+    )
+    assert row == {"what": "pr", "count": 3, "baseline": 0}
+
+
+def test_do_reply_with_unpromisable_kind_writes_nothing(tmp_path, monkeypatch, capsys):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-reply-*.md"))
+
+    assert main([
+        "do", "--reply", "evt-1", "--body", "hi", "--promise", "not-a-kind",
+    ]) == 1
+    out = capsys.readouterr().out.strip()
+    assert "promise not-a-kind ✗ not promisable" in out
+    assert not (outbox / ".promises.jsonl").exists()
+
+
+def test_do_reply_with_no_promise_stages_the_reply_and_writes_nothing(
+    tmp_path, monkeypatch, capsys,
+):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-reply-*.md"))
+
+    assert main(["do", "--reply", "evt-1", "--body", "hi", "--no-promise"]) == 0
+    assert capsys.readouterr().out.strip() == "reply evt-1 ✓"
+    assert not (outbox / ".promises.jsonl").exists()
+
+
+def test_do_note_alone_is_unaffected_by_the_reply_debt_contract(
+    tmp_path, monkeypatch, capsys,
+):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-note-*.md"))
+
+    assert main(["do", "--note", "evt-1"]) == 0
+    assert capsys.readouterr().out.strip() == "note evt-1 ✓"
+    assert not (outbox / ".promises.jsonl").exists()
 
 
 def test_do_note_ignores_an_unrelated_fresh_notice(tmp_path, monkeypatch, capsys):
@@ -614,6 +753,7 @@ def test_do_multiple_verbs_join_one_summary_line(tmp_path, monkeypatch, capsys):
 
     rc = main([
         "do", "--mood", "focused", "--note", "evt-1", "--reply", "evt-2", "--body", "hi",
+        "--no-promise",
     ])
     assert rc == 0
     out = capsys.readouterr().out.strip()
