@@ -1422,8 +1422,8 @@ def available_runner_catalog(
     those whose Shell binary is not currently on PATH.  Each row carries:
 
     - ``on_path`` (bool) — Shell binary found by :func:`shutil.which`
-    - ``available`` (bool) — on_path AND auth_env satisfied
-    - ``availability`` — ``"available"`` | ``"shell-not-found"`` | ``"auth-env-missing"``
+    - ``available`` (bool) — Shell, configured auth, and observed auth health
+    - ``availability`` — ``"available"`` or a concrete unavailable reason
     - ``stale`` (bool) — freshness_date older than 30 days
     - ``pin`` — exact model ID when set (overrides alias for ``--model``)
     - ``selected`` — True when this profile matches *selected*
@@ -1443,7 +1443,9 @@ def available_runner_catalog(
     selected_name = str(selected or "").strip()
     rows: list[dict[str, Any]] = []
     for name, profile in profiles.items():
-        record = _catalog_record(name, profile, selected_name, profiles)
+        record = _catalog_record(
+            name, profile, selected_name, profiles, repo_root=repo_root,
+        )
         if record:
             rows.append(record)
 
@@ -1495,10 +1497,13 @@ def _catalog_record(
     profile: dict[str, Any] | None,
     selected: str,
     profiles: dict[str, dict[str, Any]] | None = None,
+    *,
+    repo_root: Path | None = None,
 ) -> dict[str, Any] | None:
     import datetime
 
     from . import runner_cores as _rc
+    from . import runner_auth_health
     from . import runner_select
 
     if not isinstance(profile, dict):
@@ -1515,6 +1520,8 @@ def _catalog_record(
         availability = "shell-not-found"
     elif auth_env and not os.environ.get(auth_env):
         availability = "auth-env-missing"
+    elif runner_auth_health.is_auth_failed(repo_root or Path.cwd(), runner_profile):
+        availability = "auth-error"
     else:
         availability = "available"
     is_available = availability == "available"

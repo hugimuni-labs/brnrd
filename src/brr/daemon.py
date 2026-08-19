@@ -55,6 +55,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from . import account
+from . import runner_auth_health
 from . import await_verb
 from . import branching
 from .cli import brnrd_cmd
@@ -4732,6 +4733,7 @@ def _run_worker(
                 emit, task, event, eid, runs_dir, env_backend, env_ctx,
                 branch_plan, cfg, stop_control, attempt, trace_dirs,
             )
+        attempt_failure_kind: str | None = None
         try:
             result.raise_for_error()
         except RuntimeError as e:
@@ -4757,6 +4759,7 @@ def _run_worker(
                     transport=result.transport_failure,
                 ),
             }
+            attempt_failure_kind = str(last_failure["failure_kind"])
         else:
             if not result.validation_ok and not result.retry_reason():
                 detail = result.error_detail()
@@ -4770,6 +4773,8 @@ def _run_worker(
                             detail=detail,
                         ),
                     }
+                    attempt_failure_kind = str(last_failure["failure_kind"])
+        _record_runner_auth_health(repo_root, runner_choice, attempt_failure_kind)
 
         # Detect a fresh commit on the worktree branch before finalize runs
         # — finalize tears the worktree down on success, so this read has
@@ -14481,6 +14486,16 @@ def _failure_reason(
         if exit_code is not None:
             return f"{prefix} after {attempts} attempt(s) with exit code {exit_code}"
     return f"runner produced no reply after {attempts} attempt(s)"
+
+
+def _record_runner_auth_health(
+    repo_root: Path, profile: runner_select.RunnerProfile, failure_kind: str | None,
+) -> None:
+    """Persist the dispatch attempt's authentication verdict."""
+    if failure_kind == runner_failures.AUTH_ERROR:
+        runner_auth_health.record_auth_error(repo_root, profile)
+    elif failure_kind is None:
+        runner_auth_health.clear_success(repo_root, profile)
 
 
 def _terminal_failure_body(

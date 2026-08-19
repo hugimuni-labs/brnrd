@@ -67,6 +67,11 @@ test('offReasonOf gives a concrete reason only for verified-unavailable rows', (
 	);
 	assert.equal(shellNotFound.known, true);
 	assert.equal(shellNotFound.text, 'not installed on this daemon');
+	const authError = offReasonOf(
+		{ name: 'codex', available: false, availability: 'auth-error' },
+		false
+	);
+	assert.equal(authError.text, 'authentication failed; log in again');
 
 	// Unverified: no invented specifics — the daemon never said why.
 	const unverified = offReasonOf({ name: 'ghost' }, false);
