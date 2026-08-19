@@ -276,6 +276,53 @@ test('no mood anywhere leaves the wordmark alone — no frames, no tint', () => 
 	);
 });
 
+// #1510: `_live_runs_views` merges daemon-reported rows by run id across
+// every daemon on the account, freshest report per key wins. A run reported
+// by a daemon that then retires is keyed only by its own `run_id`, so no
+// live daemon ever overwrites it — it merge-survives indefinitely, frozen at
+// whatever `started_at` it had. `latestRunMood` used to trust `started_at`
+// alone, so a merge-survivor with a newer `started_at` than any genuinely
+// live run won the pick forever, and the wordmark animated a dead run's
+// last-known mood as if the machine were working right now.
+test('a stale merge-survivor never outvotes a fresher live run, even with a newer started_at', () => {
+	const runs = [
+		// The genuinely live run — actually running, but it started earlier in
+		// wall-clock terms than the zombie below.
+		moodRun({
+			id: 'fresh',
+			started_at: '2026-07-23T21:00:00Z',
+			mood: 'id_l',
+			mood_glyph: '(-_-)',
+			daemon_stale: false
+		}),
+		// A run reported by a daemon that has since retired: its own report is
+		// stale, but its `started_at` is newer than the fresh run's — the exact
+		// ordering that let it win the old `at > bestAt` comparison.
+		moodRun({
+			id: 'zombie',
+			started_at: '2026-07-23T22:30:00Z',
+			mood: 'gnaw',
+			mood_glyph: '>_<',
+			daemon_stale: true
+		})
+	];
+	assert.deepEqual(wordmarkMood(runs, null), { frames: ['(-_-)'], pitch: null });
+});
+
+test('every live run stale ⇒ no live mood to wear, and the wordmark falls to the daemon', () => {
+	const daemon = {
+		state: 'idle',
+		name: 'brnrd breathing',
+		glyph: '(-_-)',
+		frames: ['(-_-)', '(-.-)'],
+		pitch: 0.4
+	};
+	const runs = [
+		moodRun({ id: 'zombie', started_at: '2026-07-23T22:30:00Z', mood: 'gnaw', daemon_stale: true })
+	];
+	assert.deepEqual(wordmarkMood(runs, daemon), { frames: ['(-_-)', '(-.-)'], pitch: 0.4 });
+});
+
 test('a null daemon mood leaves the loom idle seam exactly as it was', () => {
 	// The seam swaps its hollow dot for the resting face only when this is
 	// non-null; a pre-upgrade daemon publishes nothing and gets today's render.
