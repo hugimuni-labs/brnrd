@@ -142,6 +142,12 @@ def test_the_chip_never_opens_the_gate_by_itself(tmp_path):
     ctx, outbox, portal = _ctx(tmp_path)
     quiet = _portal("t1", card={"stale": False, "state": "ok"})
     portal.write_text(json.dumps(quiet), encoding="utf-8")
+    # Boundary 0 (w-54): the first bar renders everything once — burn it
+    # before the receipt exists, so the chip's own appearance is isolated.
+    hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})
+    # The receipt lands, the portal token does not move: writing
+    # `.gate-receipts.json` is invisible to portal-state by design, so no
+    # opener fires and the chip alone summons nothing.
     _receipt(outbox)
     out = hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})
     assert out["inject"] is None
