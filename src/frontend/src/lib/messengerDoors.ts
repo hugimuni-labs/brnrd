@@ -44,6 +44,20 @@ export function doorOffHasEnablePath(reason: string | null | undefined): boolean
 	return reason === 'not_configured';
 }
 
+/** Turn a one-shot pairing deep link into the stable conversation door. */
+export function conversationLink(deepLink: string | null): string | null {
+	if (!deepLink) return null;
+	try {
+		const url = new URL(deepLink);
+		if (url.protocol !== 'https:') return null;
+		url.search = '';
+		url.hash = '';
+		return url.toString();
+	} catch {
+		return null;
+	}
+}
+
 // Registry order, with unknown platforms (a future connector this
 // component's roster hasn't been told about) appended rather than dropped
 // — same "the set stays complete" posture the backend registry itself

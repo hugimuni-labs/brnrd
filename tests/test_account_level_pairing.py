@@ -327,6 +327,24 @@ def test_account_code_pairs_route_with_no_repo_pin(env):
     assert "no project is connected" in sends[-1]["text"].lower()
 
 
+def test_minting_page_observes_pairing_complete_through_status_route(env):
+    """#1530 — the origin page's poll sees the same code turn consumed."""
+    app, client, sends = env
+    headers = _account(client)
+    _login_session(client, headers)
+    code = _account_code(client)
+
+    pending = client.get(f"/v1/dashboard/pair/{code}")
+    assert pending.status_code == 200
+    assert pending.json() == {"consumed": False, "display": None}
+
+    _post(client, _message(1001, f"/start {code}"))
+
+    paired = client.get(f"/v1/dashboard/pair/{code}")
+    assert paired.status_code == 200
+    assert paired.json() == {"consumed": True, "display": "@ada_l"}
+
+
 def test_account_code_with_repos_names_the_resolved_target(env):
     app, client, sends = env
     headers = _account(client)

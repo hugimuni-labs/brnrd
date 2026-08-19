@@ -55,6 +55,7 @@ async function waitForServer(url, tries = 60) {
 // clock, below, never by shrinking this.
 const TTL_S = 180;
 let mintCount = 0;
+let statusPollCount = 0;
 
 async function mountRoutes(page) {
 	await page.route('**/v1/dashboard/**', async (route) => {
@@ -77,6 +78,18 @@ async function mountRoutes(page) {
 					deep_link,
 					platform,
 					expires_at
+				})
+			});
+			return;
+		}
+		if (req.method() === 'GET' && /\/v1\/dashboard\/pair\/PK-repro\d+$/.test(req.url())) {
+			statusPollCount += 1;
+			await route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify({
+					consumed: statusPollCount >= 2,
+					display: statusPollCount >= 2 ? '@maintainer' : null
 				})
 			});
 			return;
@@ -114,6 +127,7 @@ async function main() {
 
 		for (const viewport of WIDTHS) {
 			mintCount = 0;
+			statusPollCount = 0;
 			const context = await browser.newContext({
 				viewport: { width: viewport.width, height: viewport.height }
 			});
@@ -142,16 +156,16 @@ async function main() {
 			await delay(200);
 			await shot(page, `${OUT}/${viewport.name}-02-ample.png`);
 
-			// Low: fast-forward past the ample/low boundary (⅓ of 180s = 60s
-			// remaining) on the *same* still-live code — no new mint.
-			await page.clock.fastForward(125_000);
-			await delay(200);
-			await shot(page, `${OUT}/${viewport.name}-03-low.png`);
-
-			// Critical: fast-forward past the TTL itself.
-			await page.clock.fastForward(60_000);
-			await delay(200);
-			await shot(page, `${OUT}/${viewport.name}-04-critical.png`);
+			// The origin page notices redemption on its next existing status
+			// poll and replaces the minted-code card without navigation.
+			await page.clock.fastForward(3_100);
+			await page.waitForSelector('[data-testid="paired-telegram"]', { timeout: 15000 });
+			await shot(page, `${OUT}/${viewport.name}-03-connected.png`);
+			if (viewport.name === 'phone') {
+				await page.locator('[data-testid="paired-telegram"]').screenshot({
+					path: `${OUT}/phone-success-card.png`
+				});
+			}
 
 			await writeFile(
 				`${OUT}/${viewport.name}-console.json`,
