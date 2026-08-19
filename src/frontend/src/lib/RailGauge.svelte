@@ -110,7 +110,8 @@
 				{#each fuel as row (row.id)}
 					{@const level = quotaLevel(row.percent)}
 					<span
-						class="inline-flex items-baseline gap-1 whitespace-nowrap text-ink-quiet {row.stale || row.daemonStale
+						class="inline-flex items-baseline gap-1 whitespace-nowrap text-ink-quiet {row.stale ||
+						row.daemonStale
 							? 'opacity-60'
 							: ''}"
 						title={row.tooltip}
@@ -128,7 +129,14 @@
 								class="h-[9px] w-[9px] shrink-0 -rotate-90 scale-x-[-1] self-center"
 								aria-label="reset window remaining"
 							>
-								<circle cx="6" cy="6" r="5.5" fill="none" stroke-width="1" class="stroke-stone-800" />
+								<circle
+									cx="6"
+									cy="6"
+									r="5.5"
+									fill="none"
+									stroke-width="1"
+									class="stroke-stone-800"
+								/>
 								<circle
 									cx="6"
 									cy="6"
