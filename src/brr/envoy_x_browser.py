@@ -497,7 +497,21 @@ def _self_url(driver: Any, post_id: str | None) -> str | None:
     """
     if post_id is None:
         return None
-    handle = driver.whoami()
+    try:
+        handle = driver.whoami()
+    except Exception:  # noqa: BLE001
+        # The post has ALREADY SHIPPED by the time this runs, and the
+        # receipt row plus `_record_send`'s hourly-cap tick are both
+        # downstream of this call. An unguarded raise here — `whoami`
+        # opens with a bare `page.goto(HOME_URL)`, so a navigation
+        # timeout or a dead session is enough — would propagate out of
+        # the driver context and leave a live public post with **no
+        # receipt line and no cap increment**: the two mechanisms this
+        # whole module exists to keep honest. A convenience lookup must
+        # never sit between an irreversible act and its record. Honest
+        # absence instead, same contract as a `None` handle below; the
+        # id is already in hand and the URL is reconstructible from it.
+        return None
     if not handle:
         return None
     return f"https://x.com/{handle}/status/{post_id}"

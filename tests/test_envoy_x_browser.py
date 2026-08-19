@@ -44,7 +44,7 @@ class _FakeDriver:
 
     def __init__(
         self, *, whoami_value=None, read_value=None, search_value=None,
-        click_send_return=None,
+        click_send_return=None, whoami_raises=False,
     ):
         self.calls: list = []
         self.headless: bool | None = None
@@ -53,6 +53,7 @@ class _FakeDriver:
         self._search_value = search_value if search_value is not None else []
         self.search_tabs = []
         self._click_send_return = click_send_return
+        self._whoami_raises = whoami_raises
 
     def __enter__(self):
         self.calls.append("__enter__")
@@ -64,6 +65,8 @@ class _FakeDriver:
 
     def whoami(self):
         self.calls.append("whoami")
+        if self._whoami_raises:
+            raise RuntimeError("navigation timeout")
         return self._whoami_value
 
     def wait_for_manual_login(self):
@@ -527,6 +530,48 @@ def test_self_url_omitted_when_whoami_fails(tmp_path, monkeypatch):
     record = json.loads(paths.log.read_text(encoding="utf-8").strip().splitlines()[0])
     assert record["post_id"] == "42"
     assert "self_url" not in record
+
+
+def test_a_raising_whoami_never_costs_the_post_its_receipt(tmp_path, monkeypatch):
+    """The self-URL lookup happens AFTER the post has already shipped, so
+    it must not be able to take the receipt down with it.
+
+    `whoami()` opens with a bare `page.goto(HOME_URL)` — a navigation
+    timeout or a session that died between the send and this call is
+    enough to raise. If that propagates, `_record_send` (the hourly cap's
+    only writer) and `_append_receipt` both never run, and a live public
+    post exists with no receipt line and no cap increment. The
+    already-covered case is a whoami that *returns* nothing; this is the
+    one that *raises*."""
+    paths = _paths(tmp_path)
+    _armed_env(monkeypatch)
+    driver = _FakeDriver(click_send_return="42", whoami_raises=True)
+    envoy_x_browser.run(
+        ["post", "--text", "hi", "--confirm"],
+        paths, driver_factory=_factory_for(driver),
+    )
+    record = json.loads(paths.log.read_text(encoding="utf-8").strip().splitlines()[0])
+    assert record["post_id"] == "42"
+    assert "self_url" not in record
+    # the cap tick is the other casualty of a raise here
+    assert envoy_x_browser.cap_status(paths)["used"] == 1
+
+
+def test_a_raising_whoami_never_costs_a_reply_its_receipt(tmp_path, monkeypatch):
+    """Same guarantee on the reply lane, which gained the `self_url`
+    lookup in the same change."""
+    paths = _paths(tmp_path)
+    _armed_env(monkeypatch)
+    driver = _FakeDriver(click_send_return="42", whoami_raises=True)
+    envoy_x_browser.run(
+        ["send", "https://x.com/someone/status/1", "--text", "hi", "--confirm"],
+        paths, driver_factory=_factory_for(driver),
+    )
+    record = json.loads(paths.log.read_text(encoding="utf-8").strip().splitlines()[0])
+    assert record["post_id"] == "42"
+    assert record["url"] == "https://x.com/someone/status/1"
+    assert "self_url" not in record
+    assert envoy_x_browser.cap_status(paths)["used"] == 1
 
 
 # ── --form: caller-supplied rhetorical form, free text, never an arm ──
