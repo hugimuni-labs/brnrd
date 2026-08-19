@@ -8917,6 +8917,25 @@ def _cut_mismatches(
     return mismatches
 
 
+def _cut_bounce_kinds(mismatches: list[str]) -> list[str]:
+    """Collapse daemon-authored cut diffs to stable telemetry categories."""
+    kinds: list[str] = []
+    for mismatch in mismatches:
+        if mismatch.startswith(("produce:", "issue #")):
+            kind = "produce"
+        elif mismatch.startswith("owed"):
+            kind = "owed"
+        elif mismatch.startswith("strands:"):
+            kind = "strands"
+        elif mismatch.startswith("topicless:"):
+            kind = "topic"
+        else:
+            kind = "pending-event"
+        if kind not in kinds:
+            kinds.append(kind)
+    return kinds
+
+
 def _drain_outbox(
     emit: _WorkerEmit,
     task: Run,
@@ -9323,6 +9342,11 @@ def _drain_outbox(
                         "declaration-shaped body — staging casualty, not a woven reply",
                     )
                 if mismatches:
+                    bounce_kinds = _cut_bounce_kinds(mismatches)
+                    prior_kinds = list(task.meta.get("cut_bounce_kinds") or [])
+                    task.meta["cut_bounce_kinds"] = prior_kinds + [
+                        kind for kind in bounce_kinds if kind not in prior_kinds
+                    ]
                     bounces_so_far = int(
                         (task.meta.get("cut_bounces") or 0)
                         if hasattr(task, "meta") else 0
@@ -9348,6 +9372,10 @@ def _drain_outbox(
                     task.meta["bolt"] = {
                         "accepted_at": accepted_at,
                         "annotated": annotated,
+                        "attempts": int(task.meta.get("cut_bounces") or 0) + (
+                            0 if annotated else 1
+                        ),
+                        "bounces": list(task.meta.get("cut_bounce_kinds") or []),
                         **cut_verb.durable_declaration(
                             declaration,
                             dissent=mismatches if annotated else (),
@@ -12937,6 +12965,11 @@ def _persist_run_state_doc(
     if isinstance(bolt_meta, dict) and bolt_meta.get("accepted_at"):
         bolt_label = "annotated" if bolt_meta.get("annotated") else "accepted"
         lines.append(f"bolt: {bolt_label} {bolt_meta['accepted_at']}")
+        attempts = int(bolt_meta.get("attempts") or 1)
+        lines.append(f"bolt_attempts: {attempts}")
+        bounces = bolt_meta.get("bounces") or []
+        if attempts > 1 and bounces:
+            lines.append(f"bolt_bounces: {', '.join(str(kind) for kind in bounces)}")
     # The body used to restate status/stage/repo/source/event/runner as a
     # bullet list — every fact a verbatim copy of the frontmatter one screen
     # up, and the node renderer showed both (maintainer, 2026-07-19: the ask

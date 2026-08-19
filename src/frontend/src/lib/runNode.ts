@@ -175,6 +175,7 @@ export const FRAME_FIELDS: Array<{ key: string; label: string }> = [
 	{ key: 'status', label: 'status' },
 	{ key: 'stage', label: 'stage' },
 	{ key: 'bolt', label: 'bolt' },
+	{ key: 'bolt_friction', label: 'cut' },
 	{ key: 'started_at', label: 'started' },
 	{ key: 'ended_at', label: 'ended' },
 	{ key: 'source', label: 'source' },
@@ -199,7 +200,9 @@ const FRAME_SUPPRESSED = [
 	'pid',
 	'reply_archive',
 	'parent_run_id',
-	'child_run_ids'
+	'child_run_ids',
+	'bolt_attempts',
+	'bolt_bounces'
 ];
 
 export interface FrameField {
@@ -215,6 +218,12 @@ function frameValue(key: string, value: string): string {
 
 /** Ordered, non-empty frame fields; unknown keys keep their raw name, last. */
 export function frameFields(metadata: Record<string, string>): FrameField[] {
+	metadata = { ...metadata };
+	const attempts = Number.parseInt(metadata.bolt_attempts ?? '', 10);
+	if (attempts > 1) {
+		const count = attempts - 1;
+		metadata.bolt_friction = `accepted after ${count} bounce${count === 1 ? '' : 's'}: ${metadata.bolt_bounces}`;
+	}
 	const fields: FrameField[] = [];
 	const seen = new Set<string>(FRAME_SUPPRESSED);
 	for (const { key, label } of FRAME_FIELDS) {
