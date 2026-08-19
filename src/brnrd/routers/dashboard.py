@@ -485,7 +485,24 @@ def _runners_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
             profiles[name] = entry
     out = list(profiles.values())
     for row in out:
-        row.pop("_reported_at", None)
+        # Per-row freshness, distinct from the account-wide `stale` below and
+        # from the daemon's own per-row `stale` (`runner.py`'s
+        # freshness_date/benchmark staleness, a different fact entirely —
+        # don't overwrite it). Merging keeps every daemon's rows keyed by
+        # profile *name* only (#328's "residency moved machines" case: an old
+        # daemon retires, its rows never get overwritten because the new
+        # daemon never reports the same names), so the single account-wide
+        # `newest`/`stale` computed below can read fresh while a specific
+        # row's own source report is days old. `daemon_reported_at` /
+        # `daemon_stale` let a reader (the rack) gate a row on the report
+        # that actually produced it, not on whichever daemon in the account
+        # happened to report most recently.
+        row_reported_at = row.pop("_reported_at", None)
+        row["daemon_reported_at"] = row_reported_at.isoformat() if row_reported_at else None
+        row["daemon_stale"] = (
+            row_reported_at is None
+            or (now - row_reported_at).total_seconds() > _RUNNERS_STALE_SECONDS
+        )
     out.sort(
         key=lambda row: (
             row.get("cost_rank") is None,
