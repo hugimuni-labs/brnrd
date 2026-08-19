@@ -3,6 +3,13 @@
 	import { liveSticky, type RunnerProfile, type RunnerSticky, type WakeRequest } from './runners';
 	import { stickyCountdown } from './controlStrip';
 	import { availabilityOf, collapsedShellSummary, groupByShell, isTappable } from './spoolRack';
+	import {
+		DISABLED_ROW,
+		IDLE_ROW,
+		SELECTED_PINNED,
+		SELECTED_REQUESTED,
+		UNAVAILABLE_MARK
+	} from './stateChrome';
 
 	// #328 spool rack. You don't set a being's body with a dropdown; the
 	// rack shows who *can* wake and which spool is threaded (the pin).
@@ -78,15 +85,14 @@
 		return platform ? `${platform} thread` : 'thread';
 	}
 
-	const CLASS_LABEL: Record<string, string> = {
-		economy: 'economy',
-		balanced: 'balanced',
-		strong: 'strong'
-	};
-
+	/** The core half of the row, distinct from the pin badge's "default":
+	 *  this answers "which core", the badge answers "who wakes next" — see
+	 *  the module doc for why a row could otherwise print "default" twice
+	 *  meaning two different things. Vocabulary matches `runner.py` /
+	 *  `run_ledger.py`: "None"/"default" means *unpinned*. */
 	function coreLabel(profile: RunnerProfile): string {
 		if (profile.model && profile.model !== profile.shell) return profile.model;
-		return 'default';
+		return 'unpinned';
 	}
 
 	function isPinned(profile: RunnerProfile): boolean {
@@ -141,11 +147,11 @@
 			const availability = availabilityOf(profile);
 			return availability === 'unverified'
 				? 'cursor-not-allowed border-dashed border-stone-800/60 bg-stone-950/20 opacity-60'
-				: 'cursor-not-allowed border-stone-900/60 bg-stone-950/30 opacity-45';
+				: DISABLED_ROW;
 		}
-		if (requested) return 'border-amber-600/80 bg-amber-950/40';
-		if (pinned) return 'border-amber-800/70 bg-amber-950/20';
-		return 'border-stone-800/60 bg-stone-900/30 hover:border-stone-600/70';
+		if (requested) return SELECTED_REQUESTED;
+		if (pinned) return SELECTED_PINNED;
+		return IDLE_ROW;
 	}
 
 	function rowLabelClasses(nextWake: boolean, tappable: boolean, unverified: boolean): string {
@@ -155,7 +161,7 @@
 	}
 
 	function rowMark(availability: ReturnType<typeof availabilityOf>): string {
-		if (availability === 'unavailable') return '✗ ';
+		if (availability === 'unavailable') return UNAVAILABLE_MARK;
 		if (availability === 'unverified') return '? ';
 		return '';
 	}
@@ -188,7 +194,7 @@
 						title="expand to see this shell's cores — still not tappable, nothing here is installed"
 						class="flex w-full items-center justify-between gap-3 border border-stone-900/60 bg-stone-950/20 px-2 py-1.5 text-left font-mono text-xs text-ink-mute transition-colors hover:border-stone-700/60"
 					>
-						<span>✗ {collapsedShellSummary(group)}</span>
+						<span>{UNAVAILABLE_MARK}{collapsedShellSummary(group)}</span>
 						<span class="text-[10px] text-ink-quiet">▸</span>
 					</button>
 				{:else}
@@ -291,9 +297,7 @@
 											>
 										{/if}
 										{#if profile.class}
-											<span class="tracking-wide text-stone-400 uppercase"
-												>{CLASS_LABEL[profile.class] ?? profile.class}</span
-											>
+											<span class="tracking-wide text-stone-400 uppercase">{profile.class}</span>
 										{/if}
 										{#if profile.cost_rank !== null && profile.cost_rank !== undefined}
 											<span class="text-ink-quiet">rank {profile.cost_rank}</span>

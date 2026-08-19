@@ -475,20 +475,14 @@
 	// *within* the lane; the cloth's rows wrap, so there they do not — the
 	// alphabet is the claim, not the column.)
 	// The machine's own row set. Same `pickRows` the lane draws from — one
-	// computation, three readers (the rail's slim line, the parked run block,
-	// the lane), so no two surfaces can disagree about which pick is burning.
+	// computation, two readers (the parked run block, the lane), so no two
+	// surfaces can disagree about which pick is burning. (A third reader,
+	// the rail's own slim-bar line (`ControlStrip`'s `livePick`), was
+	// removed 2026-08-19 — dead once the machine dock always sits under the
+	// rail on this page, so the branch that would have shown it never fired.)
 	let machineRows = $derived(pickRows({ liveRuns, scheduledWakes, now }));
 	let burningRows = $derived(machineRows.filter((row) => row.phase === 'picking'));
 	let armedRows = $derived(machineRows.filter((row) => row.phase === 'armed'));
-	// The rail's one line about the now.
-	let livePick = $derived.by(() => {
-		if (burningRows.length === 0) return null;
-		return {
-			label: burningRows[0].label,
-			clock: burningRows[0].clock,
-			extra: burningRows.length - 1
-		};
-	});
 	let threads = $derived(topicThreadList.map((thread) => thread.canonicalId));
 	// Which topics have an item weaving right now — the answer to "which one
 	// is being worked", rendered on the heddle rail where the question gets
@@ -1431,8 +1425,6 @@
 					maxSpawns={spawnMaxConcurrent}
 					condensed={railCondensed}
 					{onRackChange}
-					{livePick}
-					machineDocks={true}
 				/>
 			</div>
 
