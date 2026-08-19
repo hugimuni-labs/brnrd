@@ -377,6 +377,35 @@ def _stale_quota_windows(windows: Any, *, as_of: Any) -> list[dict[str, Any]]:
     return out
 
 
+def _stamp_row_freshness(
+    rows: list[dict[str, Any]], *, now: datetime, stale_after_seconds: int
+) -> None:
+    """Stamp `daemon_reported_at` / `daemon_stale` on each row, in place.
+
+    Every account-scoped dashboard view below merges daemon-reported rows by
+    key **across every daemon on the account**, freshest report wins per key —
+    so a retired daemon's row can merge-survive looking exactly as fresh as
+    the account's newest report, as long as no live daemon ever reports a row
+    under the same key (#1502 "the rack of dead spools", #1503/#1504 "the
+    tank of dead quotas", #1505). This is the one place that shape gets fixed:
+    pop the merge-internal `_reported_at` a caller stashed on each row (per
+    the same `existing["_reported_at"] >= reported_at` collision pattern each
+    call site already uses) and re-stamp it as two public facts a reader can
+    gate on *per row*, distinct from whatever single account-wide
+    `newest`/`stale` flag the caller also computes and keeps returning
+    unchanged. `stale_after_seconds` is deliberately a parameter, not a
+    shared constant — each view's own staleness window (`_QUOTA_STALE_SECONDS`
+    et al.) reflects that view's own publish cadence, not a universal one.
+    """
+    for row in rows:
+        row_reported_at = row.pop("_reported_at", None)
+        row["daemon_reported_at"] = row_reported_at.isoformat() if row_reported_at else None
+        row["daemon_stale"] = (
+            row_reported_at is None
+            or (now - row_reported_at).total_seconds() > stale_after_seconds
+        )
+
+
 def _quota_views(db: Session, repos: list[Repo], runner_stats: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Real per-shell quota windows from the daemons' own reports (#237)."""
     repo_ids = {repo.id for repo in repos}
@@ -424,25 +453,11 @@ def _quota_views(db: Session, repos: list[Repo], runner_stats: list[dict[str, An
                     "_reported_at": reported_at,
                 }
     out = list(real.values())
-    for row in out:
-        # Same shape as `_runners_views` below (#1502, "the rack of dead
-        # spools"): windows merge into one dict keyed by shell *name* across
-        # every daemon on the account, with no per-row expiry — a retired
-        # daemon's window never gets overwritten unless a live daemon
-        # reports the same shell name, so it can sit on the tank looking as
-        # fresh as one reported seconds ago. Stamp the report's own
-        # freshness instead of discarding it, so a reader (the tank) can
-        # gate a window on the report that actually produced it rather than
-        # on whichever daemon in the account happened to report most
-        # recently. Reuses `_QUOTA_STALE_SECONDS` — the same threshold this
-        # function already applies to scrape-level staleness above — rather
-        # than minting a second, unrelated staleness window.
-        row_reported_at = row.pop("_reported_at", None)
-        row["daemon_reported_at"] = row_reported_at.isoformat() if row_reported_at else None
-        row["daemon_stale"] = (
-            row_reported_at is None
-            or (now - row_reported_at).total_seconds() > _QUOTA_STALE_SECONDS
-        )
+    # Reuses `_QUOTA_STALE_SECONDS` — the same threshold this function already
+    # applies to scrape-level staleness above — rather than minting a second,
+    # unrelated staleness window. See `_stamp_row_freshness` for why this
+    # exists at all.
+    _stamp_row_freshness(out, now=now, stale_after_seconds=_QUOTA_STALE_SECONDS)
     for row in runner_stats:
         shell = row["shell"]
         if shell == "unknown" or shell in real:
@@ -501,25 +516,12 @@ def _runners_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
             entry["_reported_at"] = reported_at
             profiles[name] = entry
     out = list(profiles.values())
-    for row in out:
-        # Per-row freshness, distinct from the account-wide `stale` below and
-        # from the daemon's own per-row `stale` (`runner.py`'s
-        # freshness_date/benchmark staleness, a different fact entirely —
-        # don't overwrite it). Merging keeps every daemon's rows keyed by
-        # profile *name* only (#328's "residency moved machines" case: an old
-        # daemon retires, its rows never get overwritten because the new
-        # daemon never reports the same names), so the single account-wide
-        # `newest`/`stale` computed below can read fresh while a specific
-        # row's own source report is days old. `daemon_reported_at` /
-        # `daemon_stale` let a reader (the rack) gate a row on the report
-        # that actually produced it, not on whichever daemon in the account
-        # happened to report most recently.
-        row_reported_at = row.pop("_reported_at", None)
-        row["daemon_reported_at"] = row_reported_at.isoformat() if row_reported_at else None
-        row["daemon_stale"] = (
-            row_reported_at is None
-            or (now - row_reported_at).total_seconds() > _RUNNERS_STALE_SECONDS
-        )
+    # `daemon_stale` here is distinct from the daemon's own per-row `stale`
+    # (`runner.py`'s freshness_date/benchmark staleness, a different fact
+    # entirely — `_stamp_row_freshness` writes `daemon_stale`, never `stale`,
+    # so it can't collide with a key a row already carries). See
+    # `_stamp_row_freshness` for why this exists at all.
+    _stamp_row_freshness(out, now=now, stale_after_seconds=_RUNNERS_STALE_SECONDS)
     out.sort(
         key=lambda row: (
             row.get("cost_rank") is None,
@@ -620,8 +622,11 @@ def _live_runs_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
             row["_reported_at"] = reported_at
             runs[run_key] = row
     out = list(runs.values())
-    for row in out:
-        row.pop("_reported_at", None)
+    # Same shape as `_runners_views`/`_quota_views` (#1502, #1503/#1504,
+    # #1505): the merge above keeps a retired daemon's run keyed only by its
+    # own `run_id`, so it can merge-survive looking as fresh as the
+    # account-wide `stale` below. See `_stamp_row_freshness`.
+    _stamp_row_freshness(out, now=now, stale_after_seconds=_LIVE_RUNS_STALE_SECONDS)
     out.sort(key=lambda row: row.get("started_at") or "")
     stale = bool(newest_reported_at) and (now - newest_reported_at).total_seconds() > _LIVE_RUNS_STALE_SECONDS
     return {
@@ -672,8 +677,11 @@ def _pr_review_queue_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
             row["_reported_at"] = reported_at
             prs[pr_key] = row
     out = list(prs.values())
-    for row in out:
-        row.pop("_reported_at", None)
+    # Same shape as `_runners_views`/`_quota_views` (#1502, #1503/#1504,
+    # #1505): the merge above keeps a retired daemon's PR keyed only by
+    # `repo#number`, so it can merge-survive looking as fresh as the
+    # account-wide `stale` below. See `_stamp_row_freshness`.
+    _stamp_row_freshness(out, now=now, stale_after_seconds=_PR_REVIEW_QUEUE_STALE_SECONDS)
     out.sort(key=lambda row: row.get("created_at") or "")
     stale = bool(newest_reported_at) and (now - newest_reported_at).total_seconds() > _PR_REVIEW_QUEUE_STALE_SECONDS
     return {
@@ -742,8 +750,11 @@ def _run_ledger_views(
             row["_reported_at"] = reported_at
             rows[run_key] = row
     out = list(rows.values())
-    for row in out:
-        row.pop("_reported_at", None)
+    # Same shape as `_runners_views`/`_quota_views` (#1502, #1503/#1504,
+    # #1505): the merge above keeps a retired daemon's closed run keyed only
+    # by its own `run_id`, so it can merge-survive looking as fresh as the
+    # account-wide `stale` below. See `_stamp_row_freshness`.
+    _stamp_row_freshness(out, now=now, stale_after_seconds=_RUN_LEDGER_STALE_SECONDS)
     out.sort(key=lambda row: row.get("ended_at") or "", reverse=True)
     stale = bool(newest_reported_at) and (now - newest_reported_at).total_seconds() > _RUN_LEDGER_STALE_SECONDS
     return {
