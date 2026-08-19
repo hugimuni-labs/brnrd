@@ -12012,6 +12012,22 @@ def test_enrich_catalog_quota_stamps_every_row_and_skips_unknown_pools(
     assert "quota_level" not in catalog[2]
 
 
+def test_dispatch_auth_health_marks_and_success_clears_same_domain(tmp_path):
+    from brr import runner_auth_health, runner_failures, runner_select
+
+    (tmp_path / ".brr").mkdir()
+    failed = runner_select.RunnerProfile(
+        name="codex", profile="codex", shell="codex", quota_source="codex-local",
+    )
+    sibling = runner_select.RunnerProfile(
+        name="codex-full", profile="codex", shell="codex", quota_source="codex-local",
+    )
+    daemon._record_runner_auth_health(tmp_path, failed, runner_failures.AUTH_ERROR)
+    assert runner_auth_health.is_auth_failed(tmp_path, sibling)
+    daemon._record_runner_auth_health(tmp_path, sibling, None)
+    assert not runner_auth_health.is_auth_failed(tmp_path, failed)
+
+
 def _capture_ctx(tmp_path):
     """The scaffold the `_capture_control_files` tests share."""
     repo = tmp_path / "repo"
