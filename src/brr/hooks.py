@@ -173,6 +173,19 @@ _TOPIC_NUDGE_CAP = 2
 AMBIENT_FIRST_BAR_KEY = "ambient_first_bar"
 AMBIENT_BUDGET_PCT_KEY = "ambient_budget_pct"
 AMBIENT_QUOTA_KEY = "ambient_quota"
+# BAR_LAST_CHIPS_KEY — {segment_key: rendered_text} at the last boundary whose
+# bar actually rendered (w-54 change-gating): a chip whose text is unchanged
+# since then is not news and does not render again. Committed only on render,
+# so a suppressed boundary cannot mark a change as seen.
+BAR_LAST_CHIPS_KEY = "bar_last_chips"
+# COURSE_DRIFT_COUNT_KEY / WORK_TOKEN_KEY — the course drift trigger (w-54):
+# count work-deltas (produce / delivery / gate movement) landing while the
+# route stands still; at _COURSE_DRIFT_THRESHOLD the course line re-surfaces
+# once ("the run moved, the route didn't") and the counter re-arms. Endogenous
+# — keyed to evidence of divergence, not to a clock or a message.
+COURSE_DRIFT_COUNT_KEY = "course_drift_count"
+WORK_TOKEN_KEY = "work_token"
+_COURSE_DRIFT_THRESHOLD = 3
 
 # Budget thresholds (% used) at which the ambient bar re-emits; crossed once
 # each in the ascending direction only.
@@ -1228,20 +1241,17 @@ class _BarSegment:
 #: stay full detail lines below the bar (see :func:`_render_bar`) instead of
 #: a segment here.
 BAR_SEGMENTS: tuple[_BarSegment, ...] = (
-    _BarSegment(
-        "run", "⌁",
-        "run identity — the run id's 4-char random disambiguator "
-        "(`run-YYMMDD-HHMM-<rand>` → `<rand>`). Always first when the bar "
-        "renders at all.",
-        # Vital, not ambient: nothing discharges a run id, and a bar
-        # without one makes every other chip ambiguous — "must stay
-        # legible" is exactly what the class is for.
-        klass=VITAL,
-    ),
+    # The `run` id chip retired 2026-08-19 (w-54): the id is ambient context
+    # the reader already has, and the bar's anchor role moved to the static
+    # `⌁[<mood>]:` preamble (`_bar_preamble`) — the bolt glyph stays, the
+    # noise goes.
     _BarSegment(
         "budget", "⏱",
-        "wall-clock posture — elapsed/soft-limit minutes (`16/120m`). "
-        "Renders whenever both numbers are known.",
+        "the wall-clock ticker — elapsed minutes (`⏱ 41m`), with the "
+        "soft limit only when the user configured one (`16/120m`). "
+        "Changes nearly every boundary; renders only when its text moved, "
+        "like every chip since w-54 — but a minute is a minute, so in "
+        "practice it rides most open bars. It never opens one.",
         # a meter.
         klass=VITAL,
     ),
@@ -1386,18 +1396,14 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
     ),
     _BarSegment(
         "mood", "mood",
-        "the resident's own `.mood` control file (#566 layer 2), truncated "
-        "to 16 chars, with the emote's base-frame glyph prefixed when "
-        "`brr.emotes` resolves the name. Renders every boundary it is "
-        "present; on a boundary that *surprised* the run it also carries "
-        "`← <what happened>`, which is the ask — the mood channel questions "
-        "itself on an edge, not on every tick (#604). The older "
-        "unconditional `·keep?` suffix this entry used to document was "
-        "removed with that change. In its absence, once the run has run "
-        "past ~15m with no `.mood` ever written, the segment renders "
-        "`mood?` instead — a one-shot, latched nudge (never a repeat, and "
-        "never what keeps the bar alive on its own), silenced for good the "
-        "moment any `.mood` write happens, however stale it later goes.",
+        "the mood channel's *edge* forms only (w-54): the steady face moved "
+        "into the `⌁[<face>]:` preamble, so this segment speaks just three "
+        "ways — `mood <face> ← <what happened>` on a boundary that "
+        "surprised the run (the ask: the mood channel questions itself on "
+        "an edge, not on every tick, #604); `mood ✗ <name> → <near misses>` "
+        "while the written handle resolves to no emote (actionable — "
+        "rewrite the file); and `mood?` once, latched, when ~15m pass with "
+        "no `.mood` ever written — silenced for good by any write.",
         # the `mood?` form asks for a write. Caller-latched
         # to once per run, so classing it here costs one chip, not a repeat.
         klass=OBLIGATION,
@@ -1429,8 +1435,7 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         # the resident opens `portal-state.json` and reads every entry. That
         # is DELTA's own definition ("records something that changed... has
         # no discharge, but earns its bytes by being new"), not OBLIGATION's.
-        # Relabeling only — both classes already sit in `_KEPT_WHEN_QUIET`,
-        # so the bar's own rendering/gating is unchanged; `brnrd legend`
+        # Relabeling only — rendering was unchanged by it; `brnrd legend`
         # (cli.py's cmd_legend) does print this field verbatim, so its `!`
         # row now correctly says `delta`, which is the fix, not a side
         # effect. The change that would make this a genuine OBLIGATION (a
@@ -1440,14 +1445,14 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
     ),
     _BarSegment(
         "card", "card",
-        "the live `.card` surface's own health: `ok` / `stale` / `blank` / "
-        "`cut N>4096`. The last measures the *projection* the transport "
-        "publishes, not the file — a long card with a well-formed `Now` is "
-        "fine; `cut` means the live surface is losing the tail. "
-        "Always the last segment when the bar renders at all — the cheap, "
-        "always-current anchor. A `stale` value also gets its own detail "
-        "line naming why (see above) — the chip alone is never the whole "
-        "obligation.",
+        "the live `.card` surface's health, spoken only when it needs a "
+        "hand: `stale` / `blank` / `cut N>4096`. The last measures the "
+        "*projection* the transport publishes, not the file — a long card "
+        "with a well-formed `Now` is fine; `cut` means the live surface is "
+        "losing the tail. A healthy card renders nothing (w-54): `card ok` "
+        "was a fact with no act attached, repeated forever. Last segment "
+        "when present. A `stale` value also gets its own detail line "
+        "naming why — the chip alone is never the whole obligation.",
         # a stale card is discharged by writing one.
         klass=OBLIGATION,
     ),
@@ -1465,26 +1470,28 @@ SEGMENT_CLASS: dict[str, str] = {
     "pending_unknown": OBLIGATION,
 }
 
-#: What survives an ambient-quiet boundary. Everything except the class
-#: that is, by its own definition, neither news nor an obligation.
-_KEPT_WHEN_QUIET = frozenset({OBLIGATION, DELTA, VITAL})
-
-
-def _run_id_chip(run: dict[str, Any]) -> str | None:
-    run_id = str(run.get("id") or "").strip()
-    if not run_id:
-        return None
-    tail = run_id.rsplit("-", 1)[-1].strip()
-    return f"⌁ {tail}" if tail else None
+# _KEPT_WHEN_QUIET and the `run` id chip retired with w-54 (2026-08-19):
+# per-chip change-gating in `_render_bar` subsumes the class-wide
+# quiet-boundary filter, and the bar's anchor is the `⌁[<mood>]:` preamble.
 
 
 def _budget_chip(budget: dict[str, Any]) -> str | None:
+    """The wall-clock ticker: elapsed minutes, with the limit only when real.
+
+    The w-54 redesign (2026-08-19): there is no default time limit, so the
+    ``x/ym`` form renders only when the user configured one
+    (``runner.timeout_seconds``) and the daemon therefore put a
+    ``budget_seconds`` in the capsule. Unlimited runs get the bare ticker —
+    ``⏱ 41m`` — which changes roughly every boundary, but that's a ticker.
+    """
     elapsed = budget.get("elapsed_seconds")
     limit = budget.get("budget_seconds")
-    if elapsed is None or limit is None:
+    if elapsed is None:
         return None
     try:
-        return f"⏱ {int(elapsed) // 60}/{int(limit) // 60}m"
+        if limit is not None:
+            return f"⏱ {int(elapsed) // 60}/{int(limit) // 60}m"
+        return f"⏱ {int(elapsed) // 60}m"
     except (TypeError, ValueError):
         return None
 
@@ -1610,7 +1617,7 @@ def _produce_total(produce: dict[str, Any]) -> int:
     return sum(int(v or 0) for v in counts.values() if isinstance(v, (int, float)))
 
 
-def _card_chip(card: dict[str, Any], card_stale: bool) -> str:
+def _card_chip(card: dict[str, Any], card_stale: bool) -> str | None:
     """The live `.card` surface's health — measured, not assumed.
 
     This chip said ``card ok`` throughout #685: it checked that the file was
@@ -1623,6 +1630,11 @@ def _card_chip(card: dict[str, Any], card_stale: bool) -> str:
     bounds the projection rather than overflowing it, which means this no
     longer warns of an imminent 422 — it warns that the live card is being
     *truncated*, which is the same fact arriving early enough to act on.
+
+    A healthy card renders **nothing** (w-54, 2026-08-19): ``card ok`` was
+    the textbook always-on chip — a fact with no act attached, repeated at
+    every boundary. The chip now speaks only when the surface needs a hand
+    (stale / blank / cut); silence is the ok.
     """
     if card_stale:
         return "card stale"
@@ -1633,10 +1645,9 @@ def _card_chip(card: dict[str, Any], card_stale: bool) -> str:
         size = len(card_rule.now_projection(text))
         if size > card_rule.CARD_TEXT_MAX_CHARS:
             return f"card cut {size}>{card_rule.CARD_TEXT_MAX_CHARS}"
-    # No body in the capsule to measure — an older capsule shape, not a
-    # verdict. Report what the chip has always reported rather than inventing
-    # a failure out of a missing field.
-    return "card ok"
+    # Healthy (or an older capsule shape with no body to measure — absence
+    # of evidence of trouble is the quiet state, not a verdict to invent).
+    return None
 
 
 # #1002: a notice carries a ``kind`` since daemon.py:5765 — ``refused`` |
@@ -1830,6 +1841,24 @@ def _mood_chip(raw: str) -> str:
     if near:
         return f"✗ {name} → " + " · ".join(near)
     return f"✗ {name}"
+
+
+def _bar_preamble(mood: str | None) -> str:
+    """``⌁[<face>]:`` — the bar's one static element (w-54, his sketch).
+
+    The bolt is the mark of the resident-owned status line; the face inside
+    the brackets is the only thing that renders there, and it is the
+    resident's own — the ornament curated by the run, connecting it to the
+    reader. ``·`` when no mood is written (the ``mood?`` nudge still fires
+    once, elsewhere); ``✗`` when the written mood resolves to no emote — the
+    unresolved-handle honesty `_mood_chip` keeps, compressed to one mark
+    (the near-misses ride the mood chip, which still renders for a miss).
+    """
+    if not mood:
+        return "⌁[·]:"
+    name = mood.strip()
+    glyph = _emote_glyph(name)
+    return f"⌁[{glyph}]:" if glyph else "⌁[✗]:"
 
 
 # Substrings that mark a tool result as a failure. Deliberately a heuristic:
@@ -2487,14 +2516,30 @@ def _render_bar(
     bolt_edge: bool = False,
     repeat_streaks: dict[str, int] | None = None,
     pending_set_changed: bool = True,
+    last_chips: dict[str, str] | None = None,
+    rendered_chips: dict[str, str] | None = None,
+    route_drift: bool = False,
 ) -> str | None:
-    """The mid-run (``post-tool``) status bar: one line + obligation details.
+    """The mid-run (``post-tool``) status bar: preamble + changed chips + details.
 
-    ``ambient_emit`` controls whether the chip-row bar line is included.
-    When ``False`` (no threshold crossing, not the first boundary), only the
-    obligation detail lines are returned — the compressed form (#1116: "on
-    repeat, compress/collapse rather than re-emit in full").  When ``True``
-    the full bar + details are returned as before.
+    w-54 (2026-08-19): the bar opens with the one static element —
+    ``⌁[<mood>]:`` (:func:`_bar_preamble`) — and every chip after it is
+    **change-gated**: it renders only when its text differs from what the
+    last *rendered* bar carried (*last_chips*), or when its own edge fires
+    (course on ``route_edge``/``route_prompt``/``route_drift``, bolt on
+    ``bolt_edge``/``route_prompt``, owed on ``plan_edge``) or it is an
+    obligation standing unmet (a not-ok card, an unknown pending count).
+    A boundary with no due chip and no detail lines injects **nothing**.
+
+    *rendered_chips*, when given, is filled with every laden chip's current
+    text so the caller can commit it as the next boundary's *last_chips* —
+    only after this boundary actually rendered (commit-on-render, #728's
+    discipline). *last_chips* ``None`` means everything is due — the
+    conservative default for direct calls and the run's first bar.
+
+    ``ambient_emit`` is accepted for caller compatibility but no longer
+    filters chips: per-chip change-gating subsumes the class-wide
+    quiet-boundary filter it used to drive.
 
     Builds the fixed :data:`BAR_SEGMENTS` chips left to right, then appends
     detail lines *only* for new obligations — non-zero pending events, a
@@ -2530,9 +2575,6 @@ def _render_bar(
     bar alive on its own.
     """
     segments: list[tuple[str, str]] = []
-    id_chip = _run_id_chip(run)
-    if id_chip:
-        segments.append(("run", id_chip))
     budget_chip = _budget_chip(budget)
     if budget_chip:
         segments.append(("budget", budget_chip))
@@ -2615,18 +2657,19 @@ def _render_bar(
     if gate_chip:
         segments.append(("gate", gate_chip))
     if mood:
-        # Display every boundary (it is the user's window onto the resident's
-        # own face); *ask* only on an edge. The old unconditional "·keep?"
-        # asked about the artifact — "is this label still the one you'd
-        # write?" — which is answered yes for free and induces nothing. The
-        # edge form asks nothing in words: it sets the mood the resident
-        # claimed beside the thing that just went wrong, and lets the
-        # mismatch do the work. Deictic, per the weave's own measure of a
-        # mark — it points at what both parties just looked at.
+        # The steady face lives in the preamble now (w-54); this segment
+        # keeps only the forms with an act attached. The surprise form sets
+        # the mood the resident claimed beside the thing that just went
+        # wrong and lets the mismatch do the work (#604) — deictic, per the
+        # weave's own measure of a mark. The unresolved-handle form keeps
+        # `_mood_chip`'s honesty: a face that resolves to no emote is
+        # actionable (rewrite the file), so it renders — change-gated, once
+        # per text — until the handle resolves.
+        mood_text = _mood_chip(mood)
         if surprise:
-            segments.append(("mood", f"mood {_mood_chip(mood)} ← {surprise}"))
-        else:
-            segments.append(("mood", f"mood {_mood_chip(mood)}"))
+            segments.append(("mood", f"mood {mood_text} ← {surprise}"))
+        elif mood_text.startswith("✗"):
+            segments.append(("mood", f"mood {mood_text}"))
     elif mood_prompt:
         # The blank-mood nudge: ambient, once. See the caller's latch
         # (`MOOD_NUDGE_KEY`) and the docstring above — this branch only
@@ -2642,7 +2685,9 @@ def _render_bar(
         # "passive chip, not a nag row" — a subtitle here would double the
         # furniture the cap exists to avoid.
         segments.append(("topic", "topic?"))
-    segments.append(("card", _card_chip(card, card_stale)))
+    card_chip = _card_chip(card, card_stale)
+    if card_chip:
+        segments.append(("card", card_chip))
 
     details: list[str] = []
     repeat_streaks_in = repeat_streaks or {}
@@ -2722,14 +2767,23 @@ def _render_bar(
         if owed:
             details.append(owed)
     # The route reminder: on the course's own delta (the resident edited its
-    # plan — confirm the chip moved) and on the boundary a fresh event landed
+    # plan — confirm the chip moved), on the boundary a fresh event landed
     # (``route_prompt`` — the derailment moment; a steer needs the current
-    # row in the loud zone before "continue or turn" is decidable). Never
+    # row in the loud zone before "continue or turn" is decidable), and on
+    # drift (``route_drift``, w-54): the run's work-facts moved
+    # _COURSE_DRIFT_THRESHOLD times while the route stood still — the one
+    # moment "update the tracker" is evidence rather than a clock. Never
     # per-boundary while merely standing: that is the *fires constantly for
     # a non-reason* death, and the chip already carries the standing fact.
-    if route_edge or route_prompt:
+    if route_edge or route_prompt or route_drift:
         route_line = course.current_line(route)
         if route_line:
+            if route_drift and not (route_edge or route_prompt):
+                route_line += (
+                    " — the run has moved "
+                    f"{_COURSE_DRIFT_THRESHOLD}× since the route did: check "
+                    "a row, or redraw the plan"
+                )
             details.append(route_line)
     # The bolt gauge's detail line: latched on its own token edge (the
     # accretion moved — an ask got dispositioned, a promise was made/met,
@@ -2801,62 +2855,56 @@ def _render_bar(
                 "or stale."
             )
 
-    any_delivery = bool(delivery_chip)
-    # A blueprint edge opens the gate on its own, for `surprise`'s reason:
-    # writing a promise changes nothing the daemon puts in portal-state, so
-    # gating this on the portal token would leave the one boundary the
-    # signal exists for rendering nothing.
-    plan_laden = bool(plan is not None and plan_edge and plan.owed)
-    # A course edge opens the gate for the blueprint edge's exact reason:
-    # `.card` is a control file, so editing the route changes nothing in
-    # portal-state and the one boundary the confirmation exists for would
-    # otherwise render nothing. ``route_prompt`` deliberately does NOT open
-    # the gate — a fresh event already opened it.
-    route_laden = bool(route is not None and route_edge and route.open_rows)
-    # A mood edge is laden by definition: something the resident did just came
-    # back wrong. Without this clause the caller's gate opens and this one
-    # closes again — the ask would still be silent on exactly the boundary it
-    # exists for, one layer past where the fix was aimed.
+    # ── The due-filter (w-54): change-gating replaces the laden gate. ──
     #
-    # ``resources_laden`` (quota chip, siblings chip, keepalive chip) is
-    # deliberately *absent* from the gate below (#1116 three-class split): those
-    # chips are ambient vitals — no discharge condition, no business repeating
-    # every tick.  ``ambient_emit`` (caller-owned: first boundary or threshold
-    # crossing) controls whether the bar line appears; obligation and delta
-    # content surfaces regardless.
-    # The laden gate — restored to what it was, and deliberately *not*
-    # keyed on `ambient_emit`. Two facts were riding one flag: "may ambient
-    # chips render" and "is there news worth opening a bar for". Only the
-    # first is `ambient_emit`'s; the second is ladenness, which vitals
-    # participate in (`resources_laden`) because a quota reading is the
-    # maintainer's named exemption — you cannot act on it and must not lose
-    # it. What #1116 reclaims is therefore the AMBIENT chips *inside* an
-    # already-open bar, plus (via the caller's content dedupe, which now
-    # runs on any boundary carrying no obligation) the byte-identical
-    # repeats that remain.
-    resources_laden = bool(quota_chip or siblings_chip or keepalive_chip)
-    has_obligations_or_deltas = (
-        (not pending_known) or pending > 0 or pending_files > 0
-        or any_delivery or card_stale or surprise
-        or bool(notices_chip) or bool(finished_spawns) or bool(armed)
-        or plan_laden or route_laden
-    )
-    if not has_obligations_or_deltas and not resources_laden:
-        return None
+    # Every laden chip's current text is recorded (for the caller to commit
+    # as the next boundary's *last_chips* — commit-on-render, its job); a
+    # chip *renders* only when it is news: its text moved since the last
+    # rendered bar, its own edge fired, or it is an obligation standing
+    # unmet whose repetition is the point (a not-ok card, an unknown
+    # pending count, the caller-latched nudges). The old class-wide
+    # `resources_laden` opener is gone — it held the bar open at every
+    # boundary because quota is always known, which is exactly the
+    # habituation w-54 ends. Obligations keep their nets elsewhere: the
+    # detail lines above, the fresh-event re-render (`route_prompt`), the
+    # Stop readback, and the bolt's own validation at the cut.
+    chips_now = dict(segments)
+    if rendered_chips is not None:
+        rendered_chips.clear()
+        rendered_chips.update(chips_now)
+    edge_due = {
+        # An unknown obligation count must never go quiet.
+        "pending_unknown": True,
+        # `stale` repeats until discharged (rewriting the card is the act) —
+        # it rides beside its own detail line, streak-compressed above.
+        # `blank`/`cut` announce their transitions via change-gating like
+        # everything else; the caller-latched nudges (`mood?`, `topic?`)
+        # render once by the same rule — commit-on-render means a rendered
+        # chip was seen, so the old miss-a-quiet-boundary caps are moot.
+        "card": card_stale,
+        # A surprise is fresh news even when its text repeats — the caller
+        # already latches it to the clean→broken transition.
+        "mood": bool(surprise),
+        # Position trackers re-surface on their own edges even when the
+        # numbers happen not to have moved.
+        "course": route_edge or route_prompt or route_drift,
+        "bolt": bolt_edge or route_prompt,
+        "owed": plan_edge,
+    }
 
-    # #1116, the typed half: on an ambient-quiet boundary the bar still
-    # renders — it just drops the chips that have no discharge. Suppressing
-    # the whole line would take the obligation chips (`!N` refused notices, a
-    # stale card, the mood ask) down with the meters, which is the failure
-    # this split exists to end.
-    kept = [
-        (key, text) for key, text in segments
-        if ambient_emit or SEGMENT_CLASS.get(key, AMBIENT) in _KEPT_WHEN_QUIET
-    ]
-    bar = " │ ".join(text for _, text in kept)
-    if not bar and not details:
+    def _due(key: str, text: str) -> bool:
+        if edge_due.get(key):
+            return True
+        if last_chips is None:
+            return True
+        return last_chips.get(key) != text
+
+    kept = [(key, text) for key, text in segments if _due(key, text)]
+    if not kept and not details:
         return None
-    return bar + ("\n" + "\n".join(details) if details else "")
+    bar = " │ ".join(text for _, text in kept)
+    line = _bar_preamble(mood) + ((" " + bar) if bar else "")
+    return line + ("\n" + "\n".join(details) if details else "")
 
 
 def _finished_spawns_line(finished_spawns: list[dict[str, Any]]) -> str:
@@ -2946,6 +2994,9 @@ def format_delta(
     pending_set_changed: bool = True,
     no_reply_streak: int = 0,
     no_reply_capped: bool = False,
+    last_chips: dict[str, str] | None = None,
+    rendered_chips: dict[str, str] | None = None,
+    route_drift: bool = False,
 ) -> str | None:
     """Render a compact context delta from the live portal-state payload.
 
@@ -3100,6 +3151,8 @@ def format_delta(
             bolt_asks_total=bolt_asks_total, bolt_edge=bolt_edge,
             repeat_streaks=repeat_streaks,
             pending_set_changed=pending_set_changed,
+            last_chips=last_chips, rendered_chips=rendered_chips,
+            route_drift=route_drift,
         )
 
     lines: list[str] = []
@@ -4587,6 +4640,39 @@ def compute_neutral(
     )
     state["route_token"] = route_token
 
+    # The course drift trigger (w-54): the course is a promise about work,
+    # and the work is already visible — produce, delivery, the gate verdict.
+    # So the reminder fires exactly when the run moves and the route doesn't:
+    # _COURSE_DRIFT_THRESHOLD work-deltas with no route edit re-surface the
+    # current row once, then the counter re-arms. Endogenous — evidence of
+    # divergence, not a clock, and the act that discharges it (editing the
+    # card) is the act it asks for.
+    portal_outbound = (
+        portal.get("outbound") if isinstance(portal.get("outbound"), dict) else {}
+    )
+    work_token = "|".join(str(part) for part in (
+        _produce_total(portal_produce),
+        portal_outbound.get("replies_current") or 0,
+        portal_outbound.get("replies_other") or 0,
+        portal_outbound.get("outbound_messages") or 0,
+        (gate_receipt_data or {}).get("head") or "",
+        (gate_receipt_data or {}).get("verdict") or "",
+    ))
+    route_drift = False
+    prev_work_token = state.get(WORK_TOKEN_KEY)
+    if route is not None and route.open_rows:
+        if route_edge:
+            state[COURSE_DRIFT_COUNT_KEY] = 0
+        elif prev_work_token is not None and work_token != prev_work_token:
+            drift_count = int(state.get(COURSE_DRIFT_COUNT_KEY) or 0) + 1
+            if drift_count >= _COURSE_DRIFT_THRESHOLD:
+                route_drift = True
+                drift_count = 0
+            state[COURSE_DRIFT_COUNT_KEY] = drift_count
+    else:
+        state[COURSE_DRIFT_COUNT_KEY] = 0
+    state[WORK_TOKEN_KEY] = work_token
+
     # The bolt gauge (design-the-bolt.md §Accretion): T/A over the run's
     # whole lifetime, so computed once here — before the phase branch, like
     # `plan`/`route` above — rather than per-phase. The partition is shared
@@ -4812,11 +4898,18 @@ def compute_neutral(
         })
 
         # Gate: open when there is something to say.  Obligations bypass the
-        # token check; ambient and deltas use it as before.
+        # token check; ambient and deltas use it as before. ``route_drift``
+        # opens it for the blueprint edge's reason: the divergence it names
+        # is computed off run state, so no portal token ever moves for it.
         token_moved = token is not None and token != state.get("last_token")
+        last_chips = (
+            state.get(BAR_LAST_CHIPS_KEY)
+            if isinstance(state.get(BAR_LAST_CHIPS_KEY), dict) else None
+        )
+        rendered_chips: dict[str, str] = {}
         if (
             has_obligations or ambient_emit or edge or plan_edge
-            or route_edge or bolt_edge or token_moved
+            or route_edge or bolt_edge or route_drift or token_moved
         ):
             inject = format_delta(
                 portal, mood=mood, mood_prompt=mood_prompt,
@@ -4830,6 +4923,8 @@ def compute_neutral(
                 bolt_asks_total=bolt_asks_total, bolt_edge=bolt_edge,
                 repeat_streaks=repeat_streaks,
                 pending_set_changed=pending_set_changed,
+                last_chips=last_chips, rendered_chips=rendered_chips,
+                route_drift=route_drift,
             )
             state["last_token"] = token
             if ambient_emit and inject is not None:
@@ -4840,6 +4935,12 @@ def compute_neutral(
         # injections bypass dedup — see the ``has_obligations`` note above.
         if not has_obligations:
             inject = _suppress_unchanged_inject(state, inject)
+
+        # Commit-on-render (w-54): the chip ledger advances only when this
+        # boundary actually injected — a suppressed bar must not mark its
+        # changes as seen, or they would never render at all.
+        if inject is not None and rendered_chips:
+            state[BAR_LAST_CHIPS_KEY] = rendered_chips
 
     # Latch on the render, not on the decision (#728's rule, same
     # discipline as `GATELESS_ROUTING_KEY`): `mood_prompt` proves only that
