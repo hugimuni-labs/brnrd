@@ -84,7 +84,11 @@ async function mountRoutes(page) {
 		const url = new URL(req.url());
 		const body = fixtures.ROUTES[url.pathname];
 		if (body) {
-			await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+			await route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify(body)
+			});
 		} else {
 			await route.fulfill({ status: 404, contentType: 'application/json', body: '{}' });
 		}
@@ -149,7 +153,10 @@ async function main() {
 			await delay(200);
 			await shot(page, `${OUT}/${viewport.name}-04-critical.png`);
 
-			await writeFile(`${OUT}/${viewport.name}-console.json`, JSON.stringify(consoleErrors, null, 2));
+			await writeFile(
+				`${OUT}/${viewport.name}-console.json`,
+				JSON.stringify(consoleErrors, null, 2)
+			);
 			await context.close();
 		}
 
