@@ -440,10 +440,9 @@ test('bolt renders as a named frame row instead of falling to the catch-all', ()
 
 test('cut friction is differential and names the daemon bounce kinds', () => {
 	assert.deepEqual(frameFields({ bolt_attempts: '1' }), []);
-	assert.deepEqual(
-		frameFields({ bolt_attempts: '3', bolt_bounces: 'pending-event, owed' }),
-		[{ label: 'cut', value: 'accepted after 2 bounces: pending-event, owed' }]
-	);
+	assert.deepEqual(frameFields({ bolt_attempts: '3', bolt_bounces: 'pending-event, owed' }), [
+		{ label: 'cut', value: 'accepted after 2 bounces: pending-event, owed' }
+	]);
 });
 
 test('nodeDigest carries the frame bolt state as a bare handle, the mood precedent', () => {
