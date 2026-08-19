@@ -67,7 +67,12 @@ def test_summary_is_compact_and_tags_non_user_owner():
     assert "brnrd" in relay.summary()
 
 
-def test_select_cost_aware_prefers_cheapest_economy():
+def test_select_cost_aware_defaults_to_balanced_class():
+    """The 2026-08-19 recalibration: a fresh install's default run lands on
+    the Shell's balanced Core, not the weakest one installed. The first-ever
+    wake writes the repo contract and the product's first impression — the
+    cheapest core was measurably not up to it, and defaulting to it made
+    every fresh install open on the worst available foot."""
     runners = [
         _profile("strong", **{"class": "strong", "cost_rank": 50}),
         _profile("eco-b", **{"class": "economy", "cost_rank": 20}),
@@ -75,26 +80,42 @@ def test_select_cost_aware_prefers_cheapest_economy():
         _profile("balanced", **{"class": "balanced", "cost_rank": 30}),
     ]
     chosen = rs.select_runner(runners)
-    assert chosen.name == "eco-a"  # cheapest at-or-below economy
+    assert chosen.name == "balanced"  # cheapest of the target class
 
 
-def test_select_cost_aware_respects_default_class_ceiling():
+def test_select_cost_aware_default_class_is_a_target_not_a_ceiling():
     runners = [
         _profile("eco", **{"class": "economy", "cost_rank": 10}),
         _profile("bal", **{"class": "balanced", "cost_rank": 30}),
         _profile("strong", **{"class": "strong", "cost_rank": 50}),
     ]
-    # Ceiling at balanced still picks the cheapest at-or-below it (economy).
-    assert rs.select_runner(runners, default_class="balanced").name == "eco"
+    # The target class wins even when a cheaper class exists below it —
+    # this is the semantic that changed: a ceiling here always collapsed
+    # to the cheapest economy profile, making the knob a no-op for any
+    # value above `economy`.
+    assert rs.select_runner(runners, default_class="balanced").name == "bal"
+    # `default_class=economy` restores the pre-change default exactly.
+    assert rs.select_runner(runners, default_class="economy").name == "eco"
+    # A strong target picks the cheapest strong profile.
+    assert rs.select_runner(runners, default_class="strong").name == "strong"
+
+
+def test_select_falls_back_below_target_class_before_going_above():
+    runners = [
+        _profile("strong", **{"class": "strong", "cost_rank": 50}),
+        _profile("eco", **{"class": "economy", "cost_rank": 10}),
+    ]
+    # No balanced profile exists: prefer the class *below* the target over
+    # silently escalating to strong (strong stays an explicit ask).
+    assert rs.select_runner(runners).name == "eco"
 
 
 def test_select_falls_back_when_no_profile_at_or_below_class():
     runners = [
         _profile("strong", **{"class": "strong", "cost_rank": 50}),
-        _profile("balanced", **{"class": "balanced", "cost_rank": 30}),
     ]
-    # No economy profile exists; selector falls back to cheapest of any class.
-    assert rs.select_runner(runners).name == "balanced"
+    # Nothing at or below the target; selector falls back to what exists.
+    assert rs.select_runner(runners).name == "strong"
 
 
 def test_select_never_auto_picks_relay():

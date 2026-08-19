@@ -1626,7 +1626,9 @@ def resolve_runner_profile(
     3. **Legacy ``runner=``** — same as ``shell=`` for backward compatibility;
        ``runner=auto`` triggers cost-aware auto-detection.
     4. **Auto** — cost-aware selection via :func:`runner_select.select_runner`:
-       cheapest available local profile at or below ``economy`` class.
+       cheapest available local profile of the ``balanced`` class, falling
+       back below it, then to any class. ``default_class=`` in ``.brr/config``
+       retunes the target (``economy`` restores the pre-2026-08-19 default).
 
     Raises ``RuntimeError`` when no profile can be resolved.
     """
@@ -1729,7 +1731,11 @@ def resolve_runner_profile(
     if policy not in {runner_select.POLICY_COST_AWARE, runner_select.POLICY_FIXED}:
         policy = runner_select.POLICY_COST_AWARE
 
-    chosen = runner_select.select_runner(candidates, policy=policy)
+    chosen = runner_select.select_runner(
+        candidates,
+        policy=policy,
+        default_class=str(cfg.get("default_class", "")).strip().lower() or None,
+    )
     if chosen:
         return chosen
 
