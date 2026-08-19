@@ -4156,3 +4156,71 @@ def test_list_noted_sees_only_noted_events_of_its_own_source(tmp_path):
 
     ids = [e.get("cloud_event_id") for e in protocol.list_noted(inbox, "cloud")]
     assert ids == ["ev_yes"]
+
+
+def test_list_noted_orders_by_created_not_mtime(tmp_path):
+    """#1497: unlike `list_active`, `_close_noted_events`'s sweep *is*
+    batch-capped (`_NOTED_CLOSE_BATCH`), so a wrong order here can push the
+    genuinely-oldest queued row past a poll's cutoff — the row pinning the
+    server's `clamp_since` floor. Same measured shape as the daemon-level
+    #1492 fixes: the older (by `created`) event's file was touched more
+    recently than the younger sibling's."""
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    older_path = _noted_event(inbox, "ev_older")
+    older = next(
+        e for e in protocol.list_noted(inbox, "cloud")
+        if e["_path"] == older_path
+    )
+    newer_path = _noted_event(inbox, "ev_newer")
+    newer = next(
+        e for e in protocol.list_noted(inbox, "cloud")
+        if e["_path"] == newer_path
+    )
+    protocol.update_event_meta(older, created="2026-08-18T14:58:06Z")
+    protocol.update_event_meta(newer, created="2026-08-18T15:33:51Z")
+    old_time = time.time() - 3600
+    os.utime(newer_path, (old_time, old_time))
+
+    events = protocol.list_noted(inbox, "cloud")
+
+    assert [e["cloud_event_id"] for e in events] == ["ev_older", "ev_newer"]
+
+
+def test_close_noted_events_batch_cap_serves_the_oldest_first(tmp_path, monkeypatch):
+    """The caller the ordering actually matters for: `_close_noted_events`
+    caps how many it closes per poll. With the cap forced to 1, a naive
+    mtime sort would close whichever file the unrelated write touched last
+    — here the *younger* event — leaving the true oldest starved behind it
+    for another poll, delaying the `clamp_since` floor it pins. The age
+    sort must serve the older one within the same capped batch."""
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    older_path = _noted_event(inbox, "ev_older")
+    older = next(
+        e for e in protocol.list_noted(inbox, "cloud")
+        if e["_path"] == older_path
+    )
+    newer_path = _noted_event(inbox, "ev_newer")
+    newer = next(
+        e for e in protocol.list_noted(inbox, "cloud")
+        if e["_path"] == newer_path
+    )
+    protocol.update_event_meta(older, created="2026-08-18T14:58:06Z")
+    protocol.update_event_meta(newer, created="2026-08-18T15:33:51Z")
+    old_time = time.time() - 3600
+    os.utime(newer_path, (old_time, old_time))
+    monkeypatch.setattr(cloud, "_NOTED_CLOSE_BATCH", 1)
+    posts = []
+
+    def fake_request(base_url, method, path, **kwargs):
+        posts.append(kwargs.get("json"))
+        return {}
+
+    monkeypatch.setattr(cloud, "_request", fake_request)
+    state = {"brnrd_url": "https://example.invalid", "token": "t"}
+
+    cloud._close_noted_events(inbox, state)
+
+    assert len(posts) == 1
+    assert posts[0]["event_id"] == "ev_older"

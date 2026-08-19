@@ -2050,7 +2050,15 @@ def _dispatchable_targets(
                     repo_label=repo_label,
                 )
             )
-    return sorted(targets, key=lambda target: _event_mtime(target.event))
+    # #1497: this decides which pending event actually becomes the next
+    # run — the dispatch order, not a read-only projection of it (that's
+    # ``_pending_events_for_agent``, already on this same key). Raw mtime
+    # is a proof of *last touched*, not *arrived*; a re-queue, a defer, or
+    # the ``status: processing`` write this very dispatch is about to make
+    # all bump it, so a genuinely older event could sort behind a younger
+    # sibling whose file simply hadn't been written to since. Same key as
+    # the resident's pending view, so the two views agree.
+    return sorted(targets, key=lambda target: _event_queue_sort_key(target.event))
 
 
 def _wake_reason(value: object) -> str | None:
@@ -14000,10 +14008,23 @@ def _reconcile_orphaned_spawn_dispatches(
       the dispatching process (the runner's parent) may still be mid-flight
       ⇒ leave it alone;
     - **proof of death**: a closed ledger row for the event's run (the
-      strand finished; only the reap-notify was lost), or no write to the
-      event file / run manifest for longer than *stale_after_seconds*
-      (defaults to the janitors' 24h crash-recovery horizon — beyond any
-      runner budget, keepalive-extended or not).
+      strand finished; only the reap-notify was lost), *or* a recorded
+      ``interrupted_at`` stamp beside a ``failure_kind`` of
+      ``host_interrupted`` on the run's manifest (#1497 —
+      ``_mark_interrupted_runs`` runs immediately before this sweep in the
+      same boot pass and, for any run of its own it judges dead, writes
+      that stamp *and* rewrites the manifest, which bumps the manifest's
+      mtime the same instant; the stamp is this sweep's proof the prior
+      sweep already did the work, read instead of a `.stat()` that would
+      just see its own boot's fresh write and read "dead" as "alive"),
+      *or* no write to the event file / run manifest for longer than
+      *stale_after_seconds* (defaults to the janitors' 24h crash-recovery
+      horizon — beyond any runner budget, keepalive-extended or not) — a
+      manifest with no stamp yet gets an ``orphan_sweep_observed_at`` of
+      its own written the first time this sweep observes it, so a later
+      boot reads that instead of `.stat()` too. That one is an age proxy
+      and nothing more: it never stands in for the interrupted-run
+      sweep's verdict, because this sweep did not reach that verdict.
 
     Idempotent by the status transition itself: the sweep resolves the
     event to ``error``, and a resolved event never appears in
@@ -14037,13 +14058,68 @@ def _reconcile_orphaned_spawn_dispatches(
             continue
         if any(_recorded_pid_alive(t) for t in event_runs):
             continue
+        # #1497: `_mark_interrupted_runs` runs immediately before this sweep
+        # in the same boot pass (`start()`'s ordering) and, for any of
+        # these runs it already judged dead, calls `task.update_status`
+        # — which bumps the manifest's own mtime to *now*. A bare
+        # `.stat()` read here would then see that fresh write and read a
+        # provably-dead run as freshly alive, forcing this sweep to wait a
+        # full `stale_after_seconds` more before it can conclude what the
+        # prior sweep already proved — the first sweep refreshing the
+        # second sweep's evidence. `_mark_interrupted_runs` already writes
+        # a recorded `interrupted_at` stamp onto the manifest meta for
+        # exactly this reason; prefer it over `.stat()` wherever present —
+        # its *presence* is itself proof of death (this sweep's own
+        # presence/pid checks above already ruled out "still alive"), not
+        # merely an alternate mtime source, so it slots in beside
+        # ``ledger_closed`` below rather than only feeding ``newest_write``.
         newest_write = _event_mtime(event)
+        already_interrupted = False
         for t in event_runs:
+            # Two different stamps, kept apart on purpose. Both answer
+            # "when", only one answers "why", and the proof string below
+            # names the why — so reading them through one key would let a
+            # stamp this sweep wrote itself come back as a claim about
+            # what `_mark_interrupted_runs` concluded. One predicate, two
+            # reasons, is how a diagnostic starts lying with a straight
+            # face.
+            #
+            #   interrupted_at            — written by `_mark_interrupted_runs`
+            #                               beside `failure_kind` and
+            #                               `interrupt_reason`. Its presence
+            #                               *is* proof of death.
+            #   orphan_sweep_observed_at  — written here, by this sweep, and
+            #                               claiming nothing but "the manifest's
+            #                               mtime, the first time I looked."
+            #                               An age proxy only; never a proof.
+            marked = t.meta.get("failure_kind") == runner_failures.HOST_INTERRUPTED
+            stamp_epoch = protocol.parse_iso_epoch(
+                t.meta.get("interrupted_at")) if marked else None
+            if stamp_epoch is not None:
+                already_interrupted = True
+                newest_write = max(newest_write, stamp_epoch)
+                continue
+            observed_epoch = protocol.parse_iso_epoch(
+                t.meta.get("orphan_sweep_observed_at"))
+            if observed_epoch is not None:
+                # This sweep's own earlier observation. Frozen precisely so a
+                # later boot does not re-`stat()` a manifest that this very
+                # loop's `t.save()` has since touched — the mutable proxy the
+                # whole sweep exists to stop trusting, met one turn later.
+                newest_write = max(newest_write, observed_epoch)
+                continue
             try:
-                newest_write = max(
-                    newest_write,
-                    run_manifest_path(runs_dir, t.id).stat().st_mtime,
-                )
+                manifest_mtime = run_manifest_path(runs_dir, t.id).stat().st_mtime
+            except OSError:
+                continue
+            newest_write = max(newest_write, manifest_mtime)
+            # No recorded stamp yet on this manifest — freeze this
+            # observation onto it now rather than leaving future readers to
+            # re-derive from `.stat()` too.
+            t.meta["orphan_sweep_observed_at"] = time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime(manifest_mtime))
+            try:
+                t.save(runs_dir)
             except OSError:
                 pass
         if target.repo_root not in ledger_cache:
@@ -14052,11 +14128,13 @@ def _reconcile_orphaned_spawn_dispatches(
         ledger_closed = any(
             t.id in ledger_cache[target.repo_root] for t in event_runs)
         ancient = timestamp - newest_write >= stale_after_seconds
-        if not (ledger_closed or ancient):
+        if not (ledger_closed or already_interrupted or ancient):
             continue
         proof = (
             "its run closed in the ledger but the completion was never delivered"
             if ledger_closed
+            else "already marked host_interrupted by the boot-time interrupted-run sweep"
+            if already_interrupted
             else "no write for longer than the reconciliation safety horizon"
         )
         # Status first, notify after — same order as the live path (the
@@ -14978,47 +15056,17 @@ def _weave_burst_siblings_into_body(
     return woven, woven_ids
 
 
-def _event_mtime(event: dict) -> float:
-    """File mtime of a pending event ≈ its arrival time. 0.0 when unknown,
-    so an unstattable event reads as old and never holds the burst window."""
-    path = event.get("_path")
-    try:
-        return path.stat().st_mtime
-    except (OSError, AttributeError):
-        return 0.0
-
-
-def _event_created_epoch(event: dict) -> float | None:
-    """Epoch seconds for an event's own ``created`` stamp, or ``None``.
-
-    ``created`` is written once, at ingestion (``protocol.create_event``),
-    so unlike ``_event_mtime`` — file mtime, which *any* later status/meta
-    write bumps — it is a stable proxy for arrival order. ``None`` on a
-    missing or unparseable stamp; callers fall back to ``_event_mtime``
-    rather than treating "no signal" as either oldest or newest.
-    """
-    parsed = _parse_utc_stamp(event.get("created"))
-    return parsed.timestamp() if parsed is not None else None
-
-
-def _event_queue_sort_key(event: dict) -> tuple[float, float]:
-    """Queue order for the resident's own pending view — oldest first.
-
-    #1496 follow-on: file mtime alone is a proxy for age that any status
-    write invalidates — a re-queue, a defer, a plain meta update all bump
-    it, sending an event to the back of its own line (measured live: an
-    event dispatched at 14:58:06Z sorted *after* one created 15:33:51Z
-    because the earlier one's mtime was bumped by an unrelated
-    ``status: processing`` write at 18:34Z). Sort by the event's own
-    ``created`` instead — written once, never touched again — with
-    ``_event_mtime`` as the tiebreaker for equal ``created`` values *and*
-    the fallback for any event that predates the field or fails to parse
-    it, so a missing stamp degrades to the old mtime ordering rather than
-    crashing or jumping the queue.
-    """
-    mtime = _event_mtime(event)
-    created = _event_created_epoch(event)
-    return (created if created is not None else mtime, mtime)
+#: #1497 sweep: ``_event_mtime`` / ``_event_created_epoch`` /
+#: ``_event_queue_sort_key`` used to be defined here and separately would
+#: have needed a near-copy in ``protocol.py`` for :func:`protocol.list_pending`
+#: / :func:`protocol.list_noted` to share the same age semantics as this
+#: module's dispatch sort and resident pending view. Moved to ``protocol.py``
+#: instead (module-private there too) and aliased back so every existing
+#: call site in this module keeps working unchanged — one derivation, not
+#: two (#1506/#1507 is what a second one costs).
+_event_mtime = protocol._event_mtime
+_event_created_epoch = protocol._event_created_epoch
+_event_queue_sort_key = protocol._event_queue_sort_key
 
 
 def _burst_settle_delay(
