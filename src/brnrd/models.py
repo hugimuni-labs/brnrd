@@ -597,6 +597,16 @@ class RunnerWakeRequest(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime)
+    # #1492 (starved-tap half): how many times the "parked after this event
+    # existed" rung has refused this row. `wake_requests.claim` bounds the
+    # starvation on this counter — a re-queued event can otherwise survive in
+    # the dispatch queue long enough to refuse the same tap indefinitely.
+    parked_after_refusals: Mapped[int] = mapped_column(Integer, default=0)
+    # The most recent reason a still-pending row was refused, so the person
+    # who parked the tap has something to read besides silence (#1492's
+    # "make the deferral visible" ask). Meaningful only while STATUS_PENDING;
+    # a decided row's reason is carried in the claim/cancel response instead.
+    blocked_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 
 class RunStopRequest(Base):

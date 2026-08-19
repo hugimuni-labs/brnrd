@@ -552,6 +552,9 @@ class RunnerWakeRequestOut(BaseModel):
     environment: str | None = None
     requested_at: datetime | None = None
     status: str
+    # #1492: why a still-pending row keeps losing the race, if it has lost at
+    # least once. None on a fresh tap and on any decided row.
+    blocked_reason: str | None = None
 
 
 class WakeRequestClaim(BaseModel):
