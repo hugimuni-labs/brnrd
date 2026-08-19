@@ -705,11 +705,15 @@ def test_docker_invoke_pipes_prompt_on_default_path(tmp_path, monkeypatch):
 
 
 def test_docker_invoke_uses_default_timeout(tmp_path, monkeypatch):
-    """The default runner timeout is 7200s — the historic 600s default
-    was killing live work mid-run for xhigh-reasoning models, and the
-    1h follow-up default (3600s) still cut long implementation/research
-    sessions short without a human knowing to extend ``.keepalive``
-    (2026-07-06)."""
+    """Unset config means NO timeout at all — ``subprocess.run(timeout=None)``
+    blocks until the runner finishes (2026-08-19, maintainer decision on
+    evt-…-xw3c via #1522: "remove a time limit by default, completely, only
+    if a user explicitly sets it in the config"). The docker env inherits
+    the same contract as the host env: a limit exists only when
+    ``runner.timeout_seconds`` is written. This pin was missed by #1522's
+    own sweep — its grep for ``runner_timeout`` never matched the uppercase
+    ``DEFAULT_RUNNER_TIMEOUT`` import here, and trunk went red on the very
+    next push."""
     _isolate_docker_creds(monkeypatch, tmp_path)
     _stub_worktree(monkeypatch, tmp_path)
     monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
@@ -741,7 +745,7 @@ def test_docker_invoke_uses_default_timeout(tmp_path, monkeypatch):
         {"docker.image": "img:latest", "runner_cmd": ["mock", "{prompt}"]},
     )
 
-    assert captured["timeout"] == DEFAULT_RUNNER_TIMEOUT == 7200
+    assert captured["timeout"] is None
 
 
 def test_docker_invoke_honours_configured_timeout(tmp_path, monkeypatch):
