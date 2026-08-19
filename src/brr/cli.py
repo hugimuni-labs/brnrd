@@ -724,6 +724,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("key", help="the metric key this sample is for")
     p.add_argument("value", type=float, help="the sample's numeric value")
     p.add_argument("--source", default=None, help="where the number came from")
+    p.add_argument(
+        "--basis", default=None,
+        help="the measurement population this sample belongs to (e.g. "
+        "'window5' vs 'lifetime') — two same-key readings only get a Δ "
+        "when their basis matches; unset falls back to --source")
     p.add_argument("--note", default=None, help="optional free-text note")
     p.set_defaults(func=cmd_goal_record)
     p = goal_sub.add_parser(
@@ -3023,6 +3028,7 @@ def cmd_goal_record(args):
         args.value,
         source=(args.source or "").strip(),
         note=(args.note or None),
+        basis=(args.basis or "").strip() or None,
     )
     source_note = f" via {reading.source}" if reading.source else ""
     print(f"{goal.id} {reading.key} = {items_mod.format_value(reading.value)}{source_note} ({reading.ts})")
@@ -3059,11 +3065,12 @@ def cmd_goal_show(args):
     summary = items_mod.reading_summary(readings)
     for key in sorted(summary):
         info = summary[key]
-        delta = (
-            f" (Δ{items_mod.format_delta(info.delta)} vs previous)"
-            if info.previous is not None
-            else ""
-        )
+        if info.delta is not None:
+            delta = f" (Δ{items_mod.format_delta(info.delta)} vs previous)"
+        elif info.basis_mismatch:
+            delta = " (Δ refused: basis differs from previous sample)"
+        else:
+            delta = ""
         plural = "" if info.count == 1 else "s"
         print(
             f"{key}: {items_mod.format_value(info.latest.value)}{delta} "

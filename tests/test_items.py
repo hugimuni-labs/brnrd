@@ -517,6 +517,127 @@ def test_reading_summary_orders_by_ts_not_append_order(tmp_path: Path):
     assert summary["tickets"].delta == 5
 
 
+def test_append_reading_includes_basis_only_when_given(tmp_path: Path):
+    root = _warp(tmp_path)
+    items.append_reading(root, "g-1", "impressions", 333, ts="2026-08-15T13:18:00Z")
+    items.append_reading(
+        root, "g-1", "impressions", 147, basis="window5", ts="2026-08-16T20:50:00Z"
+    )
+    lines = items.readings_path(root, "g-1").read_text(encoding="utf-8").splitlines()
+    assert "basis" not in json.loads(lines[0])
+    assert json.loads(lines[1])["basis"] == "window5"
+
+
+def test_reading_summary_same_basis_renders_delta(tmp_path: Path):
+    # Same key, explicit matching basis on both samples — a real Δ.
+    root = _warp(tmp_path)
+    items.append_reading(
+        root, "g-1", "impressions", 100, basis="window5", ts="2026-08-01T00:00:00Z"
+    )
+    items.append_reading(
+        root, "g-1", "impressions", 150, basis="window5", ts="2026-08-02T00:00:00Z"
+    )
+    summary = items.reading_summary(items.load_readings(root, "g-1"))
+    info = summary["impressions"]
+    assert info.delta == 50
+    assert info.basis_mismatch is False
+
+
+def test_reading_summary_cross_basis_suppresses_delta(tmp_path: Path):
+    # The bug report's live case: same key, same `source`, incompatible
+    # denominators — a lifetime sum then a 5-item window sum. Distinct
+    # `basis` values must gate the Δ even though `source` alone doesn't.
+    root = _warp(tmp_path)
+    items.append_reading(
+        root,
+        "g-1",
+        "impressions",
+        333,
+        source="x-api",
+        basis="lifetime",
+        ts="2026-08-15T13:18:00Z",
+    )
+    items.append_reading(
+        root,
+        "g-1",
+        "impressions",
+        147,
+        source="x-api",
+        basis="window5",
+        ts="2026-08-16T20:50:00Z",
+    )
+    summary = items.reading_summary(items.load_readings(root, "g-1"))
+    info = summary["impressions"]
+    assert info.delta is None
+    assert info.basis_mismatch is True
+    # The refused comparison still surfaces both endpoints — nothing about
+    # this suppresses the data, only the arithmetic across it.
+    assert info.latest.value == 147
+    assert info.previous.value == 333
+
+
+def test_reading_summary_no_previous_is_not_a_basis_mismatch(tmp_path: Path):
+    # A single sample has nothing to diff against — that's the ordinary
+    # "no previous" case, distinct from a refused cross-basis comparison.
+    root = _warp(tmp_path)
+    items.append_reading(root, "g-1", "conversion", 0.5, ts="2026-08-01T00:00:00Z")
+    summary = items.reading_summary(items.load_readings(root, "g-1"))
+    info = summary["conversion"]
+    assert info.delta is None
+    assert info.basis_mismatch is False
+
+
+def test_reading_summary_no_basis_falls_back_to_source(tmp_path: Path):
+    # Old rows written before `basis` existed carry none — comparisons
+    # keep working exactly as before (gated on `source`), a strict
+    # superset of the pre-fix behaviour rather than a new restriction.
+    root = _warp(tmp_path)
+    items.append_reading(
+        root, "g-1", "posts", 14, source="x-api", ts="2026-08-01T00:00:00Z"
+    )
+    items.append_reading(
+        root, "g-1", "posts", 17, source="x-api", ts="2026-08-02T00:00:00Z"
+    )
+    summary = items.reading_summary(items.load_readings(root, "g-1"))
+    assert summary["posts"].delta == 3
+    assert summary["posts"].basis_mismatch is False
+
+    # And the second live-bug shape: no explicit basis, but `source`
+    # crosses a collector boundary — still caught via the source fallback.
+    items.append_reading(
+        root, "g-1", "posts", 19, source="local-post-log", ts="2026-08-03T00:00:00Z"
+    )
+    summary = items.reading_summary(items.load_readings(root, "g-1"))
+    assert summary["posts"].delta is None
+    assert summary["posts"].basis_mismatch is True
+
+
+def test_load_readings_parses_rows_with_no_basis_field(tmp_path: Path):
+    root = _warp(tmp_path)
+    path = items.readings_path(root, "g-1")
+    path.write_text(
+        '{"ts": "2026-08-01T00:00:00Z", "key": "tickets", "value": 1.0, "source": "m"}\n',
+        encoding="utf-8",
+    )
+    readings = items.load_readings(root, "g-1")
+    assert len(readings) == 1
+    assert readings[0].basis is None
+
+
+def test_readings_index_line_marks_a_refused_cross_basis_delta(tmp_path: Path):
+    root = _warp(tmp_path)
+    items.append_reading(
+        root, "g-1", "impressions", 333, basis="lifetime", ts="2026-08-15T13:18:00Z"
+    )
+    items.append_reading(
+        root, "g-1", "impressions", 147, basis="window5", ts="2026-08-16T20:50:00Z"
+    )
+    line = items.readings_index_line("g-1", root)
+    assert line is not None
+    assert "impressions 147 (Δ refused: basis differs)" in line
+    assert "Δ-186" not in line
+
+
 def test_format_value_trims_integers_and_trailing_zeros():
     assert items.format_value(10.0) == "10"
     assert items.format_value(12.5) == "12.5"
