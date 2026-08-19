@@ -81,74 +81,84 @@
 
 <div
 	data-measure="gauge"
-	class="panel flex w-full flex-nowrap items-baseline gap-x-3 overflow-x-auto px-3 py-1.5 font-mono text-[10px] whitespace-nowrap"
+	class="panel flex w-full items-baseline gap-x-2 px-3 py-1.5 font-mono text-[10px]"
 >
-	<span data-measure="next-pick" class="flex items-baseline gap-1.5 whitespace-nowrap">
-		<span class="tracking-[0.13em] text-ink-quiet uppercase">next pick</span>
-		{#if runners === null}
-			<span class="text-ink-quiet">loading…</span>
-		{:else if activeBlock}
-			<span class="text-amber-200" title={profileTitle(activeBlock.profile.name)}
-				>{activeBlock.profile.name}</span
-			>
-			<span class="text-ink-quiet">{activeBlock.badge}</span>
-		{:else}
-			<span class="text-ink-quiet">unavailable</span>
-		{/if}
-	</span>
-
-	<span
-		data-measure="fuel"
-		class="flex items-baseline gap-3 whitespace-nowrap"
-		aria-label="quota fuel"
+	<!-- The scrollable half: next pick, fuel, tank. `overflow-x-auto` on
+	     *this* inner region only — not the whole gauge — because the bench
+	     toggle below must stay reachable at a glance no matter how far the
+	     catalog has scrolled the fuel grid sideways; a control that can
+	     itself scroll out of view is the failure this split exists to
+	     avoid one level up. -->
+	<div
+		class="flex min-w-0 flex-1 flex-nowrap items-baseline gap-x-3 overflow-x-auto whitespace-nowrap"
 	>
-		{#if shells === null}
-			<span class="text-ink-mute">loading quota…</span>
-		{:else if fuel.length === 0}
-			<span class="text-ink-mute">no quota report</span>
-		{:else}
-			{#each fuel as row (row.id)}
-				{@const level = quotaLevel(row.percent)}
-				<span
-					class="whitespace-nowrap text-ink-quiet {row.stale || row.daemonStale
-						? 'opacity-60'
-						: ''}"
-					title={row.tooltip}
+		<span data-measure="next-pick" class="flex items-baseline gap-1.5 whitespace-nowrap">
+			<span class="tracking-[0.13em] text-ink-quiet uppercase">next pick</span>
+			{#if runners === null}
+				<span class="text-ink-quiet">loading…</span>
+			{:else if activeBlock}
+				<span class="text-amber-200" title={profileTitle(activeBlock.profile.name)}
+					>{activeBlock.profile.name}</span
 				>
-					{row.label}
-					<span style={`color: ${LEVEL_COLOR[level]}`}
-						>{row.percent === null ? '?' : `${Math.round(row.percent)}%`}</span
-					>
-				</span>
-			{/each}
-		{/if}
-		{#if slots}
-			<span
-				title={slots.title}
-				class="text-ink-quiet"
-				style={slots.level ? `color: ${LEVEL_COLOR[slots.level]}` : ''}>{slots.label}</span
-			>
-		{/if}
-	</span>
-
-	{#if lead}
-		<span
-			data-measure="tank"
-			class="flex items-baseline gap-2 whitespace-nowrap"
-			aria-label="tank forecast"
-		>
-			<span class="tracking-[0.13em] text-ink-quiet uppercase">tank</span>
-			<span style={`color: ${VERDICT_COLOR[lead.verdict]}`}>{lead.headline}</span>
-			{#if lead.stale}<span class="text-ink-mute">· last known</span>{/if}
+				<span class="text-ink-quiet">{activeBlock.badge}</span>
+			{:else}
+				<span class="text-ink-quiet">unavailable</span>
+			{/if}
 		</span>
-	{/if}
+
+		<span
+			data-measure="fuel"
+			class="flex items-baseline gap-3 whitespace-nowrap"
+			aria-label="quota fuel"
+		>
+			{#if shells === null}
+				<span class="text-ink-mute">loading quota…</span>
+			{:else if fuel.length === 0}
+				<span class="text-ink-mute">no quota report</span>
+			{:else}
+				{#each fuel as row (row.id)}
+					{@const level = quotaLevel(row.percent)}
+					<span
+						class="whitespace-nowrap text-ink-quiet {row.stale || row.daemonStale
+							? 'opacity-60'
+							: ''}"
+						title={row.tooltip}
+					>
+						{row.label}
+						<span style={`color: ${LEVEL_COLOR[level]}`}
+							>{row.percent === null ? '?' : `${Math.round(row.percent)}%`}</span
+						>
+					</span>
+				{/each}
+			{/if}
+			{#if slots}
+				<span
+					title={slots.title}
+					class="text-ink-quiet"
+					style={slots.level ? `color: ${LEVEL_COLOR[slots.level]}` : ''}>{slots.label}</span
+				>
+			{/if}
+		</span>
+
+		{#if lead}
+			<span
+				data-measure="tank"
+				class="flex items-baseline gap-2 whitespace-nowrap"
+				aria-label="tank forecast"
+			>
+				<span class="tracking-[0.13em] text-ink-quiet uppercase">tank</span>
+				<span style={`color: ${VERDICT_COLOR[lead.verdict]}`}>{lead.headline}</span>
+				{#if lead.stale}<span class="text-ink-mute">· last known</span>{/if}
+			</span>
+		{/if}
+	</div>
 
 	<button
 		type="button"
 		aria-expanded={benchOpen}
 		aria-label={benchOpen ? 'fold the bench' : 'open the bench — project, environment, core'}
 		onclick={onBenchToggle}
-		class="ml-auto shrink-0 cursor-pointer border border-stone-800/60 bg-stone-900/30 px-2 py-1 font-mono text-[9px] tracking-[0.13em] text-ink-quiet uppercase hover:border-stone-600/70 hover:text-stone-300"
+		class="shrink-0 cursor-pointer border border-stone-800/60 bg-stone-900/30 px-2 py-1 font-mono text-[9px] tracking-[0.13em] text-ink-quiet uppercase hover:border-stone-600/70 hover:text-stone-300"
 	>
 		{benchOpen ? '▾ bench' : '▸ bench'}
 	</button>
