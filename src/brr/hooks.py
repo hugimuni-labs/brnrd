@@ -96,6 +96,91 @@ BOUNDARIES_NAME = "boundaries.jsonl"
 # stops growing and says so on its last line, because a transcript that
 # silently stops is indistinguishable from a run that went quiet.
 _BOUNDARIES_MAX_BYTES = 4_000_000
+
+ACT_LABELS = ("orient", "probe", "mutate", "publish", "dispatch", "wait")
+
+
+def classify_act(tool_name: object, tool_input: object) -> str:
+    """Return one coarse effect label without retaining the tool input."""
+    name = tool_name.strip().lower() if isinstance(tool_name, str) else ""
+    compact_name = name.replace("-", "_").replace(".", "_")
+    input_path = ""
+    input_body = ""
+    if isinstance(tool_input, dict):
+        for key in ("file_path", "path"):
+            value = tool_input.get(key)
+            if isinstance(value, str):
+                input_path = value.lower()
+                break
+        for key in ("content", "text", "patch"):
+            value = tool_input.get(key)
+            if isinstance(value, str):
+                input_body = value.lower()
+                break
+
+    if any(part in compact_name for part in ("write", "edit", "patch")):
+        if input_path.endswith("/.keepalive"):
+            return "wait"
+        if "/outbox/" in input_path:
+            if re.search(r"(?:spawn|respawn|to|stop):\s*", input_body):
+                return "dispatch"
+            if not Path(input_path).name.startswith("."):
+                return "publish"
+        return "mutate"
+    if any(part in compact_name for part in ("spawn", "dispatch", "steer", "stop_agent")):
+        return "dispatch"
+    if any(part in compact_name for part in ("await", "sleep", "keepalive")):
+        return "wait"
+    if any(part in compact_name for part in ("publish", "push", "send_message", "create_pr")):
+        return "publish"
+    if any(part in compact_name for part in (
+        "delete", "remove", "rename", "move", "imagegen",
+    )):
+        return "mutate"
+    if any(part in compact_name for part in (
+        "read", "grep", "glob", "find", "list", "view", "open", "status", "diff", "log",
+    )):
+        return "orient"
+
+    if compact_name in {"bash", "shell", "exec", "exec_command", "functions_exec"}:
+        command = ""
+        if isinstance(tool_input, dict):
+            value = tool_input.get("command", tool_input.get("cmd", ""))
+            if isinstance(value, str):
+                command = value
+        command = command.strip().lower()
+        if re.search(r"(?:^|[;&|]\s*)(?:brnrd\s+)?await(?:\s|$)", command) or re.search(
+            r"(?:^|[;&|]\s*)sleep(?:\s|$)", command
+        ) or ".keepalive" in command:
+            return "wait"
+        if re.search(r"(?:spawn|respawn|to|stop):\s*", command):
+            return "dispatch"
+        if re.search(r"\bgit\s+push\b|\bgh\s+pr\s+(?:create|edit|merge|comment)\b", command):
+            return "publish"
+        if re.search(r"\b(?:curl|wget)\b.*(?:--request|-x)\s*(?:post|put|patch|delete)\b", command):
+            return "publish"
+        if re.search(
+            r"\b(?:git\s+(?:add|commit|merge|rebase|switch|checkout|restore|reset|clean)|"
+            r"apply_patch|mkdir|touch|rm|mv|cp|install)\b|(?:^|\s)(?:>>?|2>)\s*\S+",
+            command,
+        ):
+            return "mutate"
+        if re.search(
+            r"\b(?:pytest|npm\s+(?:test|run)|cargo\s+test|go\s+test|scripts/gate\.py)\b",
+            command,
+        ):
+            return "probe"
+        if re.search(
+            r"\b(?:git\s+(?:status|diff|log|show|branch|rev-parse)|gh\s+(?:issue|pr|run)\s+"
+            r"(?:view|list)|rg|grep|find|ls|sed\s+-n|head|tail|cat)\b",
+            command,
+        ):
+            return "orient"
+        return "probe"
+
+    if any(part in compact_name for part in ("test", "run", "fetch", "search", "request", "query")):
+        return "probe"
+    return "probe"
 # The gate-less routing fact (#728) is true for the whole life of a gate-less
 # run and can never be cleared, so it is said once and then remembered here —
 # the one line in the closeout briefing that is a constant rather than an
@@ -5806,6 +5891,7 @@ def record_boundary(
     # batch while Codex supplies one top-level tool name; inputs, responses,
     # and tool-use ids are deliberately excluded from the transcript.
     tool_names: list[str] = []
+    first_act: str | None = None
     if phase == PHASE_POST_TOOL and isinstance(payload, dict):
         calls = payload.get("tool_calls")
         if isinstance(calls, list):
@@ -5815,12 +5901,16 @@ def record_boundary(
                 name = call.get("tool_name")
                 if isinstance(name, str) and name.strip():
                     tool_names.append(name.strip())
+                    if first_act is None:
+                        first_act = classify_act(name, call.get("tool_input"))
         else:
             name = payload.get("tool_name")
             if isinstance(name, str) and name.strip():
                 tool_names.append(name.strip())
+                first_act = classify_act(name, payload.get("tool_input"))
     if tool_names:
         record["tools"] = tool_names
+        record["act"] = first_act
     # An in-process subagent's boundary is recorded (it happened, and a reader
     # asking "what did this run's environment say" wants it) but tagged, so
     # `derive_boundaries_summary` can keep the run's own verdict — which is
