@@ -722,6 +722,27 @@ def _now_iso() -> str:
     )
 
 
+def reading_ts_order_key(ts: str) -> str:
+    """Order two reading stamps that may differ in fractional-second width.
+
+    Readings were whole-second (``…:56Z``) until withdrawal handles needed
+    to address one sample unambiguously, and are microsecond (``…:56.4Z``)
+    after.  A raw string sort mixes the two wrongly: ``.`` (0x2E) sorts
+    before ``Z`` (0x5A), so a *later* microsecond sample sorts *before* an
+    earlier whole-second one recorded in the same second — and ``latest``
+    is what every goal surface publishes.  Normalising the fraction to a
+    fixed width makes the lexicographic order the chronological one again,
+    with no parsing and no dependency on how the row was written.
+
+    These stamps are always UTC-``Z``; an offset form would need real
+    parsing, and none is ever written here.
+    """
+    head, dot, tail = ts.partition(".")
+    if not dot:
+        return head[:-1] + ".000000" if head.endswith("Z") else head + ".000000"
+    return head + "." + tail.rstrip("Z").ljust(6, "0")[:6]
+
+
 def _parse_iso(value: str) -> _dt.datetime | None:
     try:
         return _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -916,7 +937,7 @@ def reading_summary(readings: list[ReadingRow]) -> dict[str, ReadingSummary]:
         by_key.setdefault(reading.key, []).append(reading)
     out: dict[str, ReadingSummary] = {}
     for key, samples in by_key.items():
-        ordered = sorted(samples, key=lambda r: r.ts)
+        ordered = sorted(samples, key=lambda r: reading_ts_order_key(r.ts))
         latest = ordered[-1]
         previous = ordered[-2] if len(ordered) > 1 else None
         values = [r.value for r in ordered]
