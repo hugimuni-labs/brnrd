@@ -80,6 +80,7 @@ WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 if str(REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "src"))
 from brr import gate_receipt, gitops  # noqa: E402
+from brr.parked_branches import TERMINAL_RUN_STATUSES  # noqa: E402
 
 # Written beside the run's other control dotfiles; the daemon's outbox drain
 # skips dotfiles, so it is never delivered to chat. Same idiom as `.card`.
@@ -221,8 +222,15 @@ _LOCK_REPORT_EVERY = 15.0
 #: A terminal status is stamped before environment finalization.  The longest
 #: bounded finalization operation is a 300-second docker action, so allow twice
 #: that tail before treating a still-live child as orphaned.
+#:
+#: What the grace is measured *against* is the manifest's mtime, because the
+#: manifest records `started_at` and no terminal timestamp — there is nothing
+#: else on disk that says when the run went terminal.  So any later write to
+#: the manifest restarts the clock and the lock keeps queueing.  That is the
+#: safe direction (it never breaks a lock early) but it is not what "has been
+#: terminal for N seconds" would mean, and the log line below says the one it
+#: actually measures.
 _TERMINAL_RUN_GRACE_SECONDS = 600.0
-_TERMINAL_RUN_STATUSES = frozenset({"done", "error", "conflict", "stopped"})
 
 
 def gate_lock_path() -> Path:
@@ -320,8 +328,11 @@ def _terminal_owner_reason(lock: Path, holder: dict) -> str | None:
         if line.startswith("status:"):
             status = line.partition(":")[2].strip()
             break
-    if status in _TERMINAL_RUN_STATUSES and age > _TERMINAL_RUN_GRACE_SECONDS:
-        return f"owner run is terminal ({status}) and has been so for {age:.0f}s"
+    if status in TERMINAL_RUN_STATUSES and age > _TERMINAL_RUN_GRACE_SECONDS:
+        return (
+            f"owner run is terminal ({status}) and its manifest has not been "
+            f"written for {age:.0f}s"
+        )
     return None
 
 
