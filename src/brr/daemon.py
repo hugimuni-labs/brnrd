@@ -13017,7 +13017,9 @@ def _persist_run_state_doc(
     # up, and the node renderer showed both (maintainer, 2026-07-19: the ask
     # is an information-dense, *non-repetitive* surface). The frontmatter is
     # the attested record; the body carries only what it alone knows: the
-    # request excerpt and the produce manifest.
+    # request excerpt and the produce manifest.  The full request is a sibling
+    # document: keeping it out of this inline rendering leaves the node cheap
+    # to scan without making the excerpt the durable record.
     lines.extend([
         "---",
         f"# Run {task.id}",
@@ -13025,8 +13027,22 @@ def _persist_run_state_doc(
     if task.body:
         summary = " ".join(task.body.split())
         if len(summary) > 240:
-            summary = summary[:239].rstrip() + "..."
+            summary = summary[:237].rstrip() + "..."
+        request_path = root / "request.md"
+        request_tmp = request_path.with_suffix(request_path.suffix + ".tmp")
+        request_tmp.write_text(task.body, encoding="utf-8")
+        request_tmp.replace(request_path)
         lines.extend(["", "## Request", "", summary])
+        # The link is an affordance, and an affordance is not a fact: offer
+        # "read the full request" only where the inline excerpt is not
+        # already the whole record.  The excerpt is lossy two ways — the
+        # 240-char cut *and* the whitespace collapse that flattens a
+        # multi-paragraph ask onto one line — so the exact test is whether
+        # the rendered excerpt still equals the body, never the length
+        # alone.  A single short line reads identically in both places and
+        # earns no link; anything else does.
+        if summary != task.body:
+            lines.extend(["", "[Read the full request](request.md)"])
     # The complete bounded declaration lives on the durable run node as one
     # JSON value.  Keeping the object whole makes omission detectable and
     # avoids inventing a second, lossy Markdown grammar.  ``produce`` is not
