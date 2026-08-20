@@ -222,6 +222,14 @@ def test_usage_command_uses_ax_screen_reader_and_safe_mode():
     ]
 
 
+def test_suite_guard_prevents_real_pty_scrape(monkeypatch):
+    def _unexpected(*_args, **_kwargs):  # pragma: no cover - must stay guarded
+        raise AssertionError("the unit suite must not spawn claude")
+
+    monkeypatch.setattr(claude_usage.subprocess, "Popen", _unexpected)
+    assert claude_usage.capture_usage_raw() == b""
+
+
 def test_capture_levels_returns_error_snapshot_on_probe_failure(monkeypatch):
     def _boom(**_kwargs):
         raise RuntimeError("no tty")
