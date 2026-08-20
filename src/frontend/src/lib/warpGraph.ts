@@ -459,6 +459,7 @@ export function findGoalReadingsFile(goalId: string, files: SurfaceFile[]): Surf
  *  `items.py`'s `load_readings` tolerance. */
 export function parseGoalReadings(markdown: string): GoalReading[] {
 	const out: GoalReading[] = [];
+	const withdrawn = new Set<string>();
 	for (const rawLine of (markdown ?? '').split('\n')) {
 		const line = rawLine.trim();
 		if (!line) continue;
@@ -471,6 +472,10 @@ export function parseGoalReadings(markdown: string): GoalReading[] {
 		if (typeof record !== 'object' || record === null) continue;
 		const r = record as Record<string, unknown>;
 		if (typeof r.ts !== 'string' || typeof r.key !== 'string') continue;
+		if (r.withdrawn === true && typeof r.withdrawn_ts === 'string') {
+			withdrawn.add(`${r.key}\0${r.withdrawn_ts}`);
+			continue;
+		}
 		const value = typeof r.value === 'number' ? r.value : Number(r.value);
 		if (!Number.isFinite(value)) continue;
 		out.push({
@@ -482,7 +487,7 @@ export function parseGoalReadings(markdown: string): GoalReading[] {
 			basis: typeof r.basis === 'string' && r.basis ? r.basis : null
 		});
 	}
-	return out;
+	return out.filter((reading) => !withdrawn.has(`${reading.key}\0${reading.ts}`));
 }
 
 export interface GoalReadingSummary {

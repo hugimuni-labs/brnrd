@@ -286,3 +286,61 @@ def test_goal_show_marks_a_refused_cross_basis_delta(tmp_path, monkeypatch, caps
     assert "Δ refused: basis differs" in out
     assert "Δ-186" not in out
     assert "Δ+" not in out and "Δ-" not in out
+
+
+def test_goal_withdraw_then_record_restores_real_delta(tmp_path, monkeypatch, capsys):
+    _repo_with_home(tmp_path, monkeypatch)
+    _new_goal(metric="impressions")
+    capsys.readouterr()
+
+    main([
+        "goal", "record", "g-1", "impressions", "100",
+        "--basis", "window5",
+    ])
+    first_ts = capsys.readouterr().out.rsplit("(", 1)[1].rstrip(")\n")
+    main([
+        "goal", "record", "g-1", "impressions", "999",
+        "--basis", "lifetime",
+    ])
+    bad_ts = capsys.readouterr().out.rsplit("(", 1)[1].rstrip(")\n")
+
+    rc = main([
+        "goal", "withdraw", "g-1", "impressions", bad_ts,
+        "--why", "wrong measurement population",
+    ])
+    assert rc == 0
+    assert f"impressions at {bad_ts} withdrawn" in capsys.readouterr().out
+
+    rc = main([
+        "goal", "record", "g-1", "impressions", "150",
+        "--basis", "window5",
+    ])
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+
+    assert main(["goal", "show", "g-1"]) == 0
+    out = capsys.readouterr().out
+    assert "impressions: 150 (Δ+50 vs previous)" in out
+    assert "2 samples · min 100 · max 150 · 1 withdrawal" in out
+    assert first_ts != bad_ts
+
+
+def test_goal_withdraw_requires_reason_and_exact_target(tmp_path, monkeypatch, capsys):
+    _repo_with_home(tmp_path, monkeypatch)
+    _new_goal(metric="tickets")
+    capsys.readouterr()
+    main(["goal", "record", "g-1", "tickets", "10"])
+    capsys.readouterr()
+
+    assert main([
+        "goal", "withdraw", "g-1", "tickets", "2026-01-01T00:00:00Z",
+        "--why", "wrong row",
+    ]) == 1
+    assert "no reading" in capsys.readouterr().err
+
+    assert main([
+        "goal", "withdraw", "g-1", "tickets", "2026-01-01T00:00:00Z",
+        "--why", "",
+    ]) == 1
+    assert "withdraw needs --why" in capsys.readouterr().err

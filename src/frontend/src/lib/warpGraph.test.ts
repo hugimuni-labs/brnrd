@@ -534,6 +534,23 @@ describe('goal readings (design-goal-oriented-engineering.md §"a metrics block 
 		assert.equal(conversion.count, 1);
 	});
 
+	it('parseGoalReadings excludes samples superseded by withdrawal rows', () => {
+		const readings = parseGoalReadings(
+			[
+				'{"ts":"2026-08-01T00:00:00Z","key":"tickets","value":10,"source":"m","basis":"daily"}',
+				'{"ts":"2026-08-02T00:00:00Z","key":"tickets","value":999,"source":"m","basis":"lifetime"}',
+				'{"ts":"2026-08-02T01:00:00Z","key":"tickets","withdrawn":true,"withdrawn_ts":"2026-08-02T00:00:00Z","why":"wrong population"}',
+				'{"ts":"2026-08-03T00:00:00Z","key":"tickets","value":15,"source":"m","basis":"daily"}'
+			].join('\n')
+		);
+		const info = summarizeGoalReadings(readings).get('tickets')!;
+		assert.deepEqual(readings.map((reading) => reading.value), [10, 15]);
+		assert.equal(info.delta, 5);
+		assert.equal(info.count, 2);
+		assert.equal(info.min, 10);
+		assert.equal(info.max, 15);
+	});
+
 	// Mirrors `tests/test_items.py`'s basis-guard cases (`items.py`'s
 	// `reading_basis` / `reading_summary`) — the "in lockstep" comment atop
 	// this file's readings section names that Python module as the source of
