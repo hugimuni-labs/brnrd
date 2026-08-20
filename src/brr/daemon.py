@@ -13032,9 +13032,17 @@ def _persist_run_state_doc(
         request_tmp = request_path.with_suffix(request_path.suffix + ".tmp")
         request_tmp.write_text(task.body, encoding="utf-8")
         request_tmp.replace(request_path)
-        lines.extend([
-            "", "## Request", "", summary, "", "[Read the full request](request.md)",
-        ])
+        lines.extend(["", "## Request", "", summary])
+        # The link is an affordance, and an affordance is not a fact: offer
+        # "read the full request" only where the inline excerpt is not
+        # already the whole record.  The excerpt is lossy two ways — the
+        # 240-char cut *and* the whitespace collapse that flattens a
+        # multi-paragraph ask onto one line — so the exact test is whether
+        # the rendered excerpt still equals the body, never the length
+        # alone.  A single short line reads identically in both places and
+        # earns no link; anything else does.
+        if summary != task.body:
+            lines.extend(["", "[Read the full request](request.md)"])
     # The complete bounded declaration lives on the durable run node as one
     # JSON value.  Keeping the object whole makes omission detectable and
     # avoids inventing a second, lossy Markdown grammar.  ``produce`` is not
