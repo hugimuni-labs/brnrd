@@ -677,7 +677,7 @@ class Reading:
     measure different populations (issue: a lifetime sum and a 5-item
     window both recorded as ``source: x-api``), so ``source`` alone cannot
     gate a delta. ``None`` when the writer didn't set one — comparisons then
-    fall back to ``source`` (see ``_reading_basis``), which is a superset of
+    fall back to ``source`` (see ``reading_basis``), which is a superset of
     the old, no-``basis`` behaviour, not a new default that reopens old
     data. A caller wanting a delta to render must give both readings the
     same explicit ``basis`` whenever they are not already drawn from the
@@ -691,7 +691,7 @@ class Reading:
     basis: str | None = None
 
 
-def _reading_basis(reading: Reading) -> str:
+def reading_basis(reading: Reading) -> str:
     """The value two readings must share for a Δ between them to be
     constructible. Explicit ``basis`` wins; absent one, ``source`` is the
     best available population signal — it's what already separated the
@@ -827,7 +827,7 @@ def reading_summary(readings: list[Reading]) -> dict[str, ReadingSummary]:
     itself back into place here rather than trusting append order).
 
     A Δ is only constructed when ``latest`` and ``previous`` share a
-    measurement basis (``_reading_basis``) — grouping by ``key`` alone put
+    measurement basis (``reading_basis``) — grouping by ``key`` alone put
     a lifetime sum and a rolling-window sum, both keyed ``impressions``,
     into the same subtraction (issue: the wake rendered ``Δ-186`` across
     two denominators that were never comparable). A same-``key``,
@@ -842,7 +842,7 @@ def reading_summary(readings: list[Reading]) -> dict[str, ReadingSummary]:
         latest = ordered[-1]
         previous = ordered[-2] if len(ordered) > 1 else None
         values = [r.value for r in ordered]
-        comparable = previous is not None and _reading_basis(previous) == _reading_basis(latest)
+        comparable = previous is not None and reading_basis(previous) == reading_basis(latest)
         out[key] = ReadingSummary(
             latest=latest,
             previous=previous,
