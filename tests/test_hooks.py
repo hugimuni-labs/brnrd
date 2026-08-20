@@ -5182,6 +5182,54 @@ def test_classify_act_is_total_across_the_six_labels(tool_name, tool_input, expe
     assert expected in hooks.ACT_LABELS
 
 
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        # brnrd's own speech acts. Without these the one question this field
+        # exists to answer — did the wake say anything to anyone — falls
+        # through to the shell default and reads `probe`.
+        ("brnrd do --gate cloud --body-file /tmp/ann.md", "publish"),
+        ("brnrd do --reply evt-x --body hi --no-promise", "publish"),
+        ("brnrd cut /tmp/cut.md", "publish"),
+        ("python3 account/x-browser.py post --text x --confirm", "publish"),
+        ("gh issue create --title t --body-file /tmp/b.md", "publish"),
+        # ...and the reads that merely *look* like them.
+        ("brnrd do --mood focused", "probe"),
+        ("python3 account/x-browser.py check --json", "probe"),
+        ("python3 account/x-browser.py read https://x.com/a/1", "probe"),
+        ("gh issue list --state open", "orient"),
+    ],
+)
+def test_classify_act_knows_brnrds_own_publish_verbs(command, expected):
+    assert hooks.classify_act("Bash", {"command": command}) == expected
+
+
+def test_classify_act_never_returns_a_label_outside_the_vocabulary():
+    """The vocabulary is a contract, not a comment.
+
+    The parametrized cases above assert the classifier against a list the same
+    author wrote, which cannot catch a seventh label being minted. This asserts
+    the *return*, over inputs deliberately unlike any case above — including
+    junk types the hook payload could really carry.
+    """
+    junk = [
+        ("Bash", {"command": "\x00\x01 not a command at all"}),
+        ("Bash", {"command": ""}),
+        ("Bash", {}),
+        ("Bash", None),
+        ("", ""),
+        (None, None),
+        (12, ["not", "a", "dict"]),
+        ("SomeToolInventedNextYear", {"weird": {"nested": [1, 2]}}),
+        ("Write", {"file_path": None, "content": 3}),
+        ("Write", {"file_path": "/tmp/outbox/evt/", "content": "to: run-x"}),
+        ("mcp__server__do_a_thing", {"arg": "value"}),
+    ]
+    for tool_name, tool_input in junk:
+        label = hooks.classify_act(tool_name, tool_input)
+        assert label in hooks.ACT_LABELS, (tool_name, tool_input, label)
+
+
 def test_a_silent_boundary_is_still_recorded(tmp_path):
     """A fired-but-silent hook is a result, not a gap.
 
