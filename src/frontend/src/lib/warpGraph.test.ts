@@ -21,6 +21,7 @@ import {
 	itemInTopics,
 	liveTakenRuns,
 	parseGoalReadings,
+	readingTsOrderKey,
 	parseRunTopics,
 	parseWarpItem,
 	parseWarpTopic,
@@ -534,6 +535,26 @@ describe('goal readings (design-goal-oriented-engineering.md §"a metrics block 
 		assert.equal(conversion.count, 1);
 	});
 
+	it('parseGoalReadings excludes samples superseded by withdrawal rows', () => {
+		const readings = parseGoalReadings(
+			[
+				'{"ts":"2026-08-01T00:00:00Z","key":"tickets","value":10,"source":"m","basis":"daily"}',
+				'{"ts":"2026-08-02T00:00:00Z","key":"tickets","value":999,"source":"m","basis":"lifetime"}',
+				'{"ts":"2026-08-02T01:00:00Z","key":"tickets","withdrawn":true,"withdrawn_ts":"2026-08-02T00:00:00Z","why":"wrong population"}',
+				'{"ts":"2026-08-03T00:00:00Z","key":"tickets","value":15,"source":"m","basis":"daily"}'
+			].join('\n')
+		);
+		const info = summarizeGoalReadings(readings).get('tickets')!;
+		assert.deepEqual(
+			readings.map((reading) => reading.value),
+			[10, 15]
+		);
+		assert.equal(info.delta, 5);
+		assert.equal(info.count, 2);
+		assert.equal(info.min, 10);
+		assert.equal(info.max, 15);
+	});
+
 	// Mirrors `tests/test_items.py`'s basis-guard cases (`items.py`'s
 	// `reading_basis` / `reading_summary`) — the "in lockstep" comment atop
 	// this file's readings section names that Python module as the source of
@@ -652,5 +673,31 @@ describe('goal readings (design-goal-oriented-engineering.md §"a metrics block 
 		assert.equal(conversion.count, 1);
 		assert.equal(readings[0].note, 'first count');
 		assert.equal(readings[1].note, null);
+	});
+});
+
+describe('goal readings ordering across the stamp-width change', () => {
+	// Readings were whole-second before withdrawal handles needed microsecond
+	// precision and are microsecond after, so one goal can hold both widths.
+	// `.` sorts before `Z`, so a raw string sort makes the earlier row the
+	// `latest` one — and `latest` is the number the goal surface publishes.
+	// Mirrors the Python guard in tests/test_items.py; the two stay in lockstep.
+	it('orders a mixed-width pair from the same second by time', () => {
+		const readings = parseGoalReadings(
+			'{"ts": "2026-08-20T18:10:56Z", "key": "followers", "value": 2, "basis": "b"}\n' +
+				'{"ts": "2026-08-20T18:10:56.400000Z", "key": "followers", "value": 3, "basis": "b"}\n'
+		);
+		const summary = summarizeGoalReadings(readings).get('followers');
+		assert.equal(summary?.latest.value, 3);
+		assert.equal(summary?.previous?.value, 2);
+		assert.equal(summary?.delta, 1);
+	});
+
+	it('normalises both stamp widths to one comparable form', () => {
+		assert.equal(readingTsOrderKey('2026-08-20T18:10:56Z'), '2026-08-20T18:10:56.000000');
+		assert.equal(readingTsOrderKey('2026-08-20T18:10:56.4Z'), '2026-08-20T18:10:56.400000');
+		assert.ok(
+			readingTsOrderKey('2026-08-20T18:10:56Z') < readingTsOrderKey('2026-08-20T18:10:56.4Z')
+		);
 	});
 });
