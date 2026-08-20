@@ -1088,6 +1088,54 @@ def test_cut_refuses_bullet_list_inside_canonical_declaration(
     assert list(outbox.glob("do-*-cut-*.md")) == []
 
 
+def test_stage_cut_refuses_unterminated_frontmatter_fence_before_staging(tmp_path):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    declaration = tmp_path / "bolt.md"
+    declaration.write_text(
+        "---\ncut: true\nproduce: none\nThe loom is tied off.\n",
+        encoding="utf-8",
+    )
+
+    path, err = do_mod.stage_cut(outbox, declaration)
+
+    assert path is None
+    assert err is not None
+    assert "invalid cut declaration fence" in err
+    assert "closing `---`" in err
+    assert list(outbox.iterdir()) == []
+
+
+def test_cut_canonical_declaration_without_marker_splices_once(
+    tmp_path, monkeypatch,
+):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    declaration = tmp_path / "bolt.md"
+    declaration.write_text(
+        "---\nproduce: none\nowed: none\n---\nThe loom is tied off.\n",
+        encoding="utf-8",
+    )
+    staged = {}
+
+    def _sleep(_seconds):
+        matches = list(outbox.glob("do-*-cut-*.md"))
+        if matches:
+            staged["text"] = matches[0].read_text(encoding="utf-8")
+            payload = json.loads((outbox / "portal-state.json").read_text())
+            payload["bolt"] = _CLEAN_BOLT
+            (outbox / "portal-state.json").write_text(json.dumps(payload))
+            matches[0].unlink()
+
+    monkeypatch.setattr(time, "sleep", _sleep)
+
+    assert main(["cut", str(declaration)]) == 0
+    assert staged["text"].count("cut:") == 1
+    assert staged["text"].startswith("---\ncut: true\nproduce: none\n")
+
+
 def test_cut_lenient_minimal_shape_stages_without_double_wrap(
     tmp_path, monkeypatch,
 ):
