@@ -2695,7 +2695,8 @@ def test_wake_dump_renders_the_boot_then_every_boundary_in_order(tmp_path):
             {"at": "2026-07-27T17:21:31Z", "phase": "session-start",
              "inject": "seed capsule", "block": False, "block_reason": None},
             {"at": "2026-07-27T17:21:34Z", "phase": "post-tool",
-             "inject": None, "block": False, "block_reason": None},
+             "inject": None, "block": False, "block_reason": None,
+             "act": "orient"},
             {"at": "2026-07-27T17:25:02Z", "phase": "stop",
              "inject": "closeout", "block": True,
              "block_reason": "one more thing"},
@@ -2705,6 +2706,7 @@ def test_wake_dump_renders_the_boot_then_every_boundary_in_order(tmp_path):
 
     assert "# the wake" in out
     assert "3 hook fire(s)" in out
+    assert "act distribution: 1 distinct / 1 classified · orient 1" in out
     # Order is the run's own, and it is the whole point of the file.
     assert out.index("seed capsule") < out.index("closeout")
     # A silent boundary is rendered, not skipped — the count must stay honest.
