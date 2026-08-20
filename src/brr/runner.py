@@ -1638,7 +1638,8 @@ def resolve_runner_profile(
        ``runner=auto`` triggers cost-aware auto-detection.
     4. **Auto** — cost-aware selection via :func:`runner_select.select_runner`:
        cheapest available local profile of the ``balanced`` class, falling
-       back below it, then to any class. ``default_class=`` in ``.brr/config``
+       back *above* it before below (the target is a floor — "at least
+       balanced"), then to any class. ``default_class=`` in ``.brr/config``
        retunes the target (``economy`` restores the pre-2026-08-19 default).
 
     Raises ``RuntimeError`` when no profile can be resolved.
