@@ -3367,7 +3367,10 @@ class TestWorkSurfaceInjection:
             lambda _repo: [parked_branches.ParkedBranch("brr/lost", 2, None)],
         )
         prompt = build_daemon_prompt("fix it", "evt-1", "/tmp/r.md", tmp_path)
-        assert "parked branches: brr/lost (2 commits, pushed age unknown)" in prompt
+        assert (
+            "parked branches: brr/lost (2 unmerged commits, pushed age unknown)"
+            in prompt
+        )
 
         monkeypatch.setattr(parked_branches, "detect", lambda _repo: [])
         prompt = build_daemon_prompt("fix it", "evt-1", "/tmp/r.md", tmp_path)
