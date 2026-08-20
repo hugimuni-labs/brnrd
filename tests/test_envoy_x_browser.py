@@ -602,6 +602,85 @@ def test_form_recorded_verbatim_on_post(tmp_path, monkeypatch):
     assert record["form"] == "the measured number"
 
 
+def _form_argv(verb: str, label: str) -> list[str]:
+    if verb == "send":
+        return [
+            "send", "https://x.com/a/status/1", "--text", "hi", "--confirm",
+            "--form", label,
+        ]
+    return ["post", "--text", "hi", "--confirm", "--form", label]
+
+
+@pytest.mark.parametrize("verb", ["post", "send"])
+def test_declared_form_is_silent_and_recorded_verbatim(
+    tmp_path, monkeypatch, capsys, verb,
+):
+    paths = _paths(tmp_path)
+    _armed_env(monkeypatch)
+    paths.config.write_text(
+        json.dumps({"forms": ["the open question", "the measured number"]}),
+        encoding="utf-8",
+    )
+    envoy_x_browser.run(
+        _form_argv(verb, "the open question"), paths,
+        driver_factory=_factory_for(_FakeDriver(click_send_return="42")),
+    )
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert "id 42" in captured.out
+    record = json.loads(paths.log.read_text(encoding="utf-8").strip())
+    assert record["form"] == "the open question"
+
+
+@pytest.mark.parametrize("verb", ["post", "send"])
+def test_undeclared_form_warns_once_but_ships_and_records_verbatim(
+    tmp_path, monkeypatch, capsys, verb,
+):
+    paths = _paths(tmp_path)
+    _armed_env(monkeypatch)
+    paths.config.write_text(
+        json.dumps({"forms": ["the open question", "the measured number"]}),
+        encoding="utf-8",
+    )
+    label = "the wrong axis"
+    envoy_x_browser.run(
+        _form_argv(verb, label), paths,
+        driver_factory=_factory_for(_FakeDriver(click_send_return="42")),
+    )
+    captured = capsys.readouterr()
+    assert captured.err.splitlines() == [
+        "warning: form 'the wrong axis' is not declared; declared forms: "
+        "the open question, the measured number"
+    ]
+    assert "id 42" in captured.out
+    record = json.loads(paths.log.read_text(encoding="utf-8").strip())
+    assert record["form"] == label
+
+
+@pytest.mark.parametrize("verb", ["post", "send"])
+@pytest.mark.parametrize(
+    "config",
+    [
+        {},
+        {"forms": "the open question"},
+        {"forms": ["the open question", 7]},
+    ],
+)
+def test_absent_or_malformed_forms_config_emits_no_warning(
+    tmp_path, monkeypatch, capsys, verb, config,
+):
+    paths = _paths(tmp_path)
+    _armed_env(monkeypatch)
+    paths.config.write_text(json.dumps(config), encoding="utf-8")
+    envoy_x_browser.run(
+        _form_argv(verb, "outside any vocabulary"), paths,
+        driver_factory=_factory_for(_FakeDriver(click_send_return="42")),
+    )
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert "id 42" in captured.out
+
+
 def test_form_absent_when_not_passed(tmp_path, monkeypatch):
     paths = _paths(tmp_path)
     _armed_env(monkeypatch)
