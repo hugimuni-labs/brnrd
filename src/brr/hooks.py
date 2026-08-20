@@ -155,7 +155,26 @@ def classify_act(tool_name: object, tool_input: object) -> str:
             return "wait"
         if re.search(r"(?:spawn|respawn|to|stop):\s*", command):
             return "dispatch"
-        if re.search(r"\bgit\s+push\b|\bgh\s+pr\s+(?:create|edit|merge|comment)\b", command):
+        if re.search(
+            r"\bgit\s+push\b"
+            r"|\bgh\s+pr\s+(?:create|edit|merge|comment)\b"
+            r"|\bgh\s+issue\s+(?:create|comment|close|edit)\b",
+            command,
+        ):
+            return "publish"
+        # brnrd's own speech acts. Without these the single most important
+        # question a register bench can ask — *did this wake say anything to
+        # anyone* — falls through to the shell default and reads as `probe`,
+        # which is the one misclassification that would make the field look
+        # like it varies while staying blind to the axis it exists for.
+        # `brnrd do` only counts when it carries a delivery flag: `--mood` /
+        # `--card` / a bare status read change nothing outside this machine.
+        if re.search(
+            r"\bbrnrd\s+do\b(?=.*--(?:gate|reply)\b)"
+            r"|\bbrnrd\s+cut\b"
+            r"|\b(?:x-browser|x-post|x-intent|bsky-post)\.py\s+(?:post|send|reply)\b",
+            command,
+        ):
             return "publish"
         if re.search(r"\b(?:curl|wget)\b.*(?:--request|-x)\s*(?:post|put|patch|delete)\b", command):
             return "publish"
