@@ -249,7 +249,7 @@ def probe_shell_models(
     function — PATH check included — sat behind one ``lru_cache``: a shell
     probed while not yet installed memoized ``()`` for the rest of the
     process's life, and installing the shell afterwards changed nothing until
-    a restart (#1522 — a codex-only adopter's spool rack stayed dark on a
+    a restart (#1519 — a codex-only adopter's spool rack stayed dark on a
     working machine).
     """
     shell = shell_name.strip()
