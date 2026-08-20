@@ -12454,6 +12454,43 @@ def test_drain_outbox_cut_without_any_gate_stays_undeliverable_after_stamp(
     assert promoted == 0
 
 
+def test_drain_outbox_cut_survives_a_raising_notify_gate_resolver(
+    tmp_path, monkeypatch,
+):
+    """A failed fallback resolution must degrade, never destroy the delivery.
+
+    The resolver reads disk (``.brr/config``, gate health, thread history)
+    and runs *after* the bolt is stamped, *inside* ``_OutboxEntryGuard`` —
+    whose ``__exit__`` quarantines the declaration to ``.poisoned/`` and
+    trips the ``continue`` past the whole delivery tail. So an unguarded
+    raise here would turn "staged undeliverable, recorded" into "body gone,
+    file quarantined" — strictly worse than the bug the fallback fixes.
+    Before the fallback existed this window could not raise at all; this
+    test is what keeps that true.
+    """
+    def _boom(*_args, **_kwargs):
+        raise OSError("gate health file is a directory")
+
+    monkeypatch.setattr(daemon, "_cached_notify_gate", _boom)
+
+    promoted, task, outbox, _inbox, responses, event_id = _drain_cut(
+        tmp_path, "---\ncut: true\n---\nThe resolver blew up.\n",
+        source="schedule",
+    )
+
+    # The bolt still stands.
+    assert task.meta["bolt"]["accepted_at"]
+    # The declaration was consumed normally, not quarantined.
+    assert not (outbox / ".poisoned").exists()
+    assert not (outbox / "cut.md").exists()
+    # And the pre-existing honest lane still ran.
+    assert protocol.list_partials(responses, event_id) == []
+    texts = " ".join(n["text"] for n in daemon._read_outbox_notices(outbox))
+    assert "staged undeliverable" in texts
+    assert "drain error" not in texts
+    assert promoted == 0
+
+
 def test_drain_outbox_cut_bounces_double_wrapped_staging_casualty(tmp_path):
     """Old porcelain output can remain on disk after an upgrade. The drain
     recognizes the stranded declaration before accepting a minimal bolt."""
