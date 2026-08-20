@@ -15,6 +15,16 @@ _WARNED: set[str] = set()
 
 @dataclass(frozen=True)
 class ParkedBranch:
+    """A branch holding work ``main`` does not have, with nobody left on it.
+
+    ``commits`` counts **unmerged** commits (patch-id, via
+    :func:`gitops.unmerged_commit_count`), not commits reachable from the
+    branch and not from the default. The two come apart on every rebase-merge,
+    squash, and cherry-pick, and the reachability form never converges back —
+    which is why the surface's first real day listed four branches that held
+    nothing (#1544).
+    """
+
     name: str
     commits: int
     updated_at: float | None
@@ -42,6 +52,12 @@ def detect(repo_root: Path) -> list[ParkedBranch]:
     PR state comes from the daemon-warmed forge cache. Unknown PR state is
     deliberately fail-closed: absence of evidence must not become a false
     claim that a branch has no PR.
+
+    "Ahead" is measured by patch id, not by reachability (#1544). A branch
+    whose every commit already has an equivalent on the default branch is not
+    parked work — it is a leftover ref — and listing it costs the reader the
+    only expensive thing here: reading a diff to find out it was already
+    merged.
     """
     default = gitops.default_branch(repo_root)
     if not default:
@@ -60,7 +76,7 @@ def detect(repo_root: Path) -> list[ParkedBranch]:
     for name, updated_at in gitops.branches_with_commit_times(repo_root, "brr"):
         if not name or name in live or name in open_heads:
             continue
-        commits = gitops.ahead_count(repo_root, default, name)
+        commits = gitops.unmerged_commit_count(repo_root, default, name)
         if commits is None or commits <= 0:
             continue
         parked.append(ParkedBranch(name, commits, updated_at))
@@ -85,7 +101,7 @@ def render(items: list[ParkedBranch], *, now: float | None = None) -> str | None
     for item in items:
         noun = "commit" if item.commits == 1 else "commits"
         rows.append(
-            f"{item.name} ({item.commits} {noun}, "
+            f"{item.name} ({item.commits} unmerged {noun}, "
             f"pushed {_age(item.updated_at, now=now)})"
         )
     return "parked branches: " + " · ".join(rows)
@@ -99,6 +115,6 @@ def warn_new(repo_root: Path) -> None:
         _WARNED.add(item.name)
         print(
             f"[brnrd:ergo] warn parked_branch [daemon] — "
-            f"{item.name} is {item.commits} commit(s) ahead with no open PR "
-            "and no live run"
+            f"{item.name} holds {item.commits} unmerged commit(s) with no "
+            "open PR and no live run"
         )
