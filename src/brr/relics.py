@@ -806,14 +806,22 @@ def _identity(
             return ("commit", sha[:7], str(repo))
         return ("commit", sha[:7])
     if kind == "merge":
-        # A merge keys on its commit sha but in its own namespace: the
+        # A PR merge self-reported before its remote commit reaches this
+        # checkout has no sha yet, so key that form by PR.  Once archaeology
+        # derives the same merge with both fields, the two rows meet here.
+        # A non-PR merge still keys on its commit sha in its own namespace:
         # maintainer's explicit ask (2026-07-21) is that merges performed
         # are a separate block from PRs made, so a merge relic never
         # collapses into a ``pr`` relic for the same number.
+        pr = record.get("pr")
+        repo = _repo()
+        if pr:
+            if repo:
+                return ("merge-pr", str(pr), str(repo))
+            return ("merge-pr", str(pr))
         sha = str(record.get("sha") or "")
         if not sha:
             return None
-        repo = _repo()
         if repo:
             return ("merge", sha[:7], str(repo))
         return ("merge", sha[:7])
