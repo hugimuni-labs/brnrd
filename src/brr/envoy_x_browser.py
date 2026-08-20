@@ -95,7 +95,10 @@ not a rename. Three new keys, unambiguous in both lanes:
 - ``form`` — the caller-supplied rhetorical form of the post (``--form
   <label>`` on ``send``/``post``, free text, run through
   :func:`_dash_guard` like every other free-text argument this module
-  accepts), present only when passed. Not offered on ``draft``/
+  accepts), present only when passed. When ``Paths.config`` declares a
+  string-only ``"forms"`` list, a label outside it emits a warning naming
+  the declared forms but still ships and is recorded verbatim. An absent or
+  malformed ``"forms"`` key emits no warning. Not offered on ``draft``/
   ``draft-post``: neither writes a receipt row at all, so a ``--form``
   flag there would be argv nobody reads.
 """
@@ -104,6 +107,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 import urllib.parse
 from dataclasses import dataclass
@@ -182,7 +186,9 @@ send/post ship disarmed: BRR_X_BROWSER_SEND=1 in the environment AND
 --confirm on argv are both required, and both still refuse past the
 hourly cap (one shared bucket across both verbs).
 --form <label> records the caller's rhetorical form for the post verbatim
-in the receipt log; free text, absent when not passed.
+in the receipt log; free text, absent when not passed. If x-browser.json
+declares a string-only "forms" list, an undeclared label warns on stderr but
+still ships; an absent or malformed "forms" key means no warning.
 A kill-switch file (see Paths.kill_switch) refuses every verb but check.\
 """
 
@@ -232,8 +238,11 @@ Ships disarmed: refuses unless BOTH --confirm (this argv) and
 BRR_X_BROWSER_SEND=1 (environment) are present, and refuses independently
 once the hourly cap is spent.
 --form <label> is free text, recorded verbatim in the receipt log as the
-caller's rhetorical form for the post; absent when not passed. It cannot
-arm anything — it is checked and recorded, never read by the arming guard.\
+caller's rhetorical form for the post; absent when not passed. If
+x-browser.json declares a string-only "forms" list, an undeclared label warns
+on stderr but still ships; an absent or malformed "forms" key means no
+warning. It cannot arm anything — it is checked and recorded, never read by
+the arming guard.\
 """
 
 DRAFT_POST_USAGE = """\
@@ -251,8 +260,11 @@ BRR_X_BROWSER_SEND=1 (environment) are present, and refuses independently
 once the hourly cap is spent (shared with the reply lane's `send`).
 Posts an original — no reply target, no <url> argument.
 --form <label> is free text, recorded verbatim in the receipt log as the
-caller's rhetorical form for the post; absent when not passed. It cannot
-arm anything — it is checked and recorded, never read by the arming guard.\
+caller's rhetorical form for the post; absent when not passed. If
+x-browser.json declares a string-only "forms" list, an undeclared label warns
+on stderr but still ships; an absent or malformed "forms" key means no
+warning. It cannot arm anything — it is checked and recorded, never read by
+the arming guard.\
 """
 
 
@@ -271,8 +283,9 @@ class Paths:
       ``0700``; excluded from the account home's git tracking by
       ``account.py``'s ``GITIGNORE`` (matched by directory name — see
       that module).
-    - ``config`` — ``{"hourly_cap": N}``; missing or malformed falls back
-      to :data:`DEFAULT_HOURLY_CAP`.
+    - ``config`` — ``{"hourly_cap": N, "forms": [...]}``; a missing or
+      malformed cap falls back to :data:`DEFAULT_HOURLY_CAP`, while a missing
+      or malformed forms list disables vocabulary warnings.
     - ``state`` — send timestamps in the trailing hour, for the cap
       arithmetic. Not secret, just runtime bookkeeping.
     - ``kill_switch`` — presence alone (any content, or none) refuses
@@ -331,6 +344,34 @@ def _load_cap(paths: Paths) -> int:
     except (TypeError, ValueError):
         return DEFAULT_HOURLY_CAP
     return cap if cap >= 0 else DEFAULT_HOURLY_CAP
+
+
+def _load_forms(paths: Paths) -> list[str] | None:
+    """Return the account-declared form vocabulary when it is well formed."""
+    if not paths.config.exists():
+        return None
+    try:
+        data = json.loads(paths.config.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    forms = data.get("forms")
+    if not isinstance(forms, list) or not all(isinstance(form, str) for form in forms):
+        return None
+    return forms
+
+
+def _warn_if_undeclared_form(paths: Paths, form: str | None) -> None:
+    """Warn about vocabulary drift without changing the publishing path."""
+    forms = _load_forms(paths)
+    if form is None or forms is None or form in forms:
+        return
+    declared = ", ".join(forms) if forms else "(none)"
+    print(
+        f"warning: form {form!r} is not declared; declared forms: {declared}",
+        file=sys.stderr,
+    )
 
 
 def _recent_send_times(paths: Paths, now: float) -> list[float]:
@@ -1086,6 +1127,7 @@ def _run_post(args: list[str], paths: Paths, factory: DriverFactory) -> None:
             f"refusing: hourly cap reached ({cap['used']}/{cap['cap']} sent "
             "in the last hour)"
         )
+    _warn_if_undeclared_form(paths, form)
     with factory(paths, headless=False) as driver:
         driver.open_post_composer()
         driver.fill_text(text)
@@ -1133,6 +1175,7 @@ def _run_send(args: list[str], paths: Paths, factory: DriverFactory) -> None:
             f"refusing: hourly cap reached ({cap['used']}/{cap['cap']} sent "
             "in the last hour)"
         )
+    _warn_if_undeclared_form(paths, form)
     with factory(paths, headless=False) as driver:
         driver.open_reply_composer(url)
         driver.fill_text(text)
