@@ -932,6 +932,35 @@ def ahead_count(repo_root: Path, base: str, branch: str) -> int | None:
         return None
 
 
+def unmerged_commit_count(repo_root: Path, base: str, branch: str) -> int | None:
+    """Commits on *branch* with no patch-equivalent already on *base*.
+
+    The question :func:`ahead_count` answers is a *graph* question — is this
+    branch ahead of base in the commit DAG — and it is the wrong one whenever
+    work reaches base by any route other than a fast-forward of this exact
+    branch. A rebase-merge, a squash, a cherry-pick, or a second strand
+    landing the same fix independently all leave the branch reachability-ahead
+    forever while holding nothing base does not have (#1544: on the parked
+    surface's first real day, four of six listed branches carried nothing).
+
+    ``git cherry`` compares by **patch id**, so a rebased or cherry-picked
+    commit is recognised as already upstream and counted out. What it cannot
+    see is an *independent reimplementation* of the same idea — a different
+    patch reaching the same end. That residue is real; callers should render
+    the number as "unmerged" rather than "merged-clean", and this docstring is
+    the one place it is stated.
+
+    ``None`` when git refuses (unknown ref, not a repo) — never ``0``, which a
+    caller would read as "nothing here" and act on.
+    """
+    result = _git(repo_root, "cherry", base, branch, check=False)
+    if result.returncode != 0:
+        return None
+    return sum(
+        1 for line in result.stdout.splitlines() if line.startswith("+")
+    )
+
+
 def valid_branch_name(repo_root: Path, branch: str) -> bool:
     """Return True when *branch* is acceptable as a local branch name."""
     if not branch or branch == "HEAD":
