@@ -10251,6 +10251,77 @@ def test_account_run_state_doc_preserves_long_request_whole(tmp_path):
     assert (state_path.parent / "request.md").read_text(encoding="utf-8") == body
 
 
+def test_account_run_state_doc_offers_no_full_link_when_the_excerpt_is_whole(tmp_path):
+    """Issue #1369: the link is an affordance and must not promise more than exists.
+
+    A one-line request renders byte-for-byte in the node's own excerpt, so
+    "read the full request" would send a reader to a file that says exactly
+    what they just read.  The record is still captured whole — it is the
+    *link* that is conditional, and the condition is equality with the
+    rendered excerpt rather than a length, because the excerpt also
+    collapses whitespace.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {
+            "repo.label": "Gurio/brr",
+            "home.path": str(tmp_path / "account-home"),
+        },
+    )
+    body = "Bump the release."
+    task = Run(
+        id="run-short-request",
+        event_id="evt-short-request",
+        body=body,
+        source="telegram",
+        status="running",
+    )
+
+    state_path = daemon._persist_run_state_doc(
+        ctx, task, repo_label="Gurio/brr", stage="created",
+    )
+
+    state = state_path.read_text(encoding="utf-8")
+    assert body in state
+    assert "[Read the full request](request.md)" not in state
+    # The durable record exists regardless: its presence is not what the
+    # link is conditional on, so a consumer can always rely on the file.
+    assert (state_path.parent / "request.md").read_text(encoding="utf-8") == body
+
+
+def test_account_run_state_doc_links_a_short_multiline_request(tmp_path):
+    """A short body can still be lossy: the excerpt flattens its paragraphs."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {
+            "repo.label": "Gurio/brr",
+            "home.path": str(tmp_path / "account-home"),
+        },
+    )
+    body = "Bump the release.\n\nThen tag it."
+    task = Run(
+        id="run-multiline-request",
+        event_id="evt-multiline-request",
+        body=body,
+        source="telegram",
+        status="running",
+    )
+
+    state_path = daemon._persist_run_state_doc(
+        ctx, task, repo_label="Gurio/brr", stage="created",
+    )
+
+    state = state_path.read_text(encoding="utf-8")
+    assert "[Read the full request](request.md)" in state
+    assert (state_path.parent / "request.md").read_text(encoding="utf-8") == body
+
+
 def test_account_run_state_doc_does_not_invent_clock_readings(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
