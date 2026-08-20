@@ -5747,7 +5747,7 @@ def run_hook(
         # correspondents. A stray write into the shared host checkout is a
         # hazard either limb can cause, so neither is exempted here).
         neutral = _rooted_write_neutral(ctx, payload)
-        record_boundary(ctx, phase, neutral)
+        record_boundary(ctx, phase, neutral, payload)
         return render_native(ctx.flavour, phase, neutral)
     # An in-process subagent shares every env handle with the resident, so the
     # payload is the only place the two differ (#1095). Branch before anything
@@ -5760,12 +5760,15 @@ def run_hook(
     # Record the *neutral* result, not the rendered native JSON: the neutral
     # shape is the one thing every Shell flavour shares, so a transcript
     # written from here reads the same whether the run was claude or codex.
-    record_boundary(ctx, phase, neutral)
+    record_boundary(ctx, phase, neutral, payload)
     return render_native(ctx.flavour, phase, neutral)
 
 
 def record_boundary(
-    ctx: HookContext, phase: str, neutral: dict[str, Any]
+    ctx: HookContext,
+    phase: str,
+    neutral: dict[str, Any],
+    payload: dict[str, Any] | None = None,
 ) -> Path | None:
     """Append this boundary to the run's transcript. Best-effort, never raises.
 
@@ -5799,6 +5802,25 @@ def record_boundary(
         "block": bool(neutral.get("block")),
         "block_reason": neutral.get("block_reason"),
     }
+    # Record only the bounded identity of each act. Claude supplies an ordered
+    # batch while Codex supplies one top-level tool name; inputs, responses,
+    # and tool-use ids are deliberately excluded from the transcript.
+    tool_names: list[str] = []
+    if phase == PHASE_POST_TOOL and isinstance(payload, dict):
+        calls = payload.get("tool_calls")
+        if isinstance(calls, list):
+            for call in calls:
+                if not isinstance(call, dict):
+                    continue
+                name = call.get("tool_name")
+                if isinstance(name, str) and name.strip():
+                    tool_names.append(name.strip())
+        else:
+            name = payload.get("tool_name")
+            if isinstance(name, str) and name.strip():
+                tool_names.append(name.strip())
+    if tool_names:
+        record["tools"] = tool_names
     # An in-process subagent's boundary is recorded (it happened, and a reader
     # asking "what did this run's environment say" wants it) but tagged, so
     # `derive_boundaries_summary` can keep the run's own verdict — which is
