@@ -602,14 +602,18 @@ def test_produce_renders_once_on_change_then_goes_quiet(tmp_path):
     assert hooks.format_delta(payload, last_chips=seen) is None
 
 
-def test_midrun_nudges_unwritten_run_name_but_stop_does_not(tmp_path):
+def test_unwritten_run_name_no_longer_nags_without_a_ledger(tmp_path):
+    # w-69: the standalone `.name?` nudge retired into the claims
+    # assignment. A wake with no assignment ledger (no boot score armed)
+    # gets no name chatter at any phase — the dashboards still show the
+    # hex, and the bolt's dissent row remains the net underneath.
     _portal(
         tmp_path, token="t1", pending=1,
         events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}],
         name={"written": False}, budget={"elapsed_seconds": 240, "budget_seconds": 3600},
     )
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
-    assert ".name" in out["hookSpecificOutput"]["additionalContext"]
+    assert ".name" not in out["hookSpecificOutput"]["additionalContext"]
 
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     assert ".name" not in out["hookSpecificOutput"]["additionalContext"]
@@ -3928,11 +3932,16 @@ def test_no_mood_means_no_surprise_annotation(tmp_path):
     assert ctx.splitlines()[0].startswith("⌁[·]:")
 
 
-# ── The orientation ledger (#513 Slice 9) ────────────────────────────────
+# ── The orientation ledger (#513 Slice 9 → w-69's orient assignment) ─────
 #
 # Fixture discipline (#611): every negative assertion below lives beside a
 # positive twin on the *same* input shape, so an assertion of absence can
 # never be green against an input that could not have produced the segment.
+#
+# Since w-69 the walk's rendered surface is the orient *assignment* row:
+# the `assign k/n` chip counts retired rows, and walk completion (or a
+# declared skip) is the row's discharge. The observation instrument — line
+# ranges, paging, pruning — is unchanged and still pinned via hook state.
 
 
 def _orient_files(tmp_path, names=("a.md", "b.md")):
@@ -3944,12 +3953,20 @@ def _orient_files(tmp_path, names=("a.md", "b.md")):
     return files
 
 
-def _boot_score(tmp_path, files):
+def _boot_score(tmp_path, files, *, window=6):
     path = tmp_path / "boot-score.json"
     path.write_text(json.dumps({
         "orientation_set": [
             {"path": str(f), "bytes": f.stat().st_size} for f in files
         ],
+        "assignments": [{
+            "id": "a-orient", "kind": "orient",
+            "title": f"walk the orientation set ({len(files)} file(s))",
+            "discharge": "Read each, or declare the skip on .card",
+            "window": window, "cadence": 4,
+            "detail": ["unread contract files mean acting on remembered permissions"],
+            "anchor": "orientation",
+        }],
     }), encoding="utf-8")
     return path
 
@@ -4000,7 +4017,13 @@ def test_orient_meters_reads_against_the_set_while_the_walk_is_open(tmp_path):
         hooks.PHASE_POST_TOOL, _read_batch(a), _orient_env(tmp_path)
     )
     assert code == 0
-    assert "orient 1/2" in _inject_text(out).splitlines()[0]
+    # w-69: the walk's standing surface is the orient assignment row —
+    # `assign 0/1` while it stands open; the instrument records the read.
+    assert "assign 0/1" in _inject_text(out).splitlines()[0]
+    state = json.loads(
+        (tmp_path / hooks.HOOK_STATE_NAME).read_text(encoding="utf-8")
+    )
+    assert state[hooks.ORIENTATION_READ_KEY] == [str(a.resolve())]
 
 
 def test_orient_segment_leaves_at_completion(tmp_path):
@@ -4010,14 +4033,14 @@ def test_orient_segment_leaves_at_completion(tmp_path):
     _portal(tmp_path, token="t1", pending=1,
             events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
     first, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, _read_batch(a), env)
-    # The positive twin: this exact setup renders the meter while open.
-    assert "orient 1/2" in _inject_text(first)
+    # The positive twin: this exact setup renders the row while open.
+    assert "assign 0/1" in _inject_text(first)
     _portal(tmp_path, token="t2", pending=1,
             events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
     second, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, _read_batch(b), env)
     text = _inject_text(second)
-    assert text  # the bar still renders — only the meter has left
-    assert "orient" not in text
+    assert text  # the bar still renders — only the assignment has retired
+    assert "assign" not in text
 
 
 def test_orient_partial_read_is_not_a_completed_file(tmp_path):
@@ -4037,7 +4060,7 @@ def test_orient_partial_read_is_not_a_completed_file(tmp_path):
         _orient_env(tmp_path),
     )
 
-    assert "orient 0/1" in _inject_text(out)
+    assert "assign 0/1" in _inject_text(out)
     state = json.loads(
         (tmp_path / hooks.HOOK_STATE_NAME).read_text(encoding="utf-8")
     )
@@ -4062,7 +4085,7 @@ def test_orient_paged_reads_complete_only_after_covering_the_file(tmp_path):
         _sliced_read_batch(page, offset=0, limit=90),
         env,
     )
-    assert "orient 0/1" in _inject_text(first)
+    assert "assign 0/1" in _inject_text(first)
 
     _portal(tmp_path, token="t2", pending=1,
             events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
@@ -4072,7 +4095,7 @@ def test_orient_paged_reads_complete_only_after_covering_the_file(tmp_path):
         env,
     )
 
-    assert "orient" not in _inject_text(second)
+    assert "assign" not in _inject_text(second)
     state = json.loads(
         (tmp_path / hooks.HOOK_STATE_NAME).read_text(encoding="utf-8")
     )
@@ -4092,7 +4115,7 @@ def test_orient_unbounded_read_respects_the_runner_default_page(tmp_path):
         hooks.PHASE_POST_TOOL, _read_batch(page), _orient_env(tmp_path)
     )
 
-    assert "orient 0/1" in _inject_text(out)
+    assert "assign 0/1" in _inject_text(out)
 
 
 def test_orient_ignores_reads_outside_the_set(tmp_path):
@@ -4105,7 +4128,11 @@ def test_orient_ignores_reads_outside_the_set(tmp_path):
     out, _ = hooks.run_hook(
         hooks.PHASE_POST_TOOL, _read_batch(unrelated), _orient_env(tmp_path)
     )
-    assert "orient 0/2" in _inject_text(out)
+    assert "assign 0/1" in _inject_text(out)
+    state = json.loads(
+        (tmp_path / hooks.HOOK_STATE_NAME).read_text(encoding="utf-8")
+    )
+    assert state[hooks.ORIENTATION_READ_KEY] == []
 
 
 def test_orient_skip_on_card_silences_the_meter_but_not_the_ledger(tmp_path):
@@ -4115,8 +4142,8 @@ def test_orient_skip_on_card_silences_the_meter_but_not_the_ledger(tmp_path):
     _portal(tmp_path, token="t1", pending=1,
             events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
     open_walk, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    # Positive twin: without the declaration this input renders the meter.
-    assert "orient 0/2" in _inject_text(open_walk)
+    # Positive twin: without the declaration this input renders the row.
+    assert "assign 0/1" in _inject_text(open_walk)
 
     (tmp_path / hooks.CARD_NAME).write_text(
         "## Now\nassuming prior knowledge, skipping orientation\n",
@@ -4125,7 +4152,7 @@ def test_orient_skip_on_card_silences_the_meter_but_not_the_ledger(tmp_path):
     _portal(tmp_path, token="t2", pending=1,
             events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
     skipped, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, _read_batch(a), env)
-    assert "orient" not in _inject_text(skipped)
+    assert "assign" not in _inject_text(skipped)
     # The observation still lands — skip silences the segment, never the
     # instrument (Slice 4 reads completeness from this state).
     state = json.loads(
@@ -4160,7 +4187,7 @@ def test_orient_skip_needs_a_declaration_not_a_mention(tmp_path):
     out, _ = hooks.run_hook(
         hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
     )
-    assert "orient 0/2" in _inject_text(out)
+    assert "assign 0/1" in _inject_text(out)
 
 
 def test_orient_skip_accepts_the_terse_declaration(tmp_path):
@@ -4179,7 +4206,7 @@ def test_orient_skip_accepts_the_terse_declaration(tmp_path):
     out, _ = hooks.run_hook(
         hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
     )
-    assert "orient" not in _inject_text(out)
+    assert "assign" not in _inject_text(out)
 
 
 def test_orient_skip_accepts_a_field_prefixed_declaration_with_prose_between(
@@ -4207,7 +4234,7 @@ def test_orient_skip_accepts_a_field_prefixed_declaration_with_prose_between(
     out, _ = hooks.run_hook(
         hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
     )
-    assert "orient" not in _inject_text(out)
+    assert "assign" not in _inject_text(out)
 
 
 def test_orient_skip_field_prefix_still_rejects_a_negated_value(tmp_path):
@@ -4228,7 +4255,7 @@ def test_orient_skip_field_prefix_still_rejects_a_negated_value(tmp_path):
     out, _ = hooks.run_hook(
         hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
     )
-    assert "orient 0/2" in _inject_text(out)
+    assert "assign 0/1" in _inject_text(out)
 
 
 def test_orient_is_unassertable_without_an_armed_boot_score(tmp_path):
@@ -4239,7 +4266,7 @@ def test_orient_is_unassertable_without_an_armed_boot_score(tmp_path):
     unarmed, _ = hooks.run_hook(
         hooks.PHASE_POST_TOOL, _read_batch(a), _env(tmp_path)
     )
-    assert "orient" not in _inject_text(unarmed)
+    assert "assign" not in _inject_text(unarmed)
     # Positive twin: the identical input with the env armed does render —
     # so the absence above is the guard's, not the fixture's.
     _portal(tmp_path, token="t2", pending=1,
@@ -4247,7 +4274,7 @@ def test_orient_is_unassertable_without_an_armed_boot_score(tmp_path):
     armed, _ = hooks.run_hook(
         hooks.PHASE_POST_TOOL, _read_batch(a), _orient_env(tmp_path)
     )
-    assert "orient 1/2" in _inject_text(armed)
+    assert "assign 0/1" in _inject_text(armed)
 
 
 def test_orient_prunes_state_paths_that_left_the_set(tmp_path):
@@ -4264,22 +4291,42 @@ def test_orient_prunes_state_paths_that_left_the_set(tmp_path):
     out, _ = hooks.run_hook(
         hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
     )
-    assert "orient 0/2" in _inject_text(out)
+    assert "assign 0/1" in _inject_text(out)
+    state = json.loads(
+        (tmp_path / hooks.HOOK_STATE_NAME).read_text(encoding="utf-8")
+    )
+    assert state[hooks.ORIENTATION_READ_KEY] == []
 
 
-def test_orient_bar_position_is_after_quota():
-    rendered = hooks.format_delta(_bar_payload(), mood="smug_", orient=(3, 5))
+def _assign_view(total=3, retired=1):
+    from brr import assignments as am
+    rows = [
+        {"id": f"a-{i}", "kind": "claims", "title": f"row {i}",
+         "discharge": "the writes", "window": 6, "cadence": 4, "detail": []}
+        for i in range(total)
+    ]
+    states = {
+        f"a-{i}": {"retired": am.RETIRED_DISCHARGED if i < retired else None,
+                   "overdue_since": None, "level": 0}
+        for i in range(total)
+    }
+    return am.LedgerView(rows=rows, states=states, ordinal=1)
+
+
+def test_assign_bar_position_is_after_quota():
+    rendered = hooks.format_delta(
+        _bar_payload(), mood="smug_", assign_view=_assign_view(5, 3)
+    )
     glyph = hooks._emote_glyph("smug_")
     assert rendered.splitlines()[0] == (
-        f"⌁[{glyph}]: ⏱ 16/120m │ q S57·W50·F27 │ orient 3/5 │ ▷1 │ rb3h │ "
+        f"⌁[{glyph}]: ⏱ 16/120m │ q S57·W50·F27 │ assign 3/5 │ ▷1 │ rb3h │ "
         "⇡2+3 │ ⚒4"
     )
 
 
-def test_orient_stands_quiet_while_the_walk_does_not_move():
-    # w-54's spelling of the same rule: a meter that could keep the bar
-    # alive at every boundary would train the exact skimming it measures —
-    # an unchanged `orient 0/3` is not news and renders nothing.
+def test_assign_stands_quiet_while_the_ledger_does_not_move():
+    # w-54's rule, inherited by the ledger chip: an unchanged `assign 1/3`
+    # is not news and renders nothing.
     payload = _bar_payload(
         budget={"elapsed_seconds": 60, "budget_seconds": 7200},
         outbound={"replies_current": 0, "replies_other": 0,
@@ -4288,11 +4335,15 @@ def test_orient_stands_quiet_while_the_walk_does_not_move():
         resources={},
     )
     seen: dict[str, str] = {}
-    hooks.format_delta(payload, orient=(0, 3), rendered_chips=seen)
-    assert hooks.format_delta(payload, orient=(0, 3), last_chips=seen) is None
-    # A walked file is a move, and a move is news.
-    moved = hooks.format_delta(payload, orient=(1, 3), last_chips=seen)
-    assert moved is not None and "orient 1/3" in moved.splitlines()[0]
+    hooks.format_delta(payload, assign_view=_assign_view(3, 1), rendered_chips=seen)
+    assert hooks.format_delta(
+        payload, assign_view=_assign_view(3, 1), last_chips=seen
+    ) is None
+    # A retirement is a move, and a move is news.
+    moved = hooks.format_delta(
+        payload, assign_view=_assign_view(3, 2), last_chips=seen
+    )
+    assert moved is not None and "assign 2/3" in moved.splitlines()[0]
 
 
 # ── #616: notices segment and spawn_completed closeout rendering ─────────────
@@ -4368,28 +4419,37 @@ def test_notices_chip_carries_a_discharge_detail_line():
     assert "2 directives" in detail_plural  # plural at N>1
 
 
-def test_mood_prompt_chip_carries_a_discharge_detail_line():
-    """#1116 residue: `mood?` is the other bare OBLIGATION-class chip — the
-    blank-mood nudge names the ask but never what silences it. The latch
-    itself (fires once, only in `mood`'s absence) is untouched; this only
-    checks the accompanying line renders whenever the chip does.
-    """
-    rendered = hooks.format_delta(_bar_payload(), mood_prompt=True)
-    lines = rendered.splitlines()
-    assert "mood?" in lines[0]
-    detail = "\n".join(lines[1:])
-    assert "mood?" in detail
-    assert ".mood" in detail
-    assert "brnrd emotes" in detail
-
-    # A run already wearing a face never needs the ask — same as the chip
-    # itself (`mood` takes the `if` branch, `mood_prompt` never reaches the
-    # `elif`) — so no detail line either.
-    rendered_with_mood = hooks.format_delta(
-        _bar_payload(), mood="smug_", mood_prompt=True
+def test_overdue_claims_row_names_its_discharge():
+    """w-69: the claims assignment replaced the `mood?` nudge — an overdue
+    row renders its discharge act and its unlocked escalation lines, on the
+    ledger's own edge only."""
+    from brr import assignments as am
+    rows = [{
+        "id": "a-claims", "kind": "claims",
+        "title": "claim .name · .mood · .topics",
+        "discharge": "one write each (brnrd emotes <feeling> finds a face)",
+        "window": 2, "cadence": 4,
+        "detail": ["one line each: .name, .mood, .topics"],
+    }]
+    states = {"a-claims": {"retired": None, "overdue_since": 3, "level": 1}}
+    view = am.LedgerView(rows=rows, states=states, ordinal=3, edge=True)
+    rendered = hooks.format_delta(
+        _bar_payload(), assign_view=view, assign_edge=True
     )
-    detail_with_mood = "\n".join(rendered_with_mood.splitlines()[1:])
-    assert "mood?" not in detail_with_mood
+    lines = rendered.splitlines()
+    assert "assign 0/1" in lines[0]
+    detail = "\n".join(lines[1:])
+    assert "assign overdue" in detail
+    assert "brnrd emotes" in detail
+    assert "one line each" in detail
+
+    # Between edges the chip carries the standing fact alone — no rows.
+    seen: dict[str, str] = {}
+    hooks.format_delta(_bar_payload(), assign_view=view, rendered_chips=seen)
+    quiet = hooks.format_delta(
+        _bar_payload(), assign_view=view, last_chips=seen
+    )
+    assert quiet is None or "assign overdue" not in quiet
 
 
 # ── #1002: a notice carries a `kind`, and only `refused`/`dropped` count ─────
@@ -5371,13 +5431,14 @@ def test_a_quiet_boundary_drops_even_the_vitals_once_seen():
         produce={"known": False, "counts": {}},
     )
     seen: dict[str, str] = {}
-    loud = hooks.format_delta(payload, orient=(1, 3), census="wake 40 KB",
+    view = _assign_view(3, 1)
+    loud = hooks.format_delta(payload, assign_view=view, census="wake 40 KB",
                               rendered_chips=seen)
     assert loud is not None
-    assert "q S80" in loud and "wake 40 KB" in loud and "orient 1/3" in loud
+    assert "q S80" in loud and "wake 40 KB" in loud and "assign 1/3" in loud
 
     # Nothing moved ⇒ nothing at all — vitals included.
-    quiet = hooks.format_delta(payload, orient=(1, 3), census="wake 40 KB",
+    quiet = hooks.format_delta(payload, assign_view=view, census="wake 40 KB",
                                last_chips=seen)
     assert quiet is None
 
@@ -5385,12 +5446,12 @@ def test_a_quiet_boundary_drops_even_the_vitals_once_seen():
     payload["resources"] = {
         "quota": {"status": "known", "summary": "session 79% left"},
     }
-    again = hooks.format_delta(payload, orient=(1, 3), census="wake 40 KB",
+    again = hooks.format_delta(payload, assign_view=view, census="wake 40 KB",
                                last_chips=seen)
     assert again is not None
     bar = again.splitlines()[0]
     assert "q S79" in bar
-    assert "wake 40 KB" not in bar and "orient" not in bar
+    assert "wake 40 KB" not in bar and "assign" not in bar
 
 
 # ── The in-process subagent boundary (#1095) ─────────────────────────────
@@ -5724,16 +5785,18 @@ def test_running_long_detail_compresses_on_the_third_consecutive_boundary():
     assert "- running long · seen ×4 — .keepalive" in compact
 
 
-def test_name_nudge_detail_compresses_on_the_third_consecutive_boundary():
+def test_name_nudge_detail_is_retired():
+    # w-69: the `.name?` detail line and its streak retired into the claims
+    # assignment; an unwritten name renders nothing here at any streak.
     payload = _bar_payload(
         budget={"elapsed_seconds": 300, "budget_seconds": 7200},
         card={"active": True, "stale": False},
     )
-    full = hooks.format_delta(payload, repeat_streaks={"name_nudge": 1})
-    compact = hooks.format_delta(payload, repeat_streaks={"name_nudge": 3})
-    assert "still unwritten" in full
-    assert "still unwritten" not in compact
-    assert "- .name? · seen ×3 — write .name" in compact
+    for streak in (1, 3):
+        rendered = hooks.format_delta(
+            payload, repeat_streaks={"name_nudge": streak}
+        )
+        assert rendered is None or ".name" not in rendered
 
 
 def test_card_stale_detail_compresses_on_the_third_consecutive_boundary():
@@ -6055,11 +6118,11 @@ def test_mood_drift_fires_after_work_moves_and_rearms(tmp_path):
     assert "— still?" not in _inject_text(out)
 
 
-def test_mood_nudge_rides_the_first_bar(tmp_path):
-    # evt-…-mhrx: "at the very beginning, we should also hint that it's
-    # yours to change" — the floor dropped to 0; change-gating prices the
-    # early hint at exactly one render.
+def test_mood_nudge_is_retired_from_the_first_bar(tmp_path):
+    # w-69: the `mood?` hint retired into the claims assignment — a wake
+    # with no ledger gets no blank-mood chatter, and one with a ledger gets
+    # the claims row instead (pinned in test_assignments.py).
     _portal(tmp_path, token="t1", pending=1,
             events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
-    assert "mood?" in out["hookSpecificOutput"]["additionalContext"]
+    assert "mood?" not in out["hookSpecificOutput"]["additionalContext"]

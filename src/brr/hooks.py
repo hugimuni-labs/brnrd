@@ -43,6 +43,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import assignments
 from . import card as card_rule
 from . import course
 from . import facets
@@ -131,38 +132,18 @@ STOP_NO_REPLY_EVENT_KEY = "stop_no_reply_event"
 # right, and is the net under the floor for when some future bug makes it
 # wrong again. Resets alongside the streak at a new waking event.
 STOP_NO_REPLY_ESCALATED_KEY = "stop_no_reply_escalated"
-# The blank-mood boundary nudge (greenlit 2026-08-03, evts w67h/6i1w/2wnq):
-# `card stale`, one tier softer. Unlike `card stale` it never keeps the bar
-# alive (ambient — see `_render_bar`'s `mood_prompt`) and unlike a repeating
-# chip it fires exactly once per run: the condition ("no `.mood` written
-# yet, run old enough to plausibly want one") stays true for the rest of the
-# run's life, so without this latch it would re-render at every boundary the
-# bar happened to open for another reason — #779's "a soft nag has no
-# counter" is precisely that failure. Set the moment the nudge is decided
-# eligible (same discipline as `plan_token` / `GATELESS_ROUTING_KEY`), never
-# cleared — a `.mood` write later is what actually silences it, by making
-# the eligibility check itself go false first.
-MOOD_NUDGE_KEY = "mood_nudge_shown"
-# Whether `.mood` has ever read non-empty this run, tracked independently of
-# the latch above. `_read_mood` answers "does it have content *right now*",
-# and a resident could in principle clear or delete the file after writing
-# it — the constraint is "never renders once any write has happened", not
-# "never renders while the file happens to be empty this boundary", so the
-# disqualification has to survive a mood that later reads blank again.
+# (The `mood?`/`topic?`/`.name?` nudge family and its latch/counter keys
+# retired 2026-08-20 — w-69, `design-the-ignition-assignments.md`: the
+# nudges became the claims assignment, whose ledger lives in
+# `brr.assignments` and whose state sits under `assignments.STATE_KEY` in
+# this same hook state, escalation-laddered instead of latched.)
+#
+# Whether `.mood` has ever read non-empty this run. `_read_mood` answers
+# "does it have content *right now*", and a resident could in principle
+# clear or delete the file after writing it — the claims assignment's
+# discharge is "a write happened", not "the file happens to be non-empty
+# this boundary", so the fact has to survive a mood that later reads blank.
 MOOD_EVER_WRITTEN_KEY = "mood_ever_written"
-# The topic-discoverability chip's render counter (steer, 2026-08-12): a
-# `topic?` marker on the boundary bar while this run has claimed no topic
-# (no `.topics`, no item taken) — same commit-after-render latch idiom as
-# `MOOD_NUDGE_KEY`, generalised from a boolean to a small counter because
-# the maintainer's own furniture rule ("we shouldn't repeat the same
-# un-interactive data into each boundary") caps this at a *few* renders
-# rather than exactly one: unlike the mood nudge (a single soft ask), the
-# affordance's job is to be seen near the start of a run, and one shot can
-# miss a boundary that renders nothing else laden. Never reset once the cap
-# is reached — the bolt's dissent row (`daemon._cut_mismatches`) is the net
-# underneath this invitation, so silence past the cap is not a lost signal.
-TOPIC_NUDGE_COUNT_KEY = "topic_nudge_count"
-_TOPIC_NUDGE_CAP = 2
 # Three-class boundary split (#1116): ambient vitals render on the first
 # post-tool boundary and then only when a threshold crosses, never every tick.
 # The keys below are the per-run ambient-state ledger entries.
@@ -232,12 +213,6 @@ GATE_RECEIPT_NAME = gate_receipt.RECEIPT_NAME
 # dotfile beside `.card`, same idiom as `.keepalive`/`.pr`: never delivered,
 # read fresh at every boundary. First line only — see `_read_mood`.
 MOOD_NAME = ".mood"
-# The blank-mood nudge's elapsed floor: a run this young has not necessarily
-# had a moment worth a face yet, so the chip waits rather than firing at t=0.
-# 0 since 2026-08-19 (evt-…-mhrx: "at the very beginning, we should also
-# hint that it's yours to change"): the nudge rides the run's first bar —
-# change-gating makes the early hint cost exactly one render.
-_MOOD_NUDGE_ELAPSED_SECONDS = 0
 # The resident's own topic claim (the-run-that-claims-its-thread). Same
 # idiom as `.mood` above — read fresh at every boundary rather than through
 # `run_ledger.read_run_topics_control` (which the daemon side uses for the
@@ -752,15 +727,9 @@ def _has_post_tool_obligations(
     budget = portal.get("budget") if isinstance(portal.get("budget"), dict) else {}
     if budget.get("long_running"):
         return True
-    run = portal.get("run") if isinstance(portal.get("run"), dict) else {}
-    run_name = portal.get("name") if isinstance(portal.get("name"), dict) else {}
-    elapsed = budget.get("elapsed_seconds")
-    if (
-        not run_name.get("written")
-        and isinstance(elapsed, (int, float))
-        and elapsed >= 240
-    ):
-        return True
+    # (The unwritten-.name clause retired 2026-08-20 — w-69: the claims
+    # assignment escalates it through the ledger's own edges instead of
+    # holding the bar open every boundary.)
     if plan is not None and plan_edge and plan.owed:
         return True
     # The course's edge mirrors the blueprint's: the card is a control file
@@ -1276,23 +1245,22 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         klass=VITAL,
     ),
     _BarSegment(
-        "orient", "orient",
-        "the orientation ledger (#513 Slice 9): files read from the wake's "
-        "deterministic orientation set (`orient 3/5`). Renders only while "
-        "the walk is open — set non-empty, not every file read, no skip "
-        "**declared** on `.card`. A declaration is `orient: skip` heading a "
-        "line, or the sentence \"assuming prior knowledge, skipping "
-        "orientation\"; merely *mentioning* both words is prose, not a "
-        "declaration, and does not silence the meter. Disappears at "
-        "completion or skip, and never opens the "
-        "bar on its own: a meter is not an obligation, and a meter that "
-        "never leaves trains skimming.",
-        # Obligation by the maintainer's test — *actionable and
-        # turn-off-able*: reading the set, or declaring the skip,
-        # discharges it. The module's older "a meter, not a debt"
-        # note was about whether it may *open* the bar, which is the
-        # gate's question and is unchanged: `orient` is not in the
-        # laden check and still never manufactures a boundary.
+        "assign", "assign",
+        "the ignition assignments' ledger (w-69): boot obligations retired "
+        "of boot obligations total (`assign 3/6`). Every row is in one of "
+        "three states — *current* (quiet: the chip alone carries it), "
+        "*moved* (a discharge renders once), or *overdue* (past its priced "
+        "window it grows a detail line per few boundaries, cap 3, then "
+        "holds) — the same vocabulary the drift asks use. Discharge, or "
+        "the card handoff (a `## Plan` write adopts or defers every open "
+        "row), retires a row; nothing is retired by time. The chip leaves "
+        "the boundary the last row retires and never returns. Orientation "
+        "walk progress rides the orient row's own detail, not a chip of "
+        "its own (the old `orient x/y` meter, retired 2026-08-20).",
+        # Obligation by the maintainer's test — actionable and
+        # turn-off-able: the discharge acts (or the card handoff)
+        # retire every row. Never in the laden gate: escalation
+        # edges open the bar; a standing row does not.
         klass=OBLIGATION,
     ),
     _BarSegment(
@@ -1399,22 +1367,10 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         "surprised the run (the ask: the mood channel questions itself on "
         "an edge, not on every tick, #604); `mood ✗ <name> → <near misses>` "
         "while the written handle resolves to no emote (actionable — "
-        "rewrite the file); and `mood?` once, latched, when ~15m pass with "
-        "no `.mood` ever written — silenced for good by any write.",
-        # the `mood?` form asks for a write. Caller-latched
-        # to once per run, so classing it here costs one chip, not a repeat.
-        klass=OBLIGATION,
-    ),
-    _BarSegment(
-        "topic", "topic",
-        "the topic-discoverability nudge (the-run-that-claims-its-thread, "
-        "steer 2026-08-12): `topic?` while this run has claimed no topic "
-        "(no `.topics`, no item taken), disappearing the boundary a claim "
-        "lands. Caller-latched like `mood?`, but by a small counter rather "
-        "than a boolean — capped at 2 renders per run rather than 1, since "
-        "the affordance's job is to be *seen* near the start of a run and "
-        "one shot can miss a quiet boundary. Never what keeps the bar "
-        "alive on its own; the bolt's dissent row is the net underneath it.",
+        "rewrite the file); and `mood <face> — still?` when the face stood "
+        "still through five work-moves. (The `mood?`/`topic?` blank-claim "
+        "nudges retired 2026-08-20 into the claims assignment — w-69.)",
+        # the surprise/unresolved/still? forms each name an act.
         klass=OBLIGATION,
     ),
     _BarSegment(
@@ -2506,10 +2462,7 @@ def _render_bar(
     resources: dict[str, Any],
     run_name: dict[str, Any],
     mood: str | None,
-    mood_prompt: bool = False,
-    topic_prompt: bool = False,
     surprise: str | None = None,
-    orient: tuple[int, int] | None = None,
     census: str | None = None,
     notices: list[Any] | None = None,
     finished_spawns: list[dict[str, Any]] | None = None,
@@ -2531,6 +2484,9 @@ def _render_bar(
     rendered_chips: dict[str, str] | None = None,
     route_drift: bool = False,
     mood_drift: bool = False,
+    assign_view: "assignments.LedgerView | None" = None,
+    assign_facts: dict[str, Any] | None = None,
+    assign_edge: bool = False,
 ) -> str | None:
     """The mid-run (``post-tool``) status bar: preamble + changed chips + details.
 
@@ -2579,12 +2535,12 @@ def _render_bar(
     never computed the edge (a direct :func:`format_delta` call, most
     existing tests) gets the conservative always-full behaviour.
 
-    *mood_prompt* is the blank-mood nudge's once-per-run latch, owned by the
-    caller (:func:`compute_neutral`) for ``plan_edge``'s reason: "has this
-    already fired" is run state, not snapshot state. Renders only in
-    ``mood``'s own absence (a written mood always wins) and is ambient like
-    ``gate`` / ``⚒`` — never added to the gate below, so it cannot keep the
-    bar alive on its own.
+    *assign_view* / *assign_facts* / *assign_edge* are the ignition ledger's
+    boundary read (w-69), owned by the caller (:func:`compute_neutral`) for
+    ``plan_edge``'s reason: retirement and overdue state are run state, not
+    snapshot state. The chip is ambient like ``course`` — the *edge* is what
+    opens a boundary, at the caller's gate, and the detail lines render only
+    on it.
     """
     segments: list[tuple[str, str]] = []
     budget_chip = _budget_chip(budget)
@@ -2593,13 +2549,14 @@ def _render_bar(
     quota_chip = _quota_chip(resources)
     if quota_chip:
         segments.append(("quota", quota_chip))
-    if orient is not None:
-        # The orientation ledger, open. Deliberately absent from the gate
-        # below: the meter rides boundaries the bar renders anyway and never
-        # manufactures one — an unwalked set is not an obligation (skip is a
-        # first-class outcome), and a segment that could keep the bar alive
-        # at every boundary would train the exact skimming it measures.
-        segments.append(("orient", f"orient {orient[0]}/{orient[1]}"))
+    assign_chip = assignments.chip(assign_view)
+    if assign_chip:
+        # The ignition assignments' standing fact (w-69). Deliberately absent
+        # from the gate below, like the `orient x/y` meter it absorbed: the
+        # chip rides boundaries the bar renders anyway; only an escalation
+        # *edge* (overdue transition, level bump, discharge) opens one, via
+        # `assign_edge` at the caller's render gate.
+        segments.append(("assign", assign_chip))
     if census:
         # Sits beside `orient` because both describe the *wake*, not the run:
         # what the boot cost, and how much of it has been walked. Never in the
@@ -2671,21 +2628,9 @@ def _render_bar(
             # (his ask, evt-…-mhrx): one `still?` beside the claimed face —
             # the ask is the mismatch check, the touch is the discharge.
             segments.append(("mood", f"mood {mood_text} — still?"))
-    elif mood_prompt:
-        # The blank-mood nudge: ambient, once. See the caller's latch
-        # (`MOOD_NUDGE_KEY`) and the docstring above — this branch only
-        # renders what the caller already decided was this run's one ask.
-        segments.append(("mood", "mood?"))
-    if topic_prompt:
-        # The topic-discoverability chip (steer, 2026-08-12): independent of
-        # mood — a run can wear a face and still have claimed no thread.
-        # Ambient like `mood?`, capped at a few renders by the caller's own
-        # counter (`TOPIC_NUDGE_COUNT_KEY`); this branch only renders what
-        # the caller already decided was still within budget. No detail
-        # line: the chip alone is the whole ask, per the maintainer's own
-        # "passive chip, not a nag row" — a subtitle here would double the
-        # furniture the cap exists to avoid.
-        segments.append(("topic", "topic?"))
+    # (The `mood?`/`topic?` blank-claim nudges retired 2026-08-20 — w-69:
+    # the claims assignment carries both, with an escalation ladder instead
+    # of a latch/counter pair.)
     card_chip = _card_chip(card, card_stale)
     if card_chip:
         segments.append(("card", card_chip))
@@ -2717,15 +2662,13 @@ def _render_bar(
                 "exactly like an accepted one, so this is the only way to see "
                 "what was lost."
             )
-    if not mood and mood_prompt:
-        # Same #1116 residue as the notices chip just above: the blank-mood
-        # nudge names the ask (`mood?`) but never what discharges it. The
-        # once-per-run latch itself is untouched — this only adds the line
-        # that rides alongside the chip whenever the caller's latch fires.
-        details.append(
-            "- mood?: no .mood written yet — a short line naming how the "
-            "run feels (see brnrd emotes) rides the dashboard for free; "
-            "one write silences this for good."
+    if assign_edge and assign_view is not None:
+        # The ignition's loud half (w-69): overdue rows, grown to their
+        # unlocked level, rendered only on the ledger's own edge — a level
+        # bump changes the text, which renders once; between bumps the
+        # `assign k/n` chip carries the standing fact for nine characters.
+        details.extend(
+            assignments.detail_lines(assign_view, assign_facts or {})
         )
     if pending:
         # Same framing fix as the prose form (2026-07-05): a bare count reads
@@ -2798,17 +2741,8 @@ def _render_bar(
                 f"- running long: past the {limit}s soft budget — extend via "
                 ".keepalive if the work needs it, else wind down."
             )
-    elapsed = budget.get("elapsed_seconds")
-    if not run_name.get("written") and isinstance(elapsed, (int, float)) and elapsed >= 240:
-        if streaks.get("name_nudge", 0) >= _REPEAT_COMPRESS_THRESHOLD:
-            details.append(
-                f"- .name? · seen ×{streaks['name_nudge']} — write .name"
-            )
-        else:
-            details.append(
-                "- .name: still unwritten — add a short resident-authored run name "
-                "so the live dashboard can identify this work beyond its waking-message excerpt."
-            )
+    # (The standalone `.name?` nudge line retired 2026-08-20 — w-69: the
+    # claims assignment carries the name beside mood and topics.)
     if card_stale:
         age = card.get("age_seconds")
         age_txt = f"{age}s" if age is not None else "a while"
@@ -2866,6 +2800,10 @@ def _render_bar(
         # numbers happen not to have moved.
         "course": route_edge or route_prompt or route_drift,
         "owed": plan_edge,
+        # The ignition ledger rides its own transitions (w-69): an overdue
+        # edge or level bump changes the details, not necessarily the chip
+        # text, so the chip is forced due to stand beside them.
+        "assign": assign_edge,
     }
 
     def _due(key: str, text: str) -> bool:
@@ -2949,10 +2887,7 @@ def format_delta(
     stop: bool = False,
     run_body: str | None = None,
     mood: str | None = None,
-    mood_prompt: bool = False,
-    topic_prompt: bool = False,
     surprise: str | None = None,
-    orient: tuple[int, int] | None = None,
     census: str | None = None,
     note_routing: bool = False,
     event_seen: dict[str, dict[str, Any]] | None = None,
@@ -2974,6 +2909,9 @@ def format_delta(
     rendered_chips: dict[str, str] | None = None,
     route_drift: bool = False,
     mood_drift: bool = False,
+    assign_view: "assignments.LedgerView | None" = None,
+    assign_facts: dict[str, Any] | None = None,
+    assign_edge: bool = False,
 ) -> str | None:
     """Render a compact context delta from the live portal-state payload.
 
@@ -3006,19 +2944,16 @@ def format_delta(
     fresh by the caller (:func:`_read_mood`) at every boundary — rendered as
     a bar segment mid-run, or its own prose line at seed/stop.
 
-    ``mood_prompt`` is the blank-mood nudge's once-per-run latch (the mood
-    seam's ergonomics ask, 2026-08-03), owned by the caller for
-    ``note_routing``'s reason — a mid-run bar segment only (``mood?``), and
-    only in ``mood``'s absence: a run wearing a face never needs asking.
-
-    ``orient`` is the orientation ledger's open value (#513 Slice 9),
-    computed by the caller (:func:`_orientation_progress`) — a mid-run bar
-    segment only, never seed/stop prose: the kernel already names the walk
-    at seed, and by stop the walk is either done, skipped, or moot.
+    ``assign_view`` / ``assign_facts`` / ``assign_edge`` are the ignition
+    ledger's boundary read (w-69), computed by the caller off
+    ``boot-score.json`` + this boundary's observable acts
+    (:func:`brr.assignments.advance`) — the seed header names the ledger,
+    the mid-run bar carries its chip and, on an edge, its overdue rows, and
+    the closeout reads back what was never discharged or deferred.
 
     ``census`` is the wake census (#739), computed by the caller
     (:func:`_wake_census`) off `boot-score.json` — a mid-run bar segment
-    only, for `orient`'s reason: seed already names the boot's shape, and by
+    only: seed already names the boot's shape, and by
     stop the number is a week-old fact about a prompt nobody will re-read.
 
     ``note_routing`` is the gate-less routing fact's once-per-run latch
@@ -3116,9 +3051,8 @@ def format_delta(
             events=action_events,
             budget=budget, outbound=outbound, produce=produce, card=card,
             card_stale=card_stale, resources=resources, run_name=run_name,
-            mood=mood, mood_prompt=mood_prompt, topic_prompt=topic_prompt,
-            surprise=surprise,
-            orient=orient, census=census,
+            mood=mood, surprise=surprise,
+            census=census,
             notices=notices, finished_spawns=finished_spawns,
             event_seen=event_seen, inbox_pointer=inbox_pointer,
             armed=armed, gate_receipt_data=gate_receipt_data,
@@ -3130,37 +3064,66 @@ def format_delta(
             pending_set_changed=pending_set_changed,
             last_chips=last_chips, rendered_chips=rendered_chips,
             route_drift=route_drift, mood_drift=mood_drift,
+            assign_view=assign_view, assign_facts=assign_facts,
+            assign_edge=assign_edge,
         )
 
     lines: list[str] = []
     # Only seed/stop reach this point — post-tool returned via `_render_bar`
     # above — so this is always one of the two verbose-prose headers.
-    header = "brnrd portal seed" if seed else "brnrd portal closeout"
-    # Framing, not just data: a bare count reads as ambient telemetry and
-    # habituates fast — a maintainer caught this live (2026-07-05) when two
-    # follow-ups sat unacknowledged on the outward-facing card for 8 minutes
-    # despite the count appearing in every batch. Non-zero pending events get
-    # an explicit action verb so the line reads as something to do, not
-    # something to note; zero stays the plain affirmative-clear line.
-    # Finished spawns are excluded from the obligation count — they are facts,
-    # not messages with correspondents.
-    if pending_known:
+    #
+    # The seed's header is the ignition frame (w-69, fork 4 signed: the
+    # fold-in replaces the portal seed's prose outright) whenever this wake
+    # carries an assignment list: the obligations live as typed rows in the
+    # boot kernel, so the seed stops re-instructing and instead names the
+    # ledger and its discharge grammar once. The event rows below stay — they
+    # are the pending rows' own discharge surface, and they carry the bodies.
+    # A wake with no assignment list (no boot score: ad-hoc, older daemon)
+    # keeps the pre-w-69 header verbatim.
+    if seed and assign_view is not None and assign_view.total:
         header_line = (
-            f"[{header}] {action_pending} pending event(s), "
-            f"{pending_files} undelivered outbox file(s)."
+            f"[brnrd ignition] {assign_view.total} assignment(s) — the boot "
+            "kernel carries the rows; discharge each, adopt them as your "
+            ".card ## Plan, or defer with a named reason on the card."
         )
+        if pending_known:
+            header_line += (
+                f" {action_pending} pending event(s), {pending_files} "
+                "undelivered outbox file(s)."
+            )
+        else:
+            header_line += (
+                " Could not count pending event(s) — portal state did not "
+                "provide a count."
+            )
+        lines.append(header_line)
     else:
-        header_line = (
-            f"[{header}] could not count pending event(s) — "
-            "portal state did not provide a count."
-        )
-    if action_pending:
-        header_line += (
-            " Address each below with an `event:` reply, or retire it "
-            "deliberately with `note:`, before your next plan boundary or "
-            "closeout."
-        )
-    lines.append(header_line)
+        header = "brnrd portal seed" if seed else "brnrd portal closeout"
+        # Framing, not just data: a bare count reads as ambient telemetry and
+        # habituates fast — a maintainer caught this live (2026-07-05) when two
+        # follow-ups sat unacknowledged on the outward-facing card for 8 minutes
+        # despite the count appearing in every batch. Non-zero pending events get
+        # an explicit action verb so the line reads as something to do, not
+        # something to note; zero stays the plain affirmative-clear line.
+        # Finished spawns are excluded from the obligation count — they are facts,
+        # not messages with correspondents.
+        if pending_known:
+            header_line = (
+                f"[{header}] {action_pending} pending event(s), "
+                f"{pending_files} undelivered outbox file(s)."
+            )
+        else:
+            header_line = (
+                f"[{header}] could not count pending event(s) — "
+                "portal state did not provide a count."
+            )
+        if action_pending:
+            header_line += (
+                " Address each below with an `event:` reply, or retire it "
+                "deliberately with `note:`, before your next plan boundary or "
+                "closeout."
+            )
+        lines.append(header_line)
     lines.extend(_render_event_rows(action_events, event_seen, inbox_pointer))
     if finished_spawns:
         # Distinct fact line: not obligations, but visible to the parent.
@@ -3228,6 +3191,11 @@ def format_delta(
     # and silent when the route is finished or absent.
     if stop:
         lines.extend(course.stop_lines(route))
+        # The ignition's own readback beside the course's (w-69): rows never
+        # discharged or deferred, named once at the closeout. The waking-event
+        # and pending kinds are excluded inside `stop_lines` — the delivery
+        # clause and the pending-event block own those seams already.
+        lines.extend(assignments.stop_lines(assign_view))
         # The bolt (design-the-bolt.md): the closing act, named — or, once
         # cut, affirmed. An accepted bolt collapses the ask (the polarity
         # flip: the declaration was validated at `cut:` time); the annotated
@@ -4520,17 +4488,6 @@ def compute_neutral(
     inject: str | None = None
     block = False
     block_reason: str | None = None
-    # The blank-mood nudge's once-per-run eligibility (piece 1, greenlit
-    # 2026-08-03) — only ever set True in the mid-run branch below; latched
-    # after the fact, once ``inject`` proves this boundary actually rendered
-    # something carrying it (see the commit below the phase dispatch).
-    mood_prompt = False
-    # The topic-discoverability chip's per-boundary eligibility (steer,
-    # 2026-08-12) — only ever set True in the mid-run branch below; latched
-    # after the fact via a counter, not a boolean (`TOPIC_NUDGE_COUNT_KEY`),
-    # since the cap is a few renders rather than exactly one. See the commit
-    # below the phase dispatch, mirroring `mood_prompt`'s own.
-    topic_prompt = False
     # The pending-event seen ledger (letter chrome, see that section): decide
     # once per boundary how each event renders, off the persisted per-run
     # state — hooks are fresh subprocesses, so this is the only memory the
@@ -4592,19 +4549,6 @@ def compute_neutral(
     plan_token = promises.token(plan)
     plan_edge = plan.any_promises and plan_token != state.get("plan_token")
     state["plan_token"] = plan_token
-    # The topic-discoverability chip's eligibility (steer, 2026-08-12):
-    # topicless — no `.topics` claim and no `item` relic on this run's own
-    # manifest (the same signal `daemon._cut_mismatches` checks at the
-    # bolt, read here off the produce counts the daemon already computed
-    # rather than re-parsing `.relics.jsonl`) — and the render cap not yet
-    # reached. Recomputed fresh every boundary (no "ever claimed" latch like
-    # mood's): a claim landing must make the chip vanish immediately, and a
-    # claim that later disappears is out of scope for this build (noted as
-    # an open edge, not a state this chip tracks).
-    topic_nudge_count = int(state.get(TOPIC_NUDGE_COUNT_KEY) or 0)
-    topicless = not topics and not produce_counts.get("item")
-    if topicless and topic_nudge_count < _TOPIC_NUDGE_CAP:
-        topic_prompt = True
     # The course (`.card` §Plan/§Course), read fresh for the same reason as
     # the blueprint above — a control file the portal token never sees, so
     # its only path to the boundary is its own latch. Parsed off the card
@@ -4692,11 +4636,56 @@ def compute_neutral(
     bolt_edge = bolt_token != state.get("bolt_token")
     state["bolt_token"] = bolt_token
 
+    # The ignition assignments (w-69): rows off the persisted boot score
+    # (same artifact-read doctrine as the census and the orientation set —
+    # empty on any absence, so every consumer degrades to "no ledger"), and
+    # the observable-act facts their discharge tests read. Built before the
+    # phase dispatch because all three phases consume them: the seed names
+    # the ledger, the boundary advances it, the closeout reads it back.
+    assign_rows = (
+        assignments.rows_from_score(_read_json(ctx.boot_score_path))
+        if ctx.boot_score_path is not None else []
+    )
+    assign_view: assignments.LedgerView | None = None
+    assign_facts: dict[str, Any] = {}
+    # The orientation observation (Slice 4's instrument) runs whether or not
+    # this wake carries assignments: completeness stays measurable even for
+    # a wake whose score predates the ledger.
+    orient_set_paths = _orientation_set_paths(ctx)
+    orient_progress = _orientation_progress(ctx, payload, state)
+    if assign_rows:
+        portal_card = (
+            portal.get("card") if isinstance(portal.get("card"), dict) else {}
+        )
+        portal_name = (
+            portal.get("name") if isinstance(portal.get("name"), dict) else {}
+        )
+        assign_facts = {
+            "replies_current": portal_outbound.get("replies_current"),
+            "action_pending": action_pending,
+            "card_active": bool(portal_card.get("active")),
+            "course_rows": (
+                [row.text for row in route.rows] if route is not None else None
+            ),
+            "name_written": bool(portal_name.get("written")),
+            "mood_ever": bool(state.get(MOOD_EVER_WRITTEN_KEY)),
+            "topics_claimed": bool(topics) or bool(produce_counts.get("item")),
+            # Done = the walk closed for a real reason: progress reads None
+            # while a non-empty set exists only at completion or a declared
+            # skip (`_orientation_progress`'s three-way None).
+            "orient_done": bool(orient_set_paths) and orient_progress is None,
+            "orient_progress": orient_progress,
+        }
+
     if phase == PHASE_SESSION_START:
+        if assign_rows:
+            # No ledger tick at the seed — the run has acted zero times.
+            # The view exists so the header can name the total.
+            assign_view = assignments.LedgerView(rows=assign_rows)
         inject = format_delta(
             portal, seed=True, mood=mood,
             event_seen=event_decisions, inbox_pointer=inbox_pointer,
-            plan=plan,
+            plan=plan, assign_view=assign_view,
         )
         state["last_token"] = portal.get("change_token")
     elif phase == PHASE_STOP:
@@ -4735,6 +4724,13 @@ def compute_neutral(
         # as ``note_routing``/``GATELESS_ROUTING_KEY`` just above — computed
         # ahead of the call so ``format_delta`` stays a pure read of it.
         no_reply_capped = _stop_no_reply_escalation_capped(state, no_reply_streak)
+        # The ignition ledger's closeout read (w-69): observe the final
+        # batch's acts without spending a boundary — Stop can fire more than
+        # once, and a re-fire is not a boundary the run lived.
+        if assign_rows:
+            assign_view = assignments.advance(
+                assign_rows, state, facts=assign_facts, tick=False
+            )
         if stop_token != state.get("stop_last_token"):
             inject = format_delta(
                 portal, stop=True, run_body=_read_card_body(ctx), mood=mood,
@@ -4743,6 +4739,7 @@ def compute_neutral(
                 plan=plan, route=route,
                 no_reply_streak=no_reply_streak,
                 no_reply_capped=no_reply_capped,
+                assign_view=assign_view,
             )
             # Latch on the render, not on the decision: a Stop whose token
             # did not move injects nothing, and burning the one statement on
@@ -4781,35 +4778,31 @@ def compute_neutral(
         was_surprised = bool(state.get("mood_surprised"))
         edge = surprise if (surprise and not was_surprised) else None
         state["mood_surprised"] = bool(surprise)
-        # The orientation ledger (#513 Slice 9): observe this batch's Reads
-        # against the score's orientation set — unconditionally, because the
-        # observation is Slice 4's instrument and must not depend on whether
-        # a bar happens to render this boundary. The returned value is the
-        # segment's, and only when the walk is still open.
-        orient = _orientation_progress(ctx, payload, state)
         # The wake census (#739): a pure read of the score the daemon wrote
         # before this runner started. Computed here rather than inside the
-        # renderer for the same reason `orient` is — `format_delta` stays a
-        # function of the portal snapshot, and the score is not in it.
+        # renderer because `format_delta` stays a function of the portal
+        # snapshot, and the score is not in it. (The orientation observation
+        # — Slice 4's instrument — already ran above, in the assignment-facts
+        # block, unconditionally: it must not depend on whether a bar renders
+        # this boundary. The `orient x/y` segment it fed retired 2026-08-20
+        # into the orient assignment row — w-69.)
         census = _wake_census(ctx)
-        # The blank-mood nudge (piece 1): eligible only while no `.mood` has
-        # ever been written this run (`MOOD_EVER_WRITTEN_KEY` — survives a
-        # mood that later reads blank again, not just "absent this
-        # boundary"), the run has cleared the elapsed floor, and the nudge
-        # latch has not already fired. Committing `MOOD_NUDGE_KEY` happens
-        # after the render attempt below proves this boundary actually
-        # carried it, not here — eligibility alone is not delivery.
-        if not state.get(MOOD_EVER_WRITTEN_KEY) and not state.get(MOOD_NUDGE_KEY):
-            portal_budget = (
-                portal.get("budget") if isinstance(portal.get("budget"), dict) else {}
-            )
-            elapsed_for_mood = portal_budget.get("elapsed_seconds")
-            mood_prompt = (
-                isinstance(elapsed_for_mood, (int, float))
-                and not isinstance(elapsed_for_mood, bool)
-                and elapsed_for_mood >= _MOOD_NUDGE_ELAPSED_SECONDS
-            )
+        # (The blank-mood nudge retired 2026-08-20 — w-69: the claims
+        # assignment carries the ask, with the same MOOD_EVER_WRITTEN fact
+        # as its discharge input.)
         token = portal.get("change_token")
+
+        # The ignition ledger's boundary tick (w-69): advance retirements
+        # and the overdue clock against this boundary's observable acts.
+        # Its edge — a discharge, an overdue transition, a level bump — is
+        # a gate-opener below, exactly like `route_drift`: computed off run
+        # state, so no portal token ever moves for it.
+        assign_edge = False
+        if assign_rows:
+            assign_view = assignments.advance(
+                assign_rows, state, facts=assign_facts
+            )
+            assign_edge = assign_view.edge
 
         # Three-class split (#1116): obligations, deltas, ambient vitals.
         #
@@ -4870,25 +4863,15 @@ def compute_neutral(
         # Compression-on-repeat (#1116 residue, design-the-live-loop.md §1):
         # advance each compressible detail line's consecutive-laden-boundary
         # streak, off the exact same "due" reads `_has_post_tool_obligations`
-        # and `_render_bar` use for these four lines — so the streak can
+        # and `_render_bar` use for these lines — so the streak can
         # never fall out of step with what actually renders.
         pt_notices = (
             portal.get("notices") if isinstance(portal.get("notices"), list) else []
         )
         pt_card = portal.get("card") if isinstance(portal.get("card"), dict) else {}
-        pt_run_name = (
-            portal.get("name") if isinstance(portal.get("name"), dict) else {}
-        )
-        pt_elapsed = pt_budget.get("elapsed_seconds")
         repeat_streaks = _bump_repeat_streaks(state, {
             "notices": bool(_counted_notices(pt_notices)),
             "running_long": bool(pt_budget.get("long_running")),
-            "name_nudge": (
-                not pt_run_name.get("written")
-                and isinstance(pt_elapsed, (int, float))
-                and not isinstance(pt_elapsed, bool)
-                and pt_elapsed >= 240
-            ),
             "card_stale": bool(pt_card.get("stale")),
         })
 
@@ -4905,12 +4888,11 @@ def compute_neutral(
         if (
             has_obligations or ambient_emit or edge or plan_edge
             or route_edge or bolt_edge or route_drift or mood_drift
-            or token_moved
+            or assign_edge or token_moved
         ):
             inject = format_delta(
-                portal, mood=mood, mood_prompt=mood_prompt,
-                topic_prompt=topic_prompt, surprise=edge,
-                orient=orient, census=census,
+                portal, mood=mood, surprise=edge,
+                census=census,
                 event_seen=event_decisions, inbox_pointer=inbox_pointer,
                 gate_receipt_data=gate_receipt_data,
                 plan=plan, plan_edge=plan_edge,
@@ -4921,6 +4903,8 @@ def compute_neutral(
                 pending_set_changed=pending_set_changed,
                 last_chips=last_chips, rendered_chips=rendered_chips,
                 route_drift=route_drift, mood_drift=mood_drift,
+                assign_view=assign_view, assign_facts=assign_facts,
+                assign_edge=assign_edge,
             )
             state["last_token"] = token
             if ambient_emit and inject is not None:
@@ -4937,19 +4921,6 @@ def compute_neutral(
         # changes as seen, or they would never render at all.
         if inject is not None and rendered_chips:
             state[BAR_LAST_CHIPS_KEY] = rendered_chips
-
-    # Latch on the render, not on the decision (#728's rule, same
-    # discipline as `GATELESS_ROUTING_KEY`): `mood_prompt` proves only that
-    # the chip was *offered* to this boundary's bar, not that the bar had
-    # anything else laden to render it alongside. `inject` still non-``None``
-    # here means the boundary produced fresh, undeduplicated content — the
-    # only case the ambient chip could actually have ridden along in.
-    if mood_prompt and inject is not None:
-        state[MOOD_NUDGE_KEY] = True
-    # Same commit-on-render discipline, counter form: only a boundary that
-    # actually carried the chip spends one of the cap's few renders.
-    if topic_prompt and inject is not None:
-        state[TOPIC_NUDGE_COUNT_KEY] = topic_nudge_count + 1
 
     if phase == PHASE_STOP:
         # `action_events` / `action_pending` were already partitioned above

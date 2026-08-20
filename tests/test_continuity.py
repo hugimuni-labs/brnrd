@@ -223,23 +223,25 @@ def test_worker_is_never_told_to_answer_the_residents_queue() -> None:
     thesis confirmed from its ugly end: **the imperative list at the hot slot is
     what gets acted on; the prose contract beneath it is what gets skimmed.**
     """
-    from brr.prompts import _build_orientation
+    from brr.prompts import _build_assignments
 
-    def actions(*, is_strand: bool) -> list[str]:
+    def titles(*, is_strand: bool) -> list[str]:
         return [
-            s.action
-            for s in _build_orientation(
-                is_daemon=True,
+            a.title
+            for a in _build_assignments(
+                None,
                 is_strand=is_strand,
                 environment="worktree",
                 pending_count=12,
                 has_event_body=True,
+                orientation_set=[],
+                quota_binding_pct=None,
             )
         ]
 
-    assert not any("queued event" in a for a in actions(is_strand=True))
+    assert not any("queued event" in t for t in titles(is_strand=True))
     # …and the resident still gets it: the fix is a gate, not a deletion.
-    assert any("queued event" in a for a in actions(is_strand=False))
+    assert any("queued event" in t for t in titles(is_strand=False))
 
 
 # ── Continuity ────────────────────────────────────────────────────────────────
@@ -895,36 +897,41 @@ def test_attest_blocks_names_the_block_and_both_dates() -> None:
 # them apart so the naming collision this slice inherited cannot regrow.
 
 
-def test_orientation_set_and_next_actions_are_distinct_kernel_blocks() -> None:
-    from brr.bootscore import OrientationFile, OrientationStep
+def test_orientation_files_render_under_their_assignment_row() -> None:
+    # w-69: the standalone `orient:` block and the `next:` list retired
+    # into one typed assignment list; the walk's files render under the
+    # orient row, full absolute paths, byte costs intact.
+    from brr.assignments import Assignment
+    from brr.bootscore import OrientationFile
 
     kernel = _kernel(
-        orientation=[OrientationStep(action="act", reason="go")],
+        assignments=[Assignment(
+            id="a-orient", kind="orient",
+            title="walk the orientation set (2 file(s) · 13,921B)",
+            discharge="Read each, or declare the skip on .card",
+            window=6,
+        )],
         orientation_set=[
             OrientationFile(path="/repo/AGENTS.md", bytes=4120),
             OrientationFile(path="/home/kb/subject-envs.md", bytes=9801),
         ],
     )
-    # The walk: named files, byte costs, and the skip declared as first-class.
-    assert "orient: 2 file(s) · 13,921B" in kernel
-    assert "  · /repo/AGENTS.md (4,120B)" in kernel
-    assert "  · /home/kb/subject-envs.md (9,801B)" in kernel
-    assert "skipping orientation" in kernel
-    # The next-actions list is still its own block, untouched by the set.
-    assert "next:" in kernel
-    assert "  1. act — go" in kernel
-    # The orient block precedes next: — posture, then the walk, then actions.
-    assert kernel.index("orient:") < kernel.index("next:")
-
-
-def test_empty_orientation_set_costs_the_kernel_nothing() -> None:
-    from brr.bootscore import OrientationStep
-
-    # Differential like every kernel line — and this negative can fail: the
-    # positive twin above proves this same renderer emits `orient:` when the
-    # set is non-empty.
-    kernel = _kernel(orientation=[OrientationStep(action="act")])
+    assert "assignments: 1" in kernel
+    assert "walk the orientation set (2 file(s) · 13,921B)" in kernel
+    assert "     · /repo/AGENTS.md (4,120B)" in kernel
+    assert "     · /home/kb/subject-envs.md (9,801B)" in kernel
+    assert "↗6b" in kernel
+    # The retired blocks stay retired.
+    assert "next:" not in kernel
     assert "orient:" not in kernel
+
+
+def test_empty_assignments_cost_the_kernel_nothing() -> None:
+    # Differential like every kernel line — and this negative can fail: the
+    # positive twin above proves this same renderer emits `assignments:`
+    # when rows exist.
+    kernel = _kernel()
+    assert "assignments:" not in kernel
 
 
 def test_orientation_set_rides_to_dict() -> None:
@@ -1161,10 +1168,15 @@ def test_rendered_kernel_names_every_file_the_persisted_score_meters(
     assert [Path(e.path).name for e in score.orientation_set] == [
         "AGENTS.md", "subject-boot-sequence.md",
     ]
-    # …and every selected file is named in the text the wake reads.
+    # …and every selected file is named in the text the wake reads —
+    # since w-69, under the orient assignment row rather than a block of
+    # its own.
     for entry in score.orientation_set:
         assert entry.path in prompt, f"kernel never names {entry.path}"
-    assert f"orient: {len(score.orientation_set)} file(s)" in prompt
+    assert (
+        f"walk the orientation set ({len(score.orientation_set)} file(s)"
+        in prompt
+    )
 
 
 # ── #628 — the walk must name only what the wake was NOT already handed ──
