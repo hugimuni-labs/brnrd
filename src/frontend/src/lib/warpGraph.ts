@@ -422,13 +422,13 @@ export interface GoalReading {
 	 *  window vs a lifetime sum, whatever makes two same-`key` values
 	 *  arithmetically incompatible. `null` when the writer didn't set one;
 	 *  comparisons then fall back to `source` (see `readingBasis`), mirroring
-	 *  `items.py`'s `Reading.basis` / `_reading_basis`. */
+	 *  `items.py`'s `Reading.basis` / `reading_basis`. */
 	basis: string | null;
 }
 
 /** The value two readings must share for a Δ between them to be
  *  constructible. Explicit `basis` wins; absent one, `source` is the best
- *  available population signal. Mirrors `items.py`'s `_reading_basis`. */
+ *  available population signal. Mirrors `items.py`'s `reading_basis`. */
 export function readingBasis(reading: GoalReading): string {
 	return reading.basis ? reading.basis : reading.source;
 }
