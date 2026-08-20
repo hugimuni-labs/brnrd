@@ -374,11 +374,14 @@ def test_relic_merge_pr_spellings_write_the_same_record(
     assert record["kind"] == "merge"
     assert record["pr"] == 1545
     assert record["url"] == "https://github.com/hugimuni-labs/brnrd/pull/1545"
-    # A full URL preserves its explicit repository; the two shorthand forms
-    # leave it implicit.  Collection resolves both to the same repository.
-    assert record.get("repo") == (
-        "hugimuni-labs/brnrd" if ref.startswith("https://") else None
-    )
+    # All three spellings leave ``repo`` implicit when the URL names *this*
+    # checkout's own origin.  ``repo`` is part of the relic's dedupe identity
+    # (``relics._identity``) and ``derive_auto`` never writes it, so a full
+    # URL that carried it would give the same merge two identities and
+    # double-count against the row archaeology derives later.  The earlier
+    # spelling of this assertion required exactly that, which is why it is
+    # rewritten here rather than relaxed: it specified the defect.
+    assert record.get("repo") is None
 
 
 def test_relic_merge_sha_writes_the_derived_record_shape(
@@ -398,6 +401,38 @@ def test_relic_merge_sha_writes_the_derived_record_shape(
         "sha": sha,
         "url": f"https://github.com/hugimuni-labs/brnrd/commit/{sha}",
     }]
+
+
+def test_relic_merge_from_a_full_url_dedupes_against_the_derived_row(
+    tmp_path, monkeypatch,
+):
+    """The load-bearing case, driven end to end through the CLI.
+
+    A remote-only merge is self-reported with whatever spelling the resident
+    has to hand — often the PR URL, because that is what ``gh pr merge``
+    prints.  When the merge commit later reaches the checkout,
+    ``derive_auto`` writes its own row for the same merge, carrying ``sha``
+    and no ``repo``.  The two must collapse to one.
+    """
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    assert main([
+        "relic", "merge",
+        "https://github.com/hugimuni-labs/brnrd/pull/1545",
+    ]) == 0
+    reported = _relic_lines(outbox)[0]
+
+    derived = {
+        "kind": "merge", "pr": 1545, "sha": "64aa034c1234567890",
+        "subject": "Merge pull request #1545 from owner/branch",
+        "url": "https://github.com/hugimuni-labs/brnrd/pull/1545",
+    }
+
+    from brr import relics as relics_mod
+
+    assert relics_mod.dedupe([reported, derived]) == [derived]
 
 
 def test_relic_merge_refuses_unparseable_input(tmp_path, monkeypatch, capsys):
