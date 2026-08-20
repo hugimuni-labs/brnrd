@@ -9414,15 +9414,27 @@ def _drain_outbox(
                         + f"daemon: {annotated} check{plural} unresolved — "
                         + " · ".join(mismatches)
                     )
-                # Deliver on the current event through the existing `event:`
-                # lane — the verified lane until #1205's fresh-send primitive
-                # exists (design doc §The porcelain). Falling through (no
-                # `continue`) reuses the general reply block below verbatim —
-                # its cross-inbox/redirect/stats machinery, unduplicated.
-                # Force-address the current event regardless of what the
-                # declaration file happened to also carry.
+                # Gate-owned wakes keep using the current event's verified
+                # reply lane. A gate-less wake has no such carrier, so aim the
+                # accepted body's delivery through the same memoized
+                # ``notify.gate`` fallback as the terminal stream. Acceptance
+                # and its durable stamp happened above: failure to resolve or
+                # deliver this fallback must never roll the bolt back.
                 fm.pop("event", None)
                 fm.pop("gate", None)
+                cut_source = str(getattr(task, "source", "") or "")
+                if cut_source and not _gate_owns_source(cut_source):
+                    cut_cfg = conf.load_config(repo_root or emit.brr_dir.parent)
+                    notify_gate = _cached_notify_gate(
+                        task,
+                        cut_cfg,
+                        emit.brr_dir,
+                        conversation_key=str(
+                            getattr(task, "conversation_key", "") or ""
+                        ),
+                    )
+                    if notify_gate:
+                        fm["gate"] = notify_gate
             if cut_guard.tripped:
                 continue
         gate = str(fm.get("gate") or "").strip()

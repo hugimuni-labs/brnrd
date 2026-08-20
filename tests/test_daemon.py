@@ -12333,7 +12333,7 @@ def test_issue_filing_claims_matches_the_conservative_pattern_set():
 
 def _drain_cut(
     tmp_path, frontmatter, *, meta=None, stats=None, repo_root=None, filename="cut.md",
-    topics="the-loom",
+    topics="the-loom", source="telegram",
 ):
     """Stage one ``cut:`` directive and drain it.
 
@@ -12354,11 +12354,11 @@ def _drain_cut(
     outbox.mkdir(parents=True, exist_ok=True)
     if topics is not None:
         (outbox / ".topics").write_text(topics + "\n", encoding="utf-8")
-    path = protocol.create_event(inbox, "telegram", "original", status="processing")
+    path = protocol.create_event(inbox, source, "original", status="processing")
     event_id = path.stem
     (outbox / filename).write_text(frontmatter, encoding="utf-8")
     task = Run(
-        id="run-parent", event_id=event_id, body="original", source="telegram",
+        id="run-parent", event_id=event_id, body="original", source=source,
         meta=dict(meta or {}),
     )
     promoted = daemon._drain_outbox(
@@ -12390,6 +12390,68 @@ def test_drain_outbox_cut_minimal_bolt_is_accepted(tmp_path):
     assert "All done here." in protocol.read_partial(partial_path)
     assert promoted == 1
     assert not (outbox / "cut.md").exists()
+
+
+def test_drain_outbox_cut_on_gateless_wake_uses_notify_gate_fallback(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(
+        daemon.conf, "load_config", lambda _root: {"notify.gate": "telegram"},
+    )
+    monkeypatch.setattr(
+        daemon, "_gate_can_deliver", lambda _brr, gate: gate == "telegram",
+    )
+
+    promoted, task, _outbox, inbox, responses, event_id = _drain_cut(
+        tmp_path, "---\ncut: true\n---\nThe scheduled work is done.\n",
+        source="schedule",
+    )
+
+    assert task.meta["bolt"]["accepted_at"]
+    assert protocol.list_partials(responses, event_id) == []
+    [fallback_event] = protocol.list_done(inbox, "telegram")
+    assert protocol.read_response(responses, fallback_event["id"]) == (
+        "The scheduled work is done."
+    )
+    assert promoted == 1
+
+
+def test_drain_outbox_cut_on_gate_owned_wake_stays_on_current_event(
+    tmp_path, monkeypatch,
+):
+    def resolver_must_not_run(*_args, **_kwargs):
+        raise AssertionError("gate-owned cut must not resolve a fallback gate")
+
+    monkeypatch.setattr(daemon, "_cached_notify_gate", resolver_must_not_run)
+
+    promoted, task, _outbox, inbox, responses, event_id = _drain_cut(
+        tmp_path, "---\ncut: true\n---\nReply to the current thread.\n",
+    )
+
+    assert task.meta["bolt"]["accepted_at"]
+    [partial_path] = protocol.list_partials(responses, event_id)
+    assert protocol.read_partial(partial_path) == "Reply to the current thread."
+    assert protocol.list_done(inbox, "telegram") == []
+    assert promoted == 1
+
+
+def test_drain_outbox_cut_without_any_gate_stays_undeliverable_after_stamp(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(daemon.conf, "load_config", lambda _root: {})
+    monkeypatch.setattr(daemon, "_gate_can_deliver", lambda _brr, _gate: False)
+
+    promoted, task, outbox, _inbox, responses, event_id = _drain_cut(
+        tmp_path, "---\ncut: true\n---\nNobody can carry this body.\n",
+        source="schedule",
+    )
+
+    assert task.meta["bolt"]["accepted_at"]
+    assert protocol.list_partials(responses, event_id) == []
+    [notice] = daemon._read_outbox_notices(outbox)
+    assert "staged undeliverable" in notice["text"]
+    assert "no gate owns schedule events" in notice["text"]
+    assert promoted == 0
 
 
 def test_drain_outbox_cut_bounces_double_wrapped_staging_casualty(tmp_path):
