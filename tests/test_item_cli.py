@@ -182,6 +182,80 @@ def test_goal_record_accepts_a_basis_flag(tmp_path, monkeypatch, capsys):
     assert readings[-1].basis == "window5"
 
 
+def test_goal_record_warns_on_changed_basis_and_still_appends(tmp_path, monkeypatch, capsys):
+    _repo_with_home(tmp_path, monkeypatch)
+    _new_goal(metric="impressions")
+    capsys.readouterr()
+    main(["goal", "record", "g-1", "impressions", "333", "--basis", "lifetime"])
+    capsys.readouterr()
+
+    rc = main(["goal", "record", "g-1", "impressions", "147", "--basis", "window5"])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert captured.out.startswith("g-1 impressions = 147")
+    assert "standing basis for impressions is lifetime" in captured.err
+    assert "given basis is window5" in captured.err
+    assert "Δ will be refused" in captured.err
+    from brr import cli as cli_mod
+    from brr import items as items_mod
+
+    warp_root, err = cli_mod._item_context()
+    assert err is None
+    readings = items_mod.load_readings(warp_root, "g-1")
+    assert [reading.basis for reading in readings] == ["lifetime", "window5"]
+
+
+def test_goal_record_without_basis_prints_standing_basis(tmp_path, monkeypatch, capsys):
+    _repo_with_home(tmp_path, monkeypatch)
+    _new_goal(metric="impressions")
+    capsys.readouterr()
+    main(["goal", "record", "g-1", "impressions", "333", "--basis", "lifetime"])
+    capsys.readouterr()
+
+    rc = main(["goal", "record", "g-1", "impressions", "334"])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert captured.out.startswith("g-1 impressions = 334")
+    assert "standing basis for impressions: lifetime" in captured.err
+
+
+def test_goal_record_with_matching_basis_prints_no_warning(tmp_path, monkeypatch, capsys):
+    _repo_with_home(tmp_path, monkeypatch)
+    _new_goal(metric="impressions")
+    capsys.readouterr()
+    main(["goal", "record", "g-1", "impressions", "333", "--basis", "lifetime"])
+    capsys.readouterr()
+
+    rc = main(["goal", "record", "g-1", "impressions", "334", "--basis", "lifetime"])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert captured.out.startswith("g-1 impressions = 334")
+    assert captured.err == ""
+
+
+def test_goal_record_first_reading_prints_no_warning_and_appends(tmp_path, monkeypatch, capsys):
+    _repo_with_home(tmp_path, monkeypatch)
+    _new_goal(metric="impressions")
+    capsys.readouterr()
+
+    rc = main(["goal", "record", "g-1", "impressions", "333", "--basis", "lifetime"])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert captured.out.startswith("g-1 impressions = 333")
+    assert captured.err == ""
+    from brr import cli as cli_mod
+    from brr import items as items_mod
+
+    warp_root, err = cli_mod._item_context()
+    assert err is None
+    readings = items_mod.load_readings(warp_root, "g-1")
+    assert len(readings) == 1
+
+
 def test_goal_show_marks_a_refused_cross_basis_delta(tmp_path, monkeypatch, capsys):
     # The live bug's shape reproduced through the CLI end to end: same
     # key, same source, two denominators — `goal show` must say the
