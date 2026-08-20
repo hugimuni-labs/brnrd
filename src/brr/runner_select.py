@@ -341,7 +341,13 @@ def select_runner(
        escalates; it exists for users who do not want cost-aware movement.
     3. **Cost-aware policy** prefers the cheapest *local* profile **of the
        target class** (``default_class``, ``balanced`` when unset), then the
-       cheapest below it, then the cheapest of any class. A **relay** (paid,
+       cheapest *above* it, then the cheapest below, then any. The target is
+       a floor before it is a ceiling: "at least balanced" (maintainer,
+       2026-08-20) means a machine with no balanced Core lands on the
+       cheapest strong one, and economy is the last resort rather than the
+       first fallback. Only profiles with a *known* class may fill the
+       above-target slot — an unclassed legacy profile never silently
+       escalates (the #1524 guard, kept here). A **relay** (paid,
        brnrd-owned) profile is *never* auto-selected here — relay needs
        spend-plan consent, so it only enters via an explicit override or a
        later consent flow.
@@ -379,8 +385,12 @@ def select_runner(
     target = default_class or BALANCED
     target_rank = _LOCAL_CLASS_ORDER.get(target, len(_LOCAL_CLASS_ORDER))
     in_class = [r for r in local if r.class_rank == target_rank]
-    at_or_below = [r for r in local if r.class_rank <= target_rank]
-    return cheapest(in_class or at_or_below or local)
+    above = [
+        r for r in local
+        if r.cost_class in _LOCAL_CLASS_ORDER and r.class_rank > target_rank
+    ]
+    below = [r for r in local if r.class_rank < target_rank]
+    return cheapest(in_class or above or below or local)
 
 
 def automatic_fallback_runner(
