@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
+import os
 import subprocess
 import threading
 import time
@@ -5111,6 +5112,36 @@ def test_boundary_transcript_records_the_injection_beside_the_wake(tmp_path):
     # against the rendered native output, not against a second rendering.
     assert records[0]["inject"] == _inject_text(out)
     assert records[0]["at"].endswith("Z")
+
+
+def test_boundary_transcript_records_ordered_tool_names_only(tmp_path):
+    """The real hook writer preserves a batch's acts without its payloads."""
+    worktree = os.path.realpath(os.path.join(os.path.dirname(__file__), ".."))
+    assert os.path.realpath(hooks.__file__).startswith(worktree + os.sep)
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=0, events=[])
+    payload = json.dumps({
+        "hook_event_name": "PostToolBatch",
+        "tool_calls": [
+            {
+                "tool_name": "Read",
+                "tool_input": {"file_path": "/secret"},
+                "tool_use_id": "toolu_secret",
+                "tool_response": "credential-shaped response",
+            },
+            {"tool_name": "Bash", "tool_input": {"command": "huge command"}},
+        ],
+    })
+
+    hooks.run_hook(hooks.PHASE_POST_TOOL, payload, env)
+    hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+
+    records = _transcript(run_dir)
+    assert records[0]["tools"] == ["Read", "Bash"]
+    assert "tool_input" not in records[0]
+    assert "tool_use_id" not in records[0]
+    assert "tool_response" not in records[0]
+    assert "tools" not in records[1]
 
 
 def test_a_silent_boundary_is_still_recorded(tmp_path):
