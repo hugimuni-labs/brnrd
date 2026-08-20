@@ -12413,6 +12413,36 @@ def test_drain_outbox_cut_bounces_double_wrapped_staging_casualty(tmp_path):
     assert protocol.list_partials(responses, event_id) == []
 
 
+def test_drain_outbox_drops_named_cut_file_with_empty_frontmatter(tmp_path):
+    promoted, task, outbox, _inbox, responses, event_id = _drain_cut(
+        tmp_path,
+        "---\ncut: true\nproduce: none\nNo closing fence.\n",
+        filename="do-1700000000000-cut-0.md",
+    )
+
+    assert promoted == 0
+    assert "bolt" not in task.meta
+    [notice] = daemon._read_outbox_notices(outbox)
+    assert notice["kind"] == "dropped"
+    assert notice["source_file"] == "do-1700000000000-cut-0.md"
+    assert notice["text"].startswith("cut dropped:")
+    assert "staging casualty, not a reply" in notice["text"]
+    assert protocol.list_partials(responses, event_id) == []
+
+
+def test_drain_outbox_plain_frontmatterless_reply_still_delivers(tmp_path):
+    promoted, task, outbox, _inbox, responses, event_id = _drain_cut(
+        tmp_path, "A plain reply still takes the default route.\n",
+        filename="reply.md",
+    )
+
+    assert promoted == 1
+    assert "bolt" not in task.meta
+    assert daemon._read_outbox_notices(outbox) == []
+    [partial_path] = protocol.list_partials(responses, event_id)
+    assert "plain reply" in protocol.read_partial(partial_path)
+
+
 def test_drain_outbox_cut_undispositioned_pending_event_bounces(tmp_path):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
