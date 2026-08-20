@@ -2266,6 +2266,15 @@ def cmd_relic_merge(args):
         repo = parsed_pr[0]
 
     links = relics.forge_links(_maybe_repo_root())
+    # ``repo`` names *another* project, per the flag's own help text — this
+    # checkout's own origin is implicit, and ``derive_auto`` never writes it.
+    # Carrying it anyway would make the same merge wear two identities
+    # depending on how the resident spelled it (``relics._identity`` keys on
+    # ``repo``), so a full PR URL for this very repo would double-count
+    # against the row archaeology derives later. Driven, not reasoned:
+    # ``dedupe([url_form, derived])`` returned two rows before this line.
+    if repo and links.repo_path and repo == links.repo_path:
+        repo = ""
     fields = {"repo": repo or None}
     if parsed_pr:
         number = int(parsed_pr[1])
