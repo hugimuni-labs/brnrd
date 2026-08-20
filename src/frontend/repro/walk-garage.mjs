@@ -45,7 +45,9 @@ async function waitFor(url) {
 		try {
 			const r = await fetch(url);
 			if (r.ok || r.status === 404) return;
-		} catch {}
+		} catch {
+			/* not up yet */
+		}
 		await delay(500);
 	}
 	throw new Error('no server');
