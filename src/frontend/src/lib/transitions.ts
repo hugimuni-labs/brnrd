@@ -18,6 +18,20 @@
 // the first one that had to be spelled the way node reads it.
 import { whenBooted } from './boot.ts';
 
+/** Garage motion: fast-in, 7px overshoot, hard stop, then one shake frame. */
+export function garageSpring(_node: Element, params: { duration?: number } = {}) {
+	const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+	return {
+		duration: reduced ? 0 : (params.duration ?? 220),
+		css: (t: number) => {
+			if (t >= 1) return 'transform: translateY(0); opacity: 1';
+			const frame = Math.min(5, Math.floor(t * 6));
+			const offsets = [-18, -5, 7, 0, -2, 0];
+			return `transform: translateY(${offsets[frame]}px); opacity: ${Math.min(1, t * 3)}`;
+		}
+	};
+}
+
 export interface GlitchRevealParams {
 	/** Total transition time in ms. Kept short by design — "quite fast to
 	 * not disturb" — so it reads as a flourish, not a wait. */
