@@ -468,15 +468,16 @@ write one:
 brnrd relic issue 686 --closed [--repo owner/name]
 brnrd relic issue 764 --opened
 brnrd relic pr 1175 [--summary TEXT]
+brnrd relic merge 1175  # also accepts #1175, a full PR URL, or a commit sha
 brnrd relic comment "issue #903 — stale-open sweep"
 brnrd relic message "design fork answered" [--channel telegram]
 brnrd relic file /tmp/report.md
 brnrd relic item the-loom#gate-chips-row-on-repos
 ```
 
-Same appended lines, none of the JSON. Commits, merges, the branch, kb
+Same appended lines, none of the JSON. Local commits and merges, the branch, kb
 pages, and your reply are all derived — `git log`, the `.pr` control, the
-knowledge capture — but issue actions, comments, ad-hoc messages, and a
+knowledge capture — but remote-only merges, issue actions, comments, ad-hoc messages, and a
 file produced outside a commit happen inside your shell and leave the
 daemon nothing to observe. The raw JSONL grammar above still works for
 anything a command doesn't cover.

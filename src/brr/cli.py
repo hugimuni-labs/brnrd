@@ -583,6 +583,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="one line describing the PR")
     p.set_defaults(func=cmd_relic_pr)
 
+    p = relic_sub.add_parser(
+        "merge", help="record a merge this run performed remotely")
+    p.add_argument(
+        "ref", help="merged PR number, #N, full forge PR URL, or commit sha")
+    p.add_argument(
+        "--repo", default=None, metavar="owner/name",
+        help="the merge's project, when it is not this checkout's origin — "
+             "inferred from a full URL's own owner/repo when omitted")
+    p.set_defaults(func=cmd_relic_merge)
+
     # The blueprint's front door — `.promises.jsonl`, the opposite tense of
     # the relics manifest (#1008). Its own top-level verb rather than a
     # `relic` subcommand: a promise is not produce, the two live in different
@@ -2198,6 +2208,100 @@ def cmd_relic_pr(args):
         return 1
     where = f" in {repo}" if repo else ""
     print(f"[brnrd relic] pr #{number}{where}")
+    return 0
+
+
+def cmd_relic_merge(args):
+    """Append a self-reported ``merge`` relic to this run's manifest.
+
+    Local merge commits are already derived by :func:`relics.derive_auto`.
+    This front door covers the deliberately non-derivable case: a merge
+    performed on the forge whose resulting commit never entered the run's
+    checkout.  Its records mirror the derived grammar — PR merges carry
+    ``pr`` and sha-only merges carry ``sha`` — and use the same forge link
+    resolver as collection.
+    """
+    import re
+    import sys
+
+    from . import forges
+    from . import relics
+
+    outbox_dir = _wake_outbox_dir()
+    if outbox_dir is None:
+        print(
+            "[brnrd relic] no run outbox in this environment — `brnrd relic` "
+            "records produce for a live brnrd run, and the daemon names the "
+            "outbox through BRR_OUTBOX_DIR / BRR_PORTAL_STATE. Nothing was "
+            "written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    raw = str(getattr(args, "ref", "") or "").strip()
+    parsed_pr = forges.parse_pull_request_ref(raw)
+    sha = (
+        raw.lower()
+        if not parsed_pr and re.fullmatch(r"[0-9a-fA-F]{7,64}", raw)
+        else None
+    )
+    if not parsed_pr and not sha:
+        print(
+            f"[brnrd relic] not a PR number, PR URL, or commit sha: {raw!r} "
+            "— want a positive integer, `#N`, a full forge PR URL, or a "
+            "7-64 character hexadecimal commit sha. Nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    repo = str(getattr(args, "repo", None) or "").strip().strip("/")
+    if repo and repo.count("/") < 1:
+        print(
+            f"[brnrd relic] not a repo: {repo!r} — want owner/name, e.g. "
+            "`--repo hugimuni-labs/brnrd`. Nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+    if parsed_pr and not repo and parsed_pr[0]:
+        repo = parsed_pr[0]
+
+    links = relics.forge_links(_maybe_repo_root())
+    # ``repo`` names *another* project, per the flag's own help text — this
+    # checkout's own origin is implicit, and ``derive_auto`` never writes it.
+    # Carrying it anyway would make the same merge wear two identities
+    # depending on how the resident spelled it (``relics._identity`` keys on
+    # ``repo``), so a full PR URL for this very repo would double-count
+    # against the row archaeology derives later. Driven, not reasoned:
+    # ``dedupe([url_form, derived])`` returned two rows before this line.
+    if repo and links.repo_path and repo == links.repo_path:
+        repo = ""
+    fields = {"repo": repo or None}
+    if parsed_pr:
+        number = int(parsed_pr[1])
+        fields.update(pr=number, url=links.pull_request(number, repo or None))
+        label = f"pr #{number}"
+    else:
+        fields.update(sha=sha, url=links.commit(sha, repo or None))
+        label = f"commit {sha}"
+
+    control = outbox_dir / relics.CONTROL_NAME
+    try:
+        before = control.stat().st_size
+    except OSError:
+        before = 0
+    relics.append(outbox_dir, "merge", **fields)
+    try:
+        after = control.stat().st_size
+    except OSError:
+        after = before
+    if after <= before:
+        print(
+            f"[brnrd relic] could not append to {control} — nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+    where = f" in {repo}" if repo else ""
+    print(f"[brnrd relic] merge {label}{where}")
     return 0
 
 

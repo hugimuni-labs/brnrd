@@ -512,6 +512,21 @@ def test_dedupe_prefers_url_bearing_row_and_merges_fields():
     assert out[0]["url"] == "https://x/issues/7"
 
 
+def test_dedupe_matches_reported_and_auto_derived_pr_merge():
+    """A remote report has only the PR; archaeology later adds its sha."""
+    reported = {
+        "kind": "merge", "pr": 1545,
+        "url": "https://github.com/hugimuni-labs/brnrd/pull/1545",
+    }
+    derived = {
+        "kind": "merge", "pr": 1545, "sha": "64aa034c1234567890",
+        "subject": "Merge pull request #1545 from owner/branch",
+        "url": "https://github.com/hugimuni-labs/brnrd/pull/1545",
+    }
+
+    assert relics.dedupe([reported, derived]) == [derived]
+
+
 def test_dedupe_keeps_distinct_identities_apart():
     records = [
         {"kind": "pr", "number": 1},
