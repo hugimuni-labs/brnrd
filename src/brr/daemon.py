@@ -9424,15 +9424,31 @@ def _drain_outbox(
                 fm.pop("gate", None)
                 cut_source = str(getattr(task, "source", "") or "")
                 if cut_source and not _gate_owns_source(cut_source):
-                    cut_cfg = conf.load_config(repo_root or emit.brr_dir.parent)
-                    notify_gate = _cached_notify_gate(
-                        task,
-                        cut_cfg,
-                        emit.brr_dir,
-                        conversation_key=str(
-                            getattr(task, "conversation_key", "") or ""
-                        ),
-                    )
+                    # Both calls below read disk (`.brr/config`, gate health,
+                    # thread history). They sit *after* an accepted, stamped
+                    # bolt and *inside* ``cut_guard``, whose ``__exit__``
+                    # quarantines the declaration file and trips the
+                    # ``continue`` below — so an unguarded raise here would
+                    # not merely fail to improve delivery, it would destroy
+                    # the delivery this branch already had. Before this
+                    # fallback existed the window held two ``fm.pop`` calls
+                    # and could not raise; keep that property. Resolution
+                    # failure degrades to the pre-existing undeliverable
+                    # staging, which is honest and recorded.
+                    try:
+                        cut_cfg = conf.load_config(
+                            repo_root or emit.brr_dir.parent,
+                        )
+                        notify_gate = _cached_notify_gate(
+                            task,
+                            cut_cfg,
+                            emit.brr_dir,
+                            conversation_key=str(
+                                getattr(task, "conversation_key", "") or ""
+                            ),
+                        )
+                    except Exception:  # noqa: BLE001 - see the comment above
+                        notify_gate = ""
                     if notify_gate:
                         fm["gate"] = notify_gate
             if cut_guard.tripped:
