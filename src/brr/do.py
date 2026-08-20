@@ -85,8 +85,11 @@ next: none
 <woven reply>"""
 
 _CUT_FENCE_ERROR = (
-    "invalid cut declaration fence: the opening frontmatter fence has no "
-    "closing `---`; nothing was staged. Close the fence before the woven reply."
+    "invalid cut declaration fence: no closing `---` on a line of its own "
+    "before the woven reply; nothing was staged. A closer carrying anything "
+    "else (`--- `, `---extra`) reads as missing here on purpose — the check "
+    "is deliberately stricter than the parser, because the failure it "
+    "prevents is silent."
 )
 
 #: Suggested/default wait for a staged directive to be drained, per the
