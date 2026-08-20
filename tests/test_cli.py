@@ -354,6 +354,64 @@ def test_relic_pr_reports_a_failed_append(tmp_path, monkeypatch, capsys):
     assert "could not append" in capsys.readouterr().err
 
 
+# ── brnrd relic merge ────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("ref", [
+    "1545",
+    "#1545",
+    "https://github.com/hugimuni-labs/brnrd/pull/1545",
+])
+def test_relic_merge_pr_spellings_write_the_same_record(
+    ref, tmp_path, monkeypatch,
+):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    assert main(["relic", "merge", ref]) == 0
+    record = _relic_lines(outbox)[0]
+    assert record["kind"] == "merge"
+    assert record["pr"] == 1545
+    assert record["url"] == "https://github.com/hugimuni-labs/brnrd/pull/1545"
+    # A full URL preserves its explicit repository; the two shorthand forms
+    # leave it implicit.  Collection resolves both to the same repository.
+    assert record.get("repo") == (
+        "hugimuni-labs/brnrd" if ref.startswith("https://") else None
+    )
+
+
+def test_relic_merge_sha_writes_the_derived_record_shape(
+    tmp_path, monkeypatch,
+):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=REPO, check=True,
+        stdout=subprocess.PIPE, text=True,
+    ).stdout.strip()
+
+    assert main(["relic", "merge", sha]) == 0
+    assert _relic_lines(outbox) == [{
+        "kind": "merge",
+        "sha": sha,
+        "url": f"https://github.com/hugimuni-labs/brnrd/commit/{sha}",
+    }]
+
+
+def test_relic_merge_refuses_unparseable_input(tmp_path, monkeypatch, capsys):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    assert main(["relic", "merge", "not-a-merge"]) == 1
+    err = capsys.readouterr().err
+    assert "PR number, PR URL, or commit sha" in err
+    assert "nothing was written" in err.lower()
+    assert not (outbox / ".relics.jsonl").exists()
+
+
 # ── brnrd relic item (#972, THE WELD) ────────────────────────────────────────
 #
 # The warp-item half of the manifest: the run's ancestry address
