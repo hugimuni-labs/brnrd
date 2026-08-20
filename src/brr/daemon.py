@@ -9043,6 +9043,15 @@ def _drain_outbox(
             body = body.strip()
         if parse_guard.tripped:
             continue
+        if not fm and fpath.match("do-*-cut-*.md"):
+            _record_outbox_notice(
+                outbox_dir,
+                "cut dropped: empty frontmatter in staged cut — "
+                "staging casualty, not a reply",
+                kind="dropped", lifetime="run", source_file=fpath.name,
+            )
+            _retire_outbox_staging(fpath)
+            continue
         if _runner_policy_proposal_requested(fm):
             with _OutboxEntryGuard(outbox_dir, fpath):
                 if _queue_runner_policy_proposal(

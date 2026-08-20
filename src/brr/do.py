@@ -84,6 +84,14 @@ next: none
 ---
 <woven reply>"""
 
+_CUT_FENCE_ERROR = (
+    "invalid cut declaration fence: no closing `---` on a line of its own "
+    "before the woven reply; nothing was staged. A closer carrying anything "
+    "else (`--- `, `---extra`) reads as missing here on purpose — the check "
+    "is deliberately stricter than the parser, because the failure it "
+    "prevents is silent."
+)
+
 #: Suggested/default wait for a staged directive to be drained, per the
 #: task's own guidance — long enough to clear the daemon's heartbeat tick
 #: (`daemon._HEARTBEAT_INTERVAL`, ~10s) at least once with margin, short
@@ -297,6 +305,11 @@ def stage_cut(
 
     filename = stage_filename("cut", index)
     if text.startswith("---\n"):
+        # An empty parse means either a valid block with no recognized keys or
+        # no block at all. Prove the closing fence independently before using
+        # the empty mapping as permission to splice in ``cut: true``.
+        if not any(line == "---" for line in text.splitlines()[1:]):
+            return None, _CUT_FENCE_ERROR
         fm = protocol.parse_frontmatter(text)
         if "cut" in fm:
             path = outbox_dir / filename
