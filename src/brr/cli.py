@@ -1478,6 +1478,18 @@ def _wake_dump(run_dir: Path, *, boot: bool, limit: int | None) -> str:
     if len(shown) != total:
         header += f", showing the first {len(shown)}"
     parts.append(header + "\n")
+    acts = [
+        record.get("act")
+        for record in records
+        if isinstance(record.get("act"), str)
+    ]
+    if acts:
+        counts = {act: acts.count(act) for act in sorted(set(acts))}
+        distribution = " · ".join(f"{act} {count}" for act, count in counts.items())
+        parts.append(
+            f"act distribution: {len(counts)} distinct / {len(acts)} classified"
+            f" · {distribution}\n"
+        )
     for index, record in enumerate(shown, start=1):
         phase = record.get("phase", "?")
         at = record.get("at", "?")
