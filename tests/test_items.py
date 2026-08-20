@@ -763,3 +763,35 @@ def test_fixture_readings_load_and_summarize_as_recorded(tmp_path: Path):
     # The first tickets sample carries the recorded note; the second doesn't.
     assert readings[0].note == "first count"
     assert readings[1].note is None
+
+
+def test_reading_summary_orders_mixed_width_stamps_chronologically(tmp_path):
+    """A whole-second and a microsecond stamp in the SAME second must order by time.
+
+    Readings were whole-second before withdrawal handles needed microsecond
+    precision and are microsecond after, so any goal recorded across that
+    change can hold both widths. A raw string sort puts `…56.400000Z`
+    before `…56Z` (`.` < `Z`), which makes the *earlier* row the `latest`
+    one — and `latest` is the number every goal surface publishes.
+    """
+    warp = tmp_path / "warp"
+    warp.mkdir()
+    path = items.readings_path(warp, "g-1")
+    path.write_text(
+        '{"ts": "2026-08-20T18:10:56Z", "key": "followers", "value": 2, "basis": "b"}\n'
+        '{"ts": "2026-08-20T18:10:56.400000Z", "key": "followers", "value": 3, "basis": "b"}\n',
+        encoding="utf-8",
+    )
+    summary = items.reading_summary(items.load_readings(warp, "g-1"))["followers"]
+    assert summary.latest.value == 3
+    assert summary.previous is not None and summary.previous.value == 2
+    assert summary.delta == 1
+
+
+def test_reading_ts_order_key_normalises_both_widths():
+    key = items.reading_ts_order_key
+    assert key("2026-08-20T18:10:56Z") == "2026-08-20T18:10:56.000000"
+    assert key("2026-08-20T18:10:56.4Z") == "2026-08-20T18:10:56.400000"
+    assert key("2026-08-20T18:10:56.123456Z") == "2026-08-20T18:10:56.123456"
+    # the ordering the raw string sort got wrong
+    assert key("2026-08-20T18:10:56Z") < key("2026-08-20T18:10:56.400000Z")
