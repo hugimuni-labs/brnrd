@@ -517,6 +517,42 @@ def test_reading_summary_orders_by_ts_not_append_order(tmp_path: Path):
     assert summary["tickets"].delta == 5
 
 
+def test_withdrawn_reading_is_excluded_from_bounds_count_and_delta(tmp_path: Path):
+    root = _warp(tmp_path)
+    items.append_reading(
+        root, "g-1", "tickets", 10, basis="daily", ts="2026-08-01T00:00:00Z"
+    )
+    items.append_reading(
+        root, "g-1", "tickets", 999, basis="lifetime", ts="2026-08-02T00:00:00Z"
+    )
+    items.append_reading_withdrawal(
+        root,
+        "g-1",
+        "tickets",
+        "2026-08-02T00:00:00Z",
+        why="wrong measurement population",
+        ts="2026-08-02T01:00:00Z",
+    )
+    items.append_reading(
+        root, "g-1", "tickets", 15, basis="daily", ts="2026-08-03T00:00:00Z"
+    )
+
+    rows = items.load_readings(root, "g-1")
+    info = items.reading_summary(rows)["tickets"]
+    assert info.latest.value == 15
+    assert info.previous.value == 10
+    assert info.delta == 5
+    assert info.basis_mismatch is False
+    assert info.count == 2
+    assert info.min == 10
+    assert info.max == 15
+    assert items.reading_withdrawal_counts(rows) == {"tickets": 1}
+
+    records = [json.loads(line) for line in items.readings_path(root, "g-1").read_text().splitlines()]
+    assert records[2]["withdrawn_ts"] == "2026-08-02T00:00:00Z"
+    assert records[2]["why"] == "wrong measurement population"
+
+
 def test_append_reading_includes_basis_only_when_given(tmp_path: Path):
     root = _warp(tmp_path)
     items.append_reading(root, "g-1", "impressions", 333, ts="2026-08-15T13:18:00Z")

@@ -742,6 +742,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--note", default=None, help="optional free-text note")
     p.set_defaults(func=cmd_goal_record)
     p = goal_sub.add_parser(
+        "withdraw", help="withdraw one reading by timestamp, preserving the audit trail")
+    p.add_argument("id", help="goal id, or a unique fragment of its headline")
+    p.add_argument("key", help="the metric key of the sample to withdraw")
+    p.add_argument("timestamp", help="the exact timestamp printed when the sample was recorded")
+    p.add_argument(
+        "--why", required=True, metavar="REASON",
+        help="why this reading is being withdrawn (required; rides the tombstone row)")
+    p.set_defaults(func=cmd_goal_withdraw)
+    p = goal_sub.add_parser(
         "show", help="metric/target/horizon header, then latest reading per key")
     p.add_argument("id", help="goal id, or a unique fragment of its headline")
     p.set_defaults(func=cmd_goal_show)
@@ -3277,7 +3286,8 @@ def cmd_goal_record(args):
         return 1
     basis = (args.basis or "").strip() or None
     prior = next(
-        (sample for sample in reversed(items_mod.load_readings(warp_root, goal.id))
+        (sample for sample in reversed(items_mod.active_readings(
+            items_mod.load_readings(warp_root, goal.id)))
          if sample.key == key),
         None,
     )
@@ -3305,6 +3315,58 @@ def cmd_goal_record(args):
     )
     source_note = f" via {reading.source}" if reading.source else ""
     print(f"{goal.id} {reading.key} = {items_mod.format_value(reading.value)}{source_note} ({reading.ts})")
+    return 0
+
+
+def cmd_goal_withdraw(args):
+    import sys
+
+    from . import items as items_mod
+
+    warp_root, err = _item_context()
+    if err:
+        print(f"[brnrd goal] {err}", file=sys.stderr)
+        return 1
+    goal, err = _resolve_goal_arg(warp_root, args.id)
+    if err:
+        print(f"[brnrd goal] {err}", file=sys.stderr)
+        return 1
+    key = args.key.strip()
+    target_ts = args.timestamp.strip()
+    why = args.why.strip()
+    if not why:
+        print(
+            "[brnrd goal] withdraw needs --why. Withdrawing a reading is a "
+            "decision, not a default; nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+    rows = items_mod.load_readings(warp_root, goal.id)
+    matching = [
+        row for row in rows
+        if isinstance(row, items_mod.Reading) and row.key == key and row.ts == target_ts
+    ]
+    if not matching:
+        print(
+            f"[brnrd goal] no reading for {key} at {target_ts}. Nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+    already = any(
+        isinstance(row, items_mod.ReadingWithdrawal)
+        and row.key == key and row.withdrawn_ts == target_ts
+        for row in rows
+    )
+    if already:
+        print(
+            f"[brnrd goal] {key} at {target_ts} is already withdrawn. Nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+    withdrawal = items_mod.append_reading_withdrawal(
+        warp_root, goal.id, key, target_ts, why=why
+    )
+    print(f"{goal.id} {key} at {target_ts} withdrawn ({withdrawal.ts})")
     return 0
 
 
@@ -3336,7 +3398,13 @@ def cmd_goal_show(args):
         print("no readings yet")
         return 0
     summary = items_mod.reading_summary(readings)
-    for key in sorted(summary):
+    withdrawals = items_mod.reading_withdrawal_counts(readings)
+    for key in sorted(set(summary) | set(withdrawals)):
+        if key not in summary:
+            count = withdrawals[key]
+            plural = "" if count == 1 else "s"
+            print(f"{key}: no active samples · {count} withdrawal{plural}")
+            continue
         info = summary[key]
         if info.delta is not None:
             delta = f" (Δ{items_mod.format_delta(info.delta)} vs previous)"
@@ -3344,11 +3412,17 @@ def cmd_goal_show(args):
             delta = " (Δ refused: basis differs from previous sample)"
         else:
             delta = ""
-        plural = "" if info.count == 1 else "s"
+        sample_plural = "" if info.count == 1 else "s"
+        withdrawal = ""
+        if key in withdrawals:
+            count = withdrawals[key]
+            withdrawal_plural = "" if count == 1 else "s"
+            withdrawal = f" · {count} withdrawal{withdrawal_plural}"
         print(
             f"{key}: {items_mod.format_value(info.latest.value)}{delta} "
-            f"· {info.count} sample{plural} "
+            f"· {info.count} sample{sample_plural} "
             f"· min {items_mod.format_value(info.min)} · max {items_mod.format_value(info.max)}"
+            f"{withdrawal}"
         )
     return 0
 
