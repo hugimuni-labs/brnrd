@@ -270,7 +270,7 @@
 									     badges' shape language (w-68's bar). -->
 								<span
 									class="flex items-baseline gap-1.5 border {LIVE_CLAIM} px-1.5 py-0.5 text-[10px] tracking-wide uppercase"
-									title={`a tapped core rides its conversation until the timer runs out — wakes in that thread dispatch here, not on the default${stickyLive?.expires_at ? ` (until ${stickyLive.expires_at})` : ''}`}
+									title={`a tapped core rides its conversation ${stickyLive?.persistent ? 'until changed or released' : 'until the timer runs out'} — wakes in that thread dispatch here, not on the default${stickyLive?.expires_at && !stickyLive.persistent ? ` (until ${stickyLive.expires_at})` : ''}`}
 								>
 									<span
 										class="inline-block h-1.5 w-1.5 rounded-full bg-stone-200"

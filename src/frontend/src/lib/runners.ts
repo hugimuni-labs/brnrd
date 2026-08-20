@@ -56,12 +56,12 @@ export interface WakeRequest {
 }
 
 /** #932's conversation-sticky, mirrored up the runners lane: a claimed tap
- * binds its profile to the claiming conversation for a TTL, and until it
- * expires it — not the pin, not a parked tap — answers that thread's wakes.
- * Rendering it (timer included) is what stops the rack lying about who
- * wakes next (2026-08-08). */
+ * binds its profile to the claiming conversation until changed or released,
+ * unless the daemon reports an opt-in TTL regime. Rendering that regime is
+ * what stops the rack lying about who wakes next. */
 export interface RunnerSticky {
 	profile: string;
+	persistent?: boolean;
 	claimed_at?: string | null;
 	expires_at?: string | null;
 	correspondent_key?: string | null;
@@ -76,7 +76,7 @@ export function liveSticky(
 	nowMs: number = Date.now()
 ): RunnerSticky | null {
 	if (!sticky || !sticky.profile) return null;
-	if (sticky.expires_at) {
+	if (!sticky.persistent && sticky.expires_at) {
 		const expires = Date.parse(sticky.expires_at);
 		if (!Number.isNaN(expires) && nowMs >= expires) return null;
 	}
