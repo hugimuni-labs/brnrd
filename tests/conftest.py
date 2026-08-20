@@ -140,6 +140,25 @@ def _no_codex_app_server_probe(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_claude_usage_pty_scrape(monkeypatch):
+    """Never spawn a real ``claude /usage`` PTY scrape from the unit suite (#1552).
+
+    ``claude_usage.capture_usage_raw`` shells out to a real Claude and drives
+    its interactive TUI — correct in production, but fatal in tests on a
+    maintainer's logged-in machine: every fresh test outbox can pay another
+    multi-second scrape, while CI without Claude never exposes the cost.
+    Patched to an empty screen so collectors take their normal unavailable
+    path. Tests keep the parser, cache, and refresh machinery real and can
+    patch this finer-grained seam when they mean to exercise probe behaviour.
+    """
+    from brr import claude_usage
+
+    real_capture = claude_usage.capture_usage_raw
+    monkeypatch.setattr(claude_usage, "capture_usage_raw", lambda **kwargs: b"")
+    yield real_capture
+
+
+@pytest.fixture(autouse=True)
 def _no_real_power_assertion(monkeypatch):
     """Never spawn a real ``caffeinate``/``systemd-inhibit`` from the unit
     suite (#1485).
