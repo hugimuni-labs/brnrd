@@ -43,18 +43,6 @@ export interface GlitchRevealParams {
 	delay?: number;
 }
 
-/** Garage header spring: fast-in, 7px overshoot, hard stop, one shake frame. */
-export function garageSpring(_node: Element, params: { duration?: number } = {}) {
-	const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-	return {
-		duration: reduced ? 0 : (params.duration ?? 260),
-		css: (t: number) => {
-			const frame = t < 0.58 ? -7 * (1 - t / 0.58) : t < 0.82 ? 2 : t < 0.9 ? -1 : 0;
-			return `transform: translateY(${frame}px); opacity: ${Math.min(1, t * 2.5)};`;
-		}
-	};
-}
-
 // Deterministic per-frame glitch states (v2, 2026-07-09). The first cut
 // (180ms, monotonic left→right wipe + fade) tested as invisible in practice
 // — the maintainer's live verdict: "the animation is nowhere to be seen,
