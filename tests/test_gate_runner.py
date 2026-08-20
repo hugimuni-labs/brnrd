@@ -741,3 +741,59 @@ def test_a_queued_run_names_the_holder_and_the_wait(tmp_path, monkeypatch, capfd
     err = capfd.readouterr().err
     assert "999999" in err
     assert "queued" in err
+
+
+def test_a_queued_gate_breaks_a_live_lock_owned_by_a_finished_run(
+    tmp_path, monkeypatch, capfd
+):
+    """A live orphan process must not starve gates after its run is terminal."""
+    import fcntl
+
+    gate = _gate()
+    repo = _repo(tmp_path)
+    monkeypatch.setattr(gate, "REPO_ROOT", repo)
+    monkeypatch.setattr(gate, "_LOCK_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(gate, "_TERMINAL_RUN_GRACE_SECONDS", 0.05)
+    monkeypatch.setenv("BRR_RUN_ID", "waiting-run")
+
+    lock_path = gate.gate_lock_path()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    holder_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    fcntl.flock(holder_fd, fcntl.LOCK_EX)
+    runs_dir = lock_path.parent / "runs"
+    manifest = runs_dir / "finished-run" / "run.md"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        "---\nid: finished-run\nevent_id: evt-old\nenv: worktree\n"
+        "status: done\nsource: spawn\n---\nold run\n",
+        encoding="utf-8",
+    )
+    old = time.time() - 1
+    os.utime(manifest, (old, old))
+    gate._write_lock_status(
+        gate._lock_status_path(lock_path),
+        pid=os.getpid(),
+        run_id="finished-run",
+        since="2026-08-19T16:32:11+00:00",
+    )
+
+    entered = threading.Event()
+
+    def _waiter():
+        with gate.held_gate_lock():
+            entered.set()
+
+    thread = threading.Thread(target=_waiter)
+    thread.start()
+    try:
+        assert entered.wait(1), "finished owner run left the queued gate starved"
+    finally:
+        fcntl.flock(holder_fd, fcntl.LOCK_UN)
+        os.close(holder_fd)
+        thread.join(timeout=2)
+
+    err = capfd.readouterr().err
+    assert "broke stale gate lock" in err
+    assert str(os.getpid()) in err
+    assert "finished-run" in err
+    assert "terminal" in err
