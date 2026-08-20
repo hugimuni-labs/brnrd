@@ -459,6 +459,7 @@ export function findGoalReadingsFile(goalId: string, files: SurfaceFile[]): Surf
  *  `items.py`'s `load_readings` tolerance. */
 export function parseGoalReadings(markdown: string): GoalReading[] {
 	const out: GoalReading[] = [];
+	const withdrawn = new Set<string>();
 	for (const rawLine of (markdown ?? '').split('\n')) {
 		const line = rawLine.trim();
 		if (!line) continue;
@@ -471,6 +472,10 @@ export function parseGoalReadings(markdown: string): GoalReading[] {
 		if (typeof record !== 'object' || record === null) continue;
 		const r = record as Record<string, unknown>;
 		if (typeof r.ts !== 'string' || typeof r.key !== 'string') continue;
+		if (r.withdrawn === true && typeof r.withdrawn_ts === 'string') {
+			withdrawn.add(`${r.key}\0${r.withdrawn_ts}`);
+			continue;
+		}
 		const value = typeof r.value === 'number' ? r.value : Number(r.value);
 		if (!Number.isFinite(value)) continue;
 		out.push({
@@ -482,7 +487,7 @@ export function parseGoalReadings(markdown: string): GoalReading[] {
 			basis: typeof r.basis === 'string' && r.basis ? r.basis : null
 		});
 	}
-	return out;
+	return out.filter((reading) => !withdrawn.has(`${reading.key}\0${reading.ts}`));
 }
 
 export interface GoalReadingSummary {
@@ -508,6 +513,21 @@ export interface GoalReadingSummary {
  *  rolling-window sum, both keyed `impressions`, into the same subtraction.
  *  A same-`key`, different-`basis` pair renders `delta: null` and
  *  `basisMismatch: true` instead of a number that looks real. */
+/** Order two reading stamps that may differ in fractional-second width.
+ *  Readings were whole-second until withdrawal handles needed to address one
+ *  sample unambiguously, and are microsecond after. A raw string sort mixes
+ *  the two wrongly — `.` sorts before `Z`, so a later microsecond sample
+ *  sorts before an earlier whole-second one from the same second, and
+ *  `latest` is what the goal surface publishes. Mirrors `items.py`'s
+ *  `reading_ts_order_key`; the two must stay in lockstep. */
+export function readingTsOrderKey(ts: string): string {
+	const dot = ts.indexOf('.');
+	if (dot === -1) return (ts.endsWith('Z') ? ts.slice(0, -1) : ts) + '.000000';
+	const head = ts.slice(0, dot);
+	const tail = ts.slice(dot + 1).replace(/Z$/, '');
+	return head + '.' + (tail + '000000').slice(0, 6);
+}
+
 export function summarizeGoalReadings(readings: GoalReading[]): Map<string, GoalReadingSummary> {
 	const byKey = new Map<string, GoalReading[]>();
 	for (const reading of readings) {
@@ -517,7 +537,9 @@ export function summarizeGoalReadings(readings: GoalReading[]): Map<string, Goal
 	}
 	const out = new Map<string, GoalReadingSummary>();
 	for (const [key, samples] of byKey) {
-		const ordered = [...samples].sort((a, b) => a.ts.localeCompare(b.ts));
+		const ordered = [...samples].sort((a, b) =>
+			readingTsOrderKey(a.ts).localeCompare(readingTsOrderKey(b.ts))
+		);
 		const latest = ordered[ordered.length - 1];
 		const previous = ordered.length > 1 ? ordered[ordered.length - 2] : null;
 		const values = ordered.map((r) => r.value);

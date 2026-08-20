@@ -691,6 +691,19 @@ class Reading:
     basis: str | None = None
 
 
+@dataclass(frozen=True)
+class ReadingWithdrawal:
+    """One append-only tombstone for a sample identified by key + timestamp."""
+
+    ts: str
+    key: str
+    withdrawn_ts: str
+    why: str
+
+
+ReadingRow = Reading | ReadingWithdrawal
+
+
 def reading_basis(reading: Reading) -> str:
     """The value two readings must share for a Δ between them to be
     constructible. Explicit ``basis`` wins; absent one, ``source`` is the
@@ -704,10 +717,30 @@ def reading_basis(reading: Reading) -> str:
 def _now_iso() -> str:
     return (
         _dt.datetime.now(_dt.timezone.utc)
-        .replace(microsecond=0)
         .isoformat()
         .replace("+00:00", "Z")
     )
+
+
+def reading_ts_order_key(ts: str) -> str:
+    """Order two reading stamps that may differ in fractional-second width.
+
+    Readings were whole-second (``…:56Z``) until withdrawal handles needed
+    to address one sample unambiguously, and are microsecond (``…:56.4Z``)
+    after.  A raw string sort mixes the two wrongly: ``.`` (0x2E) sorts
+    before ``Z`` (0x5A), so a *later* microsecond sample sorts *before* an
+    earlier whole-second one recorded in the same second — and ``latest``
+    is what every goal surface publishes.  Normalising the fraction to a
+    fixed width makes the lexicographic order the chronological one again,
+    with no parsing and no dependency on how the row was written.
+
+    These stamps are always UTC-``Z``; an offset form would need real
+    parsing, and none is ever written here.
+    """
+    head, dot, tail = ts.partition(".")
+    if not dot:
+        return head[:-1] + ".000000" if head.endswith("Z") else head + ".000000"
+    return head + "." + tail.rstrip("Z").ljust(6, "0")[:6]
 
 
 def _parse_iso(value: str) -> _dt.datetime | None:
@@ -762,8 +795,38 @@ def append_reading(
     return reading
 
 
-def load_readings(warp_root: Path, goal_id: str) -> list[Reading]:
-    """Every parseable sample for a goal, file order (append-only, so this
+def append_reading_withdrawal(
+    warp_root: Path,
+    goal_id: str,
+    key: str,
+    withdrawn_ts: str,
+    *,
+    why: str,
+    ts: str | None = None,
+) -> ReadingWithdrawal:
+    """Append a tombstone for one explicitly addressed sample."""
+    withdrawal = ReadingWithdrawal(
+        ts=ts or _now_iso(), key=key, withdrawn_ts=withdrawn_ts, why=why
+    )
+    record = {
+        "ts": withdrawal.ts,
+        "key": withdrawal.key,
+        "withdrawn_ts": withdrawal.withdrawn_ts,
+        "withdrawn": True,
+        "why": withdrawal.why,
+    }
+    with readings_path(warp_root, goal_id).open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record, sort_keys=True) + "\n")
+    return withdrawal
+
+
+def load_readings(warp_root: Path, goal_id: str) -> list[ReadingRow]:
+    """Every parseable sample or withdrawal for a goal, in file order.
+
+    Withdrawal rows deliberately omit ``value``. Older loaders therefore
+    skip them as non-samples while still parsing the file as valid JSONL.
+
+    The file is append-only, so this
     is chronological unless hand-edited). A malformed line is skipped, not
     fatal — one bad line does not lose a goal's whole history, same stance
     ``parse_item`` takes on an unreadable file."""
@@ -774,7 +837,7 @@ def load_readings(warp_root: Path, goal_id: str) -> list[Reading]:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return []
-    out: list[Reading] = []
+    out: list[ReadingRow] = []
     for raw_line in text.splitlines():
         raw_line = raw_line.strip()
         if not raw_line:
@@ -786,6 +849,20 @@ def load_readings(warp_root: Path, goal_id: str) -> list[Reading]:
         if not isinstance(record, dict):
             continue
         try:
+            if record.get("withdrawn") is True:
+                why = str(record["why"]).strip()
+                withdrawn_ts = str(record["withdrawn_ts"]).strip()
+                if not why or not withdrawn_ts:
+                    continue
+                out.append(
+                    ReadingWithdrawal(
+                        ts=str(record["ts"]),
+                        key=str(record["key"]),
+                        withdrawn_ts=withdrawn_ts,
+                        why=why,
+                    )
+                )
+                continue
             out.append(
                 Reading(
                     ts=str(record["ts"]),
@@ -799,6 +876,28 @@ def load_readings(warp_root: Path, goal_id: str) -> list[Reading]:
         except (KeyError, TypeError, ValueError):
             continue
     return out
+
+
+def active_readings(rows: list[ReadingRow]) -> list[Reading]:
+    """Samples not superseded by a later withdrawal row."""
+    withdrawn = {
+        (row.key, row.withdrawn_ts)
+        for row in rows
+        if isinstance(row, ReadingWithdrawal)
+    }
+    return [
+        row for row in rows
+        if isinstance(row, Reading) and (row.key, row.ts) not in withdrawn
+    ]
+
+
+def reading_withdrawal_counts(rows: list[ReadingRow]) -> dict[str, int]:
+    """Number of audit-trail withdrawal rows per metric key."""
+    counts: dict[str, int] = {}
+    for row in rows:
+        if isinstance(row, ReadingWithdrawal):
+            counts[row.key] = counts.get(row.key, 0) + 1
+    return counts
 
 
 @dataclass(frozen=True)
@@ -821,7 +920,7 @@ class ReadingSummary:
     basis_mismatch: bool = False
 
 
-def reading_summary(readings: list[Reading]) -> dict[str, ReadingSummary]:
+def reading_summary(readings: list[ReadingRow]) -> dict[str, ReadingSummary]:
     """Per key: latest sample, previous sample, delta, sample count, min,
     max — chronological by ``ts`` (a hand-edited out-of-order file sorts
     itself back into place here rather than trusting append order).
@@ -834,11 +933,11 @@ def reading_summary(readings: list[Reading]) -> dict[str, ReadingSummary]:
     different-``basis`` pair now renders with ``delta=None`` and
     ``basis_mismatch=True`` instead of a number that looks real."""
     by_key: dict[str, list[Reading]] = {}
-    for reading in readings:
+    for reading in active_readings(readings):
         by_key.setdefault(reading.key, []).append(reading)
     out: dict[str, ReadingSummary] = {}
     for key, samples in by_key.items():
-        ordered = sorted(samples, key=lambda r: r.ts)
+        ordered = sorted(samples, key=lambda r: reading_ts_order_key(r.ts))
         latest = ordered[-1]
         previous = ordered[-2] if len(ordered) > 1 else None
         values = [r.value for r in ordered]
