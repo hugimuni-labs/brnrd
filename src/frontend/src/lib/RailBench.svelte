@@ -56,7 +56,7 @@
 
 <div
 	data-measure="bench"
-	class="workbench border-t-2 border-stone-600 bg-stone-950 px-3 py-5 sm:px-5"
+	class="workbench border-t border-stone-700 bg-stone-950 px-2 py-3 sm:px-5 sm:py-5"
 	in:glitchReveal={{ duration: 240 }}
 >
 	<div data-measure="error-note">
@@ -72,9 +72,9 @@
 			<p class="text-sm text-ink-quiet">Loading…</p>
 		{/if}
 	{:else}
-		<div class="bench-bays mb-5 grid gap-6 md:grid-cols-2 md:gap-5">
+		<div class="bench-bays mb-3 grid gap-3 md:grid-cols-2 md:gap-5">
 			<section data-measure="project" class="bench-bay">
-				<div class="workshop-label"><span>01</span> project</div>
+				<div class="workshop-label">project</div>
 				{#if repos === null}
 					<p class="font-mono text-xs text-ink-quiet">Loading account projects…</p>
 				{:else if repos.length === 0}
@@ -128,7 +128,7 @@
 			</section>
 
 			<section data-measure="environment" class="bench-bay">
-				<div class="workshop-label"><span>02</span> environment</div>
+				<div class="workshop-label">environment</div>
 				<div class="space-y-1.5">
 					<button
 						data-role="bench-pick"
@@ -205,31 +205,26 @@
 		background-size: 24px 24px;
 	}
 	.bench-bay {
-		border-left: 3px solid rgb(87 83 78);
-		padding-left: 0.75rem;
+		min-width: 0;
 	}
 	.workshop-label {
-		margin-bottom: 0.65rem;
+		margin-bottom: 0.4rem;
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 		font-size: 0.7rem;
 		font-weight: 700;
 		letter-spacing: 0.14em;
 		text-transform: uppercase;
-		color: rgb(214 211 209);
-	}
-	.workshop-label span {
-		margin-right: 0.5rem;
-		color: rgb(120 113 108);
+		color: rgb(168 162 158);
 	}
 	.pick-row {
 		min-height: 44px;
 	}
 	.spool-bay :global([data-measure='spool-rack']) {
 		border: 0;
-		border-left: 3px solid rgb(87 83 78);
+		border-top: 1px solid rgb(68 64 60 / 0.7);
 		background: transparent;
 		box-shadow: none;
-		padding: 0 0 0 0.75rem;
+		padding: 0.75rem 0 0;
 	}
 	.spool-bay :global([data-measure='spool-rack'] > div:first-child) {
 		min-height: 1.5rem;
