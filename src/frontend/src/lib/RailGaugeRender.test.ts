@@ -72,7 +72,7 @@ test('the bench toggle reflects benchOpen honestly', async () => {
 	ok(closed.includes('▸ bench'));
 });
 
-test('the fuel line never wraps — overflow-x-auto, not flex-wrap, is what keeps the gauge fixed height', async () => {
+test('the fuel deck never wraps — its fixed-height horizontal track absorbs catalog growth', async () => {
 	const shells = Array.from({ length: 12 }, (_, i) => ({
 		shell: `shell-${i}`,
 		status: 'ok',
@@ -80,13 +80,17 @@ test('the fuel line never wraps — overflow-x-auto, not flex-wrap, is what keep
 			{ label: '5h window', used: null, limit: null, percent: 40, reset: null, resets_at: null }
 		]
 	}));
-	const body = await renderGauge({ runners: null, shells, benchOpen: false });
+	await renderGauge({ runners: null, shells, benchOpen: false });
+	const source = readFileSync(componentPath, 'utf8');
+	ok(source.includes('class="fuel-deck"'), 'fuel owns a dedicated instrument deck');
 	ok(
-		body.includes('overflow-x-auto'),
-		'the gauge scrolls sideways rather than wrapping to a second line'
+		/\.fuel-deck\s*\{[^}]*overflow-x:\s*auto/su.test(source),
+		'catalog growth scrolls inside fuel'
 	);
+	ok(/\.gauge\s*\{[^}]*height:\s*140px/su.test(source), 'the gauge has one explicit height');
 	ok(
-		!/flex-wrap/u.test(body),
-		'flex-wrap is exactly what let the old slim bar grow with the catalog'
+		/grid-template-rows:\s*repeat\(2, 1fr\)/u.test(source),
+		'a phone sees four meters as two rows'
 	);
+	ok(!/class="[^"]*flex-wrap/u.test(source), 'no rendered gauge row can wrap with the catalog');
 });

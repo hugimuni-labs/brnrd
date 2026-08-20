@@ -178,7 +178,7 @@
 		     as two different rooms). Amber stays reserved for the DEFAULT
 		     badge and selection marks, per the selection-vs-action split. -->
 		<span class="font-mono font-bold tracking-[0.14em] uppercase" style="color: rgb(214 211 209)"
-			><span class="mr-2 text-ink-quiet">03</span>spool rack</span
+			>core</span
 		>
 		{#if stale}
 			<span
