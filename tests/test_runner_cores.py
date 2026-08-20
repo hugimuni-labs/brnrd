@@ -261,6 +261,34 @@ def test_probe_shell_models_tolerates_malformed_models_cache(tmp_path, monkeypat
     assert runner_cores.probe_shell_models("codex") == ()
 
 
+def test_probe_shell_models_self_heals_on_path_flip_without_cache_clear(monkeypatch):
+    """#1519: a shell installed *after* a negative probe must be picked up
+    on the very next call — no ``cache_clear()``, no daemon restart.
+
+    Before the fix, ``probe_shell_models`` was one ``lru_cache``-wrapped
+    function whose own ``shutil.which`` check sat *behind* the cache: a
+    shell probed while absent memoized ``()`` for the rest of the process's
+    life, and nothing — including the shell later appearing on PATH — ever
+    invalidated it. This pins the actual bug (a stale *negative*, not staleness
+    in general) rather than the cache-clearing behaviour the other probe tests
+    already cover.
+    """
+    runner_cores.probe_shell_models.cache_clear()
+
+    monkeypatch.setattr(runner_cores.shutil, "which", lambda name: None)
+    assert runner_cores.probe_shell_models("codex") == ()
+
+    class _Proc:
+        stdout = "  --model <MODEL>  choices: gpt-5-codex, gpt-5.4-mini\n"
+        stderr = ""
+
+    monkeypatch.setattr(runner_cores.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(runner_cores.subprocess, "run", lambda *a, **k: _Proc())
+
+    # No cache_clear() call here — this is the regression the fix closes.
+    assert runner_cores.probe_shell_models("codex") == ("gpt-5-codex", "gpt-5.4-mini")
+
+
 def test_generated_profile_entries_derive_class_when_missing(monkeypatch):
     monkeypatch.setattr(
         runner_cores,
