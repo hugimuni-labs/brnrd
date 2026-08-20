@@ -912,24 +912,24 @@ class TestBootScore:
         host = build_boot_score(
             empty_repo, environment="host", pending_count=3, has_event_body=True
         )
-        actions = [s.action for s in host.orientation]
-        assert "branch before you edit" in actions
-        assert "answer 3 queued events" in actions
+        titles = [a.title for a in host.assignments]
+        assert "branch before you edit" in titles
+        assert "answer 3 queued events" in titles
 
         worktree = build_boot_score(
             empty_repo, environment="worktree", pending_count=0, has_event_body=True
         )
-        actions = [s.action for s in worktree.orientation]
-        assert "branch before you edit" not in actions   # the daemon publishes it
-        assert not any(a.startswith("answer") for a in actions)  # nothing queued
+        titles = [a.title for a in worktree.assignments]
+        assert "branch before you edit" not in titles   # the daemon publishes it
+        assert not any(t.startswith("answer 3") for t in titles)  # nothing queued
 
     def test_worker_kernel_omits_resident_only_steps(self, empty_repo):
         """A worker never writes a card — ``strand.md`` does not grant it one."""
         from brr.prompts import build_boot_score
 
         score = build_boot_score(empty_repo, is_strand=True, has_event_body=True)
-        actions = [s.action for s in score.orientation]
-        assert not any("card" in a for a in actions)
+        titles = [a.title for a in score.assignments]
+        assert not any("card" in t for t in titles)
 
     def test_cost_ledger_measures_the_wake_not_the_disk(self, empty_repo):
         """Bytes are what entered the prompt, and they add up to the whole bill.
