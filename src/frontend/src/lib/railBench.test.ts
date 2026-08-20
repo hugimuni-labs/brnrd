@@ -26,8 +26,8 @@ test('no repo policy at all renders honestly, not as a fabricated default', () =
 	assert.equal(display.name, 'no environment configured');
 });
 
-test('the bench is mobile-first: bays stack before widening at md', () => {
-	assert.match(source, /grid gap-6 md:grid-cols-2/);
+test('the bench is mobile-first: bays stack compactly before widening at md', () => {
+	assert.match(source, /grid gap-3 md:grid-cols-2/);
 	assert.doesNotMatch(source, /class="panel[^"]*"/);
 });
 
@@ -38,8 +38,8 @@ test('every bench pick and inherited rack control has a 44px floor', () => {
 	assert.match(source, /button\[data-role='rack-row-tap'\][\s\S]*min-height: 44px/);
 });
 
-test('workshop labels replace card titles with numbered bays', () => {
-	assert.match(source, /<span>01<\/span> project/);
-	assert.match(source, /<span>02<\/span> environment/);
-	assert.match(source, /border-left: 3px solid/);
+test('mobile labels name the choices without ornamental bay numbers or rails', () => {
+	assert.match(source, /class="workshop-label">project/);
+	assert.match(source, /class="workshop-label">environment/);
+	assert.doesNotMatch(source, /<span>0[123]<\/span>/);
 });
