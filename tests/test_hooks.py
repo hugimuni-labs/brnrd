@@ -10,6 +10,8 @@ import subprocess
 import threading
 import time
 
+import pytest
+
 from brr import card, hooks, portals
 
 
@@ -5114,7 +5116,7 @@ def test_boundary_transcript_records_the_injection_beside_the_wake(tmp_path):
     assert records[0]["at"].endswith("Z")
 
 
-def test_boundary_transcript_records_ordered_tool_names_only(tmp_path):
+def test_boundary_transcript_records_ordered_tool_names_and_first_act(tmp_path):
     """The real hook writer preserves a batch's acts without its payloads."""
     worktree = os.path.realpath(os.path.join(os.path.dirname(__file__), ".."))
     assert os.path.realpath(hooks.__file__).startswith(worktree + os.sep)
@@ -5138,10 +5140,46 @@ def test_boundary_transcript_records_ordered_tool_names_only(tmp_path):
 
     records = _transcript(run_dir)
     assert records[0]["tools"] == ["Read", "Bash"]
+    assert records[0]["act"] == "orient"
     assert "tool_input" not in records[0]
     assert "tool_use_id" not in records[0]
     assert "tool_response" not in records[0]
     assert "tools" not in records[1]
+
+
+def test_boundary_act_classification_drops_the_command_it_reads(tmp_path):
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=0, events=[])
+    payload = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": "printf INPUT_CANARY_1560_DO_NOT_PERSIST"},
+    })
+
+    hooks.run_hook(hooks.PHASE_POST_TOOL, payload, env)
+
+    record = _transcript(run_dir)[0]
+    assert record["act"] == "probe"
+    assert "INPUT_CANARY_1560_DO_NOT_PERSIST" not in json.dumps(record)
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "tool_input", "expected"),
+    [
+        ("Read", {"file_path": "/tmp/a"}, "orient"),
+        ("Bash", {"command": "pytest tests/test_hooks.py -q"}, "probe"),
+        ("Bash", {"command": "git commit -m test"}, "mutate"),
+        ("Bash", {"command": "git push origin HEAD"}, "publish"),
+        ("spawn_agent", {"task": "inspect"}, "dispatch"),
+        ("Bash", {"command": "brnrd await --timeout 5m"}, "wait"),
+        ("Write", {"file_path": "/tmp/outbox/evt/.keepalive", "content": "+30m"}, "wait"),
+        ("Write", {"file_path": "/tmp/outbox/evt/reply.md", "content": "hello"}, "publish"),
+        ("Write", {"file_path": "/tmp/outbox/evt/spawn.md", "content": "spawn: true"}, "dispatch"),
+        ("FutureTool", {"opaque": True}, "probe"),
+    ],
+)
+def test_classify_act_is_total_across_the_six_labels(tool_name, tool_input, expected):
+    assert hooks.classify_act(tool_name, tool_input) == expected
+    assert expected in hooks.ACT_LABELS
 
 
 def test_a_silent_boundary_is_still_recorded(tmp_path):
