@@ -618,8 +618,14 @@ def test_resolve_runner_core_pin_filters_by_model(tmp_path, monkeypatch):
     assert resolve_runner(tmp_path) == "claude-sonnet"
 
 
-def test_resolve_runner_auto_picks_cheapest(tmp_path, monkeypatch):
-    """Without shell= or core=, auto picks the cheapest available profile."""
+def test_resolve_runner_auto_holds_the_balanced_floor(tmp_path, monkeypatch):
+    """Without shell= or core=, auto lands at-or-above the balanced target.
+
+    The fixture has no balanced profile on purpose: the floor semantics
+    ("at least balanced", maintainer 2026-08-20) climb to strong rather
+    than settle on the cheapest economy core — the fresh-install first
+    wake is exactly the run that must not open on the weakest foot.
+    """
     (tmp_path / ".brr").mkdir()
     (tmp_path / ".brr" / "config").write_text("", encoding="utf-8")
     monkeypatch.setattr(
@@ -645,8 +651,8 @@ def test_resolve_runner_auto_picks_cheapest(tmp_path, monkeypatch):
         "which",
         lambda name: "/usr/bin/claude" if name == "claude" else None,
     )
-    # Auto should pick the economy (cheapest) profile.
-    assert resolve_runner(tmp_path) == "claude-economy"
+    # No balanced profile: above-target beats below-target.
+    assert resolve_runner(tmp_path) == "claude-strong"
 
 
 def test_resolve_runner_auto_prefers_generated_core_profile(tmp_path, monkeypatch):

@@ -100,22 +100,46 @@ def test_select_cost_aware_default_class_is_a_target_not_a_ceiling():
     assert rs.select_runner(runners, default_class="strong").name == "strong"
 
 
-def test_select_falls_back_below_target_class_before_going_above():
+def test_select_falls_back_above_target_class_before_going_below():
     runners = [
         _profile("strong", **{"class": "strong", "cost_rank": 50}),
         _profile("eco", **{"class": "economy", "cost_rank": 10}),
     ]
-    # No balanced profile exists: prefer the class *below* the target over
-    # silently escalating to strong (strong stays an explicit ask).
+    # No balanced profile exists: the target is a floor before it is a
+    # ceiling ("at least balanced", maintainer 2026-08-20) — a machine
+    # with no balanced Core lands on the cheapest strong one, and economy
+    # is the last resort, not the first fallback.
+    assert rs.select_runner(runners).name == "strong"
+
+
+def test_select_falls_back_below_only_when_nothing_at_or_above():
+    runners = [
+        _profile("eco-b", **{"class": "economy", "cost_rank": 20}),
+        _profile("eco-a", **{"class": "economy", "cost_rank": 10}),
+    ]
+    # Nothing at or above the target; the cheapest below is all there is.
+    assert rs.select_runner(runners).name == "eco-a"
+
+
+def test_select_unclassed_profile_never_fills_the_above_target_slot():
+    runners = [
+        _profile("mystery", **{"cost_rank": 99}),
+        _profile("eco", **{"class": "economy", "cost_rank": 10}),
+    ]
+    # An unclassed legacy profile sorts past every local class, but "past
+    # strong" is not a known class — it must not ride the above-target
+    # preference (the #1524 guard, kept at first selection).
     assert rs.select_runner(runners).name == "eco"
 
 
-def test_select_falls_back_when_no_profile_at_or_below_class():
+def test_select_economy_target_climbs_before_it_settles():
     runners = [
+        _profile("bal", **{"class": "balanced", "cost_rank": 30}),
         _profile("strong", **{"class": "strong", "cost_rank": 50}),
     ]
-    # Nothing at or below the target; selector falls back to what exists.
-    assert rs.select_runner(runners).name == "strong"
+    # default_class=economy with no economy profile: the nearest class
+    # above wins (cheapest above = balanced), never a silent jump to strong.
+    assert rs.select_runner(runners, default_class="economy").name == "bal"
 
 
 def test_select_never_auto_picks_relay():
