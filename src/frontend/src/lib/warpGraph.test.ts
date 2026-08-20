@@ -535,7 +535,7 @@ describe('goal readings (design-goal-oriented-engineering.md §"a metrics block 
 	});
 
 	// Mirrors `tests/test_items.py`'s basis-guard cases (`items.py`'s
-	// `_reading_basis` / `reading_summary`) — the "in lockstep" comment atop
+	// `reading_basis` / `reading_summary`) — the "in lockstep" comment atop
 	// this file's readings section names that Python module as the source of
 	// truth this must not drift from.
 
