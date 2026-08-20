@@ -262,7 +262,7 @@ def test_probe_shell_models_tolerates_malformed_models_cache(tmp_path, monkeypat
 
 
 def test_probe_shell_models_self_heals_on_path_flip_without_cache_clear(monkeypatch):
-    """#1522: a shell installed *after* a negative probe must be picked up
+    """#1519: a shell installed *after* a negative probe must be picked up
     on the very next call — no ``cache_clear()``, no daemon restart.
 
     Before the fix, ``probe_shell_models`` was one ``lru_cache``-wrapped
