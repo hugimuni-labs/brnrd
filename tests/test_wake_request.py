@@ -307,7 +307,22 @@ def _bind(brr_dir, **overrides):
     )
 
 
-def test_live_sticky_view_renders_a_live_record_with_expiry(tmp_path):
+def test_live_sticky_view_is_persistent_without_a_ttl(tmp_path):
+    from datetime import datetime, timezone
+
+    brr_dir = _brr(tmp_path)
+    _bind(brr_dir)
+    view = wake_request.live_sticky_view(
+        brr_dir, None, now=datetime(2026, 8, 9, 11, 0, tzinfo=timezone.utc)
+    )
+    assert view is not None
+    assert view["profile"] == "claude-haiku"
+    assert view["persistent"] is True
+    assert "expires_at" not in view
+    assert view["correspondent_key"] == "telegram:user-id:1"
+
+
+def test_live_sticky_view_honours_an_explicit_ttl(tmp_path):
     from datetime import datetime, timezone
 
     brr_dir = _brr(tmp_path)
@@ -316,9 +331,8 @@ def test_live_sticky_view_renders_a_live_record_with_expiry(tmp_path):
         brr_dir, 7200, now=datetime(2026, 8, 8, 11, 0, tzinfo=timezone.utc)
     )
     assert view is not None
-    assert view["profile"] == "claude-haiku"
+    assert view["persistent"] is False
     assert view["expires_at"] == "2026-08-08T12:00:00+00:00"
-    assert view["correspondent_key"] == "telegram:user-id:1"
 
 
 def test_live_sticky_view_is_none_for_absent_expired_or_malformed(tmp_path):

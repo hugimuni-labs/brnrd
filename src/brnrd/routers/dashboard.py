@@ -555,7 +555,7 @@ def _live_sticky(raw: str | None, now: datetime) -> dict[str, Any] | None:
     if not isinstance(record, dict) or not str(record.get("profile") or "").strip():
         return None
     expires = record.get("expires_at")
-    if isinstance(expires, str):
+    if not record.get("persistent") and isinstance(expires, str):
         try:
             expires_dt = datetime.fromisoformat(expires.replace("Z", "+00:00"))
         except ValueError:

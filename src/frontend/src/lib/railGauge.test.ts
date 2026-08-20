@@ -88,6 +88,21 @@ test('an expired or unmatched sticky falls back to the default block', () => {
 	);
 });
 
+test('a persistent sticky survives its old expiry and hides the countdown', () => {
+	const persistent = { ...sticky, persistent: true };
+	const longAfterOldExpiry = Date.parse('2026-07-20T14:00:01Z');
+	assert.deepEqual(runnerBlocks(profiles, 'codex', null, persistent, longAfterOldExpiry), [
+		{
+			profile: profiles[1],
+			kind: 'sticky',
+			badge: 'riding thread · until changed',
+			active: true
+		},
+		{ profile: profiles[0], kind: 'default', badge: 'default', active: false }
+	]);
+	assert.equal(stickyCountdown(persistent, duringSticky), null);
+});
+
 test('a parked request outranks the sticky in the header', () => {
 	const blocks = runnerBlocks(profiles, 'codex', request, sticky, duringSticky);
 	assert.equal(blocks[0]?.kind, 'requested');

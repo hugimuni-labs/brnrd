@@ -150,9 +150,9 @@ export function runnerBlocks(
 			{
 				profile: stuck,
 				kind: 'sticky',
-				badge: `riding thread · ${stickyCountdown(live, nowMs) ?? 'until released'}`,
+				badge: `riding thread · ${live.persistent ? 'until changed' : (stickyCountdown(live, nowMs) ?? 'until released')}`,
 				active: true,
-				...(live.expires_at ? { until: live.expires_at } : {})
+				...(live.expires_at && !live.persistent ? { until: live.expires_at } : {})
 			}
 		];
 		if (fallback && fallback.name !== stuck.name) {
@@ -170,7 +170,7 @@ export function stickyCountdown(
 	sticky: RunnerSticky | null | undefined,
 	nowMs: number = Date.now()
 ): string | null {
-	if (!sticky?.expires_at) return null;
+	if (!sticky?.expires_at || sticky.persistent) return null;
 	const expires = Date.parse(sticky.expires_at);
 	if (Number.isNaN(expires)) return null;
 	return shortDelta((expires - nowMs) / 1000);
