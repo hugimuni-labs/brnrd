@@ -3159,6 +3159,25 @@ def cmd_goal_record(args):
     if not key:
         print("[brnrd goal] key must not be empty", file=sys.stderr)
         return 1
+    basis = (args.basis or "").strip() or None
+    prior = next(
+        (sample for sample in reversed(items_mod.load_readings(warp_root, goal.id))
+         if sample.key == key),
+        None,
+    )
+    if prior is not None:
+        standing_basis = items_mod.reading_basis(prior)
+        if basis is None:
+            print(
+                f"[brnrd goal] standing basis for {key}: {standing_basis}",
+                file=sys.stderr,
+            )
+        elif basis != standing_basis:
+            print(
+                f"[brnrd goal] warning: standing basis for {key} is "
+                f"{standing_basis}; given basis is {basis}; the Δ will be refused",
+                file=sys.stderr,
+            )
     reading = items_mod.append_reading(
         warp_root,
         goal.id,
@@ -3166,7 +3185,7 @@ def cmd_goal_record(args):
         args.value,
         source=(args.source or "").strip(),
         note=(args.note or None),
-        basis=(args.basis or "").strip() or None,
+        basis=basis,
     )
     source_note = f" via {reading.source}" if reading.source else ""
     print(f"{goal.id} {reading.key} = {items_mod.format_value(reading.value)}{source_note} ({reading.ts})")
