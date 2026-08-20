@@ -80,6 +80,7 @@ WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 if str(REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "src"))
 from brr import gate_receipt, gitops  # noqa: E402
+from brr.parked_branches import TERMINAL_RUN_STATUSES  # noqa: E402
 
 # Written beside the run's other control dotfiles; the daemon's outbox drain
 # skips dotfiles, so it is never delivered to chat. Same idiom as `.card`.
@@ -218,6 +219,18 @@ _LOCK_POLL_SECONDS = 2.0
 #: How often (in poll ticks) a queued run repeats its status, so a long wait
 #: does not spam stderr once per poll but still narrates within a minute.
 _LOCK_REPORT_EVERY = 15.0
+#: A terminal status is stamped before environment finalization.  The longest
+#: bounded finalization operation is a 300-second docker action, so allow twice
+#: that tail before treating a still-live child as orphaned.
+#:
+#: What the grace is measured *against* is the manifest's mtime, because the
+#: manifest records `started_at` and no terminal timestamp — there is nothing
+#: else on disk that says when the run went terminal.  So any later write to
+#: the manifest restarts the clock and the lock keeps queueing.  That is the
+#: safe direction (it never breaks a lock early) but it is not what "has been
+#: terminal for N seconds" would mean, and the log line below says the one it
+#: actually measures.
+_TERMINAL_RUN_GRACE_SECONDS = 600.0
 
 
 def gate_lock_path() -> Path:
@@ -279,6 +292,88 @@ def _read_lock_status(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _pid_is_alive(pid: object) -> bool:
+    try:
+        value = int(pid)
+        if value <= 0:
+            return False
+        os.kill(value, 0)
+    except (TypeError, ValueError, ProcessLookupError):
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _terminal_owner_reason(lock: Path, holder: dict) -> str | None:
+    """Return why a current-format holder is stale, or ``None``.
+
+    Missing ``run_id`` deliberately fails closed: old status files carry no
+    ownership evidence, so they continue to queue exactly as before.
+    """
+    run_id = str(holder.get("run_id") or "").strip()
+    if not run_id:
+        return None
+    pid = holder.get("pid")
+    if not _pid_is_alive(pid):
+        return "holder pid is no longer alive"
+    manifest = lock.parent / "runs" / run_id / "run.md"
+    try:
+        text = manifest.read_text(encoding="utf-8")
+        age = time.time() - manifest.stat().st_mtime
+    except OSError:
+        return None
+    status = ""
+    for line in text.splitlines():
+        if line.startswith("status:"):
+            status = line.partition(":")[2].strip()
+            break
+    if status in TERMINAL_RUN_STATUSES and age > _TERMINAL_RUN_GRACE_SECONDS:
+        return (
+            f"owner run is terminal ({status}) and its manifest has not been "
+            f"written for {age:.0f}s"
+        )
+    return None
+
+
+def _fd_names_current_lock(fd: int, lock: Path) -> bool:
+    try:
+        opened = os.fstat(fd)
+        current = lock.stat()
+    except OSError:
+        return False
+    return (opened.st_dev, opened.st_ino) == (current.st_dev, current.st_ino)
+
+
+def _break_stale_lock(fd: int, lock: Path, status: Path) -> bool:
+    """Replace the stale inode once, serializing competing queued reapers."""
+    reap_path = lock.with_name(lock.name + ".reap")
+    reap_fd = os.open(str(reap_path), os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(reap_fd, fcntl.LOCK_EX)
+        holder = _read_lock_status(status)
+        reason = _terminal_owner_reason(lock, holder)
+        if reason is None or not _fd_names_current_lock(fd, lock):
+            return False
+        held_pid = holder.get("pid", "unknown")
+        held_run = holder.get("run_id", "unknown")
+        print(
+            f"gate: broke stale gate lock — pid {held_pid}, run {held_run}: "
+            f"{reason}; lock was broken",
+            file=sys.stderr,
+            flush=True,
+        )
+        with contextlib.suppress(OSError):
+            lock.unlink()
+        with contextlib.suppress(OSError):
+            status.unlink()
+        return True
+    finally:
+        with contextlib.suppress(OSError):
+            fcntl.flock(reap_fd, fcntl.LOCK_UN)
+        os.close(reap_fd)
+
+
 def queue_status_path() -> Path | None:
     """Where *this* invocation's own "I am queued" status goes, or None.
 
@@ -335,12 +430,21 @@ def held_gate_lock():
     ticks = 0
     try:
         while True:
+            if not _fd_names_current_lock(fd, lock):
+                os.close(fd)
+                fd = os.open(str(lock), os.O_CREAT | os.O_RDWR, 0o644)
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
+                if _fd_names_current_lock(fd, lock):
+                    break
+                fcntl.flock(fd, fcntl.LOCK_UN)
             except OSError:
                 pass
             holder = _read_lock_status(status)
+            stale_reason = _terminal_owner_reason(lock, holder)
+            if stale_reason and _fd_names_current_lock(fd, lock):
+                if _break_stale_lock(fd, lock, status):
+                    continue
             if ticks % max(1, int(_LOCK_REPORT_EVERY / _LOCK_POLL_SECONDS)) == 0:
                 held_since = holder.get("since", "unknown")
                 held_pid = holder.get("pid", "unknown")
@@ -363,6 +467,7 @@ def held_gate_lock():
         _write_lock_status(
             status,
             pid=os.getpid(),
+            run_id=os.environ.get("BRR_RUN_ID", ""),
             since=datetime.datetime.now(datetime.timezone.utc).isoformat(),
         )
         if queue_path is not None:
