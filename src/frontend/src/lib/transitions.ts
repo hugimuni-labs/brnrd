@@ -18,6 +18,25 @@
 // the first one that had to be spelled the way node reads it.
 import { whenBooted } from './boot.ts';
 
+export interface GarageSpringParams {
+	duration?: number;
+}
+
+/** Sketches A–C share one compact spring: fast entry, a 7px overshoot,
+ * one opposing shake frame, then a hard stop. Geometry is discrete so the
+ * finish never drifts; reduced-motion readers get the settled frame only. */
+export function garageSpring(_node: Element, params: GarageSpringParams = {}) {
+	const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+	const frames = [-7, 2, -1, 0];
+	return {
+		duration: reduced ? 0 : (params.duration ?? 220),
+		css: (t: number) => {
+			const index = Math.min(frames.length - 1, Math.floor(t * frames.length));
+			return `transform: translateX(${frames[index]}px); opacity: ${reduced ? 1 : Math.min(1, t * 2.8)};`;
+		}
+	};
+}
+
 export interface GlitchRevealParams {
 	/** Total transition time in ms. Kept short by design — "quite fast to
 	 * not disturb" — so it reads as a flourish, not a wait. */
