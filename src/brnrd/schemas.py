@@ -510,15 +510,18 @@ class EnvironmentOptionIn(BaseModel):
 class RunnerStickyIn(BaseModel):
     """#932's conversation-sticky, mirrored so the rack can render it.
 
-    A claimed tap binds its profile to the claiming conversation for a TTL
+    A claimed tap binds its profile to the claiming conversation until it is
+    changed or released; deployments can opt back into #932's TTL
     (daemon-owned, `src/brr/wake_request.py`). Until this rode the runners
     lane the record decided every wake in the bound thread while the rack
     kept showing the config pin as `selected` — the 2026-08-08 "the core tap
-    is lying" defect. ``expires_at`` is computed daemon-side from the same
-    TTL dispatch honours, so the dashboard's timer and dispatch agree.
+    is lying" defect. ``persistent`` names the regime; when false,
+    ``expires_at`` is computed daemon-side from the same TTL dispatch honours,
+    so the dashboard's timer and dispatch agree.
     """
 
     profile: str = Field(min_length=1, max_length=64)
+    persistent: bool = False
     claimed_at: datetime | None = None
     expires_at: datetime | None = None
     correspondent_key: str | None = Field(default=None, max_length=255)

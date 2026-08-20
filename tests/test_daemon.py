@@ -9863,7 +9863,7 @@ def test_applied_tap_binds_the_conversation_sticky_record(
     assert record["claimed_at"]
 
 
-def test_burst_event_within_ttl_inherits_the_tap_profile(tmp_path, monkeypatch):
+def test_later_event_inherits_the_persistent_tap_profile(tmp_path, monkeypatch):
     """#932's live incident: the photo that lands 39 seconds after a fable
     tap and dispatches with no tap parked must inherit fable, not fall
     through to the config default — with the sticky stamps the run context
@@ -9882,6 +9882,19 @@ def test_burst_event_within_ttl_inherits_the_tap_profile(tmp_path, monkeypatch):
     daemon._apply_dashboard_wake_request(target, ctx, repo_a)
     assert wake_request_mod.pending_id(repo_a / ".brr") is None
 
+    # Persistence is meaningful past #932's old two-hour default, not only
+    # inside the original burst window.
+    record = wake_request_mod.sticky_record(repo_a / ".brr")
+    old_claim = datetime.now().astimezone() - timedelta(hours=3)
+    wake_request_mod.store_sticky(
+        repo_a / ".brr",
+        request_id=record["request_id"],
+        profile=record["profile"],
+        correspondent_key=record["correspondent_key"],
+        conversation_key=record["conversation_key"],
+        claimed_at=old_claim.isoformat(timespec="seconds"),
+    )
+
     burst = _second_target(ctx, repo_a, tmp_path, exclude_id=target.event["id"])
     _give_identity(burst.event)
     _never_claims(monkeypatch)
@@ -9890,15 +9903,14 @@ def test_burst_event_within_ttl_inherits_the_tap_profile(tmp_path, monkeypatch):
 
     assert applied.event["runner"] == "claude-fable"
     assert applied.event["dashboard_wake_sticky_profile"] == "claude-fable"
-    # The stamps carry the record's own clock: expiry is claimed_at + TTL.
+    # The record's clock remains visible, but the default regime has no expiry.
     record = wake_request_mod.sticky_record(repo_a / ".brr")
     claimed = datetime.fromisoformat(record["claimed_at"])
     assert applied.event["dashboard_wake_sticky_claimed_at"] == (
         claimed.isoformat(timespec="seconds")
     )
-    assert applied.event["dashboard_wake_sticky_expires_at"] == (
-        (claimed + timedelta(hours=2)).isoformat(timespec="seconds")
-    )
+    assert applied.event["dashboard_wake_sticky_persistent"] is True
+    assert "dashboard_wake_sticky_expires_at" not in applied.event
     # Inherited, not claimed fresh — no request id, and the record survives
     # for the rest of the conversation instead of being retired.
     assert "dashboard_wake_request_id" not in applied.event
@@ -10015,7 +10027,7 @@ def test_schedule_and_self_woken_events_never_consult_the_sticky_record(
     assert "runner" not in applied.event
 
 
-def test_expired_sticky_record_falls_through_to_config(tmp_path, monkeypatch):
+def test_explicitly_timed_sticky_record_falls_through_after_expiry(tmp_path, monkeypatch):
     """Expiry is the load-bearing half of the design: past the TTL the
     record is dropped and resolution falls through to `.brr/config` — the
     cheap default returns on its own, nobody has to remember to downgrade."""
@@ -10036,7 +10048,9 @@ def test_expired_sticky_record_falls_through_to_config(tmp_path, monkeypatch):
     )
     _never_claims(monkeypatch)
 
-    applied = daemon._apply_dashboard_wake_request(target, ctx, repo_a)
+    applied = daemon._apply_dashboard_wake_request(
+        target, ctx, repo_a, {"wake_request.sticky_ttl_seconds": "7200"}
+    )
 
     assert "runner" not in applied.event
     assert "dashboard_wake_sticky_profile" not in applied.event

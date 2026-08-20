@@ -2245,8 +2245,8 @@ def _apply_dashboard_wake_request(
     return target
 
 
-def _sticky_ttl_seconds(cfg: dict | None) -> float:
-    """#932: the sticky record's lifetime, config-overridable per repo.
+def _sticky_ttl_seconds(cfg: dict | None) -> float | None:
+    """The sticky record's opt-in lifetime, shared by every reader.
 
     Thin alias — `wake_request.sticky_ttl_seconds` owns the resolution so
     dispatch and the dashboard publish tick cannot disagree about when a
@@ -2290,10 +2290,9 @@ def _apply_sticky_wake_profile(
       within the conversation, auto-reverting, never carried to schedule
       ticks. A schedule tick has no correspondent, but the guard must not
       lean on that accident.
-    - expiry means fall through to config, and the record is dropped so the
-      next dispatch doesn't re-read a dead promise. The TTL is the whole
-      reason plain sticky was rejected ("I would forget to downgrade a
-      shell too"): the cheap default returns on its own tomorrow.
+    - when an explicit TTL expires, fall through to config and drop the
+      record so the next dispatch doesn't re-read a dead promise. Without
+      that opt-in, the pick persists until changed or released.
     - the match prefers the correspondent key — the per-human identity that
       collapses `cloud:telegram:…` and `telegram:…` into one person (#930
       is what raw thread keys did to menus) — and falls back to the
@@ -2341,20 +2340,23 @@ def _apply_sticky_wake_profile(
         return target
 
     claimed_iso = view["claimed_at"]
-    expires_iso = view["expires_at"]
     updates: dict[str, object] = {
         "runner": profile,
         "dashboard_wake_sticky_profile": profile,
         "dashboard_wake_sticky_claimed_at": claimed_iso,
-        "dashboard_wake_sticky_expires_at": expires_iso,
+        "dashboard_wake_sticky_persistent": view["persistent"],
     }
+    expires_iso = view.get("expires_at")
+    if expires_iso:
+        updates["dashboard_wake_sticky_expires_at"] = expires_iso
     protocol.update_event_meta(event, **updates)
     event.update(updates)
     record_id = str(view.get("request_id") or "").strip() or "unknown"
     print(
         f"[brnrd] wake request {record_id} conversation-sticky: "
         f"{event.get('id') or 'an unnamed event'} inherits profile "
-        f"{profile} (claimed {claimed_iso}, expires {expires_iso})"
+        f"{profile} (claimed {claimed_iso}"
+        f"{f', expires {expires_iso}' if expires_iso else ', until changed'})"
     )
     return target
 
@@ -2375,6 +2377,8 @@ def _sticky_wake_note(event: dict) -> str:
     expires = _hhmm(event.get("dashboard_wake_sticky_expires_at"))
     if claimed and expires:
         return f"conversation-sticky from tap at {claimed}Z, expires {expires}Z"
+    if claimed and event.get("dashboard_wake_sticky_persistent") is True:
+        return f"conversation-sticky from tap at {claimed}Z, until changed"
     return "conversation-sticky from an earlier dashboard tap"
 
 

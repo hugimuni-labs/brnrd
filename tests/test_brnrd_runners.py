@@ -552,6 +552,7 @@ def test_wake_request_claim_skips_availability_when_the_rack_is_blank():
 
 _STICKY = {
     "profile": "claude-haiku",
+    "persistent": False,
     "claimed_at": "2026-08-08T10:00:00+00:00",
     # Far future: these tests pin mirroring and lifecycle, not the clock.
     "expires_at": "2126-08-08T12:00:00+00:00",
@@ -575,6 +576,7 @@ def test_sticky_rides_the_runners_mirror_to_the_dashboard():
     _login_cookie(client)
     body = client.get("/v1/dashboard/runners").json()
     assert body["sticky"]["profile"] == "claude-haiku"
+    assert body["sticky"]["persistent"] is False
     assert body["sticky"]["expires_at"].startswith("2126-08-08T12:00:00")
 
     # A sticky past its expiry never renders, even off a stale mirror.
@@ -585,6 +587,15 @@ def test_sticky_rides_the_runners_mirror_to_the_dashboard():
     ).status_code == 200
     late = client.get("/v1/dashboard/runners").json()
     assert late["sticky"] is None
+
+    # The explicit regime flag outranks a legacy expiry stamp.
+    assert client.put(
+        "/v1/daemons/runners",
+        json={**_CATALOG_PAYLOAD, "sticky": {**_STICKY, "persistent": True, "expires_at": "2020-01-01T00:00:00+00:00"}},
+        headers=daemon_headers,
+    ).status_code == 200
+    persistent = client.get("/v1/dashboard/runners").json()
+    assert persistent["sticky"]["persistent"] is True
 
     # A publish with no sticky clears the mirror.
     assert client.put(

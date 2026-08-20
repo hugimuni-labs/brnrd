@@ -2175,7 +2175,7 @@ def test_runners_snapshot_reads_local_catalog(tmp_path, monkeypatch):
     assert snapshot["profiles"] == catalog
 
     # #932 made visible: no sticky record => sticky is None; a live one
-    # rides the snapshot with its computed expiry.
+    # rides the snapshot in the default persistent regime.
     assert snapshot["sticky"] is None
     from brr import wake_request as wake_request_mod
 
@@ -2188,7 +2188,8 @@ def test_runners_snapshot_reads_local_catalog(tmp_path, monkeypatch):
     )
     snapshot = cloud._runners_snapshot(brr_dir)
     assert snapshot["sticky"]["profile"] == "claude-haiku"
-    assert snapshot["sticky"]["expires_at"] == "2126-08-08T12:00:00+00:00"
+    assert snapshot["sticky"]["persistent"] is True
+    assert "expires_at" not in snapshot["sticky"]
 
 
 def test_dashboard_publish_tick_noop_without_configured_state(tmp_path):
