@@ -10217,6 +10217,40 @@ def test_account_run_state_doc_persists_run_snapshot(tmp_path):
     assert "run_state_url" not in task.meta
 
 
+def test_account_run_state_doc_preserves_long_request_whole(tmp_path):
+    """Issue #1369: the glance excerpt must not replace the request record."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {
+            "repo.label": "Gurio/brr",
+            "home.path": str(tmp_path / "account-home"),
+        },
+    )
+    body = "First paragraph.\n\n" + ("A long second paragraph. " * 40).rstrip()
+    task = Run(
+        id="run-long-request",
+        event_id="evt-long-request",
+        body=body,
+        source="telegram",
+        status="running",
+    )
+
+    state_path = daemon._persist_run_state_doc(
+        ctx,
+        task,
+        repo_label="Gurio/brr",
+        stage="created",
+    )
+
+    state = state_path.read_text(encoding="utf-8")
+    assert "[Read the full request](request.md)" in state
+    assert body not in state
+    assert (state_path.parent / "request.md").read_text(encoding="utf-8") == body
+
+
 def test_account_run_state_doc_does_not_invent_clock_readings(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
