@@ -58,6 +58,11 @@ class MessengerIdentities:
 
     telegram_bot_username: str = ""
     whatsapp_e164: str = ""
+    # Distinct from the derived E.164 value: the Cloud API credentials can
+    # be present while the one startup lookup is temporarily unavailable.
+    # Keeping that fact lets the dashboard avoid calling a configured door
+    # "not configured" merely because Meta did not answer at boot.
+    whatsapp_credentials_present: bool = False
 
 
 @dataclass(frozen=True)
@@ -102,6 +107,9 @@ def env_only_identities(settings: Settings) -> MessengerIdentities:
         # phone lookup is the *only* source, so with no derivation run yet
         # there is nothing here but empty.
         whatsapp_e164="",
+        whatsapp_credentials_present=bool(
+            settings.whatsapp_access_token and settings.whatsapp_phone_number_id
+        ),
     )
 
 
@@ -153,6 +161,9 @@ def derive_messenger_identities(settings: Settings, *, timeout: float = 5.0) -> 
         # `app.py`'s lifespan ran immediately before this call.
         telegram_bot_username=telegram_effective_bot_username(settings),
         whatsapp_e164=derive_whatsapp_number(settings, timeout=timeout),
+        whatsapp_credentials_present=bool(
+            settings.whatsapp_access_token and settings.whatsapp_phone_number_id
+        ),
     )
 
 
@@ -198,6 +209,7 @@ PLATFORMS: tuple[str, ...] = tuple(d.platform for d in _REGISTRY)
 
 _NOT_BUILT = "not_built"
 _NOT_CONFIGURED = "not_configured"
+_IDENTITY_UNAVAILABLE = "identity_unavailable"
 
 
 def messenger_doors(identities: MessengerIdentities) -> list[MessengerDoor]:
@@ -209,7 +221,12 @@ def messenger_doors(identities: MessengerIdentities) -> list[MessengerDoor]:
             doors.append(MessengerDoor(d.platform, False, _NOT_BUILT))
             continue
         value = getattr(identities, d.identity_attr)
-        doors.append(MessengerDoor(d.platform, bool(value), None if value else _NOT_CONFIGURED))
+        if value:
+            doors.append(MessengerDoor(d.platform, True))
+        elif d.platform == "whatsapp" and identities.whatsapp_credentials_present:
+            doors.append(MessengerDoor(d.platform, False, _IDENTITY_UNAVAILABLE))
+        else:
+            doors.append(MessengerDoor(d.platform, False, _NOT_CONFIGURED))
     return doors
 
 

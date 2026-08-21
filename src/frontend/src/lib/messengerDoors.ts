@@ -28,7 +28,9 @@ export function doorLabel(platform: string): string {
 // still renders — the generic line below — rather than a blank row.
 const OFF_COPY: Record<string, string> = {
 	not_built: 'not built yet — no connector exists for this platform.',
-	not_configured: 'built, but not configured on this deployment.'
+	not_configured: 'built, but not configured on this deployment.',
+	identity_unavailable:
+		'configured, but its identity could not be verified when this service started.'
 };
 
 export function doorOffCopy(reason: string | null | undefined): string {
@@ -37,9 +39,9 @@ export function doorOffCopy(reason: string | null | undefined): string {
 }
 
 // `not_configured` is an operator lever (a bot token, a Cloud API
-// credential) — worth pointing at the self-hosting docs. `not_built` has
-// no lever to point at yet; showing a docs link there would promise a
-// setting that does not exist.
+// credential) — worth pointing at the self-hosting docs. `not_built` and
+// `identity_unavailable` have no configuration lever: the latter means the
+// credentials exist but startup could not fetch the provider identity.
 export function doorOffHasEnablePath(reason: string | null | undefined): boolean {
 	return reason === 'not_configured';
 }

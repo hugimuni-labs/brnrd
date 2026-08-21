@@ -69,6 +69,15 @@ def test_unconfigured_telegram_and_whatsapp_carry_the_not_configured_reason():
     assert doors["whatsapp"].reason == "not_configured"
 
 
+def test_configured_whatsapp_without_a_derived_number_is_not_misclassified():
+    """A transient Meta lookup failure leaves the deep link dark, but it
+    must not claim that the deployment has no credentials."""
+    identities = messenger_doors.MessengerIdentities(whatsapp_credentials_present=True)
+    door = {d.platform: d for d in messenger_doors.messenger_doors(identities)}["whatsapp"]
+    assert door.deep_link_available is False
+    assert door.reason == "identity_unavailable"
+
+
 def test_a_lit_door_carries_no_reason():
     identities = messenger_doors.MessengerIdentities(
         telegram_bot_username="brnrd_bot", whatsapp_e164="15551234567"
@@ -132,6 +141,7 @@ def test_env_only_identities_never_carries_a_whatsapp_number():
     fallback is always empty for WhatsApp."""
     settings = _settings(whatsapp_access_token="tok", whatsapp_phone_number_id="123")
     assert messenger_doors.env_only_identities(settings).whatsapp_e164 == ""
+    assert messenger_doors.env_only_identities(settings).whatsapp_credentials_present is True
 
 
 # --- the telegram half is #1463's, read not re-derived ----------------------
@@ -198,6 +208,38 @@ def test_derive_whatsapp_is_empty_when_the_lookup_fails(monkeypatch):
     monkeypatch.setattr(wa, "fetch_display_phone_number", lambda *a, **k: None)
     settings = _settings(whatsapp_access_token="tok", whatsapp_phone_number_id="123")
     assert messenger_doors.derive_whatsapp_number(settings) == ""
+
+
+def test_whatsapp_lookup_logs_meta_error_without_the_token(monkeypatch, caplog):
+    from brnrd.platforms import whatsapp as wa
+
+    request = wa.httpx.Request("GET", "https://graph.facebook.com/v22.0/123")
+    response = wa.httpx.Response(
+        401,
+        request=request,
+        json={"error": {"code": 190, "message": "Invalid OAuth access token."}},
+    )
+    monkeypatch.setattr(wa.httpx, "get", lambda *a, **k: response)
+
+    with caplog.at_level("WARNING"):
+        assert wa.fetch_display_phone_number("https://graph.facebook.com", "v22.0", "123", "secret-token") is None
+
+    assert "HTTP 401 Meta code=190 message=Invalid OAuth access token." in caplog.text
+    assert "secret-token" not in caplog.text
+
+
+def test_whatsapp_lookup_logs_timeout_class_without_credentials(monkeypatch, caplog):
+    from brnrd.platforms import whatsapp as wa
+
+    def timeout(*args, **kwargs):
+        raise wa.httpx.ReadTimeout("timed out")
+
+    monkeypatch.setattr(wa.httpx, "get", timeout)
+    with caplog.at_level("WARNING"):
+        assert wa.fetch_display_phone_number("https://graph.facebook.com", "v22.0", "123", "secret-token") is None
+
+    assert "ReadTimeout" in caplog.text
+    assert "secret-token" not in caplog.text
 
 
 # --- mint_deep_link ----------------------------------------------------------

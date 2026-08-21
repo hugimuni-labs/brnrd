@@ -27,6 +27,7 @@ test('doorLabel names the known platforms and title-cases an unknown one', () =>
 test('doorOffCopy distinguishes not_built from not_configured', () => {
 	equal(doorOffCopy('not_built').includes('no connector'), true);
 	equal(doorOffCopy('not_configured').includes('not configured'), true);
+	equal(doorOffCopy('identity_unavailable').includes('configured'), true);
 });
 
 test('doorOffCopy falls back to a generic line for an unrecognized reason', () => {
