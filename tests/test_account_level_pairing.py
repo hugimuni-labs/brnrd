@@ -260,6 +260,27 @@ def test_dashboard_repos_carries_the_off_door_reason(env):
     assert reasons["signal"] == "not_built"
 
 
+def test_dashboard_does_not_call_configured_whatsapp_unconfigured_after_lookup_failure(monkeypatch):
+    """The dashboard wire must preserve the distinction made by the door
+    registry when startup has credentials but cannot derive the number."""
+    app, client, sends = _make_client(
+        monkeypatch, whatsapp_access_token="tok", whatsapp_phone_number_id="123"
+    )
+    from brnrd.messenger_doors import MessengerIdentities
+
+    app.state.messenger_identities = MessengerIdentities(
+        telegram_bot_username="brnrd_bot", whatsapp_credentials_present=True
+    )
+    headers = _account(client)
+    _login_session(client, headers)
+    doors = {d["platform"]: d for d in client.get("/v1/dashboard/repos").json()["messenger_doors"]}
+    assert doors["whatsapp"] == {
+        "platform": "whatsapp",
+        "deep_link_available": False,
+        "reason": "identity_unavailable",
+    }
+
+
 def test_generalized_pair_mint_carries_a_visible_expiry(env):
     """brr/every-door-on-the-page — the mint response needs its own
     `expires_at` so the page can render a live countdown instead of a link

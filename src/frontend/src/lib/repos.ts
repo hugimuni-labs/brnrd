@@ -156,8 +156,9 @@ export interface MessengerDoor {
 	deep_link_available: boolean;
 	// brr/every-door-on-the-page — why a dark door is dark: `"not_built"`
 	// (no connector exists, Slack/Signal today) vs `"not_configured"` (the
-	// connector exists but this deployment hasn't wired its identity,
-	// Telegram/WhatsApp with no bot token / Cloud API creds). `null` for a
+	// connector exists but this deployment lacks its credentials) vs
+	// `"identity_unavailable"` (credentials exist but provider identity
+	// lookup failed at startup). `null` for a
 	// lit door. Absent on an older backend — treat as `null`, same "no
 	// reason known" reading `messengerDoors.ts`'s `doorOffCopy` falls back
 	// to.
