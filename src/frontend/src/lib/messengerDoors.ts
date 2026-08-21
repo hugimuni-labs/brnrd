@@ -29,7 +29,8 @@ export function doorLabel(platform: string): string {
 const OFF_COPY: Record<string, string> = {
 	not_built: 'not built yet — no connector exists for this platform.',
 	not_configured: 'built, but not configured on this deployment.',
-	identity_unavailable: 'configured, but its identity could not be verified when this service started.'
+	identity_unavailable:
+		'configured, but its identity could not be verified when this service started.'
 };
 
 export function doorOffCopy(reason: string | null | undefined): string {
