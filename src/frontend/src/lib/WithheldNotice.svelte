@@ -47,7 +47,9 @@
 			{unrecorded !== null ? '' : 'paused — '}{optedOut}.
 		{/if}
 		{#if canNameRepo}
-			<a class="underline hover:text-amber-100" href={resolve('/repos')}>Set the full publish scope.</a>
+			<a class="underline hover:text-amber-100" href={resolve('/repos')}
+				>Set the full publish scope.</a
+			>
 		{/if}
 	{/if}
 </p>
