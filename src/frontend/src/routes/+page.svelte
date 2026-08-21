@@ -88,7 +88,6 @@
 	import {
 		ReposAuthError,
 		fetchRepos,
-		type Capability,
 		type ConnectedRepo,
 		type GitHubInstallation,
 		type MachinesSummary,
@@ -157,11 +156,6 @@
 	// to read `setup_command` off, so the account-level spelling comes with
 	// the list itself.
 	let pairingCommand = $state<string | null>(null);
-	// The capability registry (design-capability-panel.md), same
-	// `/v1/dashboard/repos` fetch — additive/optional on the wire, so a
-	// backend that predates #1156 leaves this `null` and the panel renders
-	// nothing rather than an empty shell (`repos.ts` capabilities? comment).
-	let capabilities = $state<Capability[] | null>(null);
 	// design-machines-and-guests.md R1 / #1365, same `/v1/dashboard/repos`
 	// fetch: account-level daemon presence, so ColdStart can tell "paired,
 	// no repo enabled yet" apart from "nothing paired at all" without a
@@ -1208,7 +1202,6 @@
 				pairingCommand = repos.pairing_command ?? null;
 				githubLogin = repos.account.github_login;
 				accountId = repos.account.id;
-				capabilities = repos.capabilities ?? null;
 				machines = repos.machines ?? null;
 				messengerDoors = repos.messenger_doors ?? null;
 			} catch (e) {
