@@ -2,7 +2,6 @@
 	import { resolve } from '$app/paths';
 	import { optedOutClause, unrecordedClause } from './publishScope';
 	import { consentGapRepos } from './consentGap';
-	import ConsentPopover from './ConsentPopover.svelte';
 	import type { WithheldLane } from './withheld';
 
 	interface Props {
@@ -24,9 +23,7 @@
 	// `consentGapRepos` drops any name that arrived without one (an older
 	// backend, mid-deploy). Empty ⇒ no dead button; the /repos link below
 	// still covers it.
-	let canActInPlace = $derived(consentGapRepos(withheld).length > 0);
-
-	let popover: ConsentPopover | undefined = $state();
+	let canNameRepo = $derived(consentGapRepos(withheld).length > 0);
 </script>
 
 <p class={className}>
@@ -49,15 +46,8 @@
 		{#if optedOut !== null}
 			{unrecorded !== null ? '' : 'paused — '}{optedOut}.
 		{/if}
-		{#if canActInPlace}
-			<button
-				type="button"
-				class="cursor-pointer underline hover:text-amber-100"
-				onclick={() => popover?.open()}>Or fix it here.</button
-			>
+		{#if canNameRepo}
+			<a class="underline hover:text-amber-100" href={resolve('/repos')}>Set the full publish scope.</a>
 		{/if}
 	{/if}
 </p>
-{#if canActInPlace}
-	<ConsentPopover bind:this={popover} {withheld} />
-{/if}

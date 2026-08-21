@@ -113,3 +113,16 @@ def test_uninitialized_wake_task_renders_facts_block(tmp_path):
     task = prompts.build_uninitialized_wake_task(repo, facts=facts)
     assert "### Init facts" in task
     assert "Existing AGENTS.md: no" in task
+
+
+def test_account_paired_first_wake_forces_home_knowledge(tmp_path):
+    repo = _repo(tmp_path)
+    task = prompts.build_uninitialized_wake_task(
+        repo, facts={"account_paired": True, "agents_md": False},
+    )
+
+    assert "Knowledge shape for this adopter: **home**" in task
+    assert "Do **not** create a repo-local `kb/`" in task
+    assert "do not ask the user to choose" in task
+    assert "skip this beat" in task
+    assert ".brnrd-kb/" in task

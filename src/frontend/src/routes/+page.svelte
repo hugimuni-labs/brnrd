@@ -94,7 +94,6 @@
 		type MachinesSummary,
 		type MessengerDoor
 	} from '$lib/repos';
-	import CapabilityPanel from '$lib/CapabilityPanel.svelte';
 	import Landing from '$lib/Landing.svelte';
 	import { SurfaceAuthError, fetchSurface, type SurfaceResponse } from '$lib/surface';
 	import { glitchReveal, typeReveal } from '$lib/transitions';
@@ -1416,8 +1415,6 @@
 		     is "the panel at rest + the frontier," placed where the old
 		     static /repos repetition sits, above the rail so it's never
 		     under the fold. -->
-		<CapabilityPanel {capabilities} {connectedRepos} {pairingCommand} {now} />
-
 		<div bind:this={releaseSentinel} class="h-px -mb-px" aria-hidden="true"></div>
 		<!-- THE STACK (w-48, `design-the-sticky-stack.md`): gauge, docked heddle
 		     copy, machine head, section label — one sticky container, so every
