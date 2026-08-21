@@ -88,12 +88,17 @@ one exchange unless the user opens it up.
    at closeout, not the bare command: `hooks.gate_command` only names what
    to run, it never runs anything by itself, and `brnrd gate-run` is what
    actually runs it and writes the receipt the Stop hook checks for.
-2. **Where memory lives.** One combined question: knowledge in a committed
-   `kb/` in the repo (portable, public to the repo's readers) or in their
-   private brnrd account home — and, if `gh` is available, whether to back
-   memory/knowledge up to private GitHub repos now. Default: committed
-   `kb/`. This answer decides which contract you author — never author
-   first and ask second.
+2. **Where memory lives.** If the facts say `account_paired`, skip this beat:
+   pairing already settled the ownership boundary. Knowledge is available
+   through the daemon-managed account knowledge repo (with its `.brnrd-kb/`
+   working checkout), never a committed `kb/` in the adopted repo; home and
+   knowledge durability is connect's mechanical job, not an interview choice.
+   Without an account, ask one combined question: knowledge in a committed
+   `kb/` in the repo (portable, public to the repo's readers) or in a local
+   private brnrd home — and, if `gh` is available, whether to back memory and
+   knowledge up to private GitHub repos now. Default: committed `kb/`. This
+   answer decides which contract you author — never author first and ask
+   second.
 3. **Channels — ask the outcome, not the gate name.** *"Where do you want
    to be able to reach me from?"* Phone · issues and PRs · your team's
    chat.
@@ -182,8 +187,10 @@ committing, in a short readable form. One round of adjustments is normal.
 ## Closeout
 
 1. Commit everything you authored on the current branch — message:
-   `chore: set up AGENTS.md and knowledge base`. Committing to the default
-   branch is correct *in this wake*; the user asked for these files here.
+   `chore: set up AGENTS.md and knowledge base`. A daemon-hosted door wake
+   follows its Run Context Bundle's branch and delivery contract; do not
+   reinterpret this setup as permission to commit directly to the default
+   branch. A terminal init wake may commit on its current default branch.
 2. Write your `.card` `## Now` as a compact receipt: contract authored,
    gates wired, gate command declared, shape chosen.
 3. Final reply, short: what exists now, what you'd suggest first

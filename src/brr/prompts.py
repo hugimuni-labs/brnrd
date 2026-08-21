@@ -4114,6 +4114,17 @@ def _first_wake_task_parts(
             "---\n\n## Adopter template (author `AGENTS.md` from this)\n\n"
             + tpl_path.read_text(encoding="utf-8")
         )
+    if facts and facts.get("account_paired"):
+        task_parts.append(
+            "---\n\n## Knowledge shape for this adopter: **home**\n\n"
+            "This repo is connected to a brnrd account. Its knowledge base, "
+            "work surface, topics, and resident memory belong to that account "
+            "home outside the adopted repository. Do **not** create a repo-local "
+            "`kb/`, and do not ask the user to choose between repo and home "
+            "knowledge: pairing already settled the ownership boundary. Author "
+            "`AGENTS.md` for home knowledge and write durable knowledge through "
+            "the account path named in the wake's Knowledge Sources block."
+        )
     return "\n\n".join(p for p in task_parts if p)
 
 

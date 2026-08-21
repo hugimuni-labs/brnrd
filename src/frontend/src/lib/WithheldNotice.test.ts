@@ -97,15 +97,17 @@ test('two unrecorded repos are both named, joined in natural language', async ()
 	equal(html.includes('Gurio/BeCenter and Gurio/other-repo'), true);
 });
 
-// ── the in-place act (id-bearing payload) ──────────────────────────────
+// ── one aggregate repair surface ───────────────────────────────────────
 
-test('an id-bearing gap mounts the fix-it-here trigger and the dialog', async () => {
+test('an id-bearing gap points at the full publish-scope selector', async () => {
 	const html = await renderNotice({
 		lane: 'corpus',
 		unrecorded: ['Gurio/BeCenter'],
 		unrecorded_ids: ['repo-1']
 	});
-	ok(html.includes('Or fix it here.'), 'the in-place trigger must render when a real id is known');
+	ok(html.includes('Set the full publish scope.'));
+	ok(html.includes('href="/repos"'));
+	ok(!html.includes('Or fix it here.'));
 });
 
 test('a name with no id twin gets no in-place trigger — only the /repos link', async () => {

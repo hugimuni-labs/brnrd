@@ -34,6 +34,7 @@
 	import MarkerNotice from '$lib/MarkerNotice.svelte';
 	import MessengerDoors from '$lib/MessengerDoors.svelte';
 	import PairedChats from '$lib/PairedChats.svelte';
+	import CapabilityPanel from '$lib/CapabilityPanel.svelte';
 
 	let data = $state<ReposResponse | null>(null);
 	let error = $state<string | null>(null);
@@ -439,6 +440,12 @@
 	{:else if data === null}
 		<p class="mt-6 text-sm text-ink-quiet">Loading...</p>
 	{:else}
+		<CapabilityPanel
+			capabilities={data.capabilities ?? null}
+			connectedRepos={data.connected_repos}
+			pairingCommand={data.pairing_command}
+			now={Date.now()}
+		/>
 		{#if data.notice}
 			<!-- The GitHub Setup URL return (#1084). `data.notice` is the
 			     backend-mapped text (`_notice_text`, `routers/_session.py`);

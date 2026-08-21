@@ -189,6 +189,7 @@ def bootstrap(url: str | None = None) -> tuple[Path, list[str]]:
 
 def init_repo(
     url: str | None = None, *, interactive: bool = False, defaults: bool = False,
+    knowledge_shape: str | None = None,
 ) -> None:
     """Initialize a repository for brr management.
 
@@ -223,7 +224,10 @@ def init_repo(
 
     if defaults:
         print(f"[brnrd] {style.dim('--defaults: skipping the interview')}")
-        _init_auto(repo_root, available, interactive=False)
+        _init_auto(
+            repo_root, available, interactive=False,
+            knowledge_shape=knowledge_shape,
+        )
         return
 
     from . import init_wake as init_wake_mod
@@ -359,7 +363,8 @@ def runner_mod_doctor(repo_root: Path, *, attempted: str, error: str) -> str:
 
 
 def _init_auto(
-    repo_root: Path, available: list[str], *, interactive: bool = False
+    repo_root: Path, available: list[str], *, interactive: bool = False,
+    knowledge_shape: str | None = None,
 ) -> None:
     """The pre-#507 install, unchanged — what init degrades *to*.
 
@@ -395,7 +400,7 @@ def _init_auto(
     # asked *before* the contract is written, so setup authors the shape the
     # user actually chose instead of committing repo-`kb/` and discovering the
     # mismatch only when home-linking is offered afterwards.
-    knowledge_shape = _resolve_knowledge_shape(interactive)
+    knowledge_shape = knowledge_shape or _resolve_knowledge_shape(interactive)
 
     _run_setup(runner_name, repo_root, knowledge_shape=knowledge_shape)
 

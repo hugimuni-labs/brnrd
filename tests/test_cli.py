@@ -1520,9 +1520,78 @@ def test_account_connect_defaults_flag_writes_init_defaults_not_the_interview(
         "account", "connect", "https://brnrd.example", "--defaults",
     ]) is None
 
-    assert calls == [((), {"defaults": True})]
+    assert calls == [((), {"defaults": True, "knowledge_shape": "home"})]
     assert "writing brnrd init defaults" in capsys.readouterr().out
     assert protocol.list_pending(repo / ".brr" / "inbox") == []
+
+
+def test_connect_memory_links_both_private_repos_by_default(
+    monkeypatch, tmp_path, capsys,
+):
+    from types import SimpleNamespace
+    from brr import cli, home_link
+
+    monkeypatch.setattr(
+        "brr.account.resolve_context",
+        lambda *_a, **_kw: SimpleNamespace(kind="account", home_root=tmp_path, dominion_repo=tmp_path),
+    )
+    monkeypatch.setattr(home_link, "gh_available", lambda: True)
+    monkeypatch.setattr("brr.config.load_config", lambda _root: {})
+    monkeypatch.setattr(
+        "brr.knowledge.ensure_checkout", lambda *_a, **_kw: tmp_path / ".brnrd-kb",
+    )
+    calls = []
+    monkeypatch.setattr(
+        home_link, "link_home",
+        lambda *a, **kw: calls.append((a, kw)) or [
+            home_link.RepoLinkResult(
+                "dominion", tmp_path / "home", "https://x/home", "adopted", True,
+            ),
+            home_link.RepoLinkResult(
+                "knowledge", tmp_path / "knowledge", "https://x/kb", "created", True,
+            ),
+        ],
+    )
+
+    cli._connect_memory(tmp_path, local_only=False)
+
+    assert len(calls) == 1
+    out = capsys.readouterr().out
+    assert "private memory ready" in out
+    assert "dominion: adopted" in out and "knowledge: created" in out
+    assert (tmp_path / "surface" / "topics" / "adoption.md").exists()
+
+
+def test_connect_memory_local_only_is_an_explicit_opt_out(
+    monkeypatch, tmp_path, capsys,
+):
+    from types import SimpleNamespace
+    from brr import cli, home_link
+
+    monkeypatch.setattr(
+        "brr.account.resolve_context",
+        lambda *_a, **_kw: SimpleNamespace(kind="account", home_root=tmp_path, dominion_repo=tmp_path),
+    )
+    monkeypatch.setattr("brr.config.load_config", lambda _root: {})
+    checkout = tmp_path / ".brnrd-kb"
+    ensured = []
+    monkeypatch.setattr(
+        "brr.knowledge.ensure_checkout",
+        lambda *a, **kw: ensured.append((a, kw)) or checkout,
+    )
+    monkeypatch.setattr(
+        home_link, "link_home",
+        lambda *_a, **_kw: (_ for _ in ()).throw(
+            AssertionError("local-only must not link remotes")
+        ),
+    )
+
+    cli._connect_memory(tmp_path, local_only=True)
+
+    assert len(ensured) == 1
+    out = capsys.readouterr().out
+    assert "explicit --local-memory" in out
+    assert str(checkout) in out
 
 
 def test_account_connect_skips_setup_entirely_once_agents_md_exists(

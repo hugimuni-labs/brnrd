@@ -348,6 +348,14 @@ def build_parser() -> argparse.ArgumentParser:
             "repo; write today's `brnrd init` defaults directly instead"
         ),
     )
+    p.add_argument(
+        "--local-memory",
+        action="store_true",
+        help=(
+            "keep the account home and knowledge base only on this machine; "
+            "by default connect creates or adopts private GitHub backups"
+        ),
+    )
     linger = p.add_mutually_exclusive_group()
     linger.add_argument(
         "--yes-linger",
@@ -5626,6 +5634,7 @@ def cmd_brnrd_connect(args):
         # during the pairing-approval poll leaves the pending pair code to
         # expire server-side on its own TTL and this machine untouched.
         raise _connect_interrupted("pairing approval") from None
+    _connect_memory(repo_root, local_only=bool(args.local_memory))
     if args.no_service:
         print(
             "[brnrd] Paired without a background service. "
@@ -5670,6 +5679,49 @@ def cmd_brnrd_connect(args):
     _connect_finish_setup(repo_root, brr_dir, defaults=bool(args.defaults))
 
 
+def _connect_memory(repo_root: Path, *, local_only: bool) -> None:
+    """Make account memory durable as part of pairing, unless explicitly local."""
+    from . import account, config as conf, home_link, knowledge
+
+    cfg = conf.load_config(repo_root)
+    ctx = account.resolve_context(repo_root, cfg, create=True)
+    if ctx.kind != "account":
+        return
+    checkout = knowledge.ensure_checkout(repo_root, cfg)
+    topic = account.work_surface_path(ctx) / "topics" / "adoption.md"
+    if not topic.exists():
+        topic.parent.mkdir(parents=True, exist_ok=True)
+        topic.write_text(
+            "# Adoption\n\n"
+            "Getting brnrd from first connection to a resident that can work, remember, and be reached.\n",
+            encoding="utf-8",
+        )
+    if local_only:
+        print(
+            f"[brnrd] memory: local-only (explicit --local-memory); "
+            f"knowledge checkout ready at {checkout}"
+        )
+        return
+    if not home_link.gh_available():
+        print(
+            f"[brnrd] memory is local-only for now — `gh` is unavailable; "
+            f"run `{brnrd_cmd()} home link --yes` after installing/signing in"
+        )
+        return
+    try:
+        results = home_link.link_home(repo_root, cfg)
+    except home_link.HomeLinkError as exc:
+        print(
+            f"[brnrd] memory is local-only for now — {exc}; "
+            f"resume with `{brnrd_cmd()} home link --yes`"
+        )
+        return
+    rendered = "; ".join(
+        f"{r.slot}: {r.action} → {r.remote_url}" for r in results
+    )
+    print(f"[brnrd] private memory ready — {rendered}")
+
+
 def _connect_finish_setup(repo_root: Path, brr_dir: Path, *, defaults: bool) -> None:
     """#1244 fork 2 — what `connect` does about an uninitialized repo.
 
@@ -5687,7 +5739,7 @@ def _connect_finish_setup(repo_root: Path, brr_dir: Path, *, defaults: bool) -> 
         from . import adopt
 
         print("[brnrd] --defaults: writing brnrd init defaults, no interview")
-        adopt.init_repo(defaults=True)
+        adopt.init_repo(defaults=True, knowledge_shape="home")
         return
 
     from . import connect_greeting

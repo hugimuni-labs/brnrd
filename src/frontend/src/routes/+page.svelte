@@ -88,13 +88,11 @@
 	import {
 		ReposAuthError,
 		fetchRepos,
-		type Capability,
 		type ConnectedRepo,
 		type GitHubInstallation,
 		type MachinesSummary,
 		type MessengerDoor
 	} from '$lib/repos';
-	import CapabilityPanel from '$lib/CapabilityPanel.svelte';
 	import Landing from '$lib/Landing.svelte';
 	import { SurfaceAuthError, fetchSurface, type SurfaceResponse } from '$lib/surface';
 	import { glitchReveal, typeReveal } from '$lib/transitions';
@@ -158,11 +156,6 @@
 	// to read `setup_command` off, so the account-level spelling comes with
 	// the list itself.
 	let pairingCommand = $state<string | null>(null);
-	// The capability registry (design-capability-panel.md), same
-	// `/v1/dashboard/repos` fetch — additive/optional on the wire, so a
-	// backend that predates #1156 leaves this `null` and the panel renders
-	// nothing rather than an empty shell (`repos.ts` capabilities? comment).
-	let capabilities = $state<Capability[] | null>(null);
 	// design-machines-and-guests.md R1 / #1365, same `/v1/dashboard/repos`
 	// fetch: account-level daemon presence, so ColdStart can tell "paired,
 	// no repo enabled yet" apart from "nothing paired at all" without a
@@ -1209,7 +1202,6 @@
 				pairingCommand = repos.pairing_command ?? null;
 				githubLogin = repos.account.github_login;
 				accountId = repos.account.id;
-				capabilities = repos.capabilities ?? null;
 				machines = repos.machines ?? null;
 				messengerDoors = repos.messenger_doors ?? null;
 			} catch (e) {
@@ -1416,8 +1408,6 @@
 		     is "the panel at rest + the frontier," placed where the old
 		     static /repos repetition sits, above the rail so it's never
 		     under the fold. -->
-		<CapabilityPanel {capabilities} {connectedRepos} {pairingCommand} {now} />
-
 		<div bind:this={releaseSentinel} class="h-px -mb-px" aria-hidden="true"></div>
 		<!-- THE STACK (w-48, `design-the-sticky-stack.md`): gauge, docked heddle
 		     copy, machine head, section label — one sticky container, so every
