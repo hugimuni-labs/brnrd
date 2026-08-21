@@ -1312,10 +1312,10 @@ class _CloudCardTransport:
     def _post(self, body: dict) -> dict:
         return _request(self._state["brnrd_url"], "POST", "/v1/daemons/card", token=self._state["token"], json=body)
 
-    def send(self, text: str, *, reply_to: int | None = None) -> int | None:
+    def send(self, text: str, *, reply_to: int | None = None) -> int | str | None:
         return self._post({"event_id": self._event_id, "text": text}).get("message_id")
 
-    def edit(self, message_id: int, text: str) -> None:
+    def edit(self, message_id: int | str, text: str) -> None:
         try:
             self._post({"event_id": self._event_id, "text": text, "message_id": message_id})
         except RuntimeError as exc:
@@ -1332,6 +1332,11 @@ def _card_text_for(brr_dir: Path, conv_key: str, run_id: str, platform: str) -> 
     if platform == "telegram":
         from . import telegram
         return telegram.card_text(brr_dir, conv_key, run_id)
+    if platform == "whatsapp":
+        view = run_progress.project_run(brr_dir, conv_key, run_id)
+        if view is None:
+            return None
+        return run_progress.render_text(view, compact=True)
     return None
 
 

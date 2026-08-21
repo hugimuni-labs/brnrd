@@ -295,12 +295,12 @@ class ResponseAck(BaseModel):
 class CardPost(BaseModel):
     event_id: str
     text: str
-    message_id: int | None = None
+    message_id: int | str | None = None
 
 
 class CardAck(BaseModel):
     event_id: str
-    message_id: int | None = None
+    message_id: int | str | None = None
 
 
 class MessagePost(BaseModel):

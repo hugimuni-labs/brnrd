@@ -476,6 +476,98 @@ def test_response_is_forwarded_back_to_whatsapp(env):
     assert sends[0]["reply_to_message_id"] == "wamid.77"
 
 
+def test_card_relay_sends_one_threaded_notice_then_keeps_its_receipt(env, monkeypatch):
+    """WhatsApp cannot edit sent messages: create once, then acknowledge
+    later card lifecycle calls without adding another chat message."""
+    app, client, sends = env
+    acc, rid = _bound_wa_event(app, client, sends, message_id="wamid.source")
+    with app.state.SessionLocal() as db:
+        event_id = db.execute(
+            select(Event).where(Event.source == "whatsapp")
+        ).scalar_one().event_id
+
+    original_send = wa.send_message
+
+    def send_with_receipt(*args, **kwargs):
+        original_send(*args, **kwargs)
+        return "wamid.card"
+
+    monkeypatch.setattr("brnrd.platforms.whatsapp.send_message", send_with_receipt)
+    dmn = _daemon_headers(client, acc, rid)
+
+    created = client.post(
+        "/v1/daemons/card",
+        json={"event_id": event_id, "text": "⏳ working"},
+        headers=dmn,
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()["message_id"] == "wamid.card"
+    assert sends == [{
+        "token": "wa-token",
+        "phone_number_id": "phone-1",
+        "to": "15551234567",
+        "text": "⏳ working",
+        "reply_to_message_id": "wamid.source",
+    }]
+
+    later = client.post(
+        "/v1/daemons/card",
+        json={
+            "event_id": event_id,
+            "text": "done",
+            "message_id": "wamid.card",
+        },
+        headers=dmn,
+    )
+    assert later.status_code == 200
+    assert later.json()["message_id"] == "wamid.card"
+    assert len(sends) == 1
+
+
+@pytest.mark.parametrize(
+    ("failure", "detail"),
+    [
+        (wa.WindowClosed("outside 24h window — template messages not yet supported"), "outside 24h window"),
+        (RuntimeError("token secret-value rejected"), "whatsapp card relay failed"),
+    ],
+)
+def test_card_relay_failure_is_honest_and_does_not_close_event(env, monkeypatch, failure, detail):
+    app, client, sends = env
+    acc, rid = _bound_wa_event(app, client, sends)
+    with app.state.SessionLocal() as db:
+        event_id = db.execute(
+            select(Event).where(Event.source == "whatsapp")
+        ).scalar_one().event_id
+
+    monkeypatch.setattr(
+        "brnrd.platforms.whatsapp.send_message",
+        lambda *a, **k: (_ for _ in ()).throw(failure),
+    )
+    response = client.post(
+        "/v1/daemons/card",
+        json={"event_id": event_id, "text": "working"},
+        headers=_daemon_headers(client, acc, rid),
+    )
+    assert response.status_code == 502
+    assert detail in response.json()["detail"]
+    assert "secret-value" not in response.json()["detail"]
+    with app.state.SessionLocal() as db:
+        event = db.execute(select(Event).where(Event.event_id == event_id)).scalar_one()
+        assert event.status == Event.STATUS_QUEUED
+
+
+def test_send_message_returns_meta_message_id(monkeypatch):
+    class _Resp:
+        status_code = 200
+        content = b"1"
+
+        def json(self):
+            return {"messages": [{"id": "wamid.stable"}]}
+
+    monkeypatch.setattr(wa.httpx, "post", lambda *a, **k: _Resp())
+    assert wa.send_message("tok", "phone-1", "1555", "hi") == "wamid.stable"
+
+
 # ── the 24h customer-service window ────────────────────────────────────
 
 
