@@ -166,7 +166,7 @@ and the reply are yours.
   **never host paths** — `.brr/worktrees/<run-id>/kb/foo.md` renders
   nowhere. brnrd appends the forge-hosted branch URL to the card when a
   real one exists — that's the only source for it.
-- **next move** — `weave.md` §The turn owns the reply's whole shape, menu
+- **next move** — `weave.md` §The turn owns the reply's briefing shape; menu
   and bare state included; one owner, and this pin only checks it.
   Mechanical, before sending: **read the literal last line** — it is the
   menu, or it is the bare state (`done` | `continuing` | `blocked`).
