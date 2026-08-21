@@ -168,7 +168,11 @@ def install(
     pid: int | None = None
     if not no_start:
         _bootout(run=run, check=False)
-        _run_launchctl(["bootstrap", _gui_domain(), str(path)], run=run)
+        # `bootout` returns before launchd has always finished tearing the
+        # old job down. A bootstrap in that window fails with error 5 / EIO
+        # and suggests root, although this is a user-domain service. Retry
+        # that one transient shape; preserve every real failure verbatim.
+        _bootstrap_after_bootout(path, run=run, sleep=sleep)
         _run_launchctl(["kickstart", _gui_service()], run=run)
         started = True
         pid = _poll_for_pid(workdir_value, timeout=poll_timeout, sleep=sleep)
@@ -181,6 +185,25 @@ def install(
         alive=alive,
         pid=pid,
     )
+
+
+def _bootstrap_after_bootout(
+    path: Path,
+    *,
+    run: RunFn,
+    sleep: Callable[[float], None],
+    attempts: int = 4,
+) -> None:
+    args = ["bootstrap", _gui_domain(), str(path)]
+    for attempt in range(attempts):
+        result = _run_launchctl(args, run=run, check=False)
+        if result.returncode == 0:
+            return
+        detail = (result.stderr or result.stdout or "").strip()
+        transient_eio = "Bootstrap failed: 5" in detail or "Input/output error" in detail
+        if not transient_eio or attempt == attempts - 1:
+            raise SystemExit(detail or f"[brnrd] launchctl {' '.join(args)} failed")
+        sleep(0.25)
 
 
 def _poll_for_pid(
