@@ -9906,9 +9906,12 @@ def test_later_event_inherits_the_persistent_tap_profile(tmp_path, monkeypatch):
     # The record's clock remains visible, but the default regime has no expiry.
     record = wake_request_mod.sticky_record(repo_a / ".brr")
     claimed = datetime.fromisoformat(record["claimed_at"])
-    assert applied.event["dashboard_wake_sticky_claimed_at"] == (
-        claimed.isoformat(timespec="seconds")
-    )
+    # The live view canonicalizes stamps to UTC. Compare the instant, not the
+    # host's offset spelling: on a non-UTC machine the stored `+02:00` and the
+    # rendered `+00:00` strings differ while naming the same claim exactly.
+    assert datetime.fromisoformat(
+        applied.event["dashboard_wake_sticky_claimed_at"]
+    ) == claimed
     assert applied.event["dashboard_wake_sticky_persistent"] is True
     assert "dashboard_wake_sticky_expires_at" not in applied.event
     # Inherited, not claimed fresh — no request id, and the record survives

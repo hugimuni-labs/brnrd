@@ -25,11 +25,11 @@ This page reflects the public command tree printed by the installed CLI on
 | `brnrd gate auth <gate>` | Authenticate `telegram`, `slack`, `github`, `signal`, or `cloud`. |
 | `brnrd gate bind <repo> <gate>` | Bind a repo-local gate. |
 | `brnrd gate list [--json]` | Show gates configured here. |
-| `brnrd account connect [url]` | Pair with brnrd, then install and start the native user service; accepts `--daemon-name`, `--no-service`, and Linux linger controls. |
+| `brnrd account connect [url]` | Pair with brnrd, prepare account home + external knowledge, create/adopt their private GitHub remotes, then install and start the native user service; `--local-memory` explicitly skips remote linking. Also accepts `--daemon-name`, `--no-service`, `--defaults`, and Linux linger controls. |
 | `brnrd account disconnect` | Remove the local managed-gate identity while keeping the account home and its durable memory. |
 | `brnrd account add <repo>` | Add a repo to the connected account home. |
 | `brnrd account status [--json]` | Show the resolved home and its repos. |
-| `brnrd home link` | Back up resident memory and project knowledge to private GitHub repos; use `--help` before this mutating operation. |
+| `brnrd home link` | Retry or customize the private GitHub remotes for resident memory and project knowledge; managed connect normally performs this automatically. |
 
 The retired top-level spellings `auth`, `bind`, `setup`, `add`, and `connect`
 are not aliases. Use the noun-first commands above.

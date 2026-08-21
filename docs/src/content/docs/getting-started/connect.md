@@ -29,6 +29,16 @@ daemon. It does not move run execution to hosted compute. See
 [Security & privacy](../../security/) for the derived-knowledge mirror used by
 the dashboard.
 
+Connect also prepares the resident's memory as account infrastructure. It
+creates the local home and a separate knowledge Git repository, prepares the
+repository's `.brnrd-kb/` working checkout, and uses the signed-in GitHub CLI
+to adopt or create private `brnrd-home` and `brnrd-knowledge` remotes and push
+both. Existing private remotes are reused. Pass `--local-memory` to make the
+explicit local-only choice; the local home, knowledge repo, and checkout still
+exist, but no GitHub remotes are created or linked. If `gh` is unavailable or
+signed out, connect finishes locally and prints the `brnrd home link --yes`
+command that resumes durability later.
+
 GitHub organization installations are supported. A personal installation is
 bound only when its target matches the signed-in GitHub login; an organization
 installation is bound only after the App verifies that login as an active

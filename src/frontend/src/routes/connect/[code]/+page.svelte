@@ -16,6 +16,8 @@
 		type ApproveResult,
 		type ConnectContext
 	} from '$lib/connect';
+	import MessengerDoors from '$lib/MessengerDoors.svelte';
+	import { fetchRepos, type MessengerDoor } from '$lib/repos';
 
 	// #327 Jinja-removal, /connect slice — the device-pairing approval page.
 	// Every auth consequence stays backend-owned (`approve_core`): session,
@@ -33,6 +35,7 @@
 	let showPicker = $state(false);
 	let posting = $state(false);
 	let result = $state<ApproveResult | null>(null);
+	let messengerDoors = $state<MessengerDoor[] | null>(null);
 
 	let code = $derived(page.params.code ?? '');
 	// The initiator proof the pairing daemon minted, carried here in the URL
@@ -69,6 +72,14 @@
 		result = null;
 		try {
 			result = await approveConnect(code, useSuggested ? '' : repoId, approveProof);
+			if (result.ok) {
+				try {
+					const repos = await fetchRepos();
+					messengerDoors = repos.messenger_doors ?? null;
+				} catch {
+					messengerDoors = null;
+				}
+			}
 		} catch (e) {
 			if (e instanceof ConnectAuthError) unauthenticated = true;
 			else error = e instanceof Error ? e.message : 'approve failed';
@@ -121,6 +132,7 @@
 					{/if}
 				</div>
 			{/if}
+			<MessengerDoors doors={messengerDoors} />
 		{:else}
 			<p class="text-sm text-stone-400">
 				Bind pair code <code class="font-mono text-amber-200">{code}</code> to a repository.
