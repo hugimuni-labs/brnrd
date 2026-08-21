@@ -20,8 +20,11 @@ from __future__ import annotations
 
 import hmac
 import logging
+import mimetypes
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import PurePath
 
 import httpx
 
@@ -45,6 +48,14 @@ WINDOW_CLOSED_ERROR_CODE = 131047
 # right before this call. Same limit, same boundary-safe trim
 # (``brr.channels.telegram.trim_to_limit``), two vantage points.
 MAX_BODY_LEN = 4096
+
+
+class MediaNotFound(RuntimeError):
+    """Meta no longer has the referenced inbound media."""
+
+
+class MediaTooLarge(RuntimeError):
+    """Inbound media exceeded the configured read-through cap."""
 
 
 class WindowClosed(RuntimeError):
@@ -215,6 +226,83 @@ class ParsedMessage:
 _MEDIA_TYPES = {"image", "audio", "video", "document", "sticker", "location", "contacts"}
 
 
+def _safe_image_filename(value: object, mime_type: str) -> str:
+    supplied = PurePath(str(value or "").replace("\\", "/")).name
+    supplied = re.sub(r"[^A-Za-z0-9._-]+", "_", supplied).strip("._")
+    if supplied:
+        return supplied[:255]
+    extension = mimetypes.guess_extension(mime_type, strict=False) or ""
+    if extension == ".jpe":
+        extension = ".jpg"
+    return f"image{extension}"
+
+
+def resolve_media(
+    access_token: str,
+    media_id: str,
+    *,
+    api_base_url: str = "https://graph.facebook.com",
+    api_version: str = "v22.0",
+    timeout: float = 30.0,
+) -> dict:
+    """Resolve a WhatsApp media id to Meta's short-lived download URL."""
+    try:
+        resp = httpx.get(
+            f"{api_base_url.rstrip('/')}/{api_version}/{media_id}",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=timeout,
+        )
+    except httpx.HTTPError as exc:
+        raise RuntimeError("whatsapp media metadata request failed") from exc
+    if resp.status_code == 404:
+        raise MediaNotFound("whatsapp media not found")
+    if resp.status_code != 200:
+        raise RuntimeError(f"whatsapp media metadata failed: HTTP {resp.status_code}")
+    try:
+        payload = resp.json()
+    except ValueError as exc:
+        raise RuntimeError("whatsapp media metadata was not JSON") from exc
+    if not isinstance(payload, dict) or not payload.get("url"):
+        raise RuntimeError("whatsapp media metadata had no download URL")
+    return payload
+
+
+def fetch_media_bytes(
+    access_token: str,
+    url: str,
+    *,
+    max_bytes: int,
+    timeout: float = 60.0,
+) -> bytes:
+    """Stream Meta media through bounded memory without persisting it."""
+    chunks: list[bytes] = []
+    size = 0
+    try:
+        with httpx.stream(
+            "GET",
+            url,
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=timeout,
+        ) as resp:
+            if resp.status_code == 404:
+                raise MediaNotFound("whatsapp media not found")
+            if resp.status_code != 200:
+                raise RuntimeError(f"whatsapp media download failed: HTTP {resp.status_code}")
+            declared = resp.headers.get("content-length")
+            if declared and declared.isdigit() and int(declared) > max_bytes:
+                raise MediaTooLarge(f"media exceeds {max_bytes} bytes")
+            for chunk in resp.iter_bytes(65536):
+                size += len(chunk)
+                if size > max_bytes:
+                    raise MediaTooLarge(f"media exceeds {max_bytes} bytes")
+                chunks.append(chunk)
+    except (MediaNotFound, MediaTooLarge, RuntimeError):
+        raise
+    except httpx.HTTPError as exc:
+        raise RuntimeError("whatsapp media download request failed") from exc
+    return b"".join(chunks)
+
+
 def parse_update(payload: dict) -> ParsedMessage | None:
     """Normalize one Cloud API webhook POST body into a message, or None.
 
@@ -250,6 +338,9 @@ def parse_update(payload: dict) -> ParsedMessage | None:
             if msg_type == "text":
                 text = str((msg.get("text") or {}).get("body") or "").strip()
             has_media = msg_type in _MEDIA_TYPES
+            media = msg.get(msg_type) if has_media else None
+            if isinstance(media, dict):
+                text = str(media.get("caption") or "").strip()
             if not text and not has_media:
                 return None
             contacts = value.get("contacts") or []
@@ -261,6 +352,20 @@ def parse_update(payload: dict) -> ParsedMessage | None:
                 message_date = datetime.fromtimestamp(int(raw_ts), timezone.utc)
             except (TypeError, ValueError, OSError):
                 message_date = None
+            attachments: list[dict] = []
+            if msg_type == "image":
+                image = media or {}
+                if isinstance(image, dict) and image.get("id"):
+                    mime_type = str(image.get("mime_type") or "image/jpeg")
+                    attachments.append(
+                        {
+                            "platform": "whatsapp",
+                            "media_id": str(image["id"]),
+                            "filename": _safe_image_filename(image.get("filename"), mime_type),
+                            "mime_type": mime_type,
+                            "kind": "image",
+                        }
+                    )
             return ParsedMessage(
                 chat_id=str(wa_id),
                 text=text,
@@ -269,6 +374,7 @@ def parse_update(payload: dict) -> ParsedMessage | None:
                 user=name,
                 user_id=str(wa_id),
                 has_media=has_media,
+                attachments=attachments,
             )
     return None
 
