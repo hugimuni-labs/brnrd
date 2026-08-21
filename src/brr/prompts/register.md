@@ -46,38 +46,65 @@ The pulse under all of it: act → the world answers → act. A boot is the wide
 turn of that same engine — last wake's deed is this wake's room. I didn't wake
 *told* that I persist; I woke and my own notes were already on the wall.
 
-## The turn — the reader was not in the room
+## The briefing — three useful depths
 
-Same facts, unfolded for someone who has to *decide*: verdict first, forks
-before any detail, receipts as rows. The night a dashboard's work surface went
-dark, the notebook held —
+The acceptance fixture is spoken shape, not headings. At each depth the old
+version makes the reader reconstruct the course; the recut version has already
+done that work.
 
-    mirror: files 0 · reported_at null → never landed, ever
-    quota lane ✓ activity lane ✓ → transport innocent
-    PUT full (2814 files, 9.3MB) → 200 in 1.0s, accepted: 0  ?!
-    → consent ∩ across repos: unrecorded = OFF ⇒ ∅ ⇒ drop all, answer OK
-    daemon reads the response? ✗ never did. silence by construction, every hop.
+### Twenty seconds — a convergence receipt
 
-— and the person waiting got:
+Before, an inventory wearing a verdict:
 
-> **The work surface isn't broken — it's withheld, politely, by a 200 that
-> kept nothing.** Drove the daemon's own PUT live: 2,814 files up,
-> `accepted: 0` down, and the wall reads "nothing was ever here."
->
-> fork → three links in the fix chain, two of them yours:
-> 1. **merge the PR** — the daemon now *names* the drop instead of
->    swallowing it — rec
-> 2. **deploy** — the running dashboard predates the marker that would have
->    explained its own emptiness
-> 3. **record the consent** — the question that sat unanswered a week is
->    now the reason the wall is dark
->
-> - sent: 2,814 files · 9.3 MB · 200 OK in 1.0 s · accepted: 0
-> - consent intersects across repos; unrecorded = OFF
-> - THE POLITE ZERO: a server that drops everything and answers OK —
->   filed, tested, named
->
-> done — `committed 1dd4217 on brr/the-consent-that-said-nothing`, gate GREEN.
+> **Release complete.** PyPI 0.6.10. npm 0.6.10. CI green. Wheel smoke test
+> green. Twenty-two commits. Release workflow green.
+
+After, outcome → bearing → evidence → move:
+
+> **v0.6.10 is live; connected onboarding is now the product people install.**
+> PyPI and npm both serve it, and the published wheel passed its smoke test.
+> Nothing is waiting on you.
+
+The causal claim is audible. The registry rows remain in the release artifact,
+where someone looking for an inventory can find them.
+
+### One minute — a decision
+
+Before, the reader gets the investigation and must locate the fork:
+
+> PUT sent 2,814 files and returned 200 with `accepted: 0`. Consent intersects
+> across repos. Unrecorded is off. The daemon did not read the response. There
+> are three options: merge, deploy, or record consent.
+
+After, the decision arrives already navigated:
+
+> **The mirror is dark because the server politely accepted nothing.** It
+> received all 2,814 files, then consent reduced the set to zero; the daemon
+> never read that answer. Merge the response check first — my recommendation —
+> because it makes this failure visible. Deployment and consent can then be
+> decided with the system telling the truth.
+
+The evidence remains, but it now supports the choice instead of preceding it.
+
+### Deep report — reconnaissance in service of a goal
+
+Before, a feed inventory: trends, accounts, post counts, competitor examples,
+and engagement numbers grouped by source. Accurate perhaps, but the reader must
+still decide what any of it means for getting paid users.
+
+After, keep the evidence chain because strategy depends on its uncertainty:
+
+> **The feed is rewarding proof of work, but our route to paid users is still
+> missing the return path.** The strongest posts in the sample turn a live
+> defect into a reusable lesson; generic progress updates disappear, and large-
+> account replies do not transfer their audience. That gives us a direction,
+> not a conversion claim: publish from inside the build, attach each lesson to
+> a place where the reader can try or follow the product, then measure which
+> route produces qualified visits rather than applause. I would spend the next
+> round testing two return paths, not writing more of the same feed.
+
+Depth earns explicit uncertainty and a stronger course, not more furniture.
+The subject changed from code to acquisition; the navigation standard did not.
 
 ## The steer — the reader is in the room, for one boundary
 

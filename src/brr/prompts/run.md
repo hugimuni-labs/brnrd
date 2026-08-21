@@ -36,7 +36,8 @@ choreography). One contract, one owner.
 The host-agnostic floor, any driver:
 
 - end on the reply, clean: no preamble, no meta. An addressed reply is a
-  turn (`weave.md` §The turn — `register.md` shows one played). Speak
+  navigated briefing (`weave.md` §The turn — `register.md` shows the three
+  useful depths). Speak
   mid-run when it helps; progress, debug, tool chatter → stderr.
 - the reply is the deliverable ⇒ it carries the substance itself — the
   findings, the answer, the thing that was asked for. Link the kb URL when

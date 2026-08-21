@@ -950,7 +950,7 @@ class TestPromptBuilding:
         assert "Blind retry" in prompt
         assert "Rebuild the image before you trust the cache." in prompt
         assert "bounded, single-purpose thought" in prompt
-        assert _says(prompt, "the turn frame in `weave.md` §The turn")
+        assert _says(prompt, "the briefing in `weave.md` §The turn")
         # Mechanics still ride — a worker wake is still under the daemon.
         assert "single-flight" in prompt
 
@@ -1363,20 +1363,22 @@ class TestPromptBuilding:
         assert "your working register" in prompt
 
     def test_prompts_carry_the_turn_grammar(self, tmp_path):
-        """The reply-as-turn contract (weave.md → "The turn") rides both
-        runner paths: menu closes the turn, empty menu legal, free text
-        overrides. Issue #777 — a content pin so a refactor or trim that
-        drops the section is caught here, not by a reader."""
+        """The navigated briefing contract rides both runner paths.
+
+        Content pin: a refactor or trim that restores inventory-shaped replies
+        must fail here, not in a reader's next conversation.
+        """
         for prompt in (
             build_run_prompt("ship it", tmp_path),
             build_daemon_prompt(
                 "ship it", "evt-1", "/tmp/resp.md", tmp_path, run_id="task-9",
             ),
         ):
-            assert "The menu closes the turn" in prompt
-            assert "An empty menu is legal" in prompt
-            assert "Free text always overrides" in prompt
-            assert "Scene-verdict line" in prompt
+            assert "navigate, then speak" in prompt
+            assert "Outcome" in prompt
+            assert "Bearing" in prompt
+            assert "Pass the ear test without flattening the page" in prompt
+            assert "menu is the fast path for genuine options" in prompt
 
     def test_daemon_prompt_lists_pending_events_and_fold_in_contract(self, tmp_path):
         prompt = build_daemon_prompt(
@@ -2163,9 +2165,8 @@ class TestPromptBuilding:
         assert "brnrd docs portals" in prompt
 
     def test_daemon_prompt_carries_next_move_and_linger(self, tmp_path):
-        # A1/#211 + B5/#216: the delivery-portals block carries the compact
-        # next-move rule (four closeout states, manufactured options named
-        # as the failure mode) and the post-delivery linger contract (hold
+        # A1/#211 + B5/#216: the delivery-portals block carries the navigated
+        # briefing's move plus the post-delivery linger contract (hold
         # the slot with `await:` / `brnrd await` rather than a hand-rolled
         # poll loop, dispatch-or-explicit-defer ownership for unrelated
         # pending work). Full contracts live in the portals manual (pinned
@@ -2189,13 +2190,10 @@ class TestPromptBuilding:
             run_id="task-9",
         )
         assert "next move" in prompt
-        for state in (
-            "done — receipt",
-            "continuing — what's next",
-            "blocked — what's needed",
-        ):
-            assert state in prompt
-        assert "Manufactured options are the failure mode" in prompt
+        assert "Outcome" in prompt
+        assert "Bearing" in prompt
+        assert "what happens next, or the one real fork" in prompt
+        assert "menu is the fast path for genuine options" in prompt
         assert "linger" in prompt
         assert "await:" in prompt
         assert "brnrd await" in prompt

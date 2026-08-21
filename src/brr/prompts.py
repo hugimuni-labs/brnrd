@@ -4626,7 +4626,7 @@ RECENT_TURN_ELISION_MARKER = "…{dropped:,} B elided · {pointer}"
 # not thereby ask to be fed its own voice back.
 OWN_OUTBOUND_RECEIPT_HEAD_CHARS = 200
 
-# The first line is the scene-verdict line under the turn contract (weave.md
+# The first line is the outcome line under the briefing contract (weave.md
 # → "The turn"), so it is the right summary handle; for older messages
 # predating that contract it is still the best available single line.
 OWN_OUTBOUND_RECEIPT_MARKER = "{head} · {size:,} B · {pointer}"
