@@ -135,6 +135,48 @@ def test_install_no_start_skips_launchctl(tmp_path):
     assert calls == []
 
 
+def test_install_retries_launchd_eio_after_bootout(tmp_path):
+    calls = []
+    sleeps = []
+
+    def flaky_run(cmd, **_kwargs):
+        calls.append(cmd)
+        bootstrap_calls = sum(call[1] == "bootstrap" for call in calls)
+        if cmd[1] == "bootstrap" and bootstrap_calls < 3:
+            return subprocess.CompletedProcess(
+                cmd, 5, stdout="", stderr="Bootstrap failed: 5: Input/output error"
+            )
+        return _ok(cmd)
+
+    macos.install(
+        brr_path="/opt/homebrew/bin/brnrd",
+        home=tmp_path / "home",
+        workdir=tmp_path / "proj",
+        run=flaky_run,
+        sleep=sleeps.append,
+        poll_timeout=0,
+    )
+
+    assert [cmd[1] for cmd in calls].count("bootstrap") == 3
+    assert sleeps == [0.25, 0.25]
+
+
+def test_install_does_not_retry_a_real_bootstrap_failure(tmp_path):
+    def broken_run(cmd, **_kwargs):
+        if cmd[1] == "bootstrap":
+            return subprocess.CompletedProcess(cmd, 78, stdout="", stderr="invalid plist")
+        return _ok(cmd)
+
+    with pytest.raises(SystemExit, match="invalid plist"):
+        macos.install(
+            brr_path="/opt/homebrew/bin/brnrd",
+            home=tmp_path / "home",
+            workdir=tmp_path / "proj",
+            run=broken_run,
+            sleep=lambda _seconds: pytest.fail("a real failure must not be retried"),
+        )
+
+
 def test_install_confirms_liveness_by_reading_the_pidfile_back(tmp_path):
     """``launchctl kickstart`` returns the moment the job forks — a job
     that hard-exits before ``_write_pid`` (no ``AGENTS.md``) still reports

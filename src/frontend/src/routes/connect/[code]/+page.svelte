@@ -132,7 +132,11 @@
 					{/if}
 				</div>
 			{/if}
-			<MessengerDoors doors={messengerDoors} />
+			<MessengerDoors
+				doors={messengerDoors}
+				excludePlatforms={result.telegram ? ['telegram'] : []}
+				heading="continue in another chat"
+			/>
 		{:else}
 			<p class="text-sm text-stone-400">
 				Bind pair code <code class="font-mono text-amber-200">{code}</code> to a repository.
