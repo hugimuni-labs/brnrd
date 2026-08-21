@@ -225,11 +225,11 @@ class CardTransport(Protocol):
     threading).
     """
 
-    def send(self, text: str, *, reply_to: int | None = None) -> int | None:
+    def send(self, text: str, *, reply_to: int | None = None) -> int | str | None:
         """Post a new card; return its platform message id (or None)."""
         ...
 
-    def edit(self, message_id: int, text: str) -> None:
+    def edit(self, message_id: int | str, text: str) -> None:
         """Edit the card in place.
 
         Raise ``CardUnchanged`` on a no-op, ``CardGone`` when the platform
@@ -272,7 +272,7 @@ def update_card(
     try:
         if entry and entry.get("message_id"):
             try:
-                transport.edit(int(entry["message_id"]), text)
+                transport.edit(entry["message_id"], text)
             except CardUnchanged:
                 # Server-side check agrees the body didn't change; a
                 # successful no-op, not a reason to send a duplicate.
