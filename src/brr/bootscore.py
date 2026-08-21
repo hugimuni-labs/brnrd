@@ -30,7 +30,10 @@ Slice 2 (2026-07-13) added the two fields whose consumers now exist:
 
 - ``orientation`` — the ordered next-actions rendered by :func:`format_kernel`
   into the *first* block of every daemon wake.  Deterministically derived from
-  posture; no inferred intent.
+  posture; no inferred intent.  (Superseded 2026-08-20 by ``assignments`` —
+  w-69, ``design-the-ignition-assignments.md``: the ``next:`` list and the
+  standalone ``orient:`` meter folded into one typed assignment list, each
+  row carrying its discharge and its escalation window.)
 - ``bytes`` / ``prompt_bytes`` — the cost ledger.  The score named which blocks
   were present but never what they cost, so the compact/worked depth call had
   no evidence to stand on and the resident had to shell out to ``wc -c`` to
@@ -46,6 +49,7 @@ import time
 from dataclasses import asdict, dataclass, field, replace
 
 from . import protocol
+from .assignments import Assignment
 
 # ── Schema version ────────────────────────────────────────────────────────────
 
@@ -546,38 +550,16 @@ class BootHook:
 
 
 @dataclass(frozen=True)
-class OrientationStep:
-    """One ordered next-action in the boot kernel.
-
-    **Pulls, not pushes.**  A step names an action the resident performs and
-    the reason it is worth performing; it does not carry the content.  Every
-    executed read converts cold injected prose into a hot tool-result at a
-    boundary edge — the highest-attention position the loop has — so the
-    cheapest way to make orientation land is to let it be *fetched* rather
-    than shipped (``design-native-boot-sequence.md`` §maintainer steer).
-
-    Derived deterministically from posture.  A step is a fact about the wake
-    ("2 events are queued", "this checkout does not publish itself"), never an
-    inference about what the resident intends to do about it.
-    """
-
-    action: str
-    reason: str = ""
-
-
-@dataclass(frozen=True)
 class OrientationFile:
     """One file in the wake's **orientation set** (#513 Slice 9).
 
-    Not to be confused with :class:`OrientationStep` / ``BootScore.orientation``
-    — that is the kernel's ``next:`` list, *actions derived from posture*
-    ("read the task", "act").  This is the **orientation ledger's** unit: a
-    file this wake ought to have *read* — the walk the maintainer's MUD-boot
-    steer asked for — observed by the hooks (``brr.hooks``) as ``orient x/y``
-    until the walk completes or the resident declares the skip on ``.card``.
-    The two words coexist because they are two halves of the same steer: the
-    ``next:`` list is what a wake *does first*; the set is what a wake
-    *inhabits by reading*.  Renaming either would orphan its consumers.
+    The orientation *walk*'s unit: a file this wake ought to have *read* —
+    the walk the maintainer's MUD-boot steer asked for — observed by the
+    hooks until the walk completes or the resident declares the skip on
+    ``.card``. Since w-69 the walk's rendered surface is the orient
+    *assignment* row (the set's files render under it in the kernel, and
+    walk completion is the row's discharge); this dataclass stays the
+    metering unit the hooks' instrument counts against.
 
     Every entry is deterministic and provably wrong-able: the file existed at
     derivation time, at this absolute path, at this size.  Nothing here is
@@ -609,14 +591,22 @@ class BootScore:
     continuity: BootContinuity = field(default_factory=BootContinuity)
     attention: BootAttention = field(default_factory=BootAttention)
     posture: BootPosture = field(default_factory=BootPosture)
-    orientation: list[OrientationStep] = field(default_factory=list)
+    assignments: list[Assignment] = field(default_factory=list)
+    """The ignition assignments (w-69, ``design-the-ignition-assignments.md``):
+    the wake's obligations as one typed, daemon-derived list — the waking
+    event itself first (the signed rider), then every other row the daemon
+    can prove, each carrying its discharge act and its escalation window
+    (priced per wake from the live quota posture; see
+    :func:`brr.assignments.price`).  Persisted with the score to
+    ``boot-score.json``, where the hooks' boundary ledger reads it back.
+    Supersedes the ``orientation`` next-actions list (2026-08-20)."""
     orientation_set: list[OrientationFile] = field(default_factory=list)
-    """The orientation *ledger*'s file set (#513 Slice 9) — distinct from
-    :attr:`orientation`, which is the kernel's ``next:`` action list; see
-    :class:`OrientationFile` for why both words exist.  Empty when nothing
-    deterministic could be named (no ``AGENTS.md``, no active plan, no
-    matched kb hub) — never padded with guesses.  Persisted with the score
-    to ``boot-score.json``, where the hook ledger reads it back."""
+    """The orientation *walk*'s file set (#513 Slice 9), rendered under the
+    orient assignment row since w-69; see :class:`OrientationFile`.  Empty
+    when nothing deterministic could be named (no ``AGENTS.md``, no active
+    plan, no matched kb hub) — never padded with guesses.  Persisted with
+    the score to ``boot-score.json``, where the hook instrument reads it
+    back as the walk's denominator."""
     contracts: list[ContractEntry] = field(default_factory=list)
     hooks: list[BootHook] = field(default_factory=list)
 
@@ -699,7 +689,7 @@ def to_dict(score: BootScore) -> dict:
         "continuity": asdict(score.continuity),
         "attention": asdict(score.attention),
         "posture": asdict(score.posture),
-        "orientation": [asdict(o) for o in score.orientation],
+        "assignments": [asdict(a) for a in score.assignments],
         "orientation_set": [asdict(f) for f in score.orientation_set],
         "contracts": [asdict(c) for c in score.contracts],
         "hooks": [asdict(h) for h in score.hooks],
@@ -753,8 +743,8 @@ def format_kernel(score: BootScore) -> str:
     Three properties, copied deliberately:
 
     - **differential** — it says what is true *now*, not what is always true;
-    - **imperative, with a required disposition** — ``next:`` is a list of
-      actions, not a list of facts;
+    - **imperative, with a required disposition** — ``assignments:`` is a list
+      of obligations with discharge acts, not a list of facts;
     - **at the choice point** — first thing read, last thing before the scroll
       it indexes.
 
@@ -903,40 +893,34 @@ def format_kernel(score: BootScore) -> str:
     if p_bits:
         lines.append(f"posture: {' · '.join(p_bits)}")
 
-    if score.orientation_set:
-        # The orientation ledger's walk (#513 Slice 9), genuinely differential
-        # (#628): the set names only what the wake was NOT already handed, so
-        # it renders exactly when there is something left to point at. Before
-        # #628, `AGENTS.md` and/or the active plan were unconditional
-        # candidates and one of the two survived on every Shell, so this line
-        # effectively always rendered regardless of what the wake actually
-        # needed to seek out — documented as differential (#614 item 2) while
-        # behaving like a permanent fixture. On codex, with the plan injected
-        # whole by the work-surface block and no touched `subject-*.md` hub,
-        # the set is now correctly empty and this block is absent — the render
-        # needed no change for that, since an empty list was already falsy
-        # here; only the set itself had never been empty before. The
-        # differential half also lives in the hooks' `orient x/y` segment,
-        # which leaves at completion or skip. Two surfaces, two jobs. Full
+    if score.assignments:
+        # The ignition assignments (w-69): the wake's obligations as one
+        # typed list — the fold-in that replaced the `next:` prose list and
+        # the standalone `orient:` meter (both retired 2026-08-20,
+        # `design-the-ignition-assignments.md` fork 4, signed). Each row
+        # names its discharge act (`⇢`) and, when the boundary ledger meters
+        # it, the escalation window in boundaries (`↗Nb`) — priced per wake
+        # from the live quota posture, so a scarce week reads later, smaller
+        # escalations than a rich one. The header's scaffold clause is the
+        # `## Plan` offer (fork 1, signed): the rows as checkboxes, adopted,
+        # edited, or replaced by the resident's first card write — offered,
+        # never imposed; a deleted row is a deferral the escalation
+        # respects. The orientation files render under their own row, full
         # absolute paths on purpose: the line exists to be *acted on* (each
         # entry is one Read call), and a basename the wake would have to
-        # resolve first is a walk with a toll booth. The hooks meter these
-        # Reads as `orient x/y` until the walk completes or the skip is
-        # declared; both outcomes are first-class.
-        total = sum(f.bytes for f in score.orientation_set)
+        # resolve first is a walk with a toll booth.
         lines.append(
-            f"orient: {len(score.orientation_set)} file(s) · {total:,}B — "
-            "read them before the work, or declare the skip on .card "
-            "(\"assuming prior knowledge, skipping orientation\")"
+            f"assignments: {len(score.assignments)} — discharge each "
+            "(⇢ names the act; ↗Nb = escalation starts after N boundaries), "
+            "adopt them as your .card ## Plan (`- [ ]` rows), or defer with "
+            "a named reason on the card"
         )
-        for f in score.orientation_set:
-            lines.append(f"  · {f.path} ({f.bytes:,}B)")
-
-    if score.orientation:
-        lines.append("next:")
-        for i, step in enumerate(score.orientation, 1):
-            suffix = f" — {step.reason}" if step.reason else ""
-            lines.append(f"  {i}. {step.action}{suffix}")
+        for i, a in enumerate(score.assignments, 1):
+            window = f" ↗{a.window}b" if a.window is not None else ""
+            lines.append(f"  {i}. {a.title} ⇢ {a.discharge}{window}")
+            if a.kind == "orient":
+                for f in score.orientation_set:
+                    lines.append(f"     · {f.path} ({f.bytes:,}B)")
 
     lines.append(
         "below: reference · `brnrd prompts show` names every block and its cost"
