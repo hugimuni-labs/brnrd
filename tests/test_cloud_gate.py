@@ -3390,6 +3390,8 @@ def test_attachment_fetch_failure_annotates_body(tmp_path, monkeypatch):
     (event,) = protocol.list_pending(inbox_dir)
     assert event["body"].startswith("the dashboard bug")
     assert 'attachment "shot.png" could not be fetched' in event["body"]
+    assert "source media may have expired" in event["body"]
+    assert "telegram" not in event["body"].lower()
     assert protocol.event_attachment_paths(event) == []
 
 

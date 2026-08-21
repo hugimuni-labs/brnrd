@@ -944,12 +944,12 @@ def event_attachment(event_id: str, index: int, request: Request, principal: Pri
     """#525 — read-through proxy for a queued event's image attachment.
 
     The server holds only *pointers* (models.Event.attachments_json); this
-    endpoint resolves the Telegram ``file_id`` fresh via ``getFile`` on every
-    request and streams the bytes through memory — nothing lands at rest
-    server-side (#543 bounded mirror, #542 pointer-not-copy). Same daemon
-    credential as the inbox pull, scoped to the token's repo. Telegram file
-    links can expire: failures surface as honest HTTP errors (502/413) for
-    the daemon to annotate, never fabricated or silently empty bytes.
+    endpoint resolves the platform pointer fresh on every request and streams
+    the bytes through memory — nothing lands at rest server-side (#543 bounded
+    mirror, #542 pointer-not-copy). The same daemon credential as the inbox
+    pull scopes access to its repo. Upstream media links can expire: failures
+    surface as honest HTTP errors (502/413) for the daemon to annotate, never
+    fabricated or silently empty bytes.
     """
     settings = request.app.state.settings
     event = _account_event(db, principal, event_id)
