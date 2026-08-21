@@ -960,10 +960,41 @@ def event_attachment(event_id: str, index: int, request: Request, principal: Pri
         # Also the shape a closed/aged-out event answers with — pointers are
         # cleared alongside the body, so "no such attachment" is honest.
         raise HTTPException(status_code=404, detail="no such attachment")
-    if not settings.telegram_bot_token:
-        raise HTTPException(status_code=503, detail="telegram is not configured")
     pointer = pointers[index]
     max_bytes = max(1, int(settings.telegram_media_max_mb)) * 1024 * 1024
+    platform = str(pointer.get("platform") or event.source or "telegram")
+    if platform == "whatsapp":
+        if not settings.whatsapp_access_token:
+            raise HTTPException(status_code=503, detail="whatsapp is not configured")
+        from ..platforms import whatsapp as wa
+        try:
+            info = wa.resolve_media(
+                settings.whatsapp_access_token,
+                str(pointer.get("media_id") or ""),
+                api_base_url=settings.whatsapp_api_base_url,
+                api_version=settings.whatsapp_api_version,
+            )
+            declared = info.get("file_size")
+            if isinstance(declared, int) and declared > max_bytes:
+                raise wa.MediaTooLarge("declared media size exceeds cap")
+            content = wa.fetch_media_bytes(
+                settings.whatsapp_access_token,
+                str(info["url"]),
+                max_bytes=max_bytes,
+            )
+        except wa.MediaNotFound as e:
+            raise HTTPException(status_code=404, detail="whatsapp attachment not found") from e
+        except wa.MediaTooLarge as e:
+            raise HTTPException(status_code=413, detail=f"attachment exceeds the {settings.telegram_media_max_mb} MB cap") from e
+        except RuntimeError as e:
+            raise HTTPException(status_code=502, detail="whatsapp attachment unavailable") from e
+        _touch_daemon(db, principal)
+        media_type = str(info.get("mime_type") or pointer.get("mime_type") or "application/octet-stream")
+        return Response(content=content, media_type=media_type)
+    if platform != "telegram":
+        raise HTTPException(status_code=502, detail="unsupported attachment platform")
+    if not settings.telegram_bot_token:
+        raise HTTPException(status_code=503, detail="telegram is not configured")
     from ..platforms import telegram as tg
     try:
         info = tg.resolve_file(settings.telegram_bot_token, str(pointer.get("file_id") or ""))

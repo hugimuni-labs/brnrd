@@ -15,6 +15,7 @@ import json
 import logging
 import re
 import time
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -144,6 +145,28 @@ def _message(wa_id: str, text: str, *, message_id="wamid.1", ts=None, name="Ada"
             }
         ],
     }
+
+
+def _image_message(
+    wa_id: str,
+    *,
+    media_id="media-1",
+    caption: str | None = None,
+    mime_type="image/jpeg",
+    filename: str | None = None,
+    message_id="wamid.image",
+):
+    payload = _message(wa_id, "", message_id=message_id)
+    msg = payload["entry"][0]["changes"][0]["value"]["messages"][0]
+    msg.pop("text")
+    msg["type"] = "image"
+    image = {"id": media_id, "mime_type": mime_type}
+    if caption is not None:
+        image["caption"] = caption
+    if filename is not None:
+        image["filename"] = filename
+    msg["image"] = image
+    return payload
 
 
 def _status_payload(wa_id: str):
@@ -431,10 +454,29 @@ def test_status_receipt_is_never_a_trigger(env):
     assert sends == []
 
 
-def test_non_text_media_message_gets_honest_reply_and_annotated_body_if_paired(env):
-    """v1 doesn't ingest WhatsApp media at all (no attachment pointers,
-    unlike Telegram's image path): an unpaired-adjacent media message with
-    no text gets the "can't see attached media" reply."""
+def test_parse_image_builds_safe_pointer_and_caption():
+    parsed = wa.parse_update(
+        _image_message(
+            "15551234567",
+            caption="look here",
+            mime_type="image/png",
+            filename="../../unsafe holiday.png",
+        )
+    )
+    assert parsed is not None
+    assert parsed.text == "look here"
+    assert parsed.attachments == [
+        {
+            "platform": "whatsapp",
+            "media_id": "media-1",
+            "filename": "unsafe_holiday.png",
+            "mime_type": "image/png",
+            "kind": "image",
+        }
+    ]
+
+
+def test_captionless_image_enqueues_attachment_pointer(env):
     app, client, sends = env
     acc = _account(client)
     rid = _repo(client, acc)
@@ -442,16 +484,60 @@ def test_non_text_media_message_gets_honest_reply_and_annotated_body_if_paired(e
     _post(client, _message("15551234567", code))
     sends.clear()
 
-    payload = _message("15551234567", "", message_id="wamid.9")
-    msg = payload["entry"][0]["changes"][0]["value"]["messages"][0]
-    del msg["text"]
-    msg["type"] = "image"
-    msg["image"] = {"id": "media-1", "mime_type": "image/jpeg"}
-    r = _post(client, payload)
+    r = _post(client, _image_message("15551234567", message_id="wamid.9"))
     assert r.status_code == 200
-    assert sends and "can't see attached media" in sends[0]["text"]
+    assert sends == []
+    with app.state.SessionLocal() as db:
+        event = db.execute(select(Event).where(Event.source == "whatsapp")).scalar_one()
+        assert event.body == ""
+        assert inbox_service.attachments_of(event)[0]["media_id"] == "media-1"
+
+
+def test_captioned_image_enqueues_body_and_attachment(env):
+    app, client, sends = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    _post(client, _message("15551234567", _pair_code(client, acc, rid)))
+    sends.clear()
+    _post(client, _image_message("15551234567", caption="inspect this"))
+    with app.state.SessionLocal() as db:
+        event = db.execute(select(Event).where(Event.source == "whatsapp")).scalar_one()
+        assert event.body == "inspect this"
+        assert len(inbox_service.attachments_of(event)) == 1
+
+
+def test_image_attachment_count_participates_in_admission_limit(env):
+    app, client, sends = env
+    app.state.settings = replace(app.state.settings, limit_max_event_attachments=0)
+    acc = _account(client)
+    rid = _repo(client, acc)
+    _post(client, _message("15551234567", _pair_code(client, acc, rid)))
+    sends.clear()
+    _post(client, _image_message("15551234567"))
+    assert sends and "Too many attachments" in sends[0]["text"]
     with app.state.SessionLocal() as db:
         assert db.execute(select(Event)).scalars().all() == []
+
+
+def test_unsupported_media_keeps_not_ingested_annotation(env):
+    app, client, sends = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    _post(client, _message("15551234567", _pair_code(client, acc, rid)))
+    sends.clear()
+    payload = _message("15551234567", "")
+    msg = payload["entry"][0]["changes"][0]["value"]["messages"][0]
+    msg["type"] = "video"
+    msg["video"] = {"id": "video-1", "caption": "describe it"}
+    msg.pop("text")
+    _post(client, payload)
+    assert sends == []
+    with app.state.SessionLocal() as db:
+        event = db.execute(select(Event).where(Event.source == "whatsapp")).scalar_one()
+        assert event.body == (
+            "describe it\n\n"
+            "[attached media not ingested — brnrd received the text only]"
+        )
 
 
 def test_response_is_forwarded_back_to_whatsapp(env):
@@ -474,6 +560,111 @@ def test_response_is_forwarded_back_to_whatsapp(env):
     assert sends[0]["to"] == "15551234567"
     assert sends[0]["text"] == "here is your answer"
     assert sends[0]["reply_to_message_id"] == "wamid.77"
+
+
+# ── inbound image read-through proxy ─────────────────────────────────
+
+
+def _bound_wa_image_event(app, client, sends):
+    acc = _account(client)
+    rid = _repo(client, acc)
+    _post(client, _message("15551234567", _pair_code(client, acc, rid)))
+    sends.clear()
+    _post(client, _image_message("15551234567", mime_type="image/png"))
+    dmn = _daemon_headers(client, acc, rid)
+    event = client.get(
+        "/v1/daemons/inbox", params={"since": 0, "wait": 0}, headers=dmn
+    ).json()["events"][0]
+    return acc, rid, dmn, event
+
+
+def test_whatsapp_attachment_proxy_fetches_with_meta_token(env, monkeypatch):
+    app, client, sends = env
+    calls: list[tuple] = []
+
+    def resolve(token, media_id, **kwargs):
+        calls.append(("resolve", token, media_id, kwargs["api_version"]))
+        return {
+            "url": "https://lookaside.facebook.test/media",
+            "mime_type": "image/png",
+            "file_size": 4,
+        }
+
+    def fetch(token, url, *, max_bytes, timeout=60.0):
+        calls.append(("fetch", token, url, max_bytes))
+        return b"PNG!"
+
+    monkeypatch.setattr(wa, "resolve_media", resolve)
+    monkeypatch.setattr(wa, "fetch_media_bytes", fetch)
+    _, _, dmn, event = _bound_wa_image_event(app, client, sends)
+    url = f"/v1/daemons/events/{event['event_id']}/attachments/0"
+    r = client.get(url, headers=dmn)
+    assert r.status_code == 200
+    assert r.content == b"PNG!"
+    assert r.headers["content-type"].startswith("image/png")
+    assert calls == [
+        ("resolve", "wa-token", "media-1", "v22.0"),
+        ("fetch", "wa-token", "https://lookaside.facebook.test/media", 10 * 1024 * 1024),
+    ]
+    assert client.get(url).status_code == 401
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (wa.MediaNotFound("gone"), 404),
+        (wa.MediaTooLarge("large"), 413),
+        (RuntimeError("token=must-not-leak"), 502),
+    ],
+)
+def test_whatsapp_attachment_proxy_maps_fetch_failures(env, monkeypatch, failure, expected):
+    app, client, sends = env
+    monkeypatch.setattr(
+        wa,
+        "resolve_media",
+        lambda *a, **k: {"url": "https://lookaside.facebook.test/media"},
+    )
+
+    def fail(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(wa, "fetch_media_bytes", fail)
+    _, _, dmn, event = _bound_wa_image_event(app, client, sends)
+    r = client.get(
+        f"/v1/daemons/events/{event['event_id']}/attachments/0", headers=dmn
+    )
+    assert r.status_code == expected
+    assert "must-not-leak" not in r.text
+
+
+def test_whatsapp_attachment_proxy_rejects_declared_size_before_fetch(env, monkeypatch):
+    app, client, sends = env
+    fetched: list[bool] = []
+    monkeypatch.setattr(
+        wa,
+        "resolve_media",
+        lambda *a, **k: {
+            "url": "https://lookaside.facebook.test/media",
+            "file_size": 11 * 1024 * 1024,
+        },
+    )
+    monkeypatch.setattr(wa, "fetch_media_bytes", lambda *a, **k: fetched.append(True))
+    _, _, dmn, event = _bound_wa_image_event(app, client, sends)
+    r = client.get(
+        f"/v1/daemons/events/{event['event_id']}/attachments/0", headers=dmn
+    )
+    assert r.status_code == 413
+    assert fetched == []
+
+
+def test_whatsapp_attachment_proxy_is_503_without_configuration(env, monkeypatch):
+    app, client, sends = env
+    _, _, dmn, event = _bound_wa_image_event(app, client, sends)
+    app.state.settings = replace(app.state.settings, whatsapp_access_token="")
+    r = client.get(
+        f"/v1/daemons/events/{event['event_id']}/attachments/0", headers=dmn
+    )
+    assert r.status_code == 503
 
 
 # ── the 24h customer-service window ────────────────────────────────────
