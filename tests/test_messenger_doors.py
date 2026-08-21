@@ -210,6 +210,38 @@ def test_derive_whatsapp_is_empty_when_the_lookup_fails(monkeypatch):
     assert messenger_doors.derive_whatsapp_number(settings) == ""
 
 
+def test_whatsapp_lookup_logs_meta_error_without_the_token(monkeypatch, caplog):
+    from brnrd.platforms import whatsapp as wa
+
+    request = wa.httpx.Request("GET", "https://graph.facebook.com/v22.0/123")
+    response = wa.httpx.Response(
+        401,
+        request=request,
+        json={"error": {"code": 190, "message": "Invalid OAuth access token."}},
+    )
+    monkeypatch.setattr(wa.httpx, "get", lambda *a, **k: response)
+
+    with caplog.at_level("WARNING"):
+        assert wa.fetch_display_phone_number("https://graph.facebook.com", "v22.0", "123", "secret-token") is None
+
+    assert "HTTP 401 Meta code=190 message=Invalid OAuth access token." in caplog.text
+    assert "secret-token" not in caplog.text
+
+
+def test_whatsapp_lookup_logs_timeout_class_without_credentials(monkeypatch, caplog):
+    from brnrd.platforms import whatsapp as wa
+
+    def timeout(*args, **kwargs):
+        raise wa.httpx.ReadTimeout("timed out")
+
+    monkeypatch.setattr(wa.httpx, "get", timeout)
+    with caplog.at_level("WARNING"):
+        assert wa.fetch_display_phone_number("https://graph.facebook.com", "v22.0", "123", "secret-token") is None
+
+    assert "ReadTimeout" in caplog.text
+    assert "secret-token" not in caplog.text
+
+
 # --- mint_deep_link ----------------------------------------------------------
 
 

@@ -19,10 +19,13 @@ transport error, so the caller (``brnrd.inbox``) can record an honest
 from __future__ import annotations
 
 import hmac
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 # Meta's documented error code for "message failed to send because more
 # than 24 hours have passed since the customer last replied to this
@@ -90,13 +93,42 @@ def fetch_display_phone_number(
             timeout=timeout,
         )
         resp.raise_for_status()
-    except httpx.HTTPError:
+    except httpx.HTTPStatusError as exc:
+        error: dict = {}
+        try:
+            payload = exc.response.json() if exc.response.content else {}
+            candidate = payload.get("error") if isinstance(payload, dict) else None
+            error = candidate if isinstance(candidate, dict) else {}
+        except ValueError:
+            pass
+        code = error.get("code")
+        message = error.get("message")
+        detail = ""
+        if code is not None:
+            detail += f" Meta code={code}"
+        if isinstance(message, str) and message:
+            detail += f" message={message}"
+        logger.warning(
+            "whatsapp phone-number lookup failed: HTTP %s%s",
+            exc.response.status_code,
+            detail,
+        )
+        return None
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "whatsapp phone-number lookup failed: %s", type(exc).__name__
+        )
         return None
     try:
         payload = resp.json()
     except ValueError:
+        logger.warning("whatsapp phone-number lookup failed: Meta returned non-JSON")
         return None
     number = payload.get("display_phone_number") if isinstance(payload, dict) else None
+    if not (isinstance(number, str) and number):
+        logger.warning(
+            "whatsapp phone-number lookup failed: Meta response had no display_phone_number"
+        )
     return number if isinstance(number, str) and number else None
 
 
