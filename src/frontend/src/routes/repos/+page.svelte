@@ -659,6 +659,12 @@
 				>
 			</div>
 
+			<!-- Messenger pairing is account/daemon state, not repository
+			     inventory. Keep the available connectors and paired chats at
+			     that boundary instead of marooning them below every repo card. -->
+			<MessengerDoors doors={data.messenger_doors ?? null} />
+			<PairedChats />
+
 			{#if connectedRepos.length === 0}
 				<p class="text-sm text-ink-quiet">No repos enabled yet.</p>
 			{:else}
@@ -1049,20 +1055,5 @@
 				</div>
 			</form>
 		</section>
-
-		<!-- brr/every-door-on-the-page — the account-level pairing surface:
-		     every messenger door the registry declares, lit or dark, with a
-		     mint/re-mint control. Sits directly above `PairedChats` (its
-		     natural neighbour — one initiates, the other lists/revokes) and
-		     after the repo panels for the same reason `PairedChats` already
-		     does: this is account-level, not tied to any one repo card. -->
-		<MessengerDoors doors={data.messenger_doors ?? null} />
-
-		<!-- #1464 — account-level, not per-repo: every ChannelRoute this
-		     account carries, with a revoke button. Placed after the repo
-		     panels rather than inside one — a paired chat outlives any
-		     single repo pin (#1457), and the component renders nothing of
-		     its own when the account has nothing paired yet. -->
-		<PairedChats />
 	{/if}
 </div>

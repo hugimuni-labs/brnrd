@@ -67,12 +67,12 @@ test('empty doors renders nothing rather than an empty panel shell', async () =>
 	ok(!html.includes('data-testid="door-'));
 });
 
-test('every registry door renders, lit and dark alike — decision: the off parts stay visible', async () => {
+test('implemented doors render while roadmap-only connectors stay out of account controls', async () => {
 	const html = await renderDoors(FULL_REGISTRY);
 	ok(html.includes('data-testid="door-telegram"'));
 	ok(html.includes('data-testid="door-whatsapp"'));
-	ok(html.includes('data-testid="door-slack"'));
-	ok(html.includes('data-testid="door-signal"'));
+	ok(!html.includes('data-testid="door-slack"'));
+	ok(!html.includes('data-testid="door-signal"'));
 });
 
 test('a lit door offers a connect button, not an off badge', async () => {
@@ -81,17 +81,10 @@ test('a lit door offers a connect button, not an off badge', async () => {
 	ok(html.includes('connect telegram'));
 });
 
-test('a dark door with no lever (not_built) shows the off state and no docs link', async () => {
+test('a dark door with no lever (not_built) is not presented as a broken control', async () => {
 	const html = await renderDoors(FULL_REGISTRY);
-	// Scope to the slack row so a passing assertion can't be satisfied by
-	// telegram's own markup elsewhere in the document.
-	const slackRow = html.slice(
-		html.indexOf('data-testid="door-slack"'),
-		html.indexOf('data-testid="door-signal"')
-	);
-	ok(slackRow.includes('off</span'), 'the off badge renders');
-	ok(slackRow.includes('no connector'), 'the not_built copy renders');
-	ok(!slackRow.includes(DOCS_URL), 'no docs link for a connector with nothing to configure');
+	ok(!html.includes('data-testid="door-slack"'));
+	ok(!html.includes('no connector'));
 });
 
 test('a dark door with a lever (not_configured) shows the off state and a docs link', async () => {
@@ -113,16 +106,13 @@ test('an unknown reason still renders the row with the generic off copy, never a
 	ok(html.includes('not available on this deployment'));
 });
 
-test('dark and lit doors carry visibly different marker shapes, not the same dot dimmed', async () => {
+test('configured-but-unavailable and lit doors carry visibly different marker shapes', async () => {
 	const html = await renderDoors(FULL_REGISTRY);
 	const litRow = html.slice(
 		html.indexOf('data-testid="door-telegram"'),
 		html.indexOf('data-testid="door-whatsapp"')
 	);
-	const darkRow = html.slice(
-		html.indexOf('data-testid="door-slack"'),
-		html.indexOf('data-testid="door-signal"')
-	);
+	const darkRow = html.slice(html.indexOf('data-testid="door-whatsapp"'));
 	ok(litRow.includes('rounded-full'), 'a lit door gets a round marker');
 	ok(!darkRow.includes('rounded-full'), 'a dark door does not reuse the round marker, dimmed');
 });

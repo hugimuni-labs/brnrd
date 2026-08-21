@@ -57,11 +57,22 @@
 		// runtime default) reads the real clock; a test pins one instant
 		// to assert a specific countdown tier without waiting on a timer.
 		nowOverride?: number | null;
+		excludePlatforms?: string[];
+		heading?: string;
 	}
 
-	let { doors, nowOverride = null }: Props = $props();
+	let {
+		doors,
+		nowOverride = null,
+		excludePlatforms = [],
+		heading = 'chat connectors'
+	}: Props = $props();
 
-	const allDoors = $derived(orderedDoors(doors ?? []));
+	const allDoors = $derived(
+		orderedDoors(doors ?? []).filter(
+			(door) => door.reason !== 'not_built' && !excludePlatforms.includes(door.platform)
+		)
+	);
 
 	// `untrack` — this is a deliberate one-shot capture (the seed for a
 	// value the interval below mutates directly), not a reactive read of
@@ -158,11 +169,10 @@
 			id="messenger-doors-heading"
 			class="font-mono text-lg font-semibold tracking-tight text-amber-100"
 		>
-			connect a chat
+			{heading}
 		</h2>
 		<p class="mt-1 max-w-2xl text-sm text-ink-quiet">
-			Every door brnrd can open a chat through — lit or not. A tapped link binds this account for a
-			few minutes, then dies on its own; re-mint any time, no need to wait for it to fail first.
+			Connect another chat to this account. Each link lives for a few minutes; re-mint it any time.
 		</p>
 
 		<div class="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -239,7 +249,7 @@
 									<button
 										type="button"
 										data-testid={`remint-${door.platform}`}
-										class="mt-2 inline-flex cursor-pointer items-center border border-amber-800/50 bg-amber-950/20 px-3 py-2 font-mono text-[11px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/40 hover:text-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+										class="mt-2 inline-flex cursor-pointer items-center border border-sky-700/70 bg-sky-950/30 px-3 py-2 font-mono text-[11px] tracking-wide text-sky-200 uppercase hover:bg-sky-900/40 hover:text-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
 										onclick={() => mint(door.platform)}
 										disabled={mintingPlatform === door.platform}
 										>{mintingPlatform === door.platform
@@ -269,7 +279,7 @@
 									<div class="mt-2 flex flex-wrap items-center gap-3">
 										{#if outcome.deep_link}
 											<a
-												class="inline-flex cursor-pointer items-center border border-amber-800/50 bg-amber-950/20 px-3 py-2 font-mono text-[11px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/40 hover:text-amber-100"
+												class="inline-flex cursor-pointer items-center border border-sky-700/70 bg-sky-950/30 px-3 py-2 font-mono text-[11px] tracking-wide text-sky-200 uppercase hover:bg-sky-900/40 hover:text-sky-100"
 												href={outcome.deep_link}
 												target="_blank"
 												rel="external noreferrer"
@@ -304,7 +314,7 @@
 							<button
 								type="button"
 								data-testid={`connect-${door.platform}`}
-								class="mt-2 inline-flex cursor-pointer items-center border border-amber-800/50 bg-amber-950/20 px-3 py-2 font-mono text-[11px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/40 hover:text-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+								class="mt-2 inline-flex cursor-pointer items-center border border-sky-700/70 bg-sky-950/30 px-3 py-2 font-mono text-[11px] tracking-wide text-sky-200 uppercase hover:bg-sky-900/40 hover:text-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
 								onclick={() => mint(door.platform)}
 								disabled={mintingPlatform === door.platform}
 								>{mintingPlatform === door.platform
