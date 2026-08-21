@@ -20,10 +20,10 @@ daemon image: not tracked · no fingerprint captured in this process
 continuity: ✗ first wake
 attention: evt-fixture-0001
 posture: brr/fixture-branch · week 80% left (resets Sunday) · budget 120m
-next:
-  1. read the task — the verbatim event body is the last block below
-  2. write .card — the card is the surface the user watches while you think
-  3. act — deltas arrive at every tool boundary; never poll
+assignments: 3 — discharge each (⇢ names the act; ↗Nb = escalation starts after N boundaries), adopt them as your .card ## Plan (`- [ ]` rows), or defer with a named reason on the card
+  1. answer the waking event ⇢ the reply — final stdout at close, or an `event:` outbox file; the substance, not a receipt
+  2. write .card with a ## Plan ⇢ the write — these rows as `- [ ]` checkboxes are the offered scaffold; adopt, edit, or replace it ↗4b
+  3. claim .name · .mood · .topics ⇢ one write each (brnrd emotes <feeling> finds a face) ↗10b
 below: reference · `brnrd prompts show` names every block and its cost
 
 {{BODY verbatim: prompts/run.md}}
@@ -293,7 +293,7 @@ hooks:
 source manifest:
     block                                                           owner        authority      bytes  location / freshness
   -------------------------------------------------------------------------------------------------------------------------
-  ✓ Boot kernel (action-first score)                                daemon-live  runtime          885  computed
+  ✓ Boot kernel (action-first score)                                daemon-live  runtime        1,229  computed
   ✓ Operational preamble (run.md)                                   product      contract     [bytes]  {PACKAGE_ROOT}/prompts/run.md  [mtime]
   ✓ Working register (weave.md)                                     product      contract     [bytes]  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Working register, worked example (register.md)                  product      contract     [bytes]  {PACKAGE_ROOT}/prompts/register.md  [mtime]

@@ -3139,83 +3139,63 @@ def _collect_preamble_contracts(
     return entries
 
 
-def _build_orientation(
+def _build_assignments(
+    repo_root: Path | None,
     *,
-    is_daemon: bool,
     is_strand: bool,
     environment: str | None,
     pending_count: int,
     has_event_body: bool,
+    orientation_set: list[Any],
+    quota_binding_pct: float | None,
 ) -> list[Any]:
-    """The kernel's ``next:`` list — ordered actions, derived from posture.
+    """The kernel's ignition assignments (w-69) — typed obligations, derived
+    from posture.
 
-    Deterministic.  Every step is a *fact about this wake* plus the action it
-    obliges; none of them is an inference about what the resident intends.
-    That boundary is the whole reason the daemon is allowed to write this list
-    at all (``design-native-boot-sequence.md`` §1: facts and pointers, not
-    generated interpretations).
+    Supersedes the ``next:`` action list (retired 2026-08-20,
+    ``design-the-ignition-assignments.md`` fork 4, signed). Deterministic:
+    every row is an obligation the daemon already knows, none is an inference
+    about what the resident intends — the boundary that licenses the daemon
+    to write this list at all (``design-native-boot-sequence.md`` §1).
 
-    Ordering is execution order, not authority order: what is being asked →
-    make yourself visible → the constraint that will bite → the queue → go.
+    The strand carveout survives the redesign verbatim, because the incident
+    it answers does: on 2026-07-13 two strands inherited the parent's
+    ``pending_count`` at position 1 of the old ``next:`` list and answered
+    twelve of the user's messages in the resident's thread, with no context
+    for any of them. The imperative list at the hot slot is what gets acted
+    on; a strand has no gate authority and must never see the queue row —
+    :func:`brr.assignments.derive` enforces it, and the test that pins it
+    goes through this caller.
+
+    Windows are priced per wake from ``quota_binding_pct`` — the same
+    binding-percent reducer the scheduler's ``every:`` pacing trusts
+    (fork 2, amended and signed: "price against quota allocation … live
+    cost-aware decision making"). ``None`` prices neutral, which is what the
+    CLI (``brnrd prompts show``) and ad-hoc paths pass.
     """
-    from .bootscore import OrientationStep
+    from . import assignments as assignments_mod
 
-    steps: list[Any] = []
+    needs_sync: str | None = None
+    if repo_root is not None and not is_strand:
+        try:
+            from . import gitops, knowledge
 
-    if has_event_body:
-        steps.append(OrientationStep(
-            action="read the task",
-            reason="the verbatim event body is the last block below",
-        ))
+            needs_sync = knowledge.needs_sync(gitops.shared_brr_dir(repo_root))
+        except Exception:  # noqa: BLE001 — a boot score must never fail a wake
+            needs_sync = None
 
-    if is_daemon and not is_strand:
-        steps.append(OrientationStep(
-            action="write .card",
-            reason="the card is the surface the user watches while you think",
-        ))
-
-    # The queue belongs to the *resident*, and only to the resident.
-    #
-    # This was gated on ``pending_count`` alone, and it caused a live incident on
-    # 2026-07-13. ``pending_count`` is the **parent's** queue — events addressed
-    # to the resident, in the resident's gate thread. A spawned strand inherited
-    # it and was handed, at position 1, in the imperative:
-    #
-    #     next:
-    #       2. answer 12 queued events — one outbox file each, `event: <id>`
-    #
-    # Two strands (claude-haiku, codex-mini) did exactly that: they answered
-    # twelve of the user's messages to the resident, in the resident's thread,
-    # with no context for any of them.
-    #
-    # ``strand.md`` states plainly that the dispatching conversation "is not yours
-    # to hold or extend" — and it states it in *prose*, *below* this list. The
-    # kernel overrode it. That is the whole thesis of the boot work confirmed
-    # from the wrong end: **the imperative action-list at the hot slot is what
-    # gets acted on; the prose contract beneath it is what gets skimmed.** The
-    # kernel did not misfire. It worked perfectly, and carried a wrong
-    # instruction with total authority.
-    #
-    # A strand has no gate authority, no `event:` disposition to make, and no
-    # standing in that thread. It must never see this step.
-    if pending_count and not is_strand:
-        plural = "s" if pending_count != 1 else ""
-        steps.append(OrientationStep(
-            action=f"answer {pending_count} queued event{plural}",
-            reason="one outbox file each, `event: <id>`; nothing else clears them",
-        ))
-
-    if (environment or "").strip() == "host":
-        steps.append(OrientationStep(
-            action="branch before you edit",
-            reason="host checkout — your push, or the work never leaves this machine",
-        ))
-
-    steps.append(OrientationStep(
-        action="act",
-        reason="deltas arrive at every tool boundary; never poll",
-    ))
-    return steps
+    return assignments_mod.derive(
+        is_strand=is_strand,
+        environment=environment,
+        has_event_body=has_event_body,
+        pending_count=pending_count,
+        orientation_files=len(orientation_set),
+        orientation_bytes=sum(
+            int(getattr(f, "bytes", 0) or 0) for f in orientation_set
+        ),
+        needs_sync=needs_sync,
+        pricing=assignments_mod.price(quota_binding_pct),
+    )
 
 
 #: Cap on the orientation set (#513: "3–5 files"). The cap bounds the walk's
@@ -3507,6 +3487,7 @@ def build_boot_score(
     hooks_installed: bool | None = None,
     hook_stamps: dict[str, str] | None = None,
     mounted: bool = False,
+    quota_binding_pct: float | None = None,
 ) -> "BootScore":
     """Assemble a :class:`BootScore` for inspection without building the full prompt.
 
@@ -3629,6 +3610,16 @@ def build_boot_score(
     else:
         tier = "Tier 1 heartbeat-polled (no hooks)"
 
+    # Built before the score because two fields read it: the walk ledger
+    # itself, and the orient assignment row whose title carries the set's
+    # count and byte total (w-69 — the meter folded into the assignment).
+    orientation_set = _build_orientation_set(
+        effective_root,
+        task_text=task_text,
+        runner_shell=runner_shell,
+        injected_whole=injected_whole,
+    )
+
     return BootScore(
         schema_version=SCHEMA_VERSION,
         depth=DEPTH_COMPACT,
@@ -3675,19 +3666,16 @@ def build_boot_score(
             quota=quota,
             branch=branch,
         ),
-        orientation=_build_orientation(
-            is_daemon=is_daemon,
+        assignments=_build_assignments(
+            repo_root,
             is_strand=is_strand,
             environment=environment,
             pending_count=pending_count,
             has_event_body=has_event_body,
+            orientation_set=orientation_set,
+            quota_binding_pct=quota_binding_pct,
         ),
-        orientation_set=_build_orientation_set(
-            effective_root,
-            task_text=task_text,
-            runner_shell=runner_shell,
-            injected_whole=injected_whole,
-        ),
+        orientation_set=orientation_set,
         contracts=all_contracts,
         hooks=hooks_info,
     )
@@ -3736,6 +3724,7 @@ def build_daemon_prompt_with_score(
     runner_quota = kwargs.get("runner_quota")
     branch_name = kwargs.get("branch_name")
     hooks_installed = kwargs.get("hooks_installed")
+    quota_binding_pct = kwargs.get("quota_binding_pct")
 
     # #1137: the same forge-state join #957 built for the live menu
     # (`resolved_prs` — a `{pr_number: "merged 3h ago"}` map), reused here so
@@ -3873,6 +3862,7 @@ def build_daemon_prompt_with_score(
         # same shape as #638's `task_text` omission).
         injected_whole=injected_whole,
         hooks_installed=hooks_installed,
+        quota_binding_pct=quota_binding_pct,
         # Same derivation the kernel used, from the same `mountable` set — so the
         # block the wake *reads* and the score the daemon *persists* cannot disagree
         # about which boot it got. (They already did, for one commit: the kernel said
@@ -4361,6 +4351,7 @@ def build_daemon_prompt(
     source_gate: str | None = None,
     continuity: Any | None = None,
     hooks_installed: bool | None = None,
+    quota_binding_pct: float | None = None,
     diffense: bool = False,
     strand: bool = False,
     _prepared_injected_keyed: list[tuple[str, str]] | None = None,
@@ -4521,6 +4512,7 @@ def build_daemon_prompt(
         contracts=[],
         task_text=pitfall_text or None,
         hooks_installed=hooks_installed,
+        quota_binding_pct=quota_binding_pct,
         # Derived from the *render*: `_mountable` is exactly the set of blocks
         # about to be subtracted from this prose and seeded as perceptions. Not
         # `cfg["boot.mount"]` — a config key is a request, and the request can
