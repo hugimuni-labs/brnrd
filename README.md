@@ -93,6 +93,11 @@ brnrd account connect  # pair + install + start (systemd/launchd)
 brnrd account add .    # add another repo later
 ```
 
+Connect also creates the account home and separate knowledge repository,
+prepares `.brnrd-kb/`, and creates or adopts private GitHub backups for both.
+Use `--local-memory` only when you explicitly want those Git repositories to
+remain on this machine.
+
 </td>
 <td>
 

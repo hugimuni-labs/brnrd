@@ -256,7 +256,10 @@ def _step_account(repo_root: Path, brr_dir: Path, *, tty: bool) -> bool:
         _command(["account", "connect"])
         return False
 
-    _invoke(["account", "connect"])
+    connect_args = ["account", "connect"]
+    if not _ask("back up your resident home and knowledge to private GitHub repos?", default=True):
+        connect_args.append("--local-memory")
+    _invoke(connect_args)
     return cloud.is_configured(brr_dir)
 
 
