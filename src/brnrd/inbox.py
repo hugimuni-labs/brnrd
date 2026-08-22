@@ -161,30 +161,6 @@ def make_default_forwarder(settings) -> Forwarder:
             reply_to_message_id=reply_to.get("message_id") or None,
         )
 
-    def forward_signal(item: ForwardItem, reply_to: dict) -> None:
-        if not (
-            settings.signal_api_url
-            and settings.signal_api_token
-            and settings.signal_number
-        ):
-            return
-        chat_id = str(reply_to.get("chat_id") or "").strip()
-        if not chat_id:
-            return
-        from .platforms import signal
-
-        body = item.body
-        if utf16_len(body) > signal.MAX_BODY_LEN:
-            budget = signal.MAX_BODY_LEN - utf16_len(TRUNCATION_MARKER)
-            body = trim_to_limit(body, budget) + TRUNCATION_MARKER
-        signal.send_message(
-            settings.signal_api_url,
-            settings.signal_api_token,
-            settings.signal_number,
-            chat_id,
-            body,
-        )
-
     # The routing table this refactor exists to introduce (#the-forwarder-
     # learns-a-table): one platform name -> handler mapping, replacing what
     # used to be an if/elif chain that grew by one clause per platform. The
@@ -200,7 +176,6 @@ def make_default_forwarder(settings) -> Forwarder:
         "telegram": forward_telegram,
         "github": forward_github,
         "whatsapp": forward_whatsapp,
-        "signal": forward_signal,
     }
 
     def forward(item: ForwardItem) -> None:
