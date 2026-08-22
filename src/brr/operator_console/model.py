@@ -9,11 +9,20 @@ event is not a local terminal route: because no gate owns that source, the
 daemon may resolve ``notify.gate`` from recent activity and deliver the reply
 to a real chat gate. Input belongs here only after brnrd has an explicit local
 operator delivery contract.
+
+The BOOT projection is deliberately stricter than a reconstructed command line.
+``prompt.md`` is exact evidence of what brnrd handed across the daemon/runner
+boundary; a ``session-start`` row in ``boundaries.jsonl`` is native evidence
+that the selected Shell actually started and called back into brnrd. Anything
+owned by the runner/model outside those surfaces stays marked opaque rather
+than being silently reconstructed from whatever profile happens to be current
+when the console is opened.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -57,6 +66,8 @@ class RunView:
     last_seen: float
     event_id: str = ""
     prompt: str = ""
+    manifest: dict[str, Any] = field(default_factory=dict)
+    boot: dict[str, Any] = field(default_factory=dict)
     boundaries: tuple[Boundary, ...] = ()
     portal_state: dict[str, Any] = field(default_factory=dict)
     inbox_state: Any = field(default_factory=list)
@@ -124,9 +135,86 @@ def _manifest(path: Path) -> dict[str, Any]:
     return protocol.parse_frontmatter(text) if text else {}
 
 
-def _event_id_for_run(run_dir: Path) -> str:
-    manifest = _manifest(run_dir / "run.md")
-    return str(manifest.get("event_id") or "").strip()
+def _phase_key(value: str) -> str:
+    return re.sub(r"[^a-z]", "", value.lower())
+
+
+def _boot_evidence(
+    *,
+    run_dir: Path,
+    prompt: str,
+    boundaries: tuple[Boundary, ...],
+    entry: dict[str, Any],
+) -> dict[str, Any]:
+    """Return facts about the daemon → Shell → model boot, with provenance.
+
+    This is intentionally *not* a re-render of the current runner profile.
+    Profiles can change after a run starts, and a reconstructed argv would then
+    answer "what would launch now?" rather than "what launched this run?".
+
+    Today two durable facts cross that honesty bar:
+
+    * ``prompt.md`` — exact brnrd-owned bytes handed to the runner invocation;
+    * a ``session-start`` boundary — native runner lifecycle evidence that the
+      selected Shell started and called the brnrd hook endpoint.
+
+    The presence registry supplies the daemon's selected Runner/Shell/Core. It
+    is labelled ``daemon`` rather than ``native`` because selection is not the
+    same as the Shell attesting the model-side envelope. Runner-owned base
+    instructions, tool schema, project loading, and transcript transformations
+    therefore stay explicitly opaque until a runner-specific receipt exists.
+    """
+    prompt_bytes = prompt.encode("utf-8")
+    session_start = next(
+        (
+            edge
+            for edge in boundaries
+            if _phase_key(edge.phase) == "sessionstart"
+        ),
+        None,
+    )
+
+    native: dict[str, Any] | None = None
+    if session_start is not None:
+        native = {
+            "provenance": "native",
+            "boundary": session_start.seq,
+            "at": session_start.at,
+            "phase": session_start.phase,
+            "act": session_start.act or None,
+            "inject": session_start.inject or None,
+            # Keep the whole hook-owned record available to forensic readers.
+            # The TUI renders a compact summary and the JSON probe exposes this
+            # exact object without defining another schema for runner events.
+            "raw": session_start.raw,
+        }
+
+    return {
+        "wake": {
+            "provenance": "exact",
+            "path": str(run_dir / "prompt.md"),
+            "bytes": len(prompt_bytes),
+            "sha256": hashlib.sha256(prompt_bytes).hexdigest(),
+            "present": bool(prompt),
+        },
+        "runner": {
+            "provenance": "daemon",
+            "name": str(entry.get("runner_name") or ""),
+            "shell": str(entry.get("runner_shell") or ""),
+            "core": str(entry.get("runner_core") or ""),
+            "class": str(entry.get("runner_class") or ""),
+        },
+        "session_start": native,
+        "model_envelope": {
+            "provenance": "opaque",
+            "status": "not-attested",
+            "note": (
+                "runner/model-owned base instructions, tool schema, project "
+                "loading and transcript transforms are not captured by the "
+                "current durable run artifacts"
+            ),
+        },
+    }
 
 
 def console_conversation_key(repo_root: Path, repo_label: str = "") -> str:
@@ -152,8 +240,11 @@ def _run_from_presence(
         return None
 
     run_dir = brr_dir / "runs" / run_id
-    event_id = _event_id_for_run(run_dir)
+    manifest = _manifest(run_dir / "run.md")
+    event_id = str(manifest.get("event_id") or "").strip()
     outbox_dir = brr_dir / "outbox" / event_id if event_id else Path()
+    prompt = _read_text(run_dir / "prompt.md")
+    boundaries = _read_boundaries(run_dir / "boundaries.jsonl")
 
     stream = str(entry.get("stream") or "").strip()
     thread: tuple[dict[str, Any], ...] = ()
@@ -182,8 +273,15 @@ def _run_from_presence(
         started_at=float(entry.get("started_at") or 0),
         last_seen=float(entry.get("last_seen") or 0),
         event_id=event_id,
-        prompt=_read_text(run_dir / "prompt.md"),
-        boundaries=_read_boundaries(run_dir / "boundaries.jsonl"),
+        prompt=prompt,
+        manifest=manifest,
+        boot=_boot_evidence(
+            run_dir=run_dir,
+            prompt=prompt,
+            boundaries=boundaries,
+            entry=entry,
+        ),
+        boundaries=boundaries,
         portal_state=(
             _read_json(outbox_dir / "portal-state.json", {})
             if event_id else {}

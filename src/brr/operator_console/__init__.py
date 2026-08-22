@@ -41,6 +41,7 @@ def _once(repo_root: Path, selected_run_id: str | None) -> int:
                 "event_id": run.event_id,
                 "stream": run.stream,
                 "boundaries": len(run.boundaries),
+                "boot_native": isinstance(run.boot.get("session_start"), dict),
                 "pending": (
                     len(run.inbox_state)
                     if isinstance(run.inbox_state, list)
@@ -53,6 +54,7 @@ def _once(repo_root: Path, selected_run_id: str | None) -> int:
             {
                 "run_id": selected.run_id,
                 "prompt_bytes": len(selected.prompt.encode("utf-8")),
+                "boot": selected.boot,
                 "boundaries": len(selected.boundaries),
                 "portal_state": selected.portal_state,
                 "inbox": selected.inbox_state,

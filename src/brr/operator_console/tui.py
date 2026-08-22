@@ -100,12 +100,98 @@ def _wake(run: RunView | None) -> str:
     if not run.prompt:
         return f"{run.run_id}\n\nNo prompt.md captured."
     return (
-        f"{run.run_id} · exact brnrd-supplied boot payload · "
+        f"{run.run_id} · exact daemon → runner payload · "
         f"{len(run.prompt.encode('utf-8')):,} B\n"
-        "Runner/model-owned instructions may exist outside prompt.md.\n"
+        "This is what brnrd supplied, not a claim about the Shell's final model context.\n"
         "────────────────────────────────────────────────────────────────\n\n"
         f"{run.prompt}"
     )
+
+
+def _boot(run: RunView | None) -> str:
+    """Render the runner side of wake-up without claiming unknowable context."""
+    if run is None:
+        return "No selected run."
+
+    boot = run.boot if isinstance(run.boot, dict) else {}
+    wake = boot.get("wake") if isinstance(boot.get("wake"), dict) else {}
+    runner = boot.get("runner") if isinstance(boot.get("runner"), dict) else {}
+    native = (
+        boot.get("session_start")
+        if isinstance(boot.get("session_start"), dict)
+        else None
+    )
+    envelope = (
+        boot.get("model_envelope")
+        if isinstance(boot.get("model_envelope"), dict)
+        else {}
+    )
+
+    shell = str(runner.get("shell") or run.runner_shell or "?")
+    core = str(runner.get("core") or run.runner_core or "?")
+    sha = str(wake.get("sha256") or "")
+    lines = [
+        f"{run.run_id} · BOOT · {shell} / {core}",
+        "",
+        "PROVENANCE",
+        "  [exact]   bytes captured by brnrd for this run",
+        "  [native]  event emitted by the runner's own lifecycle hook",
+        "  [daemon]  runner selection recorded by brnrd presence",
+        "  [opaque]  Shell/model-owned context not durably attested",
+        "",
+        "HANDOFF",
+        f"  [daemon] runner     {runner.get('name') or run.runner_name or '—'}",
+        f"  [daemon] shell      {shell}",
+        f"  [daemon] core       {core}",
+        f"  [daemon] class      {runner.get('class') or run.runner_class or '—'}",
+        f"  [exact]  wake       {int(wake.get('bytes') or 0):,} B",
+        f"  [exact]  wake sha   {sha[:16] + '…' if sha else '—'}",
+        f"  [exact]  source     {wake.get('path') or '—'}",
+        "",
+        "SESSION",
+    ]
+
+    if native is not None:
+        lines.extend(
+            [
+                f"  [native] session-start boundary #{native.get('boundary', '?')}",
+                f"  [native] at         {native.get('at') or '—'}",
+                f"  [native] phase      {native.get('phase') or 'session-start'}",
+            ]
+        )
+        if native.get("act"):
+            lines.append(f"  [native] act        {native['act']}")
+        if native.get("inject"):
+            lines.append(f"  [native] injected   {_short(native['inject'], 120)}")
+        raw = native.get("raw")
+        if isinstance(raw, dict) and raw:
+            lines.extend(
+                [
+                    "",
+                    "NATIVE SESSION-START RECORD",
+                    json.dumps(raw, indent=2, sort_keys=True, default=str),
+                ]
+            )
+    else:
+        lines.extend(
+            [
+                "  [opaque] session-start was not observed in the durable boundary transcript",
+                "           (Tier 0/1, hooks disabled/not fired, or a pre-transcript run are all possible)",
+            ]
+        )
+
+    lines.extend(
+        [
+            "",
+            "MODEL ENVELOPE",
+            f"  [opaque] {envelope.get('note') or 'runner/model-owned context is not attested'}",
+            "",
+            "The important split: WAKE answers ‘what did brnrd send?’;",
+            "BOOT answers ‘what can we prove about how the receiving Shell woke?’.",
+            "A future runner receipt can promote argv/session/transcript rows from opaque to exact/native.",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _portals(run: RunView | None) -> str:
@@ -203,12 +289,14 @@ def _attention(run: RunView | None) -> str:
     pending = _pending(run)
     notices = _notices(run)
     done, total = _course(run.card)
+    native_boot = isinstance(run.boot.get("session_start"), dict)
     lines = [
         _short(_title(run), 28),
         _runner(run),
         "",
         f"awake      {_age(run.started_at)}",
         f"event      {run.event_id[-12:] if run.event_id else '—'}",
+        f"boot       {'native' if native_boot else 'partial'}",
         f"pending    {len(pending)}",
         f"notices    {len(notices)}",
         f"course     {done}/{total}" if total else "course     —",
@@ -285,9 +373,10 @@ def run_tui(repo_root: Path, *, selected_run_id: str | None = None) -> None:
             Binding("q", "quit", "quit"),
             Binding("1", "tab_edge", "edge", show=False),
             Binding("2", "tab_wake", "wake", show=False),
-            Binding("3", "tab_portals", "portals", show=False),
-            Binding("4", "tab_thread", "thread", show=False),
-            Binding("5", "tab_body", "body", show=False),
+            Binding("3", "tab_boot", "boot", show=False),
+            Binding("4", "tab_portals", "portals", show=False),
+            Binding("5", "tab_thread", "thread", show=False),
+            Binding("6", "tab_body", "body", show=False),
             Binding("r", "poll_now", "refresh"),
         ]
 
@@ -309,6 +398,8 @@ def run_tui(repo_root: Path, *, selected_run_id: str | None = None) -> None:
                             yield RichLog(id="edge-log", wrap=True, markup=False)
                         with TabPane("WAKE", id="wake"):
                             yield RichLog(id="wake-log", wrap=False, markup=False)
+                        with TabPane("BOOT", id="boot"):
+                            yield RichLog(id="boot-log", wrap=True, markup=False)
                         with TabPane("PORTALS", id="portals"):
                             yield RichLog(id="portals-log", wrap=True, markup=False)
                         with TabPane("THREAD", id="thread"):
@@ -364,6 +455,7 @@ def run_tui(repo_root: Path, *, selected_run_id: str | None = None) -> None:
             self.query_one("#attention", Static).update(_attention(run))
             self._set_log("#edge-log", _edges(run))
             self._set_log("#wake-log", _wake(run))
+            self._set_log("#boot-log", _boot(run))
             self._set_log("#portals-log", _portals(run))
             self._set_log("#thread-log", _thread(run, snap))
             self._set_log("#body-log", _body(run))
@@ -380,6 +472,9 @@ def run_tui(repo_root: Path, *, selected_run_id: str | None = None) -> None:
 
         def action_tab_wake(self) -> None:
             self._tabs().active = "wake"
+
+        def action_tab_boot(self) -> None:
+            self._tabs().active = "boot"
 
         def action_tab_portals(self) -> None:
             self._tabs().active = "portals"
