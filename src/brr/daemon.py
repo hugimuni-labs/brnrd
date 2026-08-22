@@ -4061,6 +4061,14 @@ def _run_worker(
         if not _is_strand(task.meta):
             obligations.append("vigil")
 
+        # A cloud conversation stays warm by default. Unlike `vigil`, which
+        # checks a claim the reply made, `linger` checks the lifecycle itself:
+        # a user should not pay for a cold wake merely because the resident
+        # forgot the final wait. Schedule/forge/internal runs have no live chat
+        # counterpart to catch and remain outside the obligation.
+        if not _is_strand(task.meta) and str(task.meta.get("source") or "") == "cloud":
+            obligations.append("linger")
+
         if obligations:
             env["BRR_CLOSEOUT_OBLIGATIONS"] = ",".join(obligations)
 
@@ -13316,6 +13324,9 @@ _MAX_PRESERVED_BYTES = 1_000_000
 NOT_PRESERVED: dict[str, str] = {
     portals.KEEPALIVE_NAME: (
         "transient slot control, meaningless after the run"
+    ),
+    portals.LINGER_OPT_OUT_NAME: (
+        "transient closeout control, meaningless after the run"
     ),
     hooks_mod.HOOK_STATE_NAME: (
         "daemon/hook diagnostics, not the resident's"
