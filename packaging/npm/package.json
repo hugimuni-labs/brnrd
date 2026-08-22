@@ -1,6 +1,6 @@
 {
   "name": "brnrd",
-  "version": "0.6.10",
+  "version": "0.6.11",
   "description": "brnrd — structured guardrails for AI agent work, managed from a chat. Install with `npm install -g brnrd`; this package is the launcher for the Python program.",
   "keywords": [
     "ai",
