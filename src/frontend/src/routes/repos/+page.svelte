@@ -662,8 +662,8 @@
 			<!-- Messenger pairing is account/daemon state, not repository
 			     inventory. Keep the available connectors and paired chats at
 			     that boundary instead of marooning them below every repo card. -->
-			<MessengerDoors doors={data.messenger_doors ?? null} />
-			<PairedChats />
+			<MessengerDoors doors={data.messenger_doors ?? null} embedded />
+			<PairedChats embedded />
 
 			{#if connectedRepos.length === 0}
 				<p class="text-sm text-ink-quiet">No repos enabled yet.</p>

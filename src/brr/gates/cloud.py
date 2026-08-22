@@ -610,6 +610,7 @@ def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON
     }
     pair = _request(brnrd_url, "POST", "/v1/accounts/pair", json=pair_body or None)
     out(f"[brnrd] Approve this daemon at: {pair['pair_url']}")
+    out(f"[brnrd] Pairing code: {pair['pair_code']}")
     deadline = time.monotonic() + timeout_s
     while True:
         try:
@@ -672,17 +673,6 @@ def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON
     # keeps publishing the new identity into 404s indefinitely.
     _register(brr_dir, state)
     out(f"[brnrd] Connected to brnrd account {status.get('account_id')}.")
-    pair = status.get("telegram_pair") or {}
-    if isinstance(pair, dict):
-        deep_link = str(pair.get("deep_link") or "").strip()
-        instructions = str(pair.get("instructions") or "").strip()
-        pair_code = str(pair.get("pair_code") or "").strip()
-        if deep_link:
-            out(f"[brnrd] Pair Telegram chat: {deep_link}")
-            if pair_code:
-                out(f"[brnrd] If Telegram only opens the chat, send: /start {pair_code}")
-        elif instructions:
-            out(f"[brnrd] Telegram pairing: {instructions}")
     return state
 
 

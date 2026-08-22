@@ -256,10 +256,10 @@ def _step_account(repo_root: Path, brr_dir: Path, *, tty: bool) -> bool:
         _command(["account", "connect"])
         return False
 
-    connect_args = ["account", "connect"]
-    if not _ask("back up your resident home and knowledge to private GitHub repos?", default=True):
-        connect_args.append("--local-memory")
-    _invoke(connect_args)
+    # `account connect` owns the durability consent. The guided door
+    # announces and invokes that command; pre-asking here made one choice
+    # echo across this caller, the memory receipt, and `home link` itself.
+    _invoke(["account", "connect"])
     return cloud.is_configured(brr_dir)
 
 
@@ -329,13 +329,8 @@ def _step_memory(repo_root: Path, *, tty: bool) -> bool:
 
     if not manifest.fully_linked:
         _note("local-only — this memory doesn't survive the machine yet")
-        if not tty:
-            _command(["home", "link"])
-        elif _ask("back it up to private GitHub repos now?"):
-            _invoke(["home", "link"])
-        else:
-            _note("skipped — run it whenever you like:")
-            _command(["home", "link"])
+        _note("resume the backup whenever you like:")
+        _command(["home", "link"])
 
     return True
 
