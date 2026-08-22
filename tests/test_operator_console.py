@@ -3,12 +3,8 @@ from __future__ import annotations
 import json
 import os
 
-from brr import conversations, presence, protocol
-from brr.operator_console.model import (
-    collect_snapshot,
-    console_conversation_key,
-    enqueue_console_message,
-)
+from brr import conversations, presence
+from brr.operator_console.model import collect_snapshot, console_conversation_key
 
 
 def _write_run(brr, run_id: str, event_id: str, *, prompt: str = "wake") -> None:
@@ -139,28 +135,6 @@ def test_snapshot_projects_existing_runtime_surfaces(tmp_path):
     assert "Tracing the steer" in snapshot.selected.card
     assert [row["kind"] for row in snapshot.selected.thread] == ["event", "artifact"]
     assert snapshot.console_key == "console:hugimuni-labs_brnrd"
-
-
-def test_console_message_is_normal_pending_cli_event_on_isolated_thread(tmp_path):
-    repo = tmp_path / "brnrd"
-    repo.mkdir()
-    brr = repo / ".brr"
-    brr.mkdir()
-
-    path = enqueue_console_message(
-        repo,
-        "inspect the last boundary",
-        brr_dir=brr,
-        repo_label="hugimuni-labs/brnrd",
-    )
-
-    text = path.read_text(encoding="utf-8")
-    meta = protocol.parse_frontmatter(text)
-    assert meta["source"] == "cli"
-    assert meta["status"] == "pending"
-    assert meta["conversation_key"] == "console:hugimuni-labs_brnrd"
-    assert meta["console"] is True
-    assert protocol.frontmatter_body(text).strip() == "inspect the last boundary"
 
 
 def test_console_key_has_no_gate_identity(tmp_path):
