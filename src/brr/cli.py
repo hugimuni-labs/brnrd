@@ -405,6 +405,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="repo name for the memory backup (default: brnrd-home)")
     p.add_argument("--knowledge-name", default=None,
                    help="repo name for the knowledge backup (default: brnrd-knowledge)")
+    p.add_argument("--ssh", action="store_true",
+                   help="use SSH remotes explicitly (default: HTTPS through gh credentials)")
     p.set_defaults(func=cmd_home_link)
 
     p = home_sub.add_parser(
@@ -4967,6 +4969,7 @@ def cmd_home_link(args):
             owner=args.owner,
             dominion_name=dominion_name,
             knowledge_name=knowledge_name,
+            ssh=bool(args.ssh),
             on_result=_report,
         )
     except home_link.HomeLinkError as exc:
@@ -5617,6 +5620,7 @@ def _connect_interrupted(step: str) -> "SystemExit":
 def cmd_brnrd_connect(args):
     import os
     import socket
+    import sys
 
     from .gates import cloud
 
@@ -5624,6 +5628,16 @@ def cmd_brnrd_connect(args):
     brr_dir = _brr_dir_for_repo(repo_root)
     url = args.url_option or args.url or os.environ.get("BRNRD_URL", "https://brnrd.dev")
     daemon_name = args.daemon_name or socket.gethostname()
+    local_memory = bool(args.local_memory)
+    if not local_memory and sys.stdin.isatty():
+        from .adopt import _confirm
+
+        print()
+        if not _confirm(
+            "Back up the resident home and knowledge to two private GitHub repos?",
+            default=True,
+        ):
+            local_memory = True
     try:
         cloud.connect(brr_dir, brnrd_url=url, daemon_name=daemon_name)
     except (cloud.CloudUnavailableError, TimeoutError) as exc:
@@ -5634,7 +5648,7 @@ def cmd_brnrd_connect(args):
         # during the pairing-approval poll leaves the pending pair code to
         # expire server-side on its own TTL and this machine untouched.
         raise _connect_interrupted("pairing approval") from None
-    _connect_memory(repo_root, local_only=bool(args.local_memory))
+    _connect_memory(repo_root, local_only=local_memory)
     if args.no_service:
         print(
             "[brnrd] Paired without a background service. "

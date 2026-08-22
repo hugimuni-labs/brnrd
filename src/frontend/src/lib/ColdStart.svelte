@@ -183,6 +183,7 @@
 	// registry (Slack, Signal, an unconfigured Telegram/WhatsApp) reads
 	// through the honest-intermediate fallback instead.
 	let availableDoors = $derived((messengerDoors ?? []).filter((d) => d.deep_link_available));
+	let pairedDoors = $derived((messengerDoors ?? []).filter((d) => d.paired));
 
 	// Coarse pointer / UA-CH, client-side only — no new server state, no
 	// User-Agent sniffing on the backend. `pointer: coarse` is the primary
@@ -247,6 +248,7 @@
 	// to carry the signal. `cold` now requires *both* to be false; the
 	// paired-but-repo-less gap in between is `pairedNoRepo`.
 	let cold = $derived(repos !== null && !daemonEverPaired && !machinePaired);
+	let chatOnly = $derived(cold && pairedDoors.length > 0);
 	let pairedNoRepo = $derived(repos !== null && !daemonEverPaired && machinePaired);
 
 	// #1277a: the pairing command's first line is `cd <repo>` before any
@@ -376,21 +378,27 @@
 </script>
 
 {#snippet messengerDoorCta(platform: string)}
+	{@const door = availableDoors.find((candidate) => candidate.platform === platform)}
 	<p class="mt-1.5 text-sm text-stone-300">
-		brnrd talks back in {doorLabel(platform)} — no laptop needed. Tap through and hit Start; setup below
-		can wait.
+		{door?.paired
+			? `${doorLabel(platform)} is connected${door.paired_display ? ` as ${door.paired_display}` : ''}.`
+			: `brnrd talks back in ${doorLabel(platform)} — no laptop needed. Tap through and hit Start; setup below can wait.`}
 	</p>
 	<button
 		type="button"
 		data-testid={`open-${platform}`}
-		class="mt-3 inline-flex cursor-pointer items-center border border-amber-800/50 bg-amber-950/20 px-3 py-2 font-mono text-[11px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/40 hover:text-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+		class={door?.paired
+			? 'mt-3 inline-flex cursor-pointer items-center border border-amber-700/70 bg-amber-950/30 px-3 py-2 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:bg-amber-950/50 disabled:opacity-60'
+			: 'mt-3 inline-flex cursor-pointer items-center border border-sky-700/70 bg-sky-950/30 px-3 py-2 font-mono text-[11px] tracking-wide text-sky-200 uppercase hover:bg-sky-950/50 disabled:opacity-60'}
 		onclick={() => openMessengerDoor(platform)}
 		disabled={mintingPlatform === platform || !!pairedOutcomes[platform]}
 		>{mintingPlatform === platform
 			? 'opening…'
 			: pairedOutcomes[platform]
 				? 'paired'
-				: `open ${doorLabel(platform).toLowerCase()}`}</button
+				: door?.paired
+					? 'connect another chat'
+					: `open ${doorLabel(platform).toLowerCase()}`}</button
 	>
 	{#if pairedOutcomes[platform]}
 		<!-- #1464 — the redeem outcome, read back live: the moment a
@@ -429,11 +437,12 @@
 	>
 		<p class="eyebrow">the cold start</p>
 		<h2 id="cold-heading" class="font-mono text-sm font-semibold text-amber-100">
-			nothing is paired yet
+			{chatOnly ? 'chat connected; daemon still to go' : 'nothing is paired yet'}
 		</h2>
 		<p class="mt-2 text-sm text-stone-400">
-			This board reads a daemon running on your own machine. There is none yet — two steps, in
-			order.
+			{chatOnly
+				? 'Your resident can already meet you in chat. No daemon is running on your machine yet — finish that step below.'
+				: 'This board reads a daemon running on your own machine. There is none yet — two steps, in order.'}
 		</p>
 
 		{#if isMobile}

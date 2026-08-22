@@ -11,6 +11,11 @@
 	import { ReposAuthError, fetchPairedChats, revokePairedChat } from './repos';
 	import type { PairedChat } from './repos';
 
+	interface Props {
+		embedded?: boolean;
+	}
+	let { embedded = false }: Props = $props();
+
 	let chats = $state<PairedChat[] | null>(null);
 	let loadError = $state<string | null>(null);
 	let confirming = $state<string | null>(null);
@@ -53,8 +58,11 @@
 </script>
 
 {#if chats !== null && chats.length > 0}
-	<section class="panel mt-6 p-4" aria-labelledby="paired-chats-heading">
-		<p class="eyebrow">messenger doors</p>
+	<section
+		class={embedded ? 'mt-5 border-t border-stone-800 pt-5' : 'panel mt-6 p-4'}
+		aria-labelledby="paired-chats-heading"
+	>
+		{#if !embedded}<p class="eyebrow">messenger doors</p>{/if}
 		<h2
 			id="paired-chats-heading"
 			class="font-mono text-lg font-semibold tracking-tight text-amber-100"
@@ -73,11 +81,10 @@
 					<div class="flex items-start justify-between gap-2">
 						<div class="min-w-0">
 							<p class="truncate font-mono text-sm font-semibold text-amber-100">
-								{chat.principal_display ?? '(no name reported)'}
+								{platformLabel(chat.platform)} · {chat.principal_display ?? '(no name reported)'}
 							</p>
 							<p class="mt-1 truncate font-mono text-[11px] text-ink-quiet">
-								{platformLabel(chat.platform)}{chat.chat_title ? ` · ${chat.chat_title}` : ''} · paired
-								{chat.paired_at_label}
+								{chat.chat_title ? `${chat.chat_title} · ` : ''}paired {chat.paired_at_label}
 							</p>
 							<p class="mt-1 truncate font-mono text-[11px] text-ink-quiet">
 								{chat.repo_full_name ? `pinned to ${chat.repo_full_name}` : 'auto-routed'}

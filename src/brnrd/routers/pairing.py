@@ -110,7 +110,10 @@ def start_pair(
         raise HTTPException(status_code=503, detail="could not allocate pair code")
 
     secret = ids.poll_secret()
-    approve_secret = ids.pair_approve_secret()
+    # Device-code flow: the human-entered, 40-bit one-time code is the
+    # initiator proof. The website no longer receives a long secret in its
+    # URL and then pointlessly prints the short code it already knows.
+    approve_secret = code
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.pair_ttl_s)
     # No auth yet at this point in the handshake (that's what pairing mints)
     # — capabilities ride in unauthenticated, exactly like the pair code
@@ -139,12 +142,7 @@ def start_pair(
         )
     )
     db.commit()
-    # The approval proof rides the **fragment**, not the query string: a
-    # fragment is never sent to a server, so it stays out of access logs,
-    # out of `Referer` on any onward navigation, and out of the JSON the
-    # approval page's own context endpoint returns. The browser reads it
-    # from `location.hash` and posts it back over TLS.
-    pair_url = f"{settings.public_base_url.rstrip()}/connect/{code}#{approve_secret}"
+    pair_url = f"{settings.public_base_url.rstrip()}/connect"
     return schemas.PairStarted(pair_code=code, pair_url=pair_url, poll_secret=secret, approve_secret=approve_secret, expires_at=expires_at)
 
 
@@ -312,14 +310,6 @@ def poll_pair(code: str, request: Request, poll_secret: str = Query(...), db: Se
         return schemas.PairStatus(status="pending")
     if pair.status == PairRequest.STATUS_APPROVED:
         token = pair.minted_token
-        telegram_pair = None
-        if pair.account_id and pair.repo_id:
-            telegram_pair = telegram_pair_for_connect(
-                db,
-                request.app.state.settings,
-                pair.account_id,
-                pair.repo_id,
-            )
         pair.status = PairRequest.STATUS_CONSUMED
         pair.minted_token = None
         db.commit()
@@ -328,6 +318,8 @@ def poll_pair(code: str, request: Request, poll_secret: str = Query(...), db: Se
             account_id=pair.account_id,
             repo_id=pair.repo_id,
             daemon_token=token,
-            telegram_pair=telegram_pair,
+            # Messenger setup belongs to the shared connector panel. The
+            # daemon handshake must not mint a second, invisible door code.
+            telegram_pair=None,
         )
     return schemas.PairStatus(status="paired", account_id=pair.account_id, repo_id=pair.repo_id)

@@ -312,9 +312,8 @@ def test_connect_persists_token(tmp_path, monkeypatch):
     assert register[2]["json"]["daemon_name"] == "laptop"
     assert output == [
         "[brnrd] Approve this daemon at: u",
+        "[brnrd] Pairing code: BR-TEST",
         "[brnrd] Connected to brnrd account acct_x.",
-        "[brnrd] Pair Telegram chat: https://t.me/brnrd_bot?start=TG-TEST",
-        "[brnrd] If Telegram only opens the chat, send: /start TG-TEST",
     ]
 
 

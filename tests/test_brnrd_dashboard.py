@@ -553,6 +553,32 @@ def test_dashboard_repos_api_carries_the_channel_directory_onto_the_wire():
     assert by_name["Gurio/wire-wa"]["telegram_paired"] is False
 
 
+def test_dashboard_door_registry_joins_existing_pairing_identity():
+    from brnrd.models import ChannelRoute
+
+    client = _client()
+    _login(client, login="Gurio")
+    account_id = _account_id(client)
+    with client.app.state.SessionLocal() as db:
+        db.add(
+            ChannelRoute(
+                id="cr-door-wa",
+                platform="whatsapp",
+                channel_id="wa-door",
+                account_id=account_id,
+                repo_id=None,
+                paired_user_id=42,
+                paired_user_display="Alexandra",
+            )
+        )
+        db.commit()
+
+    doors = {row["platform"]: row for row in client.get("/v1/dashboard/repos").json()["messenger_doors"]}
+    assert doors["whatsapp"]["paired"] is True
+    assert doors["whatsapp"]["paired_count"] == 1
+    assert doors["whatsapp"]["paired_display"] == "Alexandra"
+
+
 def test_repo_views_channel_directory_carries_a_paired_whatsapp_route():
     """brr/the-directory-reaches-the-wire: `ChannelRoute` already carries a
     `platform` column and rows are written for more than Telegram
