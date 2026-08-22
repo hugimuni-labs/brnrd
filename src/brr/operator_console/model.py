@@ -119,37 +119,6 @@ def _read_boundaries(path: Path) -> tuple[Boundary, ...]:
     return tuple(out)
 
 
-def _dialogue(
-    records: list[dict[str, Any]], *, limit: int = 40,
-) -> tuple[dict[str, Any], ...]:
-    """Project conversation records the same way the prompt-facing tail does.
-
-    We intentionally do not call the private ``_is_dialogue_record`` helper.
-    The public record grammar is small: user events plus response/interim/
-    outbound artifacts are dialogue; run/update rows are lifecycle.
-    """
-    rows: list[dict[str, Any]] = []
-    for record in records:
-        kind = record.get("kind")
-        if kind == "event":
-            rows.append(record)
-            continue
-        if kind == "artifact":
-            if (
-                record.get("artifact_kind")
-                in {"response", "interim_response", "outbound_message"}
-                and isinstance(record.get("body"), str)
-                and str(record.get("body")).strip()
-            ):
-                rows.append(record)
-            continue
-        if kind not in {"run", "update"}:
-            rows.append(record)
-    if limit > 0:
-        rows = rows[-limit:]
-    return tuple(rows)
-
-
 def _manifest(path: Path) -> dict[str, Any]:
     text = _read_text(path)
     return protocol.parse_frontmatter(text) if text else {}
@@ -189,9 +158,11 @@ def _run_from_presence(
     stream = str(entry.get("stream") or "").strip()
     thread: tuple[dict[str, Any], ...] = ()
     if stream:
-        thread = _dialogue(
-            conversations.read_records(brr_dir, stream),
-            limit=thread_limit,
+        # ``read_recent`` is the canonical kind-aware projection: it keeps
+        # dialogue and excludes lifecycle rows by default. Reuse it instead of
+        # copying that classification into the console.
+        thread = tuple(
+            conversations.read_recent(brr_dir, stream, limit=thread_limit)
         )
 
     return RunView(
@@ -261,9 +232,8 @@ def collect_snapshot(
 
     repo_label = selected.repo_label if selected else ""
     key = console_conversation_key(repo_root, repo_label)
-    console_thread = _dialogue(
-        conversations.read_records(runtime, key),
-        limit=thread_limit,
+    console_thread = tuple(
+        conversations.read_recent(runtime, key, limit=thread_limit)
     )
 
     return ConsoleSnapshot(
