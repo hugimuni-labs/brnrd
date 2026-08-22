@@ -278,6 +278,9 @@ def test_dashboard_does_not_call_configured_whatsapp_unconfigured_after_lookup_f
         "platform": "whatsapp",
         "deep_link_available": False,
         "reason": "identity_unavailable",
+        "paired": False,
+        "paired_count": 0,
+        "paired_display": None,
     }
 
 
