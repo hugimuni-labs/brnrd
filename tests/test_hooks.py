@@ -3040,6 +3040,50 @@ def test_vigil_accepts_a_live_keepalive(tmp_path):
     assert out.get("decision") != "block"
 
 
+def test_linger_blocks_cloud_closeout_without_a_horizon(tmp_path):
+    env = _armed_vigil(tmp_path)
+    env["BRR_CLOSEOUT_OBLIGATIONS"] = "linger"
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out["decision"] == "block"
+    assert "lingers by default" in out["reason"]
+    assert portals.LINGER_OPT_OUT_NAME in out["reason"]
+
+
+def test_linger_blocks_exit_while_the_horizon_is_still_live(tmp_path):
+    env = _armed_vigil(tmp_path)
+    env["BRR_CLOSEOUT_OBLIGATIONS"] = "linger"
+    _keepalive(tmp_path, "+30m\n")
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out["decision"] == "block"
+    assert "still live" in out["reason"]
+
+
+def test_linger_accepts_an_elapsed_horizon(tmp_path):
+    env = _armed_vigil(tmp_path)
+    env["BRR_CLOSEOUT_OBLIGATIONS"] = "linger"
+    _keepalive(tmp_path, "2020-01-01T00:00:00Z")
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out.get("decision") != "block"
+
+
+def test_linger_accepts_a_reasoned_opt_out(tmp_path):
+    env = _armed_vigil(tmp_path)
+    env["BRR_CLOSEOUT_OBLIGATIONS"] = "linger"
+    (tmp_path / portals.LINGER_OPT_OUT_NAME).write_text(
+        "operator asked for an immediate stop\n", encoding="utf-8"
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out.get("decision") != "block"
+
+
+def test_linger_rejects_an_empty_opt_out(tmp_path):
+    env = _armed_vigil(tmp_path)
+    env["BRR_CLOSEOUT_OBLIGATIONS"] = "linger"
+    (tmp_path / portals.LINGER_OPT_OUT_NAME).write_text(" \n", encoding="utf-8")
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out["decision"] == "block"
+
+
 def test_vigil_accepts_an_iso_keepalive_deadline(tmp_path):
     env = _armed_vigil(tmp_path)
     later = datetime.datetime.now(
