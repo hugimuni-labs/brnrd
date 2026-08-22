@@ -63,6 +63,8 @@ class MessengerIdentities:
     # Keeping that fact lets the dashboard avoid calling a configured door
     # "not configured" merely because Meta did not answer at boot.
     whatsapp_credentials_present: bool = False
+    signal_e164: str = ""
+    signal_credentials_present: bool = False
 
 
 @dataclass(frozen=True)
@@ -109,6 +111,13 @@ def env_only_identities(settings: Settings) -> MessengerIdentities:
         whatsapp_e164="",
         whatsapp_credentials_present=bool(
             settings.whatsapp_access_token and settings.whatsapp_phone_number_id
+        ),
+        signal_e164=settings.signal_number.strip(),
+        signal_credentials_present=bool(
+            settings.signal_api_url
+            and settings.signal_api_token
+            and settings.signal_number
+            and settings.signal_webhook_secret
         ),
     )
 
@@ -164,6 +173,13 @@ def derive_messenger_identities(settings: Settings, *, timeout: float = 5.0) -> 
         whatsapp_credentials_present=bool(
             settings.whatsapp_access_token and settings.whatsapp_phone_number_id
         ),
+        signal_e164=settings.signal_number.strip(),
+        signal_credentials_present=bool(
+            settings.signal_api_url
+            and settings.signal_api_token
+            and settings.signal_number
+            and settings.signal_webhook_secret
+        ),
     )
 
 
@@ -180,6 +196,12 @@ def _telegram_deep_link(identity_value: str, code: str) -> str:
 
 def _whatsapp_deep_link(identity_value: str, code: str) -> str:
     return f"https://wa.me/{identity_value}?text={code}"
+
+
+def _signal_deep_link(identity_value: str, code: str) -> str:
+    # Signal has no pre-filled-message parameter. The link opens the
+    # conversation; pair_instructions carries the code the reader sends.
+    return f"https://signal.me/#p/{identity_value}"
 
 
 @dataclass(frozen=True)
@@ -201,7 +223,7 @@ _REGISTRY: tuple[_DoorDef, ...] = (
     # rather than omitted — the maintainer's brief: "the set complete, the
     # UI honest."
     _DoorDef("slack", None),
-    _DoorDef("signal", None),
+    _DoorDef("signal", "signal_e164", _signal_deep_link),
 )
 
 PLATFORMS: tuple[str, ...] = tuple(d.platform for d in _REGISTRY)
@@ -224,6 +246,8 @@ def messenger_doors(identities: MessengerIdentities) -> list[MessengerDoor]:
         if value:
             doors.append(MessengerDoor(d.platform, True))
         elif d.platform == "whatsapp" and identities.whatsapp_credentials_present:
+            doors.append(MessengerDoor(d.platform, False, _IDENTITY_UNAVAILABLE))
+        elif d.platform == "signal" and identities.signal_credentials_present:
             doors.append(MessengerDoor(d.platform, False, _IDENTITY_UNAVAILABLE))
         else:
             doors.append(MessengerDoor(d.platform, False, _NOT_CONFIGURED))
@@ -271,6 +295,16 @@ def pair_instructions(platform: str, code: str, deep_link: str | None) -> str:
             )
         return (
             f"Text `{code}` by itself — no other words — to your brnrd WhatsApp number "
+            "to bind this chat to your account."
+        )
+    if platform == "signal":
+        if deep_link:
+            return (
+                f"Open {deep_link}, then send `{code}` by itself — no other words — "
+                "to bind this chat to your account."
+            )
+        return (
+            f"Send `{code}` by itself — no other words — to your brnrd Signal number "
             "to bind this chat to your account."
         )
     raise ValueError(f"no pairing instructions for platform {platform!r}")
