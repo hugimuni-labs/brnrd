@@ -1345,7 +1345,7 @@ def test_a_noted_close_retires_the_event_without_forwarding_anything():
 
 
 @pytest.mark.parametrize(
-    "platform", ["telegram", "github", "whatsapp", "signal"],
+    "platform", ["telegram", "github", "whatsapp"],
 )
 def test_every_forward_handler_tolerates_an_incomplete_reply_to(platform):
     """A routable platform with nothing to route to is not an exception.
@@ -1368,9 +1368,6 @@ def test_every_forward_handler_tolerates_an_incomplete_reply_to(platform):
         telegram_bot_token="t",
         whatsapp_access_token="w",
         whatsapp_phone_number_id="1",
-        signal_api_url="https://signal.example",
-        signal_api_token="s",
-        signal_number="+33999999999",
     )
     forward = inbox_service.make_default_forwarder(settings)
     item = inbox_service.ForwardItem(
@@ -1398,7 +1395,7 @@ def test_the_handler_list_above_matches_the_routing_table():
         for line in table.splitlines()
         if line.strip().startswith('"')
     }
-    assert registered == {"telegram", "github", "whatsapp", "signal"}, (
+    assert registered == {"telegram", "github", "whatsapp"}, (
         "a platform was added to the routing table without extending "
         "test_every_forward_handler_tolerates_an_incomplete_reply_to"
     )

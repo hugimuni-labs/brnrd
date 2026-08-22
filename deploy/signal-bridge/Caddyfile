@@ -1,4 +1,0 @@
-{$SIGNAL_BRIDGE_HOST} {
-    respond /receive 404
-    reverse_proxy relay:8090
-}
