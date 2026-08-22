@@ -1,0 +1,326 @@
+"""Read-only projections for the local brnrd operator console.
+
+The console deliberately owns no runtime state. It reads the same files and
+library projections the daemon, gates, and dashboard already use, then renders
+them for a human sitting beside the daemon.
+
+The one write path is :func:`enqueue_console_message`: it creates an ordinary
+``source=cli`` pending event on an isolated console conversation. That keeps
+local operator speech inside the normal daemon/event machinery without
+accidentally routing a debugging turn back through Telegram/Slack.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+import json
+import os
+from pathlib import Path
+import re
+from typing import Any
+
+from .. import conversations, daemon, gitops, presence, protocol
+
+
+_CONSOLE_KEY_SAFE = re.compile(r"[^A-Za-z0-9_.-]+")
+
+
+@dataclass(frozen=True)
+class Boundary:
+    seq: int
+    phase: str
+    at: str
+    act: str
+    inject: str
+    block: bool = False
+    block_reason: str = ""
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class RunView:
+    run_id: str
+    presence_id: str
+    kind: str
+    label: str
+    name: str
+    stream: str
+    repo_label: str
+    parent_run_id: str
+    is_subspawn: bool
+    runner_name: str
+    runner_shell: str
+    runner_core: str
+    runner_class: str
+    started_at: float
+    last_seen: float
+    event_id: str = ""
+    prompt: str = ""
+    boundaries: tuple[Boundary, ...] = ()
+    portal_state: dict[str, Any] = field(default_factory=dict)
+    inbox_state: Any = field(default_factory=list)
+    card: str = ""
+    thread: tuple[dict[str, Any], ...] = ()
+
+
+@dataclass(frozen=True)
+class ConsoleSnapshot:
+    repo_root: Path
+    brr_dir: Path
+    daemon_pid: int | None
+    runs: tuple[RunView, ...]
+    selected_run_id: str | None
+    selected: RunView | None
+    console_key: str
+    console_thread: tuple[dict[str, Any], ...]
+
+
+def _read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _read_json(path: Path, default: Any) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return default
+
+
+def _read_boundaries(path: Path) -> tuple[Boundary, ...]:
+    if not path.is_file():
+        return ()
+    out: list[Boundary] = []
+    for raw in _read_text(path).splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            record = json.loads(raw)
+        except json.JSONDecodeError:
+            record = {"phase": "?", "inject": raw, "malformed": True}
+        if not isinstance(record, dict):
+            record = {"phase": "?", "inject": str(record), "malformed": True}
+        out.append(
+            Boundary(
+                seq=len(out) + 1,
+                phase=str(record.get("phase") or "?"),
+                at=str(record.get("at") or record.get("ts") or "?"),
+                act=str(record.get("act") or ""),
+                inject=str(record.get("inject") or ""),
+                block=bool(record.get("block")),
+                block_reason=str(record.get("block_reason") or ""),
+                raw=dict(record),
+            )
+        )
+    return tuple(out)
+
+
+def _dialogue(records: list[dict[str, Any]], *, limit: int = 40) -> tuple[dict[str, Any], ...]:
+    """Project conversation records the same way the prompt-facing tail does.
+
+    We intentionally do not call the private ``_is_dialogue_record`` helper.
+    The public record grammar is small: user events plus response/interim/
+    outbound artifacts are dialogue; run/update rows are lifecycle.
+    """
+    rows: list[dict[str, Any]] = []
+    for record in records:
+        kind = record.get("kind")
+        if kind == "event":
+            rows.append(record)
+            continue
+        if kind == "artifact":
+            if (
+                record.get("artifact_kind")
+                in {"response", "interim_response", "outbound_message"}
+                and isinstance(record.get("body"), str)
+                and str(record.get("body")).strip()
+            ):
+                rows.append(record)
+            continue
+        if kind not in {"run", "update"}:
+            rows.append(record)
+    if limit > 0:
+        rows = rows[-limit:]
+    return tuple(rows)
+
+
+def _manifest(path: Path) -> dict[str, Any]:
+    text = _read_text(path)
+    return protocol.parse_frontmatter(text) if text else {}
+
+
+def _event_id_for_run(run_dir: Path) -> str:
+    manifest = _manifest(run_dir / "run.md")
+    return str(manifest.get("event_id") or "").strip()
+
+
+def console_conversation_key(repo_root: Path, repo_label: str = "") -> str:
+    """Stable local-only conversation key for this checkout.
+
+    Conversation keys route context; they do not imply a delivery gate. The
+    repo label is preferred because it remains meaningful when the checkout
+    moves, with the directory name as a deterministic fallback.
+    """
+    label = repo_label.strip() or repo_root.name or "repo"
+    safe = _CONSOLE_KEY_SAFE.sub("_", label).strip("_") or "repo"
+    return f"console:{safe}"
+
+
+def _run_from_presence(
+    brr_dir: Path,
+    entry: dict[str, Any],
+    *,
+    thread_limit: int,
+) -> RunView | None:
+    run_id = str(entry.get("run_id") or "").strip()
+    if not run_id:
+        return None
+
+    run_dir = brr_dir / "runs" / run_id
+    event_id = _event_id_for_run(run_dir)
+    outbox_dir = brr_dir / "outbox" / event_id if event_id else Path()
+
+    stream = str(entry.get("stream") or "").strip()
+    thread: tuple[dict[str, Any], ...] = ()
+    if stream:
+        thread = _dialogue(
+            conversations.read_records(brr_dir, stream),
+            limit=thread_limit,
+        )
+
+    return RunView(
+        run_id=run_id,
+        presence_id=str(entry.get("id") or ""),
+        kind=str(entry.get("kind") or "run"),
+        label=str(entry.get("label") or ""),
+        name=str(entry.get("name") or ""),
+        stream=stream,
+        repo_label=str(entry.get("repo_label") or ""),
+        parent_run_id=str(entry.get("parent_run_id") or ""),
+        is_subspawn=bool(entry.get("is_subspawn")),
+        runner_name=str(entry.get("runner_name") or ""),
+        runner_shell=str(entry.get("runner_shell") or ""),
+        runner_core=str(entry.get("runner_core") or ""),
+        runner_class=str(entry.get("runner_class") or ""),
+        started_at=float(entry.get("started_at") or 0),
+        last_seen=float(entry.get("last_seen") or 0),
+        event_id=event_id,
+        prompt=_read_text(run_dir / "prompt.md"),
+        boundaries=_read_boundaries(run_dir / "boundaries.jsonl"),
+        portal_state=(
+            _read_json(outbox_dir / "portal-state.json", {})
+            if event_id else {}
+        ),
+        inbox_state=(
+            _read_json(outbox_dir / "inbox.json", [])
+            if event_id else []
+        ),
+        card=_read_text(outbox_dir / ".card") if event_id else "",
+        thread=thread,
+    )
+
+
+def _pick_default(runs: list[RunView]) -> str | None:
+    if not runs:
+        return None
+    # Prefer the resident thought over a dispatched child; newest resident
+    # wins when two independent local sessions overlap.
+    residents = [run for run in runs if not run.is_subspawn]
+    pool = residents or runs
+    return max(pool, key=lambda run: run.started_at).run_id
+
+
+def collect_snapshot(
+    repo_root: Path,
+    *,
+    selected_run_id: str | None = None,
+    brr_dir: Path | None = None,
+    thread_limit: int = 40,
+) -> ConsoleSnapshot:
+    repo_root = Path(repo_root).resolve()
+    runtime = Path(brr_dir) if brr_dir is not None else gitops.shared_brr_dir(repo_root)
+
+    active = presence.list_active(runtime)
+    runs = [
+        run
+        for entry in active
+        if (run := _run_from_presence(runtime, entry, thread_limit=thread_limit))
+        is not None
+    ]
+    runs.sort(key=lambda run: run.started_at)
+
+    ids = {run.run_id for run in runs}
+    chosen = selected_run_id if selected_run_id in ids else _pick_default(runs)
+    selected = next((run for run in runs if run.run_id == chosen), None)
+
+    repo_label = selected.repo_label if selected else ""
+    key = console_conversation_key(repo_root, repo_label)
+    console_thread = _dialogue(
+        conversations.read_records(runtime, key),
+        limit=thread_limit,
+    )
+
+    return ConsoleSnapshot(
+        repo_root=repo_root,
+        brr_dir=runtime,
+        daemon_pid=daemon.read_pid(runtime),
+        runs=tuple(runs),
+        selected_run_id=chosen,
+        selected=selected,
+        console_key=key,
+        console_thread=console_thread,
+    )
+
+
+def enqueue_console_message(
+    repo_root: Path,
+    body: str,
+    *,
+    brr_dir: Path | None = None,
+    repo_label: str = "",
+) -> Path:
+    """Queue a local operator turn through the normal daemon inbox.
+
+    ``source=cli`` is already a brnrd-minted owner-trust source. An explicit
+    dedicated conversation key keeps this event local in *context identity*:
+    it never inherits the selected Telegram/Slack/GitHub thread merely because
+    the console happens to be inspecting one.
+    """
+    text = body.strip()
+    if not text:
+        raise ValueError("console message is empty")
+
+    root = Path(repo_root).resolve()
+    runtime = Path(brr_dir) if brr_dir is not None else gitops.shared_brr_dir(root)
+    key = console_conversation_key(root, repo_label)
+    return protocol.create_event(
+        runtime / "inbox",
+        "cli",
+        text,
+        conversation_key=key,
+        console=True,
+    )
+
+
+def resolve_repo_root(path: str | os.PathLike[str] | None = None) -> Path:
+    if path is None:
+        return gitops.ensure_git_repo()
+    candidate = Path(path).expanduser().resolve()
+    # ``ensure_git_repo`` is cwd-based; for the operator console a path flag
+    # is useful enough to resolve directly with git while staying dependency
+    # free and without changing the caller's cwd.
+    import subprocess
+
+    result = subprocess.run(
+        ["git", "-C", str(candidate), "rev-parse", "--show-toplevel"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"not a git repository: {candidate}")
+    return Path(result.stdout.strip()).resolve()
