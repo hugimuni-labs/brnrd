@@ -4,10 +4,11 @@ The console deliberately owns no runtime state. It reads the same files and
 library projections the daemon, gates, and dashboard already use, then renders
 them for a human sitting beside the daemon.
 
-The one write path is :func:`enqueue_console_message`: it creates an ordinary
-``source=cli`` pending event on an isolated console conversation. That keeps
-local operator speech inside the normal daemon/event machinery without
-accidentally routing a debugging turn back through Telegram/Slack.
+Resident speech is deliberately absent from this first slice. A ``source=cli``
+event is not a local terminal route: because no gate owns that source, the
+daemon may resolve ``notify.gate`` from recent activity and deliver the reply
+to a real chat gate. Input belongs here only after brnrd has an explicit local
+operator delivery contract.
 """
 
 from __future__ import annotations
@@ -118,7 +119,9 @@ def _read_boundaries(path: Path) -> tuple[Boundary, ...]:
     return tuple(out)
 
 
-def _dialogue(records: list[dict[str, Any]], *, limit: int = 40) -> tuple[dict[str, Any], ...]:
+def _dialogue(
+    records: list[dict[str, Any]], *, limit: int = 40,
+) -> tuple[dict[str, Any], ...]:
     """Project conversation records the same way the prompt-facing tail does.
 
     We intentionally do not call the private ``_is_dialogue_record`` helper.
@@ -158,11 +161,11 @@ def _event_id_for_run(run_dir: Path) -> str:
 
 
 def console_conversation_key(repo_root: Path, repo_label: str = "") -> str:
-    """Stable local-only conversation key for this checkout.
+    """Stable future local-console conversation key for this checkout.
 
-    Conversation keys route context; they do not imply a delivery gate. The
-    repo label is preferred because it remains meaningful when the checkout
-    moves, with the directory name as a deterministic fallback.
+    Conversation keys route context; they do not imply a delivery gate. This
+    helper reserves the identity the local route can use later without making
+    the unsafe claim that the key itself prevents fallback delivery.
     """
     label = repo_label.strip() or repo_root.name or "repo"
     safe = _CONSOLE_KEY_SAFE.sub("_", label).strip("_") or "repo"
@@ -272,36 +275,6 @@ def collect_snapshot(
         selected=selected,
         console_key=key,
         console_thread=console_thread,
-    )
-
-
-def enqueue_console_message(
-    repo_root: Path,
-    body: str,
-    *,
-    brr_dir: Path | None = None,
-    repo_label: str = "",
-) -> Path:
-    """Queue a local operator turn through the normal daemon inbox.
-
-    ``source=cli`` is already a brnrd-minted owner-trust source. An explicit
-    dedicated conversation key keeps this event local in *context identity*:
-    it never inherits the selected Telegram/Slack/GitHub thread merely because
-    the console happens to be inspecting one.
-    """
-    text = body.strip()
-    if not text:
-        raise ValueError("console message is empty")
-
-    root = Path(repo_root).resolve()
-    runtime = Path(brr_dir) if brr_dir is not None else gitops.shared_brr_dir(root)
-    key = console_conversation_key(root, repo_label)
-    return protocol.create_event(
-        runtime / "inbox",
-        "cli",
-        text,
-        conversation_key=key,
-        console=True,
     )
 
 
