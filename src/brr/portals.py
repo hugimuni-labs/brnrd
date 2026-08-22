@@ -33,6 +33,9 @@ LIVE_MENU_NAME = "menu.json"
 #: The agent-written liveness extension. A dotfile, so the drain never sees
 #: it as a message and it needs no entry in :data:`CONTROL_NAMES`.
 KEEPALIVE_NAME = ".keepalive"
+#: A conscious close of a live conversation without the default linger.
+#: First non-empty line is the reason; an empty marker is not an opt-out.
+LINGER_OPT_OUT_NAME = ".linger-opt-out"
 
 #: Control files a drain loop must never mistake for a chat message.
 CONTROL_NAMES = frozenset(
