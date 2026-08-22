@@ -100,6 +100,27 @@ export function quotaWindowCountLabel(shells: QuotaShell[]): string {
 	return `${count} quota window${count === 1 ? '' : 's'}`;
 }
 
+/**
+ * Quota is historical evidence; the runner catalog is current capability.
+ * Keep a shell when capability is unknown, but drop its old fuel once every
+ * current profile for that shell is explicitly unavailable. This prevents a
+ * disconnected subscription from leaving healthy-looking bars behind while
+ * preserving quota for older daemons that did not publish availability yet.
+ */
+export function availableQuotaShells(
+	shells: QuotaShell[],
+	profiles: RunnerProfile[] | null | undefined
+): QuotaShell[] {
+	if (!profiles) return shells;
+	return shells.filter((quota) => {
+		const current = profiles.filter(
+			(profile) => profile.shell === quota.shell && profile.daemon_stale !== true
+		);
+		if (current.length === 0) return true;
+		return !current.every((profile) => profile.available === false);
+	});
+}
+
 function shortDelta(seconds: number): string {
 	const s = Math.max(0, Math.floor(seconds));
 	const d = Math.floor(s / 86400);

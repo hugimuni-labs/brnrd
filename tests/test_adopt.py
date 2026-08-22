@@ -1139,6 +1139,44 @@ class TestChannelMenu:
         out = capsys.readouterr().out
         assert "gates configured: telegram" in out
         assert "`brnrd up` makes them live." in out
+    def test_setup_runner_question_names_shell_and_core_and_persists_override(
+        self, tmp_path, monkeypatch,
+    ):
+        repo = tmp_path / "repo"
+        _init_git(repo)
+        adopt._setup_brr_dir(repo)
+        catalog = [
+            {
+                "name": "codex",
+                "shell": "codex",
+                "core": "gpt-5.6-terra",
+                "class": "balanced",
+            },
+            {
+                "name": "codex-full",
+                "shell": "codex",
+                "core": "gpt-5.6-sol",
+                "class": "strong",
+            },
+        ]
+        monkeypatch.setattr(
+            adopt.runner, "available_runner_catalog", lambda *_a, **_kw: catalog
+        )
+        seen = {}
+
+        def choose(label, options, default):
+            seen.update(label=label, options=options, default=default)
+            return options[1]
+
+        monkeypatch.setattr(adopt, "_pick_option", choose)
+
+        selected = adopt._choose_setup_runner(repo, ["codex", "codex-full"])
+
+        assert selected == "codex-full"
+        assert seen["label"] == "Default model for the resident?"
+        assert seen["default"] == "codex — codex / gpt-5.6-terra (balanced)"
+        assert "codex-full — codex / gpt-5.6-sol (strong)" in seen["options"]
+        assert adopt.conf.load_config(repo)["runner"] == "codex-full"
 
     def test_every_printed_command_is_a_real_cli_verb(self):
         """The #1084 discipline: every command a fresh install reads must

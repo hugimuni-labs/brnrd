@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
 	DIAL_WEDGE_RADIUS,
+	availableQuotaShells,
 	dialDasharray,
 	fuelRows,
 	quotaWindowCountLabel,
@@ -301,6 +302,44 @@ test('quota window count names the rows in the fuel grid, not their shells', () 
 	}));
 
 	assert.equal(quotaWindowCountLabel(shells), '4 quota windows');
+});
+
+test('quota disappears when every current profile for its shell is explicitly unavailable', () => {
+	const shells: QuotaShell[] = [
+		{ shell: 'claude', status: 'known', windows: [] },
+		{ shell: 'codex', status: 'known', windows: [] }
+	];
+	const catalog: RunnerProfile[] = [
+		{ name: 'claude', shell: 'claude', available: false },
+		{ name: 'claude-opus', shell: 'claude', available: false },
+		{ name: 'codex', shell: 'codex', available: true }
+	];
+
+	assert.deepEqual(availableQuotaShells(shells, catalog), [shells[1]]);
+});
+
+test('quota stays visible when availability is unknown, mixed, or only reported by a stale daemon', () => {
+	const claude: QuotaShell = { shell: 'claude', status: 'known', windows: [] };
+
+	assert.deepEqual(availableQuotaShells([claude], undefined), [claude]);
+	assert.deepEqual(availableQuotaShells([claude], [{ name: 'claude', shell: 'claude' }]), [claude]);
+	assert.deepEqual(
+		availableQuotaShells(
+			[claude],
+			[
+				{ name: 'claude', shell: 'claude', available: false },
+				{ name: 'claude-opus', shell: 'claude', available: true }
+			]
+		),
+		[claude]
+	);
+	assert.deepEqual(
+		availableQuotaShells(
+			[claude],
+			[{ name: 'claude', shell: 'claude', available: false, daemon_stale: true }]
+		),
+		[claude]
+	);
 });
 
 test('fuelRows clamps an already-passed reset to zero, empty dial', () => {
