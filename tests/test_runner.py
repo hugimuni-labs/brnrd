@@ -724,6 +724,7 @@ def test_available_runner_catalog_marks_unavailable_auth_env_profiles(
 ):
     """API-key auth variants without their key appear with available=False, not excluded."""
     (tmp_path / ".brr").mkdir()
+    monkeypatch.setattr(runner_mod.Path, "home", lambda: tmp_path / "empty-home")
     monkeypatch.setattr(
         runner_mod,
         "_profiles_cache",
@@ -787,6 +788,54 @@ def test_runner_auth_error_survives_restart_and_clear(tmp_path, monkeypatch):
     runner_auth_health.clear_success(tmp_path, profile)
     assert not runner_auth_health.is_auth_failed(tmp_path, profile)
     assert "codex-local" not in state_path.read_text(encoding="utf-8")
+
+
+def test_fresh_claude_account_cache_marks_ended_subscription_unavailable(tmp_path, monkeypatch):
+    claude_home = tmp_path / "home"
+    claude_home.mkdir()
+    (claude_home / ".claude.json").write_text(
+        json.dumps({
+            "oauthAccount": {
+                "billingType": "none",
+                "profileFetchedAt": 1_800_000_000_000,
+            }
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runner_mod.Path, "home", lambda: claude_home)
+    monkeypatch.setattr(runner_mod.time, "time", lambda: 1_800_000_000)
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {"claude": {"cmd": "claude --print", "shell": "claude"}},
+    )
+    monkeypatch.setattr(runner_mod.shutil, "which", lambda _name: "/usr/bin/claude")
+
+    row = runner_mod.available_runner_catalog(tmp_path)[0]
+    assert row["available"] is False
+    assert row["availability"] == "subscription-unavailable"
+
+
+def test_claude_subscription_cache_fails_open_when_stale_or_api_key(tmp_path, monkeypatch):
+    claude_home = tmp_path / "home"
+    claude_home.mkdir()
+    (claude_home / ".claude.json").write_text(
+        json.dumps({
+            "oauthAccount": {
+                "billingType": "none",
+                "profileFetchedAt": 1_700_000_000_000,
+            }
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runner_mod.Path, "home", lambda: claude_home)
+
+    assert not runner_mod._claude_subscription_unavailable(
+        "claude", "", now_ms=1_800_000_000_000
+    )
+    assert not runner_mod._claude_subscription_unavailable(
+        "claude", "anthropic-api-key", now_ms=1_700_000_000_000
+    )
 
 
 def test_runner_auth_mark_is_scoped_to_failure_domain(tmp_path):
