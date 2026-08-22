@@ -3911,6 +3911,39 @@ def _keepalive_armed(ctx: "HookContext") -> bool:
     return until is not None and until > time.time()
 
 
+def _linger_opted_out(ctx: "HookContext") -> bool:
+    """Whether this run consciously declined the live-chat linger."""
+    if ctx.outbox_dir is None:
+        return False
+    try:
+        text = (ctx.outbox_dir / portals.LINGER_OPT_OUT_NAME).read_text(
+            encoding="utf-8"
+        )
+    except OSError:
+        return False
+    return any(line.strip() for line in text.splitlines())
+
+
+def _linger_closeout_clause(ctx: "HookContext") -> str | None:
+    """Require a completed linger, or an explicit reason for skipping it."""
+    if ctx.outbox_dir is None or _linger_opted_out(ctx):
+        return None
+    until = portals.keepalive_until(ctx.outbox_dir / portals.KEEPALIVE_NAME)
+    if until is not None and until <= time.time():
+        return None
+    state = (
+        "no parseable `.keepalive` was armed"
+        if until is None
+        else "the `.keepalive` horizon is still live — exiting now would not linger"
+    )
+    return (
+        f"{state}. A cloud conversation lingers by default: deliver first, "
+        "run `brnrd await --timeout 30m`, and close only after that horizon "
+        "resolves quiet. If stopping now is deliberate, write the reason as "
+        f"the first line of `{portals.LINGER_OPT_OUT_NAME}`"
+    )
+
+
 def _spawn_child_armed(portal: dict[str, Any], run_id: str | None) -> bool | None:
     """Whether a ``spawn:`` child owned by *run_id* is still running.
 
@@ -4466,6 +4499,11 @@ def _armed_closeout_block(
         vigil_clause = _vigil_closeout_clause(ctx, payload, portal or {})
         if vigil_clause:
             unmet.append(vigil_clause)
+
+    if "linger" in ctx.closeout_obligations:
+        linger_clause = _linger_closeout_clause(ctx)
+        if linger_clause:
+            unmet.append(linger_clause)
 
     for name in _CLOSEOUT_ARTIFACT_ORDER:
         if name in ctx.closeout_obligations:

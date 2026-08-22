@@ -153,6 +153,7 @@ and the reply are yours.
   | --- | --- | --- |
   | `.card` | the run-body write-head | keep `## Now` current — the compact live projection; the run's arc, findings, decisions in sections below it; closeout captures the file as `runs/<repo>/<run>/body.md`. Write it among the run's earliest acts — a body that appears only under duress reads as forgotten. A `## Plan` (or `## Course`) checkbox section is the **course** — the run's own route, read back at every boundary: `course 2/5` chip, current row on the course's own change and on every fresh event (the derailment moment), open rows read back at Stop. Checking a row on the card is the discharge; a steer folds in as a new row at write time. A `## Vector` section is the **steer-log** — each mid-run steer and how it folded (redirected · sharpened · deferred), in order — so a successor recovering this run inherits the *movement* (the correction from X to Y, the fallback taken under a clock), not only the endpoint the `## Now` records: a run steered many times is a vector, and the endpoint alone loses the arc that produced it. (Boundary-maintained by hand today; the hook that re-arms it each wake is the durable form — see the property-graph design's topic node.) |
   | `.keepalive` | outlast the budget | first line ISO-8601 or `+30m` |
+  | `.linger-opt-out` | consciously skip the default final live-chat linger | first non-empty line is the reason; presence without a reason opts out of nothing |
   | `.name` | the run's short name | first line, ≤60 chars, resident-authored |
   | `.mood` | emote chip + private narration | first line an emote handle, lines after narration; rides statusline, run node, dashboard. 113 faces — **`brnrd emotes <feeling>`** is the index; a family word resolves to no face and the chip names near misses. Honest-only: write when the state is real, rewrite when it changes — look the face up rather than reusing one |
   | `.topics` | the topic(s) this run touched | first line (or a `topics:`-prefixed line), whitespace/`·`-separated slugs — a run may mint one. Live-read same heartbeat as `.mood`/`.name` into the live-runs `topics` field; closeout captures `runs/<repo>/<run>/topics.md`. Unclaimed ⇒ part of the boot's claims assignment (`assign k/n` ledger — discharge, adopt into your `## Plan`, or defer); still topicless (and no warp item taken) at the bolt ⇒ one dissent row, same bounce/cap-3 ladder as any other mismatch |
@@ -181,6 +182,10 @@ and the reply are yours.
     single-flight slot, and closing early trades that free hold for a cold
     restart — a whole wake reassembled from files — to buy nothing.
     **Waiting-on-Stop is the cheaper default, not a special case.**
+  - **cloud closeout enforces this default.** A live cloud conversation may
+    close only after its keepalive horizon elapsed. A conscious early stop is
+    legal: write the reason to `.linger-opt-out`. The reason is the opt-out;
+    an empty marker is not.
 - **receipts** — wrote files ⇒ **commit on the current branch; uncommitted
   work disappears.**
   - `worktree` environment ⇒ the daemon publishes the branch you end on ·
