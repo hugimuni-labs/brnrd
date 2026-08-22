@@ -53,13 +53,11 @@ def test_the_connector_set_is_non_empty_and_every_member_answers():
         assert (door.reason is None) == door.deep_link_available
 
 
-def test_slack_and_signal_carry_the_not_built_reason():
-    """No mint lane exists for either, ever — distinct from a connector
-    that's built but unconfigured on this deployment (see the next test)."""
+def test_slack_is_unbuilt_while_signal_is_a_hosted_unconfigured_door():
     identities = messenger_doors.MessengerIdentities()
     doors = {d.platform: d for d in messenger_doors.messenger_doors(identities)}
     assert doors["slack"].reason == "not_built"
-    assert doors["signal"].reason == "not_built"
+    assert doors["signal"].reason == "not_configured"
 
 
 def test_unconfigured_telegram_and_whatsapp_carry_the_not_configured_reason():
@@ -103,17 +101,15 @@ def test_no_identity_no_door():
     assert doors["whatsapp"].deep_link_available is False
 
 
-def test_slack_and_signal_never_have_a_deep_link_regardless_of_identities():
-    """#1465 — declared `deep_link_available: false` unconditionally: no
-    mint lane exists for either, so nothing in `MessengerIdentities` can
-    ever flip them true. The set stays complete rather than the platform
-    silently vanishing."""
+def test_slack_stays_dark_while_a_configured_signal_identity_lights():
     identities = messenger_doors.MessengerIdentities(
-        telegram_bot_username="brnrd_bot", whatsapp_e164="15551234567"
+        telegram_bot_username="brnrd_bot",
+        whatsapp_e164="15551234567",
+        signal_e164="+33999999999",
     )
     doors = {d.platform: d for d in messenger_doors.messenger_doors(identities)}
     assert doors["slack"].deep_link_available is False
-    assert doors["signal"].deep_link_available is False
+    assert doors["signal"].deep_link_available is True
 
 
 # --- env_only_identities (the zero-network fallback) ------------------------
@@ -258,13 +254,22 @@ def test_mint_deep_link_builds_the_whatsapp_url():
     )
 
 
+def test_mint_deep_link_builds_the_signal_conversation_url():
+    identities = messenger_doors.MessengerIdentities(signal_e164="+33999999999")
+    assert (
+        messenger_doors.mint_deep_link("signal", identities, "PK-abc")
+        == "https://signal.me/#p/+33999999999"
+    )
+
+
 def test_mint_deep_link_is_none_without_the_identity():
     identities = messenger_doors.MessengerIdentities()
     assert messenger_doors.mint_deep_link("telegram", identities, "PK-abc") is None
     assert messenger_doors.mint_deep_link("whatsapp", identities, "PK-abc") is None
+    assert messenger_doors.mint_deep_link("signal", identities, "PK-abc") is None
 
 
-@pytest.mark.parametrize("platform", ["slack", "signal", "unknown-platform"])
+@pytest.mark.parametrize("platform", ["slack", "unknown-platform"])
 def test_mint_deep_link_is_none_for_a_platform_with_no_mint_lane(platform):
     identities = messenger_doors.MessengerIdentities(telegram_bot_username="brnrd_bot", whatsapp_e164="15551234567")
     assert messenger_doors.mint_deep_link(platform, identities, "PK-abc") is None
@@ -286,6 +291,14 @@ def test_pair_instructions_telegram_without_deep_link_falls_back_to_manual():
 
 def test_pair_instructions_whatsapp_without_deep_link_names_the_bare_code():
     text = messenger_doors.pair_instructions("whatsapp", "PK-abc", None)
+    assert "PK-abc" in text
+    assert "no other words" in text
+
+
+def test_pair_instructions_signal_names_the_bare_code():
+    text = messenger_doors.pair_instructions(
+        "signal", "PK-abc", "https://signal.me/#p/+33999999999"
+    )
     assert "PK-abc" in text
     assert "no other words" in text
 
