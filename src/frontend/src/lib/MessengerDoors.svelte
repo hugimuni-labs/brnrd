@@ -59,13 +59,15 @@
 		nowOverride?: number | null;
 		excludePlatforms?: string[];
 		heading?: string;
+		embedded?: boolean;
 	}
 
 	let {
 		doors,
 		nowOverride = null,
 		excludePlatforms = [],
-		heading = 'chat connectors'
+		heading = 'chat connectors',
+		embedded = false
 	}: Props = $props();
 
 	const allDoors = $derived(
@@ -163,7 +165,7 @@
 </script>
 
 {#if allDoors.length > 0}
-	<section class="panel mt-6 p-4" aria-labelledby="messenger-doors-heading">
+	<section class={embedded ? 'mt-4' : 'panel mt-6 p-4'} aria-labelledby="messenger-doors-heading">
 		<p class="eyebrow">messenger doors</p>
 		<h2
 			id="messenger-doors-heading"
@@ -198,18 +200,19 @@
 							</p>
 						</div>
 
-						{#if paired}
+						{#if paired || door.paired}
 							<div
-								class="mt-3 border border-emerald-700/60 bg-emerald-950/30 p-4"
+								class="mt-3 border border-amber-700/60 bg-amber-950/30 p-4"
 								data-testid={`paired-${door.platform}`}
 								aria-live="polite"
 							>
 								<div class="flex items-center gap-2">
-									<span class="text-lg text-emerald-300" aria-hidden="true">✓</span>
-									<p class="font-mono text-base font-semibold text-emerald-100">connected</p>
+									<span class="text-lg text-amber-300" aria-hidden="true">✓</span>
+									<p class="font-mono text-base font-semibold text-amber-100">connected</p>
 								</div>
 								<p class="mt-2 text-sm text-stone-300">
-									{paired.display ?? 'Your chat'} is ready. Say hello to your resident.
+									{paired?.display ?? door.paired_display ?? 'Your chat'} is ready. Say hello to your
+									resident.
 								</p>
 								{#if chatLink}
 									<a

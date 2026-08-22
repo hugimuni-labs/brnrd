@@ -154,6 +154,9 @@ export interface MachinesSummary {
 export interface MessengerDoor {
 	platform: string;
 	deep_link_available: boolean;
+	paired?: boolean;
+	paired_count?: number;
+	paired_display?: string | null;
 	// brr/every-door-on-the-page — why a dark door is dark: `"not_built"`
 	// (no connector exists, Slack/Signal today) vs `"not_configured"` (the
 	// connector exists but this deployment lacks its credentials) vs

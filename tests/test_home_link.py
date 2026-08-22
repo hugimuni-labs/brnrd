@@ -505,7 +505,7 @@ def test_push_subprocess_actually_carries_the_noninteractive_env(tmp_path, monke
         assert env.get("GIT_ASKPASS")
 
 
-def test_ssh_project_origin_prefers_ssh_home_remote_and_skips_gh_setup_git(tmp_path, monkeypatch):
+def test_explicit_ssh_override_uses_ssh_home_remote_and_skips_gh_setup_git(tmp_path, monkeypatch):
     """#1241: when the project's own origin is SSH, mint the home remote as
     SSH too — the trace's machine had a working SSH identity while HTTPS
     died. gh is still needed for repo metadata (view/create — that's a
@@ -543,7 +543,7 @@ def test_ssh_project_origin_prefers_ssh_home_remote_and_skips_gh_setup_git(tmp_p
 
     monkeypatch.setattr(home_link, "_run_gh", fake_run_gh)
 
-    results = home_link.link_home(repo_root, _cfg(home), owner="acme")
+    results = home_link.link_home(repo_root, _cfg(home), owner="acme", ssh=True)
 
     assert all(r.pushed for r in results)
     assert all(c[:2] != ["auth", "setup-git"] for c in calls), (

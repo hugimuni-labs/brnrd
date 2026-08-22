@@ -834,7 +834,7 @@ def test_connect_approve_makes_poll_return_token(client, monkeypatch):
     body = approve.json()
     assert body["ok"] is True
     assert "Your daemon is connected" in body["notice"]
-    assert body["telegram"]["pair_code"].startswith("PK-")
+    assert body["telegram"] is None
 
     # The CLI's poll now returns the freshly minted daemon token.
     polled = client.get(
@@ -844,8 +844,7 @@ def test_connect_approve_makes_poll_return_token(client, monkeypatch):
     assert polled["status"] == "paired"
     assert polled["daemon_token"]
     assert polled["repo_id"] == repo_id
-    assert polled["telegram_pair"]["pair_code"].startswith("PK-")
-    assert f"/start {polled['telegram_pair']['pair_code']}" in polled["telegram_pair"]["instructions"]
+    assert polled["telegram_pair"] is None
 
 
 def test_connect_approve_is_single_use_after_poll(client, monkeypatch):
@@ -871,7 +870,7 @@ def test_connect_approve_is_single_use_after_poll(client, monkeypatch):
     assert status["status"] == "consumed"
 
 
-def test_connect_approve_offers_telegram_pair_link(monkeypatch):
+def test_connect_approve_leaves_messenger_pairing_to_the_connector_panel(monkeypatch):
     client = _make_client(telegram_bot_username="@brnrd_bot")
     repo_id = _account_and_repo(client)
     _login_web(client, monkeypatch)
@@ -883,19 +882,16 @@ def test_connect_approve_offers_telegram_pair_link(monkeypatch):
     assert approve.status_code == 200
     body = approve.json()
     assert "Your daemon is connected" in body["notice"]
-    assert body["telegram"]["deep_link"].startswith("https://t.me/brnrd_bot?start=PK-")
-    assert "bind this chat" in body["telegram"]["instructions"]
+    assert body["telegram"] is None
 
     polled = client.get(
         f"/v1/accounts/pair/{pair['pair_code']}",
         params={"poll_secret": pair["poll_secret"]},
     ).json()
 
+    assert polled["telegram_pair"] is None
     with client.app.state.SessionLocal() as db:
-        tg_pair = db.execute(select(TgPairCode)).scalar_one()
-        assert tg_pair.repo_id == repo_id
-        assert polled["telegram_pair"]["pair_code"] == tg_pair.code
-        assert polled["telegram_pair"]["deep_link"] == f"https://t.me/brnrd_bot?start={tg_pair.code}"
+        assert db.execute(select(TgPairCode)).scalar_one_or_none() is None
 
 
 def test_connect_approve_refuses_a_session_that_cannot_prove_it_initiated(client, monkeypatch):

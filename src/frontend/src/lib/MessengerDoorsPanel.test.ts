@@ -81,6 +81,22 @@ test('a lit door offers a connect button, not an off badge', async () => {
 	ok(html.includes('connect telegram'));
 });
 
+test('a paired door renders the existing identity before offering another connection', async () => {
+	const html = await renderDoors([
+		door({
+			platform: 'whatsapp',
+			deep_link_available: true,
+			paired: true,
+			paired_count: 1,
+			paired_display: 'Alexandra'
+		})
+	]);
+	ok(html.includes('connected'));
+	ok(html.includes('Alexandra'));
+	ok(html.includes('connect another chat'));
+	ok(!html.includes('>connect whatsapp<'), 'the stale primary action is gone');
+});
+
 test('a dark door with no lever (not_built) is not presented as a broken control', async () => {
 	const html = await renderDoors(FULL_REGISTRY);
 	ok(!html.includes('data-testid="door-slack"'));

@@ -119,27 +119,10 @@
 			<p class="text-sm text-ink-quiet">Loading…</p>
 		{:else if result?.ok}
 			<p class="text-sm text-amber-200">{result.notice}</p>
-			{#if result.telegram}
-				<div class="subpanel mt-4 p-4">
-					<p class="font-mono text-[10px] tracking-wide text-amber-200/80 uppercase">telegram</p>
-					<p class="mt-1 text-sm text-stone-300">{result.telegram.instructions}</p>
-					{#if result.telegram.deep_link}
-						<a
-							class="mt-3 inline-flex items-center border border-amber-700 bg-amber-950/40 px-3 py-1.5 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:border-amber-500"
-							href={result.telegram.deep_link}
-							rel="external">Open Telegram and press Start</a
-						>
-					{/if}
-				</div>
-			{/if}
-			<MessengerDoors
-				doors={messengerDoors}
-				excludePlatforms={result.telegram ? ['telegram'] : []}
-				heading="continue in another chat"
-			/>
+			<MessengerDoors doors={messengerDoors} heading="continue in another chat" />
 		{:else}
 			<p class="text-sm text-stone-400">
-				Bind pair code <code class="font-mono text-amber-200">{code}</code> to a repository.
+				Pairing code accepted. Choose the repository this daemon should serve.
 			</p>
 
 			{#if notice}
