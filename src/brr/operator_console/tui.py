@@ -1,8 +1,10 @@
 """Textual frontend for :mod:`brr.operator_console.model`.
 
-Kept separate from the snapshot layer on purpose: Textual is an optional
-developer dependency, and the data model should remain reusable by a future
-standalone console, webview, or plain terminal renderer.
+Textual stays optional and is imported only when the console starts. The
+frontend is deliberately read-only in this first slice: a ``source=cli`` event
+can fall through the daemon's ``notify.gate`` resolver to a real chat gate, so
+local resident speech needs an explicit local terminal route before it is safe
+to put behind an input box.
 """
 
 from __future__ import annotations
@@ -13,14 +15,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .model import ConsoleSnapshot, RunView, collect_snapshot, enqueue_console_message
+from .model import ConsoleSnapshot, RunView, collect_snapshot
 
 
 def _clock(value: str) -> str:
-    if not value or value == "?":
-        return "??:??:??"
-    match = re.search(r"T(\d\d:\d\d:\d\d)", value)
-    return match.group(1) if match else value[-8:]
+    match = re.search(r"T(\d\d:\d\d:\d\d)", value or "")
+    return match.group(1) if match else (value[-8:] if value else "??:??:??")
 
 
 def _age(started_at: float) -> str:
@@ -29,223 +29,184 @@ def _age(started_at: float) -> str:
     seconds = max(0, int(time.time() - started_at))
     minutes, seconds = divmod(seconds, 60)
     hours, minutes = divmod(minutes, 60)
-    if hours:
-        return f"{hours:d}h{minutes:02d}m"
-    return f"{minutes:02d}m{seconds:02d}s"
+    return f"{hours:d}h{minutes:02d}m" if hours else f"{minutes:02d}m{seconds:02d}s"
 
 
-def _short(value: str, width: int = 30) -> str:
+def _short(value: object, width: int = 30) -> str:
     text = " ".join(str(value or "").split())
-    if len(text) <= width:
-        return text
-    return text[: max(1, width - 1)].rstrip() + "…"
+    return text if len(text) <= width else text[: width - 1].rstrip() + "…"
 
 
-def _run_title(run: RunView) -> str:
+def _title(run: RunView) -> str:
     return run.name or run.label or run.run_id
 
 
-def _runner(run: RunView) -> str:
-    parts = [run.runner_shell, run.runner_core]
-    text = " · ".join(part for part in parts if part)
+def _runner(run: RunView | None) -> str:
+    if run is None:
+        return "no active resident"
+    text = " · ".join(part for part in (run.runner_shell, run.runner_core) if part)
     return text or run.runner_name or "runner ?"
 
 
-def _pending_rows(run: RunView) -> list[dict[str, Any]]:
+def _pending(run: RunView) -> list[dict[str, Any]]:
     data = run.inbox_state
     if isinstance(data, list):
         return [row for row in data if isinstance(row, dict)]
     if isinstance(data, dict):
         for key in ("pending", "events", "pending_events"):
-            value = data.get(key)
-            if isinstance(value, list):
-                return [row for row in value if isinstance(row, dict)]
-    value = run.portal_state.get("pending_events")
-    if isinstance(value, list):
-        return [row for row in value if isinstance(row, dict)]
-    return []
+            rows = data.get(key)
+            if isinstance(rows, list):
+                return [row for row in rows if isinstance(row, dict)]
+    rows = run.portal_state.get("pending_events")
+    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
 
 
 def _notices(run: RunView) -> list[Any]:
-    value = run.portal_state.get("notices")
-    return value if isinstance(value, list) else []
+    rows = run.portal_state.get("notices")
+    return rows if isinstance(rows, list) else []
 
 
 def _course(card: str) -> tuple[int, int]:
     rows = re.findall(r"(?m)^\s*-\s*\[([ xX])\]\s+", card or "")
-    if not rows:
-        return 0, 0
     return sum(1 for mark in rows if mark.lower() == "x"), len(rows)
 
 
-def _format_edges(run: RunView | None) -> str:
+def _edges(run: RunView | None) -> str:
     if run is None:
-        return "Nothing awake. Send a console message below to create a daemon event."
+        return "Nothing awake."
     if not run.boundaries:
-        return (
-            f"{run.run_id}\n\n"
-            "No boundary transcript yet. This can mean the run has not crossed a "
-            "recorded hook boundary, or predates the transcript path."
-        )
-
-    chunks: list[str] = []
-    for edge in run.boundaries[-80:]:
-        flags: list[str] = []
-        if edge.act:
-            flags.append(edge.act)
-        if edge.block:
-            flags.append("BLOCKED")
-        suffix = f"  [{' · '.join(flags)}]" if flags else ""
-        chunks.append(f"{_clock(edge.at)}  EDGE #{edge.seq:<3}  {edge.phase}{suffix}")
+        return f"{run.run_id}\n\nNo recorded boundary fires yet."
+    lines: list[str] = []
+    for edge in run.boundaries[-100:]:
+        flags = [part for part in (edge.act, "BLOCKED" if edge.block else "") if part]
+        tail = f"  [{' · '.join(flags)}]" if flags else ""
+        lines.append(f"{_clock(edge.at)}  EDGE #{edge.seq:<3}  {edge.phase}{tail}")
         if edge.inject:
-            payload = edge.inject.rstrip()
-            if len(payload) > 1600:
-                payload = payload[:1600].rstrip() + "\n… injection elided in console view"
-            for line in payload.splitlines():
-                chunks.append(f"             + {line}")
+            inject = edge.inject.rstrip()
+            if len(inject) > 1800:
+                inject = inject[:1800].rstrip() + "\n… elided in console projection"
+            lines.extend(f"             + {row}" for row in inject.splitlines())
         else:
-            chunks.append("               · silent — nothing injected")
+            lines.append("               · silent — nothing injected")
         if edge.block_reason:
-            chunks.append(f"               ! {_short(edge.block_reason, 120)}")
-        chunks.append("")
-    return "\n".join(chunks).rstrip()
+            lines.append(f"               ! {_short(edge.block_reason, 120)}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
 
-def _format_wake(run: RunView | None) -> str:
+def _wake(run: RunView | None) -> str:
     if run is None:
         return "No selected run."
     if not run.prompt:
-        return f"{run.run_id}\n\nNo prompt.md captured for this run."
-    size = len(run.prompt.encode("utf-8"))
+        return f"{run.run_id}\n\nNo prompt.md captured."
     return (
-        f"{run.run_id} · brnrd-supplied boot payload · {size:,} B\n"
-        "Provenance: exact prompt.md. Runner/model-owned instructions may exist outside this file.\n"
-        "────────────────────────────────────────────────────────────────────\n\n"
-        + run.prompt
+        f"{run.run_id} · exact brnrd-supplied boot payload · "
+        f"{len(run.prompt.encode('utf-8')):,} B\n"
+        "Runner/model-owned instructions may exist outside prompt.md.\n"
+        "────────────────────────────────────────────────────────────────\n\n"
+        f"{run.prompt}"
     )
 
 
-def _format_portals(run: RunView | None) -> str:
+def _portals(run: RunView | None) -> str:
     if run is None:
         return "No selected run."
-    pending = _pending_rows(run)
+    pending = _pending(run)
     notices = _notices(run)
     state = run.portal_state
-
     lines = [
         f"run        {run.run_id}",
         f"event      {run.event_id or '—'}",
         f"pending    {len(pending)}",
         f"notices    {len(notices)}",
     ]
+
     await_state = state.get("await")
     if isinstance(await_state, dict):
-        armed = await_state.get("armed")
-        resolved = await_state.get("resolved")
-        outcome = await_state.get("outcome") or "—"
-        lines.append(f"await      armed={armed!s:<5} resolved={resolved!s:<5} outcome={outcome}")
+        lines.append(
+            "await      "
+            f"armed={await_state.get('armed')} "
+            f"resolved={await_state.get('resolved')} "
+            f"outcome={await_state.get('outcome') or '—'}"
+        )
+
     resources = state.get("resources")
     if isinstance(resources, dict):
         coexist = resources.get("coexisting_runs")
-        if isinstance(coexist, dict):
-            pool = coexist.get("spawn_pool")
-            if isinstance(pool, dict):
-                lines.append(
-                    "spawn      "
-                    f"{pool.get('active', '?')} active / {pool.get('max_concurrent', '?')} max"
-                    f" · {pool.get('available', '?')} available"
-                )
-    produce = state.get("produce")
-    if produce:
-        lines.append(f"produce    {_short(json.dumps(produce, sort_keys=True), 120)}")
+        pool = coexist.get("spawn_pool") if isinstance(coexist, dict) else None
+        if isinstance(pool, dict):
+            lines.append(
+                f"spawn      {pool.get('active', '?')} active / "
+                f"{pool.get('max_concurrent', '?')} max · "
+                f"{pool.get('available', '?')} available"
+            )
 
     if pending:
         lines.extend(["", "PENDING"])
         for row in pending[-20:]:
-            eid = row.get("id") or row.get("event_id") or "?"
-            source = row.get("source") or "?"
-            body = row.get("body") or row.get("summary") or ""
-            lines.append(f"  {str(eid)[-12:]:>12}  {source:<12}  {_short(str(body), 90)}")
+            eid = str(row.get("id") or row.get("event_id") or "?")
+            lines.append(
+                f"  {eid[-12:]:>12}  {str(row.get('source') or '?'):<12}  "
+                f"{_short(row.get('body') or row.get('summary') or '', 90)}"
+            )
 
     if notices:
         lines.extend(["", "NOTICES"])
         for notice in notices[-20:]:
             if isinstance(notice, dict):
-                text = notice.get("message") or notice.get("text") or json.dumps(notice, sort_keys=True)
-            else:
-                text = str(notice)
-            lines.append(f"  ! {_short(text, 120)}")
+                notice = notice.get("message") or notice.get("text") or notice
+            lines.append(f"  ! {_short(notice, 120)}")
 
-    lines.extend(
-        [
-            "",
-            "RAW PORTAL STATE",
-            json.dumps(state, indent=2, sort_keys=True, default=str) if state else "{}",
-            "",
-            "RAW INBOX",
-            json.dumps(run.inbox_state, indent=2, sort_keys=True, default=str),
-        ]
-    )
+    lines += [
+        "",
+        "RAW PORTAL STATE",
+        json.dumps(state, indent=2, sort_keys=True, default=str) if state else "{}",
+        "",
+        "RAW INBOX",
+        json.dumps(run.inbox_state, indent=2, sort_keys=True, default=str),
+    ]
     return "\n".join(lines)
 
 
-def _format_thread(run: RunView | None, snapshot: ConsoleSnapshot) -> str:
-    if run is None:
-        records = snapshot.console_thread
-        key = snapshot.console_key
-    else:
-        records = run.thread
-        key = run.stream or "(no conversation key)"
+def _thread(run: RunView | None, snapshot: ConsoleSnapshot) -> str:
+    records = run.thread if run else snapshot.console_thread
+    key = (run.stream if run else snapshot.console_key) or "(no conversation key)"
     lines = [f"thread  {key}", ""]
     if not records:
-        lines.append("No dialogue records.")
-        if run is not None and snapshot.console_thread:
-            lines.append(
-                f"\nLocal console thread has {len(snapshot.console_thread)} turn(s); "
-                "select the console-spawned run when it wakes to read them in context."
-            )
-        return "\n".join(lines)
-
+        return "\n".join(lines + ["No dialogue records."])
     for record in records:
         ts = _clock(str(record.get("ts") or ""))
-        kind = record.get("kind")
-        if kind == "event":
-            who = str(record.get("source") or "user")
-            body = str(record.get("body") or record.get("summary") or "")
+        if record.get("kind") == "event":
+            who = record.get("source") or "user"
+            body = record.get("body") or record.get("summary") or ""
         else:
-            who = str(record.get("artifact_kind") or "resident")
-            body = str(record.get("body") or "")
+            who = record.get("artifact_kind") or "resident"
+            body = record.get("body") or ""
         lines.append(f"{ts}  {who}")
-        lines.extend(f"          {line}" for line in body.strip().splitlines() or [""])
+        lines.extend(f"          {row}" for row in str(body).strip().splitlines() or [""])
         lines.append("")
     return "\n".join(lines).rstrip()
 
 
-def _format_body(run: RunView | None) -> str:
+def _body(run: RunView | None) -> str:
     if run is None:
         return "No selected run."
     if not run.card:
-        return (
-            f"{run.run_id}\n\n"
-            "No live .card. The resident may not have authored it yet, or the run "
-            "predates the current body contract."
-        )
+        return f"{run.run_id}\n\nNo live .card."
     done, total = _course(run.card)
-    return f"{run.run_id} · course {done}/{total if total else '—'}\n\n{run.card}"
+    return f"{run.run_id} · course {done}/{total or '—'}\n\n{run.card}"
 
 
-def _format_attention(run: RunView | None) -> str:
+def _attention(run: RunView | None) -> str:
     if run is None:
-        return "ATTENTION\n\nnothing awake"
-    pending = _pending_rows(run)
+        return "nothing awake"
+    pending = _pending(run)
     notices = _notices(run)
     done, total = _course(run.card)
-
     lines = [
-        "ATTENTION",
-        "",
-        _short(_run_title(run), 28),
+        _short(_title(run), 28),
         _runner(run),
+        "",
         f"awake      {_age(run.started_at)}",
         f"event      {run.event_id[-12:] if run.event_id else '—'}",
         f"pending    {len(pending)}",
@@ -255,116 +216,71 @@ def _format_attention(run: RunView | None) -> str:
     ]
     await_state = run.portal_state.get("await")
     if isinstance(await_state, dict):
-        outcome = await_state.get("outcome")
-        if outcome:
-            lines.append(f"await      {outcome}")
+        if await_state.get("outcome"):
+            lines.append(f"await      {await_state['outcome']}")
         elif await_state.get("armed"):
             lines.append("await      armed")
-
     if pending:
         lines.extend(["", "WAITING"])
         for row in pending[-6:]:
             eid = str(row.get("id") or row.get("event_id") or "?")
-            source = str(row.get("source") or "?")
-            body = str(row.get("summary") or row.get("body") or "")
-            lines.append(f"◌ {eid[-8:]} {source}")
-            if body:
-                lines.append(f"  {_short(body, 28)}")
-
+            lines.append(f"◌ {eid[-8:]} {row.get('source') or '?'}")
+            preview = row.get("summary") or row.get("body")
+            if preview:
+                lines.append(f"  {_short(preview, 28)}")
     if notices:
         lines.extend(["", "REFUSED"])
         for notice in notices[-4:]:
-            text = (
-                str(notice.get("message") or notice.get("text") or notice)
-                if isinstance(notice, dict)
-                else str(notice)
-            )
-            lines.append(f"! {_short(text, 28)}")
+            if isinstance(notice, dict):
+                notice = notice.get("message") or notice.get("text") or notice
+            lines.append(f"! {_short(notice, 28)}")
     return "\n".join(lines)
 
 
 def run_tui(repo_root: Path, *, selected_run_id: str | None = None) -> None:
-    """Launch the optional Textual frontend."""
     try:
         from textual.app import App, ComposeResult
         from textual.binding import Binding
         from textual.containers import Horizontal, Vertical
-        from textual.widgets import DataTable, Footer, Input, RichLog, Static, TabbedContent, TabPane
-    except ImportError as exc:  # pragma: no cover - exercised without extra
+        from textual.widgets import DataTable, Footer, RichLog, Static, TabbedContent, TabPane
+    except ImportError as exc:  # pragma: no cover
         raise RuntimeError(
-            "operator console needs the optional TUI dependency; "
-            "install with `pip install 'brnrd[console]'` "
-            "(or `pip install -e '.[console]'` in a checkout)"
+            "operator console needs the optional TUI dependency; install with "
+            "`pip install 'brnrd[console]'` (or `pip install -e '.[console]'`)"
         ) from exc
 
     class OperatorConsole(App):
         TITLE = "brnrd · resident console"
         CSS = """
-        Screen {
-            background: #0d0c0a;
-            color: #d9cfbd;
-        }
+        Screen { background: #0d0c0a; color: #d9cfbd; }
         #top {
-            height: 3;
-            padding: 0 1;
-            background: #15120e;
+            height: 3; padding: 0 1; background: #15120e;
             border-bottom: solid #51422c;
         }
-        #workspace {
-            height: 1fr;
-        }
-        #left {
-            width: 31;
-            min-width: 24;
-            border-right: solid #3a3125;
-        }
+        #workspace { height: 1fr; }
+        #left { width: 31; min-width: 24; border-right: solid #3a3125; }
         #left-title, #right-title {
-            height: 2;
-            padding: 0 1;
-            color: #d3a75e;
-            text-style: bold;
+            height: 2; padding: 0 1; color: #d3a75e; text-style: bold;
         }
-        #runs {
-            height: 1fr;
-        }
-        #center {
-            width: 1fr;
-        }
+        #runs { height: 1fr; }
+        #center { width: 1fr; }
         #right {
-            width: 34;
-            min-width: 26;
-            padding: 0 1;
+            width: 34; min-width: 26; padding: 0 1;
             border-left: solid #3a3125;
         }
-        #attention {
-            height: 1fr;
-        }
-        TabbedContent {
-            height: 1fr;
-        }
-        TabPane {
-            padding: 0;
-        }
-        RichLog {
-            background: #0d0c0a;
-            color: #d9cfbd;
-            border: none;
-            padding: 0 1;
-        }
-        #message {
-            dock: bottom;
-            height: 3;
+        #attention { height: 1fr; }
+        #local-speech {
+            height: 2; padding: 0 1; color: #8e806c; background: #15120e;
             border-top: solid #51422c;
-            background: #15120e;
         }
-        DataTable {
-            background: #0d0c0a;
+        TabbedContent { height: 1fr; }
+        TabPane { padding: 0; }
+        RichLog {
+            background: #0d0c0a; color: #d9cfbd; border: none; padding: 0 1;
         }
-        Footer {
-            background: #15120e;
-        }
+        DataTable { background: #0d0c0a; }
+        Footer { background: #15120e; }
         """
-
         BINDINGS = [
             Binding("q", "quit", "quit"),
             Binding("1", "tab_edge", "edge", show=False),
@@ -372,7 +288,6 @@ def run_tui(repo_root: Path, *, selected_run_id: str | None = None) -> None:
             Binding("3", "tab_portals", "portals", show=False),
             Binding("4", "tab_thread", "thread", show=False),
             Binding("5", "tab_body", "body", show=False),
-            Binding("/", "focus_message", "message"),
             Binding("r", "poll_now", "refresh"),
         ]
 
@@ -381,7 +296,6 @@ def run_tui(repo_root: Path, *, selected_run_id: str | None = None) -> None:
             self.repo_root = repo_root
             self.selected_run_id = selected_run_id
             self.snapshot: ConsoleSnapshot | None = None
-            self._table_ready = False
 
         def compose(self) -> ComposeResult:
             yield Static("", id="top")
@@ -404,80 +318,58 @@ def run_tui(repo_root: Path, *, selected_run_id: str | None = None) -> None:
                 with Vertical(id="right"):
                     yield Static("ATTENTION", id="right-title")
                     yield Static("", id="attention")
-            yield Input(placeholder="message> local daemon event · / focuses here", id="message")
+            yield Static(
+                "resident input withheld in this slice · source=cli may fall through notify.gate",
+                id="local-speech",
+            )
             yield Footer()
 
         def on_mount(self) -> None:
-            table = self.query_one("#runs", DataTable)
-            table.add_columns("run", "runner", "age")
-            self._table_ready = True
+            self.query_one("#runs", DataTable).add_columns("run", "runner", "age")
             self._poll()
             self.set_interval(1.0, self._poll)
 
-        def _replace_log(self, selector: str, content: str) -> None:
+        def _set_log(self, selector: str, text: str) -> None:
             log = self.query_one(selector, RichLog)
             log.clear()
-            log.write(content or "—")
+            log.write(text or "—")
 
         def _poll(self) -> None:
             try:
-                snapshot = collect_snapshot(
-                    self.repo_root,
-                    selected_run_id=self.selected_run_id,
-                )
+                snap = collect_snapshot(self.repo_root, selected_run_id=self.selected_run_id)
             except Exception as exc:
                 self.query_one("#top", Static).update(f"brnrd · console read failed: {exc}")
                 return
+            self.snapshot = snap
+            self.selected_run_id = snap.selected_run_id
+            run = snap.selected
 
-            self.snapshot = snapshot
-            self.selected_run_id = snapshot.selected_run_id
-            selected = snapshot.selected
-
-            daemon_label = f"daemon ● pid {snapshot.daemon_pid}" if snapshot.daemon_pid else "daemon ○"
-            runner = _runner(selected) if selected else "no active resident"
+            daemon_label = f"daemon ● pid {snap.daemon_pid}" if snap.daemon_pid else "daemon ○"
             self.query_one("#top", Static).update(
-                f"brnrd  /  RESIDENT CONSOLE    {snapshot.repo_root.name}    "
-                f"{daemon_label}    {runner}"
+                f"brnrd  /  RESIDENT CONSOLE    {snap.repo_root.name}    "
+                f"{daemon_label}    {_runner(run)}"
             )
 
-            if self._table_ready:
-                table = self.query_one("#runs", DataTable)
-                table.clear()
-                for run in snapshot.runs:
-                    marker = "↳" if run.is_subspawn else "◆"
-                    title = f"{marker} {_short(_run_title(run), 18)}"
-                    table.add_row(title, _short(_runner(run), 22), _age(run.started_at), key=run.run_id)
+            table = self.query_one("#runs", DataTable)
+            table.clear()
+            for item in snap.runs:
+                marker = "↳" if item.is_subspawn else "◆"
+                table.add_row(
+                    f"{marker} {_short(_title(item), 18)}",
+                    _short(_runner(item), 22),
+                    _age(item.started_at),
+                    key=item.run_id,
+                )
 
-            self.query_one("#attention", Static).update(_format_attention(selected))
-            self._replace_log("#edge-log", _format_edges(selected))
-            self._replace_log("#wake-log", _format_wake(selected))
-            self._replace_log("#portals-log", _format_portals(selected))
-            self._replace_log("#thread-log", _format_thread(selected, snapshot))
-            self._replace_log("#body-log", _format_body(selected))
+            self.query_one("#attention", Static).update(_attention(run))
+            self._set_log("#edge-log", _edges(run))
+            self._set_log("#wake-log", _wake(run))
+            self._set_log("#portals-log", _portals(run))
+            self._set_log("#thread-log", _thread(run, snap))
+            self._set_log("#body-log", _body(run))
 
         def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-            value = getattr(event.row_key, "value", event.row_key)
-            self.selected_run_id = str(value)
-            self._poll()
-
-        def on_input_submitted(self, event: Input.Submitted) -> None:
-            if event.input.id != "message":
-                return
-            body = event.value.strip()
-            if not body:
-                return
-            try:
-                repo_label = self.snapshot.selected.repo_label if self.snapshot and self.snapshot.selected else ""
-                path = enqueue_console_message(
-                    self.repo_root,
-                    body,
-                    repo_label=repo_label,
-                )
-            except Exception as exc:
-                self.notify(f"message not queued: {exc}", severity="error")
-                return
-            event.input.value = ""
-            self.notify(f"queued {path.stem}", timeout=2)
+            self.selected_run_id = str(getattr(event.row_key, "value", event.row_key))
             self._poll()
 
         def _tabs(self) -> Any:
@@ -497,9 +389,6 @@ def run_tui(repo_root: Path, *, selected_run_id: str | None = None) -> None:
 
         def action_tab_body(self) -> None:
             self._tabs().active = "body"
-
-        def action_focus_message(self) -> None:
-            self.query_one("#message", Input).focus()
 
         def action_poll_now(self) -> None:
             self._poll()
