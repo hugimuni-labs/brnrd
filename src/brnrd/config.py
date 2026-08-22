@@ -165,6 +165,13 @@ class Settings:
     whatsapp_api_base_url: str = os.environ.get("BRNRD_WHATSAPP_API_BASE_URL", "https://graph.facebook.com")
     whatsapp_api_version: str = os.environ.get("BRNRD_WHATSAPP_API_VERSION", "v22.0")
 
+    # Signal — hosted through a persistent bridge because signal-cli's
+    # cryptographic identity cannot live in the stateless web container.
+    signal_api_url: str = os.environ.get("BRNRD_SIGNAL_API_URL", "")
+    signal_api_token: str = os.environ.get("BRNRD_SIGNAL_API_TOKEN", "")
+    signal_number: str = os.environ.get("BRNRD_SIGNAL_NUMBER", "")
+    signal_webhook_secret: str = os.environ.get("BRNRD_SIGNAL_WEBHOOK_SECRET", "")
+
     session_cookie: str = os.environ.get("BRNRD_SESSION_COOKIE", "brnrd_session")
 
     github_oauth_client_id: str = _env_first("BRNRD_GITHUB_OAUTH_CLIENT_ID", "GITHUB_CLIENT_ID")

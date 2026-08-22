@@ -48,6 +48,15 @@ Invalid numeric values use the defaults shown above.
 | `BRNRD_TELEGRAM_AUTHZ_ALLOWLIST` | No | Empty | Comma-separated Telegram user IDs allowed by `routers.webhooks` in addition to the paired principal. |
 | `BRNRD_TELEGRAM_MEDIA_MAX_MB` | No | `10` | `routers.daemons` caps attachment proxy buffering. |
 
+## Signal
+
+| Variable | Secret | Default | Consumer |
+| --- | --- | --- | --- |
+| `BRNRD_SIGNAL_API_URL` | No | Empty | Base URL of the persistent hosted Signal bridge used for replies. |
+| `BRNRD_SIGNAL_API_TOKEN` | **Yes** | Empty | Bearer credential for bridge send and registration calls. |
+| `BRNRD_SIGNAL_NUMBER` | No | Empty | E.164 number shown by the connect surface and used as the sending identity. |
+| `BRNRD_SIGNAL_WEBHOOK_SECRET` | **Yes** | Empty | HMAC secret authenticating bridge ingress at `/v1/webhooks/signal`. |
+
 ## GitHub, web sessions, and OAuth
 
 The unprefixed `GITHUB_*` names below are compatibility aliases. When both are
