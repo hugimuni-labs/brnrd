@@ -15607,7 +15607,10 @@ def start(
             # name brr branches whose producing run has gone away. The helper
             # owns process-lifetime dedup so heartbeat cadence cannot spam.
             from . import parked_branches
-            parked_branches.warn_new(repo_root)
+            try:
+                parked_branches.warn_new(repo_root)
+            except Exception as exc:  # noqa: BLE001 — ergonomic warning never kills the daemon
+                print(f"[brnrd] parked_branches.warn_new failed (ignored): {exc}")
 
             # This is a daily, background observation; a release endpoint can
             # never delay dispatch or make the daemon unhealthy.

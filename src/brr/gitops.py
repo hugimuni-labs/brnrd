@@ -317,7 +317,7 @@ class NotAGitRepository(RuntimeError):
     """
 
 
-def diagnose_unusable_tree(named: Path, *, asked_from: Path) -> str:
+def diagnose_unusable_tree(named: Path, *, asked_from: Path | None) -> str:
     """Explain why git named *named* as a working tree that isn't there.
 
     Classified, never one confident sentence. The repair for a stale
@@ -327,11 +327,31 @@ def diagnose_unusable_tree(named: Path, *, asked_from: Path) -> str:
     cause and once about the fix (#786, #792). Where the evidence does not
     separate the cases, this says so rather than picking the likelier
     branch.
+
+    *asked_from* is ``None`` when the caller's own working directory is
+    gone — ``Path.cwd()`` raised ``OSError``.  That is itself the
+    strongest diagnosis available: the process is standing in a deleted
+    directory, most likely a brnrd run worktree that has since been torn
+    down.  In that case the ``core.worktree`` check is skipped (it would
+    require a usable cwd) and the dead-cwd cause is named directly.
     """
     head = (
         f"git says this repository's working tree is {named}, and that "
         f"directory does not exist."
     )
+    if asked_from is None:
+        return (
+            f"{head}\n"
+            f"  cause: the process's own working directory no longer "
+            f"exists.  The service was most likely started from a brnrd "
+            f"run worktree that has since been torn down, leaving the "
+            f"daemon standing in a deleted directory.  That deleted "
+            f"directory is also what git resolves as the working tree.\n"
+            f"  repair: re-run `brnrd daemon install` from the project "
+            f"checkout to refresh the service's WorkingDirectory, then "
+            f"restart with `brnrd daemon restart` (or re-kick the "
+            f"launchd/systemd unit directly)."
+        )
     pin = _config_value(asked_from, "core.worktree")
     if pin and _same_path(Path(pin), named):
         return (
@@ -438,8 +458,12 @@ def _git(
     config had repointed the checkout. Same failure, diagnosed.
     """
     if not Path(repo_root).is_dir():
+        try:
+            asked_from: Path | None = Path.cwd()
+        except OSError:
+            asked_from = None
         raise RepoTreeUnusable(
-            diagnose_unusable_tree(Path(repo_root), asked_from=Path.cwd())
+            diagnose_unusable_tree(Path(repo_root), asked_from=asked_from)
         )
     return subprocess.run(
         ["git", *args],
@@ -500,8 +524,21 @@ def ensure_git_repo() -> Path:
     returns a deleted directory and *exits 0* (driven, git 2.43). The
     existence check is the only thing between that answer and a
     ``FileNotFoundError`` thrown by whichever call uses it as a cwd next.
+
+    If ``Path.cwd()`` itself raises ``OSError`` (the process's own
+    working directory was deleted), that is also a ``RepoTreeUnusable``:
+    it is not a "not a repository" shrug-and-degrade case, it is a dead
+    environment that needs an explicit repair step.
     """
-    cwd = Path.cwd()
+    try:
+        cwd = Path.cwd()
+    except OSError:
+        raise RepoTreeUnusable(
+            "the process's own working directory no longer exists — "
+            "cd to the project checkout and retry, or re-run "
+            "`brnrd daemon install` from the repo to refresh the "
+            "service's WorkingDirectory."
+        )
     try:
         result = _git(cwd, "rev-parse", "--show-toplevel")
     except subprocess.CalledProcessError as exc:
@@ -835,7 +872,13 @@ def toplevel(repo_root: Path) -> Path | None:
 def is_tracked(path: Path) -> bool:
     """Return True if *path* is tracked by Git."""
     try:
-        _git(Path.cwd(), "ls-files", "--error-unmatch", str(path))
+        cwd = Path.cwd()
+    except OSError:
+        # Dead cwd — cannot resolve the repository; treat as untracked
+        # rather than propagating an OSError from an informational probe.
+        return False
+    try:
+        _git(cwd, "ls-files", "--error-unmatch", str(path))
         return True
     except subprocess.CalledProcessError:
         return False
