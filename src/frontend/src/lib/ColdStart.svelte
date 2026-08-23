@@ -1,9 +1,17 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
 	import MessengerDoors from './MessengerDoors.svelte';
+	import PairingCommand from './PairingCommand.svelte';
 	import { DOCS_URL } from './publicStats';
-	import { splitPairingCommand } from './repos';
-	import type { ConnectedRepo, GitHubInstallation, MachinesSummary, MessengerDoor } from './repos';
+	import { isConnected, loadSharedPairedChats, splitPairingCommand } from './repos';
+	import type {
+		ConnectedRepo,
+		GitHubInstallation,
+		MachinesSummary,
+		MessengerDoor,
+		PairedChat
+	} from './repos';
 	// The cold start (2026-08-03). Reported from a real signup on the
 	// deployed dashboard: "two screens - no clarity on the installation, or
 	// what is missing, the actual repo enablement is the repos screen
@@ -171,7 +179,24 @@
 	// registry (Slack, Signal, an unconfigured Telegram/WhatsApp) reads
 	// through the honest-intermediate fallback instead.
 	let availableDoors = $derived((messengerDoors ?? []).filter((d) => d.deep_link_available));
-	let pairedDoors = $derived((messengerDoors ?? []).filter((d) => d.paired));
+	// The fourth reading of "is this door connected" used to live here, and it
+	// was the weakest: `d.paired` alone, the wire flag, ignoring the paired
+	// chats entirely — so a chat the account had already bound could leave
+	// this screen still saying "nothing is paired yet".
+	//
+	// It now shares `isConnected` with `MessengerDoors`, over the same list,
+	// and the list costs nothing extra: the panel this component renders is
+	// already fetching it, and `loadSharedPairedChats` hands both readers the
+	// same in-flight request. One GET, two readers, one derivation.
+	let pairedChats = $state<PairedChat[]>([]);
+	onMount(() => {
+		loadSharedPairedChats()
+			.then((chats) => (pairedChats = chats))
+			// The wire flag still answers on its own; a failed detail fetch
+			// must never turn a connected door back off.
+			.catch(() => {});
+	});
+	let pairedDoors = $derived((messengerDoors ?? []).filter((d) => isConnected(d, pairedChats)));
 
 	// Coarse pointer / UA-CH, client-side only — no new server state, no
 	// User-Agent sniffing on the backend. `pointer: coarse` is the primary
@@ -295,6 +320,13 @@
 					the messenger door
 				</p>
 				{#if availableDoors.length > 0}
+					<!-- Shared concept once, above the tiles: each door mints a
+					     timed link and opens the app directly. The per-tile copy
+					     inside MessengerDoors names both platforms — proposal in
+					     the report for the maintainer to resolve there. -->
+					<p class="mt-1.5 text-sm text-stone-300">
+						Tap a door — the link opens the app directly and binds this account.
+					</p>
 					<MessengerDoors doors={availableDoors} embedded heading="the messenger door" />
 				{:else}
 					<p class="mt-1.5 text-sm text-stone-300">
@@ -346,31 +378,10 @@
 					<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
 						<span class="text-amber-200/80">02</span> run <code>brnrd</code> — the guided setup
 					</p>
-					{#if pairCommand}
-						{#if pairParts?.setupLine}
-							<!-- #1277a: scene-setting, not copyable — the box below hands
-							     over only the line that is unconditionally runnable. -->
-							<p class="mt-1.5 font-mono text-[11px] text-ink-mute">from your repo checkout:</p>
-						{/if}
-						<!-- Wrapped, not scrolled (driven on a 390px phone, 2026-08-03):
-						     `overflow-x-auto` clipped the middle line to "brnrd account
-						     connect https://brnrd.de" with no visible tell, which is a
-						     plausible-looking wrong domain on the one command that has
-						     to be right. A soft wrap keeps every character on screen and
-						     the copy button hands over the real string regardless. -->
-						<div class="mt-1.5 flex items-start gap-2">
-							<pre
-								class="min-w-0 grow border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] wrap-anywhere whitespace-pre-wrap text-stone-300"><code
-									>{pairParts?.runnable ?? pairCommand}</code
-								></pre>
-							<button
-								type="button"
-								class="shrink-0 cursor-pointer border border-stone-800 px-2 py-2 font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-								onclick={() => copy('pair', pairParts?.runnable ?? pairCommand ?? '')}
-								>{copied === 'pair' ? 'copied' : 'copy'}</button
-							>
-						</div>
-					{/if}
+					<!-- #1277a split handled inside PairingCommand; plain `<pre>`
+						     reference boxes (mobile) remain separate, intentionally
+						     inert — nothing on a phone can run the command. -->
+					<PairingCommand command={pairCommand} />
 					<p class="mt-1.5 text-sm text-stone-400">
 						In the checkout, after 01. One word, narrated: it pairs this machine (printing a link
 						back here to approve), names your doors, and queues the first run — the one that writes
@@ -433,6 +444,10 @@
 					the messenger door
 				</p>
 				{#if availableDoors.length > 0}
+					<!-- Same shared intro as the cold branch above. -->
+					<p class="mt-1.5 text-sm text-stone-300">
+						Tap a door — the link opens the app directly and binds this account.
+					</p>
 					<MessengerDoors doors={availableDoors} embedded heading="the messenger door" />
 				{:else}
 					<p class="mt-1.5 text-sm text-stone-300">
@@ -458,23 +473,7 @@
 		{:else}
 			<div class="mt-4">
 				<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">enable a repo</p>
-				{#if pairCommand}
-					{#if pairParts?.setupLine}
-						<p class="mt-1.5 font-mono text-[11px] text-ink-mute">from the repo checkout:</p>
-					{/if}
-					<div class="mt-1.5 flex items-start gap-2">
-						<pre
-							class="min-w-0 grow border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] wrap-anywhere whitespace-pre-wrap text-stone-300"><code
-								>{pairParts?.runnable ?? pairCommand}</code
-							></pre>
-						<button
-							type="button"
-							class="shrink-0 cursor-pointer border border-stone-800 px-2 py-2 font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-							onclick={() => copy('pair', pairParts?.runnable ?? pairCommand ?? '')}
-							>{copied === 'pair' ? 'copied' : 'copy'}</button
-						>
-					</div>
-				{/if}
+				<PairingCommand command={pairCommand} />
 				<p class="mt-1.5 text-sm text-stone-400">
 					Same command as pairing — running it in a checkout also enables that repo.
 				</p>

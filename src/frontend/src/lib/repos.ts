@@ -189,8 +189,10 @@ export interface ReposResponse {
 	// is empty. One source, backend-owned: see `_session.pairing_command`.
 	pairing_command: string;
 	// Additive, optional: present once the backend ships it, absent on any
-	// client/response that predates it. No component reads this yet — see
-	// the `Capability` doc comment above.
+	// client/response that predates it. Read by `/repos` for the one row that
+	// has no other representation on the page (`repo-initialised`); the board
+	// that used to render all fifteen of them is gone, because every other row
+	// restated something the same page already said.
 	capabilities?: Capability[];
 	// Additive, optional, same "absent on an older backend" contract as
 	// `capabilities` above — `ColdStart.svelte` falls back to its pre-#1365
