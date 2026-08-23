@@ -344,13 +344,47 @@ def test_portals_default_shows_interpreted_not_raw_json(tmp_path):
     text = _portals(run)
     # Interpreted fields present
     assert "run-test-1234" in text
-    assert "pending" in text
+    assert "attention  1 message · 0 strands finished" in text
     assert "await" in text
     # Raw JSON NOT present — no big dump
     assert "RAW PORTAL STATE" not in text
     assert "RAW INBOX" not in text
     # Hint that the toggle exists
     assert "[j]" in text
+
+
+def test_portals_separates_correspondence_from_finished_strands_and_folds_notices(tmp_path):
+    run = _make_run_view(
+        tmp_path,
+        portal_state={
+            "notices": [
+                {"text": "note: body text ignored — a note closes event evt-a without speaking; use event: to reply"},
+                {"text": "note: body text ignored — a note closes event evt-b without speaking; use event: to reply"},
+            ],
+            "await": {"armed": True, "resolved": True, "outcome": "event"},
+        },
+        inbox=[
+            {"id": "evt-person", "source": "cloud", "body": "does it read well?"},
+            {
+                "id": "evt-child",
+                "source": "spawn_completed",
+                "spawn_status": "done",
+                "spawn_published_branch": "brr/the-finished-limb",
+                "body": "concurrent spawn finished --- message_path: /private/path",
+            },
+        ],
+    )
+
+    text = _portals(run)
+    assert "attention  1 message · 1 strand finished" in text
+    assert "ATTENTION" in text and "does it read well?" in text
+    assert "FINISHED STRANDS  (1)" in text
+    assert "brr/the-finished-limb" in text
+    assert "message_path" not in text
+    assert "NOTICES  (2 advisories)" in text
+    assert "note body ignored; use event: to reply ×2" in text
+    assert "await      resolved by event" in text
+    assert "armed=True" not in text
 
 
 def test_portals_show_raw_includes_json_dumps(tmp_path):
