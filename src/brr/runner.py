@@ -1561,10 +1561,13 @@ def _catalog_record(
         availability = "available"
     is_available = availability == "available"
 
-    # Staleness: freshness_date older than 30 days.
+    # Staleness: alias-tracked entries are never stale (the Shell resolves the
+    # alias to the latest model at dispatch time; the registry date has no
+    # staleness meaning).  Only pinned entries age by their freshness_date.
+    alias_tracked = _rc.is_alias_tracked(profile)
     stale = False
     freshness_date = str(profile.get("freshness_date") or "").strip() or None
-    if freshness_date:
+    if freshness_date and not alias_tracked:
         try:
             fd = datetime.date.fromisoformat(freshness_date)
             stale = (datetime.date.today() - fd).days > 30
@@ -1593,6 +1596,7 @@ def _catalog_record(
         "available": is_available,
         "availability": availability,
         "stale": stale,
+        "alias_tracked": alias_tracked,
         "freshness_date": freshness_date,
         "selected": name == selected or runner_profile.profile == selected,
     }

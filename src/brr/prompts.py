@@ -4687,6 +4687,8 @@ def _render_runner_catalog(
             bits.append(f"auth={item['auth_variant']}")
         if availability != "available":
             bits.append(f"availability={availability}")
+        if item.get("alias_tracked"):
+            bits.append("alias-tracked")
         if item.get("stale"):
             bits.append("stale")
         lines.append(
