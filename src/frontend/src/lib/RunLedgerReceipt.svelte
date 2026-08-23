@@ -86,8 +86,12 @@
 							<p class="truncate font-mono text-ink-quiet">
 								{runner}
 								{#if row.core_mismatch === false}
+									<!-- Amber, not green: `statusPalette.ts` excludes the
+									     hue outright, and the meaning here is carried by the
+									     contrast with the red badge in the sibling branch, not
+									     by traffic-light convention. -->
 									<span
-										class="text-emerald-400"
+										class="text-amber-300"
 										title="observed model matches the configured core pin">✓</span
 									>
 								{:else if row.core_mismatch}
