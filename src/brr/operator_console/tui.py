@@ -75,6 +75,19 @@ def _notices(run: RunView) -> list[Any]:
     return rows if isinstance(rows, list) else []
 
 
+def _notice_text(notice: Any) -> str:
+    if isinstance(notice, dict):
+        notice = notice.get("message") or notice.get("text") or notice
+    return str(notice)
+
+
+def _notice_class(notice: Any) -> str:
+    text = _notice_text(notice)
+    if "note: body text ignored" in text:
+        return "note body ignored; use event: to reply"
+    return _short(text, 120)
+
+
 def _course(card: str) -> tuple[int, int]:
     rows = re.findall(r"(?m)^\s*-\s*\[([ xX])\]\s+", card or "")
     return sum(1 for mark in rows if mark.lower() == "x"), len(rows)
@@ -272,23 +285,23 @@ def _portals(run: RunView | None, *, show_raw: bool = False) -> str:
     if run is None:
         return "No selected run."
     pending = _pending(run)
+    finished = [row for row in pending if row.get("source") == "spawn_completed"]
+    attention = [row for row in pending if row.get("source") != "spawn_completed"]
     notices = _notices(run)
     state = run.portal_state
     lines = [
         f"run        {run.run_id}",
         f"event      {run.event_id or '—'}",
-        f"pending    {len(pending)}",
-        f"notices    {len(notices)}",
+        f"attention  {len(attention)} message{'s' if len(attention) != 1 else ''}"
+        f" · {len(finished)} strand{'s' if len(finished) != 1 else ''} finished",
     ]
 
     await_state = state.get("await")
     if isinstance(await_state, dict):
-        lines.append(
-            "await      "
-            f"armed={await_state.get('armed')} "
-            f"resolved={await_state.get('resolved')} "
-            f"outcome={await_state.get('outcome') or '—'}"
-        )
+        if await_state.get("resolved"):
+            lines.append(f"await      resolved by {await_state.get('outcome') or 'event'}")
+        elif await_state.get("armed"):
+            lines.append("await      holding")
 
     resources = state.get("resources")
     if isinstance(resources, dict):
@@ -301,21 +314,31 @@ def _portals(run: RunView | None, *, show_raw: bool = False) -> str:
                 f"{pool.get('available', '?')} available"
             )
 
-    if pending:
-        lines.extend(["", "PENDING"])
-        for row in pending[-20:]:
+    if attention:
+        lines.extend(["", "ATTENTION"])
+        for row in attention[-20:]:
             eid = str(row.get("id") or row.get("event_id") or "?")
             lines.append(
                 f"  {eid[-12:]:>12}  {str(row.get('source') or '?'):<12}  "
                 f"{_short(row.get('body') or row.get('summary') or '', 90)}"
             )
 
+    if finished:
+        lines.extend(["", f"FINISHED STRANDS  ({len(finished)})"])
+        for row in finished[-20:]:
+            status = str(row.get("spawn_status") or "done")
+            branch = str(row.get("spawn_published_branch") or "—")
+            lines.append(f"  {_short(branch, 54):<54}  {status}")
+
     if notices:
-        lines.extend(["", "NOTICES"])
-        for notice in notices[-20:]:
-            if isinstance(notice, dict):
-                notice = notice.get("message") or notice.get("text") or notice
-            lines.append(f"  ! {_short(notice, 120)}")
+        grouped: dict[str, int] = {}
+        for notice in notices:
+            label = _notice_class(notice)
+            grouped[label] = grouped.get(label, 0) + 1
+        lines.extend(["", f"NOTICES  ({len(notices)} advisories)"])
+        for label, count in grouped.items():
+            suffix = f" ×{count}" if count > 1 else ""
+            lines.append(f"  ! {label}{suffix}")
 
     if show_raw:
         lines += [
