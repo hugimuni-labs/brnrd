@@ -201,6 +201,135 @@ def classify_act(tool_name: object, tool_input: object) -> str:
     if any(part in compact_name for part in ("test", "run", "fetch", "search", "request", "query")):
         return "probe"
     return "probe"
+
+
+# ── Tool-detail extraction for boundary records ──────────────────────────
+#
+# Boundaries now carry a ``detail`` field: a short, redacted summary of
+# *what* the tool did (command line for Bash, path for file tools, brief
+# input summary for anything else).  ``out_bytes`` records the byte count of
+# the tool's response without retaining the response text itself.
+#
+# Redaction is the care point: a command line can carry API keys, auth tokens,
+# and env-var assignments.  The patterns below err toward over-masking rather
+# than under-masking, per the design doc's boot-receipt rule (safe exact
+# facts, never credential values).
+
+# Patterns where group 1 is the key/prefix and the value follows (redact
+# value, preserve key for context).
+_SECRET_PATTERNS_KEYED: list[re.Pattern[str]] = [
+    # Authorization: Bearer TOKEN  /  Cookie: session=VALUE
+    # Value runs to the next quote character or end of line (covers multi-word
+    # schemes like "Bearer TOKEN" and "Basic BASE64BLOB").
+    re.compile(r"(?i)((?:Authorization|Cookie)\s*:\s*)[^'\"\n]+"),
+    # token=VALUE  secret=VALUE  password=VALUE  api_key=VALUE  etc.
+    re.compile(
+        r"(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|"
+        r"token|secret|password|passwd|credential|auth)\s*[=:]\s*)\S+"
+    ),
+    # --token VALUE  --key VALUE  --secret VALUE  --password VALUE  etc.
+    re.compile(
+        r"(?i)(--(?:token|key|secret|password|api-key|apikey|auth-token)\s+)\S+"
+    ),
+]
+
+# Patterns where the whole match is the credential (no useful prefix to keep).
+_SECRET_PATTERNS_WHOLE: list[re.Pattern[str]] = [
+    # JWT: three base64url-encoded segments separated by dots.
+    re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"),
+    # Known API-key prefixes (Anthropic, GitHub, GitLab, Slack, AWS).
+    re.compile(
+        r"(?:sk-ant-|sk-[a-zA-Z0-9]{2}-|ghp_|ghs_|gho_|glpat-|"
+        r"xoxb-|xapp-|xoxa-|xoxe-|xoxp-|xoxr-|AKIA)[A-Za-z0-9_\-]{8,}"
+    ),
+]
+
+_REDACT_PLACEHOLDER = "<redacted>"
+
+#: Max bytes retained for the Bash command detail field.
+_DETAIL_BASH_MAX = 500
+#: Max bytes retained for non-Bash tool detail summaries.
+_DETAIL_OTHER_MAX = 200
+
+
+def redact_detail(text: str) -> str:
+    """Mask secret-bearing values in a command-line or summary string.
+
+    Over-masks rather than under-masks — a value that *looks* like a token is
+    masked even if it might not be one.  The ``detail`` field is diagnostic,
+    not operational: losing a few non-secret values is cheaper than leaking
+    one real credential.
+    """
+    for pattern in _SECRET_PATTERNS_KEYED:
+        text = pattern.sub(lambda m: m.group(1) + _REDACT_PLACEHOLDER, text)
+    for pattern in _SECRET_PATTERNS_WHOLE:
+        text = pattern.sub(_REDACT_PLACEHOLDER, text)
+    return text
+
+
+def _tool_detail(tool_name: object, tool_input: object) -> str | None:
+    """Return a short redacted detail string for one tool call, or ``None``.
+
+    Never retains raw ``tool_input`` — only a derived, human-readable summary
+    that has been passed through :func:`redact_detail`.
+    """
+    if not isinstance(tool_name, str) or not tool_name.strip():
+        return None
+    name_lower = tool_name.strip().lower().replace("-", "_").replace(".", "_")
+    if not isinstance(tool_input, dict):
+        return None
+
+    # Bash and shell-equivalent tools: show the command line.
+    if name_lower in ("bash", "shell", "exec", "exec_command", "functions_exec"):
+        cmd = tool_input.get("command") or tool_input.get("cmd")
+        if not isinstance(cmd, str) or not cmd.strip():
+            return None
+        cmd = re.sub(r"\s+", " ", cmd.strip())
+        raw = cmd.encode("utf-8")
+        if len(raw) > _DETAIL_BASH_MAX:
+            cmd = raw[:_DETAIL_BASH_MAX].decode("utf-8", errors="replace") + "…"
+        return redact_detail(cmd)
+
+    # File-oriented tools: show the path/pattern.
+    for key in ("file_path", "path", "pattern", "glob"):
+        val = tool_input.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+
+    # Agent/dispatch tools: show a short task summary.
+    for key in ("task", "prompt", "description", "query"):
+        val = tool_input.get(key)
+        if isinstance(val, str) and val.strip():
+            summary = re.sub(r"\s+", " ", val.strip())
+            if len(summary) > _DETAIL_OTHER_MAX:
+                summary = summary[:_DETAIL_OTHER_MAX] + "…"
+            return redact_detail(summary)
+
+    # Generic fallback: first non-empty string value.
+    for val in tool_input.values():
+        if isinstance(val, str) and val.strip():
+            summary = re.sub(r"\s+", " ", val.strip())
+            if len(summary) > _DETAIL_OTHER_MAX:
+                summary = summary[:_DETAIL_OTHER_MAX] + "…"
+            return redact_detail(summary)
+
+    return None
+
+
+def _response_bytes(response: object) -> int:
+    """Return the byte count of a tool response without retaining its content."""
+    if response is None:
+        return 0
+    if isinstance(response, (bytes, bytearray)):
+        return len(response)
+    if isinstance(response, str):
+        return len(response.encode("utf-8"))
+    try:
+        return len(json.dumps(response).encode("utf-8"))
+    except (TypeError, ValueError):
+        return 0
+
+
 # The gate-less routing fact (#728) is true for the whole life of a gate-less
 # run and can never be cleared, so it is said once and then remembered here —
 # the one line in the closeout briefing that is a constant rather than an
@@ -6008,10 +6137,15 @@ def record_boundary(
         "block_reason": neutral.get("block_reason"),
     }
     # Record only the bounded identity of each act. Claude supplies an ordered
-    # batch while Codex supplies one top-level tool name; inputs, responses,
+    # batch while Codex supplies one top-level tool name; raw inputs, responses,
     # and tool-use ids are deliberately excluded from the transcript.
+    # ``detail`` is a derived, redacted summary of the primary tool's input;
+    # ``out_bytes`` is the total byte count of responses (never the content).
     tool_names: list[str] = []
     first_act: str | None = None
+    first_detail: str | None = None
+    total_out_bytes: int = 0
+    has_out_bytes = False
     if phase == PHASE_POST_TOOL and isinstance(payload, dict):
         calls = payload.get("tool_calls")
         if isinstance(calls, list):
@@ -6023,14 +6157,28 @@ def record_boundary(
                     tool_names.append(name.strip())
                     if first_act is None:
                         first_act = classify_act(name, call.get("tool_input"))
+                        first_detail = _tool_detail(name, call.get("tool_input"))
+                response = call.get("tool_response")
+                if response is not None:
+                    total_out_bytes += _response_bytes(response)
+                    has_out_bytes = True
         else:
             name = payload.get("tool_name")
             if isinstance(name, str) and name.strip():
                 tool_names.append(name.strip())
                 first_act = classify_act(name, payload.get("tool_input"))
+                first_detail = _tool_detail(name, payload.get("tool_input"))
+            response = payload.get("tool_response")
+            if response is not None:
+                total_out_bytes = _response_bytes(response)
+                has_out_bytes = True
     if tool_names:
         record["tools"] = tool_names
         record["act"] = first_act
+    if first_detail is not None:
+        record["detail"] = first_detail
+    if has_out_bytes:
+        record["out_bytes"] = total_out_bytes
     # An in-process subagent's boundary is recorded (it happened, and a reader
     # asking "what did this run's environment say" wants it) but tagged, so
     # `derive_boundaries_summary` can keep the run's own verdict — which is
