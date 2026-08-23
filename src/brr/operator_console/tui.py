@@ -37,6 +37,15 @@ def _short(value: object, width: int = 30) -> str:
     return text if len(text) <= width else text[: width - 1].rstrip() + "…"
 
 
+def _fmt_bytes(n: int) -> str:
+    """Human-readable byte count for EDGE output sizes."""
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n / (1024 * 1024):.1f} MB"
+
+
 def _title(run: RunView) -> str:
     return run.name or run.label or run.run_id
 
@@ -80,7 +89,15 @@ def _edges(run: RunView | None) -> str:
     for edge in run.boundaries[-100:]:
         flags = [part for part in (edge.act, "BLOCKED" if edge.block else "") if part]
         tail = f"  [{' · '.join(flags)}]" if flags else ""
-        lines.append(f"{_clock(edge.at)}  EDGE #{edge.seq:<3}  {edge.phase}{tail}")
+        # Tool-detail suffix: first tool name · command/path/summary · out N KB
+        # Back-compat: detail="" and out_bytes=-1 on old records → suffix is empty.
+        tool_names = edge.raw.get("tools") or []
+        first_tool = str(tool_names[0]) if tool_names else ""
+        detail_parts = [p for p in (first_tool, edge.detail) if p]
+        if edge.out_bytes >= 0:
+            detail_parts.append(f"out {_fmt_bytes(edge.out_bytes)}")
+        detail_suffix = ("  " + " · ".join(detail_parts)) if detail_parts else ""
+        lines.append(f"{_clock(edge.at)}  EDGE #{edge.seq:<3}  {edge.phase}{tail}{detail_suffix}")
         if edge.inject:
             inject = edge.inject.rstrip()
             if len(inject) > 1800:
