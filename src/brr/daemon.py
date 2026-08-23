@@ -15607,6 +15607,15 @@ def start(
             # reason to exist). TTL-guarded: at most one `gh` round-trip every
             # few minutes, and never two at once.
             forge_pr_cache.refresh_if_stale_async(repo_root)
+            # Same contract, one lane over: keep the deploy-run cache warm off
+            # the loop thread so `forge_state.render_prod_line` can say *why*
+            # prod is behind without a network call at prompt-assembly time.
+            # Without this line the cache is never written, `read_state`
+            # answers `absent` forever, and the whole classifier renders
+            # "deploy lane: unknown" for the rest of time — a correct guard
+            # nothing feeds.
+            from . import forge_workflow_cache
+            forge_workflow_cache.refresh_if_stale_async(repo_root)
             # Local-only cross-run sweep: once the shared forge cache is warm,
             # name brr branches whose producing run has gone away. The helper
             # owns process-lifetime dedup so heartbeat cadence cannot spam.
