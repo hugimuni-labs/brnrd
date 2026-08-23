@@ -169,11 +169,151 @@ def _fake_ci(repo: Path, command: str) -> Path:
     return workflow
 
 
+def _fake_ci_jobs(repo: Path, jobs: dict[str, list[str]]) -> Path:
+    """A multi-job workflow in *repo*: job id -> its own ordered `run:` steps.
+
+    `#1603`'s own tests need more than one job with no `needs:` between
+    them (exactly the real `ci.yml` shape: `backend` / `frontend` /
+    `launcher`, independent) — `_fake_ci` above only ever writes one.
+    `yaml.dump` rather than hand-built strings: a command containing a
+    quote or colon must not need escaping-by-hand to land in this fixture.
+    """
+    workflow = repo / ".github" / "workflows" / "ci.yml"
+    workflow.parent.mkdir(parents=True, exist_ok=True)
+    doc = {
+        "jobs": {
+            job_id: {
+                "steps": [
+                    {"name": f"step {i}", "run": command}
+                    for i, command in enumerate(commands)
+                ]
+            }
+            for job_id, commands in jobs.items()
+        }
+    }
+    workflow.write_text(yaml.dump(doc, sort_keys=False), encoding="utf-8")
+    return workflow
+
+
 def _drive(gate, monkeypatch, repo: Path, outbox: Path, argv: list[str]) -> int:
     monkeypatch.setattr(gate, "REPO_ROOT", repo)
     monkeypatch.setattr(gate, "WORKFLOW", repo / ".github" / "workflows" / "ci.yml")
     monkeypatch.setenv("BRR_OUTBOX_DIR", str(outbox))
     return gate.main(argv)
+
+
+# ── #1603: independent jobs run concurrently, legs within a job stay ─────
+# serial, and the receipt keeps its exact one-entry-per-leg shape ────────
+
+
+def test_independent_jobs_run_concurrently_not_serially(tmp_path, monkeypatch):
+    """CI's three jobs carry no `needs:` between them — the local gate must
+    not serialize what CI itself runs in parallel. Three jobs each sleeping
+    ~0.6s: serial would take >=1.8s; concurrent finishes well under that."""
+    gate = _gate()
+    repo = _repo(tmp_path)
+    sleeper = "python3 -c \"import time; time.sleep(0.6)\""
+    _fake_ci_jobs(repo, {"backend": [sleeper], "frontend": [sleeper], "launcher": [sleeper]})
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+
+    started = time.monotonic()
+    assert _drive(gate, monkeypatch, repo, outbox, []) == 0
+    elapsed = time.monotonic() - started
+    assert elapsed < 1.5, f"three 0.6s jobs took {elapsed:.2f}s — not running concurrently"
+
+
+def test_one_failing_job_does_not_affect_siblings_and_receipt_attributes_it_alone(
+    tmp_path, monkeypatch
+):
+    """All three jobs must still run to completion and their receipts must
+    independently show PASS/FAIL exactly as they would serially (#1603
+    acceptance)."""
+    from brr import gate_receipt
+
+    gate = _gate()
+    repo = _repo(tmp_path)
+    _fake_ci_jobs(repo, {"backend": ["exit 0"], "frontend": ["exit 1"], "launcher": ["exit 0"]})
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+
+    assert _drive(gate, monkeypatch, repo, outbox, []) == 1
+
+    payload = json.loads((outbox / gate.RECEIPT_NAME).read_text(encoding="utf-8"))
+    entry = payload[gate_receipt.tree_key(repo)]
+    assert entry["verdict"] == "RED"
+    by_job = {leg["label"].split(":")[0]: leg["verdict"] for leg in entry["legs"]}
+    assert by_job == {"backend": "PASS", "frontend": "FAIL rc=1", "launcher": "PASS"}
+    # Shape unchanged: one entry per leg, same label/verdict/seconds keys —
+    # concurrency changes how the entries are produced, never their shape.
+    for leg in entry["legs"]:
+        assert set(leg) == {"label", "verdict", "seconds"}
+
+
+def test_steps_within_one_job_still_run_in_sequence(tmp_path, monkeypatch):
+    """A job can have a setup step before its test step — concurrency is
+    across jobs only; within one job, step order is still a real dependency,
+    not an artifact of the old single loop."""
+    gate = _gate()
+    repo = _repo(tmp_path)
+    marker = tmp_path / "setup-ran-first.txt"
+    _fake_ci_jobs(
+        repo,
+        {
+            "backend": [
+                f"python3 -c \"open(r'{marker}', 'w').close()\"",
+                f"python3 -c \"import pathlib,sys; "
+                f"sys.exit(0 if pathlib.Path(r'{marker}').exists() else 1)\"",
+            ]
+        },
+    )
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    assert _drive(gate, monkeypatch, repo, outbox, []) == 0
+
+
+def test_concurrent_job_output_is_line_prefixed_and_attributable(tmp_path, monkeypatch, capfd):
+    """Interleaved concurrent output must stay attributable to its job."""
+    gate = _gate()
+    repo = _repo(tmp_path)
+    _fake_ci_jobs(
+        repo,
+        {"backend": ["printf 'backend line\\n'"], "frontend": ["printf 'frontend line\\n'"]},
+    )
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    assert _drive(gate, monkeypatch, repo, outbox, []) == 0
+    out = capfd.readouterr().out
+    assert "[backend] backend line" in out
+    assert "[frontend] frontend line" in out
+
+
+def test_moved_tree_detection_holds_with_concurrent_out_of_order_finishes(
+    tmp_path, monkeypatch
+):
+    """The receipt is about the tree state *after the last leg finishes*,
+    and that must still be true when legs finish out of order under
+    concurrency — here the fast job (backend) writes a file and finishes
+    well before the slow job (frontend)."""
+    from brr import gate_receipt
+
+    gate = _gate()
+    repo = _repo(tmp_path)
+    _fake_ci_jobs(
+        repo,
+        {
+            "backend": ["printf 'x\\n' > written-mid-gate.py"],
+            "frontend": ["python3 -c \"import time; time.sleep(0.3)\""],
+        },
+    )
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+
+    assert _drive(gate, monkeypatch, repo, outbox, []) == 0
+    payload = json.loads((outbox / gate.RECEIPT_NAME).read_text(encoding="utf-8"))
+    payload = payload[gate_receipt.tree_key(repo)]
+    assert payload["tree_moved_during_gate"] is True
+    assert "written-mid-gate.py" in payload["status"]
 
 
 def test_the_referent_rules_are_the_shipped_ones_not_a_second_copy():
