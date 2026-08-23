@@ -87,7 +87,6 @@ def write_wake_manifest(brr_dir: Path, task: Run, score: Any) -> Path | None:
     Non-fatal on error; returns the path written or ``None``.
     """
     import json
-    from dataclasses import asdict
 
     from . import bootscore as bs
 

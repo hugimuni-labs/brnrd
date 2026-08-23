@@ -570,3 +570,34 @@ def test_strand_selection_preserved_across_polls(tmp_path):
     assert snap2.selected_run_id == "run-strand"
     assert snap2.selected is not None
     assert snap2.selected.prompt == "strand wake"
+
+
+def test_wake_topology_table_tokens_and_total():
+    from brr.operator_console.tui import _wake_topology_table
+
+    table = _wake_topology_table(_SAMPLE_WAKE_MANIFEST["blocks"])
+    assert "≈tok" in table
+    assert "2,048" in table  # identity-core: 8192 bytes // 4
+    assert "Σ kept" in table
+    assert "8,704" in table  # 512 + 8192 present bytes
+    assert "heuristic" in table  # the tok column names its own basis
+
+
+def test_attention_is_loud_about_await(tmp_path):
+    from brr.operator_console.tui import _attention
+
+    holding = _make_run_view(
+        tmp_path,
+        portal_state={
+            "await": {"armed": True, "resolved": False, "deadline": "2026-08-23T18:00:00Z"}
+        },
+    )
+    out = _attention(holding)
+    assert out.splitlines()[0].startswith("▓▓ AWAIT"), "await must lead, loudly"
+    assert "18:00:00" in out
+
+    resolved = _make_run_view(
+        tmp_path,
+        portal_state={"await": {"armed": True, "resolved": True, "outcome": "event"}},
+    )
+    assert "▓▓ AWAIT" not in _attention(resolved)
