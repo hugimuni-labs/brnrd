@@ -194,7 +194,7 @@ def _boot(run: RunView | None) -> str:
     return "\n".join(lines)
 
 
-def _portals(run: RunView | None) -> str:
+def _portals(run: RunView | None, *, show_raw: bool = False) -> str:
     if run is None:
         return "No selected run."
     pending = _pending(run)
@@ -243,14 +243,19 @@ def _portals(run: RunView | None) -> str:
                 notice = notice.get("message") or notice.get("text") or notice
             lines.append(f"  ! {_short(notice, 120)}")
 
-    lines += [
-        "",
-        "RAW PORTAL STATE",
-        json.dumps(state, indent=2, sort_keys=True, default=str) if state else "{}",
-        "",
-        "RAW INBOX",
-        json.dumps(run.inbox_state, indent=2, sort_keys=True, default=str),
-    ]
+    if show_raw:
+        lines += [
+            "",
+            "RAW PORTAL STATE",
+            json.dumps(state, indent=2, sort_keys=True, default=str) if state else "{}",
+            "",
+            "RAW INBOX",
+            json.dumps(run.inbox_state, indent=2, sort_keys=True, default=str),
+        ]
+    else:
+        lines.append("")
+        lines.append("  [j] show raw JSON")
+
     return "\n".join(lines)
 
 
@@ -378,6 +383,7 @@ def run_tui(repo_root: Path, *, selected_run_id: str | None = None) -> None:
             Binding("5", "tab_thread", "thread", show=False),
             Binding("6", "tab_body", "body", show=False),
             Binding("r", "poll_now", "refresh"),
+            Binding("j", "toggle_portals_raw", "portals raw JSON", show=False),
         ]
 
         def __init__(self) -> None:
@@ -385,6 +391,11 @@ def run_tui(repo_root: Path, *, selected_run_id: str | None = None) -> None:
             self.repo_root = repo_root
             self.selected_run_id = selected_run_id
             self.snapshot: ConsoleSnapshot | None = None
+            # Tracks the last rendered text per log selector so unchanged ticks
+            # skip the clear/write and leave the scroll position untouched.
+            self._last_content: dict[str, str] = {}
+            # Whether the PORTALS pane shows raw JSON (toggled with `j`).
+            self._portals_show_raw: bool = False
 
         def compose(self) -> ComposeResult:
             yield Static("", id="top")
@@ -395,17 +406,17 @@ def run_tui(repo_root: Path, *, selected_run_id: str | None = None) -> None:
                 with Vertical(id="center"):
                     with TabbedContent(initial="edge"):
                         with TabPane("EDGE", id="edge"):
-                            yield RichLog(id="edge-log", wrap=True, markup=False)
+                            yield RichLog(id="edge-log", wrap=True, markup=False, auto_scroll=False)
                         with TabPane("WAKE", id="wake"):
-                            yield RichLog(id="wake-log", wrap=False, markup=False)
+                            yield RichLog(id="wake-log", wrap=False, markup=False, auto_scroll=False)
                         with TabPane("BOOT", id="boot"):
-                            yield RichLog(id="boot-log", wrap=True, markup=False)
+                            yield RichLog(id="boot-log", wrap=True, markup=False, auto_scroll=False)
                         with TabPane("PORTALS", id="portals"):
-                            yield RichLog(id="portals-log", wrap=True, markup=False)
+                            yield RichLog(id="portals-log", wrap=True, markup=False, auto_scroll=False)
                         with TabPane("THREAD", id="thread"):
-                            yield RichLog(id="thread-log", wrap=True, markup=False)
+                            yield RichLog(id="thread-log", wrap=True, markup=False, auto_scroll=False)
                         with TabPane("BODY", id="body"):
-                            yield RichLog(id="body-log", wrap=True, markup=False)
+                            yield RichLog(id="body-log", wrap=True, markup=False, auto_scroll=False)
                 with Vertical(id="right"):
                     yield Static("ATTENTION", id="right-title")
                     yield Static("", id="attention")
@@ -421,9 +432,20 @@ def run_tui(repo_root: Path, *, selected_run_id: str | None = None) -> None:
             self.set_interval(1.0, self._poll)
 
         def _set_log(self, selector: str, text: str) -> None:
+            # Skip entirely when the content hasn't changed — the widget is
+            # not touched, so scroll position is naturally preserved.
+            if self._last_content.get(selector) == text:
+                return
             log = self.query_one(selector, RichLog)
+            # Remember whether the operator was reading the tail before we
+            # clobber the content.  Terminal convention: stay glued to tail
+            # only if already there; never yank someone who scrolled up.
+            was_at_end = log.is_vertical_scroll_end
             log.clear()
             log.write(text or "—")
+            if was_at_end:
+                log.scroll_end(animate=False)
+            self._last_content[selector] = text
 
         def _poll(self) -> None:
             try:
@@ -443,7 +465,8 @@ def run_tui(repo_root: Path, *, selected_run_id: str | None = None) -> None:
 
             table = self.query_one("#runs", DataTable)
             table.clear()
-            for item in snap.runs:
+            chosen_row = 0
+            for i, item in enumerate(snap.runs):
                 marker = "↳" if item.is_subspawn else "◆"
                 table.add_row(
                     f"{marker} {_short(_title(item), 18)}",
@@ -451,17 +474,30 @@ def run_tui(repo_root: Path, *, selected_run_id: str | None = None) -> None:
                     _age(item.started_at),
                     key=item.run_id,
                 )
+                if item.run_id == snap.selected_run_id:
+                    chosen_row = i
+            # Restore cursor to the selected run so the operator's focus is
+            # not yanked back to row 0 on every tick.  Without this, a strand
+            # selected by the user is immediately deselected by the next poll.
+            if snap.runs:
+                table.move_cursor(row=chosen_row)
 
             self.query_one("#attention", Static).update(_attention(run))
             self._set_log("#edge-log", _edges(run))
             self._set_log("#wake-log", _wake(run))
             self._set_log("#boot-log", _boot(run))
-            self._set_log("#portals-log", _portals(run))
+            self._set_log(
+                "#portals-log",
+                _portals(run, show_raw=self._portals_show_raw),
+            )
             self._set_log("#thread-log", _thread(run, snap))
             self._set_log("#body-log", _body(run))
 
         def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
             self.selected_run_id = str(getattr(event.row_key, "value", event.row_key))
+            # Clear the content cache so every pane refreshes to the new run's
+            # state; the next _set_log call will scroll each pane to its end.
+            self._last_content.clear()
             self._poll()
 
         def _tabs(self) -> Any:
@@ -486,6 +522,14 @@ def run_tui(repo_root: Path, *, selected_run_id: str | None = None) -> None:
             self._tabs().active = "body"
 
         def action_poll_now(self) -> None:
+            self._poll()
+
+        def action_toggle_portals_raw(self) -> None:
+            """Toggle raw JSON visibility on the PORTALS pane (bound to `j`)."""
+            self._portals_show_raw = not self._portals_show_raw
+            # Bust the content cache for the portals pane so the next _set_log
+            # call writes the new render even when portal state hasn't changed.
+            self._last_content.pop("#portals-log", None)
             self._poll()
 
     OperatorConsole().run()
