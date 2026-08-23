@@ -329,28 +329,43 @@ def diagnose_unusable_tree(named: Path, *, asked_from: Path | None) -> str:
     branch.
 
     *asked_from* is ``None`` when the caller's own working directory is
-    gone — ``Path.cwd()`` raised ``OSError``.  That is itself the
-    strongest diagnosis available: the process is standing in a deleted
-    directory, most likely a brnrd run worktree that has since been torn
-    down.  In that case the ``core.worktree`` check is skipped (it would
-    require a usable cwd) and the dead-cwd cause is named directly.
+    gone — ``Path.cwd()`` raised ``OSError``.  Until 2026-08-23 that call
+    was unguarded and sat on this function's own argument list, so the
+    guard written to stop #1108 reaching an operator as a bare
+    ``FileNotFoundError`` reached one as a bare ``FileNotFoundError``.  A
+    dead cwd is not an obstacle to the diagnosis; it is the strongest
+    single fact available and the only case that used to produce no
+    message at all.  The ``core.worktree`` probe is skipped for it (that
+    probe needs a usable cwd), and the branch names the fact without
+    ranking its causes — see the branch itself for why.
     """
     head = (
         f"git says this repository's working tree is {named}, and that "
         f"directory does not exist."
     )
     if asked_from is None:
+        # Deliberately unranked. The obvious story — "it was started from a
+        # run worktree that got torn down" — cannot explain the report that
+        # produced this branch: a first-ever `brnrd account connect` on a
+        # fresh checkout, with no run worktree to have been torn down and no
+        # pin to have gone stale. A diagnostic that names the likelier cause
+        # has lied twice whenever it guesses wrong, once about the cause and
+        # once about the fix, and this function's whole contract is to say so
+        # instead. The fact is certain; the repair below is the one that
+        # works whichever way the cwd died.
         return (
             f"{head}\n"
-            f"  cause: the process's own working directory no longer "
-            f"exists.  The service was most likely started from a brnrd "
-            f"run worktree that has since been torn down, leaving the "
-            f"daemon standing in a deleted directory.  That deleted "
-            f"directory is also what git resolves as the working tree.\n"
-            f"  repair: re-run `brnrd daemon install` from the project "
-            f"checkout to refresh the service's WorkingDirectory, then "
-            f"restart with `brnrd daemon restart` (or re-kick the "
-            f"launchd/systemd unit directly)."
+            f"  cause: certain — the process's own working directory no "
+            f"longer exists, so the same deleted path is both where this "
+            f"process is standing and what git resolves as the working "
+            f"tree. Why it died is not determined here: a torn-down run "
+            f"worktree, a pinned service WorkingDirectory that was "
+            f"removed, and a checkout deleted underneath a long-lived "
+            f"process all present identically at this point.\n"
+            f"  repair: from the project checkout, `brnrd daemon install` "
+            f"to refresh the service's pinned working directory, then "
+            f"restart it. Running the same command from a directory that "
+            f"exists is what all three causes have in common."
         )
     pin = _config_value(asked_from, "core.worktree")
     if pin and _same_path(Path(pin), named):
