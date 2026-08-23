@@ -539,48 +539,51 @@ export async function revokePairedChat(
 // here — it shortens the wait by triggering an invalidate-and-reload, but
 // the wire state (`door.paired` or an entry in `pairedChats`) is the
 // final word.
+// The platform comes off the door, never as a third argument. A signature
+// that lets you pass door A beside platform B is a signature that eventually
+// gets called that way, and the resulting wrong answer looks like a data bug.
 export function isConnected(
-	door: Pick<MessengerDoor, 'paired'>,
-	pairedChats: PairedChat[],
-	platform: string
+	door: Pick<MessengerDoor, 'paired' | 'platform'>,
+	pairedChats: PairedChat[]
 ): boolean {
 	if (door.paired) return true;
-	return pairedChats.some((c) => c.platform === platform && c.paired);
+	return pairedChats.some((c) => c.platform === door.platform && c.paired);
 }
 
 // --- module-level paired-chats store ------------------------------------
 //
-// One in-flight fetch per page, not one per mounted `MessengerDoors`
+// One in-flight fetch at a time, not one per mounted `MessengerDoors`
 // instance. Today every mount fires its own `GET /v1/dashboard/paired-
 // chats`; two panels on the same page means two identical requests racing
 // each other. The singleton below collapses them: the second caller gets
 // the same Promise the first started.
 //
-// Call `invalidatePairedChats()` after a successful pair or revoke so the
-// next `loadSharedPairedChats()` re-reads the wire. The component's own
-// `$state pairedChats` still drives renders — this store is the fetch
-// layer only.
+// Deliberately *not* a result cache. An earlier shape here also memoised
+// the resolved list, which collapsed two requests into one and then served
+// that same list on every later mount — so navigating away and back showed
+// a paired-chats list from minutes ago. Freshness is what this surface is
+// for; the thing worth deduplicating is the concurrent burst, not the
+// answer. Every mount still reads the wire.
+//
+// Call `invalidatePairedChats()` after a successful pair or revoke so a
+// sibling panel does not join a request that predates it. The component's
+// own `$state pairedChats` drives renders — this store is the fetch layer
+// only.
 let _pairedChatsInflight: Promise<PairedChat[]> | null = null;
-let _pairedChatsCache: PairedChat[] | null = null;
 
-/** Drop the cache and any in-flight request so the next
- * `loadSharedPairedChats()` call issues a fresh GET. */
+/** Drop any in-flight request so the next `loadSharedPairedChats()` call
+ * issues a fresh GET rather than joining a request that predates the pair
+ * or revoke that just happened. */
 export function invalidatePairedChats(): void {
 	_pairedChatsInflight = null;
-	_pairedChatsCache = null;
 }
 
-/** Fetch (or return the cached) account-level paired-chats list. Multiple
- * concurrent callers share the same in-flight Promise — only one GET is
- * ever in flight at a time. Pass a custom `fetchImpl` to stub in tests. */
 export async function loadSharedPairedChats(fetchImpl?: typeof fetch): Promise<PairedChat[]> {
-	if (_pairedChatsCache !== null) return _pairedChatsCache;
 	if (_pairedChatsInflight !== null) return _pairedChatsInflight;
 	_pairedChatsInflight = fetchPairedChats(fetchImpl)
 		.then((r) => {
-			_pairedChatsCache = r.paired_chats;
 			_pairedChatsInflight = null;
-			return _pairedChatsCache as PairedChat[];
+			return r.paired_chats;
 		})
 		.catch((err: unknown) => {
 			_pairedChatsInflight = null;

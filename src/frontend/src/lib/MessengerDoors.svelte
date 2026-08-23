@@ -256,7 +256,7 @@
 							</p>
 						</div>
 
-						{#if isConnected(door, pairedChats, door.platform) || !!paired}
+						{#if isConnected(door, pairedChats) || !!paired}
 							<div
 								class="mt-3 border border-amber-700/60 bg-amber-950/30 p-4"
 								data-testid={`paired-${door.platform}`}
