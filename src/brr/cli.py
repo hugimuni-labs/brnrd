@@ -1229,7 +1229,13 @@ def _repo_root_from_arg(raw: str) -> Path:
 
     path = Path(raw).expanduser()
     if not path.is_absolute():
-        path = Path.cwd() / path
+        try:
+            path = Path.cwd() / path
+        except OSError:
+            raise SystemExit(
+                f"[brnrd] cannot resolve relative path {raw!r}: "
+                "the working directory no longer exists"
+            )
     result = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
         cwd=path,
@@ -5537,15 +5543,22 @@ def cmd_up(args):
     # suspicious. A read-only verb like `daemon status` still gets the
     # diagnosis and leaves the operator's config alone; being asked a
     # question is not consent to edit git config.
-    gitops.heal_stale_brnrd_worktree_pin(Path.cwd())
+    try:
+        gitops.heal_stale_brnrd_worktree_pin(Path.cwd())
+    except OSError:
+        pass  # dead cwd — skip the heal; the error below will name it
     try:
         root = _repo_root()
     except RuntimeError:
         # Under an installed service this cwd comes from the unit's
         # WorkingDirectory pin; a raw traceback in the journal helps nobody.
+        try:
+            cwd_str = str(Path.cwd())
+        except OSError:
+            cwd_str = "<working directory deleted>"
         raise SystemExit(
             "[brnrd] `daemon up` must run from inside a project repository "
-            f"(cwd: {Path.cwd()}) — under a service, re-run "
+            f"(cwd: {cwd_str}) — under a service, re-run "
             "`brnrd daemon install` from the repo to refresh the pinned "
             "working directory"
         )
@@ -5704,8 +5717,15 @@ def cmd_brnrd_connect(args):
         print("[brnrd] Connected and listening in the background.")
     else:
         print(
-            "[brnrd] Paired, but the background service did not come up — "
-            "see the diagnosis above."
+            "[brnrd] Paired, but the background service did not come up.\n"
+            "  The error above names the cause.  Common next steps:\n"
+            "    1. If the error mentions a missing or deleted working "
+            "directory, re-run `brnrd daemon install` from your project "
+            "checkout to refresh the service, then restart it.\n"
+            "    2. Run `brnrd daemon status` to see the current service "
+            "state and any recent error output.\n"
+            "  Your account is paired — only the local service needs "
+            "attention."
         )
 
     _connect_finish_setup(repo_root, brr_dir, defaults=bool(args.defaults))
