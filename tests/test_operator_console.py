@@ -7,7 +7,7 @@ import os
 
 from brr import conversations, presence
 from brr.operator_console.model import collect_snapshot, console_conversation_key
-from brr.operator_console.tui import _boot, _portals, _wake
+from brr.operator_console.tui import _boot, _edges, _fmt_bytes, _portals, _wake
 
 
 _SAMPLE_WAKE_MANIFEST = {
@@ -601,3 +601,83 @@ def test_attention_is_loud_about_await(tmp_path):
         portal_state={"await": {"armed": True, "resolved": True, "outcome": "event"}},
     )
     assert "▓▓ AWAIT" not in _attention(resolved)
+
+
+def test_edges_renders_tool_detail_and_out_bytes(tmp_path):
+    """EDGE shows tool name · command/path · out N KB for instrumented records.
+
+    Old records (no ``detail`` / ``out_bytes``) render exactly as before;
+    new records append the detail suffix to the same line.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    brr = repo / ".brr"
+    brr.mkdir()
+    run_dir = brr / "runs" / "run-edge"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.md").write_text(
+        "---\nevent_id: evt-edge\nstatus: running\n---\n", encoding="utf-8"
+    )
+    (run_dir / "prompt.md").write_text("wake", encoding="utf-8")
+    # Mix: one record with detail+out_bytes (new), one without (old back-compat).
+    boundaries = [
+        {
+            "phase": "post-tool",
+            "at": "2026-08-23T10:00:00Z",
+            "act": "mutate",
+            "tools": ["Bash"],
+            "detail": "git status --short",
+            "out_bytes": 1228,
+            "inject": None,
+            "block": False,
+            "block_reason": None,
+        },
+        {
+            "phase": "post-tool",
+            "at": "2026-08-23T10:00:05Z",
+            "act": "orient",
+            "tools": ["Read"],
+            "inject": None,
+            "block": False,
+            "block_reason": None,
+            # no detail, no out_bytes — old record shape
+        },
+    ]
+    (run_dir / "boundaries.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in boundaries), encoding="utf-8"
+    )
+    presence.register(
+        brr,
+        kind="daemon",
+        label="edge test",
+        run_id="run-edge",
+        repo_label="hugimuni-labs/brnrd",
+        stream="cli:edge",
+        pid=os.getpid(),
+        runner_name="claude",
+        runner_shell="claude",
+        runner_core="default",
+    )
+
+    snapshot = collect_snapshot(repo, brr_dir=brr)
+    assert snapshot.selected is not None
+    rendered = _edges(snapshot.selected)
+
+    # New-style record: shows tool · detail · out N KB.
+    assert "Bash" in rendered
+    assert "git status --short" in rendered
+    assert "out 1.2 KB" in rendered
+
+    # Old-style record: renders without crashing, no spurious detail suffix.
+    # Only "Read" appears from the tools list — no out N KB on that line.
+    lines = rendered.splitlines()
+    old_line = next(ln for ln in lines if "Read" in ln)
+    assert "out" not in old_line
+
+
+def test_fmt_bytes_human_readable():
+    assert _fmt_bytes(0) == "0 B"
+    assert _fmt_bytes(512) == "512 B"
+    assert _fmt_bytes(1024) == "1.0 KB"
+    assert _fmt_bytes(1228) == "1.2 KB"
+    assert _fmt_bytes(1024 * 1024) == "1.0 MB"

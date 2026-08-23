@@ -5299,19 +5299,30 @@ def test_boundary_transcript_records_ordered_tool_names_and_first_act(tmp_path):
     assert "tools" not in records[1]
 
 
-def test_boundary_act_classification_drops_the_command_it_reads(tmp_path):
+def test_boundary_act_classification_stores_detail_not_raw_input(tmp_path):
+    """The record carries a derived detail, never the raw tool_input struct.
+
+    ``detail`` is a redacted summary extracted from the command; the raw
+    ``tool_input`` dict, ``tool_use_id``, and ``tool_response`` are still
+    excluded — the transcript is not a replay surface.
+    """
     env, run_dir = _transcript_env(tmp_path)
     _portal(tmp_path, token="t1", pending=0, events=[])
     payload = json.dumps({
         "tool_name": "Bash",
-        "tool_input": {"command": "printf INPUT_CANARY_1560_DO_NOT_PERSIST"},
+        "tool_input": {"command": "printf hello"},
     })
 
     hooks.run_hook(hooks.PHASE_POST_TOOL, payload, env)
 
     record = _transcript(run_dir)[0]
     assert record["act"] == "probe"
-    assert "INPUT_CANARY_1560_DO_NOT_PERSIST" not in json.dumps(record)
+    assert "tool_input" not in record        # raw struct still excluded
+    assert "tool_use_id" not in record
+    assert "tool_response" not in record
+    # Command is present in derived detail (not-secret, so not redacted).
+    assert "detail" in record
+    assert "printf hello" in record["detail"]
 
 
 @pytest.mark.parametrize(
@@ -5462,6 +5473,169 @@ def test_the_transcript_cap_announces_itself(tmp_path, monkeypatch):
     hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
     assert len(_transcript(run_dir)) == before
     assert (run_dir / "boundaries.jsonl").stat().st_size == size
+
+
+# ── Tool detail, redaction, and out_bytes ─────────────────────────────────
+#
+# Tests for the ``detail`` and ``out_bytes`` fields added to boundary records.
+# Driven through the real hook entry point so the full write path is covered.
+
+
+def test_boundary_detail_for_bash_command(tmp_path):
+    """Bash commands are captured in the ``detail`` field, truncated+redacted."""
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=0, events=[])
+    payload = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": "git status --short"},
+    })
+    hooks.run_hook(hooks.PHASE_POST_TOOL, payload, env)
+
+    record = _transcript(run_dir)[0]
+    assert record.get("detail") == "git status --short"
+    # Raw command is in detail (derived), not as a raw struct field.
+    assert "tool_input" not in record
+
+
+def test_boundary_detail_for_file_tool(tmp_path):
+    """Read records the file path in ``detail``."""
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=0, events=[])
+    payload = json.dumps({
+        "tool_name": "Read",
+        "tool_input": {"file_path": "/src/brr/hooks.py"},
+    })
+    hooks.run_hook(hooks.PHASE_POST_TOOL, payload, env)
+
+    record = _transcript(run_dir)[0]
+    assert record.get("detail") == "/src/brr/hooks.py"
+    assert "tool_input" not in record
+
+
+def test_boundary_redactor_masks_secret_never_reaches_disk(tmp_path):
+    """A secret-shaped value in a command line must never land in the record.
+
+    ``detail`` is passed through :func:`hooks.redact_detail`, so known
+    secret-bearing shapes (Authorization header, token= assignment, known API
+    key prefixes) are replaced with ``<redacted>`` before the record is
+    written.  This test proves the guarantee: the secret value does not exist
+    anywhere in the serialised record.
+    """
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=0, events=[])
+
+    secret = "sk-ant-SECRET_MUST_NOT_LEAK_2026"
+    payload = json.dumps({
+        "hook_event_name": "PostToolBatch",
+        "tool_calls": [
+            {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        f"curl -H 'Authorization: Bearer {secret}' "
+                        "https://api.anthropic.com/v1/messages"
+                    )
+                },
+                "tool_use_id": "tu_secret",
+                "tool_response": "200 OK",
+            }
+        ],
+    })
+
+    hooks.run_hook(hooks.PHASE_POST_TOOL, payload, env)
+
+    record_text = (run_dir / "boundaries.jsonl").read_text(encoding="utf-8")
+    assert "SECRET_MUST_NOT_LEAK_2026" not in record_text
+    record = _transcript(run_dir)[0]
+    assert "<redacted>" in record.get("detail", "")
+    assert "tool_response" not in record    # response text still excluded
+    assert "tool_use_id" not in record
+
+
+def test_boundary_out_bytes_counts_response_size(tmp_path):
+    """``out_bytes`` records the total response size without storing content."""
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=0, events=[])
+    response_text = "a" * 1024   # exactly 1 KB
+    payload = json.dumps({
+        "hook_event_name": "PostToolBatch",
+        "tool_calls": [
+            {
+                "tool_name": "Read",
+                "tool_input": {"file_path": "/some/file"},
+                "tool_response": response_text,
+            }
+        ],
+    })
+
+    hooks.run_hook(hooks.PHASE_POST_TOOL, payload, env)
+
+    record = _transcript(run_dir)[0]
+    assert record.get("out_bytes") == 1024
+    # Response content itself must not be in the record.
+    assert response_text not in json.dumps(record)
+
+
+def test_boundary_out_bytes_sums_batch_responses(tmp_path):
+    """A multi-tool batch accumulates out_bytes across all responses."""
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=0, events=[])
+    payload = json.dumps({
+        "hook_event_name": "PostToolBatch",
+        "tool_calls": [
+            {
+                "tool_name": "Read",
+                "tool_input": {"file_path": "/a"},
+                "tool_response": "x" * 500,
+            },
+            {
+                "tool_name": "Read",
+                "tool_input": {"file_path": "/b"},
+                "tool_response": "y" * 300,
+            },
+        ],
+    })
+
+    hooks.run_hook(hooks.PHASE_POST_TOOL, payload, env)
+
+    record = _transcript(run_dir)[0]
+    assert record.get("out_bytes") == 800
+
+
+def test_boundary_detail_absent_for_non_tool_phases(tmp_path):
+    """Stop boundaries (no tool payload) carry no detail or out_bytes."""
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=0, events=[])
+    hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+
+    record = _transcript(run_dir)[-1]
+    assert "detail" not in record
+    assert "out_bytes" not in record
+
+
+def test_redact_detail_masks_authorization_header():
+    """Authorization header values are masked regardless of case."""
+    result = hooks.redact_detail("curl -H 'Authorization: Bearer mytoken123'")
+    assert "mytoken123" not in result
+    assert "<redacted>" in result
+
+
+def test_redact_detail_masks_token_assignment():
+    """``token=VALUE`` and ``secret=VALUE`` assignments are masked."""
+    assert "<redacted>" in hooks.redact_detail("export TOKEN=super_secret_value")
+    assert "<redacted>" in hooks.redact_detail("secret=topsecret cmd")
+
+
+def test_redact_detail_masks_known_api_key_prefix():
+    """Values starting with known API-key prefixes (sk-ant-, ghp_) are masked."""
+    assert "<redacted>" in hooks.redact_detail("--key sk-ant-abc123xyz456")
+    assert "<redacted>" in hooks.redact_detail("echo ghp_PAT1234567890")
+
+
+def test_redact_detail_preserves_innocent_text():
+    """Normal command lines that contain no secrets are returned unchanged."""
+    cmd = "pytest tests/ -q --tb=short"
+    assert hooks.redact_detail(cmd) == cmd
 
 
 # ── Boundary summary (`boundaries.json`) ──────────────────────────────────
@@ -6422,3 +6596,22 @@ def test_course_stall_resets_on_route_edit(tmp_path):
     _portal(tmp_path, token=f"t{2 * threshold + 1}", pending=0)
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
     assert f"stalled ×{threshold} boundaries" in _inject_text(out)
+
+
+def test_boundary_detail_redacts_file_tool_pattern():
+    """The path/pattern branch redacts and caps like every other branch.
+
+    A Grep pattern is arbitrary text — a secret-shaped value in it must not
+    reach disk, and an unbounded pattern must not either.
+    """
+    from brr.hooks import _tool_detail
+
+    detail = _tool_detail("Grep", {"pattern": "Authorization: Bearer sk-ant-abc123def456ghi"})
+    assert detail is not None
+    assert "sk-ant-abc123def456ghi" not in detail
+    assert "<redacted>" in detail
+
+    long_pattern = "x" * 5000
+    capped = _tool_detail("Grep", {"pattern": long_pattern})
+    assert capped is not None
+    assert len(capped) <= 210  # _DETAIL_OTHER_MAX + ellipsis
