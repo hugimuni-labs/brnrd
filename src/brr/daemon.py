@@ -4444,6 +4444,7 @@ def _run_worker(
             # entered, who owns them, which were silent.
             run_context.write_prompt_file(brr_dir, task, prompt)
             run_context.write_boot_score(brr_dir, task, boot_score)
+            run_context.write_wake_manifest(brr_dir, task, boot_score)
         prompt_mode = "normal"
         fallback_notice = None
 

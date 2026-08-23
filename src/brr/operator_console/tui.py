@@ -94,18 +94,75 @@ def _edges(run: RunView | None) -> str:
     return "\n".join(lines).rstrip()
 
 
+#: Rough bytes-per-token heuristic for English/Markdown prose. A heuristic,
+#: not a measurement — the table says so where it uses it.
+_BYTES_PER_TOKEN = 4
+
+
+def _wake_topology_table(blocks: list[dict[str, Any]]) -> str:
+    """Render wake-manifest.json blocks as a compact topology table.
+
+    The ``≈tok`` column is ``bytes // 4`` — a stated heuristic so the
+    operator can price a block (tokens × their core's input rate) without
+    the console inventing a dollar figure it has no rate to back.
+    """
+    header = (
+        "TOPOLOGY  (from wake-manifest.json)\n"
+        "────────────────────────────────────────────────────────────────\n"
+        f"{'store':<18}  {'name':<32}  {'kept':>8}  {'≈tok':>7}  {'cut':>8}  trim\n"
+        f"{'─'*18}  {'─'*32}  {'─'*8}  {'─'*7}  {'─'*8}  {'─'*4}"
+    )
+    rows: list[str] = []
+    total_kept = 0
+    for block in blocks:
+        if not block.get("present"):
+            continue
+        sources = block.get("sources") or []
+        if sources and sources[0].get("synthesized"):
+            store = "synthesized"
+        else:
+            store = (sources[0].get("store") or "?") if sources else "?"
+        name = str(block.get("name") or "?")
+        kept = block.get("bytes_kept")
+        cut = block.get("bytes_cut")
+        trim = str(block.get("trim_kind") or "")
+        kept_str = f"{kept:,}" if isinstance(kept, int) else "—"
+        tok_str = f"{kept // _BYTES_PER_TOKEN:,}" if isinstance(kept, int) else "—"
+        cut_str = f"{cut:,}" if isinstance(cut, int) else "—"
+        if isinstance(kept, int):
+            total_kept += kept
+        rows.append(
+            f"{store[:18]:<18}  {name[:32]:<32}  {kept_str:>8}  {tok_str:>7}  {cut_str:>8}  {trim}"
+        )
+    if not rows:
+        return header + "\n(no present blocks)"
+    footer = (
+        f"{'─'*18}  {'─'*32}  {'─'*8}  {'─'*7}  {'─'*8}  {'─'*4}\n"
+        f"{'Σ kept':<18}  {'':<32}  {total_kept:>8,}  {total_kept // _BYTES_PER_TOKEN:>7,}\n"
+        f"≈tok = bytes/{_BYTES_PER_TOKEN} (heuristic) · price ≈ tok × the core's input rate · "
+        "cached prefixes re-bill far cheaper"
+    )
+    return header + "\n" + "\n".join(rows) + "\n" + footer
+
+
 def _wake(run: RunView | None) -> str:
     if run is None:
         return "No selected run."
+    prompt_bytes = len(run.prompt.encode("utf-8")) if run.prompt else 0
+    header = (
+        f"{run.run_id} · exact daemon → runner payload · "
+        f"{prompt_bytes:,} B\n"
+        "This is what brnrd supplied, not a claim about the Shell's final model context.\n"
+        "────────────────────────────────────────────────────────────────"
+    )
     if not run.prompt:
         return f"{run.run_id}\n\nNo prompt.md captured."
-    return (
-        f"{run.run_id} · exact daemon → runner payload · "
-        f"{len(run.prompt.encode('utf-8')):,} B\n"
-        "This is what brnrd supplied, not a claim about the Shell's final model context.\n"
-        "────────────────────────────────────────────────────────────────\n\n"
-        f"{run.prompt}"
-    )
+    if run.wake_manifest:
+        topology = _wake_topology_table(run.wake_manifest)
+        return f"{header}\n\n{topology}\n\n{run.prompt}"
+    # Pre-manifest run: show bytes+hash header as fallback, then the prompt.
+    no_manifest_note = "no manifest (pre-manifest run)"
+    return f"{header}\n{no_manifest_note}\n\n{run.prompt}"
 
 
 def _boot(run: RunView | None) -> str:
@@ -288,6 +345,21 @@ def _body(run: RunView | None) -> str:
     return f"{run.run_id} · course {done}/{total or '—'}\n\n{run.card}"
 
 
+def _awaiting(run: RunView | None) -> dict[str, Any] | None:
+    """The live await state when the run is holding, else None.
+
+    Loud on purpose: an operator watching a silent console must be able to
+    tell "the resident is deliberately waiting" from "nothing is happening"
+    at a glance — the two are byte-identical otherwise.
+    """
+    if run is None:
+        return None
+    state = run.portal_state.get("await")
+    if isinstance(state, dict) and state.get("armed") and not state.get("resolved"):
+        return state
+    return None
+
+
 def _attention(run: RunView | None) -> str:
     if run is None:
         return "nothing awake"
@@ -295,7 +367,19 @@ def _attention(run: RunView | None) -> str:
     notices = _notices(run)
     done, total = _course(run.card)
     native_boot = isinstance(run.boot.get("session_start"), dict)
-    lines = [
+    lines = []
+    holding = _awaiting(run)
+    if holding is not None:
+        deadline = str(holding.get("deadline") or "")
+        lines.extend(
+            [
+                "▓▓ AWAIT — deliberately holding ▓▓",
+                f"   until {_clock(deadline)}" if deadline else "   no deadline recorded",
+                "   any event resolves it",
+                "",
+            ]
+        )
+    lines += [
         _short(_title(run), 28),
         _runner(run),
         "",
@@ -469,9 +553,10 @@ def build_console_app() -> type:
             run = snap.selected
 
             daemon_label = f"daemon ● pid {snap.daemon_pid}" if snap.daemon_pid else "daemon ○"
+            await_label = "    ▓ AWAIT — holding ▓" if _awaiting(run) else ""
             self.query_one("#top", Static).update(
                 f"brnrd  /  RESIDENT CONSOLE    {snap.repo_root.name}    "
-                f"{daemon_label}    {_runner(run)}"
+                f"{daemon_label}    {_runner(run)}{await_label}"
             )
 
             table = self.query_one("#runs", DataTable)

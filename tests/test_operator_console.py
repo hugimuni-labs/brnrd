@@ -7,7 +7,45 @@ import os
 
 from brr import conversations, presence
 from brr.operator_console.model import collect_snapshot, console_conversation_key
-from brr.operator_console.tui import _boot, _portals
+from brr.operator_console.tui import _boot, _portals, _wake
+
+
+_SAMPLE_WAKE_MANIFEST = {
+    "schema_version": "1",
+    "run_id": "run-parent",
+    "blocks": [
+        {
+            "name": "boot-kernel",
+            "label": "Boot kernel (action-first score)",
+            "present": True,
+            "sources": [{"synthesized": True}],
+            "bytes_kept": 512,
+            "bytes_cut": None,
+            "budget_bytes": None,
+            "trim_kind": None,
+        },
+        {
+            "name": "identity-core",
+            "label": "Resident Identity Core",
+            "present": True,
+            "sources": [{"path": "/repo/src/brr/prompts/identity-core.md", "store": "product-prompt"}],
+            "bytes_kept": 8192,
+            "bytes_cut": 2048,
+            "budget_bytes": None,
+            "trim_kind": None,
+        },
+        {
+            "name": "dominion-digest",
+            "label": "Dominion digest",
+            "present": False,
+            "sources": [{"path": "/home/.brr/dominion/playbook.md", "store": "dominion"}],
+            "bytes_kept": None,
+            "bytes_cut": None,
+            "budget_bytes": None,
+            "trim_kind": None,
+        },
+    ],
+}
 
 
 def _write_run(
@@ -17,6 +55,7 @@ def _write_run(
     *,
     prompt: str = "wake",
     session_start: bool = False,
+    wake_manifest: dict | None = None,
 ) -> None:
     run_dir = brr / "runs" / run_id
     run_dir.mkdir(parents=True)
@@ -50,6 +89,10 @@ def _write_run(
         "".join(json.dumps(row) + "\n" for row in boundaries),
         encoding="utf-8",
     )
+    if wake_manifest is not None:
+        (run_dir / "wake-manifest.json").write_text(
+            json.dumps(wake_manifest), encoding="utf-8"
+        )
 
 
 def test_snapshot_projects_existing_runtime_surfaces(tmp_path):
@@ -64,6 +107,7 @@ def test_snapshot_projects_existing_runtime_surfaces(tmp_path):
         "evt-parent",
         prompt="assembled wake",
         session_start=True,
+        wake_manifest=_SAMPLE_WAKE_MANIFEST,
     )
     outbox = brr / "outbox" / "evt-parent"
     outbox.mkdir(parents=True)
@@ -184,6 +228,47 @@ def test_snapshot_projects_existing_runtime_surfaces(tmp_path):
     assert "[native] session-start boundary #1" in rendered_boot
     assert "native-session-123" in rendered_boot
     assert "[opaque]" in rendered_boot
+
+    # wake_manifest should be populated from wake-manifest.json.
+    assert len(snapshot.selected.wake_manifest) == 3
+    assert snapshot.selected.wake_manifest[0]["name"] == "boot-kernel"
+    assert snapshot.selected.wake_manifest[0]["sources"] == [{"synthesized": True}]
+
+    # _wake shows topology table when manifest is present.
+    rendered_wake = _wake(snapshot.selected)
+    assert "TOPOLOGY" in rendered_wake
+    assert "boot-kernel" in rendered_wake
+    assert "identity-core" in rendered_wake
+    # Absent block (present=False) should not appear in the topology table.
+    assert "dominion-digest" not in rendered_wake
+
+
+def test_wake_falls_back_gracefully_without_manifest(tmp_path):
+    """_wake shows a 'no manifest' note for runs that predate the manifest file."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    brr = repo / ".brr"
+    brr.mkdir()
+    _write_run(brr, "run-old", "evt-old", prompt="old prompt without manifest")
+    presence.register(
+        brr,
+        kind="daemon",
+        label="old run",
+        run_id="run-old",
+        repo_label="hugimuni-labs/brnrd",
+        stream="cli:old",
+        pid=os.getpid(),
+        runner_name="claude",
+        runner_shell="claude",
+    )
+    snapshot = collect_snapshot(repo, brr_dir=brr)
+    assert snapshot.selected is not None
+    assert snapshot.selected.wake_manifest == []
+
+    rendered = _wake(snapshot.selected)
+    assert "no manifest (pre-manifest run)" in rendered
+    # Raw prompt still present as fallback content.
+    assert "old prompt without manifest" in rendered
 
 
 def test_boot_does_not_invent_native_session_when_hook_evidence_is_absent(tmp_path):
@@ -485,3 +570,34 @@ def test_strand_selection_preserved_across_polls(tmp_path):
     assert snap2.selected_run_id == "run-strand"
     assert snap2.selected is not None
     assert snap2.selected.prompt == "strand wake"
+
+
+def test_wake_topology_table_tokens_and_total():
+    from brr.operator_console.tui import _wake_topology_table
+
+    table = _wake_topology_table(_SAMPLE_WAKE_MANIFEST["blocks"])
+    assert "≈tok" in table
+    assert "2,048" in table  # identity-core: 8192 bytes // 4
+    assert "Σ kept" in table
+    assert "8,704" in table  # 512 + 8192 present bytes
+    assert "heuristic" in table  # the tok column names its own basis
+
+
+def test_attention_is_loud_about_await(tmp_path):
+    from brr.operator_console.tui import _attention
+
+    holding = _make_run_view(
+        tmp_path,
+        portal_state={
+            "await": {"armed": True, "resolved": False, "deadline": "2026-08-23T18:00:00Z"}
+        },
+    )
+    out = _attention(holding)
+    assert out.splitlines()[0].startswith("▓▓ AWAIT"), "await must lead, loudly"
+    assert "18:00:00" in out
+
+    resolved = _make_run_view(
+        tmp_path,
+        portal_state={"await": {"armed": True, "resolved": True, "outcome": "event"}},
+    )
+    assert "▓▓ AWAIT" not in _attention(resolved)
