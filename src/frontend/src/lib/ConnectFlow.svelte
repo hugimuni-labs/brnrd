@@ -1,11 +1,12 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
 	import {
 		ConnectAuthError,
 		approvalProofFromHash,
 		approveConnect,
 		canApprove,
+		codeInFlight,
+		connectPhase,
 		connectNextUrl,
 		fetchConnectContext,
 		loginUrlForConnect,
@@ -41,12 +42,27 @@
 
 	type Phase = 'entry' | 'confirm' | 'done';
 
-	let phase = $state<Phase>(initialCode ? 'confirm' : 'entry');
+	// The code in flight has two possible owners and they never overlap: the
+	// URL owns it on `/connect/<code>` (this component never submits a form
+	// there), and the form owns it on `/connect` (where the prop stays `''`
+	// for the component's whole life, because phase 2 arrives by
+	// `replaceState`, not by navigation).
+	//
+	// Derived, not copied, and that is not style. Copying a prop into `$state`
+	// captures its *initial* value — the compiler names it,
+	// `state_referenced_locally` — and SvelteKit keeps this component mounted
+	// across `/connect/A` -> `/connect/B`, so a copied `code` would hold A
+	// while the reader looks at B and the approve would post the wrong one.
+	// The warning went unheard upstream because the authoring worktree had no
+	// `.svelte-kit/`, so `svelte-check` failed on every file at once and its
+	// output read as environment noise.
+	let submitted = $state<{ code: string; hash: string } | null>(null);
+	let approved = $state(false);
 
-	// The pairing code in flight (from form or URL)
-	let code = $state(initialCode);
+	let code = $derived(codeInFlight(submitted, initialCode));
 	// The URL fragment carrying the initiator proof
-	let hash = $state(initialHash);
+	let hash = $derived(submitted?.hash ?? initialHash);
+	let phase = $derived<Phase>(connectPhase({ code, approved }));
 
 	// --- entry phase state ---
 	let enteredCode = $state('');
@@ -86,10 +102,30 @@
 		}
 	}
 
-	// For deep-link entry: fetch context on mount.
-	onMount(async () => {
-		if (code) {
-			await loadContext(code);
+	// One fetch per code, whichever owner supplied it — deep-link mount, form
+	// submit, or a navigation that swapped the prop under a mounted component.
+	// `onMount` covered only the first of those three.
+	$effect(() => {
+		const inFlight = code;
+		if (inFlight) loadContext(inFlight);
+	});
+
+	// SvelteKit keeps this component mounted across `/connect/A` → `/connect/B`,
+	// so the props change while `code`/`hash` still hold A's values and
+	// `onMount` never fires again — the approve would post the previous code.
+	// The compiler says so out loud (`state_referenced_locally`); it went
+	// unheard because the strand's worktree had no `.svelte-kit/`, so
+	// `svelte-check` failed on every file and its warnings were read as
+	// environment. Never fires on mount: `code` is initialised to
+	// `initialCode`, so the guard is false exactly once.
+	$effect(() => {
+		if (initialCode && initialCode !== code) {
+			code = initialCode;
+			hash = initialHash;
+			phase = 'confirm';
+			result = null;
+			showPicker = false;
+			loadContext(initialCode);
 		}
 	});
 
@@ -105,16 +141,15 @@
 		}
 		entryError = null;
 		submitting = true;
-		code = entered;
-		// The one-time device code is also the initiator proof — carry it in the
-		// fragment so login detours preserve it without sending it to a server.
-		hash = '#' + entered;
 		// Update the URL so a reload lands on a working approval page rather than
 		// an empty form. replaceState (not pushState / assign) — this is not a
 		// navigation, just a bookmark for the session.
 		history.replaceState(null, '', resolve(`/connect/${entered}`) + '#' + entered);
-		phase = 'confirm';
-		await loadContext(entered);
+		// The one-time device code is also the initiator proof — carry it in the
+		// fragment so login detours preserve it without sending it to a server.
+		// This single write moves the phase and triggers the fetch; the effect
+		// above owns the request.
+		submitted = { code: entered, hash: '#' + entered };
 		submitting = false;
 	}
 
@@ -134,7 +169,7 @@
 				} catch {
 					messengerDoors = null;
 				}
-				phase = 'done';
+				approved = true;
 			}
 		} catch (e) {
 			if (e instanceof ConnectAuthError) unauthenticated = true;
@@ -146,10 +181,18 @@
 </script>
 
 <svelte:head>
-	<title>{phase === 'done' ? 'daemon connected' : phase === 'confirm' ? 'approve daemon' : 'connect daemon'} · brnrd</title>
+	<title
+		>{phase === 'done'
+			? 'daemon connected'
+			: phase === 'confirm'
+				? 'approve daemon'
+				: 'connect daemon'} · brnrd</title
+	>
 </svelte:head>
 
-<div class="mx-auto max-w-xl p-6">
+<!-- The done phase renders the two-column messenger-door grid; the entry and
+     confirm phases are a single column and read better narrow. -->
+<div class="mx-auto p-6 {phase === 'done' ? 'max-w-2xl' : 'max-w-xl'}">
 	<div class="flex items-start justify-between gap-4">
 		<p class="eyebrow">pairing handshake</p>
 		{#if phase !== 'entry'}
@@ -160,22 +203,20 @@
 			>
 		{/if}
 	</div>
+	<!-- The heading does not change between entry and confirm, deliberately.
+	     A panel whose title renames itself under the reader is a second
+	     screen wearing the first one's URL — and the second screen is the
+	     thing this flow exists to have deleted. -->
 	<h1 class="mt-1 font-mono text-2xl font-semibold tracking-tight text-amber-100">
-		{#if phase === 'done'}
-			Daemon connected
-		{:else if phase === 'confirm'}
-			Approve this daemon
-		{:else}
-			Connect your daemon
-		{/if}
+		{phase === 'done' ? 'Daemon connected' : 'Connect your daemon'}
 	</h1>
 
 	<section class="panel mt-6 p-5">
 		{#if phase === 'entry'}
 			<!-- Phase 1: code entry form -->
 			<p class="text-sm text-stone-300">
-				Run <code class="font-mono text-amber-200">brnrd account connect</code> in your checkout,
-				then enter the one-time code it prints.
+				Run <code class="font-mono text-amber-200">brnrd account connect</code> in your checkout, then
+				enter the one-time code it prints.
 			</p>
 			<form
 				class="mt-5"
@@ -207,7 +248,21 @@
 			</form>
 			{#if entryError}<p class="mt-3 text-sm text-red-400">{entryError}</p>{/if}
 		{:else if phase === 'confirm'}
-			<!-- Phase 2: confirm / repo selection -->
+			<!-- Phase 2 sits *below* phase 1's own field rather than replacing
+			     it: the code stays on screen, accepted, and the repository
+			     appears under it. One panel that grows, not two panels that
+			     swap. -->
+			<div class="flex items-baseline justify-between gap-3">
+				<p class="font-mono text-[11px] tracking-wide text-amber-200/80 uppercase">pairing code</p>
+				<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">accepted</p>
+			</div>
+			<p
+				class="mt-2 w-full border border-stone-800 bg-stone-950/60 px-3 py-3 font-mono text-lg tracking-wider text-ink-quiet"
+				data-testid="accepted-code"
+			>
+				{code}
+			</p>
+
 			{#if contextError}
 				<p class="text-sm text-red-400">{contextError}</p>
 			{:else if unauthenticated}
@@ -224,8 +279,10 @@
 				<!-- Shouldn't reach here — result.ok transitions to 'done' — guard only -->
 				<p class="text-sm text-amber-200">{result.notice}</p>
 			{:else}
-				<p class="text-sm text-stone-400">
-					Pairing code accepted. Choose the repository this daemon should serve.
+				<p class="mt-4 text-sm text-stone-400">
+					{suggested && !showPicker
+						? 'This is the repository your checkout named. Connect it and the terminal takes over from there.'
+						: 'Choose the repository this daemon should serve.'}
 				</p>
 
 				{#if notice}
