@@ -732,6 +732,141 @@ def _origin_main_relationship(repo_root: Path, commit: str) -> dict[str, Any]:
         return {"status": "unknown", "commit": commit}
 
 
+def _classify_deploy_lane(runs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Classify deploy-lane health from a list of recent workflow runs.
+
+    Scans *runs* newest-first (the cache order from ``gh run list``), looking
+    only at **completed** runs on **main** (the production deploy trigger).
+    Stops at the first success.  Returns::
+
+        {"health": "healthy" | "failing" | "unknown", "consecutive_failures": int}
+
+    ``unknown`` is returned when there are no qualifying completed runs at all
+    — not when the cache is missing; that is the caller's problem.  The caller
+    (:func:`_deploy_lane_facet`) never interprets a missing cache as ``unknown``
+    directly: the two failure modes (no cache, no qualifying runs) must be
+    distinguishable so a renderer can say "unknown (no cache)" vs "unknown (no
+    main-branch runs in window)".
+
+    Severity ladder: ``consecutive_failures ≥ DEPLOY_FAILING_THRESHOLD`` earns
+    a loud rendered line; below it, one quiet line.  Only ``failure`` and
+    ``timed_out`` count against the lane — ``cancelled``, ``skipped``,
+    ``neutral`` are ambiguous (a human may have cancelled a build for any
+    reason) and reset the count rather than extending it, stopping the scan
+    early rather than skipping them, so a run of ``fail · cancel · fail`` does
+    not falsely count as two consecutive failures.
+    """
+    consecutive = 0
+    found_qualifying = False
+    for run in runs:
+        if str(run.get("head_branch") or "") != "main":
+            continue
+        if str(run.get("status") or "") != "completed":
+            continue
+        found_qualifying = True
+        conclusion = str(run.get("conclusion") or "").strip().lower()
+        if conclusion == "success":
+            break  # lane is healthy up to this point
+        if conclusion in ("failure", "timed_out"):
+            consecutive += 1
+        else:
+            # cancelled / skipped / neutral — ambiguous; don't extend the count
+            break
+    if not found_qualifying:
+        return {"health": "unknown", "consecutive_failures": 0}
+    if consecutive > 0:
+        return {"health": "failing", "consecutive_failures": consecutive}
+    return {"health": "healthy", "consecutive_failures": 0}
+
+
+# Minimum consecutive failures before the rendered line raises its voice.
+DEPLOY_FAILING_THRESHOLD = 3
+
+
+def _deploy_lane_facet(repo_root: Path) -> dict[str, Any]:
+    """Deploy-lane health from the workflow-run cache — never a network call.
+
+    Returns a dict with ``health`` (``"healthy"`` | ``"failing"`` | ``"unknown"``)
+    and ``consecutive_failures`` (int).  When the cache is absent or errored,
+    ``health`` is ``"unknown"`` and ``cache_status`` names why — so
+    :func:`render_prod_line` can say "deploy lane: unknown" rather than
+    silently inheriting the ambiguity that made the "36 commits behind" line
+    cost a day.
+
+    Import is lazy so a host without this module (older install) degrades to
+    ``health=unknown`` rather than a hard import error at module load.
+    """
+    try:
+        from . import forge_workflow_cache
+        state = forge_workflow_cache.read_state(repo_root)
+    except Exception:  # noqa: BLE001 — import error, I/O, anything
+        return {"health": "unknown", "consecutive_failures": 0, "cache_status": "error"}
+
+    runs = state.get("runs")  # None = absent or errored
+    cache_status = str(state.get("status") or "absent")
+    if runs is None:
+        return {
+            "health": "unknown",
+            "consecutive_failures": 0,
+            "cache_status": cache_status,
+        }
+
+    classification = _classify_deploy_lane(runs)
+    return {**classification, "cache_status": cache_status}
+
+
+def _render_deploy_lane_bit(
+    deploy_lane: Any,
+    relationship_status: str,
+) -> str:
+    """The deploy-lane clause to append to the prod line, or ``""``.
+
+    The rule is the fix for the "one predicate, two causes" defect
+    (2026-08-23): ``N commits behind`` is true for both "normal lag" and
+    "broken pipeline", and a reader watching the number rise cannot tell
+    which.  This clause disambiguates it.
+
+    Shown when:
+
+    - prod is ``"behind"`` — always, even when healthy, to confirm "we know
+      and the lane is fine"; a silent omission is how the lie recurs.
+    - the lane is visibly broken (``health == "failing"``) — regardless of
+      the relationship, because a failing lane that happens to have prod current
+      will break the next push too.
+
+    Omitted when prod matches origin/main and the lane is healthy (or unknown
+    for a non-behind relationship) — then it is noise, not signal.
+
+    Severity: ``consecutive_failures ≥ DEPLOY_FAILING_THRESHOLD`` ⇒ loud;
+    below that ⇒ one quiet line.  A guard that cries constantly stops being
+    read; the tenth alarm is the real one.
+    """
+    if not isinstance(deploy_lane, dict):
+        # No facet at all (old fingerprint, pre-this-change) — if prod is
+        # behind, say so honestly rather than inheriting the silence.
+        if relationship_status == "behind":
+            return "deploy lane: unknown"
+        return ""
+
+    health = str(deploy_lane.get("health") or "unknown")
+    consecutive = int(deploy_lane.get("consecutive_failures") or 0)
+
+    if health == "failing":
+        if consecutive >= DEPLOY_FAILING_THRESHOLD:
+            return f"DEPLOY LANE FAILING ({consecutive} consecutive)"
+        return "deploy lane: last run failed"
+
+    if health == "unknown":
+        if relationship_status == "behind":
+            return "deploy lane: unknown"
+        return ""
+
+    # healthy
+    if relationship_status == "behind":
+        return "deploy lane: healthy"
+    return ""
+
+
 def _prod_fingerprint_facet(repo_root: Path) -> dict[str, Any]:
     """What prod last reported, read locally — never a network call.
 
@@ -746,10 +881,11 @@ def _prod_fingerprint_facet(repo_root: Path) -> dict[str, Any]:
     relationship to local ``origin/main`` (#1039 task 2 — "merged is not
     deployed, and the tell is built_at" needed a second tell: prod can be
     honestly built and honestly stale at once, and nothing compared the two
-    before this). Computed here, once, at facet-build time — the same
-    repo_root :func:`build_forge_state` already has — so
-    :func:`render_prod_line` stays a pure formatter over data that's already
-    resolved, exactly like every other field on this fingerprint.
+    before this) **and** the deploy-lane health (the "one predicate, two
+    causes" fix: "N commits behind" looks the same whether the pipeline is
+    fine or broken, and this field breaks that ambiguity). Both computed
+    here, once, at facet-build time — so :func:`render_prod_line` stays a
+    pure formatter over data that's already resolved.
     """
     try:
         from .gates import import_gate
@@ -767,6 +903,7 @@ def _prod_fingerprint_facet(repo_root: Path) -> dict[str, Any]:
                 fingerprint["origin_main_relationship"] = _origin_main_relationship(
                     repo_root, commit
                 )
+                fingerprint["deploy_lane"] = _deploy_lane_facet(repo_root)
         return {
             "configured": True,
             "fingerprint": fingerprint,
@@ -886,11 +1023,18 @@ def render_prod_line(prod: Any, *, now: datetime | None = None) -> str:
     up = _short_time(build.get("started_at"))
     if up:
         bits.append(f"up {up}")
-    relationship_bit = _render_origin_relationship(
-        fingerprint.get("origin_main_relationship")
-    )
+    relationship = fingerprint.get("origin_main_relationship")
+    relationship_bit = _render_origin_relationship(relationship)
     if relationship_bit:
         bits.append(relationship_bit)
+    relationship_status = (
+        str(relationship.get("status") or "") if isinstance(relationship, dict) else ""
+    )
+    deploy_lane_bit = _render_deploy_lane_bit(
+        fingerprint.get("deploy_lane"), relationship_status
+    )
+    if deploy_lane_bit:
+        bits.append(deploy_lane_bit)
     bot_login = str(github.get("bot_login") or "").strip()
     if bot_login:
         bits.append(f"call sign {bot_login}")

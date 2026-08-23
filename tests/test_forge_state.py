@@ -972,3 +972,231 @@ def test_origin_relationship_unknown_origin_main_missing(tmp_path, monkeypatch):
 
     rendered = _prod_line(repo)
     assert f"relationship unknown — {sha[:8]} not in this checkout" in rendered
+
+
+# ── deploy-lane health on the prod line (2026-08-23 task) ─────────────────
+#
+# "N commits behind origin/main" is one predicate true for two reasons:
+# normal lag (fine) vs a broken pipeline (costs a day).  The deploy-lane
+# clause that now follows it must distinguish all four cases at the renderer
+# level.  Tests are driven through render_prod_line with hand-crafted prod
+# fixtures — the same surface the deployed code actually calls, not the
+# private _classify_deploy_lane helper.
+
+
+_SENTINEL = object()
+
+
+def _prod_with_relationship(
+    relationship: dict,
+    deploy_lane: object = _SENTINEL,
+) -> dict:
+    """A prod fixture whose fingerprint carries the given relationship and
+    optional deploy_lane.  ``fetched_at`` is pinned within the freshness
+    window so the stale-prefix branch is never taken.
+
+    Pass ``deploy_lane=None`` to explicitly set the key to None;
+    omit the parameter to leave the key absent from the fingerprint.
+    """
+    prod = _prod_fixture("2026-08-24T00:00:00+00:00")
+    prod["fingerprint"]["origin_main_relationship"] = relationship
+    if deploy_lane is not _SENTINEL:
+        prod["fingerprint"]["deploy_lane"] = deploy_lane
+    return prod
+
+
+_BEHIND_RELATIONSHIP = {
+    "status": "behind",
+    "commit": "d36489f9" * 5,
+    "origin_sha": "cafebabe" * 5,
+    "count": 36,
+}
+_MATCHES_RELATIONSHIP = {
+    "status": "matches",
+    "commit": "d36489f9" * 5,
+    "origin_sha": "d36489f9" * 5,
+}
+
+
+def test_deploy_lane_behind_healthy_names_lane():
+    """Behind + healthy lane: the prod line names the lane so "behind" is not
+    ambiguous.  A silent line is the defect this task corrects."""
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 8, 24, 0, 0, 30, tzinfo=timezone.utc)
+    prod = _prod_with_relationship(
+        _BEHIND_RELATIONSHIP,
+        {"health": "healthy", "consecutive_failures": 0},
+    )
+    rendered = forge_state.render_prod_line(prod, now=now)
+    assert "36 commits behind origin/main" in rendered
+    assert "deploy lane: healthy" in rendered
+
+
+def test_deploy_lane_behind_failing_loud_above_threshold():
+    """Behind + consecutive failures ≥ threshold: renderer raises its voice."""
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 8, 24, 0, 0, 30, tzinfo=timezone.utc)
+    prod = _prod_with_relationship(
+        _BEHIND_RELATIONSHIP,
+        {"health": "failing", "consecutive_failures": 12},
+    )
+    rendered = forge_state.render_prod_line(prod, now=now)
+    assert "36 commits behind origin/main" in rendered
+    assert "DEPLOY LANE FAILING (12 consecutive)" in rendered
+    # The loud version is visibly different from the "behind + healthy" line.
+    assert "deploy lane: healthy" not in rendered
+
+
+def test_deploy_lane_behind_failing_quiet_below_threshold():
+    """Behind + one failure: quiet line, not the alarm."""
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 8, 24, 0, 0, 30, tzinfo=timezone.utc)
+    prod = _prod_with_relationship(
+        _BEHIND_RELATIONSHIP,
+        {"health": "failing", "consecutive_failures": 1},
+    )
+    rendered = forge_state.render_prod_line(prod, now=now)
+    assert "36 commits behind origin/main" in rendered
+    assert "deploy lane: last run failed" in rendered
+    assert "DEPLOY LANE FAILING" not in rendered
+
+
+def test_deploy_lane_behind_unknown_renders_as_unknown_not_healthy():
+    """Unknown deploy state must never render as healthy.
+
+    "behind, deploy state unknown" is an honest line; "behind" alone is the
+    line that cost a day on 2026-08-23."""
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 8, 24, 0, 0, 30, tzinfo=timezone.utc)
+    prod = _prod_with_relationship(
+        _BEHIND_RELATIONSHIP,
+        {"health": "unknown", "consecutive_failures": 0},
+    )
+    rendered = forge_state.render_prod_line(prod, now=now)
+    assert "36 commits behind origin/main" in rendered
+    assert "deploy lane: unknown" in rendered
+    assert "deploy lane: healthy" not in rendered
+
+
+def test_deploy_lane_behind_no_facet_renders_as_unknown():
+    """A prod fingerprint with no deploy_lane key (older cache, pre-this-change)
+    must not read as healthy when prod is behind."""
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 8, 24, 0, 0, 30, tzinfo=timezone.utc)
+    # Leave deploy_lane absent from the fingerprint entirely.
+    prod = _prod_with_relationship(_BEHIND_RELATIONSHIP)
+    assert "deploy_lane" not in prod["fingerprint"]
+    rendered = forge_state.render_prod_line(prod, now=now)
+    assert "deploy lane: unknown" in rendered
+
+
+def test_deploy_lane_matching_healthy_stays_quiet():
+    """Prod matches origin/main and the lane is healthy: no deploy noise."""
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 8, 24, 0, 0, 30, tzinfo=timezone.utc)
+    prod = _prod_with_relationship(
+        _MATCHES_RELATIONSHIP,
+        {"health": "healthy", "consecutive_failures": 0},
+    )
+    rendered = forge_state.render_prod_line(prod, now=now)
+    assert "matches origin/main" in rendered
+    assert "deploy lane" not in rendered
+
+
+def test_deploy_lane_matching_failing_still_surfaced():
+    """Even when prod is current, a broken lane is worth surfacing — the next
+    push will also fail."""
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 8, 24, 0, 0, 30, tzinfo=timezone.utc)
+    prod = _prod_with_relationship(
+        _MATCHES_RELATIONSHIP,
+        {"health": "failing", "consecutive_failures": 5},
+    )
+    rendered = forge_state.render_prod_line(prod, now=now)
+    assert "matches origin/main" in rendered
+    assert "DEPLOY LANE FAILING (5 consecutive)" in rendered
+
+
+# ── _classify_deploy_lane: unit coverage of the classifier ────────────────
+#
+# Driving the renderer is the primary contract; these tests guard the
+# classification logic so a mismatch between the classifier and the renderer
+# is caught at its source rather than only via an integration failure.
+
+
+def test_classify_empty_runs_is_unknown():
+    assert forge_state._classify_deploy_lane([]) == {
+        "health": "unknown",
+        "consecutive_failures": 0,
+    }
+
+
+def test_classify_no_main_runs_is_unknown():
+    runs = [
+        {"head_branch": "brr/feature", "status": "completed", "conclusion": "failure"},
+        {"head_branch": "brr/other", "status": "completed", "conclusion": "success"},
+    ]
+    result = forge_state._classify_deploy_lane(runs)
+    assert result["health"] == "unknown"
+
+
+def test_classify_consecutive_failures_on_main():
+    runs = [
+        {"head_branch": "main", "status": "completed", "conclusion": "failure"},
+        {"head_branch": "main", "status": "completed", "conclusion": "failure"},
+        {"head_branch": "main", "status": "completed", "conclusion": "failure"},
+        {"head_branch": "main", "status": "completed", "conclusion": "success"},
+    ]
+    result = forge_state._classify_deploy_lane(runs)
+    assert result["health"] == "failing"
+    assert result["consecutive_failures"] == 3
+
+
+def test_classify_success_after_failure_is_healthy():
+    runs = [
+        {"head_branch": "main", "status": "completed", "conclusion": "success"},
+        {"head_branch": "main", "status": "completed", "conclusion": "failure"},
+    ]
+    result = forge_state._classify_deploy_lane(runs)
+    assert result["health"] == "healthy"
+    assert result["consecutive_failures"] == 0
+
+
+def test_classify_in_progress_runs_are_skipped():
+    runs = [
+        {"head_branch": "main", "status": "in_progress", "conclusion": None},
+        {"head_branch": "main", "status": "completed", "conclusion": "success"},
+    ]
+    result = forge_state._classify_deploy_lane(runs)
+    assert result["health"] == "healthy"
+
+
+def test_classify_cancelled_stops_count():
+    """A cancelled run is ambiguous: don't count it as failure or success."""
+    runs = [
+        {"head_branch": "main", "status": "completed", "conclusion": "failure"},
+        {"head_branch": "main", "status": "completed", "conclusion": "cancelled"},
+        {"head_branch": "main", "status": "completed", "conclusion": "failure"},
+    ]
+    result = forge_state._classify_deploy_lane(runs)
+    # Only the first failure is counted before the ambiguous cancel stops the scan.
+    assert result["health"] == "failing"
+    assert result["consecutive_failures"] == 1
+
+
+def test_classify_timed_out_counts_as_failure():
+    runs = [
+        {"head_branch": "main", "status": "completed", "conclusion": "timed_out"},
+        {"head_branch": "main", "status": "completed", "conclusion": "timed_out"},
+        {"head_branch": "main", "status": "completed", "conclusion": "failure"},
+    ]
+    result = forge_state._classify_deploy_lane(runs)
+    assert result["health"] == "failing"
+    assert result["consecutive_failures"] == 3
