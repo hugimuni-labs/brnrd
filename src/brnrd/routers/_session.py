@@ -166,7 +166,7 @@ def _account_channel_directory(db: Session, account_id: str) -> list[dict[str, A
     read in this module that needs a channel view derives from this same
     list (see ``_paired_channels_by_repo``) instead of re-querying.
 
-    A ``ChannelRoute`` with a NULL ``paired_user_id`` authorizes nobody
+    A ``ChannelRoute`` with a NULL ``paired_principal_id`` authorizes nobody
     (``models.py`` ~line 339: rows created before #409 shipped predate the
     principal column) and must not count as paired (#885) — that rule is a
     property of *pairing*, not of Telegram, so it applies identically to
@@ -190,9 +190,9 @@ def _account_channel_directory(db: Session, account_id: str) -> list[dict[str, A
     that exists yet — flagged rather than silently assumed either way.
     """
     return [
-        {"platform": platform, "paired": paired_user_id is not None, "repo_id": repo_id}
-        for repo_id, platform, paired_user_id in db.execute(
-            select(ChannelRoute.repo_id, ChannelRoute.platform, ChannelRoute.paired_user_id).where(
+        {"platform": platform, "paired": paired_principal_id is not None, "repo_id": repo_id}
+        for repo_id, platform, paired_principal_id in db.execute(
+            select(ChannelRoute.repo_id, ChannelRoute.platform, ChannelRoute.paired_principal_id).where(
                 ChannelRoute.account_id == account_id
             )
         )

@@ -33,7 +33,7 @@ export interface ConnectedRepo {
 	// #885: whether a real `ChannelRoute` row pairs this repo to a Telegram
 	// chat — false for both "never paired" and "route exists but its
 	// principal is NULL" (authorizes nobody; see the backend's `models.py`
-	// `ChannelRoute.paired_user_id` doc).
+	// `ChannelRoute.paired_principal_id` doc).
 	telegram_paired: boolean;
 	environment_default: string | null;
 	environments: EnvironmentOption[];
@@ -482,6 +482,7 @@ export async function fetchPairStatus(
 export interface PairedChat {
 	id: string;
 	platform: string;
+	paired: boolean;
 	chat_title: string | null;
 	principal_display: string | null;
 	paired_at: string | null;

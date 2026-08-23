@@ -627,6 +627,36 @@ def test_push_failure_message_carries_stderr_and_a_specific_remedy(tmp_path, mon
     assert "gh auth setup-git" in message or "gh auth login" in message
 
 
+def test_dominion_push_failure_does_not_skip_knowledge_creation(tmp_path, monkeypatch):
+    """A two-repo promise must attempt both slots even when the first
+    repository is wired but its initial push fails."""
+    home = tmp_path / "home"
+    repo_root = tmp_path / "repo"
+    created: list[str] = []
+
+    monkeypatch.setattr(home_link, "_require_gh_auth", lambda: None)
+    monkeypatch.setattr(home_link, "resolve_owner", lambda _owner=None: "acme")
+    monkeypatch.setattr(home_link, "_try_gh_setup_git", lambda: True)
+    monkeypatch.setattr(
+        home_link,
+        "_clone_url",
+        lambda _owner, name: str(tmp_path / f"remote-{name}"),
+    )
+
+    def fake_link_one(*, slot, repo_path, owner, name, ssh, prepare_push):
+        created.append(slot)
+        if slot == "dominion":
+            raise home_link.HomeLinkError("dominion: initial push failed")
+        return home_link.RepoLinkResult(slot, repo_path, f"https://github.test/{name}", "created", True)
+
+    monkeypatch.setattr(home_link, "_link_one", fake_link_one)
+
+    with pytest.raises(home_link.HomeLinkError, match="dominion: initial push failed"):
+        home_link.link_home(repo_root, _cfg(home))
+
+    assert created == ["dominion", "knowledge"]
+
+
 def test_current_or_symbolic_branch_survives_a_current_branch_probe_failure(
     tmp_path, monkeypatch,
 ):

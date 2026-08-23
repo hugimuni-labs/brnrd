@@ -342,7 +342,7 @@ def test_account_code_pairs_route_with_no_repo_pin(env):
     route = _route(app, 1001)
     assert route is not None
     assert route.repo_id is None
-    assert route.paired_user_id == 42
+    assert route.paired_principal_id == "42"
     # No repos yet: the confirmation names the one step that stands
     # between here and work, and is honest that nothing is queued.
     # #1464 — the reply also names the bound GitHub login, not just "your

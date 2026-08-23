@@ -1056,6 +1056,7 @@ def _paired_chat_out(route: ChannelRoute, *, repo_full_name: str | None) -> dict
     return {
         "id": route.id,
         "platform": route.platform,
+        "paired": route.paired_principal_id is not None,
         # None = a private/untitled chat (Telegram) or any WhatsApp route —
         # see `models.ChannelRoute.chat_title`; the frontend renders that
         # distinctly from an empty string, never as "untitled".
@@ -1080,7 +1081,7 @@ def _messenger_door_rows(db: Session, account_id: str, identities: Any) -> list[
             select(ChannelRoute)
             .where(
                 ChannelRoute.account_id == account_id,
-                ChannelRoute.paired_user_id.is_not(None),
+                ChannelRoute.paired_principal_id.is_not(None),
             )
             .order_by(ChannelRoute.created_at.desc())
         ).scalars()
@@ -1134,7 +1135,7 @@ def dashboard_paired_chats_api(request: Request, db: Session = Depends(get_db)) 
 @router.delete("/v1/dashboard/paired-chats/{route_id}")
 def dashboard_paired_chat_revoke_api(route_id: str, request: Request, db: Session = Depends(get_db)) -> JSONResponse:
     """#1464 — the revoke half of the floor. Deletes the `ChannelRoute` row
-    outright rather than clearing `paired_user_id`: the chat/topic must
+    outright rather than clearing `paired_principal_id`: the chat/topic must
     stop authorizing *and* stop existing as a routing target, the same
     "re-pair from scratch" state a chat that was never paired is in. This
     is deliberately **not** #1459's disconnect semantics (which un-pins a
