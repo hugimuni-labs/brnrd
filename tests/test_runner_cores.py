@@ -437,6 +437,105 @@ def test_stale_entries_uses_today_by_default():
     assert "new" not in result
 
 
+# ── Freshness classification: alias-tracked vs pinned ────────────────────────
+
+
+def test_is_alias_tracked_true_for_claude_aliases():
+    """Every documented Claude alias is alias-tracked when no pin is set."""
+    for alias in ("haiku", "sonnet", "opus", "fable"):
+        entry = {"shell": "claude", "model": alias}
+        assert runner_cores.is_alias_tracked(entry), f"{alias!r} should be alias-tracked"
+
+
+def test_a_family_alias_nobody_listed_is_still_alias_tracked():
+    """The member nobody listed.
+
+    `CLAUDE_ALIASES` records today's families; it is not the test. The day a
+    new bare family word ships, a membership check would classify it as pinned
+    and render it stale forever — the same inversion this feature exists to
+    end, arriving one alias later. The property is structural: an exact model
+    ID carries a version, an alias does not.
+    """
+    unlisted = {"shell": "claude", "model": "titan"}
+    assert unlisted["model"] not in runner_cores.CLAUDE_ALIASES
+    assert runner_cores.is_alias_tracked(unlisted)
+
+    # And the other side of the property: an exact ID is never alias-tracked,
+    # however Claude-shaped it looks.
+    for exact in ("claude-fable-5", "opus-5", "sonnet4", "claude.opus"):
+        assert not runner_cores.is_alias_tracked({"shell": "claude", "model": exact}), exact
+
+    # A non-claude shell is never alias-tracked, bare word or not.
+    assert not runner_cores.is_alias_tracked({"shell": "codex", "model": "terra"})
+
+
+def test_is_alias_tracked_false_when_pin_present():
+    """A pin overrides alias tracking regardless of the model field."""
+    entry = {"shell": "claude", "model": "sonnet", "pin": "claude-sonnet-4-6"}
+    assert not runner_cores.is_alias_tracked(entry)
+
+
+def test_is_alias_tracked_false_for_codex_pinned_ids():
+    """Codex entries use exact IDs, never aliases — always pinned semantics."""
+    for model in ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"):
+        entry = {"shell": "codex", "model": model}
+        assert not runner_cores.is_alias_tracked(entry), f"{model!r} should be pinned"
+
+
+def test_is_alias_tracked_false_for_unknown_model():
+    """An unrecognised model on the claude shell is not alias-tracked."""
+    entry = {"shell": "claude", "model": "claude-sonnet-4-6"}
+    assert not runner_cores.is_alias_tracked(entry)
+
+
+def test_is_alias_tracked_false_for_non_claude_alias():
+    """Same alias word on a different shell is not alias-tracked."""
+    entry = {"shell": "codex", "model": "sonnet"}
+    assert not runner_cores.is_alias_tracked(entry)
+
+
+def test_bundled_claude_entries_are_alias_tracked():
+    """Every Claude entry in the bundled registry must be alias-tracked (no pin set)."""
+    for name, entry in runner_cores.all_cores().items():
+        if entry.get("shell") == "claude":
+            assert runner_cores.is_alias_tracked(entry), (
+                f"{name}: claude entry with model={entry.get('model')!r} should be "
+                "alias-tracked; add CLAUDE_ALIASES entry or use a pin: field"
+            )
+
+
+def test_bundled_codex_entries_are_not_alias_tracked():
+    """Every Codex entry in the bundled registry uses exact IDs — never alias-tracked."""
+    for name, entry in runner_cores.all_cores().items():
+        if entry.get("shell") == "codex":
+            assert not runner_cores.is_alias_tracked(entry), (
+                f"{name}: codex entry should not be alias-tracked"
+            )
+
+
+def test_stale_entries_skips_alias_tracked():
+    """alias-tracked entries must not appear in stale_entries(), even when old."""
+    registry = {
+        "claude-haiku": {"shell": "claude", "model": "haiku", "freshness_date": "2020-01-01"},
+        "codex-old": {"shell": "codex", "model": "gpt-5.6-sol", "freshness_date": "2020-01-01"},
+    }
+    result = runner_cores.stale_entries(registry, now="2026-08-24", threshold_days=30)
+    assert "claude-haiku" not in result, "alias-tracked claude entry must never be stale"
+    assert "codex-old" in result, "pinned codex entry with old date must be stale"
+
+
+def test_stale_entries_flags_pinned_claude_with_old_date():
+    """A claude entry with a pin: field uses pinned semantics and can be stale."""
+    registry = {
+        "claude-pinned": {
+            "shell": "claude", "model": "sonnet",
+            "pin": "claude-sonnet-4-6", "freshness_date": "2020-01-01",
+        },
+    }
+    result = runner_cores.stale_entries(registry, now="2026-08-24", threshold_days=30)
+    assert "claude-pinned" in result, "pinned claude entry with old date must be stale"
+
+
 # ── #503: probe fabrication is bundled-shells-only ─────────────────────────
 
 
