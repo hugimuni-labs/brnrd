@@ -179,27 +179,26 @@ test('configured-but-unavailable and lit doors carry visibly different marker sh
 	ok(!darkRow.includes('rounded-full'), 'a dark door does not reuse the round marker, dimmed');
 });
 
-// ----- THE BUG PINNED BELOW ------------------------------------------- //
-// WhatsApp was connected. The backend knew. The repos fetch returned
-// `paired: false` (stale). The paired-chats fetch had the truth. The door
-// still offered CONNECT WHATSAPP.
+// ----- ONE DERIVATION OF "CONNECTED" ---------------------------------- //
+// The reported symptom: WhatsApp was connected, the backend knew, and the
+// door still offered CONNECT WHATSAPP with the paired chat rendered fifty
+// pixels below it.
 //
-// The fix: `isConnected(door, pairedChats, platform)` is the one
-// derivation, exported from `repos.ts`, that OR-s the wire flag with the
-// chat list. It did not exist before this change — the tests below import
-// it dynamically so the failure on the parent commit is localised to
-// these tests and does not cascade to the rest of the suite.
-//
-// Red-on-parent failure text (both tests):
-//   TypeError: isConnected is not a function
-// (the export did not exist; the dynamic import resolves it as `undefined`)
+// Honest about what these tests do and do not prove. They go red on the
+// parent commit with `TypeError: isConnected is not a function`, which
+// says the export is new — not that the defect reproduces. The screenshot
+// that started this was taken against a build that predates
+// `MessengerDoors` owning the paired-chat list at all, so the measured
+// symptom may already be gone. What is pinned here is the *contract*: one
+// derivation, wire flag first, chat list as the answer when the flag is
+// stale, and the optimistic poll outcome deliberately outside it.
 // -------------------------------------------------------------------- //
 
 test('isConnected: wire paired:false + paired chat in list → connected (the bug)', async () => {
 	// On the parent commit `isConnected` is not exported from repos.ts;
 	// importing it returns `undefined` → calling it throws TypeError → red.
 	const { isConnected: ic } = (await import('./repos.ts')) as {
-		isConnected?: (door: { paired?: boolean }, chats: PairedChat[], platform: string) => boolean;
+		isConnected?: (door: { paired?: boolean; platform: string }, chats: PairedChat[]) => boolean;
 	};
 	const chat: PairedChat = {
 		id: 'r-wa-1',
@@ -212,12 +211,17 @@ test('isConnected: wire paired:false + paired chat in list → connected (the bu
 		paired_at_label: 'today'
 	};
 	// Wire says not paired — but the chat list says otherwise. Must be connected.
+	const wa = { paired: false, platform: 'whatsapp' };
+	ok(ic!(wa, [chat]), 'paired chat in list → connected despite stale wire flag');
+	ok(!ic!(wa, []), 'no chats and paired:false → not connected');
+	ok(ic!({ paired: true, platform: 'whatsapp' }, []), 'wire paired:true → connected regardless');
+	// The platform comes off the door: another platform's paired chat must
+	// never light this door. This is the case the old three-argument
+	// signature made possible to get wrong at the call site.
 	ok(
-		ic!({ paired: false }, [chat], 'whatsapp'),
-		'paired chat in list → connected despite stale wire flag'
+		!ic!({ paired: false, platform: 'telegram' }, [chat]),
+		"another platform's chat is not this door"
 	);
-	ok(!ic!({ paired: false }, [], 'whatsapp'), 'no chats and paired:false → not connected');
-	ok(ic!({ paired: true }, [], 'whatsapp'), 'wire paired:true → connected regardless of chat list');
 });
 
 test('a door with paired:false but a matched paired chat must not offer a bare connect button', async () => {
@@ -258,6 +262,29 @@ test('one paired-chats request across two mounted panels', async () => {
 	ok(fetchCalls === 1, `expected 1 fetch but got ${fetchCalls}`);
 	ok(Array.isArray(a) && Array.isArray(b), 'both results are arrays');
 	invalidate!(); // clean up for next test
+});
+
+test('a later mount re-reads the wire — the burst is deduplicated, the answer is not cached', async () => {
+	// The trade this store must not make. Memoising the resolved list also
+	// collapses two requests into one, and then serves that same list on
+	// every later mount — so navigating away and back shows a paired-chats
+	// list from minutes ago, on the one surface whose whole job is to say
+	// what is connected *right now*.
+	const { invalidatePairedChats: invalidate, loadSharedPairedChats: load } =
+		(await import('./repos.ts')) as {
+			invalidatePairedChats?: () => void;
+			loadSharedPairedChats?: (fetchImpl?: typeof fetch) => Promise<PairedChat[]>;
+		};
+	invalidate!();
+	let fetchCalls = 0;
+	const mockFetch = (async () => {
+		fetchCalls++;
+		return { ok: true, status: 200, json: async () => ({ paired_chats: [] }) } as Response;
+	}) as typeof fetch;
+	await load!(mockFetch);
+	await load!(mockFetch);
+	ok(fetchCalls === 2, `sequential callers must each read the wire, got ${fetchCalls}`);
+	invalidate!();
 });
 
 test('revoke clears the chat row and invalidates the shared cache', async () => {
