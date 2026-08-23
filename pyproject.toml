@@ -84,6 +84,11 @@ postgres = [
 browser = [
   "playwright>=1.40",
 ]
+# Local maintainer/operator surface. Kept optional because the console is a
+# development instrument over the daemon, not part of the resident runtime.
+console = [
+  "textual>=8.2,<9",
+]
 # `pyyaml` is not a runtime dependency: `scripts/gate.py` reads
 # `.github/workflows/ci.yml` so the local gate cannot drift from CI's
 # own leg list. A hardcoded copy is the bug that script exists to prevent.
@@ -91,6 +96,7 @@ dev = ["pytest>=7.0", "pyyaml>=6", "brnrd[backend]"]
 
 [project.scripts]
 brnrd = "brr.cli:main"
+brnrd-console = "brr.operator_console:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
