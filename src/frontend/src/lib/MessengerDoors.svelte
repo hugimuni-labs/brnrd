@@ -34,8 +34,10 @@
 	import { onDestroy, onMount, untrack } from 'svelte';
 	import { DOCS_URL } from './publicStats';
 	import {
-		fetchPairedChats,
 		fetchPairStatus,
+		invalidatePairedChats,
+		isConnected,
+		loadSharedPairedChats,
 		mintAccountMessengerPair,
 		revokePairedChat
 	} from './repos';
@@ -108,9 +110,13 @@
 	let revoking = $state<string | null>(null);
 	let revokeFailed = $state(false);
 
-	async function loadPairedChats() {
+	// `invalidate: true` busts the module-level cache before fetching —
+	// used after a successful pair or revoke so the wire is re-read rather
+	// than handing back the stale cache the next caller would get.
+	async function loadPairedChats(invalidate = false) {
 		try {
-			pairedChats = (await fetchPairedChats()).paired_chats;
+			if (invalidate) invalidatePairedChats();
+			pairedChats = await loadSharedPairedChats();
 		} catch {
 			// The door inventory still carries an honest paired summary. A
 			// transient detail-fetch failure must not turn a connected door off.
@@ -131,6 +137,9 @@
 		try {
 			await revokePairedChat(chat.id);
 			pairedChats = pairedChats.filter((candidate) => candidate.id !== chat.id);
+			// Drop the module-level cache so a sibling panel (or next mount)
+			// doesn't serve the revoked chat from the old cached list.
+			invalidatePairedChats();
 			confirming = null;
 		} catch {
 			revokeFailed = true;
@@ -160,7 +169,10 @@
 			const status = await fetchPairStatus(code);
 			if (status.consumed) {
 				pairedOutcomes = { ...pairedOutcomes, [platform]: { display: status.display } };
-				await loadPairedChats();
+				// Invalidate the shared cache so the next loadPairedChats()
+				// re-reads the wire — the wire wins, and this is the moment
+				// the poll outcome and the wire state must agree.
+				await loadPairedChats(/* invalidate */ true);
 				stopPolling(platform);
 				return;
 			}
@@ -244,7 +256,7 @@
 							</p>
 						</div>
 
-						{#if paired || door.paired || platformChats.length > 0}
+						{#if isConnected(door, pairedChats) || !!paired}
 							<div
 								class="mt-3 border border-amber-700/60 bg-amber-950/30 p-4"
 								data-testid={`paired-${door.platform}`}

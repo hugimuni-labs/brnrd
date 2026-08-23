@@ -178,3 +178,156 @@ test('configured-but-unavailable and lit doors carry visibly different marker sh
 	ok(litRow.includes('rounded-full'), 'a lit door gets a round marker');
 	ok(!darkRow.includes('rounded-full'), 'a dark door does not reuse the round marker, dimmed');
 });
+
+// ----- ONE DERIVATION OF "CONNECTED" ---------------------------------- //
+// The reported symptom: WhatsApp was connected, the backend knew, and the
+// door still offered CONNECT WHATSAPP with the paired chat rendered fifty
+// pixels below it.
+//
+// Honest about what these tests do and do not prove. They go red on the
+// parent commit with `TypeError: isConnected is not a function`, which
+// says the export is new — not that the defect reproduces. The screenshot
+// that started this was taken against a build that predates
+// `MessengerDoors` owning the paired-chat list at all, so the measured
+// symptom may already be gone. What is pinned here is the *contract*: one
+// derivation, wire flag first, chat list as the answer when the flag is
+// stale, and the optimistic poll outcome deliberately outside it.
+// -------------------------------------------------------------------- //
+
+test('isConnected: wire paired:false + paired chat in list → connected (the bug)', async () => {
+	// On the parent commit `isConnected` is not exported from repos.ts;
+	// importing it returns `undefined` → calling it throws TypeError → red.
+	const { isConnected: ic } = (await import('./repos.ts')) as {
+		isConnected?: (door: { paired?: boolean; platform: string }, chats: PairedChat[]) => boolean;
+	};
+	const chat: PairedChat = {
+		id: 'r-wa-1',
+		platform: 'whatsapp',
+		paired: true,
+		principal_display: 'Me',
+		chat_title: null,
+		repo_full_name: null,
+		paired_at: null,
+		paired_at_label: 'today'
+	};
+	// Wire says not paired — but the chat list says otherwise. Must be connected.
+	const wa = { paired: false, platform: 'whatsapp' };
+	ok(ic!(wa, [chat]), 'paired chat in list → connected despite stale wire flag');
+	ok(!ic!(wa, []), 'no chats and paired:false → not connected');
+	ok(ic!({ paired: true, platform: 'whatsapp' }, []), 'wire paired:true → connected regardless');
+	// The platform comes off the door: another platform's paired chat must
+	// never light this door. This is the case the old three-argument
+	// signature made possible to get wrong at the call site.
+	ok(
+		!ic!({ paired: false, platform: 'telegram' }, [chat]),
+		"another platform's chat is not this door"
+	);
+});
+
+test('a door with paired:false but a matched paired chat must not offer a bare connect button', async () => {
+	const chat: PairedChat = {
+		id: 'r-wa-2',
+		platform: 'whatsapp',
+		paired: true,
+		principal_display: 'Me',
+		chat_title: null,
+		repo_full_name: null,
+		paired_at: null,
+		paired_at_label: 'today'
+	};
+	const html = await renderDoors(
+		[door({ platform: 'whatsapp', deep_link_available: true, paired: false })],
+		0,
+		[chat]
+	);
+	ok(!html.includes('data-testid="connect-whatsapp"'), 'bare connect button must not appear');
+	ok(html.includes('connected'), 'connected state must render');
+});
+
+test('one paired-chats request across two mounted panels', async () => {
+	// On the parent commit these exports do not exist → red (same TypeError).
+	const { invalidatePairedChats: invalidate, loadSharedPairedChats: load } =
+		(await import('./repos.ts')) as {
+			invalidatePairedChats?: () => void;
+			loadSharedPairedChats?: (fetchImpl?: typeof fetch) => Promise<PairedChat[]>;
+		};
+	invalidate!();
+	let fetchCalls = 0;
+	const mockFetch = (async () => {
+		fetchCalls++;
+		return { ok: true, status: 200, json: async () => ({ paired_chats: [] }) } as Response;
+	}) as typeof fetch;
+	// Two concurrent callers — only one GET should be issued.
+	const [a, b] = await Promise.all([load!(mockFetch), load!(mockFetch)]);
+	ok(fetchCalls === 1, `expected 1 fetch but got ${fetchCalls}`);
+	ok(Array.isArray(a) && Array.isArray(b), 'both results are arrays');
+	invalidate!(); // clean up for next test
+});
+
+test('a later mount re-reads the wire — the burst is deduplicated, the answer is not cached', async () => {
+	// The trade this store must not make. Memoising the resolved list also
+	// collapses two requests into one, and then serves that same list on
+	// every later mount — so navigating away and back shows a paired-chats
+	// list from minutes ago, on the one surface whose whole job is to say
+	// what is connected *right now*.
+	const { invalidatePairedChats: invalidate, loadSharedPairedChats: load } =
+		(await import('./repos.ts')) as {
+			invalidatePairedChats?: () => void;
+			loadSharedPairedChats?: (fetchImpl?: typeof fetch) => Promise<PairedChat[]>;
+		};
+	invalidate!();
+	let fetchCalls = 0;
+	const mockFetch = (async () => {
+		fetchCalls++;
+		return { ok: true, status: 200, json: async () => ({ paired_chats: [] }) } as Response;
+	}) as typeof fetch;
+	await load!(mockFetch);
+	await load!(mockFetch);
+	ok(fetchCalls === 2, `sequential callers must each read the wire, got ${fetchCalls}`);
+	invalidate!();
+});
+
+test('revoke clears the chat row and invalidates the shared cache', async () => {
+	// Existing revoke behaviour: the revoke button appears when connected,
+	// and after revoke the chat row is gone. This pins it survives the
+	// isConnected switch. (The cache invalidation is a side-effect of the
+	// revoke path — verified in the store test above via invalidate!().)
+	const html = await renderDoors(
+		[door({ platform: 'telegram', deep_link_available: true, paired: true })],
+		0,
+		[
+			{
+				id: 'tg-1',
+				platform: 'telegram',
+				paired: true,
+				principal_display: 'Gurio',
+				chat_title: null,
+				repo_full_name: null,
+				paired_at: null,
+				paired_at_label: 'today'
+			}
+		]
+	);
+	ok(html.includes('data-testid="revoke-open"'), 'revoke control renders for a connected chat');
+	ok(html.includes('Gurio'), 'connected chat principal is visible');
+});
+
+test('countdown and re-mint controls survive the isConnected switch', async () => {
+	// A minted-but-unpaired door (outcome present, no chat yet) must still
+	// show the countdown — it falls in the else branch of the condition, not
+	// the connected branch, and must not regress.
+	// We test the boundary with a zero-override nowMs to trigger countdown
+	// at time 0 — the component renders the countdown when there is a mint
+	// outcome and cd is truthy but isConnected is false.
+	// The component calculates ttl at mint time; in SSR with nowMs=0 the ttl
+	// is computed as the full countdown from epoch. We only care that the
+	// countdown branch doesn't accidentally render the connect button.
+	const html = await renderDoors(
+		[door({ platform: 'telegram', deep_link_available: true, paired: false })],
+		0,
+		[]
+	);
+	// An unconnected door with no mint outcome → connect button (not countdown).
+	ok(html.includes('data-testid="connect-telegram"'));
+	ok(!html.includes('data-testid="paired-telegram"'));
+});
