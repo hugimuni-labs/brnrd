@@ -526,3 +526,65 @@ export async function revokePairedChat(
 		throw new Error(`revoke failed: ${res.status}`);
 	}
 }
+
+// --- connected derivation ------------------------------------------------
+//
+// The single source of truth for "is this platform door connected". Wire
+// flag (`door.paired`) wins; the paired-chat list is the ground truth for
+// the stale-flag case the maintainer measured: `door.paired` from the
+// repos fetch lagged a real paired chat by one page load, so the connect
+// button appeared while the chat was visible fifty pixels below it.
+//
+// `pairedOutcomes` (the post-poll optimistic state) does NOT participate
+// here — it shortens the wait by triggering an invalidate-and-reload, but
+// the wire state (`door.paired` or an entry in `pairedChats`) is the
+// final word.
+export function isConnected(
+	door: Pick<MessengerDoor, 'paired'>,
+	pairedChats: PairedChat[],
+	platform: string
+): boolean {
+	if (door.paired) return true;
+	return pairedChats.some((c) => c.platform === platform && c.paired);
+}
+
+// --- module-level paired-chats store ------------------------------------
+//
+// One in-flight fetch per page, not one per mounted `MessengerDoors`
+// instance. Today every mount fires its own `GET /v1/dashboard/paired-
+// chats`; two panels on the same page means two identical requests racing
+// each other. The singleton below collapses them: the second caller gets
+// the same Promise the first started.
+//
+// Call `invalidatePairedChats()` after a successful pair or revoke so the
+// next `loadSharedPairedChats()` re-reads the wire. The component's own
+// `$state pairedChats` still drives renders — this store is the fetch
+// layer only.
+let _pairedChatsInflight: Promise<PairedChat[]> | null = null;
+let _pairedChatsCache: PairedChat[] | null = null;
+
+/** Drop the cache and any in-flight request so the next
+ * `loadSharedPairedChats()` call issues a fresh GET. */
+export function invalidatePairedChats(): void {
+	_pairedChatsInflight = null;
+	_pairedChatsCache = null;
+}
+
+/** Fetch (or return the cached) account-level paired-chats list. Multiple
+ * concurrent callers share the same in-flight Promise — only one GET is
+ * ever in flight at a time. Pass a custom `fetchImpl` to stub in tests. */
+export async function loadSharedPairedChats(fetchImpl?: typeof fetch): Promise<PairedChat[]> {
+	if (_pairedChatsCache !== null) return _pairedChatsCache;
+	if (_pairedChatsInflight !== null) return _pairedChatsInflight;
+	_pairedChatsInflight = fetchPairedChats(fetchImpl)
+		.then((r) => {
+			_pairedChatsCache = r.paired_chats;
+			_pairedChatsInflight = null;
+			return _pairedChatsCache as PairedChat[];
+		})
+		.catch((err: unknown) => {
+			_pairedChatsInflight = null;
+			throw err;
+		});
+	return _pairedChatsInflight;
+}
