@@ -2957,6 +2957,24 @@ def cmd_do(args):
         print(f"[brnrd do] {pairing_error}. Nothing was staged.", file=sys.stderr)
         return 1
 
+    # One reply can answer a burst; its sibling events are notes. Accepting
+    # byte-identical bodies for several event ids made the mechanically easy
+    # spelling send the same chat message once per event. Refuse that batch
+    # before any file exists, and name the economy shape the caller wanted.
+    duplicate_targets: dict[str, list[str]] = {}
+    for event_id, body in replies:
+        duplicate_targets.setdefault(body, []).append(event_id)
+    repeated = next((ids for ids in duplicate_targets.values() if len(ids) > 1), None)
+    if repeated is not None:
+        print(
+            "[brnrd do] identical reply body targets multiple events "
+            f"({', '.join(repeated)}). Reply once and --note the sibling "
+            "event(s); otherwise each --reply sends another chat message. "
+            "Nothing was staged.",
+            file=sys.stderr,
+        )
+        return 1
+
     # The reply-debt contract: a call with any --reply must own exactly one
     # of --promise/--no-promise (argparse's mutually-exclusive group already
     # refuses both at once — this is the "neither given" half, which
