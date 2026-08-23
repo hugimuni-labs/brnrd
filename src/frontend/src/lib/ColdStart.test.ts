@@ -14,6 +14,8 @@ const componentPath = join(here, 'ColdStart.svelte');
 const generated = join(here, '.coldStart.generated.mjs');
 const messengerDoorsPath = join(here, 'MessengerDoors.svelte');
 const generatedMessengerDoors = join(here, '.coldStartMessengerDoors.generated.mjs');
+const pairingCommandPath = join(here, 'PairingCommand.svelte');
+const generatedPairingCommand = join(here, '.coldStartPairingCommand.generated.mjs');
 
 // Same rendering dance as PublishConsentNotice.test.ts: compile the real
 // component and render it with real props, so a claim that only becomes
@@ -51,15 +53,26 @@ async function renderColdStart(
 		generatedMessengerDoors,
 		messengerDoorsCompiled.js.code.replace(/'(\.\/[A-Za-z0-9_-]+)'/g, "'$1.ts'")
 	);
+	// PairingCommand is now imported by ColdStart — compile it the same way
+	// MessengerDoors is compiled, so the SSR harness can resolve the import.
+	const pairingCommandSource = readFileSync(pairingCommandPath, 'utf8');
+	const pairingCommandCompiled = compile(pairingCommandSource, {
+		generate: 'server',
+		runes: true,
+		name: 'PairingCommand'
+	});
+	writeFileSync(
+		generatedPairingCommand,
+		pairingCommandCompiled.js.code.replace(/'(\.\/[A-Za-z0-9_-]+)'/g, "'$1.ts'")
+	);
 	const compiled = compile(source, { generate: 'server', runes: true, name: 'ColdStart' });
 	const runnable = compiled.js.code
-		// Same generic rewrite CapabilityPanel.test.ts uses: any bare relative
-		// import needs its `.ts` extension for Node's loader. Narrowed to
-		// `./publicStats` alone until #1277a's `splitPairingCommand` import
-		// (`./repos`) needed the same treatment — generic from here so the
-		// next added import doesn't silently need its own regex line too.
+		// Same generic rewrite: any bare relative import needs its `.ts`
+		// extension for Node's loader. Generic from #1277a onward so new
+		// imports don't each need their own regex line.
 		.replace(/'(\.\/[A-Za-z0-9_-]+)'/g, "'$1.ts'")
 		.replace("'./MessengerDoors.svelte'", "'./.coldStartMessengerDoors.generated.mjs'")
+		.replace("'./PairingCommand.svelte'", "'./.coldStartPairingCommand.generated.mjs'")
 		.replace(/import\s*\{[^}]*\}\s*from\s*'\$app\/paths';/, 'const resolve = (path) => path;');
 	writeFileSync(generated, runnable);
 	try {
@@ -70,6 +83,7 @@ async function renderColdStart(
 	} finally {
 		rmSync(generated, { force: true });
 		rmSync(generatedMessengerDoors, { force: true });
+		rmSync(generatedPairingCommand, { force: true });
 	}
 }
 
@@ -89,6 +103,7 @@ function installation(over: Partial<GitHubInstallation> = {}): GitHubInstallatio
 after(() => {
 	rmSync(generated, { force: true });
 	rmSync(generatedMessengerDoors, { force: true });
+	rmSync(generatedPairingCommand, { force: true });
 });
 
 function repo(over: Partial<ConnectedRepo> = {}): ConnectedRepo {
@@ -572,4 +587,31 @@ test('desktop rendering is unaffected by messengerDoors', async () => {
 		[{ platform: 'telegram', deep_link_available: true }]
 	);
 	equal(withDoors, withoutDoors, 'desktop HTML is byte-identical either way');
+});
+
+// Door copy cleanup (brr/the-board-that-said-it-twice): when doors are
+// available the mobile panel shows a shared intro sentence once, above the
+// tiles, so the "opens the app directly" concept is said once rather than
+// repeated per tile inside MessengerDoors (which is outside this file's
+// ownership). Pin: intro appears before the first door's tap button.
+test('mobile arrival with available doors shows shared intro above the door tiles', async () => {
+	const html = await renderColdStart([], undefined, null, null, true, [
+		{ platform: 'telegram', deep_link_available: true },
+		{ platform: 'whatsapp', deep_link_available: true }
+	]);
+	ok(html.includes('opens the app directly'), 'shared intro renders');
+	const introAt = html.indexOf('opens the app directly');
+	const tileAt = html.indexOf('data-testid="connect-telegram"');
+	ok(introAt >= 0 && tileAt >= 0, 'both intro and first tile render');
+	ok(introAt < tileAt, 'shared intro is above the door tiles');
+});
+
+// The shared intro must not render when no door is available — the
+// honest-intermediate copy fills that slot instead.
+test('shared intro is absent when no doors are available', async () => {
+	const html = await renderColdStart([], undefined, null, null, true, [
+		{ platform: 'telegram', deep_link_available: false }
+	]);
+	ok(!html.includes('opens the app directly'), 'no intro without an available door');
+	ok(html.includes('once a repo is enabled'), 'honest-intermediate copy still renders');
 });

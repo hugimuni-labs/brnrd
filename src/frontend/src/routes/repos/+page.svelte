@@ -9,10 +9,8 @@
 		connectRepo,
 		disconnectRepo,
 		fetchRepos,
-		pairRepoTelegram,
 		setPublishLayers,
-		splitPairingCommand,
-		telegramPairLabel,
+		type Capability,
 		type ConnectedRepo,
 		type RepoActionResponse,
 		type ReposResponse
@@ -33,7 +31,7 @@
 	import { STATUS_GOOD, STATUS_UNKNOWN, STATUS_WARN, statusDotStyle } from '$lib/statusPalette';
 	import MarkerNotice from '$lib/MarkerNotice.svelte';
 	import MessengerDoors from '$lib/MessengerDoors.svelte';
-	import CapabilityPanel from '$lib/CapabilityPanel.svelte';
+	import PairingCommand from '$lib/PairingCommand.svelte';
 
 	let data = $state<ReposResponse | null>(null);
 	let error = $state<string | null>(null);
@@ -68,28 +66,17 @@
 	});
 	let returnCode = $derived(returnTarget?.code ?? null);
 
-	// Clipboard for the "connect this repository" command (no-installation
-	// state, #1084/#1032 steer) — same copy/flash idiom ColdStart.svelte
-	// already uses for its two command boxes; not reinvented.
-	let copied = $state<string | null>(null);
-	let copyTimer: ReturnType<typeof setTimeout> | undefined;
-
-	// #1277a, same fix as ColdStart.svelte's step 02: `data.pairing_command`
-	// leads with `cd <repo>`, a literal placeholder no shell can run — split
-	// it out so the box below only ever holds, and the button only ever
-	// copies, the line that is unconditionally runnable.
-	let pairingParts = $derived(data ? splitPairingCommand(data.pairing_command) : null);
-
-	async function copy(key: string, text: string) {
-		try {
-			await navigator.clipboard.writeText(text);
-			copied = key;
-			clearTimeout(copyTimer);
-			copyTimer = setTimeout(() => (copied = null), 1500);
-		} catch {
-			// Clipboard unavailable or denied — no crash, just no flash.
-		}
-	}
+	// `repo-initialised` is the one capability row with no other representation
+	// on this page — keyed by repo.id so each repo card can show a note when
+	// its own AGENTS.md / kb / .brr/config are absent. `data.capabilities` is
+	// additive/optional (`repos.ts:194`) — undefined on an older backend, in
+	// which case this map is empty and no note renders.
+	let repoInitialised = $derived.by((): Record<string, Capability> => {
+		const caps = data?.capabilities ?? [];
+		return Object.fromEntries(
+			caps.filter((c) => c.id === 'repo-initialised').map((c) => [c.subject ?? '', c])
+		);
+	});
 
 	// The GitHub Setup URL return (#1084): `routers/github_app.py`'s
 	// `github_app_setup` 303s here with `?notice=…` after syncing an
@@ -316,10 +303,6 @@
 		);
 	}
 
-	function pairTelegram(repo: ConnectedRepo) {
-		runAction(`pair:${repo.id}`, () => pairRepoTelegram(repo.id));
-	}
-
 	function confirmDisconnect(repo: ConnectedRepo) {
 		runAction(`disconnect:${repo.id}`, () => disconnectRepo(repo.id));
 	}
@@ -439,12 +422,6 @@
 	{:else if data === null}
 		<p class="mt-6 text-sm text-ink-quiet">Loading...</p>
 	{:else}
-		<CapabilityPanel
-			capabilities={data.capabilities ?? null}
-			connectedRepos={data.connected_repos}
-			pairingCommand={data.pairing_command}
-			now={Date.now()}
-		/>
 		{#if data.notice}
 			<!-- The GitHub Setup URL return (#1084). `data.notice` is the
 			     backend-mapped text (`_notice_text`, `routers/_session.py`);
@@ -591,24 +568,8 @@
 				</p>
 
 				<div class="mt-4">
-					{#if pairingParts?.setupLine}
-						<!-- #1277a: scene-setting, not copyable — see ColdStart.svelte's
-						     step 02 for the same split on the same backend string. -->
-						<p class="font-mono text-[11px] text-ink-mute">from your repo checkout:</p>
-					{/if}
-					<div class="mt-1.5 flex items-start gap-2">
-						<pre
-							class="min-w-0 grow border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] wrap-anywhere whitespace-pre-wrap text-stone-300"><code
-								>{pairingParts?.runnable ?? data.pairing_command}</code
-							></pre>
-						<button
-							type="button"
-							class="shrink-0 cursor-pointer border border-stone-800 px-2 py-2 font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-							onclick={() =>
-								data && copy('connect-cmd', pairingParts?.runnable ?? data.pairing_command)}
-							>{copied === 'connect-cmd' ? 'copied' : 'copy'}</button
-						>
-					</div>
+					<!-- PairingCommand handles the #1277a split and clipboard helper. -->
+					<PairingCommand command={data.pairing_command} />
 					<p class="mt-1 font-mono text-[11px] text-ink-mute">
 						No <code class="text-stone-400">brnrd</code> on this machine yet?
 						<code class="text-stone-400">npx brnrd</code> does the whole cold start in one word.
@@ -645,17 +606,11 @@
 		{/if}
 
 		<section class="panel mt-6 p-4">
-			<div class="mb-3 flex items-center justify-between gap-3">
-				<div>
-					<p class="eyebrow">connected</p>
-					<h2 class="font-mono text-lg font-semibold tracking-tight text-amber-100">
-						daemon pairing
-					</h2>
-				</div>
-				<span
-					class="shrink-0 border border-stone-800 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-ink-quiet uppercase"
-					>{connectedRepos.length} enabled</span
-				>
+			<div class="mb-3">
+				<p class="eyebrow">connected</p>
+				<h2 class="font-mono text-lg font-semibold tracking-tight text-amber-100">
+					daemon pairing
+				</h2>
 			</div>
 
 			<!-- Messenger pairing is account/daemon state, not repository
@@ -663,10 +618,16 @@
 			     that boundary instead of marooning them below every repo card. -->
 			<MessengerDoors doors={data.messenger_doors ?? null} embedded />
 
+			<!-- The count labels what is directly beneath it: repos, not chats. -->
+			<p class="mt-4 font-mono text-[10px] tracking-wide text-ink-quiet uppercase">
+				{connectedRepos.length}
+				{connectedRepos.length === 1 ? 'repo' : 'repos'} enabled
+			</p>
+
 			{#if connectedRepos.length === 0}
-				<p class="text-sm text-ink-quiet">No repos enabled yet.</p>
+				<p class="mt-1 text-sm text-ink-quiet">No repos enabled yet.</p>
 			{:else}
-				<div class="space-y-2">
+				<div class="mt-2 space-y-2">
 					{#each connectedRepos as repo (repo.id)}
 						{@const statusColor = daemonColor(repo.daemon_status)}
 						<div class="subpanel p-3" id={`repo-${encodeURIComponent(repo.id)}`}>
@@ -716,6 +677,16 @@
 									{:else}
 										<p class="mt-2 text-sm text-stone-400">
 											Pair a local daemon from a checkout when this repo should drain work.
+										</p>
+									{/if}
+									{#if repoInitialised[repo.id] && repoInitialised[repo.id].state !== 'lit'}
+										<!-- `repo-initialised` is the one capability row with no
+										     other representation on this page: AGENTS.md, kb,
+										     .brr/config. Only shown when not lit — a quiet absence
+										     to name for the repos that still need it. -->
+										<p class="mt-2 font-mono text-[11px] text-amber-400">
+											not initialised — run <code class="text-amber-200">brnrd</code> in this checkout
+											to write AGENTS.md and the kb
 										</p>
 									{/if}
 									<div class="mt-2 border-t border-stone-800/70 pt-2">
@@ -827,36 +798,10 @@
 								</div>
 
 								<div class="flex w-full shrink-0 flex-col gap-2 md:w-auto md:items-end">
-									{#if repo.telegram_paired}
-										<!-- #885 follow-up: re-pairing is an exception (the chat moved, the route
-										     broke), not a routine act, so it lives inside the status it changes —
-										     the same disclosure idiom this card already uses for `setup command`.
-										     An idle paired repo shows state and one destructive action, nothing
-										     else to press. -->
-										<details class="w-full md:w-auto md:text-right">
-											<summary
-												class="cursor-pointer font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-												>telegram paired</summary
-											>
-											<button
-												type="button"
-												class="mt-2 cursor-pointer border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-stone-400 uppercase hover:text-stone-200 disabled:cursor-wait disabled:opacity-50"
-												disabled={pendingAction !== null}
-												onclick={() => pairTelegram(repo)}
-												>{telegramPairLabel(true, actionBusy(`pair:${repo.id}`))}</button
-											>
-										</details>
-									{/if}
-									<div class="grid grid-cols-2 gap-2 md:flex md:justify-end">
-										{#if !repo.telegram_paired && confirmingDisconnect !== repo.id}
-											<button
-												type="button"
-												class="cursor-pointer border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-stone-400 uppercase hover:text-stone-200 disabled:cursor-wait disabled:opacity-50"
-												disabled={pendingAction !== null}
-												onclick={() => pairTelegram(repo)}
-												>{telegramPairLabel(false, actionBusy(`pair:${repo.id}`))}</button
-											>
-										{/if}
+									<!-- Telegram pairing now lives in the account-level MessengerDoors
+									     control above. The per-repo pair/re-pair buttons that lived
+									     here off `repo.telegram_paired` are removed. -->
+									<div class="flex gap-2 md:justify-end">
 										{#if confirmingDisconnect === repo.id}
 											<button
 												type="button"
