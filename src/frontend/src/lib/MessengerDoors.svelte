@@ -31,10 +31,15 @@
 	// intentional) and the countdown is a first-class visual element with
 	// three distinct, named states (`messengerDoors.ts`'s `countdown`),
 	// not a number in parentheses.
-	import { onDestroy, untrack } from 'svelte';
+	import { onDestroy, onMount, untrack } from 'svelte';
 	import { DOCS_URL } from './publicStats';
-	import { fetchPairStatus, mintAccountMessengerPair } from './repos';
-	import type { MessengerDoor, MessengerPairStarted } from './repos';
+	import {
+		fetchPairedChats,
+		fetchPairStatus,
+		mintAccountMessengerPair,
+		revokePairedChat
+	} from './repos';
+	import type { MessengerDoor, MessengerPairStarted, PairedChat } from './repos';
 	import {
 		countdown,
 		conversationLink,
@@ -60,6 +65,7 @@
 		excludePlatforms?: string[];
 		heading?: string;
 		embedded?: boolean;
+		pairedChatsOverride?: PairedChat[];
 	}
 
 	let {
@@ -67,7 +73,8 @@
 		nowOverride = null,
 		excludePlatforms = [],
 		heading = 'chat connectors',
-		embedded = false
+		embedded = false,
+		pairedChatsOverride
 	}: Props = $props();
 
 	const allDoors = $derived(
@@ -96,6 +103,41 @@
 	let mintTtlSeconds = $state<Record<string, number>>({});
 	let mintFailedPlatforms = $state<Record<string, boolean>>({});
 	let pairedOutcomes = $state<Record<string, { display: string | null }>>({});
+	let pairedChats = $state<PairedChat[]>(untrack(() => pairedChatsOverride ?? []));
+	let confirming = $state<string | null>(null);
+	let revoking = $state<string | null>(null);
+	let revokeFailed = $state(false);
+
+	async function loadPairedChats() {
+		try {
+			pairedChats = (await fetchPairedChats()).paired_chats;
+		} catch {
+			// The door inventory still carries an honest paired summary. A
+			// transient detail-fetch failure must not turn a connected door off.
+		}
+	}
+
+	onMount(() => {
+		if (pairedChatsOverride === undefined) loadPairedChats();
+	});
+
+	function chatsFor(platform: string): PairedChat[] {
+		return pairedChats.filter((chat) => chat.platform === platform && chat.paired);
+	}
+
+	async function revoke(chat: PairedChat) {
+		revoking = chat.id;
+		revokeFailed = false;
+		try {
+			await revokePairedChat(chat.id);
+			pairedChats = pairedChats.filter((candidate) => candidate.id !== chat.id);
+			confirming = null;
+		} catch {
+			revokeFailed = true;
+		} finally {
+			revoking = null;
+		}
+	}
 
 	const pollTimers: Record<string, ReturnType<typeof setTimeout>> = {};
 	const pollDeadlines: Record<string, number> = {};
@@ -118,6 +160,7 @@
 			const status = await fetchPairStatus(code);
 			if (status.consumed) {
 				pairedOutcomes = { ...pairedOutcomes, [platform]: { display: status.display } };
+				await loadPairedChats();
 				stopPolling(platform);
 				return;
 			}
@@ -179,6 +222,7 @@
 
 		<div class="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
 			{#each allDoors as door (door.platform)}
+				{@const platformChats = chatsFor(door.platform)}
 				<div class="subpanel p-3" data-testid={`door-${door.platform}`}>
 					{#if door.deep_link_available}
 						{@const outcome = mintOutcomes[door.platform]}
@@ -200,7 +244,7 @@
 							</p>
 						</div>
 
-						{#if paired || door.paired}
+						{#if paired || door.paired || platformChats.length > 0}
 							<div
 								class="mt-3 border border-amber-700/60 bg-amber-950/30 p-4"
 								data-testid={`paired-${door.platform}`}
@@ -210,13 +254,65 @@
 									<span class="text-lg text-amber-300" aria-hidden="true">✓</span>
 									<p class="font-mono text-base font-semibold text-amber-100">connected</p>
 								</div>
-								<p class="mt-2 text-sm text-stone-300">
-									{paired?.display ?? door.paired_display ?? 'Your chat'} is ready. Say hello to your
-									resident.
-								</p>
+								{#if platformChats.length > 0}
+									<div class="mt-3 space-y-2">
+										{#each platformChats as chat (chat.id)}
+											<div
+												class="flex items-start justify-between gap-3 border-t border-amber-900/60 pt-2"
+												data-testid="paired-chat-row"
+											>
+												<div class="min-w-0">
+													<div class="flex items-center gap-2">
+														<span
+															class="inline-block h-2 w-2 shrink-0 rounded-full bg-amber-400"
+															aria-hidden="true"
+														></span>
+														<p class="truncate font-mono text-xs font-semibold text-amber-100">
+															{chat.principal_display ?? '(no name reported)'}
+														</p>
+													</div>
+													<p class="mt-1 truncate font-mono text-[10px] text-ink-quiet">
+														{chat.chat_title ? `${chat.chat_title} · ` : ''}{chat.repo_full_name
+															? `pinned to ${chat.repo_full_name}`
+															: 'auto-routed'}
+													</p>
+												</div>
+												<div class="flex shrink-0 items-center gap-2">
+													{#if confirming === chat.id}
+														<button
+															type="button"
+															class="cursor-pointer border border-red-900/60 bg-red-950/30 px-2 py-1 font-mono text-[10px] tracking-wide text-red-200 uppercase hover:bg-red-950/50 disabled:cursor-wait disabled:opacity-60"
+															disabled={revoking === chat.id}
+															onclick={() => revoke(chat)}
+															>{revoking === chat.id ? 'revoking' : 'confirm'}</button
+														>
+														<button
+															type="button"
+															class="cursor-pointer font-mono text-[10px] text-ink-quiet uppercase"
+															disabled={revoking === chat.id}
+															onclick={() => (confirming = null)}>cancel</button
+														>
+													{:else}
+														<button
+															type="button"
+															class="cursor-pointer font-mono text-[10px] tracking-wide text-ink-quiet uppercase underline hover:text-stone-300"
+															onclick={() => (confirming = chat.id)}
+															data-testid="revoke-open">revoke</button
+														>
+													{/if}
+												</div>
+											</div>
+										{/each}
+									</div>
+								{:else}
+									<p class="mt-2 text-sm text-stone-300">
+										{paired?.display ?? door.paired_display ?? 'Your chat'} is ready. Say hello to your
+										resident.
+									</p>
+								{/if}
 								{#if chatLink}
 									<a
-										class="mt-4 flex min-h-11 w-full items-center justify-center border border-emerald-500/70 bg-emerald-900/50 px-4 py-3 font-mono text-sm font-semibold tracking-wide text-emerald-50 uppercase hover:bg-emerald-800/60"
+										class="mt-4 flex min-h-11 w-full items-center justify-center border border-amber-700/70 bg-amber-950/30 px-4 py-3 font-mono text-sm font-semibold tracking-wide text-amber-100 uppercase hover:bg-amber-950/50"
 										href={chatLink}
 										target="_blank"
 										rel="external noreferrer"
@@ -231,6 +327,11 @@
 								disabled={mintingPlatform === door.platform}
 								>{mintingPlatform === door.platform ? 'minting…' : 'connect another chat'}</button
 							>
+							{#if revokeFailed}
+								<p class="mt-2 text-sm text-red-300" data-testid="revoke-error">
+									Couldn't revoke — try again.
+								</p>
+							{/if}
 						{:else if outcome && cd}
 							<!-- The countdown: a designed element with three
 							     distinct states, not a number in parens. -->

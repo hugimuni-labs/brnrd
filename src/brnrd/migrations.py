@@ -76,6 +76,21 @@ def _column_exists(conn: Connection, table_name: str, column_name: str) -> bool:
     )
 
 
+def _column_data_type(conn: Connection, table_name: str, column_name: str) -> str | None:
+    return conn.execute(
+        text(
+            """
+            SELECT data_type
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = :table_name
+              AND column_name = :column_name
+            """
+        ),
+        {"table_name": table_name, "column_name": column_name},
+    ).scalar_one_or_none()
+
+
 def _migrate_accounts(conn: Connection) -> None:
     conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS github_id VARCHAR(32)"))
     conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS github_login VARCHAR(255)"))
@@ -226,15 +241,22 @@ def _migrate_runner_wake_requests(conn: Connection) -> None:
 
 
 def _migrate_channel_routes(conn: Connection) -> None:
-    # #409 — authorization principal for the default-closed Telegram gate;
-    # existing rows land NULL (no principal), which is deliberately
-    # unauthorized until the chat is re-paired via /start.
-    # #1392 — models.py now declares BigInteger (Telegram user ids crossed
-    # 2**31-1 in 2021); a fresh table already gets it right via create_all,
-    # but an existing INTEGER column needs widening the same way #1377
-    # widened events.response_ms.
-    conn.execute(text("ALTER TABLE channel_routes ADD COLUMN IF NOT EXISTS paired_user_id BIGINT"))
-    _widen_channel_routes_paired_user_id(conn)
+    # The principal began as Telegram-only BIGINT ``paired_user_id``.
+    # WhatsApp proved that model false: its verified sender is an E.164
+    # string. Rename the one fact and widen it; never add a second store.
+    legacy_exists = _column_exists(conn, "channel_routes", "paired_user_id")
+    principal_exists = _column_exists(conn, "channel_routes", "paired_principal_id")
+    if legacy_exists and not principal_exists:
+        conn.execute(text("ALTER TABLE channel_routes RENAME COLUMN paired_user_id TO paired_principal_id"))
+        principal_exists = True
+    conn.execute(text("ALTER TABLE channel_routes ADD COLUMN IF NOT EXISTS paired_principal_id VARCHAR(255)"))
+    # A once-interrupted migration may have both columns. Preserve the old
+    # value, then retire the duplicate before any reader can choose wrong.
+    if legacy_exists and principal_exists:
+        conn.execute(text("UPDATE channel_routes SET paired_principal_id = paired_user_id::text WHERE paired_principal_id IS NULL"))
+        conn.execute(text("ALTER TABLE channel_routes DROP COLUMN paired_user_id"))
+    if _column_data_type(conn, "channel_routes", "paired_principal_id") != "character varying":
+        conn.execute(text("ALTER TABLE channel_routes ALTER COLUMN paired_principal_id TYPE VARCHAR(255) USING paired_principal_id::text"))
     # #1457 — account-level routes: NULL repo_id = "resolved at message
     # time", so the column may no longer be NOT NULL. Existing rows keep
     # their value (they become per-chat pins, semantics unchanged).
@@ -252,32 +274,6 @@ def _migrate_tg_pair_codes(conn: Connection) -> None:
     conn.execute(text("ALTER TABLE tg_pair_codes ALTER COLUMN repo_id DROP NOT NULL"))
     # #1464 — the minting session's outcome readback; see models.py.
     conn.execute(text("ALTER TABLE tg_pair_codes ADD COLUMN IF NOT EXISTS redeemed_display VARCHAR(255)"))
-
-
-def _widen_channel_routes_paired_user_id(conn: Connection) -> None:
-    data_type = conn.execute(
-        text(
-            """
-            SELECT data_type
-            FROM information_schema.columns
-            WHERE table_schema = 'public'
-              AND table_name = 'channel_routes'
-              AND column_name = 'paired_user_id'
-            """
-        )
-    ).scalar_one_or_none()
-    if data_type is None:
-        # create_all already made the column the right width on a fresh DB.
-        return
-    if data_type != "integer":
-        # Already bigint (or wider) — nothing to do. A guard that fires on
-        # every type, including bigint, would silently pass over nothing
-        # forever if this ever got renamed away from the intended check.
-        assert data_type == "bigint", (
-            f"unexpected channel_routes.paired_user_id data_type: {data_type!r}"
-        )
-        return
-    conn.execute(text("ALTER TABLE channel_routes ALTER COLUMN paired_user_id TYPE BIGINT"))
 
 
 def _migrate_events(conn: Connection) -> None:

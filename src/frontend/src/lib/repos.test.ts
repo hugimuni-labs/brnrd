@@ -226,6 +226,7 @@ test('fetchPairedChats reads the account-scoped list endpoint', async () => {
 			{
 				id: 'chan_1',
 				platform: 'telegram',
+				paired: true,
 				chat_title: null,
 				principal_display: '@ada_l',
 				paired_at: '2026-08-17T20:00:00+00:00',

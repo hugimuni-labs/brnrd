@@ -7,6 +7,7 @@ import { compile } from 'svelte/compiler';
 import { render } from 'svelte/server';
 import { DOCS_URL } from './publicStats.ts';
 import type { MessengerDoor } from './repos.ts';
+import type { PairedChat } from './repos.ts';
 
 // brr/every-door-on-the-page — same compile-and-render-for-real dance
 // `ColdStart.test.ts` uses: a claim about the rendered HTML only fails
@@ -25,7 +26,8 @@ const generated = join(here, '.messengerDoorsPanel.generated.mjs');
 
 async function renderDoors(
 	doors: MessengerDoor[] | null,
-	nowOverride: number | null = 0
+	nowOverride: number | null = 0,
+	pairedChatsOverride: PairedChat[] = []
 ): Promise<string> {
 	const source = readFileSync(componentPath, 'utf8');
 	const compiled = compile(source, { generate: 'server', runes: true, name: 'MessengerDoors' });
@@ -33,7 +35,7 @@ async function renderDoors(
 	writeFileSync(generated, runnable);
 	try {
 		const module = await import(`${generated}?t=${process.pid}`);
-		return render(module.default, { props: { doors, nowOverride } }).body;
+		return render(module.default, { props: { doors, nowOverride, pairedChatsOverride } }).body;
 	} finally {
 		rmSync(generated, { force: true });
 	}
@@ -95,6 +97,50 @@ test('a paired door renders the existing identity before offering another connec
 	ok(html.includes('Alexandra'));
 	ok(html.includes('connect another chat'));
 	ok(!html.includes('>connect whatsapp<'), 'the stale primary action is gone');
+});
+
+test('a platform row owns its connected chat and revoke control', async () => {
+	const html = await renderDoors(
+		[door({ platform: 'telegram', deep_link_available: true, paired: true, paired_count: 1 })],
+		0,
+		[
+			{
+				id: 'route-1',
+				platform: 'telegram',
+				paired: true,
+				principal_display: 'Gurio',
+				chat_title: 'Workshop',
+				repo_full_name: null,
+				paired_at: null,
+				paired_at_label: 'today'
+			},
+			{
+				id: 'legacy-null-principal',
+				platform: 'telegram',
+				paired: false,
+				principal_display: null,
+				chat_title: 'Not authorized',
+				repo_full_name: null,
+				paired_at: null,
+				paired_at_label: 'long ago'
+			}
+		]
+	);
+	ok(html.includes('data-testid="paired-chat-row"'));
+	ok(html.includes('Gurio'));
+	ok(html.includes('Workshop · auto-routed'));
+	ok(!html.includes('Not authorized'), 'a principal-less legacy route does not render connected');
+	ok(html.includes('data-testid="revoke-open"'));
+	ok(html.includes('bg-amber-400'), 'the connected chat carries the shared amber signal');
+});
+
+test('an unpaired platform keeps connect in the same door row', async () => {
+	const html = await renderDoors([
+		door({ platform: 'whatsapp', deep_link_available: true, paired: false, paired_count: 0 })
+	]);
+	ok(html.includes('data-testid="connect-whatsapp"'));
+	ok(!html.includes('data-testid="paired-chat-row"'));
+	ok(!html.includes('data-testid="revoke-open"'));
 });
 
 test('a dark door with no lever (not_built) is not presented as a broken control', async () => {

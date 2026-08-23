@@ -744,12 +744,12 @@ def _authorized(settings, parsed: tg.ParsedMessage, route: ChannelRoute) -> bool
     attribution is part of the grant."""
     if parsed.user_id is None:
         return False
-    if route.paired_user_id is not None and parsed.user_id == route.paired_user_id:
+    if route.paired_principal_id is not None and str(parsed.user_id) == route.paired_principal_id:
         return True
     if (
         settings.telegram_open_rooms
         and parsed.chat_type in ("group", "supergroup")
-        and route.paired_user_id is not None
+        and route.paired_principal_id is not None
     ):
         return True
     return parsed.user_id in settings.telegram_authz_allowlist
@@ -759,7 +759,7 @@ def _telegram_display_name(parsed: tg.ParsedMessage) -> str:
     """Best-effort human label for a Telegram principal (#1464): the
     `@username` (stable, and what the paired human recognises themselves
     by) when Telegram supplies one, else the first name it always does.
-    Rendering only — never the authorization principal (`paired_user_id`
+    Rendering only — never the authorization principal (`paired_principal_id`
     stays that)."""
     return f"@{parsed.username}" if parsed.username else parsed.user
 
@@ -800,12 +800,12 @@ def _handle_start(db: Session, settings, parsed: tg.ParsedMessage, code: str) ->
         _reply(settings, parsed, "This chat/topic is already paired to another account.")
         return
     if existing is None:
-        existing = ChannelRoute(id=ids.channel_route_id(), platform="telegram", channel_id=parsed.chat_id, topic_id=topic_id, account_id=pc.account_id, repo_id=pc.repo_id, paired_user_id=parsed.user_id, paired_user_display=display, chat_title=chat_title)
+        existing = ChannelRoute(id=ids.channel_route_id(), platform="telegram", channel_id=parsed.chat_id, topic_id=topic_id, account_id=pc.account_id, repo_id=pc.repo_id, paired_principal_id=str(parsed.user_id), paired_user_display=display, chat_title=chat_title)
         db.add(existing)
     else:
         existing.account_id = pc.account_id
         existing.repo_id = pc.repo_id
-        existing.paired_user_id = parsed.user_id
+        existing.paired_principal_id = str(parsed.user_id)
         existing.paired_user_display = display
         existing.chat_title = chat_title
     pc.consumed = True
@@ -898,7 +898,7 @@ def _handle_command(db: Session, settings, parsed: tg.ParsedMessage, command: st
 #    typed); minting a WhatsApp-specific code from the dashboard is
 #    frontend work, out of scope here (see the PR body).
 # 2. There is no default-closed authz gate mirroring Telegram's
-#    ``_authorized``/``paired_user_id``. A WhatsApp "chat" *is* one
+#    ``_authorized``/``paired_principal_id``. A WhatsApp "chat" *is* one
 #    customer's own number (``ParsedMessage.chat_id == wa_id``, no
 #    group-chat concept, no forwarded-message spoofing surface) — the
 #    channel-route lookup below is keyed on that same number, so a route
@@ -999,11 +999,12 @@ def _handle_whatsapp_pair(
         return
     display = _whatsapp_display_name(parsed)
     if existing is None:
-        existing = ChannelRoute(id=ids.channel_route_id(), platform="whatsapp", channel_id=parsed.chat_id, topic_id=None, account_id=pc.account_id, repo_id=pc.repo_id, paired_user_display=display)
+        existing = ChannelRoute(id=ids.channel_route_id(), platform="whatsapp", channel_id=parsed.chat_id, topic_id=None, account_id=pc.account_id, repo_id=pc.repo_id, paired_principal_id=str(parsed.user_id), paired_user_display=display)
         db.add(existing)
     else:
         existing.account_id = pc.account_id
         existing.repo_id = pc.repo_id
+        existing.paired_principal_id = str(parsed.user_id)
         existing.paired_user_display = display
     pc.consumed = True
     # #1464 — see the matching Telegram branch in `_handle_start`.

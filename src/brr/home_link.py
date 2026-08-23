@@ -550,39 +550,47 @@ def link_home(
 
     resolved_owner = owner
     results: list[RepoLinkResult] = []
+    failures: list[str] = []
     for slot, path, name in plan:
-        existing_remote = gitops.default_remote(path)
-        if existing_remote:
-            url = gitops.remote_url(path, existing_remote) or ""
-            if not use_ssh and (https_url := _github_https_url(url)):
-                changed = subprocess.run(
-                    ["git", "remote", "set-url", existing_remote, https_url],
-                    cwd=path,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    env=_noninteractive_git_env(),
-                )
-                if changed.returncode != 0:
-                    raise HomeLinkError(
-                        f"{slot}: could not move the interrupted SSH origin to authenticated HTTPS "
-                        f"({changed.stderr.strip() or 'git remote set-url failed'})"
+        try:
+            existing_remote = gitops.default_remote(path)
+            if existing_remote:
+                url = gitops.remote_url(path, existing_remote) or ""
+                if not use_ssh and (https_url := _github_https_url(url)):
+                    changed = subprocess.run(
+                        ["git", "remote", "set-url", existing_remote, https_url],
+                        cwd=path,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        env=_noninteractive_git_env(),
                     )
-                url = https_url
-            result = _retry_push_if_needed(
-                slot=slot, repo_path=path, url=url, ssh=use_ssh,
-                prepare_push=None if use_ssh else _prepare_https_push,
-            )
+                    if changed.returncode != 0:
+                        raise HomeLinkError(
+                            f"{slot}: could not move the interrupted SSH origin to authenticated HTTPS "
+                            f"({changed.stderr.strip() or 'git remote set-url failed'})"
+                        )
+                    url = https_url
+                result = _retry_push_if_needed(
+                    slot=slot, repo_path=path, url=url, ssh=use_ssh,
+                    prepare_push=None if use_ssh else _prepare_https_push,
+                )
+            else:
+                if resolved_owner is None:
+                    _require_gh_auth()
+                    resolved_owner = resolve_owner(owner)
+                result = _link_one(
+                    slot=slot, repo_path=path, owner=resolved_owner, name=name,
+                    ssh=use_ssh,
+                    prepare_push=None if use_ssh else _prepare_https_push,
+                )
+        except HomeLinkError as exc:
+            failures.append(str(exc))
+            continue
         else:
-            if resolved_owner is None:
-                _require_gh_auth()
-                resolved_owner = resolve_owner(owner)
-            result = _link_one(
-                slot=slot, repo_path=path, owner=resolved_owner, name=name,
-                ssh=use_ssh,
-                prepare_push=None if use_ssh else _prepare_https_push,
-            )
-        results.append(result)
-        if on_result is not None:
-            on_result(result)
+            results.append(result)
+            if on_result is not None:
+                on_result(result)
+    if failures:
+        raise HomeLinkError("; ".join(failures))
     return results

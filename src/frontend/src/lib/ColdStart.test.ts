@@ -12,6 +12,8 @@ import type { ConnectedRepo, GitHubInstallation, MachinesSummary, MessengerDoor 
 const here = dirname(fileURLToPath(import.meta.url));
 const componentPath = join(here, 'ColdStart.svelte');
 const generated = join(here, '.coldStart.generated.mjs');
+const messengerDoorsPath = join(here, 'MessengerDoors.svelte');
+const generatedMessengerDoors = join(here, '.coldStartMessengerDoors.generated.mjs');
 
 // Same rendering dance as PublishConsentNotice.test.ts: compile the real
 // component and render it with real props, so a claim that only becomes
@@ -39,6 +41,16 @@ async function renderColdStart(
 	messengerDoors: MessengerDoor[] | null = null
 ): Promise<string> {
 	const source = readFileSync(componentPath, 'utf8');
+	const messengerDoorsSource = readFileSync(messengerDoorsPath, 'utf8');
+	const messengerDoorsCompiled = compile(messengerDoorsSource, {
+		generate: 'server',
+		runes: true,
+		name: 'MessengerDoors'
+	});
+	writeFileSync(
+		generatedMessengerDoors,
+		messengerDoorsCompiled.js.code.replace(/'(\.\/[A-Za-z0-9_-]+)'/g, "'$1.ts'")
+	);
 	const compiled = compile(source, { generate: 'server', runes: true, name: 'ColdStart' });
 	const runnable = compiled.js.code
 		// Same generic rewrite CapabilityPanel.test.ts uses: any bare relative
@@ -47,6 +59,7 @@ async function renderColdStart(
 		// (`./repos`) needed the same treatment — generic from here so the
 		// next added import doesn't silently need its own regex line too.
 		.replace(/'(\.\/[A-Za-z0-9_-]+)'/g, "'$1.ts'")
+		.replace("'./MessengerDoors.svelte'", "'./.coldStartMessengerDoors.generated.mjs'")
 		.replace(/import\s*\{[^}]*\}\s*from\s*'\$app\/paths';/, 'const resolve = (path) => path;');
 	writeFileSync(generated, runnable);
 	try {
@@ -56,6 +69,7 @@ async function renderColdStart(
 		}).body;
 	} finally {
 		rmSync(generated, { force: true });
+		rmSync(generatedMessengerDoors, { force: true });
 	}
 }
 
@@ -72,7 +86,10 @@ function installation(over: Partial<GitHubInstallation> = {}): GitHubInstallatio
 	};
 }
 
-after(() => rmSync(generated, { force: true }));
+after(() => {
+	rmSync(generated, { force: true });
+	rmSync(generatedMessengerDoors, { force: true });
+});
 
 function repo(over: Partial<ConnectedRepo> = {}): ConnectedRepo {
 	return {
@@ -470,8 +487,8 @@ test('a backend with an available telegram door renders the tappable door, not t
 		{ platform: 'telegram', deep_link_available: true }
 	]);
 	ok(html.includes('the messenger door'));
-	ok(html.includes('data-testid="open-telegram"'), 'the tap affordance renders');
-	ok(html.includes('open telegram'), 'the button carries the real CTA copy');
+	ok(html.includes('data-testid="connect-telegram"'), 'the tap affordance renders');
+	ok(html.includes('connect telegram'), 'the canonical button carries the CTA copy');
 	ok(
 		!html.includes('once a repo is enabled'),
 		'the honest-intermediate copy is gone once a real door exists'
@@ -484,7 +501,10 @@ test('a registry with no available door keeps the honest-intermediate fallback',
 		{ platform: 'whatsapp', deep_link_available: false }
 	]);
 	ok(html.includes('the messenger door'));
-	ok(!html.includes('data-testid="open-telegram"'), 'no tap affordance without an available door');
+	ok(
+		!html.includes('data-testid="connect-telegram"'),
+		'no tap affordance without an available door'
+	);
 	ok(html.includes('once a repo is enabled'), 'the pre-#1457 copy still renders');
 	ok(!html.includes('Telegram or WhatsApp'), '#1465: no longer promises a platform nothing backs');
 });
@@ -495,7 +515,7 @@ test("an absent messenger_doors field (older backend) renders exactly today's co
 	const withAbsent = await renderColdStart([], undefined, null, null, true, undefined as never);
 	const withExplicitNull = await renderColdStart([], undefined, null, null, true, null);
 	equal(withAbsent, withExplicitNull, 'an omitted key renders identically to the explicit default');
-	ok(!withAbsent.includes('data-testid="open-telegram"'));
+	ok(!withAbsent.includes('data-testid="connect-telegram"'));
 	ok(withAbsent.includes('once a repo is enabled'));
 });
 
@@ -504,9 +524,12 @@ test('a registry with an available whatsapp door renders its own tappable button
 		{ platform: 'telegram', deep_link_available: false },
 		{ platform: 'whatsapp', deep_link_available: true }
 	]);
-	ok(html.includes('data-testid="open-whatsapp"'), 'the whatsapp tap affordance renders');
-	ok(html.includes('open whatsapp'));
-	ok(!html.includes('data-testid="open-telegram"'), 'telegram stays unavailable, no button for it');
+	ok(html.includes('data-testid="connect-whatsapp"'), 'the whatsapp tap affordance renders');
+	ok(html.includes('connect whatsapp'));
+	ok(
+		!html.includes('data-testid="connect-telegram"'),
+		'telegram stays unavailable, no button for it'
+	);
 });
 
 test('both doors available render two tappable buttons, no hand-picked primary', async () => {
@@ -514,8 +537,8 @@ test('both doors available render two tappable buttons, no hand-picked primary',
 		{ platform: 'telegram', deep_link_available: true },
 		{ platform: 'whatsapp', deep_link_available: true }
 	]);
-	ok(html.includes('data-testid="open-telegram"'));
-	ok(html.includes('data-testid="open-whatsapp"'));
+	ok(html.includes('data-testid="connect-telegram"'));
+	ok(html.includes('data-testid="connect-whatsapp"'));
 });
 
 // Same flip, same reasoning, in the paired-no-repo state: #1457 mints
@@ -531,7 +554,7 @@ test('paired-no-repo state also renders the tappable door once one is available'
 		[{ platform: 'telegram', deep_link_available: true }]
 	);
 	ok(html.includes('machine paired, no repo enabled yet'));
-	ok(html.includes('data-testid="open-telegram"'));
+	ok(html.includes('data-testid="connect-telegram"'));
 	ok(!html.includes('still waits on a repo'), 'the stale repo-gated copy is gone');
 });
 
