@@ -74,7 +74,10 @@ brnrd do [--outbox DIR] [--timeout SECONDS] \
   same "nothing staged" guarantee. The decision is **per call, not per
   `--reply`**: several replies staged together still share one
   promise-or-none choice, so `--promise` never writes more than one
-  blueprint row per call, however many `--reply`s it carries. `--promise
+  blueprint row per call, however many `--reply`s it carries. Byte-identical
+  bodies may not target several events in one call: reply once and `--note`
+  the sibling events, or the chat would receive one duplicate per target.
+  `--promise
   <what>` takes the same vocabulary as `brnrd promise` (`commit`, `branch`,
   `pr`, `merge`, `kb`, `issue`, `comment`, `message`, `file`) and appends
   the row through `promises.append` — the exact writer `brnrd promise`
@@ -297,7 +300,7 @@ source manifest:
   ✓ Working register (weave.md)                                     product      contract     [bytes]  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Working register, worked example (register.md)                  product      contract     [bytes]  {PACKAGE_ROOT}/prompts/register.md  [mtime]
   ✓ Daemon mechanics (daemon-substrate.md)                          product      substrate    [bytes]  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
-  ✓ Portal verb grammar (`brnrd await` / `brnrd do`, docs portals)  product      substrate      9,962  {PACKAGE_ROOT}/docs/portals.md  [mtime]
+  ✓ Portal verb grammar (`brnrd await` / `brnrd do`, docs portals)  product      substrate     10,129  {PACKAGE_ROOT}/docs/portals.md  [mtime]
   · diffense review-pack prompt                                     product      config             0  {PACKAGE_ROOT}/prompts/diffense.md  [mtime]
   · Introspection dev-mode invitation                               product      config             0  {PACKAGE_ROOT}/prompts/introspection.md  [mtime]
   ✓ Resident identity core                                          product      identity     [bytes]  {PACKAGE_ROOT}/prompts/identity-core.md  [mtime]
