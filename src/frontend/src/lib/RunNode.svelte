@@ -9,6 +9,7 @@
 	// a run that predates the runfile weld, or died before writing a body, is a
 	// normal shape and the page has to say so plainly.
 	import { setContext } from 'svelte';
+	import { deliveryToneClass } from '$lib/deliveryTone';
 	import { resolve } from '$app/paths';
 	import MarkdownContent from './MarkdownContent.svelte';
 	import RunLedgerReceipt from './RunLedgerReceipt.svelte';
@@ -92,14 +93,6 @@
 		const firstSection = beforeProduce.search(/^## /m);
 		return firstSection < 0 ? '' : beforeProduce.slice(firstSection).trim();
 	});
-
-	const TONE_CLASS: Record<string, string> = {
-		delivered: 'text-emerald-400/80',
-		collected: 'text-emerald-400/60',
-		pending: 'text-amber-400',
-		undeliverable: 'text-red-400',
-		unknown: 'text-ink-quiet'
-	};
 
 	function instantLabel(raw: string): string {
 		if (!raw) return '';
@@ -392,7 +385,7 @@
 								<span class="min-w-0 truncate text-amber-200">
 									{message.metadata.kind || 'message'}{target ? ` → ${target}` : ''}
 								</span>
-								<span class="shrink-0 {TONE_CLASS[tone]}">
+								<span class="shrink-0 {deliveryToneClass(tone)}">
 									{message.metadata.status || 'recorded'}{instant ? ` · ${instant}` : ''}
 								</span>
 							</div>
