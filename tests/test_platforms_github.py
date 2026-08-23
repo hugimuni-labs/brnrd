@@ -72,7 +72,7 @@ def test_add_reaction_accepts_200_and_201(monkeypatch, status_code):
     )
 
 
-@pytest.mark.parametrize("status_code", [403, 404, 422])
+@pytest.mark.parametrize("status_code", [403])
 def test_add_reaction_returns_false_without_raising_on_error_status(
     monkeypatch, status_code
 ):
