@@ -299,59 +299,45 @@ def test_portals_none_run_returns_placeholder():
 # ---------------------------------------------------------------------------
 
 
-def test_set_log_scroll_preservation():
+def test_set_log_scroll_preservation(tmp_path):
     """
-    Drive scroll-preservation using Textual's pilot harness (asyncio.run so no
-    pytest-asyncio plugin is needed).  Three scenarios:
-      (a) unchanged content → scroll position completely preserved
-      (b) changed content, user scrolled up → not forced to end
-      (c) changed content, user at tail → stays at tail
+    Drive scroll-preservation through the REAL OperatorConsole._set_log (via
+    build_console_app — never a mirrored copy, which would stay green while
+    the real logic drifted).  Three scenarios:
+      (a) unchanged content -> scroll position completely preserved
+      (b) changed content, user scrolled up -> not forced to end
+      (c) changed content, user at tail -> stays at tail
     """
     try:
-        from textual.app import App, ComposeResult
+        from brr.operator_console.tui import build_console_app
+
+        OperatorConsole = build_console_app()
         from textual.widgets import RichLog
-    except ImportError:
+    except RuntimeError:
         import pytest
 
         pytest.skip("textual not installed")
 
     MANY_LINES = "\n".join(f"line {i:03d}" for i in range(200))
-
-    class ScrollTestApp(App):
-        """Minimal app exercising _set_log scroll logic in isolation."""
-
-        def compose(self) -> ComposeResult:
-            yield RichLog(id="log", auto_scroll=False, wrap=False, markup=False)
-
-        def on_mount(self) -> None:
-            self._last_content: dict[str, str] = {}
-
-        def set_log(self, selector: str, text: str) -> None:
-            """Mirror of OperatorConsole._set_log."""
-            if self._last_content.get(selector) == text:
-                return
-            log = self.query_one(selector, RichLog)
-            was_at_end = log.is_vertical_scroll_end
-            log.clear()
-            log.write(text or "—")
-            if was_at_end:
-                log.scroll_end(animate=False)
-            self._last_content[selector] = text
+    SELECTOR = "#edge-log"
 
     async def _run() -> None:
-        app = ScrollTestApp()
+        app = OperatorConsole(tmp_path)
         async with app.run_test(size=(80, 24)) as pilot:
-            log = app.query_one("#log", RichLog)
+            # Freeze the 1s poll so the pilot owns the pane for the test.
+            if app._poll_timer is not None:
+                app._poll_timer.pause()
+            log = app.query_one(SELECTOR, RichLog)
 
             # Seed with content (write line-by-line so RichLog definitely has
-            # more lines than the 24-row visible area — a single multiline
-            # string may not settle before the next layout pass).
+            # more lines than the 24-row visible area).
+            log.clear()
             for line in MANY_LINES.splitlines():
                 log.write(line)
-            app._last_content["#log"] = MANY_LINES  # prime cache
+            app._last_content[SELECTOR] = MANY_LINES  # prime cache
             await pilot.pause(0.1)
 
-            # --- Prime: scroll to a known mid-position for scenario (a) ---
+            # --- Prime: known positions ---
             log.scroll_end(animate=False)
             await pilot.pause(0.05)
             assert log.is_vertical_scroll_end, "should be at tail after explicit scroll_end"
@@ -359,29 +345,87 @@ def test_set_log_scroll_preservation():
             await pilot.pause(0.05)
             assert not log.is_vertical_scroll_end, "should not be at tail after scroll to top"
 
-            # --- (a) unchanged content → scroll position completely preserved ---
+            # --- (a) unchanged content -> scroll position completely preserved ---
             scroll_before = log.scroll_y
-            app.set_log("#log", MANY_LINES)  # same content — cache hit, no widget touch
+            app._set_log(SELECTOR, MANY_LINES)  # same content — cache hit, no widget touch
             await pilot.pause(0.05)
             assert log.scroll_y == scroll_before, "scroll moved on no-op update"
 
-            # --- (c) changed content, user at tail → stays at tail ---
+            # --- (c) changed content, user at tail -> stays at tail ---
             log.scroll_end(animate=False)
             await pilot.pause(0.05)
             assert log.is_vertical_scroll_end, "pre-condition: at tail"
-            app.set_log("#log", MANY_LINES + "\nextra line appended")
+            app._set_log(SELECTOR, MANY_LINES + "\nextra line appended")
             await pilot.pause(0.05)
             assert log.is_vertical_scroll_end, "tail user should stay at tail after content change"
 
-            # --- (b) changed content, user scrolled up → not forced to end ---
+            # --- (b) changed content, user scrolled up -> not forced to end ---
             log.scroll_to(y=0, animate=False)
             await pilot.pause(0.05)
             assert not log.is_vertical_scroll_end, "pre-condition: not at tail"
-            app.set_log("#log", MANY_LINES + "\nanother update")
+            app._set_log(SELECTOR, MANY_LINES + "\nanother update")
             await pilot.pause(0.05)
             assert not log.is_vertical_scroll_end, (
                 "user who scrolled up should not be yanked to end on content change"
             )
+
+    asyncio.run(_run())
+
+
+def test_cursor_follows_browsing_across_polls(tmp_path):
+    """
+    Cursor != selection: arrows browse, Enter selects.  A 1s poll rebuild must
+    not drag a browsing cursor back to the selected row (the defect the first
+    cut of the cursor-restore shipped).
+    """
+    try:
+        from brr.operator_console.tui import build_console_app
+
+        OperatorConsole = build_console_app()
+        from textual.widgets import DataTable
+    except RuntimeError:
+        import pytest
+
+        pytest.skip("textual not installed")
+
+    import dataclasses
+    from unittest.mock import patch
+
+    from brr.operator_console.model import ConsoleSnapshot
+
+    run_a = _make_run_view(tmp_path)  # run_id="run-test-1234"
+    run_b = dataclasses.replace(run_a, run_id="run-strand-5678", is_subspawn=True)
+    snap = ConsoleSnapshot(
+        repo_root=tmp_path,
+        brr_dir=tmp_path / ".brr",
+        daemon_pid=None,
+        runs=(run_a, run_b),
+        selected_run_id=run_a.run_id,
+        selected=run_a,
+        console_key="console:test",
+        console_thread=(),
+    )
+
+    async def _run() -> None:
+        with patch("brr.operator_console.tui.collect_snapshot", return_value=snap):
+            app = OperatorConsole(tmp_path)
+            async with app.run_test(size=(80, 24)) as pilot:
+                if app._poll_timer is not None:
+                    app._poll_timer.pause()
+                table = app.query_one("#runs", DataTable)
+                await pilot.pause(0.05)
+                assert app._row_ids == [run_a.run_id, run_b.run_id]
+                assert table.cursor_row == 0, "initial cursor on the selected run"
+
+                # Browse to the strand row without selecting it...
+                table.move_cursor(row=1)
+                await pilot.pause(0.05)
+                # ...then a poll tick rebuilds the table.
+                app._poll()
+                await pilot.pause(0.05)
+
+                assert table.cursor_row == 1, "poll rebuild must not yank a browsing cursor"
+                assert app.selected_run_id == run_a.run_id, "browsing must not change selection"
 
     asyncio.run(_run())
 

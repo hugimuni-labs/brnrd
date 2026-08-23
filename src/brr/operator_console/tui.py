@@ -330,7 +330,14 @@ def _attention(run: RunView | None) -> str:
     return "\n".join(lines)
 
 
-def run_tui(repo_root: Path, *, selected_run_id: str | None = None) -> None:
+def build_console_app() -> type:
+    """Import Textual and return the real ``OperatorConsole`` class.
+
+    Textual is imported here rather than at module top so the console stays an
+    optional dependency. Tests reach the actual class through this factory —
+    never a mirrored copy of its logic, which would go green while the real
+    thing drifted.
+    """
     try:
         from textual.app import App, ComposeResult
         from textual.binding import Binding
@@ -386,7 +393,7 @@ def run_tui(repo_root: Path, *, selected_run_id: str | None = None) -> None:
             Binding("j", "toggle_portals_raw", "portals raw JSON", show=False),
         ]
 
-        def __init__(self) -> None:
+        def __init__(self, repo_root: Path, *, selected_run_id: str | None = None) -> None:
             super().__init__()
             self.repo_root = repo_root
             self.selected_run_id = selected_run_id
@@ -396,6 +403,10 @@ def run_tui(repo_root: Path, *, selected_run_id: str | None = None) -> None:
             self._last_content: dict[str, str] = {}
             # Whether the PORTALS pane shows raw JSON (toggled with `j`).
             self._portals_show_raw: bool = False
+            # Run ids in current table row order — lets the cursor follow the
+            # row it was on across rebuilds (browsing), not just the selection.
+            self._row_ids: list[str] = []
+            self._poll_timer: Any = None
 
         def compose(self) -> ComposeResult:
             yield Static("", id="top")
@@ -429,7 +440,7 @@ def run_tui(repo_root: Path, *, selected_run_id: str | None = None) -> None:
         def on_mount(self) -> None:
             self.query_one("#runs", DataTable).add_columns("run", "runner", "age")
             self._poll()
-            self.set_interval(1.0, self._poll)
+            self._poll_timer = self.set_interval(1.0, self._poll)
 
         def _set_log(self, selector: str, text: str) -> None:
             # Skip entirely when the content hasn't changed — the widget is
@@ -464,8 +475,16 @@ def run_tui(repo_root: Path, *, selected_run_id: str | None = None) -> None:
             )
 
             table = self.query_one("#runs", DataTable)
+            # Cursor ≠ selection: arrows move the cursor, Enter selects.
+            # Remember which run the browsing cursor sat on before the rebuild
+            # so a tick never drags an operator mid-browse back to the
+            # selected row.
+            prev_cursor_id: str | None = None
+            if self._row_ids and 0 <= table.cursor_row < len(self._row_ids):
+                prev_cursor_id = self._row_ids[table.cursor_row]
             table.clear()
             chosen_row = 0
+            self._row_ids = []
             for i, item in enumerate(snap.runs):
                 marker = "↳" if item.is_subspawn else "◆"
                 table.add_row(
@@ -474,13 +493,17 @@ def run_tui(repo_root: Path, *, selected_run_id: str | None = None) -> None:
                     _age(item.started_at),
                     key=item.run_id,
                 )
+                self._row_ids.append(item.run_id)
                 if item.run_id == snap.selected_run_id:
                     chosen_row = i
-            # Restore cursor to the selected run so the operator's focus is
-            # not yanked back to row 0 on every tick.  Without this, a strand
-            # selected by the user is immediately deselected by the next poll.
+            # Restore the cursor: follow the row it was on when it still
+            # exists (browsing survives the tick); otherwise fall back to the
+            # selected run so focus is never yanked to row 0.
             if snap.runs:
-                table.move_cursor(row=chosen_row)
+                if prev_cursor_id in self._row_ids:
+                    table.move_cursor(row=self._row_ids.index(prev_cursor_id))
+                else:
+                    table.move_cursor(row=chosen_row)
 
             self.query_one("#attention", Static).update(_attention(run))
             self._set_log("#edge-log", _edges(run))
@@ -532,4 +555,8 @@ def run_tui(repo_root: Path, *, selected_run_id: str | None = None) -> None:
             self._last_content.pop("#portals-log", None)
             self._poll()
 
-    OperatorConsole().run()
+    return OperatorConsole
+
+
+def run_tui(repo_root: Path, *, selected_run_id: str | None = None) -> None:
+    build_console_app()(repo_root, selected_run_id=selected_run_id).run()
