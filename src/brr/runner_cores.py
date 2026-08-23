@@ -68,6 +68,13 @@ from . import runner_capabilities, runner_select
 # per-profile with `probe_models: true`.
 BUNDLED_SHELLS: frozenset[str] = frozenset({"claude", "codex"})
 
+# Short aliases that Claude Code's ``--model`` flag resolves to the *latest*
+# model in that family at dispatch time.  Entries that use one of these are
+# **alias-tracked**: they cannot be stale because the Shell, not the registry,
+# owns the resolution.  A ``pin:`` field overrides the alias with an exact ID
+# and restores pinned semantics (the pin can age).
+CLAUDE_ALIASES: frozenset[str] = frozenset({"haiku", "sonnet", "opus", "fable"})
+
 _PROBE_TIMEOUT_S = 2.0
 _MODEL_TOKEN_RE = re.compile(
     r"\b(?:claude|gpt|o\d|llama|mistral|qwen|deepseek|devstral|grok)"
@@ -180,6 +187,25 @@ def all_cores() -> dict[str, dict[str, Any]]:
     return dict(_BUNDLED_CORES)
 
 
+def is_alias_tracked(entry: dict[str, Any]) -> bool:
+    """True when *entry* resolves via a Shell alias that always tracks the latest model.
+
+    An alias-tracked Core is never stale: the Shell resolves the alias to the
+    latest model in that family at dispatch time, so ``freshness_date`` carries
+    no staleness signal for these entries.  A ``pin:`` field overrides the alias
+    with an exact model ID, making the entry behave as pinned — the pin can age.
+
+    Currently only the ``claude`` Shell exposes named family aliases
+    (:data:`CLAUDE_ALIASES`).  A custom ``pin:`` always defeats alias tracking
+    regardless of shell.
+    """
+    if _str(entry.get("pin")):
+        return False  # explicit pin → pinned semantics, can age
+    shell = (_str(entry.get("shell")) or "").lower()
+    model = (_str(entry.get("model")) or "").lower()
+    return shell == "claude" and model in CLAUDE_ALIASES
+
+
 def stale_entries(
     registry: dict[str, dict[str, Any]],
     now: datetime.date | str | None = None,
@@ -191,6 +217,12 @@ def stale_entries(
     ``freshness_date`` that predates *now* by more than *threshold_days*.
     Entries with no ``freshness_date`` or an unparseable one are excluded
     from the result (not flagged as stale — absence of data is not staleness).
+
+    **Alias-tracked entries are always excluded** regardless of their
+    ``freshness_date``.  An alias-tracked Core (e.g. Claude's ``sonnet``)
+    resolves to the latest model in that family at dispatch time, so the
+    registry date has no staleness meaning.  Pinned entries (exact model IDs,
+    or alias entries that carry a ``pin:`` field) are checked normally.
 
     *now* defaults to today's date when omitted; pass a ``datetime.date`` or
     an ISO-8601 string to compare against a fixed point (useful in tests).
@@ -204,6 +236,8 @@ def stale_entries(
     threshold = datetime.timedelta(days=threshold_days)
     out: dict[str, dict[str, Any]] = {}
     for name, entry in registry.items():
+        if is_alias_tracked(entry):
+            continue  # alias-tracked: resolves at dispatch, date has no staleness meaning
         raw = _str(entry.get("freshness_date"))
         if not raw:
             continue
