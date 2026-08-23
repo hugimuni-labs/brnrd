@@ -48,23 +48,26 @@ test('the "connect this repository" section defers to the dashboard cold-start b
 });
 
 // #1277a, second occurrence: this page's own "connect this repository"
-// section prints the *same* backend `pairing_command` (`cd <repo>\nbrnrd
-// account connect …`) in a COPY-button box as ColdStart.svelte's step 02 —
-// the maintainer's fix direction ("do this for every copy block with a
-// placeholder") applies here too, not only in the dashboard component.
-test('the connect-command box never hands the cd placeholder to the COPY button', () => {
+// section used to hand-roll the `splitPairingCommand` split (and carry its
+// own copied/copyTimer/copy() state). It now delegates to PairingCommand,
+// which owns the split and clipboard helper in one place. The old assertion
+// pinned the inline split — updated to pin the delegation instead, so a
+// future refactor that re-inlines the split would fail here and remember why
+// the component exists.
+test('the connect-command box delegates to PairingCommand, not a hand-rolled split', () => {
 	const src = source();
 	ok(
-		/splitPairingCommand/.test(src),
-		'the page runs the same split ColdStart.svelte uses, not a second parser'
+		/PairingCommand/.test(src),
+		'the page imports and uses PairingCommand — the split and clipboard helper live there'
 	);
 	const connectSection = src.match(/id="connect-heading"[\s\S]{0,2000}/);
 	ok(connectSection, 'the "connect this repository" heading exists');
 	const body = connectSection![0];
 	ok(
-		/pairingParts\?\.runnable/.test(body),
-		'the code block and its COPY button both read the runnable half'
+		/<PairingCommand command=/.test(body),
+		'the connect section uses the shared component, not a hand-copied copy box'
 	);
+	ok(!src.includes('cd <repo>'), 'the page never mentions the placeholder it delegates away from');
 });
 
 // The re-sync control (#1084's escape hatch): `POST /api/github/sync` exists,
