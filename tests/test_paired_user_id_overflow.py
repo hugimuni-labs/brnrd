@@ -1,10 +1,8 @@
-"""#1392 — ``paired_user_id`` overflowed 32-bit INTEGER: Telegram user ids
-crossed 2**31-1 around 2021, so any account created since then could not
-pair, and the failure landed at write time on a brand-new user's very first
-``/start``. See ``brnrd.models.ChannelRoute.paired_user_id`` and
-``brnrd.migrations._migrate_channel_routes`` for the fix. Mirrors the
-shape of ``test_response_ms_overflow.py`` (#1377), the sibling 32-bit
-overflow this same sweep found.
+"""The paired principal is platform-neutral and lossless.
+
+It began as Telegram's BIGINT ``paired_user_id`` (#1392). WhatsApp exposed
+the deeper defect: a successful non-Telegram route had no value in that
+column and disappeared from every persisted status view.
 """
 
 from __future__ import annotations
@@ -17,7 +15,7 @@ pytest.importorskip("fastapi")
 pytest.importorskip("sqlalchemy")
 
 from fastapi.testclient import TestClient  # noqa: E402
-from sqlalchemy import BigInteger  # noqa: E402
+from sqlalchemy import String  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 
 from brnrd import create_app, migrations  # noqa: E402
@@ -83,21 +81,14 @@ def _message(chat_id, text, *, user_id=42, message_id=1):
     }
 
 
-def test_paired_user_id_is_declared_as_biginteger():
-    """The behavioural test below runs on SQLite, whose ints are 64-bit —
-    the 32-bit overflow itself cannot reproduce there (confirmed by
-    reverting the column to ``Integer`` locally: the behavioural test
-    stayed green). This is the assertion that actually pins the fix: a
-    rename or an accidental revert back to ``Integer`` would leave that
-    test green on SQLite while still failing the write on postgres.
-    """
-    assert isinstance(ChannelRoute.__table__.c.paired_user_id.type, BigInteger)
+def test_paired_principal_id_is_declared_as_platform_neutral_text():
+    assert isinstance(ChannelRoute.__table__.c.paired_principal_id.type, String)
 
 
 def test_start_binds_chat_for_a_post2021_telegram_user_id(env):
     """Drives the real write path: the webhook `/start` handler
     (`routers/webhooks.py::_handle_start`) constructing `ChannelRoute` with
-    `paired_user_id=parsed.user_id` — not a direct model `.add()`."""
+    the verified sender — not a direct model `.add()`."""
     app, client = env
     acc = _account(client)
     rid = _repo(client, acc, name="myrepo")
@@ -116,7 +107,7 @@ def test_start_binds_chat_for_a_post2021_telegram_user_id(env):
         ).scalar_one()
         assert binding.repo_id == rid
         # The value must round-trip exactly, not wrap or truncate.
-        assert binding.paired_user_id == _OUT_OF_RANGE_USER_ID
+        assert binding.paired_principal_id == str(_OUT_OF_RANGE_USER_ID)
 
 
 def test_start_binds_a_supergroup_shaped_negative_chat_id(env):
@@ -144,10 +135,8 @@ def test_start_binds_a_supergroup_shaped_negative_chat_id(env):
 
 
 class _FakeInformationSchemaConn:
-    """Records executed statements; answers the one information_schema
-    lookup the guard issues with a fixed ``data_type``."""
-
-    def __init__(self, data_type):
+    def __init__(self, columns, data_type="character varying"):
+        self.columns = set(columns)
         self.data_type = data_type
         self.statements: list[str] = []
 
@@ -155,7 +144,9 @@ class _FakeInformationSchemaConn:
         text = str(statement)
         self.statements.append(text)
         if "information_schema.columns" in text:
-            return _ScalarResult(self.data_type)
+            if "SELECT data_type" in text:
+                return _ScalarResult(self.data_type)
+            return _ScalarResult(1 if params["column_name"] in self.columns else None)
         return _ScalarResult(None)
 
 
@@ -167,31 +158,23 @@ class _ScalarResult:
         return self._value
 
 
-def test_migration_widens_an_integer_paired_user_id_column_to_bigint():
-    conn = _FakeInformationSchemaConn("integer")
-    migrations._widen_channel_routes_paired_user_id(conn)
-    altered = [s for s in conn.statements if "ALTER COLUMN paired_user_id" in s]
-    assert len(altered) == 1
-    assert "BIGINT" in altered[0]
+def test_migration_renames_the_telegram_column_and_widens_it_to_text():
+    conn = _FakeInformationSchemaConn({"paired_user_id"}, data_type="bigint")
+    migrations._migrate_channel_routes(conn)
+    assert any("RENAME COLUMN paired_user_id TO paired_principal_id" in s for s in conn.statements)
+    assert any("ALTER COLUMN paired_principal_id" in s and "VARCHAR(255)" in s for s in conn.statements)
 
 
-def test_migration_leaves_an_already_bigint_paired_user_id_column_alone():
-    conn = _FakeInformationSchemaConn("bigint")
-    migrations._widen_channel_routes_paired_user_id(conn)
-    altered = [s for s in conn.statements if "ALTER COLUMN paired_user_id" in s]
-    assert altered == []
+def test_migration_keeps_the_platform_neutral_column_as_the_one_store():
+    conn = _FakeInformationSchemaConn({"paired_principal_id"})
+    migrations._migrate_channel_routes(conn)
+    assert not any("RENAME COLUMN" in s for s in conn.statements)
+    assert "paired_principal_id" in ChannelRoute.__table__.c
+    assert "paired_user_id" not in ChannelRoute.__table__.c
 
 
-def test_migration_guard_cannot_silently_pass_over_an_unrecognised_type():
-    """A rename of the ``data_type`` string this guard checks for must fail
-    loudly rather than quietly stop widening anything — this is what makes
-    the "leaves bigint alone" test above trustworthy rather than a check
-    that happens to pass because the guard fired on nothing.
-    """
-    conn = _FakeInformationSchemaConn("smallint")
-    with pytest.raises(AssertionError):
-        migrations._widen_channel_routes_paired_user_id(conn)
-
-
-def test_migrate_channel_routes_column_still_present_in_the_model():
-    assert "paired_user_id" in ChannelRoute.__table__.c
+def test_migration_recovers_an_interrupted_two_column_state_without_two_stores():
+    conn = _FakeInformationSchemaConn({"paired_user_id", "paired_principal_id"})
+    migrations._migrate_channel_routes(conn)
+    assert any("SET paired_principal_id = paired_user_id::text" in s for s in conn.statements)
+    assert any("DROP COLUMN paired_user_id" in s for s in conn.statements)

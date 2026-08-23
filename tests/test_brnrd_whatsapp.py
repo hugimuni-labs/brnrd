@@ -256,6 +256,22 @@ def test_pair_code_binds_chat_and_confirms(env):
             )
         ).scalar_one()
         assert route.repo_id == rid
+        assert route.paired_principal_id == "15551234567"
+
+    # The live failure was not transport: this same route accepted work.
+    # It was representation after a fresh page fetch. Exercise that reader,
+    # not only the immediate pairing reply that already looked correct.
+    client.cookies.set("brnrd_session", acc["Authorization"].removeprefix("Bearer "))
+    dashboard = client.get("/v1/dashboard/repos").json()
+    whatsapp = next(
+        door for door in dashboard["messenger_doors"] if door["platform"] == "whatsapp"
+    )
+    assert whatsapp["paired"] is True
+    assert whatsapp["paired_count"] == 1
+    paired_chats = client.get("/v1/dashboard/paired-chats").json()["paired_chats"]
+    assert [(chat["platform"], chat["principal_display"]) for chat in paired_chats] == [
+        ("whatsapp", "Ada")
+    ]
     assert len(sends) == 1
     assert sends[0]["to"] == "15551234567"
     assert "myrepo" in sends[0]["text"]

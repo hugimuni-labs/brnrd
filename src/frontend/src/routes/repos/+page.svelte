@@ -33,7 +33,6 @@
 	import { STATUS_GOOD, STATUS_UNKNOWN, STATUS_WARN, statusDotStyle } from '$lib/statusPalette';
 	import MarkerNotice from '$lib/MarkerNotice.svelte';
 	import MessengerDoors from '$lib/MessengerDoors.svelte';
-	import PairedChats from '$lib/PairedChats.svelte';
 	import CapabilityPanel from '$lib/CapabilityPanel.svelte';
 
 	let data = $state<ReposResponse | null>(null);
@@ -663,7 +662,6 @@
 			     inventory. Keep the available connectors and paired chats at
 			     that boundary instead of marooning them below every repo card. -->
 			<MessengerDoors doors={data.messenger_doors ?? null} embedded />
-			<PairedChats embedded />
 
 			{#if connectedRepos.length === 0}
 				<p class="text-sm text-ink-quiet">No repos enabled yet.</p>
