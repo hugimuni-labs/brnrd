@@ -15485,6 +15485,10 @@ def start(
     next_retention_sweep = time.monotonic() + _RETENTION_FIRST_SWEEP_DELAY_SECONDS
 
     wake = protocol.inbox_wake()
+    # Process-lifetime latch for the parked-branch note's failure path (see
+    # its call site below): the loop ticks every few seconds, and a warning
+    # that repeats every tick is a warning nobody reads.
+    _parked_warn_failed = False
     try:
         while running:
             if time.monotonic() >= next_zombie_sweep:
@@ -15609,8 +15613,17 @@ def start(
             from . import parked_branches
             try:
                 parked_branches.warn_new(repo_root)
-            except Exception as exc:  # noqa: BLE001 — ergonomic warning never kills the daemon
-                print(f"[brnrd] parked_branches.warn_new failed (ignored): {exc}")
+            except Exception as exc:  # noqa: BLE001 — an ergonomics note never kills the loop
+                # Once per process, not once per heartbeat. This runs every
+                # ~10s; a guard that repeats a non-actionable line every tick
+                # stops being read, and then the alarm that matters is buried
+                # in ten thousand copies of one that does not.
+                if not _parked_warn_failed:
+                    _parked_warn_failed = True
+                    print(
+                        "[brnrd] parked-branch note skipped for this process "
+                        f"(ignored, reported once): {exc}"
+                    )
 
             # This is a daily, background observation; a release endpoint can
             # never delay dispatch or make the daemon unhealthy.
