@@ -68,6 +68,7 @@ class RunView:
     prompt: str = ""
     manifest: dict[str, Any] = field(default_factory=dict)
     boot: dict[str, Any] = field(default_factory=dict)
+    wake_manifest: list[dict[str, Any]] = field(default_factory=list)
     boundaries: tuple[Boundary, ...] = ()
     portal_state: dict[str, Any] = field(default_factory=dict)
     inbox_state: Any = field(default_factory=list)
@@ -133,6 +134,22 @@ def _read_boundaries(path: Path) -> tuple[Boundary, ...]:
 def _manifest(path: Path) -> dict[str, Any]:
     text = _read_text(path)
     return protocol.parse_frontmatter(text) if text else {}
+
+
+def _read_wake_manifest(path: Path) -> list[dict[str, Any]]:
+    """Read wake-manifest.json and return its blocks list, or [] on any error.
+
+    Returns an empty list for runs that predate the manifest (file absent)
+    and for any parse error — never raises.  Callers use the empty list as
+    the "no manifest" sentinel.
+    """
+    raw = _read_json(path, {})
+    if not isinstance(raw, dict):
+        return []
+    blocks = raw.get("blocks")
+    if not isinstance(blocks, list):
+        return []
+    return [b for b in blocks if isinstance(b, dict)]
 
 
 def _phase_key(value: str) -> str:
@@ -281,6 +298,7 @@ def _run_from_presence(
             boundaries=boundaries,
             entry=entry,
         ),
+        wake_manifest=_read_wake_manifest(run_dir / "wake-manifest.json"),
         boundaries=boundaries,
         portal_state=(
             _read_json(outbox_dir / "portal-state.json", {})

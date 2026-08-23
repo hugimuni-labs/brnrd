@@ -94,18 +94,55 @@ def _edges(run: RunView | None) -> str:
     return "\n".join(lines).rstrip()
 
 
+def _wake_topology_table(blocks: list[dict[str, Any]]) -> str:
+    """Render wake-manifest.json blocks as a compact topology table."""
+    header = (
+        "TOPOLOGY  (from wake-manifest.json)\n"
+        "────────────────────────────────────────────────────────────────\n"
+        f"{'store':<18}  {'name':<32}  {'kept':>8}  {'cut':>8}  trim\n"
+        f"{'─'*18}  {'─'*32}  {'─'*8}  {'─'*8}  {'─'*4}"
+    )
+    rows: list[str] = []
+    for block in blocks:
+        if not block.get("present"):
+            continue
+        sources = block.get("sources") or []
+        if sources and sources[0].get("synthesized"):
+            store = "synthesized"
+        else:
+            store = (sources[0].get("store") or "?") if sources else "?"
+        name = str(block.get("name") or "?")
+        kept = block.get("bytes_kept")
+        cut = block.get("bytes_cut")
+        trim = str(block.get("trim_kind") or "")
+        kept_str = f"{kept:,}" if isinstance(kept, int) else "—"
+        cut_str = f"{cut:,}" if isinstance(cut, int) else "—"
+        rows.append(
+            f"{store[:18]:<18}  {name[:32]:<32}  {kept_str:>8}  {cut_str:>8}  {trim}"
+        )
+    if not rows:
+        return header + "\n(no present blocks)"
+    return header + "\n" + "\n".join(rows)
+
+
 def _wake(run: RunView | None) -> str:
     if run is None:
         return "No selected run."
+    prompt_bytes = len(run.prompt.encode("utf-8")) if run.prompt else 0
+    header = (
+        f"{run.run_id} · exact daemon → runner payload · "
+        f"{prompt_bytes:,} B\n"
+        "This is what brnrd supplied, not a claim about the Shell's final model context.\n"
+        "────────────────────────────────────────────────────────────────"
+    )
     if not run.prompt:
         return f"{run.run_id}\n\nNo prompt.md captured."
-    return (
-        f"{run.run_id} · exact daemon → runner payload · "
-        f"{len(run.prompt.encode('utf-8')):,} B\n"
-        "This is what brnrd supplied, not a claim about the Shell's final model context.\n"
-        "────────────────────────────────────────────────────────────────\n\n"
-        f"{run.prompt}"
-    )
+    if run.wake_manifest:
+        topology = _wake_topology_table(run.wake_manifest)
+        return f"{header}\n\n{topology}\n\n{run.prompt}"
+    # Pre-manifest run: show bytes+hash header as fallback, then the prompt.
+    no_manifest_note = "no manifest (pre-manifest run)"
+    return f"{header}\n{no_manifest_note}\n\n{run.prompt}"
 
 
 def _boot(run: RunView | None) -> str:
