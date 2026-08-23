@@ -5325,3 +5325,138 @@ class TestPromptsTeachOnlyLiveGrammar:
         # No sanity assertion on `named`: zero mentions is a legitimate state
         # for this one, and asserting non-empty would force a prompt to keep
         # naming the command forever.
+
+
+class TestWakeManifest:
+    """write_wake_manifest produces a valid topology from the real assembler.
+
+    Fixture produced by build_daemon_prompt_with_score → write_wake_manifest,
+    not by hand-crafted JSON. This test exercises the full assembly path so
+    any accounting change that breaks the manifest schema is caught here.
+    """
+
+    def test_write_wake_manifest_from_real_assembler(self, tmp_path):
+        import json
+
+        from brr.prompts import build_daemon_prompt_with_score
+        from brr.run import Run
+        from brr import run_context
+
+        _VALID_STORES = {
+            "product-prompt", "dominion", "surface",
+            "knowledge", "runtime-generated", "synthesized",
+        }
+
+        _, score = build_daemon_prompt_with_score(
+            "check the thing", "evt-mfst-1", "/tmp/resp.md", tmp_path,
+            run_id="run-mfst-test",
+        )
+
+        # Fabricate a minimal Run so write_wake_manifest can derive the path.
+        run = Run(
+            id="run-mfst-test",
+            event_id="evt-mfst-1",
+            body="",
+            source="test",
+            status="running",
+        )
+
+        brr_dir = tmp_path / ".brr"
+        brr_dir.mkdir(exist_ok=True)
+        path = run_context.write_wake_manifest(brr_dir, run, score)
+
+        assert path is not None and path.exists(), "manifest file was not written"
+
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        assert manifest["schema_version"] == "1"
+        assert manifest["run_id"] == "run-mfst-test"
+        blocks = manifest["blocks"]
+        assert isinstance(blocks, list) and blocks, "blocks list must be non-empty"
+
+        required_fields = {"name", "label", "present", "sources", "bytes_kept",
+                           "bytes_cut", "budget_bytes", "trim_kind"}
+        for block in blocks:
+            assert required_fields <= block.keys(), (
+                f"block {block.get('name')!r} missing fields: "
+                f"{required_fields - block.keys()}"
+            )
+            sources = block["sources"]
+            assert isinstance(sources, list) and sources, (
+                f"block {block.get('name')!r} has empty sources"
+            )
+            for src in sources:
+                if src.get("synthesized"):
+                    continue
+                store = src.get("store")
+                assert store in _VALID_STORES, (
+                    f"block {block.get('name')!r} has unknown store {store!r}"
+                )
+
+        # The boot-kernel block must be present and synthesized.
+        kernel = next(
+            (b for b in blocks if b.get("name") == "boot-kernel"), None
+        )
+        assert kernel is not None, "boot-kernel block missing from manifest"
+        assert kernel["sources"] == [{"synthesized": True}], (
+            "boot-kernel must be synthesized (no file source)"
+        )
+
+        # At least one non-synthesized block should have a known store.
+        file_blocks = [
+            b for b in blocks
+            if b.get("present")
+            and not b["sources"][0].get("synthesized")
+        ]
+        assert file_blocks, "expected at least one file-backed present block"
+        for b in file_blocks:
+            assert b["sources"][0].get("store") in _VALID_STORES
+
+    def test_write_wake_manifest_absent_blocks_still_appear(self, tmp_path):
+        """ContractEntry rows with present=False appear in the manifest.
+
+        An absent block has bytes_kept=null (it was never rendered) and
+        bytes_cut=null. The manifest must record it so a reader can see the
+        full scope of what was in play, not just what entered the prompt.
+        """
+        import json
+
+        from brr.prompts import build_daemon_prompt_with_score
+        from brr.run import Run
+        from brr import run_context
+
+        _, score = build_daemon_prompt_with_score(
+            "bare minimum wake", "evt-mfst-2", "/tmp/resp.md", tmp_path,
+            run_id="run-mfst-2",
+        )
+
+        run = Run(
+            id="run-mfst-2",
+            event_id="evt-mfst-2",
+            body="",
+            source="test",
+            status="running",
+        )
+        brr_dir = tmp_path / ".brr"
+        brr_dir.mkdir(exist_ok=True)
+        path = run_context.write_wake_manifest(brr_dir, run, score)
+        assert path is not None
+
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        blocks = manifest["blocks"]
+
+        absent = [b for b in blocks if not b.get("present")]
+        # A minimal tmp_path repo has no dominion, no kb, no knowledge —
+        # those blocks should be absent.
+        assert absent, (
+            "expected some absent blocks (missing dominion/kb on a fresh repo)"
+        )
+        for b in absent:
+            # Absent blocks that were measured during assembly have bytes_kept=0
+            # (ContractEntry.bytes == 0 means "in scope but rendered empty").
+            # bytes_kept=None only appears for unrendered scores (e.g. brnrd
+            # prompts show without assembly). Both are valid.
+            kept = b["bytes_kept"]
+            assert kept is None or isinstance(kept, int), (
+                f"absent block {b.get('name')!r} bytes_kept should be int or null, "
+                f"got {kept!r}"
+            )
