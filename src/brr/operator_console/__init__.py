@@ -1,8 +1,9 @@
 """Local operator console for brnrd.
 
 This is intentionally a developer/operator surface, not the resident's coding
-Shell and not a second daemon. The snapshot/model layer has no optional
-dependencies; Textual is imported only when the interactive frontend starts.
+Shell and not a second daemon. The snapshot layer projects both live presence
+and retained run/home artifacts; Textual is imported only when the interactive
+frontend starts.
 """
 
 from __future__ import annotations
@@ -12,8 +13,8 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from .model import collect_snapshot, resolve_repo_root
-from .tui import run_tui
+from .history import collect_snapshot, resolve_repo_root
+from .history_tui import run_tui
 
 
 def _once(repo_root: Path, selected_run_id: str | None) -> int:
@@ -29,6 +30,8 @@ def _once(repo_root: Path, selected_run_id: str | None) -> int:
             {
                 "run_id": run.run_id,
                 "kind": run.kind,
+                "historical": run.kind.startswith("history"),
+                "status": run.manifest.get("status"),
                 "name": run.name,
                 "label": run.label,
                 "repo_label": run.repo_label,
@@ -53,12 +56,16 @@ def _once(repo_root: Path, selected_run_id: str | None) -> int:
         "selected": (
             {
                 "run_id": selected.run_id,
+                "historical": selected.kind.startswith("history"),
+                "status": selected.manifest.get("status"),
                 "prompt_bytes": len(selected.prompt.encode("utf-8")),
                 "boot": selected.boot,
                 "boundaries": len(selected.boundaries),
                 "portal_state": selected.portal_state,
                 "inbox": selected.inbox_state,
                 "card": selected.card,
+                "body_source": selected.manifest.get("_body_source"),
+                "storage": selected.manifest.get("_storage"),
             }
             if selected
             else None
@@ -72,7 +79,7 @@ def _once(repo_root: Path, selected_run_id: str | None) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="brnrd-console",
-        description="Local operator console over a running brnrd daemon",
+        description="Local operator console over live and retained brnrd runs",
     )
     parser.add_argument(
         "--repo",
@@ -83,7 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--run",
         dest="run_id",
         default=None,
-        help="initial run id to select",
+        help="initial run id to select (live or historical)",
     )
     parser.add_argument(
         "--once",
