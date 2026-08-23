@@ -6596,3 +6596,22 @@ def test_course_stall_resets_on_route_edit(tmp_path):
     _portal(tmp_path, token=f"t{2 * threshold + 1}", pending=0)
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
     assert f"stalled ×{threshold} boundaries" in _inject_text(out)
+
+
+def test_boundary_detail_redacts_file_tool_pattern():
+    """The path/pattern branch redacts and caps like every other branch.
+
+    A Grep pattern is arbitrary text — a secret-shaped value in it must not
+    reach disk, and an unbounded pattern must not either.
+    """
+    from brr.hooks import _tool_detail
+
+    detail = _tool_detail("Grep", {"pattern": "Authorization: Bearer sk-ant-abc123def456ghi"})
+    assert detail is not None
+    assert "sk-ant-abc123def456ghi" not in detail
+    assert "<redacted>" in detail
+
+    long_pattern = "x" * 5000
+    capped = _tool_detail("Grep", {"pattern": long_pattern})
+    assert capped is not None
+    assert len(capped) <= 210  # _DETAIL_OTHER_MAX + ellipsis

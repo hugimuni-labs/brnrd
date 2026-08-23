@@ -290,11 +290,16 @@ def _tool_detail(tool_name: object, tool_input: object) -> str | None:
             cmd = raw[:_DETAIL_BASH_MAX].decode("utf-8", errors="replace") + "…"
         return redact_detail(cmd)
 
-    # File-oriented tools: show the path/pattern.
+    # File-oriented tools: show the path/pattern. Redacted and capped like
+    # every other branch — a Grep pattern is arbitrary text and can carry
+    # exactly the secret shapes the redactor exists for.
     for key in ("file_path", "path", "pattern", "glob"):
         val = tool_input.get(key)
         if isinstance(val, str) and val.strip():
-            return val.strip()
+            summary = val.strip()
+            if len(summary) > _DETAIL_OTHER_MAX:
+                summary = summary[:_DETAIL_OTHER_MAX] + "…"
+            return redact_detail(summary)
 
     # Agent/dispatch tools: show a short task summary.
     for key in ("task", "prompt", "description", "query"):
