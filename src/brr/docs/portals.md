@@ -127,7 +127,10 @@ brnrd do [--outbox DIR] [--timeout SECONDS] \
   same "nothing staged" guarantee. The decision is **per call, not per
   `--reply`**: several replies staged together still share one
   promise-or-none choice, so `--promise` never writes more than one
-  blueprint row per call, however many `--reply`s it carries. `--promise
+  blueprint row per call, however many `--reply`s it carries. Byte-identical
+  bodies may not target several events in one call: reply once and `--note`
+  the sibling events, or the chat would receive one duplicate per target.
+  `--promise
   <what>` takes the same vocabulary as `brnrd promise` (`commit`, `branch`,
   `pr`, `merge`, `kb`, `issue`, `comment`, `message`, `file`) and appends
   the row through `promises.append` — the exact writer `brnrd promise`
