@@ -18,8 +18,9 @@
 	// resurrects that wall or means the control vanishes for exactly the
 	// account that has been through onboarding once and wants to add a
 	// second chat platform later. `/repos` is already titled "repository
-	// control", already carries the account-level `PairedChats` panel this
-	// one sits beside, and its own subtitle already promises "route
+	// control", renders the account-level paired-chats list this component
+	// now owns itself (the separate `PairedChats` panel this line used to
+	// point at was folded in on 2026-08-23), and its own subtitle promises "route
 	// Telegram chats into brnrd" — this is that promise, generalized to
 	// every door and given a mint control, not a new page.
 	//
@@ -423,9 +424,15 @@
 								{/if}
 							</div>
 						{:else}
+							<!-- One sentence, one platform. This line used to name *both*
+							     platforms in *every* tile, so a reader with two doors on
+							     screen read "Telegram/WhatsApp open the app directly" twice
+							     and learned nothing either time. The panel's own
+							     description above already says what a link is and how long
+							     it lives; what belongs in the tile is only what is true of
+							     this door. -->
 							<p class="mt-1.5 text-sm text-stone-300">
-								Tap to mint a link that binds this account — Telegram/WhatsApp open the app
-								directly.
+								Opens {doorLabel(door.platform)} directly.
 							</p>
 							<button
 								type="button"

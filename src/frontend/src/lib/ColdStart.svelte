@@ -1,10 +1,17 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
 	import MessengerDoors from './MessengerDoors.svelte';
 	import PairingCommand from './PairingCommand.svelte';
 	import { DOCS_URL } from './publicStats';
-	import { splitPairingCommand } from './repos';
-	import type { ConnectedRepo, GitHubInstallation, MachinesSummary, MessengerDoor } from './repos';
+	import { isConnected, loadSharedPairedChats, splitPairingCommand } from './repos';
+	import type {
+		ConnectedRepo,
+		GitHubInstallation,
+		MachinesSummary,
+		MessengerDoor,
+		PairedChat
+	} from './repos';
 	// The cold start (2026-08-03). Reported from a real signup on the
 	// deployed dashboard: "two screens - no clarity on the installation, or
 	// what is missing, the actual repo enablement is the repos screen
@@ -172,7 +179,24 @@
 	// registry (Slack, Signal, an unconfigured Telegram/WhatsApp) reads
 	// through the honest-intermediate fallback instead.
 	let availableDoors = $derived((messengerDoors ?? []).filter((d) => d.deep_link_available));
-	let pairedDoors = $derived((messengerDoors ?? []).filter((d) => d.paired));
+	// The fourth reading of "is this door connected" used to live here, and it
+	// was the weakest: `d.paired` alone, the wire flag, ignoring the paired
+	// chats entirely — so a chat the account had already bound could leave
+	// this screen still saying "nothing is paired yet".
+	//
+	// It now shares `isConnected` with `MessengerDoors`, over the same list,
+	// and the list costs nothing extra: the panel this component renders is
+	// already fetching it, and `loadSharedPairedChats` hands both readers the
+	// same in-flight request. One GET, two readers, one derivation.
+	let pairedChats = $state<PairedChat[]>([]);
+	onMount(() => {
+		loadSharedPairedChats()
+			.then((chats) => (pairedChats = chats))
+			// The wire flag still answers on its own; a failed detail fetch
+			// must never turn a connected door back off.
+			.catch(() => {});
+	});
+	let pairedDoors = $derived((messengerDoors ?? []).filter((d) => isConnected(d, pairedChats)));
 
 	// Coarse pointer / UA-CH, client-side only — no new server state, no
 	// User-Agent sniffing on the backend. `pointer: coarse` is the primary
