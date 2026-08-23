@@ -447,6 +447,28 @@ def test_is_alias_tracked_true_for_claude_aliases():
         assert runner_cores.is_alias_tracked(entry), f"{alias!r} should be alias-tracked"
 
 
+def test_a_family_alias_nobody_listed_is_still_alias_tracked():
+    """The member nobody listed.
+
+    `CLAUDE_ALIASES` records today's families; it is not the test. The day a
+    new bare family word ships, a membership check would classify it as pinned
+    and render it stale forever — the same inversion this feature exists to
+    end, arriving one alias later. The property is structural: an exact model
+    ID carries a version, an alias does not.
+    """
+    unlisted = {"shell": "claude", "model": "titan"}
+    assert unlisted["model"] not in runner_cores.CLAUDE_ALIASES
+    assert runner_cores.is_alias_tracked(unlisted)
+
+    # And the other side of the property: an exact ID is never alias-tracked,
+    # however Claude-shaped it looks.
+    for exact in ("claude-fable-5", "opus-5", "sonnet4", "claude.opus"):
+        assert not runner_cores.is_alias_tracked({"shell": "claude", "model": exact}), exact
+
+    # A non-claude shell is never alias-tracked, bare word or not.
+    assert not runner_cores.is_alias_tracked({"shell": "codex", "model": "terra"})
+
+
 def test_is_alias_tracked_false_when_pin_present():
     """A pin overrides alias tracking regardless of the model field."""
     entry = {"shell": "claude", "model": "sonnet", "pin": "claude-sonnet-4-6"}

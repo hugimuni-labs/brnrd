@@ -68,12 +68,15 @@ from . import runner_capabilities, runner_select
 # per-profile with `probe_models: true`.
 BUNDLED_SHELLS: frozenset[str] = frozenset({"claude", "codex"})
 
-# Short aliases that Claude Code's ``--model`` flag resolves to the *latest*
-# model in that family at dispatch time.  Entries that use one of these are
-# **alias-tracked**: they cannot be stale because the Shell, not the registry,
-# owns the resolution.  A ``pin:`` field overrides the alias with an exact ID
-# and restores pinned semantics (the pin can age).
+# The Claude family aliases known at the time of writing.  Documentation, not
+# the test — see :func:`is_alias_tracked` for why the *check* is structural.
 CLAUDE_ALIASES: frozenset[str] = frozenset({"haiku", "sonnet", "opus", "fable"})
+
+# What separates an alias from an exact model ID, structurally: an exact ID
+# carries a version (``claude-fable-5``, ``gpt-5.6-sol``) and therefore a digit
+# or a separator; an alias is a bare family word.  This is the property, and
+# the membership list above is only a record of today's members.
+_BARE_FAMILY_WORD = re.compile(r"^[a-z]+$")
 
 _PROBE_TIMEOUT_S = 2.0
 _MODEL_TOKEN_RE = re.compile(
@@ -195,15 +198,26 @@ def is_alias_tracked(entry: dict[str, Any]) -> bool:
     no staleness signal for these entries.  A ``pin:`` field overrides the alias
     with an exact model ID, making the entry behave as pinned — the pin can age.
 
-    Currently only the ``claude`` Shell exposes named family aliases
-    (:data:`CLAUDE_ALIASES`).  A custom ``pin:`` always defeats alias tracking
-    regardless of shell.
+    Only the ``claude`` Shell exposes named family aliases; :data:`CLAUDE_ALIASES`
+    records the ones known today but is *not* what this checks.  The test is
+    structural — a bare family word (no version, no separator) as opposed to an
+    exact model ID — so a family Anthropic ships tomorrow is classified right
+    without an edit here.  A ``pin:`` always defeats alias tracking, whatever
+    the shell.
     """
     if _str(entry.get("pin")):
         return False  # explicit pin → pinned semantics, can age
     shell = (_str(entry.get("shell")) or "").lower()
     model = (_str(entry.get("model")) or "").lower()
-    return shell == "claude" and model in CLAUDE_ALIASES
+    if shell != "claude" or not model:
+        return False
+    # Structural, not a membership test against CLAUDE_ALIASES. A class defined
+    # by listing its members meets the member nobody listed: the day Anthropic
+    # ships a new family word, a list-based check would quietly classify it as
+    # pinned and render it stale forever — which is the exact inversion this
+    # function exists to end, arriving one alias later. The property is that an
+    # exact model ID carries a version and an alias does not.
+    return bool(_BARE_FAMILY_WORD.match(model))
 
 
 def stale_entries(

@@ -1065,8 +1065,11 @@ def test_alias_tracked_profile_never_renders_stale(tmp_path, monkeypatch):
             assert "stale" not in line, (
                 f"rendered catalog line for alias-tracked profile {row_name!r} contains 'stale': {line!r}"
             )
-            assert "alias-tracked" in line, (
-                f"rendered catalog line for alias-tracked profile {row_name!r} should say 'alias-tracked': {line!r}"
+            # Deliberately no positive label: the wake renders what a
+            # resident may have to act on, and "fine by construction" is
+            # not that. The absence of `stale` is the whole signal.
+            assert "alias-tracked" not in line, (
+                f"alias-tracked rows must not carry a positive label: {line!r}"
             )
 
 

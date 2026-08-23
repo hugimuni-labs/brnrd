@@ -4687,8 +4687,12 @@ def _render_runner_catalog(
             bits.append(f"auth={item['auth_variant']}")
         if availability != "available":
             bits.append(f"availability={availability}")
-        if item.get("alias_tracked"):
-            bits.append("alias-tracked")
+        # No positive `alias-tracked` label. The wake renders what a resident
+        # may have to act on; "this row is fine, by construction" is not that,
+        # and five such labels every wake is the noise the maintainer asked to
+        # have removed from the status line (2026-08-19, w-54). The absence of
+        # `stale` is the signal. The field stays on the record for callers that
+        # need to distinguish the two.
         if item.get("stale"):
             bits.append("stale")
         lines.append(
