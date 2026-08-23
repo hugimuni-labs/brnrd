@@ -1200,3 +1200,36 @@ def test_classify_timed_out_counts_as_failure():
     result = forge_state._classify_deploy_lane(runs)
     assert result["health"] == "failing"
     assert result["consecutive_failures"] == 3
+
+
+def test_the_daemon_actually_feeds_the_deploy_lane_cache():
+    """The classifier nothing fed.
+
+    `forge_workflow_cache` shipped complete, tested against fixtures, and
+    correct in all four branches — and the daemon never called its refresh.
+    `read_state` would have answered `absent` on every real machine forever,
+    so the one line a reader ever saw would have been "deploy lane: unknown",
+    for the rest of time.
+
+    A guard is only as live as the thing that feeds it, and the fixture that
+    proves the guard says nothing about whether anything does. This asserts
+    the call exists beside its sibling cache in the heartbeat body — the one
+    place the whole feature depends on and the one place no unit test of the
+    module itself can reach.
+    """
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1] / "src" / "brr" / "daemon.py"
+    body = source.read_text(encoding="utf-8")
+    assert "forge_workflow_cache.refresh_if_stale_async(repo_root)" in body, (
+        "the deploy-run cache is never refreshed by the daemon — read_state "
+        "will answer 'absent' forever and the lane will always render unknown"
+    )
+    # And it must sit beside the sibling it copies, inside the heartbeat, not
+    # in some startup-only path a long-lived daemon passes once.
+    pr_at = body.index("forge_pr_cache.refresh_if_stale_async(repo_root)")
+    wf_at = body.index("forge_workflow_cache.refresh_if_stale_async(repo_root)")
+    assert 0 < wf_at - pr_at < 1200, (
+        "the deploy-run refresh drifted away from the PR-cache refresh it "
+        "shares a cadence contract with"
+    )
