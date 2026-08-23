@@ -4,11 +4,19 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-// Source-level, deliberately — same rationale as before: ConnectFlow reads
-// onMount, history.replaceState, and browser APIs that the SSR harness cannot
-// stub cheaply, and the claims here are structural (markup presence, link
-// shapes, absence of wrong patterns), not derived state. The one exception is
-// the initial-phase check, which is a source-level read of the $state init.
+import { codeInFlight, connectPhase } from './connect.ts';
+
+// Source-level, and the boundary matters. This harness is
+// `node --test src/lib/*.test.ts` — no DOM — so a `.svelte` file can only be
+// read as text here. That is legitimate for *structural* claims (a markup
+// block exists, a link is built through the shared helper, a wrong pattern is
+// absent) and it is worthless for *behavioural* ones: two tests here used to
+// regex the phase initialiser and the done assignment, and both went red on a
+// refactor that made the component strictly more correct.
+//
+// So the decisions moved out to `connect.ts` (`connectPhase`, `codeInFlight`)
+// where they can be driven with real inputs, and what stays source-level is
+// only what a reader could verify by looking.
 const here = dirname(fileURLToPath(import.meta.url));
 const connectFlowPath = join(here, 'ConnectFlow.svelte');
 const connectCodeRoutePath = join(here, '..', 'routes', 'connect', '[code]', '+page.svelte');
@@ -27,16 +35,27 @@ test('ConnectFlow contains all three phase blocks in one component', () => {
 	ok(src.includes("phase === 'done'"), 'done phase block present');
 });
 
-test('ConnectFlow starts at entry when no initialCode is given', () => {
-	const src = flowSource();
-	// The $state initialiser must read: initialCode ? 'confirm' : 'entry'
-	// so a no-props render starts at the entry form, not the confirm phase.
-	ok(
-		/let phase = \$state<Phase>\(\s*initialCode\s*\?\s*['"]confirm['"]\s*:\s*['"]entry['"]\s*\)/.test(
-			src
-		),
-		'phase initialises to confirm when initialCode is set, entry otherwise'
-	);
+test('the phase is decided by the code in flight, not by which route mounted', () => {
+	// Was a regex over the component's own source. It went red on a refactor
+	// that made the component strictly more correct, which is the whole tell:
+	// it pinned the spelling of an initialiser and witnessed no behaviour.
+	// `connectPhase` is that decision, extracted so it can actually be driven.
+	strictEqual(connectPhase({ code: '', approved: false }), 'entry');
+	strictEqual(connectPhase({ code: 'BR-94RTUFHR', approved: false }), 'confirm');
+	strictEqual(connectPhase({ code: 'BR-94RTUFHR', approved: true }), 'done');
+	// An approve cannot have happened without a code, but if state ever got
+	// there the reader must see the connected screen, never the empty form.
+	strictEqual(connectPhase({ code: '', approved: true }), 'done');
+});
+
+test('a submitted code outranks the route param, because replaceState never changes it', () => {
+	// The /connect path: the prop stays '' for the component's whole life and
+	// phase 2 arrives by replaceState. Without this the flow would never move.
+	strictEqual(codeInFlight({ code: 'BR-FORMCODE', hash: '#BR-FORMCODE' }, ''), 'BR-FORMCODE');
+	// The /connect/<code> path: nothing is ever submitted, the URL owns it.
+	strictEqual(codeInFlight(null, 'BR-URLCODE1'), 'BR-URLCODE1');
+	// Neither: the entry form, which is what an empty string means downstream.
+	strictEqual(codeInFlight(null, ''), '');
 });
 
 test('ConnectFlow starts at confirm when initialCode is provided (deep-link / reload)', () => {
@@ -118,10 +137,7 @@ test('all terminal statuses are handled in the confirm phase', () => {
 
 test('suggestedIsLocal note renders for local forge, guarding the synthesized name', () => {
 	const src = flowSource();
-	ok(
-		src.includes('suggestedIsLocal'),
-		'suggestedIsLocal derived value is checked in the template'
-	);
+	ok(src.includes('suggestedIsLocal'), 'suggestedIsLocal derived value is checked in the template');
 	ok(
 		src.includes('no forge behind this one'),
 		'the local-forge note renders to warn about the synthesized name'
@@ -170,12 +186,15 @@ test('ConnectFlow is the only file containing approval logic', () => {
 
 // --- approval phase: the flow enters correctly, then exits to done ---
 
-test('ConnectFlow transitions to done after a successful approve', () => {
+test('only a successful approve reaches the done screen', () => {
 	const src = flowSource();
-	// On result.ok, phase must be set to 'done'
+	// The transition itself is `connectPhase`, driven above. What is still
+	// worth pinning here is the *condition*: the flag may only be raised
+	// inside the `result.ok` branch, never on a failed or absent approve.
+	ok(src.includes('if (result.ok)'), 'the done flag is raised under result.ok');
+	ok(src.includes('approved = true;'), 'the done flag is raised at all');
 	ok(
-		/phase = ['"]done['"]/.test(src),
-		"phase is set to 'done' after a successful approve"
+		src.indexOf('if (result.ok)') < src.indexOf('approved = true;'),
+		'the done flag is raised after the ok check, not before it'
 	);
-	ok(src.includes("result.ok"), 'result.ok is the condition for the done transition');
 });
