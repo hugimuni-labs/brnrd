@@ -44,6 +44,8 @@ class Boundary:
     inject: str
     block: bool = False
     block_reason: str = ""
+    detail: str = ""    # redacted tool detail (cmd/path/summary); "" when absent
+    out_bytes: int = -1  # total response byte count; -1 when not recorded
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -116,6 +118,9 @@ def _read_boundaries(path: Path) -> tuple[Boundary, ...]:
             record = {"phase": "?", "inject": raw, "malformed": True}
         if not isinstance(record, dict):
             record = {"phase": "?", "inject": str(record), "malformed": True}
+        raw_out = int(record["out_bytes"]) if isinstance(
+            record.get("out_bytes"), (int, float)
+        ) else -1
         out.append(
             Boundary(
                 seq=len(out) + 1,
@@ -125,6 +130,8 @@ def _read_boundaries(path: Path) -> tuple[Boundary, ...]:
                 inject=str(record.get("inject") or ""),
                 block=bool(record.get("block")),
                 block_reason=str(record.get("block_reason") or ""),
+                detail=str(record.get("detail") or ""),
+                out_bytes=raw_out,
                 raw=dict(record),
             )
         )
