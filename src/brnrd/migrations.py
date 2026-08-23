@@ -248,13 +248,24 @@ def _migrate_channel_routes(conn: Connection) -> None:
     principal_exists = _column_exists(conn, "channel_routes", "paired_principal_id")
     if legacy_exists and not principal_exists:
         conn.execute(text("ALTER TABLE channel_routes RENAME COLUMN paired_user_id TO paired_principal_id"))
+        # The rename *consumed* the legacy column — it did not leave a copy.
+        # This assignment is the whole of the 2026-08-23 prod outage: without
+        # it, the two-column recovery below fired against a column the
+        # statement above had just renamed away, Postgres answered
+        # `UndefinedColumn`, and every container built from that image died
+        # at startup. Twelve rollouts stayed `pending` and timed out while a
+        # fresh database — which never has this column, so never reaches this
+        # branch — kept the suite green.
+        legacy_exists = False
         principal_exists = True
     conn.execute(text("ALTER TABLE channel_routes ADD COLUMN IF NOT EXISTS paired_principal_id VARCHAR(255)"))
-    # A once-interrupted migration may have both columns. Preserve the old
-    # value, then retire the duplicate before any reader can choose wrong.
-    if legacy_exists and principal_exists:
+    # A once-interrupted migration may have both columns *at the same time* —
+    # the only state where the old value still exists to be preserved.
+    # Reachable exclusively when the rename above did not run.
+    if legacy_exists:
         conn.execute(text("UPDATE channel_routes SET paired_principal_id = paired_user_id::text WHERE paired_principal_id IS NULL"))
         conn.execute(text("ALTER TABLE channel_routes DROP COLUMN paired_user_id"))
+        legacy_exists = False
     if _column_data_type(conn, "channel_routes", "paired_principal_id") != "character varying":
         conn.execute(text("ALTER TABLE channel_routes ALTER COLUMN paired_principal_id TYPE VARCHAR(255) USING paired_principal_id::text"))
     # #1457 — account-level routes: NULL repo_id = "resolved at message
