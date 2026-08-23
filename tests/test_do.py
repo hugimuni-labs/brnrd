@@ -792,6 +792,25 @@ def test_do_two_replies_back_to_back_with_no_body_is_rejected(tmp_path, monkeypa
     assert "--reply evt-1 has no --body-file/--body" in err
 
 
+def test_do_rejects_identical_body_for_multiple_event_replies(tmp_path, monkeypatch, capsys):
+    """One body answering a burst is one message plus notes, not N copies."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+
+    assert main([
+        "do",
+        "--reply", "evt-1", "--body", "same answer",
+        "--reply", "evt-2", "--body", "same answer",
+        "--no-promise",
+    ]) == 1
+
+    err = capsys.readouterr().err
+    assert "identical reply body targets multiple events" in err
+    assert "Reply once and --note the sibling event(s)" in err
+    assert not list(outbox.glob("do-*.md"))
+
+
 def test_do_reply_missing_body_file_is_rejected_before_staging(tmp_path, monkeypatch, capsys):
     outbox = tmp_path / "outbox"
     outbox.mkdir()
