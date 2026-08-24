@@ -693,6 +693,17 @@ def _body_sha(body_markdown: str) -> str:
 #: A noted close is silent on the platform and terminal in the database.
 RESPONSE_STATUS_NOTED = "noted"
 
+#: brnrd#1388 — the server's own half of "resend to rehandle is the
+#: contract". ``noted`` above closes a row a daemon *chose* to retire; nothing
+#: closed a row the daemon never got around to at all, so a queued event
+#: could sit forever waiting on a daemon that crashed, was uninstalled, or
+#: simply never noted it (`RESPONSE_STATUS_NOTED`'s own docstring measured
+#: the blast radius: 1,226 events on one fresh poll, `clamp_since` pinned to
+#: the beginning of time by a single such row). ``expired`` is the server
+#: closing that row on its own clock instead of depending on the daemon
+#: side ever running — see :func:`_expire_stale_queued` / :func:`gc_events`.
+RESPONSE_STATUS_EXPIRED = "expired"
+
 
 def _close_noted(db: Session, event: Event) -> Event:
     """Retire *event* server-side with no platform forward.
@@ -808,15 +819,96 @@ def record_response(db: Session, *, repo_id: str, event_id: str, body_markdown: 
 _EVENT_BODY_TTL = timedelta(days=14)
 _EVENT_ROW_TTL = timedelta(days=90)
 _GC_INTERVAL_S = 3600.0
-_gc_state = {"at": 0.0}
+# `time.monotonic()`'s epoch is unspecified — commonly seconds since host
+# boot on Linux, so on a freshly-booted CI runner (uptime under an hour)
+# the raw value itself can sit under `_GC_INTERVAL_S`. `0.0` as "never run"
+# assumed the epoch was process-start-relative; it is not, and
+# `tick - 0.0 < _GC_INTERVAL_S` then throttles the very first call.
+# `-inf` is correct for any epoch: `tick - (-inf)` is always `+inf`.
+_gc_state = {"at": float("-inf")}
+
+#: brnrd#1388 default — see `RESPONSE_STATUS_EXPIRED` and
+#: `config.Settings.inbox_stale_event_horizon_hours` (the live override
+#: `gc_events` callers thread through; this is only the fallback for a
+#: caller that passes none, e.g. a test or a script running outside the
+#: request/settings path).
+_STALE_EVENT_HORIZON_DEFAULT = timedelta(hours=48.0)
 
 
 def reset_gc_throttle() -> None:
-    """Test seam: allow the next gc_events call to run."""
-    _gc_state["at"] = 0.0
+    """Test seam: allow the next gc_events call to run.
+
+    `-inf`, not `0.0` — see the comment on `_gc_state`'s definition. A
+    caller on a low-uptime host that reset to `0.0` here would still get
+    throttled on the very next call, which is exactly backwards for a
+    "make sure the next call runs" seam.
+    """
+    _gc_state["at"] = float("-inf")
 
 
-def gc_events(db: Session, *, now: datetime | None = None, force: bool = False) -> None:
+def _expire_stale_queued(db: Session, *, now: datetime, horizon: timedelta) -> int:
+    """Close every queued row older than *horizon* as `expired`.
+
+    brnrd#1388's server half: `_close_noted` above only ever closes a row a
+    connected daemon deliberately noted; a row whose daemon never noted it
+    — crashed, uninstalled, or simply never running long enough to see it —
+    stayed queued forever, which is exactly the shape that pinned
+    `clamp_since`'s `oldest_queued - 1` floor at the beginning of time (see
+    `RESPONSE_STATUS_NOTED`'s docstring for the incident that measured it).
+    Closing on the server's own clock, independent of any daemon, is what
+    makes that floor self-heal on a schedule instead of on a hope.
+
+    Same per-row close shape as `_close_noted` (nulls body/attachments,
+    stamps `response_*` identically) — deliberately not a bulk `UPDATE`,
+    since `response_ms` is computed per row against that row's own
+    `created_at`, the same reason `_close_noted` and `record_response`'s
+    terminal branch are per-row too. Volume is bounded by cadence: this
+    runs at most once an hour (`gc_events`'s own throttle), over whatever
+    crossed the horizon since the last tick, not the whole table.
+    """
+    cutoff = now - horizon
+    stale = db.execute(
+        select(Event).where(
+            Event.status == Event.STATUS_QUEUED,
+            Event.created_at < cutoff,
+        )
+    ).scalars()
+    count = 0
+    for event in stale:
+        created = event.created_at
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        event.response_status = RESPONSE_STATUS_EXPIRED
+        event.response_len = 0
+        event.response_ms = int((now - created).total_seconds() * 1000)
+        event.response_sha = _body_sha("")
+        event.responded_at = now
+        event.status = Event.STATUS_RESPONDED
+        event.body = None
+        event.attachments_json = "[]"
+        count += 1
+    if count:
+        # Commit before `gc_events`'s own bulk delete/update run: those use
+        # SQLAlchemy's ORM-enabled bulk statements, which synchronize
+        # in-session dirty objects via a Python-side re-evaluation of their
+        # WHERE clause (`synchronize_session="evaluate"`, the default for an
+        # ORM-mapped `update`/`delete`) — and evaluating that clause against
+        # a still-pending, not-yet-flushed row here raised
+        # `TypeError: can't compare offset-naive and offset-aware datetimes`
+        # (SQLite hands back a naive `created_at`; the bulk statements below
+        # compare against a tz-aware `now`). Committing first clears the
+        # dirty set, so those statements synchronize against nothing here.
+        db.commit()
+    return count
+
+
+def gc_events(
+    db: Session,
+    *,
+    now: datetime | None = None,
+    force: bool = False,
+    stale_event_horizon: timedelta | None = None,
+) -> None:
     """Opportunistic sweep, throttled process-wide to once an hour.
 
     Piggybacks on the activity publish (`PUT /v1/daemons/activity`) the same
@@ -824,12 +916,26 @@ def gc_events(db: Session, *, now: datetime | None = None, force: bool = False) 
     bounded, and a deployment with no daemons has nothing accreting anyway.
     Deleting old rows is cursor-safe: `clamp_since` only cares about the
     per-repo max seq, and rows this old sit far below any live cursor.
+
+    *stale_event_horizon* — brnrd#1388's ingestion-age horizon
+    (`config.Settings.inbox_stale_event_horizon_hours`); the caller threads
+    the live setting through so the sweep honors an operator override
+    without this module importing `config` itself. ``None`` or a
+    non-positive value falls back to / disables the sweep respectively —
+    same "off means off" shape the daemon-side horizon uses.
     """
     tick = time.monotonic()
     if not force and tick - _gc_state["at"] < _GC_INTERVAL_S:
         return
     _gc_state["at"] = tick
     now = now or datetime.now(timezone.utc)
+    horizon = (
+        _STALE_EVENT_HORIZON_DEFAULT
+        if stale_event_horizon is None
+        else stale_event_horizon
+    )
+    if horizon > timedelta(0):
+        _expire_stale_queued(db, now=now, horizon=horizon)
     db.execute(delete(Event).where(Event.created_at < now - _EVENT_ROW_TTL))
     db.execute(
         update(Event)
