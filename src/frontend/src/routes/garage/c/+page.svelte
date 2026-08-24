@@ -259,7 +259,7 @@
 							type="button"
 							class:chosen={environmentSelection === null}
 							onclick={() => (environmentSelection = null)}
-							>{environment.name}{environment.isDefault ? ' · default' : ''}</button
+							>{environment.name}{#if environment.isDefault}<span>default</span>{/if}</button
 						>
 						{#each selectedRepo?.environments ?? [] as option (option.name)}<button
 								type="button"
