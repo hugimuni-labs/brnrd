@@ -2,30 +2,10 @@
 	import { onMount } from 'svelte';
 	import { GITHUB_REPO } from '$lib/publicStats';
 
-	// The landing's hero exchange. It is not a mock, and this file used to lie
-	// about that (2026-07-31): the first version rendered an *invented*
-	// conversation under the eyebrow "an actual exchange, not a screenshot" —
-	// a claim meant to say "live DOM, not an image" that every visitor reads
-	// as "this happened". It hadn't. The maintainer felt it as "slightly
-	// artificial" within ten minutes of the deploy, and his own brief that
-	// afternoon had already asked for the opposite: *"the whole conversation
-	// mock should be real"*.
-	//
-	// So every line below is verbatim from this repository's own Telegram
-	// thread on 2026-07-31 at 21:54 CEST — the maintainer's message as he
-	// typed it, the resident's reply as it was sent, trimmed at sentence
-	// boundaries and never rewritten. Every number resolves: #908, #909 and
-	// #903 are real pull requests and issues in the repository this page
-	// links to, and `c05699d7` is the commit that merged #908. The invented
-	// version used `a3f9c1e`, `PR #142` and "4/5 green" — smaller, rounder
-	// and less impressive than the truth they replaced, which is the whole
-	// argument for never inventing here again.
-	//
-	// The one thing no competitor's landing shows (genre research,
-	// `research-peer-landing-and-identity-2026-07-31.md`) is continuity: the
-	// resident's second line recognises a test and remembers filing the issue
-	// for it earlier that same day, unprompted. That beat is the product, so
-	// it is not a footnote.
+	// A real exchange from this repository's Telegram thread on 2026-07-31.
+	// Lines stay verbatim; the long diagnostic is trimmed at sentence boundaries
+	// so the proof does not swallow the landing on a phone. The continuity beat
+	// remains: the resident recognises #903 from earlier that same afternoon.
 	const REPO_URL = `https://github.com/${GITHUB_REPO}`;
 
 	interface Chip {
@@ -39,9 +19,6 @@
 		from: 'you' | 'resident';
 		kind: 'text' | 'receipt';
 		text?: string;
-		/** Milliseconds after the previous bubble. Deliberately uneven: a fixed
-		 *  metronome is the tell that a reveal was scripted, and the real gap
-		 *  before a receipt is the length of the work. */
 		gap: number;
 	}
 
@@ -61,16 +38,12 @@
 		{
 			from: 'resident',
 			kind: 'text',
-			// The memory beat, verbatim.
-			text: '#909 (docs): backend red = test_dashboard_coarse_recheck_only_touches_stale_repos — that’s #903, the flaky thread-race filed this afternoon. A docs-only diff has zero .py changes; it cannot reach that code path. Retriggered.',
-			gap: 1900
+			text: '#909 (docs): backend red = test_dashboard_coarse_recheck_only_touches_stale_repos — that’s #903, the flaky thread-race filed this afternoon. Retriggered.',
+			gap: 1700
 		},
-		{ from: 'resident', kind: 'receipt', gap: 1500 }
+		{ from: 'resident', kind: 'receipt', gap: 1200 }
 	];
 
-	// The receipts are links, not decorations: every chip opens the thing it
-	// names. A receipt you cannot click is the same genre of claim as the
-	// exchange this file used to invent.
 	const CHIPS: Chip[] = [
 		{
 			icon: '🔨',
@@ -107,21 +80,23 @@
 </script>
 
 <div class="panel p-4" aria-label="a real exchange with the resident">
-	<p class="eyebrow">a real exchange · 31 july 2026 · this repository's own thread</p>
+	<div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+		<p class="eyebrow">a real exchange</p>
+		<p class="font-mono text-[9px] tracking-wide text-ink-mute uppercase">
+			you · Telegram ↔ resident
+		</p>
+	</div>
 	<div class="mt-3 flex flex-col gap-2">
 		{#each BUBBLES as bubble, i (i)}
 			{#if i < visibleCount}
 				<div class="ignite flex {bubble.from === 'you' ? 'justify-end' : 'justify-start'}">
-					<!-- `min-w-0` + `break-words`: real work carries unbroken tokens a
-					     copywriter never types — a 52-character test name here — and
-					     without these it escapes the panel on every width. -->
-					<div class="max-w-[85%] min-w-0 sm:max-w-[75%]">
+					<div class="max-w-[88%] min-w-0 sm:max-w-[78%]">
 						<p
-							class="mb-0.5 font-mono text-[10px] tracking-wide uppercase {bubble.from === 'you'
+							class="mb-0.5 font-mono text-[9px] tracking-wide uppercase {bubble.from === 'you'
 								? 'text-right text-amber-200/70'
 								: 'text-ink-quiet'}"
 						>
-							{bubble.from === 'you' ? 'you · telegram' : 'resident'}
+							{bubble.from === 'you' ? 'you' : 'resident'}
 						</p>
 						{#if bubble.kind === 'receipt'}
 							<div
@@ -137,9 +112,6 @@
 										>
 									{/each}
 								</div>
-								<!-- No test count here on purpose. The number that would go in
-							     this slot grows every week, so a figure baked into the
-							     markup is a slow lie; the two facts below do not move. -->
 								<p class="mt-1.5 font-mono text-amber-300">
 									✓ gate green — merged, deployed 21:51 CEST
 								</p>
@@ -159,13 +131,10 @@
 			{/if}
 		{/each}
 	</div>
-	<!-- Two facts the page can back. The provenance line is load-bearing: it
-	     is what lets the eyebrow above say "real" without overclaiming, and it
-	     names the trim honestly. The cherry is the hosted layer showing up as
-	     one annotation on an exchange it merely carried — never as the reason
-	     the exchange happened. -->
-	<p class="mt-3 border-t border-stone-800/70 pt-2 font-mono text-[10px] text-ink-mute">
-		verbatim, trimmed for length, never rewritten · sent from a phone over Telegram · the resident
-		ran on the sender's own machine
+	<p
+		class="mt-3 border-t border-stone-800/70 pt-2 font-mono text-[9px] leading-relaxed text-ink-mute"
+	>
+		verbatim · trimmed for length · 31 July 2026 · this repository's own thread · resident ran on
+		the sender's machine
 	</p>
 </div>

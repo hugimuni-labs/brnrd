@@ -202,7 +202,11 @@
 				{#if projectOpen}
 					<div class="project-detail" transition:garageSpring>
 						<span>{selectedRepo?.repo_full_name ?? 'no connected project'}</span>
-						<span>{environment.name}{environment.isDefault ? ' · default' : ''}</span>
+						<span
+							>{environment.name}{#if environment.isDefault}<span class="env-badge">
+									· default</span
+								>{/if}</span
+						>
 						<a href={resolve('/#bench')}>open full bench →</a>
 					</div>
 				{/if}
@@ -364,6 +368,9 @@
 		color: rgb(120 113 108);
 	}
 	.project-detail a {
+		color: rgb(125 211 252);
+	}
+	.env-badge {
 		color: rgb(125 211 252);
 	}
 	.machine-lane {
