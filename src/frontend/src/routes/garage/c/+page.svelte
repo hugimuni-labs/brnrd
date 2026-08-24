@@ -259,7 +259,9 @@
 							type="button"
 							class:chosen={environmentSelection === null}
 							onclick={() => (environmentSelection = null)}
-							>{environment.name}{#if environment.isDefault}<span>default</span>{/if}</button
+							>{environment.name}{#if environment.isDefault}<span class="env-badge">
+									· default</span
+								>{/if}</button
 						>
 						{#each selectedRepo?.environments ?? [] as option (option.name)}<button
 								type="button"
@@ -391,6 +393,9 @@
 	.project-picks button.chosen {
 		border-color: rgb(217 119 6);
 		color: rgb(253 230 138);
+	}
+	.env-badge {
+		color: rgb(125 211 252);
 	}
 	.machine-lane {
 		margin-top: 9px;
