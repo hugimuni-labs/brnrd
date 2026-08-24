@@ -968,6 +968,7 @@ def _enqueue_whatsapp_event(db: Session, parsed: "wa.ParsedMessage", *, repo_id:
         body=body,
         source="whatsapp",
         reply_to={"platform": "whatsapp", "chat_id": parsed.chat_id, "message_id": parsed.message_id},
+        attachments=parsed.attachments or None,
     )
 
 
@@ -1099,20 +1100,18 @@ async def whatsapp_webhook(request: Request, x_hub_signature_256: str | None = H
             _wa_reply(settings, parsed, _NO_REPO_YET_TEXT)
             return {"ok": True}
         if not parsed.text and not parsed.attachments:
-            # v1 doesn't ingest WhatsApp media at all (no attachment
-            # pointers, unlike Telegram's image path) — a media message
-            # with no text carries nothing brnrd can act on.
             _wa_audit(trace, "rejected", "reason=media_without_text")
             _wa_reply(settings, parsed, "I can't see attached media yet — that message had no text I can read. Send it as words.")
             return {"ok": True}
         body = parsed.text
-        if parsed.has_media:
+        if parsed.has_media and not parsed.attachments:
             body += "\n\n[attached media not ingested — brnrd received the text only]"
         decision = limits.check_event_admission(
             db,
             settings,
             db.get(Account, route.account_id),
             body=body,
+            attachment_count=len(parsed.attachments),
         )
         if not decision.allowed:
             _wa_audit(trace, "rejected", f"reason=limit:{decision.reason}")
