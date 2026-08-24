@@ -123,7 +123,10 @@ test('GitHub and Slack are app-shaped integrations', () => {
 
 test('Signal is BYO and the dashboard is control, not peers in one connector list', () => {
 	assert.equal(surface('signal-byo').statusMode, 'byo');
-	assert.equal(REACH_GROUPS.find((group) => group.slug === 'control')?.surfaces[0]?.id, 'web-dashboard');
+	assert.equal(
+		REACH_GROUPS.find((group) => group.slug === 'control')?.surfaces[0]?.id,
+		'web-dashboard'
+	);
 });
 
 test('every hosted reach surface points at a known backend door slug', () => {

@@ -85,7 +85,8 @@ export const REACH_GROUPS: ReachGroup[] = [
 			{
 				id: 'telegram-hosted',
 				label: 'Telegram',
-				detail: 'Message the shared brnrd bot; the control plane routes the thread to your paired daemon.',
+				detail:
+					'Message the shared brnrd bot; the control plane routes the thread to your paired daemon.',
 				icon: 'telegram',
 				doorSlug: 'telegram',
 				statusMode: 'hosted'
@@ -108,7 +109,8 @@ export const REACH_GROUPS: ReachGroup[] = [
 			{
 				id: 'github-app',
 				label: 'GitHub App',
-				detail: 'Issues, review requests, replies, and a managed identity for the resident’s pushes.',
+				detail:
+					'Issues, review requests, replies, and a managed identity for the resident’s pushes.',
 				icon: 'github',
 				doorSlug: 'github',
 				statusMode: 'hosted'

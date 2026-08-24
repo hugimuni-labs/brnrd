@@ -48,7 +48,9 @@
 				drain local · route wisely
 			</p>
 		</div>
-		<nav class="flex w-full flex-wrap items-center gap-x-4 gap-y-2 sm:w-auto sm:justify-end sm:pt-2">
+		<nav
+			class="flex w-full flex-wrap items-center gap-x-4 gap-y-2 sm:w-auto sm:justify-end sm:pt-2"
+		>
 			<a
 				href={DOCS_URL}
 				rel="external"
@@ -86,9 +88,10 @@
 			<p class="mt-4 max-w-2xl text-base leading-relaxed text-stone-300 sm:text-lg">
 				Your coding agent, resident in the repo and reachable from anywhere.
 			</p>
-			<p class="mt-2 max-w-2xl text-sm leading-relaxed text-stone-500">
-				brnrd keeps continuity around the agent CLI you already use: work comes in, context survives,
-				and commits, pull requests, progress, and replies go back to the thread that asked.
+			<p class="mt-2 max-w-2xl text-sm leading-relaxed text-ink-quiet">
+				brnrd keeps continuity around the agent CLI you already use: work comes in, context
+				survives, and commits, pull requests, progress, and replies go back to the thread that
+				asked.
 			</p>
 
 			<div class="mt-5 flex flex-wrap items-center gap-3">
@@ -118,9 +121,9 @@
 		<p class="eyebrow">how it fits</p>
 		<div class="mt-5">
 			<div class="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-				{#each ['Telegram', 'WhatsApp', 'GitHub', 'Slack', 'Signal', 'Web'] as route}
+				{#each ['Telegram', 'WhatsApp', 'GitHub', 'Slack', 'Signal', 'Web'] as route (route)}
 					<div
-						class="border-t border-stone-800 px-1 pt-2 text-center font-mono text-[10px] tracking-wide text-stone-500 uppercase"
+						class="border-t border-stone-800 px-1 pt-2 text-center font-mono text-[10px] tracking-wide text-ink-mute uppercase"
 					>
 						{route}
 					</div>
@@ -138,7 +141,9 @@
 				<h2 class="mt-2 text-center font-mono text-xl font-semibold tracking-tight text-amber-100">
 					one resident per repository
 				</h2>
-				<div class="mt-5 grid grid-cols-2 gap-x-5 gap-y-3 text-center font-mono text-[11px] text-stone-400 sm:grid-cols-4">
+				<div
+					class="mt-5 grid grid-cols-2 gap-x-5 gap-y-3 text-center font-mono text-[11px] text-stone-400 sm:grid-cols-4"
+				>
 					<span>memory</span>
 					<span>routing</span>
 					<span>steering</span>
@@ -162,7 +167,7 @@
 				your repository · your hardware · your credentials
 			</p>
 		</div>
-		<p class="mx-auto mt-6 max-w-2xl text-center text-sm leading-relaxed text-stone-500">
+		<p class="mx-auto mt-6 max-w-2xl text-center text-sm leading-relaxed text-ink-quiet">
 			The daemon stays beside the repository. Routes bring work in; the resident keeps context,
 			steers the shell, and sends durable results back out. brnrd is the layer connecting those
 			pieces, not another model behind them.
@@ -175,33 +180,37 @@
 			<article class="border-t border-stone-800 pt-3">
 				<h2 class="font-mono text-base font-semibold text-amber-100">it remembers</h2>
 				<p class="mt-2 text-sm leading-relaxed text-stone-400">
-					Decisions, pitfalls, project knowledge, and unfinished bearings survive the run that created
-					them. The next task does not start from zero.
+					Decisions, pitfalls, project knowledge, and unfinished bearings survive the run that
+					created them. The next task does not start from zero.
 				</p>
 			</article>
 			<article class="border-t border-stone-800 pt-3">
 				<h2 class="font-mono text-base font-semibold text-amber-100">you can reach it</h2>
 				<p class="mt-2 text-sm leading-relaxed text-stone-400">
-					Send work while you are away from the terminal. Progress and answers return to the same place
-					that asked for them.
+					Send work while you are away from the terminal. Progress and answers return to the same
+					place that asked for them.
 				</p>
 			</article>
 			<article class="border-t border-stone-800 pt-3">
 				<h2 class="font-mono text-base font-semibold text-amber-100">work leaves receipts</h2>
 				<p class="mt-2 text-sm leading-relaxed text-stone-400">
-					Branches, commits, pull requests, issues, and thread replies make the work inspectable instead
-					of disappearing into another chat history.
+					Branches, commits, pull requests, issues, and thread replies make the work inspectable
+					instead of disappearing into another chat history.
 				</p>
 			</article>
 		</div>
 	</section>
 
-	<section class="ignite mt-16 sm:mt-20" style="--ignite-delay: 420ms" aria-label="ways to reach the resident">
+	<section
+		class="ignite mt-16 sm:mt-20"
+		style="--ignite-delay: 420ms"
+		aria-label="ways to reach the resident"
+	>
 		<p class="eyebrow">reach your resident</p>
 		<h2 class="mt-2 font-mono text-xl font-semibold tracking-tight text-amber-100">
 			same platforms, different topology
 		</h2>
-		<p class="mt-3 max-w-2xl text-sm leading-relaxed text-stone-500">
+		<p class="mt-3 max-w-2xl text-sm leading-relaxed text-ink-quiet">
 			A hosted Telegram identity is not the same product path as a Telegram bot you own. GitHub and
 			Slack are app-shaped integrations. Signal is a local identity. The dashboard is control. The
 			landing keeps those distinctions visible instead of flattening them into one connector pile.
@@ -246,7 +255,7 @@
 											>
 										{/if}
 									</div>
-									<p class="mt-1 text-xs leading-relaxed text-stone-500">{surface.detail}</p>
+									<p class="mt-1 text-xs leading-relaxed text-ink-quiet">{surface.detail}</p>
 								</div>
 							</li>
 						{/each}
@@ -256,7 +265,11 @@
 		</div>
 	</section>
 
-	<section class="ignite mt-16 sm:mt-20" style="--ignite-delay: 500ms" aria-label="local and managed brnrd">
+	<section
+		class="ignite mt-16 sm:mt-20"
+		style="--ignite-delay: 500ms"
+		aria-label="local and managed brnrd"
+	>
 		<p class="eyebrow">local at the core</p>
 		<div class="mt-5 grid grid-cols-1 gap-8 md:grid-cols-[1.05fr_0.95fr] md:items-start">
 			<div>
@@ -280,14 +293,16 @@
 			</div>
 
 			<div class="border-l border-amber-900/60 pl-5">
-				<p class="font-mono text-[10px] tracking-wide text-amber-200/70 uppercase">optional layer</p>
+				<p class="font-mono text-[10px] tracking-wide text-amber-200/70 uppercase">
+					optional layer
+				</p>
 				<h3 class="mt-1 font-mono text-lg font-semibold tracking-tight text-amber-100">
 					brnrd.dev control plane
 				</h3>
 				<p class="mt-3 text-sm leading-relaxed text-stone-400">
-					Pair that same local daemon to add hosted Telegram and WhatsApp identities, installable app
-					ingress, and the dashboard from anywhere. The control plane routes and coordinates; it does
-					not become the machine doing the coding.
+					Pair that same local daemon to add hosted Telegram and WhatsApp identities, installable
+					app ingress, and the dashboard from anywhere. The control plane routes and coordinates; it
+					does not become the machine doing the coding.
 				</p>
 				<p class="mt-3 text-xs leading-relaxed text-ink-quiet">
 					Execution stays local. Connecting an account mirrors derived project notes to brnrd.dev,
@@ -302,7 +317,12 @@
 		</div>
 	</section>
 
-	<section id="install" class="ignite mt-16 sm:mt-20" style="--ignite-delay: 560ms" aria-label="install brnrd">
+	<section
+		id="install"
+		class="ignite mt-16 sm:mt-20"
+		style="--ignite-delay: 560ms"
+		aria-label="install brnrd"
+	>
 		<p class="eyebrow">install</p>
 		<div class="mt-5 grid grid-cols-1 gap-6 md:grid-cols-[1fr_0.9fr] md:items-start">
 			<div>
@@ -321,8 +341,10 @@
 			</div>
 			<div class="panel p-4" aria-label="terminal install commands">
 				<p class="font-mono text-[10px] tracking-wide text-ink-mute uppercase">terminal</p>
-				<pre class="mt-3 overflow-x-auto font-mono text-sm leading-7 text-stone-300"><code><span class="text-ink-mute">$</span> npm install -g brnrd
-<span class="text-ink-mute">$</span> brnrd</code></pre>
+				<pre class="mt-3 overflow-x-auto font-mono text-sm leading-7 text-stone-300"><code
+						><span class="text-ink-mute">$</span> npm install -g brnrd
+<span class="text-ink-mute">$</span> brnrd</code
+					></pre>
 			</div>
 		</div>
 	</section>
