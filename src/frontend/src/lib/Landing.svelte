@@ -16,9 +16,10 @@
 	} from '$lib/supportMatrix';
 	import { fetchLoginContext, resolveSigninHref, type LoginContext } from '$lib/login';
 
-	// brnrd's local resident is the product. brnrd.dev is an optional control
-	// plane around it, never a remote compute farm. Keep that hierarchy visible
-	// in the page shape rather than asking paragraphs of copy to repair it.
+	// The resident is the persistent coordinating identity above project
+	// contexts and agent CLIs. brnrd.dev is an optional control plane around
+	// the local engine, never a remote compute farm. Keep those layers distinct
+	// in the page shape rather than asking paragraphs of copy to repair them.
 	let doorStatuses = $state<Map<string, DoorStatus> | null>(null);
 	let loginContext = $state<LoginContext | null>(null);
 	const legalNoticeReady = legalNoticeIsComplete();
@@ -86,7 +87,7 @@
 				a resident, not a chatbot
 			</h1>
 			<p class="mt-4 max-w-2xl text-base leading-relaxed text-stone-300 sm:text-lg">
-				Your coding agent, resident in the repo and reachable from anywhere.
+				Your coding agent, persistent between runs and reachable from anywhere.
 			</p>
 			<p class="mt-2 max-w-2xl text-sm leading-relaxed text-ink-quiet">
 				brnrd keeps continuity around the agent CLI you already use: work comes in, context
@@ -139,7 +140,7 @@
 					brnrd resident
 				</p>
 				<h2 class="mt-2 text-center font-mono text-xl font-semibold tracking-tight text-amber-100">
-					one resident per repository
+					persistent identity · project-aware context
 				</h2>
 				<div
 					class="mt-5 grid grid-cols-2 gap-x-5 gap-y-3 text-center font-mono text-[11px] text-stone-400 sm:grid-cols-4"
@@ -149,10 +150,32 @@
 					<span>steering</span>
 					<span>git receipts</span>
 				</div>
+				<p class="mt-4 text-center font-mono text-[10px] tracking-wide text-ink-mute uppercase">
+					persistent state · not a permanently-running model
+				</p>
 			</div>
 
 			<p class="my-4 text-center font-mono text-[10px] tracking-wide text-ink-mute uppercase">
-				↓ drives the agent CLI already on your machine
+				↓ resolves where the work belongs · dispatches bounded work when useful
+			</p>
+
+			<div class="mx-auto grid max-w-xl grid-cols-1 gap-5 sm:grid-cols-2">
+				<div class="border-t border-stone-800 pt-3 text-center">
+					<p class="font-mono text-[10px] tracking-wide text-amber-200/70 uppercase">project context</p>
+					<p class="mt-2 text-xs leading-relaxed text-stone-400">
+						repo target · project knowledge · current bearing
+					</p>
+				</div>
+				<div class="border-t border-stone-800 pt-3 text-center">
+					<p class="font-mono text-[10px] tracking-wide text-amber-200/70 uppercase">strands</p>
+					<p class="mt-2 text-xs leading-relaxed text-stone-400">
+						bounded workers · isolated worktrees · return to resident
+					</p>
+				</div>
+			</div>
+
+			<p class="my-4 text-center font-mono text-[10px] tracking-wide text-ink-mute uppercase">
+				↓ runs through the agent CLI already on your machine
 			</p>
 
 			<div class="flex flex-wrap items-center justify-center gap-5">
@@ -164,19 +187,29 @@
 				{/each}
 			</div>
 			<p class="mt-4 text-center font-mono text-[10px] tracking-wide text-amber-200/60 uppercase">
-				your repository · your hardware · your credentials
+				repository · worktree · tests · credentials
 			</p>
 		</div>
 		<p class="mx-auto mt-6 max-w-2xl text-center text-sm leading-relaxed text-ink-quiet">
-			The daemon stays beside the repository. Routes bring work in; the resident keeps context,
-			steers the shell, and sends durable results back out. brnrd is the layer connecting those
-			pieces, not another model behind them.
+			The daemon stays on your machine. Routes bring work to the resident; it keeps continuity,
+			resolves the project context, dispatches strands when useful, and sends durable results back
+			out. brnrd is the layer connecting those pieces, not another model behind them.
 		</p>
 	</section>
 
 	<section class="ignite mt-16 sm:mt-20" style="--ignite-delay: 340ms" aria-label="why a resident">
 		<p class="eyebrow">why a resident</p>
-		<div class="mt-5 grid grid-cols-1 gap-7 md:grid-cols-3">
+		<div class="mt-5 max-w-2xl">
+			<h2 class="font-mono text-xl font-semibold tracking-tight text-amber-100">
+				it sleeps without forgetting
+			</h2>
+			<p class="mt-3 text-sm leading-relaxed text-stone-400">
+				Persistence lives in durable state, not in keeping a model process warm. When work arrives,
+				the resident wakes, resolves the project context, can dispatch bounded strands, and goes
+				quiet again when the work is done.
+			</p>
+		</div>
+		<div class="mt-7 grid grid-cols-1 gap-7 md:grid-cols-3">
 			<article class="border-t border-stone-800 pt-3">
 				<h2 class="font-mono text-base font-semibold text-amber-100">it remembers</h2>
 				<p class="mt-2 text-sm leading-relaxed text-stone-400">
@@ -211,9 +244,9 @@
 			same platforms, different topology
 		</h2>
 		<p class="mt-3 max-w-2xl text-sm leading-relaxed text-ink-quiet">
-			A hosted Telegram identity is not the same product path as a Telegram bot you own. GitHub and
-			Slack are app-shaped integrations. Signal is a local identity. The dashboard is control. The
-			landing keeps those distinctions visible instead of flattening them into one connector pile.
+			Use a hosted identity, install brnrd where you already work, or bring your own local gate.
+			GitHub and Slack are app-shaped integrations; the dashboard is control. The same resident sits
+			behind each route.
 		</p>
 
 		<div class="mt-7 grid grid-cols-1 gap-x-8 gap-y-8 md:grid-cols-2">
@@ -234,25 +267,21 @@
 									<div class="flex flex-wrap items-center gap-2">
 										<span class="text-sm text-stone-300">{surface.label}</span>
 										{#if badge === 'live'}
-											<span
-												class="border border-sky-700/50 px-1.5 py-0.5 font-mono text-[9px] tracking-wide text-sky-300 uppercase"
-												>live</span
-											>
+											<span class="font-mono text-[9px] tracking-wide text-amber-300 uppercase">
+												<span class="mr-1" aria-hidden="true">●</span>live
+											</span>
 										{:else if badge === 'coming'}
-											<span
-												class="border border-amber-700/50 px-1.5 py-0.5 font-mono text-[9px] tracking-wide text-amber-300 uppercase"
-												>coming</span
-											>
+											<span class="font-mono text-[9px] tracking-wide text-slate-400 uppercase">
+												<span class="mr-1" aria-hidden="true">○</span>coming
+											</span>
 										{:else if badge === 'byo'}
-											<span
-												class="border border-stone-700 px-1.5 py-0.5 font-mono text-[9px] tracking-wide text-stone-400 uppercase"
-												>BYO</span
-											>
+											<span class="font-mono text-[9px] tracking-wide text-stone-500 uppercase">
+												<span class="mr-1" aria-hidden="true">◇</span>BYO
+											</span>
 										{:else}
-											<span
-												class="border border-stone-800 px-1.5 py-0.5 font-mono text-[9px] tracking-wide text-ink-mute uppercase"
-												>checking…</span
-											>
+											<span class="font-mono text-[9px] tracking-wide text-ink-mute uppercase">
+												<span class="mr-1" aria-hidden="true">·</span>checking…
+											</span>
 										{/if}
 									</div>
 									<p class="mt-1 text-xs leading-relaxed text-ink-quiet">{surface.detail}</p>
@@ -282,8 +311,8 @@
 					brnrd account, payment, phone-home, or feature gate is required for that path.
 				</p>
 				<p class="mt-3 text-xs leading-relaxed text-ink-quiet">
-					Your source tree stays on your machine. The resident runs where your repository, shell,
-					credentials, and tests already live.
+					Your source trees stay on your machine. The local engine runs where your repositories,
+					shells, credentials, and tests already live.
 				</p>
 				<a
 					class="mt-5 inline-flex items-center gap-2 border border-stone-700 px-3 py-2 font-mono text-[12px] tracking-wide text-stone-300 uppercase hover:border-stone-500"
@@ -327,11 +356,12 @@
 		<div class="mt-5 grid grid-cols-1 gap-6 md:grid-cols-[1fr_0.9fr] md:items-start">
 			<div>
 				<h2 class="font-mono text-xl font-semibold tracking-tight text-amber-100">
-					put a resident beside the repo
+					install your resident
 				</h2>
 				<p class="mt-3 text-sm leading-relaxed text-stone-400">
-					The npm package installs the same brnrd CLI as the uv and pipx routes. Run it from the
-					repository you want the resident to inhabit; the guided setup picks up from there.
+					The npm package installs the same brnrd CLI as the uv and pipx routes. Run it from a
+					repository to start; the guided setup picks up that project context and walks you through
+					the rest.
 				</p>
 				<a
 					class="mt-4 inline-flex font-mono text-[11px] tracking-wide text-sky-400 underline underline-offset-2"
