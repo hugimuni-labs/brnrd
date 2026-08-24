@@ -136,19 +136,19 @@ test('every hosted reach surface points at a known backend door slug', () => {
 
 test('landing maps internal ready/soon to coming rather than exposing implementation state', () => {
 	const slack = surface('slack-app');
-	assert.equal(reachBadge(slack, new Map([['slack', 'ready']])), 'coming');
-	assert.equal(reachBadge(slack, new Map([['slack', 'soon']])), 'coming');
+	assert.equal(reachBadge(slack, new Map([['slack', 'ready' as const]])), 'coming');
+	assert.equal(reachBadge(slack, new Map([['slack', 'soon' as const]])), 'coming');
 });
 
 test('landing only calls a hosted route live after the backend confirms it', () => {
 	const telegram = surface('telegram-hosted');
-	assert.equal(reachBadge(telegram, new Map([['telegram', 'live']])), 'live');
+	assert.equal(reachBadge(telegram, new Map([['telegram', 'live' as const]])), 'live');
 	assert.equal(reachBadge(telegram, null), 'checking');
 });
 
 test('BYO routes do not inherit brnrd.dev hosted status', () => {
 	const telegram = surface('telegram-byo');
-	assert.equal(reachBadge(telegram, new Map([['telegram', 'soon']])), 'byo');
+	assert.equal(reachBadge(telegram, new Map([['telegram', 'soon' as const]])), 'byo');
 	assert.equal(reachBadge(telegram, null), 'byo');
 });
 
