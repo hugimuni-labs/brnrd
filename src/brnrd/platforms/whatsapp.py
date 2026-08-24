@@ -171,15 +171,16 @@ def send_message(
     api_version: str = "v22.0",
     reply_to_message_id: str | None = None,
     timeout: float = 30.0,
-) -> None:
+) -> str | None:
     """Send one free-form text message via the Cloud API.
 
     No chunking — a body over ``MAX_BODY_LEN`` is the daemon's overflow
     concern (gist-or-truncate), not this client's; it posts whatever it is
     given and lets Meta's own length validation answer.
 
-    Raises ``WindowClosed`` when the 24h window is the reason the send was
-    refused, ``RuntimeError`` for any other failure.
+    Returns Meta's stable ``wamid`` receipt when one is present. Raises
+    ``WindowClosed`` when the 24h window is the reason the send was refused,
+    ``RuntimeError`` for any other failure.
     """
     params: dict = {
         "messaging_product": "whatsapp",
@@ -196,6 +197,16 @@ def send_message(
         timeout=timeout,
     )
     _raise_for_response(resp)
+    try:
+        payload = resp.json()
+    except ValueError:
+        return None
+    messages = payload.get("messages") if isinstance(payload, dict) else None
+    if not isinstance(messages, list) or not messages:
+        return None
+    first = messages[0]
+    message_id = first.get("id") if isinstance(first, dict) else None
+    return message_id if isinstance(message_id, str) and message_id else None
 
 
 @dataclass

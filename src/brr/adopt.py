@@ -60,7 +60,7 @@ def _timed_input(prompt: str, default: str, timeout: int = 10) -> str:
         value = input(prompt)
         signal.alarm(0)
         return value.strip() or default
-    except (TimeoutError, EOFError):
+    except (TimeoutError, EOFError, OSError):
         signal.alarm(0)
         print(f"\n{style.dim('[brnrd] no input — using default:')} {style.accent(default)}")
         return default
@@ -257,11 +257,8 @@ def _init_via_wake(
     finished still has to pass the same structure gate the headless path
     enforces.
     """
-    runner_name = available[0]
+    runner_name = _choose_setup_runner(repo_root, available)
     cfg = conf.load_config(repo_root)
-    configured = str(cfg.get("runner") or "auto")
-    if configured != "auto" and configured in available:
-        runner_name = configured
     print(f"[brnrd] runner: {style.accent(runner_name)}")
     # No stage-manager line here. It used to read "handing this session to
     # the agent — talk to it below", which announces the actor instead of
@@ -473,6 +470,40 @@ def _interactive_configure(available: list[str]) -> tuple[str, dict]:
 
     print()
     return runner_name, cfg
+
+
+def _choose_setup_runner(repo_root: Path, available: list[str]) -> str:
+    """Ask which detected profile should become the resident's default.
+
+    The cost-aware first entry remains the default, but setup states the
+    Shell+Core it resolves to and makes Enter an explicit acceptance rather
+    than silently baking policy into the first wake.
+    """
+    default = available[0]
+    catalog = {
+        str(row.get("name")): row
+        for row in runner.available_runner_catalog(repo_root, selected=default)
+        if str(row.get("name")) in available
+    }
+
+    def label(name: str) -> str:
+        row = catalog.get(name, {})
+        shell = str(row.get("shell") or name)
+        core = str(row.get("core") or row.get("model") or "default")
+        cost_class = str(row.get("class") or "unclassified")
+        return f"{name} — {shell} / {core} ({cost_class})"
+
+    labels = [label(name) for name in available]
+    chosen_label = _pick_option(
+        "Default model for the resident?",
+        labels,
+        label(default),
+    )
+    chosen = available[labels.index(chosen_label)]
+    cfg = conf.load_config(repo_root)
+    cfg["runner"] = chosen
+    conf.write_config(repo_root, cfg)
+    return chosen
 
 
 def _configure_environment() -> dict:

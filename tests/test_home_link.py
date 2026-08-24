@@ -505,7 +505,7 @@ def test_push_subprocess_actually_carries_the_noninteractive_env(tmp_path, monke
         assert env.get("GIT_ASKPASS")
 
 
-def test_ssh_project_origin_prefers_ssh_home_remote_and_skips_gh_setup_git(tmp_path, monkeypatch):
+def test_explicit_ssh_override_uses_ssh_home_remote_and_skips_gh_setup_git(tmp_path, monkeypatch):
     """#1241: when the project's own origin is SSH, mint the home remote as
     SSH too — the trace's machine had a working SSH identity while HTTPS
     died. gh is still needed for repo metadata (view/create — that's a
@@ -543,7 +543,7 @@ def test_ssh_project_origin_prefers_ssh_home_remote_and_skips_gh_setup_git(tmp_p
 
     monkeypatch.setattr(home_link, "_run_gh", fake_run_gh)
 
-    results = home_link.link_home(repo_root, _cfg(home), owner="acme")
+    results = home_link.link_home(repo_root, _cfg(home), owner="acme", ssh=True)
 
     assert all(r.pushed for r in results)
     assert all(c[:2] != ["auth", "setup-git"] for c in calls), (
@@ -625,6 +625,36 @@ def test_push_failure_message_carries_stderr_and_a_specific_remedy(tmp_path, mon
     assert "does-not-exist-as-a-repo" in message
     # a concrete remedy — gh is available in this fake, so the gh-flavoured one
     assert "gh auth setup-git" in message or "gh auth login" in message
+
+
+def test_dominion_push_failure_does_not_skip_knowledge_creation(tmp_path, monkeypatch):
+    """A two-repo promise must attempt both slots even when the first
+    repository is wired but its initial push fails."""
+    home = tmp_path / "home"
+    repo_root = tmp_path / "repo"
+    created: list[str] = []
+
+    monkeypatch.setattr(home_link, "_require_gh_auth", lambda: None)
+    monkeypatch.setattr(home_link, "resolve_owner", lambda _owner=None: "acme")
+    monkeypatch.setattr(home_link, "_try_gh_setup_git", lambda: True)
+    monkeypatch.setattr(
+        home_link,
+        "_clone_url",
+        lambda _owner, name: str(tmp_path / f"remote-{name}"),
+    )
+
+    def fake_link_one(*, slot, repo_path, owner, name, ssh, prepare_push):
+        created.append(slot)
+        if slot == "dominion":
+            raise home_link.HomeLinkError("dominion: initial push failed")
+        return home_link.RepoLinkResult(slot, repo_path, f"https://github.test/{name}", "created", True)
+
+    monkeypatch.setattr(home_link, "_link_one", fake_link_one)
+
+    with pytest.raises(home_link.HomeLinkError, match="dominion: initial push failed"):
+        home_link.link_home(repo_root, _cfg(home))
+
+    assert created == ["dominion", "knowledge"]
 
 
 def test_current_or_symbolic_branch_survives_a_current_branch_probe_failure(

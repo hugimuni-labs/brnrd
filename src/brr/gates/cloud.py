@@ -610,6 +610,7 @@ def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON
     }
     pair = _request(brnrd_url, "POST", "/v1/accounts/pair", json=pair_body or None)
     out(f"[brnrd] Approve this daemon at: {pair['pair_url']}")
+    out(f"[brnrd] Pairing code: {pair['pair_code']}")
     deadline = time.monotonic() + timeout_s
     while True:
         try:
@@ -672,17 +673,6 @@ def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON
     # keeps publishing the new identity into 404s indefinitely.
     _register(brr_dir, state)
     out(f"[brnrd] Connected to brnrd account {status.get('account_id')}.")
-    pair = status.get("telegram_pair") or {}
-    if isinstance(pair, dict):
-        deep_link = str(pair.get("deep_link") or "").strip()
-        instructions = str(pair.get("instructions") or "").strip()
-        pair_code = str(pair.get("pair_code") or "").strip()
-        if deep_link:
-            out(f"[brnrd] Pair Telegram chat: {deep_link}")
-            if pair_code:
-                out(f"[brnrd] If Telegram only opens the chat, send: /start {pair_code}")
-        elif instructions:
-            out(f"[brnrd] Telegram pairing: {instructions}")
     return state
 
 
@@ -1312,10 +1302,10 @@ class _CloudCardTransport:
     def _post(self, body: dict) -> dict:
         return _request(self._state["brnrd_url"], "POST", "/v1/daemons/card", token=self._state["token"], json=body)
 
-    def send(self, text: str, *, reply_to: int | None = None) -> int | None:
+    def send(self, text: str, *, reply_to: int | None = None) -> int | str | None:
         return self._post({"event_id": self._event_id, "text": text}).get("message_id")
 
-    def edit(self, message_id: int, text: str) -> None:
+    def edit(self, message_id: int | str, text: str) -> None:
         try:
             self._post({"event_id": self._event_id, "text": text, "message_id": message_id})
         except RuntimeError as exc:
@@ -1332,6 +1322,11 @@ def _card_text_for(brr_dir: Path, conv_key: str, run_id: str, platform: str) -> 
     if platform == "telegram":
         from . import telegram
         return telegram.card_text(brr_dir, conv_key, run_id)
+    if platform == "whatsapp":
+        view = run_progress.project_run(brr_dir, conv_key, run_id)
+        if view is None:
+            return None
+        return run_progress.render_text(view, compact=True)
     return None
 
 

@@ -317,7 +317,7 @@ class NotAGitRepository(RuntimeError):
     """
 
 
-def diagnose_unusable_tree(named: Path, *, asked_from: Path) -> str:
+def diagnose_unusable_tree(named: Path, *, asked_from: Path | None) -> str:
     """Explain why git named *named* as a working tree that isn't there.
 
     Classified, never one confident sentence. The repair for a stale
@@ -327,11 +327,46 @@ def diagnose_unusable_tree(named: Path, *, asked_from: Path) -> str:
     cause and once about the fix (#786, #792). Where the evidence does not
     separate the cases, this says so rather than picking the likelier
     branch.
+
+    *asked_from* is ``None`` when the caller's own working directory is
+    gone — ``Path.cwd()`` raised ``OSError``.  Until 2026-08-23 that call
+    was unguarded and sat on this function's own argument list, so the
+    guard written to stop #1108 reaching an operator as a bare
+    ``FileNotFoundError`` reached one as a bare ``FileNotFoundError``.  A
+    dead cwd is not an obstacle to the diagnosis; it is the strongest
+    single fact available and the only case that used to produce no
+    message at all.  The ``core.worktree`` probe is skipped for it (that
+    probe needs a usable cwd), and the branch names the fact without
+    ranking its causes — see the branch itself for why.
     """
     head = (
         f"git says this repository's working tree is {named}, and that "
         f"directory does not exist."
     )
+    if asked_from is None:
+        # Deliberately unranked. The obvious story — "it was started from a
+        # run worktree that got torn down" — cannot explain the report that
+        # produced this branch: a first-ever `brnrd account connect` on a
+        # fresh checkout, with no run worktree to have been torn down and no
+        # pin to have gone stale. A diagnostic that names the likelier cause
+        # has lied twice whenever it guesses wrong, once about the cause and
+        # once about the fix, and this function's whole contract is to say so
+        # instead. The fact is certain; the repair below is the one that
+        # works whichever way the cwd died.
+        return (
+            f"{head}\n"
+            f"  cause: certain — the process's own working directory no "
+            f"longer exists, so the same deleted path is both where this "
+            f"process is standing and what git resolves as the working "
+            f"tree. Why it died is not determined here: a torn-down run "
+            f"worktree, a pinned service WorkingDirectory that was "
+            f"removed, and a checkout deleted underneath a long-lived "
+            f"process all present identically at this point.\n"
+            f"  repair: from the project checkout, `brnrd daemon install` "
+            f"to refresh the service's pinned working directory, then "
+            f"restart it. Running the same command from a directory that "
+            f"exists is what all three causes have in common."
+        )
     pin = _config_value(asked_from, "core.worktree")
     if pin and _same_path(Path(pin), named):
         return (
@@ -438,8 +473,12 @@ def _git(
     config had repointed the checkout. Same failure, diagnosed.
     """
     if not Path(repo_root).is_dir():
+        try:
+            asked_from: Path | None = Path.cwd()
+        except OSError:
+            asked_from = None
         raise RepoTreeUnusable(
-            diagnose_unusable_tree(Path(repo_root), asked_from=Path.cwd())
+            diagnose_unusable_tree(Path(repo_root), asked_from=asked_from)
         )
     return subprocess.run(
         ["git", *args],
@@ -500,8 +539,21 @@ def ensure_git_repo() -> Path:
     returns a deleted directory and *exits 0* (driven, git 2.43). The
     existence check is the only thing between that answer and a
     ``FileNotFoundError`` thrown by whichever call uses it as a cwd next.
+
+    If ``Path.cwd()`` itself raises ``OSError`` (the process's own
+    working directory was deleted), that is also a ``RepoTreeUnusable``:
+    it is not a "not a repository" shrug-and-degrade case, it is a dead
+    environment that needs an explicit repair step.
     """
-    cwd = Path.cwd()
+    try:
+        cwd = Path.cwd()
+    except OSError:
+        raise RepoTreeUnusable(
+            "the process's own working directory no longer exists — "
+            "cd to the project checkout and retry, or re-run "
+            "`brnrd daemon install` from the repo to refresh the "
+            "service's WorkingDirectory."
+        )
     try:
         result = _git(cwd, "rev-parse", "--show-toplevel")
     except subprocess.CalledProcessError as exc:
@@ -835,7 +887,13 @@ def toplevel(repo_root: Path) -> Path | None:
 def is_tracked(path: Path) -> bool:
     """Return True if *path* is tracked by Git."""
     try:
-        _git(Path.cwd(), "ls-files", "--error-unmatch", str(path))
+        cwd = Path.cwd()
+    except OSError:
+        # Dead cwd — cannot resolve the repository; treat as untracked
+        # rather than propagating an OSError from an informational probe.
+        return False
+    try:
+        _git(cwd, "ls-files", "--error-unmatch", str(path))
         return True
     except subprocess.CalledProcessError:
         return False

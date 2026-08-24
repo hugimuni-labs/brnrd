@@ -1056,6 +1056,7 @@ def _paired_chat_out(route: ChannelRoute, *, repo_full_name: str | None) -> dict
     return {
         "id": route.id,
         "platform": route.platform,
+        "paired": route.paired_principal_id is not None,
         # None = a private/untitled chat (Telegram) or any WhatsApp route —
         # see `models.ChannelRoute.chat_title`; the frontend renders that
         # distinctly from an empty string, never as "untitled".
@@ -1071,6 +1072,38 @@ def _paired_chat_out(route: ChannelRoute, *, repo_full_name: str | None) -> dict
         # None = account-level (repo resolved per message); a name = pinned.
         "repo_full_name": repo_full_name,
     }
+
+
+def _messenger_door_rows(db: Session, account_id: str, identities: Any) -> list[dict[str, Any]]:
+    """Join connector capability to the account's actual paired state."""
+    routes = list(
+        db.execute(
+            select(ChannelRoute)
+            .where(
+                ChannelRoute.account_id == account_id,
+                ChannelRoute.paired_principal_id.is_not(None),
+            )
+            .order_by(ChannelRoute.created_at.desc())
+        ).scalars()
+    )
+    by_platform: dict[str, list[ChannelRoute]] = {}
+    for route in routes:
+        by_platform.setdefault(route.platform.casefold(), []).append(route)
+
+    rows: list[dict[str, Any]] = []
+    for door in list_messenger_doors(identities):
+        paired = by_platform.get(door.platform.casefold(), [])
+        latest = paired[0] if paired else None
+        row = door.to_wire()
+        row.update({
+            "paired": bool(paired),
+            "paired_count": len(paired),
+            "paired_display": (
+                (latest.paired_user_display or latest.chat_title) if latest is not None else None
+            ),
+        })
+        rows.append(row)
+    return rows
 
 
 @router.get("/v1/dashboard/paired-chats")
@@ -1102,7 +1135,7 @@ def dashboard_paired_chats_api(request: Request, db: Session = Depends(get_db)) 
 @router.delete("/v1/dashboard/paired-chats/{route_id}")
 def dashboard_paired_chat_revoke_api(route_id: str, request: Request, db: Session = Depends(get_db)) -> JSONResponse:
     """#1464 — the revoke half of the floor. Deletes the `ChannelRoute` row
-    outright rather than clearing `paired_user_id`: the chat/topic must
+    outright rather than clearing `paired_principal_id`: the chat/topic must
     stop authorizing *and* stop existing as a routing target, the same
     "re-pair from scratch" state a chat that was never paired is in. This
     is deliberately **not** #1459's disconnect semantics (which un-pins a
@@ -1197,7 +1230,7 @@ def dashboard_repos_api(
             # `messenger_doors.py`'s module docstring) — the renderer picks
             # labels/icons per platform. A new connector joins this array
             # the moment its registry entry exists, with no frontend edit.
-            "messenger_doors": [d.to_wire() for d in list_messenger_doors(identities)],
+            "messenger_doors": _messenger_door_rows(db, account.id, identities),
             # Deprecated (#1465), kept one release: superseded by
             # `messenger_doors[platform=telegram].deep_link_available` +
             # the generalized `POST /v1/dashboard/pair`. Left in place so

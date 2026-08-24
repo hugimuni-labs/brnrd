@@ -116,7 +116,11 @@ def pair_approve_secret() -> str:
 
 
 def pair_code() -> str:
-    return "BR-" + "".join(secrets.choice(_PAIR_ALPHABET) for _ in range(4))
+    # Eight symbols = 40 bits from the 32-character alphabet. This is now
+    # the human-entered device proof, not merely a label beside a separate
+    # URL-fragment secret, so the old four-symbol (~20-bit) shape is too
+    # enumerable even with the browser attempt throttle.
+    return "BR-" + "".join(secrets.choice(_PAIR_ALPHABET) for _ in range(8))
 
 
 def tg_pair_code() -> str:

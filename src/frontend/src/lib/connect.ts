@@ -163,3 +163,39 @@ export function statusNotice(context: ConnectContext): string | null {
 				: null;
 	}
 }
+
+// The connect flow's phase, as a function rather than a ternary buried in a
+// component initialiser.
+//
+// It lives here for one reason: the frontend suite is
+// `node --test src/lib/*.test.ts` — no DOM, no component rendering — so
+// anything left inside the `.svelte` file can only be "tested" by matching
+// its own source text, which pins the spelling and witnesses nothing. Two
+// such tests existed and both went red on a refactor that made the component
+// strictly *more* correct. A test a correct change breaks was never testing
+// the change.
+//
+// `code` is whatever the flow currently holds — from the URL on
+// `/connect/<code>`, from the form on `/connect`. `approved` flips once the
+// backend has accepted the pairing.
+export function connectPhase(input: {
+	code: string;
+	approved: boolean;
+}): 'entry' | 'confirm' | 'done' {
+	if (input.approved) return 'done';
+	return input.code ? 'confirm' : 'entry';
+}
+
+// Which owner's code the flow is acting on. The two never overlap: the URL
+// owns it on the `[code]` route (no form is ever submitted there), the form
+// owns it on `/connect` (where the prop stays empty for the component's whole
+// life, because phase 2 arrives by `replaceState` rather than navigation).
+//
+// A submitted code wins so that a `replaceState` — which does not change the
+// route's params — still moves the flow forward.
+export function codeInFlight(
+	submitted: { code: string; hash: string } | null,
+	fromUrl: string
+): string {
+	return submitted?.code ?? fromUrl;
+}

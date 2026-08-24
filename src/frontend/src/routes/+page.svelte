@@ -1399,15 +1399,6 @@
 
 		<PublishConsentNotice repos={connectedRepos} />
 
-		<!-- The capability panel (design-capability-panel.md, build step 2):
-		     the board at rest — same registry ColdStart's own detectors used
-		     to answer alone, now one renderer for all of it. Sits beside
-		     ColdStart rather than replacing it (that replacement, and the
-		     /repos → /settings rename it unblocks, are their own signed
-		     effort — design-capability-panel.md §Build order steps 3-5); this
-		     is "the panel at rest + the frontier," placed where the old
-		     static /repos repetition sits, above the rail so it's never
-		     under the fold. -->
 		<div bind:this={releaseSentinel} class="h-px -mb-px" aria-hidden="true"></div>
 		<!-- THE STACK (w-48, `design-the-sticky-stack.md`): gauge, docked heddle
 		     copy, machine head, section label — one sticky container, so every

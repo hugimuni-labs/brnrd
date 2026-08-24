@@ -68,6 +68,16 @@ from . import runner_capabilities, runner_select
 # per-profile with `probe_models: true`.
 BUNDLED_SHELLS: frozenset[str] = frozenset({"claude", "codex"})
 
+# The Claude family aliases known at the time of writing.  Documentation, not
+# the test — see :func:`is_alias_tracked` for why the *check* is structural.
+CLAUDE_ALIASES: frozenset[str] = frozenset({"haiku", "sonnet", "opus", "fable"})
+
+# What separates an alias from an exact model ID, structurally: an exact ID
+# carries a version (``claude-fable-5``, ``gpt-5.6-sol``) and therefore a digit
+# or a separator; an alias is a bare family word.  This is the property, and
+# the membership list above is only a record of today's members.
+_BARE_FAMILY_WORD = re.compile(r"^[a-z]+$")
+
 _PROBE_TIMEOUT_S = 2.0
 _MODEL_TOKEN_RE = re.compile(
     r"\b(?:claude|gpt|o\d|llama|mistral|qwen|deepseek|devstral|grok)"
@@ -180,6 +190,36 @@ def all_cores() -> dict[str, dict[str, Any]]:
     return dict(_BUNDLED_CORES)
 
 
+def is_alias_tracked(entry: dict[str, Any]) -> bool:
+    """True when *entry* resolves via a Shell alias that always tracks the latest model.
+
+    An alias-tracked Core is never stale: the Shell resolves the alias to the
+    latest model in that family at dispatch time, so ``freshness_date`` carries
+    no staleness signal for these entries.  A ``pin:`` field overrides the alias
+    with an exact model ID, making the entry behave as pinned — the pin can age.
+
+    Only the ``claude`` Shell exposes named family aliases; :data:`CLAUDE_ALIASES`
+    records the ones known today but is *not* what this checks.  The test is
+    structural — a bare family word (no version, no separator) as opposed to an
+    exact model ID — so a family Anthropic ships tomorrow is classified right
+    without an edit here.  A ``pin:`` always defeats alias tracking, whatever
+    the shell.
+    """
+    if _str(entry.get("pin")):
+        return False  # explicit pin → pinned semantics, can age
+    shell = (_str(entry.get("shell")) or "").lower()
+    model = (_str(entry.get("model")) or "").lower()
+    if shell != "claude" or not model:
+        return False
+    # Structural, not a membership test against CLAUDE_ALIASES. A class defined
+    # by listing its members meets the member nobody listed: the day Anthropic
+    # ships a new family word, a list-based check would quietly classify it as
+    # pinned and render it stale forever — which is the exact inversion this
+    # function exists to end, arriving one alias later. The property is that an
+    # exact model ID carries a version and an alias does not.
+    return bool(_BARE_FAMILY_WORD.match(model))
+
+
 def stale_entries(
     registry: dict[str, dict[str, Any]],
     now: datetime.date | str | None = None,
@@ -191,6 +231,12 @@ def stale_entries(
     ``freshness_date`` that predates *now* by more than *threshold_days*.
     Entries with no ``freshness_date`` or an unparseable one are excluded
     from the result (not flagged as stale — absence of data is not staleness).
+
+    **Alias-tracked entries are always excluded** regardless of their
+    ``freshness_date``.  An alias-tracked Core (e.g. Claude's ``sonnet``)
+    resolves to the latest model in that family at dispatch time, so the
+    registry date has no staleness meaning.  Pinned entries (exact model IDs,
+    or alias entries that carry a ``pin:`` field) are checked normally.
 
     *now* defaults to today's date when omitted; pass a ``datetime.date`` or
     an ISO-8601 string to compare against a fixed point (useful in tests).
@@ -204,6 +250,8 @@ def stale_entries(
     threshold = datetime.timedelta(days=threshold_days)
     out: dict[str, dict[str, Any]] = {}
     for name, entry in registry.items():
+        if is_alias_tracked(entry):
+            continue  # alias-tracked: resolves at dispatch, date has no staleness meaning
         raw = _str(entry.get("freshness_date"))
         if not raw:
             continue

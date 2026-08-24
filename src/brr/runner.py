@@ -39,6 +39,38 @@ from .cli import brnrd_cmd
 _profiles_cache: dict[str, dict[str, Any]] | None = None
 _profiles_cache_key: str | None = None
 
+_CLAUDE_ACCOUNT_CACHE_MAX_AGE_MS = 48 * 60 * 60 * 1000
+
+
+def _claude_subscription_unavailable(
+    shell: str | None,
+    auth_variant: str,
+    *,
+    now_ms: int | None = None,
+) -> bool:
+    """Read Claude Code's own fresh account verdict without making an API call.
+
+    A present binary and OAuth file only prove that Claude Code can start.  When
+    a subscription ends, the CLI keeps both while its refreshed account cache
+    says ``billingType: none`` and every model request returns 403.  Treat that
+    fresh, CLI-owned fact as unavailable; ignore old/malformed caches and API-key
+    profiles, whose billing is independent of the Claude subscription.
+    """
+    if str(shell or "").lower() != "claude" or auth_variant == "anthropic-api-key":
+        return False
+    try:
+        payload = json.loads((Path.home() / ".claude.json").read_text(encoding="utf-8"))
+        account = payload.get("oauthAccount") if isinstance(payload, dict) else None
+        if not isinstance(account, dict) or account.get("billingType") != "none":
+            return False
+        fetched_at = account.get("profileFetchedAt")
+        if not isinstance(fetched_at, (int, float)):
+            return False
+        current_ms = int(time.time() * 1000) if now_ms is None else now_ms
+        return 0 <= current_ms - int(fetched_at) <= _CLAUDE_ACCOUNT_CACHE_MAX_AGE_MS
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return False
+
 # Live runner subprocesses, keyed by invocation label. The daemon runs the
 # resident's thought *and* up to ``spawn.max_concurrent`` strand children in
 # one process, each invoking its own runner subprocess concurrently — a
@@ -1516,20 +1548,26 @@ def _catalog_record(
     # Availability
     on_path = shutil.which(str(shell or "").strip()) is not None
     auth_env = str(profile.get("auth_env") or "").strip()
+    auth_variant = str(profile.get("auth_variant") or "").strip()
     if not on_path:
         availability = "shell-not-found"
     elif auth_env and not os.environ.get(auth_env):
         availability = "auth-env-missing"
+    elif _claude_subscription_unavailable(shell, auth_variant):
+        availability = "subscription-unavailable"
     elif runner_auth_health.is_auth_failed(repo_root or Path.cwd(), runner_profile):
         availability = "auth-error"
     else:
         availability = "available"
     is_available = availability == "available"
 
-    # Staleness: freshness_date older than 30 days.
+    # Staleness: alias-tracked entries are never stale (the Shell resolves the
+    # alias to the latest model at dispatch time; the registry date has no
+    # staleness meaning).  Only pinned entries age by their freshness_date.
+    alias_tracked = _rc.is_alias_tracked(profile)
     stale = False
     freshness_date = str(profile.get("freshness_date") or "").strip() or None
-    if freshness_date:
+    if freshness_date and not alias_tracked:
         try:
             fd = datetime.date.fromisoformat(freshness_date)
             stale = (datetime.date.today() - fd).days > 30
@@ -1548,7 +1586,7 @@ def _catalog_record(
         "cost_rank": runner_profile.cost_rank,
         "quota_source": runner_profile.quota_source,
         "hooks": runner_profile.hooks,
-        "auth_variant": str(profile.get("auth_variant") or "").strip() or None,
+        "auth_variant": auth_variant or None,
         "auth_env": auth_env or None,
         "capability_score": runner_profile.capability_score,
         "capability_source": runner_profile.capability_source,
@@ -1558,6 +1596,7 @@ def _catalog_record(
         "available": is_available,
         "availability": availability,
         "stale": stale,
+        "alias_tracked": alias_tracked,
         "freshness_date": freshness_date,
         "selected": name == selected or runner_profile.profile == selected,
     }

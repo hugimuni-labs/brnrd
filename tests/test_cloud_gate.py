@@ -312,9 +312,8 @@ def test_connect_persists_token(tmp_path, monkeypatch):
     assert register[2]["json"]["daemon_name"] == "laptop"
     assert output == [
         "[brnrd] Approve this daemon at: u",
+        "[brnrd] Pairing code: BR-TEST",
         "[brnrd] Connected to brnrd account acct_x.",
-        "[brnrd] Pair Telegram chat: https://t.me/brnrd_bot?start=TG-TEST",
-        "[brnrd] If Telegram only opens the chat, send: /start TG-TEST",
     ]
 
 
@@ -2525,6 +2524,51 @@ def test_render_update_relays_card_through_the_cloud_transport(tmp_path, monkeyp
     cards = [body for path, body in posts if path == "/v1/daemons/card"]
     assert len(cards) == 2
     assert cards[1]["message_id"] == 9       # edit replays the returned id
+
+
+def test_render_update_relays_whatsapp_card_and_reuses_wamid(tmp_path, monkeypatch):
+    """The managed gate renders WhatsApp progress through the production
+    card endpoint; the endpoint owns its bounded create-only lifecycle."""
+    from brr import updates
+    from brr.run import Run
+
+    brr_dir = tmp_path / ".brr"
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": "tok", "repo_id": "p", "since": 0},
+    )
+    posts: list[tuple[str, dict]] = []
+
+    def fake_request(base_url, method, path, *, token=None, json=None,
+                     params=None, timeout=60):
+        posts.append((path, json or {}))
+        return {"message_id": "wamid.card"}
+
+    monkeypatch.setattr(cloud, "_request", fake_request)
+    conv_key = "cloud:whatsapp:15551234567:"
+    runs_dir = brr_dir / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    task = Run(
+        id="task-wa-1", event_id="ev-1", body="x", env="docker",
+        status="running", source="cloud", conversation_key=conv_key,
+        meta={"cloud_event_id": "brnrd-evt-wa", "cloud_platform": "whatsapp",
+              "cloud_chat_id": "15551234567"},
+    )
+    task.save(runs_dir)
+
+    def emit(ptype, **payload):
+        updates.emit(brr_dir, updates.UpdatePacket(
+            type=ptype, conversation_key=conv_key, event_id="ev-1",
+            payload={"run_id": task.id, "event_id": "ev-1", **payload},
+        ))
+
+    emit("run_created", branch="auto", env="docker")
+    emit("finalizing", stage="done")
+    cards = [body for path, body in posts if path == "/v1/daemons/card"]
+    assert len(cards) == 2
+    assert cards[0]["event_id"] == "brnrd-evt-wa"
+    assert "message_id" not in cards[0]
+    assert cards[1]["message_id"] == "wamid.card"
 
 
 def test_request_raises_auth_error_on_401(monkeypatch):

@@ -93,6 +93,17 @@ def _is_ssh_url(url: str) -> bool:
     return url.startswith("git@") or url.startswith("ssh://")
 
 
+def _github_https_url(url: str) -> str | None:
+    """Translate a GitHub SSH remote to the HTTPS spelling, if recognized."""
+    if url.startswith("git@github.com:"):
+        path = url.removeprefix("git@github.com:").strip("/")
+    elif url.startswith("ssh://git@github.com/"):
+        path = url.removeprefix("ssh://git@github.com/").strip("/")
+    else:
+        return None
+    return f"https://github.com/{path}"
+
+
 def _project_origin_is_ssh(repo_root: Path) -> bool:
     """Whether *repo_root*'s own ``origin`` (or first remote) is SSH.
 
@@ -476,6 +487,7 @@ def link_home(
     owner: str | None = None,
     dominion_name: str = DEFAULT_DOMINION_NAME,
     knowledge_name: str = DEFAULT_KNOWLEDGE_NAME,
+    ssh: bool = False,
     on_result: Callable[[RepoLinkResult], None] | None = None,
 ) -> list[RepoLinkResult]:
     """Idempotently wire *repo_root*'s resolved home to two private GitHub repos.
@@ -504,13 +516,11 @@ def link_home(
     that then hits a HomeLinkError on the second repo still knows the
     first repo's outcome.
 
-    **Remote scheme (#1241).** When *repo_root*'s own ``origin`` is an SSH
-    remote, both home repos are wired SSH too — the trace this fix answers
-    had a working SSH identity the whole time while HTTPS died, so the
-    project's own choice is the strongest signal available. Otherwise
-    HTTPS, with a best-effort ``gh auth setup-git`` tried once (not per
-    repo) before the first push, so a bare ``gh auth login`` is enough to
-    authenticate the push without a separate ``git credential`` dance.
+    Home repositories use HTTPS through ``gh auth setup-git`` by default.
+    The checkout's own transport is unrelated ambient state: inheriting its
+    SSH URL can select a different GitHub identity from the one ``gh`` just
+    authenticated and used to create these private repos. ``ssh=True`` is
+    the explicit override for operators who deliberately want that route.
     """
     cfg = cfg or {}
     ctx = account.resolve_context(repo_root, cfg)
@@ -528,7 +538,7 @@ def link_home(
         ("knowledge", knowledge_root, knowledge_name),
     ]
 
-    use_ssh = _project_origin_is_ssh(repo_root)
+    use_ssh = ssh
     setup_git_tried = False
 
     def _prepare_https_push() -> None:
@@ -540,24 +550,47 @@ def link_home(
 
     resolved_owner = owner
     results: list[RepoLinkResult] = []
+    failures: list[str] = []
     for slot, path, name in plan:
-        existing_remote = gitops.default_remote(path)
-        if existing_remote:
-            url = gitops.remote_url(path, existing_remote) or ""
-            result = _retry_push_if_needed(
-                slot=slot, repo_path=path, url=url, ssh=use_ssh,
-                prepare_push=None if use_ssh else _prepare_https_push,
-            )
+        try:
+            existing_remote = gitops.default_remote(path)
+            if existing_remote:
+                url = gitops.remote_url(path, existing_remote) or ""
+                if not use_ssh and (https_url := _github_https_url(url)):
+                    changed = subprocess.run(
+                        ["git", "remote", "set-url", existing_remote, https_url],
+                        cwd=path,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        env=_noninteractive_git_env(),
+                    )
+                    if changed.returncode != 0:
+                        raise HomeLinkError(
+                            f"{slot}: could not move the interrupted SSH origin to authenticated HTTPS "
+                            f"({changed.stderr.strip() or 'git remote set-url failed'})"
+                        )
+                    url = https_url
+                result = _retry_push_if_needed(
+                    slot=slot, repo_path=path, url=url, ssh=use_ssh,
+                    prepare_push=None if use_ssh else _prepare_https_push,
+                )
+            else:
+                if resolved_owner is None:
+                    _require_gh_auth()
+                    resolved_owner = resolve_owner(owner)
+                result = _link_one(
+                    slot=slot, repo_path=path, owner=resolved_owner, name=name,
+                    ssh=use_ssh,
+                    prepare_push=None if use_ssh else _prepare_https_push,
+                )
+        except HomeLinkError as exc:
+            failures.append(str(exc))
+            continue
         else:
-            if resolved_owner is None:
-                _require_gh_auth()
-                resolved_owner = resolve_owner(owner)
-            result = _link_one(
-                slot=slot, repo_path=path, owner=resolved_owner, name=name,
-                ssh=use_ssh,
-                prepare_push=None if use_ssh else _prepare_https_push,
-            )
-        results.append(result)
-        if on_result is not None:
-            on_result(result)
+            results.append(result)
+            if on_result is not None:
+                on_result(result)
+    if failures:
+        raise HomeLinkError("; ".join(failures))
     return results

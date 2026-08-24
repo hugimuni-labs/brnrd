@@ -404,33 +404,29 @@ def test_step_memory_skips_the_local_only_note_when_fully_linked(repo, capsys, t
     assert result is True
 
 
-def test_step_memory_offers_to_link_on_a_tty(repo, capsys, monkeypatch):
-    """Mirrors ``_step_account``'s own ``_ask`` then ``_invoke`` shape:
-    ``home_link.link_home`` already does the whole idempotent job in one
-    call, so a local-only home on a real terminal gets offered the fix
-    instead of only being told the command to type."""
+def test_step_memory_reports_local_only_without_reasking_on_a_tty(repo, capsys, monkeypatch):
+    """Durability consent belongs to account connect; this is a receipt."""
     ctx = account.resolve_context(repo, {})
     kb = account.knowledge_path(ctx)
     kb.mkdir(parents=True, exist_ok=True)
     (kb / "design.md").write_text("# Design", encoding="utf-8")
-    monkeypatch.setattr(builtins, "input", _answering("y"))
-    invoked = []
-    monkeypatch.setattr(front_door, "_invoke", lambda argv: invoked.append(argv))
+    monkeypatch.setattr(builtins, "input", lambda _prompt: pytest.fail("memory receipt re-asked consent"))
+    monkeypatch.setattr(front_door, "_invoke", lambda argv: pytest.fail(f"memory receipt ran {argv}"))
 
     result = front_door._step_memory(repo, tty=True)
 
     out = capsys.readouterr().out
-    assert "back it up to private GitHub repos now?" in out
-    assert invoked == [["home", "link"]]
+    assert "local-only" in out
+    assert "$ brnrd home link" in out
     assert result is True
 
 
-def test_declining_the_link_offer_changes_nothing(repo, capsys, monkeypatch):
+def test_step_memory_resume_instruction_changes_nothing(repo, capsys, monkeypatch):
     ctx = account.resolve_context(repo, {})
     kb = account.knowledge_path(ctx)
     kb.mkdir(parents=True, exist_ok=True)
     (kb / "design.md").write_text("# Design", encoding="utf-8")
-    monkeypatch.setattr(builtins, "input", _answering("n"))
+    monkeypatch.setattr(builtins, "input", lambda _prompt: pytest.fail("memory receipt asked again"))
     monkeypatch.setattr(
         front_door, "_invoke",
         lambda argv: pytest.fail(f"ran {argv} on a declined offer"),
@@ -439,7 +435,7 @@ def test_declining_the_link_offer_changes_nothing(repo, capsys, monkeypatch):
     result = front_door._step_memory(repo, tty=True)
 
     out = capsys.readouterr().out
-    assert "skipped" in out
+    assert "resume the backup whenever you like" in out
     assert result is True
 
 

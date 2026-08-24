@@ -201,6 +201,140 @@ def classify_act(tool_name: object, tool_input: object) -> str:
     if any(part in compact_name for part in ("test", "run", "fetch", "search", "request", "query")):
         return "probe"
     return "probe"
+
+
+# ── Tool-detail extraction for boundary records ──────────────────────────
+#
+# Boundaries now carry a ``detail`` field: a short, redacted summary of
+# *what* the tool did (command line for Bash, path for file tools, brief
+# input summary for anything else).  ``out_bytes`` records the byte count of
+# the tool's response without retaining the response text itself.
+#
+# Redaction is the care point: a command line can carry API keys, auth tokens,
+# and env-var assignments.  The patterns below err toward over-masking rather
+# than under-masking, per the design doc's boot-receipt rule (safe exact
+# facts, never credential values).
+
+# Patterns where group 1 is the key/prefix and the value follows (redact
+# value, preserve key for context).
+_SECRET_PATTERNS_KEYED: list[re.Pattern[str]] = [
+    # Authorization: Bearer TOKEN  /  Cookie: session=VALUE
+    # Value runs to the next quote character or end of line (covers multi-word
+    # schemes like "Bearer TOKEN" and "Basic BASE64BLOB").
+    re.compile(r"(?i)((?:Authorization|Cookie)\s*:\s*)[^'\"\n]+"),
+    # token=VALUE  secret=VALUE  password=VALUE  api_key=VALUE  etc.
+    re.compile(
+        r"(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|"
+        r"token|secret|password|passwd|credential|auth)\s*[=:]\s*)\S+"
+    ),
+    # --token VALUE  --key VALUE  --secret VALUE  --password VALUE  etc.
+    re.compile(
+        r"(?i)(--(?:token|key|secret|password|api-key|apikey|auth-token)\s+)\S+"
+    ),
+]
+
+# Patterns where the whole match is the credential (no useful prefix to keep).
+_SECRET_PATTERNS_WHOLE: list[re.Pattern[str]] = [
+    # JWT: three base64url-encoded segments separated by dots.
+    re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"),
+    # Known API-key prefixes (Anthropic, GitHub, GitLab, Slack, AWS).
+    re.compile(
+        r"(?:sk-ant-|sk-[a-zA-Z0-9]{2}-|ghp_|ghs_|gho_|glpat-|"
+        r"xoxb-|xapp-|xoxa-|xoxe-|xoxp-|xoxr-|AKIA)[A-Za-z0-9_\-]{8,}"
+    ),
+]
+
+_REDACT_PLACEHOLDER = "<redacted>"
+
+#: Max bytes retained for the Bash command detail field.
+_DETAIL_BASH_MAX = 500
+#: Max bytes retained for non-Bash tool detail summaries.
+_DETAIL_OTHER_MAX = 200
+
+
+def redact_detail(text: str) -> str:
+    """Mask secret-bearing values in a command-line or summary string.
+
+    Over-masks rather than under-masks — a value that *looks* like a token is
+    masked even if it might not be one.  The ``detail`` field is diagnostic,
+    not operational: losing a few non-secret values is cheaper than leaking
+    one real credential.
+    """
+    for pattern in _SECRET_PATTERNS_KEYED:
+        text = pattern.sub(lambda m: m.group(1) + _REDACT_PLACEHOLDER, text)
+    for pattern in _SECRET_PATTERNS_WHOLE:
+        text = pattern.sub(_REDACT_PLACEHOLDER, text)
+    return text
+
+
+def _tool_detail(tool_name: object, tool_input: object) -> str | None:
+    """Return a short redacted detail string for one tool call, or ``None``.
+
+    Never retains raw ``tool_input`` — only a derived, human-readable summary
+    that has been passed through :func:`redact_detail`.
+    """
+    if not isinstance(tool_name, str) or not tool_name.strip():
+        return None
+    name_lower = tool_name.strip().lower().replace("-", "_").replace(".", "_")
+    if not isinstance(tool_input, dict):
+        return None
+
+    # Bash and shell-equivalent tools: show the command line.
+    if name_lower in ("bash", "shell", "exec", "exec_command", "functions_exec"):
+        cmd = tool_input.get("command") or tool_input.get("cmd")
+        if not isinstance(cmd, str) or not cmd.strip():
+            return None
+        cmd = re.sub(r"\s+", " ", cmd.strip())
+        raw = cmd.encode("utf-8")
+        if len(raw) > _DETAIL_BASH_MAX:
+            cmd = raw[:_DETAIL_BASH_MAX].decode("utf-8", errors="replace") + "…"
+        return redact_detail(cmd)
+
+    # File-oriented tools: show the path/pattern. Redacted and capped like
+    # every other branch — a Grep pattern is arbitrary text and can carry
+    # exactly the secret shapes the redactor exists for.
+    for key in ("file_path", "path", "pattern", "glob"):
+        val = tool_input.get(key)
+        if isinstance(val, str) and val.strip():
+            summary = val.strip()
+            if len(summary) > _DETAIL_OTHER_MAX:
+                summary = summary[:_DETAIL_OTHER_MAX] + "…"
+            return redact_detail(summary)
+
+    # Agent/dispatch tools: show a short task summary.
+    for key in ("task", "prompt", "description", "query"):
+        val = tool_input.get(key)
+        if isinstance(val, str) and val.strip():
+            summary = re.sub(r"\s+", " ", val.strip())
+            if len(summary) > _DETAIL_OTHER_MAX:
+                summary = summary[:_DETAIL_OTHER_MAX] + "…"
+            return redact_detail(summary)
+
+    # Generic fallback: first non-empty string value.
+    for val in tool_input.values():
+        if isinstance(val, str) and val.strip():
+            summary = re.sub(r"\s+", " ", val.strip())
+            if len(summary) > _DETAIL_OTHER_MAX:
+                summary = summary[:_DETAIL_OTHER_MAX] + "…"
+            return redact_detail(summary)
+
+    return None
+
+
+def _response_bytes(response: object) -> int:
+    """Return the byte count of a tool response without retaining its content."""
+    if response is None:
+        return 0
+    if isinstance(response, (bytes, bytearray)):
+        return len(response)
+    if isinstance(response, str):
+        return len(response.encode("utf-8"))
+    try:
+        return len(json.dumps(response).encode("utf-8"))
+    except (TypeError, ValueError):
+        return 0
+
+
 # The gate-less routing fact (#728) is true for the whole life of a gate-less
 # run and can never be cleared, so it is said once and then remembered here —
 # the one line in the closeout briefing that is a constant rather than an
@@ -271,6 +405,14 @@ BAR_LAST_CHIPS_KEY = "bar_last_chips"
 COURSE_DRIFT_COUNT_KEY = "course_drift_count"
 WORK_TOKEN_KEY = "work_token"
 _COURSE_DRIFT_THRESHOLD = 3
+# COURSE_STALL_COUNT_KEY — boundaries elapsed since the course last moved
+# (route_edge=True resets; a new pending event does not). At
+# _COURSE_STALL_THRESHOLD a "stalled ×N" detail line fires once and the
+# counter re-arms. Distinct from drift: drift counts *work* moves with no
+# route edit; stall counts *boundaries* with no route edit regardless of
+# whether work moved.
+COURSE_STALL_COUNT_KEY = "course_stall_count"
+_COURSE_STALL_THRESHOLD = 10
 # The mood's own drift (his ask, evt-…-mhrx: "we should do the mood
 # staleness detection and ask to touch the face file at least"): a face
 # left standing across _MOOD_DRIFT_THRESHOLD work-deltas gets one
@@ -768,6 +910,7 @@ def _has_post_tool_obligations(
     route: "course.Course | None" = None,
     route_edge: bool = False,
     bolt_edge: bool = False,
+    pending_new_or_changed: bool = True,
 ) -> bool:
     """True when this boundary carries at least one obligation.
 
@@ -803,7 +946,15 @@ def _has_post_tool_obligations(
     except (TypeError, ValueError):
         pending_known = False
         pending = 0
-    if not pending_known or pending > 0:
+    # Seen-only pending events are no longer obligations at the mid-run bar
+    # (w-54 follow-on, 2026-08-23): a pending event the resident has already
+    # seen collapses to a count chip; only *new* or *changed* bodies — or the
+    # first render of any pending set — keep the bar alive by themselves.
+    # `pending_unknown` (the ✉? chip) still always forces (unknown ≠ zero).
+    # `pending_new_or_changed` defaults to True so callers that don't compute
+    # event decisions (tests, direct calls) get the conservative old behaviour:
+    # any non-zero pending count opens the boundary.
+    if not pending_known or (pending > 0 and pending_new_or_changed):
         return True
     try:
         pending_files = int(attention.get("pending_outbox_file_count", 0) or 0)
@@ -2279,6 +2430,8 @@ def _render_event_rows(
     events: list[Any],
     event_seen: dict[str, dict[str, Any]] | None,
     inbox_pointer: str | None,
+    *,
+    skip_seen: bool = False,
 ) -> list[str]:
     """One letter per pending event: chrome row + body per policy.
 
@@ -2287,6 +2440,12 @@ def _render_event_rows(
     the shape ad-hoc callers and replay get). An unchanged already-shown
     body collapses to the one-line seen form; a changed one re-renders in
     full under a ``Δ changed`` mark.
+
+    *skip_seen* (``True`` for the mid-run bar path): silently omit events
+    whose bodies are unchanged since last render — they are already accounted
+    for by the ``pending N`` chip in the bar line.  The full-replay callers
+    (Stop, direct ``format_delta`` calls) leave this ``False`` to preserve
+    the existing seen-row behaviour.
 
     Capped at :data:`_PENDING_EVENT_ROWS_MAX` — existing order is preserved
     (never re-sorted), just truncated, and a fitting list gets no elision
@@ -2300,7 +2459,10 @@ def _render_event_rows(
     # is accounted for on screen, just compactly) — it must bump this
     # counter exactly like a full row, or the elision line below double-
     # counts it: emitted *and* claimed omitted (#1116 residue's own bug).
+    # When skip_seen=True, seen rows are NOT rendered and NOT counted here —
+    # they are accounted for by the chip, not these detail rows.
     rendered = 0
+    seen_skipped = 0  # seen events suppressed via skip_seen — accounted for by chip
     rows: list[str] = []
     for ev in rendered_events:
         if not isinstance(ev, dict):
@@ -2309,6 +2471,9 @@ def _render_event_rows(
         status = (decision or {}).get("status") or "new"
         shown = int((decision or {}).get("shown") or 0)
         if status == "seen":
+            if skip_seen:
+                seen_skipped += 1
+                continue
             rendered += 1
             rows.append(f"- {_event_seen_line(ev, shown)}")
             continue
@@ -2317,7 +2482,7 @@ def _render_event_rows(
         rendered += 1
         rows.append(f"- {_event_header(ev, size=size, changed=status == 'changed')}")
         rows.extend(_event_body_block(body, size, inbox_pointer))
-    omitted = total - rendered
+    omitted = total - rendered - seen_skipped
     if omitted > 0:
         rows.append(
             f"- … +{omitted:,} more pending events not rendered here — read "
@@ -2587,6 +2752,7 @@ def _render_bar(
     last_chips: dict[str, str] | None = None,
     rendered_chips: dict[str, str] | None = None,
     route_drift: bool = False,
+    route_stall: bool = False,
     mood_drift: bool = False,
     assign_view: "assignments.LedgerView | None" = None,
     assign_facts: dict[str, Any] | None = None,
@@ -2678,6 +2844,12 @@ def _render_bar(
         segments.append(("delivery", delivery_chip))
     if not pending_known:
         segments.append(("pending_unknown", "✉?"))
+    elif pending > 0:
+        # The count chip: seen-only pending events collapse here instead of
+        # repeating as detail rows. Change-gated (no edge_due entry) — the
+        # chip rides boundaries that render for other reasons; it does not
+        # keep the bar alive by itself when events are all unchanged.
+        segments.append(("pending", f"pending {pending}"))
     produce_total = _produce_total(produce)
     if produce_total:
         segments.append(("produce", f"⚒{produce_total}"))
@@ -2780,23 +2952,25 @@ def _render_bar(
         # applies *more* here, since a dense bar habituates faster than prose.
         # The full sentence is the pending SET's own edge (`pending_set_changed`,
         # caller-owned — first laden boundary / new id / count increase); an
-        # unchanged set repeats nothing new, so it gets the compact one-liner
-        # instead — this obligation still bypasses content dedup entirely (it
-        # must keep appearing until discharged), what changes is only which of
-        # the two forms it appears in.
-        if pending_set_changed:
-            details.append(
-                f"{pending} pending event(s), {pending_files} undelivered outbox "
-                "file(s). Address each below with an `event:` reply, or retire it "
-                "deliberately with `note:`, before your next plan boundary or "
-                "closeout."
-            )
-        else:
-            details.append(
-                f"{pending} pending event(s), {pending_files} undelivered outbox "
-                "file(s) — `event:`/`note:` each before closeout."
-            )
-        details.extend(_render_event_rows(events, event_seen, inbox_pointer))
+        # unchanged set with no new/changed event rows needs no sentence at all —
+        # the `pending N` chip on the bar line carries the standing fact.
+        # skip_seen=True: seen-only events are accounted for by the
+        # `pending N` chip in the bar line; detail rows only for new/changed.
+        event_rows = _render_event_rows(
+            events, event_seen, inbox_pointer, skip_seen=True
+        )
+        if event_rows or pending_set_changed:
+            # Something new to say: either a new/changed event row or the
+            # first-render instruction sentence. Show the sentence only on the
+            # pending set's own edge; let the event rows carry changed bodies.
+            if pending_set_changed:
+                details.append(
+                    f"{pending} pending event(s), {pending_files} undelivered outbox "
+                    "file(s). Address each below with an `event:` reply, or retire it "
+                    "deliberately with `note:`, before your next plan boundary or "
+                    "closeout."
+                )
+            details.extend(event_rows)
     if finished_spawns:
         # Finished spawns are facts, not obligations — the parent already
         # observed them; they will self-retire at run end. Reported as a
@@ -2833,6 +3007,20 @@ def _render_bar(
                     "a row, or redraw the plan"
                 )
             details.append(route_line)
+    # The course stall (2026-08-23): _COURSE_STALL_THRESHOLD boundaries have
+    # passed with open rows and no route edit — distinct from drift (which
+    # counts *work* moves; stall counts *any* boundary). Fires once per
+    # threshold crossing. Vetoed by a concurrent route_edge/route_prompt/
+    # route_drift — those already re-surface the plan row with a richer
+    # message.
+    if route_stall and not (route_edge or route_prompt or route_drift):
+        stall_chip = course.chip(route)
+        if stall_chip:
+            details.append(
+                f"- {stall_chip} · stalled ×{_COURSE_STALL_THRESHOLD} boundaries"
+                " — open rows exist but the plan hasn't moved:"
+                " check a row or redraw"
+            )
     streaks = repeat_streaks_in
     if budget.get("long_running"):
         limit = budget.get("budget_seconds")
@@ -2902,7 +3090,7 @@ def _render_bar(
         "mood": bool(surprise) or mood_drift,
         # Position trackers re-surface on their own edges even when the
         # numbers happen not to have moved.
-        "course": route_edge or route_prompt or route_drift,
+        "course": route_edge or route_prompt or route_drift or route_stall,
         "owed": plan_edge,
         # The ignition ledger rides its own transitions (w-69): an overdue
         # edge or level bump changes the details, not necessarily the chip
@@ -3012,6 +3200,7 @@ def format_delta(
     last_chips: dict[str, str] | None = None,
     rendered_chips: dict[str, str] | None = None,
     route_drift: bool = False,
+    route_stall: bool = False,
     mood_drift: bool = False,
     assign_view: "assignments.LedgerView | None" = None,
     assign_facts: dict[str, Any] | None = None,
@@ -3167,7 +3356,7 @@ def format_delta(
             repeat_streaks=repeat_streaks,
             pending_set_changed=pending_set_changed,
             last_chips=last_chips, rendered_chips=rendered_chips,
-            route_drift=route_drift, mood_drift=mood_drift,
+            route_drift=route_drift, route_stall=route_stall, mood_drift=mood_drift,
             assign_view=assign_view, assign_facts=assign_facts,
             assign_edge=assign_edge,
         )
@@ -3911,6 +4100,39 @@ def _keepalive_armed(ctx: "HookContext") -> bool:
     return until is not None and until > time.time()
 
 
+def _linger_opted_out(ctx: "HookContext") -> bool:
+    """Whether this run consciously declined the live-chat linger."""
+    if ctx.outbox_dir is None:
+        return False
+    try:
+        text = (ctx.outbox_dir / portals.LINGER_OPT_OUT_NAME).read_text(
+            encoding="utf-8"
+        )
+    except OSError:
+        return False
+    return any(line.strip() for line in text.splitlines())
+
+
+def _linger_closeout_clause(ctx: "HookContext") -> str | None:
+    """Require a completed linger, or an explicit reason for skipping it."""
+    if ctx.outbox_dir is None or _linger_opted_out(ctx):
+        return None
+    until = portals.keepalive_until(ctx.outbox_dir / portals.KEEPALIVE_NAME)
+    if until is not None and until <= time.time():
+        return None
+    state = (
+        "no parseable `.keepalive` was armed"
+        if until is None
+        else "the `.keepalive` horizon is still live — exiting now would not linger"
+    )
+    return (
+        f"{state}. A cloud conversation lingers by default: deliver first, "
+        "run `brnrd await --timeout 30m`, and close only after that horizon "
+        "resolves quiet. If stopping now is deliberate, write the reason as "
+        f"the first line of `{portals.LINGER_OPT_OUT_NAME}`"
+    )
+
+
 def _spawn_child_armed(portal: dict[str, Any], run_id: str | None) -> bool | None:
     """Whether a ``spawn:`` child owned by *run_id* is still running.
 
@@ -4467,6 +4689,11 @@ def _armed_closeout_block(
         if vigil_clause:
             unmet.append(vigil_clause)
 
+    if "linger" in ctx.closeout_obligations:
+        linger_clause = _linger_closeout_clause(ctx)
+        if linger_clause:
+            unmet.append(linger_clause)
+
     for name in _CLOSEOUT_ARTIFACT_ORDER:
         if name in ctx.closeout_obligations:
             filename, clause = _CLOSEOUT_ARTIFACTS[name]
@@ -4697,6 +4924,22 @@ def compute_neutral(
             state[COURSE_DRIFT_COUNT_KEY] = drift_count
     else:
         state[COURSE_DRIFT_COUNT_KEY] = 0
+    # Course stall (2026-08-23): count *any* boundary where open rows exist
+    # and the route didn't change (regardless of whether work moved — that
+    # distinction belongs to drift). At _COURSE_STALL_THRESHOLD the stall
+    # detail fires once and the counter re-arms. route_edge resets to 0.
+    route_stall = False
+    if route is not None and route.open_rows:
+        if route_edge:
+            state[COURSE_STALL_COUNT_KEY] = 0
+        else:
+            stall_count = int(state.get(COURSE_STALL_COUNT_KEY) or 0) + 1
+            if stall_count >= _COURSE_STALL_THRESHOLD:
+                route_stall = True
+                stall_count = 0
+            state[COURSE_STALL_COUNT_KEY] = stall_count
+    else:
+        state[COURSE_STALL_COUNT_KEY] = 0
     # The mood's drift, same engine (evt-…-mhrx): the face stood still while
     # the run visibly moved. Touching `.mood` — any text change — resets;
     # the ask re-arms after another full threshold of work-moves, so a
@@ -4933,10 +5176,44 @@ def compute_neutral(
             portal.get("resources")
             if isinstance(portal.get("resources"), dict) else {}
         )
+        # Whether any pending event is new or changed at this boundary — used
+        # to decide if pending events count as an obligation (forcing the bar
+        # to render) or merely as a count chip riding the bar if it renders
+        # for other reasons. Computed before `has_obligations` so it can gate
+        # the pending-event clause there.
+        has_new_or_changed_events = any(
+            d.get("status") in ("new", "changed")
+            for d in (event_decisions or {}).values()
+        )
+
+        # The pending sermon's own set-changed edge (bar path only — seed and
+        # stop keep the full sentence unconditionally): full instruction
+        # sentence on the pending SET's own edge, compact one-liner on a
+        # boundary where it stands unchanged from the one before it. Skipped
+        # (and left at its unused default) when nothing is pending — the
+        # detail line this gates does not render at all in that case, so
+        # there is nothing to compress and nothing worth pruning the ledger
+        # over. Computed *before* `has_obligations` — its side-effect (ledger
+        # snapshot write) must run on every laden boundary, and `has_obligations`
+        # uses `pending_new_or_changed` which depends on this result.
+        pending_set_changed = (
+            _pending_set_changed(state, action_events, action_pending)
+            if action_pending
+            else True
+        )
+
+        # An event obligation exists only when there is something new to see:
+        # a fresh id, a changed body, or the first render of any pending set.
+        # Seen-only events collapse to the `pending N` chip and never keep the
+        # bar alive by themselves — that is the "annoying reminder" this
+        # change ends (maintainer, 2026-08-23).
+        pending_new_or_changed = has_new_or_changed_events or pending_set_changed
+
         has_obligations = _has_post_tool_obligations(
             portal, plan, surprise=edge, plan_edge=plan_edge,
             portal_unavailable=portal_unavailable,
             route=route, route_edge=route_edge, bolt_edge=bolt_edge,
+            pending_new_or_changed=pending_new_or_changed,
         )
         ambient_emit = _ambient_should_emit(state, pt_budget, pt_resources)
 
@@ -4948,20 +5225,6 @@ def compute_neutral(
         route_prompt = route is not None and any(
             decision.get("status") in ("new", "changed")
             for decision in (event_decisions or {}).values()
-        )
-
-        # The pending sermon's own set-changed edge (bar path only — seed and
-        # stop keep the full sentence unconditionally): full instruction
-        # sentence on the pending SET's own edge, compact one-liner on a
-        # boundary where it stands unchanged from the one before it. Skipped
-        # (and left at its unused default) when nothing is pending — the
-        # detail line this gates does not render at all in that case, so
-        # there is nothing to compress and nothing worth pruning the ledger
-        # over.
-        pending_set_changed = (
-            _pending_set_changed(state, action_events, action_pending)
-            if action_pending
-            else True
         )
 
         # Compression-on-repeat (#1116 residue, design-the-live-loop.md §1):
@@ -4991,8 +5254,8 @@ def compute_neutral(
         rendered_chips: dict[str, str] = {}
         if (
             has_obligations or ambient_emit or edge or plan_edge
-            or route_edge or bolt_edge or route_drift or mood_drift
-            or assign_edge or token_moved
+            or route_edge or bolt_edge or route_drift or route_stall
+            or mood_drift or assign_edge or token_moved
         ):
             inject = format_delta(
                 portal, mood=mood, surprise=edge,
@@ -5006,7 +5269,8 @@ def compute_neutral(
                 repeat_streaks=repeat_streaks,
                 pending_set_changed=pending_set_changed,
                 last_chips=last_chips, rendered_chips=rendered_chips,
-                route_drift=route_drift, mood_drift=mood_drift,
+                route_drift=route_drift, route_stall=route_stall,
+                mood_drift=mood_drift,
                 assign_view=assign_view, assign_facts=assign_facts,
                 assign_edge=assign_edge,
             )
@@ -5878,10 +6142,15 @@ def record_boundary(
         "block_reason": neutral.get("block_reason"),
     }
     # Record only the bounded identity of each act. Claude supplies an ordered
-    # batch while Codex supplies one top-level tool name; inputs, responses,
+    # batch while Codex supplies one top-level tool name; raw inputs, responses,
     # and tool-use ids are deliberately excluded from the transcript.
+    # ``detail`` is a derived, redacted summary of the primary tool's input;
+    # ``out_bytes`` is the total byte count of responses (never the content).
     tool_names: list[str] = []
     first_act: str | None = None
+    first_detail: str | None = None
+    total_out_bytes: int = 0
+    has_out_bytes = False
     if phase == PHASE_POST_TOOL and isinstance(payload, dict):
         calls = payload.get("tool_calls")
         if isinstance(calls, list):
@@ -5893,14 +6162,28 @@ def record_boundary(
                     tool_names.append(name.strip())
                     if first_act is None:
                         first_act = classify_act(name, call.get("tool_input"))
+                        first_detail = _tool_detail(name, call.get("tool_input"))
+                response = call.get("tool_response")
+                if response is not None:
+                    total_out_bytes += _response_bytes(response)
+                    has_out_bytes = True
         else:
             name = payload.get("tool_name")
             if isinstance(name, str) and name.strip():
                 tool_names.append(name.strip())
                 first_act = classify_act(name, payload.get("tool_input"))
+                first_detail = _tool_detail(name, payload.get("tool_input"))
+            response = payload.get("tool_response")
+            if response is not None:
+                total_out_bytes = _response_bytes(response)
+                has_out_bytes = True
     if tool_names:
         record["tools"] = tool_names
         record["act"] = first_act
+    if first_detail is not None:
+        record["detail"] = first_detail
+    if has_out_bytes:
+        record["out_bytes"] = total_out_bytes
     # An in-process subagent's boundary is recorded (it happened, and a reader
     # asking "what did this run's environment say" wants it) but tagged, so
     # `derive_boundaries_summary` can keep the run's own verdict — which is

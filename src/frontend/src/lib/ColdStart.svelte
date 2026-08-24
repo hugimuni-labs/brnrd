@@ -1,21 +1,17 @@
 <script lang="ts">
-	import { onDestroy } from 'svelte';
+	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
+	import MessengerDoors from './MessengerDoors.svelte';
+	import PairingCommand from './PairingCommand.svelte';
 	import { DOCS_URL } from './publicStats';
-	import { fetchPairStatus, mintAccountMessengerPair, splitPairingCommand } from './repos';
+	import { isConnected, loadSharedPairedChats, splitPairingCommand } from './repos';
 	import type {
 		ConnectedRepo,
 		GitHubInstallation,
 		MachinesSummary,
 		MessengerDoor,
-		MessengerPairStarted
+		PairedChat
 	} from './repos';
-	// brr/every-door-on-the-page — the label roster moved here so this
-	// component and the persistent `MessengerDoors.svelte` panel on
-	// `/repos` render the same word for the same platform. See that
-	// module's own doc comment for the "why this file" reasoning.
-	import { doorLabel } from './messengerDoors';
-
 	// The cold start (2026-08-03). Reported from a real signup on the
 	// deployed dashboard: "two screens - no clarity on the installation, or
 	// what is missing, the actual repo enablement is the repos screen
@@ -183,6 +179,24 @@
 	// registry (Slack, Signal, an unconfigured Telegram/WhatsApp) reads
 	// through the honest-intermediate fallback instead.
 	let availableDoors = $derived((messengerDoors ?? []).filter((d) => d.deep_link_available));
+	// The fourth reading of "is this door connected" used to live here, and it
+	// was the weakest: `d.paired` alone, the wire flag, ignoring the paired
+	// chats entirely — so a chat the account had already bound could leave
+	// this screen still saying "nothing is paired yet".
+	//
+	// It now shares `isConnected` with `MessengerDoors`, over the same list,
+	// and the list costs nothing extra: the panel this component renders is
+	// already fetching it, and `loadSharedPairedChats` hands both readers the
+	// same in-flight request. One GET, two readers, one derivation.
+	let pairedChats = $state<PairedChat[]>([]);
+	onMount(() => {
+		loadSharedPairedChats()
+			.then((chats) => (pairedChats = chats))
+			// The wire flag still answers on its own; a failed detail fetch
+			// must never turn a connected door back off.
+			.catch(() => {});
+	});
+	let pairedDoors = $derived((messengerDoors ?? []).filter((d) => isConnected(d, pairedChats)));
 
 	// Coarse pointer / UA-CH, client-side only — no new server state, no
 	// User-Agent sniffing on the backend. `pointer: coarse` is the primary
@@ -247,6 +261,7 @@
 	// to carry the signal. `cold` now requires *both* to be false; the
 	// paired-but-repo-less gap in between is `pairedNoRepo`.
 	let cold = $derived(repos !== null && !daemonEverPaired && !machinePaired);
+	let chatOnly = $derived(cold && pairedDoors.length > 0);
 	let pairedNoRepo = $derived(repos !== null && !daemonEverPaired && machinePaired);
 
 	// #1277a: the pairing command's first line is `cd <repo>` before any
@@ -259,100 +274,6 @@
 	let copied = $state<string | null>(null);
 	let copyTimer: ReturnType<typeof setTimeout> | undefined;
 
-	// #1465 — the messenger door's own mint state, keyed per platform since
-	// more than one door can be available at once (Telegram *and*
-	// WhatsApp). `mintingPlatform` gates each button so a second tap
-	// mid-flight can't stack a second mint for that platform (a different
-	// door's button stays live); a successful mint with a `deep_link`
-	// never populates `mintOutcomes` for that platform — it navigates away
-	// instead — so an entry there always means "show the code, the link
-	// didn't come with one". `mintFailedPlatforms` is the separate case
-	// where the POST itself never landed (network, 401, non-2xx) — there
-	// is no `pair_code` to fall back to there, only a plain retry prompt.
-	let mintingPlatform = $state<string | null>(null);
-	let mintOutcomes = $state<Record<string, MessengerPairStarted>>({});
-	let mintFailedPlatforms = $state<Record<string, boolean>>({});
-
-	// #1464 — the mint's own outcome, read back while this panel is still
-	// open: the one moment a hijacked or wrong-phone redeem (the
-	// maintainer's own live trace, #1464's issue) is caught by the person
-	// who minted the code. Keyed per platform like every other mint state
-	// here (#1465) — more than one door can be tapped in one session, and
-	// a Telegram redeem must not light up the WhatsApp button. An entry
-	// appears once and stays — a consumed code never un-consumes; its
-	// `display` is `null` when the redeem captured no name (a legacy
-	// route, or one predating #1464), rendered as a generic "paired"
-	// rather than blank.
-	let pairedOutcomes = $state<Record<string, { display: string | null }>>({});
-	const pollTimers: Record<string, ReturnType<typeof setTimeout>> = {};
-	const pollDeadlines: Record<string, number> = {};
-
-	function stopPolling(platform: string) {
-		clearTimeout(pollTimers[platform]);
-		delete pollTimers[platform];
-	}
-
-	function stopAllPolling() {
-		for (const platform of Object.keys(pollTimers)) stopPolling(platform);
-	}
-
-	// Deliberately not a fixed-count loop: `openMessengerDoor` below may
-	// navigate the tab away (a mobile deep link) and back, and this keeps
-	// polling across that gap for as long as the code could still be live
-	// (~600s TTL server-side, `settings.pair_ttl_s`, plus slack) — the
-	// exact span the "while the panel is open" ask covers, including the
-	// panel being backgrounded mid-flight.
-	async function pollPairStatus(platform: string, code: string) {
-		if (Date.now() > pollDeadlines[platform]) {
-			stopPolling(platform);
-			return;
-		}
-		try {
-			const status = await fetchPairStatus(code);
-			if (status.consumed) {
-				pairedOutcomes = { ...pairedOutcomes, [platform]: { display: status.display } };
-				stopPolling(platform);
-				return;
-			}
-		} catch {
-			// Transient (network blip, a 401 from a session that expired
-			// mid-flight) — keep trying until the deadline; a permanent
-			// auth failure just polls harmlessly to a stop.
-		}
-		pollTimers[platform] = setTimeout(() => pollPairStatus(platform, code), 3000);
-	}
-
-	onDestroy(stopAllPolling);
-
-	// Mint on tap, never on render — codes expire in ~600s server-side
-	// (`settings.pair_ttl_s`), so pre-minting on a panel that might sit
-	// open for minutes would hand out a code already halfway to stale.
-	async function openMessengerDoor(platform: string) {
-		mintingPlatform = platform;
-		mintFailedPlatforms = { ...mintFailedPlatforms, [platform]: false };
-		pairedOutcomes = Object.fromEntries(
-			Object.entries(pairedOutcomes).filter(([p]) => p !== platform)
-		);
-		try {
-			const started = await mintAccountMessengerPair(platform);
-			pollDeadlines[platform] = Date.now() + 630_000;
-			stopPolling(platform);
-			pollPairStatus(platform, started.pair_code);
-			if (started.deep_link) {
-				window.location.assign(started.deep_link);
-				return;
-			}
-			// No link this platform's identity can build right now (e.g.
-			// #1242's Telegram shape check failed server-side) — the code
-			// alone still binds the chat.
-			mintOutcomes = { ...mintOutcomes, [platform]: started };
-		} catch {
-			mintFailedPlatforms = { ...mintFailedPlatforms, [platform]: true };
-		} finally {
-			mintingPlatform = null;
-		}
-	}
-
 	async function copy(key: string, text: string) {
 		try {
 			await navigator.clipboard.writeText(text);
@@ -364,62 +285,7 @@
 			// The command is still there to select by hand.
 		}
 	}
-
-	// #1465 — the tappable door's body, shared between the `cold` and
-	// `pairedNoRepo` mobile sections below and looped once per available
-	// door: every platform reads `availableDoors` the same way and mints
-	// through the same generalized endpoint, so the interactive half
-	// (copy, button, mint-outcome rendering) is one snippet instead of a
-	// copy per platform drifting apart the next time either state's
-	// wording changes. Each caller still owns its own empty-set fallback
-	// copy — that half genuinely differs per state.
 </script>
-
-{#snippet messengerDoorCta(platform: string)}
-	<p class="mt-1.5 text-sm text-stone-300">
-		brnrd talks back in {doorLabel(platform)} — no laptop needed. Tap through and hit Start; setup below
-		can wait.
-	</p>
-	<button
-		type="button"
-		data-testid={`open-${platform}`}
-		class="mt-3 inline-flex cursor-pointer items-center border border-amber-800/50 bg-amber-950/20 px-3 py-2 font-mono text-[11px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/40 hover:text-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
-		onclick={() => openMessengerDoor(platform)}
-		disabled={mintingPlatform === platform || !!pairedOutcomes[platform]}
-		>{mintingPlatform === platform
-			? 'opening…'
-			: pairedOutcomes[platform]
-				? 'paired'
-				: `open ${doorLabel(platform).toLowerCase()}`}</button
-	>
-	{#if pairedOutcomes[platform]}
-		<!-- #1464 — the redeem outcome, read back live: the moment a
-		     hijacked or wrong-phone tap is caught by the person who minted
-		     the code, right here where they can still act on it. -->
-		<div
-			class="mt-3 border border-emerald-800/50 bg-emerald-950/20 p-2"
-			data-testid={`pair-outcome-${platform}`}
-		>
-			<p class="font-mono text-[11px] tracking-wide text-emerald-300/80 uppercase">paired</p>
-			<p class="mt-1 text-sm text-emerald-100">
-				{pairedOutcomes[platform].display ?? '(no name reported)'}
-			</p>
-			<p class="mt-1.5 text-sm text-stone-400">
-				Not you? Revoke it from the paired-chats list once you're on a computer.
-			</p>
-		</div>
-	{:else if mintOutcomes[platform]}
-		<div class="mt-3 border border-stone-800 bg-stone-950/50 p-2" data-testid="pair-code-fallback">
-			<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">your code</p>
-			<p class="mt-1 font-mono text-sm text-amber-100">{mintOutcomes[platform].pair_code}</p>
-			<p class="mt-1.5 text-sm text-stone-400">{mintOutcomes[platform].instructions}</p>
-		</div>
-	{:else if mintFailedPlatforms[platform]}
-		<p class="mt-2 text-sm text-stone-400" data-testid="mint-failed">
-			Couldn't reach brnrd — try again.
-		</p>
-	{/if}
-{/snippet}
 
 {#if cold}
 	<section
@@ -429,11 +295,12 @@
 	>
 		<p class="eyebrow">the cold start</p>
 		<h2 id="cold-heading" class="font-mono text-sm font-semibold text-amber-100">
-			nothing is paired yet
+			{chatOnly ? 'chat connected; daemon still to go' : 'nothing is paired yet'}
 		</h2>
 		<p class="mt-2 text-sm text-stone-400">
-			This board reads a daemon running on your own machine. There is none yet — two steps, in
-			order.
+			{chatOnly
+				? 'Your resident can already meet you in chat. No daemon is running on your machine yet — finish that step below.'
+				: 'This board reads a daemon running on your own machine. There is none yet — two steps, in order.'}
 		</p>
 
 		{#if isMobile}
@@ -453,9 +320,14 @@
 					the messenger door
 				</p>
 				{#if availableDoors.length > 0}
-					{#each availableDoors as door (door.platform)}
-						{@render messengerDoorCta(door.platform)}
-					{/each}
+					<!-- Shared concept once, above the tiles: each door mints a
+					     timed link and opens the app directly. The per-tile copy
+					     inside MessengerDoors names both platforms — proposal in
+					     the report for the maintainer to resolve there. -->
+					<p class="mt-1.5 text-sm text-stone-300">
+						Tap a door — the link opens the app directly and binds this account.
+					</p>
+					<MessengerDoors doors={availableDoors} embedded heading="the messenger door" />
 				{:else}
 					<p class="mt-1.5 text-sm text-stone-300">
 						brnrd talks back once a repo is enabled — no laptop needed after that. It opens on a
@@ -506,31 +378,10 @@
 					<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
 						<span class="text-amber-200/80">02</span> run <code>brnrd</code> — the guided setup
 					</p>
-					{#if pairCommand}
-						{#if pairParts?.setupLine}
-							<!-- #1277a: scene-setting, not copyable — the box below hands
-							     over only the line that is unconditionally runnable. -->
-							<p class="mt-1.5 font-mono text-[11px] text-ink-mute">from your repo checkout:</p>
-						{/if}
-						<!-- Wrapped, not scrolled (driven on a 390px phone, 2026-08-03):
-						     `overflow-x-auto` clipped the middle line to "brnrd account
-						     connect https://brnrd.de" with no visible tell, which is a
-						     plausible-looking wrong domain on the one command that has
-						     to be right. A soft wrap keeps every character on screen and
-						     the copy button hands over the real string regardless. -->
-						<div class="mt-1.5 flex items-start gap-2">
-							<pre
-								class="min-w-0 grow border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] wrap-anywhere whitespace-pre-wrap text-stone-300"><code
-									>{pairParts?.runnable ?? pairCommand}</code
-								></pre>
-							<button
-								type="button"
-								class="shrink-0 cursor-pointer border border-stone-800 px-2 py-2 font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-								onclick={() => copy('pair', pairParts?.runnable ?? pairCommand ?? '')}
-								>{copied === 'pair' ? 'copied' : 'copy'}</button
-							>
-						</div>
-					{/if}
+					<!-- #1277a split handled inside PairingCommand; plain `<pre>`
+						     reference boxes (mobile) remain separate, intentionally
+						     inert — nothing on a phone can run the command. -->
+					<PairingCommand command={pairCommand} />
 					<p class="mt-1.5 text-sm text-stone-400">
 						In the checkout, after 01. One word, narrated: it pairs this machine (printing a link
 						back here to approve), names your doors, and queues the first run — the one that writes
@@ -593,9 +444,11 @@
 					the messenger door
 				</p>
 				{#if availableDoors.length > 0}
-					{#each availableDoors as door (door.platform)}
-						{@render messengerDoorCta(door.platform)}
-					{/each}
+					<!-- Same shared intro as the cold branch above. -->
+					<p class="mt-1.5 text-sm text-stone-300">
+						Tap a door — the link opens the app directly and binds this account.
+					</p>
+					<MessengerDoors doors={availableDoors} embedded heading="the messenger door" />
 				{:else}
 					<p class="mt-1.5 text-sm text-stone-300">
 						A machine has paired, but the door still waits on a repo — enabling one is what's left,
@@ -620,23 +473,7 @@
 		{:else}
 			<div class="mt-4">
 				<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">enable a repo</p>
-				{#if pairCommand}
-					{#if pairParts?.setupLine}
-						<p class="mt-1.5 font-mono text-[11px] text-ink-mute">from the repo checkout:</p>
-					{/if}
-					<div class="mt-1.5 flex items-start gap-2">
-						<pre
-							class="min-w-0 grow border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] wrap-anywhere whitespace-pre-wrap text-stone-300"><code
-								>{pairParts?.runnable ?? pairCommand}</code
-							></pre>
-						<button
-							type="button"
-							class="shrink-0 cursor-pointer border border-stone-800 px-2 py-2 font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-							onclick={() => copy('pair', pairParts?.runnable ?? pairCommand ?? '')}
-							>{copied === 'pair' ? 'copied' : 'copy'}</button
-						>
-					</div>
-				{/if}
+				<PairingCommand command={pairCommand} />
 				<p class="mt-1.5 text-sm text-stone-400">
 					Same command as pairing — running it in a checkout also enables that repo.
 				</p>

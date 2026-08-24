@@ -84,11 +84,8 @@ class PairStarted(BaseModel):
     pair_code: str
     pair_url: str
     poll_secret: str
-    # The initiating daemon's proof, to be presented back at approve. Already
-    # embedded in `pair_url`'s fragment — returned separately only so a
-    # client that builds its own approval surface doesn't have to parse the
-    # URL apart. Never leaves the machine that ran the pairing command
-    # except through the link its human opens.
+    # The human-entered device code, returned under the compatibility name
+    # existing API clients already present back at approve.
     approve_secret: str
     expires_at: datetime
 
@@ -295,12 +292,12 @@ class ResponseAck(BaseModel):
 class CardPost(BaseModel):
     event_id: str
     text: str
-    message_id: int | None = None
+    message_id: int | str | None = None
 
 
 class CardAck(BaseModel):
     event_id: str
-    message_id: int | None = None
+    message_id: int | str | None = None
 
 
 class MessagePost(BaseModel):
