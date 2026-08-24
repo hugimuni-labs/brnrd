@@ -44,13 +44,14 @@ class _FakeDriver:
 
     def __init__(
         self, *, whoami_value=None, read_value=None, search_value=None,
-        click_send_return=None, whoami_raises=False,
+        mentions_value=None, click_send_return=None, whoami_raises=False,
     ):
         self.calls: list = []
         self.headless: bool | None = None
         self._whoami_value = whoami_value
         self._read_value = read_value if read_value is not None else {}
         self._search_value = search_value if search_value is not None else []
+        self._mentions_value = mentions_value if mentions_value is not None else []
         self.search_tabs = []
         self._click_send_return = click_send_return
         self._whoami_raises = whoami_raises
@@ -80,6 +81,10 @@ class _FakeDriver:
         self.calls.append(("search", query))
         self.search_tabs.append(tab)
         return self._search_value
+
+    def mentions(self):
+        self.calls.append("mentions")
+        return self._mentions_value
 
     def open_reply_composer(self, url):
         self.calls.append(("open_reply_composer", url))
@@ -124,6 +129,7 @@ def _armed_env(monkeypatch):
         ["check", "--help"],
         ["read", "-h"],
         ["search", "--help"],
+        ["mentions", "-h"],
         ["draft", "-h"],
         ["send", "--help"],
         ["draft-post", "-h"],
@@ -830,6 +836,7 @@ def test_record_send_appends_and_prunes(tmp_path):
         ["login"],
         ["read", "https://x.com/a/status/1"],
         ["search", "q"],
+        ["mentions"],
         ["draft", "https://x.com/a/status/1", "--text", "hi"],
         ["send", "https://x.com/a/status/1", "--text", "hi", "--confirm"],
         ["draft-post", "--text", "hi"],
@@ -993,6 +1000,92 @@ def test_search_top_flag_is_not_mistaken_for_the_query(tmp_path):
         ["search", "agent memory", "--top", "--json"], paths, driver_factory=_factory_for(driver)
     )
     assert ("search", "agent memory") in driver.calls
+
+
+# ── mentions: structured output, headless, no positional args ─────────
+
+
+def test_mentions_prints_structured_json_headless(tmp_path, capsys):
+    paths = _paths(tmp_path)
+    driver = _FakeDriver(
+        whoami_value="brnrd_resident",
+        mentions_value=[
+            {"author": "@a", "text": "hi", "url": "https://x.com/a/status/1", "timestamp": "t"},
+        ],
+    )
+    envoy_x_browser.run(["mentions"], paths, driver_factory=_factory_for(driver))
+    assert driver.headless is True
+    assert "whoami" in driver.calls
+    assert "mentions" in driver.calls
+    out = json.loads(capsys.readouterr().out)
+    assert out == [
+        {"author": "@a", "text": "hi", "url": "https://x.com/a/status/1", "timestamp": "t"},
+    ]
+
+
+def test_mentions_returns_a_real_empty_result_when_logged_in(tmp_path, capsys):
+    """A genuine "nothing new" mentions read must stay expressible, the
+    same distinction `search` needed from a logged-out session."""
+    paths = _paths(tmp_path)
+    driver = _FakeDriver(whoami_value="brnrd_resident", mentions_value=[])
+    envoy_x_browser.run(["mentions"], paths, driver_factory=_factory_for(driver))
+    assert "mentions" in driver.calls
+    out = json.loads(capsys.readouterr().out)
+    assert out == []
+
+
+def test_mentions_accepts_and_ignores_json_flag(tmp_path, capsys):
+    paths = _paths(tmp_path)
+    driver = _FakeDriver(whoami_value="brnrd_resident", mentions_value=[])
+    envoy_x_browser.run(["mentions", "--json"], paths, driver_factory=_factory_for(driver))
+    assert json.loads(capsys.readouterr().out) == []
+
+
+def test_mentions_rejects_a_stray_positional(tmp_path):
+    """No reply target, no query -- a leftover positional almost certainly
+    means the caller meant `search`/`read`, not this verb."""
+    paths = _paths(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        envoy_x_browser.run(
+            ["mentions", "https://x.com/a/status/1"], paths, driver_factory=_refusing_factory,
+        )
+    assert "no positional arguments" in str(exc.value)
+
+
+def test_mentions_refuses_when_logged_out(tmp_path):
+    """Same defect class `read`/`search` were already pinned against: a
+    dead session must not come back as an empty-but-successful list,
+    indistinguishable from a genuine zero mentions."""
+    paths = _paths(tmp_path)
+    driver = _FakeDriver(whoami_value=None)
+    with pytest.raises(SystemExit) as exc:
+        envoy_x_browser.run(["mentions"], paths, driver_factory=_factory_for(driver))
+    message = str(exc.value)
+    assert "login" in message and "retry" in message
+    assert "whoami" in driver.calls
+    assert "mentions" not in driver.calls
+
+
+def test_mentions_reuses_the_same_driver_for_the_session_check(tmp_path):
+    paths = _paths(tmp_path)
+    driver = _FakeDriver(whoami_value="brnrd_resident", mentions_value=[])
+    calls = {"n": 0}
+
+    def counting_factory(p, *, headless):  # noqa: ARG001
+        calls["n"] += 1
+        return driver
+
+    envoy_x_browser.run(["mentions"], paths, driver_factory=counting_factory)
+    assert calls["n"] == 1
+
+
+def test_mentions_refused_by_kill_switch(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    _armed_env(monkeypatch)
+    paths.kill_switch.write_text("", encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        envoy_x_browser.run(["mentions"], paths, driver_factory=_refusing_factory)
+    assert "kill switch" in str(exc.value)
 
 
 # ── read / search: a dead session refuses instead of scraping blind ────
