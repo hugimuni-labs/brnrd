@@ -62,7 +62,9 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 try:  # pragma: no cover - POSIX only, and every supported host is POSIX
@@ -701,32 +703,91 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  [{mark:>7}] {leg['job']}: {leg['name']}  (cwd {leg['cwd']})")
         return 0
 
+    # #1603: CI's own jobs (`backend` / `frontend` / `launcher`) carry no
+    # `needs:` between them — genuinely independent — but the serial loop
+    # this replaced ran every leg of every job back to back under one
+    # exclusive lock, so a ~9-10m critical path became a ~40m local wait.
+    # The fix stays inside that same lock (#1195 rec 1's scope is untouched):
+    # one thread per *job*, legs **within** a job still run in step order —
+    # a job can have a setup step before its test step, and reordering those
+    # would be a second, worse bug. `print_lock` only serializes the
+    # bookkeeping prints and each already-complete output line; it is not a
+    # second job-level lock.
     def run_legs() -> list[tuple[str, str, float]]:
-        results: list[tuple[str, str, float]] = []
-        for leg in runnable:
+        print_lock = threading.Lock()
+
+        def run_one(leg: dict) -> tuple[str, str, float]:
             label = f"{leg['job']}: {leg['name']}"
+            prefix = f"[{leg['job']}] "
             if leg["job"] in skip_jobs:
-                print(
-                    f"\n=== SKIP  {label}\n    --changed-only vs {base}: "
-                    f"{leg['job']} not touched by the diff"
-                )
-                results.append((label, "SKIPPED", 0.0))
-                continue
+                with print_lock:
+                    print(
+                        f"\n=== SKIP  {label}\n    --changed-only vs {base}: "
+                        f"{leg['job']} not touched by the diff"
+                    )
+                return (label, "SKIPPED", 0.0)
             reason = refusal(leg["command"])
             if reason:
-                print(f"\n=== SKIP  {label}\n    {reason}")
-                results.append((label, "SKIPPED", 0.0))
-                continue
-            print(f"\n=== RUN   {label}  (cwd {leg['cwd']})", flush=True)
+                with print_lock:
+                    print(f"\n=== SKIP  {label}\n    {reason}")
+                return (label, "SKIPPED", 0.0)
+            with print_lock:
+                print(f"\n=== RUN   {label}  (cwd {leg['cwd']})", flush=True)
             started = time.monotonic()
-            completed = subprocess.run(
-                leg["command"], shell=True, cwd=REPO_ROOT / leg["cwd"]
+            # Piped (not inherited) so concurrent jobs' output doesn't tear
+            # mid-line on the shared terminal fd; merged stderr->stdout so
+            # there is exactly one pipe to drain per leg, never two (no
+            # separate-pipe deadlock to guard against). Each complete line is
+            # prefixed with its job id before it prints, under the same lock
+            # that guards the `=== RUN`/`=== SKIP` bookkeeping lines, so a
+            # reader can always tell which job printed which line.
+            proc = subprocess.Popen(
+                leg["command"],
+                shell=True,
+                cwd=REPO_ROOT / leg["cwd"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
             )
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                with print_lock:
+                    sys.stdout.write(f"{prefix}{line}")
+                    sys.stdout.flush()
+            proc.wait()
             elapsed = time.monotonic() - started
-            ok = completed.returncode == 0
-            results.append(
-                (label, "PASS" if ok else f"FAIL rc={completed.returncode}", elapsed)
-            )
+            ok = proc.returncode == 0
+            return (label, "PASS" if ok else f"FAIL rc={proc.returncode}", elapsed)
+
+        def run_job(job_legs: list[dict]) -> list[tuple[str, str, float]]:
+            # Sequential on purpose: step order inside one job is a real
+            # dependency (a setup step before the step that needs it), not
+            # an artifact of the old top-level loop.
+            return [run_one(leg) for leg in job_legs]
+
+        # Grouped by first appearance, which is already job order followed
+        # by leg order within that job — `legs()` walks jobs, then a job's
+        # own steps, in that order — so flattening the per-job results back
+        # in this same `jobs_order` reproduces the exact sequence the old
+        # single loop produced. `.gate-receipts.json`'s shape (one entry per
+        # leg, in leg order) does not change; only how the entries are
+        # produced does.
+        jobs_order: list[str] = []
+        grouped: dict[str, list[dict]] = {}
+        for leg in runnable:
+            grouped.setdefault(leg["job"], []).append(leg)
+            if leg["job"] not in jobs_order:
+                jobs_order.append(leg["job"])
+
+        if not jobs_order:
+            return []
+
+        results: list[tuple[str, str, float]] = []
+        with ThreadPoolExecutor(max_workers=len(jobs_order)) as pool:
+            futures = {job_id: pool.submit(run_job, grouped[job_id]) for job_id in jobs_order}
+            for job_id in jobs_order:
+                results.extend(futures[job_id].result())
         return results
 
     # The captures bracket *the legs*, not the process: `--list` returned
