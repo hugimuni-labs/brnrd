@@ -1,30 +1,17 @@
-// The shells-and-doors shelf on brnrd.dev's own landing (#1070 follow-up).
+// Product support data used by brnrd.dev's landing.
 //
-// The docs site (docs/src/content/docs/index.md) renders the same idea —
-// what brnrd supports — but answers a different question: "can I self-host
-// this today" (gate code shipped on `main`). This landing answers "is
-// brnrd.dev's own hosted convenience layer wired up for this today", which
-// is a deployment fact this static bundle cannot know at build time — only
-// the running backend can, from its own live `Settings`. So: roster
-// (identity, icon, tag) lives here as presentation data, same as the docs
-// page hand-writes its own; **status never does** — it always comes from
-// `GET /v1/stats/support`, computed by `brr.support_matrix` (see that
-// module's docstring for the full design and why the two landings can
-// legitimately disagree about the same door).
+// There are two different facts here, and the landing must not collapse them:
 //
-// The property this file exists to hold: a door this landing has not heard
-// a live status for is never rendered as though it were confirmed live —
-// see `doorRows`'s `status: null` branch and `supportMatrix.test.ts`'s
-// "status-drift" cases.
+// 1. the backend's six platform-level deployment statuses (`DOORS`), fetched
+//    from `/v1/stats/support`; and
+// 2. the way a human can actually reach a resident (`REACH_GROUPS`).
 //
-// Three door states, not two: `'ready'` is shipped code with no confirmed
-// brnrd.dev identity yet — the maintainer's brief, named directly: code
-// shipped, lane wired, and an identity that actually answers are three
-// independent facts, and a two-value status collapses the last two into
-// each other in both directions (an unconfigured hosted axis reading the
-// same as unwritten code; a door with no hosted axis at all reading the
-// same as a working one). See `hosted_status`'s docstring for the full
-// reasoning.
+// Those are not the same taxonomy. Telegram deliberately appears twice in
+// the reach model: once as brnrd.dev's shared hosted identity and once as a
+// bot token the operator owns and wires directly to the local daemon. Signal
+// is local/BYO only. GitHub and Slack are app-shaped integrations. The web
+// dashboard is a control surface, not a chat connector. Keeping those shapes
+// separate is the point of this file: a provider logo is not an architecture.
 
 export type DoorStatus = 'live' | 'soon' | 'ready';
 
@@ -50,11 +37,8 @@ export const SHELLS: DoorMeta[] = [
 	{ slug: 'codex', label: 'Codex', icon: 'codex-mono' }
 ];
 
-// Order matches the docs shelf (#1070) so the two pages read as the same
-// list. Slugs must match `brr.support_matrix.DOORS` — `doorRows` ignores a
-// fetched status for any slug this roster doesn't recognize, so a slug
-// typo on either side fails safe (that door reads `status: null`, never a
-// fabricated `live`) rather than crashing or mismatching silently.
+// Slugs must match `brr.support_matrix.DOORS`. Status still comes from the
+// running backend rather than being hard-coded into the frontend bundle.
 export const DOORS: DoorMeta[] = [
 	{ slug: 'telegram', label: 'Telegram', icon: 'telegram' },
 	{ slug: 'slack', label: 'Slack', icon: 'slack-mono' },
@@ -64,16 +48,126 @@ export const DOORS: DoorMeta[] = [
 	{ slug: 'signal', label: 'Signal', icon: 'signal' }
 ];
 
+export type ReachBadge = 'live' | 'coming' | 'byo' | 'checking';
+export type ReachStatusMode = 'hosted' | 'byo';
+
+export interface ReachSurface {
+	/** Unique because one platform can legitimately appear more than once. */
+	id: string;
+	label: string;
+	detail: string;
+	icon: DoorMeta['icon'];
+	/** Platform status to consult when brnrd.dev owns/mediates the identity. */
+	doorSlug?: string;
+	statusMode: ReachStatusMode;
+}
+
+export interface ReachGroup {
+	slug: 'hosted' | 'apps' | 'byo' | 'control';
+	label: string;
+	description: string;
+	surfaces: ReachSurface[];
+}
+
+/**
+ * The landing's user-facing reach model.
+ *
+ * This intentionally does not mirror DOORS one-for-one. DOORS is a backend
+ * deployment roster; this is the topology a visitor needs in order to choose
+ * how to reach their resident.
+ */
+export const REACH_GROUPS: ReachGroup[] = [
+	{
+		slug: 'hosted',
+		label: 'hosted identities',
+		description: 'brnrd-operated identities — no bot token or phone number to provision.',
+		surfaces: [
+			{
+				id: 'telegram-hosted',
+				label: 'Telegram',
+				detail: 'Message the shared brnrd bot; the control plane routes the thread to your paired daemon.',
+				icon: 'telegram',
+				doorSlug: 'telegram',
+				statusMode: 'hosted'
+			},
+			{
+				id: 'whatsapp-hosted',
+				label: 'WhatsApp',
+				detail: 'Message the brnrd number; hosted routing hands the work to your paired daemon.',
+				icon: 'whatsapp',
+				doorSlug: 'whatsapp',
+				statusMode: 'hosted'
+			}
+		]
+	},
+	{
+		slug: 'apps',
+		label: 'installable apps',
+		description: 'brnrd gets an identity inside a workspace or repository you own.',
+		surfaces: [
+			{
+				id: 'github-app',
+				label: 'GitHub App',
+				detail: 'Issues, review requests, replies, and a managed identity for the resident’s pushes.',
+				icon: 'github',
+				doorSlug: 'github',
+				statusMode: 'hosted'
+			},
+			{
+				id: 'slack-app',
+				label: 'Slack App',
+				detail: 'Workspace-installed ingress, rather than a bot identity you provision yourself.',
+				icon: 'slack-mono',
+				doorSlug: 'slack',
+				statusMode: 'hosted'
+			}
+		]
+	},
+	{
+		slug: 'byo',
+		label: 'bring your own',
+		description: 'your credentials, your identity, wired straight to the local daemon.',
+		surfaces: [
+			{
+				id: 'telegram-byo',
+				label: 'Telegram bot',
+				detail: 'Run your own bot token directly against the daemon.',
+				icon: 'telegram',
+				statusMode: 'byo'
+			},
+			{
+				id: 'signal-byo',
+				label: 'Signal',
+				detail: 'Link your own Signal number/device to the daemon.',
+				icon: 'signal',
+				statusMode: 'byo'
+			}
+		]
+	},
+	{
+		slug: 'control',
+		label: 'control',
+		description: 'a surface for seeing and steering the resident, not another messaging identity.',
+		surfaces: [
+			{
+				id: 'web-dashboard',
+				label: 'Web dashboard',
+				detail: 'Inspect and steer paired residents from brnrd.dev.',
+				icon: 'dashboard',
+				doorSlug: 'dashboard',
+				statusMode: 'hosted'
+			}
+		]
+	}
+];
+
 interface SupportMatrixResponse {
 	doors: Array<{ slug: string; status: string }>;
 }
 
 /** Fetches `/v1/stats/support` and returns a slug → status map, or `null`
- * on any failure (network, non-2xx, malformed body) — the same "decoration,
- * never a gate" posture as `fetchPublicStats` / `fetchPricing`. A garbage
- * status value from a future backend rollout is dropped rather than passed
- * through, so a typo server-side degrades to "unknown", never to a
- * fabricated claim. */
+ * on any failure. A garbage status from a future backend rollout is dropped
+ * rather than passed through. */
 export async function fetchDoorStatus(
 	fetcher: typeof fetch = fetch
 ): Promise<Map<string, DoorStatus> | null> {
@@ -95,23 +189,34 @@ export async function fetchDoorStatus(
 }
 
 export interface DoorRow extends DoorMeta {
-	/** `null` = no confirmed status yet (still loading, or the fetch
-	 * failed) — rendered distinctly from both `live` and `soon`, never
-	 * folded into either. This is the property the maintainer's brief
-	 * named: a door nobody has vouched for today must never read the same
-	 * as one that has. */
+	/** `null` = no confirmed status yet (still loading, or the fetch failed). */
 	status: DoorStatus | null;
 }
 
-/** Joins the static roster with a fetched status map. Every roster door
- * always gets a row (so the shelf's shape never jumps between "loading"
- * and "loaded"); a door the status map didn't mention — because the fetch
- * hasn't resolved yet, failed, or a slug drifted out of sync with the
- * backend — reads `status: null` rather than defaulting to `live` or
- * being silently dropped. */
+/** Joins the static backend roster with a fetched status map. */
 export function doorRows(statuses: Map<string, DoorStatus> | null): DoorRow[] {
 	return DOORS.map((door) => ({
 		...door,
 		status: statuses?.get(door.slug) ?? null
 	}));
+}
+
+/**
+ * Translate implementation/deployment state into the vocabulary a visitor
+ * actually needs on the landing.
+ *
+ * `ready` is intentionally not exposed. Internally it means "gate code is
+ * shipped but brnrd.dev has no confirmed identity for it"; to a visitor that
+ * still means "you cannot use the hosted route yet", i.e. coming. BYO routes
+ * do not consult hosted status at all because brnrd.dev is not in that path.
+ */
+export function reachBadge(
+	surface: ReachSurface,
+	statuses: Map<string, DoorStatus> | null
+): ReachBadge {
+	if (surface.statusMode === 'byo') return 'byo';
+	if (!surface.doorSlug) return 'coming';
+	const status = statuses?.get(surface.doorSlug) ?? null;
+	if (status === null) return 'checking';
+	return status === 'live' ? 'live' : 'coming';
 }
