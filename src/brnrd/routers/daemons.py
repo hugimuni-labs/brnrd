@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
 from typing import Any, Callable
 
@@ -248,7 +248,7 @@ def publishing_credential(
 
 
 @router.put("/activity", response_model=schemas.ActivityList)
-def put_activity(payload: schemas.ActivityReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+def put_activity(request: Request, payload: schemas.ActivityReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
     """Replace this daemon token's current Activity snapshot for its repo.
 
     Delete-then-insert is atomic per transaction but not against a
@@ -259,8 +259,17 @@ def put_activity(payload: schemas.ActivityReport, principal: Principal = Depends
     """
     daemon = _current_daemon(db, principal)
     # #502: the event queue's hourly GC rides this publish tick — same
-    # piggyback economics as the stale-activity delete below.
-    inbox_service.gc_events(db)
+    # piggyback economics as the stale-activity delete below. #1388: the
+    # horizon is a live setting (`inbox_stale_event_horizon_hours`), not a
+    # module constant, so an operator override takes effect on the very
+    # next tick with no redeploy of `inbox.py` itself.
+    settings = request.app.state.settings
+    inbox_service.gc_events(
+        db,
+        stale_event_horizon=timedelta(
+            hours=settings.inbox_stale_event_horizon_hours,
+        ),
+    )
     now = datetime.now(timezone.utc)
     db.execute(
         delete(ActivityRecord).where(

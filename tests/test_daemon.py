@@ -5413,6 +5413,168 @@ def test_handle_daemon_control_events_routes_config_change(tmp_path):
     assert remaining == []
 
 
+# ── brnrd#1388: stale-event ingestion horizon ──────────────────────────────
+#
+# "Resend to rehandle is the contract" — an inbound event whose `created`
+# stamp is already past the horizon the moment the daemon considers it for
+# dispatch must never become a waking event: it's retired (`noted`), and
+# every stale event sharing one correspondent in the same pass folds into
+# exactly one aggregate reply, never one line per event (#818's dedup class).
+
+_STALE_NOW_ISO = "2026-08-24T12:00:00Z"
+
+
+def _stale_event_target(
+    tmp_path,
+    body,
+    *,
+    created,
+    source="telegram",
+    telegram_user_id="42",
+    inbox_dir=None,
+    responses_dir=None,
+):
+    """A `_DispatchTarget` backdated to *created*, addressed to a
+    resolvable correspondent by default (telegram source, a user id) so
+    `conversations.correspondent_key_for_event` has something to key on —
+    the same shape a real inbound message carries.
+    """
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = inbox_dir or brr_dir / "inbox"
+    responses_dir = responses_dir or brr_dir / "responses"
+    meta = {}
+    if source == "telegram":
+        meta["telegram_user_id"] = telegram_user_id
+        meta["telegram_chat_id"] = telegram_user_id
+    path = protocol.create_event(inbox_dir, source, body, **meta)
+    eid = path.stem
+    event = next(e for e in protocol.list_pending(inbox_dir) if e["id"] == eid)
+    protocol.update_event_meta(event, created=created)
+    return daemon._DispatchTarget(
+        event=event,
+        repo_root=tmp_path,
+        inbox_dir=inbox_dir,
+        responses_dir=responses_dir,
+        repo_label="Gurio/brr",
+    )
+
+
+def test_handle_stale_events_retires_burst_with_one_aggregate_reply(tmp_path):
+    """Two stale events from the same correspondent: both retired, but only
+    one reply goes out — the aggregate line, on the oldest (lead) event; the
+    other closes silently `noted`, matching #818's never-one-line-per-event
+    rule."""
+    now = protocol.parse_iso_epoch(_STALE_NOW_ISO)
+    older = _stale_event_target(
+        tmp_path, "hello from way back", created="2026-08-20T00:00:00Z",
+    )
+    newer = _stale_event_target(
+        tmp_path, "and again", created="2026-08-22T00:00:00Z",
+        inbox_dir=older.inbox_dir, responses_dir=older.responses_dir,
+    )
+
+    remaining = daemon._handle_stale_events([older, newer], {}, now=now)
+
+    assert remaining == []
+    lead_status = protocol.list_pending(older.inbox_dir)
+    assert lead_status == []  # neither is pending/processing any more
+
+    lead_body = protocol.read_response(older.responses_dir, older.event["id"])
+    assert lead_body == (
+        "retired 2 stale events from before 2026-08-22; resend anything "
+        "still wanted"
+    )
+    assert not protocol.response_exists(newer.responses_dir, newer.event["id"])
+
+
+def test_handle_stale_events_singular_grammar_for_one_event(tmp_path):
+    now = protocol.parse_iso_epoch(_STALE_NOW_ISO)
+    lone = _stale_event_target(
+        tmp_path, "solo straggler", created="2026-08-20T00:00:00Z",
+    )
+
+    remaining = daemon._handle_stale_events([lone], {}, now=now)
+
+    assert remaining == []
+    body = protocol.read_response(lone.responses_dir, lone.event["id"])
+    assert body == (
+        "retired 1 stale event from before 2026-08-22; resend anything "
+        "still wanted"
+    )
+
+
+def test_handle_stale_events_leaves_fresh_events_untouched(tmp_path):
+    now = protocol.parse_iso_epoch(_STALE_NOW_ISO)
+    fresh = _stale_event_target(
+        tmp_path, "just arrived", created="2026-08-24T11:30:00Z",
+    )
+
+    remaining = daemon._handle_stale_events([fresh], {}, now=now)
+
+    assert remaining == [fresh]
+    assert not protocol.response_exists(fresh.responses_dir, fresh.event["id"])
+    assert fresh.event["status"] == "pending"
+
+
+def test_handle_stale_events_skips_events_with_no_correspondent(tmp_path):
+    """A schedule firing (or any source `channels.registry` has no identity
+    rule for) has nobody to send an aggregate note to — it isn't "resend it
+    if you still want it" material, so age never touches it here."""
+    now = protocol.parse_iso_epoch(_STALE_NOW_ISO)
+    scheduled = _stale_event_target(
+        tmp_path, "every: 30m fired", created="2026-08-01T00:00:00Z",
+        source="schedule",
+    )
+
+    remaining = daemon._handle_stale_events([scheduled], {}, now=now)
+
+    assert remaining == [scheduled]
+    assert scheduled.event["status"] == "pending"
+
+
+def test_handle_stale_events_horizon_is_configurable(tmp_path):
+    """A tighter horizon retires an event the 48h default would still
+    leave alone."""
+    now = protocol.parse_iso_epoch(_STALE_NOW_ISO)
+    two_hours_old = _stale_event_target(
+        tmp_path, "two hours old", created="2026-08-24T10:00:00Z",
+    )
+
+    # Untouched at the 48h default.
+    remaining_default = daemon._handle_stale_events(
+        [two_hours_old], {}, now=now,
+    )
+    assert remaining_default == [two_hours_old]
+
+    # Retired at a 1h override.
+    remaining_tight = daemon._handle_stale_events(
+        [two_hours_old],
+        {"dispatch.stale_event_horizon_hours": 1},
+        now=now,
+    )
+    assert remaining_tight == []
+    assert protocol.response_exists(
+        two_hours_old.responses_dir, two_hours_old.event["id"],
+    )
+
+
+def test_handle_stale_events_non_positive_horizon_disables_sweep(tmp_path):
+    now = protocol.parse_iso_epoch(_STALE_NOW_ISO)
+    ancient = _stale_event_target(
+        tmp_path, "from before the migration", created="2026-01-01T00:00:00Z",
+    )
+
+    remaining = daemon._handle_stale_events(
+        [ancient], {"dispatch.stale_event_horizon_hours": 0}, now=now,
+    )
+
+    assert remaining == [ancient]
+    assert ancient.event["status"] == "pending"
+    assert not protocol.response_exists(
+        ancient.responses_dir, ancient.event["id"],
+    )
+
+
 # ── Owner-tier gate tests (S2) ─────────────────────────────────────────────
 #
 # Each test below was driven red before keeping: the test was written first,

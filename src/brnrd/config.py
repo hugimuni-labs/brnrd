@@ -105,6 +105,18 @@ class Settings:
     # cursor advances per page, so the backlog still drains, one poll at a
     # time, and a daemon that dies mid-drain resumes instead of restarting.
     inbox_page_limit: int = _env_int("BRNRD_INBOX_PAGE_LIMIT", 200)
+    # brnrd#1388 — a queued row past this age closes `expired` on the
+    # server's own clock rather than waiting on a daemon `note:` that may
+    # never come; see `inbox.gc_events` / `RESPONSE_STATUS_EXPIRED`. Same
+    # 48h default as the daemon-side ingestion horizon (`daemon.py`'s
+    # `dispatch.stale_event_horizon_hours`) — the two enforce the same
+    # "resend to rehandle" invariant from opposite ends of the wire and are
+    # tuned independently on purpose (a daemon that changed its own horizon
+    # should not silently move the floor every other daemon on the account
+    # relies on).
+    inbox_stale_event_horizon_hours: float = _env_float(
+        "BRNRD_INBOX_STALE_EVENT_HORIZON_HOURS", 48.0,
+    )
     pair_ttl_s: int = _env_int("BRNRD_PAIR_TTL_S", 600)
     # The messenger-door mint's own, shorter TTL (brr/every-door-on-the-page):
     # a `TgPairCode` is a bearer link rendered on a page and tapped from a

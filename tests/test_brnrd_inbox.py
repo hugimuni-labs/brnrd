@@ -871,7 +871,14 @@ def test_gc_events_nulls_dead_bodies_and_prunes_old_rows(env):
         db.commit()
 
     with app.state.SessionLocal() as db:
-        inbox_service.gc_events(db, force=True)
+        # brnrd#1388's expiry sweep would otherwise close `evt-dead-queued`
+        # (30 days old) before this test ever gets to observe the
+        # body-null-but-still-queued state it's isolating — pass a horizon
+        # well past its age so the two sweeps stay decoupled here; the
+        # expiry sweep itself has its own tests below.
+        inbox_service.gc_events(
+            db, force=True, stale_event_horizon=timedelta(days=9999),
+        )
 
     with app.state.SessionLocal() as db:
         remaining = {e.event_id: e for e in db.execute(select(Event)).scalars()}
@@ -909,6 +916,208 @@ def test_gc_events_hourly_throttle(env):
         inbox_service.gc_events(db)  # throttled: must not touch the new row
     with app.state.SessionLocal() as db:
         assert db.execute(select(Event).where(Event.event_id == "evt-late-arrival")).scalar_one().body == "old"
+
+
+def test_gc_events_expires_stale_queued_rows_past_horizon(env):
+    """brnrd#1388, server half: a queued row past the horizon closes
+    `expired` on the server's own clock — it never depended on a daemon
+    ever noting it. A row still inside the horizon is untouched."""
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd import inbox as inbox_service
+    from brnrd.inbox import RESPONSE_STATUS_EXPIRED
+
+    app, client, forwarder = env
+    headers = _account(client)
+    repo_id = _repo(client, headers)
+    now = datetime.now(timezone.utc)
+    with app.state.SessionLocal() as db:
+        db.add(
+            Event(
+                event_id="evt-stale",
+                repo_id=repo_id,
+                source="dev",
+                body="nobody ever noted this",
+                reply_to="{}",
+                status=Event.STATUS_QUEUED,
+                created_at=now - timedelta(hours=72),
+            )
+        )
+        db.add(
+            Event(
+                event_id="evt-within-horizon",
+                repo_id=repo_id,
+                source="dev",
+                body="still young",
+                reply_to="{}",
+                status=Event.STATUS_QUEUED,
+                created_at=now - timedelta(hours=1),
+            )
+        )
+        db.commit()
+
+    with app.state.SessionLocal() as db:
+        # No stale_event_horizon override ⇒ the 48h module default.
+        inbox_service.gc_events(db, force=True)
+
+    with app.state.SessionLocal() as db:
+        by_id = {e.event_id: e for e in db.execute(select(Event)).scalars()}
+        stale = by_id["evt-stale"]
+        assert stale.status == Event.STATUS_RESPONDED
+        assert stale.response_status == RESPONSE_STATUS_EXPIRED
+        assert stale.body is None
+        assert stale.attachments_json == "[]"
+        assert stale.responded_at is not None
+
+        fresh = by_id["evt-within-horizon"]
+        assert fresh.status == Event.STATUS_QUEUED
+        assert fresh.body == "still young"
+        assert fresh.response_status is None
+
+
+def test_gc_events_stale_horizon_disabled_by_non_positive_value(env):
+    """A non-positive override turns the sweep off, mirroring the daemon
+    side's `dispatch.stale_event_horizon_hours<=0` "off means off" shape —
+    not a horizon of zero that expires everything instantly."""
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd import inbox as inbox_service
+
+    app, client, forwarder = env
+    headers = _account(client)
+    repo_id = _repo(client, headers)
+    now = datetime.now(timezone.utc)
+    with app.state.SessionLocal() as db:
+        db.add(
+            Event(
+                event_id="evt-ancient-queued",
+                repo_id=repo_id,
+                source="dev",
+                body="still here",
+                reply_to="{}",
+                status=Event.STATUS_QUEUED,
+                created_at=now - timedelta(days=10),
+            )
+        )
+        db.commit()
+
+    with app.state.SessionLocal() as db:
+        inbox_service.gc_events(
+            db, force=True, stale_event_horizon=timedelta(0),
+        )
+
+    with app.state.SessionLocal() as db:
+        row = db.execute(
+            select(Event).where(Event.event_id == "evt-ancient-queued")
+        ).scalar_one()
+        assert row.status == Event.STATUS_QUEUED
+        assert row.body == "still here"
+
+
+def test_gc_events_expiry_unpins_clamp_since_floor(env):
+    """brnrd#1388: `clamp_since`'s `oldest_queued - 1` floor used to depend
+    on every old queued row eventually being noted by a connected daemon —
+    a single row nobody ever noted pinned it at the beginning of time. The
+    expiry sweep unpins it on its own schedule: once the ancient row closes
+    `expired`, it stops counting as "queued" and the floor advances past it."""
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd import inbox as inbox_service
+
+    app, client, forwarder = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    now = datetime.now(timezone.utc)
+
+    with app.state.SessionLocal() as db:
+        # The never-noted row: old enough to be well past the default
+        # horizon, and — being the *oldest* queued row — exactly what pins
+        # clamp_since's floor before the sweep ever runs.
+        db.add(
+            Event(
+                event_id="evt-never-noted",
+                repo_id=rid,
+                source="dev",
+                body="from before the migration",
+                reply_to="{}",
+                status=Event.STATUS_QUEUED,
+                created_at=now - timedelta(days=5),
+            )
+        )
+        db.commit()
+        oldest_seq = db.execute(
+            select(Event.seq).where(Event.event_id == "evt-never-noted")
+        ).scalar_one()
+
+    # A fresh, still-open event above the ancient row.
+    fresh_id = client.post(
+        "/v1/_dev/enqueue", json={"repo_id": rid, "body": "hello"}, headers=acc
+    ).json()["event_id"]
+
+    with app.state.SessionLocal() as db:
+        before = inbox_service.clamp_since(db, rid, since=999_999)
+        assert before == oldest_seq - 1  # pinned by the never-noted row
+
+        inbox_service.gc_events(db, force=True)  # 48h default expires it
+
+        after = inbox_service.clamp_since(db, rid, since=999_999)
+        fresh_seq = db.execute(
+            select(Event.seq).where(Event.event_id == fresh_id)
+        ).scalar_one()
+        # The ancient row no longer counts as queued, so the floor now
+        # tracks the fresh event instead of the row that used to pin it.
+        assert after == fresh_seq - 1
+        assert after > before
+
+
+def test_activity_publish_honors_configured_stale_event_horizon(tmp_path):
+    """The horizon `PUT /v1/daemons/activity` threads into `gc_events` is a
+    live setting (`inbox_stale_event_horizon_hours`), not the module
+    constant — an operator override takes effect without touching
+    `inbox.py`. A tight 1h horizon here expires a 2h-old queued row purely
+    by publishing activity, the ordinary daemon heartbeat path."""
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd import inbox as inbox_service
+    from brnrd.inbox import RESPONSE_STATUS_EXPIRED
+
+    forwarder = CapturingForwarder()
+    settings = Settings(
+        database_url=f"sqlite:///{tmp_path / 'brnrd-test-horizon.db'}",
+        inbox_stale_event_horizon_hours=1.0,
+    )
+    app = create_app(settings, forwarder=forwarder)
+    client = TestClient(app)
+    acc = _account(client)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
+
+    now = datetime.now(timezone.utc)
+    with app.state.SessionLocal() as db:
+        db.add(
+            Event(
+                event_id="evt-two-hours-old",
+                repo_id=rid,
+                source="dev",
+                body="two hours old",
+                reply_to="{}",
+                status=Event.STATUS_QUEUED,
+                created_at=now - timedelta(hours=2),
+            )
+        )
+        db.commit()
+
+    inbox_service.reset_gc_throttle()
+    resp = client.put("/v1/daemons/activity", json={"records": []}, headers=dmn)
+    assert resp.status_code == 200, resp.text
+
+    with app.state.SessionLocal() as db:
+        row = db.execute(
+            select(Event).where(Event.event_id == "evt-two-hours-old")
+        ).scalar_one()
+        assert row.status == Event.STATUS_RESPONDED
+        assert row.response_status == RESPONSE_STATUS_EXPIRED
+        assert row.body is None
 
 
 def test_response_sets_conversation_id_when_null(env):

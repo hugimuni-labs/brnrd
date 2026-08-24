@@ -165,6 +165,13 @@ _RETENTION_FIRST_SWEEP_DELAY_SECONDS = 60 * 60.0
 # for the real case and still excludes the day/month-old collisions that
 # caused silent message loss (2026-07-15). Override: `dispatch.dedup_window_seconds`.
 _DEDUP_WINDOW_SECONDS_DEFAULT = 6 * 3600.0
+# brnrd#1388: resend-to-rehandle is the contract. An inbound event whose
+# `created` stamp is already older than this horizon the moment the daemon
+# considers it for dispatch must never become a waking event — a replay
+# burst (machine migration, a redelivered webhook, a daemon that was down
+# for days) should not wake a run on months-old history. Override:
+# `dispatch.stale_event_horizon_hours`; <=0 disables the sweep.
+_STALE_EVENT_HORIZON_DEFAULT_HOURS = 48.0
 # Cadence for the run-time heartbeat packet. 10s keeps the chat card
 # visibly alive and is well below Telegram's edit rate ceiling
 # (~30/sec/chat). The Claude usage PTY scrape (which can block ~18s)
@@ -1834,6 +1841,103 @@ def _handle_daemon_control_events(
         if _handle_config_change_control_event(target, account_context):
             continue
         remaining.append(target)
+    return remaining
+
+
+def _stale_event_horizon_seconds(cfg: dict) -> float:
+    """Resolve the ingestion-age horizon, `dispatch.stale_event_horizon_hours`.
+
+    A non-positive override disables the sweep outright (an event is never
+    "stale enough" to retire) rather than retiring everything on arrival —
+    same "off means off" shape as `sync.fetch_before_run=false`. A
+    malformed override degrades to the default rather than crashing dispatch.
+    """
+    raw = cfg.get(
+        "dispatch.stale_event_horizon_hours", _STALE_EVENT_HORIZON_DEFAULT_HOURS,
+    )
+    try:
+        hours = float(raw)
+    except (TypeError, ValueError):
+        hours = _STALE_EVENT_HORIZON_DEFAULT_HOURS
+    if hours <= 0:
+        return float("inf")
+    return hours * 3600.0
+
+
+def _format_stale_cutoff(now: float, horizon_seconds: float) -> str:
+    cutoff = now - horizon_seconds
+    return time.strftime("%Y-%m-%d", time.gmtime(cutoff))
+
+
+def _handle_stale_events(
+    targets: list[_DispatchTarget],
+    cfg: dict,
+    *,
+    now: float | None = None,
+) -> list[_DispatchTarget]:
+    """Retire inbound events past the staleness horizon before dispatch.
+
+    brnrd#1388: resend-to-rehandle is the contract. An event whose
+    ``created`` stamp is already older than the horizon the moment the
+    daemon considers it for dispatch — freshly arrived, or a queued event
+    that crossed the horizon while the daemon itself was down, both land
+    here the same way, since the check is against wall-clock *now*, never
+    against how old the event was when it was first ingested — is retired
+    instead of becoming a waking event: closed ``noted`` (never a run), and
+    every stale event sharing one correspondent in this pass is folded into
+    exactly one aggregate reply on that correspondent's thread, never one
+    line per event (#818's byte-identical-dedup class).
+
+    Scoped to events with a resolvable correspondent
+    (:func:`conversations.correspondent_key_for_event`) — a schedule firing
+    or a spawn-completion event carries no correspondent to notify and is
+    not "resend it if you still want it" material, so it passes through
+    untouched; only human-originated inbound events are subject to the
+    horizon.
+
+    Order matters at the call site: run after
+    :func:`_handle_daemon_control_events` so an approval/rejection reply
+    (which never becomes a waking event either way) is already drained
+    before age is judged on what remains.
+    """
+    timestamp = time.time() if now is None else now
+    horizon = _stale_event_horizon_seconds(cfg)
+    remaining: list[_DispatchTarget] = []
+    if horizon == float("inf"):
+        return targets
+    groups: dict[str, list[_DispatchTarget]] = {}
+    for target in targets:
+        created = protocol.parse_iso_epoch(target.event.get("created"))
+        age = (timestamp - created) if created is not None else None
+        if age is None or age < horizon:
+            remaining.append(target)
+            continue
+        correspondent = conversations.correspondent_key_for_event(target.event)
+        if not correspondent:
+            remaining.append(target)
+            continue
+        groups.setdefault(correspondent, []).append(target)
+    for stale_targets in groups.values():
+        stale_targets.sort(key=lambda t: _event_queue_sort_key(t.event))
+        lead, *extras = stale_targets
+        count = len(stale_targets)
+        noun = "event" if count == 1 else "events"
+        cutoff = _format_stale_cutoff(timestamp, horizon)
+        body = (
+            f"retired {count} stale {noun} from before {cutoff}; resend "
+            "anything still wanted"
+        )
+        _write_control_response(lead, body)
+        for extra in extras:
+            try:
+                protocol.update_event_meta(
+                    extra.event,
+                    noted_by="daemon:stale-horizon",
+                    noted_at=_utc_now(),
+                )
+            except OSError:
+                pass
+            _set_event_status_if_present(extra.event, "noted")
     return remaining
 
 
@@ -15823,6 +15927,11 @@ def start(
                         pending,
                         account_context,
                     )
+                if pending:
+                    # brnrd#1388: retire anything already past the staleness
+                    # horizon before it can become the dispatch lead — a
+                    # replayed burst of history must never wake a run.
+                    pending = _handle_stale_events(pending, cfg)
                 if pending:
                     burst_hold = _burst_settle_delay(
                         [target.event for target in pending],
