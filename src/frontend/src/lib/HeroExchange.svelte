@@ -82,7 +82,9 @@
 <div class="panel p-4" aria-label="a real exchange with the resident">
 	<div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
 		<p class="eyebrow">a real exchange</p>
-		<p class="font-mono text-[9px] tracking-wide text-ink-mute uppercase">you · Telegram ↔ resident</p>
+		<p class="font-mono text-[9px] tracking-wide text-ink-mute uppercase">
+			you · Telegram ↔ resident
+		</p>
 	</div>
 	<div class="mt-3 flex flex-col gap-2">
 		{#each BUBBLES as bubble, i (i)}
@@ -97,7 +99,9 @@
 							{bubble.from === 'you' ? 'you' : 'resident'}
 						</p>
 						{#if bubble.kind === 'receipt'}
-							<div class="subpanel border-l-2 border-l-amber-700/60 px-3 py-2 text-xs leading-relaxed">
+							<div
+								class="subpanel border-l-2 border-l-amber-700/60 px-3 py-2 text-xs leading-relaxed"
+							>
 								<div class="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-stone-300">
 									{#each CHIPS as chip (chip.href)}
 										<a
@@ -108,7 +112,9 @@
 										>
 									{/each}
 								</div>
-								<p class="mt-1.5 font-mono text-amber-300">✓ gate green — merged, deployed 21:51 CEST</p>
+								<p class="mt-1.5 font-mono text-amber-300">
+									✓ gate green — merged, deployed 21:51 CEST
+								</p>
 							</div>
 						{:else}
 							<div
@@ -125,7 +131,9 @@
 			{/if}
 		{/each}
 	</div>
-	<p class="mt-3 border-t border-stone-800/70 pt-2 font-mono text-[9px] leading-relaxed text-ink-mute">
+	<p
+		class="mt-3 border-t border-stone-800/70 pt-2 font-mono text-[9px] leading-relaxed text-ink-mute"
+	>
 		verbatim · trimmed for length · 31 July 2026 · this repository's own thread · resident ran on
 		the sender's machine
 	</p>
