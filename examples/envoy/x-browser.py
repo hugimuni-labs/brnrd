@@ -21,6 +21,7 @@ where ``brr`` is importable (usually ``<repo>/.venv/bin/python3``).
     <python-with-brr> x-browser.py check                        -> session live? as whom? cap left?
     <python-with-brr> x-browser.py read <url>                    -> structured JSON
     <python-with-brr> x-browser.py search <query>                -> structured JSON
+    <python-with-brr> x-browser.py mentions                       -> structured JSON, notifications/mentions tab
     <python-with-brr> x-browser.py draft <url> --text "<s>"       -> screenshot only, never sends
     <python-with-brr> x-browser.py send <url> --text "<s>" --confirm
         -> ships disarmed: also needs BRR_X_BROWSER_SEND=1 in the environment,
