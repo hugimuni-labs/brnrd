@@ -1001,7 +1001,7 @@ def _annotate_failures(
     body: str, failed: list[str], unrecognised: str | None = None,
 ) -> str:
     notes = [
-        f"[attachment \"{name}\" could not be fetched — the telegram file link may have "
+        f"[attachment \"{name}\" could not be fetched — the source media may have "
         "expired or the file exceeds the size cap; ask the sender to re-send it]"
         for name in failed
     ]
