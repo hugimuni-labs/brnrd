@@ -116,7 +116,16 @@ def _queued_event(app, repo_id: str, *, event_id: str, age: timedelta) -> None:
 def _sweep(app) -> None:
     inbox_service.reset_gc_throttle()
     with app.state.SessionLocal() as db:
-        inbox_service.gc_events(db, force=True)
+        # brnrd#1388's expiry sweep defaults to a 48h horizon for any caller
+        # that doesn't override it (the shape documented for "a caller that
+        # passes none, e.g. a test... running outside the request/settings
+        # path") — decoupled here the same way the sibling
+        # test_gc_events_nulls_dead_bodies_and_prunes_old_rows already had
+        # to be, so this module's own multi-day TTL boundary stays isolated
+        # from a same-process sweep it never asked for.
+        inbox_service.gc_events(
+            db, force=True, stale_event_horizon=timedelta(days=9999),
+        )
 
 
 def _event(app, event_id: str):
