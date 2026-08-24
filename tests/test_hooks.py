@@ -150,23 +150,48 @@ def test_post_tool_no_reinject_when_token_unchanged(tmp_path):
 
 
 def test_an_unmet_obligation_repeats_until_it_is_discharged(tmp_path):
-    """The other half, and the whole point of typing the channel (#1116).
+    """Seen-only pending events collapse to the count chip; they no longer
+    keep the bar alive boundary-by-boundary (maintainer, 2026-08-23:
+    "our event reminders are quite annoying").
 
-    The maintainer's rule: *every notification is actionable and
-    turn-off-able, unless it is a necessary tick update.* A pending event
-    is actionable — so it must keep asking until it is answered, even
-    though the portal token has not moved and the bytes are identical to
-    last boundary. Suppressing it is the failure #963 named and could not
-    prevent.
+    First render: full event row (obligation). On the *same* portal snapshot
+    (same token) the second render is quiet. When the bar does render for
+    other reasons (a token change), the event shows as a count chip only —
+    no per-event detail rows. The closeout guard (Stop) still surfaces the
+    full list.
     """
-    _portal(tmp_path, token="t1", pending=1,
-            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    events = [{"id": "evt-2", "source": "telegram", "summary": "hi"}]
+    _portal(tmp_path, token="t1", pending=1, events=events)
     env = _env(tmp_path)
     first, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    second, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    # First boundary: event is new — full row must render.
     assert "hookSpecificOutput" in first
-    assert "hookSpecificOutput" in second, "an unmet obligation went quiet"
-    assert "evt-2" in second["hookSpecificOutput"]["additionalContext"]
+    ctx1 = first["hookSpecificOutput"]["additionalContext"]
+    assert "evt-2" in ctx1
+
+    # Second boundary: same token, event now seen — no injection.
+    second, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    assert "hookSpecificOutput" not in second, (
+        "seen-only pending event kept the bar alive on an unchanged token; "
+        "should have collapsed to the count chip and suppressed the boundary"
+    )
+
+    # Third boundary: token moved (portal changed), but the event is still
+    # seen — bar may render for the token change, but must NOT show the
+    # seen event as a detail row; only the `pending N` chip is acceptable.
+    _portal(tmp_path, token="t2", pending=1, events=events)
+    third, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    if "hookSpecificOutput" in third:
+        ctx3 = third["hookSpecificOutput"]["additionalContext"]
+        assert "seen ×" not in ctx3, "seen event row must not appear in bar path"
+        assert "unchanged" not in ctx3, "seen event row must not appear in bar path"
+        assert "pending 1" in ctx3.splitlines()[0], (
+            "count chip must appear on the bar line when bar renders"
+        )
+
+    # The closeout guard (Stop) still surfaces the pending event.
+    stop, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+    assert "pending" in stop["reason"]
 
 
 def test_post_tool_reinjects_when_token_moves(tmp_path):
@@ -342,12 +367,11 @@ def test_post_tool_pending_events_are_framed_as_action_not_telemetry(tmp_path):
 
 
 def test_post_tool_pending_sermon_compresses_on_unchanged_second_boundary(tmp_path):
-    # The full instruction sentence must not repeat byte-identically at
-    # every laden boundary while the pending SET stands still: first laden
-    # boundary gets the full sentence, the next boundary with the exact same
-    # ids gets the compact one-liner instead. The per-event rows underneath
-    # (letter chrome, seen/changed collapse) are untouched by this — only
-    # the header sentence changes shape.
+    # The full instruction sentence renders on the pending SET's own edge
+    # (first laden boundary / new id). After that, seen events collapse to
+    # the `pending N` chip — the bar may be quiet entirely (2026-08-23).
+    # When the bar does render for other reasons (token/chip change), it
+    # must NOT show the old compact sentence; only the chip carries the count.
     events = [{"id": "evt-2", "source": "telegram", "summary": "hi"}]
     _portal(tmp_path, token="t1", pending=1, events=events)
     out1, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
@@ -356,25 +380,26 @@ def test_post_tool_pending_sermon_compresses_on_unchanged_second_boundary(tmp_pa
 
     _portal(tmp_path, token="t2", pending=1, events=events)
     out2, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
-    ctx2 = out2["hookSpecificOutput"]["additionalContext"]
-    assert "Address each below" not in ctx2
-    assert (
-        "1 pending event(s), 0 undelivered outbox file(s) — "
-        "`event:`/`note:` each before closeout."
-    ) in ctx2
+    # Second boundary: event now seen, nothing new to report — bar may be
+    # quiet.  If it does render, neither sentence form must appear.
+    if "hookSpecificOutput" in out2:
+        ctx2 = out2["hookSpecificOutput"]["additionalContext"]
+        assert "Address each below" not in ctx2
+        assert "event:`/`note:` each before closeout" not in ctx2
 
 
 def test_post_tool_pending_sermon_full_again_on_a_new_event_id(tmp_path):
     # A fresh id arriving mid-run is the derailment moment — the full
-    # sentence must come back, not stay compressed just because *something*
-    # was pending before too.
+    # sentence must come back. When the event is seen-only, the bar may be
+    # quiet; either way "Address each below" must not appear.
     events = [{"id": "evt-2", "source": "telegram", "summary": "hi"}]
     _portal(tmp_path, token="t1", pending=1, events=events)
     hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
 
     _portal(tmp_path, token="t2", pending=1, events=events)
     out2, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
-    assert "Address each below" not in out2["hookSpecificOutput"]["additionalContext"]
+    if "hookSpecificOutput" in out2:
+        assert "Address each below" not in out2["hookSpecificOutput"]["additionalContext"]
 
     events3 = events + [{"id": "evt-3", "source": "telegram", "summary": "new"}]
     _portal(tmp_path, token="t3", pending=2, events=events3)
@@ -416,9 +441,10 @@ def test_pending_set_changed_tracks_ids_and_count():
 
 
 def test_format_delta_pending_sermon_form_follows_pending_set_changed():
-    # Direct-call level, mirroring `test_card_stale_detail_compresses_on_the_
-    # third_consecutive_boundary`'s style for `repeat_streaks`: the caller-
-    # owned edge alone decides which of the two sentence forms renders.
+    # Direct-call level: `pending_set_changed=True` renders the full
+    # instruction sentence; `pending_set_changed=False` suppresses all
+    # pending sentences — new event rows still render (via event_seen=None
+    # → status "new" for direct calls), but no instruction sentence.
     payload = _bar_payload(
         attention={"pending_event_count": 1, "pending_outbox_file_count": 0},
         inbound={"events": [
@@ -426,13 +452,15 @@ def test_format_delta_pending_sermon_form_follows_pending_set_changed():
         ]},
     )
     full = hooks.format_delta(payload, pending_set_changed=True)
-    compact = hooks.format_delta(payload, pending_set_changed=False)
+    # With event_seen=None, the event is "new" on both calls, so event
+    # rows render. Only the instruction sentence differs.
+    no_sentence = hooks.format_delta(payload, pending_set_changed=False)
     assert "Address each below with an `event:` reply" in full
-    assert "Address each below" not in compact
-    assert (
-        "1 pending event(s), 0 undelivered outbox file(s) — "
-        "`event:`/`note:` each before closeout."
-    ) in compact
+    assert "Address each below" not in no_sentence
+    # The compact sentence is gone — the pending chip carries the count.
+    assert "event:`/`note:` each before closeout" not in no_sentence
+    # The event row itself still renders (new event in both cases).
+    assert "evt-9" in no_sentence
 
 
 def test_stop_surfaces_unpushed_and_modified_scm(tmp_path):
@@ -1472,8 +1500,11 @@ def test_pending_long_body_renders_first_line_plus_accounting(tmp_path):
 
 def test_seen_suppression_collapses_repeat_boundaries(tmp_path):
     # Hooks are fresh subprocesses; the seen ledger persists in the run's
-    # hook state. First appearance renders in full, each later boundary with
-    # the unchanged body costs one honest line, counting how often.
+    # hook state. First appearance renders in full. Subsequent boundaries
+    # with the same event body may render for other reasons (portal token
+    # changes), but the per-event seen rows are suppressed — only the
+    # `pending N` chip remains on the bar line (2026-08-23 change). The full
+    # replay is preserved at Stop (the closeout guard path).
     ev = {
         "id": "evt-1785520000000000001-tick", "source": "schedule",
         "summary": "tick", "body": _HUGE_BODY,
@@ -1483,20 +1514,28 @@ def test_seen_suppression_collapses_repeat_boundaries(tmp_path):
     first, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
     assert "KB total" in first["hookSpecificOutput"]["additionalContext"]
 
+    # Second boundary: token moved (portal change), event is seen.
+    # Bar may render but must NOT show the per-event seen row.
     _portal(tmp_path, token="t2", pending=1, events=[ev])
     second, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    ctx2 = second["hookSpecificOutput"]["additionalContext"]
-    assert (
-        "- ⏰ evt-1785520000000000001-tick · schedule · seen ×1 · unchanged"
-        in ctx2
-    )
-    assert "## the only tick" not in ctx2
+    if "hookSpecificOutput" in second:
+        ctx2 = second["hookSpecificOutput"]["additionalContext"]
+        assert "seen ×" not in ctx2, "seen row must not appear in bar path"
+        assert "## the only tick" not in ctx2, "body must not re-render in bar path"
+        bar2 = ctx2.splitlines()[0]
+        assert "pending 1" in bar2, "count chip must appear on bar line"
 
+    # Third boundary: same check.
     _portal(tmp_path, token="t3", pending=1, events=[ev])
     third, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    assert (
-        "seen ×2 · unchanged" in third["hookSpecificOutput"]["additionalContext"]
-    )
+    if "hookSpecificOutput" in third:
+        ctx3 = third["hookSpecificOutput"]["additionalContext"]
+        assert "seen ×" not in ctx3
+        assert "## the only tick" not in ctx3
+
+    # The closeout guard (Stop) still surfaces the full list — load-bearing.
+    stop, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+    assert "evt-1785520000000000001-tick" in stop["reason"]
 
 
 def test_changed_body_rerenders_in_full_with_a_delta_mark(tmp_path):
@@ -3040,6 +3079,50 @@ def test_vigil_accepts_a_live_keepalive(tmp_path):
     assert out.get("decision") != "block"
 
 
+def test_linger_blocks_cloud_closeout_without_a_horizon(tmp_path):
+    env = _armed_vigil(tmp_path)
+    env["BRR_CLOSEOUT_OBLIGATIONS"] = "linger"
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out["decision"] == "block"
+    assert "lingers by default" in out["reason"]
+    assert portals.LINGER_OPT_OUT_NAME in out["reason"]
+
+
+def test_linger_blocks_exit_while_the_horizon_is_still_live(tmp_path):
+    env = _armed_vigil(tmp_path)
+    env["BRR_CLOSEOUT_OBLIGATIONS"] = "linger"
+    _keepalive(tmp_path, "+30m\n")
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out["decision"] == "block"
+    assert "still live" in out["reason"]
+
+
+def test_linger_accepts_an_elapsed_horizon(tmp_path):
+    env = _armed_vigil(tmp_path)
+    env["BRR_CLOSEOUT_OBLIGATIONS"] = "linger"
+    _keepalive(tmp_path, "2020-01-01T00:00:00Z")
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out.get("decision") != "block"
+
+
+def test_linger_accepts_a_reasoned_opt_out(tmp_path):
+    env = _armed_vigil(tmp_path)
+    env["BRR_CLOSEOUT_OBLIGATIONS"] = "linger"
+    (tmp_path / portals.LINGER_OPT_OUT_NAME).write_text(
+        "operator asked for an immediate stop\n", encoding="utf-8"
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out.get("decision") != "block"
+
+
+def test_linger_rejects_an_empty_opt_out(tmp_path):
+    env = _armed_vigil(tmp_path)
+    env["BRR_CLOSEOUT_OBLIGATIONS"] = "linger"
+    (tmp_path / portals.LINGER_OPT_OUT_NAME).write_text(" \n", encoding="utf-8")
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out["decision"] == "block"
+
+
 def test_vigil_accepts_an_iso_keepalive_deadline(tmp_path):
     env = _armed_vigil(tmp_path)
     later = datetime.datetime.now(
@@ -3417,17 +3500,24 @@ def test_post_tool_bar_pending_events_always_get_a_detail_line():
     assert "ping" in rendered
 
 
-def test_post_tool_bar_never_renders_a_pending_count_as_a_segment():
-    # The obligation must live in a detail line, not a glyph on the bar
-    # itself — assert the bar *line* (not the whole rendered block) carries
-    # no bare pending count.
-    payload = _bar_payload(
-        attention={"pending_event_count": 2, "pending_outbox_file_count": 0},
-        inbound={"events": []},
-    )
-    rendered = hooks.format_delta(payload)
-    bar = rendered.splitlines()[0]
-    assert "pending" not in bar
+def test_post_tool_bar_renders_pending_count_as_chip(tmp_path):
+    # Pending events collapse to a `pending N` chip on the bar line (2026-08-23
+    # change). Previously the count lived only in a detail line; now it's a
+    # first-class chip so seen-only events stay visible at a glance without
+    # repeating their detail rows.
+    env = _env(tmp_path)
+    ev = {"id": "evt-42", "source": "telegram", "summary": "hello"}
+    _portal(tmp_path, token="t1", pending=1, events=[ev])
+    first, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    ctx1 = first["hookSpecificOutput"]["additionalContext"]
+    bar1 = ctx1.splitlines()[0]
+    # First render: bar shows the pending count chip.
+    assert "pending 1" in bar1
+
+    # Second render: event now seen — bar is quiet (no injection).
+    _portal(tmp_path, token="t2", pending=1, events=[ev])
+    second, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    assert "hookSpecificOutput" not in second
 
 
 # ── Armed dated-letters block (#904) ──────────────────────────────────
@@ -4041,8 +4131,10 @@ def test_orient_segment_leaves_at_completion(tmp_path):
             events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
     second, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, _read_batch(b), env)
     text = _inject_text(second)
-    assert text  # the bar still renders — only the assignment has retired
-    assert "assign" not in text
+    # With seen-only pending events, the bar may stay quiet when nothing
+    # else has news. What matters is that "assign" is not in whatever renders.
+    if text:
+        assert "assign" not in text
 
 
 def test_orient_partial_read_is_not_a_completed_file(tmp_path):
@@ -5207,19 +5299,30 @@ def test_boundary_transcript_records_ordered_tool_names_and_first_act(tmp_path):
     assert "tools" not in records[1]
 
 
-def test_boundary_act_classification_drops_the_command_it_reads(tmp_path):
+def test_boundary_act_classification_stores_detail_not_raw_input(tmp_path):
+    """The record carries a derived detail, never the raw tool_input struct.
+
+    ``detail`` is a redacted summary extracted from the command; the raw
+    ``tool_input`` dict, ``tool_use_id``, and ``tool_response`` are still
+    excluded — the transcript is not a replay surface.
+    """
     env, run_dir = _transcript_env(tmp_path)
     _portal(tmp_path, token="t1", pending=0, events=[])
     payload = json.dumps({
         "tool_name": "Bash",
-        "tool_input": {"command": "printf INPUT_CANARY_1560_DO_NOT_PERSIST"},
+        "tool_input": {"command": "printf hello"},
     })
 
     hooks.run_hook(hooks.PHASE_POST_TOOL, payload, env)
 
     record = _transcript(run_dir)[0]
     assert record["act"] == "probe"
-    assert "INPUT_CANARY_1560_DO_NOT_PERSIST" not in json.dumps(record)
+    assert "tool_input" not in record        # raw struct still excluded
+    assert "tool_use_id" not in record
+    assert "tool_response" not in record
+    # Command is present in derived detail (not-secret, so not redacted).
+    assert "detail" in record
+    assert "printf hello" in record["detail"]
 
 
 @pytest.mark.parametrize(
@@ -5370,6 +5473,169 @@ def test_the_transcript_cap_announces_itself(tmp_path, monkeypatch):
     hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
     assert len(_transcript(run_dir)) == before
     assert (run_dir / "boundaries.jsonl").stat().st_size == size
+
+
+# ── Tool detail, redaction, and out_bytes ─────────────────────────────────
+#
+# Tests for the ``detail`` and ``out_bytes`` fields added to boundary records.
+# Driven through the real hook entry point so the full write path is covered.
+
+
+def test_boundary_detail_for_bash_command(tmp_path):
+    """Bash commands are captured in the ``detail`` field, truncated+redacted."""
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=0, events=[])
+    payload = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": "git status --short"},
+    })
+    hooks.run_hook(hooks.PHASE_POST_TOOL, payload, env)
+
+    record = _transcript(run_dir)[0]
+    assert record.get("detail") == "git status --short"
+    # Raw command is in detail (derived), not as a raw struct field.
+    assert "tool_input" not in record
+
+
+def test_boundary_detail_for_file_tool(tmp_path):
+    """Read records the file path in ``detail``."""
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=0, events=[])
+    payload = json.dumps({
+        "tool_name": "Read",
+        "tool_input": {"file_path": "/src/brr/hooks.py"},
+    })
+    hooks.run_hook(hooks.PHASE_POST_TOOL, payload, env)
+
+    record = _transcript(run_dir)[0]
+    assert record.get("detail") == "/src/brr/hooks.py"
+    assert "tool_input" not in record
+
+
+def test_boundary_redactor_masks_secret_never_reaches_disk(tmp_path):
+    """A secret-shaped value in a command line must never land in the record.
+
+    ``detail`` is passed through :func:`hooks.redact_detail`, so known
+    secret-bearing shapes (Authorization header, token= assignment, known API
+    key prefixes) are replaced with ``<redacted>`` before the record is
+    written.  This test proves the guarantee: the secret value does not exist
+    anywhere in the serialised record.
+    """
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=0, events=[])
+
+    secret = "sk-ant-SECRET_MUST_NOT_LEAK_2026"
+    payload = json.dumps({
+        "hook_event_name": "PostToolBatch",
+        "tool_calls": [
+            {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        f"curl -H 'Authorization: Bearer {secret}' "
+                        "https://api.anthropic.com/v1/messages"
+                    )
+                },
+                "tool_use_id": "tu_secret",
+                "tool_response": "200 OK",
+            }
+        ],
+    })
+
+    hooks.run_hook(hooks.PHASE_POST_TOOL, payload, env)
+
+    record_text = (run_dir / "boundaries.jsonl").read_text(encoding="utf-8")
+    assert "SECRET_MUST_NOT_LEAK_2026" not in record_text
+    record = _transcript(run_dir)[0]
+    assert "<redacted>" in record.get("detail", "")
+    assert "tool_response" not in record    # response text still excluded
+    assert "tool_use_id" not in record
+
+
+def test_boundary_out_bytes_counts_response_size(tmp_path):
+    """``out_bytes`` records the total response size without storing content."""
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=0, events=[])
+    response_text = "a" * 1024   # exactly 1 KB
+    payload = json.dumps({
+        "hook_event_name": "PostToolBatch",
+        "tool_calls": [
+            {
+                "tool_name": "Read",
+                "tool_input": {"file_path": "/some/file"},
+                "tool_response": response_text,
+            }
+        ],
+    })
+
+    hooks.run_hook(hooks.PHASE_POST_TOOL, payload, env)
+
+    record = _transcript(run_dir)[0]
+    assert record.get("out_bytes") == 1024
+    # Response content itself must not be in the record.
+    assert response_text not in json.dumps(record)
+
+
+def test_boundary_out_bytes_sums_batch_responses(tmp_path):
+    """A multi-tool batch accumulates out_bytes across all responses."""
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=0, events=[])
+    payload = json.dumps({
+        "hook_event_name": "PostToolBatch",
+        "tool_calls": [
+            {
+                "tool_name": "Read",
+                "tool_input": {"file_path": "/a"},
+                "tool_response": "x" * 500,
+            },
+            {
+                "tool_name": "Read",
+                "tool_input": {"file_path": "/b"},
+                "tool_response": "y" * 300,
+            },
+        ],
+    })
+
+    hooks.run_hook(hooks.PHASE_POST_TOOL, payload, env)
+
+    record = _transcript(run_dir)[0]
+    assert record.get("out_bytes") == 800
+
+
+def test_boundary_detail_absent_for_non_tool_phases(tmp_path):
+    """Stop boundaries (no tool payload) carry no detail or out_bytes."""
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=0, events=[])
+    hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+
+    record = _transcript(run_dir)[-1]
+    assert "detail" not in record
+    assert "out_bytes" not in record
+
+
+def test_redact_detail_masks_authorization_header():
+    """Authorization header values are masked regardless of case."""
+    result = hooks.redact_detail("curl -H 'Authorization: Bearer mytoken123'")
+    assert "mytoken123" not in result
+    assert "<redacted>" in result
+
+
+def test_redact_detail_masks_token_assignment():
+    """``token=VALUE`` and ``secret=VALUE`` assignments are masked."""
+    assert "<redacted>" in hooks.redact_detail("export TOKEN=super_secret_value")
+    assert "<redacted>" in hooks.redact_detail("secret=topsecret cmd")
+
+
+def test_redact_detail_masks_known_api_key_prefix():
+    """Values starting with known API-key prefixes (sk-ant-, ghp_) are masked."""
+    assert "<redacted>" in hooks.redact_detail("--key sk-ant-abc123xyz456")
+    assert "<redacted>" in hooks.redact_detail("echo ghp_PAT1234567890")
+
+
+def test_redact_detail_preserves_innocent_text():
+    """Normal command lines that contain no secrets are returned unchanged."""
+    cmd = "pytest tests/ -q --tb=short"
+    assert hooks.redact_detail(cmd) == cmd
 
 
 # ── Boundary summary (`boundaries.json`) ──────────────────────────────────
@@ -6212,3 +6478,140 @@ def test_mood_nudge_is_retired_from_the_first_bar(tmp_path):
             events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
     assert "mood?" not in out["hookSpecificOutput"]["additionalContext"]
+
+
+# ── 2026-08-23: render-on-change (boundary dedup) ─────────────────────
+
+
+def test_pending_chip_appears_on_first_render(tmp_path):
+    """The `pending N` chip renders on the first boundary where N>0."""
+    ev = {"id": "evt-42", "source": "telegram", "summary": "hello"}
+    _portal(tmp_path, token="t1", pending=1, events=[ev])
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    bar = ctx.splitlines()[0]
+    assert "pending 1" in bar
+
+
+def test_seen_events_do_not_keep_bar_alive(tmp_path):
+    """Second boundary with the same unseen event: bar is quiet."""
+    ev = {"id": "evt-42", "source": "telegram", "summary": "hello"}
+    env = _env(tmp_path)
+    _portal(tmp_path, token="t1", pending=1, events=[ev])
+    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)  # first: renders
+    # Same token — event now seen, nothing else changed → no injection.
+    second, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    assert "hookSpecificOutput" not in second
+
+
+def test_changed_body_re_renders_on_bar_path(tmp_path):
+    """A body change re-opens the bar with the new content."""
+    env = _env(tmp_path)
+    _portal(tmp_path, token="t1", pending=1, events=[{
+        "id": "evt-42", "source": "telegram", "body": "first body",
+    }])
+    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+
+    _portal(tmp_path, token="t2", pending=1, events=[{
+        "id": "evt-42", "source": "telegram", "body": "edited body",
+    }])
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "Δ changed" in ctx
+    assert "edited body" in ctx
+    assert "seen ×" not in ctx
+
+
+def test_closeout_guard_unweakened_for_seen_events(tmp_path):
+    """Stop boundary always surfaces pending events even when they're seen."""
+    ev = {"id": "evt-42", "source": "telegram", "summary": "hello"}
+    env = _env(tmp_path)
+    _portal(tmp_path, token="t1", pending=1, events=[ev])
+    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)  # mark event seen
+    # Second post-tool: quiet (seen only).
+    second, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    assert "hookSpecificOutput" not in second
+    # Stop: the guard must still block and surface the event.
+    stop, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+    assert stop.get("decision") == "block"
+    assert "pending" in stop["reason"]
+
+
+def test_course_stall_fires_at_threshold(tmp_path):
+    """After _COURSE_STALL_THRESHOLD boundaries with open rows and no route
+    edit, the stall detail line renders once and the counter re-arms.
+
+    The very first boundary sets route_edge=True (card seen for the first
+    time) which resets the counter, so the stall fires after
+    1 (seed/route-edge) + threshold more calls = threshold+1 total calls.
+    """
+    (tmp_path / hooks.CARD_NAME).write_text(
+        "## Now\nworking\n\n## Plan\n- [ ] do the thing\n", encoding="utf-8"
+    )
+    env = _env(tmp_path)
+    threshold = hooks._COURSE_STALL_THRESHOLD
+    # Run threshold boundaries (first resets via route_edge, then threshold
+    # non-edge ones accumulate): stall must NOT fire yet.
+    for i in range(threshold):
+        _portal(tmp_path, token=f"t{i}", pending=0)
+        out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+        assert "stalled ×" not in _inject_text(out)
+    # The threshold+1th boundary: stall fires.
+    _portal(tmp_path, token=f"t{threshold}", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    text = _inject_text(out)
+    assert f"stalled ×{threshold} boundaries" in text
+    # Counter re-armed: next boundary alone does not re-fire.
+    _portal(tmp_path, token=f"t{threshold + 1}", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    assert "stalled ×" not in _inject_text(out)
+
+
+def test_course_stall_resets_on_route_edit(tmp_path):
+    """Editing the card (route_edge=True) resets the stall counter."""
+    card = tmp_path / hooks.CARD_NAME
+    card.write_text(
+        "## Now\nworking\n\n## Plan\n- [ ] do the thing\n", encoding="utf-8"
+    )
+    env = _env(tmp_path)
+    threshold = hooks._COURSE_STALL_THRESHOLD
+    # Burn threshold boundaries (first is route_edge, resets; then threshold-1
+    # non-edge ones accumulate to stall_count = threshold-1 < threshold).
+    for i in range(threshold):
+        _portal(tmp_path, token=f"t{i}", pending=0)
+        hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    # Edit the card — route_edge fires, resets the stall counter.
+    card.write_text(
+        "## Now\nworking\n\n## Plan\n- [x] do the thing\n- [ ] next\n",
+        encoding="utf-8",
+    )
+    _portal(tmp_path, token=f"t{threshold}", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    assert "stalled ×" not in _inject_text(out)
+    # threshold more non-edge boundaries: stall fires again from new baseline.
+    for i in range(threshold - 1):
+        _portal(tmp_path, token=f"t{threshold + 1 + i}", pending=0)
+        out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+        assert "stalled ×" not in _inject_text(out)
+    _portal(tmp_path, token=f"t{2 * threshold + 1}", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    assert f"stalled ×{threshold} boundaries" in _inject_text(out)
+
+
+def test_boundary_detail_redacts_file_tool_pattern():
+    """The path/pattern branch redacts and caps like every other branch.
+
+    A Grep pattern is arbitrary text — a secret-shaped value in it must not
+    reach disk, and an unbounded pattern must not either.
+    """
+    from brr.hooks import _tool_detail
+
+    detail = _tool_detail("Grep", {"pattern": "Authorization: Bearer sk-ant-abc123def456ghi"})
+    assert detail is not None
+    assert "sk-ant-abc123def456ghi" not in detail
+    assert "<redacted>" in detail
+
+    long_pattern = "x" * 5000
+    capped = _tool_detail("Grep", {"pattern": long_pattern})
+    assert capped is not None
+    assert len(capped) <= 210  # _DETAIL_OTHER_MAX + ellipsis

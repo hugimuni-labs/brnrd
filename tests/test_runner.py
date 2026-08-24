@@ -724,6 +724,7 @@ def test_available_runner_catalog_marks_unavailable_auth_env_profiles(
 ):
     """API-key auth variants without their key appear with available=False, not excluded."""
     (tmp_path / ".brr").mkdir()
+    monkeypatch.setattr(runner_mod.Path, "home", lambda: tmp_path / "empty-home")
     monkeypatch.setattr(
         runner_mod,
         "_profiles_cache",
@@ -787,6 +788,54 @@ def test_runner_auth_error_survives_restart_and_clear(tmp_path, monkeypatch):
     runner_auth_health.clear_success(tmp_path, profile)
     assert not runner_auth_health.is_auth_failed(tmp_path, profile)
     assert "codex-local" not in state_path.read_text(encoding="utf-8")
+
+
+def test_fresh_claude_account_cache_marks_ended_subscription_unavailable(tmp_path, monkeypatch):
+    claude_home = tmp_path / "home"
+    claude_home.mkdir()
+    (claude_home / ".claude.json").write_text(
+        json.dumps({
+            "oauthAccount": {
+                "billingType": "none",
+                "profileFetchedAt": 1_800_000_000_000,
+            }
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runner_mod.Path, "home", lambda: claude_home)
+    monkeypatch.setattr(runner_mod.time, "time", lambda: 1_800_000_000)
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {"claude": {"cmd": "claude --print", "shell": "claude"}},
+    )
+    monkeypatch.setattr(runner_mod.shutil, "which", lambda _name: "/usr/bin/claude")
+
+    row = runner_mod.available_runner_catalog(tmp_path)[0]
+    assert row["available"] is False
+    assert row["availability"] == "subscription-unavailable"
+
+
+def test_claude_subscription_cache_fails_open_when_stale_or_api_key(tmp_path, monkeypatch):
+    claude_home = tmp_path / "home"
+    claude_home.mkdir()
+    (claude_home / ".claude.json").write_text(
+        json.dumps({
+            "oauthAccount": {
+                "billingType": "none",
+                "profileFetchedAt": 1_700_000_000_000,
+            }
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runner_mod.Path, "home", lambda: claude_home)
+
+    assert not runner_mod._claude_subscription_unavailable(
+        "claude", "", now_ms=1_800_000_000_000
+    )
+    assert not runner_mod._claude_subscription_unavailable(
+        "claude", "anthropic-api-key", now_ms=1_700_000_000_000
+    )
 
 
 def test_runner_auth_mark_is_scoped_to_failure_domain(tmp_path):
@@ -955,6 +1004,124 @@ def test_catalog_includes_unavailable_rows_with_marks(tmp_path, monkeypatch):
     assert gemini["on_path"] is False
     assert gemini["available"] is False
     assert gemini["availability"] == "shell-not-found"
+
+
+def test_alias_tracked_profile_never_renders_stale(tmp_path, monkeypatch):
+    """An alias-tracked Claude profile must never carry stale in the catalog row.
+
+    Drives through available_runner_catalog() (dict) AND _render_runner_catalog()
+    (the text line a resident reads) — the inversion fix must hold at both layers.
+    Old freshness_date on an alias entry is not staleness; it is stale metadata about
+    when the registry entry was last touched, which has no meaning for dispatch.
+    """
+    from brr import prompts as prompts_mod
+
+    (tmp_path / ".brr").mkdir()
+    # Claude alias entry with a very old freshness_date — must NOT render stale.
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "claude": {
+                "cmd": "claude --print",
+                "hooks": "claude",
+                "class": "balanced",
+                "cost_rank": 30,
+                "quota_source": "claude-local",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/claude" if name == "claude" else None,
+    )
+    monkeypatch.setattr(runner_mod.Path, "home", lambda: tmp_path / "empty-home")
+
+    from brr import runner_cores as rc_mod
+
+    catalog = runner_mod.available_runner_catalog(tmp_path)
+    # Generated Claude Core profiles (haiku, sonnet, opus, fable) are alias-tracked.
+    # The base 'claude' shell profile has no model and is correctly NOT alias-tracked.
+    alias_tracked_rows = [
+        r for r in catalog
+        if r.get("shell") == "claude" and r.get("model") in rc_mod.CLAUDE_ALIASES
+    ]
+    assert alias_tracked_rows, "expected generated Claude alias Core profiles in catalog"
+    for row in alias_tracked_rows:
+        assert not row.get("stale"), (
+            f"alias-tracked profile {row['name']!r} must not be stale; got stale={row.get('stale')!r}"
+        )
+        assert row.get("alias_tracked") is True, (
+            f"alias-tracked profile {row['name']!r} should carry alias_tracked=True"
+        )
+    # Also verify the rendered catalog line does not say "stale" but does say "alias-tracked".
+    rendered = prompts_mod._render_runner_catalog(catalog)
+    alias_names = {r["name"] for r in alias_tracked_rows}
+    for line in rendered:
+        bare = line.lstrip("- ✗").replace("selected ", "").strip()
+        row_name = bare.split(":")[0].strip()
+        if row_name in alias_names:
+            assert "stale" not in line, (
+                f"rendered catalog line for alias-tracked profile {row_name!r} contains 'stale': {line!r}"
+            )
+            # Deliberately no positive label: the wake renders what a
+            # resident may have to act on, and "fine by construction" is
+            # not that. The absence of `stale` is the whole signal.
+            assert "alias-tracked" not in line, (
+                f"alias-tracked rows must not carry a positive label: {line!r}"
+            )
+
+
+def test_pinned_profile_past_date_renders_stale(tmp_path, monkeypatch):
+    """A pinned (exact model ID) profile older than 30 days must render stale.
+
+    Drives through available_runner_catalog() AND _render_runner_catalog().
+    """
+    from brr import prompts as prompts_mod
+
+    (tmp_path / ".brr").mkdir()
+    # Codex profile with a very old freshness_date — must render stale.
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "codex": {
+                "cmd": "codex exec",
+                "class": "balanced",
+                "cost_rank": 25,
+                "quota_source": "codex-local",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/codex" if name == "codex" else None,
+    )
+    monkeypatch.setattr(runner_mod.Path, "home", lambda: tmp_path / "empty-home")
+
+    catalog = runner_mod.available_runner_catalog(tmp_path)
+    # Generated Codex profiles use exact model IDs (gpt-5.6-*) — pinned semantics.
+    codex_rows = [r for r in catalog if r.get("shell") == "codex"]
+    assert codex_rows, "expected generated Codex profiles in catalog"
+    # At least the bundled profiles (gpt-5.6-sol etc., dated 2026-07-11) must be stale
+    # relative to today (2026-08-24 > 30 days later).
+    stale_rows = [r for r in codex_rows if r.get("stale")]
+    assert stale_rows, (
+        "pinned Codex profiles with old freshness_date must render stale in catalog"
+    )
+    # Verify the rendered line contains "stale" for those rows.
+    rendered = prompts_mod._render_runner_catalog(catalog)
+    stale_names = {r["name"] for r in stale_rows}
+    for line in rendered:
+        # Extract name from "- [prefix]name: ..." format.
+        bare = line.lstrip("- ✗").replace("selected ", "").strip()
+        row_name = bare.split(":")[0].strip()
+        if row_name in stale_names:
+            assert "stale" in line, (
+                f"rendered line for stale profile {row_name!r} missing 'stale': {line!r}"
+            )
 
 
 def test_catalog_consumers_see_same_row_names(tmp_path, monkeypatch):

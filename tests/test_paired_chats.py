@@ -250,6 +250,7 @@ def test_paired_chats_list_carries_platform_title_display_and_paired_at(env):
     assert len(rows) == 1
     row = rows[0]
     assert row["platform"] == "telegram"
+    assert row["paired"] is True
     assert row["chat_title"] == "Ops Room"
     assert row["principal_display"] == "@ada_l"
     assert row["paired_at"] is not None

@@ -361,7 +361,7 @@ class _Context:
             for route in db.execute(
                 select(ChannelRoute).where(
                     ChannelRoute.repo_id.in_(repo_ids),
-                    ChannelRoute.paired_user_id.isnot(None),
+                    ChannelRoute.paired_principal_id.isnot(None),
                     ChannelRoute.account_id == account.id,
                 )
             ).scalars():

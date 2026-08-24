@@ -405,6 +405,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="repo name for the memory backup (default: brnrd-home)")
     p.add_argument("--knowledge-name", default=None,
                    help="repo name for the knowledge backup (default: brnrd-knowledge)")
+    p.add_argument("--ssh", action="store_true",
+                   help="use SSH remotes explicitly (default: HTTPS through gh credentials)")
     p.set_defaults(func=cmd_home_link)
 
     p = home_sub.add_parser(
@@ -1227,7 +1229,13 @@ def _repo_root_from_arg(raw: str) -> Path:
 
     path = Path(raw).expanduser()
     if not path.is_absolute():
-        path = Path.cwd() / path
+        try:
+            path = Path.cwd() / path
+        except OSError:
+            raise SystemExit(
+                f"[brnrd] cannot resolve relative path {raw!r}: "
+                "the working directory no longer exists"
+            )
     result = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
         cwd=path,
@@ -2953,6 +2961,24 @@ def cmd_do(args):
     replies, gates, pairing_error = _reconstruct_do_ops(ordered_ops)
     if pairing_error:
         print(f"[brnrd do] {pairing_error}. Nothing was staged.", file=sys.stderr)
+        return 1
+
+    # One reply can answer a burst; its sibling events are notes. Accepting
+    # byte-identical bodies for several event ids made the mechanically easy
+    # spelling send the same chat message once per event. Refuse that batch
+    # before any file exists, and name the economy shape the caller wanted.
+    duplicate_targets: dict[str, list[str]] = {}
+    for event_id, body in replies:
+        duplicate_targets.setdefault(body, []).append(event_id)
+    repeated = next((ids for ids in duplicate_targets.values() if len(ids) > 1), None)
+    if repeated is not None:
+        print(
+            "[brnrd do] identical reply body targets multiple events "
+            f"({', '.join(repeated)}). Reply once and --note the sibling "
+            "event(s); otherwise each --reply sends another chat message. "
+            "Nothing was staged.",
+            file=sys.stderr,
+        )
         return 1
 
     # The reply-debt contract: a call with any --reply must own exactly one
@@ -4967,6 +4993,7 @@ def cmd_home_link(args):
             owner=args.owner,
             dominion_name=dominion_name,
             knowledge_name=knowledge_name,
+            ssh=bool(args.ssh),
             on_result=_report,
         )
     except home_link.HomeLinkError as exc:
@@ -5516,15 +5543,22 @@ def cmd_up(args):
     # suspicious. A read-only verb like `daemon status` still gets the
     # diagnosis and leaves the operator's config alone; being asked a
     # question is not consent to edit git config.
-    gitops.heal_stale_brnrd_worktree_pin(Path.cwd())
+    try:
+        gitops.heal_stale_brnrd_worktree_pin(Path.cwd())
+    except OSError:
+        pass  # dead cwd — skip the heal; the error below will name it
     try:
         root = _repo_root()
     except RuntimeError:
         # Under an installed service this cwd comes from the unit's
         # WorkingDirectory pin; a raw traceback in the journal helps nobody.
+        try:
+            cwd_str = str(Path.cwd())
+        except OSError:
+            cwd_str = "<working directory deleted>"
         raise SystemExit(
             "[brnrd] `daemon up` must run from inside a project repository "
-            f"(cwd: {Path.cwd()}) — under a service, re-run "
+            f"(cwd: {cwd_str}) — under a service, re-run "
             "`brnrd daemon install` from the repo to refresh the pinned "
             "working directory"
         )
@@ -5617,6 +5651,7 @@ def _connect_interrupted(step: str) -> "SystemExit":
 def cmd_brnrd_connect(args):
     import os
     import socket
+    import sys
 
     from .gates import cloud
 
@@ -5624,6 +5659,16 @@ def cmd_brnrd_connect(args):
     brr_dir = _brr_dir_for_repo(repo_root)
     url = args.url_option or args.url or os.environ.get("BRNRD_URL", "https://brnrd.dev")
     daemon_name = args.daemon_name or socket.gethostname()
+    local_memory = bool(args.local_memory)
+    if not local_memory and sys.stdin.isatty():
+        from .adopt import _confirm
+
+        print()
+        if not _confirm(
+            "Back up the resident home and knowledge to two private GitHub repos?",
+            default=True,
+        ):
+            local_memory = True
     try:
         cloud.connect(brr_dir, brnrd_url=url, daemon_name=daemon_name)
     except (cloud.CloudUnavailableError, TimeoutError) as exc:
@@ -5634,7 +5679,7 @@ def cmd_brnrd_connect(args):
         # during the pairing-approval poll leaves the pending pair code to
         # expire server-side on its own TTL and this machine untouched.
         raise _connect_interrupted("pairing approval") from None
-    _connect_memory(repo_root, local_only=bool(args.local_memory))
+    _connect_memory(repo_root, local_only=local_memory)
     if args.no_service:
         print(
             "[brnrd] Paired without a background service. "
@@ -5672,8 +5717,15 @@ def cmd_brnrd_connect(args):
         print("[brnrd] Connected and listening in the background.")
     else:
         print(
-            "[brnrd] Paired, but the background service did not come up — "
-            "see the diagnosis above."
+            "[brnrd] Paired, but the background service did not come up.\n"
+            "  The error above names the cause.  Common next steps:\n"
+            "    1. If the error mentions a missing or deleted working "
+            "directory, re-run `brnrd daemon install` from your project "
+            "checkout to refresh the service, then restart it.\n"
+            "    2. Run `brnrd daemon status` to see the current service "
+            "state and any recent error output.\n"
+            "  Your account is paired — only the local service needs "
+            "attention."
         )
 
     _connect_finish_setup(repo_root, brr_dir, defaults=bool(args.defaults))

@@ -922,7 +922,43 @@ def post_card(request: Request, payload: schemas.CardPost, principal: Principal 
     # terminal close (2026-07-21 — the mega run whose status card vanished).
     # Card sends/edits are already idempotent via message_id.
     reply_to = inbox_service.reply_to_of(event)
-    if reply_to.get("platform") != "telegram" or not settings.telegram_bot_token:
+    platform = reply_to.get("platform")
+    if platform == "whatsapp" and settings.whatsapp_access_token and settings.whatsapp_phone_number_id:
+        from ..platforms import whatsapp as wa
+
+        # The Cloud API has no operation for editing an already-sent message.
+        # A WhatsApp card is therefore one bounded, threaded working notice;
+        # later lifecycle packets retain its receipt without sending again.
+        # The ordinary response relay remains the terminal transition.
+        if payload.message_id is not None:
+            _touch_daemon(db, principal)
+            return schemas.CardAck(event_id=payload.event_id, message_id=payload.message_id)
+        try:
+            mid = wa.send_message(
+                settings.whatsapp_access_token,
+                settings.whatsapp_phone_number_id,
+                reply_to["chat_id"],
+                payload.text,
+                api_base_url=settings.whatsapp_api_base_url,
+                api_version=settings.whatsapp_api_version,
+                reply_to_message_id=reply_to.get("message_id") or None,
+            )
+            _touch_daemon(db, principal)
+            return schemas.CardAck(event_id=payload.event_id, message_id=mid)
+        except wa.WindowClosed as e:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=_safe_detail(f"whatsapp card relay failed: {e}"),
+            ) from e
+        except Exception as e:
+            # Meta/network error strings can echo request material. The
+            # transport class is enough diagnosis here; keep the raw detail
+            # server-side rather than reflecting it through the daemon API.
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="whatsapp card relay failed",
+            ) from e
+    if platform != "telegram" or not settings.telegram_bot_token:
         return schemas.CardAck(event_id=payload.event_id, message_id=None)
     from ..platforms import telegram as tg
     try:

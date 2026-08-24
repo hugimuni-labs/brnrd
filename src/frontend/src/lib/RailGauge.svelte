@@ -1,5 +1,12 @@
 <script lang="ts">
-	import { DIAL_WEDGE_RADIUS, dialDasharray, fuelRows, runnerBlocks, slotChip } from './railGauge';
+	import {
+		DIAL_WEDGE_RADIUS,
+		availableQuotaShells,
+		dialDasharray,
+		fuelRows,
+		runnerBlocks,
+		slotChip
+	} from './railGauge';
 	import { quotaLevel, type QuotaShell } from './quota';
 	import type { RunnersResponse } from './runners';
 	import type { RunLedgerRow } from './runLedger';
@@ -55,9 +62,10 @@
 		)
 	);
 	let activeBlock = $derived(blocks.find((block) => block.active) ?? null);
-	let fuel = $derived(fuelRows(shells ?? []));
+	let availableShells = $derived(availableQuotaShells(shells ?? [], runners?.profiles));
+	let fuel = $derived(fuelRows(availableShells));
 	let slots = $derived(activeSpawns === null ? null : slotChip(activeSpawns, maxSpawns));
-	let tanks = $derived(readTanks(shells ?? [], ledgerRows, scheduledWakes, now));
+	let tanks = $derived(readTanks(availableShells, ledgerRows, scheduledWakes, now));
 	let lead = $derived(tanks[0] ?? null);
 
 	const VERDICT_COLOR: Record<TankVerdict, string> = {

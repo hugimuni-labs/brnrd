@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import threading
+import time
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -25,7 +28,7 @@ from brnrd.models import Account, ConfigChangeRequest, PairRequest, Repo, TermsA
 from brnrd.routers.accounts import SESSION_TTL, account_for_github_identity, issue_session_token
 from brnrd.routers.config_approval import decide_core as decide_config_change
 from brnrd.routers.github_app import sync_app_installations_for_account
-from brnrd.routers.pairing import approve_core, initiator_proof_ok, pair_suggested_forge, pair_suggested_repo_full_name, telegram_pair_core
+from brnrd.routers.pairing import approve_core, initiator_proof_ok, pair_suggested_forge, pair_suggested_repo_full_name
 
 from ._session import (
     _account_id,
@@ -46,6 +49,30 @@ router = APIRouter(tags=["web"])
 
 # Static files live at src/brnrd/static/ (one package level up from routers/).
 _STATIC_DIR = Path(__file__).parent.parent / "static"
+
+_PAIR_FAILURE_WINDOW_S = 60.0
+_PAIR_FAILURE_LIMIT = 8
+_pair_failures: dict[str, deque[float]] = defaultdict(deque)
+_pair_failures_lock = threading.Lock()
+
+
+def _pair_attempt_key(request: Request, account_id: str) -> str:
+    host = request.client.host if request.client is not None else "unknown"
+    return f"{account_id}:{host}"
+
+
+def _pair_attempt_allowed(key: str) -> bool:
+    now = time.monotonic()
+    with _pair_failures_lock:
+        failures = _pair_failures[key]
+        while failures and now - failures[0] > _PAIR_FAILURE_WINDOW_S:
+            failures.popleft()
+        return len(failures) < _PAIR_FAILURE_LIMIT
+
+
+def _record_pair_failure(key: str) -> None:
+    with _pair_failures_lock:
+        _pair_failures[key].append(time.monotonic())
 
 
 def _compute_asset_version() -> str:
@@ -379,7 +406,12 @@ def connect_context_api(code: str, request: Request, db: Session = Depends(get_d
     account_id = _account_id(request, db)
     if account_id is None:
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    attempt_key = _pair_attempt_key(request, account_id)
+    if not _pair_attempt_allowed(attempt_key):
+        return JSONResponse({"detail": "too many pairing attempts — wait a minute"}, status_code=429)
     pair = _get_pair_row(db, code)
+    if pair is None:
+        _record_pair_failure(attempt_key)
     repos = _repos(db, account_id)
     # The repo the connecting checkout already named (#the-enable-button-that-
     # never-enabled-anything): a daemon paired from inside a git checkout
@@ -424,8 +456,14 @@ def connect_approve_api(
     account_id = _account_id(request, db)
     if account_id is None:
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    attempt_key = _pair_attempt_key(request, account_id)
+    if not _pair_attempt_allowed(attempt_key):
+        return JSONResponse({"ok": False, "notice": "too many pairing attempts — wait a minute"}, status_code=429)
     repo_id = str((payload or {}).get("repo_id") or "")
     approve_secret = str((payload or {}).get("approve_secret") or "")
+    pair_for_attempt = _get_pair_row(db, code)
+    if pair_for_attempt is None or not initiator_proof_ok(pair_for_attempt, approve_secret):
+        _record_pair_failure(attempt_key)
     from fastapi import HTTPException
 
     if not repo_id:
@@ -473,22 +511,14 @@ def connect_approve_api(
         approve_core(db, account_id, code, repo_id, approve_secret)
     except HTTPException as exc:
         return JSONResponse({"ok": False, "notice": str(exc.detail)}, status_code=exc.status_code)
-    try:
-        pair = telegram_pair_core(db, request.app.state.settings, account_id, repo_id)
-    except Exception:
-        pair = None
-    telegram = None
-    if pair is not None:
-        telegram = {
-            "pair_code": pair.pair_code,
-            "instructions": pair.instructions,
-            "deep_link": pair.deep_link,
-        }
     return JSONResponse(
         {
             "ok": True,
             "notice": "Your daemon is connected. You can return to your terminal.",
-            "telegram": telegram,
+            # Door pairing is owned by the shared connector panel. Minting a
+            # Telegram code here created an invisible duplicate code whenever
+            # the user did not choose Telegram immediately.
+            "telegram": None,
         }
     )
 

@@ -4061,6 +4061,14 @@ def _run_worker(
         if not _is_strand(task.meta):
             obligations.append("vigil")
 
+        # A cloud conversation stays warm by default. Unlike `vigil`, which
+        # checks a claim the reply made, `linger` checks the lifecycle itself:
+        # a user should not pay for a cold wake merely because the resident
+        # forgot the final wait. Schedule/forge/internal runs have no live chat
+        # counterpart to catch and remain outside the obligation.
+        if not _is_strand(task.meta) and str(task.meta.get("source") or "") == "cloud":
+            obligations.append("linger")
+
         if obligations:
             env["BRR_CLOSEOUT_OBLIGATIONS"] = ",".join(obligations)
 
@@ -4436,6 +4444,7 @@ def _run_worker(
             # entered, who owns them, which were silent.
             run_context.write_prompt_file(brr_dir, task, prompt)
             run_context.write_boot_score(brr_dir, task, boot_score)
+            run_context.write_wake_manifest(brr_dir, task, boot_score)
         prompt_mode = "normal"
         fallback_notice = None
 
@@ -13317,6 +13326,9 @@ NOT_PRESERVED: dict[str, str] = {
     portals.KEEPALIVE_NAME: (
         "transient slot control, meaningless after the run"
     ),
+    portals.LINGER_OPT_OUT_NAME: (
+        "transient closeout control, meaningless after the run"
+    ),
     hooks_mod.HOOK_STATE_NAME: (
         "daemon/hook diagnostics, not the resident's"
     ),
@@ -15473,6 +15485,10 @@ def start(
     next_retention_sweep = time.monotonic() + _RETENTION_FIRST_SWEEP_DELAY_SECONDS
 
     wake = protocol.inbox_wake()
+    # Process-lifetime latch for the parked-branch note's failure path (see
+    # its call site below): the loop ticks every few seconds, and a warning
+    # that repeats every tick is a warning nobody reads.
+    _parked_warn_failed = False
     try:
         while running:
             if time.monotonic() >= next_zombie_sweep:
@@ -15591,11 +15607,32 @@ def start(
             # reason to exist). TTL-guarded: at most one `gh` round-trip every
             # few minutes, and never two at once.
             forge_pr_cache.refresh_if_stale_async(repo_root)
+            # Same contract, one lane over: keep the deploy-run cache warm off
+            # the loop thread so `forge_state.render_prod_line` can say *why*
+            # prod is behind without a network call at prompt-assembly time.
+            # Without this line the cache is never written, `read_state`
+            # answers `absent` forever, and the whole classifier renders
+            # "deploy lane: unknown" for the rest of time — a correct guard
+            # nothing feeds.
+            from . import forge_workflow_cache
+            forge_workflow_cache.refresh_if_stale_async(repo_root)
             # Local-only cross-run sweep: once the shared forge cache is warm,
             # name brr branches whose producing run has gone away. The helper
             # owns process-lifetime dedup so heartbeat cadence cannot spam.
             from . import parked_branches
-            parked_branches.warn_new(repo_root)
+            try:
+                parked_branches.warn_new(repo_root)
+            except Exception as exc:  # noqa: BLE001 — an ergonomics note never kills the loop
+                # Once per process, not once per heartbeat. This runs every
+                # ~10s; a guard that repeats a non-actionable line every tick
+                # stops being read, and then the alarm that matters is buried
+                # in ten thousand copies of one that does not.
+                if not _parked_warn_failed:
+                    _parked_warn_failed = True
+                    print(
+                        "[brnrd] parked-branch note skipped for this process "
+                        f"(ignored, reported once): {exc}"
+                    )
 
             # This is a daily, background observation; a release endpoint can
             # never delay dispatch or make the daemon unhealthy.

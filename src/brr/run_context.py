@@ -56,6 +56,118 @@ def write_boot_score(brr_dir: Path, task: Run, score: Any) -> Path | None:
         return None
 
 
+def write_wake_manifest(brr_dir: Path, task: Run, score: Any) -> Path | None:
+    """Write the wake topology to `.brr/runs/<run-id>/wake-manifest.json`.
+
+    Emits an ordered list of blocks derived from the BootScore's contract
+    entries — the same accounting ``boot-score.json`` already persists, shaped
+    for a topology reader rather than a full score inspector.  Beside
+    ``prompt.md`` and ``boot-score.json`` so all three answers to "what did
+    this wake see?" live in the same directory.
+
+    Schema::
+
+        {
+          "schema_version": "1",
+          "run_id": "<run-id>",
+          "blocks": [
+            {
+              "name": "<block_key>",
+              "label": "<human label>",
+              "present": true,
+              "sources": [{"path": "…", "store": "product-prompt"} | {"synthesized": true}],
+              "bytes_kept": 12345,   # ContractEntry.bytes; null when unrendered
+              "bytes_cut": 3456,     # file size − bytes_kept; null for synthesized
+              "budget_bytes": null,  # not yet tracked per-block — see report
+              "trim_kind": null      # "cut" | "cut-stale" | "stale" | null
+            }
+          ]
+        }
+
+    Non-fatal on error; returns the path written or ``None``.
+    """
+    import json
+
+    from . import bootscore as bs
+
+    _AUTHORITY_TO_STORE = {
+        bs.AUTHORITY_CONTRACT: "product-prompt",
+        bs.AUTHORITY_IDENTITY: "product-prompt",
+        bs.AUTHORITY_SUBSTRATE: "product-prompt",
+        bs.AUTHORITY_POLICY: "product-prompt",
+        bs.AUTHORITY_MEMORY: "dominion",
+        bs.AUTHORITY_SURFACE: "surface",
+        bs.AUTHORITY_HEARTH: "surface",
+        bs.AUTHORITY_KNOWLEDGE: "knowledge",
+        bs.AUTHORITY_ACTIVITY: "knowledge",
+        bs.AUTHORITY_HEALTH: "runtime-generated",
+        bs.AUTHORITY_RUNTIME: "runtime-generated",
+        bs.AUTHORITY_CONFIG: "runtime-generated",
+    }
+    _COMPUTED = "computed"
+
+    def _sources(entry: Any) -> list[dict[str, Any]]:
+        loc = str(entry.location or "")
+        if not loc or loc == _COMPUTED:
+            return [{"synthesized": True}]
+        store = _AUTHORITY_TO_STORE.get(str(entry.authority or ""), "product-prompt")
+        return [{"path": loc, "store": store}]
+
+    def _bytes_cut(entry: Any) -> int | None:
+        loc = str(entry.location or "")
+        if not loc or loc == _COMPUTED:
+            return None
+        kept = entry.bytes
+        if kept is None:
+            return None
+        try:
+            file_size = Path(loc).stat().st_size
+            cut = file_size - kept
+            return cut if cut >= 0 else None
+        except OSError:
+            return None
+
+    def _trim_kind(entry: Any) -> str | None:
+        dropped = entry.dropped
+        stale = bool(entry.stale)
+        if dropped is not None and dropped > 0 and stale:
+            return "cut-stale"
+        if dropped is not None and dropped > 0:
+            return "cut"
+        if stale:
+            return "stale"
+        return None
+
+    blocks = [
+        {
+            "name": entry.block_key,
+            "label": entry.label,
+            "present": bool(entry.present),
+            "sources": _sources(entry),
+            "bytes_kept": entry.bytes,
+            "bytes_cut": _bytes_cut(entry),
+            "budget_bytes": None,
+            "trim_kind": _trim_kind(entry),
+        }
+        for entry in score.contracts
+    ]
+
+    manifest = {
+        "schema_version": "1",
+        "run_id": task.id,
+        "blocks": blocks,
+    }
+
+    context_dir = brr_dir / "runs" / task.id
+    context_dir.mkdir(parents=True, exist_ok=True)
+    path = context_dir / "wake-manifest.json"
+    try:
+        path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        return path
+    except (OSError, TypeError):
+        return None
+
+
 def write_context_file(
     brr_dir: Path,
     task: Run,

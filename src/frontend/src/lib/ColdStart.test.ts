@@ -12,6 +12,10 @@ import type { ConnectedRepo, GitHubInstallation, MachinesSummary, MessengerDoor 
 const here = dirname(fileURLToPath(import.meta.url));
 const componentPath = join(here, 'ColdStart.svelte');
 const generated = join(here, '.coldStart.generated.mjs');
+const messengerDoorsPath = join(here, 'MessengerDoors.svelte');
+const generatedMessengerDoors = join(here, '.coldStartMessengerDoors.generated.mjs');
+const pairingCommandPath = join(here, 'PairingCommand.svelte');
+const generatedPairingCommand = join(here, '.coldStartPairingCommand.generated.mjs');
 
 // Same rendering dance as PublishConsentNotice.test.ts: compile the real
 // component and render it with real props, so a claim that only becomes
@@ -39,14 +43,36 @@ async function renderColdStart(
 	messengerDoors: MessengerDoor[] | null = null
 ): Promise<string> {
 	const source = readFileSync(componentPath, 'utf8');
+	const messengerDoorsSource = readFileSync(messengerDoorsPath, 'utf8');
+	const messengerDoorsCompiled = compile(messengerDoorsSource, {
+		generate: 'server',
+		runes: true,
+		name: 'MessengerDoors'
+	});
+	writeFileSync(
+		generatedMessengerDoors,
+		messengerDoorsCompiled.js.code.replace(/'(\.\/[A-Za-z0-9_-]+)'/g, "'$1.ts'")
+	);
+	// PairingCommand is now imported by ColdStart — compile it the same way
+	// MessengerDoors is compiled, so the SSR harness can resolve the import.
+	const pairingCommandSource = readFileSync(pairingCommandPath, 'utf8');
+	const pairingCommandCompiled = compile(pairingCommandSource, {
+		generate: 'server',
+		runes: true,
+		name: 'PairingCommand'
+	});
+	writeFileSync(
+		generatedPairingCommand,
+		pairingCommandCompiled.js.code.replace(/'(\.\/[A-Za-z0-9_-]+)'/g, "'$1.ts'")
+	);
 	const compiled = compile(source, { generate: 'server', runes: true, name: 'ColdStart' });
 	const runnable = compiled.js.code
-		// Same generic rewrite CapabilityPanel.test.ts uses: any bare relative
-		// import needs its `.ts` extension for Node's loader. Narrowed to
-		// `./publicStats` alone until #1277a's `splitPairingCommand` import
-		// (`./repos`) needed the same treatment — generic from here so the
-		// next added import doesn't silently need its own regex line too.
+		// Same generic rewrite: any bare relative import needs its `.ts`
+		// extension for Node's loader. Generic from #1277a onward so new
+		// imports don't each need their own regex line.
 		.replace(/'(\.\/[A-Za-z0-9_-]+)'/g, "'$1.ts'")
+		.replace("'./MessengerDoors.svelte'", "'./.coldStartMessengerDoors.generated.mjs'")
+		.replace("'./PairingCommand.svelte'", "'./.coldStartPairingCommand.generated.mjs'")
 		.replace(/import\s*\{[^}]*\}\s*from\s*'\$app\/paths';/, 'const resolve = (path) => path;');
 	writeFileSync(generated, runnable);
 	try {
@@ -56,6 +82,8 @@ async function renderColdStart(
 		}).body;
 	} finally {
 		rmSync(generated, { force: true });
+		rmSync(generatedMessengerDoors, { force: true });
+		rmSync(generatedPairingCommand, { force: true });
 	}
 }
 
@@ -72,7 +100,11 @@ function installation(over: Partial<GitHubInstallation> = {}): GitHubInstallatio
 	};
 }
 
-after(() => rmSync(generated, { force: true }));
+after(() => {
+	rmSync(generated, { force: true });
+	rmSync(generatedMessengerDoors, { force: true });
+	rmSync(generatedPairingCommand, { force: true });
+});
 
 function repo(over: Partial<ConnectedRepo> = {}): ConnectedRepo {
 	return {
@@ -470,8 +502,8 @@ test('a backend with an available telegram door renders the tappable door, not t
 		{ platform: 'telegram', deep_link_available: true }
 	]);
 	ok(html.includes('the messenger door'));
-	ok(html.includes('data-testid="open-telegram"'), 'the tap affordance renders');
-	ok(html.includes('open telegram'), 'the button carries the real CTA copy');
+	ok(html.includes('data-testid="connect-telegram"'), 'the tap affordance renders');
+	ok(html.includes('connect telegram'), 'the canonical button carries the CTA copy');
 	ok(
 		!html.includes('once a repo is enabled'),
 		'the honest-intermediate copy is gone once a real door exists'
@@ -484,7 +516,10 @@ test('a registry with no available door keeps the honest-intermediate fallback',
 		{ platform: 'whatsapp', deep_link_available: false }
 	]);
 	ok(html.includes('the messenger door'));
-	ok(!html.includes('data-testid="open-telegram"'), 'no tap affordance without an available door');
+	ok(
+		!html.includes('data-testid="connect-telegram"'),
+		'no tap affordance without an available door'
+	);
 	ok(html.includes('once a repo is enabled'), 'the pre-#1457 copy still renders');
 	ok(!html.includes('Telegram or WhatsApp'), '#1465: no longer promises a platform nothing backs');
 });
@@ -495,7 +530,7 @@ test("an absent messenger_doors field (older backend) renders exactly today's co
 	const withAbsent = await renderColdStart([], undefined, null, null, true, undefined as never);
 	const withExplicitNull = await renderColdStart([], undefined, null, null, true, null);
 	equal(withAbsent, withExplicitNull, 'an omitted key renders identically to the explicit default');
-	ok(!withAbsent.includes('data-testid="open-telegram"'));
+	ok(!withAbsent.includes('data-testid="connect-telegram"'));
 	ok(withAbsent.includes('once a repo is enabled'));
 });
 
@@ -504,9 +539,12 @@ test('a registry with an available whatsapp door renders its own tappable button
 		{ platform: 'telegram', deep_link_available: false },
 		{ platform: 'whatsapp', deep_link_available: true }
 	]);
-	ok(html.includes('data-testid="open-whatsapp"'), 'the whatsapp tap affordance renders');
-	ok(html.includes('open whatsapp'));
-	ok(!html.includes('data-testid="open-telegram"'), 'telegram stays unavailable, no button for it');
+	ok(html.includes('data-testid="connect-whatsapp"'), 'the whatsapp tap affordance renders');
+	ok(html.includes('connect whatsapp'));
+	ok(
+		!html.includes('data-testid="connect-telegram"'),
+		'telegram stays unavailable, no button for it'
+	);
 });
 
 test('both doors available render two tappable buttons, no hand-picked primary', async () => {
@@ -514,8 +552,8 @@ test('both doors available render two tappable buttons, no hand-picked primary',
 		{ platform: 'telegram', deep_link_available: true },
 		{ platform: 'whatsapp', deep_link_available: true }
 	]);
-	ok(html.includes('data-testid="open-telegram"'));
-	ok(html.includes('data-testid="open-whatsapp"'));
+	ok(html.includes('data-testid="connect-telegram"'));
+	ok(html.includes('data-testid="connect-whatsapp"'));
 });
 
 // Same flip, same reasoning, in the paired-no-repo state: #1457 mints
@@ -531,7 +569,7 @@ test('paired-no-repo state also renders the tappable door once one is available'
 		[{ platform: 'telegram', deep_link_available: true }]
 	);
 	ok(html.includes('machine paired, no repo enabled yet'));
-	ok(html.includes('data-testid="open-telegram"'));
+	ok(html.includes('data-testid="connect-telegram"'));
 	ok(!html.includes('still waits on a repo'), 'the stale repo-gated copy is gone');
 });
 
@@ -549,4 +587,31 @@ test('desktop rendering is unaffected by messengerDoors', async () => {
 		[{ platform: 'telegram', deep_link_available: true }]
 	);
 	equal(withDoors, withoutDoors, 'desktop HTML is byte-identical either way');
+});
+
+// Door copy cleanup (brr/the-board-that-said-it-twice): when doors are
+// available the mobile panel shows a shared intro sentence once, above the
+// tiles, so the "opens the app directly" concept is said once rather than
+// repeated per tile inside MessengerDoors (which is outside this file's
+// ownership). Pin: intro appears before the first door's tap button.
+test('mobile arrival with available doors shows shared intro above the door tiles', async () => {
+	const html = await renderColdStart([], undefined, null, null, true, [
+		{ platform: 'telegram', deep_link_available: true },
+		{ platform: 'whatsapp', deep_link_available: true }
+	]);
+	ok(html.includes('opens the app directly'), 'shared intro renders');
+	const introAt = html.indexOf('opens the app directly');
+	const tileAt = html.indexOf('data-testid="connect-telegram"');
+	ok(introAt >= 0 && tileAt >= 0, 'both intro and first tile render');
+	ok(introAt < tileAt, 'shared intro is above the door tiles');
+});
+
+// The shared intro must not render when no door is available — the
+// honest-intermediate copy fills that slot instead.
+test('shared intro is absent when no doors are available', async () => {
+	const html = await renderColdStart([], undefined, null, null, true, [
+		{ platform: 'telegram', deep_link_available: false }
+	]);
+	ok(!html.includes('opens the app directly'), 'no intro without an available door');
+	ok(html.includes('once a repo is enabled'), 'honest-intermediate copy still renders');
 });

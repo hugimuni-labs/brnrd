@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from .db import Base
 
@@ -402,21 +402,18 @@ class ChannelRoute(Base):
     # unchanged — a pin and a legacy binding are the same row.
     repo_id: Mapped[str | None] = mapped_column(ForeignKey("repos.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    # #409 — the Telegram user id who paired this chat/topic via `/start`.
-    # The sole authorization principal for enqueueing a run from this route
-    # (see routers/webhooks.py `_authorized`); nullable only because rows
-    # created before the security fix landed predate the column — a route
-    # with no principal authorizes nobody (default-closed), so those chats
-    # must be re-paired.
-    # #1392 — BigInteger, not Integer: Telegram user ids crossed 2**31-1
-    # around 2021, so a 32-bit column silently fails a brand-new account's
-    # very first `/start` (see `migrations._widen_channel_routes_paired_user_id`
-    # for the same widen applied to existing rows).
-    paired_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # The platform's verified sender identity, captured when the route is
+    # paired. Telegram stores ``from.id``; WhatsApp stores the sender's
+    # E.164 number. A route with no principal authorizes nobody. This is a
+    # string because the connector registry is not a Telegram schema.
+    paired_principal_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Transitional Python spelling for pre-rename callers. One mapped
+    # column remains the single source of truth.
+    paired_user_id = synonym("paired_principal_id")
     # #1464 — a best-effort human label for the paired-chats surface: the
     # Telegram `@username` (falls back to the first name Telegram always
     # supplies) or the WhatsApp profile name, captured at the moment of
-    # pairing. Rendering only — `paired_user_id` above stays the sole
+    # pairing. Rendering only — `paired_principal_id` above stays the sole
     # authorization principal; this column is never read by `_authorized`.
     # Nullable because it predates rows written before this column existed
     # and because a re-pair always refreshes it, so a stale display is only

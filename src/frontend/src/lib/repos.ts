@@ -33,7 +33,7 @@ export interface ConnectedRepo {
 	// #885: whether a real `ChannelRoute` row pairs this repo to a Telegram
 	// chat — false for both "never paired" and "route exists but its
 	// principal is NULL" (authorizes nobody; see the backend's `models.py`
-	// `ChannelRoute.paired_user_id` doc).
+	// `ChannelRoute.paired_principal_id` doc).
 	telegram_paired: boolean;
 	environment_default: string | null;
 	environments: EnvironmentOption[];
@@ -154,6 +154,9 @@ export interface MachinesSummary {
 export interface MessengerDoor {
 	platform: string;
 	deep_link_available: boolean;
+	paired?: boolean;
+	paired_count?: number;
+	paired_display?: string | null;
 	// brr/every-door-on-the-page — why a dark door is dark: `"not_built"`
 	// (no connector exists, Slack/Signal today) vs `"not_configured"` (the
 	// connector exists but this deployment lacks its credentials) vs
@@ -186,8 +189,10 @@ export interface ReposResponse {
 	// is empty. One source, backend-owned: see `_session.pairing_command`.
 	pairing_command: string;
 	// Additive, optional: present once the backend ships it, absent on any
-	// client/response that predates it. No component reads this yet — see
-	// the `Capability` doc comment above.
+	// client/response that predates it. Read by `/repos` for the one row that
+	// has no other representation on the page (`repo-initialised`); the board
+	// that used to render all fifteen of them is gone, because every other row
+	// restated something the same page already said.
 	capabilities?: Capability[];
 	// Additive, optional, same "absent on an older backend" contract as
 	// `capabilities` above — `ColdStart.svelte` falls back to its pre-#1365
@@ -479,6 +484,7 @@ export async function fetchPairStatus(
 export interface PairedChat {
 	id: string;
 	platform: string;
+	paired: boolean;
 	chat_title: string | null;
 	principal_display: string | null;
 	paired_at: string | null;
@@ -521,4 +527,69 @@ export async function revokePairedChat(
 	if (!res.ok) {
 		throw new Error(`revoke failed: ${res.status}`);
 	}
+}
+
+// --- connected derivation ------------------------------------------------
+//
+// The single source of truth for "is this platform door connected". Wire
+// flag (`door.paired`) wins; the paired-chat list is the ground truth for
+// the stale-flag case the maintainer measured: `door.paired` from the
+// repos fetch lagged a real paired chat by one page load, so the connect
+// button appeared while the chat was visible fifty pixels below it.
+//
+// `pairedOutcomes` (the post-poll optimistic state) does NOT participate
+// here — it shortens the wait by triggering an invalidate-and-reload, but
+// the wire state (`door.paired` or an entry in `pairedChats`) is the
+// final word.
+// The platform comes off the door, never as a third argument. A signature
+// that lets you pass door A beside platform B is a signature that eventually
+// gets called that way, and the resulting wrong answer looks like a data bug.
+export function isConnected(
+	door: Pick<MessengerDoor, 'paired' | 'platform'>,
+	pairedChats: PairedChat[]
+): boolean {
+	if (door.paired) return true;
+	return pairedChats.some((c) => c.platform === door.platform && c.paired);
+}
+
+// --- module-level paired-chats store ------------------------------------
+//
+// One in-flight fetch at a time, not one per mounted `MessengerDoors`
+// instance. Today every mount fires its own `GET /v1/dashboard/paired-
+// chats`; two panels on the same page means two identical requests racing
+// each other. The singleton below collapses them: the second caller gets
+// the same Promise the first started.
+//
+// Deliberately *not* a result cache. An earlier shape here also memoised
+// the resolved list, which collapsed two requests into one and then served
+// that same list on every later mount — so navigating away and back showed
+// a paired-chats list from minutes ago. Freshness is what this surface is
+// for; the thing worth deduplicating is the concurrent burst, not the
+// answer. Every mount still reads the wire.
+//
+// Call `invalidatePairedChats()` after a successful pair or revoke so a
+// sibling panel does not join a request that predates it. The component's
+// own `$state pairedChats` drives renders — this store is the fetch layer
+// only.
+let _pairedChatsInflight: Promise<PairedChat[]> | null = null;
+
+/** Drop any in-flight request so the next `loadSharedPairedChats()` call
+ * issues a fresh GET rather than joining a request that predates the pair
+ * or revoke that just happened. */
+export function invalidatePairedChats(): void {
+	_pairedChatsInflight = null;
+}
+
+export async function loadSharedPairedChats(fetchImpl?: typeof fetch): Promise<PairedChat[]> {
+	if (_pairedChatsInflight !== null) return _pairedChatsInflight;
+	_pairedChatsInflight = fetchPairedChats(fetchImpl)
+		.then((r) => {
+			_pairedChatsInflight = null;
+			return r.paired_chats;
+		})
+		.catch((err: unknown) => {
+			_pairedChatsInflight = null;
+			throw err;
+		});
+	return _pairedChatsInflight;
 }

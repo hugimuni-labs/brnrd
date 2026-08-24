@@ -94,6 +94,30 @@ async function mountRoutes(page) {
 			});
 			return;
 		}
+		if (req.method() === 'GET' && req.url().includes('/v1/dashboard/paired-chats')) {
+			await route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify({
+					paired_chats:
+						statusPollCount >= 2
+							? [
+									{
+										id: 'route-repro',
+										platform: 'telegram',
+										paired: true,
+										principal_display: '@maintainer',
+										chat_title: 'Workshop',
+										repo_full_name: null,
+										paired_at: null,
+										paired_at_label: 'now'
+									}
+								]
+							: []
+				})
+			});
+			return;
+		}
 		const url = new URL(req.url());
 		const body = fixtures.ROUTES[url.pathname];
 		if (body) {

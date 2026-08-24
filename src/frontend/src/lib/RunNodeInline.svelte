@@ -6,6 +6,7 @@
 	// vitals, and a count. Everything heavier sits behind one expand, and the
 	// standalone `/runs/...` page stays the addressable deep link.
 	import type { ResolvedPathname } from '$app/types';
+	import { deliveryToneClass } from '$lib/deliveryTone';
 	import MarkdownContent from './MarkdownContent.svelte';
 	import MoodChip from './MoodChip.svelte';
 	import { LiveRunsAuthError, moodFace, requestRunStop, type HeartbeatLevel } from './liveRuns';
@@ -181,14 +182,6 @@
 	let produceEmptyLabel = $derived(
 		digest?.status === 'running' ? 'nothing committed yet' : 'this run produced nothing'
 	);
-
-	const TONE_CLASS: Record<string, string> = {
-		delivered: 'text-emerald-400/80',
-		collected: 'text-emerald-400/60',
-		pending: 'text-amber-400',
-		undeliverable: 'text-red-400',
-		unknown: 'text-ink-quiet'
-	};
 
 	function instantLabel(raw: string): string {
 		if (!raw) return '';
@@ -465,7 +458,7 @@
 							<span class="min-w-0 truncate text-amber-200/80">
 								{message.metadata.kind || 'message'}{target ? ` → ${target}` : ''}
 							</span>
-							<span class="shrink-0 {TONE_CLASS[tone]}">
+							<span class="shrink-0 {deliveryToneClass(tone)}">
 								{message.metadata.status || 'recorded'}
 								{instantLabel(messageInstant(message.metadata))}
 							</span>

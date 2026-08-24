@@ -82,10 +82,8 @@ def _daemon_tokens(client) -> list[Token]:
 # --- the approval proof itself ------------------------------------------
 
 
-def test_start_pair_hands_the_initiator_a_proof_and_hides_it_in_the_url_fragment():
-    """The secret rides the fragment, so it never reaches the server as a
-    query string (access logs, `Referer`) — only the browser the human
-    pastes the terminal's link into can read it back out."""
+def test_start_pair_hands_the_initiator_a_human_device_code():
+    """The generic page asks for a 40-bit, one-time initiator proof."""
     client = TestClient(
         create_app(
             Settings(
@@ -97,12 +95,9 @@ def test_start_pair_hands_the_initiator_a_proof_and_hides_it_in_the_url_fragment
     pair = _start_pair(client)
     secret = pair["approve_secret"]
     assert secret
-    # 128-bit floor. `secrets.token_urlsafe(32)` is 256 bits in 43 chars;
-    # the assertion is on the entropy the guard needs, not the spelling.
-    assert len(secret) >= 22
-    assert pair["pair_url"] == (
-        f"https://brnrd.example/connect/{pair['pair_code']}#{secret}"
-    )
+    assert secret == pair["pair_code"]
+    assert len(pair["pair_code"].removeprefix("BR-")) == 8
+    assert pair["pair_url"] == "https://brnrd.example/connect"
     # Never stored in the clear — hashed exactly like the poll secret.
     row = _pair_row(client, pair["pair_code"])
     assert row.approve_secret_hash

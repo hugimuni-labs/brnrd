@@ -18,8 +18,9 @@
 	// resurrects that wall or means the control vanishes for exactly the
 	// account that has been through onboarding once and wants to add a
 	// second chat platform later. `/repos` is already titled "repository
-	// control", already carries the account-level `PairedChats` panel this
-	// one sits beside, and its own subtitle already promises "route
+	// control", renders the account-level paired-chats list this component
+	// now owns itself (the separate `PairedChats` panel this line used to
+	// point at was folded in on 2026-08-23), and its own subtitle promises "route
 	// Telegram chats into brnrd" — this is that promise, generalized to
 	// every door and given a mint control, not a new page.
 	//
@@ -31,10 +32,17 @@
 	// intentional) and the countdown is a first-class visual element with
 	// three distinct, named states (`messengerDoors.ts`'s `countdown`),
 	// not a number in parentheses.
-	import { onDestroy, untrack } from 'svelte';
+	import { onDestroy, onMount, untrack } from 'svelte';
 	import { DOCS_URL } from './publicStats';
-	import { fetchPairStatus, mintAccountMessengerPair } from './repos';
-	import type { MessengerDoor, MessengerPairStarted } from './repos';
+	import {
+		fetchPairStatus,
+		invalidatePairedChats,
+		isConnected,
+		loadSharedPairedChats,
+		mintAccountMessengerPair,
+		revokePairedChat
+	} from './repos';
+	import type { MessengerDoor, MessengerPairStarted, PairedChat } from './repos';
 	import {
 		countdown,
 		conversationLink,
@@ -57,11 +65,26 @@
 		// runtime default) reads the real clock; a test pins one instant
 		// to assert a specific countdown tier without waiting on a timer.
 		nowOverride?: number | null;
+		excludePlatforms?: string[];
+		heading?: string;
+		embedded?: boolean;
+		pairedChatsOverride?: PairedChat[];
 	}
 
-	let { doors, nowOverride = null }: Props = $props();
+	let {
+		doors,
+		nowOverride = null,
+		excludePlatforms = [],
+		heading = 'chat connectors',
+		embedded = false,
+		pairedChatsOverride
+	}: Props = $props();
 
-	const allDoors = $derived(orderedDoors(doors ?? []));
+	const allDoors = $derived(
+		orderedDoors(doors ?? []).filter(
+			(door) => door.reason !== 'not_built' && !excludePlatforms.includes(door.platform)
+		)
+	);
 
 	// `untrack` — this is a deliberate one-shot capture (the seed for a
 	// value the interval below mutates directly), not a reactive read of
@@ -83,6 +106,48 @@
 	let mintTtlSeconds = $state<Record<string, number>>({});
 	let mintFailedPlatforms = $state<Record<string, boolean>>({});
 	let pairedOutcomes = $state<Record<string, { display: string | null }>>({});
+	let pairedChats = $state<PairedChat[]>(untrack(() => pairedChatsOverride ?? []));
+	let confirming = $state<string | null>(null);
+	let revoking = $state<string | null>(null);
+	let revokeFailed = $state(false);
+
+	// `invalidate: true` busts the module-level cache before fetching —
+	// used after a successful pair or revoke so the wire is re-read rather
+	// than handing back the stale cache the next caller would get.
+	async function loadPairedChats(invalidate = false) {
+		try {
+			if (invalidate) invalidatePairedChats();
+			pairedChats = await loadSharedPairedChats();
+		} catch {
+			// The door inventory still carries an honest paired summary. A
+			// transient detail-fetch failure must not turn a connected door off.
+		}
+	}
+
+	onMount(() => {
+		if (pairedChatsOverride === undefined) loadPairedChats();
+	});
+
+	function chatsFor(platform: string): PairedChat[] {
+		return pairedChats.filter((chat) => chat.platform === platform && chat.paired);
+	}
+
+	async function revoke(chat: PairedChat) {
+		revoking = chat.id;
+		revokeFailed = false;
+		try {
+			await revokePairedChat(chat.id);
+			pairedChats = pairedChats.filter((candidate) => candidate.id !== chat.id);
+			// Drop the module-level cache so a sibling panel (or next mount)
+			// doesn't serve the revoked chat from the old cached list.
+			invalidatePairedChats();
+			confirming = null;
+		} catch {
+			revokeFailed = true;
+		} finally {
+			revoking = null;
+		}
+	}
 
 	const pollTimers: Record<string, ReturnType<typeof setTimeout>> = {};
 	const pollDeadlines: Record<string, number> = {};
@@ -105,6 +170,10 @@
 			const status = await fetchPairStatus(code);
 			if (status.consumed) {
 				pairedOutcomes = { ...pairedOutcomes, [platform]: { display: status.display } };
+				// Invalidate the shared cache so the next loadPairedChats()
+				// re-reads the wire — the wire wins, and this is the moment
+				// the poll outcome and the wire state must agree.
+				await loadPairedChats(/* invalidate */ true);
 				stopPolling(platform);
 				return;
 			}
@@ -152,21 +221,21 @@
 </script>
 
 {#if allDoors.length > 0}
-	<section class="panel mt-6 p-4" aria-labelledby="messenger-doors-heading">
+	<section class={embedded ? 'mt-4' : 'panel mt-6 p-4'} aria-labelledby="messenger-doors-heading">
 		<p class="eyebrow">messenger doors</p>
 		<h2
 			id="messenger-doors-heading"
 			class="font-mono text-lg font-semibold tracking-tight text-amber-100"
 		>
-			connect a chat
+			{heading}
 		</h2>
 		<p class="mt-1 max-w-2xl text-sm text-ink-quiet">
-			Every door brnrd can open a chat through — lit or not. A tapped link binds this account for a
-			few minutes, then dies on its own; re-mint any time, no need to wait for it to fail first.
+			Connect another chat to this account. Each link lives for a few minutes; re-mint it any time.
 		</p>
 
 		<div class="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
 			{#each allDoors as door (door.platform)}
+				{@const platformChats = chatsFor(door.platform)}
 				<div class="subpanel p-3" data-testid={`door-${door.platform}`}>
 					{#if door.deep_link_available}
 						{@const outcome = mintOutcomes[door.platform]}
@@ -188,22 +257,75 @@
 							</p>
 						</div>
 
-						{#if paired}
+						{#if isConnected(door, pairedChats) || !!paired}
 							<div
-								class="mt-3 border border-emerald-700/60 bg-emerald-950/30 p-4"
+								class="mt-3 border border-amber-700/60 bg-amber-950/30 p-4"
 								data-testid={`paired-${door.platform}`}
 								aria-live="polite"
 							>
 								<div class="flex items-center gap-2">
-									<span class="text-lg text-emerald-300" aria-hidden="true">✓</span>
-									<p class="font-mono text-base font-semibold text-emerald-100">connected</p>
+									<span class="text-lg text-amber-300" aria-hidden="true">✓</span>
+									<p class="font-mono text-base font-semibold text-amber-100">connected</p>
 								</div>
-								<p class="mt-2 text-sm text-stone-300">
-									{paired.display ?? 'Your chat'} is ready. Say hello to your resident.
-								</p>
+								{#if platformChats.length > 0}
+									<div class="mt-3 space-y-2">
+										{#each platformChats as chat (chat.id)}
+											<div
+												class="flex items-start justify-between gap-3 border-t border-amber-900/60 pt-2"
+												data-testid="paired-chat-row"
+											>
+												<div class="min-w-0">
+													<div class="flex items-center gap-2">
+														<span
+															class="inline-block h-2 w-2 shrink-0 rounded-full bg-amber-400"
+															aria-hidden="true"
+														></span>
+														<p class="truncate font-mono text-xs font-semibold text-amber-100">
+															{chat.principal_display ?? '(no name reported)'}
+														</p>
+													</div>
+													<p class="mt-1 truncate font-mono text-[10px] text-ink-quiet">
+														{chat.chat_title ? `${chat.chat_title} · ` : ''}{chat.repo_full_name
+															? `pinned to ${chat.repo_full_name}`
+															: 'auto-routed'}
+													</p>
+												</div>
+												<div class="flex shrink-0 items-center gap-2">
+													{#if confirming === chat.id}
+														<button
+															type="button"
+															class="cursor-pointer border border-red-900/60 bg-red-950/30 px-2 py-1 font-mono text-[10px] tracking-wide text-red-200 uppercase hover:bg-red-950/50 disabled:cursor-wait disabled:opacity-60"
+															disabled={revoking === chat.id}
+															onclick={() => revoke(chat)}
+															>{revoking === chat.id ? 'revoking' : 'confirm'}</button
+														>
+														<button
+															type="button"
+															class="cursor-pointer font-mono text-[10px] text-ink-quiet uppercase"
+															disabled={revoking === chat.id}
+															onclick={() => (confirming = null)}>cancel</button
+														>
+													{:else}
+														<button
+															type="button"
+															class="cursor-pointer font-mono text-[10px] tracking-wide text-ink-quiet uppercase underline hover:text-stone-300"
+															onclick={() => (confirming = chat.id)}
+															data-testid="revoke-open">revoke</button
+														>
+													{/if}
+												</div>
+											</div>
+										{/each}
+									</div>
+								{:else}
+									<p class="mt-2 text-sm text-stone-300">
+										{paired?.display ?? door.paired_display ?? 'Your chat'} is ready. Say hello to your
+										resident.
+									</p>
+								{/if}
 								{#if chatLink}
 									<a
-										class="mt-4 flex min-h-11 w-full items-center justify-center border border-emerald-500/70 bg-emerald-900/50 px-4 py-3 font-mono text-sm font-semibold tracking-wide text-emerald-50 uppercase hover:bg-emerald-800/60"
+										class="mt-4 flex min-h-11 w-full items-center justify-center border border-amber-700/70 bg-amber-950/30 px-4 py-3 font-mono text-sm font-semibold tracking-wide text-amber-100 uppercase hover:bg-amber-950/50"
 										href={chatLink}
 										target="_blank"
 										rel="external noreferrer"
@@ -218,6 +340,11 @@
 								disabled={mintingPlatform === door.platform}
 								>{mintingPlatform === door.platform ? 'minting…' : 'connect another chat'}</button
 							>
+							{#if revokeFailed}
+								<p class="mt-2 text-sm text-red-300" data-testid="revoke-error">
+									Couldn't revoke — try again.
+								</p>
+							{/if}
 						{:else if outcome && cd}
 							<!-- The countdown: a designed element with three
 							     distinct states, not a number in parens. -->
@@ -239,7 +366,7 @@
 									<button
 										type="button"
 										data-testid={`remint-${door.platform}`}
-										class="mt-2 inline-flex cursor-pointer items-center border border-amber-800/50 bg-amber-950/20 px-3 py-2 font-mono text-[11px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/40 hover:text-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+										class="mt-2 inline-flex cursor-pointer items-center border border-sky-700/70 bg-sky-950/30 px-3 py-2 font-mono text-[11px] tracking-wide text-sky-200 uppercase hover:bg-sky-900/40 hover:text-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
 										onclick={() => mint(door.platform)}
 										disabled={mintingPlatform === door.platform}
 										>{mintingPlatform === door.platform
@@ -269,7 +396,7 @@
 									<div class="mt-2 flex flex-wrap items-center gap-3">
 										{#if outcome.deep_link}
 											<a
-												class="inline-flex cursor-pointer items-center border border-amber-800/50 bg-amber-950/20 px-3 py-2 font-mono text-[11px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/40 hover:text-amber-100"
+												class="inline-flex cursor-pointer items-center border border-sky-700/70 bg-sky-950/30 px-3 py-2 font-mono text-[11px] tracking-wide text-sky-200 uppercase hover:bg-sky-900/40 hover:text-sky-100"
 												href={outcome.deep_link}
 												target="_blank"
 												rel="external noreferrer"
@@ -297,14 +424,20 @@
 								{/if}
 							</div>
 						{:else}
+							<!-- One sentence, one platform. This line used to name *both*
+							     platforms in *every* tile, so a reader with two doors on
+							     screen read "Telegram/WhatsApp open the app directly" twice
+							     and learned nothing either time. The panel's own
+							     description above already says what a link is and how long
+							     it lives; what belongs in the tile is only what is true of
+							     this door. -->
 							<p class="mt-1.5 text-sm text-stone-300">
-								Tap to mint a link that binds this account — Telegram/WhatsApp open the app
-								directly.
+								Opens {doorLabel(door.platform)} directly.
 							</p>
 							<button
 								type="button"
 								data-testid={`connect-${door.platform}`}
-								class="mt-2 inline-flex cursor-pointer items-center border border-amber-800/50 bg-amber-950/20 px-3 py-2 font-mono text-[11px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/40 hover:text-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+								class="mt-2 inline-flex cursor-pointer items-center border border-sky-700/70 bg-sky-950/30 px-3 py-2 font-mono text-[11px] tracking-wide text-sky-200 uppercase hover:bg-sky-900/40 hover:text-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
 								onclick={() => mint(door.platform)}
 								disabled={mintingPlatform === door.platform}
 								>{mintingPlatform === door.platform

@@ -125,7 +125,7 @@
 						</p>
 						{#if bubble.kind === 'receipt'}
 							<div
-								class="subpanel border-l-2 border-l-emerald-700/60 px-3 py-2 text-xs leading-relaxed"
+								class="subpanel border-l-2 border-l-amber-700/60 px-3 py-2 text-xs leading-relaxed"
 							>
 								<div class="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-stone-300">
 									{#each CHIPS as chip (chip.href)}
@@ -140,7 +140,7 @@
 								<!-- No test count here on purpose. The number that would go in
 							     this slot grows every week, so a figure baked into the
 							     markup is a slow lie; the two facts below do not move. -->
-								<p class="mt-1.5 font-mono text-emerald-400">
+								<p class="mt-1.5 font-mono text-amber-300">
 									✓ gate green — merged, deployed 21:51 CEST
 								</p>
 							</div>
