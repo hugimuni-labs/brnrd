@@ -116,16 +116,22 @@ _MONTH_ABBR = {
     "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
 }
 
-# Two shapes seen live: undated session resets ("11:59pm (Europe/Berlin)")
-# and dated week resets ("Jul 10, 12am (Europe/Berlin)") — no year either way.
-_RESET_EPOCH_RE = re.compile(
-    r"^(?:(?P<mon>[A-Za-z]{3})\s+(?P<day>\d{1,2}),\s*)?"
-    r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>am|pm)\s*"
-    r"\((?P<zone>[^)]+)\)$",
+# The reset string is scanned for its three *parts* rather than matched against
+# a list of whole-string shapes. The list lost: it named two literal layouts
+# ("11:59pm (Europe/Berlin)" and "Jul 10, 12am (Europe/Berlin)"), Anthropic's
+# panel copy moved the comma to the word "at" ("Aug 29 at 2pm (Europe/Paris)",
+# live 2026-08-24), and every dated window silently lost its epoch — the
+# dashboard kept the bar and dropped the countdown with nothing saying why.
+# Zone, date, and time are independent needles now, so punctuation and
+# connective words between them are not part of the contract.
+_RESET_ZONE_RE = re.compile(r"\(\s*(?P<zone>[^()]+?)\s*\)\s*$")
+_RESET_DATE_RE = re.compile(
+    r"\b(?P<mon>jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+"
+    r"(?P<day>\d{1,2})\b",
     re.IGNORECASE,
 )
-_DATE_ONLY_RESET_RE = re.compile(
-    r"^(?P<mon>[A-Za-z]{3})\s+(?P<day>\d{1,2})\s*\((?P<zone>[^)]+)\)$",
+_RESET_TIME_RE = re.compile(
+    r"\b(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>am|pm)\b",
     re.IGNORECASE,
 )
 _CREDIT_SPEND_RE = re.compile(
@@ -150,52 +156,68 @@ def _reset_epoch(reset_text: str | None, *, now: datetime | None = None) -> floa
     """Best-effort UTC epoch for a TUI-scraped reset string, or ``None``.
 
     Claude's ``/usage`` panel never gives a raw epoch the way Codex's
-    session rollout does (``codex_status._fmt_reset``) — only free text, in
-    two different shapes: the session (5h) reset carries no date
-    (``"11:59pm (Europe/Berlin)"``), the week reset carries month+day but no
-    year (``"Jul 10, 12am (Europe/Berlin)"``). This computes the next future
-    occurrence of that wall-clock time in that zone rather than parsing a
-    year that isn't there. Never raises — any parse or zone failure is
-    ``None``, not a guess.
+    session rollout does (``codex_status._fmt_reset``) — only free text, and
+    the text is Anthropic's own prose, edited without notice. So this reads
+    the *parts* it needs and ignores the joinery: a trailing ``(Zone)``, an
+    optional month+day, an optional am/pm clock time. All three of these are
+    the same instant to this function::
+
+        "11:59pm (Europe/Berlin)"          # session, undated
+        "Jul 10, 12am (Europe/Berlin)"     # week, comma form
+        "Aug 29 at 2pm (Europe/Paris)"     # week, "at" form (live 2026-08-24)
+
+    The year is never in the source text, so this computes the next future
+    occurrence of that wall-clock instant in that zone. Never raises — any
+    parse or zone failure is ``None``, not a guess, and a non-empty string
+    that yields nothing is logged rather than dropped in silence.
     """
     if not reset_text:
         return None
     text = reset_text.strip()
     now = now if now is not None else datetime.now(timezone.utc)
-    match = _RESET_EPOCH_RE.match(text)
-    date_only_match = None if match else _DATE_ONLY_RESET_RE.match(text)
-    if not match and not date_only_match:
+
+    zone_match = _RESET_ZONE_RE.search(text)
+    if not zone_match:
+        _log_unparsed_reset(text, "no trailing (zone)")
         return None
-    zone_name = (match or date_only_match).group("zone").strip()
     try:
-        zone = ZoneInfo(zone_name)
+        zone = ZoneInfo(zone_match.group("zone"))
     except Exception:
+        _log_unparsed_reset(text, "unknown zone")
         return None
+
+    body = text[: zone_match.start()]
+    date_match = _RESET_DATE_RE.search(body)
+    # Look for the clock time after the date when both are present, so a day
+    # number can never be read as an hour.
+    time_match = _RESET_TIME_RE.search(body, date_match.end() if date_match else 0)
+    if not date_match and not time_match:
+        _log_unparsed_reset(text, "neither a date nor a time")
+        return None
+
     now_local = now.astimezone(zone)
     hour = 0
     minute = 0
-    if match:
-        hour = int(match.group("hour"))
-        minute = int(match.group("minute") or 0)
+    if time_match:
+        hour = int(time_match.group("hour"))
+        minute = int(time_match.group("minute") or 0)
         if not (1 <= hour <= 12) or not (0 <= minute <= 59):
+            _log_unparsed_reset(text, "clock time out of range")
             return None
-        if match.group("ampm").lower() == "am":
+        if time_match.group("ampm").lower() == "am":
             hour = 0 if hour == 12 else hour
         else:
             hour = 12 if hour == 12 else hour + 12
 
-    match = match or date_only_match
-    mon, day = match.group("mon"), match.group("day")
-    if mon:
-        month = _MONTH_ABBR.get(mon.strip().lower())
-        if month is None:
-            return None
+    if date_match:
+        month = _MONTH_ABBR[date_match.group("mon")[:3].lower()]
         try:
             candidate = now_local.replace(
-                month=month, day=int(day), hour=hour, minute=minute,
-                second=0, microsecond=0,
+                month=month, day=int(date_match.group("day")),
+                hour=hour, minute=minute, second=0, microsecond=0,
             )
         except ValueError:
+            _log_unparsed_reset(text, "no such day in the named month")
             return None
         # No year in the source text: a result more than 2 days in the past
         # means the reset is actually next year (a week-boundary date named
@@ -211,6 +233,17 @@ def _reset_epoch(reset_text: str | None, *, now: datetime | None = None) -> floa
             candidate = candidate + timedelta(days=1)
 
     return candidate.astimezone(timezone.utc).timestamp()
+
+
+def _log_unparsed_reset(text: str, why: str) -> None:
+    """A reset string the panel *did* print and this module could not read.
+
+    Worth a line of its own: downstream, an unparsed reset and a daemon too
+    old to send one are byte-identical — the countdown simply is not there.
+    Anthropic edits this copy without notice, so the next shape change should
+    leave a trail instead of only a missing chip.
+    """
+    logger.warning("claude /usage: unparseable reset string %r (%s)", text, why)
 
 
 def _reset_text(line: str) -> str | None:
