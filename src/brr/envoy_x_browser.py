@@ -128,6 +128,13 @@ LOGIN_URL = "https://x.com/login"
 HOME_URL = "https://x.com/home"
 SEARCH_URL = "https://x.com/search"
 COMPOSE_URL = "https://x.com/compose/post"
+#: The mentions-only tab, narrower than the full Notifications feed (which
+#: also carries likes/follows/reposts noise) and the only notification
+#: surface this envoy has any verb for — the metered API lane
+#: (``envoy_x.run_read``) has been dead since 2026-08-17 and there is
+#: otherwise no code path in this repo that can read what's sitting in the
+#: account's Notifications bell.
+NOTIFICATIONS_MENTIONS_URL = "https://x.com/notifications/mentions"
 
 #: X's search tabs, as the `f=` parameter names them. `live` is Latest —
 #: reverse-chronological, unfiltered, and what this verb has always used;
@@ -142,6 +149,11 @@ SEARCH_TABS = {"live": "live", "top": "top"}
 # one at the CLI, so the cost of waiting too long is a slow command and the
 # cost of waiting too little is a lie.
 SEARCH_RESULT_TIMEOUT_MS = 15000
+#: Same generous wait, same reason, for the mentions feed
+#: (brnrd#1470 was this exact bug: `count()` does not auto-wait, so a
+#: client-side feed read at `domcontentloaded` counts 0 articles and an
+#: empty page is indistinguishable from a real "nothing new" at the CLI).
+MENTIONS_RESULT_TIMEOUT_MS = 15000
 
 #: The narrower of X's two cookie-banner answers. Named rather than inlined
 #: because it is a *choice made inside someone else's account*, and a choice
@@ -177,6 +189,7 @@ Usage: envoy-x-browser login
        envoy-x-browser check [--json]
        envoy-x-browser read <url> [--json]
        envoy-x-browser search <query> [--top] [--json]
+       envoy-x-browser mentions [--json]
        envoy-x-browser draft <url> --text "<s>"
        envoy-x-browser send <url> --text "<s>" --confirm [--form <label>]
        envoy-x-browser draft-post --text "<s>"
@@ -222,6 +235,16 @@ Default is X's *Latest* tab — reverse-chronological, everything that
 matched, however small. `--top` asks for X's *Top* tab instead: ranked by
 engagement, which is the only one of the two that answers "what is
 actually being read about this right now."\
+"""
+
+MENTIONS_USAGE = """\
+Usage: envoy-x-browser mentions [--json]
+
+Returns structured results for the mentions tab
+(x.com/notifications/mentions): author, text, permalink, timestamp when
+the DOM exposes one cheaply. Read-only, no new write path — a substitute
+mention source for the browser lane while the metered API's mentions read
+(`x-read.py`) is dead.\
 """
 
 DRAFT_USAGE = """\
@@ -754,6 +777,54 @@ class _PlaywrightDriver:
             })
         return rows
 
+    def mentions(self) -> list[dict[str, Any]]:
+        """Structured rows for the mentions-only notifications tab.
+
+        Same client-side-render trap as :meth:`search`, same fix: X renders
+        this feed via JS after `domcontentloaded`, so a bare `count()` here
+        answers 0 on every real page — indistinguishable from a genuine
+        "nothing new," which is exactly the bug `search` shipped with
+        (brnrd#1470) and the one this verb exists to not repeat. Wait for
+        the first article before counting; a real empty mentions tab still
+        times out here and still returns `[]`, honestly.
+
+        Mentions render as the same `article[data-testid="tweet"]` cells
+        the timeline and search results use, so the author/text/permalink
+        scrape is the same shape as :meth:`search`'s, plus a timestamp
+        (cheap: already on the article as a `<time datetime=…>`, the way
+        :meth:`read_url` reads it). X's notifications markup does not
+        expose a structural mention-vs-reply distinction the way it
+        exposes the action-bar metrics :meth:`_scrape_metrics` walks, so no
+        `kind` field is guessed at here — the task named it a bonus, not a
+        requirement, and an invented kind is worse than an absent one.
+        """
+        self._page.goto(NOTIFICATIONS_MENTIONS_URL, wait_until="domcontentloaded")
+        articles = self._page.locator('article[data-testid="tweet"]')
+        try:
+            articles.first.wait_for(state="visible", timeout=MENTIONS_RESULT_TIMEOUT_MS)
+        except Exception:  # noqa: BLE001 - a real empty tab, or a render this hasn't seen
+            return []
+        rows = []
+        for i in range(min(articles.count(), 20)):
+            article = articles.nth(i)
+            timestamp = None
+            try:
+                timestamp = article.locator("time").first.get_attribute(
+                    "datetime", timeout=2000
+                )
+            except Exception:  # noqa: BLE001 - honest absence, not fatal to the row
+                pass
+            rows.append({
+                "author": self._first_text(article, '[data-testid="User-Name"]'),
+                "text": self._first_text(article, '[data-testid="tweetText"]'),
+                # The permalink, for the same reason `search` carries one:
+                # an item a caller cannot `read`/reply to individually is
+                # not useful as a list member.
+                "url": self._status_url(article),
+                "timestamp": timestamp,
+            })
+        return rows
+
     def _status_url(self, article: Any) -> str | None:
         """The `/status/<id>` permalink for one rendered article, or ``None``.
 
@@ -1080,6 +1151,21 @@ def _run_search(args: list[str], paths: Paths, factory: DriverFactory) -> None:
     print(json.dumps(rows))
 
 
+def _run_mentions(args: list[str], paths: Paths, factory: DriverFactory) -> None:
+    if "-h" in args or "--help" in args:
+        raise SystemExit(MENTIONS_USAGE.strip())
+    _refuse_if_killed(paths)
+    rest = [a for a in args if a != "--json"]
+    if rest:
+        raise SystemExit(
+            MENTIONS_USAGE.strip() + "\n(no positional arguments expected)"
+        )
+    with factory(paths, headless=True) as driver:
+        _require_session(driver, "mentions")
+        rows = driver.mentions()
+    print(json.dumps(rows))
+
+
 def _run_draft(args: list[str], paths: Paths, factory: DriverFactory) -> None:
     if "-h" in args or "--help" in args:
         raise SystemExit(DRAFT_USAGE.strip())
@@ -1216,6 +1302,7 @@ _VERBS: dict[str, Callable[[list[str], Paths, DriverFactory], None]] = {
     "check": _run_check,
     "read": _run_read,
     "search": _run_search,
+    "mentions": _run_mentions,
     "draft": _run_draft,
     "send": _run_send,
     "draft-post": _run_draft_post,
