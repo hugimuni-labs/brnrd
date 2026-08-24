@@ -830,3 +830,55 @@ def test_carry_forward_says_it_carried_when_an_older_same_plan_reading_serves(ca
     line = next(r.message for r in caplog.records if "plan changed" in r.message)
     assert "carried from an older same-plan reading instead" in line
     assert "refusing to carry" not in line
+
+
+def test_reset_epoch_reads_the_at_form_the_panel_switched_to():
+    # Live capture 2026-08-24: Anthropic's panel moved the week reset from
+    # "Aug 29, 2pm" to "Aug 29 at 2pm". The comma was never the contract.
+    zone = claude_usage.ZoneInfo("Europe/Paris")
+    now = datetime(2026, 8, 24, 11, 40, tzinfo=timezone.utc)
+    assert claude_usage._reset_epoch("Aug 29 at 2pm (Europe/Paris)", now=now) == (
+        datetime(2026, 8, 29, 14, 0, tzinfo=zone).timestamp()
+    )
+    assert claude_usage._reset_epoch("Aug 29 at 1:59pm (Europe/Paris)", now=now) == (
+        datetime(2026, 8, 29, 13, 59, tzinfo=zone).timestamp()
+    )
+
+
+def test_reset_epoch_day_number_is_never_read_as_the_hour():
+    # "Aug 29 at 2pm" carries two numbers; the clock scan starts after the
+    # date so 29 can never become an hour, and a date-only string stays
+    # midnight rather than borrowing its own day number.
+    now = datetime(2026, 8, 24, 11, 40, tzinfo=timezone.utc)
+    zone = claude_usage.ZoneInfo("Europe/Paris")
+    assert claude_usage._reset_epoch("Aug 29 (Europe/Paris)", now=now) == (
+        datetime(2026, 8, 29, 0, 0, tzinfo=zone).timestamp()
+    )
+
+
+def test_reset_epoch_rejects_an_impossible_calendar_day():
+    assert claude_usage._reset_epoch("Feb 30, 1am (Europe/Paris)") is None
+
+
+def test_parse_usage_text_gives_the_week_window_an_epoch_in_the_at_form():
+    # The regression the dashboard showed: the bar kept its percentage and the
+    # countdown chip vanished, because `week_resets_at` alone went None while
+    # `week_reset` still carried the text. Drive the real captured panel.
+    levels = claude_usage.parse_usage_text(
+        "Current session\n2% 2% used\nResets 5:40pm (Europe/Paris)\n"
+        "Current week (all models)\n16% 16% used\n"
+        "Resets Aug 29 at 1:59pm (Europe/Paris)\n"
+        "Current week (Fable)\n9% 9% used\n"
+        "Resets Aug 29 at 1:59pm (Europe/Paris)\n"
+    )
+
+    assert levels["week_reset"] == "Aug 29 at 1:59pm (Europe/Paris)"
+    assert isinstance(levels["week_resets_at"], float)
+    assert isinstance(levels["session_resets_at"], float)
+    assert isinstance(levels["week_models"]["Fable"]["resets_at"], float)
+    # Same instant as the primary week window ⇒ elided from the summary.
+    assert levels["quota"]["summary"] == (
+        "session 98% left (resets 5:40pm (Europe/Paris)); "
+        "week 84% left (resets Aug 29 at 1:59pm (Europe/Paris)); "
+        "Fable week 91% left"
+    )
