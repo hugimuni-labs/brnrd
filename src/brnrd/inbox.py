@@ -819,7 +819,13 @@ def record_response(db: Session, *, repo_id: str, event_id: str, body_markdown: 
 _EVENT_BODY_TTL = timedelta(days=14)
 _EVENT_ROW_TTL = timedelta(days=90)
 _GC_INTERVAL_S = 3600.0
-_gc_state = {"at": 0.0}
+# `time.monotonic()`'s epoch is unspecified — commonly seconds since host
+# boot on Linux, so on a freshly-booted CI runner (uptime under an hour)
+# the raw value itself can sit under `_GC_INTERVAL_S`. `0.0` as "never run"
+# assumed the epoch was process-start-relative; it is not, and
+# `tick - 0.0 < _GC_INTERVAL_S` then throttles the very first call.
+# `-inf` is correct for any epoch: `tick - (-inf)` is always `+inf`.
+_gc_state = {"at": float("-inf")}
 
 #: brnrd#1388 default — see `RESPONSE_STATUS_EXPIRED` and
 #: `config.Settings.inbox_stale_event_horizon_hours` (the live override
@@ -830,8 +836,14 @@ _STALE_EVENT_HORIZON_DEFAULT = timedelta(hours=48.0)
 
 
 def reset_gc_throttle() -> None:
-    """Test seam: allow the next gc_events call to run."""
-    _gc_state["at"] = 0.0
+    """Test seam: allow the next gc_events call to run.
+
+    `-inf`, not `0.0` — see the comment on `_gc_state`'s definition. A
+    caller on a low-uptime host that reset to `0.0` here would still get
+    throttled on the very next call, which is exactly backwards for a
+    "make sure the next call runs" seam.
+    """
+    _gc_state["at"] = float("-inf")
 
 
 def _expire_stale_queued(db: Session, *, now: datetime, horizon: timedelta) -> int:
