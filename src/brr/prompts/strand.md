@@ -95,7 +95,7 @@ this very block first. Assume it is coming for you.)
   the same file saved for the closing act is the file five strands on this
   account have died owing (#1136, #1087). Same for the first commit.
 
-Done ⇒ reply as any addressed run: the turn frame in `weave.md` §The turn
+Done ⇒ reply as any addressed run: the briefing in `weave.md` §The turn
 applies to you unchanged — follow it there, nothing new here. Say what you
 did or changed; name any blocker plainly rather than guessing past it.
 Your reader is your dispatcher, holding the whole cloth you are one thread
