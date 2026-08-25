@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .model import ConsoleSnapshot, RunView, collect_snapshot
+from .model import Boundary, ConsoleSnapshot, RunView, collect_snapshot
 
 
 def _clock(value: str) -> str:
@@ -124,6 +124,50 @@ def _edges(run: RunView | None) -> str:
     return "\n".join(lines).rstrip()
 
 
+#: Stable act → color map, keyed by `hooks.ACT_LABELS` (orient/probe/mutate/
+#: publish/dispatch/wait) — one CSS class per act so a wall of boundaries
+#: reads as a colored rhythm instead of identical lines. An act outside this
+#: set (blank, or a future label this console hasn't caught up to) gets the
+#: neutral "act-unknown" class rather than silently inheriting a color that
+#: means something else.
+_ACT_CSS_CLASS = {act: f"act-{act}" for act in ("orient", "probe", "mutate", "publish", "dispatch", "wait")}
+_ACT_UNKNOWN_CLASS = "act-unknown"
+
+
+def _edge_css_class(edge: Boundary) -> str:
+    """CSS class(es) for one boundary's Collapsible: act color + blocked flag."""
+    base = _ACT_CSS_CLASS.get(edge.act, _ACT_UNKNOWN_CLASS)
+    return f"{base} act-blocked" if edge.block else base
+
+
+def _edge_title(edge: Boundary) -> str:
+    """One compact line — the Collapsible header shown while collapsed."""
+    tool_names = edge.raw.get("tools") or []
+    first_tool = str(tool_names[0]) if tool_names else ""
+    detail_parts = [p for p in (first_tool, edge.detail) if p]
+    if edge.out_bytes >= 0:
+        detail_parts.append(f"out {_fmt_bytes(edge.out_bytes)}")
+    detail_suffix = f"  {' · '.join(detail_parts)}" if detail_parts else ""
+    flag = "  ⛔ BLOCKED" if edge.block else ""
+    act = edge.act or "·"
+    return f"{_clock(edge.at)}  #{edge.seq:<3} {act:<8} {edge.phase}{detail_suffix}{flag}"
+
+
+def _edge_body(edge: Boundary) -> str:
+    """Full inject/block-reason text — the Collapsible content when expanded."""
+    lines: list[str] = []
+    if edge.inject:
+        inject = edge.inject.rstrip()
+        if len(inject) > 1800:
+            inject = inject[:1800].rstrip() + "\n… elided in console projection"
+        lines.extend(inject.splitlines())
+    else:
+        lines.append("silent — nothing injected")
+    if edge.block_reason:
+        lines.append(f"! {edge.block_reason}")
+    return "\n".join(lines)
+
+
 #: Rough bytes-per-token heuristic for English/Markdown prose. A heuristic,
 #: not a measurement — the table says so where it uses it.
 _BYTES_PER_TOKEN = 4
@@ -173,6 +217,71 @@ def _wake_topology_table(blocks: list[dict[str, Any]]) -> str:
         "cached prefixes re-bill far cheaper"
     )
     return header + "\n" + "\n".join(rows) + "\n" + footer
+
+
+def _wake_header(run: RunView) -> str:
+    """The always-visible preamble above WAKE's grouped block sections."""
+    prompt_bytes = len(run.prompt.encode("utf-8")) if run.prompt else 0
+    return (
+        f"{run.run_id} · exact daemon → runner payload · {prompt_bytes:,} B\n"
+        "This is what brnrd supplied, not a claim about the Shell's final model context."
+    )
+
+
+def _wake_block_title(block: dict[str, Any]) -> str:
+    """Collapsed-view header for one manifest block: name + byte size."""
+    name = str(block.get("name") or "?")
+    if not block.get("present"):
+        return f"{name}  ·  absent"
+    kept = block.get("bytes_kept")
+    kept_str = f"{kept:,} B" if isinstance(kept, int) else "— B"
+    return f"{name}  ·  {kept_str}"
+
+
+def _wake_block_detail(block: dict[str, Any]) -> str:
+    """Expanded content for one manifest block: everything the manifest knows about it.
+
+    No per-block raw prompt text exists to show — `wake-manifest.json` records
+    accounting (bytes/source/trim), not a byte range into `prompt.md` — so the
+    expanded view is that accounting, not archaeology the manifest can't back.
+    """
+    sources = block.get("sources") or []
+    if sources and sources[0].get("synthesized"):
+        store = "synthesized"
+        source_line = "synthesized — computed at wake time, no source file"
+    else:
+        src = sources[0] if sources else {}
+        store = str(src.get("store") or "?")
+        source_line = str(src.get("path") or "—")
+    kept = block.get("bytes_kept")
+    cut = block.get("bytes_cut")
+    budget = block.get("budget_bytes")
+    trim = block.get("trim_kind")
+    lines = [str(block.get("label") or "")] if block.get("label") else []
+    lines += [
+        f"store   {store}",
+        f"source  {source_line}",
+        f"kept    {kept:,} B" if isinstance(kept, int) else "kept    —",
+        f"≈tok    {kept // _BYTES_PER_TOKEN:,}" if isinstance(kept, int) else "≈tok    —",
+        f"cut     {cut:,} B" if isinstance(cut, int) else "cut     —",
+        f"budget  {budget:,} B" if isinstance(budget, int) else "budget  —",
+        f"trim    {trim or '—'}",
+    ]
+    return "\n".join(lines)
+
+
+def _wake_footer(blocks: list[dict[str, Any]]) -> str:
+    """Σ kept + the same ≈tok heuristic disclosure `_wake_topology_table` states."""
+    total_kept = sum(
+        block["bytes_kept"]
+        for block in blocks
+        if block.get("present") and isinstance(block.get("bytes_kept"), int)
+    )
+    return (
+        f"Σ kept  {total_kept:,} B  ·  ≈{total_kept // _BYTES_PER_TOKEN:,} tok\n"
+        f"≈tok = bytes/{_BYTES_PER_TOKEN} (heuristic) · price ≈ tok × the core's input rate · "
+        "cached prefixes re-bill far cheaper"
+    )
 
 
 def _wake(run: RunView | None) -> str:
@@ -465,8 +574,16 @@ def build_console_app() -> type:
     try:
         from textual.app import App, ComposeResult
         from textual.binding import Binding
-        from textual.containers import Horizontal, Vertical
-        from textual.widgets import DataTable, Footer, RichLog, Static, TabbedContent, TabPane
+        from textual.containers import Horizontal, Vertical, VerticalScroll
+        from textual.widgets import (
+            Collapsible,
+            DataTable,
+            Footer,
+            RichLog,
+            Static,
+            TabbedContent,
+            TabPane,
+        )
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError(
             "operator console needs the optional TUI dependency; install with "
@@ -504,6 +621,21 @@ def build_console_app() -> type:
         }
         DataTable { background: #0d0c0a; }
         Footer { background: #15120e; }
+        #edge-log, #wake-log { background: #0d0c0a; padding: 0 1; }
+        Collapsible { padding-bottom: 0; background: #0d0c0a; border-top: none; }
+        CollapsibleTitle { color: #a99f8c; }
+        /* act → color, keyed by hooks.ACT_LABELS — a wall of boundaries reads
+           as a colored rhythm instead of a log dump. */
+        Collapsible.act-orient CollapsibleTitle { color: #6ec6ff; }
+        Collapsible.act-probe CollapsibleTitle { color: #8fd6c4; }
+        Collapsible.act-mutate CollapsibleTitle { color: #d3a75e; }
+        Collapsible.act-publish CollapsibleTitle { color: #7fbf7f; }
+        Collapsible.act-dispatch CollapsibleTitle { color: #c792ea; }
+        Collapsible.act-wait CollapsibleTitle { color: #8e806c; }
+        Collapsible.act-unknown CollapsibleTitle { color: #a99f8c; }
+        /* Blocked overrides act color — always the alarm, whatever the act. */
+        Collapsible.act-blocked CollapsibleTitle { color: #e06c75; text-style: bold; }
+        Collapsible.wake-absent CollapsibleTitle { color: #6b6153; text-style: italic; }
         """
         BINDINGS = [
             Binding("q", "quit", "quit"),
@@ -527,6 +659,14 @@ def build_console_app() -> type:
             self._last_content: dict[str, str] = {}
             # Whether the PORTALS pane shows raw JSON (toggled with `j`).
             self._portals_show_raw: bool = False
+            # EDGE/WAKE rebuild their Collapsible trees only when content
+            # changes (see _render_edges/_render_wake); expand state is
+            # tracked here, keyed by run id, so a rebuild never re-collapses
+            # a section the operator opened. EDGE keys by boundary seq
+            # (stable — boundaries.jsonl only appends); WAKE keys by block
+            # name plus the sentinel "__raw__" for the raw-prompt section.
+            self._edge_expanded: dict[str, set[int]] = {}
+            self._wake_expanded: dict[str, set[str]] = {}
             # Run ids in current table row order — lets the cursor follow the
             # row it was on across rebuilds (browsing), not just the selection.
             self._row_ids: list[str] = []
@@ -541,9 +681,9 @@ def build_console_app() -> type:
                 with Vertical(id="center"):
                     with TabbedContent(initial="edge"):
                         with TabPane("EDGE", id="edge"):
-                            yield RichLog(id="edge-log", wrap=True, markup=False, auto_scroll=False)
+                            yield VerticalScroll(id="edge-log")
                         with TabPane("WAKE", id="wake"):
-                            yield RichLog(id="wake-log", wrap=False, markup=False, auto_scroll=False)
+                            yield VerticalScroll(id="wake-log")
                         with TabPane("BOOT", id="boot"):
                             yield RichLog(id="boot-log", wrap=True, markup=False, auto_scroll=False)
                         with TabPane("PORTALS", id="portals"):
@@ -581,6 +721,99 @@ def build_console_app() -> type:
             if was_at_end:
                 log.scroll_end(animate=False)
             self._last_content[selector] = text
+
+        def _render_edges(self, run: RunView | None) -> None:
+            # _edges(run) is not rendered here — reused only as a cheap
+            # change signature so an unchanged boundary list skips the
+            # rebuild entirely, the same no-op-skip _set_log gives RichLog
+            # panes. The actual Collapsible tree is built from run.boundaries
+            # directly, one compact colored line each, since that's the only
+            # shape that can carry both a title and hidden detail content.
+            sig = _edges(run)
+            if self._last_content.get("#edge-log") == sig:
+                return
+            container = self.query_one("#edge-log", VerticalScroll)
+            was_at_end = container.is_vertical_scroll_end
+            container.remove_children()
+            if run is None:
+                container.mount(Static("Nothing awake."))
+            elif not run.boundaries:
+                container.mount(Static(f"{run.run_id}\n\nNo recorded boundary fires yet."))
+            else:
+                expanded = self._edge_expanded.setdefault(run.run_id, set())
+                nodes = []
+                for edge in run.boundaries[-100:]:
+                    node = Collapsible(
+                        Static(_edge_body(edge), markup=False),
+                        title=_edge_title(edge),
+                        collapsed=edge.seq not in expanded,
+                        classes=_edge_css_class(edge),
+                    )
+                    node.edge_seq = edge.seq  # recovered in on_collapsible_toggled
+                    nodes.append(node)
+                container.mount_all(nodes)
+            if was_at_end:
+                container.scroll_end(animate=False)
+            self._last_content["#edge-log"] = sig
+
+        def _render_wake(self, run: RunView | None) -> None:
+            # Same reuse-as-signature move as _render_edges: _wake(run) drives
+            # only the skip-if-unchanged check.
+            sig = _wake(run)
+            if self._last_content.get("#wake-log") == sig:
+                return
+            container = self.query_one("#wake-log", VerticalScroll)
+            was_at_end = container.is_vertical_scroll_end
+            container.remove_children()
+            if run is None:
+                container.mount(Static("No selected run."))
+            elif not run.prompt:
+                container.mount(Static(f"{run.run_id}\n\nNo prompt.md captured."))
+            else:
+                container.mount(Static(_wake_header(run)))
+                expanded = self._wake_expanded.setdefault(run.run_id, set())
+                if run.wake_manifest:
+                    nodes = []
+                    for block in run.wake_manifest:
+                        name = str(block.get("name") or "?")
+                        node = Collapsible(
+                            Static(_wake_block_detail(block), markup=False),
+                            title=_wake_block_title(block),
+                            collapsed=name not in expanded,
+                            classes="" if block.get("present") else "wake-absent",
+                        )
+                        node.wake_block_name = name
+                        nodes.append(node)
+                    container.mount_all(nodes)
+                    container.mount(Static(_wake_footer(run.wake_manifest)))
+                else:
+                    container.mount(Static("no manifest (pre-manifest run)"))
+                raw_bytes = len(run.prompt.encode("utf-8"))
+                raw_node = Collapsible(
+                    Static(run.prompt, markup=False),
+                    title=f"RAW PROMPT.MD  ·  {raw_bytes:,} B",
+                    collapsed="__raw__" not in expanded,
+                )
+                raw_node.wake_block_name = "__raw__"
+                container.mount(raw_node)
+            if was_at_end:
+                container.scroll_end(animate=False)
+            self._last_content["#wake-log"] = sig
+
+        def on_collapsible_toggled(self, event: Collapsible.Toggled) -> None:
+            """Track expand state so the next rebuild doesn't re-collapse it."""
+            node = event.collapsible
+            run = self.snapshot.selected if self.snapshot else None
+            run_id = run.run_id if run else ""
+            seq = getattr(node, "edge_seq", None)
+            if seq is not None:
+                expanded = self._edge_expanded.setdefault(run_id, set())
+                expanded.discard(seq) if node.collapsed else expanded.add(seq)
+                return
+            name = getattr(node, "wake_block_name", None)
+            if name is not None:
+                expanded = self._wake_expanded.setdefault(run_id, set())
+                expanded.discard(name) if node.collapsed else expanded.add(name)
 
         def _poll(self) -> None:
             try:
@@ -631,8 +864,8 @@ def build_console_app() -> type:
                     table.move_cursor(row=chosen_row)
 
             self.query_one("#attention", Static).update(_attention(run))
-            self._set_log("#edge-log", _edges(run))
-            self._set_log("#wake-log", _wake(run))
+            self._render_edges(run)
+            self._render_wake(run)
             self._set_log("#boot-log", _boot(run))
             self._set_log(
                 "#portals-log",
