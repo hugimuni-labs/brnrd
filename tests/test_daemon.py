@@ -9963,6 +9963,48 @@ def test_a_refusal_that_keeps_the_tap_pending_leaves_the_mirror_armed(
     assert wake_request_mod.pending_id(repo_a / ".brr") == "wake_sched"
 
 
+def test_refused_tap_falls_through_to_matching_conversation_sticky(
+    tmp_path, monkeypatch,
+):
+    """A refused one-shot made no runner choice for this event, so the
+    existing conversation preference remains the next valid rung instead
+    of dispatch falling through to the config default.
+
+    Live 2026-08-25: an event older than a newly parked fable tap correctly
+    kept that tap pending, but incorrectly ran on sonnet while its matching
+    persistent opus sticky was still valid.
+    """
+    from brr import wake_request as wake_request_mod
+
+    repo_a, ctx, target = _wake_ctx(tmp_path)
+    _give_identity(target.event)
+    wake_request_mod.store_pending(repo_a / ".brr", {"request_id": "wake_next"})
+    wake_request_mod.store_sticky(
+        repo_a / ".brr",
+        request_id="wake_previous",
+        profile="claude-opus",
+        correspondent_key="telegram:user-id:777",
+        conversation_key="telegram:555:",
+    )
+    _stub_claim(monkeypatch, {
+        "apply": False,
+        "reason": "the tap was parked after this event existed",
+        "request_id": "wake_next",
+        "status": "pending",
+        "profile": "claude-fable",
+    })
+
+    applied = daemon._apply_dashboard_wake_request(target, ctx, repo_a)
+
+    assert applied.event["runner"] == "claude-opus"
+    assert applied.event["dashboard_wake_sticky_profile"] == "claude-opus"
+    assert applied.event["dashboard_wake_request_profile"] == "claude-fable"
+    assert applied.event["dashboard_wake_request_reason"] == (
+        "the tap was parked after this event existed"
+    )
+    assert wake_request_mod.pending_id(repo_a / ".brr") == "wake_next"
+
+
 def test_event_pin_outranks_the_tap_and_never_claims_it(tmp_path, monkeypatch):
     """An event-level pin (respawn shell:/core:, quality: escalate) is a
     deliberate per-run choice. It short-circuits *before* the claim, so the

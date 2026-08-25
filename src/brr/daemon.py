@@ -2295,7 +2295,16 @@ def _apply_dashboard_wake_request(
         updates = _stamp_wake_request(event, claimed_id, profile, reason)
         protocol.update_event_meta(event, **updates)
         event.update(updates)
-        return target
+        # A one-shot request outranks the conversation sticky only when it
+        # applies.  Refusal means it made no runner choice for this event;
+        # do not skip the next valid rung and fall all the way through to
+        # `.brr/config`.  Measured live 2026-08-25: an event older than a
+        # newly parked fable tap was correctly refused, but then ran on the
+        # sonnet config default even though the same conversation still had
+        # a valid opus sticky.  Keep the refusal stamped for the run facet,
+        # and independently let the sticky helper enforce its own source,
+        # identity, and lifetime guards.
+        return _apply_sticky_wake_profile(target, brr_dir, cfg)
 
     if not verdict.get("apply"):
         return refuse(_wake_reason(verdict.get("reason")) or "the server refused the claim")
