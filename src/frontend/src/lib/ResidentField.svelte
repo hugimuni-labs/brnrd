@@ -116,7 +116,7 @@
 		// read as "not connected firmly". The connection is the *pad*: a
 		// nub straddling each border exactly, trace ending on it.
 		const x = TRUNK_X;
-		const y0 = rootRect.bottom - box.top;
+		const y0 = rootRect.bottom - box.top - 10;
 		const yStub = limbRect.top - box.top + limbRect.height / 2;
 		const xEnd = limbRect.left - box.left;
 		const r = Math.min(8, Math.max(0, yStub - y0 - 2), Math.max(0, xEnd - x - 2));
@@ -341,13 +341,7 @@
 				/>
 				{#each trace.pads as pad, i (i)}
 					<g class="field-dock" class:field-dock--live={live} in:fade={{ duration: 900 }}>
-						<rect
-							x={pad.x - (i === 0 ? 4 : 2.5)}
-							y={pad.y - (i === 0 ? 2.5 : 4)}
-							width={i === 0 ? 8 : 5}
-							height={i === 0 ? 5 : 8}
-							class="field-dock-bay"
-						/>
+						<rect x={pad.x - 2.5} y={pad.y - 4} width="5" height="8" class="field-dock-bay" />
 						<rect x={pad.x - 1.5} y={pad.y - 1.5} width="3" height="3" class="field-dock-core" />
 					</g>
 				{/each}
