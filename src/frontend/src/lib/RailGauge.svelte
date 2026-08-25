@@ -124,7 +124,7 @@
 						{#if row.timeRemaining !== null}
 							<svg
 								viewBox="0 0 12 12"
-								class="h-[9px] w-[9px] -rotate-90 scale-x-[-1]"
+								class="h-[9px] w-[9px] rotate-90 scale-x-[-1]"
 								aria-label="reset window remaining"
 							>
 								<circle
