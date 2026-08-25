@@ -4271,3 +4271,146 @@ def test_close_noted_events_batch_cap_serves_the_oldest_first(tmp_path, monkeypa
 
     assert len(posts) == 1
     assert posts[0]["event_id"] == "ev_older"
+
+
+def test_live_runs_snapshot_publishes_room_edge_and_lifecycle(tmp_path, monkeypatch):
+    """the-overlay-that-shows-the-room: the live row carries where the work
+    happens — room (env/branch/dir from the manifest), edge (the latest
+    non-subagent boundary from the transcript tail), and lifecycle — all
+    derived from run-node state the daemon already writes, never guessed."""
+    import json as _json
+
+    from brr import presence, run_progress
+    from brr.gates import cloud_publisher
+
+    brr_dir = tmp_path / ".brr"
+    run_dir = brr_dir / "runs" / "run-room"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.md").write_text(
+        "---\n"
+        "id: run-room\n"
+        "event_id: evt-room-1\n"
+        "env: worktree\n"
+        "worktree_path: /tmp/wt/run-room\n"
+        "branch_name: brr/the-room\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    (run_dir / "boundaries.jsonl").write_text(
+        _json.dumps({
+            "at": "2026-08-25T18:00:00Z", "phase": "post-tool",
+            "act": "edit", "tools": ["Edit"], "detail": "src/x.py",
+            "out_bytes": 120, "inject": "",
+        }) + "\n"
+        + _json.dumps({
+            "at": "2026-08-25T18:01:00Z", "phase": "post-tool",
+            "act": "run", "tools": ["Bash"], "detail": "pytest -q",
+            "out_bytes": 512, "inject": "steer folded",
+        }) + "\n"
+        # A limb's boundary arrives last but is not the run's act (#1095).
+        + _json.dumps({
+            "at": "2026-08-25T18:02:00Z", "phase": "post-tool",
+            "act": "orient", "tools": ["Read"], "detail": "notes.md",
+            "subagent": {"id": "limb-1"},
+        }) + "\n",
+        encoding="utf-8",
+    )
+    presence.register(
+        brr_dir, kind="daemon", stream="telegram:9:", run_id="run-room",
+        repo_label="Gurio/brr", pid=os.getpid(),
+    )
+    monkeypatch.setattr(
+        cloud_publisher, "_live_run_progress",
+        lambda *_: run_progress.RunProgressView(
+            conversation_key="telegram:9:", run_id="run-room", phase="running",
+        ),
+    )
+
+    row = {r["run_id"]: r for r in cloud._live_runs_snapshot(brr_dir)}["run-room"]
+    # Room: manifest facts; the branch falls back to the manifest seed when
+    # the worktree path is not a real git tree.
+    assert row["room"] == {"env": "worktree", "branch": "brr/the-room", "dir": "run-room"}
+    # Edge: the newest *resident* boundary — the subagent row is skipped.
+    assert row["edge"]["act"] == "run"
+    assert row["edge"]["detail"] == "pytest -q"
+    assert row["edge"]["out_bytes"] == 512
+    assert row["edge"]["injected"] is True
+    assert row["lifecycle"] == "weaving"
+    assert row["await_until"] is None
+
+
+def test_live_runs_snapshot_names_awaiting_and_closing(tmp_path, monkeypatch):
+    """AWAIT is a positive fact from the portal `await` facet — armed and
+    unresolved — never an inference from quietness; CLOSING is the attested
+    finalizing phase. Both must stay distinguishable from plain weaving."""
+    import json as _json
+
+    from brr import presence, run_progress
+    from brr.gates import cloud_publisher
+
+    brr_dir = tmp_path / ".brr"
+    run_dir = brr_dir / "runs" / "run-wait"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.md").write_text(
+        "---\nid: run-wait\nevent_id: evt-wait-1\nenv: host\n"
+        "host_context_branch: main\n---\n",
+        encoding="utf-8",
+    )
+    outbox = brr_dir / "outbox" / "evt-wait-1"
+    outbox.mkdir(parents=True)
+    (outbox / "portal-state.json").write_text(
+        _json.dumps({"await": {
+            "armed": True, "resolved": False,
+            "deadline": "2026-08-25T19:00:00Z",
+        }}),
+        encoding="utf-8",
+    )
+    presence.register(
+        brr_dir, kind="daemon", stream="telegram:9:", run_id="run-wait",
+        repo_label="Gurio/brr", pid=os.getpid(),
+    )
+
+    def _view(phase):
+        return run_progress.RunProgressView(
+            conversation_key="telegram:9:", run_id="run-wait", phase=phase,
+        )
+
+    monkeypatch.setattr(
+        cloud_publisher, "_live_run_progress", lambda *_: _view("running"),
+    )
+    row = {r["run_id"]: r for r in cloud._live_runs_snapshot(brr_dir)}["run-wait"]
+    assert row["lifecycle"] == "awaiting"
+    assert row["await_until"] == "2026-08-25T19:00:00Z"
+
+    # A *resolved* wait is not an AWAIT — the stale-resolution shape (#1187)
+    # must read as plain weaving again.
+    (outbox / "portal-state.json").write_text(
+        _json.dumps({"await": {"armed": True, "resolved": True}}),
+        encoding="utf-8",
+    )
+    row = {r["run_id"]: r for r in cloud._live_runs_snapshot(brr_dir)}["run-wait"]
+    assert row["lifecycle"] == "weaving"
+    assert row["await_until"] is None
+
+    monkeypatch.setattr(
+        cloud_publisher, "_live_run_progress", lambda *_: _view("finalizing"),
+    )
+    row = {r["run_id"]: r for r in cloud._live_runs_snapshot(brr_dir)}["run-wait"]
+    assert row["lifecycle"] == "closing"
+
+
+def test_live_runs_snapshot_absent_room_and_edge_stay_absent(tmp_path):
+    """An ad-hoc session has no run dir: no room, no edge, no lifecycle —
+    absent data stays absent rather than becoming a fabricated default."""
+    from brr import presence
+
+    brr_dir = tmp_path / ".brr"
+    presence.register(
+        brr_dir, kind="session", stream="cursor:1:", run_id="",
+        repo_label="Gurio/brr", pid=os.getpid(), entry_id="adhoc-entry",
+    )
+    row = cloud._live_runs_snapshot(brr_dir)[0]
+    assert row["room"] is None
+    assert row["edge"] is None
+    assert row["lifecycle"] is None
+    assert row["await_until"] is None

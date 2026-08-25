@@ -1393,6 +1393,7 @@ _LIVE_RUN_STRING_BOUNDS = {
     "id": 64,
     "kind": 32,
     "label": 256,
+    "lifecycle": 16,
     "mood": 64,
     "mood_glyph": 16,
     "mood_rest": 16,
@@ -1403,6 +1404,196 @@ _LIVE_RUN_STRING_BOUNDS = {
     "run_id": 64,
     "stream": 256,
 }
+
+# --- where the work happens (the overlay-that-shows-the-room slice) ---------
+#
+# Three additions to the live-run row, all derived from state the daemon
+# already writes — no new telemetry source (design-resident-field.md §Data
+# and delivery: "derive it from the existing per-run truth rather than
+# creating a second telemetry truth"):
+#
+# * ``room``  — where this thought's hands are: environment kind, the branch
+#   the tree is actually on (asked of git live, because a run renames its
+#   branch mid-flight; manifest as fallback), and the worktree dir name.
+#   Source: the run manifest (`.brr/runs/<id>/run.md`) + one bounded
+#   ``git rev-parse`` per live run per publish tick (~25-30s).
+# * ``edge``  — the latest attested tool boundary: phase, classified act,
+#   tool names, the *already-redacted* detail summary `hooks.record_boundary`
+#   wrote (`_tool_detail` caps at 500 B and masks secrets at write time),
+#   response byte count, and whether the daemon injected context there.
+#   Source: a bounded tail read of `boundaries.jsonl` — never the whole file.
+# * ``lifecycle`` + ``await_until`` — starting | weaving | awaiting |
+#   closing. `awaiting` is read off the run's own portal capsule (the
+#   `await` facet: armed and unresolved), never inferred from quietness —
+#   AWAIT must stay distinguishable from "between wakes" (the runner still
+#   exists) and from a long silent tool call.
+
+#: How much of a `boundaries.jsonl` tail one publish tick may read.
+_EDGE_TAIL_BYTES = 16_384
+
+#: `run_progress` phase → wire lifecycle. Terminal phases publish nothing:
+#: a run in one leaves the presence registry within a tick, and the Cloth
+#: owns the past tense.
+_LIFECYCLE_BY_PHASE = {
+    "queued": "starting",
+    "preparing": "starting",
+    "running": "weaving",
+    "finalizing": "closing",
+    "stopping": "closing",
+}
+
+
+def _live_run_manifest(brr_dir: Path, run_id: str) -> dict[str, Any]:
+    """The run's `run.md` frontmatter, `{}` on any failure."""
+    if not run_id:
+        return {}
+    try:
+        text = (brr_dir / "runs" / run_id / "run.md").read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    try:
+        return protocol.parse_frontmatter(text) or {}
+    except Exception:
+        return {}
+
+
+def _live_branch(tree: Path) -> str | None:
+    """The branch *tree* is on right now, or ``None`` — never a guess.
+
+    Asked of git rather than the manifest because a run legitimately
+    renames or switches its branch mid-flight; the manifest records the
+    seed. Bounded and best-effort: a publish tick must not hang on a git
+    that is wedged.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(tree), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    branch = out.stdout.strip()
+    return branch if branch and branch != "HEAD" else None
+
+
+def _room_payload(brr_dir: Path, manifest: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Where this run's hands are: env kind, live branch, worktree dir name."""
+    env = str(manifest.get("env") or "").strip() or None
+    worktree = str(manifest.get("worktree_path") or "").strip() or None
+    tree = Path(worktree) if worktree else brr_dir.parent
+    branch = _live_branch(tree)
+    if branch is None:
+        branch = (
+            str(manifest.get("branch_name") or "").strip()
+            or str(manifest.get("host_context_branch") or "").strip()
+            or None
+        )
+    dir_name = Path(worktree).name if worktree else None
+    if not (env or branch or dir_name):
+        return None
+    return {
+        "env": (env or "")[:16] or None,
+        "branch": (branch or "")[:256] or None,
+        "dir": (dir_name or "")[:256] or None,
+    }
+
+
+def _edge_payload(brr_dir: Path, run_id: str) -> dict[str, Any] | None:
+    """The latest attested tool boundary, from a bounded transcript tail.
+
+    Skips a subagent's boundaries (#1095 — a limb's act is not the run's)
+    and returns ``None`` rather than a zero-valued row when the transcript
+    is absent or unreadable: no edge attested is different from a quiet one.
+    """
+    if not run_id:
+        return None
+    path = brr_dir / "runs" / run_id / "boundaries.jsonl"
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, 2)
+            size = handle.tell()
+            handle.seek(max(0, size - _EDGE_TAIL_BYTES))
+            tail = handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    for raw in reversed(tail.splitlines()):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            record = json.loads(raw)
+        except json.JSONDecodeError:
+            continue  # the seek may have torn the first line — skip, walk on
+        if not isinstance(record, dict) or record.get("subagent"):
+            continue
+        phase = record.get("phase")
+        if not isinstance(phase, str) or not phase:
+            continue
+        tools = [
+            str(name)[:64]
+            for name in (record.get("tools") or [])
+            if isinstance(name, str)
+        ][:16]
+        at = record.get("at")
+        act = record.get("act")
+        detail = record.get("detail")
+        out_bytes = record.get("out_bytes")
+        return {
+            "at": at if isinstance(at, str) else None,
+            "phase": phase[:16],
+            "act": act[:32] if isinstance(act, str) and act else None,
+            "tools": tools,
+            "detail": detail[:500] if isinstance(detail, str) and detail else None,
+            "out_bytes": out_bytes if isinstance(out_bytes, int) else None,
+            "injected": bool(record.get("inject")),
+        }
+    return None
+
+
+def _await_facet(brr_dir: Path, manifest: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The run's own portal `await` facet, ``None`` when unreadable."""
+    event_id = str(manifest.get("event_id") or "").strip()
+    if not event_id:
+        return None
+    try:
+        raw = json.loads(
+            (brr_dir / "outbox" / event_id / "portal-state.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    except (OSError, ValueError):
+        return None
+    facet = raw.get("await") if isinstance(raw, dict) else None
+    return facet if isinstance(facet, dict) else None
+
+
+def _lifecycle_payload(
+    brr_dir: Path,
+    manifest: Mapping[str, Any],
+    view: run_progress.RunProgressView | None,
+) -> tuple[str | None, str | None]:
+    """``(lifecycle, await_until)`` for one live row.
+
+    AWAIT is a *positive* fact — the `await` facet armed and unresolved —
+    never an inference from silence, and CLOSING is the attested finalizing
+    phase, rendered only while genuinely in flight (the resident-field
+    rule: no ceremony held open for theatre).
+    """
+    phase = (view.phase if view is not None else None) or None
+    lifecycle = _LIFECYCLE_BY_PHASE.get(phase or "")
+    if lifecycle is None and view is None and str(manifest.get("id") or ""):
+        # A registered run with no conversation record yet: the wake is
+        # being assembled or the Shell has not spoken — starting.
+        lifecycle = "starting"
+    if lifecycle != "weaving":
+        return lifecycle, None
+    facet = _await_facet(brr_dir, manifest)
+    if facet and facet.get("armed") and not facet.get("resolved"):
+        deadline = facet.get("deadline")
+        return "awaiting", deadline if isinstance(deadline, str) else None
+    return lifecycle, None
 
 
 def _bounded_live_run(row: dict[str, Any]) -> dict[str, Any]:
@@ -1456,6 +1647,8 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
         stream = str(entry.get("stream") or "")
         run_id = str(entry.get("run_id") or "")
         view = _live_run_progress(brr_dir, stream, run_id)
+        manifest = _live_run_manifest(brr_dir, run_id)
+        lifecycle, await_until = _lifecycle_payload(brr_dir, manifest, view)
         out.append(
             _bounded_live_run({
                 "id": str(entry.get("id") or ""),
@@ -1516,6 +1709,16 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
                     str(slug) for slug in (entry.get("topics") or [])
                     if isinstance(slug, str)
                 ],
+                # the-overlay-that-shows-the-room: where the work happens,
+                # published rather than guessed browser-side. All three are
+                # derived from run-node state the daemon already writes —
+                # the manifest, the boundary transcript's redacted tail,
+                # and the portal capsule's `await` facet. `None` everywhere
+                # for an ad-hoc session (no run dir) — absent stays absent.
+                "lifecycle": lifecycle,
+                "await_until": await_until,
+                "room": _room_payload(brr_dir, manifest) if manifest else None,
+                "edge": _edge_payload(brr_dir, run_id),
             })
         )
     return out
