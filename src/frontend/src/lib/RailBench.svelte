@@ -2,6 +2,9 @@
 	import SpoolRack from './SpoolRack.svelte';
 	import { glitchReveal } from './transitions';
 	import { environmentDisplay } from './railBench';
+	import { fuelProviderGroups } from './fuelProviders';
+	import { quotaLevel, type QuotaShell } from './quota';
+	import { STATUS_BURNING, STATUS_COOLING, STATUS_SPENT, STATUS_UNKNOWN } from './statusPalette';
 	import type { RunnersResponse } from './runners';
 	import type { ConnectedRepo, EnvironmentOption } from './repos';
 	import { IDLE_ROW, OFF_MARK, OFF_ROW, SELECTED_OPTION } from './stateChrome';
@@ -12,11 +15,21 @@
 	// no longer sharing a sticky box with the fixed-height gauge. Where the
 	// picking happens now; action receipts (a tap's own error/note) live
 	// here too, with the control that caused them.
+	//
+	// design-resident-field.md §"Settings, fuel, and the next dispatch":
+	// "press a provider row" opens exactly this surface. `focusProvider`
+	// carries which one, so the Resources readout below and the Next-run
+	// picker (SpoolRack, already the Shell/Core selector) both open already
+	// pointed at it — the resource reading informs the choice without
+	// becoming a second choice mechanism (no new POST: `SpoolRack`'s own
+	// tap-to-request machinery is untouched).
 	interface Props {
 		runners: RunnersResponse | null;
 		runnersError?: string | null;
 		runnersNote?: string | null;
 		repos?: ConnectedRepo[] | null;
+		shells?: QuotaShell[] | null;
+		focusProvider?: string | null;
 		now?: number;
 		onTap?: (profileName: string, repoLabel: string | null, environment: string | null) => void;
 		onReleaseSticky?: () => void;
@@ -27,10 +40,29 @@
 		runnersError = null,
 		runnersNote = null,
 		repos = null,
+		shells = null,
+		focusProvider = null,
 		now = Date.now(),
 		onTap,
 		onReleaseSticky
 	}: Props = $props();
+
+	// Every observed meter for the focused provider — "Resources" in the
+	// design's own vocabulary: window, remaining, reset age, one row each,
+	// no ghost/primary distinction here (that compression is the collapsed
+	// gauge's job; expanded, every reading is equally readable).
+	let resourceGroup = $derived(
+		focusProvider
+			? (fuelProviderGroups(shells ?? []).find((group) => group.provider === focusProvider) ?? null)
+			: null
+	);
+
+	const LEVEL_COLOR: Record<string, string> = {
+		burning: STATUS_BURNING,
+		cooling: STATUS_COOLING,
+		spent: STATUS_SPENT,
+		unknown: STATUS_UNKNOWN
+	};
 
 	let repoSelection = $state<string | null>(null);
 	let environmentSelection = $state<string | null>(null);
@@ -67,6 +99,46 @@
 			<p class="mb-2 font-mono text-xs text-amber-300">{runnersNote}</p>
 		{/if}
 	</div>
+	{#if resourceGroup}
+		<!-- Resources: every meter this provider reports, expanded — the
+		     fuel design's first half of "press a provider row". Sits above
+		     the shell/core picker below, which the same tap already opened
+		     to this provider's tab, so the reading and the choice it informs
+		     share one view. -->
+		<section data-measure="resources" class="resource-bay mb-3">
+			<div class="workshop-label">{resourceGroup.provider} · resources</div>
+			{#if resourceGroup.meters.length === 0}
+				<p class="font-mono text-xs text-ink-quiet">
+					No quota report for {resourceGroup.provider}.
+				</p>
+			{:else}
+				<div class="space-y-1">
+					{#each resourceGroup.meters as meter (meter.id)}
+						{@const level = quotaLevel(meter.percent)}
+						<div
+							class="resource-row flex items-baseline justify-between gap-3 border border-stone-800/60 bg-stone-900/40 px-2 py-1.5"
+							title={meter.tooltip}
+						>
+							<span class="flex min-w-0 items-baseline gap-2 font-mono text-xs">
+								<span class="text-stone-300">{meter.label}</span>
+								{#if meter.scope === 'core'}
+									<span class="text-[10px] tracking-wide text-ink-quiet uppercase"
+										>core allowance</span
+									>
+								{/if}
+							</span>
+							<span class="flex items-baseline gap-2 font-mono text-[11px]">
+								<strong style={`color: ${LEVEL_COLOR[level]}`}
+									>{meter.percent === null ? '?' : `${Math.round(meter.percent)}%`}</strong
+								>
+								{#if meter.resetShort}<span class="text-ink-quiet">↻{meter.resetShort}</span>{/if}
+							</span>
+						</div>
+					{/each}
+				</div>
+			{/if}
+		</section>
+	{/if}
 	{#if runners === null}
 		{#if !runnersError}
 			<p class="text-sm text-ink-quiet">Loading…</p>
@@ -192,6 +264,7 @@
 				{now}
 				onTap={tapRunner}
 				{onReleaseSticky}
+				focusShell={focusProvider}
 			/>
 		</div>
 	{/if}
@@ -205,6 +278,12 @@
 		background-size: 24px 24px;
 	}
 	.bench-bay {
+		min-width: 0;
+	}
+	.resource-bay {
+		min-width: 0;
+	}
+	.resource-row {
 		min-width: 0;
 	}
 	.workshop-label {
