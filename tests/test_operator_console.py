@@ -431,14 +431,18 @@ def test_set_log_scroll_preservation(tmp_path):
         from brr.operator_console.tui import build_console_app
 
         OperatorConsole = build_console_app()
-        from textual.widgets import RichLog
+        from textual.widgets import RichLog, TabbedContent
     except RuntimeError:
         import pytest
 
         pytest.skip("textual not installed")
 
     MANY_LINES = "\n".join(f"line {i:03d}" for i in range(200))
-    SELECTOR = "#edge-log"
+    # Exercises the generic RichLog _set_log path; EDGE/WAKE moved to
+    # Collapsible trees (see test_edge_renders_colored_collapsible_rows /
+    # test_wake_renders_grouped_collapsible_blocks below) so a plain-text
+    # RichLog pane — BOOT — stands in for this scroll-preservation check.
+    SELECTOR = "#boot-log"
 
     async def _run() -> None:
         app = OperatorConsole(tmp_path)
@@ -446,6 +450,10 @@ def test_set_log_scroll_preservation(tmp_path):
             # Freeze the 1s poll so the pilot owns the pane for the test.
             if app._poll_timer is not None:
                 app._poll_timer.pause()
+            # BOOT isn't the initial tab (EDGE is) — an inactive TabPane isn't
+            # laid out, so its scroll geometry lies. Activate it first.
+            app.query_one(TabbedContent).active = "boot"
+            await pilot.pause(0.05)
             log = app.query_one(SELECTOR, RichLog)
 
             # Seed with content (write line-by-line so RichLog definitely has
@@ -707,6 +715,153 @@ def test_edges_renders_tool_detail_and_out_bytes(tmp_path):
     lines = rendered.splitlines()
     old_line = next(ln for ln in lines if "Read" in ln)
     assert "out" not in old_line
+
+
+def test_edge_renders_colored_collapsible_rows(tmp_path):
+    """EDGE tab: one Collapsible per boundary, collapsed by default, color-
+    classed by act; the compact title never carries the full inject text."""
+    try:
+        from brr.operator_console.tui import build_console_app
+
+        OperatorConsole = build_console_app()
+        from textual.widgets import Collapsible
+    except RuntimeError:
+        import pytest
+
+        pytest.skip("textual not installed")
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    brr = repo / ".brr"
+    brr.mkdir()
+    run_dir = brr / "runs" / "run-edge2"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.md").write_text(
+        "---\nevent_id: evt-edge2\nstatus: running\n---\n", encoding="utf-8"
+    )
+    (run_dir / "prompt.md").write_text("wake", encoding="utf-8")
+    boundaries = [
+        {
+            "phase": "PostToolUse",
+            "at": "2026-08-24T10:00:00Z",
+            "act": "mutate",
+            "tools": ["Write"],
+            "detail": "src/brr/foo.py",
+            "out_bytes": 12,
+            "inject": "pending event evt-x",
+        },
+        {
+            "phase": "Stop",
+            "at": "2026-08-24T10:00:05Z",
+            "act": "wait",
+            "block": True,
+            "block_reason": "unresolved closeout obligation",
+            "inject": None,
+        },
+    ]
+    (run_dir / "boundaries.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in boundaries), encoding="utf-8"
+    )
+    presence.register(
+        brr,
+        kind="daemon",
+        label="edge2",
+        run_id="run-edge2",
+        repo_label="hugimuni-labs/brnrd",
+        stream="cli:edge2",
+        pid=os.getpid(),
+        runner_name="claude",
+        runner_shell="claude",
+        runner_core="default",
+    )
+
+    async def _run() -> None:
+        app = OperatorConsole(repo)
+        async with app.run_test(size=(100, 30)) as pilot:
+            if app._poll_timer is not None:
+                app._poll_timer.pause()
+            app._poll()
+            await pilot.pause(0.1)
+            edge_nodes = [n for n in app.query(Collapsible) if hasattr(n, "edge_seq")]
+            assert len(edge_nodes) == 2
+            assert all(n.collapsed for n in edge_nodes), "collapsed by default"
+
+            mutate_node = next(n for n in edge_nodes if n.edge_seq == 1)
+            assert "act-mutate" in mutate_node.classes
+            assert "src/brr/foo.py" in mutate_node.title
+            assert "pending event evt-x" not in mutate_node.title, (
+                "full inject text belongs in the expanded body, not the compact title"
+            )
+
+            blocked_node = next(n for n in edge_nodes if n.edge_seq == 2)
+            assert "act-wait" in blocked_node.classes
+            assert "act-blocked" in blocked_node.classes
+            assert "BLOCKED" in blocked_node.title
+
+    asyncio.run(_run())
+
+
+def test_wake_renders_grouped_collapsible_blocks(tmp_path):
+    """WAKE tab: one Collapsible per manifest block plus the raw prompt,
+    collapsed by default, header = block name + byte size."""
+    try:
+        from brr.operator_console.tui import build_console_app
+
+        OperatorConsole = build_console_app()
+        from textual.widgets import Collapsible
+    except RuntimeError:
+        import pytest
+
+        pytest.skip("textual not installed")
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    brr = repo / ".brr"
+    brr.mkdir()
+    _write_run(
+        brr,
+        "run-wake2",
+        "evt-wake2",
+        prompt="assembled wake bytes",
+        wake_manifest=_SAMPLE_WAKE_MANIFEST,
+    )
+    presence.register(
+        brr,
+        kind="daemon",
+        label="wake2",
+        run_id="run-wake2",
+        repo_label="hugimuni-labs/brnrd",
+        stream="cli:wake2",
+        pid=os.getpid(),
+        runner_name="claude",
+        runner_shell="claude",
+        runner_core="default",
+    )
+
+    async def _run() -> None:
+        app = OperatorConsole(repo)
+        async with app.run_test(size=(100, 30)) as pilot:
+            if app._poll_timer is not None:
+                app._poll_timer.pause()
+            app._poll()
+            await pilot.pause(0.1)
+            wake_nodes = [n for n in app.query(Collapsible) if hasattr(n, "wake_block_name")]
+            # 3 manifest blocks (present + absent) + the raw-prompt section.
+            assert len(wake_nodes) == 4
+            assert all(n.collapsed for n in wake_nodes), "collapsed by default"
+
+            titles = {n.wake_block_name: n.title for n in wake_nodes}
+            assert titles["boot-kernel"] == "boot-kernel  ·  512 B"
+            assert titles["identity-core"] == "identity-core  ·  8,192 B"
+            assert titles["dominion-digest"] == "dominion-digest  ·  absent"
+
+            absent_node = next(n for n in wake_nodes if n.wake_block_name == "dominion-digest")
+            assert "wake-absent" in absent_node.classes
+
+            raw_node = next(n for n in wake_nodes if n.wake_block_name == "__raw__")
+            assert "RAW PROMPT.MD" in raw_node.title
+
+    asyncio.run(_run())
 
 
 def test_fmt_bytes_human_readable():
