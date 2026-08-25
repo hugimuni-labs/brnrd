@@ -697,6 +697,77 @@ def truncate_marked(text: str, limit: int) -> str:
     return text[:keep] + LIVE_RUN_TRUNCATION_MARK[: limit]
 
 
+class LiveRunRoomIn(BaseModel):
+    """Where a live run's hands are (the-overlay-that-shows-the-room).
+
+    Derived daemon-side from the run manifest plus a live ``git rev-parse``
+    (`cloud_publisher._room_payload`) — the branch is the tree's *current*
+    branch, because a run legitimately renames its branch mid-flight and the
+    manifest only records the seed. All display, no identity: every field
+    truncates rather than rejects, and an absent room stays ``None`` on the
+    row (an ad-hoc session has no run dir to derive one from).
+    """
+
+    env: str | None = Field(default=None, max_length=16)
+    branch: str | None = Field(default=None, max_length=256)
+    dir: str | None = Field(default=None, max_length=256)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _truncate(cls, data: Any) -> Any:
+        return _truncate_to_bounds(cls, data)
+
+
+class LiveRunEdgeIn(BaseModel):
+    """The latest attested tool boundary of a live run.
+
+    A bounded tail read of the run's ``boundaries.jsonl``
+    (`cloud_publisher._edge_payload`): the classified act, tool names, the
+    already-redacted detail summary (`hooks._tool_detail` masks secrets and
+    caps at write time — this model only bounds a hostile payload), the
+    response byte count, and whether the daemon injected context at that
+    boundary. Subagent boundaries never reach this row (#1095).
+    """
+
+    at: str | None = None
+    phase: str | None = Field(default=None, max_length=16)
+    act: str | None = Field(default=None, max_length=32)
+    tools: list[str] = Field(default_factory=list, max_length=16)
+    detail: str | None = Field(default=None, max_length=500)
+    out_bytes: int | None = None
+    injected: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _truncate(cls, data: Any) -> Any:
+        return _truncate_to_bounds(cls, data)
+
+    @field_validator("tools")
+    @classmethod
+    def _bound_tools(cls, value: list[str]) -> list[str]:
+        """Per-item bound — ``max_length`` only counts the outer list."""
+        return [str(name)[:64] for name in value if str(name).strip()]
+
+
+def _truncate_to_bounds(model: type[BaseModel], data: Any) -> Any:
+    """Truncate over-long ``str`` fields to the model's bounds, marked.
+
+    The nested-model twin of ``LiveRunIn._truncate_display_fields`` — same
+    contract (a truncated field beats a dark dashboard, #685 ask 2), shared
+    here because nested rows carry no identity fields at all.
+    """
+    if not isinstance(data, dict):
+        return data
+    out: dict[str, Any] | None = None
+    for field, cap in string_bounds(model).items():
+        value = data.get(field)
+        if isinstance(value, str) and len(value) > cap:
+            if out is None:
+                out = dict(data)
+            out[field] = truncate_marked(value, cap)
+    return data if out is None else out
+
+
 class LiveRunIn(BaseModel):
     """One entry from the local presence registry (``src/brr/presence.py``)
     — a thought currently awake on this daemon, or an ad-hoc session
@@ -766,6 +837,20 @@ class LiveRunIn(BaseModel):
     # run; bounded against a hostile payload only (the daemon already
     # slug-filters and caps at 32; 8 is generous for honest use).
     topics: list[str] = Field(default_factory=list, max_length=8)
+    # the-overlay-that-shows-the-room: where the work happens, published by
+    # the daemon rather than guessed browser-side (design-resident-field.md
+    # §Data and delivery). `lifecycle` is the derived execution state —
+    # starting | weaving | awaiting | closing — where AWAITING is a positive
+    # fact read off the run's own portal `await` facet (armed, unresolved)
+    # and CLOSING is the attested finalizing phase; both must stay
+    # distinguishable from "between wakes" (no runner at all). `await_until`
+    # is the wait's deadline when one is armed. `room`/`edge` document their
+    # own derivations on their models above. All `None` for an ad-hoc
+    # session or a daemon predating the fields — absent stays absent.
+    lifecycle: str | None = Field(default=None, max_length=16)
+    await_until: str | None = None
+    room: LiveRunRoomIn | None = None
+    edge: LiveRunEdgeIn | None = None
 
     @classmethod
     def string_bounds(cls) -> dict[str, int]:
