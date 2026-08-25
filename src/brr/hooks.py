@@ -6184,6 +6184,14 @@ def record_boundary(
         record["detail"] = first_detail
     if has_out_bytes:
         record["out_bytes"] = total_out_bytes
+    # Where the act ran. The hook payload carries the runner's cwd at this
+    # boundary; the transcript keeps it bounded and raw (the transcript is
+    # local), and the publisher relativizes against the run's own tree
+    # before anything reaches a remote reader — a host path is not an
+    # answer there ("render the path you work in on the card", 2026-08-25).
+    cwd = payload.get("cwd") if isinstance(payload, dict) else None
+    if isinstance(cwd, str) and cwd.strip():
+        record["cwd"] = cwd.strip()[:512]
     # An in-process subagent's boundary is recorded (it happened, and a reader
     # asking "what did this run's environment say" wants it) but tagged, so
     # `derive_boundaries_summary` can keep the run's own verdict — which is

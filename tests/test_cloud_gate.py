@@ -4454,3 +4454,94 @@ def test_live_runs_snapshot_absent_room_and_edge_stay_absent(tmp_path):
     assert row["edge"] is None
     assert row["lifecycle"] is None
     assert row["await_until"] is None
+    assert row["portals"] is None
+
+
+def test_edge_dir_relativizes_and_never_publishes_host_paths(tmp_path):
+    """The transcript's raw cwd becomes tree-relative on the wire — the
+    tree root is `.`, a subdir is its relative path, and a cwd outside the
+    run's tree degrades to its basename. A host-absolute path never rides."""
+    from brr.gates import cloud_publisher
+
+    brr_dir = tmp_path / "repo" / ".brr"
+    brr_dir.mkdir(parents=True)
+    tree = tmp_path / "wt" / "run-x"
+    (tree / "src" / "frontend").mkdir(parents=True)
+    manifest = {"worktree_path": str(tree)}
+
+    assert cloud_publisher._edge_dir(str(tree), manifest, brr_dir) == "."
+    assert (
+        cloud_publisher._edge_dir(str(tree / "src" / "frontend"), manifest, brr_dir)
+        == "src/frontend"
+    )
+    # Host env: no worktree — relativize against the checkout the daemon serves.
+    (brr_dir.parent / "docs").mkdir()
+    assert cloud_publisher._edge_dir(str(brr_dir.parent / "docs"), {}, brr_dir) == "docs"
+    # Outside the tree entirely → basename only, never the absolute path.
+    outside = cloud_publisher._edge_dir("/somewhere/else/place", manifest, brr_dir)
+    assert outside == "place"
+    assert cloud_publisher._edge_dir(None, manifest, brr_dir) is None
+    assert cloud_publisher._edge_dir("   ", manifest, brr_dir) is None
+
+
+def test_live_runs_snapshot_publishes_portal_pending(tmp_path, monkeypatch):
+    """the-field-takes-its-body: the row carries how many pending events
+    stand at the run's portal and when the oldest arrived — counts and one
+    timestamp only, never bodies — so a sent message can render as
+    *resting, put to read* until a boundary attests the read."""
+    import json as _json
+
+    from brr import presence, run_progress
+    from brr.gates import cloud_publisher
+
+    brr_dir = tmp_path / ".brr"
+    run_dir = brr_dir / "runs" / "run-door"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.md").write_text(
+        "---\nid: run-door\nevent_id: evt-door-1\nenv: host\n---\n",
+        encoding="utf-8",
+    )
+    outbox = brr_dir / "outbox" / "evt-door-1"
+    outbox.mkdir(parents=True)
+    (outbox / "portal-state.json").write_text(
+        _json.dumps({
+            "inbound": {
+                "current_event": "evt-door-1",
+                "events": [
+                    {"id": "evt-late", "created": "2026-08-25T22:10:00Z",
+                     "body": "never published"},
+                    {"id": "evt-early", "created": "2026-08-25T22:05:00Z",
+                     "body": "never published"},
+                ],
+            },
+        }),
+        encoding="utf-8",
+    )
+    presence.register(
+        brr_dir, kind="daemon", stream="telegram:9:", run_id="run-door",
+        repo_label="Gurio/brr", pid=os.getpid(),
+    )
+    monkeypatch.setattr(
+        cloud_publisher, "_live_run_progress",
+        lambda *_: run_progress.RunProgressView(
+            conversation_key="telegram:9:", run_id="run-door", phase="running",
+        ),
+    )
+
+    row = {r["run_id"]: r for r in cloud._live_runs_snapshot(brr_dir)}["run-door"]
+    assert row["portals"] == {"pending": 2, "oldest_at": "2026-08-25T22:05:00Z"}
+    # The wire never carries a pending event's content.
+    assert "never published" not in _json.dumps(row)
+
+    # An empty queue is a *known* empty portal — pending 0, not None.
+    (outbox / "portal-state.json").write_text(
+        _json.dumps({"inbound": {"current_event": "evt-door-1", "events": []}}),
+        encoding="utf-8",
+    )
+    row = {r["run_id"]: r for r in cloud._live_runs_snapshot(brr_dir)}["run-door"]
+    assert row["portals"] == {"pending": 0, "oldest_at": None}
+
+    # No capsule at all → no portal attested — absent stays absent.
+    (outbox / "portal-state.json").unlink()
+    row = {r["run_id"]: r for r in cloud._live_runs_snapshot(brr_dir)}["run-door"]
+    assert row["portals"] is None
