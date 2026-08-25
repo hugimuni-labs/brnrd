@@ -1,16 +1,17 @@
-// w-68's own instrument, and the acceptance check for the gauge/bench split
-// it built. Boots the real vite dev server, mocks every /v1/dashboard/*
+// Acceptance instrument for the sticky gauge and its separate bench. Since
+// PR #1630 the gauge is a provider-row deck rather than w-68's one-line rail;
+// this checks that the regrouped deck keeps one fixed wrapper height across
+// widths and catalog scales. Boots the real vite dev server, mocks every
+// /v1/dashboard/*
 // route from repro/fixtures.mjs (same pattern drive.mjs/repro*.mjs already
 // use), opens the bench, and reads `getBoundingClientRect()` for each named
 // section at two widths and two catalog/data scales — replacing "look at a
 // screenshot and say 977px" with a number a script produced.
 //
-// Section names updated for the split (2026-08-19): `fold-bar` is gone with
-// the condense/pin duality it belonged to (the gauge has exactly one form
-// now). `gauge` and `bench` are new — the two top-level surfaces the split
-// created — wrapping the same three/five sub-sections the original script
-// named: gauge → next-pick · fuel · tank; bench → error-note · project ·
-// environment · spool-rack. Each still carries its own
+// Section names follow the gauge/bench split: `gauge` and `bench` are the
+// two top-level surfaces, while the gauge's provider rows contain the same
+// measured next-pick · fuel · tank content and the bench contains
+// error-note · project · environment · spool-rack. Each still carries its own
 // `data-measure="<name>"` attribute (`RailGauge.svelte` / `RailBench.svelte`
 // / `SpoolRack.svelte`).
 //
