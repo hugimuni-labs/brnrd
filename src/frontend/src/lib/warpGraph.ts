@@ -886,3 +886,30 @@ export function topicCounts(graph: WarpGraph): Map<string, TopicCounts> {
 	}
 	return counts;
 }
+
+/** The warp items attached to one run — taken by it, or resolved by it
+ * (the-overlay-that-shows-the-room: "attach the warp items on creation of
+ * new, change of existing, or resolution"). Creation has no recorded
+ * author on the item grammar, so the two attested relations render:
+ * `taken:` rows (the ignition receipt) and the `done: … [run]` receipt.
+ * A run that resolved an item it also took appears once, as `done` — the
+ * stronger tense wins. Order: done first (the receipts), then taken. */
+export interface RunWarpAttachment {
+	id: string;
+	headline: string;
+	relation: 'taken' | 'done';
+}
+
+export function runWarpAttachments(graph: WarpGraph, runId: string): RunWarpAttachment[] {
+	if (!runId) return [];
+	const done: RunWarpAttachment[] = [];
+	const taken: RunWarpAttachment[] = [];
+	for (const item of graph.items) {
+		if (item.doneRun === runId) {
+			done.push({ id: item.id, headline: item.headline, relation: 'done' });
+		} else if (item.taken.includes(runId)) {
+			taken.push({ id: item.id, headline: item.headline, relation: 'taken' });
+		}
+	}
+	return [...done, ...taken];
+}
