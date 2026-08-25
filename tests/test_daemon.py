@@ -3920,6 +3920,80 @@ def test_notify_spawn_parent_cancelled_before_start_emits_no_produce_keys(tmp_pa
     assert "spawn_report_path" not in note
 
 
+def test_stop_sweep_survives_dispatch_mtime_drift(tmp_path):
+    """The #1389 utterance sweep must not miss a genuine burst sibling just
+    because the anchor event's own dispatch overhead (a `status:
+    processing` write, a wake-request meta stamp) bumped its file mtime
+    forward relative to the sibling's untouched one.
+
+    Reproduces the measured shape from 2026-08-25 18:15Z (the dashboard
+    "wake-request tap did not apply to the next dispatch" report): two
+    messages arrive ~1ms apart — a genuine burst — the daemon dispatches
+    the older as lead, real dispatch overhead elapses (measured live:
+    ~21s) before the lead's own event file takes its last write ahead of
+    the stop, the user stops the lead — and the sibling, which never
+    earned a courtesy write, must still be recognised as part of the same
+    burst and swept, not left to independently dispatch later carrying a
+    stale `created` stamp. That stale stamp is exactly what let a
+    dashboard wake-request tap slip past it in the live incident: the
+    tap's claim read "parked after this event existed", because by the
+    time the orphaned sibling finally got its own dispatch turn, it truly
+    was old relative to the freshly-parked tap.
+
+    Drives the real production kill path (`daemon._apply_run_stop`, the
+    one function both the `stop:` outbox verb and the dashboard's
+    user-stop affordance call — see its own docstring) against real event
+    files on disk, not a reimplemented helper. Red against the pre-fix
+    `_event_mtime`-only comparison: the anchor's simulated dispatch
+    latency (21s) exceeds `max(_BURST_WINDOW_DEFAULT,
+    _BURST_MAX_WAIT_DEFAULT)` (12s), so the old code excludes the sibling
+    from the sweep outright.
+    """
+    inbox = tmp_path / ".brr" / "inbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+
+    conv_key = "cloud:telegram:155783668:"
+    corr_key = "telegram:user-id:155783668"
+
+    anchor_path = protocol.create_event(
+        inbox, "cloud", "first message of the burst",
+        conversation_key=conv_key, correspondent_key=corr_key,
+    )
+    sibling_path = protocol.create_event(
+        inbox, "cloud", "second message, sent moments later",
+        conversation_key=conv_key, correspondent_key=corr_key,
+    )
+    anchor_event = protocol._read_event(anchor_path)
+    anchor_id = anchor_event["id"]
+
+    # Real dispatch overhead: the lead event picks up a `status:
+    # processing` write well before the user reacts and stops it.
+    # Simulate the resulting mtime gap directly rather than sleeping the
+    # test 21 seconds.
+    protocol.set_status(anchor_event, "processing")
+    drifted = anchor_path.stat().st_mtime + 21.0
+    os.utime(anchor_path, (drifted, drifted))
+
+    control = {
+        "event_id": anchor_id,
+        "parent_run_id": None,
+        "run_id": "run-anchor",
+        "stopped": False,
+    }
+
+    daemon._apply_run_stop(
+        control, inbox, stopped_by="user", conversation_key=conv_key,
+        responses_dir=tmp_path / ".brr" / "responses",
+    )
+
+    sibling_event = protocol._read_event(sibling_path)
+    assert sibling_event.get("status") == "cancelled", (
+        "burst sibling survived the sweep — the stale-mtime comparison "
+        "excluded it from its own burst"
+    )
+    assert sibling_event.get("swept_by_run") == "run-anchor"
+
+
 def test_clean_finish_spawn_notifies_parent_end_to_end(tmp_path, monkeypatch):
     """A spawn that runs to a clean, zero-commit finish must still land a
     completion notification in the parent's thread — issue #268's still-
