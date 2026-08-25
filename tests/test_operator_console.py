@@ -801,6 +801,69 @@ def test_edge_renders_colored_collapsible_rows(tmp_path):
     asyncio.run(_run())
 
 
+def test_edge_collapsible_title_treats_boundary_detail_as_literal_text(tmp_path):
+    """Rich-style tokens in recorded commands must not become title markup."""
+    try:
+        from brr.operator_console.tui import build_console_app
+
+        OperatorConsole = build_console_app()
+        from textual.widgets import Collapsible
+    except RuntimeError:
+        import pytest
+
+        pytest.skip("textual not installed")
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    brr = repo / ".brr"
+    brr.mkdir()
+    run_dir = brr / "runs" / "run-edge-markup"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.md").write_text(
+        "---\nevent_id: evt-edge-markup\nstatus: running\n---\n", encoding="utf-8"
+    )
+    (run_dir / "prompt.md").write_text("wake", encoding="utf-8")
+    detail = "ls [bold]x[/bold] [a-z]"
+    (run_dir / "boundaries.jsonl").write_text(
+        json.dumps(
+            {
+                "phase": "PostToolUse",
+                "at": "2026-08-24T10:00:00Z",
+                "act": "orient",
+                "tools": ["Bash"],
+                "detail": detail,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    presence.register(
+        brr,
+        kind="daemon",
+        label="edge-markup",
+        run_id="run-edge-markup",
+        repo_label="hugimuni-labs/brnrd",
+        stream="cli:edge-markup",
+        pid=os.getpid(),
+        runner_name="codex",
+        runner_shell="codex",
+        runner_core="default",
+    )
+
+    async def _run() -> None:
+        app = OperatorConsole(repo)
+        async with app.run_test(size=(100, 30)) as pilot:
+            if app._poll_timer is not None:
+                app._poll_timer.pause()
+            app._poll()
+            await pilot.pause(0.1)
+            edge_node = next(n for n in app.query(Collapsible) if hasattr(n, "edge_seq"))
+            assert r"ls \[bold]x\[/bold] \[a-z]" in edge_node.title
+            assert detail in edge_node.query_one("CollapsibleTitle").render().plain
+
+    asyncio.run(_run())
+
+
 def test_wake_renders_grouped_collapsible_blocks(tmp_path):
     """WAKE tab: one Collapsible per manifest block plus the raw prompt,
     collapsed by default, header = block name + byte size."""
