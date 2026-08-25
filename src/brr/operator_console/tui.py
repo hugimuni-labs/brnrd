@@ -15,6 +15,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from rich.markup import escape
+
 from .model import Boundary, ConsoleSnapshot, RunView, collect_snapshot
 
 
@@ -143,14 +145,16 @@ def _edge_css_class(edge: Boundary) -> str:
 def _edge_title(edge: Boundary) -> str:
     """One compact line — the Collapsible header shown while collapsed."""
     tool_names = edge.raw.get("tools") or []
-    first_tool = str(tool_names[0]) if tool_names else ""
-    detail_parts = [p for p in (first_tool, edge.detail) if p]
+    first_tool = escape(str(tool_names[0])) if tool_names else ""
+    detail = escape(edge.detail) if edge.detail else ""
+    detail_parts = [p for p in (first_tool, detail) if p]
     if edge.out_bytes >= 0:
         detail_parts.append(f"out {_fmt_bytes(edge.out_bytes)}")
     detail_suffix = f"  {' · '.join(detail_parts)}" if detail_parts else ""
     flag = "  ⛔ BLOCKED" if edge.block else ""
-    act = edge.act or "·"
-    return f"{_clock(edge.at)}  #{edge.seq:<3} {act:<8} {edge.phase}{detail_suffix}{flag}"
+    act = escape(edge.act) if edge.act else "·"
+    phase = escape(edge.phase)
+    return f"{escape(_clock(edge.at))}  #{edge.seq:<3} {act:<8} {phase}{detail_suffix}{flag}"
 
 
 def _edge_body(edge: Boundary) -> str:
@@ -230,7 +234,7 @@ def _wake_header(run: RunView) -> str:
 
 def _wake_block_title(block: dict[str, Any]) -> str:
     """Collapsed-view header for one manifest block: name + byte size."""
-    name = str(block.get("name") or "?")
+    name = escape(str(block.get("name") or "?"))
     if not block.get("present"):
         return f"{name}  ·  absent"
     kept = block.get("bytes_kept")
