@@ -1323,6 +1323,46 @@ def test_loop_publishes_quota_warm_outbox_wins_over_shared_fallback(
     assert shells["claude"]["windows"][1]["percent"] == 48.0
 
 
+def test_quota_snapshot_does_not_publish_newer_per_run_carried_regression(
+    tmp_path, monkeypatch
+):
+    """The dashboard merge follows direct account evidence, not the newest
+    concurrent run's independently carried memory."""
+    import os
+
+    brr_dir = tmp_path / ".brr"
+    direct = brr_dir / "outbox" / "evt-direct"
+    carried = brr_dir / "outbox" / "evt-carried"
+    direct.mkdir(parents=True)
+    carried.mkdir(parents=True)
+    direct_path = direct / ".claude-usage-levels.json"
+    direct_path.write_text(json.dumps({
+        "updated_at": "2026-08-25T18:47:05Z",
+        "quota": {"buckets": {"session": {"remaining_percentage": 45.0}}},
+    }), encoding="utf-8")
+    carried_path = carried / ".claude-usage-levels.json"
+    carried_path.write_text(json.dumps({
+        "updated_at": "2026-08-25T18:49:08Z",
+        "error": "no quota buckets parsed from /usage screen",
+        "quota": {
+            "carried_from": "2026-08-25T18:20:27Z",
+            "buckets": {"session": {"remaining_percentage": 62.0}},
+        },
+    }), encoding="utf-8")
+    os.utime(direct_path, (1.0, 1.0))
+    os.utime(carried_path, (2.0, 2.0))
+    monkeypatch.setattr(cloud.claude_usage, "capture_levels", lambda **kw: {
+        "updated_at": "2026-08-25T18:49:30Z",
+        "error": "no quota buckets parsed from /usage screen",
+    })
+    monkeypatch.setattr(cloud.codex_usage, "probe_rate_limits", lambda **kw: None)
+    monkeypatch.setattr(cloud.codex_status, "load_levels", lambda *a, **kw: {})
+
+    shells = {row["shell"]: row for row in cloud._quota_snapshot(brr_dir)}
+
+    assert shells["claude"]["windows"][0]["percent"] == 45.0
+
+
 def test_loop_publishes_quota_snapshot_survives_malformed_gate_state(
     tmp_path, monkeypatch
 ):

@@ -313,6 +313,33 @@ def test_latest_claude_usage_outbox_dir_picks_freshest(tmp_path):
     assert result == newer
 
 
+def test_latest_claude_usage_outbox_dir_direct_observation_beats_newer_carried_values(tmp_path):
+    """Reproduce the live 74 -> 56 -> 74 -> 62 oscillation shape.
+
+    Failed scrapes in concurrent runs carried their own older quota values,
+    then freshest-mtime treated those memories as new account observations.
+    """
+    import os
+
+    brr_dir = tmp_path / ".brr"
+    values = [
+        ("evt-direct", 56.0, None, 1.0),
+        ("evt-stale-74", 74.0, "2026-08-25T18:20:27Z", 2.0),
+        ("evt-stale-62", 62.0, "2026-08-25T18:48:42Z", 3.0),
+    ]
+    for event, remaining, carried_from, mtime in values:
+        outbox = brr_dir / "outbox" / event
+        outbox.mkdir(parents=True)
+        quota = {"buckets": {"session": {"remaining_percentage": remaining}}}
+        if carried_from:
+            quota["carried_from"] = carried_from
+        path = outbox / ".claude-usage-levels.json"
+        path.write_text(json.dumps({"quota": quota}), encoding="utf-8")
+        os.utime(path, (mtime, mtime))
+
+    assert runner_quota.latest_claude_usage_outbox_dir(brr_dir).name == "evt-direct"
+
+
 def test_latest_claude_usage_outbox_dir_none_when_no_snapshot_cached(tmp_path):
     brr_dir = tmp_path / ".brr"
     (brr_dir / "outbox" / "evt-empty").mkdir(parents=True)

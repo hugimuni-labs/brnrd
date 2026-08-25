@@ -144,12 +144,14 @@ def latest_claude_usage_outbox_dir(brr_dir: Path) -> Path | None:
     itself — a shared-level reader that has no "current run" of its own (the
     schedule-pacing read in ``daemon._fire_due_schedules``, the dashboard
     quota publish in ``brr.gates.cloud``) has to go find the freshest one.
-    Same "freshest mtime" shape as :func:`codex_status._latest_rollout_fallback`
-    — the compatibility fallback Codex now falls back to only when it has no
-    ``thread_id`` to correlate on exactly (issue #195); Claude's outbox scan
-    here has no comparable per-run id to correlate on, so it keeps the
-    mtime guess unconditionally. Returns ``None`` when no run has ever cached
-    one (cold daemon, or Codex-only).
+    Prefer the freshest *observed* quota over carried snapshots. Concurrent
+    Claude runs own separate caches; when a scrape fails, each can carry a
+    different older value forward and stamp it with a fresh file mtime. A
+    plain freshest-mtime merge then makes the account gauge jump between
+    those per-run memories. ``quota.carried_from`` explicitly says the value
+    was not observed by this snapshot, so it cannot outrank direct evidence.
+    The freshest carried snapshot remains the fallback when no direct reading
+    exists at all. Returns ``None`` when no run has ever cached one.
     """
     from . import claude_usage
 
@@ -158,14 +160,22 @@ def latest_claude_usage_outbox_dir(brr_dir: Path) -> Path | None:
     except OSError:
         return None
     best_path: Path | None = None
-    best_mtime = -1.0
+    best_rank: tuple[int, float] = (-1, -1.0)
     for candidate in candidates:
         try:
             mtime = candidate.stat().st_mtime
+            snapshot = json.loads(candidate.read_text(encoding="utf-8"))
         except OSError:
             continue
-        if mtime > best_mtime:
-            best_mtime = mtime
+        except (json.JSONDecodeError, TypeError):
+            continue
+        quota = snapshot.get("quota") if isinstance(snapshot, dict) else None
+        if not isinstance(quota, dict):
+            continue
+        direct = "carried_from" not in quota
+        rank = (1 if direct else 0, mtime)
+        if rank > best_rank:
+            best_rank = rank
             best_path = candidate.parent
     return best_path
 
