@@ -3,10 +3,10 @@
 		DIAL_WEDGE_RADIUS,
 		availableQuotaShells,
 		dialDasharray,
-		fuelRows,
 		runnerBlocks,
 		slotChip
 	} from './railGauge';
+	import { fuelProviderGroups, type FuelProviderGroup } from './fuelProviders';
 	import { quotaLevel, type QuotaShell } from './quota';
 	import type { RunnersResponse } from './runners';
 	import type { RunLedgerRow } from './runLedger';
@@ -38,6 +38,12 @@
 		maxSpawns?: number | null;
 		benchOpen: boolean;
 		onBenchToggle: () => void;
+		/** A provider row was tapped — "press a provider row" from the fuel
+		 *  design (design-resident-field.md §Settings, fuel, and the next
+		 *  dispatch): the parent opens the Bench focused on that provider's
+		 *  Resources + Next-run (Shell/Core) selection. The gauge itself stays
+		 *  disclosure-free — it only reports the tap. */
+		onProviderExpand?: (provider: string) => void;
 	}
 
 	let {
@@ -49,7 +55,8 @@
 		activeSpawns = null,
 		maxSpawns = null,
 		benchOpen,
-		onBenchToggle
+		onBenchToggle,
+		onProviderExpand
 	}: Props = $props();
 
 	let blocks = $derived(
@@ -63,7 +70,12 @@
 	);
 	let activeBlock = $derived(blocks.find((block) => block.active) ?? null);
 	let availableShells = $derived(availableQuotaShells(shells ?? [], runners?.profiles));
-	let fuel = $derived(fuelRows(availableShells));
+	// One row per harness provider — the flat per-meter grid this replaces
+	// (`git log` on this file/`fuelRows` carries it) named a shell·window pair
+	// per cell and grew a cell for every window a provider reported. Grouped,
+	// the provider itself is the readable primary, and everything else it
+	// reports layers behind it as topology, not a second row.
+	let providerGroups = $derived(fuelProviderGroups(availableShells));
 	let slots = $derived(activeSpawns === null ? null : slotChip(activeSpawns, maxSpawns));
 	let tanks = $derived(readTanks(availableShells, ledgerRows, scheduledWakes, now));
 	let lead = $derived(tanks[0] ?? null);
@@ -85,6 +97,21 @@
 		const profile = runners?.profiles.find((candidate) => candidate.name === name);
 		return profile ? `${profile.shell ?? '?'} · ${profile.model ?? 'default'}` : name;
 	}
+
+	/** The collapsed row's own tooltip/aria text: the primary reading plus
+	 *  every ghost, so a reader who can't see opacity still gets the topology
+	 *  ("there is more here") in words. */
+	function providerTooltip(group: FuelProviderGroup): string {
+		const parts = group.meters.map(
+			(meter) =>
+				`${meter.label}: ${meter.percent === null ? 'unknown' : `${Math.round(meter.percent)}% left`}`
+		);
+		return parts.length > 0 ? parts.join(' · ') : `${group.provider}: no quota report`;
+	}
+
+	function expandProvider(provider: string) {
+		onProviderExpand?.(provider);
+	}
 </script>
 
 <div data-measure="gauge" class="gauge font-mono">
@@ -98,30 +125,53 @@
 			>
 		{/if}
 	</div>
-	<div data-measure="fuel" class="fuel-deck" aria-label="quota fuel">
+	<div data-measure="fuel" class="fuel-deck" aria-label="quota fuel, by provider">
 		{#if shells === null}
 			<span class="fuel-empty">loading quota…</span>
-		{:else if fuel.length === 0}
+		{:else if providerGroups.length === 0}
 			<span class="fuel-empty">no quota report</span>
 		{:else}
-			{#each fuel as row (row.id)}
-				{@const level = quotaLevel(row.percent)}
-				<div
-					class="fuel-cell {row.stale || row.daemonStale ? 'opacity-60' : ''}"
-					title={row.tooltip}
+			{#each providerGroups as group (group.provider)}
+				{@const primary = group.primary}
+				{@const level = quotaLevel(primary?.percent ?? null)}
+				<button
+					type="button"
+					class="fuel-provider-row"
+					title={providerTooltip(group)}
+					onclick={() => expandProvider(group.provider)}
 				>
-					<span class="fuel-label">{row.label}</span>
-					<strong style={`color: ${LEVEL_COLOR[level]}`}
-						>{row.percent === null ? '?' : `${Math.round(row.percent)}%`}</strong
-					>
-					<span class="fuel-track" role="img" aria-label={row.tooltip}>
-						<span
-							class="fuel-fill"
-							style={`width: ${row.percent ?? 0}%; background-color: ${LEVEL_COLOR[level]}`}
-						></span>
+					<div class="fuel-provider-head">
+						<span class="fuel-label">{group.provider}</span>
+						{#if primary}
+							<strong style={`color: ${LEVEL_COLOR[level]}`}
+								>{primary.percent === null ? '?' : `${Math.round(primary.percent)}%`}</strong
+							>
+						{:else}
+							<span class="fuel-empty">no report</span>
+						{/if}
+					</div>
+					<span class="fuel-stack" role="img" aria-label={providerTooltip(group)}>
+						<!-- Ghosts render first (painted behind), dimmest-and-narrowest
+						     last in source order so a later, more-recent-window ghost
+						     doesn't visually cover an earlier one — enough topology to
+						     read "there is more here" without asking the reader to
+						     decode every meter. Never averaged or normalized against
+						     the primary: each track keeps its own width and color. -->
+						{#each group.secondary as ghost, index (ghost.id)}
+							<span
+								class="fuel-ghost"
+								style={`width: ${ghost.percent ?? 0}%; bottom: ${(index + 1) * 3}px; background-color: ${LEVEL_COLOR[quotaLevel(ghost.percent)]}; opacity: ${0.4 - index * 0.1}`}
+							></span>
+						{/each}
+						{#if primary}
+							<span
+								class="fuel-fill"
+								style={`width: ${primary.percent ?? 0}%; background-color: ${LEVEL_COLOR[level]}`}
+							></span>
+						{/if}
 					</span>
 					<span class="fuel-reset">
-						{#if row.timeRemaining !== null}
+						{#if primary?.timeRemaining !== null && primary?.timeRemaining !== undefined}
 							<svg
 								viewBox="0 0 12 12"
 								class="h-[9px] w-[9px] rotate-90 scale-x-[-1]"
@@ -142,13 +192,16 @@
 									fill="none"
 									stroke-width={DIAL_WEDGE_RADIUS * 2}
 									class="stroke-stone-500"
-									stroke-dasharray={dialDasharray(row.timeRemaining)}
+									stroke-dasharray={dialDasharray(primary.timeRemaining)}
 								/>
 							</svg>
 						{/if}
-						{#if row.resetShort}↻{row.resetShort}{/if}
+						{#if primary?.resetShort}↻{primary.resetShort}{/if}
+						{#if group.secondary.length > 0}
+							<span class="fuel-more" aria-hidden="true">+{group.secondary.length}</span>
+						{/if}
 					</span>
-				</div>
+				</button>
 			{/each}
 		{/if}
 	</div>
@@ -212,25 +265,47 @@
 	.gauge-key {
 		color: rgb(120 113 108);
 	}
+	/* One row per harness provider (design-resident-field.md §Settings, fuel,
+	   and the next dispatch), not one cell per meter — a fixed-count list
+	   (currently claude/codex), so unlike the old flat grid this never grows
+	   with the catalog. `overflow-y: auto` is the same "never grows" belt the
+	   old grid wore as `overflow-x` — a pathological account with more
+	   providers scrolls, it does not stretch the gauge. */
 	.fuel-deck {
-		display: grid;
-		grid-auto-flow: column;
-		grid-auto-columns: calc((100% - 10px) / 2);
-		grid-template-rows: repeat(2, 1fr);
-		gap: 5px 10px;
+		display: flex;
+		flex-direction: column;
+		justify-content: center;
+		gap: 4px;
 		height: 85px;
-		overflow-x: auto;
+		overflow-y: auto;
 		padding: 5px 0 4px;
 		scrollbar-width: none;
 	}
 	.fuel-deck::-webkit-scrollbar {
 		display: none;
 	}
-	.fuel-cell {
+	.fuel-provider-row {
 		display: grid;
 		grid-template-columns: minmax(0, 1fr) auto;
-		grid-template-rows: 14px 7px 10px;
+		grid-template-rows: 14px 12px 8px;
 		column-gap: 6px;
+		min-width: 0;
+		flex: none;
+		width: 100%;
+		border: 0;
+		background: none;
+		padding: 0;
+		font: inherit;
+		color: inherit;
+		text-align: left;
+		cursor: pointer;
+	}
+	.fuel-provider-head {
+		grid-column: 1 / -1;
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 6px;
 		min-width: 0;
 	}
 	.fuel-label {
@@ -240,22 +315,44 @@
 		font-size: 10px;
 		color: rgb(168 162 158);
 	}
-	.fuel-cell strong {
+	.fuel-provider-head strong {
 		font-size: 11px;
 		font-weight: 500;
 	}
-	.fuel-track {
+	/* The ghost stack: a dim baseline track, then every secondary meter
+	   layered above it at falling opacity, then the primary fill on top —
+	   "there is more here" as topology, never averaged into the primary
+	   reading and never a manufactured symmetrical track. */
+	.fuel-stack {
 		grid-column: 1 / -1;
+		position: relative;
 		display: block;
+		height: 12px;
+	}
+	.fuel-stack::before {
+		content: '';
+		position: absolute;
+		inset: 0 0 0 0;
+		bottom: 0;
 		height: 5px;
 		background: rgb(41 37 36);
 		box-shadow: inset 0 0 0 1px rgb(68 64 60 / 0.45);
 	}
-	.fuel-fill {
+	.fuel-fill,
+	.fuel-ghost {
+		position: absolute;
+		left: 0;
+		bottom: 0;
 		display: block;
-		height: 100%;
+	}
+	.fuel-fill {
+		height: 5px;
 		transition: width 500ms ease-out;
 		box-shadow: 0 0 8px currentColor;
+	}
+	.fuel-ghost {
+		height: 4px;
+		transition: width 500ms ease-out;
 	}
 	.fuel-reset {
 		grid-column: 1 / -1;
@@ -263,6 +360,9 @@
 		align-items: center;
 		gap: 3px;
 		font-size: 8px;
+		color: rgb(120 113 108);
+	}
+	.fuel-more {
 		color: rgb(120 113 108);
 	}
 	.fuel-empty {

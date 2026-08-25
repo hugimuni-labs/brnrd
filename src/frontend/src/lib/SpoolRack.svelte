@@ -61,6 +61,13 @@
 		onTap?: (profileName: string) => void;
 		/** The sticky's exit: drop it now instead of waiting out the TTL. */
 		onReleaseSticky?: () => void;
+		/** The fuel gauge's own "press a provider row" ask
+		 *  (design-resident-field.md §Settings, fuel, and the next dispatch):
+		 *  open the rack already tabbed to that provider's shell, since a
+		 *  provider *is* the shell family this rack already groups by. Read
+		 *  once per change, not fought on every re-render — a reader who then
+		 *  taps a different tab keeps that choice until the next expand. */
+		focusShell?: string | null;
 	}
 
 	let {
@@ -71,7 +78,8 @@
 		sticky = null,
 		now = Date.now(),
 		onTap,
-		onReleaseSticky
+		onReleaseSticky,
+		focusShell = null
 	}: Props = $props();
 
 	let stickyLive = $derived(liveSticky(sticky, now));
@@ -105,6 +113,20 @@
 	// written). Falls back to `defaultShell` whenever the reader hasn't
 	// chosen, or their choice no longer exists in a fresh report.
 	let manualShell = $state<string | null>(null);
+
+	// `focusShell` is only ever set from a browser click on the fuel gauge's
+	// provider row (RailGauge → RailBench → here), never present on the
+	// first server render, so `$effect`'s SSR gap doesn't apply the way it
+	// would to the tab's own default (the comment above `manualShell`
+	// explains that constraint; this is a distinct, later-arriving override,
+	// not the initial pick). Once the reader taps a different tab manually,
+	// `manualShell` moves and this effect stays quiet until the next expand.
+	$effect(() => {
+		if (focusShell && groups.some((group) => group.shell === focusShell)) {
+			manualShell = focusShell;
+		}
+	});
+
 	let selectedShell = $derived(
 		manualShell !== null && groups.some((group) => group.shell === manualShell)
 			? manualShell

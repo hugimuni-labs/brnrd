@@ -551,6 +551,15 @@
 	let corpusHeadingEl = $state<HTMLElement | null>(null);
 	let billingHeadingEl = $state<HTMLElement | null>(null);
 	let benchOpen = $state(false);
+	// design-resident-field.md §"Settings, fuel, and the next dispatch":
+	// "press a provider row" opens the bench already pointed at that
+	// provider's Resources + Next-run — the gauge stays disclosure-free and
+	// only reports which provider was tapped.
+	let benchFocusProvider = $state<string | null>(null);
+	function onProviderExpand(provider: string) {
+		benchFocusProvider = provider;
+		benchOpen = true;
+	}
 	let clocks = $state<StackClocks>(initialStackClocks());
 	let railCondensed = $derived(clocks.rail.settled);
 	let heddleDocked = $derived(clocks.heddle.settled);
@@ -817,6 +826,10 @@
 	function onBenchToggle() {
 		const open = !benchOpen;
 		benchOpen = open;
+		// A generic close drops the fuel gauge's own focus — reopening via
+		// the plain "▸ bench" tap (as opposed to another provider-row tap)
+		// should not silently keep showing the last provider's Resources.
+		if (!open) benchFocusProvider = null;
 		// Un-docking is immediate, never debounced — step the clocks in the
 		// same act, before the smooth scroll below has moved anything.
 		requestStackStep();
@@ -1460,6 +1473,7 @@
 					maxSpawns={spawnMaxConcurrent}
 					{benchOpen}
 					{onBenchToggle}
+					{onProviderExpand}
 				/>
 			</div>
 
@@ -1592,6 +1606,8 @@
 			<RailBench
 				runners={runnersData}
 				repos={connectedRepos}
+				{shells}
+				focusProvider={benchFocusProvider}
 				{runnersError}
 				{runnersNote}
 				{now}
