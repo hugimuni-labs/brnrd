@@ -5,6 +5,7 @@
 	import BillingPanel from '$lib/BillingPanel.svelte';
 	import PickLane from '$lib/PickLane.svelte';
 	import LiveRuns from '$lib/LiveRuns.svelte';
+	import ResidentField from '$lib/ResidentField.svelte';
 	import RunLedgerReceipt from '$lib/RunLedgerReceipt.svelte';
 	import Cloth from '$lib/Cloth.svelte';
 	import {
@@ -1628,7 +1629,28 @@
 				     No sibling section, no second NOW eyebrow — the stem ties the
 				     panel to the seam it dropped from (the machine round:
 				     `NOW · NODE` as a separate section dies). -->
-					{#if loomSelection !== null || focusRunId !== null || (liveRuns?.length ?? 0) > 1}
+					<!-- The field: the live body drawn as a body (design-resident-field
+				     §The Shed when occupied) — the resident on its room baseplate,
+				     strands as limbs on real dispatch traces, packets riding the
+				     traces only on recorded events. The compact default face of NOW;
+				     pressing any cell speaks the same selection grammar as ever and
+				     the overlay answers. It replaced the peer-card grid *and* the
+				     sole-run auto-unfold as the lane's resting face — compact by
+				     default, detail on press (maintainer, 2026-08-25). -->
+					{#if (liveRuns?.length ?? 0) > 0}
+						<div class="mt-2">
+							<ResidentField
+								runs={liveRuns ?? []}
+								stale={liveRunsStale}
+								{now}
+								withheld={liveRunsWithheld}
+								onSelect={(id) => selectFromLoom('run', id)}
+								selectedId={loomSelection?.kind === 'run' ? loomSelection.id : null}
+							/>
+						</div>
+					{/if}
+
+					{#if loomSelection !== null}
 						<div class="ignite" style="--ignite-delay: 600ms">
 							<div class="mx-auto h-2 w-px bg-amber-700/60" aria-hidden="true"></div>
 							{#if loomSelection !== null}
@@ -1688,20 +1710,6 @@
 											no receipt rows for that run in the current window.
 										</p>
 									{/if}
-								{:else}
-									<!-- Multi-run now, nothing unfolded: tapping a card *selects*
-							     it, and this same frame answers with the node panel — the
-							     identical grammar a seam tap speaks. The card's old inline
-							     expansion was a third rendering of the run (2026-07-20:
-							     "3 visual elements for a run"); it survives only in the
-							     fallbacks above, where no node can answer. -->
-									<LiveRuns
-										runs={liveRuns ?? []}
-										stale={liveRunsStale}
-										{now}
-										withheld={liveRunsWithheld}
-										onSelect={(id) => selectFromLoom('run', id)}
-									/>
 								{/if}
 							</div>
 						</div>
