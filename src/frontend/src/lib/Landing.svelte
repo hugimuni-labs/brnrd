@@ -161,7 +161,9 @@
 
 			<div class="mx-auto grid max-w-xl grid-cols-1 gap-5 sm:grid-cols-2">
 				<div class="border-t border-stone-800 pt-3 text-center">
-					<p class="font-mono text-[10px] tracking-wide text-amber-200/70 uppercase">project context</p>
+					<p class="font-mono text-[10px] tracking-wide text-amber-200/70 uppercase">
+						project context
+					</p>
 					<p class="mt-2 text-xs leading-relaxed text-stone-400">
 						repo target · project knowledge · current bearing
 					</p>
@@ -275,7 +277,7 @@
 												<span class="mr-1" aria-hidden="true">○</span>coming
 											</span>
 										{:else if badge === 'byo'}
-											<span class="font-mono text-[9px] tracking-wide text-stone-500 uppercase">
+											<span class="font-mono text-[9px] tracking-wide text-ink-mute uppercase">
 												<span class="mr-1" aria-hidden="true">◇</span>BYO
 											</span>
 										{:else}
