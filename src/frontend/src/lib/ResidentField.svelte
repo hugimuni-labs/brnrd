@@ -115,18 +115,23 @@
 		const xEnd = limbRect.left - box.left;
 		// A machined route, not a bare hairline: rounded elbow at the bend,
 		// square port pads where the trace leaves the dispatcher and enters
-		// the limb.
-		const r = Math.min(8, Math.max(0, yStub - y0 - 2), Math.max(0, xEnd - x - 2));
+		// the limb. Both ends bite 3px *into* their cell — a trace that
+		// stops at the border reads as almost-touching, never as connected
+		// (maintainer, live read: "the line is not connected to the card
+		// firmly").
+		const y0i = y0 - 3;
+		const xEndI = xEnd + 3;
+		const r = Math.min(8, Math.max(0, yStub - y0i - 2), Math.max(0, xEndI - x - 2));
 		const d =
 			r > 1
-				? `M ${x} ${y0} V ${yStub - r} Q ${x} ${yStub} ${x + r} ${yStub} H ${xEnd}`
-				: `M ${x} ${y0} V ${yStub} H ${xEnd}`;
+				? `M ${x} ${y0i} V ${yStub - r} Q ${x} ${yStub} ${x + r} ${yStub} H ${xEndI}`
+				: `M ${x} ${y0i} V ${yStub} H ${xEndI}`;
 		return {
 			key: limbKey,
 			d,
 			pads: [
-				{ x, y: y0 },
-				{ x: xEnd, y: yStub }
+				{ x, y: y0i },
+				{ x: xEndI, y: yStub }
 			]
 		};
 	}
@@ -343,23 +348,57 @@
 				{/each}
 			{/each}
 			{#each packets as packet (packet.id)}
-				<text
-					class="field-packet"
-					font-size="11"
-					fill={packet.color}
-					style={`--packet-glow: ${packet.color}`}
-				>
-					{packet.glyph}
-					<animateMotion
-						dur={`${packet.durMs}ms`}
-						path={packet.d}
-						rotate="0"
-						fill="freeze"
-						keyPoints={packet.reverse ? '1;0' : '0;1'}
-						keyTimes="0;1"
-						calcMode="linear"
-					/>
-				</text>
+				<!-- A packet is a comet, not a floating glyph: a centered core
+				     with two trail dots lagging the same path (the trail's
+				     `begin` offsets it behind the head), so the signal reads as
+				     data *flowing*, and the head sits ON the trace — a <text>
+				     node's default origin is its baseline corner, which is the
+				     "very offset romboid" the live read caught. -->
+				<g class="field-packet" style={`--packet-glow: ${packet.color}`}>
+					<circle r="4.5" fill={packet.color} opacity="0.16">
+						<animateMotion
+							dur={`${packet.durMs}ms`}
+							path={packet.d}
+							rotate="0"
+							fill="freeze"
+							keyPoints={packet.reverse ? '1;0' : '0;1'}
+							keyTimes="0;1"
+							calcMode="spline"
+							keySplines="0.35 0 0.25 1"
+						/>
+					</circle>
+					<text font-size="9" fill={packet.color} text-anchor="middle" dominant-baseline="central">
+						{packet.glyph}
+						<animateMotion
+							dur={`${packet.durMs}ms`}
+							path={packet.d}
+							rotate="0"
+							fill="freeze"
+							keyPoints={packet.reverse ? '1;0' : '0;1'}
+							keyTimes="0;1"
+							calcMode="spline"
+							keySplines="0.35 0 0.25 1"
+						/>
+					</text>
+					{#each [0.12, 0.24] as lag, i (lag)}
+						<!-- Hidden until its own ride begins — an unstarted SMIL
+						     element would otherwise sit visible at the SVG origin. -->
+						<circle r={2 - i * 0.7} fill={packet.color} opacity="0">
+							<set attributeName="opacity" to={0.5 - i * 0.22} begin={`${lag}s`} fill="freeze" />
+							<animateMotion
+								dur={`${packet.durMs}ms`}
+								path={packet.d}
+								rotate="0"
+								fill="freeze"
+								begin={`${lag}s`}
+								keyPoints={packet.reverse ? '1;0' : '0;1'}
+								keyTimes="0;1"
+								calcMode="spline"
+								keySplines="0.35 0 0.25 1"
+							/>
+						</circle>
+					{/each}
+				</g>
 			{/each}
 		</svg>
 
@@ -388,7 +427,7 @@
 					use:cellRef={key}
 					class="subpanel field-cell block w-full cursor-pointer p-2.5 text-left text-xs transition-[box-shadow] duration-700"
 					class:field-selected={selectedId === key}
-					style={`border-left: 2px solid ${face?.color ?? 'rgba(217,164,65,0.4)'};${
+					style={`border-left: 2px solid ${face ? `color-mix(in srgb, ${face.color} 55%, #d9a441)` : 'rgba(217,164,65,0.4)'};${
 						flashes[key]
 							? ` box-shadow: 0 0 14px -2px ${flashes[key]}, inset 0 0 10px -6px ${flashes[key]};`
 							: ''
@@ -434,7 +473,7 @@
 					</div>
 					<div class="mt-1 flex min-w-0 items-center gap-2">
 						<span
-							class="truncate text-sm font-medium text-amber-100"
+							class="truncate text-base font-medium tracking-tight text-amber-100"
 							use:typeReveal={{ text: liveRunDisplayName(run) }}>{liveRunDisplayName(run)}</span
 						>
 						<MoodChip face={mood} seed={key} variant="stage" class="ml-auto shrink-0" />
@@ -453,6 +492,9 @@
 								{#if edge.detail}
 									· <span use:typeReveal={{ text: edge.detail, duration: 2400 }}>{edge.detail}</span
 									>
+								{/if}
+								{#if run.edge?.dir && run.edge.dir !== '.'}
+									<span class="text-ink-mute"> · {run.edge.dir}/</span>
 								{/if}
 								{#if run.edge?.out_bytes != null}
 									<span class="text-ink-mute"> · {run.edge.out_bytes} B</span>
@@ -507,7 +549,7 @@
 								use:cellRef={lkey}
 								class="subpanel field-cell block w-full cursor-pointer p-2 text-left text-xs transition-[box-shadow] duration-700"
 								class:field-selected={selectedId === lkey}
-								style={`border-left: 2px solid ${lface?.color ?? 'rgba(217,164,65,0.3)'};${
+								style={`border-left: 2px solid ${lface ? `color-mix(in srgb, ${lface.color} 55%, #d9a441)` : 'rgba(217,164,65,0.3)'};${
 									flashes[lkey]
 										? ` box-shadow: 0 0 12px -2px ${flashes[lkey]}, inset 0 0 8px -6px ${flashes[lkey]};`
 										: ''
@@ -568,6 +610,12 @@
 												· <span use:typeReveal={{ text: ledge.detail, duration: 2400 }}
 													>{ledge.detail}</span
 												>
+											{/if}
+											{#if lrun.edge?.dir && lrun.edge.dir !== '.'}
+												<span class="text-ink-mute"> · {lrun.edge.dir}/</span>
+											{/if}
+											{#if lrun.edge?.out_bytes != null}
+												<span class="text-ink-mute"> · {lrun.edge.out_bytes} B</span>
 											{/if}
 										</p>
 									{/key}
@@ -644,6 +692,10 @@
 		isolation: isolate;
 		background:
 			linear-gradient(165deg, rgba(243, 232, 216, 0.03), transparent 40%), rgba(12, 9, 6, 0.55);
+		/* One key light from above: a machined top edge catching it, the
+		   plinth falling away beneath. Coherent light reads as expensive;
+		   more glow reads as cheap. */
+		box-shadow: inset 0 1px 0 rgba(243, 232, 216, 0.07);
 	}
 	.field-cell::after {
 		content: '';

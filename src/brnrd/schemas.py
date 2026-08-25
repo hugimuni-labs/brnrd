@@ -736,6 +736,9 @@ class LiveRunEdgeIn(BaseModel):
     detail: str | None = Field(default=None, max_length=500)
     out_bytes: int | None = None
     injected: bool = False
+    # Where the act ran, already relativized daemon-side against the run's
+    # own tree (`cloud_publisher._edge_dir`) — never a host-absolute path.
+    dir: str | None = Field(default=None, max_length=256)
 
     @model_validator(mode="before")
     @classmethod

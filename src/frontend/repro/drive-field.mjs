@@ -81,6 +81,7 @@ const strandFuel = liveRun({
 		act: 'orient',
 		tools: ['Read'],
 		detail: 'Read quota.ts',
+		dir: 'src/frontend/src/lib',
 		out_bytes: 4210,
 		injected: false
 	}
