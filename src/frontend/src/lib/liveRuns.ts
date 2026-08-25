@@ -149,6 +149,9 @@ export interface LiveRunEdge {
 	detail: string | null;
 	out_bytes: number | null;
 	injected: boolean;
+	/** Where the act ran, relative to the run's own tree (`.` = the tree
+	 *  root) — relativized daemon-side; a host path never rides the wire. */
+	dir?: string | null;
 }
 
 export interface LiveRunsResponse {
@@ -485,12 +488,13 @@ export function roomLine(room: LiveRunRoom | null | undefined): string | null {
 	return line || null;
 }
 
-/** The latest boundary as one compact line: `act · detail`. The detail is
- * already redacted and capped at the writer (`hooks._tool_detail`); this
- * only composes. */
+/** The latest boundary as one compact line: `act · detail · in <dir>`. The
+ * detail is already redacted and capped at the writer (`hooks._tool_detail`);
+ * the dir arrives tree-relative from the publisher; this only composes. */
 export function edgeLine(edge: LiveRunEdge | null | undefined): string | null {
 	if (!edge) return null;
-	const parts = [edge.act, edge.detail].filter(Boolean);
+	const where = edge.dir && edge.dir !== '.' ? `in ${edge.dir}` : null;
+	const parts = [edge.act, edge.detail, where].filter(Boolean);
 	return parts.length ? parts.join(' · ') : null;
 }
 

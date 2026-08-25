@@ -4457,6 +4457,33 @@ def test_live_runs_snapshot_absent_room_and_edge_stay_absent(tmp_path):
     assert row["portals"] is None
 
 
+def test_edge_dir_relativizes_and_never_publishes_host_paths(tmp_path):
+    """The transcript's raw cwd becomes tree-relative on the wire — the
+    tree root is `.`, a subdir is its relative path, and a cwd outside the
+    run's tree degrades to its basename. A host-absolute path never rides."""
+    from brr.gates import cloud_publisher
+
+    brr_dir = tmp_path / "repo" / ".brr"
+    brr_dir.mkdir(parents=True)
+    tree = tmp_path / "wt" / "run-x"
+    (tree / "src" / "frontend").mkdir(parents=True)
+    manifest = {"worktree_path": str(tree)}
+
+    assert cloud_publisher._edge_dir(str(tree), manifest, brr_dir) == "."
+    assert (
+        cloud_publisher._edge_dir(str(tree / "src" / "frontend"), manifest, brr_dir)
+        == "src/frontend"
+    )
+    # Host env: no worktree — relativize against the checkout the daemon serves.
+    (brr_dir.parent / "docs").mkdir()
+    assert cloud_publisher._edge_dir(str(brr_dir.parent / "docs"), {}, brr_dir) == "docs"
+    # Outside the tree entirely → basename only, never the absolute path.
+    outside = cloud_publisher._edge_dir("/somewhere/else/place", manifest, brr_dir)
+    assert outside == "place"
+    assert cloud_publisher._edge_dir(None, manifest, brr_dir) is None
+    assert cloud_publisher._edge_dir("   ", manifest, brr_dir) is None
+
+
 def test_live_runs_snapshot_publishes_portal_pending(tmp_path, monkeypatch):
     """the-field-takes-its-body: the row carries how many pending events
     stand at the run's portal and when the oldest arrived — counts and one

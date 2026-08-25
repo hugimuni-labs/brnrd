@@ -1500,7 +1500,29 @@ def _room_payload(brr_dir: Path, manifest: Mapping[str, Any]) -> dict[str, Any] 
     }
 
 
-def _edge_payload(brr_dir: Path, run_id: str) -> dict[str, Any] | None:
+def _edge_dir(record_cwd: Any, manifest: Mapping[str, Any], brr_dir: Path) -> str | None:
+    """The boundary's working dir, publishable — relative or basename only.
+
+    The transcript records the raw cwd (local surface); the wire must not
+    carry a host path. Relativize against the run's own tree (worktree
+    path, else the checkout the daemon serves); the tree root itself
+    publishes as ``.``; a cwd outside the tree degrades to its basename.
+    """
+    if not isinstance(record_cwd, str) or not record_cwd.strip():
+        return None
+    cwd = record_cwd.strip()
+    tree = str(manifest.get("worktree_path") or "").strip() or str(brr_dir.parent)
+    try:
+        rel = Path(cwd).resolve().relative_to(Path(tree).resolve())
+    except (OSError, ValueError):
+        return (Path(cwd).name or None) and Path(cwd).name[:256]
+    text = str(rel)
+    return ("." if text == "." else text)[:256]
+
+
+def _edge_payload(
+    brr_dir: Path, run_id: str, manifest: Mapping[str, Any] | None = None
+) -> dict[str, Any] | None:
     """The latest attested tool boundary, from a bounded transcript tail.
 
     Skips a subagent's boundaries (#1095 — a limb's act is not the run's)
@@ -1548,6 +1570,7 @@ def _edge_payload(brr_dir: Path, run_id: str) -> dict[str, Any] | None:
             "detail": detail[:500] if isinstance(detail, str) and detail else None,
             "out_bytes": out_bytes if isinstance(out_bytes, int) else None,
             "injected": bool(record.get("inject")),
+            "dir": _edge_dir(record.get("cwd"), manifest or {}, brr_dir),
         }
     return None
 
@@ -1756,7 +1779,7 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
                 "lifecycle": lifecycle,
                 "await_until": await_until,
                 "room": _room_payload(brr_dir, manifest) if manifest else None,
-                "edge": _edge_payload(brr_dir, run_id),
+                "edge": _edge_payload(brr_dir, run_id, manifest),
                 # the-field-takes-its-body: the message-ceremony fact — how
                 # many pending events stand at this run's portal and when
                 # the oldest arrived, so a sent message can render as

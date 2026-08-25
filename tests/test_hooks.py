@@ -5299,6 +5299,27 @@ def test_boundary_transcript_records_ordered_tool_names_and_first_act(tmp_path):
     assert "tools" not in records[1]
 
 
+def test_boundary_transcript_records_the_cwd(tmp_path):
+    """Where an act ran rides the transcript, bounded — the payload's own
+    `cwd`, so the field/console can say which directory the hands were in
+    ("render the path you work in on the card", 2026-08-25). Publishing
+    relativizes it (`cloud_publisher._edge_dir`); the transcript is local
+    and keeps it raw."""
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=0, events=[])
+    payload = json.dumps({
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "npm test"},
+        "cwd": "/tmp/wt/run-x/src/frontend",
+    })
+
+    hooks.run_hook(hooks.PHASE_POST_TOOL, payload, env)
+
+    records = _transcript(run_dir)
+    assert records[0]["cwd"] == "/tmp/wt/run-x/src/frontend"
+
+
 def test_boundary_act_classification_stores_detail_not_raw_input(tmp_path):
     """The record carries a derived detail, never the raw tool_input struct.
 
