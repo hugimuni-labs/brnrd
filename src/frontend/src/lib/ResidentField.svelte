@@ -90,8 +90,8 @@
 	// drops from the root cell's port, stubs branch to each limb. Expected
 	// node count is small (research §8: "the hard problem is information
 	// architecture, not GPU scale"), so re-measuring per poll is cheap.
-	const GUTTER = 28; // px the limb column indents; traces live here
-	const TRUNK_X = 13;
+	const GUTTER = 30; // px the limb column indents; traces live here
+	const TRUNK_X = 1;
 
 	let containerEl: HTMLDivElement | undefined = $state();
 	let cellEls = $state<Record<string, HTMLElement | undefined>>({});
@@ -109,29 +109,27 @@
 		const rootRect = cellEls[rootKey]?.getBoundingClientRect();
 		const limbRect = cellEls[limbKey]?.getBoundingClientRect();
 		if (!box || !rootRect || !limbRect) return null;
+		// The trunk hangs in the plinth-free strip of the gutter (the slabs
+		// start 10px in), so a trace never crosses a card's own shadow —
+		// the polish round after two live reads: a line biting into the
+		// card read as "goes deep into the run card"; a line stopping short
+		// read as "not connected firmly". The connection is the *pad*: a
+		// nub straddling each border exactly, trace ending on it.
 		const x = TRUNK_X;
 		const y0 = rootRect.bottom - box.top;
 		const yStub = limbRect.top - box.top + limbRect.height / 2;
 		const xEnd = limbRect.left - box.left;
-		// A machined route, not a bare hairline: rounded elbow at the bend,
-		// square port pads where the trace leaves the dispatcher and enters
-		// the limb. Both ends bite 3px *into* their cell — a trace that
-		// stops at the border reads as almost-touching, never as connected
-		// (maintainer, live read: "the line is not connected to the card
-		// firmly").
-		const y0i = y0 - 3;
-		const xEndI = xEnd + 3;
-		const r = Math.min(8, Math.max(0, yStub - y0i - 2), Math.max(0, xEndI - x - 2));
+		const r = Math.min(8, Math.max(0, yStub - y0 - 2), Math.max(0, xEnd - x - 2));
 		const d =
 			r > 1
-				? `M ${x} ${y0i} V ${yStub - r} Q ${x} ${yStub} ${x + r} ${yStub} H ${xEndI}`
-				: `M ${x} ${y0i} V ${yStub} H ${xEndI}`;
+				? `M ${x} ${y0} V ${yStub - r} Q ${x} ${yStub} ${x + r} ${yStub} H ${xEnd}`
+				: `M ${x} ${y0} V ${yStub} H ${xEnd}`;
 		return {
 			key: limbKey,
 			d,
 			pads: [
-				{ x, y: y0i },
-				{ x: xEndI, y: yStub }
+				{ x, y: y0 },
+				{ x: xEnd, y: yStub }
 			]
 		};
 	}
@@ -337,10 +335,10 @@
 				/>
 				{#each trace.pads as pad, i (i)}
 					<rect
-						x={pad.x - 2}
-						y={pad.y - 2}
-						width="4"
-						height="4"
+						x={pad.x - 2.5}
+						y={pad.y - 2.5}
+						width="5"
+						height="5"
 						class="field-pad"
 						class:field-pad--live={live}
 						in:fade={{ duration: 900 }}
@@ -402,7 +400,7 @@
 			{/each}
 		</svg>
 
-		<div class="relative z-10 space-y-2">
+		<div class="relative z-10 space-y-3.5">
 			{#each field as root (fieldRunKey(root.run))}
 				{@const run = root.run}
 				{@const key = fieldRunKey(run)}
@@ -425,7 +423,7 @@
 				<button
 					type="button"
 					use:cellRef={key}
-					class="subpanel field-cell block w-full cursor-pointer p-2.5 text-left text-xs transition-[box-shadow] duration-700"
+					class="subpanel field-cell block w-full cursor-pointer p-3 text-left text-xs transition-[box-shadow] duration-700"
 					class:field-selected={selectedId === key}
 					style={`border-left: 2px solid ${face ? `color-mix(in srgb, ${face.color} 55%, #d9a441)` : 'rgba(217,164,65,0.4)'};${
 						flashes[key]
@@ -478,8 +476,11 @@
 						>
 						<MoodChip face={mood} seed={key} variant="stage" class="ml-auto shrink-0" />
 					</div>
-					{#if runnerLabel(run)}
-						<p class="font-mono text-[10px] text-stone-400">{runnerLabel(run)}</p>
+					{#if runnerLabel(run) || course}
+						<p class="font-mono text-[10px] text-stone-400">
+							{runnerLabel(run) ?? ''}{#if runnerLabel(run) && course}{' · '}{/if}{#if course}course
+								{course.done}/{course.total}{/if}
+						</p>
 					{/if}
 					{#if edge}
 						{#key run.edge?.at}
@@ -493,9 +494,6 @@
 									· <span use:typeReveal={{ text: edge.detail, duration: 2400 }}>{edge.detail}</span
 									>
 								{/if}
-								{#if run.edge?.dir && run.edge.dir !== '.'}
-									<span class="text-ink-mute"> · {run.edge.dir}/</span>
-								{/if}
 								{#if run.edge?.out_bytes != null}
 									<span class="text-ink-mute"> · {run.edge.out_bytes} B</span>
 								{/if}
@@ -507,15 +505,19 @@
 					{/if}
 					<!-- The baseplate: the room this thought occupies — the face is
 					     the thought; the plate is the room (research §5). -->
-					{#if room || course}
+					{#if room || run.edge?.dir}
 						<div
 							class="mt-1.5 flex items-center justify-between gap-2 border-t border-stone-800/70 pt-1 font-mono text-[10px]"
 						>
 							{#if room}
 								<span class="truncate text-stone-400" title={room}>⌂ {room}</span>
 							{/if}
-							{#if course}
-								<span class="shrink-0 text-ink-quiet">course {course.done}/{course.total}</span>
+							{#if run.edge?.dir}
+								<span
+									class="shrink-0 text-amber-200/80"
+									title="the directory the latest command ran in"
+									>▸ {run.edge.dir === '.' ? './' : `${run.edge.dir}/`}</span
+								>
 							{/if}
 						</div>
 					{/if}
@@ -536,7 +538,7 @@
 				</button>
 
 				{#if root.limbs.length > 0}
-					<div class="space-y-1.5" style={`padding-left: ${GUTTER}px`}>
+					<div class="space-y-2.5" style={`padding-left: ${GUTTER}px`}>
 						{#each root.limbs as limb (fieldRunKey(limb.run))}
 							{@const lrun = limb.run}
 							{@const lkey = fieldRunKey(lrun)}
@@ -547,7 +549,7 @@
 							<button
 								type="button"
 								use:cellRef={lkey}
-								class="subpanel field-cell block w-full cursor-pointer p-2 text-left text-xs transition-[box-shadow] duration-700"
+								class="subpanel field-cell block w-full cursor-pointer p-2.5 text-left text-xs transition-[box-shadow] duration-700"
 								class:field-selected={selectedId === lkey}
 								style={`border-left: 2px solid ${lface ? `color-mix(in srgb, ${lface.color} 55%, #d9a441)` : 'rgba(217,164,65,0.3)'};${
 									flashes[lkey]
@@ -611,18 +613,24 @@
 													>{ledge.detail}</span
 												>
 											{/if}
-											{#if lrun.edge?.dir && lrun.edge.dir !== '.'}
-												<span class="text-ink-mute"> · {lrun.edge.dir}/</span>
-											{/if}
 											{#if lrun.edge?.out_bytes != null}
 												<span class="text-ink-mute"> · {lrun.edge.out_bytes} B</span>
 											{/if}
 										</p>
 									{/key}
 								{/if}
-								{#if lroom}
-									<p class="truncate font-mono text-[9px] text-ink-mute" title={lroom}>
-										⌂ {lroom}
+								{#if lroom || lrun.edge?.dir}
+									<p
+										class="flex items-center justify-between gap-2 font-mono text-[9px] text-ink-mute"
+									>
+										{#if lroom}<span class="truncate" title={lroom}>⌂ {lroom}</span>{/if}
+										{#if lrun.edge?.dir}
+											<span
+												class="shrink-0 text-amber-200/70"
+												title="the directory the latest command ran in"
+												>▸ {lrun.edge.dir === '.' ? './' : `${lrun.edge.dir}/`}</span
+											>
+										{/if}
 									</p>
 								{/if}
 								<div class="mt-1 h-0.5 overflow-hidden bg-stone-900" aria-hidden="true">
@@ -691,7 +699,16 @@
 		position: relative;
 		isolation: isolate;
 		background:
-			linear-gradient(165deg, rgba(243, 232, 216, 0.03), transparent 40%), rgba(12, 9, 6, 0.55);
+			linear-gradient(165deg, rgba(243, 232, 216, 0.03), transparent 40%),
+			linear-gradient(to right, rgba(217, 164, 65, 0.5), rgba(217, 164, 65, 0.5)) no-repeat right 0
+				top 0 / 12px 1.5px,
+			linear-gradient(to bottom, rgba(217, 164, 65, 0.5), rgba(217, 164, 65, 0.5)) no-repeat right 0
+				top 0 / 1.5px 12px,
+			linear-gradient(to right, rgba(217, 164, 65, 0.35), rgba(217, 164, 65, 0.35)) no-repeat left 0
+				bottom 0 / 12px 1.5px,
+			linear-gradient(to bottom, rgba(217, 164, 65, 0.35), rgba(217, 164, 65, 0.35)) no-repeat left
+				0 bottom 0 / 1.5px 12px,
+			rgba(12, 9, 6, 0.55);
 		/* One key light from above: a machined top edge catching it, the
 		   plinth falling away beneath. Coherent light reads as expensive;
 		   more glow reads as cheap. */
