@@ -139,31 +139,30 @@ def test_a_run_still_cannot_stop_a_run_it_did_not_dispatch():
 
 _BURST_START = datetime(2026, 8, 15, 10, 38, 0, tzinfo=timezone.utc)
 
-# #1396 — the sweep's window is `_event_mtime`-based (reusing the weave's own
-# `max(burst_window, burst_max_wait)` spread, see `_utterance_sibling_events`),
-# not the old private ±3s constant. Read it from the daemon rather than
-# hardcoding it, so a future retune doesn't quietly detune this test's own
-# boundary coverage.
+# #1396 — the sweep reuses the weave's own
+# `max(burst_window, burst_max_wait)` spread; #1626 moved its stable age to
+# the event's whole-second `created` stamp. Read the spread from the daemon
+# rather than hardcoding it, so a future retune doesn't quietly detune this
+# test's own boundary coverage.
 _MAX_SPREAD = max(daemon._BURST_WINDOW_DEFAULT, daemon._BURST_MAX_WAIT_DEFAULT)
 
 
 def _write_event(inbox_dir, *, conversation_key, offset_s, **meta):
-    """One inbox event, its file **mtime** overridden to a precise offset
-    from ``_BURST_START``.
+    """One inbox event with both stable age and mtime at the given offset.
 
-    #1396 review §6: the old version overrode the ``created`` frontmatter
-    field instead, which ``protocol.create_event`` always writes at whole-
-    second granularity (``strftime("%Y-%m-%dT%H:%M:%SZ")``) — every offset
-    this helper was given truncated to its floor second, so nothing near
-    the window's real boundary was ever exercised, and the sweep has since
-    moved off ``created`` onto ``_event_mtime`` anyway (the same signal
-    ``_weave_burst_siblings_into_body`` reads). ``os.utime`` sets the
-    mtime with full float precision, so a boundary offset lands exactly.
+    `created` is deliberately whole-second, matching production. Mtime is
+    aligned only as the queue key's tiebreaker; the sweep's membership test
+    reads the stable first component after #1626.
     """
     path = protocol.create_event(
         inbox_dir, "cloud", "hi", conversation_key=conversation_key, **meta,
     )
-    epoch = (_BURST_START + timedelta(seconds=offset_s)).timestamp()
+    created = _BURST_START + timedelta(seconds=offset_s)
+    protocol.update_event_meta(
+        protocol._read_event(path),
+        created=created.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    )
+    epoch = created.timestamp()
     os.utime(path, (epoch, epoch))
     return protocol._read_event(path)
 
@@ -188,10 +187,10 @@ def test_user_stop_sweeps_utterance_siblings_and_replies_once(tmp_path, monkeypa
     anchor = _write_event(inbox_dir, conversation_key="telegram:chat:555", offset_s=0)
     siblings = [
         _write_event(inbox_dir, conversation_key="telegram:chat:555", offset_s=s)
-        for s in (0.5, 1.0, 5.0, _MAX_SPREAD - 0.1)
+        for s in (0.5, 1.0, 5.0, _MAX_SPREAD - 1.0)
     ]
     too_late = _write_event(
-        inbox_dir, conversation_key="telegram:chat:555", offset_s=_MAX_SPREAD + 0.5
+        inbox_dir, conversation_key="telegram:chat:555", offset_s=_MAX_SPREAD + 1.0
     )
     other_thread = _write_event(
         inbox_dir, conversation_key="telegram:chat:999", offset_s=0.2

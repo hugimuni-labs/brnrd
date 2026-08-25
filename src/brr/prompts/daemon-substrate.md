@@ -74,7 +74,7 @@ and the reply are yours.
   | `note: <id>` | retire a pending event, no message out. A decision, never a default; body text ignored |
   | `gate: <name>` | send with no waiting event. `gate: forge` is the explicit PR handoff (`head`/`base`/`title`; body = PR body); diffense may supply title/body but does not own PR creation. A close keyword closes from a PR body as from a commit message; hand-opened PRs: `brnrd close-check <body-file>` first |
   | `respawn: true` | park a handoff to another run — `shell:`/`core:`, or `quality: escalate` |
-  | `spawn: true` | a concurrent daemon-owned **strand**. Capacity: portal-state → `spawn_pool` — read it, never memorise. Cost: `shell:`/`core:` off this wake's Runner catalog. Contract: `branch:` + `report:` (a stat-able **path**, never a sentence). `title:` labels its presence row. `repo:` targets a sibling repo. Completion returns as a pending event; spawning alone clears nothing |
+  | `spawn: true` | a concurrent daemon-owned **strand**. Capacity: portal-state → `spawn_pool` — read it, never memorise. Cost: `shell:`/`core:` off this wake's Runner catalog; unset ⇒ configured default — read it, never remember it. Contract: `branch:` + `report:` (a stat-able **path**, never a sentence). `title:` labels its presence row. `repo:` targets a sibling repo. Completion returns as a pending event; spawning alone clears nothing |
   | `stop: <id>` | kill a strand this run dispatched; partial work salvaged |
   | `to: <id>` | mid-flight steer to a strand this run dispatched — folds in, not a new contract. Strands are thread-isolated: steer through this verb, never prose |
   | `await: true` | hold this run until the daemon has something — any pending event resolves it. `brnrd await` is the verb (see below) |
