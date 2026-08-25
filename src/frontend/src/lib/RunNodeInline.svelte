@@ -20,6 +20,7 @@
 		type HeartbeatLevel,
 		type LiveRun
 	} from './liveRuns';
+	import { actColor } from './residentField';
 	import type { RunWarpAttachment } from './warpGraph';
 	import {
 		messageInstant,
@@ -358,7 +359,10 @@
 						<p class="flex min-w-0 items-baseline gap-1.5" in:fade={{ duration: 700 }}>
 							<span class="shrink-0 tracking-wide text-ink-mute uppercase">edge</span>
 							<span class="min-w-0 truncate text-stone-300">
-								<span aria-hidden="true" class="text-amber-300">⌁</span>
+								<!-- Act-colored, the same palette the field and the operator
+								     console speak (`residentField.actColor` ↔ tui.py, #1623) —
+								     three renderers of one boundary record, one grammar. -->
+								<span aria-hidden="true" style={`color: ${actColor(edge?.act)}`}>⌁</span>
 								<span use:typeReveal={{ text: edgeText, duration: 2400 }}>{edgeText}</span>
 							</span>
 							{#if edge?.out_bytes != null}

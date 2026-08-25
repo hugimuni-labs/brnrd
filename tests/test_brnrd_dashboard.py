@@ -2249,6 +2249,7 @@ def test_put_live_runs_carries_room_edge_and_lifecycle():
                     "detail": "x" * 600,  # hostile length — truncates, never rejects
                     "out_bytes": 512, "injected": True,
                 },
+                "portals": {"pending": 2, "oldest_at": "2026-08-25T22:05:00Z"},
             },
             {"id": "run-bare", "run_id": "run-bare", "repo_label": "Gurio/brr"},
         ]},
@@ -2272,7 +2273,9 @@ def test_put_live_runs_carries_room_edge_and_lifecycle():
     assert room_row["edge"]["injected"] is True
     assert len(room_row["edge"]["detail"]) == 500
     assert room_row["edge"]["detail"].endswith("…")
+    assert room_row["portals"] == {"pending": 2, "oldest_at": "2026-08-25T22:05:00Z"}
     bare = rows["run-bare"]
     assert bare["room"] is None
     assert bare["edge"] is None
     assert bare["lifecycle"] is None
+    assert bare["portals"] is None

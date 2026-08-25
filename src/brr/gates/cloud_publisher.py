@@ -1500,7 +1500,29 @@ def _room_payload(brr_dir: Path, manifest: Mapping[str, Any]) -> dict[str, Any] 
     }
 
 
-def _edge_payload(brr_dir: Path, run_id: str) -> dict[str, Any] | None:
+def _edge_dir(record_cwd: Any, manifest: Mapping[str, Any], brr_dir: Path) -> str | None:
+    """The boundary's working dir, publishable — relative or basename only.
+
+    The transcript records the raw cwd (local surface); the wire must not
+    carry a host path. Relativize against the run's own tree (worktree
+    path, else the checkout the daemon serves); the tree root itself
+    publishes as ``.``; a cwd outside the tree degrades to its basename.
+    """
+    if not isinstance(record_cwd, str) or not record_cwd.strip():
+        return None
+    cwd = record_cwd.strip()
+    tree = str(manifest.get("worktree_path") or "").strip() or str(brr_dir.parent)
+    try:
+        rel = Path(cwd).resolve().relative_to(Path(tree).resolve())
+    except (OSError, ValueError):
+        return (Path(cwd).name or None) and Path(cwd).name[:256]
+    text = str(rel)
+    return ("." if text == "." else text)[:256]
+
+
+def _edge_payload(
+    brr_dir: Path, run_id: str, manifest: Mapping[str, Any] | None = None
+) -> dict[str, Any] | None:
     """The latest attested tool boundary, from a bounded transcript tail.
 
     Skips a subagent's boundaries (#1095 — a limb's act is not the run's)
@@ -1548,6 +1570,7 @@ def _edge_payload(brr_dir: Path, run_id: str) -> dict[str, Any] | None:
             "detail": detail[:500] if isinstance(detail, str) and detail else None,
             "out_bytes": out_bytes if isinstance(out_bytes, int) else None,
             "injected": bool(record.get("inject")),
+            "dir": _edge_dir(record.get("cwd"), manifest or {}, brr_dir),
         }
     return None
 
@@ -1567,6 +1590,44 @@ def _await_facet(brr_dir: Path, manifest: Mapping[str, Any]) -> dict[str, Any] |
         return None
     facet = raw.get("await") if isinstance(raw, dict) else None
     return facet if isinstance(facet, dict) else None
+
+
+def _portals_payload(brr_dir: Path, manifest: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Correspondence waiting at this run's door — the *put to read* fact.
+
+    Reads the same portal capsule ``_await_facet`` does, taking the
+    ``inbound.events`` view the daemon refreshes on its heartbeat: how many
+    pending events stand at this run's portal, and when the oldest arrived.
+    Counts and one timestamp only — the wire carries the *fact* of a
+    waiting message, never its content (same secrets posture as the edge's
+    pre-redacted detail). ``None`` when the capsule is absent or unreadable:
+    no portal attested is different from an empty one.
+    """
+    event_id = str(manifest.get("event_id") or "").strip()
+    if not event_id:
+        return None
+    try:
+        raw = json.loads(
+            (brr_dir / "outbox" / event_id / "portal-state.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    except (OSError, ValueError):
+        return None
+    inbound = raw.get("inbound") if isinstance(raw, dict) else None
+    if not isinstance(inbound, dict):
+        return None
+    events = inbound.get("events")
+    if not isinstance(events, list):
+        return None
+    oldest: str | None = None
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        created = ev.get("created")
+        if isinstance(created, str) and created and (oldest is None or created < oldest):
+            oldest = created
+    return {"pending": len(events), "oldest_at": oldest}
 
 
 def _lifecycle_payload(
@@ -1718,7 +1779,13 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
                 "lifecycle": lifecycle,
                 "await_until": await_until,
                 "room": _room_payload(brr_dir, manifest) if manifest else None,
-                "edge": _edge_payload(brr_dir, run_id),
+                "edge": _edge_payload(brr_dir, run_id, manifest),
+                # the-field-takes-its-body: the message-ceremony fact — how
+                # many pending events stand at this run's portal and when
+                # the oldest arrived, so a sent message can render as
+                # *resting, put to read* until the boundary that folds it
+                # in attests the read. Counts only, never bodies.
+                "portals": _portals_payload(brr_dir, manifest) if manifest else None,
             })
         )
     return out

@@ -108,6 +108,11 @@ export interface LiveRun {
 	 *  detail summary (secrets masked at write time, hooks._tool_detail),
 	 *  response bytes, and whether the daemon injected context there. */
 	edge?: LiveRunEdge | null;
+	/** Pending correspondence at the run's portal — the message ceremony's
+	 *  *resting, put to read* state. `null`/absent = no portal attested
+	 *  (ad-hoc session, pre-upgrade daemon); `pending: 0` = a known-empty
+	 *  door. */
+	portals?: LiveRunPortals | null;
 	// #1510 ("the mood of a dead run"): this row's own source report is older
 	// than the freshness window — server-computed (`dashboard.py::
 	// _stamp_row_freshness`), same shape as `RunnerProfile.daemon_stale`
@@ -128,6 +133,14 @@ export interface LiveRunRoom {
 	dir: string | null;
 }
 
+/** Correspondence waiting at the run's portal — the *put to read* fact of
+ * the message ceremony (`cloud_publisher._portals_payload`). Counts and one
+ * timestamp only; a pending body never rides this wire. */
+export interface LiveRunPortals {
+	pending: number;
+	oldest_at: string | null;
+}
+
 export interface LiveRunEdge {
 	at: string | null;
 	phase: string | null;
@@ -136,6 +149,9 @@ export interface LiveRunEdge {
 	detail: string | null;
 	out_bytes: number | null;
 	injected: boolean;
+	/** Where the act ran, relative to the run's own tree (`.` = the tree
+	 *  root) — relativized daemon-side; a host path never rides the wire. */
+	dir?: string | null;
 }
 
 export interface LiveRunsResponse {
@@ -472,12 +488,13 @@ export function roomLine(room: LiveRunRoom | null | undefined): string | null {
 	return line || null;
 }
 
-/** The latest boundary as one compact line: `act · detail`. The detail is
- * already redacted and capped at the writer (`hooks._tool_detail`); this
- * only composes. */
+/** The latest boundary as one compact line: `act · detail · in <dir>`. The
+ * detail is already redacted and capped at the writer (`hooks._tool_detail`);
+ * the dir arrives tree-relative from the publisher; this only composes. */
 export function edgeLine(edge: LiveRunEdge | null | undefined): string | null {
 	if (!edge) return null;
-	const parts = [edge.act, edge.detail].filter(Boolean);
+	const where = edge.dir && edge.dir !== '.' ? `in ${edge.dir}` : null;
+	const parts = [edge.act, edge.detail, where].filter(Boolean);
 	return parts.length ? parts.join(' · ') : null;
 }
 
