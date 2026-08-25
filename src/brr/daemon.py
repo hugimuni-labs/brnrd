@@ -8070,22 +8070,38 @@ def _utterance_sibling_events(inbox_dir: Path, anchor: dict) -> list[dict]:
     - **status == "pending" only**, not "processing". A sibling that
       already spawned its own run is a live process; this function only
       ever retires letters nothing has picked up yet.
-    - **`_event_mtime`, not the `created` field.** `created` is written at
-      second granularity (`protocol.py`'s `strftime("%Y-%m-%dT%H:%M:%SZ")`),
-      so a window measured against it is really one second wider than
-      stated depending on sub-second alignment. `_event_mtime` (file mtime)
-      is what the weave predicate above already uses for the same reason,
-      spread over the same `max(burst_window, burst_max_wait)` window —
-      reused here rather than the sweep's own separate
-      `_UTTERANCE_SWEEP_WINDOW_S=3.0` constant, which measured a narrower
-      slice of the exact same "did these arrive together" question the
-      weave already answers.
+    - **`_event_queue_sort_key`'s stable age, not raw `_event_mtime`.**
+      Bare file mtime is a live value — *any* later status or meta write to
+      the anchor's own event bumps it forward, and the anchor always gets
+      at least one such write (`status: processing`, plus a wake-request
+      stamp when a tap is in play) between arrival and the moment a user
+      stop reaches this function. #1497 hit the identical failure for
+      dispatch ordering ("an event dispatched at 14:58:06Z sorted *after*
+      one created 15:33:51Z because the earlier one's mtime was bumped by
+      an unrelated `status: processing` write") and fixed it by sorting on
+      the event's own `created` epoch — stamped once, at ingestion, never
+      touched again — with mtime only as the fallback for a missing or
+      unparseable stamp. This function used to compare live mtimes
+      directly and inherited the same bug on the account owner's own
+      burst: an anchor whose dispatch took longer than `max_spread` to
+      actually start running (burst-settle wait, a wake-request claim
+      round trip, subprocess spin-up) drifts its own mtime far enough past
+      a sibling's untouched one that the window check excludes a sibling
+      that plainly arrived in the same burst — silently, since the miss
+      only ever reads as "nothing to sweep" (measured live 2026-08-25: a
+      ~21s dispatch gap left a genuine sibling unswept, and it went on to
+      independently dispatch and lose a dashboard wake-request tap the
+      stop was meant to make available to it). Reusing
+      `_event_queue_sort_key` here closes that gap the same way #1497
+      closed it for the dispatch sort — one derivation of "how old is this
+      event", not a second copy that can drift out of sync with the fix
+      already applied to its sibling.
     """
     anchor_conv = conversations.conversation_key_for_event(anchor)
     anchor_corr = conversations.correspondent_key_for_event(anchor)
     if not anchor_conv:
         return []
-    anchor_mtime = _event_mtime(anchor)
+    anchor_age = _event_queue_sort_key(anchor)[0]
     max_spread = max(_BURST_WINDOW_DEFAULT, _BURST_MAX_WAIT_DEFAULT)
     anchor_id = anchor.get("id")
     siblings = []
@@ -8098,8 +8114,8 @@ def _utterance_sibling_events(inbox_dir: Path, anchor: dict) -> list[dict]:
             continue
         if anchor_corr and conversations.correspondent_key_for_event(ev) != anchor_corr:
             continue
-        mtime = _event_mtime(ev)
-        if anchor_mtime > 0 and mtime > 0 and abs(mtime - anchor_mtime) > max_spread:
+        age = _event_queue_sort_key(ev)[0]
+        if anchor_age > 0 and age > 0 and abs(age - anchor_age) > max_spread:
             continue
         siblings.append(ev)
     return siblings
@@ -15235,6 +15251,14 @@ def _weave_burst_siblings_into_body(
     capsule until the resident read it. Same-thread events that arrived
     within the burst window are woven here so actionable follow-ups are
     visible without relying on an early ``inbox.json`` read.
+
+    Windowed on ``_event_queue_sort_key``'s stable age (``created`` epoch,
+    mtime fallback), not raw ``_event_mtime`` — this runs from
+    ``_run_worker``, *after* the lead event has already taken its own
+    ``status: processing`` write (and a wake-request meta stamp, when a tap
+    is in play), so its live mtime already reflects dispatch overhead the
+    sibling never paid. See ``_utterance_sibling_events`` for the full
+    account of the drift this produces and #1497 for the precedent fix.
     """
     burst_window = float(
         cfg.get("dispatch.burst_window_seconds", _BURST_WINDOW_DEFAULT)
@@ -15251,7 +15275,7 @@ def _weave_burst_siblings_into_body(
     if not lead_id or not lead_body:
         return None, set()
 
-    lead_mtime = _event_mtime(lead_event)
+    lead_age = _event_queue_sort_key(lead_event)[0]
     siblings: list[tuple[float, dict]] = []
     for ev in protocol.list_pending(inbox_dir):
         eid = str(ev.get("id") or "").strip()
@@ -15267,10 +15291,10 @@ def _weave_burst_siblings_into_body(
             conversation_key=conversation_key,
         ):
             continue
-        mtime = _event_mtime(ev)
-        if lead_mtime > 0 and mtime > 0 and abs(mtime - lead_mtime) > max_spread:
+        age = _event_queue_sort_key(ev)[0]
+        if lead_age > 0 and age > 0 and abs(age - lead_age) > max_spread:
             continue
-        siblings.append((mtime, ev))
+        siblings.append((age, ev))
 
     if not siblings:
         return None, set()
