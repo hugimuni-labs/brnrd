@@ -768,6 +768,22 @@ def _truncate_to_bounds(model: type[BaseModel], data: Any) -> Any:
     return data if out is None else out
 
 
+class LiveRunPortalsIn(BaseModel):
+    """Correspondence waiting at a live run's portal (the message ceremony).
+
+    Derived daemon-side from the run's own portal capsule
+    (`cloud_publisher._portals_payload` reads ``inbound.events`` off
+    ``portal-state.json``): how many pending events stand at the run's
+    door and when the oldest arrived. Counts and one timestamp only — the
+    wire carries the *fact* of a waiting message, never its content, so a
+    dashboard can draw *sent → resting, put to read → folded in* without a
+    second telemetry truth or a body leak.
+    """
+
+    pending: int = Field(default=0, ge=0)
+    oldest_at: str | None = None
+
+
 class LiveRunIn(BaseModel):
     """One entry from the local presence registry (``src/brr/presence.py``)
     — a thought currently awake on this daemon, or an ad-hoc session
@@ -851,6 +867,11 @@ class LiveRunIn(BaseModel):
     await_until: str | None = None
     room: LiveRunRoomIn | None = None
     edge: LiveRunEdgeIn | None = None
+    # the-field-takes-its-body: pending correspondence at the run's portal
+    # — the *put to read* half of the message ceremony. Documented on its
+    # model above; `None` for an ad-hoc session or a daemon predating the
+    # field — absent stays absent.
+    portals: LiveRunPortalsIn | None = None
 
     @classmethod
     def string_bounds(cls) -> dict[str, int]:

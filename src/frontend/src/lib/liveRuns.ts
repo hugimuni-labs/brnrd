@@ -108,6 +108,11 @@ export interface LiveRun {
 	 *  detail summary (secrets masked at write time, hooks._tool_detail),
 	 *  response bytes, and whether the daemon injected context there. */
 	edge?: LiveRunEdge | null;
+	/** Pending correspondence at the run's portal — the message ceremony's
+	 *  *resting, put to read* state. `null`/absent = no portal attested
+	 *  (ad-hoc session, pre-upgrade daemon); `pending: 0` = a known-empty
+	 *  door. */
+	portals?: LiveRunPortals | null;
 	// #1510 ("the mood of a dead run"): this row's own source report is older
 	// than the freshness window — server-computed (`dashboard.py::
 	// _stamp_row_freshness`), same shape as `RunnerProfile.daemon_stale`
@@ -126,6 +131,14 @@ export interface LiveRunRoom {
 	env: string | null;
 	branch: string | null;
 	dir: string | null;
+}
+
+/** Correspondence waiting at the run's portal — the *put to read* fact of
+ * the message ceremony (`cloud_publisher._portals_payload`). Counts and one
+ * timestamp only; a pending body never rides this wire. */
+export interface LiveRunPortals {
+	pending: number;
+	oldest_at: string | null;
 }
 
 export interface LiveRunEdge {
