@@ -2209,3 +2209,70 @@ def test_dashboard_run_ledger_api_stamps_per_row_report_freshness_across_a_colli
     assert by_run["run-zombie"]["summary"] == "Zombie summary"
     assert by_run["run-zombie"]["daemon_stale"] is True
     assert by_run["run-zombie"]["daemon_reported_at"] is not None
+
+
+def test_put_live_runs_carries_room_edge_and_lifecycle():
+    """the-overlay-that-shows-the-room: the row's new where-the-work-happens
+    fields survive the ingest round-trip, over-long nested display strings
+    truncate instead of 422ing the row (#685's contract, extended to nested
+    models), and absent stays absent."""
+    client = _client()
+    account_token = _login(client)
+    repo_id = _create_repo(client, account_token)
+    account_headers = {"Authorization": f"Bearer {account_token}"}
+
+    pair = client.post("/v1/accounts/pair").json()
+    client.post(
+        f"/v1/accounts/pair/{pair['pair_code']}/approve",
+        json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]},
+        headers=account_headers,
+    )
+    paired = client.get(
+        f"/v1/accounts/pair/{pair['pair_code']}",
+        params={"poll_secret": pair["poll_secret"]},
+    ).json()
+    daemon_headers = {"Authorization": f"Bearer {paired['daemon_token']}"}
+    client.post("/v1/daemons/register", json={"daemon_name": "laptop"}, headers=daemon_headers)
+
+    r = client.put(
+        "/v1/daemons/live-runs",
+        json={"runs": [
+            {
+                "id": "run-room", "run_id": "run-room",
+                "repo_label": "Gurio/brr",
+                "lifecycle": "awaiting",
+                "await_until": "2026-08-25T19:00:00Z",
+                "room": {"env": "worktree", "branch": "brr/the-room", "dir": "run-room"},
+                "edge": {
+                    "at": "2026-08-25T18:01:00Z", "phase": "post-tool",
+                    "act": "run", "tools": ["Bash"],
+                    "detail": "x" * 600,  # hostile length — truncates, never rejects
+                    "out_bytes": 512, "injected": True,
+                },
+            },
+            {"id": "run-bare", "run_id": "run-bare", "repo_label": "Gurio/brr"},
+        ]},
+        headers=daemon_headers,
+    )
+    assert r.status_code == 200
+    assert r.json()["runs_rejected"] == []
+    assert len(r.json()["runs"]) == 2
+
+    body = client.get(
+        "/v1/dashboard/live-runs", headers=account_headers,
+    ).json()
+    rows = {row["run_id"]: row for row in body["runs"]}
+    room_row = rows["run-room"]
+    assert room_row["lifecycle"] == "awaiting"
+    assert room_row["await_until"] == "2026-08-25T19:00:00Z"
+    assert room_row["room"] == {
+        "env": "worktree", "branch": "brr/the-room", "dir": "run-room",
+    }
+    assert room_row["edge"]["act"] == "run"
+    assert room_row["edge"]["injected"] is True
+    assert len(room_row["edge"]["detail"]) == 500
+    assert room_row["edge"]["detail"].endswith("…")
+    bare = rows["run-bare"]
+    assert bare["room"] is None
+    assert bare["edge"] is None
+    assert bare["lifecycle"] is None

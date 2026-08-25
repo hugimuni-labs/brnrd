@@ -9,7 +9,18 @@
 	import { deliveryToneClass } from '$lib/deliveryTone';
 	import MarkdownContent from './MarkdownContent.svelte';
 	import MoodChip from './MoodChip.svelte';
-	import { LiveRunsAuthError, moodFace, requestRunStop, type HeartbeatLevel } from './liveRuns';
+	import {
+		LiveRunsAuthError,
+		edgeLine,
+		lifecycleNotice,
+		moodFace,
+		requestRunStop,
+		roomLine,
+		runCourse,
+		type HeartbeatLevel,
+		type LiveRun
+	} from './liveRuns';
+	import type { RunWarpAttachment } from './warpGraph';
 	import {
 		messageInstant,
 		messageTarget,
@@ -22,6 +33,7 @@
 	import { runFace, type RunFace } from './runFace';
 	import type { SurfaceResponse } from './surface';
 	import { glitchReveal, typeReveal } from './transitions';
+	import { fade } from 'svelte/transition';
 
 	interface Props {
 		data: SurfaceResponse | null;
@@ -78,6 +90,19 @@
 		 */
 		crossingIndex?: Map<string, string[]>;
 		topicFaces?: Map<string, RunFace>;
+		/**
+		 * The run's own live packet, when it is live — the where-the-work-
+		 * happens facts the wire now carries (room, edge, lifecycle,
+		 * await_until, card_text for the course). `null` for a closed run;
+		 * every strip below renders nothing rather than a guess.
+		 */
+		liveRun?: LiveRun | null;
+		/**
+		 * The warp items attached to this run (`warpGraph.runWarpAttachments`)
+		 * — taken by it, or resolved by it. The run's course through the
+		 * account's intent, worn on the node itself.
+		 */
+		warpItems?: RunWarpAttachment[];
 	}
 
 	let {
@@ -90,7 +115,9 @@
 		stopRun = requestRunStop,
 		identity = null,
 		crossingIndex = new Map(),
-		topicFaces = new Map()
+		topicFaces = new Map(),
+		liveRun = null,
+		warpItems = []
 	}: Props = $props();
 
 	// Confirm-then-commit, in the repos page's own grammar: an explicit pair of
@@ -188,6 +215,22 @@
 		const timestamp = Date.parse(raw);
 		return Number.isNaN(timestamp) ? raw : new Date(timestamp).toLocaleTimeString();
 	}
+
+	// ── where the work happens ──────────────────────────────────────────
+	// All four derive from the live packet and render nothing when it is
+	// absent (closed run, pre-upgrade daemon) — absent stays absent.
+	let notice = $derived(liveRun ? lifecycleNotice(liveRun) : null);
+	let room = $derived(roomLine(liveRun?.room));
+	let edge = $derived(liveRun?.edge ?? null);
+	let edgeText = $derived(edgeLine(edge));
+	let course = $derived(runCourse(liveRun?.card_text));
+	// AWAIT cools the whole panel's register; CLOSING warms it. The colors
+	// come from the same status palette every live surface speaks.
+	const NOTICE_COLOR: Record<'starting' | 'awaiting' | 'closing', string> = {
+		starting: STATUS_UNKNOWN,
+		awaiting: STATUS_WARN,
+		closing: STATUS_GOOD
+	};
 </script>
 
 {#if data === null}
@@ -270,6 +313,94 @@
 				</div>
 			{/if}
 		</div>
+
+		{#if notice}
+			<!-- The lifecycle notice — AWAIT and CLOSING rendered *specifically*
+			     (maintainer, 2026-08-25: "we also should display awaiting and
+			     closing very specifically"). AWAIT means the runner still exists
+			     and is deliberately holding — the state a reader must never
+			     mistake for "between wakes" or a stall; CLOSING is the closeout
+			     boundary in flight, visible only while genuinely attested. The
+			     slow fade is the ceremony: state changes here happen at minutes'
+			     tempo, and the surface should move at the same pace. -->
+			<div
+				class="mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 border px-2 py-1.5 font-mono text-[10px]"
+				style={`border-color: color-mix(in srgb, ${NOTICE_COLOR[notice.tone]} 35%, transparent)`}
+				in:fade={{ duration: 1200 }}
+			>
+				<span
+					class="font-medium tracking-widest uppercase"
+					style={`color: ${NOTICE_COLOR[notice.tone]}`}
+					use:typeReveal={{ text: notice.word, duration: 1600 }}>{notice.word}</span
+				>
+				{#if notice.detail}
+					<span class="text-ink-quiet">{notice.detail}</span>
+				{/if}
+			</div>
+		{/if}
+
+		{#if room || edgeText || course || warpItems.length > 0}
+			<!-- Where the work happens: the room (branch · tree), the edge (the
+			     latest attested command, already redacted at the writer), the
+			     course position read off the run's own card, and the warp items
+			     this run took or resolved. Facts as rows; the edge re-reveals
+			     slowly on each new boundary — commands land every few seconds
+			     at most, so the reveal can afford to be watched. -->
+			<div class="mt-2 space-y-1 border-b border-stone-800/70 pb-2 font-mono text-[10px]">
+				{#if room}
+					<p class="flex min-w-0 items-baseline gap-1.5">
+						<span class="shrink-0 tracking-wide text-ink-mute uppercase">room</span>
+						<span class="truncate text-stone-300" use:typeReveal={{ text: room }}>{room}</span>
+					</p>
+				{/if}
+				{#if edgeText}
+					{#key edge?.at}
+						<p class="flex min-w-0 items-baseline gap-1.5" in:fade={{ duration: 700 }}>
+							<span class="shrink-0 tracking-wide text-ink-mute uppercase">edge</span>
+							<span class="min-w-0 truncate text-stone-300">
+								<span aria-hidden="true" class="text-amber-300">⌁</span>
+								<span use:typeReveal={{ text: edgeText, duration: 2400 }}>{edgeText}</span>
+							</span>
+							{#if edge?.out_bytes != null}
+								<span class="shrink-0 text-ink-quiet">{edge.out_bytes} B</span>
+							{/if}
+							{#if edge?.injected}
+								<!-- The daemon reached the run at this boundary — a steer or
+								     portal delta folded in. The one moment the world crosses
+								     into the scroll, marked. -->
+								<span
+									class="shrink-0 text-sky-300"
+									title="the daemon folded context in at this boundary">⇣ world folded in</span
+								>
+							{/if}
+						</p>
+					{/key}
+				{/if}
+				{#if course}
+					<p class="flex min-w-0 items-baseline gap-1.5">
+						<span class="shrink-0 tracking-wide text-ink-mute uppercase">course</span>
+						<span class="shrink-0 text-stone-300">{course.done}/{course.total}</span>
+						{#if course.current}
+							<span class="truncate text-ink-quiet" title={course.current}>→ {course.current}</span>
+						{/if}
+					</p>
+				{/if}
+				{#if warpItems.length > 0}
+					<p class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+						<span class="shrink-0 tracking-wide text-ink-mute uppercase">warp</span>
+						{#each warpItems as item (item.id)}
+							<span
+								class={`inline-flex items-baseline gap-1 ${item.relation === 'done' ? 'text-sky-300' : 'text-amber-200'}`}
+								title={item.headline}
+							>
+								<span class="font-medium">{item.id}</span>
+								<span class="text-ink-quiet">{item.relation}</span>
+							</span>
+						{/each}
+					</p>
+				{/if}
+			</div>
+		{/if}
 
 		{#if vitals.length > 0}
 			<!-- The vitals line: one row of live/receipt facts, in the node's own
@@ -383,11 +514,24 @@
 		{#if liveLevel}
 			<!-- The "in motion" tell, same grammar as the LiveRuns grid: an
 			     indeterminate scan while the heartbeat is fresh, a flatlined
-			     full-width low-opacity track when it isn't. -->
+			     full-width low-opacity track when it isn't. AWAIT slows the
+			     scan to a breath and cools its color — the runner exists and
+			     is listening, deliberately quiet; a quiet state should look
+			     quiet, not busy (motion is a receipt, never ambient). -->
 			<div class="mt-2 h-1 overflow-hidden bg-stone-900" aria-hidden="true">
 				<div
-					class={`h-full ${liveLevel === 'running' ? 'w-1/3 animate-[loom-scan_1.4s_ease-in-out_infinite]' : 'w-full'}`}
-					style={`background-color: ${LIVE_COLOR[liveLevel]}; opacity: ${liveLevel === 'running' ? 1 : 0.3}`}
+					class={`h-full ${
+						liveLevel !== 'running'
+							? 'w-full'
+							: notice?.tone === 'awaiting'
+								? 'w-1/3 animate-[loom-scan_6s_ease-in-out_infinite]'
+								: 'w-1/3 animate-[loom-scan_1.4s_ease-in-out_infinite]'
+					}`}
+					style={`background-color: ${
+						notice?.tone === 'awaiting' && liveLevel === 'running'
+							? STATUS_WARN
+							: LIVE_COLOR[liveLevel]
+					}; opacity: ${liveLevel === 'running' ? (notice?.tone === 'awaiting' ? 0.6 : 1) : 0.3}`}
 				></div>
 			</div>
 		{/if}
