@@ -84,6 +84,30 @@ export interface LiveRun {
 	// it says only that: the run is still running until the daemon's next sync
 	// finalizes it as `stopped`.
 	stop_requested?: boolean;
+	// the-overlay-that-shows-the-room: where the work happens, published by
+	// the daemon (`cloud_publisher._room_payload` / `_edge_payload` /
+	// `_lifecycle_payload`) rather than guessed here. All absent on a
+	// pre-upgrade daemon or an ad-hoc session — absent stays absent.
+	//
+	// `lifecycle` is the derived execution state: starting | weaving |
+	// awaiting | closing. AWAITING is a positive fact (the run's own portal
+	// `await` facet, armed and unresolved) — never an inference from
+	// quietness — and CLOSING is the attested finalizing phase. Both must
+	// render *specifically*: an awaiting runner still exists, which is what
+	// separates it from "between wakes"; a closing run is a boundary in
+	// flight, not a place to linger (design-resident-field.md §Lifecycle).
+	lifecycle?: string | null;
+	/** The armed wait's deadline (ISO), when lifecycle is `awaiting`. */
+	await_until?: string | null;
+	/** Where this thought's hands are: env kind, the branch the tree is
+	 *  actually on (asked of git live — a run renames branches mid-flight),
+	 *  and the worktree dir name (`null` dir = the shared checkout). */
+	room?: LiveRunRoom | null;
+	/** The latest attested tool boundary, from the run's boundary
+	 *  transcript tail: classified act, tool names, the already-redacted
+	 *  detail summary (secrets masked at write time, hooks._tool_detail),
+	 *  response bytes, and whether the daemon injected context there. */
+	edge?: LiveRunEdge | null;
 	// #1510 ("the mood of a dead run"): this row's own source report is older
 	// than the freshness window — server-computed (`dashboard.py::
 	// _stamp_row_freshness`), same shape as `RunnerProfile.daemon_stale`
@@ -96,6 +120,22 @@ export interface LiveRun {
 	// `pickLane.ts::pickRows`) must skip a row with this true, or a dead run's
 	// stale data can win the pick forever.
 	daemon_stale?: boolean | null;
+}
+
+export interface LiveRunRoom {
+	env: string | null;
+	branch: string | null;
+	dir: string | null;
+}
+
+export interface LiveRunEdge {
+	at: string | null;
+	phase: string | null;
+	act: string | null;
+	tools: string[];
+	detail: string | null;
+	out_bytes: number | null;
+	injected: boolean;
 }
 
 export interface LiveRunsResponse {
@@ -385,4 +425,83 @@ export function heartbeatLevel(
 	const seen = lastSeen ? Date.parse(lastSeen) : NaN;
 	if (Number.isNaN(seen)) return 'unknown';
 	return now - seen > STALL_AFTER_MS ? 'stalling' : 'running';
+}
+
+// ── where the work happens (the-overlay-that-shows-the-room) ────────────────
+
+/** The lifecycle states that deserve their own word on a surface. `weaving`
+ * is the ordinary burning state the phase label already narrates, so it
+ * returns `null` here — this helper answers only "is this run in a state a
+ * reader must not mistake for ordinary work": AWAIT (the runner exists and
+ * is deliberately holding — not between wakes, not stalled) and CLOSING
+ * (the closeout boundary is in flight). `starting` gets a word too: a
+ * registered thought whose Shell hasn't spoken yet. */
+export function lifecycleNotice(
+	run: Pick<LiveRun, 'lifecycle' | 'await_until'>
+): { word: string; tone: 'starting' | 'awaiting' | 'closing'; detail: string | null } | null {
+	switch (run.lifecycle) {
+		case 'starting':
+			return { word: 'starting', tone: 'starting', detail: 'the wake is being assembled' };
+		case 'awaiting': {
+			const until = run.await_until ? Date.parse(run.await_until) : NaN;
+			const deadline = Number.isNaN(until)
+				? null
+				: new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+			return {
+				word: 'await',
+				tone: 'awaiting',
+				detail: deadline
+					? `holding for the world — resolves on any event, or ${deadline}`
+					: 'holding for the world — resolves on any event'
+			};
+		}
+		case 'closing':
+			return { word: 'closing', tone: 'closing', detail: 'closeout in flight — attesting produce' };
+		default:
+			return null;
+	}
+}
+
+/** One line naming the room: `branch · dir` (worktree) or `branch · checkout`
+ * (host). `null` when the daemon published no room — absent stays absent,
+ * never a guessed path. */
+export function roomLine(room: LiveRunRoom | null | undefined): string | null {
+	if (!room) return null;
+	const parts = [room.branch, room.dir ?? (room.env === 'host' ? 'the shared checkout' : null)];
+	const line = parts.filter(Boolean).join(' · ');
+	return line || null;
+}
+
+/** The latest boundary as one compact line: `act · detail`. The detail is
+ * already redacted and capped at the writer (`hooks._tool_detail`); this
+ * only composes. */
+export function edgeLine(edge: LiveRunEdge | null | undefined): string | null {
+	if (!edge) return null;
+	const parts = [edge.act, edge.detail].filter(Boolean);
+	return parts.length ? parts.join(' · ') : null;
+}
+
+/** Course position parsed from the run's own card: `- [ ]` / `- [x]` rows
+ * anywhere in the card text (the resident's `## Plan` convention). Returns
+ * `null` when the card carries no checkbox course at all — a run without a
+ * course renders nothing rather than `0/0`. `current` is the first open
+ * row, the reader's "where the plan is standing". */
+export function runCourse(
+	cardText: string | null | undefined
+): { done: number; total: number; current: string | null } | null {
+	if (!cardText) return null;
+	let done = 0;
+	let total = 0;
+	let current: string | null = null;
+	for (const line of cardText.split('\n')) {
+		const match = /^\s*[-*] \[([ xX])\]\s+(.*)$/.exec(line);
+		if (!match) continue;
+		total += 1;
+		if (match[1] === ' ') {
+			if (current === null) current = match[2].trim();
+		} else {
+			done += 1;
+		}
+	}
+	return total > 0 ? { done, total, current } : null;
 }

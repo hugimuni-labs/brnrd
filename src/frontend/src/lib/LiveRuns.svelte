@@ -5,10 +5,14 @@
 	import { typeReveal } from './transitions';
 	import MoodChip from './MoodChip.svelte';
 	import {
+		edgeLine,
 		heartbeatLevel,
+		lifecycleNotice,
 		liveRelicChips,
 		liveRunDisplayName,
 		moodFace,
+		roomLine,
+		runCourse,
 		type LiveRun
 	} from './liveRuns';
 	import { runFacesInWindow } from './runFace';
@@ -117,8 +121,27 @@
 	// stalling/unknown/phaseless row keeps the generic freshness label —
 	// "stalling" is more informative than a stale phase reading.
 	function label(run: LiveRun, lvl: 'running' | 'stalling' | 'unknown'): string {
-		if (lvl === 'running' && run.phase) return run.phase;
+		// The lifecycle notice outranks the generic phase: AWAIT and CLOSING
+		// are the states a reader must not mistake for ordinary work
+		// (maintainer, 2026-08-25: "display awaiting and closing very
+		// specifically"), and the wire now says them positively.
+		if (lvl === 'running') {
+			const notice = lifecycleNotice(run);
+			if (notice) return notice.word;
+			if (run.phase) return run.phase;
+		}
 		return LEVEL_LABEL[lvl];
+	}
+
+	// AWAIT cools the card's status color; STARTING recedes. CLOSING keeps
+	// the burning color — it is still this run's own motion.
+	function labelColor(run: LiveRun, lvl: 'running' | 'stalling' | 'unknown'): string {
+		if (lvl === 'running') {
+			const tone = lifecycleNotice(run)?.tone;
+			if (tone === 'awaiting') return STATUS_WARN;
+			if (tone === 'starting') return STATUS_UNKNOWN;
+		}
+		return LEVEL_COLOR[lvl];
 	}
 
 	// Multi-workstream slice 1 (kb/design-multi-workstream-concurrency.md
@@ -158,7 +181,10 @@
 					? `${run.repo_label || 'unknown repo'} · ${run.kind || 'run'}`
 					: run.repo_label || 'unknown repo'}
 				{@const lvl = level(run.last_seen)}
-				{@const color = LEVEL_COLOR[lvl]}
+				{@const color = labelColor(run, lvl)}
+				{@const room = roomLine(run.room)}
+				{@const edgeText = edgeLine(run.edge)}
+				{@const course = runCourse(run.card_text)}
 				{@const parentLabel = run.parent_run_id
 					? runs.find((r) => r.run_id === run.parent_run_id)?.label
 					: null}
@@ -239,6 +265,33 @@
 								use:typeReveal={{ text: `runner: ${runner}` }}
 							>
 								runner: {runner}
+							</p>
+						{/if}
+						{#if room}
+							<!-- Where the hands are — branch · tree — even at compact size:
+							     "we should see where it happens live" (2026-08-25). -->
+							<p class="truncate font-mono text-[10px] text-stone-400" title={room}>
+								⌂ {room}
+							</p>
+						{/if}
+						{#if edgeText}
+							<!-- The latest attested command, re-revealed slowly on each new
+							     boundary — commands land seconds apart at most, so the
+							     ceremony can afford to be watched. -->
+							{#key run.edge?.at}
+								<p
+									class="truncate font-mono text-[10px] text-stone-400"
+									title={edgeText}
+									in:fade={{ duration: 600 }}
+								>
+									<span class="text-amber-300">⌁</span>
+									<span use:typeReveal={{ text: edgeText, duration: 2000 }}>{edgeText}</span>
+								</p>
+							{/key}
+						{/if}
+						{#if course}
+							<p class="truncate font-mono text-[10px] text-ink-quiet">
+								course {course.done}/{course.total}{course.current ? ` → ${course.current}` : ''}
 							</p>
 						{/if}
 						{#if run.card_text && !isOpen}
@@ -328,9 +381,19 @@
 					     track at low opacity — a flatlined signal has no fill amount
 					     to misread, where a frozen fraction always looks like one. -->
 					<div class="mt-2 h-1 overflow-hidden bg-stone-900" aria-hidden="true">
+						<!-- AWAIT slows the scan to a breath: the runner exists and is
+						     listening, deliberately quiet — a quiet state looks quiet. -->
 						<div
-							class={`h-full ${lvl === 'running' ? 'w-1/3 animate-[loom-scan_1.4s_ease-in-out_infinite]' : 'w-full'}`}
-							style={`background-color: ${color}; opacity: ${lvl === 'running' ? 1 : 0.3}`}
+							class={`h-full ${
+								lvl !== 'running'
+									? 'w-full'
+									: lifecycleNotice(run)?.tone === 'awaiting'
+										? 'w-1/3 animate-[loom-scan_6s_ease-in-out_infinite]'
+										: 'w-1/3 animate-[loom-scan_1.4s_ease-in-out_infinite]'
+							}`}
+							style={`background-color: ${color}; opacity: ${
+								lvl === 'running' ? (lifecycleNotice(run)?.tone === 'awaiting' ? 0.6 : 1) : 0.3
+							}`}
 						></div>
 					</div>
 					{#if run.run_id}

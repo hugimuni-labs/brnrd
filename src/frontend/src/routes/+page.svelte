@@ -70,11 +70,13 @@
 		buildWarpGraph,
 		readyItems,
 		runTopicIndex,
+		runWarpAttachments,
 		topicCounts,
 		topicFaces,
 		topicThreads,
 		weavingRows
 	} from '$lib/warpGraph';
+	import RunOverlay from '$lib/RunOverlay.svelte';
 	import HeddleRail from '$lib/HeddleRail.svelte';
 	import { toggleHeddleSelection } from '$lib/heddleSelection';
 	import WarpGraphView from '$lib/WarpGraphView.svelte';
@@ -910,9 +912,20 @@
 	// the lens became the cloth's own view state, like a fold: nothing
 	// outside the cloth ever answered to it once the shelf was gone.
 
+	// The overlay stage (maintainer, 2026-08-25): pressing a run's compact
+	// card renders the node panel *over* the page instead of costing the
+	// reader their scroll position. Selection state and stage state stay
+	// separate — closing the overlay keeps the selection, so the in-flow
+	// lane still holds the reader's place when the sheet drops.
+	let runOverlayOpen = $state(false);
+
 	function selectFromLoom(kind: 'run' | 'wake', id: string) {
-		loomSelection =
-			loomSelection && loomSelection.kind === kind && loomSelection.id === id ? null : { kind, id };
+		const same = loomSelection !== null && loomSelection.kind === kind && loomSelection.id === id;
+		loomSelection = same ? null : { kind, id };
+		// An explicit run press opens the stage; pressing the same run again
+		// (or picking a wake) folds it. The sole-live-run auto-focus never
+		// opens it — only a press is an ask to be covered.
+		runOverlayOpen = kind === 'run' && !same;
 	}
 
 	async function refreshRunLedger() {
@@ -1096,6 +1109,13 @@
 		}
 		return parts;
 	});
+	// The live packet + warp attachments for the selected run — the
+	// where-the-work-happens facts the node panel renders (room, edge,
+	// lifecycle, course) and the items this run took or resolved.
+	let selectedLiveRun = $derived(selectedLiveRuns[0] ?? null);
+	let selectedWarpItems = $derived(
+		focusRunId === null ? [] : runWarpAttachments(warpGraphData, focusRunId)
+	);
 
 	let selectedWakes = $derived(
 		loomSelection?.kind === 'wake'
@@ -1651,6 +1671,8 @@
 											identity={selectedIdentity}
 											{crossingIndex}
 											topicFaces={topicFaceMap}
+											liveRun={selectedLiveRun}
+											warpItems={selectedWarpItems}
 										/>
 									{:else if selectedLiveRuns.length > 0}
 										<LiveRuns
@@ -1690,6 +1712,47 @@
 				</div>
 			{/if}
 		</section>
+
+		<!-- The overlay stage: the SAME node panel the lane unfolds, rendered
+		     over the page when a run's compact card is pressed (maintainer,
+		     2026-08-25: "when you press it, the overlay renders them, and you
+		     can close it"). One run, one panel — this is a placement, not a
+		     fourth rendering; closing it keeps the selection in the lane. -->
+		{#if runOverlayOpen && (loomSelection?.kind === 'run' || focusRunId !== null)}
+			<RunOverlay
+				label={selectedIdentity?.name ?? 'run detail'}
+				onClose={() => (runOverlayOpen = false)}
+			>
+				{#if selectedNode && selectedNodeAnswers}
+					<RunNodeInline
+						data={surfaceData}
+						repoSlug={selectedNode.repoSlug}
+						runId={selectedNode.runId}
+						href={selectedNode.href}
+						vitals={selectedVitals}
+						liveLevel={selectedLiveLevel}
+						identity={selectedIdentity}
+						{crossingIndex}
+						topicFaces={topicFaceMap}
+						liveRun={selectedLiveRun}
+						warpItems={selectedWarpItems}
+					/>
+				{:else if selectedLiveRuns.length > 0}
+					<LiveRuns
+						runs={selectedLiveRuns}
+						stale={liveRunsStale}
+						{now}
+						withheld={liveRunsWithheld}
+					/>
+				{:else if selectedLedgerRows.length > 0}
+					<RunLedgerReceipt rows={selectedLedgerRows} stale={runLedgerStale} />
+				{:else}
+					<p class="panel p-3 text-sm text-ink-quiet">
+						no receipt rows for that run in the current window.
+					</p>
+				{/if}
+			</RunOverlay>
+		{/if}
 
 		<!-- the warp · intent (#972: the loom is the page). The fall (THE PICK,
 		     2026-08-02) ordered the page as a run's biography — warp → machine
