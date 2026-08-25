@@ -325,24 +325,31 @@
 		>
 			{#each traces as trace (trace.key)}
 				{@const live = packets.some((p) => p.traceKey === trace.key)}
+				<!-- A machined groove, not a hand-drawn hairline: a dark
+				     under-stroke carries a lit line. Docks are firm bays cut
+				     into each border — the payload's fixed home at both ends,
+				     so a transit reads as a state transition between docks
+				     rather than a glyph loose on the board. -->
+				<path d={trace.d} fill="none" stroke-width="3.5" class="field-trace-keel" />
 				<path
 					d={trace.d}
 					fill="none"
-					stroke-width="1"
+					stroke-width="1.5"
 					pathLength="1"
 					class="field-trace"
 					class:field-trace--live={live}
 				/>
 				{#each trace.pads as pad, i (i)}
-					<rect
-						x={pad.x - 2.5}
-						y={pad.y - 2.5}
-						width="5"
-						height="5"
-						class="field-pad"
-						class:field-pad--live={live}
-						in:fade={{ duration: 900 }}
-					/>
+					<g class="field-dock" class:field-dock--live={live} in:fade={{ duration: 900 }}>
+						<rect
+							x={pad.x - (i === 0 ? 4 : 2.5)}
+							y={pad.y - (i === 0 ? 2.5 : 4)}
+							width={i === 0 ? 8 : 5}
+							height={i === 0 ? 5 : 8}
+							class="field-dock-bay"
+						/>
+						<rect x={pad.x - 1.5} y={pad.y - 1.5} width="3" height="3" class="field-dock-core" />
+					</g>
 				{/each}
 			{/each}
 			{#each packets as packet (packet.id)}
@@ -359,10 +366,10 @@
 							path={packet.d}
 							rotate="0"
 							fill="freeze"
-							keyPoints={packet.reverse ? '1;0' : '0;1'}
-							keyTimes="0;1"
+							keyPoints={packet.reverse ? '1;1;0' : '0;0;1'}
+							keyTimes="0;0.14;1"
 							calcMode="spline"
-							keySplines="0.35 0 0.25 1"
+							keySplines="0 0 1 1;0.35 0 0.25 1"
 						/>
 					</circle>
 					<text font-size="9" fill={packet.color} text-anchor="middle" dominant-baseline="central">
@@ -372,10 +379,10 @@
 							path={packet.d}
 							rotate="0"
 							fill="freeze"
-							keyPoints={packet.reverse ? '1;0' : '0;1'}
-							keyTimes="0;1"
+							keyPoints={packet.reverse ? '1;1;0' : '0;0;1'}
+							keyTimes="0;0.14;1"
 							calcMode="spline"
-							keySplines="0.35 0 0.25 1"
+							keySplines="0 0 1 1;0.35 0 0.25 1"
 						/>
 					</text>
 					{#each [0.12, 0.24] as lag, i (lag)}
@@ -389,10 +396,10 @@
 								rotate="0"
 								fill="freeze"
 								begin={`${lag}s`}
-								keyPoints={packet.reverse ? '1;0' : '0;1'}
-								keyTimes="0;1"
+								keyPoints={packet.reverse ? '1;1;0' : '0;0;1'}
+								keyTimes="0;0.14;1"
 								calcMode="spline"
-								keySplines="0.35 0 0.25 1"
+								keySplines="0 0 1 1;0.35 0 0.25 1"
 							/>
 						</circle>
 					{/each}
@@ -478,8 +485,9 @@
 					</div>
 					{#if runnerLabel(run) || course}
 						<p class="font-mono text-[10px] text-stone-400">
-							{runnerLabel(run) ?? ''}{#if runnerLabel(run) && course}{' · '}{/if}{#if course}course
-								{course.done}/{course.total}{/if}
+							{[runnerLabel(run), course ? `course ${course.done}/${course.total}` : null]
+								.filter(Boolean)
+								.join(' · ')}
 						</p>
 					{/if}
 					{#if edge}
@@ -660,7 +668,7 @@
 	/* A dispatch trace draws itself in once (state birth), then holds as a
 	   faint machined line; it brightens only while a packet transits it. */
 	.field-trace {
-		stroke: rgba(217, 164, 65, 0.3);
+		stroke: rgba(217, 164, 65, 0.42);
 		stroke-dasharray: 1;
 		stroke-dashoffset: 1;
 		animation: field-trace-draw 1.6s ease-out forwards;
@@ -677,13 +685,24 @@
 			stroke-dashoffset: 0;
 		}
 	}
-	.field-pad {
-		fill: rgba(217, 164, 65, 0.55);
+	.field-trace-keel {
+		stroke: rgba(4, 3, 2, 0.9);
+	}
+	.field-dock-bay {
+		fill: #0c0906;
+		stroke: rgba(217, 164, 65, 0.55);
+		stroke-width: 1;
+	}
+	.field-dock-core {
+		fill: rgba(217, 164, 65, 0.4);
 		transition: fill 600ms ease;
 	}
-	.field-pad--live {
+	.field-dock--live .field-dock-bay {
+		stroke: #e8b34a;
+	}
+	.field-dock--live .field-dock-core {
 		fill: #e8b34a;
-		filter: drop-shadow(0 0 3px rgba(232, 179, 74, 0.8));
+		filter: drop-shadow(0 0 4px rgba(232, 179, 74, 0.9));
 	}
 	.field-packet {
 		filter: drop-shadow(0 0 4px var(--packet-glow, #e8b34a))
