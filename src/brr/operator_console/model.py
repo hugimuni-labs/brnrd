@@ -46,6 +46,8 @@ class Boundary:
     block_reason: str = ""
     detail: str = ""    # redacted tool detail (cmd/path/summary); "" when absent
     out_bytes: int = -1  # total response byte count; -1 when not recorded
+    cwd: str = ""       # where the act ran; "" on records predating the field
+    tools: tuple[str, ...] = ()  # every tool in the batch, not only the first
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -121,6 +123,10 @@ def _read_boundaries(path: Path) -> tuple[Boundary, ...]:
         raw_out = int(record["out_bytes"]) if isinstance(
             record.get("out_bytes"), (int, float)
         ) else -1
+        raw_tools = record.get("tools")
+        tools = tuple(
+            str(name) for name in raw_tools if isinstance(name, str) and name.strip()
+        ) if isinstance(raw_tools, list) else ()
         out.append(
             Boundary(
                 seq=len(out) + 1,
@@ -132,6 +138,8 @@ def _read_boundaries(path: Path) -> tuple[Boundary, ...]:
                 block_reason=str(record.get("block_reason") or ""),
                 detail=str(record.get("detail") or ""),
                 out_bytes=raw_out,
+                cwd=str(record.get("cwd") or ""),
+                tools=tools,
                 raw=dict(record),
             )
         )
