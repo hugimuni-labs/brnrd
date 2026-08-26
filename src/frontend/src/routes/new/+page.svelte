@@ -27,6 +27,7 @@
 		residentAnatomy,
 		sceneBounds,
 		steleCellQuad,
+		wallTextTransform,
 		TRAIL_MAX,
 		type Machine,
 		type ResidentBody
@@ -630,9 +631,13 @@
 							     grooved into the stele's face, re-derived every
 							     breath frame so the carving itself breathes -->
 							{#if faceFrame}
+								<!-- stave lattice keeps the norse bone (crown + base
+								     rows); the face itself is the actual mood string,
+								     laid on the stone's plane — his verdict: the
+								     carved abstraction lost the face -->
 								{#each moodSigil(faceFrame) as sigilRow, ri (ri)}
 									{#each sigilRow as lit, ci (ci)}
-										{#if lit}
+										{#if lit && (ri === 0 || ri >= 6)}
 											<polygon
 												points={polyPoints(
 													steleCellQuad(anat.torso, ri, ci, SIGIL_ROWS, SIGIL_COLS)
@@ -642,6 +647,19 @@
 										{/if}
 									{/each}
 								{/each}
+								{#key faceFrame}
+									<text
+										transform={wallTextTransform(
+											anat.torso.x + anat.torso.w,
+											anat.torso.y + anat.torso.d / 2,
+											anat.torso.h * 0.56
+										)}
+										text-anchor="middle"
+										class="stone-face"
+									>
+										{faceFrame}
+									</text>
+								{/key}
 							{/if}
 						{:else}
 							<!-- the core-glyph: structures are drawn, the being is
@@ -1057,6 +1075,21 @@
 	.carve {
 		fill: rgba(255, 217, 160, 0.92);
 		filter: drop-shadow(0 0 2.5px rgba(255, 205, 110, 0.8));
+	}
+	.stone-face {
+		fill: #ffd9a0;
+		font-size: 10px;
+		letter-spacing: 0.5px;
+		filter: drop-shadow(0 0 3px rgba(255, 205, 110, 0.75));
+		animation: face-shift 0.5s ease-out;
+	}
+	@keyframes face-shift {
+		from {
+			opacity: 0;
+		}
+		to {
+			opacity: 1;
+		}
 	}
 	.bench-t {
 		fill: #2a1e0d;

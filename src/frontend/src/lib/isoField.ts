@@ -472,3 +472,13 @@ export function steleCellQuad(
 		iso(x, y0 + py * inset, z1 - pz * (1 - inset))
 	];
 }
+
+/** Text lying ON a machine's gate-facing (x = max) wall plane — the stone
+ *  wears the actual mood string in the scene's own isometry (his verdict
+ *  on the carved abstraction: keep the stave bone, but the face is the
+ *  string itself). Basis: text-x runs along −y → (0.894, −0.447); text-y
+ *  runs down the wall → (0, 1). */
+export function wallTextTransform(x: number, y: number, z: number): string {
+	const o = iso(x, y, z);
+	return `matrix(0.894 -0.447 0 1 ${Math.round(o.x * 100) / 100} ${Math.round(o.y * 100) / 100})`;
+}
