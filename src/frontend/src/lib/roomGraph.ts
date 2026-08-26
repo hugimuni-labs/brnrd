@@ -140,12 +140,30 @@ export interface RoomActor {
 	stale: boolean;
 }
 
+/** A chamber of the tree this camp's work has actually touched — accreted
+ * from attested boundaries only ("only what you touch comes into being").
+ * The island grows terrain from the trail, never from a directory listing. */
+export interface CampChamber {
+	dir: string;
+	lastAct: string | null;
+	visits: number;
+}
+
 export interface RoomCamp {
 	branch: string | null;
 	/** Worktree dir name; null = the shared checkout (host env). */
 	dir: string | null;
 	env: string | null;
 	actorGlyphs: string[];
+	chambers: CampChamber[];
+}
+
+/** One attested footstep, remembered by the caller across polls — the model
+ * stays pure; the page owns the memory. */
+export interface TrailStep {
+	dir: string;
+	act: string | null;
+	at: string | null;
 }
 
 export interface RoomIsland {
@@ -205,7 +223,8 @@ function ledgerUsd(row: RunLedgerRow): number | null {
  */
 export function compileRoomGraph(
 	live: LiveRunsResponse | null,
-	ledger: RunLedgerResponse | null
+	ledger: RunLedgerResponse | null,
+	trails?: Record<string, TrailStep[]>
 ): RoomGraph {
 	const runs = (live?.runs ?? []).filter((r) => r.daemon_stale !== true);
 	const residents = runs.filter((r) => !r.is_subspawn).sort((x, y) => startKey(x) - startKey(y));
@@ -247,8 +266,32 @@ export function compileRoomGraph(
 		const branch = run.room?.branch ?? null;
 		const dir = run.room?.dir ?? null;
 		const key = campKey(branch, dir);
-		const camp = camps.get(key) ?? { branch, dir, env: run.room?.env ?? null, actorGlyphs: [] };
+		const camp = camps.get(key) ?? {
+			branch,
+			dir,
+			env: run.room?.env ?? null,
+			actorGlyphs: [],
+			chambers: []
+		};
 		camp.actorGlyphs.push(glyphByRun.get(run.run_id) ?? '?');
+		// terrain accretes from the trail — attested footsteps only, current
+		// boundary included so the actor always stands on known ground.
+		const steps: TrailStep[] = [...(trails?.[run.run_id] ?? [])];
+		const edgeDir = run.edge?.dir && run.edge.dir !== '.' ? run.edge.dir : null;
+		const edgeAt = run.edge?.at ?? null;
+		const alreadyRecorded = edgeAt !== null && steps.some((s) => s.at === edgeAt);
+		if (edgeDir && !alreadyRecorded)
+			steps.push({ dir: edgeDir, act: run.edge?.act ?? null, at: edgeAt });
+		for (const step of steps) {
+			if (!step.dir) continue;
+			const existing = camp.chambers.find((c) => c.dir === step.dir);
+			if (existing) {
+				existing.visits += 1;
+				if (step.act) existing.lastAct = step.act;
+			} else {
+				camp.chambers.push({ dir: step.dir, lastAct: step.act, visits: 1 });
+			}
+		}
 		camps.set(key, camp);
 	}
 	for (const row of ledger?.rows ?? []) {

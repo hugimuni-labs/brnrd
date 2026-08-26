@@ -267,6 +267,40 @@ test('pending letters sum across actors; stale daemon rows are never actors', ()
 	assert.ok(!graph.actors.some((a) => a.runId === 'dead'));
 });
 
+test('terrain accretes from the trail, deduped by boundary timestamp', () => {
+	const run = liveRun({
+		run_id: 'r1',
+		edge: edge('mutate', 'Edit x.ts', { dir: 'src/frontend', at: '2026-08-26T10:12:00Z' })
+	});
+	const trail = [
+		{ dir: 'src/brr', act: 'orient', at: '2026-08-26T10:05:00Z' },
+		{ dir: 'src/frontend', act: 'mutate', at: '2026-08-26T10:08:00Z' },
+		// the current boundary already recorded — must not double-count
+		{ dir: 'src/frontend', act: 'mutate', at: '2026-08-26T10:12:00Z' }
+	];
+	const graph = compileRoomGraph(liveWire([run]), null, { r1: trail });
+	const camp = graph.islands[0].camps[0];
+	assert.deepEqual(
+		camp.chambers.map((c) => [c.dir, c.visits]),
+		[
+			['src/brr', 1],
+			['src/frontend', 2]
+		]
+	);
+});
+
+test('without a remembered trail the current boundary still grows one chamber', () => {
+	const run = liveRun({
+		run_id: 'r1',
+		edge: edge('probe', 'pytest', { dir: 'tests' })
+	});
+	const graph = compileRoomGraph(liveWire([run]), null);
+	assert.deepEqual(
+		graph.islands[0].camps[0].chambers.map((c) => c.dir),
+		['tests']
+	);
+});
+
 test('the empty world is a graph, not a crash', () => {
 	const graph = compileRoomGraph(null, null);
 	assert.deepEqual(graph.islands, []);

@@ -139,8 +139,10 @@ test('the busy scene tells the whole story on one board', () => {
 	assert.match(board, /hugimuni-labs\/brnrd-knowledge/);
 	assert.match(board, /brr\/the-ascii-camera · the shared checkout/);
 	assert.match(board, /brr\/kb-pass · brr-wt-kid/);
-	// actors: resident with face at its chamber, strand at its rig
-	assert.match(board, /@ b·_·d {2}src\/frontend/);
+	// actors: resident standing in the chamber its boundary attested (the
+	// terrain row carries the path; the body stands under it), strand at its rig
+	assert.match(board, /└ src\/frontend {2}·mutate/);
+	assert.match(board, /@ b·_·d/);
 	assert.match(board, /a {2}RIG/);
 	// process: the attested boundary with the injection pulse
 	assert.match(board, /⌁ mutate · Edit asciiRoom\.ts {2}✉>>>/);
@@ -272,6 +274,51 @@ test('a host-absolute path in the detail folds to its tail — never printed who
 	const board = renderRoomGraph(graph, { now: NOW });
 	assert.ok(!board.includes('/Users/'), 'host path must not reach the board');
 	assert.match(board, /⌁ mutate · Edit …\/repro\/drive-ascii\.mjs/);
+});
+
+test('the tree grows from footsteps and the actor stands under its chamber', () => {
+	const graph = compileRoomGraph(
+		liveWire([
+			liveRun({
+				run_id: 'r1',
+				mood_rest: 'b·_·d',
+				edge: {
+					at: '2026-08-26T10:12:00Z',
+					phase: 'PostToolUse',
+					act: 'mutate',
+					tools: ['Edit'],
+					detail: 'Edit roomGraph.ts',
+					out_bytes: 10,
+					injected: false,
+					dir: 'src/frontend'
+				}
+			})
+		]),
+		null,
+		{
+			r1: [
+				{ dir: 'src/brr', act: 'orient', at: '2026-08-26T10:05:00Z' },
+				{ dir: 'src/frontend', act: 'mutate', at: '2026-08-26T10:08:00Z' }
+			]
+		}
+	);
+	const board = renderRoomGraph(graph, { now: NOW });
+	assert.match(board, /├ src\/brr {2}·orient/);
+	assert.match(board, /└ src\/frontend {2}·mutate ×2/);
+	// the actor stands under its chamber row, body only — no restated stance
+	const lines = board.split('\n');
+	const chamberIdx = lines.findIndex((l) => l.includes('└ src/frontend'));
+	assert.ok(chamberIdx > 0);
+	assert.match(lines[chamberIdx + 1], /@ b·_·d\s*║/);
+});
+
+test('clock-free render drops elapsed labels but keeps the same line structure', () => {
+	const graph = busyScene();
+	const withNow = renderRoomGraph(graph, { now: NOW }).split('\n');
+	const bare = renderRoomGraph(graph).split('\n');
+	assert.equal(withNow.length, bare.length);
+	assert.ok(withNow.some((l) => l.includes('oldest 5m')));
+	assert.ok(!bare.some((l) => l.includes('oldest ')));
 });
 
 test('the legend names every glyph the boards above used', () => {
