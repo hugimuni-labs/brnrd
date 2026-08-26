@@ -92,7 +92,7 @@ console = [
 # `pyyaml` is not a runtime dependency: `scripts/gate.py` reads
 # `.github/workflows/ci.yml` so the local gate cannot drift from CI's
 # own leg list. A hardcoded copy is the bug that script exists to prevent.
-dev = ["pytest>=7.0", "pyyaml>=6", "brnrd[backend]"]
+dev = ["pytest>=7.0", "pyyaml>=6", "brnrd[backend]", "brnrd[console]"]
 
 [project.scripts]
 brnrd = "brr.cli:main"
