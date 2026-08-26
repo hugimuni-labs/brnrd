@@ -237,8 +237,7 @@ async function main() {
 			hasTouch: true,
 			reducedMotion: 'no-preference'
 		});
-		await drive(phone, OUT, 'phone', 'automaton');
-		await drive(phone, OUT, 'phone', 'glyph');
+		await drive(phone, OUT, 'phone', 'stele');
 		await phone.close();
 
 		// Social preview, the other acceptance frame.
@@ -247,8 +246,7 @@ async function main() {
 			deviceScaleFactor: 2,
 			reducedMotion: 'no-preference'
 		});
-		await drive(social, OUT, 'social', 'automaton');
-		await drive(social, OUT, 'social', 'glyph');
+		await drive(social, OUT, 'social', 'stele');
 		await social.close();
 
 		await browser.close();
