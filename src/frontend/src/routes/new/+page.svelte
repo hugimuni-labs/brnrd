@@ -26,10 +26,12 @@
 		polyPoints,
 		residentAnatomy,
 		sceneBounds,
+		steleCellQuad,
 		TRAIL_MAX,
 		type Machine,
 		type ResidentBody
 	} from '$lib/isoField';
+	import { moodSigil, SIGIL_COLS, SIGIL_ROWS } from '$lib/moodSigil';
 	import { demoFrames } from './demo';
 
 	const POLL_MS = 2000;
@@ -46,11 +48,12 @@
 	let signedOut = $state(false);
 	let demo = $state(false);
 	let selected = $state<string | null>(null);
-	// The entity round's two body studies, judged side by side. The committed
-	// direction is the written being (?body=glyph, the default): structures
-	// are drawn, entities are written. ?body=automaton stands as the boxed
-	// contrast study.
-	let bodyStyle = $state<ResidentBody>('glyph');
+	// The entity round's body studies. The committed direction is the carved
+	// mood (?body=stele, the default — his steer: the face rendered
+	// isometrically, invader-symmetric, stave-boned): structures are drawn,
+	// the being is carved. ?body=glyph keeps the halo study, ?body=automaton
+	// the boxed one.
+	let bodyStyle = $state<ResidentBody>('stele');
 
 	let reduced = false;
 	if (typeof window !== 'undefined') {
@@ -236,7 +239,8 @@
 	onMount(() => {
 		const params = new URLSearchParams(window.location.search);
 		demo = params.has('demo');
-		bodyStyle = params.get('body') === 'automaton' ? 'automaton' : 'glyph';
+		const bodyParam = params.get('body');
+		bodyStyle = bodyParam === 'automaton' || bodyParam === 'glyph' ? bodyParam : 'stele';
 		let stop = false;
 		let prev: LiveRun[] | null = null;
 
@@ -619,6 +623,25 @@
 								>
 									{faceFrame}
 								</text>
+							{/if}
+						{:else if bodyStyle === 'stele'}
+							<!-- the carved mood: the stone is drawn, the being is
+							     carved — the mood's own frame becomes a pixel sigil
+							     grooved into the stele's face, re-derived every
+							     breath frame so the carving itself breathes -->
+							{#if faceFrame}
+								{#each moodSigil(faceFrame) as sigilRow, ri (ri)}
+									{#each sigilRow as lit, ci (ci)}
+										{#if lit}
+											<polygon
+												points={polyPoints(
+													steleCellQuad(anat.torso, ri, ci, SIGIL_ROWS, SIGIL_COLS)
+												)}
+												class="carve"
+											/>
+										{/if}
+									{/each}
+								{/each}
 							{/if}
 						{:else}
 							<!-- the core-glyph: structures are drawn, the being is
@@ -1030,6 +1053,10 @@
 		stroke: rgba(255, 205, 110, 0.28);
 		stroke-width: 0.8;
 		stroke-dasharray: 1.5 3;
+	}
+	.carve {
+		fill: rgba(255, 217, 160, 0.92);
+		filter: drop-shadow(0 0 2.5px rgba(255, 205, 110, 0.8));
 	}
 	.bench-t {
 		fill: #2a1e0d;
