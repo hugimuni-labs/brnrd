@@ -299,16 +299,26 @@ export interface ResidentAnatomy {
 	trailSlits: { a: Pt; b: Pt }[];
 }
 
-/** The resident machine site → its figure. Pure geometry; the route draws. */
+/** The resident machine site → its figure. Pure geometry; the route draws.
+ *
+ *  The category-of-mark rule (his 2026-08-26 "the cubes are still cubes"
+ *  read, resolved via the Cogmind reference): in an axonometric idiom,
+ *  volume IS architecture — so a being must not be a volume. `automaton`
+ *  keeps a boxed figure for contrast; `glyph` is the committed direction:
+ *  structures are drawn, the entity is *written* — a dock plate on the
+ *  floor (place), the face-core hovering above it (being), the act-trail
+ *  hanging under it as a data spine. */
 export function residentAnatomy(m: Machine, body: ResidentBody = 'automaton'): ResidentAnatomy {
-	const tw = 1.0;
-	const td = 1.0;
+	const tw = body === 'glyph' ? 1.2 : 1.0;
+	const td = body === 'glyph' ? 1.2 : 1.0;
 	const torso: Box = {
 		x: m.x + (m.w - tw) / 2,
 		y: m.y + (m.d - td) / 2,
 		w: tw,
 		d: td,
-		h: body === 'glyph' ? 1.05 : 1.55,
+		// The glyph's "torso" is a dock plate, not a body — flat enough that
+		// nothing about it reads as a building.
+		h: body === 'glyph' ? 0.05 : 1.55,
 		z0: 0
 	};
 	const head: Box | null =
@@ -332,17 +342,28 @@ export function residentAnatomy(m: Machine, body: ResidentBody = 'automaton'): R
 	};
 	const faceAnchor = head
 		? iso(head.x + head.w, head.y + head.d / 2, head.z0 + head.h / 2)
-		: iso(torso.x + tw / 2, torso.y + td / 2, torso.h + 0.95);
+		: iso(torso.x + tw / 2, torso.y + td / 2, 1.55);
 	const benchFront = iso(bench.x + bench.w, bench.y + bench.d / 2, bench.h);
 	const benchAnchor = { x: benchFront.x + 10, y: benchFront.y };
 	const trailSlits: { a: Pt; b: Pt }[] = [];
-	for (let i = 0; i < TRAIL_MAX; i++) {
-		const z = torso.h - 0.3 - i * 0.2;
-		if (z < 0.18) break;
-		trailSlits.push({
-			a: iso(torso.x + tw, torso.y + td * 0.2, z),
-			b: iso(torso.x + tw, torso.y + td * 0.82, z)
-		});
+	if (body === 'glyph') {
+		// The data spine: act ticks hang beneath the hovering core, along
+		// the beam that grounds it to its dock — written marks, no volume.
+		for (let i = 0; i < TRAIL_MAX; i++) {
+			const y = faceAnchor.y + 27 + i * 6.5;
+			const floorY = iso(torso.x + tw / 2, torso.y + td / 2, torso.h).y;
+			if (y > floorY - 5) break;
+			trailSlits.push({ a: { x: faceAnchor.x - 4.5, y }, b: { x: faceAnchor.x + 4.5, y } });
+		}
+	} else {
+		for (let i = 0; i < TRAIL_MAX; i++) {
+			const z = torso.h - 0.3 - i * 0.2;
+			if (z < 0.18) break;
+			trailSlits.push({
+				a: iso(torso.x + tw, torso.y + td * 0.2, z),
+				b: iso(torso.x + tw, torso.y + td * 0.82, z)
+			});
+		}
 	}
 	return { torso, head, bench, faceAnchor, benchAnchor, trailSlits };
 }
