@@ -19,7 +19,6 @@
 		boxFaces,
 		buildScene,
 		floorPath,
-		floorTextTransform,
 		iso,
 		paintOrder,
 		polyPoints,
@@ -264,13 +263,12 @@
 		return name.length > max ? name.slice(0, max - 1) + '…' : name;
 	}
 
-	/** Adjacent lane labels comb onto two baselines so they never collide.
-	 *  The resident doesn't get floor signage — its name rides an
-	 *  architectural callout at the mast, in screen space, because the
-	 *  floor in front of the tower belongs to the lane and a long name
-	 *  painted there ends up occluded by its own strands. */
-	function labelSpot(m: Machine): { x: number; y: number } {
-		return { x: m.x + 0.05, y: m.y + m.d + (m.order % 2 === 0 ? 1.05 : 0.5) };
+	/** Every label is horizontal (the maintainer's steer: isometric floor
+	 *  text beside a horizontal callout read as two systems). Strand labels
+	 *  hang under the block's front corner, combing onto two baselines so
+	 *  adjacent lane neighbours never collide. */
+	function strandLabelDy(m: Machine): number {
+		return m.order % 2 === 0 ? 30 : 15;
 	}
 
 	function machineDelay(m: Machine): string {
@@ -373,12 +371,10 @@
 					y2={gateBeam.b.y}
 					class="gate-beam"
 				/>
-				<text
-					transform={floorTextTransform(scene.gate.x - 0.55, scene.gate.y + 0.85)}
-					class="floor-label dim"
-				>
-					portal
-				</text>
+				{#if scene.gatePath.length}
+					{@const gp = iso(scene.gate.x, scene.gate.y + 0.9)}
+					<text x={gp.x} y={gp.y + 16} text-anchor="middle" class="floor-label dim">portal</text>
+				{/if}
 				{#if pendingTotal > 0}
 					{#key msgDropSeq}
 						<g class="msg" class:drop={msgDropSeq > 0}>
@@ -398,6 +394,26 @@
 					{/key}
 				{/if}
 			</g>
+
+			<!-- packets: one recorded event, one transit. A packet is a small
+			     floor-plane diamond — the conduit pads' own shape, moving —
+			     drawn UNDER the machines so it rides the floor and vanishes
+			     behind the block it arrives at (the maintainer's first-read
+			     steer: a dot pasted over the scene has no place in it). -->
+			{#each packets as packet (packet.id)}
+				<g class="pkt" style={`--c:${packet.color}`}>
+					<animateMotion
+						dur={`${packet.dur}ms`}
+						path={packet.d}
+						keyPoints={packet.reverse ? '1;0' : '0;1'}
+						keyTimes="0;1"
+						calcMode="linear"
+						fill="freeze"
+					/>
+					<polygon points="0,-4.4 8.8,0 0,4.4 -8.8,0" class="pkt-halo" />
+					<polygon points="0,-2.4 4.8,0 0,2.4 -4.8,0" class="pkt-core" />
+				</g>
+			{/each}
 
 			<!-- the machines, back to front -->
 			{#each ordered as m (m.key)}
@@ -512,7 +528,9 @@
 					{/if}
 					{#if m.kind !== 'resident'}
 						<text
-							transform={floorTextTransform(labelSpot(m).x, labelSpot(m).y)}
+							x={f.floorFront.x}
+							y={f.floorFront.y + strandLabelDy(m)}
+							text-anchor="middle"
 							class="floor-label"
 						>
 							{trunc(liveRunDisplayName(run), 18)}{#if run.runner?.core}<tspan class="core-tag">
@@ -533,24 +551,9 @@
 				</g>
 			{/each}
 
-			<!-- packets: one recorded event, one transit -->
-			{#each packets as packet (packet.id)}
-				<g class="pkt" style={`--c:${packet.color}`}>
-					<animateMotion
-						dur={`${packet.dur}ms`}
-						path={packet.d}
-						keyPoints={packet.reverse ? '1;0' : '0;1'}
-						keyTimes="0;1"
-						calcMode="linear"
-						fill="freeze"
-					/>
-					<circle r="6.5" class="pkt-halo" />
-					<circle r="2.8" class="pkt-core" />
-				</g>
-			{/each}
-
 			{#if !loading && scene.machines.length === 0}
-				<text transform={floorTextTransform(1.2, scene.rows / 2)} class="floor-label empty-note">
+				{@const center = iso(scene.cols / 2, scene.rows / 2)}
+				<text x={center.x} y={center.y} text-anchor="middle" class="floor-label empty-note">
 					{signedOut ? 'sign in to see the room' : 'between wakes — daemon listening'}
 				</text>
 			{/if}
