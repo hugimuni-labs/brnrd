@@ -211,6 +211,21 @@ export function actColor(act: string | null | undefined): string {
 	return ACT_COLORS[act] ?? ACT_UNKNOWN;
 }
 
+/** A recorded command, prepared for a small in-scene surface (the bench):
+ *  leading `VAR=value` env assignments are scaffolding, not the act — skip
+ *  to the first real command word (his read: "OUT is a bit misleading").
+ *  Nothing is lost: the full command lives in the dossier and run route. */
+export function benchCommand(detail: string): string {
+	const rest = detail.replace(/^(\s*[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)\s+)+/, '');
+	return rest.trim() || detail.trim();
+}
+
+/** Truncate a path keeping its *tail* — the discriminating end of a path is
+ *  the leaf, so `/Users/…/src/frontend` beats `/Users/gurio/Sou…`. */
+export function truncPathTail(path: string, max: number): string {
+	return path.length > max ? '…' + path.slice(path.length - (max - 1)) : path;
+}
+
 /** The edge line with the act split out so the act can wear its color:
  *  `⌁ mutate · git status --short · 412 B` renders act-colored, detail
  *  parchment. */
