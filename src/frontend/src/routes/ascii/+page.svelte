@@ -16,7 +16,7 @@
 	import { resolve } from '$app/paths';
 	import { fetchLiveRuns, LiveRunsAuthError, type LiveRunsResponse } from '$lib/liveRuns';
 	import { fetchRunLedger, type RunLedgerResponse } from '$lib/runLedger';
-	import { compileRoomGraph } from '$lib/roomGraph';
+	import { compileRoomGraph, type TrailStep } from '$lib/roomGraph';
 	import { renderRoomGraph, LEGEND } from '$lib/asciiRoom';
 	import { demoFrames } from '../new/demo';
 
@@ -37,16 +37,41 @@
 	let live: LiveRunsResponse | null = null;
 	let ledger: RunLedgerResponse | null = null;
 
-	function repaint(now: number) {
-		const graph = compileRoomGraph(live, ledger);
-		stale = graph.stale;
-		const board = renderRoomGraph(graph, { width: WIDTH, now });
-		const next = board.split('\n');
-		const prev = lines;
-		const delta: number[] = [];
-		for (let i = 0; i < next.length; i++) {
-			if (prev.length > 0 && next[i] !== prev[i]) delta.push(i);
+	// The island's terrain memory: attested footsteps per run, deduped by
+	// boundary timestamp — "only what you touch comes into being". Session-
+	// local on purpose: durable exploration memory is the doc's gap #7.
+	const trails: Record<string, TrailStep[]> = {};
+	const TRAIL_CAP = 60;
+
+	function recordTrails() {
+		for (const run of live?.runs ?? []) {
+			const dir = run.edge?.dir && run.edge.dir !== '.' ? run.edge.dir : null;
+			const at = run.edge?.at ?? null;
+			if (!dir || !at) continue;
+			const trail = (trails[run.run_id] ??= []);
+			if (trail.some((s) => s.at === at)) continue;
+			trail.push({ dir, act: run.edge?.act ?? null, at });
+			if (trail.length > TRAIL_CAP) trail.splice(0, trail.length - TRAIL_CAP);
 		}
+	}
+
+	// The flash marks *state* motion only. Elapsed-time labels churn every
+	// poll, so the diff runs on a clock-free render (`now` omitted drops
+	// every elapsed label) while the display keeps its clocks — a line
+	// flashes when the world moved, never because a minute passed.
+	let prevBare: string[] = [];
+
+	function repaint(now: number) {
+		recordTrails();
+		const graph = compileRoomGraph(live, ledger, trails);
+		stale = graph.stale;
+		const next = renderRoomGraph(graph, { width: WIDTH, now }).split('\n');
+		const bare = renderRoomGraph(graph, { width: WIDTH }).split('\n');
+		const delta: number[] = [];
+		for (let i = 0; i < bare.length; i++) {
+			if (prevBare.length > 0 && bare[i] !== prevBare[i]) delta.push(i);
+		}
+		prevBare = bare;
 		lines = next;
 		changed = delta;
 	}
