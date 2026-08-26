@@ -205,13 +205,16 @@ function paintBlock(c: Canvas, b: Block, x: number, y: number) {
 /** An actor as it stands in geography: glyph+face, stance, then the attested
  * boundary (verb · redacted detail) with the injection pulse when the world
  * folded in at that boundary, then the run's own letter rack. */
-function actorLines(actor: RoomActor, now: number | undefined): string[] {
+function actorLines(actor: RoomActor, now: number | undefined, atChamber = false): string[] {
 	const out: string[] = [];
 	const face = actor.moodRest ? ` ${actor.moodRest}` : '';
 	const until = untilLabel(actor.awaitUntil, now);
 	const lifecycle =
 		actor.lifecycle === 'awaiting' ? ` (awaiting${until ? ' → ' + until : ''})` : '';
-	out.push(`  ${actor.glyph}${face}  ${placeLabel(actor.place)}${lifecycle}`);
+	// Standing under its chamber row, the stance would restate the terrain —
+	// the body alone marks the spot.
+	const stance = atChamber ? '' : `  ${placeLabel(actor.place)}`;
+	out.push(`  ${actor.glyph}${face}${stance}${lifecycle}`);
 	if (actor.act || actor.detail) {
 		const pulse = actor.injected ? '  ✉>>>' : '';
 		const detail = actor.detail ? foldPathTokens(actor.detail) : null;
@@ -242,11 +245,29 @@ function islandBlock(
 	for (const camp of island.camps) {
 		const where = camp.dir ?? (camp.env === 'host' ? 'the shared checkout' : null);
 		lines.push(` └ ${camp.branch ?? '(no branch attested)'}${where ? ' · ' + where : ''}`);
-		for (const glyph of camp.actorGlyphs) {
-			const actor = actors.find(
-				(a) => a.glyph === glyph && a.islandLabel === island.label && onIsland(a)
-			);
-			if (actor) lines.push(...actorLines(actor, now));
+		const campActors = camp.actorGlyphs
+			.map((glyph) =>
+				actors.find((a) => a.glyph === glyph && a.islandLabel === island.label && onIsland(a))
+			)
+			.filter((a): a is RoomActor => !!a);
+		// terrain first: the chambers this camp's boundaries have actually
+		// touched, in first-touch order — the tree grows as the work walks it.
+		// An actor whose stance is a chamber stands under that chamber's row.
+		const standing = new Set<string>();
+		for (let i = 0; i < camp.chambers.length; i++) {
+			const ch = camp.chambers[i];
+			const joint = i === camp.chambers.length - 1 ? '└' : '├';
+			const marks = ch.visits > 1 ? ` ×${ch.visits}` : '';
+			lines.push(`    ${joint} ${ch.dir}${ch.lastAct ? `  ·${ch.lastAct}${marks}` : ''}`);
+			for (const actor of campActors) {
+				if (actor.place.kind === 'chamber' && actor.place.label === ch.dir) {
+					lines.push(...actorLines(actor, now, true).map((l) => '  ' + l));
+					standing.add(actor.runId);
+				}
+			}
+		}
+		for (const actor of campActors) {
+			if (!standing.has(actor.runId)) lines.push(...actorLines(actor, now));
 		}
 	}
 	return block(island.label, lines, false, maxW);
