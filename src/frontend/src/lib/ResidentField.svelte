@@ -91,7 +91,14 @@
 	// node count is small (research §8: "the hard problem is information
 	// architecture, not GPU scale"), so re-measuring per poll is cheap.
 	const GUTTER = 30; // px the limb column indents; traces live here
-	const TRUNK_X = 1;
+	// The trunk's own minimum visible run below the root's real border,
+	// kept clear of any curve — a curve whose radius eats past this reads
+	// as if the elbow happens inside the card rather than below it (the
+	// connector-gap defect, 2026-08-26: the old radius clamp measured room
+	// from the dock's cosmetic inset rather than the real border, so a
+	// close-enough limb could pull the curve's start above the card's own
+	// edge, leaving no straight line to read as "exiting" at all).
+	const MIN_RUN = 6;
 
 	let containerEl: HTMLDivElement | undefined = $state();
 	let cellEls = $state<Record<string, HTMLElement | undefined>>({});
@@ -115,11 +122,20 @@
 		// card read as "goes deep into the run card"; a line stopping short
 		// read as "not connected firmly". The connection is the *pad*: a
 		// nub straddling each border exactly, trace ending on it.
-		const x = TRUNK_X;
-		const y0 = rootRect.bottom - box.top - 10;
+		// x is the root cell's OWN measured left border — the same way xEnd
+		// below is the limb's. A fixed constant here drifted from the
+		// container's own padding and left the trunk floating in the
+		// gutter, never actually touching the card it's meant to exit.
+		const x = rootRect.left - box.left;
+		const borderY = rootRect.bottom - box.top;
+		const y0 = borderY - 10;
 		const yStub = limbRect.top - box.top + limbRect.height / 2;
 		const xEnd = limbRect.left - box.left;
-		const r = Math.min(8, Math.max(0, yStub - y0 - 2), Math.max(0, xEnd - x - 2));
+		// Radius room is capped so MIN_RUN px of straight trunk always
+		// survives below the real border before any curve starts —
+		// anchored to borderY, never y0, so a close limb can't pull the
+		// elbow above the card's own edge.
+		const r = Math.min(8, Math.max(0, yStub - borderY - MIN_RUN), Math.max(0, xEnd - x - 2));
 		const d =
 			r > 1
 				? `M ${x} ${y0} V ${yStub - r} Q ${x} ${yStub} ${x + r} ${yStub} H ${xEnd}`
@@ -212,7 +228,7 @@
 				const box = containerEl?.getBoundingClientRect();
 				const rect = cellEls[parentKey]?.getBoundingClientRect();
 				if (box && rect)
-					d = `M ${TRUNK_X} ${rect.bottom - box.top + 24} V ${rect.bottom - box.top}`;
+					d = `M ${rect.left - box.left} ${rect.bottom - box.top + 24} V ${rect.bottom - box.top}`;
 			}
 			glyph = '◆';
 			color = '#a8cbdb';
