@@ -49,6 +49,96 @@
 	let field = $derived(buildField(runs));
 	let faceWindow = $derived(runFacesInWindow(runs.map((run) => fieldRunKey(run))));
 
+	let reduced = false;
+	if (typeof window !== 'undefined') {
+		reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+	}
+
+	// ── the overture — the field assembling itself on first paint ──────────
+	// A one-shot choreography, never a loop: spine draws (the trunk's own
+	// `field-trace-draw` CSS animation, unchanged), then each limb's dock
+	// pair lights in the body's own order (oldest-first, the way it grew),
+	// then each cell glitches into being — the resident first, then its
+	// strands one by one. A run appearing later (a genuine spawn once the
+	// field has already assembled) gets none of this: the flags below latch
+	// off the moment the sequence has had time to finish everywhere it
+	// could apply, and every `overtureActive` read after that is `false`.
+	const OVERTURE_SPINE_MS = 1600; // matches .field-trace's own draw-in
+	const OVERTURE_DOCK_STAGGER_MS = 160;
+	const OVERTURE_DOCK_FADE_MS = 500;
+	const OVERTURE_CELL_STAGGER_MS = 140;
+	const OVERTURE_CELL_GLITCH_MS = 320;
+	let overtureActive = $state(!reduced);
+	let overtureArmed = false;
+	/** Assembly order, oldest-first: root(s) get the low slots, each root's
+	 *  limbs follow — a pure function of the topology, safe to recompute
+	 *  freely (never a mutated counter living inside a render pass). A plain
+	 *  object, not a Map: this is rebuilt whole every time, never mutated in
+	 *  place, so there's nothing here for Svelte's reactive collections to
+	 *  buy. */
+	let overtureOrder = $derived.by(() => {
+		const order: Record<string, number> = {};
+		let i = 0;
+		for (const root of field) {
+			order[fieldRunKey(root.run)] = i++;
+			for (const limb of root.limbs) order[fieldRunKey(limb.run)] = i++;
+		}
+		return order;
+	});
+	let overtureCount = $derived(Object.keys(overtureOrder).length);
+	let overtureLimbCount = $derived(Math.max(0, overtureCount - field.length));
+	let overtureDockPhaseEnd = $derived(
+		OVERTURE_SPINE_MS +
+			(overtureLimbCount > 0
+				? (overtureLimbCount - 1) * OVERTURE_DOCK_STAGGER_MS + OVERTURE_DOCK_FADE_MS
+				: 0)
+	);
+	function dockDelay(limbKey: string): number {
+		if (!overtureActive) return 0;
+		const slot = (overtureOrder[limbKey] ?? 1) - 1; // root owns slot 0
+		return OVERTURE_SPINE_MS + Math.max(0, slot) * OVERTURE_DOCK_STAGGER_MS;
+	}
+	function cellDelay(key: string): number {
+		if (!overtureActive) return 0;
+		return overtureDockPhaseEnd + (overtureOrder[key] ?? 0) * OVERTURE_CELL_STAGGER_MS;
+	}
+	// SvelteKit skips `in:` transitions on a block's very first render (the
+	// hydration commit) — only elements inserted by a *later* update play
+	// them. The cells column is populated synchronously from `field` at
+	// mount, so its `in:glitchReveal` would silently no-op on true first
+	// paint without this: `cellsReady` starts false and flips true from an
+	// effect (which runs after mount, i.e. on a subsequent flush), so the
+	// cells are a fresh insertion once it does — the SVG trace layer needs
+	// no such gate, since `traces` already starts empty and fills in from
+	// `measure()`'s own post-mount effect.
+	let cellsReady = $state(false);
+	$effect(() => {
+		// A same-tick flip inside the mount effect still lands inside
+		// Svelte's initial flush (measured: the intro no-op survived it,
+		// even with the cells behind their own `{#if}`) — an animation-frame
+		// boundary is what makes the insertion read as a later update.
+		// Every `in:` transition below also carries `|global`: Svelte only
+		// runs a *local* transition when its own immediate block is what
+		// just initialized, and here that block is nested two levels under
+		// the field's long-since-settled top-level `{#if runs.length === 0}`
+		// — measured live (a debug probe on computed opacity) that local
+		// transitions silently no-op in that position no matter how the
+		// insertion is timed, and `|global` is the documented escape hatch.
+		const raf = requestAnimationFrame(() => {
+			cellsReady = true;
+		});
+		return () => cancelAnimationFrame(raf);
+	});
+	$effect(() => {
+		if (overtureArmed || !overtureActive || overtureCount === 0) return;
+		overtureArmed = true;
+		const total =
+			overtureDockPhaseEnd + overtureCount * OVERTURE_CELL_STAGGER_MS + OVERTURE_CELL_GLITCH_MS;
+		setTimeout(() => {
+			overtureActive = false;
+		}, total);
+	});
+
 	// ── receipts → motion ────────────────────────────────────────────────
 	// The previous snapshot this component has already drawn. Compared, not
 	// subscribed: the poll hands us state; the diff is what may move.
@@ -71,10 +161,6 @@
 	 *  color — one pulse per recorded boundary, then still again. */
 	let flashes = $state<Record<string, string>>({});
 	let packetSeq = 0;
-	let reduced = false;
-	if (typeof window !== 'undefined') {
-		reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-	}
 
 	// Ceremony tempo: events are rare (a boundary every handful of seconds
 	// at most, a spawn every few minutes), so the motion can afford to be
@@ -91,7 +177,14 @@
 	// node count is small (research §8: "the hard problem is information
 	// architecture, not GPU scale"), so re-measuring per poll is cheap.
 	const GUTTER = 30; // px the limb column indents; traces live here
-	const TRUNK_X = 1;
+	// The trunk's own minimum visible run below the root's real border,
+	// kept clear of any curve — a curve whose radius eats past this reads
+	// as if the elbow happens inside the card rather than below it (the
+	// connector-gap defect, 2026-08-26: the old radius clamp measured room
+	// from the dock's cosmetic inset rather than the real border, so a
+	// close-enough limb could pull the curve's start above the card's own
+	// edge, leaving no straight line to read as "exiting" at all).
+	const MIN_RUN = 6;
 
 	let containerEl: HTMLDivElement | undefined = $state();
 	let cellEls = $state<Record<string, HTMLElement | undefined>>({});
@@ -115,11 +208,20 @@
 		// card read as "goes deep into the run card"; a line stopping short
 		// read as "not connected firmly". The connection is the *pad*: a
 		// nub straddling each border exactly, trace ending on it.
-		const x = TRUNK_X;
-		const y0 = rootRect.bottom - box.top - 10;
+		// x is the root cell's OWN measured left border — the same way xEnd
+		// below is the limb's. A fixed constant here drifted from the
+		// container's own padding and left the trunk floating in the
+		// gutter, never actually touching the card it's meant to exit.
+		const x = rootRect.left - box.left;
+		const borderY = rootRect.bottom - box.top;
+		const y0 = borderY - 10;
 		const yStub = limbRect.top - box.top + limbRect.height / 2;
 		const xEnd = limbRect.left - box.left;
-		const r = Math.min(8, Math.max(0, yStub - y0 - 2), Math.max(0, xEnd - x - 2));
+		// Radius room is capped so MIN_RUN px of straight trunk always
+		// survives below the real border before any curve starts —
+		// anchored to borderY, never y0, so a close limb can't pull the
+		// elbow above the card's own edge.
+		const r = Math.min(8, Math.max(0, yStub - borderY - MIN_RUN), Math.max(0, xEnd - x - 2));
 		const d =
 			r > 1
 				? `M ${x} ${y0} V ${yStub - r} Q ${x} ${yStub} ${x + r} ${yStub} H ${xEnd}`
@@ -212,7 +314,7 @@
 				const box = containerEl?.getBoundingClientRect();
 				const rect = cellEls[parentKey]?.getBoundingClientRect();
 				if (box && rect)
-					d = `M ${TRUNK_X} ${rect.bottom - box.top + 24} V ${rect.bottom - box.top}`;
+					d = `M ${rect.left - box.left} ${rect.bottom - box.top + 24} V ${rect.bottom - box.top}`;
 			}
 			glyph = '◆';
 			color = '#a8cbdb';
@@ -340,7 +442,14 @@
 					class:field-trace--live={live}
 				/>
 				{#each trace.pads as pad, i (i)}
-					<g class="field-dock" class:field-dock--live={live} in:fade={{ duration: 900 }}>
+					<g
+						class="field-dock"
+						class:field-dock--live={live}
+						in:fade|global={{
+							duration: overtureActive ? OVERTURE_DOCK_FADE_MS : 900,
+							delay: dockDelay(trace.key)
+						}}
+					>
 						<rect x={pad.x - 2.5} y={pad.y - 4} width="5" height="8" class="field-dock-bay" />
 						<rect x={pad.x - 1.5} y={pad.y - 1.5} width="3" height="3" class="field-dock-core" />
 					</g>
@@ -401,260 +510,266 @@
 			{/each}
 		</svg>
 
-		<div class="relative z-10 space-y-3.5">
-			{#each field as root (fieldRunKey(root.run))}
-				{@const run = root.run}
-				{@const key = fieldRunKey(run)}
-				{@const face = faceWindow.get(key)}
-				{@const mood = moodFace(
-					run.mood,
-					run.mood_glyph,
-					run.mood_pitch,
-					run.mood_frames,
-					run.mood_rest
-				)}
-				{@const room = roomLine(run.room)}
-				{@const edge = edgeParts(run.edge)}
-				{@const course = runCourse(run.card_text)}
-				{@const color = statusColor(run)}
-				<!-- The root cell: the thought's face on its room's plinth. The
+		{#if cellsReady}
+			<div class="relative z-10 space-y-3.5">
+				{#each field as root (fieldRunKey(root.run))}
+					{@const run = root.run}
+					{@const key = fieldRunKey(run)}
+					{@const face = faceWindow.get(key)}
+					{@const mood = moodFace(
+						run.mood,
+						run.mood_glyph,
+						run.mood_pitch,
+						run.mood_frames,
+						run.mood_rest
+					)}
+					{@const room = roomLine(run.room)}
+					{@const edge = edgeParts(run.edge)}
+					{@const course = runCourse(run.card_text)}
+					{@const color = statusColor(run)}
+					<!-- The root cell: the thought's face on its room's plinth. The
 				     run's hash hue survives as the port-edge accent only — the
 				     rune glyphs belong to topics now (heddles), never to run
 				     identity. -->
-				<button
-					type="button"
-					use:cellRef={key}
-					class="subpanel field-cell block w-full cursor-pointer p-3 text-left text-xs transition-[box-shadow] duration-700"
-					class:field-selected={selectedId === key}
-					style={`border-left: 2px solid ${face ? `color-mix(in srgb, ${face.color} 55%, #d9a441)` : 'rgba(217,164,65,0.4)'};${
-						flashes[key]
-							? ` box-shadow: 0 0 14px -2px ${flashes[key]}, inset 0 0 10px -6px ${flashes[key]};`
-							: ''
-					}`}
-					onclick={() => press(run)}
-					in:glitchReveal={{ duration: 320 }}
-					data-field-cell={key}
-				>
-					<div class="flex items-center justify-between gap-2">
-						<span class="flex min-w-0 items-center gap-1.5">
-							<span
-								class="inline-block h-2 w-2 shrink-0 rounded-full"
-								style={statusDotStyle(level(run) === 'stalling' ? 'cooling' : 'burning', color)}
-								aria-hidden="true"
-							></span>
-							<span
-								class="truncate font-mono text-[10px] font-medium tracking-wide uppercase"
-								style={`color: ${color}`}
-								use:typeReveal={{ text: statusWord(run) }}>{statusWord(run)}</span
-							>
-							{#if run.is_subspawn}
+					<button
+						type="button"
+						use:cellRef={key}
+						class="subpanel field-cell block w-full cursor-pointer p-3 text-left text-xs transition-[box-shadow] duration-700"
+						class:field-selected={selectedId === key}
+						style={`border-left: 2px solid ${face ? `color-mix(in srgb, ${face.color} 55%, #d9a441)` : 'rgba(217,164,65,0.4)'};${
+							flashes[key]
+								? ` box-shadow: 0 0 14px -2px ${flashes[key]}, inset 0 0 10px -6px ${flashes[key]};`
+								: ''
+						}`}
+						onclick={() => press(run)}
+						in:glitchReveal|global={{ duration: OVERTURE_CELL_GLITCH_MS, delay: cellDelay(key) }}
+						data-field-cell={key}
+					>
+						<div class="flex items-center justify-between gap-2">
+							<span class="flex min-w-0 items-center gap-1.5">
 								<span
-									class="shrink-0 border border-amber-900/60 bg-amber-950/40 px-1 py-0.5 font-mono text-[9px] tracking-wide text-amber-300 uppercase"
-									>↳ strand</span
+									class="inline-block h-2 w-2 shrink-0 rounded-full"
+									style={statusDotStyle(level(run) === 'stalling' ? 'cooling' : 'burning', color)}
+									aria-hidden="true"
+								></span>
+								<span
+									class="truncate font-mono text-[10px] font-medium tracking-wide uppercase"
+									style={`color: ${color}`}
+									use:typeReveal={{ text: statusWord(run) }}>{statusWord(run)}</span
 								>
-							{/if}
-						</span>
-						<span class="flex shrink-0 items-center gap-1.5 font-mono text-[10px] text-ink-quiet">
-							{#if (run.portals?.pending ?? 0) > 0}
-								<!-- Correspondence resting at the door — put to read, not
+								{#if run.is_subspawn}
+									<span
+										class="shrink-0 border border-amber-900/60 bg-amber-950/40 px-1 py-0.5 font-mono text-[9px] tracking-wide text-amber-300 uppercase"
+										>↳ strand</span
+									>
+								{/if}
+							</span>
+							<span class="flex shrink-0 items-center gap-1.5 font-mono text-[10px] text-ink-quiet">
+								{#if (run.portals?.pending ?? 0) > 0}
+									<!-- Correspondence resting at the door — put to read, not
 								     yet folded in. Breathes until a boundary attests the
 								     read; the ◈ drop above is its arrival. -->
-								<span
-									class="field-waiting text-sky-300"
-									title="correspondence waiting — put to read"
-									in:fade={{ delay: 2800, duration: 900 }}
-									out:fade={{ duration: 500 }}>◈ {run.portals?.pending}</span
-								>
-							{/if}
-							{ageSince(run.started_at, now) ?? ''}
-							<span class="text-[9px] text-ink-mute">▸</span>
-						</span>
-					</div>
-					<div class="mt-1 flex min-w-0 items-center gap-2">
-						<span
-							class="truncate text-base font-medium tracking-tight text-amber-100"
-							use:typeReveal={{ text: liveRunDisplayName(run) }}>{liveRunDisplayName(run)}</span
-						>
-						<MoodChip face={mood} seed={key} variant="stage" class="ml-auto shrink-0" />
-					</div>
-					{#if runnerLabel(run) || course}
-						<p class="font-mono text-[10px] text-stone-400">
-							{[runnerLabel(run), course ? `course ${course.done}/${course.total}` : null]
-								.filter(Boolean)
-								.join(' · ')}
-						</p>
-					{/if}
-					{#if edge}
-						{#key run.edge?.at}
-							<p
-								class="mt-1 truncate font-mono text-[10px] text-stone-300"
-								title={edge.detail ?? undefined}
-								in:fade={{ duration: 700 }}
-							>
-								<span style={`color: ${edge.color}`}>⌁ {edge.act ?? '?'}</span>
-								{#if edge.detail}
-									· <span use:typeReveal={{ text: edge.detail, duration: 2400 }}>{edge.detail}</span
-									>
-								{/if}
-								{#if run.edge?.out_bytes != null}
-									<span class="text-ink-mute"> · {run.edge.out_bytes} B</span>
-								{/if}
-								{#if run.edge?.injected}
-									<span class="text-sky-300"> ⇣</span>
-								{/if}
-							</p>
-						{/key}
-					{/if}
-					<!-- The baseplate: the room this thought occupies — the face is
-					     the thought; the plate is the room (research §5). -->
-					{#if room || run.edge?.dir}
-						<div
-							class="mt-1.5 flex items-center justify-between gap-2 border-t border-stone-800/70 pt-1 font-mono text-[10px]"
-						>
-							{#if room}
-								<span class="truncate text-stone-400" title={room}>⌂ {room}</span>
-							{/if}
-							{#if run.edge?.dir}
-								<span
-									class="shrink-0 text-amber-200/80"
-									title="the directory the latest command ran in"
-									>▸ {run.edge.dir === '.' ? './' : `${run.edge.dir}/`}</span
-								>
-							{/if}
-						</div>
-					{/if}
-					<div class="mt-1.5 h-1 overflow-hidden bg-stone-900" aria-hidden="true">
-						<div
-							class={`h-full ${
-								level(run) !== 'running'
-									? 'w-full'
-									: isAwaiting(run)
-										? 'w-1/3 animate-[loom-scan_6s_ease-in-out_infinite]'
-										: 'w-1/3 animate-[loom-scan_1.4s_ease-in-out_infinite]'
-							}`}
-							style={`background-color: ${color}; opacity: ${
-								level(run) === 'running' ? (isAwaiting(run) ? 0.6 : 1) : 0.3
-							}`}
-						></div>
-					</div>
-				</button>
-
-				{#if root.limbs.length > 0}
-					<div class="space-y-2.5" style={`padding-left: ${GUTTER}px`}>
-						{#each root.limbs as limb (fieldRunKey(limb.run))}
-							{@const lrun = limb.run}
-							{@const lkey = fieldRunKey(lrun)}
-							{@const lface = faceWindow.get(lkey)}
-							{@const ledge = edgeParts(lrun.edge)}
-							{@const lcolor = statusColor(lrun)}
-							{@const lroom = roomLine(lrun.room)}
-							<button
-								type="button"
-								use:cellRef={lkey}
-								class="subpanel field-cell block w-full cursor-pointer p-2.5 text-left text-xs transition-[box-shadow] duration-700"
-								class:field-selected={selectedId === lkey}
-								style={`border-left: 2px solid ${lface ? `color-mix(in srgb, ${lface.color} 55%, #d9a441)` : 'rgba(217,164,65,0.3)'};${
-									flashes[lkey]
-										? ` box-shadow: 0 0 12px -2px ${flashes[lkey]}, inset 0 0 8px -6px ${flashes[lkey]};`
-										: ''
-								}`}
-								onclick={() => press(lrun)}
-								in:glitchReveal={{ duration: 320 }}
-								data-field-cell={lkey}
-							>
-								<div class="flex items-center justify-between gap-2">
-									<span class="flex min-w-0 items-center gap-1.5">
-										<span
-											class="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
-											style={statusDotStyle(
-												level(lrun) === 'stalling' ? 'cooling' : 'burning',
-												lcolor
-											)}
-											aria-hidden="true"
-										></span>
-										<span
-											class="truncate font-medium text-amber-100/90"
-											use:typeReveal={{ text: liveRunDisplayName(lrun) }}
-											>{liveRunDisplayName(lrun)}</span
-										>
-										{#if limb.hands > 0}
-											<span
-												class="shrink-0 font-mono text-[9px] text-ink-mute"
-												title="collapsed deeper strands — inspect on the run route"
-												>+{limb.hands} hands</span
-											>
-										{/if}
-									</span>
 									<span
-										class="flex shrink-0 items-center gap-1.5 font-mono text-[10px] text-ink-quiet"
+										class="field-waiting text-sky-300"
+										title="correspondence waiting — put to read"
+										in:fade={{ delay: 2800, duration: 900 }}
+										out:fade={{ duration: 500 }}>◈ {run.portals?.pending}</span
 									>
-										{#if (lrun.portals?.pending ?? 0) > 0}
-											<span
-												class="field-waiting text-sky-300"
-												title="correspondence waiting — put to read"
-												in:fade={{ delay: 2800, duration: 900 }}
-												out:fade={{ duration: 500 }}>◈ {lrun.portals?.pending}</span
-											>
-										{/if}
-										{ageSince(lrun.started_at, now) ?? ''}
-									</span>
-								</div>
-								{#if runnerLabel(lrun)}
-									<p class="font-mono text-[9px] text-ink-mute">{runnerLabel(lrun)}</p>
 								{/if}
-								{#if ledge}
-									{#key lrun.edge?.at}
-										<p
-											class="mt-0.5 truncate font-mono text-[10px] text-stone-300"
-											title={ledge.detail ?? undefined}
-											in:fade={{ duration: 700 }}
+								{ageSince(run.started_at, now) ?? ''}
+								<span class="text-[9px] text-ink-mute">▸</span>
+							</span>
+						</div>
+						<div class="mt-1 flex min-w-0 items-center gap-2">
+							<span
+								class="truncate text-base font-medium tracking-tight text-amber-100"
+								use:typeReveal={{ text: liveRunDisplayName(run) }}>{liveRunDisplayName(run)}</span
+							>
+							<MoodChip face={mood} seed={key} variant="stage" class="ml-auto shrink-0" />
+						</div>
+						{#if runnerLabel(run) || course}
+							<p class="font-mono text-[10px] text-stone-400">
+								{[runnerLabel(run), course ? `course ${course.done}/${course.total}` : null]
+									.filter(Boolean)
+									.join(' · ')}
+							</p>
+						{/if}
+						{#if edge}
+							{#key run.edge?.at}
+								<p
+									class="mt-1 truncate font-mono text-[10px] text-stone-300"
+									title={edge.detail ?? undefined}
+									in:fade={{ duration: 700 }}
+								>
+									<span style={`color: ${edge.color}`}>⌁ {edge.act ?? '?'}</span>
+									{#if edge.detail}
+										· <span use:typeReveal={{ text: edge.detail, duration: 2400 }}
+											>{edge.detail}</span
 										>
-											<span style={`color: ${ledge.color}`}>⌁ {ledge.act ?? '?'}</span>
-											{#if ledge.detail}
-												· <span use:typeReveal={{ text: ledge.detail, duration: 2400 }}
-													>{ledge.detail}</span
+									{/if}
+									{#if run.edge?.out_bytes != null}
+										<span class="text-ink-mute"> · {run.edge.out_bytes} B</span>
+									{/if}
+									{#if run.edge?.injected}
+										<span class="text-sky-300"> ⇣</span>
+									{/if}
+								</p>
+							{/key}
+						{/if}
+						<!-- The baseplate: the room this thought occupies — the face is
+					     the thought; the plate is the room (research §5). -->
+						{#if room || run.edge?.dir}
+							<div
+								class="mt-1.5 flex items-center justify-between gap-2 border-t border-stone-800/70 pt-1 font-mono text-[10px]"
+							>
+								{#if room}
+									<span class="truncate text-stone-400" title={room}>⌂ {room}</span>
+								{/if}
+								{#if run.edge?.dir}
+									<span
+										class="shrink-0 text-amber-200/80"
+										title="the directory the latest command ran in"
+										>▸ {run.edge.dir === '.' ? './' : `${run.edge.dir}/`}</span
+									>
+								{/if}
+							</div>
+						{/if}
+						<div class="mt-1.5 h-1 overflow-hidden bg-stone-900" aria-hidden="true">
+							<div
+								class={`h-full ${
+									level(run) !== 'running'
+										? 'w-full'
+										: isAwaiting(run)
+											? 'w-1/3 animate-[loom-scan_6s_ease-in-out_infinite]'
+											: 'w-1/3 animate-[loom-scan_1.4s_ease-in-out_infinite]'
+								}`}
+								style={`background-color: ${color}; opacity: ${
+									level(run) === 'running' ? (isAwaiting(run) ? 0.6 : 1) : 0.3
+								}`}
+							></div>
+						</div>
+					</button>
+
+					{#if root.limbs.length > 0}
+						<div class="space-y-2.5" style={`padding-left: ${GUTTER}px`}>
+							{#each root.limbs as limb (fieldRunKey(limb.run))}
+								{@const lrun = limb.run}
+								{@const lkey = fieldRunKey(lrun)}
+								{@const lface = faceWindow.get(lkey)}
+								{@const ledge = edgeParts(lrun.edge)}
+								{@const lcolor = statusColor(lrun)}
+								{@const lroom = roomLine(lrun.room)}
+								<button
+									type="button"
+									use:cellRef={lkey}
+									class="subpanel field-cell block w-full cursor-pointer p-2.5 text-left text-xs transition-[box-shadow] duration-700"
+									class:field-selected={selectedId === lkey}
+									style={`border-left: 2px solid ${lface ? `color-mix(in srgb, ${lface.color} 55%, #d9a441)` : 'rgba(217,164,65,0.3)'};${
+										flashes[lkey]
+											? ` box-shadow: 0 0 12px -2px ${flashes[lkey]}, inset 0 0 8px -6px ${flashes[lkey]};`
+											: ''
+									}`}
+									onclick={() => press(lrun)}
+									in:glitchReveal|global={{
+										duration: OVERTURE_CELL_GLITCH_MS,
+										delay: cellDelay(lkey)
+									}}
+									data-field-cell={lkey}
+								>
+									<div class="flex items-center justify-between gap-2">
+										<span class="flex min-w-0 items-center gap-1.5">
+											<span
+												class="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
+												style={statusDotStyle(
+													level(lrun) === 'stalling' ? 'cooling' : 'burning',
+													lcolor
+												)}
+												aria-hidden="true"
+											></span>
+											<span
+												class="truncate font-medium text-amber-100/90"
+												use:typeReveal={{ text: liveRunDisplayName(lrun) }}
+												>{liveRunDisplayName(lrun)}</span
+											>
+											{#if limb.hands > 0}
+												<span
+													class="shrink-0 font-mono text-[9px] text-ink-mute"
+													title="collapsed deeper strands — inspect on the run route"
+													>+{limb.hands} hands</span
 												>
 											{/if}
-											{#if lrun.edge?.out_bytes != null}
-												<span class="text-ink-mute"> · {lrun.edge.out_bytes} B</span>
+										</span>
+										<span
+											class="flex shrink-0 items-center gap-1.5 font-mono text-[10px] text-ink-quiet"
+										>
+											{#if (lrun.portals?.pending ?? 0) > 0}
+												<span
+													class="field-waiting text-sky-300"
+													title="correspondence waiting — put to read"
+													in:fade={{ delay: 2800, duration: 900 }}
+													out:fade={{ duration: 500 }}>◈ {lrun.portals?.pending}</span
+												>
+											{/if}
+											{ageSince(lrun.started_at, now) ?? ''}
+										</span>
+									</div>
+									{#if runnerLabel(lrun)}
+										<p class="font-mono text-[9px] text-ink-mute">{runnerLabel(lrun)}</p>
+									{/if}
+									{#if ledge}
+										{#key lrun.edge?.at}
+											<p
+												class="mt-0.5 truncate font-mono text-[10px] text-stone-300"
+												title={ledge.detail ?? undefined}
+												in:fade={{ duration: 700 }}
+											>
+												<span style={`color: ${ledge.color}`}>⌁ {ledge.act ?? '?'}</span>
+												{#if ledge.detail}
+													· <span use:typeReveal={{ text: ledge.detail, duration: 2400 }}
+														>{ledge.detail}</span
+													>
+												{/if}
+												{#if lrun.edge?.out_bytes != null}
+													<span class="text-ink-mute"> · {lrun.edge.out_bytes} B</span>
+												{/if}
+											</p>
+										{/key}
+									{/if}
+									{#if lroom || lrun.edge?.dir}
+										<p
+											class="flex items-center justify-between gap-2 font-mono text-[9px] text-ink-mute"
+										>
+											{#if lroom}<span class="truncate" title={lroom}>⌂ {lroom}</span>{/if}
+											{#if lrun.edge?.dir}
+												<span
+													class="shrink-0 text-amber-200/70"
+													title="the directory the latest command ran in"
+													>▸ {lrun.edge.dir === '.' ? './' : `${lrun.edge.dir}/`}</span
+												>
 											{/if}
 										</p>
-									{/key}
-								{/if}
-								{#if lroom || lrun.edge?.dir}
-									<p
-										class="flex items-center justify-between gap-2 font-mono text-[9px] text-ink-mute"
-									>
-										{#if lroom}<span class="truncate" title={lroom}>⌂ {lroom}</span>{/if}
-										{#if lrun.edge?.dir}
-											<span
-												class="shrink-0 text-amber-200/70"
-												title="the directory the latest command ran in"
-												>▸ {lrun.edge.dir === '.' ? './' : `${lrun.edge.dir}/`}</span
-											>
-										{/if}
-									</p>
-								{/if}
-								<div class="mt-1 h-0.5 overflow-hidden bg-stone-900" aria-hidden="true">
-									<div
-										class={`h-full ${
-											level(lrun) !== 'running'
-												? 'w-full'
-												: isAwaiting(lrun)
-													? 'w-1/3 animate-[loom-scan_6s_ease-in-out_infinite]'
-													: 'w-1/3 animate-[loom-scan_1.4s_ease-in-out_infinite]'
-										}`}
-										style={`background-color: ${lcolor}; opacity: ${
-											level(lrun) === 'running' ? (isAwaiting(lrun) ? 0.6 : 1) : 0.3
-										}`}
-									></div>
-								</div>
-							</button>
-						{/each}
-					</div>
-				{/if}
-			{/each}
-		</div>
+									{/if}
+									<div class="mt-1 h-0.5 overflow-hidden bg-stone-900" aria-hidden="true">
+										<div
+											class={`h-full ${
+												level(lrun) !== 'running'
+													? 'w-full'
+													: isAwaiting(lrun)
+														? 'w-1/3 animate-[loom-scan_6s_ease-in-out_infinite]'
+														: 'w-1/3 animate-[loom-scan_1.4s_ease-in-out_infinite]'
+											}`}
+											style={`background-color: ${lcolor}; opacity: ${
+												level(lrun) === 'running' ? (isAwaiting(lrun) ? 0.6 : 1) : 0.3
+											}`}
+										></div>
+									</div>
+								</button>
+							{/each}
+						</div>
+					{/if}
+				{/each}
+			</div>
+		{/if}
 	{/if}
 </div>
 
