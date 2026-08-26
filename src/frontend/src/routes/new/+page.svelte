@@ -619,17 +619,33 @@
 									{faceFrame}
 								</text>
 							{/if}
-						{:else if faceFrame}
-							<!-- the core-glyph study: the face itself, held in a ring -->
+						{:else}
+							<!-- the core-glyph: structures are drawn, the being is
+							     written — a hovering face-core tethered to its dock,
+							     no volume anywhere on the entity -->
+							{@const dockTop = iso(
+								anat.torso.x + anat.torso.w / 2,
+								anat.torso.y + anat.torso.d / 2,
+								anat.torso.h
+							)}
+							<line
+								x1={dockTop.x}
+								y1={dockTop.y}
+								x2={anat.faceAnchor.x}
+								y2={anat.faceAnchor.y + 21}
+								class="tether"
+							/>
 							<circle cx={anat.faceAnchor.x} cy={anat.faceAnchor.y} r="21" class="halo" />
-							<text
-								x={anat.faceAnchor.x}
-								y={anat.faceAnchor.y + 5}
-								text-anchor="middle"
-								class="face-text glyph"
-							>
-								{faceFrame}
-							</text>
+							{#if faceFrame}
+								<text
+									x={anat.faceAnchor.x}
+									y={anat.faceAnchor.y + 5}
+									text-anchor="middle"
+									class="face-text glyph"
+								>
+									{faceFrame}
+								</text>
+							{/if}
 						{/if}
 						<!-- the bench: where the current command lies -->
 						<polygon points={polyPoints(bef.left)} class="bench-l" />
@@ -1008,6 +1024,11 @@
 		fill: rgba(11, 8, 3, 0.85);
 		stroke: rgba(255, 205, 110, 0.5);
 		stroke-width: 0.9;
+	}
+	.tether {
+		stroke: rgba(255, 205, 110, 0.28);
+		stroke-width: 0.8;
+		stroke-dasharray: 1.5 3;
 	}
 	.bench-t {
 		fill: #2a1e0d;
