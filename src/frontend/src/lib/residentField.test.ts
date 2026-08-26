@@ -10,10 +10,12 @@ import { deepEqual, equal, ok } from 'node:assert/strict';
 import {
 	ACT_COLORS,
 	actColor,
+	benchCommand,
 	buildField,
 	diffFieldEvents,
 	edgeParts,
-	fieldRunKey
+	fieldRunKey,
+	truncPathTail
 } from './residentField.ts';
 import type { LiveRun } from './liveRuns';
 
@@ -253,4 +255,20 @@ test('pending falling is a read — the resting marker travels, never vanishes',
 	deepEqual(events, [{ kind: 'read', runId: 'r1', parentId: null }]);
 	// And unchanged pending emits nothing — a still door is a still field.
 	deepEqual(diffFieldEvents(after, after), []);
+});
+
+test('the bench strips env scaffolding and keeps path tails', () => {
+	equal(
+		benchCommand('OUT=/Users/g/.brr/outbox/evt-1 cat > "$OUT/.card" <<EOF'),
+		'cat > "$OUT/.card" <<EOF'
+	);
+	equal(benchCommand('A=1 B="x y" git status'), 'git status');
+	equal(benchCommand('git push origin main'), 'git push origin main');
+	// A detail that is ONLY assignments still shows something, never blank.
+	equal(benchCommand('FOO=bar'), 'FOO=bar');
+	equal(
+		truncPathTail('/Users/gurio/Source/Projects/brnrd/src/frontend', 20),
+		'…/brnrd/src/frontend'
+	);
+	equal(truncPathTail('src', 20), 'src');
 });

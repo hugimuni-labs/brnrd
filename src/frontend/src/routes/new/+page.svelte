@@ -15,7 +15,14 @@
 		runCourse,
 		type LiveRun
 	} from '$lib/liveRuns';
-	import { actColor, buildField, diffFieldEvents, fieldRunKey } from '$lib/residentField';
+	import {
+		actColor,
+		benchCommand,
+		buildField,
+		diffFieldEvents,
+		fieldRunKey,
+		truncPathTail
+	} from '$lib/residentField';
 	import {
 		boxFaces,
 		buildScene,
@@ -660,11 +667,11 @@
 								style={`fill:${lamp}`}
 							/>
 							<text x={anat.benchAnchor.x} y={anat.benchAnchor.y} class="bench-cmd">
-								{trunc(run.edge.detail, 34)}
+								{trunc(benchCommand(run.edge.detail), 34)}
 							</text>
 							{#if (run.edge.dir && run.edge.dir !== '.') || run.room?.dir || run.room?.branch}
 								<text x={anat.benchAnchor.x} y={anat.benchAnchor.y + 10} class="bench-dir">
-									{trunc(
+									{truncPathTail(
 										(run.edge.dir && run.edge.dir !== '.' ? run.edge.dir : null) ??
 											run.room?.dir ??
 											run.room?.branch ??
