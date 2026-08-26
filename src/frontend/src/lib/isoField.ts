@@ -240,15 +240,17 @@ export interface Faces {
 	floorFront: Pt;
 }
 
-/** An extruded box's three visible faces for the fixed camera. */
-export function boxFaces(x: number, y: number, w: number, d: number, h: number): Faces {
-	const a = iso(x, y, h); // back
-	const b = iso(x + w, y, h); // right
-	const c = iso(x + w, y + d, h); // front
-	const e = iso(x, y + d, h); // left
-	const bf = iso(x + w, y, 0);
-	const ef = iso(x, y + d, 0);
-	const cf = iso(x + w, y + d, 0);
+/** An extruded box's three visible faces for the fixed camera. `z0` lifts
+ *  the box's base off the floor — a head hovering over a torso is the same
+ *  box, raised. */
+export function boxFaces(x: number, y: number, w: number, d: number, h: number, z0 = 0): Faces {
+	const a = iso(x, y, z0 + h); // back
+	const b = iso(x + w, y, z0 + h); // right
+	const c = iso(x + w, y + d, z0 + h); // front
+	const e = iso(x, y + d, z0 + h); // left
+	const bf = iso(x + w, y, z0);
+	const ef = iso(x, y + d, z0);
+	const cf = iso(x + w, y + d, z0);
 	return {
 		top: [a, b, c, e],
 		left: [e, c, cf, ef],
@@ -256,6 +258,93 @@ export function boxFaces(x: number, y: number, w: number, d: number, h: number):
 		frontCorner: c,
 		floorFront: cf
 	};
+}
+
+// ── the resident's anatomy ──────────────────────────────────────────────────
+//
+// The entity round (2026-08-26, the maintainer's steer): a building answers
+// *where*; the resident is a *who*. The warehouse becomes a figure — a slim
+// torso, a hovering head that wears the run's own mood face, an act-trail on
+// the torso's gate-facing face (the windows return, but now every slit is a
+// recorded boundary act), and a bench in front where the current command
+// lies. Two studies share this skeleton: `automaton` (boxed head with a
+// visor) and `glyph` (no head — the face itself, held in a halo ring).
+
+export type ResidentBody = 'automaton' | 'glyph';
+
+/** How many act slits the torso's face can carry — the trail beyond this
+ *  scrolls off the bottom, oldest first. */
+export const TRAIL_MAX = 6;
+
+export interface Box {
+	x: number;
+	y: number;
+	w: number;
+	d: number;
+	h: number;
+	z0: number;
+}
+
+export interface ResidentAnatomy {
+	torso: Box;
+	/** Null in the `glyph` study — the face floats instead of wearing a box. */
+	head: Box | null;
+	bench: Box;
+	/** Screen anchor for the face (visor center / halo center). */
+	faceAnchor: Pt;
+	/** Screen anchor for the bench's command line (horizontal text). */
+	benchAnchor: Pt;
+	/** Act-trail slit endpoints on the torso's gate-facing (x = max) face,
+	 *  newest slot first, each a short segment across the face. */
+	trailSlits: { a: Pt; b: Pt }[];
+}
+
+/** The resident machine site → its figure. Pure geometry; the route draws. */
+export function residentAnatomy(m: Machine, body: ResidentBody = 'automaton'): ResidentAnatomy {
+	const tw = 1.0;
+	const td = 1.0;
+	const torso: Box = {
+		x: m.x + (m.w - tw) / 2,
+		y: m.y + (m.d - td) / 2,
+		w: tw,
+		d: td,
+		h: body === 'glyph' ? 1.05 : 1.55,
+		z0: 0
+	};
+	const head: Box | null =
+		body === 'glyph'
+			? null
+			: {
+					x: torso.x + (tw - 0.6) / 2,
+					y: torso.y + (td - 0.6) / 2,
+					w: 0.6,
+					d: 0.6,
+					h: 0.5,
+					z0: torso.h + 0.14
+				};
+	const bench: Box = {
+		x: torso.x - 0.08,
+		y: m.y + m.d + 0.4,
+		w: 1.16,
+		d: 0.52,
+		h: 0.22,
+		z0: 0
+	};
+	const faceAnchor = head
+		? iso(head.x + head.w, head.y + head.d / 2, head.z0 + head.h / 2)
+		: iso(torso.x + tw / 2, torso.y + td / 2, torso.h + 0.95);
+	const benchFront = iso(bench.x + bench.w, bench.y + bench.d / 2, bench.h);
+	const benchAnchor = { x: benchFront.x + 10, y: benchFront.y };
+	const trailSlits: { a: Pt; b: Pt }[] = [];
+	for (let i = 0; i < TRAIL_MAX; i++) {
+		const z = torso.h - 0.3 - i * 0.2;
+		if (z < 0.18) break;
+		trailSlits.push({
+			a: iso(torso.x + tw, torso.y + td * 0.2, z),
+			b: iso(torso.x + tw, torso.y + td * 0.82, z)
+		});
+	}
+	return { torso, head, bench, faceAnchor, benchAnchor, trailSlits };
 }
 
 /** Painter order: back-to-front by footprint center depth (x+y). Stable for

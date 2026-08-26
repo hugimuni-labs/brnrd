@@ -36,6 +36,10 @@ function liveRun(over) {
 		card_updated_at: now,
 		relics_counts: null,
 		mood: over.mood ?? null,
+		mood_glyph: over.mood ? 'b·_·d' : null,
+		mood_rest: over.mood ? 'b·_·d' : null,
+		mood_frames: over.mood ? [['b·_·d', 'bo_od', 'b·_·d']] : null,
+		mood_pitch: over.mood ? 0.55 : null,
 		topics: [],
 		stop_requested: false,
 		lifecycle: over.lifecycle ?? null,
@@ -53,6 +57,7 @@ const resident = (edge, portals) =>
 		name: 'the-axonometric-room',
 		started_at: new Date(Date.now() - 40 * 60_000).toISOString(),
 		card_text: '## Plan\n- [x] orient\n- [x] geometry\n- [ ] the room\n- [ ] PR',
+		mood: 'primed',
 		room: { env: 'host', branch: 'brr/the-operational-diorama', dir: null },
 		edge,
 		portals
@@ -149,7 +154,8 @@ async function waitForServer(url, tries = 60) {
 	throw new Error(`dev server never came up at ${url}`);
 }
 
-async function drive(context, dir, viewportLabel) {
+async function drive(context, dir, viewportLabel, body = 'automaton') {
+	const tag = `${body}-${viewportLabel}`;
 	const page = await context.newPage();
 	await page.route('**/v1/dashboard/**', async (route) => {
 		const url = new URL(route.request().url());
@@ -165,13 +171,13 @@ async function drive(context, dir, viewportLabel) {
 	});
 
 	phase = 0;
-	await page.goto(`http://localhost:${PORT}/new`, { waitUntil: 'networkidle' });
+	await page.goto(`http://localhost:${PORT}/new?body=${body}`, { waitUntil: 'networkidle' });
 	await delay(3600); // overture completes
-	await page.screenshot({ path: `${dir}/0-quiet-${viewportLabel}.png` });
+	await page.screenshot({ path: `${dir}/0-quiet-${tag}.png` });
 
 	phase = 1; // boundary flash — shot early enough to catch the 1.6s pulse
 	await delay(2450);
-	await page.screenshot({ path: `${dir}/1-boundary-${viewportLabel}.png` });
+	await page.screenshot({ path: `${dir}/1-boundary-${tag}.png` });
 	await delay(400);
 
 	phase = 2; // spawn — packet outward, block rises
@@ -192,24 +198,24 @@ async function drive(context, dir, viewportLabel) {
 	if (d1 !== null && d1 === d2) {
 		throw new Error(`packet did not move: offset-distance stuck at ${d1}`);
 	}
-	console.log(`packet motion probe (${viewportLabel}): ${d1} -> ${d2}`);
-	await page.screenshot({ path: `${dir}/2-spawn-${viewportLabel}.png` });
+	console.log(`packet motion probe (${tag}): ${d1} -> ${d2}`);
+	await page.screenshot({ path: `${dir}/2-spawn-${tag}.png` });
 	await delay(1600);
-	await page.screenshot({ path: `${dir}/2b-spawn-settled-${viewportLabel}.png` });
+	await page.screenshot({ path: `${dir}/2b-spawn-settled-${tag}.png` });
 
 	phase = 3; // ◈ rests at the gate
 	await delay(2800);
-	await page.screenshot({ path: `${dir}/3-message-${viewportLabel}.png` });
+	await page.screenshot({ path: `${dir}/3-message-${tag}.png` });
 
 	phase = 4; // inject — gate-feed transit
 	await delay(2400);
-	await page.screenshot({ path: `${dir}/4-inject-${viewportLabel}.png` });
+	await page.screenshot({ path: `${dir}/4-inject-${tag}.png` });
 
 	phase = 5; // return — sink + packet home
 	await delay(2400);
-	await page.screenshot({ path: `${dir}/5-return-${viewportLabel}.png` });
+	await page.screenshot({ path: `${dir}/5-return-${tag}.png` });
 	await delay(1600);
-	await page.screenshot({ path: `${dir}/5b-settled-${viewportLabel}.png` });
+	await page.screenshot({ path: `${dir}/5b-settled-${tag}.png` });
 
 	await page.close();
 }
@@ -231,7 +237,8 @@ async function main() {
 			hasTouch: true,
 			reducedMotion: 'no-preference'
 		});
-		await drive(phone, OUT, 'phone');
+		await drive(phone, OUT, 'phone', 'automaton');
+		await drive(phone, OUT, 'phone', 'glyph');
 		await phone.close();
 
 		// Social preview, the other acceptance frame.
@@ -240,7 +247,8 @@ async function main() {
 			deviceScaleFactor: 2,
 			reducedMotion: 'no-preference'
 		});
-		await drive(social, OUT, 'social');
+		await drive(social, OUT, 'social', 'automaton');
+		await drive(social, OUT, 'social', 'glyph');
 		await social.close();
 
 		await browser.close();
