@@ -4,7 +4,7 @@
 	import { DOCS_URL, GITHUB_REPO } from '$lib/publicStats';
 	import { isComplete as legalNoticeIsComplete } from '$lib/legalNotice';
 	import { typeReveal } from '$lib/transitions';
-	import CyberpalMark from '$lib/CyberpalMark.svelte';
+	import WinkWordmark from '$lib/WinkWordmark.svelte';
 	import HeroExchange from '$lib/HeroExchange.svelte';
 	import ShelfIcon from '$lib/ShelfIcon.svelte';
 	import {
@@ -43,7 +43,7 @@
 	>
 		<div class="shrink-0">
 			<p class="font-mono text-3xl font-semibold tracking-tight text-amber-100">
-				<CyberpalMark />
+				<WinkWordmark />
 			</p>
 			<p class="mt-1 hidden font-mono text-[11px] tracking-wide text-ink-quiet uppercase sm:block">
 				drain local · route wisely
