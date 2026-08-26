@@ -54,7 +54,14 @@ const resident = (over: Partial<LiveRun>) =>
 	liveRun({
 		run_id: 'run-260826-1049-f67f',
 		name: 'the-axonometric-room',
+		// The face, as the daemon would resolve it against `brr.emotes` —
+		// fixture stands in for the wire, same shape (`primed`: repro in
+		// hand, coffee metaphorically hot).
 		mood: 'primed',
+		mood_glyph: 'b·_·d',
+		mood_rest: 'b·_·d',
+		mood_frames: [['b·_·d', 'bo_od', 'b·_·d']],
+		mood_pitch: 0.55,
 		card_text: '## Plan\n- [x] orient\n- [x] geometry\n- [ ] the room\n- [ ] drive\n- [ ] PR',
 		room: { env: 'host', branch: 'brr/the-operational-diorama', dir: null },
 		...over
