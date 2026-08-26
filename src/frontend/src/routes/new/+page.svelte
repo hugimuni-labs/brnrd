@@ -264,13 +264,12 @@
 		return name.length > max ? name.slice(0, max - 1) + '…' : name;
 	}
 
-	/** Adjacent lane labels comb onto two baselines so they never collide.
-	 *  The resident doesn't get floor signage — its name rides an
-	 *  architectural callout at the mast, in screen space, because the
-	 *  floor in front of the tower belongs to the lane and a long name
-	 *  painted there ends up occluded by its own strands. */
-	function labelSpot(m: Machine): { x: number; y: number } {
-		return { x: m.x + 0.05, y: m.y + m.d + (m.order % 2 === 0 ? 1.05 : 0.5) };
+	/** Every label is horizontal (the maintainer's steer: isometric floor
+	 *  text beside a horizontal callout read as two systems). Strand labels
+	 *  hang under the block's front corner, combing onto two baselines so
+	 *  adjacent lane neighbours never collide. */
+	function strandLabelDy(m: Machine): number {
+		return m.order % 2 === 0 ? 30 : 15;
 	}
 
 	function machineDelay(m: Machine): string {
@@ -373,12 +372,13 @@
 					y2={gateBeam.b.y}
 					class="gate-beam"
 				/>
+				<!-- the one label that stays floor-painted: a static planned
+				     stencil reads as part of the floor plan (his 2nd read);
+				     only variable-length run names go horizontal -->
 				<text
 					transform={floorTextTransform(scene.gate.x - 0.55, scene.gate.y + 0.85)}
-					class="floor-label dim"
+					class="floor-label dim">portal</text
 				>
-					portal
-				</text>
 				{#if pendingTotal > 0}
 					{#key msgDropSeq}
 						<g class="msg" class:drop={msgDropSeq > 0}>
@@ -398,6 +398,28 @@
 					{/key}
 				{/if}
 			</g>
+
+			<!-- packets: one recorded event, one transit. A packet is a small
+			     floor-plane diamond — the conduit pads' own shape, moving —
+			     drawn UNDER the machines so it rides the floor and vanishes
+			     behind the block it arrives at (the maintainer's first-read
+			     steer: a dot pasted over the scene has no place in it). -->
+			<!-- CSS motion paths, not SMIL: an <animateMotion> inserted into a
+			     long-running document resolves begin="0s" against the DOCUMENT
+			     timeline, so a packet born at t=30s is already "finished" and
+			     freezes glowing at its endpoint — measured live by the
+			     maintainer ("the blue dot doesn't move"). CSS animations
+			     start at insertion, which is the semantics a receipt needs. -->
+			{#each packets as packet (packet.id)}
+				<g
+					class="pkt"
+					class:rev={packet.reverse}
+					style={`--c:${packet.color};offset-path:path('${packet.d}');animation-duration:${packet.dur}ms`}
+				>
+					<polygon points="0,-4.4 8.8,0 0,4.4 -8.8,0" class="pkt-halo" />
+					<polygon points="0,-2.4 4.8,0 0,2.4 -4.8,0" class="pkt-core" />
+				</g>
+			{/each}
 
 			<!-- the machines, back to front -->
 			{#each ordered as m (m.key)}
@@ -512,7 +534,9 @@
 					{/if}
 					{#if m.kind !== 'resident'}
 						<text
-							transform={floorTextTransform(labelSpot(m).x, labelSpot(m).y)}
+							x={f.floorFront.x}
+							y={f.floorFront.y + strandLabelDy(m)}
+							text-anchor="middle"
 							class="floor-label"
 						>
 							{trunc(liveRunDisplayName(run), 18)}{#if run.runner?.core}<tspan class="core-tag">
@@ -533,30 +557,67 @@
 				</g>
 			{/each}
 
-			<!-- packets: one recorded event, one transit -->
-			{#each packets as packet (packet.id)}
-				<g class="pkt" style={`--c:${packet.color}`}>
-					<animateMotion
-						dur={`${packet.dur}ms`}
-						path={packet.d}
-						keyPoints={packet.reverse ? '1;0' : '0;1'}
-						keyTimes="0;1"
-						calcMode="linear"
-						fill="freeze"
-					/>
-					<circle r="6.5" class="pkt-halo" />
-					<circle r="2.8" class="pkt-core" />
-				</g>
-			{/each}
-
 			{#if !loading && scene.machines.length === 0}
-				<text transform={floorTextTransform(1.2, scene.rows / 2)} class="floor-label empty-note">
+				{@const center = iso(scene.cols / 2, scene.rows / 2)}
+				<text x={center.x} y={center.y} text-anchor="middle" class="floor-label empty-note">
 					{signedOut ? 'sign in to see the room' : 'between wakes — daemon listening'}
 				</text>
 			{/if}
 		</svg>
 	</div>
 
+	{#if selected && focusRun}
+		<!-- the dossier: pressing a machine expands its record — same room
+		     vocabulary (mono, hairline rules), no panel class imported -->
+		<section class="dossier" aria-label="machine dossier">
+			<header>
+				<span class="dossier-name">{liveRunDisplayName(focusRun)}</span>
+				<button class="dossier-close" onpointerdown={() => (selected = null)}>×</button>
+			</header>
+			<dl>
+				{#if focusRun.runner?.core}
+					<dt>core</dt>
+					<dd>
+						{focusRun.runner.core}{focusRun.runner.class ? ` · ${focusRun.runner.class}` : ''}
+					</dd>
+				{/if}
+				{#if focusRun.room?.branch || focusRun.room?.dir}
+					<dt>room</dt>
+					<dd>
+						{[focusRun.room?.branch, focusRun.room?.dir].filter(Boolean).join(' · ') ||
+							'the shared checkout'}
+					</dd>
+				{/if}
+				{#if focusRun.edge?.act}
+					<dt>edge</dt>
+					<dd>
+						<span style={`color:${actColor(focusRun.edge.act)}`}>{focusRun.edge.act}</span>
+						{#if focusRun.edge.detail}· {focusRun.edge.detail}{/if}
+						{#if focusRun.edge.dir && focusRun.edge.dir !== '.'}· in {focusRun.edge.dir}{/if}
+					</dd>
+				{/if}
+				{#if focusCourse}
+					<dt>course</dt>
+					<dd>
+						{focusCourse.done}/{focusCourse.total}{focusCourse.current
+							? ` · ${focusCourse.current}`
+							: ''}
+					</dd>
+				{/if}
+				{#if focusRun.lifecycle}
+					<dt>state</dt>
+					<dd>{focusRun.lifecycle}</dd>
+				{:else if focusRun.phase}
+					<dt>phase</dt>
+					<dd>{focusRun.phase}</dd>
+				{/if}
+				{#if focusRun.portals?.pending}
+					<dt>portal</dt>
+					<dd>◈ {focusRun.portals.pending} waiting</dd>
+				{/if}
+			</dl>
+		</section>
+	{/if}
 	<footer class="hud hud-bottom">
 		{#if focusRun}
 			<span class="focus-name">{liveRunDisplayName(focusRun)}</span>
@@ -873,6 +934,23 @@
 	}
 
 	/* ── packets ───────────────────────────────────────────────────────── */
+	.pkt {
+		offset-rotate: 0deg;
+		animation-name: pkt-travel;
+		animation-timing-function: linear;
+		animation-fill-mode: forwards;
+	}
+	.pkt.rev {
+		animation-direction: reverse;
+	}
+	@keyframes pkt-travel {
+		from {
+			offset-distance: 0%;
+		}
+		to {
+			offset-distance: 100%;
+		}
+	}
 	.pkt-core {
 		fill: var(--c);
 	}
@@ -942,6 +1020,67 @@
 			opacity: 0;
 			transform: translateY(12px);
 		}
+	}
+
+	.dossier {
+		flex: none;
+		margin: 0 12px 4px;
+		padding: 10px 14px 12px;
+		border: 1px solid rgba(217, 164, 65, 0.28);
+		background: rgba(18, 13, 8, 0.92);
+		font-size: 11px;
+		color: #a8a29e;
+		max-height: 38vh;
+		overflow-y: auto;
+		animation: dossier-in 0.28s ease-out;
+	}
+	@keyframes dossier-in {
+		from {
+			opacity: 0;
+			transform: translateY(8px);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
+	}
+	.dossier header {
+		display: flex;
+		justify-content: space-between;
+		align-items: baseline;
+		margin-bottom: 6px;
+	}
+	.dossier-name {
+		color: #f3e8d8;
+		font-size: 12px;
+		letter-spacing: 0.06em;
+	}
+	.dossier-close {
+		background: none;
+		border: none;
+		color: #8a827a;
+		font-size: 16px;
+		cursor: pointer;
+		padding: 0 2px;
+		line-height: 1;
+	}
+	.dossier dl {
+		display: grid;
+		grid-template-columns: max-content 1fr;
+		gap: 3px 14px;
+		margin: 0;
+	}
+	.dossier dt {
+		color: #8a827a;
+		text-transform: uppercase;
+		font-size: 9px;
+		letter-spacing: 0.18em;
+		align-self: baseline;
+		padding-top: 1px;
+	}
+	.dossier dd {
+		margin: 0;
+		overflow-wrap: anywhere;
 	}
 
 	.hud-bottom {

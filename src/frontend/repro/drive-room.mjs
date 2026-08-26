@@ -176,6 +176,23 @@ async function drive(context, dir, viewportLabel) {
 
 	phase = 2; // spawn — packet outward, block rises
 	await delay(2300);
+	// Behavioural probe, not a screenshot: the packet must actually MOVE.
+	// (The SMIL cut of this rendered every packet frozen at its endpoint —
+	// begin="0s" resolves against the document timeline — and the stills
+	// looked fine because the drive fires seconds after load. Sample the
+	// computed offset-distance twice; a still packet fails loudly here.)
+	const probe = async () =>
+		page.evaluate(() => {
+			const el = document.querySelector('.pkt');
+			return el ? getComputedStyle(el).offsetDistance : null;
+		});
+	const d1 = await probe();
+	await delay(400);
+	const d2 = await probe();
+	if (d1 !== null && d1 === d2) {
+		throw new Error(`packet did not move: offset-distance stuck at ${d1}`);
+	}
+	console.log(`packet motion probe (${viewportLabel}): ${d1} -> ${d2}`);
 	await page.screenshot({ path: `${dir}/2-spawn-${viewportLabel}.png` });
 	await delay(1600);
 	await page.screenshot({ path: `${dir}/2b-spawn-settled-${viewportLabel}.png` });
