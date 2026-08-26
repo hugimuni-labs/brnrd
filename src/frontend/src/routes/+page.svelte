@@ -19,7 +19,7 @@
 	import ColdStart from '$lib/ColdStart.svelte';
 	import PublishConsentNotice from '$lib/PublishConsentNotice.svelte';
 	import { DOCS_URL } from '$lib/publicStats';
-	import WinkWordmark from '$lib/WinkWordmark.svelte';
+	import CyberpalMark from '$lib/CyberpalMark.svelte';
 	import WithheldNotice from '$lib/WithheldNotice.svelte';
 	import type { WithheldLane } from '$lib/withheld';
 	import { QuotaAuthError, fetchQuota, type QuotaShell } from '$lib/quota';
@@ -1350,11 +1350,13 @@
 			<div class="flex items-start justify-between gap-4">
 				<!-- The wordmark wears the board's mood (#566): the newest live run's
 				     face while something is burning, the daemon's resting one when
-				     nothing is. With neither it is the plain wink the landing page
-				     has always shown — the frontend owns no emote table, so "no mood
-				     on the wire" renders as no mood, not as a default face. -->
+				     nothing is. Since 2026-08-26 it is the drawn being, not typed
+				     glyphs — the five-slot mark whose r·n·r is the face — but the
+				     wire contract is unchanged: the frontend owns no emote table,
+				     so "no mood on the wire" renders the neutral rest face, never
+				     an invented mood. -->
 				<p class="eyebrow eyebrow--asis">
-					<WinkWordmark frames={wordmark.frames} pitch={wordmark.pitch} />
+					<CyberpalMark class="text-2xl" frames={wordmark.frames} pitch={wordmark.pitch} />
 				</p>
 				<!-- Named directly as a real gap (2026-07-08): no way to end a
 			     session short of clearing cookies by hand. Small on purpose
