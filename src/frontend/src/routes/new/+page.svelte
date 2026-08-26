@@ -107,6 +107,9 @@
 		runs = alive;
 		if (reduced || events.length === 0) return;
 
+		// An attested read and an inject boundary usually land in the same
+		// poll tick and mean the same moment — one transit, the ◈'s.
+		const readIds = new Set(events.filter((e) => e.kind === 'read').map((e) => e.runId));
 		for (const ev of events) {
 			if (ev.kind === 'spawn') {
 				births = { ...births, [ev.runId]: true };
@@ -138,9 +141,19 @@
 					flashes = Object.fromEntries(Object.entries(flashes).filter(([k]) => k !== ev.runId));
 				}, FLASH_MS);
 			} else if (ev.kind === 'inject') {
+				if (!readIds.has(ev.runId)) {
+					pushPacket(
+						nextScene.gatePath.length ? floorPath(nextScene.gatePath) : null,
+						actColor('orient'),
+						INJECT_MS
+					);
+				}
+			} else if (ev.kind === 'read') {
+				// The resting ◈ is carried home — the read attested as a
+				// transit, never a silent disappearance.
 				pushPacket(
 					nextScene.gatePath.length ? floorPath(nextScene.gatePath) : null,
-					actColor('orient'),
+					'#d9a441',
 					INJECT_MS
 				);
 			} else if (ev.kind === 'message') {
@@ -252,11 +265,6 @@
 		{ x: iso(scene.cols, scene.rows).x, y: iso(scene.cols, scene.rows).y + RIM_DROP },
 		{ x: iso(scene.cols, 0).x, y: iso(scene.cols, 0).y + RIM_DROP }
 	]);
-
-	/** Deterministic per-window brightness — inhabited, never twinkling. */
-	function windowAlpha(i: number): number {
-		return 0.28 + ((i * 7) % 5) * 0.13;
-	}
 
 	/** Floor labels are painted signage, not rows — a long name gets cut,
 	 *  the full one lives in the HUD when the machine is pressed. */
@@ -470,21 +478,11 @@
 						/>
 					{/if}
 					{#if m.kind === 'resident'}
-						<!-- lit slits: the tower is inhabited -->
-						{#each Array.from({ length: 8 }, (_, i) => i) as i (i)}
-							{@const wx = m.x + m.w + 0.001}
-							{@const col = i % 2}
-							{@const row = (i - col) / 2}
-							{@const p = iso(wx, m.y + m.d * (0.45 + col * 0.3), m.h - 0.42 - row * 0.4)}
-							<rect
-								x={p.x - 4}
-								y={p.y}
-								width="5"
-								height="2.2"
-								class="window"
-								style={`opacity:${windowAlpha(i)}`}
-							/>
-						{/each}
+						<!-- no window slits: they were pure decoration, and every
+						     mark in this room must carry data (his read, correct).
+						     What earns a place on the tower's face — course,
+						     mood, produce — is the coherent-shape round's
+						     question, answered as one vocabulary, not bolted on. -->
 						{@const mastBase = iso(m.x + m.w * 0.3, m.y + m.d * 0.3, m.h)}
 						<line
 							x1={mastBase.x}
@@ -778,9 +776,6 @@
 		fill: rgba(217, 164, 65, 0.06);
 		stroke: rgba(217, 164, 65, 0.3);
 		stroke-width: 0.8;
-	}
-	.window {
-		fill: #f3e8d8;
 	}
 	.mast {
 		stroke: rgba(255, 205, 110, 0.6);

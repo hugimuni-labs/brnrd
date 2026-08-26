@@ -189,13 +189,15 @@ test('a boundary without injection is local, never an arrival', () => {
 	deepEqual(diffFieldEvents(before, after), [{ kind: 'boundary', runId: 'r1', parentId: null }]);
 });
 
-test('correspondence arriving at the door is a message receipt; leaving is not', () => {
+test('correspondence arriving at the door is a message receipt; draining is a read', () => {
 	const before = [run({ id: 'r1', portals: { pending: 0, oldest_at: null } })];
 	const arrived = [run({ id: 'r1', portals: { pending: 1, oldest_at: '2026-08-25T22:05:00Z' } })];
 	deepEqual(diffFieldEvents(before, arrived), [{ kind: 'message', runId: 'r1', parentId: null }]);
-	// The queue draining (read/answered) moves no packet — the resting
-	// marker simply ends; the *inject* boundary is the read's own receipt.
-	deepEqual(diffFieldEvents(arrived, before), []);
+	// The queue draining used to move no packet, on the theory that the
+	// inject boundary was the read's own receipt — measured false on the
+	// live room (2026-08-26): the resting markers just vanished. A drain
+	// is a `read` event now, so the marker can be carried home.
+	deepEqual(diffFieldEvents(arrived, before), [{ kind: 'read', runId: 'r1', parentId: null }]);
 	// A daemon that never attested a portal cannot produce arrivals.
 	deepEqual(diffFieldEvents([run({ id: 'r1' })], [run({ id: 'r1' })]), []);
 });
@@ -242,4 +244,13 @@ test('edgeParts splits act from detail and colors the act', () => {
 		}),
 		null
 	);
+});
+
+test('pending falling is a read — the resting marker travels, never vanishes', () => {
+	const before = [run({ id: 'r1', portals: { pending: 2, oldest_at: '2026-08-26T11:00:00Z' } })];
+	const after = [run({ id: 'r1', portals: { pending: 0, oldest_at: null } })];
+	const events = diffFieldEvents(before, after);
+	deepEqual(events, [{ kind: 'read', runId: 'r1', parentId: null }]);
+	// And unchanged pending emits nothing — a still door is a still field.
+	deepEqual(diffFieldEvents(after, after), []);
 });

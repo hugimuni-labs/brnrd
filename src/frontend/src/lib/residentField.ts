@@ -125,7 +125,13 @@ export type FieldEventKind =
 	/** Correspondence arrived at the run's door (`portals.pending` rose) —
 	 *  the message drops from the portal and rests, *put to read*, until a
 	 *  boundary attests the read. */
-	| 'message';
+	| 'message'
+	/** The resting correspondence was folded in (`portals.pending` fell) —
+	 *  the read is attested, the resting marker travels home instead of
+	 *  silently vanishing (the maintainer's live read of the room,
+	 *  2026-08-26: "the animation didn't happen really, just the message
+	 *  diamonds disappeared from the portal"). */
+	| 'read';
 
 export interface FieldEvent {
 	kind: FieldEventKind;
@@ -170,6 +176,8 @@ export function diffFieldEvents(
 		const pendingWas = was.portals?.pending ?? 0;
 		if (pendingNow > pendingWas) {
 			events.push({ kind: 'message', runId: key, parentId: run.parent_run_id ?? null });
+		} else if (pendingNow < pendingWas) {
+			events.push({ kind: 'read', runId: key, parentId: run.parent_run_id ?? null });
 		}
 	}
 	for (const [key, run] of before) {
