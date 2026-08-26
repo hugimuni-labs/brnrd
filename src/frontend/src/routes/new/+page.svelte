@@ -1351,6 +1351,14 @@
 	.dossier dd {
 		margin: 0;
 		overflow-wrap: anywhere;
+		/* An edge detail is one recorded command, and a command can be a
+		   whole heredoc — the dossier is a record card, not a scrollback.
+		   Clamp the row; the full text stays in the run route. */
+		display: -webkit-box;
+		-webkit-box-orient: vertical;
+		-webkit-line-clamp: 3;
+		line-clamp: 3;
+		overflow: hidden;
 	}
 
 	.hud-bottom {
