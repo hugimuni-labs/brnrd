@@ -95,34 +95,215 @@ def _course(card: str) -> tuple[int, int]:
     return sum(1 for mark in rows if mark.lower() == "x"), len(rows)
 
 
+#: How much of the command echo survives on the collapsed title line. The
+#: recorded detail is capped at 500 B by ``hooks._DETAIL_BASH_MAX`` — measured
+#: across 3,944 records the median is 110 chars and the p90 is 494, so pasting
+#: it whole into a one-line header made 69% of rows run off the terminal edge
+#: and read as a wall. The title carries an identifying *prefix*; the full
+#: command lives in the expanded body, where it can wrap.
+_TITLE_DETAIL_WIDTH = 56
+
+#: Label column for the expanded body's blocks. Four fixed keys so the eye
+#: lands in the same place on every row: where it ran, what it ran, how much
+#: came back, what the daemon said into the run at that boundary.
+_BODY_LABEL_WIDTH = 7
+
+#: Where a command line may be broken for display. Shell operators only —
+#: splitting anywhere else would render a command that is not the command.
+_CMD_BREAKS = (" && ", " || ", " | ", " ; ")
+
+
+def _home_short(path: str) -> str:
+    """``/Users/gurio/Source/…`` → ``~/Source/…``; anything else untouched."""
+    if not path:
+        return ""
+    home = str(Path.home())
+    if home and path.startswith(home):
+        return "~" + path[len(home):]
+    return path
+
+
+def _tool_label(edge: Boundary) -> str:
+    """``Bash`` for one tool, ``Bash ×3`` for a batch.
+
+    A Claude boundary can carry several tool calls (669 of them in this
+    machine's recorded history carry 2-5). Only the first tool's act and
+    detail are recorded, so the count is the honest way to say the row is
+    standing for more than it shows — silently rendering ``tools[0]`` made
+    the other calls invisible rather than merely unelaborated.
+    """
+    if not edge.tools:
+        return ""
+    first = str(edge.tools[0])
+    return f"{first} ×{len(edge.tools)}" if len(edge.tools) > 1 else first
+
+
+def _wrap_command(cmd: str, width: int = 70) -> list[str]:
+    """Break a long command at shell operators, never mid-token.
+
+    The width is deliberately narrow. These lines land in a Static inside the
+    center pane, and anything that overflows gets re-wrapped by Textual —
+    which wraps to the *widget* edge, not to the label column, so one long
+    line silently un-indents itself and the block stops reading as a block.
+    Wrapping short enough to survive the pane is what keeps the column true.
+    """
+    text = " ".join((cmd or "").split())
+    if not text:
+        return []
+    parts: list[str] = [text]
+    for sep in _CMD_BREAKS:
+        nxt: list[str] = []
+        for chunk in parts:
+            pieces = chunk.split(sep)
+            for i, piece in enumerate(pieces):
+                nxt.append(piece if i == 0 else sep.lstrip() + piece)
+        parts = nxt
+    lines: list[str] = []
+    for part in parts:
+        part = part.strip()
+        while len(part) > width:
+            lines.append(part[:width])
+            part = part[width:]
+        if part:
+            lines.append(part)
+    return lines
+
+
+def _edge_is_mute(edge: Boundary) -> bool:
+    """True for a row that carries nothing a reader could act on.
+
+    ``pre-tool`` fires before the tool runs, so it has no act, no detail and
+    no response — and in this machine's history all 2,130 of them injected
+    nothing. Each one rendered as a header saying only its own sequence
+    number, expanding to "silent — nothing injected": two thirds of the wall,
+    guaranteed empty. A pre-tool row that *blocked* something is the opposite
+    of empty and is never folded.
+    """
+    return (
+        edge.phase == "pre-tool"
+        and not edge.block
+        and not edge.inject.strip()
+        and not edge.detail
+        and not edge.tools
+    )
+
+
+def _edge_rows(run: RunView | None, limit: int = 100) -> tuple[Boundary, ...]:
+    """The boundaries the EDGE pane actually shows, mute rows folded out."""
+    if run is None:
+        return ()
+    return tuple(e for e in run.boundaries if not _edge_is_mute(e))[-limit:]
+
+
+def _edge_groups(
+    rows: tuple[Boundary, ...],
+) -> list[tuple[str, list[Boundary]]]:
+    """Split boundaries into consecutive runs that share a working directory.
+
+    The directory is where the act happened, and it changes rarely — a
+    resident stays in its checkout, a strand stays in its worktree. Rendering
+    it once per stretch says the same thing as rendering it per row, minus
+    the wall of repetition, and it turns a directory change (the interesting
+    event) into something visible rather than something you would have to
+    diff two adjacent rows to notice.
+    """
+    out: list[tuple[str, list[Boundary]]] = []
+    for edge in rows:
+        where = _home_short(edge.cwd)
+        if out and out[-1][0] == where:
+            out[-1][1].append(edge)
+        else:
+            out.append((where, [edge]))
+    return out
+
+
+def _edge_cwd_now(run: RunView | None) -> str:
+    """The directory the pane's standing header shows — the latest recorded."""
+    for edge in reversed(_edge_rows(run)):
+        if edge.cwd:
+            return _home_short(edge.cwd)
+    return ""
+
+
+def _edge_blocks(edge: Boundary) -> list[tuple[str, list[str]]]:
+    """The expanded body as labelled blocks: where · ran · out · said.
+
+    Each is a distinct fact and they used to be three different shapes: the
+    command was jammed into the title, ``cwd`` was recorded and rendered
+    nowhere at all, and the body held only the inject — unlabelled, which is
+    why expanding a row read as if it had failed rather than as if it were
+    answering a different question than the one asked.
+
+    ``cwd`` appears here *and* as a group header (:func:`_edge_groups`) and
+    the pane's standing header — deliberately, at the maintainer's call
+    (2026-08-26). The collapsed wall must not repeat one directory down every
+    row, but an expanded row is a reader asking for this act in full, and
+    "where did it run" is part of full. Cheap where it is asked for, absent
+    where it would be noise.
+    """
+    blocks: list[tuple[str, list[str]]] = []
+    if edge.cwd:
+        blocks.append(("where", [_home_short(edge.cwd)]))
+    if edge.detail:
+        blocks.append(("ran", _wrap_command(edge.detail)))
+    if edge.out_bytes >= 0:
+        # The bytes are counted, never kept (hooks.py: responses are excluded
+        # from the transcript on purpose). Say so, or the number reads like a
+        # link to something openable.
+        blocks.append(("out", [f"{_fmt_bytes(edge.out_bytes)} — not retained"]))
+    if edge.inject.strip():
+        inject = edge.inject.rstrip()
+        if len(inject) > 1800:
+            inject = inject[:1800].rstrip() + "\n… elided in console projection"
+        blocks.append(("said", inject.splitlines()))
+    else:
+        blocks.append(("said", ["silent — nothing injected"]))
+    if edge.block_reason:
+        blocks.append(("block", _wrap_command(edge.block_reason)))
+    return blocks
+
+
+def _render_blocks(blocks: list[tuple[str, list[str]]], indent: str = "    ") -> list[str]:
+    """Labelled blocks → lines, label column fixed so the eye tracks it."""
+    lines: list[str] = []
+    pad = " " * (_BODY_LABEL_WIDTH + len(indent))
+    for label, rows in blocks:
+        if not rows:
+            continue
+        lines.append(f"{indent}{label:<{_BODY_LABEL_WIDTH}}{rows[0]}")
+        lines.extend(f"{pad}{row}" for row in rows[1:])
+    return lines
+
+
 def _edges(run: RunView | None) -> str:
+    """Plain-text mirror of the EDGE pane — one compact line + its blocks.
+
+    The Textual pane builds Collapsibles rather than reading this string, but
+    it must render the same facts: this is both the pane's change signature
+    and the shape the tests assert against, so a drift here is a drift the
+    suite can see.
+    """
     if run is None:
         return "Nothing awake."
     if not run.boundaries:
         return f"{run.run_id}\n\nNo recorded boundary fires yet."
+    rows = _edge_rows(run)
+    if not rows:
+        return f"{run.run_id}\n\nAll recorded boundaries were silent pre-tool fires."
     lines: list[str] = []
-    for edge in run.boundaries[-100:]:
-        flags = [part for part in (edge.act, "BLOCKED" if edge.block else "") if part]
-        tail = f"  [{' · '.join(flags)}]" if flags else ""
-        # Tool-detail suffix: first tool name · command/path/summary · out N KB
-        # Back-compat: detail="" and out_bytes=-1 on old records → suffix is empty.
-        tool_names = edge.raw.get("tools") or []
-        first_tool = str(tool_names[0]) if tool_names else ""
-        detail_parts = [p for p in (first_tool, edge.detail) if p]
-        if edge.out_bytes >= 0:
-            detail_parts.append(f"out {_fmt_bytes(edge.out_bytes)}")
-        detail_suffix = ("  " + " · ".join(detail_parts)) if detail_parts else ""
-        lines.append(f"{_clock(edge.at)}  EDGE #{edge.seq:<3}  {edge.phase}{tail}{detail_suffix}")
-        if edge.inject:
-            inject = edge.inject.rstrip()
-            if len(inject) > 1800:
-                inject = inject[:1800].rstrip() + "\n… elided in console projection"
-            lines.extend(f"             + {row}" for row in inject.splitlines())
-        else:
-            lines.append("               · silent — nothing injected")
-        if edge.block_reason:
-            lines.append(f"               ! {_short(edge.block_reason, 120)}")
+    standing = _edge_cwd_now(run)
+    if standing:
+        lines.append(f"in  {standing}")
         lines.append("")
+    for where, group in _edge_groups(rows):
+        lines.append(f"▸ {where or '—'}")
+        for edge in group:
+            lines.append(_edge_title(edge, markup=False))
+            lines.extend(_render_blocks(_edge_blocks(edge)))
+            lines.append("")
+    folded = len(run.boundaries) - len(tuple(e for e in run.boundaries if not _edge_is_mute(e)))
+    if folded:
+        lines.append(f"({folded} silent pre-tool boundaries folded)")
     return "\n".join(lines).rstrip()
 
 
@@ -142,34 +323,29 @@ def _edge_css_class(edge: Boundary) -> str:
     return f"{base} act-blocked" if edge.block else base
 
 
-def _edge_title(edge: Boundary) -> str:
-    """One compact line — the Collapsible header shown while collapsed."""
-    tool_names = edge.raw.get("tools") or []
-    first_tool = escape(str(tool_names[0])) if tool_names else ""
-    detail = escape(edge.detail) if edge.detail else ""
-    detail_parts = [p for p in (first_tool, detail) if p]
+def _edge_title(edge: Boundary, *, markup: bool = True) -> str:
+    """One compact line — the Collapsible header shown while collapsed.
+
+    Compact is the contract: time, sequence, act, phase, which tools, an
+    identifying *prefix* of the command, and the response size. The command
+    itself moved to the body — a 500-byte pipeline on a one-line header is
+    not a summary of the act, it is the act with its right-hand side hidden
+    by the terminal.
+    """
+    esc = escape if markup else (lambda value: value)
+    tools = _tool_label(edge)
+    parts = [p for p in (tools, _short(edge.detail, _TITLE_DETAIL_WIDTH)) if p]
     if edge.out_bytes >= 0:
-        detail_parts.append(f"out {_fmt_bytes(edge.out_bytes)}")
-    detail_suffix = f"  {' · '.join(detail_parts)}" if detail_parts else ""
+        parts.append(f"out {_fmt_bytes(edge.out_bytes)}")
+    suffix = f"  {esc(' · '.join(parts))}" if parts else ""
     flag = "  ⛔ BLOCKED" if edge.block else ""
-    act = escape(edge.act) if edge.act else "·"
-    phase = escape(edge.phase)
-    return f"{escape(_clock(edge.at))}  #{edge.seq:<3} {act:<8} {phase}{detail_suffix}{flag}"
+    act = esc(edge.act) if edge.act else "·"
+    return f"{esc(_clock(edge.at))}  #{edge.seq:<3} {act:<8} {esc(edge.phase)}{suffix}{flag}"
 
 
 def _edge_body(edge: Boundary) -> str:
-    """Full inject/block-reason text — the Collapsible content when expanded."""
-    lines: list[str] = []
-    if edge.inject:
-        inject = edge.inject.rstrip()
-        if len(inject) > 1800:
-            inject = inject[:1800].rstrip() + "\n… elided in console projection"
-        lines.extend(inject.splitlines())
-    else:
-        lines.append("silent — nothing injected")
-    if edge.block_reason:
-        lines.append(f"! {edge.block_reason}")
-    return "\n".join(lines)
+    """The expanded content — where · ran · out · said, as separate blocks."""
+    return "\n".join(_render_blocks(_edge_blocks(edge), indent=""))
 
 
 #: Rough bytes-per-token heuristic for English/Markdown prose. A heuristic,
@@ -626,6 +802,13 @@ def build_console_app() -> type:
         DataTable { background: #0d0c0a; }
         Footer { background: #15120e; }
         #edge-log, #wake-log { background: #0d0c0a; padding: 0 1; }
+        #edge-cwd {
+            background: #15120e; color: #8fd6c4; padding: 0 1; height: auto;
+        }
+        /* Group header: one directory, one line, above the stretch it owns. */
+        Static.edge-group {
+            color: #8fd6c4; text-style: bold; padding: 1 0 0 0; background: #0d0c0a;
+        }
         Collapsible { padding-bottom: 0; background: #0d0c0a; border-top: none; }
         CollapsibleTitle { color: #a99f8c; }
         /* act → color, keyed by hooks.ACT_LABELS — a wall of boundaries reads
@@ -685,6 +868,11 @@ def build_console_app() -> type:
                 with Vertical(id="center"):
                     with TabbedContent(initial="edge"):
                         with TabPane("EDGE", id="edge"):
+                            # Standing directory header: the EDGE wall can be
+                            # hundreds of rows, and "which tree is this
+                            # happening in" is the one fact you want still on
+                            # screen after scrolling past its group header.
+                            yield Static("", id="edge-cwd")
                             yield VerticalScroll(id="edge-log")
                         with TabPane("WAKE", id="wake"):
                             yield VerticalScroll(id="wake-log")
@@ -734,6 +922,10 @@ def build_console_app() -> type:
             # directly, one compact colored line each, since that's the only
             # shape that can carry both a title and hidden detail content.
             sig = _edges(run)
+            standing = _edge_cwd_now(run)
+            self.query_one("#edge-cwd", Static).update(
+                f"in  {escape(standing)}" if standing else ""
+            )
             if self._last_content.get("#edge-log") == sig:
                 return
             container = self.query_one("#edge-log", VerticalScroll)
@@ -744,17 +936,23 @@ def build_console_app() -> type:
             elif not run.boundaries:
                 container.mount(Static(f"{run.run_id}\n\nNo recorded boundary fires yet."))
             else:
+                # _edge_rows folds out the silent pre-tool fires; the pane and
+                # the plain-text projection must show the same set, or the
+                # change signature above stops describing what is on screen.
+                rows = _edge_rows(run)
                 expanded = self._edge_expanded.setdefault(run.run_id, set())
-                nodes = []
-                for edge in run.boundaries[-100:]:
-                    node = Collapsible(
-                        Static(_edge_body(edge), markup=False),
-                        title=_edge_title(edge),
-                        collapsed=edge.seq not in expanded,
-                        classes=_edge_css_class(edge),
-                    )
-                    node.edge_seq = edge.seq  # recovered in on_collapsible_toggled
-                    nodes.append(node)
+                nodes: list[Any] = []
+                for where, group in _edge_groups(rows):
+                    nodes.append(Static(f"▸ {where or '—'}", classes="edge-group"))
+                    for edge in group:
+                        node = Collapsible(
+                            Static(_edge_body(edge), markup=False),
+                            title=_edge_title(edge),
+                            collapsed=edge.seq not in expanded,
+                            classes=_edge_css_class(edge),
+                        )
+                        node.edge_seq = edge.seq  # recovered in on_collapsible_toggled
+                        nodes.append(node)
                 container.mount_all(nodes)
             if was_at_end:
                 container.scroll_end(animate=False)
