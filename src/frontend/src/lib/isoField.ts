@@ -385,6 +385,115 @@ export function residentAnatomy(m: Machine, body: ResidentBody = 'automaton'): R
 	return { torso, head, bench, faceAnchor, benchAnchor, trailSlits };
 }
 
+// ── the git ground (2026-08-26, the widened brief) ──────────────────────────
+//
+// "They should move around their own branch, because they work in the
+// worktree — a branch and a location." The floor stops being abstract lane
+// pitch and becomes git: every strand's block stands on a PLOT whose signage
+// is its branch; the resident's plinth is the trunk plaza. A plot is
+// geometry only — the route paints the outline and the branch label.
+
+export interface PlotRect {
+	x: number;
+	y: number;
+	w: number;
+	d: number;
+}
+
+/** The plot under a machine: its footprint plus a court margin. */
+export function plotFor(m: Machine, margin = 0.42): PlotRect {
+	return { x: m.x - margin, y: m.y - margin, w: m.w + margin * 2, d: m.d + margin * 2 };
+}
+
+// ── act stations (2026-08-26, the widened brief) ────────────────────────────
+//
+// "We can create this space based on the actual types of actions available"
+// — the edge acts stop being status rows and become PLACES around the
+// resident's plaza. One station per boxable act; the current act lights its
+// station (the being is *at* it), the others hold dim. `dispatch` lights the
+// conduit port pad instead (the dispatch is a door, not a desk), and unknown
+// acts light nothing — a station may only assert a place the taxonomy names.
+
+export interface Station {
+	act: 'orient' | 'probe' | 'mutate' | 'publish' | 'wait';
+	box: Box;
+}
+
+/** Fixed station sites around the resident machine's plinth. Pure layout:
+ *  orient lectern back-left · probe gauge on the back edge · mutate anvil at
+ *  the bench's right hand · publish post front-right · wait seat front-left.
+ *  Sites deliberately avoid the course pads' telemetry edge (x = max side,
+ *  y ∈ [m.y−0.3, m.y+m.d+0.3]) and the gate conduit's back-wall corridor
+ *  (y ≈ 0.55). */
+export function actStations(m: Machine): Station[] {
+	return [
+		{ act: 'orient', box: { x: m.x - 0.85, y: m.y + 0.05, w: 0.34, d: 0.34, h: 0.55, z0: 0 } },
+		{
+			act: 'probe',
+			box: { x: m.x + m.w * 0.5 - 0.17, y: m.y - 0.72, w: 0.34, d: 0.3, h: 0.42, z0: 0 }
+		},
+		{
+			act: 'mutate',
+			box: { x: m.x + m.w + 0.04, y: m.y + m.d + 0.46, w: 0.3, d: 0.3, h: 0.34, z0: 0 }
+		},
+		{
+			act: 'publish',
+			box: { x: m.x + m.w + 0.52, y: m.y + m.d + 0.82, w: 0.24, d: 0.24, h: 0.85, z0: 0 }
+		},
+		{ act: 'wait', box: { x: m.x - 0.78, y: m.y + m.d + 0.36, w: 0.44, d: 0.3, h: 0.28, z0: 0 } }
+	];
+}
+
+// ── the garage (2026-08-26, the widened brief) ──────────────────────────────
+//
+// "A bench with sitting runners ready to pick up" — scheduled wakes as
+// uninhabited bodies on the left wing, waiting; a new entry arrives from
+// above by claw (the route owns the ceremony, this module owns the seats).
+// The wing sits in the plate's existing left margin: x < the resident's
+// plinth, y alongside the lane rows — no scene resize needed.
+
+export const GARAGE_MAX_SEATS = 3;
+
+export interface GarageSeat {
+	/** Seat index, 0 nearest the back. */
+	i: number;
+	body: Box;
+}
+
+export interface Garage {
+	bench: Box;
+	seats: GarageSeat[];
+	/** Bodies beyond the visible seats — rendered as a `+N` count. */
+	overflow: number;
+	/** Screen anchor for the overflow/count label. */
+	countAnchor: Pt;
+}
+
+/** Seats for `count` waiting bodies, capped at the wing's own length. */
+export function garageLayout(count: number): Garage {
+	const seats: GarageSeat[] = [];
+	const shown = Math.min(count, GARAGE_MAX_SEATS);
+	const x = 0.3;
+	const y0 = 4.55;
+	const pitch = 1.0;
+	for (let i = 0; i < shown; i++) {
+		seats.push({
+			i,
+			body: { x, y: y0 + i * pitch, w: 0.62, d: 0.62, h: 0.5, z0: 0.16 }
+		});
+	}
+	const bench: Box = {
+		x: x - 0.14,
+		y: y0 - 0.24,
+		w: 0.9,
+		d: Math.max(shown, 1) * pitch + 0.24,
+		h: 0.16,
+		z0: 0
+	};
+	const anchor = iso(x + 0.31, y0 + shown * pitch + 0.15);
+	return { bench, seats, overflow: Math.max(0, count - shown), countAnchor: anchor };
+}
+
 /** Painter order: back-to-front by footprint center depth (x+y). Stable for
  *  ties via key so two frames never swap sibling paint order. */
 export function paintOrder(machines: Machine[]): Machine[] {
