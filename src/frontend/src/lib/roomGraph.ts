@@ -27,6 +27,8 @@ import type { LiveRun, LiveRunsResponse, DaemonMood } from './liveRuns.ts';
 import { liveRunDisplayName, liveRelicChips, runCourse, type LiveRelicChip } from './liveRuns.ts';
 import type { RunLedgerRow, RunLedgerResponse } from './runLedger.ts';
 import { relicCounts } from './runLedger.ts';
+import type { ScheduledWakesResponse } from './scheduledWakes.ts';
+import type { QuotaResponse } from './quota.ts';
 
 // ── PROCESS: places ─────────────────────────────────────────────────────────
 
@@ -129,6 +131,10 @@ export interface RoomActor {
 	/** The daemon folded context in at this boundary — traffic to the actor,
 	 *  never actor travel (doc §Injection never teleports the actor). */
 	injected: boolean;
+	/** The chamber the previous distinct footstep stood in — the relocation
+	 *  the current boundary made, drawn as travel. Null when unknown or the
+	 *  actor hasn't moved chambers. */
+	cameFrom: string | null;
 	lifecycle: string | null;
 	awaitUntil: string | null;
 	moodRest: string | null;
@@ -146,7 +152,23 @@ export interface RoomActor {
 export interface CampChamber {
 	dir: string;
 	lastAct: string | null;
+	/** The last file the work touched here, parsed from the redacted detail —
+	 *  the leaf on the branch the reader actually watches move. */
+	lastFile: string | null;
 	visits: number;
+}
+
+/** The file a boundary's detail names, when one is legible: the last token
+ * that looks like a filename with an extension. Conservative — no match,
+ * no leaf. */
+export function fileFromDetail(detail: string | null | undefined): string | null {
+	if (!detail) return null;
+	const matches = detail.match(/[\w][\w.-]*\.[A-Za-z][A-Za-z0-9]{0,6}(?=\s|$|['")\]])/g);
+	if (!matches || matches.length === 0) return null;
+	const last = matches[matches.length - 1];
+	// a bare domain or version number is not a file
+	if (/^\d+(\.\d+)+$/.test(last)) return null;
+	return last.includes('/') ? (last.split('/').pop() ?? null) : last;
 }
 
 export interface RoomCamp {
@@ -156,6 +178,10 @@ export interface RoomCamp {
 	env: string | null;
 	actorGlyphs: string[];
 	chambers: CampChamber[];
+	/** Commits attested so far by this camp's actors — material accreting on
+	 *  the spur (mid-run identity is doc gap #6; the count is what the wire
+	 *  serves). */
+	commits: number;
 }
 
 /** One attested footstep, remembered by the caller across polls — the model
@@ -164,6 +190,7 @@ export interface TrailStep {
 	dir: string;
 	act: string | null;
 	at: string | null;
+	file?: string | null;
 }
 
 export interface RoomIsland {
@@ -187,6 +214,33 @@ export interface ClothRow {
 	childOf: string | null;
 }
 
+/** A clockwork entry — future intent, never a body on the floor. */
+export interface ClockEntry {
+	summary: string;
+	nextAt: string | null;
+	status: string | null;
+	repoLabel: string | null;
+}
+
+/** One shell's capacity at the fuel rack. Capacity, not spend. */
+export interface FuelRow {
+	shell: string;
+	status: string;
+	/** `label pct%` fragments for known windows, live readings only. */
+	windows: { label: string; percent: number | null }[];
+}
+
+/** A watchtower sighting. Every fact resolves to a source — the tower
+ *  points, it never owns (doc §Watchtower). Only wire-attested classes
+ *  appear; what the wire cannot see (returned strands, promise mismatches)
+ *  is absent, not zero. */
+export interface WatchFact {
+	mark: '◇' | 'T';
+	text: string;
+	/** Run id or schedule id the beacon resolves to. */
+	source: string;
+}
+
 export interface RoomGraph {
 	generatedAt: string | null;
 	islands: RoomIsland[];
@@ -195,8 +249,16 @@ export interface RoomGraph {
 	/** Letters resting at the gate across all live runs — count only; the
 	 *  wire carries no per-event identity (doc §Gaps #2). */
 	pendingLetters: number;
+	clockwork: ClockEntry[];
+	garage: FuelRow[];
+	watch: WatchFact[];
 	daemonMood: DaemonMood | null;
 	stale: boolean;
+}
+
+export interface RoomExtras {
+	wakes?: ScheduledWakesResponse | null;
+	quota?: QuotaResponse | null;
 }
 
 const STRAND_GLYPHS = 'abcdefghijklmnopqrstuvwxyz';
@@ -221,10 +283,20 @@ function ledgerUsd(row: RunLedgerRow): number | null {
  * from live camps first, then from recent ledger rows so a dormant account
  * (stage 0) still has ground — durable world without inventing a body.
  */
+/** The previous distinct chamber in a trail — the relocation's origin. */
+function priorChamber(trail: TrailStep[] | undefined, currentDir: string | null): string | null {
+	if (!trail || !currentDir) return null;
+	for (let i = trail.length - 1; i >= 0; i--) {
+		if (trail[i].dir !== currentDir) return trail[i].dir;
+	}
+	return null;
+}
+
 export function compileRoomGraph(
 	live: LiveRunsResponse | null,
 	ledger: RunLedgerResponse | null,
-	trails?: Record<string, TrailStep[]>
+	trails?: Record<string, TrailStep[]>,
+	extras?: RoomExtras
 ): RoomGraph {
 	const runs = (live?.runs ?? []).filter((r) => r.daemon_stale !== true);
 	const residents = runs.filter((r) => !r.is_subspawn).sort((x, y) => startKey(x) - startKey(y));
@@ -245,6 +317,10 @@ export function compileRoomGraph(
 		act: run.edge?.act ?? null,
 		detail: run.edge?.detail ?? null,
 		injected: !!run.edge?.injected,
+		cameFrom: priorChamber(
+			trails?.[run.run_id],
+			run.edge?.dir && run.edge.dir !== '.' ? run.edge.dir : null
+		),
 		lifecycle: run.lifecycle ?? null,
 		awaitUntil: run.await_until ?? null,
 		moodRest: run.mood_rest ?? run.mood_glyph ?? null,
@@ -271,9 +347,11 @@ export function compileRoomGraph(
 			dir,
 			env: run.room?.env ?? null,
 			actorGlyphs: [],
-			chambers: []
+			chambers: [],
+			commits: 0
 		};
 		camp.actorGlyphs.push(glyphByRun.get(run.run_id) ?? '?');
+		camp.commits += run.relics_counts?.commit ?? 0;
 		// terrain accretes from the trail — attested footsteps only, current
 		// boundary included so the actor always stands on known ground.
 		const steps: TrailStep[] = [...(trails?.[run.run_id] ?? [])];
@@ -281,15 +359,26 @@ export function compileRoomGraph(
 		const edgeAt = run.edge?.at ?? null;
 		const alreadyRecorded = edgeAt !== null && steps.some((s) => s.at === edgeAt);
 		if (edgeDir && !alreadyRecorded)
-			steps.push({ dir: edgeDir, act: run.edge?.act ?? null, at: edgeAt });
+			steps.push({
+				dir: edgeDir,
+				act: run.edge?.act ?? null,
+				at: edgeAt,
+				file: fileFromDetail(run.edge?.detail)
+			});
 		for (const step of steps) {
 			if (!step.dir) continue;
 			const existing = camp.chambers.find((c) => c.dir === step.dir);
 			if (existing) {
 				existing.visits += 1;
 				if (step.act) existing.lastAct = step.act;
+				if (step.file) existing.lastFile = step.file;
 			} else {
-				camp.chambers.push({ dir: step.dir, lastAct: step.act, visits: 1 });
+				camp.chambers.push({
+					dir: step.dir,
+					lastAct: step.act,
+					lastFile: step.file ?? null,
+					visits: 1
+				});
 			}
 		}
 		camps.set(key, camp);
@@ -336,6 +425,41 @@ export function compileRoomGraph(
 		});
 	}
 
+	// CLOCKWORK: future intent from the schedule wire — never a body.
+	const clockwork: ClockEntry[] = (extras?.wakes?.rows ?? []).map((w) => ({
+		summary: w.summary || w.id,
+		nextAt: w.scheduled_for,
+		status: w.status,
+		repoLabel: w.repo_label
+	}));
+
+	// GARAGE: capacity per shell, live readings only — a stale snapshot's
+	// preserved values stay off the rack (its status says stale instead).
+	const garage: FuelRow[] = (extras?.quota?.runner_quotas ?? []).map((shell) => ({
+		shell: shell.shell,
+		status: shell.status,
+		windows:
+			shell.status === 'known'
+				? shell.windows.map((w) => ({ label: w.label, percent: w.percent }))
+				: []
+	}));
+
+	// WATCH: only beacons that resolve to a source. Letters resolve to their
+	// run; armed schedules resolve to their entry. What the wire cannot see
+	// is absent, never a synthesized zero.
+	const watch: WatchFact[] = [];
+	for (const actor of actors) {
+		if (actor.portalsPending > 0)
+			watch.push({
+				mark: '◇',
+				text: `${actor.portalsPending} letter${actor.portalsPending > 1 ? 's' : ''} — ${actor.name}`,
+				source: actor.runId
+			});
+	}
+	// Schedule entries stay in CLOCKWORK (future intent); the renderer may
+	// escalate an overdue one into the tower with its clock in hand — the
+	// compile has no `now` and refuses to guess dueness.
+
 	return {
 		generatedAt: live?.generated_at ?? ledger?.generated_at ?? null,
 		islands: [...islands.entries()]
@@ -344,6 +468,9 @@ export function compileRoomGraph(
 		actors,
 		cloth,
 		pendingLetters: actors.reduce((n, a) => n + a.portalsPending, 0),
+		clockwork,
+		garage,
+		watch,
 		daemonMood: live?.daemon_mood ?? null,
 		stale: live?.stale ?? false
 	};

@@ -212,9 +212,14 @@ function actorLines(actor: RoomActor, now: number | undefined, atChamber = false
 	const lifecycle =
 		actor.lifecycle === 'awaiting' ? ` (awaiting${until ? ' → ' + until : ''})` : '';
 	// Standing under its chamber row, the stance would restate the terrain —
-	// the body alone marks the spot.
+	// the body alone marks the spot. The relocation that brought it here
+	// renders as travel: `← <previous chamber>`.
 	const stance = atChamber ? '' : `  ${placeLabel(actor.place)}`;
-	out.push(`  ${actor.glyph}${face}${stance}${lifecycle}`);
+	const travel =
+		actor.cameFrom && actor.place.kind === 'chamber' && actor.cameFrom !== actor.place.label
+			? `  ← ${actor.cameFrom}`
+			: '';
+	out.push(`  ${actor.glyph}${face}${stance}${travel}${lifecycle}`);
 	if (actor.act || actor.detail) {
 		const pulse = actor.injected ? '  ✉>>>' : '';
 		const detail = actor.detail ? foldPathTokens(actor.detail) : null;
@@ -244,7 +249,12 @@ function islandBlock(
 	if (island.camps.length === 0) lines.push(' dormant · no camp, no actor');
 	for (const camp of island.camps) {
 		const where = camp.dir ?? (camp.env === 'host' ? 'the shared checkout' : null);
-		lines.push(` └ ${camp.branch ?? '(no branch attested)'}${where ? ' · ' + where : ''}`);
+		// material accreting on the spur: one tick per attested commit
+		const ticks =
+			camp.commits > 0
+				? ' ' + (camp.commits <= 6 ? '═#'.repeat(camp.commits) + '═' : `═#═×${camp.commits}`)
+				: '';
+		lines.push(` └ ${camp.branch ?? '(no branch attested)'}${where ? ' · ' + where : ''}${ticks}`);
 		const campActors = camp.actorGlyphs
 			.map((glyph) =>
 				actors.find((a) => a.glyph === glyph && a.islandLabel === island.label && onIsland(a))
@@ -258,7 +268,9 @@ function islandBlock(
 			const ch = camp.chambers[i];
 			const joint = i === camp.chambers.length - 1 ? '└' : '├';
 			const marks = ch.visits > 1 ? ` ×${ch.visits}` : '';
-			lines.push(`    ${joint} ${ch.dir}${ch.lastAct ? `  ·${ch.lastAct}${marks}` : ''}`);
+			// the leaf: the file the work last touched here, on its path
+			const leaf = ch.lastFile ? ` ─ ${ch.lastFile}` : '';
+			lines.push(`    ${joint} ${ch.dir}${leaf}${ch.lastAct ? `  ·${ch.lastAct}${marks}` : ''}`);
 			for (const actor of campActors) {
 				if (actor.place.kind === 'chamber' && actor.place.label === ch.dir) {
 					lines.push(...actorLines(actor, now, true).map((l) => '  ' + l));
@@ -331,6 +343,38 @@ export function renderRoomGraph(graph: RoomGraph, opts: RenderOpts = {}): string
 	if (forgeActors.length > 0) {
 		const lines = forgeActors.flatMap((a) => actorLines(a, now));
 		blocks.push(block('FORGE', lines, true, maxBlockW));
+	}
+	// the instruments — civic machinery packed onto the same plane, HUD-style
+	if (graph.watch.length > 0) {
+		blocks.push(
+			block(
+				'^ WATCH',
+				graph.watch.slice(0, 6).map((f) => `${f.mark} ${f.text}`),
+				true,
+				maxBlockW
+			)
+		);
+	}
+	if (graph.clockwork.length > 0) {
+		const rows = graph.clockwork
+			.filter((e) => e.nextAt)
+			.sort((a, b) => (a.nextAt ?? '').localeCompare(b.nextAt ?? ''))
+			.slice(0, 5)
+			.map((e) => {
+				const inWhen = untilLabel(e.nextAt, now);
+				return `T ${clip(e.summary, 30)}${inWhen ? `  in ${inWhen}` : ''}`;
+			});
+		if (rows.length > 0) blocks.push(block('CLOCKWORK', rows, true, maxBlockW));
+	}
+	if (graph.garage.length > 0) {
+		const rows = graph.garage.map((f) => {
+			const winds = f.windows
+				.filter((w) => w.percent !== null)
+				.map((w) => `${w.label} ${Math.round(w.percent as number)}%`)
+				.join(' · ');
+			return `⛁ ${f.shell}${winds ? '  ' + winds : f.status !== 'known' ? `  (${f.status})` : ''}`;
+		});
+		blocks.push(block('GARAGE', rows, true, maxBlockW));
 	}
 
 	// pack blocks onto the plane, left→right, wrapping; the sea fills around
@@ -406,7 +450,9 @@ export function renderRoomGraph(graph: RoomGraph, opts: RenderOpts = {}): string
 /** The legend, as its own block so the page can render it apart. */
 export const LEGEND = [
 	'@ resident   a…z strands   ◇ pending letter   ✉>>> boundary injection',
-	'⌁ attested boundary (verb · redacted detail)   K chart (Now/course)',
+	'⌁ attested boundary (verb · redacted detail)   ← came from   ═# commit',
 	'G gate   RIG local probe   FORGE the coast   DESK correspondence',
-	'CHART card edits   BAY dispatch   WATCH await   ══ CLOTH time register'
+	'CHART card edits   BAY dispatch   WATCH await   K chart (Now/course)',
+	'^ WATCH sightings   T CLOCKWORK future intent   ⛁ GARAGE capacity',
+	'══ CLOTH time register — LIVE above the cut, history below'
 ].join('\n');

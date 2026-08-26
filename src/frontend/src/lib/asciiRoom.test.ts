@@ -140,8 +140,9 @@ test('the busy scene tells the whole story on one board', () => {
 	assert.match(board, /brr\/the-ascii-camera · the shared checkout/);
 	assert.match(board, /brr\/kb-pass · brr-wt-kid/);
 	// actors: resident standing in the chamber its boundary attested (the
-	// terrain row carries the path; the body stands under it), strand at its rig
-	assert.match(board, /└ src\/frontend {2}·mutate/);
+	// terrain row carries the path and the touched file; the body stands
+	// under it), strand at its rig
+	assert.match(board, /└ src\/frontend ─ asciiRoom\.ts {2}·mutate/);
 	assert.match(board, /@ b·_·d/);
 	assert.match(board, /a {2}RIG/);
 	// process: the attested boundary with the injection pulse
@@ -304,12 +305,97 @@ test('the tree grows from footsteps and the actor stands under its chamber', () 
 	);
 	const board = renderRoomGraph(graph, { now: NOW });
 	assert.match(board, /├ src\/brr {2}·orient/);
-	assert.match(board, /└ src\/frontend {2}·mutate ×2/);
-	// the actor stands under its chamber row, body only — no restated stance
+	assert.match(board, /└ src\/frontend ─ roomGraph\.ts {2}·mutate ×2/);
+	// the actor stands under its chamber row — no restated stance, but the
+	// relocation that brought it here rides along
 	const lines = board.split('\n');
 	const chamberIdx = lines.findIndex((l) => l.includes('└ src/frontend'));
 	assert.ok(chamberIdx > 0);
-	assert.match(lines[chamberIdx + 1], /@ b·_·d\s*║/);
+	assert.match(lines[chamberIdx + 1], /@ b·_·d {2}← src\/brr\s*║/);
+});
+
+test('relocation renders as travel: the body carries where it came from', () => {
+	const graph = compileRoomGraph(
+		liveWire([
+			liveRun({
+				run_id: 'r1',
+				edge: {
+					at: '2026-08-26T10:12:00Z',
+					phase: 'PostToolUse',
+					act: 'orient',
+					tools: ['Read'],
+					detail: 'Read gate.py',
+					out_bytes: 10,
+					injected: false,
+					dir: 'scripts'
+				}
+			})
+		]),
+		null,
+		{ r1: [{ dir: 'src/brr', act: 'mutate', at: '2026-08-26T10:05:00Z' }] }
+	);
+	const board = renderRoomGraph(graph, { now: NOW });
+	assert.match(board, /@ {2}← src\/brr/);
+});
+
+test('the instruments pack onto the plane: watch, clockwork, garage', () => {
+	const graph = compileRoomGraph(
+		liveWire([liveRun({ run_id: 'r1', portals: { pending: 2, oldest_at: null } })]),
+		null,
+		undefined,
+		{
+			wakes: {
+				generated_at: 'x',
+				rows: [
+					{
+						id: 'wake-1',
+						kind: 'scheduled',
+						source: 'schedule',
+						status: 'recurring',
+						phase: 'every',
+						bucket: 'b',
+						summary: 'the wire round',
+						repo_label: 'hugimuni-labs/brnrd',
+						daemon_name: null,
+						conversation_key: null,
+						scheduled_for: '2026-08-26T18:00:00Z',
+						reported_at: null
+					}
+				],
+				total: 1
+			},
+			quota: {
+				generated_at: 'x',
+				runner_quotas: [
+					{
+						shell: 'claude',
+						status: 'known',
+						windows: [
+							{ label: 'week', used: null, limit: null, percent: 49.6, reset: null },
+							{ label: 'session', used: null, limit: null, percent: null, reset: null }
+						]
+					}
+				]
+			}
+		}
+	);
+	const board = renderRoomGraph(graph, { now: NOW });
+	assert.match(board, /\^ WATCH/);
+	assert.match(board, /◇ 2 letters — /);
+	assert.match(board, /CLOCKWORK/);
+	assert.match(board, /T the wire round {2}in 7h30m/);
+	assert.match(board, /GARAGE/);
+	assert.match(board, /⛁ claude {2}week 50%/);
+	// a null-percent window renders nothing, never a guessed number
+	assert.ok(!board.includes('session %'));
+});
+
+test('commit ticks accrete on the spur line', () => {
+	const graph = compileRoomGraph(
+		liveWire([liveRun({ run_id: 'r1', relics_counts: { commit: 3 } })]),
+		null
+	);
+	assert.match(renderRoomGraph(graph, { now: NOW }), /└ brr\/the-ascii-camera[^\n]*═#═#═#═/);
 });
 
 test('clock-free render drops elapsed labels but keeps the same line structure', () => {
