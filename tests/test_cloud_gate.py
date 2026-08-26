@@ -6,7 +6,7 @@ import json
 import os
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -1336,23 +1336,28 @@ def test_quota_snapshot_does_not_publish_newer_per_run_carried_regression(
     direct.mkdir(parents=True)
     carried.mkdir(parents=True)
     direct_path = direct / ".claude-usage-levels.json"
+    now = datetime.now(timezone.utc)
+
+    def stamp(delta):
+        return (now + delta).isoformat().replace("+00:00", "Z")
+
     direct_path.write_text(json.dumps({
-        "updated_at": "2026-08-25T18:47:05Z",
+        "updated_at": stamp(timedelta(minutes=-5)),
         "quota": {"buckets": {"session": {"remaining_percentage": 45.0}}},
     }), encoding="utf-8")
     carried_path = carried / ".claude-usage-levels.json"
     carried_path.write_text(json.dumps({
-        "updated_at": "2026-08-25T18:49:08Z",
+        "updated_at": stamp(timedelta(minutes=-3)),
         "error": "no quota buckets parsed from /usage screen",
         "quota": {
-            "carried_from": "2026-08-25T18:20:27Z",
+            "carried_from": stamp(timedelta(minutes=-30)),
             "buckets": {"session": {"remaining_percentage": 62.0}},
         },
     }), encoding="utf-8")
     os.utime(direct_path, (1.0, 1.0))
     os.utime(carried_path, (2.0, 2.0))
     monkeypatch.setattr(cloud.claude_usage, "capture_levels", lambda **kw: {
-        "updated_at": "2026-08-25T18:49:30Z",
+        "updated_at": stamp(timedelta(0)),
         "error": "no quota buckets parsed from /usage screen",
     })
     monkeypatch.setattr(cloud.codex_usage, "probe_rate_limits", lambda **kw: None)

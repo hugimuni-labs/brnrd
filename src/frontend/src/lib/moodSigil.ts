@@ -153,7 +153,10 @@ export function parseFaceCore(
 ): { left: string; mouth: string; right: string } | null {
 	const core = [...frame.trim()];
 	if (core.length < 3) return null;
-	if (core[0] === 'b' && core[core.length - 1] === 'd') (core.splice(0, 1), core.splice(-1, 1));
+	if (core[0] === 'b' && core[core.length - 1] === 'd') {
+		core.splice(0, 1);
+		core.splice(-1, 1);
+	}
 	if (core.length !== 3) return null;
 	return { left: core[0], mouth: core[1], right: core[2] };
 }
