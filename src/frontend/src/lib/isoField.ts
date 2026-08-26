@@ -82,16 +82,17 @@ export interface Scene {
 	slots: number;
 }
 
-// Layout constants, tiles. The resident sits back-left; the service lane
-// runs along +x in front of it, so strands march down-right on screen —
-// the diorama reads back-to-front the way the work grew.
-const RESIDENT = { x: 1.2, y: 1.4, w: 1.7, d: 1.7, h: 2.1 };
-const ORPHAN_ROW_Y = RESIDENT.y + 0.2;
-const LANE_Y = RESIDENT.y + 3.4;
-const LANE_X0 = RESIDENT.x + 2.6;
-const LANE_PITCH = 2.3;
-const STRAND = { w: 1.15, d: 1.15 };
-const GATE_X_MARGIN = 1.4;
+// Layout constants, tiles. The resident owns the centre court; worktrees
+// take plots across the CAMP in front. The earlier back-left composition
+// made a live single-run room read as an abandoned plate whose interesting
+// half only existed in the fixture-heavy demo.
+const RESIDENT = { x: 4.1, y: 2.1, w: 2.05, d: 2.05, h: 2.65 };
+const ORPHAN_ROW_Y = 1.35;
+const LANE_Y = 5.35;
+const LANE_X0 = 2.25;
+const LANE_PITCH = 2.25;
+const STRAND = { w: 1.3, d: 1.3 };
+const GATE_X_MARGIN = 1.8;
 
 /** Strand block height by runner class — a strong core is a bigger machine,
  *  read at silhouette level, no text needed. */
@@ -182,9 +183,9 @@ export function buildScene(field: FieldRoot[]): Scene {
 		(acc, m) => Math.max(acc, m.x + m.w),
 		LANE_X0 + LANE_PITCH // floor never smaller than one empty lane site
 	);
-	const cols = Math.ceil(maxX + GATE_X_MARGIN);
+	const cols = Math.max(11, Math.ceil(maxX + GATE_X_MARGIN));
 	// Front margin holds the lane's staggered floor labels on the plate.
-	const rows = Math.ceil(LANE_Y + STRAND.d + 1.7);
+	const rows = 9;
 
 	const gate: Pt = { x: cols - 1.1, y: 0 };
 	const gatePath: Pt[] = residentRoot
@@ -383,115 +384,6 @@ export function residentAnatomy(m: Machine, body: ResidentBody = 'automaton'): R
 		}
 	}
 	return { torso, head, bench, faceAnchor, benchAnchor, trailSlits };
-}
-
-// ── the git ground (2026-08-26, the widened brief) ──────────────────────────
-//
-// "They should move around their own branch, because they work in the
-// worktree — a branch and a location." The floor stops being abstract lane
-// pitch and becomes git: every strand's block stands on a PLOT whose signage
-// is its branch; the resident's plinth is the trunk plaza. A plot is
-// geometry only — the route paints the outline and the branch label.
-
-export interface PlotRect {
-	x: number;
-	y: number;
-	w: number;
-	d: number;
-}
-
-/** The plot under a machine: its footprint plus a court margin. */
-export function plotFor(m: Machine, margin = 0.42): PlotRect {
-	return { x: m.x - margin, y: m.y - margin, w: m.w + margin * 2, d: m.d + margin * 2 };
-}
-
-// ── act stations (2026-08-26, the widened brief) ────────────────────────────
-//
-// "We can create this space based on the actual types of actions available"
-// — the edge acts stop being status rows and become PLACES around the
-// resident's plaza. One station per boxable act; the current act lights its
-// station (the being is *at* it), the others hold dim. `dispatch` lights the
-// conduit port pad instead (the dispatch is a door, not a desk), and unknown
-// acts light nothing — a station may only assert a place the taxonomy names.
-
-export interface Station {
-	act: 'orient' | 'probe' | 'mutate' | 'publish' | 'wait';
-	box: Box;
-}
-
-/** Fixed station sites around the resident machine's plinth. Pure layout:
- *  orient lectern back-left · probe gauge on the back edge · mutate anvil at
- *  the bench's right hand · publish post front-right · wait seat front-left.
- *  Sites deliberately avoid the course pads' telemetry edge (x = max side,
- *  y ∈ [m.y−0.3, m.y+m.d+0.3]) and the gate conduit's back-wall corridor
- *  (y ≈ 0.55). */
-export function actStations(m: Machine): Station[] {
-	return [
-		{ act: 'orient', box: { x: m.x - 0.85, y: m.y + 0.05, w: 0.34, d: 0.34, h: 0.55, z0: 0 } },
-		{
-			act: 'probe',
-			box: { x: m.x + m.w * 0.5 - 0.17, y: m.y - 0.72, w: 0.34, d: 0.3, h: 0.42, z0: 0 }
-		},
-		{
-			act: 'mutate',
-			box: { x: m.x + m.w + 0.04, y: m.y + m.d + 0.46, w: 0.3, d: 0.3, h: 0.34, z0: 0 }
-		},
-		{
-			act: 'publish',
-			box: { x: m.x + m.w + 0.52, y: m.y + m.d + 0.82, w: 0.24, d: 0.24, h: 0.85, z0: 0 }
-		},
-		{ act: 'wait', box: { x: m.x - 0.78, y: m.y + m.d + 0.36, w: 0.44, d: 0.3, h: 0.28, z0: 0 } }
-	];
-}
-
-// ── the garage (2026-08-26, the widened brief) ──────────────────────────────
-//
-// "A bench with sitting runners ready to pick up" — scheduled wakes as
-// uninhabited bodies on the left wing, waiting; a new entry arrives from
-// above by claw (the route owns the ceremony, this module owns the seats).
-// The wing sits in the plate's existing left margin: x < the resident's
-// plinth, y alongside the lane rows — no scene resize needed.
-
-export const GARAGE_MAX_SEATS = 3;
-
-export interface GarageSeat {
-	/** Seat index, 0 nearest the back. */
-	i: number;
-	body: Box;
-}
-
-export interface Garage {
-	bench: Box;
-	seats: GarageSeat[];
-	/** Bodies beyond the visible seats — rendered as a `+N` count. */
-	overflow: number;
-	/** Screen anchor for the overflow/count label. */
-	countAnchor: Pt;
-}
-
-/** Seats for `count` waiting bodies, capped at the wing's own length. */
-export function garageLayout(count: number): Garage {
-	const seats: GarageSeat[] = [];
-	const shown = Math.min(count, GARAGE_MAX_SEATS);
-	const x = 0.3;
-	const y0 = 4.55;
-	const pitch = 1.0;
-	for (let i = 0; i < shown; i++) {
-		seats.push({
-			i,
-			body: { x, y: y0 + i * pitch, w: 0.62, d: 0.62, h: 0.5, z0: 0.16 }
-		});
-	}
-	const bench: Box = {
-		x: x - 0.14,
-		y: y0 - 0.24,
-		w: 0.9,
-		d: Math.max(shown, 1) * pitch + 0.24,
-		h: 0.16,
-		z0: 0
-	};
-	const anchor = iso(x + 0.31, y0 + shown * pitch + 0.15);
-	return { bench, seats, overflow: Math.max(0, count - shown), countAnchor: anchor };
 }
 
 /** Painter order: back-to-front by footprint center depth (x+y). Stable for
