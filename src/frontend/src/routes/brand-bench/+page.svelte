@@ -34,6 +34,8 @@
 		HugimuniConstants,
 		HugimuniPaletteName
 	} from '$lib/brandGeometry';
+	import CyberpalMark from '$lib/CyberpalMark.svelte';
+	import { FACE_DEMO_FRAMES } from '$lib/cyberpalMark';
 
 	type Mark = 'brnrd' | 'hugimuni';
 	type Register = 'stone' | 'screen';
@@ -135,6 +137,12 @@
 	}
 
 	const FACE_NAMES = Object.keys(FACES) as (keyof typeof FACES)[];
+
+	// The living preview (2026-08-26): the same constants the sliders tune,
+	// worn by the animated being — blink, name-glitch, chibi sway. The bench's
+	// own frame select picks which face the being rests in; `name` previews
+	// the neutral rest face, since the being visits the name on its own.
+	let aliveFrames = $derived(frame === 'name' ? null : [FACE_DEMO_FRAMES[frame]]);
 </script>
 
 <svelte:head><title>brand-bench (temporary) · brnrd</title></svelte:head>
@@ -216,6 +224,18 @@
 			<div class="mark-frame" style="width: 320px; height: 320px;">{@html svgMarkup}</div>
 			<p class="text-[10px] text-ink-mute">320px — the tuning size</p>
 		</div>
+
+		{#if mark === 'brnrd'}
+			<div class="panel flex flex-col items-center gap-3 p-4">
+				<div
+					class="flex items-center justify-center text-amber-100"
+					style="width: 220px; height: 220px;"
+				>
+					<CyberpalMark class="text-[120px]" frames={aliveFrames} constants={brnrdConstants} />
+				</div>
+				<p class="text-[10px] text-ink-mute">alive — blink · name-glitch · sway</p>
+			</div>
+		{/if}
 
 		<div class="panel flex flex-col gap-3 p-4">
 			<p class="text-[10px] text-ink-mute">the sizes that actually decide whether a mark works</p>
