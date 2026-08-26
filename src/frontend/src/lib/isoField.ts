@@ -270,7 +270,7 @@ export function boxFaces(x: number, y: number, w: number, d: number, h: number, 
 // lies. Two studies share this skeleton: `automaton` (boxed head with a
 // visor) and `glyph` (no head — the face itself, held in a halo ring).
 
-export type ResidentBody = 'automaton' | 'glyph';
+export type ResidentBody = 'automaton' | 'glyph' | 'stele';
 
 /** How many act slits the torso's face can carry — the trail beyond this
  *  scrolls off the bottom, oldest first. */
@@ -309,8 +309,11 @@ export interface ResidentAnatomy {
  *  floor (place), the face-core hovering above it (being), the act-trail
  *  hanging under it as a data spine. */
 export function residentAnatomy(m: Machine, body: ResidentBody = 'automaton'): ResidentAnatomy {
-	const tw = body === 'glyph' ? 1.2 : 1.0;
-	const td = body === 'glyph' ? 1.2 : 1.0;
+	// The stele: a thin standing stone, wide face toward the gate — the
+	// carving needs the d-span; the x-span stays slab-thin so nothing about
+	// it reads as a building (the carved-mood round, 2026-08-26).
+	const tw = body === 'stele' ? 0.5 : body === 'glyph' ? 1.2 : 1.0;
+	const td = body === 'stele' ? 1.05 : body === 'glyph' ? 1.2 : 1.0;
 	const torso: Box = {
 		x: m.x + (m.w - tw) / 2,
 		y: m.y + (m.d - td) / 2,
@@ -318,11 +321,11 @@ export function residentAnatomy(m: Machine, body: ResidentBody = 'automaton'): R
 		d: td,
 		// The glyph's "torso" is a dock plate, not a body — flat enough that
 		// nothing about it reads as a building.
-		h: body === 'glyph' ? 0.05 : 1.55,
+		h: body === 'stele' ? 1.75 : body === 'glyph' ? 0.05 : 1.55,
 		z0: 0
 	};
 	const head: Box | null =
-		body === 'glyph'
+		body === 'glyph' || body === 'stele'
 			? null
 			: {
 					x: torso.x + (tw - 0.6) / 2,
@@ -342,11 +345,25 @@ export function residentAnatomy(m: Machine, body: ResidentBody = 'automaton'): R
 	};
 	const faceAnchor = head
 		? iso(head.x + head.w, head.y + head.d / 2, head.z0 + head.h / 2)
-		: iso(torso.x + tw / 2, torso.y + td / 2, 1.55);
+		: body === 'stele'
+			? iso(torso.x + tw / 2, torso.y + td / 2, torso.h)
+			: iso(torso.x + tw / 2, torso.y + td / 2, 1.55);
 	const benchFront = iso(bench.x + bench.w, bench.y + bench.d / 2, bench.h);
 	const benchAnchor = { x: benchFront.x + 10, y: benchFront.y };
 	const trailSlits: { a: Pt; b: Pt }[] = [];
-	if (body === 'glyph') {
+	if (body === 'stele') {
+		// The act-trail moves to the stone's narrow (y = max) face — the
+		// carving owns the wide one. Fewer slits fit; the trail cap is the
+		// geometry's, not TRAIL_MAX's.
+		for (let i = 0; i < TRAIL_MAX; i++) {
+			const z = 0.52 - i * 0.18;
+			if (z < 0.12) break;
+			trailSlits.push({
+				a: iso(torso.x + tw * 0.15, torso.y + td, z),
+				b: iso(torso.x + tw * 0.85, torso.y + td, z)
+			});
+		}
+	} else if (body === 'glyph') {
 		// The data spine: act ticks hang beneath the hovering core, along
 		// the beam that grounds it to its dock — written marks, no volume.
 		for (let i = 0; i < TRAIL_MAX; i++) {
@@ -428,4 +445,30 @@ export function sceneBounds(scene: Scene): { x: number; y: number; w: number; h:
 export function floorTextTransform(x: number, y: number): string {
 	const o = iso(x, y);
 	return `matrix(0.894 0.447 -0.894 0.447 ${round2(o.x)} ${round2(o.y)})`;
+}
+
+/** One carved cell of the stele's sigil, as a screen quad on the stone's
+ *  wide (x = max) face. Row 0 is the top; the carving spans the face with
+ *  a margin, upper portion only — the act-trail owns the base. */
+export function steleCellQuad(
+	stele: Box,
+	row: number,
+	col: number,
+	rows: number,
+	cols: number
+): Pt[] {
+	const pad = 0.1;
+	const py = (stele.d - pad * 2) / cols;
+	const zTop = stele.h - 0.12;
+	const pz = 0.135;
+	const x = stele.x + stele.w;
+	const y0 = stele.y + pad + col * py;
+	const z1 = zTop - row * pz;
+	const inset = 0.12; // carve inset: lit cells are grooves, not tiles
+	return [
+		iso(x, y0 + py * inset, z1 - pz * inset),
+		iso(x, y0 + py * (1 - inset), z1 - pz * inset),
+		iso(x, y0 + py * (1 - inset), z1 - pz * (1 - inset)),
+		iso(x, y0 + py * inset, z1 - pz * (1 - inset))
+	];
 }
