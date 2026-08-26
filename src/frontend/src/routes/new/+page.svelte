@@ -46,10 +46,11 @@
 	let signedOut = $state(false);
 	let demo = $state(false);
 	let selected = $state<string | null>(null);
-	// The entity round's two body studies, judged side by side:
-	// ?body=automaton (default — boxed head, visor face) · ?body=glyph
-	// (no head; the mood face itself held in a halo ring).
-	let bodyStyle = $state<ResidentBody>('automaton');
+	// The entity round's two body studies, judged side by side. The committed
+	// direction is the written being (?body=glyph, the default): structures
+	// are drawn, entities are written. ?body=automaton stands as the boxed
+	// contrast study.
+	let bodyStyle = $state<ResidentBody>('glyph');
 
 	let reduced = false;
 	if (typeof window !== 'undefined') {
@@ -235,7 +236,7 @@
 	onMount(() => {
 		const params = new URLSearchParams(window.location.search);
 		demo = params.has('demo');
-		bodyStyle = params.get('body') === 'glyph' ? 'glyph' : 'automaton';
+		bodyStyle = params.get('body') === 'automaton' ? 'automaton' : 'glyph';
 		let stop = false;
 		let prev: LiveRun[] | null = null;
 
