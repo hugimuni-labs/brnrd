@@ -1217,7 +1217,16 @@ def _build_pitfalls_block(repo_root: Path, task_text: str) -> str:
         matched = pitfalls.match(pitfalls.parse_pitfalls(candidate.path), task_text)
         if matched:
             break
-    return pitfalls.format_block(matched)
+    budget = int(
+        cfg.get(
+            "dominion.pitfalls_inject_budget_bytes",
+            cfg.get(
+                "dominion_pitfalls_inject_budget_bytes",
+                pitfalls.DEFAULT_INJECT_BUDGET_BYTES,
+            ),
+        )
+    )
+    return pitfalls.format_block(matched, budget_bytes=budget)
 
 
 def _build_strand_pitfalls_contract(
@@ -1590,6 +1599,42 @@ def _build_hearth_block(repo_root: Path) -> str:
     return f"{header}\n\n{body}"
 
 
+def _surface_wake_rank(relative: str) -> tuple[int, str]:
+    """Standing orientation before commissioned/archival material.
+
+    The dashboard discovers every page. The wake is a narrower reader: index,
+    workflow and the live plan establish the operating frame; ordinary standing
+    pages follow; shelf artifacts spend only what remains. This makes eviction
+    order semantic instead of an incidental alphabetic path (#1020).
+    """
+    if relative == "index.md":
+        return (0, relative)
+    if relative == "workflow.md" or (
+        relative.startswith("plans/") and relative.endswith("/active.md")
+    ):
+        return (1, relative)
+    if relative.startswith("shelf/"):
+        return (3, relative)
+    if relative.startswith(("archive/", "ledger/")):
+        return (4, relative)
+    return (2, relative)
+
+
+def _surface_page_has_ended(content: str) -> bool:
+    """True when a page declares itself historical rather than live.
+
+    The test is deliberately authored-state only: no dates or prose are
+    inferred. A frozen page says ``FROZEN`` in its opening banner; an expired
+    shelf page rewrites its required ``keeps:`` row to ``expired …``. Those
+    pages remain discoverable and rendered on the dashboard, but their own
+    declaration takes them out of every future wake.
+    """
+    opening = content[:1024]
+    if re.search(r"(?im)^>\s*\*\*FROZEN\b", opening):
+        return True
+    return re.search(r"(?im)^keeps:\s*expired\b", opening) is not None
+
+
 def _build_work_surface_block_scored(
     repo_root: Path,
     *,
@@ -1686,6 +1731,7 @@ def _build_work_surface_block_scored(
     # content so the closing line can still offer a heading gist (#1111) —
     # the one coordinate left for a page that rendered nothing at all.
     unannounced: list[tuple[str, str]] = []
+    lifecycle_omitted: list[str] = []
 
     # The warp index (2026-08-11): `surface/warp/` and `surface/topics/`
     # are the item space — dozens of small files whose *graph*, not whose
@@ -1756,7 +1802,11 @@ def _build_work_surface_block_scored(
         remaining = max(0, remaining - size)
         reserve_floor[resolved] = _ReserveFloor(content, block, trimmed, size)
 
-    for path in acc.work_surface_files(ctx):
+    surface_files = sorted(
+        acc.work_surface_files(ctx),
+        key=lambda path: _surface_wake_rank(path.relative_to(surface).as_posix()),
+    )
+    for path in surface_files:
         resolved = path.resolve()
         relative = path.relative_to(surface).as_posix()
         if relative.startswith(("warp/", "topics/")):
@@ -1800,6 +1850,9 @@ def _build_work_surface_block_scored(
             continue
         raw_content = path.read_text(encoding="utf-8").strip()
         if not raw_content:
+            continue
+        if _surface_page_has_ended(raw_content):
+            lifecycle_omitted.append(relative)
             continue
         content = raw_content
         handles_dropped = 0
@@ -1892,6 +1945,14 @@ def _build_work_surface_block_scored(
         remaining -= size
         if trimmed.text == raw_content:
             whole_paths.add(resolved)
+
+    if lifecycle_omitted:
+        named = " · ".join(f"`{relative}`" for relative in lifecycle_omitted)
+        blocks.append(
+            f"_({len(lifecycle_omitted)} lifecycle-ended surface page"
+            f"{'s' if len(lifecycle_omitted) != 1 else ''} left out of the "
+            f"wake: {named} · retained on the dashboard and under `{surface}`)_"
+        )
 
     if unannounced:
         # The budget ran out before even a placeholder fit. One line, not

@@ -102,11 +102,26 @@ def test_parse_existing_heading_shape_is_backwards_compatible(tmp_path: Path) ->
 # ── match ──────────────────────────────────────────────────────────────
 
 
-def test_match_is_case_insensitive_substring(tmp_path: Path) -> None:
+def test_match_is_case_insensitive_term_match(tmp_path: Path) -> None:
     dom = _write(tmp_path / "dom", "## P\ntrigger: Docker\nb\n")
     parsed = pitfalls.parse_pitfalls(dom)
     assert pitfalls.match(parsed, "rebuild the DOCKER image") != []
     assert pitfalls.match(parsed, "unrelated task") == []
+
+
+def test_match_does_not_fire_inside_a_larger_word(tmp_path: Path) -> None:
+    dom = _write(tmp_path / "dom", "## PR\ntrigger: pr\nbody\n")
+    parsed = pitfalls.parse_pitfalls(dom)
+
+    assert pitfalls.match(parsed, "review the PR") != []
+    assert pitfalls.match(parsed, "review the prompt") == []
+
+
+def test_match_keeps_literal_punctuation_loci(tmp_path: Path) -> None:
+    dom = _write(tmp_path / "dom", "## Runtime\ntrigger: .brr/\nbody\n")
+    parsed = pitfalls.parse_pitfalls(dom)
+
+    assert pitfalls.match(parsed, "inspect .brr/outbox") != []
 
 
 def test_match_any_trigger_fires(tmp_path: Path) -> None:
@@ -130,6 +145,19 @@ def test_match_preserves_file_order(tmp_path: Path) -> None:
     assert [p.title for p in pitfalls.match(parsed, "x x")] == ["First", "Second"]
 
 
+def test_match_ranks_more_specific_evidence_before_file_order(tmp_path: Path) -> None:
+    dom = _write(
+        tmp_path / "dom",
+        "## Generic\ntrigger: branch\n\n"
+        "## Specific\ntrigger: branch, force push\n",
+    )
+    parsed = pitfalls.parse_pitfalls(dom)
+
+    assert [p.title for p in pitfalls.match(parsed, "force push the branch")] == [
+        "Specific", "Generic",
+    ]
+
+
 # ── format ─────────────────────────────────────────────────────────────
 
 
@@ -147,7 +175,41 @@ def test_format_renders_titles_and_bodies(tmp_path: Path) -> None:
     assert lines[0] == "# Pitfalls that match this task"
     assert "## Blind retry" in lines
     assert "Gate retries behind idempotency." in block
-    assert "trigger:" not in block  # triggers are matching metadata, not shown
+    assert "trigger: retry" in block
+
+
+def test_format_renders_only_the_opening_paragraph_as_the_handle(tmp_path: Path) -> None:
+    dom = _write(
+        tmp_path / "dom",
+        "## Blind retry\ntrigger: retry\nOpening rule.\n\nIncident history.\n",
+    )
+
+    block = pitfalls.format_block(pitfalls.parse_pitfalls(dom))
+
+    assert "Opening rule." in block
+    assert "Incident history." not in block
+    assert "Full entries remain" in block
+
+
+def test_format_hard_budget_ranks_and_announces_omissions(tmp_path: Path) -> None:
+    entries = [
+        pitfalls.Pitfall(title=f"Entry {n}", triggers=["wake"], body="x" * 600)
+        for n in range(30)
+    ]
+
+    block = pitfalls.format_block(entries, budget_bytes=2400)
+
+    assert len(block.encode("utf-8")) <= 2400
+    assert "Entry 0" in block
+    assert "lower-ranked matching pitfalls omitted" in block
+    assert "dominion `pitfalls.md`" in block
+
+
+def test_byte_head_counts_the_ellipsis_inside_its_utf8_budget() -> None:
+    head = pitfalls._byte_head("é" * 20, 11)
+
+    assert len(head.encode("utf-8")) <= 11
+    assert head.endswith("…")
 
 
 def test_format_entry_heading_round_trips_as_distinct_pitfall(tmp_path: Path) -> None:
