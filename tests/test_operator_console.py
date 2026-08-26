@@ -933,3 +933,133 @@ def test_fmt_bytes_human_readable():
     assert _fmt_bytes(1024) == "1.0 KB"
     assert _fmt_bytes(1228) == "1.2 KB"
     assert _fmt_bytes(1024 * 1024) == "1.0 MB"
+
+
+# ── EDGE: the boundary blocks (2026-08-26) ────────────────────────────────
+#
+# The pane used to put the command on the collapsed title line, uncapped at
+# `hooks._DETAIL_BASH_MAX` (500 B) — measured across 3,944 recorded details,
+# 69% ran past 80 chars, so the wall was a column of clipped pipelines. The
+# expanded body held only the inject, unlabelled. `cwd` was recorded on every
+# boundary and rendered nowhere.
+
+
+def _b(**kw):
+    """A Boundary with the fields these tests care about; rest defaulted."""
+    from brr.operator_console.model import Boundary
+
+    base = dict(seq=1, phase="post-tool", at="2026-08-26T17:31:07Z", act="mutate", inject="")
+    base.update(kw)
+    return Boundary(**base)
+
+
+def test_edge_title_is_compact_and_body_carries_the_whole_command():
+    from brr.operator_console.tui import (
+        _TITLE_DETAIL_WIDTH,
+        _edge_body,
+        _edge_title,
+    )
+
+    command = " && ".join(f"npm run step-{i} 2>&1 | tail -4" for i in range(12))
+    edge = _b(detail=command, tools=("Bash",), out_bytes=40042)
+
+    title = _edge_title(edge, markup=False)
+    assert len(title) < 120, f"title is not compact: {len(title)} chars"
+    assert command not in title
+    assert "…" in title
+    assert "out 39.1 KB" in title
+
+    body = _edge_body(edge)
+    # Wrapped for width, so compare on the joined-and-squashed text.
+    flat = " ".join(body.split())
+    for fragment in ("npm run step-0", "npm run step-11", "&& npm run step-6"):
+        assert fragment in flat, fragment
+    assert "not retained" in body, "a counted-but-discarded response must say so"
+
+
+def test_edge_title_names_the_batch_size():
+    """A boundary can carry several tool calls; only the first has a detail.
+
+    Rendering `tools[0]` alone made the rest invisible rather than merely
+    unelaborated — the count is the honest summary.
+    """
+    from brr.operator_console.tui import _edge_title
+
+    one = _edge_title(_b(tools=("Bash",), detail="ls"), markup=False)
+    many = _edge_title(_b(tools=("Bash", "Read", "Read"), detail="ls"), markup=False)
+    assert "Bash" in one and "×" not in one
+    assert "Bash ×3" in many
+
+
+def test_edge_body_labels_every_block_in_order():
+    """where · ran · out · said — four labelled blocks, fixed order.
+
+    The collapsed wall does not repeat `where` (that is the group header's
+    job); an expanded row does, because opening a row is asking for the act
+    in full and where it ran is part of full.
+    """
+    from brr.operator_console.tui import _edge_body
+
+    body = _edge_body(
+        _b(detail="git status", tools=("Bash",), out_bytes=64, inject="q S17·W55",
+           cwd="/somewhere/else")
+    )
+    labels = [ln.split()[0] for ln in body.splitlines() if not ln.startswith(" ")]
+    assert labels == ["where", "ran", "out", "said"]
+    assert "/somewhere/else" in body
+    assert "q S17·W55" in body
+
+
+def test_edge_body_says_silent_when_nothing_was_injected():
+    from brr.operator_console.tui import _edge_body
+
+    assert "silent — nothing injected" in _edge_body(_b(detail="ls", tools=("Bash",)))
+
+
+def test_edge_groups_collapse_consecutive_shared_directories():
+    from brr.operator_console.tui import _edge_groups
+
+    rows = (
+        _b(seq=1, cwd="/repo"),
+        _b(seq=2, cwd="/repo"),
+        _b(seq=3, cwd="/repo/.brr/worktrees/child"),
+        _b(seq=4, cwd="/repo"),
+    )
+    groups = _edge_groups(rows)
+    assert [len(g) for _, g in groups] == [2, 1, 1]
+    # A directory change is the interesting event and must be visible as one,
+    # rather than requiring a reader to diff two adjacent rows.
+    assert [w for w, _ in groups] == ["/repo", "/repo/.brr/worktrees/child", "/repo"]
+
+
+def test_silent_pre_tool_rows_are_folded_but_a_blocked_one_never_is():
+    """2,130 recorded pre-tool rows, 100% of them with zero inject.
+
+    Each rendered as a header carrying only its own sequence number and
+    expanded to "silent — nothing injected". A pre-tool row that *blocked* a
+    call is the opposite of empty and stays.
+    """
+    from brr.operator_console.tui import _edge_is_mute
+
+    assert _edge_is_mute(_b(seq=1, phase="pre-tool", act="", detail="", inject=""))
+    assert not _edge_is_mute(
+        _b(seq=2, phase="pre-tool", act="", detail="", inject="",
+           block=True, block_reason="refused: writes outside the worktree")
+    )
+    # Only pre-tool folds. A post-tool fire that injected nothing still
+    # happened, and its command is the reason to look at it.
+    assert not _edge_is_mute(_b(seq=3, phase="post-tool", detail="ls", tools=("Bash",)))
+    assert not _edge_is_mute(_b(seq=4, phase="stop", act="", detail="", inject=""))
+
+
+def test_wrap_command_breaks_on_shell_operators_and_path_separators():
+    from brr.operator_console.tui import _wrap_command
+
+    lines = _wrap_command("a=1 && b=2 | c=3")
+    assert lines == ["a=1", "&& b=2", "| c=3"]
+
+    # One long unbroken token is almost always a path; a break mid-segment
+    # renders a path that is not the path.
+    long_path = "/very/long/root/" + "segment/" * 20 + "leaf.txt"
+    for line in _wrap_command(long_path, width=40):
+        assert line.endswith("/") or line.endswith("leaf.txt")
