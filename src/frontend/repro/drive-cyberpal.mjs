@@ -79,7 +79,11 @@ async function main() {
 				if (!svg) return null;
 				const groups = svg.querySelectorAll('g > g').length;
 				const html = svg.innerHTML;
-				return { groups, ghosts: html.includes('#ff3b30'), paths: (html.match(/<path/g) ?? []).length };
+				return {
+					groups,
+					ghosts: html.includes('#ff3b30'),
+					paths: (html.match(/<path/g) ?? []).length
+				};
 			});
 			if (state?.ghosts) seen.ghosts = true;
 			// The name frame draws more paths (5 letterforms) than any face.
@@ -98,9 +102,7 @@ async function main() {
 		await page.selectOption('select', { index: 0 }).catch(() => {});
 		await page.evaluate(() => {
 			const selects = Array.from(document.querySelectorAll('select'));
-			const frameSel = selects.find((s) =>
-				Array.from(s.options).some((o) => o.value === 'kawaii')
-			);
+			const frameSel = selects.find((s) => Array.from(s.options).some((o) => o.value === 'kawaii'));
 			if (frameSel) {
 				frameSel.value = 'kawaii';
 				frameSel.dispatchEvent(new Event('change', { bubbles: true }));

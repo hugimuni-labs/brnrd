@@ -24,22 +24,28 @@
 		truncPathTail
 	} from '$lib/residentField';
 	import {
+		actStations,
 		boxFaces,
 		buildScene,
 		floorPath,
 		floorTextTransform,
+		garageLayout,
 		iso,
 		paintOrder,
+		plotFor,
 		polyPoints,
 		residentAnatomy,
 		sceneBounds,
 		steleCellQuad,
+		TILE,
 		TRAIL_MAX,
 		type Machine,
 		type ResidentBody
 	} from '$lib/isoField';
+	import { atlasFromDirs, fogOf, growNodes, planGround, type GroundNode } from '$lib/groundPlan';
+	import { fetchScheduledWakes, ScheduledWakesAuthError } from '$lib/scheduledWakes';
 	import { moodSigil, SIGIL_COLS, SIGIL_ROWS } from '$lib/moodSigil';
-	import { demoFrames } from './demo';
+	import { demoFrames, demoGround } from './demo';
 
 	const POLL_MS = 2000;
 	const DEMO_STEP_MS = 3600;
@@ -73,6 +79,42 @@
 	let ordered = $derived(paintOrder(scene.machines));
 	let bounds = $derived(sceneBounds(scene));
 	let residentRun = $derived(field.find((r) => !r.orphan)?.run ?? null);
+
+	// ── the generated ground (the space-creation round, 2026-08-26) ────────
+	// The hybrid contract: the civic frame above is rigid; the floor is dealt
+	// from structure and revealed by attention. Nodes come from the demo's
+	// real-tree fixture or accrete live from observed edge dirs; the fog is a
+	// pure read of (districts, sightings, now).
+	let groundNodes = $state<GroundNode[]>([]);
+	let seenDirs = $state<Record<string, number>>({});
+	let fogNow = $state(Date.now());
+	let groundArea = $derived({
+		x: 0.3,
+		y: 0.3,
+		w: scene.cols - 0.6,
+		d: scene.rows - 0.6
+	});
+	let districts = $derived(planGround(groundNodes, groundArea, residentRun?.repo_label ?? 'brnrd'));
+	let atlas = $derived(atlasFromDirs(districts, seenDirs));
+	/** District paths a live body is standing in right now — the presence
+	 *  light, distinct from the fog's slower memory. */
+	let standing = $derived(
+		new Set(
+			runs
+				.map((r) => r.edge?.dir)
+				.map((dir) => {
+					const hit = districts.find(
+						(t) => dir && dir !== '.' && (dir === t.path || dir.startsWith(t.path + '/'))
+					);
+					return hit?.path;
+				})
+				.filter((p): p is string => !!p)
+		)
+	);
+
+	// ── the garage: waiting bodies on the left wing ────────────────────────
+	let garageCount = $state(0);
+	let garage = $derived(garageLayout(garageCount));
 	let pendingTotal = $derived(runs.reduce((acc, run) => acc + (run.portals?.pending ?? 0), 0));
 	let focusRun = $derived(
 		(selected && runs.find((r) => fieldRunKey(r) === selected)) || residentRun
@@ -180,6 +222,17 @@
 			const key = fieldRunKey(run);
 			if (!(key in trails)) recordAct(key, run.edge?.act);
 		}
+		// The ground's sightings: every observed working dir marks the atlas
+		// (fog memory), and — live only — grows the accreted node list. "Only
+		// what you touch comes into being."
+		const sawAt = Date.now();
+		for (const run of alive) {
+			const dir = run.edge?.dir;
+			if (!dir || dir === '.') continue;
+			seenDirs = { ...seenDirs, [dir]: sawAt };
+			if (!demo) groundNodes = growNodes(groundNodes, dir);
+		}
+		fogNow = sawAt;
 		for (const ev of events) {
 			if (ev.kind === 'boundary' || ev.kind === 'inject') {
 				recordAct(ev.runId, alive.find((r) => fieldRunKey(r) === ev.runId)?.edge?.act);
@@ -255,6 +308,10 @@
 			const frames = demoFrames();
 			let idx = 0;
 			loading = false;
+			// The demo deals the real map and seats two waiting bodies; the
+			// replay's own dirs then lift the fog district by district.
+			groundNodes = demoGround();
+			garageCount = 2;
 			armOverture(frames[0].length);
 			applySnapshot(frames[0], null);
 			prev = frames[0];
@@ -269,6 +326,7 @@
 						idx = 0;
 						prev = null;
 						trails = {}; // the replay starts its day over — so does the trail
+						seenDirs = {}; // …and the fog closes back in
 						armOverture(frames[0].length);
 						applySnapshot(frames[0], null);
 						prev = frames[0];
@@ -285,6 +343,25 @@
 				stop = true;
 			};
 		}
+
+		// The garage's live feed: scheduled wakes as waiting bodies. Slow
+		// clock — the bench changes on schedule edits, not on boundaries.
+		let wakesTimer: ReturnType<typeof setTimeout> | null = null;
+		const pollWakes = async () => {
+			try {
+				const data = await fetchScheduledWakes();
+				garageCount = data.total;
+			} catch (error) {
+				if (!(error instanceof ScheduledWakesAuthError)) {
+					// transient — keep the last bench
+				}
+			}
+			if (!stop) wakesTimer = setTimeout(pollWakes, 60_000);
+		};
+		pollWakes();
+		// The fog's decay clock: lit → explored without a boundary needing to
+		// land. State read, not motion — safe under reduced motion.
+		const fogTicker = setInterval(() => (fogNow = Date.now()), 30_000);
 
 		let timer: ReturnType<typeof setTimeout> | null = null;
 		const poll = async () => {
@@ -311,6 +388,8 @@
 		return () => {
 			stop = true;
 			if (timer) clearTimeout(timer);
+			if (wakesTimer) clearTimeout(wakesTimer);
+			clearInterval(fogTicker);
 		};
 	});
 
@@ -423,6 +502,46 @@
 				<polygon points={polyPoints(plate)} class="plate-edge" />
 			</g>
 
+			<!-- THE GENERATED GROUND: districts dealt from the repo's own tree
+			     (seeded BSP — the same repo always deals the same map), under
+			     fog that is literally attention: lit where recorded acts stand,
+			     explored-outline where they once did, void where no run has
+			     ever been. "Only what you touch comes into being." -->
+			<g class="ground">
+				{#each districts as t (t.path)}
+					{@const fog = fogOf(t, atlas, fogNow)}
+					{@const stand = standing.has(t.path)}
+					{@const poly = [
+						iso(t.x, t.y),
+						iso(t.x + t.w, t.y),
+						iso(t.x + t.w, t.y + t.d),
+						iso(t.x, t.y + t.d)
+					]}
+					<g class={`district fog-${fog}`} class:standing={stand}>
+						<polygon points={polyPoints(poly)} class="district-floor" />
+						{#if stand}
+							{@const c = iso(t.x + t.w / 2, t.y + t.d / 2)}
+							<ellipse
+								cx={c.x}
+								cy={c.y}
+								rx={Math.min(t.w, t.d) * TILE * 0.5}
+								ry={Math.min(t.w, t.d) * TILE * 0.25}
+								class="district-presence"
+							/>
+						{/if}
+						{#if fog !== 'void'}
+							<!-- Painted toward the district's own middle: an edge-anchored
+							     stencil slides under whatever civic furniture stands on
+							     the shared ground (the garage ate "fro" of frontend). -->
+							<text
+								transform={floorTextTransform(t.x + t.w * 0.3, t.y + Math.min(0.55, t.d * 0.3))}
+								class="district-name">{t.name}</text
+							>
+						{/if}
+					</g>
+				{/each}
+			</g>
+
 			<!-- conduits: cables in the floor's negative space -->
 			{#each scene.conduits as conduit, i (conduit.key)}
 				<g class="conduit" style={`animation-delay:${conduitDelay(i)}`}>
@@ -490,6 +609,53 @@
 					{/key}
 				{/if}
 			</g>
+
+			<!-- THE GARAGE: scheduled wakes as uninhabited bodies on the left
+			     wing — no mood, no lamp, dark shells waiting. The claw and the
+			     activation ceremony are spec (design-the-loom-being.md); the
+			     waiting itself is state, served today. -->
+			{#if garage.seats.length > 0}
+				{@const gbf = boxFaces(
+					garage.bench.x,
+					garage.bench.y,
+					garage.bench.w,
+					garage.bench.d,
+					garage.bench.h
+				)}
+				<g class="garage">
+					<polygon points={polyPoints(gbf.left)} class="garage-bench-l" />
+					<polygon points={polyPoints(gbf.right)} class="garage-bench-r" />
+					<polygon points={polyPoints(gbf.top)} class="garage-bench-t" />
+					{#each garage.seats as seat (seat.i)}
+						{@const sf = boxFaces(
+							seat.body.x,
+							seat.body.y,
+							seat.body.w,
+							seat.body.d,
+							seat.body.h,
+							seat.body.z0
+						)}
+						{@const face = iso(
+							seat.body.x + seat.body.w,
+							seat.body.y + seat.body.d / 2,
+							seat.body.z0 + seat.body.h * 0.45
+						)}
+						<polygon points={polyPoints(sf.left)} class="seat-l" />
+						<polygon points={polyPoints(sf.right)} class="seat-r" />
+						<polygon points={polyPoints(sf.top)} class="seat-t" />
+						<text x={face.x - 1} y={face.y + 2} text-anchor="middle" class="seat-face">·_·</text>
+					{/each}
+					{#if garage.overflow > 0}
+						<text x={garage.countAnchor.x} y={garage.countAnchor.y} class="hands-count"
+							>+{garage.overflow}</text
+						>
+					{/if}
+					<text
+						transform={floorTextTransform(garage.bench.x - 0.05, garage.bench.y - 0.3)}
+						class="floor-label dim">garage</text
+					>
+				</g>
+			{/if}
 
 			<!-- packets: one recorded event, one transit. A packet is a small
 			     floor-plane diamond — the conduit pads' own shape, moving —
@@ -568,6 +734,21 @@
 									anat.head.z0 + anat.head.h
 								)
 							: { x: anat.faceAnchor.x, y: anat.faceAnchor.y - 21 }}
+						<!-- ACT STATIONS: the edge acts as places around the plaza —
+						     the current act lights its station, the others hold dim.
+						     dispatch has no desk (it lights the conduit port); an
+						     unknown act lights nothing. -->
+						{#each actStations(m) as st (st.act)}
+							{@const stf = boxFaces(st.box.x, st.box.y, st.box.w, st.box.d, st.box.h)}
+							{@const lit = run.edge?.act === st.act}
+							<g class="station" class:lit style={lit ? `--c:${actColor(st.act)}` : undefined}>
+								<polygon points={polyPoints(stf.left)} class="station-l" />
+								<polygon points={polyPoints(stf.right)} class="station-r" />
+								<polygon points={polyPoints(stf.top)} class="station-t" />
+								<!-- the lit label rides a later layer — see below the bench,
+								     or the furniture painted after this loop clips it -->
+							</g>
+						{/each}
 						<polygon
 							points={polyPoints([
 								iso(m.x - 0.3, m.y - 0.3),
@@ -722,6 +903,16 @@
 								/>
 							{/each}
 						{/if}
+						<!-- lit station label, above all the plaza furniture -->
+						{#each actStations(m).filter((st) => run.edge?.act === st.act) as st (st.act)}
+							{@const stf = boxFaces(st.box.x, st.box.y, st.box.w, st.box.d, st.box.h)}
+							<text
+								x={stf.floorFront.x + 5}
+								y={stf.floorFront.y + 12}
+								class="station-label"
+								style={`--c:${actColor(st.act)}`}>{st.act}</text
+							>
+						{/each}
 						<line x1={crown.x} y1={crown.y} x2={crown.x} y2={crown.y - 16} class="mast" />
 						<circle
 							cx={crown.x}
@@ -738,6 +929,18 @@
 						</text>
 					{:else}
 						{@const f = boxFaces(m.x, m.y, m.w, m.d, m.h)}
+						<!-- THE PLOT: the strand's location is git — its block stands
+						     on a staked court whose signage is its branch. -->
+						{@const plot = plotFor(m)}
+						<polygon
+							points={polyPoints([
+								iso(plot.x, plot.y),
+								iso(plot.x + plot.w, plot.y),
+								iso(plot.x + plot.w, plot.y + plot.d),
+								iso(plot.x, plot.y + plot.d)
+							])}
+							class="plot"
+						/>
 						<polygon points={polyPoints(f.left)} class="face-l" />
 						<polygon points={polyPoints(f.right)} class="face-r" />
 						<polygon points={polyPoints(f.top)} class="face-t" />
@@ -782,6 +985,16 @@
 									· {run.runner.core}</tspan
 								>{/if}{#if awaiting}<tspan class="core-tag"> · await</tspan>{/if}
 						</text>
+						{#if run.room?.branch}
+							<text
+								x={f.floorFront.x}
+								y={f.floorFront.y + strandLabelDy(m) + 10}
+								text-anchor="middle"
+								class="plot-branch"
+							>
+								{trunc(run.room.branch, 26)}
+							</text>
+						{/if}
 					{/if}
 				</g>
 			{/each}
@@ -975,6 +1188,115 @@
 	}
 	.grid-line.major {
 		stroke: rgba(217, 164, 65, 0.13);
+	}
+
+	/* ── the generated ground ──────────────────────────────────────────── */
+	/* Fog is attention: void is darkness on the plate (drawn, not absent —
+	   the map admits where nobody has been), explored is the roguelike
+	   memory state (outline, no light), lit is warm floor. */
+	.district-floor {
+		fill: rgba(0, 0, 0, 0.28);
+		stroke: none;
+	}
+	.district.fog-explored .district-floor {
+		fill: rgba(217, 164, 65, 0.025);
+		stroke: rgba(217, 164, 65, 0.14);
+		stroke-width: 0.7;
+		stroke-dasharray: 3 3;
+	}
+	.district.fog-lit .district-floor {
+		fill: rgba(217, 164, 65, 0.055);
+		stroke: rgba(217, 164, 65, 0.3);
+		stroke-width: 0.8;
+	}
+	.district-presence {
+		fill: rgba(255, 205, 110, 0.09);
+		filter: blur(6px);
+	}
+	.district-name {
+		fill: rgba(168, 162, 158, 0.4);
+		font-size: 8.5px;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		pointer-events: none;
+	}
+	.district.fog-lit .district-name {
+		fill: rgba(217, 164, 65, 0.75);
+	}
+
+	/* ── the garage ────────────────────────────────────────────────────── */
+	.garage-bench-t {
+		fill: #17110a;
+		stroke: rgba(217, 164, 65, 0.28);
+		stroke-width: 0.7;
+	}
+	.garage-bench-l {
+		fill: #0b0805;
+	}
+	.garage-bench-r {
+		fill: #100b06;
+	}
+	.seat-t {
+		fill: #1b1610;
+		stroke: rgba(168, 162, 158, 0.35);
+		stroke-width: 0.7;
+	}
+	.seat-l {
+		fill: #0d0a06;
+	}
+	.seat-r {
+		fill: #120e08;
+		stroke: rgba(168, 162, 158, 0.18);
+		stroke-width: 0.5;
+	}
+	.seat-face {
+		fill: rgba(168, 162, 158, 0.5);
+		font-size: 6.5px;
+		letter-spacing: 0.05em;
+	}
+
+	/* ── act stations ──────────────────────────────────────────────────── */
+	.station-t {
+		fill: #191209;
+		stroke: rgba(217, 164, 65, 0.22);
+		stroke-width: 0.6;
+	}
+	.station-l {
+		fill: #0c0906;
+	}
+	.station-r {
+		fill: #110c07;
+		stroke: rgba(217, 164, 65, 0.12);
+		stroke-width: 0.5;
+	}
+	.station.lit .station-t {
+		stroke: var(--c);
+		stroke-width: 1.1;
+		filter: drop-shadow(0 0 4px var(--c));
+	}
+	.station.lit .station-r {
+		stroke: var(--c);
+		stroke-width: 0.7;
+	}
+	.station-label {
+		fill: var(--c);
+		font-size: 7px;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+	}
+
+	/* ── plots: the git ground under a strand ──────────────────────────── */
+	.plot {
+		fill: rgba(110, 198, 255, 0.03);
+		stroke: rgba(110, 198, 255, 0.24);
+		stroke-width: 0.7;
+		stroke-dasharray: 4 3;
+	}
+	.plot-branch {
+		fill: rgba(110, 198, 255, 0.55);
+		font-size: 7.5px;
+		letter-spacing: 0.04em;
+		pointer-events: none;
 	}
 
 	/* ── conduits ──────────────────────────────────────────────────────── */

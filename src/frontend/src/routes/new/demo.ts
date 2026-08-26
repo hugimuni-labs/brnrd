@@ -6,6 +6,23 @@
 // this file is fixture, not vocabulary: nothing here invents semantics.
 
 import type { LiveRun } from '$lib/liveRuns';
+import type { GroundNode } from '$lib/groundPlan';
+
+/** The generated ground's fixture: this repository's own real top-level
+ *  shape, weights eyeballed from tree size. The demo deals the true map —
+ *  "from clear structure", never invented rooms. */
+export function demoGround(): GroundNode[] {
+	return [
+		{ path: 'src/brr', weight: 42 },
+		{ path: 'src/frontend', weight: 34 },
+		{ path: 'tests', weight: 16 },
+		{ path: 'docs', weight: 9 },
+		{ path: 'packaging', weight: 5 },
+		{ path: 'scripts', weight: 3 },
+		{ path: 'media', weight: 3 },
+		{ path: 'deploy', weight: 2 }
+	];
+}
 
 function liveRun(over: Partial<LiveRun> & { run_id: string }): LiveRun {
 	return {
@@ -37,7 +54,7 @@ function liveRun(over: Partial<LiveRun> & { run_id: string }): LiveRun {
 	} as LiveRun;
 }
 
-function edge(act: string, detail: string, at: string, injected = false) {
+function edge(act: string, detail: string, at: string, injected = false, dir = '.') {
 	return {
 		at,
 		phase: 'PostToolUse',
@@ -46,7 +63,7 @@ function edge(act: string, detail: string, at: string, injected = false) {
 		detail,
 		out_bytes: 412,
 		injected,
-		dir: '.'
+		dir
 	};
 }
 
@@ -98,10 +115,25 @@ const strandB = (over: Partial<LiveRun> = {}) =>
 /** The replay, in order. Frame cadence belongs to the page. */
 export function demoFrames(): LiveRun[][] {
 	return [
-		// wake — the resident alone, orienting
-		[resident({ edge: edge('orient', 'Read design-resident-field.md', '2026-08-26T10:49:20Z') })],
-		// a mutate boundary
-		[resident({ edge: edge('mutate', 'Edit isoField.ts', '2026-08-26T10:52:00Z') })],
+		// wake — the resident alone, orienting. The fog starts almost whole:
+		// each dir an edge touches sets its district onto the stage.
+		[
+			resident({
+				edge: edge('orient', 'Read design-resident-field.md', '2026-08-26T10:49:20Z', false, 'docs')
+			})
+		],
+		// a mutate boundary — the frontend district comes into being
+		[
+			resident({
+				edge: edge(
+					'mutate',
+					'Edit isoField.ts',
+					'2026-08-26T10:52:00Z',
+					false,
+					'src/frontend/src/lib'
+				)
+			})
+		],
 		// dispatch — a strand rises on the lane
 		[
 			resident({
@@ -109,21 +141,45 @@ export function demoFrames(): LiveRun[][] {
 			}),
 			strandA()
 		],
-		// both working
+		// both working — the light spreads where the work stands
 		[
-			resident({ edge: edge('probe', 'node --test isoField.test.ts', '2026-08-26T11:04:00Z') }),
-			strandA({ edge: edge('mutate', 'Edit +page.svelte', '2026-08-26T11:04:10Z') })
+			resident({
+				edge: edge(
+					'probe',
+					'node --test isoField.test.ts',
+					'2026-08-26T11:04:00Z',
+					false,
+					'src/frontend/src/lib'
+				)
+			}),
+			strandA({
+				edge: edge(
+					'mutate',
+					'Edit +page.svelte',
+					'2026-08-26T11:04:10Z',
+					false,
+					'src/frontend/src/routes/new'
+				)
+			})
 		],
 		// a second strand, economy core, holding a vigil
 		[
 			resident({ edge: edge('dispatch', 'spawn: the-quiet-vigil', '2026-08-26T11:07:00Z') }),
-			strandA({ edge: edge('publish', 'git push origin brr/the-lane', '2026-08-26T11:06:50Z') }),
+			strandA({
+				edge: edge(
+					'publish',
+					'git push origin brr/the-lane',
+					'2026-08-26T11:06:50Z',
+					false,
+					'src/frontend'
+				)
+			}),
 			strandB()
 		],
 		// correspondence arrives — ◈ rests at the gate
 		[
 			resident({
-				edge: edge('probe', 'npm run lint', '2026-08-26T11:09:00Z'),
+				edge: edge('probe', 'npm run lint', '2026-08-26T11:09:00Z', false, 'src/frontend'),
 				portals: { pending: 1, oldest_at: '2026-08-26T11:09:10Z' }
 			}),
 			strandA(),
@@ -131,12 +187,17 @@ export function demoFrames(): LiveRun[][] {
 		],
 		// the world folds in — the read is attested
 		[
-			resident({ edge: edge('orient', 'brnrd do', '2026-08-26T11:10:00Z', true) }),
+			resident({ edge: edge('orient', 'brnrd do', '2026-08-26T11:10:00Z', true, 'src/brr') }),
 			strandA(),
 			strandB()
 		],
 		// the first strand returns home
-		[resident({ edge: edge('probe', 'gh pr checks 1636', '2026-08-26T11:14:00Z') }), strandB()],
+		[
+			resident({
+				edge: edge('probe', 'python -m pytest tests/ -q', '2026-08-26T11:14:00Z', false, 'tests')
+			}),
+			strandB()
+		],
 		// the vigil resolves and returns; the resident closes out
 		[
 			resident({
