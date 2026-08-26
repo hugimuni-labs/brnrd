@@ -19,6 +19,7 @@
 		boxFaces,
 		buildScene,
 		floorPath,
+		floorTextTransform,
 		iso,
 		paintOrder,
 		polyPoints,
@@ -371,10 +372,13 @@
 					y2={gateBeam.b.y}
 					class="gate-beam"
 				/>
-				{#if scene.gatePath.length}
-					{@const gp = iso(scene.gate.x, scene.gate.y + 0.9)}
-					<text x={gp.x} y={gp.y + 16} text-anchor="middle" class="floor-label dim">portal</text>
-				{/if}
+				<!-- the one label that stays floor-painted: a static planned
+				     stencil reads as part of the floor plan (his 2nd read);
+				     only variable-length run names go horizontal -->
+				<text
+					transform={floorTextTransform(scene.gate.x - 0.55, scene.gate.y + 0.85)}
+					class="floor-label dim">portal</text
+				>
 				{#if pendingTotal > 0}
 					{#key msgDropSeq}
 						<g class="msg" class:drop={msgDropSeq > 0}>
@@ -400,16 +404,18 @@
 			     drawn UNDER the machines so it rides the floor and vanishes
 			     behind the block it arrives at (the maintainer's first-read
 			     steer: a dot pasted over the scene has no place in it). -->
+			<!-- CSS motion paths, not SMIL: an <animateMotion> inserted into a
+			     long-running document resolves begin="0s" against the DOCUMENT
+			     timeline, so a packet born at t=30s is already "finished" and
+			     freezes glowing at its endpoint — measured live by the
+			     maintainer ("the blue dot doesn't move"). CSS animations
+			     start at insertion, which is the semantics a receipt needs. -->
 			{#each packets as packet (packet.id)}
-				<g class="pkt" style={`--c:${packet.color}`}>
-					<animateMotion
-						dur={`${packet.dur}ms`}
-						path={packet.d}
-						keyPoints={packet.reverse ? '1;0' : '0;1'}
-						keyTimes="0;1"
-						calcMode="linear"
-						fill="freeze"
-					/>
+				<g
+					class="pkt"
+					class:rev={packet.reverse}
+					style={`--c:${packet.color};offset-path:path('${packet.d}');animation-duration:${packet.dur}ms`}
+				>
 					<polygon points="0,-4.4 8.8,0 0,4.4 -8.8,0" class="pkt-halo" />
 					<polygon points="0,-2.4 4.8,0 0,2.4 -4.8,0" class="pkt-core" />
 				</g>
@@ -560,6 +566,58 @@
 		</svg>
 	</div>
 
+	{#if selected && focusRun}
+		<!-- the dossier: pressing a machine expands its record — same room
+		     vocabulary (mono, hairline rules), no panel class imported -->
+		<section class="dossier" aria-label="machine dossier">
+			<header>
+				<span class="dossier-name">{liveRunDisplayName(focusRun)}</span>
+				<button class="dossier-close" onpointerdown={() => (selected = null)}>×</button>
+			</header>
+			<dl>
+				{#if focusRun.runner?.core}
+					<dt>core</dt>
+					<dd>
+						{focusRun.runner.core}{focusRun.runner.class ? ` · ${focusRun.runner.class}` : ''}
+					</dd>
+				{/if}
+				{#if focusRun.room?.branch || focusRun.room?.dir}
+					<dt>room</dt>
+					<dd>
+						{[focusRun.room?.branch, focusRun.room?.dir].filter(Boolean).join(' · ') ||
+							'the shared checkout'}
+					</dd>
+				{/if}
+				{#if focusRun.edge?.act}
+					<dt>edge</dt>
+					<dd>
+						<span style={`color:${actColor(focusRun.edge.act)}`}>{focusRun.edge.act}</span>
+						{#if focusRun.edge.detail}· {focusRun.edge.detail}{/if}
+						{#if focusRun.edge.dir && focusRun.edge.dir !== '.'}· in {focusRun.edge.dir}{/if}
+					</dd>
+				{/if}
+				{#if focusCourse}
+					<dt>course</dt>
+					<dd>
+						{focusCourse.done}/{focusCourse.total}{focusCourse.current
+							? ` · ${focusCourse.current}`
+							: ''}
+					</dd>
+				{/if}
+				{#if focusRun.lifecycle}
+					<dt>state</dt>
+					<dd>{focusRun.lifecycle}</dd>
+				{:else if focusRun.phase}
+					<dt>phase</dt>
+					<dd>{focusRun.phase}</dd>
+				{/if}
+				{#if focusRun.portals?.pending}
+					<dt>portal</dt>
+					<dd>◈ {focusRun.portals.pending} waiting</dd>
+				{/if}
+			</dl>
+		</section>
+	{/if}
 	<footer class="hud hud-bottom">
 		{#if focusRun}
 			<span class="focus-name">{liveRunDisplayName(focusRun)}</span>
@@ -876,6 +934,23 @@
 	}
 
 	/* ── packets ───────────────────────────────────────────────────────── */
+	.pkt {
+		offset-rotate: 0deg;
+		animation-name: pkt-travel;
+		animation-timing-function: linear;
+		animation-fill-mode: forwards;
+	}
+	.pkt.rev {
+		animation-direction: reverse;
+	}
+	@keyframes pkt-travel {
+		from {
+			offset-distance: 0%;
+		}
+		to {
+			offset-distance: 100%;
+		}
+	}
 	.pkt-core {
 		fill: var(--c);
 	}
@@ -945,6 +1020,67 @@
 			opacity: 0;
 			transform: translateY(12px);
 		}
+	}
+
+	.dossier {
+		flex: none;
+		margin: 0 12px 4px;
+		padding: 10px 14px 12px;
+		border: 1px solid rgba(217, 164, 65, 0.28);
+		background: rgba(18, 13, 8, 0.92);
+		font-size: 11px;
+		color: #a8a29e;
+		max-height: 38vh;
+		overflow-y: auto;
+		animation: dossier-in 0.28s ease-out;
+	}
+	@keyframes dossier-in {
+		from {
+			opacity: 0;
+			transform: translateY(8px);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
+	}
+	.dossier header {
+		display: flex;
+		justify-content: space-between;
+		align-items: baseline;
+		margin-bottom: 6px;
+	}
+	.dossier-name {
+		color: #f3e8d8;
+		font-size: 12px;
+		letter-spacing: 0.06em;
+	}
+	.dossier-close {
+		background: none;
+		border: none;
+		color: #8a827a;
+		font-size: 16px;
+		cursor: pointer;
+		padding: 0 2px;
+		line-height: 1;
+	}
+	.dossier dl {
+		display: grid;
+		grid-template-columns: max-content 1fr;
+		gap: 3px 14px;
+		margin: 0;
+	}
+	.dossier dt {
+		color: #8a827a;
+		text-transform: uppercase;
+		font-size: 9px;
+		letter-spacing: 0.18em;
+		align-self: baseline;
+		padding-top: 1px;
+	}
+	.dossier dd {
+		margin: 0;
+		overflow-wrap: anywhere;
 	}
 
 	.hud-bottom {
