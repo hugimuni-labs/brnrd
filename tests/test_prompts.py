@@ -3345,6 +3345,49 @@ class TestWorkSurfaceInjection:
         assert "### workflow.md" in result
         assert "ship it" in result
 
+    def test_lifecycle_ended_pages_leave_the_wake_but_stay_discoverable(self, tmp_path):
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        (surface / "ledger").mkdir(parents=True)
+        (surface / "shelf").mkdir(parents=True)
+        (surface / "index.md").write_text("# Start", encoding="utf-8")
+        (surface / "ledger" / "decisions.md").write_text(
+            "> **FROZEN 2026-08-11.** Historical ledger.\n\n## Old\nclosed",
+            encoding="utf-8",
+        )
+        (surface / "shelf" / "old.md").write_text(
+            "keeps: expired 2026-08-19 — successor shipped\n\n# Old reading",
+            encoding="utf-8",
+        )
+
+        result = _build_work_surface_block(tmp_path)
+
+        assert "Historical ledger" not in result
+        assert "Old reading" not in result
+        assert "2 lifecycle-ended surface pages left out" in result
+        assert "`ledger/decisions.md`" in result
+        assert "`shelf/old.md`" in result
+        assert (surface / "ledger" / "decisions.md").is_file()
+        assert (surface / "shelf" / "old.md").is_file()
+
+    def test_standing_pages_spend_before_shelf_pages(self, tmp_path):
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        (surface / "shelf").mkdir(parents=True)
+        (surface / "index.md").write_text("# Start", encoding="utf-8")
+        (surface / "operator-checklist.md").write_text(
+            "# Operator\n\nstanding", encoding="utf-8"
+        )
+        (surface / "shelf" / "artifact.md").write_text(
+            "keeps: until changed\n\n# Artifact", encoding="utf-8"
+        )
+
+        result = _build_work_surface_block(tmp_path)
+
+        assert result.index("### operator-checklist.md") < result.index(
+            "### shelf/artifact.md"
+        )
+
     def test_surface_block_rides_in_daemon_prompt(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
         prompts.mkdir(parents=True)
@@ -4060,10 +4103,11 @@ class TestSurfaceReserve:
         the render says so — the same honesty discipline as the ordinary
         walk's floor-overflow notice, just scoped to the reserve.
 
-        `aaa-hog.md` sorts *before* `workflow.md`, so by the time the walk
-        reaches workflow.md's own turn it has already spent everything the
-        reserve's floor carve-out left behind — the topup collapses back to
-        the bare floor, and the bare floor is itself over its own allowance.
+        `index.md` is the only page ranked before the load-bearing workflow,
+        so by the time the walk reaches workflow.md's own turn it has already
+        spent everything the reserve's floor carve-out left behind — the topup
+        collapses back to the bare floor, and the bare floor is itself over its
+        own allowance.
         """
         home = _seed_account_home(tmp_path)
         surface = home / "surface"
@@ -4077,7 +4121,7 @@ class TestSurfaceReserve:
         (surface / "workflow.md").write_text(
             "## Huge\n\n" + ("x" * 9_000), encoding="utf-8"
         )
-        (surface / "aaa-hog.md").write_text(
+        (surface / "index.md").write_text(
             "## Everything else\n\n" + ("y" * 2_000), encoding="utf-8"
         )
 

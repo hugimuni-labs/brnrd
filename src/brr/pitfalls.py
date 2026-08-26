@@ -30,6 +30,12 @@ from pathlib import Path
 PITFALLS_FILE = "pitfalls.md"
 _TRIGGER_RE = re.compile(r"^\s*trigger:\s*(.+?)\s*$", re.IGNORECASE)
 
+# Failure-memory is the one injected block whose reader cannot know to pull it
+# before the trigger fires.  It therefore keeps a real wake-time budget rather
+# than becoming a pointer-only block, but no longer gets to grow without bound.
+DEFAULT_INJECT_BUDGET_BYTES = 12 * 1024
+_HANDLE_BODY_BYTES = 700
+
 
 @dataclass
 class Pitfall:
@@ -40,9 +46,39 @@ class Pitfall:
     body: str = ""
 
     def matches(self, text: str) -> bool:
-        """True if any trigger is a case-insensitive substring of *text*."""
-        low = text.lower()
-        return any(t and t.lower() in low for t in self.triggers)
+        """True if any trigger appears as a term or phrase in *text*.
+
+        Word characters at a trigger's edges must also be word edges in the
+        task.  Punctuation-led loci (``.brr/``, ``event:``) retain literal
+        matching.  This keeps short triggers such as ``pr`` from firing inside
+        ``prompt`` while preserving the path-shaped triggers the store uses.
+        """
+        return bool(self.matched_triggers(text))
+
+    def matched_triggers(self, text: str) -> list[str]:
+        """The triggers that fire, in their authored order."""
+        return [trigger for trigger in self.triggers if _trigger_matches(trigger, text)]
+
+    def match_score(self, text: str) -> tuple[int, int, int]:
+        """Specific matches first; equal scores retain the file's order."""
+        matched = self.matched_triggers(text)
+        return (
+            len(matched),
+            max((len(trigger.split()) for trigger in matched), default=0),
+            max((len(trigger) for trigger in matched), default=0),
+        )
+
+
+def _trigger_matches(trigger: str, text: str) -> bool:
+    trigger = trigger.strip()
+    if not trigger or not text:
+        return False
+    pattern = re.escape(trigger)
+    if trigger[0].isalnum() or trigger[0] == "_":
+        pattern = rf"(?<!\w){pattern}"
+    if trigger[-1].isalnum() or trigger[-1] == "_":
+        pattern = rf"{pattern}(?!\w)"
+    return re.search(pattern, text, re.IGNORECASE) is not None
 
 
 def parse_pitfalls(dominion_dir: Path) -> list[Pitfall]:
@@ -97,10 +133,14 @@ def parse_pitfalls(dominion_dir: Path) -> list[Pitfall]:
 
 
 def match(pitfalls: list[Pitfall], task_text: str) -> list[Pitfall]:
-    """Return pitfalls whose triggers fire for *task_text*, order preserved."""
+    """Return matching pitfalls, strongest trigger evidence first.
+
+    Python's sort is stable, so equal-strength matches keep the file order.
+    """
     if not task_text:
         return []
-    return [p for p in pitfalls if p.matches(task_text)]
+    matched = [p for p in pitfalls if p.matches(task_text)]
+    return sorted(matched, key=lambda p: p.match_score(task_text), reverse=True)
 
 
 def inert(pitfalls: list[Pitfall]) -> list[Pitfall]:
@@ -124,22 +164,78 @@ def inert(pitfalls: list[Pitfall]) -> list[Pitfall]:
     return [p for p in pitfalls if not any(t.strip() for t in p.triggers)]
 
 
-def format_block(matched: list[Pitfall]) -> str:
-    """Render matching pitfalls as a wake-prompt affordance block, or ``""``."""
+def _byte_head(text: str, limit: int) -> str:
+    """A UTF-8-safe head of *text* no larger than *limit* bytes."""
+    encoded = text.encode("utf-8")
+    if len(encoded) <= limit:
+        return text
+    marker = "…"
+    room = max(0, limit - len(marker.encode("utf-8")))
+    return encoded[:room].decode("utf-8", errors="ignore").rstrip() + marker
+
+
+def _handle_body(body: str) -> str:
+    """The opening paragraph: enough to identify the lesson, not replay it."""
+    paragraphs = re.split(r"\n\s*\n", body.strip(), maxsplit=1)
+    opening = paragraphs[0] if paragraphs and paragraphs[0] else ""
+    return _byte_head(opening, _HANDLE_BODY_BYTES)
+
+
+def format_block(
+    matched: list[Pitfall], *, budget_bytes: int = DEFAULT_INJECT_BUDGET_BYTES
+) -> str:
+    """Render ranked failure-memory handles inside a hard byte budget."""
     if not matched:
         return ""
     parts = [
         "# Pitfalls that match this task",
         "",
         "Failure-memory you recorded earlier, surfaced because a trigger in "
-        "this task just hit it. Read it before you step on it again — and if "
-        "you've since guarded the failure with a playbook invariant, lint, test, "
-        "or baked tool, slash the pitfall (the forcing function is the better "
-        "memory).",
+        "this task just hit it. Each match is a handle — title, trigger "
+        "vocabulary, opening rule — not the whole incident report. Full entries "
+        "remain in the resident dominion's `pitfalls.md`; re-run `brnrd agent "
+        "inject --task <topic>` after a topic shift. Slash an entry once a lint, "
+        "test, hook, or baked tool guards it.",
     ]
+    kept = 0
     for p in matched:
-        parts.append("")
-        parts.append(f"## {p.title}")
-        if p.body:
-            parts.append(p.body)
-    return "\n".join(parts)
+        entry = ["", f"## {p.title}"]
+        triggers = ", ".join(p.triggers)
+        if triggers:
+            # Keep the store's own metadata spelling. A rendered block pasted
+            # back into pitfalls.md must still parse as the same entry.
+            entry.append(f"trigger: {triggers}")
+        opening = _handle_body(p.body)
+        if opening:
+            entry.extend(("", opening))
+        omitted = len(matched) - (kept + 1)
+        footer = (
+            f"\n\n_({omitted} lower-ranked matching pitfall"
+            f"{'s' if omitted != 1 else ''} omitted by the "
+            f"{budget_bytes:,} B block budget · full store: dominion "
+            "`pitfalls.md`)_"
+            if omitted else ""
+        )
+        candidate = "\n".join(parts + entry) + footer
+        if len(candidate.encode("utf-8")) > max(0, budget_bytes):
+            break
+        parts.extend(entry)
+        kept += 1
+    omitted = len(matched) - kept
+    if omitted:
+        footer = (
+            f"_({omitted} lower-ranked matching pitfall"
+            f"{'s' if omitted != 1 else ''} omitted by the "
+            f"{budget_bytes:,} B block budget · full store: dominion "
+            "`pitfalls.md`)_"
+        )
+        # Default/configured practical budgets always fit this. A pathological
+        # tiny override degrades to an empty block instead of violating its own
+        # advertised hard ceiling.
+        if kept == 0:
+            parts = [parts[0]]
+        candidate = "\n".join(parts + ["", footer])
+        if len(candidate.encode("utf-8")) <= max(0, budget_bytes):
+            parts.extend(("", footer))
+    rendered = "\n".join(parts)
+    return rendered if len(rendered.encode("utf-8")) <= max(0, budget_bytes) else ""
