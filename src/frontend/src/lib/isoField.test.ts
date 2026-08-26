@@ -13,9 +13,11 @@ import {
 	floorPath,
 	iso,
 	paintOrder,
+	residentAnatomy,
 	sceneBounds,
 	strandHeight,
-	TILE
+	TILE,
+	TRAIL_MAX
 } from './isoField.ts';
 import type { LiveRun } from './liveRuns';
 
@@ -207,4 +209,63 @@ test('faces share their silhouette edges', () => {
 		{ x: 1, y: 0 }
 	]);
 	ok(path.startsWith('M 0 0 L '), path);
+});
+
+// ── the resident's anatomy (the entity round) ───────────────────────────────
+
+test('boxFaces lifts a based box whole — a head is the same box, raised', () => {
+	const grounded = boxFaces(1, 1, 0.6, 0.6, 0.5);
+	const lifted = boxFaces(1, 1, 0.6, 0.6, 0.5, 1.7);
+	for (const face of ['top', 'left', 'right'] as const) {
+		for (let i = 0; i < grounded[face].length; i++) {
+			equal(lifted[face][i].x, grounded[face][i].x, 'lift never shears sideways');
+			ok(lifted[face][i].y < grounded[face][i].y, 'every corner rises');
+		}
+	}
+});
+
+function residentMachine() {
+	const scene = sceneOf([run({ id: 'r1' })]);
+	const m = scene.machines[0];
+	equal(m.kind, 'resident');
+	return m;
+}
+
+test('the automaton: head floats above the torso, bench stands in front', () => {
+	const m = residentMachine();
+	const anat = residentAnatomy(m, 'automaton');
+	ok(anat.head, 'the automaton has a head');
+	ok(anat.head!.z0 > anat.torso.h, 'the head hovers — a visible neck gap');
+	ok(anat.bench.y >= m.y + m.d, 'the bench is in front of the machine site');
+	// No degenerate boxes — the first wedge-shaped tower cost a drive round.
+	for (const box of [anat.torso, anat.head!, anat.bench]) {
+		ok(box.w > 0 && box.d > 0 && box.h > 0, 'every box has volume');
+	}
+	// The figure fits its plinth footprint (bench excepted — it stands off it).
+	ok(anat.torso.x >= m.x && anat.torso.x + anat.torso.w <= m.x + m.w);
+	ok(anat.torso.y >= m.y && anat.torso.y + anat.torso.d <= m.y + m.d);
+});
+
+test('the act-trail slits cross the gate-facing face and never degenerate', () => {
+	const anat = residentAnatomy(residentMachine(), 'automaton');
+	ok(anat.trailSlits.length > 0 && anat.trailSlits.length <= TRAIL_MAX);
+	for (const slit of anat.trailSlits) {
+		ok(
+			Math.abs(slit.a.x - slit.b.x) > 1 || Math.abs(slit.a.y - slit.b.y) > 1,
+			'a slit is a segment, not a point'
+		);
+	}
+	// Newest slot sits highest on the face (screen y ascends down).
+	for (let i = 1; i < anat.trailSlits.length; i++) {
+		ok(anat.trailSlits[i].a.y > anat.trailSlits[i - 1].a.y, 'trail reads downward');
+	}
+});
+
+test('the core-glyph study: no head — the face floats above the pedestal', () => {
+	const m = residentMachine();
+	const anat = residentAnatomy(m, 'glyph');
+	equal(anat.head, null);
+	ok(anat.torso.h < residentAnatomy(m, 'automaton').torso.h, 'the pedestal is shorter');
+	const pedestalTop = iso(anat.torso.x, anat.torso.y, anat.torso.h);
+	ok(anat.faceAnchor.y < pedestalTop.y, 'the face hangs above the pedestal');
 });

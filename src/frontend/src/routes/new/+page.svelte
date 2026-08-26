@@ -11,6 +11,7 @@
 		fetchLiveRuns,
 		LiveRunsAuthError,
 		liveRunDisplayName,
+		moodFace,
 		runCourse,
 		type LiveRun
 	} from '$lib/liveRuns';
@@ -23,8 +24,11 @@
 		iso,
 		paintOrder,
 		polyPoints,
+		residentAnatomy,
 		sceneBounds,
-		type Machine
+		TRAIL_MAX,
+		type Machine,
+		type ResidentBody
 	} from '$lib/isoField';
 	import { demoFrames } from './demo';
 
@@ -42,6 +46,10 @@
 	let signedOut = $state(false);
 	let demo = $state(false);
 	let selected = $state<string | null>(null);
+	// The entity round's two body studies, judged side by side:
+	// ?body=automaton (default — boxed head, visor face) · ?body=glyph
+	// (no head; the mood face itself held in a halo ring).
+	let bodyStyle = $state<ResidentBody>('automaton');
 
 	let reduced = false;
 	if (typeof window !== 'undefined') {
@@ -59,6 +67,45 @@
 		(selected && runs.find((r) => fieldRunKey(r) === selected)) || residentRun
 	);
 	let focusCourse = $derived(runCourse(focusRun?.card_text));
+
+	// ── the face the figure wears ─────────────────────────────────────────
+	// The run's own authored mood, resolved daemon-side (`moodFace`'s honesty
+	// bar: unknown handle ⇒ name only ⇒ no face here — never a guessed one).
+	// It breathes on its own clock: ambience, not a receipt — the one licensed
+	// exception, same as the beacon's glow, because a being that never
+	// blinks is a label.
+	const BREATH_MS = 4600;
+	const FRAME_MS = 260;
+	let residentFace = $derived(
+		moodFace(
+			residentRun?.mood,
+			residentRun?.mood_glyph,
+			residentRun?.mood_pitch,
+			residentRun?.mood_frames,
+			residentRun?.mood_rest
+		)
+	);
+	let faceFrame = $state<string | null>(null);
+	$effect(() => {
+		const face = residentFace;
+		faceFrame = face ? (face.rest ?? face.glyph) : null;
+		if (!face?.sequences?.length || reduced) return;
+		const frames = face.sequences[0];
+		const pending: ReturnType<typeof setTimeout>[] = [];
+		const breathe = () => {
+			frames.forEach((frame, i) => {
+				pending.push(setTimeout(() => (faceFrame = frame), i * FRAME_MS));
+			});
+			pending.push(
+				setTimeout(() => (faceFrame = face.rest ?? face.glyph), frames.length * FRAME_MS)
+			);
+		};
+		const iv = setInterval(breathe, BREATH_MS);
+		return () => {
+			clearInterval(iv);
+			pending.forEach(clearTimeout);
+		};
+	});
 
 	// ── the overture: the room assembles once, then latches still ─────────
 	let overture = $state(false);
@@ -87,6 +134,16 @@
 	let dying = $state<Dying[]>([]);
 	let msgDropSeq = $state(0);
 	let seq = 0;
+	// The act-trail: per run, the last TRAIL_MAX recorded boundary acts,
+	// newest first — the torso's slits are these, so every lit mark on the
+	// figure's face is a receipt (the windows' redemption). Starts from the
+	// current edge act (state), grows only on recorded boundaries (motion
+	// doctrine: the trail is state, its *change* is the receipt).
+	let trails = $state<Record<string, string[]>>({});
+	function recordAct(runId: string, act: string | null | undefined) {
+		if (!act) return;
+		trails = { ...trails, [runId]: [act, ...(trails[runId] ?? [])].slice(0, TRAIL_MAX) };
+	}
 
 	function pushPacket(d: string | null, color: string, dur: number, reverse = false) {
 		if (!d || reduced) return;
@@ -105,6 +162,18 @@
 		const prevScene = prev ? buildScene(buildField(prev)) : null;
 		const nextScene = buildScene(buildField(alive));
 		runs = alive;
+		// Trail bookkeeping is state, not motion — it runs under reduced
+		// motion too. Seed a first-seen run from its current act; after that
+		// only recorded boundaries append.
+		for (const run of alive) {
+			const key = fieldRunKey(run);
+			if (!(key in trails)) recordAct(key, run.edge?.act);
+		}
+		for (const ev of events) {
+			if (ev.kind === 'boundary' || ev.kind === 'inject') {
+				recordAct(ev.runId, alive.find((r) => fieldRunKey(r) === ev.runId)?.edge?.act);
+			}
+		}
 		if (reduced || events.length === 0) return;
 
 		// An attested read and an inject boundary usually land in the same
@@ -164,7 +233,9 @@
 
 	// ── feed: live poll, or the demo replay ───────────────────────────────
 	onMount(() => {
-		demo = new URLSearchParams(window.location.search).has('demo');
+		const params = new URLSearchParams(window.location.search);
+		demo = params.has('demo');
+		bodyStyle = params.get('body') === 'glyph' ? 'glyph' : 'automaton';
 		let stop = false;
 		let prev: LiveRun[] | null = null;
 
@@ -185,6 +256,7 @@
 						if (stop) return;
 						idx = 0;
 						prev = null;
+						trails = {}; // the replay starts its day over — so does the trail
 						armOverture(frames[0].length);
 						applySnapshot(frames[0], null);
 						prev = frames[0];
@@ -431,7 +503,6 @@
 
 			<!-- the machines, back to front -->
 			{#each ordered as m (m.key)}
-				{@const f = boxFaces(m.x, m.y, m.w, m.d, m.h)}
 				{@const run = m.run}
 				{@const lamp = actColor(run.edge?.act)}
 				{@const awaiting = run.lifecycle === 'awaiting'}
@@ -457,6 +528,34 @@
 					}}
 				>
 					{#if m.kind === 'resident'}
+						<!-- THE FIGURE — the entity round: a torso, a head that
+						     wears the run's own mood, an act-trail of recorded
+						     boundaries (the windows' redemption: every slit is a
+						     receipt), and a bench where the current command lies. -->
+						{@const anat = residentAnatomy(m, bodyStyle)}
+						{@const tf = boxFaces(
+							anat.torso.x,
+							anat.torso.y,
+							anat.torso.w,
+							anat.torso.d,
+							anat.torso.h
+						)}
+						{@const bef = boxFaces(
+							anat.bench.x,
+							anat.bench.y,
+							anat.bench.w,
+							anat.bench.d,
+							anat.bench.h
+						)}
+						{@const trail = trails[m.key] ?? []}
+						{@const course = runCourse(run.card_text)}
+						{@const crown = anat.head
+							? iso(
+									anat.head.x + anat.head.w / 2,
+									anat.head.y + anat.head.d / 2,
+									anat.head.z0 + anat.head.h
+								)
+							: { x: anat.faceAnchor.x, y: anat.faceAnchor.y - 21 }}
 						<polygon
 							points={polyPoints([
 								iso(m.x - 0.3, m.y - 0.3),
@@ -466,45 +565,142 @@
 							])}
 							class="plinth"
 						/>
-					{/if}
-					<polygon points={polyPoints(f.left)} class="face-l" />
-					<polygon points={polyPoints(f.right)} class="face-r" />
-					<polygon points={polyPoints(f.top)} class="face-t" />
-					{#if flashes[m.key]}
-						<polygon
-							points={polyPoints(f.top)}
-							class="face-flash"
-							style={`fill:${flashes[m.key]}`}
-						/>
-					{/if}
-					{#if m.kind === 'resident'}
-						<!-- no window slits: they were pure decoration, and every
-						     mark in this room must carry data (his read, correct).
-						     What earns a place on the tower's face — course,
-						     mood, produce — is the coherent-shape round's
-						     question, answered as one vocabulary, not bolted on. -->
-						{@const mastBase = iso(m.x + m.w * 0.3, m.y + m.d * 0.3, m.h)}
-						<line
-							x1={mastBase.x}
-							y1={mastBase.y}
-							x2={mastBase.x}
-							y2={mastBase.y - 24}
-							class="mast"
-						/>
+						<polygon points={polyPoints(tf.left)} class="face-l" />
+						<polygon points={polyPoints(tf.right)} class="face-r" />
+						<polygon points={polyPoints(tf.top)} class="face-t" />
+						{#if flashes[m.key]}
+							<polygon
+								points={polyPoints(tf.top)}
+								class="face-flash"
+								style={`fill:${flashes[m.key]}`}
+							/>
+						{/if}
+						<!-- the act-trail: recorded boundary acts, newest at top -->
+						{#each anat.trailSlits as slit, i (i)}
+							<line
+								x1={slit.a.x}
+								y1={slit.a.y}
+								x2={slit.b.x}
+								y2={slit.b.y}
+								class="trail-slit"
+								class:unlit={!trail[i]}
+								style={trail[i] ? `stroke:${actColor(trail[i])}` : undefined}
+							/>
+						{/each}
+						{#if anat.head}
+							{@const hf = boxFaces(
+								anat.head.x,
+								anat.head.y,
+								anat.head.w,
+								anat.head.d,
+								anat.head.h,
+								anat.head.z0
+							)}
+							<polygon points={polyPoints(hf.left)} class="face-l" />
+							<polygon points={polyPoints(hf.right)} class="face-r" />
+							<polygon points={polyPoints(hf.top)} class="face-t" />
+							{#if faceFrame}
+								<!-- the visor: a screen turned to the viewer — text on
+								     screens is horizontal because screens are -->
+								<rect
+									x={anat.faceAnchor.x - 21}
+									y={anat.faceAnchor.y - 8}
+									width="42"
+									height="16"
+									rx="2"
+									class="visor"
+								/>
+								<text
+									x={anat.faceAnchor.x}
+									y={anat.faceAnchor.y + 3.5}
+									text-anchor="middle"
+									class="face-text"
+								>
+									{faceFrame}
+								</text>
+							{/if}
+						{:else if faceFrame}
+							<!-- the core-glyph study: the face itself, held in a ring -->
+							<circle cx={anat.faceAnchor.x} cy={anat.faceAnchor.y} r="21" class="halo" />
+							<text
+								x={anat.faceAnchor.x}
+								y={anat.faceAnchor.y + 5}
+								text-anchor="middle"
+								class="face-text glyph"
+							>
+								{faceFrame}
+							</text>
+						{/if}
+						<!-- the bench: where the current command lies -->
+						<polygon points={polyPoints(bef.left)} class="bench-l" />
+						<polygon points={polyPoints(bef.right)} class="bench-r" />
+						<polygon points={polyPoints(bef.top)} class="bench-t" />
+						{#if run.edge?.detail}
+							<circle
+								cx={anat.benchAnchor.x - 5}
+								cy={anat.benchAnchor.y - 3}
+								r="1.8"
+								style={`fill:${lamp}`}
+							/>
+							<text x={anat.benchAnchor.x} y={anat.benchAnchor.y} class="bench-cmd">
+								{trunc(run.edge.detail, 34)}
+							</text>
+							{#if (run.edge.dir && run.edge.dir !== '.') || run.room?.dir || run.room?.branch}
+								<text x={anat.benchAnchor.x} y={anat.benchAnchor.y + 10} class="bench-dir">
+									{trunc(
+										(run.edge.dir && run.edge.dir !== '.' ? run.edge.dir : null) ??
+											run.room?.dir ??
+											run.room?.branch ??
+											'',
+										30
+									)}
+								</text>
+							{/if}
+						{/if}
+						<!-- the course: plan rows as pads on the telemetry edge -->
+						{#if course}
+							{#each Array.from({ length: Math.min(course.total, 10) }, (_, i) => i) as i (i)}
+								{@const cp = iso(
+									m.x + m.w + 0.55,
+									m.y - 0.3 + ((i + 0.5) / Math.min(course.total, 10)) * (m.d + 0.6)
+								)}
+								<rect
+									x={cp.x - 2.6}
+									y={cp.y - 2.6}
+									width="5.2"
+									height="5.2"
+									transform={`rotate(45 ${cp.x} ${cp.y})`}
+									class="course-pad"
+									class:done={i < course.done}
+								/>
+							{/each}
+						{/if}
+						<line x1={crown.x} y1={crown.y} x2={crown.x} y2={crown.y - 16} class="mast" />
 						<circle
-							cx={mastBase.x}
-							cy={mastBase.y - 27}
+							cx={crown.x}
+							cy={crown.y - 19}
 							r="2.6"
 							class="beacon"
 							style={`fill:${lamp};--c:${lamp}`}
 						/>
-						<!-- the callout: name at the mast, in the void the tower owns -->
-						<text x={mastBase.x - 9} y={mastBase.y - 24} text-anchor="end" class="callout">
+						<!-- the callout: name at the antenna, in the figure's own void -->
+						<text x={crown.x - 9} y={crown.y - 18} text-anchor="end" class="callout">
 							{trunc(liveRunDisplayName(run), 26)}<tspan class="core-tag"
 								>{run.runner?.core ? ` · ${run.runner.core}` : ''}</tspan
 							>
 						</text>
 					{:else}
+						{@const f = boxFaces(m.x, m.y, m.w, m.d, m.h)}
+						<polygon points={polyPoints(f.left)} class="face-l" />
+						<polygon points={polyPoints(f.right)} class="face-r" />
+						<polygon points={polyPoints(f.top)} class="face-t" />
+						{#if flashes[m.key]}
+							<polygon
+								points={polyPoints(f.top)}
+								class="face-flash"
+								style={`fill:${flashes[m.key]}`}
+							/>
+						{/if}
 						<circle
 							cx={f.frontCorner.x}
 							cy={f.frontCorner.y - 3}
@@ -512,25 +708,23 @@
 							class="lamp"
 							style={`fill:${lamp};--c:${lamp}`}
 						/>
-					{/if}
-					{#if m.kind === 'orphan'}
-						{@const stub = iso(m.x + m.w / 2, m.y)}
-						{@const stubEnd = iso(m.x + m.w / 2, m.y - 0.7)}
-						<line x1={stub.x} y1={stub.y} x2={stubEnd.x} y2={stubEnd.y} class="severed" />
-					{/if}
-					{#if m.hands > 0}
-						{#each Array.from({ length: Math.min(m.hands, 3) }, (_, i) => i) as i (i)}
-							{@const c = boxFaces(m.x + m.w + 0.28, m.y + 0.12 + i * 0.42, 0.26, 0.26, 0.2)}
-							<polygon points={polyPoints(c.left)} class="crate-l" />
-							<polygon points={polyPoints(c.right)} class="crate-r" />
-							<polygon points={polyPoints(c.top)} class="crate-t" />
-						{/each}
-						{#if m.hands > 3}
-							{@const hp = iso(m.x + m.w + 0.75, m.y + 0.7)}
-							<text x={hp.x} y={hp.y} class="hands-count">+{m.hands}</text>
+						{#if m.kind === 'orphan'}
+							{@const stub = iso(m.x + m.w / 2, m.y)}
+							{@const stubEnd = iso(m.x + m.w / 2, m.y - 0.7)}
+							<line x1={stub.x} y1={stub.y} x2={stubEnd.x} y2={stubEnd.y} class="severed" />
 						{/if}
-					{/if}
-					{#if m.kind !== 'resident'}
+						{#if m.hands > 0}
+							{#each Array.from({ length: Math.min(m.hands, 3) }, (_, i) => i) as i (i)}
+								{@const c = boxFaces(m.x + m.w + 0.28, m.y + 0.12 + i * 0.42, 0.26, 0.26, 0.2)}
+								<polygon points={polyPoints(c.left)} class="crate-l" />
+								<polygon points={polyPoints(c.right)} class="crate-r" />
+								<polygon points={polyPoints(c.top)} class="crate-t" />
+							{/each}
+							{#if m.hands > 3}
+								{@const hp = iso(m.x + m.w + 0.75, m.y + 0.7)}
+								<text x={hp.x} y={hp.y} class="hands-count">+{m.hands}</text>
+							{/if}
+						{/if}
 						<text
 							x={f.floorFront.x}
 							y={f.floorFront.y + strandLabelDy(m)}
@@ -547,7 +741,9 @@
 
 			<!-- returning machines sinking into the floor -->
 			{#each dying as d (d.id)}
-				{@const f = boxFaces(d.machine.x, d.machine.y, d.machine.w, d.machine.d, d.machine.h)}
+				{@const box =
+					d.machine.kind === 'resident' ? residentAnatomy(d.machine, bodyStyle).torso : d.machine}
+				{@const f = boxFaces(box.x, box.y, box.w, box.d, box.h)}
 				<g class={`machine sink kind-${d.machine.kind}`}>
 					<polygon points={polyPoints(f.left)} class="face-l" />
 					<polygon points={polyPoints(f.right)} class="face-r" />
@@ -783,6 +979,63 @@
 	}
 	.beacon {
 		filter: drop-shadow(0 0 4px var(--c));
+	}
+
+	/* the figure: trail, face, bench, course */
+	.trail-slit {
+		stroke-width: 2.2;
+		filter: drop-shadow(0 0 2.5px currentColor);
+	}
+	.trail-slit.unlit {
+		stroke: rgba(255, 205, 110, 0.1);
+		filter: none;
+	}
+	.visor {
+		fill: #0b0803;
+		stroke: rgba(255, 205, 110, 0.55);
+		stroke-width: 0.8;
+	}
+	.face-text {
+		fill: #ffd9a0;
+		font-size: 9px;
+		letter-spacing: 0.5px;
+	}
+	.face-text.glyph {
+		font-size: 12.5px;
+		filter: drop-shadow(0 0 5px rgba(255, 205, 110, 0.7));
+	}
+	.halo {
+		fill: rgba(11, 8, 3, 0.85);
+		stroke: rgba(255, 205, 110, 0.5);
+		stroke-width: 0.9;
+	}
+	.bench-t {
+		fill: #2a1e0d;
+		stroke: rgba(255, 205, 110, 0.4);
+		stroke-width: 0.7;
+	}
+	.bench-l {
+		fill: #140e06;
+	}
+	.bench-r {
+		fill: #1c1308;
+	}
+	.bench-cmd {
+		fill: #cdbfa8;
+		font-size: 8px;
+	}
+	.bench-dir {
+		fill: #7d7264;
+		font-size: 7px;
+	}
+	.course-pad {
+		fill: none;
+		stroke: rgba(217, 164, 65, 0.35);
+		stroke-width: 0.7;
+	}
+	.course-pad.done {
+		fill: rgba(217, 164, 65, 0.55);
+		stroke: rgba(255, 205, 110, 0.8);
 	}
 
 	.kind-strand .face-t,
