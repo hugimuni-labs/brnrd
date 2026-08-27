@@ -25,7 +25,10 @@ and product rhyme without wearing each other's mark.
 The generator now emits the normal SVG mark plus two genuine vector EPS
 deliverables for each palette: the standalone mark and a conference-lockup
 version with `HugiMuni` sized below it. The EPS treatment uses vector scanlines
-and deterministic phosphor flecks rather than embedding a bitmap. The wordmark
+and deterministic phosphor flecks rather than embedding a bitmap; `GRAIN`
+controls their density and the live bench applies the same strength to its SVG
+noise and scanlines. `INTERSECTION` is also exposed as a colour input there,
+with warm phosphor white as the current default. The wordmark
 uses standard PostScript Helvetica Bold; convert the text to outlines in the
 final layout application if a printer requires embedded outlines.
 
@@ -36,7 +39,7 @@ Two palettes:
 
 | file | pair |
 | --- | --- |
-| `hugimuni-amber-sky` | brnrd's own amber `#ff9a1f` + a cold sky `#8fb6cc` |
+| `hugimuni-amber-sky` | brnrd's own amber `#ff9a1f` + a cold sky `#69c7df` |
 | `hugimuni-coral-turquoise` | coral `#ff6f61` + turquoise `#3ec9bd` |
 
 The first ties the parent to the product; the second lets the parent stand
@@ -46,7 +49,7 @@ apart. That is the actual decision underneath the colour question.
 vertical exactly once, so the stems alone can only weave the mark in one band.
 Six crossings need three strokes doing the work: the legs cross the stems high,
 the bar crosses the stems at its own height, and the bar crosses the legs low —
-which is why `CROSS` sits at 302 rather than at the optical middle. Move the bar
+which is why `CROSS` sits at 276 rather than at the optical middle. Move the bar
 up and the bottom half comes apart; that was the first draft's actual defect,
 and no amount of widening the M fixed it.
 

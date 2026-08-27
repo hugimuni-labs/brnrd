@@ -147,12 +147,14 @@ test('hugimuni: STEMS / BAR_H / vee_m match the Python reference', () => {
 	);
 });
 
-test('hugimuniSvg: chosen geometry, weighted stems, and green intersection render', () => {
+test('hugimuniSvg: chosen geometry, tunable intersection, and visible grain render', () => {
 	const out = hugimuniSvg(HUGIMUNI_DEFAULTS, 'amber-sky');
 	assert.match(out, /fill="#080b09"/);
 	assert.match(out, /stroke-width="40"[^>]+stroke="#ff9a1f"/);
 	assert.match(out, /stroke-width="40"[^>]+stroke="#69c7df"/);
-	assert.match(out, /stroke-width="26"[^>]+stroke="#d8f3dc"/);
+	assert.match(out, /stroke-width="26"[^>]+stroke="#eadfca"/);
+	assert.match(out, /feTurbulence[^>]+baseFrequency="0\.72"/);
+	assert.match(out, /filter="url\(#hm-grain\)" opacity="0\.197"/);
 });
 
 test('hugimuniConstantBlock: emits pasteable assignments, TAIL flagged as function-local', () => {
@@ -160,6 +162,8 @@ test('hugimuniConstantBlock: emits pasteable assignments, TAIL flagged as functi
 	assert.match(block, /^LEFT, RIGHT = 152, 360$/m);
 	assert.match(block, /^STEM_STROKE = 40$/m);
 	assert.match(block, /^GHOST = 7$/m);
+	assert.match(block, /^GRAIN = 58$/m);
+	assert.match(block, /^INTERSECTION = "#eadfca"$/m);
 	assert.match(block, /TAIL lives inside vee_m/);
 	assert.match(block, /TAIL = 20.*carries this value in build\.py\.$/m);
 });
