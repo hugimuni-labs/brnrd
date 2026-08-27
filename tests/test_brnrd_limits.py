@@ -101,6 +101,16 @@ def _detail(response) -> dict:
 # --- repo cap (#501) ---------------------------------------------------------
 
 
+def test_default_free_offer_is_one_repo():
+    client = _client()
+    headers = _account(client)
+
+    assert _connect(client, headers, "one").status_code == 201
+    denied = _connect(client, headers, "two")
+    assert denied.status_code == 403
+    assert _detail(denied)["reason"] == "free_repo_limit"
+
+
 def test_free_repo_cap_rejects_with_reason_and_upgrade_path():
     client = _client(limit_free_repos=2)
     headers = _account(client)
@@ -111,7 +121,7 @@ def test_free_repo_cap_rejects_with_reason_and_upgrade_path():
     assert denied.status_code == 403
     detail = _detail(denied)
     assert detail["reason"] == "free_repo_limit"
-    assert "supporter" in detail["message"]
+    assert "subscribing" in detail["message"]
 
     # Reconnecting an existing repo stays idempotent and uncapped.
     assert _connect(client, headers, "one").status_code == 201
@@ -143,7 +153,7 @@ def test_free_burst_throttle_rejects_third_event():
     assert denied.status_code == 429
     detail = _detail(denied)
     assert detail["reason"] == "free_event_burst"
-    assert "supporter" in detail["message"]
+    assert "subscribing" in detail["message"]
 
 
 def test_free_daily_ceiling():

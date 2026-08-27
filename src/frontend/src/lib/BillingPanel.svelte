@@ -138,8 +138,9 @@
 		{#if !hasSubscription}
 			<!-- subscribe CTA -->
 			<p class="mt-2 text-sm leading-relaxed text-stone-400">
-				A subscription lifts the free tier's headroom limits and funds the open-source engine. It's
-				early — you'd be one of the people this gets built around.
+				Your first repository stays free. If brnrd has become part of how you really work, a
+				subscription adds more repositories, lifts the headroom limits, and funds the open-source
+				engine.
 			</p>
 			<div class="mt-3 flex flex-wrap items-center gap-3">
 				<div
