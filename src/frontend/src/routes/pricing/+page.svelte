@@ -26,10 +26,13 @@
 		[stats, pricing] = await Promise.all([fetchPublicStats(), fetchPricing()]);
 	});
 
-	let seatsLeft = $derived(
-		stats === null ? null : Math.max(0, stats.supporter_seats_total - stats.supporter_seats_taken)
+	// The public count decides which Stripe cohort is still open, but it is
+	// deliberately not rendered as scarcity. A near-empty cohort is product
+	// state, not useful social proof; the offer names the fixed 200-person
+	// boundary without turning the live subscriber count into marketing.
+	let supporterOpen = $derived(
+		stats === null || stats.supporter_seats_taken < stats.supporter_seats_total
 	);
-	let supporterOpen = $derived(seatsLeft === null || seatsLeft > 0);
 
 	// Stripe-derived, with the accepted pricing decision as the no-JS /
 	// pre-refine floor (same numbers `billing.ts`'s PRICING constant names).
@@ -39,7 +42,14 @@
 	let publicAnnual = $derived(formatUsd(pricing?.public_annual) ?? '$70');
 </script>
 
-<svelte:head><title>pricing · brnrd</title></svelte:head>
+<svelte:head>
+	<title>pricing · brnrd</title>
+	<meta
+		name="description"
+		content="Run the open-source brnrd resident free on your hardware, or add hosted ingress, managed identity, and the brnrd.dev dashboard."
+	/>
+	<link rel="canonical" href="https://brnrd.dev/pricing" />
+</svelte:head>
 
 <div class="mx-auto max-w-4xl p-6">
 	<header class="flex items-start justify-between gap-4">
@@ -63,110 +73,139 @@
 		</nav>
 	</header>
 
-	<p class="mt-8 max-w-2xl text-sm leading-relaxed text-stone-400">
-		In every tier the agent runs on your hardware with your model subscriptions. Paying for brnrd
-		pays for the hosted control plane — ingress, dashboard, managed GitHub identity — and for the
-		project existing at all.
-	</p>
-
-	<div class="mt-8 grid grid-cols-1 gap-4 md:grid-cols-3">
-		<section class="panel p-4" aria-label="self-host tier">
-			<p class="eyebrow">self-host</p>
-			<p class="mt-2 font-mono text-2xl font-semibold text-amber-100">$0</p>
-			<p class="font-mono text-[11px] text-ink-quiet">forever</p>
-			<ul class="mt-4 space-y-2 text-sm text-stone-400">
-				<li>the whole engine, open source</li>
-				<li>your gates, your tokens, your infrastructure</li>
-				<li>no account at all</li>
-			</ul>
-			<a
-				class="mt-5 inline-flex w-full items-center justify-center border border-stone-700 px-3 py-2 font-mono text-[12px] tracking-wide text-stone-300 uppercase hover:border-stone-500"
-				href={`https://github.com/${GITHUB_REPO}`}
-				rel="external">get the source</a
+	<main>
+		<section class="mt-10 max-w-3xl" aria-labelledby="pricing-title">
+			<p class="eyebrow">pricing</p>
+			<h1
+				id="pricing-title"
+				class="mt-2 font-mono text-2xl font-semibold tracking-tight text-amber-100 md:text-3xl"
 			>
-		</section>
-
-		<section class="panel p-4" aria-label="hosted freemium tier">
-			<p class="eyebrow">hosted · freemium</p>
-			<p class="mt-2 font-mono text-2xl font-semibold text-amber-100">$0</p>
-			<p class="font-mono text-[11px] text-ink-quiet">sign in and pair</p>
-			<ul class="mt-4 space-y-2 text-sm text-stone-400">
-				<li>one connected repository</li>
-				<li>brnrd.dev dashboard, anywhere</li>
-				<li>hosted Telegram + GitHub ingress</li>
-				<li>managed GitHub App identity for the resident</li>
-			</ul>
-			<p class="mt-3 text-xs leading-relaxed text-ink-quiet">
-				Keep one repository free. If brnrd becomes part of how you really work, support the
-				project by subscribing.
+				The engine is free. Hosted reach is optional.
+			</h1>
+			<p class="mt-4 max-w-2xl text-sm leading-relaxed text-stone-400">
+				The resident always runs on your hardware with the agent CLI and model subscription you
+				already use. Run the open-source engine yourself, or add brnrd.dev for managed ingress,
+				identity, and a dashboard you can reach from anywhere.
 			</p>
-			<a
-				class="mt-5 inline-flex w-full items-center justify-center border border-amber-700 bg-amber-950/40 px-3 py-2 font-mono text-[12px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/70"
-				href={resolve('/login')}>start free</a
-			>
 		</section>
 
-		<section class="panel border-amber-800/60 p-4" aria-label="subscriber tier">
-			{#if supporterOpen}
-				<p class="eyebrow">subscriber · supporter cohort</p>
-				<p class="mt-2 font-mono text-2xl font-semibold text-amber-100">
-					{supporterMonthly}<span class="text-sm text-ink-quiet">/mo</span>
+		<section class="mt-10" aria-labelledby="hosted-plans-title">
+			<div class="max-w-2xl">
+				<h2 id="hosted-plans-title" class="eyebrow">hosted control plane</h2>
+				<p class="mt-2 text-sm leading-relaxed text-stone-400">
+					Same local resident, two levels of hosted reach. Pay brnrd for the route around the agent
+					— not for running the agent itself.
 				</p>
-				<p class="font-mono text-[11px] text-ink-quiet">
-					or {supporterAnnual}/yr · first {stats?.supporter_seats_total ?? 200} accounts, price kept for
-					the life of the subscription
-					{#if seatsLeft !== null}
-						· {seatsLeft} left
+			</div>
+
+			<div class="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
+				<article
+					class="panel flex h-full flex-col p-5"
+					aria-labelledby="hosted-free-title"
+					data-pricing-plan="hosted-free"
+				>
+					<h3 id="hosted-free-title" class="eyebrow">hosted · free</h3>
+					<p class="mt-2 font-mono text-2xl font-semibold text-amber-100">$0</p>
+					<p class="font-mono text-[11px] text-ink-quiet">sign in and pair</p>
+					<ul class="mt-5 space-y-2 text-sm text-stone-400">
+						<li>one connected repository</li>
+						<li>brnrd.dev dashboard, anywhere</li>
+						<li>hosted Telegram + WhatsApp ingress</li>
+						<li>managed GitHub App identity + ingress</li>
+					</ul>
+					<div class="mt-auto pt-6">
+						<a
+							class="inline-flex w-full items-center justify-center border border-amber-700 bg-amber-950/40 px-3 py-2.5 font-mono text-[12px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/70"
+							href={resolve('/login')}>connect one repository</a
+						>
+					</div>
+				</article>
+
+				<article
+					class="panel flex h-full flex-col border-amber-800/60 p-5"
+					aria-labelledby="subscriber-title"
+					data-pricing-plan="subscriber"
+				>
+					<h3 id="subscriber-title" class="eyebrow">hosted · subscriber</h3>
+					{#if supporterOpen}
+						<p class="mt-2 font-mono text-2xl font-semibold text-amber-100">
+							{supporterMonthly}<span class="text-sm text-ink-quiet">/mo</span>
+						</p>
+						<p class="font-mono text-xs leading-relaxed text-ink-quiet">
+							or {supporterAnnual}/yr · founding price for the first {stats?.supporter_seats_total ??
+								200} subscriptions
+						</p>
+						<!-- Deliberately not a struck-through "was" price: nobody has ever
+						     been charged {publicMonthly}, so crossing it out would borrow
+						     the discount convention for a number that is a *future*
+						     price for a *different* cohort, not a past one. See
+						     decision-pricing-shape.md → "Early-adopter price step" and
+						     subject-legal-compliance.md → "Price display". -->
+						<p class="mt-1 font-mono text-[11px] leading-relaxed text-ink-quiet">
+							locked while active · later {publicMonthly}/mo or {publicAnnual}/yr
+						</p>
+						<p class="mt-1 font-mono text-[11px] text-ink-quiet">{TAX_NOTE}</p>
+					{:else}
+						<p class="mt-2 font-mono text-2xl font-semibold text-amber-100">
+							{publicMonthly}<span class="text-sm text-ink-quiet">/mo</span>
+						</p>
+						<p class="font-mono text-xs text-ink-quiet">or {publicAnnual}/yr</p>
+						<p class="mt-1 font-mono text-[11px] text-ink-quiet">{TAX_NOTE}</p>
 					{/if}
-				</p>
-				<!-- Deliberately not a struck-through "was" price: nobody has ever
-				     been charged {publicMonthly}, so crossing it out would borrow
-				     the discount convention for a number that is a *future*
-				     price for a *different* cohort, not a past one. See
-				     decision-pricing-shape.md → "Early-adopter price step" and
-				     subject-legal-compliance.md → "Price display". -->
-				<p class="mt-1 font-mono text-[11px] text-ink-quiet">
-					public price after this cohort: {publicMonthly}/mo
-				</p>
-				<p class="mt-1 font-mono text-[11px] text-ink-quiet">{TAX_NOTE}</p>
-			{:else}
-				<p class="eyebrow">subscriber</p>
-				<p class="mt-2 font-mono text-2xl font-semibold text-amber-100">
-					{publicMonthly}<span class="text-sm text-ink-quiet">/mo</span>
-				</p>
-				<p class="font-mono text-[11px] text-ink-quiet">or {publicAnnual}/yr</p>
-				<p class="mt-1 font-mono text-[11px] text-ink-quiet">{TAX_NOTE}</p>
-			{/if}
-			<ul class="mt-4 space-y-2 text-sm text-stone-400">
-				<li>everything in hosted freemium, across more repositories</li>
-				<li>headroom limits: off — the resident works as hard as you ask</li>
-				<li>funds the open-source engine it runs on</li>
-			</ul>
-			<a
-				class="mt-5 inline-flex w-full items-center justify-center border border-amber-700 bg-amber-950/40 px-3 py-2 font-mono text-[12px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/70"
-				href={resolve('/login')}>sign in to subscribe</a
-			>
-			<p class="mt-3 text-xs leading-relaxed text-ink-quiet">
-				Early access: checkout is Stripe-hosted and live; entitlements are still landing. You'd be
-				backing the build while it's early — which is exactly when backing shapes it. Priced for the
-				people who show up first.
+					<ul class="mt-5 space-y-2 text-sm text-stone-400">
+						<li>everything in hosted Free</li>
+						<li>the one-repository product cap is removed</li>
+						<li>free-tier hosted event limits are removed</li>
+					</ul>
+					<p class="mt-4 text-xs leading-relaxed text-ink-quiet">
+						Those limit lifts are live now. brnrd.dev is still early; subscribing also funds the
+						open-source engine and helps shape what comes next.
+					</p>
+					<div class="mt-auto pt-6">
+						<a
+							class="inline-flex w-full items-center justify-center border border-amber-700 bg-amber-950/40 px-3 py-2.5 font-mono text-[12px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/70"
+							href={resolve('/login')}
+							>subscribe · {supporterOpen ? `${supporterMonthly}/mo` : `${publicMonthly}/mo`}</a
+						>
+					</div>
+				</article>
+			</div>
+		</section>
+
+		<section class="panel mt-5 p-5" aria-labelledby="self-host-title">
+			<div class="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
+				<div class="md:max-w-xl">
+					<h2 id="self-host-title" class="eyebrow">self-host</h2>
+					<div class="mt-2 flex items-baseline gap-2 font-mono">
+						<p class="text-2xl font-semibold text-amber-100">$0</p>
+						<p class="text-[11px] text-ink-quiet">forever</p>
+					</div>
+					<p class="mt-3 text-sm leading-relaxed text-stone-400">
+						The full open-source engine, your gates and credentials, your infrastructure, and no
+						brnrd account. Self-hosting is a deployment path — not a smaller hosted plan.
+					</p>
+				</div>
+				<a
+					class="inline-flex shrink-0 items-center justify-center border border-stone-700 px-5 py-2.5 font-mono text-[12px] tracking-wide text-stone-300 uppercase hover:border-stone-500"
+					href={`https://github.com/${GITHUB_REPO}`}
+					rel="external">install brnrd</a
+				>
+			</div>
+		</section>
+
+		<section class="mt-10 max-w-2xl" aria-labelledby="support-title">
+			<h2 id="support-title" class="eyebrow">support the commons</h2>
+			<p class="mt-2 text-sm leading-relaxed text-stone-400">
+				For people who want to fund the project beyond a subscription, the lifetime contributor
+				bundle begins at $500. It includes lifetime subscriber access and an optional permanent
+				acknowledgement on the contributors page. It is arranged directly while brnrd is this early
+				—
+				<a class="text-sky-400 underline" href="mailto:alexandra@hugimuni.fr"
+					>contact the founders privately</a
+				>.
 			</p>
 		</section>
-	</div>
-
-	<section class="mt-8 max-w-2xl" aria-label="contributor bundle">
-		<p class="eyebrow">premium contributor bundle</p>
-		<p class="mt-2 text-sm leading-relaxed text-stone-400">
-			A lifetime package at $500+: lifetime headroom-free access, a line on the contributors page —
-			nickname and pledge each optionally redacted — and a permanent place on the leaderboard. No
-			self-serve checkout yet: open an issue or reach the maintainers
-			<a
-				class="text-sky-400 underline"
-				href={`https://github.com/${GITHUB_REPO}/issues`}
-				rel="external">on GitHub</a
-			> and it will be arranged by hand, which at this stage is the honest interface.
-		</p>
-	</section>
+	</main>
 
 	<footer class="mt-14 border-t border-stone-800 pt-4">
 		<p class="font-mono text-[10px] text-ink-mute">
