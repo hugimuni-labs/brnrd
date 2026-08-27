@@ -76,7 +76,20 @@ test('the feed is capped and ordered newest first', () => {
 	for (let i = 0; i < PAGER_CAP + 10; i++) {
 		const at = `2026-08-27T10:${String(i % 60).padStart(2, '0')}:${String(Math.floor(i / 60)).padStart(2, '0')}Z`;
 		recordPages(
-			[{ run_id: 'r1', edge: { at, phase: null, act: 'orient', tools: [], detail: null, out_bytes: null, injected: true } }],
+			[
+				{
+					run_id: 'r1',
+					edge: {
+						at,
+						phase: null,
+						act: 'orient',
+						tools: [],
+						detail: null,
+						out_bytes: null,
+						injected: true
+					}
+				}
+			],
 			store
 		);
 	}
@@ -98,6 +111,7 @@ test('a fresh page starts one bounded reading; it advances and ends', () => {
 	let readings = readingsFor([page], []);
 	assert.equal(readings.length, 1);
 	assert.equal(readings[0].ticksLeft, READING_TICKS);
+	assert.deepEqual(readingPhases(readings), { [RESIDENT]: READING_TICKS });
 	// a second page for the same actor restarts, never stacks
 	readings = readingsFor([page], readings);
 	assert.equal(readings.length, 1);
@@ -125,10 +139,7 @@ test('the PAGER strip renders pages by carrier and flashes as state', () => {
 	assert.match(out, /PAGER ✉×1/);
 	assert.match(out, /10:14 ✉ @ page rode probe/);
 	// clock-free and deterministic: the flash diff can ride it
-	assert.equal(
-		out,
-		renderWorld(topo, layout, graph, CAM, { pages: pagerFeed(store) })
-	);
+	assert.equal(out, renderWorld(topo, layout, graph, CAM, { pages: pagerFeed(store) }));
 	// no pages ⇒ no strip
 	assert.doesNotMatch(renderWorld(topo, layout, graph, CAM, {}), /PAGER/);
 });
@@ -143,7 +154,7 @@ test('the mind-connect renders in place: tether at the actor, no relocation', ()
 		reading: { [RESIDENT]: READING_TICKS }
 	});
 	assert.doesNotMatch(bare, /▯/);
-	assert.match(reading, /▯[⌁∿≋]@/, 'pager + tether + glyph');
+	assert.match(reading, /▯[⌁∿≋]b·_·d/, 'pager + tether + the face that is the body');
 	// the actor's place did not change — only its stance did
 	assert.equal(topo.actorPlaces[RESIDENT], compileTopology(graph).actorPlaces[RESIDENT]);
 });
@@ -155,7 +166,7 @@ test('a mutate at the chart table is embodied: ✎ with the leaf', () => {
 	assert.equal(kind, 'chart-table');
 	assert.equal(activityMark(actor, kind), '✎ .card');
 	const out = renderWorld(topo, layout, graph, CAM, {});
-	assert.match(out, /@.*✎ \.card/, 'the act stands beside the body');
+	assert.match(out, /b·_·d ✎ \.card/, 'the act stands beside the body');
 });
 
 // ── the dynamic trie: footsteps derive from the paths the acts name ─────────
@@ -163,7 +174,16 @@ test('a mutate at the chart table is embodied: ✎ with the leaf', () => {
 const REPO = 'hugimuni-labs/brnrd';
 
 function edgeOf(detail: string | null, dir: string | null = '.') {
-	return { at: '2026-08-27T10:00:00Z', phase: null, act: 'mutate', tools: [], detail, out_bytes: null, injected: false, dir };
+	return {
+		at: '2026-08-27T10:00:00Z',
+		phase: null,
+		act: 'mutate',
+		tools: [],
+		detail,
+		out_bytes: null,
+		injected: false,
+		dir
+	};
 }
 
 test('dirFromEdge: the cwd wins when it is not the root', () => {
@@ -172,7 +192,10 @@ test('dirFromEdge: the cwd wins when it is not the root', () => {
 
 test('dirFromEdge: an absolute detail path relativizes through the repo segment', () => {
 	assert.equal(
-		dirFromEdge(edgeOf('Edit · /Users/g/Source/Projects/brnrd/src/frontend/src/lib/liveRuns.ts'), REPO),
+		dirFromEdge(
+			edgeOf('Edit · /Users/g/Source/Projects/brnrd/src/frontend/src/lib/liveRuns.ts'),
+			REPO
+		),
 		'src/frontend/src/lib'
 	);
 	// dotfile leaf: the control file is dropped, the chamber survives…
@@ -195,7 +218,10 @@ test('dirFromEdge: a truncation-cut segment is not a fact, its prefix is', () =>
 });
 
 test('dirFromEdge: relative tokens need depth; refs and urls never land', () => {
-	assert.equal(dirFromEdge(edgeOf('grep -rn "x" src/frontend/src/lib'), REPO), 'src/frontend/src/lib');
+	assert.equal(
+		dirFromEdge(edgeOf('grep -rn "x" src/frontend/src/lib'), REPO),
+		'src/frontend/src/lib'
+	);
 	assert.equal(dirFromEdge(edgeOf('git fetch origin/main'), REPO), null);
 	assert.equal(dirFromEdge(edgeOf('curl https://example.com/a/b/c'), REPO), null);
 	assert.equal(dirFromEdge(edgeOf(null), REPO), null);
