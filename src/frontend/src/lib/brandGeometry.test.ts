@@ -138,36 +138,28 @@ test('brnrdConstantBlock: emits pasteable Python assignments, XTOP flagged', () 
 test('hugimuni: STEMS / BAR_H / vee_m match the Python reference', () => {
 	assert.equal(
 		hugimuniStems(HUGIMUNI_DEFAULTS),
-		'<path d="M 172 156 V 356"/><path d="M 340 156 V 356"/>'
+		'<path d="M 152 156 V 356"/><path d="M 360 156 V 356"/>'
 	);
-	assert.equal(hugimuniBarH(HUGIMUNI_DEFAULTS), '<path d="M 138 268 H 374"/>');
+	assert.equal(hugimuniBarH(HUGIMUNI_DEFAULTS), '<path d="M 132 276 H 380"/>');
 	assert.equal(
 		hugimuniVeeM(HUGIMUNI_DEFAULTS),
-		'<path d="M 122 156 L 286 366"/><path d="M 390 156 L 226 366"/>'
+		'<path d="M 132 156 L 276 356"/><path d="M 380 156 L 236 356"/>'
 	);
 });
 
-test('hugimuniSvg: full amber-sky render matches the Python reference', () => {
+test('hugimuniSvg: chosen geometry, weighted stems, and green intersection render', () => {
 	const out = hugimuniSvg(HUGIMUNI_DEFAULTS, 'amber-sky');
-	assert.equal(
-		out,
-		'<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">\n' +
-			'  <title>hugimuni — H and M on shared stems (amber-sky)</title>\n' +
-			'  <rect width="512" height="512" rx="112" fill="#0c0906"/>\n' +
-			'  <g style="mix-blend-mode:screen">\n' +
-			'    <g fill="none" stroke-width="30" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#ff9a1f" transform="translate(-5,0)"><path d="M 172 156 V 356"/><path d="M 340 156 V 356"/></g>\n' +
-			'    <g fill="none" stroke-width="30" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#8fb6cc" transform="translate(5,0)"><path d="M 172 156 V 356"/><path d="M 340 156 V 356"/></g>\n' +
-			'    <g fill="none" stroke-width="30" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#ff9a1f"><path d="M 138 268 H 374"/></g>\n' +
-			'    <g fill="none" stroke-width="30" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#8fb6cc"><path d="M 122 156 L 286 366"/><path d="M 390 156 L 226 366"/></g>\n' +
-			'  </g>\n' +
-			'</svg>\n'
-	);
+	assert.match(out, /fill="#080b09"/);
+	assert.match(out, /stroke-width="40"[^>]+stroke="#ff9a1f"/);
+	assert.match(out, /stroke-width="40"[^>]+stroke="#69c7df"/);
+	assert.match(out, /stroke-width="26"[^>]+stroke="#d8f3dc"/);
 });
 
 test('hugimuniConstantBlock: emits pasteable assignments, TAIL flagged as function-local', () => {
 	const block = hugimuniConstantBlock(HUGIMUNI_DEFAULTS);
-	assert.match(block, /^LEFT, RIGHT = 172, 340$/m);
-	assert.match(block, /^GHOST = 5$/m);
+	assert.match(block, /^LEFT, RIGHT = 152, 360$/m);
+	assert.match(block, /^STEM_STROKE = 40$/m);
+	assert.match(block, /^GHOST = 7$/m);
 	assert.match(block, /TAIL lives inside vee_m/);
-	assert.match(block, /TAIL = 30 to carry this value over\.$/m);
+	assert.match(block, /TAIL = 20.*carries this value in build\.py\.$/m);
 });

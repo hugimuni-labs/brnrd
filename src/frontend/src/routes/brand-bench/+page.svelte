@@ -92,6 +92,7 @@
 			step: 1
 		},
 		{ key: 'STROKE', label: 'STROKE — stroke width', min: 2, max: 80, step: 1 },
+		{ key: 'STEM_STROKE', label: 'STEM_STROKE — side-leg width', min: 2, max: 100, step: 1 },
 		{ key: 'GHOST', label: 'GHOST — chromatic-aberration offset', min: 0, max: 40, step: 1 }
 	];
 
