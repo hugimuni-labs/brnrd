@@ -109,7 +109,7 @@ All values are non-secret integers consumed by `limits.py`.
 
 | Variable | Default | Consumer |
 | --- | --- | --- |
-| `BRNRD_LIMIT_FREE_REPOS` | `3` | Connected-repository cap for free accounts. |
+| `BRNRD_LIMIT_FREE_REPOS` | `1` | Connected-repository cap for free accounts. |
 | `BRNRD_LIMIT_FREE_EVENTS_PER_MINUTE` | `6` | Free-account event burst cap. |
 | `BRNRD_LIMIT_FREE_EVENTS_PER_DAY` | `200` | Free-account daily event cap. |
 | `BRNRD_LIMIT_ABUSE_REPOS` | `100` | All-tier abuse ceiling for connected repositories. |
