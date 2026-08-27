@@ -97,9 +97,7 @@ export function readingsFor(fresh: PagerPage[], existing: Reading[]): Reading[] 
 
 /** Advance every reading one display tick; finished readings are dropped. */
 export function advanceReadings(readings: Reading[]): Reading[] {
-	return readings
-		.map((r) => ({ ...r, ticksLeft: r.ticksLeft - 1 }))
-		.filter((r) => r.ticksLeft > 0);
+	return readings.map((r) => ({ ...r, ticksLeft: r.ticksLeft - 1 })).filter((r) => r.ticksLeft > 0);
 }
 
 /** Display phase per actor for the tether animation, keyed by run id. */
