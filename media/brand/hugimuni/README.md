@@ -66,3 +66,22 @@ a design decision rather than a bug.
 ```bash
 python3 media/brand/hugimuni/build.py
 ```
+
+## The emissive render, and the ground it needs (2026-08-28)
+
+The SVG mark is **transparent and self-lit**: three passes per stroke (bloom
+halo → saturated body → blurred white-hot core), screen-blended in one
+isolated group so every crossing adds up, with the grain — turbulence plus
+scanlines — masked *onto the strokes* so `GRAIN` modulates the letter light
+itself. There is no background board anymore; the old rounded ink rect read
+as a grained monitor bezel.
+
+**Dark grounds only.** Screen blending against a light ground washes the
+mark toward white — that is physics, not a bug: a glow cannot exist on
+white. Place the SVG on near-black (`#030504` is what /brand-bench judges
+on). The EPS variants keep their own opaque ink ground for print, with the
+phosphor flecks sampled along the strokes to rhyme with the screen render.
+
+Regenerate everything: `python3 media/brand/hugimuni/build.py` — writes the
+SVG marks and the EPS mark/lockup variants beside this file. Tune first on
+`/brand-bench`, copy the constants block back into `build.py`, rerun.
