@@ -76,30 +76,67 @@ def vee_m() -> str:
             f'<path d="M {RIGHT + SPREAD} {TOP - RISE} L {AXIS - TAIL} {drop}"/>')
 
 
+def _attrs(width: float) -> str:
+    return (f'fill="none" stroke-width="{width}" '
+            'stroke-linecap="round" stroke-linejoin="round" '
+            'style="mix-blend-mode:screen"')
+
+
+def _glyph(scale, a: str, b: str, core: str) -> str:
+    """Every stroke of the mark, once — widths through ``scale``, colours
+    swapped per pass. The same shape draws the bloom halo, the body, the
+    white-hot cores, and the grain mask."""
+    return (
+        f'<g {_attrs(scale(STEM_STROKE))} stroke="{a}" transform="translate({-GHOST},0)">{STEMS}</g>'
+        f'<g {_attrs(scale(STEM_STROKE))} stroke="{b}" transform="translate({GHOST},0)">{STEMS}</g>'
+        f'<g {_attrs(scale(max(2, STEM_STROKE - GHOST * 2)))} stroke="{core}">{STEMS}</g>'
+        f'<g {_attrs(scale(STROKE))} stroke="{a}">{BAR_H}</g>'
+        f'<g {_attrs(scale(STROKE))} stroke="{b}">{vee_m()}</g>'
+    )
+
+
 def svg(name: str) -> str:
+    """The emissive render (2026-08-28, from the maintainer's generated
+    reference): three passes — bloom halo, saturated body, blurred white-hot
+    core — screen-blended in one isolated group so intersections blaze, and
+    the grain masked *onto the strokes* (turbulence overlay + scanline
+    multiply) so GRAIN modulates the letter light itself. Transparent
+    ground: the old rounded ink board read as a grained monitor bezel."""
     a, b = PALETTES[name]
-    grain_opacity = max(0, min(100, GRAIN)) / 100
+    grain = max(0, min(100, GRAIN)) / 100
+    body = _glyph(lambda w: w, a, b, INTERSECTION)
+    cores = _glyph(lambda w: max(2, round(w * 0.2)), "#fff6e4", "#eefbff", "#ffffff")
+    mask_body = _glyph(lambda w: w, "#fff", "#fff", "#fff")
     return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{BOARD}" height="{BOARD}" viewBox="0 0 {BOARD} {BOARD}">
   <title>hugimuni — H and M on shared stems ({name})</title>
   <defs>
+    <filter id="hm-bloom" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+    <filter id="hm-core" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="1.1"/>
+    </filter>
     <filter id="hm-grain" x="0" y="0" width="100%" height="100%">
-      <feTurbulence type="fractalNoise" baseFrequency="0.72" numOctaves="4" seed="23"/>
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" seed="23"/>
       <feColorMatrix type="saturate" values="0"/>
     </filter>
     <pattern id="hm-scanlines" width="4" height="4" patternUnits="userSpaceOnUse">
-      <path d="M0 3.5H4" stroke="{INTERSECTION}" stroke-width="0.45" opacity="0.28"/>
+      <path d="M0 3.5H4" stroke="#000" stroke-width="0.6" opacity="0.5"/>
     </pattern>
+    <mask id="hm-strokes">
+      <rect width="{BOARD}" height="{BOARD}" fill="#000"/>
+      {mask_body}
+    </mask>
   </defs>
-  <rect width="{BOARD}" height="{BOARD}" rx="112" fill="{INK}"/>
-  <g style="mix-blend-mode:screen">
-    <g {STEM_ATTRS} stroke="{a}" transform="translate({-GHOST},0)">{STEMS}</g>
-    <g {STEM_ATTRS} stroke="{b}" transform="translate({GHOST},0)">{STEMS}</g>
-    <g fill="none" stroke-width="{STEM_STROKE - GHOST * 2}" stroke-linecap="round" stroke="{INTERSECTION}">{STEMS}</g>
-    <g {ATTRS} stroke="{a}">{BAR_H}</g>
-    <g {ATTRS} stroke="{b}">{vee_m()}</g>
+  <g style="isolation:isolate">
+    <g filter="url(#hm-bloom)" opacity="0.9">{body}</g>
+    {body}
+    <g filter="url(#hm-core)" opacity="0.65">{cores}</g>
+    <g mask="url(#hm-strokes)">
+      <rect width="{BOARD}" height="{BOARD}" filter="url(#hm-grain)" opacity="{grain * .6:.3f}" style="mix-blend-mode:overlay"/>
+      <rect width="{BOARD}" height="{BOARD}" fill="url(#hm-scanlines)" opacity="{grain * .55:.3f}" style="mix-blend-mode:multiply"/>
+    </g>
   </g>
-  <rect width="{BOARD}" height="{BOARD}" rx="112" fill="url(#hm-scanlines)" opacity="{grain_opacity}"/>
-  <rect width="{BOARD}" height="{BOARD}" rx="112" filter="url(#hm-grain)" opacity="{grain_opacity * .34:.3f}" style="mix-blend-mode:screen"/>
 </svg>
 """
 
@@ -130,16 +167,35 @@ def eps(name: str, *, lockup: bool = False) -> str:
     ))
     for x in (LEFT, RIGHT):
         commands.append(line(x, TOP, x, BOTTOM, STEM_STROKE - GHOST * 2, INTERSECTION))
-    # Fine vector scanlines and sparse deterministic phosphor flecks. This is
-    # deliberately not a bitmap texture hidden inside an EPS wrapper.
+    # Fine vector scanlines and deterministic phosphor flecks. The flecks
+    # sample points *along the strokes* (2026-08-28 — grain belongs to the
+    # letter light, not the field around it), jittered across each stroke's
+    # own width; print rhymes with the screen render's stroke-masked grain.
+    # This is deliberately not a bitmap texture hidden inside an EPS wrapper.
     for y in range(112, 405, 6):
         commands.append(line(72, y, 440, y, .35, "#29402f"))
+    drop = BOTTOM + DIP
+    segments = (  # (x1, y1, x2, y2, stroke width)
+        (LEFT, TOP, LEFT, BOTTOM, STEM_STROKE),
+        (RIGHT, TOP, RIGHT, BOTTOM, STEM_STROKE),
+        (LEFT - OVERHANG, CROSS, RIGHT + OVERHANG, CROSS, STROKE),
+        (LEFT - SPREAD, TOP - RISE, AXIS + TAIL, drop, STROKE),
+        (RIGHT + SPREAD, TOP - RISE, AXIS - TAIL, drop, STROKE),
+    )
     flecks = round(43 + max(0, min(100, GRAIN)) * 4.4)
     for i in range(flecks):
-        x, y = 83 + (i * 47) % 346, 108 + (i * 71) % 298
+        x1, y1, x2, y2, width = segments[i % len(segments)]
+        t = ((i * 37) % 97) / 97
+        # jitter across the stroke, never past its edge
+        across = (((i * 13) % 9) - 4) / 4 * (width / 2 - 1)
+        dx, dy = x2 - x1, y2 - y1
+        length = (dx * dx + dy * dy) ** 0.5 or 1.0
+        nx, ny = -dy / length, dx / length  # unit normal
+        x = x1 + dx * t + nx * across
+        y = y1 + dy * t + ny * across
         radius = .45 + (i % 4) * .22
-        grain_tone = INTERSECTION if i % 7 == 0 else "#54735b"
-        commands.append(f"{rgb(grain_tone)} setrgbcolor newpath {x} {height-y} {radius:.2f} 0 360 arc fill")
+        grain_tone = "#ffffff" if i % 7 == 0 else INTERSECTION
+        commands.append(f"{rgb(grain_tone)} setrgbcolor newpath {x:.1f} {height-y:.1f} {radius:.2f} 0 360 arc fill")
     if lockup:
         commands.extend((
             f"{rgb(INTERSECTION)} setrgbcolor /Helvetica-Bold findfont 58 scalefont setfont",
