@@ -225,7 +225,7 @@ def _edge_cwd_now(run: RunView | None) -> str:
     return ""
 
 
-def _edge_blocks(edge: Boundary) -> list[tuple[str, list[str]]]:
+def _edge_blocks(edge: Boundary, *, command_width: int = 70) -> list[tuple[str, list[str]]]:
     """The expanded body as labelled blocks: where · ran · out · said.
 
     Each is a distinct fact and they used to be three different shapes: the
@@ -245,7 +245,7 @@ def _edge_blocks(edge: Boundary) -> list[tuple[str, list[str]]]:
     if edge.cwd:
         blocks.append(("where", [_home_short(edge.cwd)]))
     if edge.detail:
-        blocks.append(("ran", _wrap_command(edge.detail)))
+        blocks.append(("ran", _wrap_command(edge.detail, width=command_width)))
     if edge.out_bytes >= 0:
         # The bytes are counted, never kept (hooks.py: responses are excluded
         # from the transcript on purpose). Say so, or the number reads like a
@@ -259,7 +259,7 @@ def _edge_blocks(edge: Boundary) -> list[tuple[str, list[str]]]:
     else:
         blocks.append(("said", ["silent — nothing injected"]))
     if edge.block_reason:
-        blocks.append(("block", _wrap_command(edge.block_reason)))
+        blocks.append(("block", _wrap_command(edge.block_reason, width=command_width)))
     return blocks
 
 
@@ -343,9 +343,9 @@ def _edge_title(edge: Boundary, *, markup: bool = True) -> str:
     return f"{esc(_clock(edge.at))}  #{edge.seq:<3} {act:<8} {esc(edge.phase)}{suffix}{flag}"
 
 
-def _edge_body(edge: Boundary) -> str:
+def _edge_body(edge: Boundary, *, command_width: int = 70) -> str:
     """The expanded content — where · ran · out · said, as separate blocks."""
-    return "\n".join(_render_blocks(_edge_blocks(edge), indent=""))
+    return "\n".join(_render_blocks(_edge_blocks(edge, command_width=command_width), indent=""))
 
 
 #: Rough bytes-per-token heuristic for English/Markdown prose. A heuristic,
@@ -770,6 +770,23 @@ def build_console_app() -> type:
             "`pip install 'brnrd[console]'` (or `pip install -e '.[console]'`)"
         ) from exc
 
+    class _MeasuredEdgeBody(Static):
+        """Keep command wrapping inside the mounted EDGE widget's column."""
+
+        def __init__(self, edge: Boundary) -> None:
+            self.edge = edge
+            super().__init__(_edge_body(edge), markup=False)
+
+        def on_mount(self) -> None:
+            # content_region excludes this widget's padding; the fixed label
+            # column still occupies part of each rendered line.  Headless
+            # paths can report zero before layout, so retain the safe width.
+            content_width = self.content_region.width or self.size.width
+            if content_width <= 0:
+                return
+            command_width = max(1, content_width - _BODY_LABEL_WIDTH)
+            self.update(_edge_body(self.edge, command_width=command_width))
+
     class OperatorConsole(App):
         TITLE = "brnrd · resident console"
         CSS = """
@@ -946,7 +963,7 @@ def build_console_app() -> type:
                     nodes.append(Static(f"▸ {where or '—'}", classes="edge-group"))
                     for edge in group:
                         node = Collapsible(
-                            Static(_edge_body(edge), markup=False),
+                            _MeasuredEdgeBody(edge),
                             title=_edge_title(edge),
                             collapsed=edge.seq not in expanded,
                             classes=_edge_css_class(edge),

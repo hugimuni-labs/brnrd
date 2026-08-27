@@ -1063,3 +1063,10 @@ def test_wrap_command_breaks_on_shell_operators_and_path_separators():
     long_path = "/very/long/root/" + "segment/" * 20 + "leaf.txt"
     for line in _wrap_command(long_path, width=40):
         assert line.endswith("/") or line.endswith("leaf.txt")
+
+
+def test_edge_body_accepts_the_measured_command_width():
+    from brr.operator_console.tui import _edge_body
+
+    body = _edge_body(_b(detail="abcdefghij", tools=("Bash",)), command_width=5)
+    assert "ran    abcde\n       fghij" in body
