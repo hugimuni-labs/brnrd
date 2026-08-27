@@ -38,7 +38,7 @@
 	type Mark = 'brnrd' | 'hugimuni';
 	type Register = 'stone' | 'screen';
 
-	let mark = $state<Mark>('brnrd');
+	let mark = $state<Mark>('hugimuni');
 	let register = $state<Register>('stone'); // hugimuni only has one register (see below)
 	let frame = $state<BrnrdFrame>('rest');
 	let palette = $state<HugimuniPaletteName>('amber-sky');
@@ -93,7 +93,8 @@
 		},
 		{ key: 'STROKE', label: 'STROKE — stroke width', min: 2, max: 80, step: 1 },
 		{ key: 'STEM_STROKE', label: 'STEM_STROKE — side-leg width', min: 2, max: 100, step: 1 },
-		{ key: 'GHOST', label: 'GHOST — chromatic-aberration offset', min: 0, max: 40, step: 1 }
+		{ key: 'GHOST', label: 'GHOST — chromatic-aberration offset', min: 0, max: 40, step: 1 },
+		{ key: 'GRAIN', label: 'GRAIN — phosphor texture', min: 0, max: 100, step: 1 }
 	];
 
 	function resetBrnrd() {
@@ -203,6 +204,24 @@
 			</select>
 		</label>
 
+		{#if mark === 'hugimuni'}
+			<label class="flex items-center gap-2">
+				<span class="text-ink-quiet">intersection</span>
+				<input
+					type="color"
+					bind:value={hugimuniConstants.INTERSECTION}
+					class="h-8 w-12 cursor-pointer border border-stone-700 bg-transparent p-0.5"
+					aria-label="intersection colour"
+				/>
+				<input
+					type="text"
+					bind:value={hugimuniConstants.INTERSECTION}
+					class="panel w-24 px-2 py-1 text-[11px]"
+					aria-label="intersection colour hex"
+				/>
+			</label>
+		{/if}
+
 		<button
 			class="panel panel--pressable px-2 py-1 text-ink-quiet hover:text-amber-100"
 			onclick={mark === 'brnrd' ? resetBrnrd : resetHugimuni}
@@ -303,10 +322,9 @@
 	</div>
 
 	<p class="text-[10px] text-ink-mute">
-		colours are fixed, not sliders here — brnrd: stone {BRNRD_COLORS.STONE}, molten {BRNRD_COLORS.MOLTEN}→{BRNRD_COLORS.EMBER},
-		screen ghosts {BRNRD_COLORS.RED}/{BRNRD_COLORS.CYAN} on {BRNRD_COLORS.CREAM}; the task's slider
-		list didn't name them, and neither build.py treats them as tuning knobs — they're identity, not
-		geometry.
+		brnrd colours remain fixed — stone {BRNRD_COLORS.STONE}, molten {BRNRD_COLORS.MOLTEN}→{BRNRD_COLORS.EMBER},
+		screen ghosts {BRNRD_COLORS.RED}/{BRNRD_COLORS.CYAN} on {BRNRD_COLORS.CREAM}. HugiMuni's
+		intersection is tunable above; its two palette pairs remain named identity choices.
 	</p>
 </div>
 

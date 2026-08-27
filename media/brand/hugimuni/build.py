@@ -31,8 +31,9 @@ RISE, DIP = 0, 0                     # each leg crosses its stem low, not at
 STROKE = 28
 STEM_STROKE = 40                      # the outer legs carry the silhouette
 GHOST = 7                             # aberration offset on the shared stems
+GRAIN = 58                            # phosphor texture strength, 0–100
 INK = "#080b09"
-INTERSECTION = "#d8f3dc"              # phosphor-green white
+INTERSECTION = "#eadfca"              # warm phosphor white; tunable on the bench
 
 PALETTES = {
     # his two proposals, both rendered rather than argued about
@@ -77,8 +78,18 @@ def vee_m() -> str:
 
 def svg(name: str) -> str:
     a, b = PALETTES[name]
+    grain_opacity = max(0, min(100, GRAIN)) / 100
     return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{BOARD}" height="{BOARD}" viewBox="0 0 {BOARD} {BOARD}">
   <title>hugimuni — H and M on shared stems ({name})</title>
+  <defs>
+    <filter id="hm-grain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.72" numOctaves="4" seed="23"/>
+      <feColorMatrix type="saturate" values="0"/>
+    </filter>
+    <pattern id="hm-scanlines" width="4" height="4" patternUnits="userSpaceOnUse">
+      <path d="M0 3.5H4" stroke="{INTERSECTION}" stroke-width="0.45" opacity="0.28"/>
+    </pattern>
+  </defs>
   <rect width="{BOARD}" height="{BOARD}" rx="112" fill="{INK}"/>
   <g style="mix-blend-mode:screen">
     <g {STEM_ATTRS} stroke="{a}" transform="translate({-GHOST},0)">{STEMS}</g>
@@ -87,6 +98,8 @@ def svg(name: str) -> str:
     <g {ATTRS} stroke="{a}">{BAR_H}</g>
     <g {ATTRS} stroke="{b}">{vee_m()}</g>
   </g>
+  <rect width="{BOARD}" height="{BOARD}" rx="112" fill="url(#hm-scanlines)" opacity="{grain_opacity}"/>
+  <rect width="{BOARD}" height="{BOARD}" rx="112" filter="url(#hm-grain)" opacity="{grain_opacity * .34:.3f}" style="mix-blend-mode:screen"/>
 </svg>
 """
 
@@ -121,10 +134,12 @@ def eps(name: str, *, lockup: bool = False) -> str:
     # deliberately not a bitmap texture hidden inside an EPS wrapper.
     for y in range(112, 405, 6):
         commands.append(line(72, y, 440, y, .35, "#29402f"))
-    for i in range(43):
+    flecks = round(43 + max(0, min(100, GRAIN)) * 4.4)
+    for i in range(flecks):
         x, y = 83 + (i * 47) % 346, 108 + (i * 71) % 298
-        radius = .55 + (i % 3) * .35
-        commands.append(f"{rgb('#54735b')} setrgbcolor newpath {x} {height-y} {radius:.2f} 0 360 arc fill")
+        radius = .45 + (i % 4) * .22
+        grain_tone = INTERSECTION if i % 7 == 0 else "#54735b"
+        commands.append(f"{rgb(grain_tone)} setrgbcolor newpath {x} {height-y} {radius:.2f} 0 360 arc fill")
     if lockup:
         commands.extend((
             f"{rgb(INTERSECTION)} setrgbcolor /Helvetica-Bold findfont 58 scalefont setfont",
