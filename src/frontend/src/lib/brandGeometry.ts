@@ -281,6 +281,8 @@ export interface HugimuniConstants {
 	STROKE: number;
 	STEM_STROKE: number;
 	GHOST: number;
+	GRAIN: number;
+	INTERSECTION: string;
 }
 
 export const HUGIMUNI_DEFAULTS: HugimuniConstants = {
@@ -296,7 +298,9 @@ export const HUGIMUNI_DEFAULTS: HugimuniConstants = {
 	TAIL: 20,
 	STROKE: 28,
 	STEM_STROKE: 40,
-	GHOST: 7
+	GHOST: 7,
+	GRAIN: 58,
+	INTERSECTION: '#eadfca'
 };
 
 export const HUGIMUNI_INK = '#080b09';
@@ -333,16 +337,28 @@ export function hugimuniSvg(c: HugimuniConstants, paletteName: HugimuniPaletteNa
 	const attrs = hugimuniAttrs(c.STROKE);
 	const stemAttrs = hugimuniAttrs(c.STEM_STROKE);
 	const stems = hugimuniStems(c);
+	const grainOpacity = Math.max(0, Math.min(100, c.GRAIN)) / 100;
 	return `<svg xmlns="http://www.w3.org/2000/svg" width="${BOARD}" height="${BOARD}" viewBox="0 0 ${BOARD} ${BOARD}">
   <title>hugimuni — H and M on shared stems (${paletteName})</title>
+  <defs>
+    <filter id="hm-grain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.72" numOctaves="4" seed="23"/>
+      <feColorMatrix type="saturate" values="0"/>
+    </filter>
+    <pattern id="hm-scanlines" width="4" height="4" patternUnits="userSpaceOnUse">
+      <path d="M0 3.5H4" stroke="${c.INTERSECTION}" stroke-width="0.45" opacity="0.28"/>
+    </pattern>
+  </defs>
   <rect width="${BOARD}" height="${BOARD}" rx="112" fill="${HUGIMUNI_INK}"/>
   <g style="mix-blend-mode:screen">
     <g ${stemAttrs} stroke="${a}" transform="translate(${-c.GHOST},0)">${stems}</g>
     <g ${stemAttrs} stroke="${b}" transform="translate(${c.GHOST},0)">${stems}</g>
-    <g ${hugimuniAttrs(c.STEM_STROKE - c.GHOST * 2)} stroke="#d8f3dc">${stems}</g>
+    <g ${hugimuniAttrs(c.STEM_STROKE - c.GHOST * 2)} stroke="${c.INTERSECTION}">${stems}</g>
     <g ${attrs} stroke="${a}">${hugimuniBarH(c)}</g>
     <g ${attrs} stroke="${b}">${hugimuniVeeM(c)}</g>
   </g>
+  <rect width="${BOARD}" height="${BOARD}" rx="112" fill="url(#hm-scanlines)" opacity="${grainOpacity}"/>
+  <rect width="${BOARD}" height="${BOARD}" rx="112" filter="url(#hm-grain)" opacity="${(grainOpacity * 0.34).toFixed(3)}" style="mix-blend-mode:screen"/>
 </svg>
 `;
 }
@@ -366,6 +382,8 @@ export function hugimuniConstantBlock(c: HugimuniConstants): string {
 		`STROKE = ${c.STROKE}`,
 		`STEM_STROKE = ${c.STEM_STROKE}`,
 		`GHOST = ${c.GHOST}`,
+		`GRAIN = ${c.GRAIN}`,
+		`INTERSECTION = "${c.INTERSECTION}"`,
 		'',
 		'# TAIL lives inside vee_m() as a local, not up here — hand-edit that',
 		`# function's "TAIL = ${c.TAIL}" line carries this value in build.py.`
