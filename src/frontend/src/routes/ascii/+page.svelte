@@ -1,17 +1,16 @@
 <script lang="ts">
-	// /ascii — the reference camera over the RoomGraph
-	// (design-room-operational-topology.md §ASCII reference renderer).
+	// /ascii — the reference camera over the unbounded room (#1652).
 	//
-	// The page owns nothing semantic: it polls the two existing wires,
-	// compiles the RoomGraph ($lib/roomGraph), and prints the board
-	// ($lib/asciiRoom) into a <pre>. If this view can't tell the story, the
-	// *model* is what's underdefined — that is the point of serving it while
-	// the pretty renderers are still in flight.
+	// The page owns nothing semantic: it polls the wires, compiles
+	// RoomGraph → RoomTopology → RoomLayout, and asks the ASCII camera for
+	// one window into the world. The world is never laid out to fit this
+	// viewport: resizing changes the window, panning moves it, and node
+	// coordinates live in the atlas memory (persisted) — never recomputed
+	// to fit.
 	//
 	// Motion doctrine, ASCII edition: nothing animates. A line that changed
-	// between two polls flashes once (a client diff between two attested
-	// snapshots — the same rule the resident field follows); everything else
-	// holds still. No ambient life, no interpolation.
+	// between two polls flashes once (diffed on a clock-free render, so a
+	// minute passing moves nothing); everything else holds still.
 	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { fetchLiveRuns, LiveRunsAuthError, type LiveRunsResponse } from '$lib/liveRuns';
@@ -19,16 +18,24 @@
 	import { fetchScheduledWakes, type ScheduledWakesResponse } from '$lib/scheduledWakes';
 	import { fetchQuota, type QuotaResponse } from '$lib/quota';
 	import { compileRoomGraph, fileFromDetail, type TrailStep } from '$lib/roomGraph';
-	import { renderRoomGraph, LEGEND } from '$lib/asciiRoom';
-	import { demoFrames } from '../new/demo';
+	import { compileTopology, routeBetween, type PlaceId } from '$lib/roomTopology';
+	import { layoutRoom, emptyAtlas, type AtlasMemory } from '$lib/roomLayout';
+	import {
+		renderWorld,
+		cameraCenterFor,
+		LEGEND,
+		type Camera,
+		type CameraLevel
+	} from '$lib/asciiCamera';
+	import { referenceFrames } from '$lib/referenceTrace';
 
 	const POLL_MS = 2000;
 	const SLOW_MS = 60_000;
 	const DEMO_STEP_MS = 3600;
-	// Cogmind fills the screen: board width derives from the viewport, not a
-	// constant. Char width measured off a probe span at mount/resize.
 	const MIN_COLS = 64;
-	const MAX_COLS = 200;
+	const MAX_COLS = 220;
+	const ROWS = 26;
+	const PAN_STEP = 4; // world units per keypress
 	let cols = $state(76);
 	let probeEl = $state<HTMLElement | null>(null);
 	let deckEl = $state<HTMLElement | null>(null);
@@ -49,27 +56,46 @@
 	let demo = $state(false);
 	let frameNote = $state('');
 	let showLegend = $state(true);
+	let follow = $state(true);
+	let level = $state<CameraLevel>('island');
+	let levelForced = $state(false);
 
 	let live: LiveRunsResponse | null = null;
 	let ledger: RunLedgerResponse | null = null;
 	let wakes: ScheduledWakesResponse | null = null;
 	let quota: QuotaResponse | null = null;
 
-	// The island's terrain memory: attested footsteps per run, deduped by
-	// boundary timestamp — "only what you touch comes into being". Persisted
-	// client-side so the map survives a reload (closing the client half of
-	// doc gap #7; a server-side atlas remains the durable answer).
+	// terrain memory: attested footsteps per run, deduped by boundary
+	// timestamp — "only what you touch comes into being"
 	const TRAILS_KEY = 'brnrd-ascii-trails';
 	let trails: Record<string, TrailStep[]> = {};
 	const TRAIL_CAP = 60;
 	const TRAIL_RUNS_CAP = 24;
 
-	function loadTrails() {
+	// atlas memory: assigned world coordinates. Client-persisted for now
+	// (the spec's accepted first slice; server-side atlas is the durable
+	// target) — a reload rebuilds the same map because this survives.
+	const ATLAS_KEY = 'brnrd-ascii-atlas-v1';
+	let atlas: AtlasMemory = emptyAtlas();
+
+	// the camera
+	let camCenter = { x: 0, y: 0 };
+	let lastActorPlace: PlaceId | null = null;
+	let lastRoute: PlaceId[] | null = null;
+
+	function loadStores() {
 		try {
 			const raw = localStorage.getItem(TRAILS_KEY);
 			if (raw) trails = JSON.parse(raw) as Record<string, TrailStep[]>;
 		} catch {
 			trails = {};
+		}
+		try {
+			const raw = localStorage.getItem(ATLAS_KEY);
+			if (raw) atlas = JSON.parse(raw) as AtlasMemory;
+			if (!atlas || typeof atlas.nodes !== 'object') atlas = emptyAtlas();
+		} catch {
+			atlas = emptyAtlas();
 		}
 	}
 
@@ -77,12 +103,19 @@
 		try {
 			const ids = Object.keys(trails);
 			if (ids.length > TRAIL_RUNS_CAP) {
-				// oldest runs age out — run ids sort chronologically by shape
 				for (const id of ids.sort().slice(0, ids.length - TRAIL_RUNS_CAP)) delete trails[id];
 			}
 			localStorage.setItem(TRAILS_KEY, JSON.stringify(trails));
 		} catch {
-			// storage full/blocked — the map simply stays session-local
+			/* storage full/blocked — the map stays session-local */
+		}
+	}
+
+	function saveAtlas() {
+		try {
+			localStorage.setItem(ATLAS_KEY, JSON.stringify(atlas));
+		} catch {
+			/* same forgiveness */
 		}
 	}
 
@@ -98,21 +131,53 @@
 			if (trail.length > TRAIL_CAP) trail.splice(0, trail.length - TRAIL_CAP);
 			moved = true;
 		}
-		if (moved) saveTrails();
+		if (moved && !demo) saveTrails();
 	}
 
-	// The flash marks *state* motion only. Elapsed-time labels churn every
-	// poll, so the diff runs on a clock-free render (`now` omitted drops
-	// every elapsed label) while the display keeps its clocks — a line
-	// flashes when the world moved, never because a minute passed.
+	// the flash marks *state* motion only: diff on the clock-free render
 	let prevBare: string[] = [];
 
 	function repaint(now: number) {
 		recordTrails();
 		const graph = compileRoomGraph(live, ledger, trails, { wakes, quota });
 		stale = graph.stale;
-		const next = renderRoomGraph(graph, { width: cols, now }).split('\n');
-		const bare = renderRoomGraph(graph, { width: cols }).split('\n');
+		const topo = compileTopology(graph);
+		const placed = layoutRoom(topo, atlas);
+		if (Object.keys(placed.memory.nodes).length !== Object.keys(atlas.nodes).length) {
+			atlas = placed.memory;
+			if (!demo) saveAtlas();
+		}
+		const layout = placed.layout;
+
+		// dormant mode returns to Atlas; a live resident gets Island scale
+		if (!levelForced) level = graph.actors.length === 0 ? 'atlas' : 'island';
+
+		// follow: the resident (or first actor), framed with its island root
+		// so the destination keeps its context; the route it took is marked.
+		const lead = graph.actors.find((a) => !a.strand) ?? graph.actors[0];
+		const leadPlace = lead ? (topo.actorPlaces[lead.runId] ?? null) : null;
+		if (leadPlace && leadPlace !== lastActorPlace) {
+			lastRoute =
+				lastActorPlace && lastActorPlace !== leadPlace
+					? routeBetween(topo, lastActorPlace, leadPlace)
+					: null;
+			lastActorPlace = leadPlace;
+		}
+		if (follow) {
+			const frameIds: PlaceId[] = [];
+			if (leadPlace) {
+				frameIds.push(leadPlace);
+				const rootId = lead ? `repo:${lead.islandLabel}` : null;
+				if (rootId && layout.nodes[rootId]) frameIds.push(rootId);
+				if (lastRoute) frameIds.push(...lastRoute);
+			}
+			camCenter = cameraCenterFor(layout, frameIds, cols, ROWS, level);
+		}
+
+		const cam: Camera = { center: camCenter, cols, rows: ROWS, level };
+		const opts = { highlightRoute: lastRoute };
+		const next = renderWorld(topo, layout, graph, cam, { ...opts, now }).split('\n');
+		const bare = renderWorld(topo, layout, graph, cam, opts).split('\n');
 		const delta: number[] = [];
 		for (let i = 0; i < bare.length; i++) {
 			if (prevBare.length > 0 && bare[i] !== prevBare[i]) delta.push(i);
@@ -122,83 +187,81 @@
 		changed = delta;
 	}
 
+	function onKey(e: KeyboardEvent) {
+		if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+		const pan = (dx: number, dy: number) => {
+			follow = false;
+			camCenter = { x: camCenter.x + dx, y: camCenter.y + dy };
+			repaint(Date.now());
+			e.preventDefault();
+		};
+		if (e.key === 'ArrowLeft') pan(-PAN_STEP, 0);
+		else if (e.key === 'ArrowRight') pan(PAN_STEP, 0);
+		else if (e.key === 'ArrowUp') pan(0, -PAN_STEP);
+		else if (e.key === 'ArrowDown') pan(0, PAN_STEP);
+		else if (e.key === 'f') {
+			follow = true;
+			repaint(Date.now());
+		} else if (e.key === 'a') {
+			levelForced = true;
+			level = level === 'island' ? 'atlas' : 'island';
+			repaint(Date.now());
+		}
+	}
+
 	onMount(() => {
 		demo = new URLSearchParams(location.search).has('demo');
 		let stop = false;
 		let timer: ReturnType<typeof setTimeout> | null = null;
-		if (!demo) loadTrails();
+		if (!demo) loadStores();
+		else atlas = emptyAtlas();
 		measureCols();
-		const onResize = () => {
-			measureCols();
-		};
+		const onResize = () => measureCols();
 		window.addEventListener('resize', onResize);
+		window.addEventListener('keydown', onKey);
+		const cleanup = () => {
+			stop = true;
+			window.removeEventListener('resize', onResize);
+			window.removeEventListener('keydown', onKey);
+			if (timer) clearTimeout(timer);
+		};
 
 		if (demo) {
-			// The same replay `/new?demo` steps through — one fixture, two
-			// cameras, same story. The ledger is a tiny synthetic tail so the
-			// Cloth section has a past to stand on.
-			const frames = demoFrames();
+			// the reference trace (#81–#88): the journey the spec says a
+			// reader must be able to follow without opening a dossier
+			const frames = referenceFrames();
 			ledger = {
-				generated_at: '2026-08-26T10:00:00Z',
-				rows: [
-					{
-						run_id: 'run-260826-0830-jknr',
-						event_id: null,
-						started_at: '2026-08-26T08:30:00Z',
-						ended_at: '2026-08-26T08:52:00Z',
-						wall_clock_seconds: 1320,
-						runner_shell: 'claude',
-						runner_core: 'sonnet',
-						core_expected: null,
-						core_mismatch: null,
-						substitution_reason: null,
-						repo_label: 'hugimuni-labs/brnrd',
-						source_system: 'schedule',
-						name: 'the-overture-pickup',
-						external_refs: [
-							{ kind: 'commit', sha: 'ab12cd3', subject: 'fix: connector gap' },
-							{ kind: 'pr', number: 1634 }
-						],
-						parent_run_id: null,
-						is_subspawn: false,
-						tokens_input: null,
-						tokens_output: null,
-						tokens_cache_read: null,
-						tokens_cache_creation: null,
-						context_window_used: null,
-						weekly_pct_delta: null,
-						five_hour_pct_delta: null,
-						usd_subscription_attributed: 1.12,
-						usd_credits_equivalent: null,
-						estimate_vs_actual: null
-					}
-				],
+				generated_at: '2026-08-27T10:00:00Z',
+				rows: [],
 				stale: false,
-				reported_at: '2026-08-26T10:00:00Z',
+				reported_at: '2026-08-27T10:00:00Z',
 				span_seconds_served: 86400
-			} as RunLedgerResponse;
+			} as unknown as RunLedgerResponse;
 			let i = 0;
 			const step = () => {
 				if (stop) return;
 				live = {
-					generated_at: '2026-08-26T11:00:00Z',
+					generated_at: '2026-08-27T10:20:00Z',
 					runs: frames[i % frames.length],
 					stale: false,
-					reported_at: '2026-08-26T11:00:00Z',
+					reported_at: '2026-08-27T10:20:00Z',
 					spawn_max_concurrent: 3
 				};
-				frameNote = `replay ${(i % frames.length) + 1}/${frames.length}`;
-				repaint(Date.parse('2026-08-26T11:20:00Z'));
+				frameNote = `trace #${81 + (i % frames.length)} / #81–#88`;
+				repaint(Date.parse('2026-08-27T10:21:00Z'));
 				loading = false;
 				i += 1;
+				if (i % frames.length === 0) {
+					// the world persists between journeys; the trail memory
+					// resets so the replay tells the same story each loop
+					trails = {};
+					lastActorPlace = null;
+					lastRoute = null;
+				}
 				timer = setTimeout(step, DEMO_STEP_MS);
 			};
 			step();
-			return () => {
-				stop = true;
-				window.removeEventListener('resize', onResize);
-				if (timer) clearTimeout(timer);
-			};
+			return cleanup;
 		}
 
 		let lastSlowAt = 0;
@@ -208,8 +271,6 @@
 				const nowMs = Date.now();
 				if (nowMs - lastSlowAt > SLOW_MS) {
 					lastSlowAt = nowMs;
-					// the slow instruments — each is enrichment; the board
-					// stands without any of them
 					try {
 						ledger = await fetchRunLedger(fetch, 8);
 					} catch {
@@ -237,11 +298,7 @@
 			if (!stop) timer = setTimeout(poll, POLL_MS);
 		};
 		poll();
-		return () => {
-			stop = true;
-			window.removeEventListener('resize', onResize);
-			if (timer) clearTimeout(timer);
-		};
+		return cleanup;
 	});
 </script>
 
@@ -255,9 +312,12 @@
 	<header>
 		<span class="mark">b·_·d</span>
 		<span class="title">the room, in characters</span>
+		<span class="hint">←↑↓→ pan · f follow · a atlas</span>
 		<span class="status">
 			{#if loading}connecting…{:else if signedOut}signed out — <a href={resolve('/')}>sign in</a
-				>{:else if demo}{frameNote}{:else if stale}wire stale{:else}live{/if}
+				>{:else if demo}{frameNote}{:else if stale}wire stale{:else}{follow
+					? 'live · following'
+					: 'live · panned'}{/if}
 		</span>
 	</header>
 
@@ -298,6 +358,10 @@
 	}
 	.title {
 		color: #6ea87a;
+	}
+	.hint {
+		color: #3d5a46;
+		font-size: 0.75rem;
 	}
 	.status {
 		margin-left: auto;
