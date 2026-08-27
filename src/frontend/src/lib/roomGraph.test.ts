@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { compileRoomGraph, resolvePlace } from './roomGraph.ts';
+import { compileRoomGraph, fileFromDetail, resolvePlace } from './roomGraph.ts';
 import type { LiveRun, LiveRunsResponse } from './liveRuns.ts';
 import type { RunLedgerResponse, RunLedgerRow } from './runLedger.ts';
 
@@ -299,6 +299,14 @@ test('without a remembered trail the current boundary still grows one chamber', 
 		graph.islands[0].camps[0].chambers.map((c) => c.dir),
 		['tests']
 	);
+});
+
+test('fileFromDetail reads the leaf and refuses the non-file', () => {
+	assert.equal(fileFromDetail('Edit asciiRoom.ts'), 'asciiRoom.ts');
+	assert.equal(fileFromDetail('node --test src/lib/roomGraph.test.ts'), 'roomGraph.test.ts');
+	assert.equal(fileFromDetail('git status --short'), null);
+	assert.equal(fileFromDetail('pip install pkg==1.2.3'), null);
+	assert.equal(fileFromDetail(null), null);
 });
 
 test('the empty world is a graph, not a crash', () => {

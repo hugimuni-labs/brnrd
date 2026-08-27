@@ -16,14 +16,30 @@
 	import { resolve } from '$app/paths';
 	import { fetchLiveRuns, LiveRunsAuthError, type LiveRunsResponse } from '$lib/liveRuns';
 	import { fetchRunLedger, type RunLedgerResponse } from '$lib/runLedger';
-	import { compileRoomGraph, type TrailStep } from '$lib/roomGraph';
+	import { fetchScheduledWakes, type ScheduledWakesResponse } from '$lib/scheduledWakes';
+	import { fetchQuota, type QuotaResponse } from '$lib/quota';
+	import { compileRoomGraph, fileFromDetail, type TrailStep } from '$lib/roomGraph';
 	import { renderRoomGraph, LEGEND } from '$lib/asciiRoom';
 	import { demoFrames } from '../new/demo';
 
 	const POLL_MS = 2000;
-	const LEDGER_MS = 60_000;
+	const SLOW_MS = 60_000;
 	const DEMO_STEP_MS = 3600;
-	const WIDTH = 76;
+	// Cogmind fills the screen: board width derives from the viewport, not a
+	// constant. Char width measured off a probe span at mount/resize.
+	const MIN_COLS = 64;
+	const MAX_COLS = 200;
+	let cols = $state(76);
+	let probeEl = $state<HTMLElement | null>(null);
+	let deckEl = $state<HTMLElement | null>(null);
+
+	function measureCols() {
+		if (!probeEl || !deckEl) return;
+		const charW = probeEl.getBoundingClientRect().width / 20;
+		if (charW <= 0) return;
+		const avail = deckEl.clientWidth - 8;
+		cols = Math.max(MIN_COLS, Math.min(MAX_COLS, Math.floor(avail / charW)));
+	}
 
 	let lines = $state<string[]>([]);
 	let changed = $state<number[]>([]);
@@ -36,23 +52,53 @@
 
 	let live: LiveRunsResponse | null = null;
 	let ledger: RunLedgerResponse | null = null;
+	let wakes: ScheduledWakesResponse | null = null;
+	let quota: QuotaResponse | null = null;
 
 	// The island's terrain memory: attested footsteps per run, deduped by
-	// boundary timestamp — "only what you touch comes into being". Session-
-	// local on purpose: durable exploration memory is the doc's gap #7.
-	const trails: Record<string, TrailStep[]> = {};
+	// boundary timestamp — "only what you touch comes into being". Persisted
+	// client-side so the map survives a reload (closing the client half of
+	// doc gap #7; a server-side atlas remains the durable answer).
+	const TRAILS_KEY = 'brnrd-ascii-trails';
+	let trails: Record<string, TrailStep[]> = {};
 	const TRAIL_CAP = 60;
+	const TRAIL_RUNS_CAP = 24;
+
+	function loadTrails() {
+		try {
+			const raw = localStorage.getItem(TRAILS_KEY);
+			if (raw) trails = JSON.parse(raw) as Record<string, TrailStep[]>;
+		} catch {
+			trails = {};
+		}
+	}
+
+	function saveTrails() {
+		try {
+			const ids = Object.keys(trails);
+			if (ids.length > TRAIL_RUNS_CAP) {
+				// oldest runs age out — run ids sort chronologically by shape
+				for (const id of ids.sort().slice(0, ids.length - TRAIL_RUNS_CAP)) delete trails[id];
+			}
+			localStorage.setItem(TRAILS_KEY, JSON.stringify(trails));
+		} catch {
+			// storage full/blocked — the map simply stays session-local
+		}
+	}
 
 	function recordTrails() {
+		let moved = false;
 		for (const run of live?.runs ?? []) {
 			const dir = run.edge?.dir && run.edge.dir !== '.' ? run.edge.dir : null;
 			const at = run.edge?.at ?? null;
 			if (!dir || !at) continue;
 			const trail = (trails[run.run_id] ??= []);
 			if (trail.some((s) => s.at === at)) continue;
-			trail.push({ dir, act: run.edge?.act ?? null, at });
+			trail.push({ dir, act: run.edge?.act ?? null, at, file: fileFromDetail(run.edge?.detail) });
 			if (trail.length > TRAIL_CAP) trail.splice(0, trail.length - TRAIL_CAP);
+			moved = true;
 		}
+		if (moved) saveTrails();
 	}
 
 	// The flash marks *state* motion only. Elapsed-time labels churn every
@@ -63,10 +109,10 @@
 
 	function repaint(now: number) {
 		recordTrails();
-		const graph = compileRoomGraph(live, ledger, trails);
+		const graph = compileRoomGraph(live, ledger, trails, { wakes, quota });
 		stale = graph.stale;
-		const next = renderRoomGraph(graph, { width: WIDTH, now }).split('\n');
-		const bare = renderRoomGraph(graph, { width: WIDTH }).split('\n');
+		const next = renderRoomGraph(graph, { width: cols, now }).split('\n');
+		const bare = renderRoomGraph(graph, { width: cols }).split('\n');
 		const delta: number[] = [];
 		for (let i = 0; i < bare.length; i++) {
 			if (prevBare.length > 0 && bare[i] !== prevBare[i]) delta.push(i);
@@ -80,6 +126,12 @@
 		demo = new URLSearchParams(location.search).has('demo');
 		let stop = false;
 		let timer: ReturnType<typeof setTimeout> | null = null;
+		if (!demo) loadTrails();
+		measureCols();
+		const onResize = () => {
+			measureCols();
+		};
+		window.addEventListener('resize', onResize);
 
 		if (demo) {
 			// The same replay `/new?demo` steps through — one fixture, two
@@ -144,21 +196,34 @@
 			step();
 			return () => {
 				stop = true;
+				window.removeEventListener('resize', onResize);
 				if (timer) clearTimeout(timer);
 			};
 		}
 
-		let lastLedgerAt = 0;
+		let lastSlowAt = 0;
 		const poll = async () => {
 			if (stop) return;
 			try {
 				const nowMs = Date.now();
-				if (nowMs - lastLedgerAt > LEDGER_MS) {
-					lastLedgerAt = nowMs;
+				if (nowMs - lastSlowAt > SLOW_MS) {
+					lastSlowAt = nowMs;
+					// the slow instruments — each is enrichment; the board
+					// stands without any of them
 					try {
 						ledger = await fetchRunLedger(fetch, 8);
 					} catch {
-						// ledger is enrichment; the board stands without it
+						/* keep last */
+					}
+					try {
+						wakes = await fetchScheduledWakes();
+					} catch {
+						/* keep last */
+					}
+					try {
+						quota = await fetchQuota();
+					} catch {
+						/* keep last */
 					}
 				}
 				live = await fetchLiveRuns();
@@ -174,6 +239,7 @@
 		poll();
 		return () => {
 			stop = true;
+			window.removeEventListener('resize', onResize);
 			if (timer) clearTimeout(timer);
 		};
 	});
@@ -184,7 +250,8 @@
 	<meta name="robots" content="noindex" />
 </svelte:head>
 
-<div class="deck">
+<div class="deck" bind:this={deckEl}>
+	<span class="probe" bind:this={probeEl} aria-hidden="true">MMMMMMMMMMMMMMMMMMMM</span>
 	<header>
 		<span class="mark">b·_·d</span>
 		<span class="title">the room, in characters</span>
@@ -240,9 +307,15 @@
 	.status a {
 		color: #9be9a8;
 	}
+	.probe {
+		position: absolute;
+		visibility: hidden;
+		font-size: 12px;
+		white-space: pre;
+	}
 	.board {
 		margin: 0;
-		font-size: clamp(9px, 1.9vw, 13px);
+		font-size: 12px;
 		line-height: 1.35;
 		overflow-x: auto;
 		white-space: pre;
