@@ -88,7 +88,7 @@ test('the subscriber offer has one price and no founder-cohort language', async 
 	const { body: html } = await renderRoute();
 	ok(html.includes('$7'), 'monthly subscriber price is missing');
 	ok(html.includes('$70'), 'annual subscriber price is missing');
-	ok(!html.includes('$5'), 'retired founder price is still visible');
+	ok(!/\$5(?!\d)/.test(html), 'retired founder price is still visible');
 	ok(!/founding price|first 200|first \d+ subscriptions|locked while active|later \$?/i.test(html));
 	ok(!/<del[\s>]/i.test(html), 'subscriber price rendered inside a <del> element');
 	ok(!/\bline-through\b/.test(html), 'subscriber price rendered with strikethrough styling');
