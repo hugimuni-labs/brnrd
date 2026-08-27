@@ -218,7 +218,9 @@ function nodeText(
 		case 'file':
 			return `· ${node.label}`;
 		case 'camp':
-			return `▛ ${clip(node.label, 26)}`;
+			// the camp sits 9 units (18 chars) west of its root: the label must
+			// live inside that shore gap or it collides with the root's own
+			return `▛ ${clip(node.label, 15)}`;
 		case 'portal-rack':
 			return 'P';
 		case 'chart-table':
