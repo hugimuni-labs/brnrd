@@ -18,8 +18,16 @@
 	import { fetchScheduledWakes, type ScheduledWakesResponse } from '$lib/scheduledWakes';
 	import { fetchQuota, type QuotaResponse } from '$lib/quota';
 	import { compileRoomGraph, fileFromDetail, type TrailStep } from '$lib/roomGraph';
-	import { compileTopology, routeBetween, type PlaceId } from '$lib/roomTopology';
+	import { compileTopology, type PlaceId } from '$lib/roomTopology';
 	import { layoutRoom, emptyAtlas, type AtlasMemory } from '$lib/roomLayout';
+	import {
+		diffTransitions,
+		walkFor,
+		advanceWalks,
+		walkPositions,
+		easeCamera,
+		type Walk
+	} from '$lib/roomMotion';
 	import {
 		renderWorld,
 		cameraCenterFor,
@@ -32,6 +40,7 @@
 	const POLL_MS = 2000;
 	const SLOW_MS = 60_000;
 	const DEMO_STEP_MS = 3600;
+	const TICK_MS = 160; // motion ticker: walk steps + camera easing
 	const MIN_COLS = 64;
 	const MAX_COLS = 220;
 	const ROWS = 26;
@@ -40,12 +49,14 @@
 	let probeEl = $state<HTMLElement | null>(null);
 	let deckEl = $state<HTMLElement | null>(null);
 
+	let charW = 7.2; // measured at mount/resize; used to convert drag px → chars
 	function measureCols() {
 		if (!probeEl || !deckEl) return;
-		const charW = probeEl.getBoundingClientRect().width / 20;
-		if (charW <= 0) return;
+		const w = probeEl.getBoundingClientRect().width / 20;
+		if (w <= 0) return;
+		charW = w;
 		const avail = deckEl.clientWidth - 8;
-		cols = Math.max(MIN_COLS, Math.min(MAX_COLS, Math.floor(avail / charW)));
+		cols = Math.max(MIN_COLS, Math.min(MAX_COLS, Math.floor(avail / w)));
 	}
 
 	let lines = $state<string[]>([]);
@@ -56,7 +67,11 @@
 	let demo = $state(false);
 	let frameNote = $state('');
 	let showLegend = $state(true);
-	let follow = $state(true);
+	// The camera is the reader's (his steer, 2026-08-27): it frames the scene
+	// once at load and then moves only by hand — drag, arrows — unless follow
+	// is explicitly switched on with `f`.
+	let follow = $state(false);
+	let framedOnce = false;
 	let level = $state<CameraLevel>('island');
 	let levelForced = $state(false);
 
@@ -80,7 +95,6 @@
 
 	// the camera
 	let camCenter = { x: 0, y: 0 };
-	let lastActorPlace: PlaceId | null = null;
 	let lastRoute: PlaceId[] | null = null;
 
 	function loadStores() {
@@ -136,8 +150,21 @@
 
 	// the flash marks *state* motion only: diff on the clock-free render
 	let prevBare: string[] = [];
+	// motion state (#1654 slice 3): walks derive from BoundaryTransition
+	// receipts only; the camera eases toward its target between paints
+	let walks: Walk[] = [];
+	let prevPlaces: Record<string, PlaceId> | null = null;
+	let camTarget = { x: 0, y: 0 };
+	let scene: {
+		graph: ReturnType<typeof compileRoomGraph>;
+		topo: ReturnType<typeof compileTopology>;
+		layout: ReturnType<typeof layoutRoom>['layout'];
+	} | null = null;
+	let lastNow = 0;
 
-	function repaint(now: number) {
+	/** Poll boundary: recompile the world, mint transition receipts, run the
+	 *  flash diff. Paints once; the ticker keeps painting between polls. */
+	function compute(now: number) {
 		recordTrails();
 		const graph = compileRoomGraph(live, ledger, trails, { wakes, quota });
 		stale = graph.stale;
@@ -148,43 +175,82 @@
 			if (!demo) saveAtlas();
 		}
 		const layout = placed.layout;
+		scene = { graph, topo, layout };
+		lastNow = now;
+
+		// transition receipts: one attested place change ⇒ one walk
+		const transitions = diffTransitions(prevPlaces, topo.actorPlaces, topo);
+		prevPlaces = topo.actorPlaces;
+		const liveIds = new Set(Object.keys(topo.actorPlaces));
+		walks = walks.filter((w) => liveIds.has(w.actorRunId)); // cut drops the body
+		for (const t of transitions) {
+			if (t.route.length < 2) continue; // appearance — no walk to fake
+			const walk = walkFor(t, layout);
+			if (walk) walks = [...walks.filter((w) => w.actorRunId !== t.actorRunId), walk];
+		}
+		const lead = graph.actors.find((a) => !a.strand) ?? graph.actors[0];
+		const leadT = transitions.find((t) => t.actorRunId === lead?.runId);
+		if (leadT && leadT.route.length > 1) lastRoute = leadT.route;
+		const leadPlace = lead ? (topo.actorPlaces[lead.runId] ?? null) : null;
 
 		// dormant mode returns to Atlas; a live resident gets Island scale
 		if (!levelForced) level = graph.actors.length === 0 ? 'atlas' : 'island';
 
-		// follow: the resident (or first actor), framed with its island root
-		// so the destination keeps its context; the route it took is marked.
-		const lead = graph.actors.find((a) => !a.strand) ?? graph.actors[0];
-		const leadPlace = lead ? (topo.actorPlaces[lead.runId] ?? null) : null;
-		if (leadPlace && leadPlace !== lastActorPlace) {
-			lastRoute =
-				lastActorPlace && lastActorPlace !== leadPlace
-					? routeBetween(topo, lastActorPlace, leadPlace)
-					: null;
-			lastActorPlace = leadPlace;
+		// the camera is the reader's: one initial framing, then it moves only
+		// by hand — or eases with the actor when follow is explicitly on
+		const frameIds: PlaceId[] = [];
+		if (leadPlace) {
+			frameIds.push(leadPlace);
+			const rootId = lead ? `repo:${lead.islandLabel}` : null;
+			if (rootId && layout.nodes[rootId]) frameIds.push(rootId);
+			if (lastRoute) frameIds.push(...lastRoute);
 		}
-		if (follow) {
-			const frameIds: PlaceId[] = [];
-			if (leadPlace) {
-				frameIds.push(leadPlace);
-				const rootId = lead ? `repo:${lead.islandLabel}` : null;
-				if (rootId && layout.nodes[rootId]) frameIds.push(rootId);
-				if (lastRoute) frameIds.push(...lastRoute);
-			}
+		if (!framedOnce && frameIds.length > 0) {
 			camCenter = cameraCenterFor(layout, frameIds, cols, ROWS, level);
+			camTarget = camCenter;
+			framedOnce = true;
+		} else if (follow) {
+			camTarget = cameraCenterFor(layout, frameIds, cols, ROWS, level);
 		}
 
+		// flash diff on the clock-free, walk-free render: state motion only
 		const cam: Camera = { center: camCenter, cols, rows: ROWS, level };
-		const opts = { highlightRoute: lastRoute };
-		const next = renderWorld(topo, layout, graph, cam, { ...opts, now }).split('\n');
-		const bare = renderWorld(topo, layout, graph, cam, opts).split('\n');
+		const bare = renderWorld(topo, layout, graph, cam, { highlightRoute: lastRoute }).split('\n');
 		const delta: number[] = [];
 		for (let i = 0; i < bare.length; i++) {
 			if (prevBare.length > 0 && bare[i] !== prevBare[i]) delta.push(i);
 		}
 		prevBare = bare;
-		lines = next;
 		changed = delta;
+		paint();
+	}
+
+	/** Display tick: current camera + walk positions over the cached scene.
+	 *  Never touches the flash diff — a walking frame is not a state change. */
+	function paint() {
+		if (!scene) return;
+		const cam: Camera = { center: camCenter, cols, rows: ROWS, level };
+		lines = renderWorld(scene.topo, scene.layout, scene.graph, cam, {
+			now: lastNow,
+			highlightRoute: lastRoute,
+			actorPositions: walkPositions(walks)
+		}).split('\n');
+	}
+
+	/** The motion ticker: advance walks, ease the camera, repaint when
+	 *  anything actually moved. */
+	function tick() {
+		let moved = false;
+		if (walks.length > 0) {
+			const adv = advanceWalks(walks);
+			walks = adv.walks;
+			moved = true;
+		}
+		if (follow && (camCenter.x !== camTarget.x || camCenter.y !== camTarget.y)) {
+			camCenter = easeCamera(camCenter, camTarget);
+			moved = true;
+		}
+		if (moved) paint();
 	}
 
 	function onKey(e: KeyboardEvent) {
@@ -192,7 +258,8 @@
 		const pan = (dx: number, dy: number) => {
 			follow = false;
 			camCenter = { x: camCenter.x + dx, y: camCenter.y + dy };
-			repaint(Date.now());
+			camTarget = camCenter;
+			paint();
 			e.preventDefault();
 		};
 		if (e.key === 'ArrowLeft') pan(-PAN_STEP, 0);
@@ -200,13 +267,40 @@
 		else if (e.key === 'ArrowUp') pan(0, -PAN_STEP);
 		else if (e.key === 'ArrowDown') pan(0, PAN_STEP);
 		else if (e.key === 'f') {
-			follow = true;
-			repaint(Date.now());
+			follow = !follow;
+			paint();
 		} else if (e.key === 'a') {
 			levelForced = true;
 			level = level === 'island' ? 'atlas' : 'island';
-			repaint(Date.now());
+			paint();
 		}
+	}
+
+	// drag = the primary camera verb: px deltas convert through the measured
+	// char cell into world units at the current scale
+	let dragging = $state(false);
+	let dragLast = { x: 0, y: 0 };
+	function onPointerDown(e: PointerEvent) {
+		dragging = true;
+		dragLast = { x: e.clientX, y: e.clientY };
+		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+	}
+	function onPointerMove(e: PointerEvent) {
+		if (!dragging) return;
+		const lineH = charW * 2.25; // 12px font · 1.35 line-height vs ~7.2px cell
+		const sx = level === 'island' ? 2 : 0.5;
+		const sy = level === 'island' ? 1 : 0.25;
+		const dx = (e.clientX - dragLast.x) / charW / sx;
+		const dy = (e.clientY - dragLast.y) / lineH / sy;
+		if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
+		dragLast = { x: e.clientX, y: e.clientY };
+		follow = false;
+		camCenter = { x: camCenter.x - dx, y: camCenter.y - dy };
+		camTarget = camCenter;
+		paint();
+	}
+	function onPointerUp() {
+		dragging = false;
 	}
 
 	onMount(() => {
@@ -219,10 +313,14 @@
 		const onResize = () => measureCols();
 		window.addEventListener('resize', onResize);
 		window.addEventListener('keydown', onKey);
+		// the motion ticker — advances walks and eases the camera; a tick
+		// with nothing moving paints nothing
+		const ticker = setInterval(tick, TICK_MS);
 		const cleanup = () => {
 			stop = true;
 			window.removeEventListener('resize', onResize);
 			window.removeEventListener('keydown', onKey);
+			clearInterval(ticker);
 			if (timer) clearTimeout(timer);
 		};
 
@@ -248,15 +346,16 @@
 					spawn_max_concurrent: 3
 				};
 				frameNote = `trace #${81 + (i % frames.length)} / #81–#88`;
-				repaint(Date.parse('2026-08-27T10:21:00Z'));
+				compute(Date.parse('2026-08-27T10:21:00Z'));
 				loading = false;
 				i += 1;
 				if (i % frames.length === 0) {
 					// the world persists between journeys; the trail memory
 					// resets so the replay tells the same story each loop
 					trails = {};
-					lastActorPlace = null;
 					lastRoute = null;
+					prevPlaces = null;
+					walks = [];
 				}
 				timer = setTimeout(step, DEMO_STEP_MS);
 			};
@@ -289,7 +388,7 @@
 				}
 				live = await fetchLiveRuns();
 				signedOut = false;
-				repaint(nowMs);
+				compute(nowMs);
 			} catch (err) {
 				if (err instanceof LiveRunsAuthError) signedOut = true;
 			} finally {
@@ -312,17 +411,23 @@
 	<header>
 		<span class="mark">b·_·d</span>
 		<span class="title">the room, in characters</span>
-		<span class="hint">←↑↓→ pan · f follow · a atlas</span>
+		<span class="hint">drag / ←↑↓→ move camera · f follow on/off · a atlas</span>
 		<span class="status">
 			{#if loading}connecting…{:else if signedOut}signed out — <a href={resolve('/')}>sign in</a
 				>{:else if demo}{frameNote}{:else if stale}wire stale{:else}{follow
 					? 'live · following'
-					: 'live · panned'}{/if}
+					: 'live · your camera'}{/if}
 		</span>
 	</header>
 
 	{#if !signedOut}
-		<pre class="board">{#each lines as line, i (i)}<span
+		<pre
+			class="board"
+			class:grabbing={dragging}
+			onpointerdown={onPointerDown}
+			onpointermove={onPointerMove}
+			onpointerup={onPointerUp}
+			onpointercancel={onPointerUp}>{#each lines as line, i (i)}<span
 					class="line"
 					class:delta={changed.includes(i)}>{line + '\n'}</span
 				>{/each}</pre>
@@ -383,6 +488,12 @@
 		line-height: 1.35;
 		overflow-x: auto;
 		white-space: pre;
+		cursor: grab;
+		touch-action: none;
+		user-select: none;
+	}
+	.board.grabbing {
+		cursor: grabbing;
 	}
 	.line {
 		display: inline;
