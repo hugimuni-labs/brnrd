@@ -1,5 +1,5 @@
 """Tests for the #53 billing core: webhook state machine, wallet ledger,
-signature verification, cohort cutoff, and the API surface."""
+signature verification, pricing selection, and the API surface."""
 
 from __future__ import annotations
 
@@ -342,11 +342,11 @@ def test_subscription_lifecycle_flips_tier_and_grants_allowance():
     assert wallet["balances"] == {}
 
 
-# --- cohort cutoff -----------------------------------------------------------
+# --- new-subscription pricing ------------------------------------------------
 
 
-def test_supporter_cohort_cutoff(monkeypatch):
-    client = _client()  # supporter_cohort_size=2
+def test_new_subscriptions_always_use_public_price(monkeypatch):
+    client = _client()  # historical supporter configuration deliberately remains present
     seen = {}
 
     def fake_checkout(settings, **kwargs):
@@ -361,13 +361,13 @@ def test_supporter_cohort_cutoff(monkeypatch):
 
     first = _account(client, github_id="1", login="a")
     out = client.post("/v1/accounts/subscription/checkout", json={"cadence": "monthly"}, headers=first)
-    assert out.json()["cohort"] == "supporter"
-    assert seen["price_id"] == "price_sup_m"
+    assert out.json()["cohort"] == "public"
+    assert seen["price_id"] == "price_pub_m"
 
-    # two supporter subscriptions exist → third checkout is public-priced
-    for n, github_id in enumerate(("1", "2")):
-        account_headers = _account(client, github_id=github_id, login=f"user{github_id}")
-        aid = None
+    # Even with active historical supporter subscriptions below the old
+    # cohort ceiling, a new checkout remains public-priced.
+    for github_id in ("1", "2"):
+        _account(client, github_id=github_id, login=f"user{github_id}")
         from brnrd.models import Account
         from sqlalchemy import select
 
@@ -617,7 +617,6 @@ def test_a_seventh_dispatch_type_inherits_the_tombstone_guard(monkeypatch):
         return "seventh-applied"
 
     monkeypatch.setitem(billing._EVENT_HANDLERS, "customer.tax_id.created", _seventh)
-
     client = _client()
     _account(client, github_id="9", login="live")
     live_id = _account_id_for(client, "9")

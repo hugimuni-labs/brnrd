@@ -88,7 +88,17 @@ def subscription_checkout(
     account = _account(db, principal)
     if _live_subscription(db, account.id) is not None:
         raise HTTPException(status_code=409, detail="account already has a subscription")
-    price_id, cohort = billing.resolve_subscription_price(settings, db, payload.cadence)
+
+    # Pricing decision 2026-08-27: one subscriber offer. New checkouts always
+    # use the public Stripe Price; the historical supporter Price IDs remain
+    # configured only so webhook ingestion can classify existing subscribers
+    # without rewriting or canceling their Stripe subscriptions.
+    cohort = Subscription.COHORT_PUBLIC
+    price_id = (
+        settings.stripe_price_public_monthly
+        if payload.cadence == "monthly"
+        else settings.stripe_price_public_annual
+    )
     if not price_id:
         raise HTTPException(status_code=503, detail=f"no Stripe price configured for {cohort} {payload.cadence}")
     try:

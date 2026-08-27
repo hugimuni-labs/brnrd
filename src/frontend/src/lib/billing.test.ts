@@ -6,38 +6,17 @@ import {
 	billingReturnNotice,
 	dateLabel,
 	subscribeOffer,
-	supporterSeatsLeft,
 	withoutBillingParam
 } from './billing.ts';
 
-test('supporterSeatsLeft mirrors the pricing-page seat math', () => {
-	assert.equal(supporterSeatsLeft(null), null);
-	assert.equal(
-		supporterSeatsLeft({ accounts: 10, supporter_seats_total: 200, supporter_seats_taken: 60 }),
-		140
-	);
-	// oversubscribed clamps at zero, never negative
-	assert.equal(
-		supporterSeatsLeft({ accounts: 10, supporter_seats_total: 200, supporter_seats_taken: 230 }),
-		0
-	);
+test('subscribeOffer always returns the single subscriber price', () => {
+	assert.deepEqual(subscribeOffer('monthly'), { usd: 7, label: '$7/mo' });
+	assert.deepEqual(subscribeOffer('annual'), { usd: 70, label: '$70/yr' });
 });
 
-test('subscribeOffer picks supporter while seats remain or are unknown', () => {
-	assert.deepEqual(subscribeOffer('monthly', 5), { usd: 5, cohort: 'supporter', label: '$5/mo' });
-	assert.deepEqual(subscribeOffer('annual', 5), { usd: 50, cohort: 'supporter', label: '$50/yr' });
-	// unknown stats read as open — same posture as the pricing page
-	assert.equal(subscribeOffer('monthly', null).cohort, 'supporter');
-	// cohort full → public prices
-	assert.deepEqual(subscribeOffer('monthly', 0), { usd: 7, cohort: 'public', label: '$7/mo' });
-	assert.deepEqual(subscribeOffer('annual', 0), { usd: 70, cohort: 'public', label: '$70/yr' });
-});
-
-test('pricing constants match the accepted pricing decision', () => {
-	assert.equal(PRICING.supporter.monthly, 5);
-	assert.equal(PRICING.supporter.annual, 50);
-	assert.equal(PRICING.public.monthly, 7);
-	assert.equal(PRICING.public.annual, 70);
+test('pricing constants match the accepted single-price decision', () => {
+	assert.equal(PRICING.monthly, 7);
+	assert.equal(PRICING.annual, 70);
 });
 
 test('billingReturnNotice maps the four return params and nothing else', () => {
@@ -50,7 +29,7 @@ test('billingReturnNotice maps the four return params and nothing else', () => {
 	// success copy stays honest about webhook-paced entitlements…
 	assert.match(billingReturnNotice('?billing=subscribed')!.text, /incrementally/);
 	assert.doesNotMatch(billingReturnNotice('?billing=subscribed')!.text, /active|done/i);
-	// …and the patronage steer bans credits framing from the offer surface
+	// …and the offer surface bans credits framing
 	for (const param of ['subscribed', 'topup-complete', 'canceled', 'topup-canceled']) {
 		assert.doesNotMatch(billingReturnNotice(`?billing=${param}`)!.text, /credit/i);
 	}

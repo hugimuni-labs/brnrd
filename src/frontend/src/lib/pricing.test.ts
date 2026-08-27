@@ -33,15 +33,10 @@ async function renderRoute(): Promise<ReturnType<typeof render>> {
 
 after(() => rmSync(join(here, '.pricingRoute.generated.mjs'), { force: true }));
 
-test('every paid tier on /pricing carries a tax disclosure', async () => {
+test('the single paid tier on /pricing carries a tax disclosure', async () => {
 	const { body: html } = await renderRoute();
-	// Both paid tiers are behind `{#if supporterOpen}` / `{:else}`, so exactly
-	// one renders at a time — but whichever one does must be priced honestly.
-	// A regression that dropped the note from only the second branch would
-	// otherwise stay invisible until the 200th account signed up.
-	const paidPrices = ['$5', '$7'].filter((price) => html.includes(price));
-	ok(paidPrices.length > 0, 'no paid tier rendered — the test is asserting nothing');
-	ok(html.includes(TAX_NOTE), 'a paid price rendered without the tax note');
+	ok(html.includes('$7'), 'the subscriber price did not render');
+	ok(html.includes(TAX_NOTE), 'the subscriber price rendered without the tax note');
 });
 
 test('the hosted offer names its real product boundaries and live routes', async () => {
@@ -89,19 +84,14 @@ test('the page carries a search description and canonical URL', async () => {
 	ok(head.includes('https://brnrd.dev/pricing'), 'pricing has no canonical URL');
 });
 
-test('the supporter tier names the public price without a strikethrough', async () => {
-	// The public price is a real number nobody has been charged yet — it's a
-	// future price for a later cohort, not a past one. Rendering it as
-	// line-through/`<del>` would borrow the "was $X, now $Y" discount
-	// convention for a figure that was never a "was" price. Property, not
-	// wording: assert the number appears and the strikethrough markup
-	// doesn't, so a future redesign can reword this without the guard
-	// firing on prose alone — but a reintroduced `line-through`/`<del>`
-	// still trips it.
+test('the subscriber offer has one price and no founder-cohort language', async () => {
 	const { body: html } = await renderRoute();
-	ok(html.includes('$7'), 'the public price never rendered — the guard below asserts nothing');
-	ok(!/<del[\s>]/i.test(html), 'the public price rendered inside a <del> element');
-	ok(!/\bline-through\b/.test(html), 'the public price rendered with strikethrough styling');
+	ok(html.includes('$7'), 'monthly subscriber price is missing');
+	ok(html.includes('$70'), 'annual subscriber price is missing');
+	ok(!/\$5(?!\d)/.test(html), 'retired founder price is still visible');
+	ok(!/founding price|first 200|first \d+ subscriptions|locked while active|later \$?/i.test(html));
+	ok(!/<del[\s>]/i.test(html), 'subscriber price rendered inside a <del> element');
+	ok(!/\bline-through\b/.test(html), 'subscriber price rendered with strikethrough styling');
 });
 
 test('the tax note names both a tax and a rate', () => {
@@ -130,11 +120,12 @@ test('fetchPricing returns the parsed payload on success', async () => {
 	const payload = {
 		supporter_monthly: { amount: 500, currency: 'usd' },
 		supporter_annual: null,
-		public_monthly: null,
-		public_annual: null
+		public_monthly: { amount: 700, currency: 'usd' },
+		public_annual: { amount: 7000, currency: 'usd' }
 	};
 	const result = await fetchPricing(fakeFetch(200, payload));
-	ok(result?.supporter_monthly?.amount === 500);
+	ok(result?.public_monthly?.amount === 700);
+	ok(result?.public_annual?.amount === 7000);
 });
 
 test('fetchPricing degrades to null on a non-2xx response, never throws', async () => {
@@ -149,15 +140,15 @@ test('fetchPricing degrades to null on a network failure, never throws', async (
 });
 
 test('formatUsd renders a whole-dollar Stripe amount compactly', () => {
-	ok(formatUsd({ amount: 500, currency: 'usd' }) === '$5');
+	ok(formatUsd({ amount: 700, currency: 'usd' }) === '$7');
 });
 
 test('formatUsd keeps cents when the amount is not a whole dollar', () => {
-	ok(formatUsd({ amount: 550, currency: 'usd' }) === '$5.50');
+	ok(formatUsd({ amount: 750, currency: 'usd' }) === '$7.50');
 });
 
 test('formatUsd refuses to mislabel a non-USD figure as dollars', () => {
-	ok(formatUsd({ amount: 500, currency: 'eur' }) === null);
+	ok(formatUsd({ amount: 700, currency: 'eur' }) === null);
 });
 
 test('formatUsd is null-safe for an absent figure', () => {
