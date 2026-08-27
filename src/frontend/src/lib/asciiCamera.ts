@@ -29,6 +29,9 @@ export interface WorldRenderOpts {
 	now?: number;
 	/** Place route to mark on the ground — the current transition. */
 	highlightRoute?: PlaceId[] | null;
+	/** Display positions for actors mid-walk (world units) — presentation
+	 *  state derived from an attested BoundaryTransition, never a place. */
+	actorPositions?: Record<string, Point> | null;
 	/** Cap on cut Cloth rows below the board. */
 	clothRows?: number;
 }
@@ -400,16 +403,19 @@ export function renderWorld(
 		if (text) canvas.text(c.x, c.y, text);
 	}
 
-	// 4 · actors standing at their places; stacked when they share one
+	// 4 · actors standing at their places (or mid-walk when the caller
+	// passes a display position from an attested transition); stacked when
+	// they share one place
 	const stacked = new Map<PlaceId, number>();
 	const offFrame: string[] = [];
 	for (const actor of graph.actors) {
 		const pid = topo.actorPlaces[actor.runId];
-		const p = pid ? layout.nodes[pid] : undefined;
+		const walking = opts.actorPositions?.[actor.runId];
+		const p = walking ?? (pid ? layout.nodes[pid] : undefined);
 		if (!p) continue;
 		const c = toChar(f, p);
-		const n = stacked.get(pid) ?? 0;
-		stacked.set(pid, n + 1);
+		const n = walking ? 0 : (stacked.get(pid) ?? 0);
+		if (!walking) stacked.set(pid, n + 1);
 		if (!inFrame(f, c)) {
 			offFrame.push(
 				`${bearingArrow({ x: f.left + f.cols / f.sx / 2, y: f.top + f.rows / f.sy / 2 }, p)} ${actor.glyph} ${clip(actor.name, 18)}`
