@@ -138,9 +138,8 @@
 		{#if !hasSubscription}
 			<!-- subscribe CTA -->
 			<p class="mt-2 text-sm leading-relaxed text-stone-400">
-				Your first repository stays free. If brnrd has become part of how you really work, a
-				subscription adds more repositories, lifts the headroom limits, and funds the open-source
-				engine.
+				Your first repository stays free. A subscription removes the one-repository product cap and
+				the free tier's hosted event limits while funding the open-source engine.
 			</p>
 			<div class="mt-3 flex flex-wrap items-center gap-3">
 				<div
@@ -172,7 +171,7 @@
 			</div>
 			<p class="mt-2 font-mono text-[10px] text-ink-quiet">
 				{offer.cohort === 'supporter'
-					? `supporter cohort${seatsLeft !== null ? ` · ${seatsLeft} seats left` : ''} — price kept for the life of the subscription`
+					? 'founding price — kept for the life of the subscription'
 					: 'public pricing'}
 				· Stripe-hosted checkout, price shown before you pay
 			</p>
