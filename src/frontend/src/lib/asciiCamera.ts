@@ -466,7 +466,11 @@ export function renderWorld(
 			);
 			continue;
 		}
-		const face = actor.moodRest ? ` ${actor.moodRest}` : '';
+		// the body: the mood face IS the actor when the wire attests one (his
+		// call, 2026-08-27 — the face beats the glyph as a body); the glyph
+		// remains the handle in the control rows below, and the body for
+		// actors with no attested mood.
+		const body = actor.moodRest ?? actor.glyph;
 		// the mind-connect: an attested injection drops the actor into reading
 		// frames in place — the pager at its wrist, the tether cycling. The
 		// actor never moves for a page; traffic comes to it.
@@ -478,7 +482,7 @@ export function renderWorld(
 		canvas.text(
 			Math.max(0, c.x - 2 - tether.length - n * 8),
 			c.y - 1 < 0 ? c.y : c.y - 1,
-			`${tether}${actor.glyph}${face}${mark ? ' ' + mark : ''}`
+			`${tether}${body}${mark ? ' ' + mark : ''}`
 		);
 	}
 
@@ -559,7 +563,7 @@ export function renderWorld(
 
 /** The legend, as its own block so the page can render it apart. */
 export const LEGEND = [
-	'@ resident   a…z strands   ◇ pending letter   ✉>>> boundary injection',
+	'the mood face is the resident (@ when faceless)   a…z strands   ◇ pending letter   ✉>>> boundary injection',
 	'⌂ island root   name/ chamber   · file leaf   ▛ camp   ∙ current route',
 	'P portal  K chart  B bay  W watch  D wake  X cut  R rig  F FORGE',
 	'─│ corridors  ═║ branch/shore rail  ┄┆ station tether  G gate (HOME)',

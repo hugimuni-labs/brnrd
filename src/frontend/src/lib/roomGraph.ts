@@ -151,7 +151,10 @@ export function resolvePlace(
 			return { kind: 'forge-dock', label: edge.detail };
 		case 'probe':
 			if (FORGE_RE.test(detail)) return { kind: 'forge-dock', label: edge.detail };
-			return { kind: 'test-rig', label: chamberLabel(edge, run.room, run.repo_label) ?? edge.detail };
+			return {
+				kind: 'test-rig',
+				label: chamberLabel(edge, run.room, run.repo_label) ?? edge.detail
+			};
 		case 'orient':
 			if (DESK_RE.test(detail)) return { kind: 'correspondence-desk', label: edge.detail };
 			if (CONTROL_FILE_RE.test(detail)) return { kind: 'chart-table', label: edge.detail };
