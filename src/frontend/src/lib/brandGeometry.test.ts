@@ -147,14 +147,26 @@ test('hugimuni: STEMS / BAR_H / vee_m match the Python reference', () => {
 	);
 });
 
-test('hugimuniSvg: chosen geometry, tunable intersection, and visible grain render', () => {
+test('hugimuniSvg: emissive render — transparent ground, three passes, grain on the strokes', () => {
 	const out = hugimuniSvg(HUGIMUNI_DEFAULTS, 'amber-sky');
-	assert.match(out, /fill="#080b09"/);
+	// the rounded ink board is gone: the mark is transparent and carries its
+	// own light (2026-08-28, from the maintainer's generated reference)
+	assert.doesNotMatch(out, /rx="112"/);
+	assert.doesNotMatch(out, /fill="#080b09"/);
+	// body pass: full-width palette strokes; core stems keep the tunable
+	// intersection colour
 	assert.match(out, /stroke-width="40"[^>]+stroke="#ff9a1f"/);
 	assert.match(out, /stroke-width="40"[^>]+stroke="#69c7df"/);
 	assert.match(out, /stroke-width="26"[^>]+stroke="#eadfca"/);
-	assert.match(out, /feTurbulence[^>]+baseFrequency="0\.72"/);
-	assert.match(out, /filter="url\(#hm-grain\)" opacity="0\.197"/);
+	// bloom halo + white-hot cores (~34% width) around every stroke
+	assert.match(out, /filter="url\(#hm-bloom\)"/);
+	assert.match(out, /stroke-width="8"[^>]+stroke="#fff6e4"/); // round(40*.2)
+	assert.match(out, /stroke-width="6"[^>]+stroke="#fff6e4"/); // round(28*.2)
+	// grain is masked to the strokes and driven by GRAIN (58 → .348/.319)
+	assert.match(out, /<mask id="hm-strokes">/);
+	assert.match(out, /mask="url\(#hm-strokes\)"/);
+	assert.match(out, /filter="url\(#hm-grain\)" opacity="0\.348"/);
+	assert.match(out, /fill="url\(#hm-scanlines\)" opacity="0\.319"/);
 });
 
 test('hugimuniConstantBlock: emits pasteable assignments, TAIL flagged as function-local', () => {

@@ -338,4 +338,10 @@
 		width: 100%;
 		height: 100%;
 	}
+	/* The hugimuni mark is transparent since the emissive rework (2026-08-28)
+	   — it carries its own light and no longer ships a rounded ink board. The
+	   bench provides the near-black ground a glowing mark is judged on. */
+	.mark-frame {
+		background: #030504;
+	}
 </style>
