@@ -154,7 +154,7 @@ test('the mind-connect renders in place: tether at the actor, no relocation', ()
 		reading: { [RESIDENT]: READING_TICKS }
 	});
 	assert.doesNotMatch(bare, /▯/);
-	assert.match(reading, /▯[⌁∿≋]@/, 'pager + tether + glyph');
+	assert.match(reading, /▯[⌁∿≋]b·_·d/, 'pager + tether + the face that is the body');
 	// the actor's place did not change — only its stance did
 	assert.equal(topo.actorPlaces[RESIDENT], compileTopology(graph).actorPlaces[RESIDENT]);
 });
@@ -166,7 +166,7 @@ test('a mutate at the chart table is embodied: ✎ with the leaf', () => {
 	assert.equal(kind, 'chart-table');
 	assert.equal(activityMark(actor, kind), '✎ .card');
 	const out = renderWorld(topo, layout, graph, CAM, {});
-	assert.match(out, /@.*✎ \.card/, 'the act stands beside the body');
+	assert.match(out, /b·_·d ✎ \.card/, 'the act stands beside the body');
 });
 
 // ── the dynamic trie: footsteps derive from the paths the acts name ─────────
