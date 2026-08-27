@@ -2,44 +2,28 @@
 	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { isComplete as legalNoticeIsComplete } from '$lib/legalNotice';
-	import { GITHUB_REPO, fetchPublicStats, type PublicStats } from '$lib/publicStats';
-	// Ex-tax figures on this page; a French buyer pays $6.00 for the $5 tier.
-	// Why the line exists and what is still open: $lib/pricing.ts.
-	// The numbers themselves are Stripe-derived (#831): fetchPricing refines
-	// the baked-in literals below after mount, same pattern as `stats`.
+	import { GITHUB_REPO } from '$lib/publicStats';
+	// Ex-tax figures on this page. Why the line exists and what is still open:
+	// $lib/pricing.ts. The numbers themselves are Stripe-derived (#831):
+	// fetchPricing refines the baked-in literals below after mount.
 	import { TAX_NOTE, fetchPricing, formatUsd, type PricingFigures } from '$lib/pricing';
 
-	// Pricing (#509): one click off the landing, never on it. Numbers are
-	// the accepted pricing decision (decision-pricing-shape, 2026-07):
-	// supporter $5/mo · $50/yr for the first cohort, then public $7/mo ·
-	// $70/yr. Stripe Price objects stay authoritative at checkout — this
-	// page is the offer, not the invoice. Credits/top-up framing dropped
-	// (maintainer steer 2026-07-21): the subscription is patronage that
-	// removes the free tier's headroom limits — no credit product exists
-	// yet, so the page doesn't promise one.
-	let stats = $state<PublicStats | null>(null);
+	// Pricing (maintainer steer, 2026-08-27): one subscriber price, no founder
+	// cohort or scarcity step. $7/mo · $70/yr. Stripe Price objects stay
+	// authoritative at checkout — this page is the offer, not the invoice.
 	let pricing = $state<PricingFigures | null>(null);
 
 	const legalNoticeReady = legalNoticeIsComplete();
 
 	onMount(async () => {
-		[stats, pricing] = await Promise.all([fetchPublicStats(), fetchPricing()]);
+		pricing = await fetchPricing();
 	});
 
-	// The public count decides which Stripe cohort is still open, but it is
-	// deliberately not rendered as scarcity. A near-empty cohort is product
-	// state, not useful social proof; the offer names the fixed 200-person
-	// boundary without turning the live subscriber count into marketing.
-	let supporterOpen = $derived(
-		stats === null || stats.supporter_seats_taken < stats.supporter_seats_total
-	);
-
 	// Stripe-derived, with the accepted pricing decision as the no-JS /
-	// pre-refine floor (same numbers `billing.ts`'s PRICING constant names).
-	let supporterMonthly = $derived(formatUsd(pricing?.supporter_monthly) ?? '$5');
-	let supporterAnnual = $derived(formatUsd(pricing?.supporter_annual) ?? '$50');
-	let publicMonthly = $derived(formatUsd(pricing?.public_monthly) ?? '$7');
-	let publicAnnual = $derived(formatUsd(pricing?.public_annual) ?? '$70');
+	// pre-refine floor. Historical supporter prices remain in the stats API
+	// only for compatibility; new subscriptions use the public Price objects.
+	let subscriberMonthly = $derived(formatUsd(pricing?.public_monthly) ?? '$7');
+	let subscriberAnnual = $derived(formatUsd(pricing?.public_annual) ?? '$70');
 </script>
 
 <svelte:head>
@@ -127,31 +111,11 @@
 					data-pricing-plan="subscriber"
 				>
 					<h3 id="subscriber-title" class="eyebrow">hosted · subscriber</h3>
-					{#if supporterOpen}
-						<p class="mt-2 font-mono text-2xl font-semibold text-amber-100">
-							{supporterMonthly}<span class="text-sm text-ink-quiet">/mo</span>
-						</p>
-						<p class="font-mono text-xs leading-relaxed text-ink-quiet">
-							or {supporterAnnual}/yr · founding price for the first {stats?.supporter_seats_total ??
-								200} subscriptions
-						</p>
-						<!-- Deliberately not a struck-through "was" price: nobody has ever
-						     been charged {publicMonthly}, so crossing it out would borrow
-						     the discount convention for a number that is a *future*
-						     price for a *different* cohort, not a past one. See
-						     decision-pricing-shape.md → "Early-adopter price step" and
-						     subject-legal-compliance.md → "Price display". -->
-						<p class="mt-1 font-mono text-[11px] leading-relaxed text-ink-quiet">
-							locked while active · later {publicMonthly}/mo or {publicAnnual}/yr
-						</p>
-						<p class="mt-1 font-mono text-[11px] text-ink-quiet">{TAX_NOTE}</p>
-					{:else}
-						<p class="mt-2 font-mono text-2xl font-semibold text-amber-100">
-							{publicMonthly}<span class="text-sm text-ink-quiet">/mo</span>
-						</p>
-						<p class="font-mono text-xs text-ink-quiet">or {publicAnnual}/yr</p>
-						<p class="mt-1 font-mono text-[11px] text-ink-quiet">{TAX_NOTE}</p>
-					{/if}
+					<p class="mt-2 font-mono text-2xl font-semibold text-amber-100">
+						{subscriberMonthly}<span class="text-sm text-ink-quiet">/mo</span>
+					</p>
+					<p class="font-mono text-xs text-ink-quiet">or {subscriberAnnual}/yr</p>
+					<p class="mt-1 font-mono text-[11px] text-ink-quiet">{TAX_NOTE}</p>
 					<ul class="mt-5 space-y-2 text-sm text-stone-400">
 						<li>everything in hosted Free</li>
 						<li>the one-repository product cap is removed</li>
@@ -165,7 +129,7 @@
 						<a
 							class="inline-flex w-full items-center justify-center border border-amber-700 bg-amber-950/40 px-3 py-2.5 font-mono text-[12px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/70"
 							href={resolve('/login')}
-							>subscribe · {supporterOpen ? `${supporterMonthly}/mo` : `${publicMonthly}/mo`}</a
+							>subscribe · {subscriberMonthly}/mo</a
 						>
 					</div>
 				</article>
