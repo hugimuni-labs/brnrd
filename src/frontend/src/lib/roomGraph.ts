@@ -79,7 +79,18 @@ const KB_RE = /\bkb\/|\.brnrd-kb\/|knowledge\//;
  * purpose: machinery roots (`.brr`, `.git`) and a truncation-cut final
  * segment stay off the map — a fabricated chamber is worse than a missing
  * one, and every kept prefix is true even when the leaf was cut.
+ *
+ * The hidden-segment fence (2026-08-27, from four screenshots of garbage
+ * terrain): any token that passes through a dot-prefixed directory is
+ * machinery, wherever the dot sits. The measured failure: the account home
+ * lives under `~/.local/state/brnrd/…`, whose `brnrd` segment matches the
+ * repo short name, so dominion writes were minting fake chambers
+ * (`accounts/acc_…/home/…`) on the island. `.local` before the match is
+ * the tell — hidden trees stay off the map entirely.
  */
+function hasHiddenSegment(segs: string[]): boolean {
+	return segs.some((s) => (s.startsWith('.') && s !== '.') || s === '~');
+}
 export function dirFromEdge(
 	edge: LiveRun['edge'],
 	repoLabel: string | null | undefined
@@ -98,14 +109,17 @@ export function dirFromEdge(
 		const last = rel[rel.length - 1];
 		if (last && (last.startsWith('.') || /\.[A-Za-z][A-Za-z0-9]{0,6}$/.test(last)))
 			rel = rel.slice(0, -1); // drop the file leaf; chambers are directories
-		if (rel.length === 0 || rel[0].startsWith('.') || rel[0] === '~') return;
+		if (rel.length === 0 || hasHiddenSegment(rel)) return;
 		best = rel.join('/');
 	};
 	for (const m of detail.matchAll(/(?:\/[\w.@~-]+){2,}/g)) {
 		const segs = m[0].split('/').filter(Boolean);
-		// an absolute path is only legible through the repo's own segment
+		// an absolute path is only legible through the repo's own segment,
+		// and only when no hidden directory sits on the way there — the
+		// account home's `.local/state/brnrd/…` also carries the segment
 		const k = segs.lastIndexOf(short);
 		if (k < 0 || k >= segs.length - 1) continue;
+		if (hasHiddenSegment(segs.slice(0, k + 1))) continue;
 		consider(segs.slice(k + 1), detail[m.index + m[0].length] === '…');
 	}
 	for (const m of detail.matchAll(/(?<=^|[\s'"(=])(?:[\w.@~-]+\/){2,}[\w.@~-]+/g)) {
@@ -255,6 +269,11 @@ export interface TrailStep {
 export interface RoomIsland {
 	label: string;
 	camps: RoomCamp[];
+	/** Remote-forge produce attested by this island's live actors — PR /
+	 *  issue / merge counts for the FORGE dock (his steer, 2026-08-27: the
+	 *  forge looked good but the PRs and issues had no place). Counts only:
+	 *  the wire attests `relics_counts`, not identities. */
+	forge: Record<string, number>;
 }
 
 export interface ClothRow {
@@ -294,10 +313,13 @@ export interface FuelRow {
  *  appear; what the wire cannot see (returned strands, promise mismatches)
  *  is absent, not zero. */
 export interface WatchFact {
-	mark: '◇' | 'T';
+	mark: '◇' | 'T' | '^';
 	text: string;
 	/** Run id or schedule id the beacon resolves to. */
 	source: string;
+	/** The armed wait's deadline (ISO) for `^` facts — the same `brnrd
+	 *  await` arming the wire attests as `lifecycle: awaiting`. */
+	until?: string | null;
 }
 
 export interface RoomGraph {
@@ -501,7 +523,9 @@ export function compileRoomGraph(
 	}));
 
 	// WATCH: only beacons that resolve to a source. Letters resolve to their
-	// run; armed schedules resolve to their entry. What the wire cannot see
+	// run; armed waits resolve to the run that armed them (`brnrd await` →
+	// `lifecycle: awaiting` + `await_until` on the wire — the tower is wired
+	// to the same mechanism the actor waits with). What the wire cannot see
 	// is absent, never a synthesized zero.
 	const watch: WatchFact[] = [];
 	for (const actor of actors) {
@@ -510,6 +534,13 @@ export function compileRoomGraph(
 				mark: '◇',
 				text: `${actor.portalsPending} letter${actor.portalsPending > 1 ? 's' : ''} — ${actor.name}`,
 				source: actor.runId
+			});
+		if (actor.lifecycle === 'awaiting')
+			watch.push({
+				mark: '^',
+				text: `awaiting — ${actor.name}`,
+				source: actor.runId,
+				until: actor.awaitUntil
 			});
 	}
 	// Schedule entries stay in CLOCKWORK (future intent); the renderer may
@@ -520,7 +551,17 @@ export function compileRoomGraph(
 		generatedAt: live?.generated_at ?? ledger?.generated_at ?? null,
 		islands: [...islands.entries()]
 			.sort(([a], [b]) => a.localeCompare(b))
-			.map(([label, camps]) => ({ label, camps: [...camps.values()] })),
+			.map(([label, camps]) => {
+				const forge: Record<string, number> = {};
+				for (const actor of actors) {
+					if (actor.islandLabel !== label) continue;
+					for (const chip of actor.relics) {
+						if (chip.kind === 'pr' || chip.kind === 'issue' || chip.kind === 'merge')
+							forge[chip.kind] = (forge[chip.kind] ?? 0) + chip.count;
+					}
+				}
+				return { label, camps: [...camps.values()], forge };
+			}),
 		actors,
 		cloth,
 		pendingLetters: actors.reduce((n, a) => n + a.portalsPending, 0),

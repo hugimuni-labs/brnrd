@@ -56,15 +56,23 @@ function topoWith(trailDirs: string[], runs?: LiveRun[]) {
 	);
 }
 
-test('the repository root sits at its island origin; depth advances east by a fixed spacing', () => {
+test('the repository root sits at its island origin; depth advances just past the parent label', () => {
 	const topo = topoWith(['src/frontend/src/lib']);
 	const { layout } = layoutRoom(topo);
 	const root = layout.nodes[islandRootId(REPO)];
 	assert.deepEqual(root, { x: 0, y: 0 });
 	const src = layout.nodes[dirId(REPO, ['src'])];
 	const frontend = layout.nodes[dirId(REPO, ['src', 'frontend'])];
+	const src2 = layout.nodes[dirId(REPO, ['src', 'frontend', 'src'])];
+	// the advance is label-aware (2026-08-27, the width fold): each child
+	// clears its parent's painted label at island scale (2 chars/unit) plus
+	// a short corridor — never the old fixed 11-unit stride
 	assert.ok(src.x > root.x);
-	assert.equal(frontend.x - src.x, src.x - root.x); // fixed spacing per depth
+	assert.ok((frontend.x - src.x) * 2 >= 'src/'.length + 2, 'clears the parent label');
+	assert.ok((src2.x - frontend.x) * 2 >= 'frontend/'.length + 2, 'clears the longer label');
+	assert.ok(frontend.x - src.x <= 14, 'and never sprawls past the cap');
+	// deterministic: the same topology lays out to the same coordinates
+	assert.deepEqual(layoutRoom(topo).layout.nodes, layout.nodes);
 });
 
 test('the first child continues its parent lane; siblings claim the stable alternation', () => {
