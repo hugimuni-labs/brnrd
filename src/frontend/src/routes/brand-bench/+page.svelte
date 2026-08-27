@@ -94,7 +94,8 @@
 		{ key: 'STROKE', label: 'STROKE — stroke width', min: 2, max: 80, step: 1 },
 		{ key: 'STEM_STROKE', label: 'STEM_STROKE — side-leg width', min: 2, max: 100, step: 1 },
 		{ key: 'GHOST', label: 'GHOST — chromatic-aberration offset', min: 0, max: 40, step: 1 },
-		{ key: 'GRAIN', label: 'GRAIN — phosphor texture', min: 0, max: 100, step: 1 }
+		{ key: 'GRAIN', label: 'GRAIN — phosphor texture', min: 0, max: 100, step: 1 },
+		{ key: 'GROUND_RX', label: 'GROUND_RX — backdrop corner radius', min: 0, max: 256, step: 1 }
 	];
 
 	function resetBrnrd() {
@@ -218,6 +219,28 @@
 					bind:value={hugimuniConstants.INTERSECTION}
 					class="panel w-24 px-2 py-1 text-[11px]"
 					aria-label="intersection colour hex"
+				/>
+			</label>
+			<label class="flex items-center gap-2">
+				<input
+					type="checkbox"
+					bind:checked={hugimuniConstants.GROUND_ON}
+					aria-label="ground backdrop on/off"
+				/>
+				<span class="text-ink-quiet">ground</span>
+				<input
+					type="color"
+					bind:value={hugimuniConstants.GROUND}
+					class="h-8 w-12 cursor-pointer border border-stone-700 bg-transparent p-0.5"
+					aria-label="ground colour"
+					disabled={!hugimuniConstants.GROUND_ON}
+				/>
+				<input
+					type="text"
+					bind:value={hugimuniConstants.GROUND}
+					class="panel w-24 px-2 py-1 text-[11px]"
+					aria-label="ground colour hex"
+					disabled={!hugimuniConstants.GROUND_ON}
 				/>
 			</label>
 		{/if}
