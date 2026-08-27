@@ -136,12 +136,17 @@ test('the PAGER strip renders pages by carrier and flashes as state', () => {
 	const store: Record<string, PagerPage[]> = {};
 	recordPages(referenceFrames()[4], store, { [RESIDENT]: '@' });
 	const out = renderWorld(topo, layout, graph, CAM, { pages: pagerFeed(store) });
-	assert.match(out, /PAGER ✉×1/);
-	assert.match(out, /10:14 ✉ @ page rode probe/);
+	assert.match(out, /▯ PAGER/);
+	assert.match(out, /✉×1 read/);
+	assert.match(out, /10:14 ✉ @ rode probe/);
 	// clock-free and deterministic: the flash diff can ride it
 	assert.equal(out, renderWorld(topo, layout, graph, CAM, { pages: pagerFeed(store) }));
-	// no pages ⇒ no strip
-	assert.doesNotMatch(renderWorld(topo, layout, graph, CAM, {}), /PAGER/);
+	// no pages ⇒ the field still stands, honestly empty (the pager is the
+	// injection-status instrument now, not a sometimes-strip): both tenses
+	// named, nothing invented
+	const empty = renderWorld(topo, layout, graph, CAM, {});
+	assert.match(empty, /▯ PAGER/);
+	assert.match(empty, /none read yet/);
 });
 
 test('the mind-connect renders in place: tether at the actor, no relocation', () => {
@@ -153,8 +158,18 @@ test('the mind-connect renders in place: tether at the actor, no relocation', ()
 	const reading = renderWorld(topo, layout, graph, cam, {
 		reading: { [RESIDENT]: READING_TICKS }
 	});
-	assert.doesNotMatch(bare, /▯/);
+	// the bare render has the standing PAGER field but no tether — the plug
+	// only closes (▯⌁) while a reading ceremony is live
+	assert.doesNotMatch(bare, /▯⌁/);
+	assert.match(reading, /▯⌁ PAGER/, 'the pager field shows the connection');
 	assert.match(reading, /▯[⌁∿≋]b·_·d/, 'pager + tether + the face that is the body');
+	// the mind-connect reaches *down* toward the pager field below the map:
+	// the reading render carries tether frames the bare render does not
+	const tetherFrames = (s: string) => (s.match(/[∿≋]/g) ?? []).length;
+	assert.ok(
+		tetherFrames(reading) > tetherFrames(bare),
+		'the tether line descends toward the pager field'
+	);
 	// the actor's place did not change — only its stance did
 	assert.equal(topo.actorPlaces[RESIDENT], compileTopology(graph).actorPlaces[RESIDENT]);
 });
@@ -208,6 +223,28 @@ test('dirFromEdge: an absolute detail path relativizes through the repo segment'
 		dirFromEdge(edgeOf('Write ×3 · /Users/g/Source/Projects/brnrd/.brr/outbox/evt-1/x.md'), REPO),
 		null
 	);
+});
+
+test('dirFromEdge: a hidden segment anywhere on the way is machinery, not terrain', () => {
+	// the measured 08-27 failure: the account home lives under
+	// `~/.local/state/brnrd/…`, whose `brnrd` segment matches the repo short
+	// name — dominion writes were minting fake `accounts/acc_…` chambers
+	assert.equal(
+		dirFromEdge(
+			edgeOf(
+				'Write · /Users/g/.local/state/brnrd/accounts/acc_bdda426da378d4f0c3/home/repos/x/dominion/playbook.md'
+			),
+			REPO
+		),
+		null
+	);
+	// a hidden segment after the match is machinery too
+	assert.equal(
+		dirFromEdge(edgeOf('Read · /Users/g/Source/Projects/brnrd/.brnrd-kb/index.md'), REPO),
+		null
+	);
+	// and a relative token through a hidden dir never lands
+	assert.equal(dirFromEdge(edgeOf('cat .svelte-kit/output/server/index.js'), REPO), null);
 });
 
 test('dirFromEdge: a truncation-cut segment is not a fact, its prefix is', () => {

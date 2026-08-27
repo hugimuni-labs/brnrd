@@ -39,6 +39,7 @@ export type PlaceNodeKind =
 	| 'forge-dock'
 	| 'wake-dock'
 	| 'cut-loom'
+	| 'work-bench'
 	| 'home-fixture';
 
 export interface PlaceNode {
@@ -158,7 +159,11 @@ const CAMP_STATIONS: { kind: PlaceNodeKind; suffix: string; label: string }[] = 
 	{ kind: 'strand-bay', suffix: 'strand-bay', label: 'bay' },
 	{ kind: 'watch-perch', suffix: 'watch-perch', label: 'watch' },
 	{ kind: 'wake-dock', suffix: 'wake-dock', label: 'wake' },
-	{ kind: 'cut-loom', suffix: 'cut-loom', label: 'cut' }
+	{ kind: 'cut-loom', suffix: 'cut-loom', label: 'cut' },
+	// the bench (his steer, 2026-08-28): the shell place — where work that
+	// names no legible resource happens in plain sight, instead of the
+	// actor dissolving into the camp marker
+	{ kind: 'work-bench', suffix: 'work-bench', label: 'bench' }
 ];
 
 function stationId(camp: PlaceId, suffix: string): PlaceId {
@@ -294,6 +299,9 @@ function resolveActorPlace(b: Builder, graph: RoomGraph, actor: RoomActor): Plac
 	switch (place.kind) {
 		case 'chamber': {
 			if (!place.label || place.label === 'the library') {
+				// no legible resource ⇒ the camp's work-bench: uncategorized
+				// shell work happens somewhere real, in plain sight
+				if (!place.label) return station('work-bench');
 				if (place.label === 'the library') {
 					// the kb read-room: one per island, attached to the root
 					const lib = `${root}#library`;
