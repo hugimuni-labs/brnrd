@@ -283,6 +283,13 @@ export interface HugimuniConstants {
 	GHOST: number;
 	GRAIN: number;
 	INTERSECTION: string;
+	/** The contrast backdrop behind the glow (his 2026-08-28 read on the
+	 *  transparent mark: "some of the image's background we actually need").
+	 *  Flat and grainless — the grain belongs to the letters. GROUND_ON off
+	 *  ⇒ fully transparent, the asset for dark surfaces that exist already. */
+	GROUND_ON: boolean;
+	GROUND: string;
+	GROUND_RX: number;
 }
 
 export const HUGIMUNI_DEFAULTS: HugimuniConstants = {
@@ -300,7 +307,10 @@ export const HUGIMUNI_DEFAULTS: HugimuniConstants = {
 	STEM_STROKE: 40,
 	GHOST: 7,
 	GRAIN: 58,
-	INTERSECTION: '#eadfca'
+	INTERSECTION: '#eadfca',
+	GROUND_ON: true,
+	GROUND: '#050705', // darker than the old #080b09 board — his "maybe darker"
+	GROUND_RX: 64
 };
 
 export const HUGIMUNI_INK = '#080b09';
@@ -384,7 +394,7 @@ export function hugimuniSvg(c: HugimuniConstants, paletteName: HugimuniPaletteNa
       ${maskBody}
     </mask>
   </defs>
-  <g style="isolation:isolate">
+${c.GROUND_ON ? `  <rect width="${BOARD}" height="${BOARD}" rx="${c.GROUND_RX}" fill="${c.GROUND}"/>\n` : ''}  <g style="isolation:isolate">
     <g filter="url(#hm-bloom)" opacity="0.9">${body}</g>
     ${body}
     <g filter="url(#hm-core)" opacity="0.65">${cores}</g>
@@ -418,6 +428,9 @@ export function hugimuniConstantBlock(c: HugimuniConstants): string {
 		`GHOST = ${c.GHOST}`,
 		`GRAIN = ${c.GRAIN}`,
 		`INTERSECTION = "${c.INTERSECTION}"`,
+		`GROUND_ON = ${c.GROUND_ON ? 'True' : 'False'}`,
+		`GROUND = "${c.GROUND}"`,
+		`GROUND_RX = ${c.GROUND_RX}`,
 		'',
 		'# TAIL lives inside vee_m() as a local, not up here — hand-edit that',
 		`# function's "TAIL = ${c.TAIL}" line carries this value in build.py.`
