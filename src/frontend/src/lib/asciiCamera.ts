@@ -10,8 +10,14 @@
 //     intent and cost are control state, not terrain.
 
 import { fileFromDetail, type RoomActor, type RoomGraph, type ClothRow } from './roomGraph.ts';
-import type { PlaceId, PlaceNode, PlaceNodeKind, RoomTopology } from './roomTopology.ts';
-import type { Point, RoomLayout } from './roomLayout.ts';
+import {
+	campId,
+	type PlaceId,
+	type PlaceNode,
+	type PlaceNodeKind,
+	type RoomTopology
+} from './roomTopology.ts';
+import { MAX_DIR_LABEL_CHARS, type Point, type RoomLayout } from './roomLayout.ts';
 import type { PagerPage } from './roomPager.ts';
 
 export type CameraLevel = 'island' | 'atlas';
@@ -56,6 +62,17 @@ function clip(text: string, max: number): string {
 	if (max <= 0) return '';
 	if (text.length <= max) return text;
 	return max <= 1 ? text.slice(0, max) : text.slice(0, max - 1) + '…';
+}
+
+/** Middle-elide: keeps the start and the end, which for the long labels the
+ *  room actually meets (`evt-1787…-coep.attachments`) are the two halves
+ *  that identify it. */
+function clipMid(text: string, max: number): string {
+	if (text.length <= max) return text;
+	if (max <= 1) return clip(text, max);
+	const head = Math.ceil((max - 1) / 2);
+	const tail = max - 1 - head;
+	return text.slice(0, head) + '…' + (tail > 0 ? text.slice(-tail) : '');
 }
 
 function minutesLabel(iso: string | null, now: number | undefined): string | null {
@@ -212,11 +229,19 @@ export function cameraCenterFor(
 
 // ── node rendering vocabulary ───────────────────────────────────────────────
 
+/** Per-render lookups the node vocabulary needs but should not recompute
+ *  per node: camp spur material and forge-dock produce. */
+interface NodeAux {
+	campCommits: Map<PlaceId, number>;
+	forgeCounts: Map<string, string>;
+}
+
 function nodeText(
 	node: PlaceNode,
 	graph: RoomGraph,
 	level: CameraLevel,
-	now: number | undefined
+	now: number | undefined,
+	aux?: NodeAux
 ): string | null {
 	switch (node.kind) {
 		case 'repo-root': {
@@ -224,13 +249,20 @@ function nodeText(
 			return `⌂ ${level === 'atlas' ? node.label : short}`;
 		}
 		case 'directory':
-			return `${node.label}/`;
+			return `${clipMid(node.label, MAX_DIR_LABEL_CHARS - 1)}/`;
 		case 'file':
 			return `· ${node.label}`;
-		case 'camp':
+		case 'camp': {
 			// the camp sits 9 units (18 chars) west of its root: the label must
-			// live inside that shore gap or it collides with the root's own
-			return `▛ ${clip(node.label, 15)}`;
+			// live inside that shore gap or it collides with the root's own.
+			// Commits accreted on this spur ride the label — the branch is the
+			// place changes pile up before they reach the forge.
+			const commits = aux?.campCommits.get(node.id) ?? 0;
+			const suffix = commits > 0 ? ` +${commits}c` : '';
+			// the suffix survives; the branch name gives way — the shore gap is
+			// 18 chars and the material mark is the fresher fact
+			return `▛ ${clip(node.label, 15 - suffix.length)}${suffix}`;
+		}
 		case 'portal-rack':
 			return 'P';
 		case 'chart-table':
@@ -243,16 +275,36 @@ function nodeText(
 			return 'D';
 		case 'cut-loom':
 			return 'X';
+		case 'work-bench':
+			// the shell place (his steer, 2026-08-28): the prompt itself is
+			// the glyph — uncategorized commands run here, in plain sight
+			return '$';
 		case 'test-rig':
 			return 'R';
-		case 'forge-dock':
-			return 'F FORGE';
+		case 'forge-dock': {
+			// the dock shows the island's remote produce — PRs, merges, issues
+			// attested by its live actors (counts; the wire has no identities)
+			const counts = node.repoId ? aux?.forgeCounts.get(node.repoId) : undefined;
+			return counts ? `F FORGE ${counts}` : 'F FORGE';
+		}
 		case 'home-fixture': {
 			if (node.label === 'HOME') return '⌂ HOME';
 			if (node.label === 'gate') {
 				return graph.pendingLetters > 0 ? `G ◇×${graph.pendingLetters}` : 'G';
 			}
-			if (node.label === 'watch') return graph.watch.length > 0 ? `^ ×${graph.watch.length}` : '^';
+			if (node.label === 'watch') {
+				// the tower and `brnrd await` are one instrument: an armed wait
+				// (`lifecycle: awaiting`) stands a `^` fact with its deadline,
+				// and the tower shows the soonest one counting down
+				const soonest =
+					graph.watch
+						.filter((w) => w.mark === '^' && w.until)
+						.map((w) => w.until!)
+						.sort()[0] ?? null;
+				const inWhen = soonest ? untilLabel(soonest, now) : null;
+				const base = graph.watch.length > 0 ? `^ ×${graph.watch.length}` : '^';
+				return inWhen ? `${base} → ${inWhen}` : base;
+			}
 			if (node.label === 'clockwork') {
 				const next = graph.clockwork
 					.filter((e) => e.nextAt)
@@ -295,7 +347,8 @@ const STATION_KINDS = new Set<PlaceNodeKind>([
 	'strand-bay',
 	'watch-perch',
 	'wake-dock',
-	'cut-loom'
+	'cut-loom',
+	'work-bench'
 ]);
 
 /** The tether frames of the mind-connect: pager → actor, cycled by the
@@ -434,17 +487,44 @@ export function renderWorld(
 	}
 
 	// 3 · nodes, in stable paint order (y, then x, then id)
+	const aux: NodeAux = {
+		campCommits: new Map(
+			graph.islands.flatMap((i) =>
+				i.camps.map((c) => [campId(i.label, c), c.commits] as [PlaceId, number])
+			)
+		),
+		forgeCounts: new Map(
+			graph.islands
+				.map((i) => [i.label, countsLabel(i.forge ?? {})] as [string, string])
+				.filter(([, s]) => s.length > 0)
+		)
+	};
 	const paintable = Object.values(topo.nodes)
 		.map((node) => ({ node, p: layout.nodes[node.id] }))
 		.filter((n) => n.p)
 		.sort((a, b) => a.p.y - b.p.y || a.p.x - b.p.x || a.node.id.localeCompare(b.node.id));
+	const labels: { x: number; y: number; text: string }[] = [];
 	for (const { node, p } of paintable) {
 		if (cam.level === 'atlas' && node.kind !== 'repo-root' && node.kind !== 'home-fixture')
 			continue;
 		const c = toChar(f, p);
 		if (!inFrame(f, c)) continue;
-		const text = nodeText(node, graph, cam.level, now);
-		if (text) canvas.text(c.x, c.y, text);
+		const text = nodeText(node, graph, cam.level, now, aux);
+		if (text) labels.push({ x: c.x, y: c.y, text });
+	}
+	// labels never overwrite one another: within a character row, each label
+	// clips at the next label's start. Before this, paint order decided who
+	// stomped whom — the `src/unts/`-style garble in the 08-27 screenshots
+	// was one label's tail under another label's head.
+	const byRow = new Map<number, { x: number; y: number; text: string }[]>();
+	for (const l of labels) (byRow.get(l.y) ?? byRow.set(l.y, []).get(l.y)!).push(l);
+	for (const row of byRow.values()) {
+		row.sort((a, b) => a.x - b.x);
+		for (let i = 0; i < row.length; i++) {
+			const next = row[i + 1];
+			const max = next ? next.x - row[i].x - 1 : canvas.width - row[i].x;
+			canvas.text(row[i].x, row[i].y, clip(row[i].text, max));
+		}
 	}
 
 	// 4 · actors standing at their places (or mid-walk when the caller
@@ -484,6 +564,14 @@ export function renderWorld(
 			c.y - 1 < 0 ? c.y : c.y - 1,
 			`${tether}${body}${mark ? ' ' + mark : ''}`
 		);
+		// the mind-connect reaches the pager field below the map: a dotted
+		// line from the reading actor down through the frame's bottom edge,
+		// meeting the PAGER strip that sits directly under it. Ground chars —
+		// the tether threads between labels, never through them.
+		if (phase !== undefined) {
+			for (let y = c.y + 1; y < cam.rows; y++)
+				canvas.ground(c.x, y, TETHER_FRAMES[(phase + y) % TETHER_FRAMES.length]);
+		}
 	}
 
 	// 5 · header: the sea named; account weather on the right
@@ -522,24 +610,47 @@ export function renderWorld(
 	const out = canvas.toLines();
 	out.push('');
 
-	// 7 · control rows — deliberately not terrain
+	// 7 · the pager field — boundary-injection status, in two tenses,
+	// sitting directly between the map and the text rows so the reading
+	// tether has somewhere to land (his ask, 2026-08-27). WAITING is what
+	// has accumulated and not yet been injected (the wire attests count +
+	// oldest age, never content); READ is the injected boundaries, newest
+	// first. A page still names only its carrier — the fence holds.
 	if (graph.actors.length > 0) {
-		for (const actor of graph.actors) out.push(clip(actorFootline(actor, now), cam.cols));
-		// the pager: pages accumulated while this reader watched, newest
-		// first. A page names its carrier boundary, never its content — the
-		// injected text stays behind the boundaries.jsonl fence on purpose.
-		if (opts.pages && opts.pages.length > 0) {
-			out.push('');
-			out.push(`PAGER ✉×${opts.pages.length}`);
-			for (const p of opts.pages.slice(0, 3)) {
-				const hhmm = p.at.length >= 16 ? p.at.slice(11, 16) : p.at;
-				const carrier = [p.act, p.detail ? foldPathTokens(p.detail) : null]
-					.filter(Boolean)
-					.join(' · ');
-				out.push(clip(`  ${hhmm} ✉ ${p.glyph} page rode ${carrier || 'a boundary'}`, cam.cols));
-			}
-			if (opts.pages.length > 3) out.push(`  … ${opts.pages.length - 3} older`);
+		const readingNow = new Set(Object.keys(opts.reading ?? {}));
+		const oldest = graph.actors
+			.map((a) => a.portalsOldestAt)
+			.filter((t): t is string => !!t)
+			.sort()[0];
+		const oldestIn = oldest ? minutesLabel(oldest, now) : null;
+		const waiting =
+			graph.pendingLetters > 0
+				? `◇×${graph.pendingLetters} waiting${oldestIn ? ' · oldest ' + oldestIn : ''}`
+				: '· nothing waiting';
+		const pages = opts.pages ?? [];
+		const readCount = pages.length > 0 ? `✉×${pages.length} read` : '✉ none read yet';
+		const plug = readingNow.size > 0 ? '▯⌁' : '▯';
+		out.push(clip(`${plug} PAGER   ${waiting}   ${readCount}`, cam.cols));
+		const marked = new Set<string>();
+		for (const p of pages.slice(0, 3)) {
+			const hhmm = p.at.length >= 16 ? p.at.slice(11, 16) : p.at;
+			const carrier = [p.act, p.detail ? foldPathTokens(p.detail) : null]
+				.filter(Boolean)
+				.join(' · ');
+			// ▸ the page being read right now: its actor is mid-ceremony and
+			// this is that actor's newest page — the waiting → read transit
+			const fresh = readingNow.has(p.runId) && !marked.has(p.runId);
+			marked.add(p.runId);
+			out.push(
+				clip(
+					`  ${fresh ? '▸' : ' '} ${hhmm} ✉ ${p.glyph} rode ${carrier || 'a boundary'}`,
+					cam.cols
+				)
+			);
 		}
+		if (pages.length > 3) out.push(`    … ${pages.length - 3} older`);
+		out.push('');
+		for (const actor of graph.actors) out.push(clip(actorFootline(actor, now), cam.cols));
 		out.push('');
 		out.push('CHARTS');
 		for (const actor of graph.actors) out.push(chartLine(actor, cam.cols));
@@ -565,10 +676,10 @@ export function renderWorld(
 export const LEGEND = [
 	'the mood face is the resident (@ when faceless)   a…z strands   ◇ pending letter   ✉>>> boundary injection',
 	'⌂ island root   name/ chamber   · file leaf   ▛ camp   ∙ current route',
-	'P portal  K chart  B bay  W watch  D wake  X cut  R rig  F FORGE',
-	'─│ corridors  ═║ branch/shore rail  ┄┆ station tether  G gate (HOME)',
-	'^ watch  T clockwork  ⛁ garage   arrows = off-camera bearings',
+	'P portal  K chart  B bay  W watch  D wake  X cut  $ bench (uncategorized shell work)  R rig  F FORGE (+pr/mg/is counts)',
+	'─│ corridors  ═║ branch/shore rail  ┄┆ station tether  G gate (HOME)  ▛ camp +Nc commits',
+	'^ watch — armed `brnrd await`s count down here  T clockwork  ⛁ garage  arrows = off-camera bearings',
 	'⌁ attested boundary   ══ CLOTH time register — live, then history',
 	'▯⌁@ mind-connect — reading the pager   ✎ writing  ☰ reading  ✉ opening a letter',
-	'PAGER — injections by carrier boundary; content never rides the wire'
+	'▯ PAGER — injection status: ◇ waiting (accumulated, not yet injected) · ✉ read · ▸ in transit'
 ].join('\n');

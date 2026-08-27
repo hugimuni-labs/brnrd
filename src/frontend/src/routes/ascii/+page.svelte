@@ -76,10 +76,11 @@
 	let demo = $state(false);
 	let frameNote = $state('');
 	let showLegend = $state(true);
-	// The camera is the reader's (his steer, 2026-08-27): it frames the scene
-	// once at load and then moves only by hand — drag, arrows — unless follow
-	// is explicitly switched on with `f`.
-	let follow = $state(false);
+	// The camera is the reader's (his steer, 2026-08-27), refined to
+	// follow-when-idle (his sign-off, 2026-08-28): it follows the lead actor
+	// until the reader's hand moves it — drag, arrows — and the hand always
+	// wins. `f` re-arms the follow.
+	let follow = $state(true);
 	let framedOnce = false;
 	let level = $state<CameraLevel>('island');
 	let levelForced = $state(false);
