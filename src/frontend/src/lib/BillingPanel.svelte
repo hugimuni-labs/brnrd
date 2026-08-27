@@ -10,23 +10,19 @@
 		startBillingPortal,
 		startSubscriptionCheckout,
 		subscribeOffer,
-		supporterSeatsLeft,
 		withoutBillingParam,
 		type Cadence,
 		type BillingNotice,
 		type SubscriptionState
 	} from './billing';
-	import { fetchPublicStats, type PublicStats } from './publicStats';
 
 	// The account's subscription surface (maintainer steer 2026-07-21:
-	// subscription only — a patronage offer, no wallet/credits UI). Reads
-	// ride the same session cookie as every dashboard fetch; state *changes*
-	// only ever come back through the Stripe webhook, so after a checkout
-	// the panel shows honest "landing incrementally" copy instead of
-	// pretending to know.
+	// subscription only, no wallet/credits UI). Reads ride the same session
+	// cookie as every dashboard fetch; state *changes* only ever come back
+	// through the Stripe webhook, so after a checkout the panel shows honest
+	// "landing incrementally" copy instead of pretending to know.
 
 	let subscription = $state<SubscriptionState | null>(null);
-	let stats = $state<PublicStats | null>(null);
 	let loadError = $state<string | null>(null);
 	let actionError = $state<string | null>(null);
 	// One in-flight action at a time — every action here either redirects
@@ -36,8 +32,7 @@
 	let cadence = $state<Cadence>('monthly');
 	let notice = $state<BillingNotice | null>(null);
 
-	let seatsLeft = $derived(supporterSeatsLeft(stats));
-	let offer = $derived(subscribeOffer(cadence, seatsLeft));
+	let offer = $derived(subscribeOffer(cadence));
 	let hasSubscription = $derived(subscription !== null && subscription.status !== null);
 	let periodEndLabel = $derived(
 		subscription?.current_period_end ? dateLabel(subscription.current_period_end) : null
@@ -55,9 +50,6 @@
 		} catch (e) {
 			loadError = describeError(e, 'billing state fetch failed');
 		}
-		// Decoration, not a gate — the offer renders supporter-priced when
-		// the counters are absent, same as the pricing page.
-		stats = await fetchPublicStats();
 	}
 
 	onMount(() => {
@@ -170,10 +162,7 @@
 				</button>
 			</div>
 			<p class="mt-2 font-mono text-[10px] text-ink-quiet">
-				{offer.cohort === 'supporter'
-					? 'founding price — kept for the life of the subscription'
-					: 'public pricing'}
-				· Stripe-hosted checkout, price shown before you pay
+				Stripe-hosted checkout · price shown before you pay
 			</p>
 		{:else}
 			<div class="mt-3 flex flex-wrap items-center gap-3">

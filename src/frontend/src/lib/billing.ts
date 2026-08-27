@@ -6,19 +6,15 @@
 //
 // Scope (maintainer steer, 2026-07-21): subscription only — state, checkout,
 // cancel/resume, Customer Portal. No wallet/top-up/ledger UI: the
-// subscription is a patronage offer that removes the free tier's headroom
-// limits and keeps the lights on, and the panel says exactly that — no
-// credits framing for a product that doesn't exist yet.
+// subscription removes the free tier's headroom limits and keeps the lights
+// on, and the panel says exactly that — no credits framing for a product that
+// doesn't exist yet.
 //
 // All money *state* lives server-side (Stripe webhook → db); this module
-// only reads it and mints Checkout/Portal redirect URLs. Prices shown here
-// are the accepted pricing decision the pricing page renders
-// (decision-pricing-shape, 2026-07): supporter $5/mo · $50/yr for the first
-// cohort, then public $7/mo · $70/yr. Stripe Price objects stay
-// authoritative at checkout — the panel is the offer, not the invoice; the
-// server infers the cohort.
-
-import type { PublicStats } from './publicStats';
+// only reads it and mints Checkout/Portal redirect URLs. The current pricing
+// decision (2026-08-27) is one subscriber offer: $7/mo · $70/yr. Historical
+// supporter cohorts remain server-side only so existing subscriptions can be
+// classified without changing their Stripe Price.
 
 export interface SubscriptionState {
 	tier: string;
@@ -70,7 +66,7 @@ export function fetchSubscription(fetchImpl: typeof fetch = fetch): Promise<Subs
 }
 
 /** Mints a subscription Checkout session; resolves to the Stripe-hosted URL
- * the caller must redirect to. Cohort is inferred server-side. */
+ * the caller must redirect to. The server selects the public Price. */
 export async function startSubscriptionCheckout(
 	cadence: Cadence,
 	fetchImpl: typeof fetch = fetch
@@ -106,28 +102,14 @@ export async function startBillingPortal(fetchImpl: typeof fetch = fetch): Promi
 // --- pricing (display only — Stripe is authoritative at checkout) ----------
 
 export const PRICING = {
-	supporter: { monthly: 5, annual: 50 },
-	public: { monthly: 7, annual: 70 }
+	monthly: 7,
+	annual: 70
 } as const;
 
-/** Seats still open in the supporter cohort — the same arithmetic the
- * pricing page renders, null when the public counters didn't load. */
-export function supporterSeatsLeft(stats: PublicStats | null): number | null {
-	if (stats === null) return null;
-	return Math.max(0, stats.supporter_seats_total - stats.supporter_seats_taken);
-}
-
-/** The price to *show* next to the subscribe CTA. Unknown seat state gets
- * the supporter price exactly like the pricing page ("supporterOpen" when
- * stats are absent) — the server decides the real cohort at checkout. */
-export function subscribeOffer(
-	cadence: Cadence,
-	seatsLeft: number | null
-): { usd: number; cohort: 'supporter' | 'public'; label: string } {
-	const supporterOpen = seatsLeft === null || seatsLeft > 0;
-	const cohort = supporterOpen ? 'supporter' : 'public';
-	const usd = PRICING[cohort][cadence];
-	return { usd, cohort, label: cadence === 'monthly' ? `$${usd}/mo` : `$${usd}/yr` };
+/** The single price shown next to the subscribe CTA. */
+export function subscribeOffer(cadence: Cadence): { usd: number; label: string } {
+	const usd = PRICING[cadence];
+	return { usd, label: cadence === 'monthly' ? `$${usd}/mo` : `$${usd}/yr` };
 }
 
 // --- return-param notices ---------------------------------------------------
