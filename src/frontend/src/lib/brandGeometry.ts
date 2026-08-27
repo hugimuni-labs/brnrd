@@ -332,33 +332,67 @@ export function hugimuniAttrs(stroke: number): string {
 	return `fill="none" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen"`;
 }
 
+/**
+ * The emissive render (reworked 2026-08-28, from his generated reference):
+ * the mark carries its own light instead of sitting lit-from-nowhere on a
+ * grained board. Three passes per stroke — wide bloom halo, saturated body,
+ * thin blurred white-hot core — screen-blended inside one isolated group so
+ * every crossing adds up and the intersections blaze. The grain moved from
+ * the background onto the strokes: turbulence + scanlines clipped by a
+ * stroke-shaped mask, overlay/multiply-blended so GRAIN modulates the letter
+ * light itself (0 = clean neon, 100 = heavy phosphor fabric). No background
+ * rect at all — the old rounded ink board read as a grained monitor bezel;
+ * the mark is transparent now and sits on whatever ground the page gives it.
+ */
 export function hugimuniSvg(c: HugimuniConstants, paletteName: HugimuniPaletteName): string {
 	const [a, b] = HUGIMUNI_PALETTES[paletteName];
-	const attrs = hugimuniAttrs(c.STROKE);
-	const stemAttrs = hugimuniAttrs(c.STEM_STROKE);
 	const stems = hugimuniStems(c);
-	const grainOpacity = Math.max(0, Math.min(100, c.GRAIN)) / 100;
+	const bar = hugimuniBarH(c);
+	const vee = hugimuniVeeM(c);
+	const grain = Math.max(0, Math.min(100, c.GRAIN)) / 100;
+	const coreW = (w: number) => Math.max(2, Math.round(w * 0.2));
+	// one glyph, parameterized per pass: stroke widths scale, colours swap
+	const glyph = (scale: (w: number) => number, aCol: string, bCol: string, coreCol: string) =>
+		`<g ${hugimuniAttrs(scale(c.STEM_STROKE))} stroke="${aCol}" transform="translate(${-c.GHOST},0)">${stems}</g>` +
+		`<g ${hugimuniAttrs(scale(c.STEM_STROKE))} stroke="${bCol}" transform="translate(${c.GHOST},0)">${stems}</g>` +
+		`<g ${hugimuniAttrs(scale(Math.max(2, c.STEM_STROKE - c.GHOST * 2)))} stroke="${coreCol}">${stems}</g>` +
+		`<g ${hugimuniAttrs(scale(c.STROKE))} stroke="${aCol}">${bar}</g>` +
+		`<g ${hugimuniAttrs(scale(c.STROKE))} stroke="${bCol}">${vee}</g>`;
+	const body = glyph((w) => w, a, b, c.INTERSECTION);
+	const cores = glyph(coreW, '#fff6e4', '#eefbff', '#ffffff');
+	// the mask: every stroke at full width, white — grain exists only where
+	// the letters are
+	const maskBody = glyph((w) => w, '#fff', '#fff', '#fff');
 	return `<svg xmlns="http://www.w3.org/2000/svg" width="${BOARD}" height="${BOARD}" viewBox="0 0 ${BOARD} ${BOARD}">
   <title>hugimuni — H and M on shared stems (${paletteName})</title>
   <defs>
+    <filter id="hm-bloom" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+    <filter id="hm-core" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="1.1"/>
+    </filter>
     <filter id="hm-grain" x="0" y="0" width="100%" height="100%">
-      <feTurbulence type="fractalNoise" baseFrequency="0.72" numOctaves="4" seed="23"/>
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" seed="23"/>
       <feColorMatrix type="saturate" values="0"/>
     </filter>
     <pattern id="hm-scanlines" width="4" height="4" patternUnits="userSpaceOnUse">
-      <path d="M0 3.5H4" stroke="${c.INTERSECTION}" stroke-width="0.45" opacity="0.28"/>
+      <path d="M0 3.5H4" stroke="#000" stroke-width="0.6" opacity="0.5"/>
     </pattern>
+    <mask id="hm-strokes">
+      <rect width="${BOARD}" height="${BOARD}" fill="#000"/>
+      ${maskBody}
+    </mask>
   </defs>
-  <rect width="${BOARD}" height="${BOARD}" rx="112" fill="${HUGIMUNI_INK}"/>
-  <g style="mix-blend-mode:screen">
-    <g ${stemAttrs} stroke="${a}" transform="translate(${-c.GHOST},0)">${stems}</g>
-    <g ${stemAttrs} stroke="${b}" transform="translate(${c.GHOST},0)">${stems}</g>
-    <g ${hugimuniAttrs(c.STEM_STROKE - c.GHOST * 2)} stroke="${c.INTERSECTION}">${stems}</g>
-    <g ${attrs} stroke="${a}">${hugimuniBarH(c)}</g>
-    <g ${attrs} stroke="${b}">${hugimuniVeeM(c)}</g>
+  <g style="isolation:isolate">
+    <g filter="url(#hm-bloom)" opacity="0.9">${body}</g>
+    ${body}
+    <g filter="url(#hm-core)" opacity="0.65">${cores}</g>
+    <g mask="url(#hm-strokes)">
+      <rect width="${BOARD}" height="${BOARD}" filter="url(#hm-grain)" opacity="${(grain * 0.6).toFixed(3)}" style="mix-blend-mode:overlay"/>
+      <rect width="${BOARD}" height="${BOARD}" fill="url(#hm-scanlines)" opacity="${(grain * 0.55).toFixed(3)}" style="mix-blend-mode:multiply"/>
+    </g>
   </g>
-  <rect width="${BOARD}" height="${BOARD}" rx="112" fill="url(#hm-scanlines)" opacity="${grainOpacity}"/>
-  <rect width="${BOARD}" height="${BOARD}" rx="112" filter="url(#hm-grain)" opacity="${(grainOpacity * 0.34).toFixed(3)}" style="mix-blend-mode:screen"/>
 </svg>
 `;
 }
