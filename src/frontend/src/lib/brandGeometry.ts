@@ -279,30 +279,32 @@ export interface HugimuniConstants {
 	DIP: number;
 	TAIL: number;
 	STROKE: number;
+	STEM_STROKE: number;
 	GHOST: number;
 }
 
 export const HUGIMUNI_DEFAULTS: HugimuniConstants = {
-	LEFT: 172,
-	RIGHT: 340,
+	LEFT: 152,
+	RIGHT: 360,
 	TOP: 156,
 	BOTTOM: 356,
-	CROSS: 268,
-	OVERHANG: 34,
-	SPREAD: 50,
+	CROSS: 276,
+	OVERHANG: 20,
+	SPREAD: 20,
 	RISE: 0,
-	DIP: 10,
-	TAIL: 30,
-	STROKE: 30,
-	GHOST: 5
+	DIP: 0,
+	TAIL: 20,
+	STROKE: 28,
+	STEM_STROKE: 40,
+	GHOST: 7
 };
 
-export const HUGIMUNI_INK = '#0c0906';
+export const HUGIMUNI_INK = '#080b09';
 
 export type HugimuniPaletteName = 'amber-sky' | 'coral-turquoise';
 
 export const HUGIMUNI_PALETTES: Record<HugimuniPaletteName, [string, string]> = {
-	'amber-sky': ['#ff9a1f', '#8fb6cc'],
+	'amber-sky': ['#ff9a1f', '#69c7df'],
 	'coral-turquoise': ['#ff6f61', '#3ec9bd']
 };
 
@@ -329,13 +331,15 @@ export function hugimuniAttrs(stroke: number): string {
 export function hugimuniSvg(c: HugimuniConstants, paletteName: HugimuniPaletteName): string {
 	const [a, b] = HUGIMUNI_PALETTES[paletteName];
 	const attrs = hugimuniAttrs(c.STROKE);
+	const stemAttrs = hugimuniAttrs(c.STEM_STROKE);
 	const stems = hugimuniStems(c);
 	return `<svg xmlns="http://www.w3.org/2000/svg" width="${BOARD}" height="${BOARD}" viewBox="0 0 ${BOARD} ${BOARD}">
   <title>hugimuni — H and M on shared stems (${paletteName})</title>
   <rect width="${BOARD}" height="${BOARD}" rx="112" fill="${HUGIMUNI_INK}"/>
   <g style="mix-blend-mode:screen">
-    <g ${attrs} stroke="${a}" transform="translate(${-c.GHOST},0)">${stems}</g>
-    <g ${attrs} stroke="${b}" transform="translate(${c.GHOST},0)">${stems}</g>
+    <g ${stemAttrs} stroke="${a}" transform="translate(${-c.GHOST},0)">${stems}</g>
+    <g ${stemAttrs} stroke="${b}" transform="translate(${c.GHOST},0)">${stems}</g>
+    <g ${hugimuniAttrs(c.STEM_STROKE - c.GHOST * 2)} stroke="#d8f3dc">${stems}</g>
     <g ${attrs} stroke="${a}">${hugimuniBarH(c)}</g>
     <g ${attrs} stroke="${b}">${hugimuniVeeM(c)}</g>
   </g>
@@ -360,9 +364,10 @@ export function hugimuniConstantBlock(c: HugimuniConstants): string {
 		`SPREAD = ${c.SPREAD}`,
 		`RISE, DIP = ${c.RISE}, ${c.DIP}`,
 		`STROKE = ${c.STROKE}`,
+		`STEM_STROKE = ${c.STEM_STROKE}`,
 		`GHOST = ${c.GHOST}`,
 		'',
 		'# TAIL lives inside vee_m() as a local, not up here — hand-edit that',
-		`# function's "TAIL = 30" line to TAIL = ${c.TAIL} to carry this value over.`
+		`# function's "TAIL = ${c.TAIL}" line carries this value in build.py.`
 	].join('\n');
 }
