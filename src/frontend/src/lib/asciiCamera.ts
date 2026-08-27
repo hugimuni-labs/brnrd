@@ -9,9 +9,10 @@
 //   - CHARTS and the Cloth selvage stay rows below the board on purpose —
 //     intent and cost are control state, not terrain.
 
-import type { RoomActor, RoomGraph, ClothRow } from './roomGraph.ts';
-import type { PlaceId, PlaceNode, RoomTopology } from './roomTopology.ts';
+import { fileFromDetail, type RoomActor, type RoomGraph, type ClothRow } from './roomGraph.ts';
+import type { PlaceId, PlaceNode, PlaceNodeKind, RoomTopology } from './roomTopology.ts';
 import type { Point, RoomLayout } from './roomLayout.ts';
+import type { PagerPage } from './roomPager.ts';
 
 export type CameraLevel = 'island' | 'atlas';
 
@@ -34,6 +35,12 @@ export interface WorldRenderOpts {
 	actorPositions?: Record<string, Point> | null;
 	/** Cap on cut Cloth rows below the board. */
 	clothRows?: number;
+	/** The accumulated pager feed, newest first — state, so it rides the
+	 *  clock-free render and a fresh page flashes. */
+	pages?: PagerPage[] | null;
+	/** Reading-ceremony phase per actor run id (ticksLeft) — presentation,
+	 *  like walk positions: passed on display paints, never the flash diff. */
+	reading?: Record<string, number> | null;
 }
 
 // chars per world unit: island scale is the readable default; atlas
@@ -278,6 +285,43 @@ function bearingArrow(from: Point, to: Point): string {
 	return dy > 0 ? (dx > 0 ? '↘' : '↙') : dx > 0 ? '↗' : '↖';
 }
 
+// ── the acts, embodied ──────────────────────────────────────────────────────
+
+/** Stations whose acts were invisible before the pager ceremony: the actor
+ *  stood there with a busy status line and a statue's body. */
+const STATION_KINDS = new Set<PlaceNodeKind>([
+	'portal-rack',
+	'chart-table',
+	'strand-bay',
+	'watch-perch',
+	'wake-dock',
+	'cut-loom'
+]);
+
+/** The tether frames of the mind-connect: pager → actor, cycled by the
+ *  ceremony's remaining ticks. */
+const TETHER_FRAMES = ['⌁', '∿', '≋'];
+
+/**
+ * The visible act at a station: what the actor is doing where it stands.
+ * `✎` writing, `☰` reading, `✉` opening correspondence (the deliberate
+ * letter-read at the portal rack — a different act from a page arriving).
+ * Conservative: no legible act, no mark.
+ */
+export function activityMark(
+	actor: Pick<RoomActor, 'act' | 'detail'>,
+	placeKind: PlaceNodeKind | null
+): string | null {
+	if (!actor.act || !placeKind || !STATION_KINDS.has(placeKind)) return null;
+	const leaf = fileFromDetail(actor.detail);
+	if (actor.act === 'mutate') return leaf ? `✎ ${leaf}` : '✎';
+	if (actor.act === 'orient') {
+		if (placeKind === 'portal-rack') return leaf ? `✉ ${leaf}` : '✉';
+		return leaf ? `☰ ${leaf}` : null;
+	}
+	return null;
+}
+
 function actorFootline(actor: RoomActor, now: number | undefined): string {
 	const until = untilLabel(actor.awaitUntil, now);
 	const lifecycle =
@@ -423,7 +467,19 @@ export function renderWorld(
 			continue;
 		}
 		const face = actor.moodRest ? ` ${actor.moodRest}` : '';
-		canvas.text(Math.max(0, c.x - 2 - n * 8), c.y - 1 < 0 ? c.y : c.y - 1, `${actor.glyph}${face}`);
+		// the mind-connect: an attested injection drops the actor into reading
+		// frames in place — the pager at its wrist, the tether cycling. The
+		// actor never moves for a page; traffic comes to it.
+		const phase = opts.reading?.[actor.runId];
+		const tether = phase !== undefined ? `▯${TETHER_FRAMES[phase % TETHER_FRAMES.length]}` : '';
+		// the act, embodied: writing/reading marks at the station the actor
+		// stands at — a busy status line is not a body.
+		const mark = walking ? null : activityMark(actor, pid ? (topo.nodes[pid]?.kind ?? null) : null);
+		canvas.text(
+			Math.max(0, c.x - 2 - tether.length - n * 8),
+			c.y - 1 < 0 ? c.y : c.y - 1,
+			`${tether}${actor.glyph}${face}${mark ? ' ' + mark : ''}`
+		);
 	}
 
 	// 5 · header: the sea named; account weather on the right
@@ -465,6 +521,21 @@ export function renderWorld(
 	// 7 · control rows — deliberately not terrain
 	if (graph.actors.length > 0) {
 		for (const actor of graph.actors) out.push(clip(actorFootline(actor, now), cam.cols));
+		// the pager: pages accumulated while this reader watched, newest
+		// first. A page names its carrier boundary, never its content — the
+		// injected text stays behind the boundaries.jsonl fence on purpose.
+		if (opts.pages && opts.pages.length > 0) {
+			out.push('');
+			out.push(`PAGER ✉×${opts.pages.length}`);
+			for (const p of opts.pages.slice(0, 3)) {
+				const hhmm = p.at.length >= 16 ? p.at.slice(11, 16) : p.at;
+				const carrier = [p.act, p.detail ? foldPathTokens(p.detail) : null]
+					.filter(Boolean)
+					.join(' · ');
+				out.push(clip(`  ${hhmm} ✉ ${p.glyph} page rode ${carrier || 'a boundary'}`, cam.cols));
+			}
+			if (opts.pages.length > 3) out.push(`  … ${opts.pages.length - 3} older`);
+		}
 		out.push('');
 		out.push('CHARTS');
 		for (const actor of graph.actors) out.push(chartLine(actor, cam.cols));
@@ -493,5 +564,7 @@ export const LEGEND = [
 	'P portal  K chart  B bay  W watch  D wake  X cut  R rig  F FORGE',
 	'─│ corridors  ═║ branch/shore rail  ┄┆ station tether  G gate (HOME)',
 	'^ watch  T clockwork  ⛁ garage   arrows = off-camera bearings',
-	'⌁ attested boundary   ══ CLOTH time register — live, then history'
+	'⌁ attested boundary   ══ CLOTH time register — live, then history',
+	'▯⌁@ mind-connect — reading the pager   ✎ writing  ☰ reading  ✉ opening a letter',
+	'PAGER — injections by carrier boundary; content never rides the wire'
 ].join('\n');
