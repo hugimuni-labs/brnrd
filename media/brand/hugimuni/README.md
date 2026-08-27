@@ -22,7 +22,17 @@ The shared stems carry both hues offset around a pale core, which is the same
 chromatic-aberration grammar brnrd's screen register already speaks — parent
 and product rhyme without wearing each other's mark.
 
-Two palettes, both his:
+The generator now emits the normal SVG mark plus two genuine vector EPS
+deliverables for each palette: the standalone mark and a conference-lockup
+version with `HugiMuni` sized below it. The EPS treatment uses vector scanlines
+and deterministic phosphor flecks rather than embedding a bitmap. The wordmark
+uses standard PostScript Helvetica Bold; convert the text to outlines in the
+final layout application if a printer requires embedded outlines.
+
+`STEM_STROKE` is deliberately independent from `STROKE`: the side legs can
+carry more visual weight without fattening the crossbar and diagonals.
+
+Two palettes:
 
 | file | pair |
 | --- | --- |
