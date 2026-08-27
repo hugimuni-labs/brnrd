@@ -86,15 +86,20 @@
 			>
 		</section>
 
-		<section class="panel p-4" aria-label="hosted free tier">
-			<p class="eyebrow">hosted · free</p>
+		<section class="panel p-4" aria-label="hosted freemium tier">
+			<p class="eyebrow">hosted · freemium</p>
 			<p class="mt-2 font-mono text-2xl font-semibold text-amber-100">$0</p>
 			<p class="font-mono text-[11px] text-ink-quiet">sign in and pair</p>
 			<ul class="mt-4 space-y-2 text-sm text-stone-400">
+				<li>one connected repository</li>
 				<li>brnrd.dev dashboard, anywhere</li>
 				<li>hosted Telegram + GitHub ingress</li>
 				<li>managed GitHub App identity for the resident</li>
 			</ul>
+			<p class="mt-3 text-xs leading-relaxed text-ink-quiet">
+				Keep one repository free. If brnrd becomes part of how you really work, support the
+				project by subscribing.
+			</p>
 			<a
 				class="mt-5 inline-flex w-full items-center justify-center border border-amber-700 bg-amber-950/40 px-3 py-2 font-mono text-[12px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/70"
 				href={resolve('/login')}>start free</a
@@ -133,7 +138,7 @@
 				<p class="mt-1 font-mono text-[11px] text-ink-quiet">{TAX_NOTE}</p>
 			{/if}
 			<ul class="mt-4 space-y-2 text-sm text-stone-400">
-				<li>everything in hosted free</li>
+				<li>everything in hosted freemium, across more repositories</li>
 				<li>headroom limits: off — the resident works as hard as you ask</li>
 				<li>funds the open-source engine it runs on</li>
 			</ul>

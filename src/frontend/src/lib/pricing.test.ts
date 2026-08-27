@@ -44,6 +44,12 @@ test('every paid tier on /pricing carries a tax disclosure', async () => {
 	ok(html.includes(TAX_NOTE), 'a paid price rendered without the tax note');
 });
 
+test('the hosted freemium offer names one free repository and the support bargain', async () => {
+	const html = await renderRoute();
+	ok(html.includes('one connected repository'), 'the free repository allowance is not visible');
+	ok(html.includes('really work'), 'the freemium support bargain is not visible');
+});
+
 test('the supporter tier names the public price without a strikethrough', async () => {
 	// The public price is a real number nobody has been charged yet — it's a
 	// future price for a later cohort, not a past one. Rendering it as

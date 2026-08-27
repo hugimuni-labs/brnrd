@@ -237,7 +237,7 @@ class Settings:
     # ``limit_max_*`` rows bind every tier and sit far above real use:
     # protection, not product. Enforcement lives in ``limits.py``; nothing
     # outside this block carries a limit numeral.
-    limit_free_repos: int = _env_int("BRNRD_LIMIT_FREE_REPOS", 3)
+    limit_free_repos: int = _env_int("BRNRD_LIMIT_FREE_REPOS", 1)
     limit_free_events_per_minute: int = _env_int("BRNRD_LIMIT_FREE_EVENTS_PER_MINUTE", 6)
     limit_free_events_per_day: int = _env_int("BRNRD_LIMIT_FREE_EVENTS_PER_DAY", 200)
     limit_abuse_repos: int = _env_int("BRNRD_LIMIT_ABUSE_REPOS", 100)

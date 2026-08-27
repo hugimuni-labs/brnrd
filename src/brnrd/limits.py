@@ -36,7 +36,7 @@ from .config import Settings
 from .models import Account, Event, Repo
 
 # One line, no marketing (ledger 2026-07-21): name the limit, name the path.
-_UPGRADE_HINT = "the supporter plan lifts free-tier limits (dashboard billing page)."
+_UPGRADE_HINT = "subscribing lifts free-tier limits (dashboard billing page)."
 
 
 @dataclass(frozen=True)
