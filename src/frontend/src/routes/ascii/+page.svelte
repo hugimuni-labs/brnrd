@@ -17,7 +17,7 @@
 	import { fetchRunLedger, type RunLedgerResponse } from '$lib/runLedger';
 	import { fetchScheduledWakes, type ScheduledWakesResponse } from '$lib/scheduledWakes';
 	import { fetchQuota, type QuotaResponse } from '$lib/quota';
-	import { compileRoomGraph, fileFromDetail, type TrailStep } from '$lib/roomGraph';
+	import { compileRoomGraph, dirFromEdge, fileFromDetail, type TrailStep } from '$lib/roomGraph';
 	import { compileTopology, type PlaceId } from '$lib/roomTopology';
 	import { layoutRoom, emptyAtlas, type AtlasMemory } from '$lib/roomLayout';
 	import {
@@ -28,6 +28,15 @@
 		easeCamera,
 		type Walk
 	} from '$lib/roomMotion';
+	import {
+		recordPages,
+		pagerFeed,
+		readingsFor,
+		advanceReadings,
+		readingPhases,
+		type PagerPage,
+		type Reading
+	} from '$lib/roomPager';
 	import {
 		renderWorld,
 		cameraCenterFor,
@@ -93,6 +102,12 @@
 	const ATLAS_KEY = 'brnrd-ascii-atlas-v1';
 	let atlas: AtlasMemory = emptyAtlas();
 
+	// pager memory: injections attested while this reader watched — pages
+	// name their carrier boundary, never content (roomPager.ts)
+	const PAGER_KEY = 'brnrd-ascii-pager';
+	let pager: Record<string, PagerPage[]> = {};
+	let readings: Reading[] = [];
+
 	// the camera
 	let camCenter = { x: 0, y: 0 };
 	let lastRoute: PlaceId[] | null = null;
@@ -110,6 +125,12 @@
 			if (!atlas || typeof atlas.nodes !== 'object') atlas = emptyAtlas();
 		} catch {
 			atlas = emptyAtlas();
+		}
+		try {
+			const raw = localStorage.getItem(PAGER_KEY);
+			if (raw) pager = JSON.parse(raw) as Record<string, PagerPage[]>;
+		} catch {
+			pager = {};
 		}
 	}
 
@@ -133,10 +154,22 @@
 		}
 	}
 
+	function savePager() {
+		try {
+			const ids = Object.keys(pager);
+			if (ids.length > TRAIL_RUNS_CAP) {
+				for (const id of ids.sort().slice(0, ids.length - TRAIL_RUNS_CAP)) delete pager[id];
+			}
+			localStorage.setItem(PAGER_KEY, JSON.stringify(pager));
+		} catch {
+			/* same forgiveness */
+		}
+	}
+
 	function recordTrails() {
 		let moved = false;
 		for (const run of live?.runs ?? []) {
-			const dir = run.edge?.dir && run.edge.dir !== '.' ? run.edge.dir : null;
+			const dir = dirFromEdge(run.edge, run.repo_label);
 			const at = run.edge?.at ?? null;
 			if (!dir || !at) continue;
 			const trail = (trails[run.run_id] ??= []);
@@ -167,6 +200,14 @@
 	function compute(now: number) {
 		recordTrails();
 		const graph = compileRoomGraph(live, ledger, trails, { wakes, quota });
+		// pages: attested injections accumulate; a fresh page starts the
+		// mind-connect ceremony for its reader (bounded, receipt-driven)
+		const glyphs = Object.fromEntries(graph.actors.map((a) => [a.runId, a.glyph]));
+		const freshPages = recordPages(live?.runs ?? [], pager, glyphs);
+		if (freshPages.length > 0) {
+			readings = readingsFor(freshPages, readings);
+			if (!demo) savePager();
+		}
 		stale = graph.stale;
 		const topo = compileTopology(graph);
 		const placed = layoutRoom(topo, atlas);
@@ -214,8 +255,13 @@
 		}
 
 		// flash diff on the clock-free, walk-free render: state motion only
+		// (pages are state — a fresh page flashes; the reading tether is
+		// presentation and stays off this render, like walk positions)
 		const cam: Camera = { center: camCenter, cols, rows: ROWS, level };
-		const bare = renderWorld(topo, layout, graph, cam, { highlightRoute: lastRoute }).split('\n');
+		const bare = renderWorld(topo, layout, graph, cam, {
+			highlightRoute: lastRoute,
+			pages: pagerFeed(pager)
+		}).split('\n');
 		const delta: number[] = [];
 		for (let i = 0; i < bare.length; i++) {
 			if (prevBare.length > 0 && bare[i] !== prevBare[i]) delta.push(i);
@@ -233,7 +279,9 @@
 		lines = renderWorld(scene.topo, scene.layout, scene.graph, cam, {
 			now: lastNow,
 			highlightRoute: lastRoute,
-			actorPositions: walkPositions(walks)
+			actorPositions: walkPositions(walks),
+			pages: pagerFeed(pager),
+			reading: readingPhases(readings)
 		}).split('\n');
 	}
 
@@ -244,6 +292,10 @@
 		if (walks.length > 0) {
 			const adv = advanceWalks(walks);
 			walks = adv.walks;
+			moved = true;
+		}
+		if (readings.length > 0) {
+			readings = advanceReadings(readings);
 			moved = true;
 		}
 		if (follow && (camCenter.x !== camTarget.x || camCenter.y !== camTarget.y)) {
@@ -356,6 +408,8 @@
 					lastRoute = null;
 					prevPlaces = null;
 					walks = [];
+					pager = {};
+					readings = [];
 				}
 				timer = setTimeout(step, DEMO_STEP_MS);
 			};
