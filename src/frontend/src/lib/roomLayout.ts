@@ -6,7 +6,12 @@
 // The invariants (spec: "the exact spacing constants may be tuned; these
 // invariants may not"):
 //   - repository root is local (0, 0) in island space;
-//   - directory depth advances east by a fixed spacing;
+//   - directory depth advances east by exactly enough to clear the parent's
+//     label at island scale — a function of the label alone, so it is as
+//     deterministic as the old fixed stride was (reworked 2026-08-27: a
+//     fixed 11-unit stride cost 22 characters per level whatever the label
+//     said, and a four-deep path burned ~90 columns of mostly corridor —
+//     the width the four screenshots complained about);
 //   - the first child may continue its parent's lane; additional children
 //     claim the nearest free lane via the stable alternation 0,-4,+4,-8,+8…;
 //   - once assigned, a node's coordinate never changes (atlas memory);
@@ -44,7 +49,30 @@ export function emptyAtlas(): AtlasMemory {
 
 // ── spacing constants (tunable) ─────────────────────────────────────────────
 
-const DEPTH_DX = 11; // east per directory depth
+const NOMINAL_CHARS_PER_UNIT = 2; // island scale (asciiCamera SCALE.island.x)
+const DEPTH_DX_MIN = 5; // never tighter than this — corridors need to read
+const DEPTH_DX_MAX = 14; // a longer label is the camera's to clip, not ours to pay for
+/** The label the camera will paint for a tree node, in characters — the
+ *  camera clips directory labels at MAX_DIR_LABEL_CHARS (asciiCamera), so
+ *  the advance never pays for more than the reader will see. */
+export const MAX_DIR_LABEL_CHARS = 24;
+function labelChars(node: PlaceNode): number {
+	if (node.kind === 'repo-root') {
+		const short = node.label.includes('/')
+			? (node.label.split('/').pop() ?? node.label)
+			: node.label;
+		return short.length + 2; // `⌂ `
+	}
+	return Math.min(node.label.length + 1, MAX_DIR_LABEL_CHARS); // `label/`
+}
+/** East advance from a parent: clear its label plus a short corridor. */
+function depthAdvance(parent: PlaceNode | undefined): number {
+	const chars = parent ? labelChars(parent) : DEPTH_DX_MIN * NOMINAL_CHARS_PER_UNIT;
+	return Math.min(
+		DEPTH_DX_MAX,
+		Math.max(DEPTH_DX_MIN, Math.ceil((chars + 3) / NOMINAL_CHARS_PER_UNIT) + 1)
+	);
+}
 const LANE_STEP = 4; // lane alternation unit: 0, -4, +4, -8, +8 …
 const ISLAND_DY = 44; // vertical distance between island origins
 const HOME_POS: Point = { x: -26, y: 0 };
@@ -59,7 +87,8 @@ const STATION_OFFSETS: Record<string, Point> = {
 	'strand-bay': { x: 4, y: -2 },
 	'watch-perch': { x: -4, y: 1 },
 	'wake-dock': { x: 4, y: 1 },
-	'cut-loom': { x: 0, y: 3 }
+	'cut-loom': { x: 0, y: 3 },
+	'work-bench': { x: 4, y: 3 }
 };
 const HOME_FIXTURE_OFFSETS: Record<string, Point> = {
 	gate: { x: 0, y: -4 },
@@ -161,7 +190,8 @@ export function layoutRoom(
 				parent.y,
 				LANE_STEP
 			);
-			coords[dir.id] = { x: parent.x + DEPTH_DX, y: parent.y + lane };
+			const parentNode = topo.nodes[dir.parentId ?? rootId];
+			coords[dir.id] = { x: parent.x + depthAdvance(parentNode), y: parent.y + lane };
 		}
 
 		// file leaves + rigs: stable offsets from their owning node

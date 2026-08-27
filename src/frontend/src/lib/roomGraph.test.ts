@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { compileRoomGraph, fileFromDetail, resolvePlace } from './roomGraph.ts';
+import { compileTopology } from './roomTopology.ts';
 import type { LiveRun, LiveRunsResponse } from './liveRuns.ts';
 import type { RunLedgerResponse, RunLedgerRow } from './runLedger.ts';
 
@@ -225,8 +226,53 @@ test('a dormant repo from the ledger keeps its ground — no camp, no actor', ()
 		liveWire([]),
 		ledgerWire([ledgerRow({ run_id: 'old', repo_label: 'hugimuni-labs/other' })])
 	);
-	assert.deepEqual(graph.islands, [{ label: 'hugimuni-labs/other', camps: [] }]);
+	assert.deepEqual(graph.islands, [{ label: 'hugimuni-labs/other', camps: [], forge: {} }]);
 	assert.equal(graph.actors.length, 0);
+});
+
+test('an armed await stands a ^ watch fact carrying its deadline', () => {
+	const graph = compileRoomGraph(
+		liveWire([
+			liveRun({
+				run_id: 'r-wait',
+				lifecycle: 'awaiting',
+				await_until: '2026-08-26T10:32:00Z'
+			})
+		]),
+		null
+	);
+	const wait = graph.watch.find((w) => w.mark === '^');
+	assert.ok(wait, 'the tower sees the wait');
+	assert.equal(wait!.source, 'r-wait');
+	assert.equal(wait!.until, '2026-08-26T10:32:00Z');
+	// a weaving run stands no ^ fact — the tower reports armed waits only
+	const calm = compileRoomGraph(liveWire([liveRun({ run_id: 'r-live' })]), null);
+	assert.equal(calm.watch.filter((w) => w.mark === '^').length, 0);
+});
+
+test('forge counts aggregate the island’s attested PR / issue / merge produce', () => {
+	const graph = compileRoomGraph(
+		liveWire([
+			liveRun({ run_id: 'r1', relics_counts: { pr: 2, issue: 1, commit: 5 } }),
+			liveRun({ run_id: 'r2', relics_counts: { pr: 1 } })
+		]),
+		null
+	);
+	assert.deepEqual(graph.islands[0].forge, { pr: 3, issue: 1 });
+	// commits stay on the camp spur, not the dock
+	assert.equal(graph.islands[0].camps[0].commits, 5);
+});
+
+test('work that names no legible resource stands at the camp work-bench', () => {
+	// the shell place (2026-08-28): an act whose detail names no path — a
+	// bare command — puts the actor at `$`, in plain sight, instead of
+	// dissolving it into the camp marker
+	const graph = compileRoomGraph(
+		liveWire([liveRun({ run_id: 'r-shell', edge: edge('orient', 'ps aux') })]),
+		null
+	);
+	const topo = compileTopology(graph);
+	assert.ok(topo.actorPlaces['r-shell'].endsWith('#work-bench'), topo.actorPlaces['r-shell']);
 });
 
 test('cloth: live rows carry no spend; cut rows read the attested usd', () => {
