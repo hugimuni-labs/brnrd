@@ -34,6 +34,9 @@ GHOST = 7                             # aberration offset on the shared stems
 GRAIN = 58                            # phosphor texture strength, 0–100
 INK = "#080b09"
 INTERSECTION = "#eadfca"              # warm phosphor white; tunable on the bench
+GROUND_ON = True                      # the contrast backdrop behind the glow —
+GROUND = "#050705"                    # flat and grainless (grain belongs to the
+GROUND_RX = 64                        # letters); off ⇒ fully transparent mark
 
 PALETTES = {
     # his two proposals, both rendered rather than argued about
@@ -107,6 +110,8 @@ def svg(name: str) -> str:
     body = _glyph(lambda w: w, a, b, INTERSECTION)
     cores = _glyph(lambda w: max(2, round(w * 0.2)), "#fff6e4", "#eefbff", "#ffffff")
     mask_body = _glyph(lambda w: w, "#fff", "#fff", "#fff")
+    ground = (f'  <rect width="{BOARD}" height="{BOARD}" rx="{GROUND_RX}" fill="{GROUND}"/>\n'
+              if GROUND_ON else "")
     return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{BOARD}" height="{BOARD}" viewBox="0 0 {BOARD} {BOARD}">
   <title>hugimuni — H and M on shared stems ({name})</title>
   <defs>
@@ -128,7 +133,7 @@ def svg(name: str) -> str:
       {mask_body}
     </mask>
   </defs>
-  <g style="isolation:isolate">
+{ground}  <g style="isolation:isolate">
     <g filter="url(#hm-bloom)" opacity="0.9">{body}</g>
     {body}
     <g filter="url(#hm-core)" opacity="0.65">{cores}</g>

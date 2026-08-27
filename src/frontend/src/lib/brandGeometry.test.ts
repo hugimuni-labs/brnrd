@@ -149,10 +149,13 @@ test('hugimuni: STEMS / BAR_H / vee_m match the Python reference', () => {
 
 test('hugimuniSvg: emissive render — transparent ground, three passes, grain on the strokes', () => {
 	const out = hugimuniSvg(HUGIMUNI_DEFAULTS, 'amber-sky');
-	// the rounded ink board is gone: the mark is transparent and carries its
-	// own light (2026-08-28, from the maintainer's generated reference)
-	assert.doesNotMatch(out, /rx="112"/);
+	// the old grained ink board is gone; what remains is the tunable flat
+	// contrast ground (his 2026-08-28 follow-up: "some of the image's
+	// background we actually need") — grainless, and removable
 	assert.doesNotMatch(out, /fill="#080b09"/);
+	assert.match(out, /rx="64" fill="#050705"/);
+	const noGround = hugimuniSvg({ ...HUGIMUNI_DEFAULTS, GROUND_ON: false }, 'amber-sky');
+	assert.doesNotMatch(noGround, /fill="#050705"/);
 	// body pass: full-width palette strokes; core stems keep the tunable
 	// intersection colour
 	assert.match(out, /stroke-width="40"[^>]+stroke="#ff9a1f"/);
