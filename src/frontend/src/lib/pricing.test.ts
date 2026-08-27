@@ -13,7 +13,7 @@ const routePath = join(here, '..', 'routes', 'pricing', '+page.svelte');
 // Same shape as legalNotice.test.ts, and for the same reason: string-matching
 // the source would pass on a page that imports the constant and never renders
 // it. These assertions run against the HTML the component actually emits.
-async function renderRoute(): Promise<string> {
+async function renderRoute(): Promise<ReturnType<typeof render>> {
 	const source = readFileSync(routePath, 'utf8');
 	const compiled = compile(source, { generate: 'server', runes: true, name: 'PricingPage' });
 	const generated = join(here, '.pricingRoute.generated.mjs');
@@ -25,7 +25,7 @@ async function renderRoute(): Promise<string> {
 	writeFileSync(generated, runnable);
 	try {
 		const module = await import(`${generated}?t=${process.pid}`);
-		return render(module.default).body;
+		return render(module.default);
 	} finally {
 		rmSync(generated, { force: true });
 	}
@@ -34,7 +34,7 @@ async function renderRoute(): Promise<string> {
 after(() => rmSync(join(here, '.pricingRoute.generated.mjs'), { force: true }));
 
 test('every paid tier on /pricing carries a tax disclosure', async () => {
-	const html = await renderRoute();
+	const { body: html } = await renderRoute();
 	// Both paid tiers are behind `{#if supporterOpen}` / `{:else}`, so exactly
 	// one renders at a time — but whichever one does must be priced honestly.
 	// A regression that dropped the note from only the second branch would
@@ -44,10 +44,49 @@ test('every paid tier on /pricing carries a tax disclosure', async () => {
 	ok(html.includes(TAX_NOTE), 'a paid price rendered without the tax note');
 });
 
-test('the hosted freemium offer names one free repository and the support bargain', async () => {
-	const html = await renderRoute();
+test('the hosted offer names its real product boundaries and live routes', async () => {
+	const { body: html } = await renderRoute();
 	ok(html.includes('one connected repository'), 'the free repository allowance is not visible');
-	ok(html.includes('really work'), 'the freemium support bargain is not visible');
+	ok(html.includes('WhatsApp'), 'the live hosted WhatsApp route is missing from the offer');
+	ok(
+		html.includes('one-repository product cap is removed'),
+		'the paid repository entitlement is still expressed as an unspecified “more”'
+	);
+	ok(
+		html.includes('free-tier hosted event limits are removed'),
+		'the paid event entitlement is not observable'
+	);
+	ok(
+		html.includes('limit lifts are live now'),
+		'the page still presents a live entitlement as pending'
+	);
+	ok(
+		!html.includes('entitlements are still landing'),
+		'stale pre-entitlement caveat is still rendered'
+	);
+});
+
+test('the page compares hosted tiers and separates deployment from patronage', async () => {
+	const { body: html } = await renderRoute();
+	ok(html.includes('<main'), 'the pricing content has no main landmark');
+	ok(/<h1[\s>]/.test(html), 'the page has no h1');
+	const hostedPlans = html.match(/data-pricing-plan=/g) ?? [];
+	ok(hostedPlans.length === 2, `expected two comparable hosted plans, got ${hostedPlans.length}`);
+	ok(
+		html.includes('Self-hosting is a deployment path'),
+		'self-hosting still reads as a third tier'
+	);
+	ok(html.includes('support the commons'), 'contributor patronage is not separated from pricing');
+	ok(
+		!html.includes('premium contributor bundle'),
+		'sponsorship still reads as a premium product tier'
+	);
+});
+
+test('the page carries a search description and canonical URL', async () => {
+	const { head } = await renderRoute();
+	ok(head.includes('name="description"'), 'pricing has no meta description');
+	ok(head.includes('https://brnrd.dev/pricing'), 'pricing has no canonical URL');
 });
 
 test('the supporter tier names the public price without a strikethrough', async () => {
@@ -59,7 +98,7 @@ test('the supporter tier names the public price without a strikethrough', async 
 	// doesn't, so a future redesign can reword this without the guard
 	// firing on prose alone — but a reintroduced `line-through`/`<del>`
 	// still trips it.
-	const html = await renderRoute();
+	const { body: html } = await renderRoute();
 	ok(html.includes('$7'), 'the public price never rendered — the guard below asserts nothing');
 	ok(!/<del[\s>]/i.test(html), 'the public price rendered inside a <del> element');
 	ok(!/\bline-through\b/.test(html), 'the public price rendered with strikethrough styling');
