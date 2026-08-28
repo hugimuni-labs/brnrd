@@ -32,11 +32,17 @@ WEBHOOK_SECRET = "whsec_test"
 
 
 def _client(**overrides) -> TestClient:
+    # Integration tests get wider ambient repo headroom from the repository
+    # pytest bootstrap. This module is the product-contract boundary, so its
+    # default remains the actual Free offer and individual tests override it
+    # only when the scenario explicitly calls for another cap.
+    kwargs = {"limit_free_repos": 1}
+    kwargs.update(overrides)
     settings = Settings(
         database_url="sqlite:///:memory:",
         stripe_webhook_secret=WEBHOOK_SECRET,
         stripe_price_supporter_monthly="price_sup_m",
-        **overrides,
+        **kwargs,
     )
     return TestClient(create_app(settings))
 
