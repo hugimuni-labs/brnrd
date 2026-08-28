@@ -26,6 +26,12 @@
 	// an account grows. What the row owns is the press and the pressed state;
 	// what it must never grow is itself.
 	//
+	// The bench's `▸ settings` handle used to sit on this component's footline
+	// while its body mounted below the provider bay — a handle and a body with
+	// a whole panel between them (maintainer, 2026-08-28: "the settings button
+	// dropdown that control them is very much above as you can see"). Both now
+	// live in `RailBench`, above this rail. The gauge is readings only again.
+	//
 	// The whole line is one `overflow-x-auto` row rather than the old slim
 	// bar's `flex-wrap` — wrapping is exactly what let the old rail grow
 	// with the catalog (more quota windows -> more lines -> a taller
@@ -40,10 +46,6 @@
 		now?: number;
 		activeSpawns?: number | null;
 		maxSpawns?: number | null;
-		/** Project · environment. Provider-independent, so it is its own small
-		 *  block rather than a fourth thing under one heading. */
-		settingsOpen: boolean;
-		onSettingsToggle: () => void;
 		/** Which provider row is pressed open, or null. **This is the provider
 		 *  selection** — not a pointer to one stored elsewhere. A pressed row
 		 *  shows that provider's windows and that provider's cores directly
@@ -61,8 +63,6 @@
 		now = Date.now(),
 		activeSpawns = null,
 		maxSpawns = null,
-		settingsOpen,
-		onSettingsToggle,
 		openProvider = null,
 		onProviderToggle
 	}: Props = $props();
@@ -259,15 +259,6 @@
 				<span>unavailable</span>
 			{/if}
 		</span>
-		<button
-			type="button"
-			aria-expanded={settingsOpen}
-			aria-label={settingsOpen ? 'fold settings' : 'open settings — project and environment'}
-			onclick={onSettingsToggle}
-			class="bench-toggle"
-		>
-			{settingsOpen ? '▾ settings' : '▸ settings'}
-		</button>
 	</div>
 </div>
 
@@ -463,8 +454,11 @@
 	.tank-reading {
 		flex: 1 1 auto;
 	}
+	/* No settings toggle on this line any more (the bench owns its own handle
+	   above the rail), so the pick reading takes the width the button used to
+	   hold rather than truncating beside a control that has moved. */
 	.next-pick {
-		flex: 0 1 38%;
+		flex: 0 1 46%;
 	}
 	.gauge-key {
 		flex: none;
@@ -475,16 +469,5 @@
 		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
-	}
-	.bench-toggle {
-		flex: none;
-		min-height: 25px;
-		cursor: pointer;
-		border-left: 1px solid rgb(68 64 60);
-		padding-left: 9px;
-		color: rgb(168 162 158);
-		font-size: 9px;
-		letter-spacing: 0.12em;
-		text-transform: uppercase;
 	}
 </style>

@@ -567,10 +567,12 @@
 	// selection").
 	let openProvider = $state<string | null>(null);
 	// The docking machinery only ever asked one question of the old
-	// `benchOpen`: is anything expanded under the rail right now. Two things
-	// can be now, so the question keeps its own name rather than the layout
-	// silently tracking whichever one happened to be wired.
-	let railOpen = $derived(settingsOpen || openProvider !== null);
+	// `benchOpen`: is anything expanded under the rail right now. Since the
+	// bench moved above the rail (2026-08-28) exactly one thing still can be
+	// — the pressed provider — so this reads that and nothing else. It kept
+	// `settingsOpen` as a disjunct for one wake after the move, which parked
+	// the machine dock for a panel that no longer renders anywhere near it.
+	let railOpen = $derived(openProvider !== null);
 	// The group behind the pressed row, resolved through exactly the same
 	// call the gauge itself renders from — so the bay can never describe a
 	// provider the deck is not showing.
@@ -1467,6 +1469,28 @@
 
 		<PublishConsentNotice repos={connectedRepos} />
 
+		<!-- THE BENCH, above the fuel (his 2026-08-28 read: "we need a
+		     bench/settings whatever block, collapsed, on the very top of the
+		     page, above the fuel, stating the settings, and expandable on
+		     press"). It used to be a toggle on the gauge's footline whose body
+		     mounted *below* the provider bay — so opening a fuel row put a
+		     whole panel between the handle and the thing it opened.
+		     Deliberately outside the sticky stack and in normal flow: the
+		     stack's own rule is that nothing tall may be a child of it, and a
+		     disclosure that can grow to a screen of project rows is exactly
+		     that. Above it, the block simply pushes the rail down while open
+		     and scrolls away while shut — and the rail stays what it is, one
+		     fixed line of readings. -->
+		<div class="ignite mb-1" style="--ignite-delay: 100ms">
+			<RailBench
+				repos={connectedRepos}
+				open={settingsOpen}
+				onToggle={onSettingsToggle}
+				wakeRepoLabel={runnersData?.wake_request?.repo_label ?? null}
+				{onPlaceChange}
+			/>
+		</div>
+
 		<div bind:this={releaseSentinel} class="h-px -mb-px" aria-hidden="true"></div>
 		<!-- THE STACK (w-48, `design-the-sticky-stack.md`): gauge, docked heddle
 		     copy, machine head, section label — one sticky container, so every
@@ -1505,8 +1529,6 @@
 					{now}
 					activeSpawns={liveRuns === null ? null : activeSpawns}
 					maxSpawns={spawnMaxConcurrent}
-					{settingsOpen}
-					{onSettingsToggle}
 					{openProvider}
 					{onProviderToggle}
 				/>
@@ -1648,15 +1670,22 @@
 				onReleaseSticky={releaseStickyRunner}
 			/>
 		{/if}
-		{#if settingsOpen}
-			<RailBench
-				runners={runnersData}
-				repos={connectedRepos}
-				{runnersError}
-				{runnersNote}
-				{onPlaceChange}
-			/>
-		{/if}
+		<!-- THE TAP'S RECEIPT, where the tap happened. `runnersError` /
+		     `runnersNote` are what a core-row tap in the provider bay above
+		     answers with ("next wake · project · env · profile — tap the
+		     default runner to cancel"), plus the two fetch failures. They used
+		     to render inside `RailBench`, which mounted only while the settings
+		     panel was open — so every tap made with settings shut wrote a
+		     receipt to a surface that was not on the page. Rendered here they
+		     are unconditional, and they sit under the rows that cause them. -->
+		<div data-measure="error-note">
+			{#if runnersError}
+				<p class="mt-2 text-sm text-red-400">{runnersError}</p>
+			{/if}
+			{#if runnersNote}
+				<p class="mt-2 font-mono text-xs text-amber-300">{runnersNote}</p>
+			{/if}
+		</div>
 		<section class="ignite" style="--ignite-delay: 260ms" aria-label="the machine's lane">
 			{#if machineExpanded}
 				<div in:glitchReveal={{ duration: 240 }}>
