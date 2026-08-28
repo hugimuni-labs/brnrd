@@ -504,15 +504,28 @@ export function compileRoomGraph(
 	}
 
 	// CLOCKWORK: future intent from the schedule wire — never a body.
-	const deadWakeStatuses = new Set(['completed', 'cancelled', 'anchoring']);
-	const clockwork: ClockEntry[] = (extras?.wakes?.rows ?? [])
-		.filter((w) => !deadWakeStatuses.has(w.status ?? ''))
-		.map((w) => ({
-			summary: w.summary || w.id,
-			nextAt: w.scheduled_for,
-			status: w.status,
-			repoLabel: w.repo_label
-		}));
+	// No status blocklist here, deliberately, and the reasoning is worth
+	// keeping: one was written on 2026-08-28 against
+	// `{completed, cancelled, anchoring}` and every term of it was wrong.
+	// `anchoring` is not a status at all — it is `scheduled_for === null`
+	// (`scheduledWakes.ts:22`), which the camera's own consumer already
+	// filters on. And the server's real dead vocabulary is eleven spellings
+	// across two sets (`dashboard.py:63-64`: complete/completed/done/
+	// responded/success/succeeded, failed/error/errored/cancelled/canceled),
+	// so a hand-listed pair caught two of them — the class defined by
+	// listing its members, meeting the members nobody listed.
+	//
+	// The structural property is upstream and already applied:
+	// `fetchScheduledWakes` requests `?kind=scheduled`, so a finished run
+	// cannot arrive on this wire in the first place. What made a stale entry
+	// *look* live was never its status — it was `untilLabel` clamping the
+	// countdown to `0m`. That is fixed where it lived, in the label.
+	const clockwork: ClockEntry[] = (extras?.wakes?.rows ?? []).map((w) => ({
+		summary: w.summary || w.id,
+		nextAt: w.scheduled_for,
+		status: w.status,
+		repoLabel: w.repo_label
+	}));
 
 	// GARAGE: capacity per shell, live readings only — a stale snapshot's
 	// preserved values stay off the rack (its status says stale instead).

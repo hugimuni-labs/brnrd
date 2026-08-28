@@ -41,7 +41,7 @@
 		renderWorld,
 		cameraCenterFor,
 		LEGEND,
-		CAMERA_LINE_HEIGHT_PX,
+		CAMERA_LINE_HEIGHT_FALLBACK_PX,
 		isCameraHotkey,
 		type Camera,
 		type CameraLevel
@@ -61,11 +61,20 @@
 	let deckEl = $state<HTMLElement | null>(null);
 
 	let charW = 7.2; // measured at mount/resize; used to convert drag px → chars
+	// Measured beside it, for the same reason: the vertical drag used to
+	// derive line height from `charW * 2.25`, so any monospace fallback that
+	// measured other than ~7.2px scaled vertical panning wrongly while
+	// horizontal panning stayed correct. The cure is not a second constant
+	// copied out of the stylesheet — it is reading the line box the browser
+	// actually laid out.
+	let lineHeightPx = CAMERA_LINE_HEIGHT_FALLBACK_PX;
 	function measureCols() {
 		if (!probeEl || !deckEl) return;
 		const w = probeEl.getBoundingClientRect().width / 20;
 		if (w <= 0) return;
 		charW = w;
+		const measured = parseFloat(getComputedStyle(probeEl).lineHeight);
+		if (Number.isFinite(measured) && measured > 0) lineHeightPx = measured;
 		const avail = deckEl.clientWidth - 8;
 		cols = Math.max(MIN_COLS, Math.min(MAX_COLS, Math.floor(avail / w)));
 	}
@@ -342,7 +351,7 @@
 	}
 	function onPointerMove(e: PointerEvent) {
 		if (!dragging) return;
-		const lineH = CAMERA_LINE_HEIGHT_PX;
+		const lineH = lineHeightPx;
 		const sx = level === 'island' ? 2 : 0.5;
 		const sy = level === 'island' ? 1 : 0.25;
 		const dx = (e.clientX - dragLast.x) / charW / sx;

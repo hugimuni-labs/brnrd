@@ -272,19 +272,37 @@ test('an armed await stands a ^ watch fact carrying its deadline', () => {
 	assert.equal(calm.watch.filter((w) => w.mark === '^').length, 0);
 });
 
-test('clockwork contains only live scheduled intent', () => {
+test('clockwork keeps every row the schedule wire sent — the narrowing is upstream', () => {
+	// The predecessor of this test fed `completed` / `cancelled` /
+	// `anchoring` rows and asserted a hand-written blocklist dropped them.
+	// It was green against data production cannot make: `fetchScheduledWakes`
+	// requests `?kind=scheduled`, so a finished run never reaches this wire,
+	// and `anchoring` is not a status — it is `scheduled_for === null`. The
+	// server's real dead vocabulary is eleven spellings over two sets
+	// (`dashboard.py:63-64`); a listed pair caught two. A fixture is coverage
+	// only if production can still produce it.
 	const graph = compileRoomGraph(liveWire([]), null, undefined, {
 		wakes: wakesWire([
-			scheduledWake('live', 'scheduled', '2026-08-26T11:00:00Z'),
-			scheduledWake('done', 'completed', '2026-08-26T10:30:00Z'),
-			scheduledWake('cancelled', 'cancelled', '2026-08-26T10:15:00Z'),
-			scheduledWake('anchoring', 'anchoring', '2026-08-26T10:05:00Z')
+			scheduledWake('nightly', 'recurring', '2026-08-26T11:00:00Z'),
+			scheduledWake('paced', 'quota-paced', '2026-08-26T12:00:00Z')
 		])
 	});
 	assert.deepEqual(
 		graph.clockwork.map((entry) => entry.summary),
-		['live']
+		['nightly', 'paced'],
+		'a quota-paced wake is deferred, not dead — dropping it would hide real future intent'
 	);
+});
+
+test('an anchoring entry carries no instant, so it can never own the countdown', () => {
+	// The real shape of "not scheduled yet": an `every:` row the daemon has
+	// seen but not yet computed a first fire for. It stays on the wire; the
+	// camera's own `.filter((e) => e.nextAt)` is what keeps it off the T.
+	const graph = compileRoomGraph(liveWire([]), null, undefined, {
+		wakes: wakesWire([scheduledWake('anchoring', 'recurring', null)])
+	});
+	assert.equal(graph.clockwork.length, 1, 'the entry is real intent and stays');
+	assert.equal(graph.clockwork[0].nextAt, null, 'it just has no instant to count to');
 });
 
 test('forge counts aggregate the island’s attested PR / issue / merge produce', () => {

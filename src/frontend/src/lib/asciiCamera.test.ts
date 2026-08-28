@@ -5,7 +5,7 @@ import { compileRoomGraph, fileFromDetail, type TrailStep } from './roomGraph.ts
 import { compileTopology, dirId, islandRootId, routeBetween } from './roomTopology.ts';
 import { emptyAtlas, layoutRoom, type AtlasMemory } from './roomLayout.ts';
 import {
-	CAMERA_LINE_HEIGHT_PX,
+	CAMERA_LINE_HEIGHT_FALLBACK_PX,
 	LEGEND,
 	cameraCenterFor,
 	isCameraHotkey,
@@ -182,17 +182,44 @@ test('camera countdowns preserve overdue truth from the shared scheduler formatt
 	assert.match(board, /T overdue 1h 0m/);
 });
 
-test('legend names every rendered home fixture and admits the shared home glyph', () => {
+test('the legend names every glyph the camera actually renders', () => {
+	// `lib` and HOME were rendered and unlisted. The legend prints the two
+	// `⌂` kinds side by side rather than carrying a note about the
+	// collision: a legend that explains its own open questions to the reader
+	// has become a TODO with an audience.
 	assert.match(LEGEND, /lib library/);
-	assert.match(LEGEND, /⌂ HOME/);
-	assert.match(LEGEND, /shared glyph/);
+	assert.match(LEGEND, /⌂ island root · ⌂ HOME/);
+	assert.ok(!/proposed|TODO/i.test(LEGEND), 'no design note ships inside the legend');
 });
 
-test('camera hotkeys yield browser shortcuts and vertical drag uses the CSS line height', () => {
+test('camera hotkeys yield modified keys back to the browser', () => {
 	assert.equal(isCameraHotkey({ key: 'f', metaKey: false, ctrlKey: false }), true);
-	assert.equal(isCameraHotkey({ key: 'f', metaKey: false, ctrlKey: true }), false);
-	assert.equal(isCameraHotkey({ key: 'a', metaKey: true, ctrlKey: false }), false);
-	assert.equal(CAMERA_LINE_HEIGHT_PX, 16.2);
+	assert.equal(isCameraHotkey({ key: 'a', metaKey: false, ctrlKey: false }), true);
+	assert.equal(
+		isCameraHotkey({ key: 'f', metaKey: false, ctrlKey: true }),
+		false,
+		'Ctrl+F is find'
+	);
+	assert.equal(
+		isCameraHotkey({ key: 'a', metaKey: true, ctrlKey: false }),
+		false,
+		'Cmd+A is select all'
+	);
+	assert.equal(isCameraHotkey({ key: 'z', metaKey: false, ctrlKey: false }), false);
+});
+
+test('the line height is a fallback, not the stylesheet copied into TypeScript', () => {
+	// Asserting `CONSTANT === 16.2` was a test of nothing: the value and the
+	// assertion were the same fact written twice, and it would have gone on
+	// passing while the CSS moved underneath it. What is actually load-bearing
+	// is that the page *measures* — `getComputedStyle(probeEl).lineHeight` in
+	// `measureCols`, beside the `charW` measurement it already trusted — and
+	// falls back only when that read is unusable.
+	assert.ok(Number.isFinite(CAMERA_LINE_HEIGHT_FALLBACK_PX));
+	assert.ok(CAMERA_LINE_HEIGHT_FALLBACK_PX > 0);
+	// Honestly uncovered: the measurement itself is DOM-side and this harness
+	// is node-only. `repro/drive-ascii.mjs` is where a real drag-scale check
+	// would live, and it does not have one.
 });
 
 // ── the reference trace: eight boundaries, one journey ──────────────────────

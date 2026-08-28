@@ -95,8 +95,11 @@ export function isCameraHotkey(e: Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlK
 	return !e.metaKey && !e.ctrlKey && (e.key === 'f' || e.key === 'a');
 }
 
-/** Matches `.board`'s 12px font and unitless 1.35 line-height. */
-export const CAMERA_LINE_HEIGHT_PX = 16.2;
+/** Fallback only — the page measures the real line box off the rendered
+ *  board, the same way it already measures `charW`. A constant restating
+ *  `.board`'s 12px × 1.35 would be the stylesheet's number stored twice,
+ *  and the next person to touch the CSS would silently un-fix the drag. */
+export const CAMERA_LINE_HEIGHT_FALLBACK_PX = 16.2;
 
 function wallLabel(seconds: number | null): string | null {
 	if (seconds === null || !Number.isFinite(seconds)) return null;
@@ -679,10 +682,15 @@ export function renderWorld(
 	return out.join('\n');
 }
 
-/** The legend, as its own block so the page can render it apart. */
+/** The legend, as its own block so the page can render it apart.
+ *  `⌂` currently names two different kinds — an island root and HOME — and
+ *  the legend says so by printing them together rather than by carrying a
+ *  note about it. A legend names what is on screen; a legend that explains
+ *  its own open questions to the reader has become a TODO with an
+ *  audience. Splitting the glyph is a visual-design call, not this one. */
 export const LEGEND = [
 	'the mood face is the resident (@ when faceless)   a…z strands   ◇ pending letter   ✉>>> boundary injection',
-	'⌂ island root   ⌂ HOME (shared glyph; redesign proposed)   name/ chamber   · file leaf   ▛ camp   lib library   ∙ current route',
+	'⌂ island root · ⌂ HOME   name/ chamber   · file leaf   ▛ camp   lib library   ∙ current route',
 	'P portal  K chart  B bay  W watch  D wake  X cut  $ bench (uncategorized shell work)  R rig  F FORGE (+pr/mg/is counts)',
 	'─│ corridors  ═║ branch/shore rail  ┄┆ station tether  G gate (HOME)  ▛ camp +Nc commits',
 	'^ watch — armed `brnrd await`s count down here  T clockwork  ⛁ garage  arrows = off-camera bearings',
