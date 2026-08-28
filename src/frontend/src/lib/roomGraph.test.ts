@@ -433,8 +433,67 @@ test('garage and clockwork compile their real wire extras, preserving stale bind
 		['Tend the room']
 	);
 	assert.deepEqual(graph.garage, [
-		{ shell: 'claude', status: 'stale', windows: [{ label: '5h', percent: 12 }] }
+		{
+			shell: 'claude',
+			status: 'stale',
+			windows: [{ label: '5h', percent: 12 }],
+			// No reset instant on this stale snapshot, so no clock — null, not
+			// a zero. A ceiling without its clock is half an instruction (10%
+			// resetting in 40 minutes and 10% resetting in three days are
+			// opposite advice), so the row carries the clock when the wire
+			// attests one and says nothing when it does not.
+			resetShort: null
+		}
 	]);
+});
+
+test('the binding row carries its reset clock when the wire attests one', () => {
+	const graph = compileRoomGraph(liveWire([]), null, undefined, {
+		quota: {
+			generated_at: '2026-08-26T10:20:00Z',
+			runner_quotas: [
+				{
+					shell: 'claude',
+					status: 'known',
+					windows: [
+						{
+							label: '5h window',
+							used: null,
+							limit: null,
+							percent: 12,
+							reset: 'resets 8:10pm',
+							resets_at: 1787950000
+						},
+						{
+							label: 'weekly',
+							used: null,
+							limit: null,
+							percent: 43,
+							reset: 'resets Aug 29',
+							resets_at: 1788005000
+						}
+					]
+				}
+			]
+		}
+	} as never);
+	assert.equal(graph.garage[0].windows[0].label, '5h', 'the binding window, not the weekly one');
+	assert.ok(graph.garage[0].resetShort, 'and its clock rides with it');
+});
+
+test('slots read the pool the wire has carried all along', () => {
+	// `spawn_max_concurrent` has been on the live-runs response since the loom
+	// envelope's phase 1 and nothing read it onto the graph, so the room could
+	// show a resident and three strands without ever saying how many more it
+	// could hold.
+	const wire = liveWire([]);
+	const graph = compileRoomGraph({ ...wire, spawn_max_concurrent: 8 }, null);
+	assert.deepEqual(graph.slots, { active: 0, max: 8 });
+
+	// A daemon that never reported a width says so: null is not zero, and
+	// `0/0 slots` would be a claim nobody made.
+	const unreported = compileRoomGraph({ ...wire, spawn_max_concurrent: null }, null);
+	assert.equal(unreported.slots.max, null);
 });
 
 test('terrain accretes from the trail, deduped by boundary timestamp', () => {
@@ -523,11 +582,24 @@ test('the empty world is a graph, not a crash', () => {
 
 // ── TERRAIN GROWS FROM TERRAIN ─────────────────────────────────────────────
 
+/** A boundary as `dirFromEdge` reads it: this function looks only at `dir`
+ *  and `detail`, so the fixtures name only those. Cast at one place with the
+ *  reason stated, rather than each call carrying four fields it never reads
+ *  — a fixture padded to satisfy a type teaches the next reader that the
+ *  padding matters. */
+const asEdge = (e: { act: string; detail: string; dir: string; at: string | null }) =>
+	e as unknown as NonNullable<LiveRun['edge']>;
+
 test('a detail path extends attested ground, and only that', () => {
 	// `src` was attested by a real cwd, so `src/frontend/src/lib` — named in
 	// a detail while the actor sat at the root — is ground it can reach.
 	const grown = dirFromEdge(
-		{ act: 'orient', detail: "sed -n '1,180p' src/frontend/src/lib/quota.ts", dir: '.', at: null },
+		asEdge({
+			act: 'orient',
+			detail: "sed -n '1,180p' src/frontend/src/lib/quota.ts",
+			dir: '.',
+			at: null
+		}),
 		['src']
 	);
 	assert.equal(grown, 'src/frontend/src/lib', 'the file leaf drops; chambers are directories');
@@ -547,7 +619,7 @@ test('the shapes that kept minting fake chambers cannot extend anything', () => 
 		'cat ~/.local/state/brnrd/accounts/acc_x/home/knowledge/index.md'
 	]) {
 		assert.equal(
-			dirFromEdge({ act: 'orient', detail, dir: '.', at: null }, attested),
+			dirFromEdge(asEdge({ act: 'orient', detail, dir: '.', at: null }), attested),
 			null,
 			detail
 		);
@@ -558,7 +630,7 @@ test('an attested cwd is terrain without needing to extend anything', () => {
 	// The daemon resolved it against the run's real checkout before
 	// publishing. It is the ground everything else grows from.
 	assert.equal(
-		dirFromEdge({ act: 'mutate', detail: 'Edit x.ts', dir: 'src/brr', at: null }, []),
+		dirFromEdge(asEdge({ act: 'mutate', detail: 'Edit x.ts', dir: 'src/brr', at: null }), []),
 		'src/brr'
 	);
 });
@@ -567,11 +639,11 @@ test('with nothing attested yet, a detail path grows nothing', () => {
 	// Not a silent drop: the boundary is still rendered on the actor's own
 	// line. It just does not mint ground out of a string nobody has stood on.
 	assert.equal(
-		dirFromEdge({ act: 'orient', detail: 'cat src/frontend/x.ts', dir: '.', at: null }, []),
+		dirFromEdge(asEdge({ act: 'orient', detail: 'cat src/frontend/x.ts', dir: '.', at: null }), []),
 		null
 	);
 	assert.equal(
-		dirFromEdge({ act: 'orient', detail: 'cat src/frontend/x.ts', dir: '.', at: null }),
+		dirFromEdge(asEdge({ act: 'orient', detail: 'cat src/frontend/x.ts', dir: '.', at: null })),
 		null,
 		'and omitting the attested set is the same answer, never a wider one'
 	);
@@ -579,7 +651,7 @@ test('with nothing attested yet, a detail path grows nothing', () => {
 
 test('the deepest attested ground wins when several could grow', () => {
 	const dir = dirFromEdge(
-		{ act: 'mutate', detail: 'Edit src/frontend/src/lib/roomGraph.ts', dir: '.', at: null },
+		asEdge({ act: 'mutate', detail: 'Edit src/frontend/src/lib/roomGraph.ts', dir: '.', at: null }),
 		['src', 'src/frontend']
 	);
 	assert.equal(dir, 'src/frontend/src/lib');
@@ -593,7 +665,7 @@ test('the island takes its first step off the root from the run own room', () =>
 		liveWire([
 			liveRun({
 				run_id: 'r1',
-				room: { branch: 'brr/x', dir: 'src' },
+				room: { branch: 'brr/x', dir: 'src', env: 'host' },
 				edge: edge('mutate', 'Edit src/frontend/src/lib/quota.ts', {
 					dir: '.',
 					at: '2026-08-28T10:00:00Z'

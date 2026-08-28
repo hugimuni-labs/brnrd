@@ -373,3 +373,102 @@ test('the trace renders the journey on the board: terrain, actor, forge, cloth',
 	assert.ok(lastBoard.includes('X'), 'cut loom visible');
 	assert.ok(lastBoard.includes('2c 1pr'), 'produce on the live cloth row');
 });
+
+// ── the condition line ──────────────────────────────────────────────────────
+
+/** One live resident, so the pager block renders at all, built through the
+ *  same compile the page uses — never a hand-built graph literal. */
+function pagerBoard(quota: unknown, spawnMax: number | null, strands = 0): string {
+	const run = {
+		run_id: 'r1',
+		repo_label: REPO,
+		branch: 'brr/x',
+		is_subspawn: false,
+		edge: { act: 'orient', detail: 'sed -n 1,20p x.ts', dir: 'src', at: '2026-08-27T10:20:00Z' }
+	} as unknown as LiveRun;
+	const children = Array.from(
+		{ length: strands },
+		(_, i) =>
+			({
+				run_id: `s${i}`,
+				repo_label: REPO,
+				branch: 'brr/y',
+				is_subspawn: true,
+				parent_run_id: 'r1',
+				edge: { act: 'mutate', detail: 'Edit y.ts', dir: 'src', at: '2026-08-27T10:20:00Z' }
+			}) as unknown as LiveRun
+	);
+	const wire = { ...liveWire([run, ...children]), spawn_max_concurrent: spawnMax };
+	const graph = compileRoomGraph(wire, null, undefined, { quota } as never);
+	const topo = compileTopology(graph);
+	const { layout } = layoutRoom(topo, emptyAtlas());
+	const cam: Camera = { center: { x: 0, y: 0 }, cols: 140, rows: 26, level: 'island' };
+	return renderWorld(topo, layout, graph, cam, {});
+}
+
+const CONDITION_QUOTA = {
+	generated_at: '2026-08-27T10:20:00Z',
+	runner_quotas: [
+		{
+			shell: 'claude',
+			status: 'known',
+			windows: [
+				{
+					label: '5h window',
+					used: null,
+					limit: null,
+					percent: 12,
+					reset: 'resets 8:10pm',
+					resets_at: 1787950000
+				},
+				{ label: 'weekly', used: null, limit: null, percent: 43, reset: null, resets_at: null }
+			]
+		},
+		{
+			shell: 'codex',
+			status: 'known',
+			windows: [
+				{ label: 'weekly', used: null, limit: null, percent: 81, reset: null, resets_at: null }
+			]
+		}
+	]
+};
+
+test('the pager wears the body: the binding ceiling, its clock, and the slots left', () => {
+	// The pager read out the log and nothing about the body carrying it,
+	// which is the difference between a feed and a worn device (maintainer,
+	// 2026-08-28). The clock is half the reading: "10% resetting in 40
+	// minutes" and "10% resetting in three days" are opposite instructions,
+	// and the percentage alone cannot tell them apart.
+	const board = pagerBoard(CONDITION_QUOTA, 8, 3);
+	assert.match(board, /⌁ .*⛁ claude 5h 12% ↻/u, 'the binding ceiling, named, with its clock');
+	assert.match(board, /⛁ codex week 81%/u, 'the other shell reads too');
+	assert.ok(
+		!/⛁ codex week 81% ↻/u.test(board),
+		'and no clock is invented where the wire gave none'
+	);
+	assert.match(board, /◈ 3\/8 slots/u, 'how much body is free, not only how much is busy');
+});
+
+test('an unreported pool width says so rather than claiming zero', () => {
+	// A strand is demonstrably out and no daemon has reported a width. `1/0`
+	// would be arithmetic nobody could do and `1/8` a number nobody sent;
+	// `?` is the honest shape of "unknown ceiling, known draw".
+	const board = pagerBoard(CONDITION_QUOTA, null, 1);
+	assert.match(board, /◈ 1\/\? slots/u);
+});
+
+test('nothing out and no width reported grows no slot reading', () => {
+	// The unknown only matters against a draw. With neither, the line stays
+	// quiet rather than printing a question mark at an empty room.
+	const board = pagerBoard(CONDITION_QUOTA, null, 0);
+	assert.ok(!/◈/u.test(board), 'no slot chip at all');
+	assert.match(board, /⛁ claude/u, 'while the fuel it does have still reads');
+});
+
+test('a board with nothing attested grows no condition line at all', () => {
+	// An empty strip beats a row of zeroes, which would read as measured.
+	const board = pagerBoard({ generated_at: '2026-08-27T10:20:00Z', runner_quotas: [] }, null);
+	assert.ok(board.includes('PAGER'), 'the pager itself still renders');
+	assert.ok(!/⌁ .*⛁/u.test(board), 'but no fuel line is fabricated');
+});
