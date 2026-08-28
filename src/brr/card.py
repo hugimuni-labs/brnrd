@@ -44,12 +44,26 @@ see, so the parser accommodates the writer rather than the reverse.
 from __future__ import annotations
 
 import re
+from typing import TypedDict
 
 #: Mirror of ``brnrd.schemas.LiveRunIn.card_text``'s ``max_length``. That field
 #: is the authority — this constant exists because ``brr`` must not import the
 #: API package to know the number, and ``tests/test_card.py`` pins the two
 #: together so the mirror cannot drift silently.
 CARD_TEXT_MAX_CHARS = 4096
+
+#: One plan row is enough context for the compact room chart. 256 characters
+#: matches the live run's other human-authored labels while keeping the derived
+#: payload bounded independently of the full card.
+COURSE_CURRENT_MAX_CHARS = 256
+
+
+class Course(TypedDict):
+    """Bounded progress derived from a card's checkbox plan."""
+
+    done: int
+    total: int
+    current: str | None
 
 #: The section anchor: any heading depth, any case, and any trailing text after
 #: the word. The trailing-text allowance is driven, not defensive — 10 of 272
@@ -136,6 +150,34 @@ def now_projection(body: str, *, limit: int | None = None) -> str:
                 break
         projected.append(line)
     return _bound("\n".join(projected).strip(), limit)
+
+
+def course(body: str) -> Course | None:
+    """Derive checkbox progress from the full card body.
+
+    ``current`` is the first unchecked row. An explicit resident-authored
+    marker may replace that rule later; keeping the parse here prevents the
+    daemon publisher from becoming another hand-copy of card syntax.
+    """
+
+    done = 0
+    total = 0
+    current: str | None = None
+    for line in body.replace("\r\n", "\n").split("\n"):
+        match = re.match(r"^\s*[-*] \[([ xX])\]\s+(.*)$", line)
+        if match is None:
+            continue
+        total += 1
+        if match.group(1) == " ":
+            if current is None:
+                row = match.group(2).strip()
+                current = (
+                    row if len(row) <= COURSE_CURRENT_MAX_CHARS
+                    else row[: COURSE_CURRENT_MAX_CHARS - 1] + "…"
+                )
+        else:
+            done += 1
+    return {"done": done, "total": total, "current": current} if total else None
 
 
 def section_names(body: str, *, exclude_now: bool = True) -> list[str]:

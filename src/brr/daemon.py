@@ -10648,6 +10648,7 @@ def _drain_agent_card(
         run_id=task.id,
         event_id=event_id,
         text=projection,
+        course=card.course(body),
     )
     # A running run's node used to carry a frame and its traffic but no body,
     # because the body was only captured at closeout — so the one run a reader

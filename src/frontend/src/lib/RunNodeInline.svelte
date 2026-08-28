@@ -224,7 +224,7 @@
 	let room = $derived(roomLine(liveRun?.room));
 	let edge = $derived(liveRun?.edge ?? null);
 	let edgeText = $derived(edgeLine(edge));
-	let course = $derived(runCourse(liveRun?.card_text));
+	let course = $derived(runCourse(liveRun?.card_text, liveRun?.course));
 	// AWAIT cools the whole panel's register; CLOSING warms it. The colors
 	// come from the same status palette every live surface speaks.
 	const NOTICE_COLOR: Record<'starting' | 'awaiting' | 'closing', string> = {
