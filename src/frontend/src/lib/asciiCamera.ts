@@ -21,6 +21,7 @@ import { MAX_DIR_LABEL_CHARS, type Point, type RoomLayout } from './roomLayout.t
 import type { PagerPage } from './roomPager.ts';
 import { untilText } from './scheduledWakes.ts';
 import { OFF_MARK } from './stateChrome.ts';
+import type { CrossingFrame } from './roomCrossing.ts';
 
 export type CameraLevel = 'island' | 'atlas';
 
@@ -49,6 +50,11 @@ export interface WorldRenderOpts {
 	/** Reading-ceremony phase per actor run id (ticksLeft) — presentation,
 	 *  like walk positions: passed on display paints, never the flash diff. */
 	reading?: Record<string, number> | null;
+	/** THE CROSSING, mid-ceremony: the claw's current extent and the letter
+	 *  it carries. Presentation, like walk positions — the frames are derived
+	 *  from an attested crossing (`RoomGraph.crossings`) and the caller owns
+	 *  the clock, so this never rides the clock-free flash diff. */
+	crossings?: CrossingFrame[] | null;
 }
 
 /** The resident's own state, in the pager's own grid: what it is burning,
@@ -402,6 +408,14 @@ const STATION_KINDS = new Set<PlaceNodeKind>([
  *  ceremony's remaining ticks. */
 const TETHER_FRAMES = ['⌁', '∿', '≋'];
 
+/** The claw's own mark. Deliberately not `─`: that is the corridor glyph,
+ *  and a reach drawn in it is indistinguishable from the terrain it crosses —
+ *  by eye and, as the first driven check discovered, by any measurement of
+ *  the board. A ceremony you cannot tell apart from the room is a ceremony
+ *  you cannot prove is running. */
+const CLAW_CHAR = '┈';
+const CLAW_TIP = '≻';
+
 /**
  * The visible act at a station: what the actor is doing where it stands.
  * `✎` writing, `☰` reading, `✉` opening correspondence (the deliberate
@@ -574,6 +588,30 @@ export function renderWorld(
 		}
 	}
 
+	// 3b · THE CROSSING — the claw, drawn under the actors so a delivery
+	// never covers the body receiving it. Ground, like corridors: it uses
+	// `canvas.ground` so terrain and labels keep their cells, because a
+	// ceremony that erases the room to show itself is a cutscene.
+	//
+	// The letter is a *claiming* write: it is the one thing in the frame the
+	// reader is meant to follow, and it occupies exactly one cell for exactly
+	// the beats it is in flight.
+	for (const frame of opts.crossings ?? []) {
+		frame.arm.forEach((point, i) => {
+			const c = toChar(f, point);
+			// The leading cell wears the tip. Without it the reach reads as a
+			// dotted trail that happens to be there — legible, but it does not
+			// say which end is doing the reaching, and the direction is the
+			// entire argument for the claw having a source.
+			const tip = !frame.settling && i === frame.arm.length - 1;
+			canvas.ground(c.x, c.y, tip ? CLAW_TIP : CLAW_CHAR);
+		});
+		if (frame.letter) {
+			const c = toChar(f, frame.letter);
+			canvas.text(c.x, c.y, '◇');
+		}
+	}
+
 	// 4 · actors standing at their places (or mid-walk when the caller
 	// passes a display position from an attested transition); stacked when
 	// they share one place
@@ -738,6 +776,7 @@ export const LEGEND = [
 	'─│ corridors  ═║ branch/shore rail  ┄┆ station tether  G gate (HOME)  ▛ camp +Nc commits',
 	'^ watch — armed `brnrd await`s count down here  T clockwork  ⛁ garage  arrows = off-camera bearings',
 	'⌁ attested boundary   ══ CLOTH time register — live, then history',
+	'┈≻ the claw — a letter carried from HOME to the actor that received it   ◇ the letter, in flight',
 	'▯⌁@ mind-connect — reading the pager   ✎ writing  ☰ reading  ✉ opening a letter',
 	'▯ PAGER — injection status: ◇ waiting (accumulated, not yet injected) · ✉ read · ▸ in transit'
 ].join('\n');

@@ -37,6 +37,7 @@
 		type PagerPage,
 		type Reading
 	} from '$lib/roomPager';
+	import { crossingsFor, advanceCrossings, crossingFrames, type Crossing } from '$lib/roomCrossing';
 	import {
 		renderWorld,
 		cameraCenterFor,
@@ -197,6 +198,12 @@
 	// Recomputed on every scene build; the paint tick reuses the same set so a
 	// walking frame cannot silently widen the feed.
 	let liveRunIds = new Set<string>();
+	// THE CROSSING. `crossingsSeen` keys on the attested boundary's own `at`,
+	// so the bounded tail the wire republishes every poll (the same rows,
+	// every 2s) mints each ceremony exactly once — and a ceremony already
+	// delivered can never replay because a later poll happened to include it.
+	let crossings = $state<Crossing[]>([]);
+	const crossingsSeen = new Set<string>();
 	let prevBare: string[] = [];
 	// motion state (#1654 slice 3): walks derive from BoundaryTransition
 	// receipts only; the camera eases toward its target between paints
@@ -230,6 +237,18 @@
 			atlas = placed.memory;
 			if (!demo) saveAtlas();
 		}
+		// The claw is minted here, after the layout, because a delivery needs
+		// two real positions — HOME's and the actor's. It rides an attested
+		// crossing (`graph.crossings`), never a poll: the tail is republished
+		// every tick and `crossingsSeen` is what makes that idempotent.
+		const fresh = crossingsFor(
+			graph.crossings,
+			crossingsSeen,
+			topo.homeId,
+			topo.actorPlaces,
+			placed.layout
+		);
+		if (fresh.length > 0) crossings = [...crossings, ...fresh];
 		const layout = placed.layout;
 		scene = { graph, topo, layout };
 		lastNow = now;
@@ -302,7 +321,8 @@
 			highlightRoute: lastRoute,
 			actorPositions: walkPositions(walks),
 			pages: pagerFeed(pager, liveRunIds),
-			reading: readingPhases(readings)
+			reading: readingPhases(readings),
+			crossings: crossingFrames(crossings)
 		}).split('\n');
 	}
 
@@ -317,6 +337,10 @@
 		}
 		if (readings.length > 0) {
 			readings = advanceReadings(readings);
+			moved = true;
+		}
+		if (crossings.length > 0) {
+			crossings = advanceCrossings(crossings);
 			moved = true;
 		}
 		if (follow && (camCenter.x !== camTarget.x || camCenter.y !== camTarget.y)) {
