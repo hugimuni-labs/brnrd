@@ -202,70 +202,16 @@ function edgeOf(detail: string | null, dir: string | null = '.') {
 }
 
 test('dirFromEdge: the cwd wins when it is not the root', () => {
-	assert.equal(dirFromEdge(edgeOf('Edit x.ts', 'src/brr'), REPO), 'src/brr');
+	assert.equal(dirFromEdge(edgeOf('Edit x.ts', 'src/brr')), 'src/brr');
 });
 
-test('dirFromEdge: an absolute detail path relativizes through the repo segment', () => {
-	assert.equal(
-		dirFromEdge(
-			edgeOf('Edit · /Users/g/Source/Projects/brnrd/src/frontend/src/lib/liveRuns.ts'),
-			REPO
-		),
-		'src/frontend/src/lib'
-	);
-	// dotfile leaf: the control file is dropped, the chamber survives…
-	assert.equal(
-		dirFromEdge(edgeOf('Write · /Users/g/Source/Projects/brnrd/src/frontend/.env'), REPO),
-		'src/frontend'
-	);
-	// …but machinery roots are not terrain
-	assert.equal(
-		dirFromEdge(edgeOf('Write ×3 · /Users/g/Source/Projects/brnrd/.brr/outbox/evt-1/x.md'), REPO),
-		null
-	);
+test('dirFromEdge: detail text never substitutes for daemon-attested cwd', () => {
+	assert.equal(dirFromEdge(edgeOf('grep -rn "x" src/frontend/src/lib')), null);
+	assert.equal(dirFromEdge(edgeOf('Edit /Users/g/Source/Projects/brnrd/src/lib/x.ts')), null);
+	assert.equal(dirFromEdge(edgeOf(null)), null);
 });
 
-test('dirFromEdge: a hidden segment anywhere on the way is machinery, not terrain', () => {
-	// the measured 08-27 failure: the account home lives under
-	// `~/.local/state/brnrd/…`, whose `brnrd` segment matches the repo short
-	// name — dominion writes were minting fake `accounts/acc_…` chambers
-	assert.equal(
-		dirFromEdge(
-			edgeOf(
-				'Write · /Users/g/.local/state/brnrd/accounts/acc_bdda426da378d4f0c3/home/repos/x/dominion/playbook.md'
-			),
-			REPO
-		),
-		null
-	);
-	// a hidden segment after the match is machinery too
-	assert.equal(
-		dirFromEdge(edgeOf('Read · /Users/g/Source/Projects/brnrd/.brnrd-kb/index.md'), REPO),
-		null
-	);
-	// and a relative token through a hidden dir never lands
-	assert.equal(dirFromEdge(edgeOf('cat .svelte-kit/output/server/index.js'), REPO), null);
-});
-
-test('dirFromEdge: a truncation-cut segment is not a fact, its prefix is', () => {
-	assert.equal(
-		dirFromEdge(edgeOf('Read · /Users/g/Source/Projects/brnrd/src/frontend/src/lib…'), REPO),
-		'src/frontend/src'
-	);
-});
-
-test('dirFromEdge: relative tokens need depth; refs and urls never land', () => {
-	assert.equal(
-		dirFromEdge(edgeOf('grep -rn "x" src/frontend/src/lib'), REPO),
-		'src/frontend/src/lib'
-	);
-	assert.equal(dirFromEdge(edgeOf('git fetch origin/main'), REPO), null);
-	assert.equal(dirFromEdge(edgeOf('curl https://example.com/a/b/c'), REPO), null);
-	assert.equal(dirFromEdge(edgeOf(null), REPO), null);
-	assert.equal(dirFromEdge(edgeOf('Edit /Users/g/elsewhere/proj/a/b.ts'), REPO), null);
-});
-
-test('a root-cwd edit still grows the trie and places the actor in its chamber', () => {
+test('an attested in-tree cwd grows the trie and places the actor in its chamber', () => {
 	const runs = [
 		{
 			run_id: 'r-root',
@@ -274,7 +220,10 @@ test('a root-cwd edit still grows the trie and places the actor in its chamber',
 			parent_run_id: null,
 			started_at: '2026-08-27T10:00:00Z',
 			room: { env: 'host', branch: 'brr/x', dir: null },
-			edge: edgeOf('Edit · /Users/g/Source/Projects/brnrd/src/frontend/src/lib/roomGraph.ts')
+			edge: edgeOf(
+				'Edit · /Users/g/Source/Projects/brnrd/src/frontend/src/lib/roomGraph.ts',
+				'src/frontend/src/lib'
+			)
 		}
 	] as unknown as LiveRun[];
 	const graph = compileRoomGraph(liveWire(runs), null, {});
