@@ -245,3 +245,41 @@ test('an orient at the portal rack reads as opening a letter', () => {
 	// stations only — a chamber already renders its own file leaf
 	assert.equal(activityMark({ act: 'mutate', detail: 'Edit a.ts' }, 'directory'), null);
 });
+
+test('the feed scopes to live runs, and the store keeps the rest', () => {
+	// Unscoped, the strip read `✉×152 read · nothing waiting` on a quiet
+	// account — a number that is neither wrong nor about anything the reader
+	// can act on, because 149 of those pages rode runs that ended days ago.
+	// The store keeps them on purpose: a page is how a finished run's traffic
+	// stays inspectable. What changed is that the *strip* is a condition
+	// readout, and a condition is about now.
+	const store: Record<string, PagerPage[]> = {
+		'run-live': [
+			{ at: '2026-08-28T16:30:00Z', runId: 'run-live', glyph: '@', act: 'orient', detail: null }
+		],
+		'run-dead': [
+			{ at: '2026-08-27T09:00:00Z', runId: 'run-dead', glyph: 'a', act: 'mutate', detail: null },
+			{ at: '2026-08-27T09:05:00Z', runId: 'run-dead', glyph: 'a', act: 'publish', detail: null }
+		]
+	};
+	assert.equal(pagerFeed(store).length, 3, 'unscoped is still the whole history');
+	const scoped = pagerFeed(store, new Set(['run-live']));
+	assert.deepEqual(
+		scoped.map((p) => p.runId),
+		['run-live']
+	);
+	assert.equal(store['run-dead'].length, 2, 'and the dead run keeps its pages');
+});
+
+test('no live runs is a real answer, not a missing argument', () => {
+	// `undefined` means "do not scope"; an empty set means "nothing is live".
+	// Collapsing the two would make a quiet account render its whole history
+	// as if it were current — the exact defect this scoping exists to end.
+	const store: Record<string, PagerPage[]> = {
+		'run-dead': [
+			{ at: '2026-08-27T09:00:00Z', runId: 'run-dead', glyph: 'a', act: 'mutate', detail: null }
+		]
+	};
+	assert.equal(pagerFeed(store, new Set()).length, 0);
+	assert.equal(pagerFeed(store, undefined).length, 1);
+});
