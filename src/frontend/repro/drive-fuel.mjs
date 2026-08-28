@@ -179,7 +179,7 @@ async function main() {
 			await page.screenshot({ path: `${OUT}/${vp.name}-3-open-codex.png`, fullPage: false });
 
 			// settings is its own small block now, and holds no core picker
-			await page.getByRole('button', { name: /open settings/ }).click();
+			await page.locator('[data-role="bench-handle"]').click();
 			await page.waitForSelector('[data-measure="settings"]', { timeout: 15000 });
 			await delay(400);
 			await page.screenshot({ path: `${OUT}/${vp.name}-5-settings.png`, fullPage: false });

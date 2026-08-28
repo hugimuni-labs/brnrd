@@ -102,10 +102,11 @@ test('the last-looked load effect reads the stored anchor before re-arming it to
 	ok(readAt < rearmAt, 'the read happens before the re-arm write, not after');
 });
 
-test('the machine dock leaves the disclosure seam while either expansion is open', () => {
-	// Two things can be open under the rail now — settings, and a pressed
-	// provider — so the docking guard asks one question (`railOpen`) rather
-	// than tracking whichever of them happened to be wired.
+test('the machine dock leaves the disclosure seam while the pressed provider is open', () => {
+	// One thing can be open *under* the rail now — a pressed provider. The
+	// bench moved above the rail entirely (2026-08-28), so a settings
+	// disjunct here would park the machine dock for a panel rendering
+	// nowhere near it.
 	const src = source();
 	const machineAt = src.indexOf('class="ignite machine-dock');
 	ok(machineAt >= 0, 'the machine dock exists');
@@ -113,13 +114,44 @@ test('the machine dock leaves the disclosure seam while either expansion is open
 	ok(guardAt >= 0, 'the machine dock is guarded by the nothing-open state');
 	ok(machineAt - guardAt < 1_000, 'the guard belongs to the machine dock, not an earlier lane');
 	ok(
-		/let railOpen = \$derived\(settingsOpen \|\| openProvider !== null\)/u.test(src),
-		'and that state is derived from both, not from one of them'
+		/let railOpen = \$derived\(openProvider !== null\)/u.test(src),
+		'and that state names the one expansion that still lives under the rail'
 	);
 	const bayAt = src.indexOf('<ProviderBay', machineAt);
-	const benchAt = src.indexOf('<RailBench', machineAt);
 	ok(bayAt > machineAt, 'the provider bay mounts after the sticky stack');
-	ok(benchAt > bayAt, 'and settings after it — the pressed row is nearest the row that opened it');
+});
+
+// His 2026-08-28 read: "we need a bench/settings whatever block, collapsed,
+// on the very top of the page, above the fuel". Order in the source is the
+// order on the page — the whole defect was a handle above a body with the
+// provider bay wedged between them, so the ordering is the fix and belongs
+// in a test rather than only in a comment.
+test('the bench mounts above the fuel rail, not below the provider bay', () => {
+	const src = source();
+	const benchAt = src.indexOf('<RailBench');
+	const stackAt = src.indexOf('bind:this={stackEl}');
+	const bayAt = src.indexOf('<ProviderBay');
+	ok(benchAt >= 0 && stackAt >= 0 && bayAt >= 0, 'all three surfaces mount');
+	ok(benchAt < stackAt, 'the bench precedes the sticky stack that holds the gauge');
+	ok(benchAt < bayAt, 'and the provider bay, which used to sit between it and its handle');
+	ok(src.indexOf('<RailBench', benchAt + 1) === -1, 'exactly one bench, so it has one state');
+	// Mounted unconditionally: while it was `{#if settingsOpen}` the fold
+	// unmounted the component and silently reset the reader's project pick.
+	ok(!/\{#if settingsOpen\}/u.test(src), 'the bench is not conditionally mounted');
+});
+
+// `runnersNote` is what a core-row tap answers with. It rendered inside
+// `RailBench`, which mounted only while settings was open — so a tap made
+// with settings shut wrote its receipt to a surface that was not on the
+// page. A receipt with a conditional reader is not a receipt.
+test('the tap receipt renders unconditionally, under the rows that cause it', () => {
+	const src = source();
+	const noteAt = src.indexOf('data-measure="error-note"');
+	ok(noteAt >= 0, 'the receipt strip exists');
+	ok(src.includes('{runnersNote}'), 'and reads the note the tap writes');
+	const guardAt = src.lastIndexOf('{#if', noteAt);
+	const closeAt = src.lastIndexOf('{/if}', noteAt);
+	ok(closeAt > guardAt, 'no open conditional wraps the strip');
 });
 
 test('the trail store is versioned by the rule that derived it', () => {
