@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>hugimuni print register (amber-sky)</title>
+  <rect width="512" height="512" fill="#000"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <g stroke="#ff9a1f" stroke-width="40" transform="translate(-7,0)"><path d="M 152 156 V 356"/><path d="M 360 156 V 356"/></g>
+    <g stroke="#69c7df" stroke-width="40" transform="translate(7,0)"><path d="M 152 156 V 356"/><path d="M 360 156 V 356"/></g>
+    <g stroke="#ff9a1f" stroke-width="28"><path d="M 132 276 H 380"/></g>
+    <g stroke="#69c7df" stroke-width="28"><path d="M 132 156 L 276.0 356"/><path d="M 380 156 L 236.0 356"/></g>
+    <g stroke="#ffffff" stroke-width="26"><path d="M 152 156 V 356"/><path d="M 360 156 V 356"/></g>
+    <g stroke="#ffffff" stroke-width="5.5"><path d="M 132 276 H 380"/><path d="M 132 156 L 276.0 356"/><path d="M 380 156 L 236.0 356"/></g>
+  </g>
+</svg>

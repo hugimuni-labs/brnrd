@@ -146,65 +146,62 @@ def svg(name: str) -> str:
 """
 
 
-def eps(name: str, *, lockup: bool = False) -> str:
-    """Level-2 EPS: vector strokes, scanlines, grain, and standard PS type."""
-    a, b = PALETTES[name]
-    height = 640 if lockup else BOARD
+PRINT_CMYK = {
+    "amber-sky": ((0.00, 0.47, 0.88, 0.00), (0.56, 0.05, 0.03, 0.00)),
+    "coral-turquoise": ((0.00, 0.66, 0.54, 0.00), (0.66, 0.00, 0.24, 0.00)),
+}
 
-    def rgb(value: str) -> str:
-        return " ".join(f"{int(value[i:i + 2], 16) / 255:.4f}" for i in (1, 3, 5))
+
+def eps(name: str, *, lockup: bool = False) -> str:
+    """Level-2, process-CMYK EPS for physical production.
+
+    Glow, blend modes, scanlines and grain are screen material. The print
+    register keeps the woven strokes, uses authored process values, and
+    redraws every stroke with a paper-white core so crossings cannot inherit
+    the last-painted colour.
+    """
+    cmyk_a, cmyk_b = PRINT_CMYK[name]
+    height = 690 if lockup else BOARD
+
+    def cmyk(value) -> str:
+        return " ".join(f"{channel:.3f}" for channel in value)
 
     def line(x1, y1, x2, y2, width, color):
-        return (f"{rgb(color)} setrgbcolor {width} setlinewidth "
+        return (f"{cmyk(color)} setcmykcolor {width} setlinewidth "
                 f"{x1} {height-y1} moveto {x2} {height-y2} lineto stroke")
 
-    commands = [f"{rgb(INK)} setrgbcolor 0 0 {BOARD} {height} rectfill",
-                "1 setlinecap 1 setlinejoin"]
+    commands = [f"0 0 0 1 setcmykcolor 0 0 {BOARD} {height} rectfill",
+                "false setoverprint", "1 setlinecap 1 setlinejoin"]
     for x in (LEFT - GHOST, RIGHT - GHOST):
-        commands.append(line(x, TOP, x, BOTTOM, STEM_STROKE, a))
+        commands.append(line(x, TOP, x, BOTTOM, STEM_STROKE, cmyk_a))
     for x in (LEFT + GHOST, RIGHT + GHOST):
-        commands.append(line(x, TOP, x, BOTTOM, STEM_STROKE, b))
-    commands.append(line(LEFT - OVERHANG, CROSS, RIGHT + OVERHANG, CROSS, STROKE, a))
+        commands.append(line(x, TOP, x, BOTTOM, STEM_STROKE, cmyk_b))
+    commands.append(line(LEFT - OVERHANG, CROSS, RIGHT + OVERHANG, CROSS, STROKE, cmyk_a))
     drop = BOTTOM + DIP
     commands.extend((
-        line(LEFT - SPREAD, TOP - RISE, AXIS + TAIL, drop, STROKE, b),
-        line(RIGHT + SPREAD, TOP - RISE, AXIS - TAIL, drop, STROKE, b),
+        line(LEFT - SPREAD, TOP - RISE, AXIS + TAIL, drop, STROKE, cmyk_b),
+        line(RIGHT + SPREAD, TOP - RISE, AXIS - TAIL, drop, STROKE, cmyk_b),
     ))
+    paper = (0, 0, 0, 0)
     for x in (LEFT, RIGHT):
-        commands.append(line(x, TOP, x, BOTTOM, STEM_STROKE - GHOST * 2, INTERSECTION))
-    # Fine vector scanlines and deterministic phosphor flecks. The flecks
-    # sample points *along the strokes* (2026-08-28 — grain belongs to the
-    # letter light, not the field around it), jittered across each stroke's
-    # own width; print rhymes with the screen render's stroke-masked grain.
-    # This is deliberately not a bitmap texture hidden inside an EPS wrapper.
-    for y in range(112, 405, 6):
-        commands.append(line(72, y, 440, y, .35, "#29402f"))
-    drop = BOTTOM + DIP
-    segments = (  # (x1, y1, x2, y2, stroke width)
-        (LEFT, TOP, LEFT, BOTTOM, STEM_STROKE),
-        (RIGHT, TOP, RIGHT, BOTTOM, STEM_STROKE),
-        (LEFT - OVERHANG, CROSS, RIGHT + OVERHANG, CROSS, STROKE),
-        (LEFT - SPREAD, TOP - RISE, AXIS + TAIL, drop, STROKE),
-        (RIGHT + SPREAD, TOP - RISE, AXIS - TAIL, drop, STROKE),
-    )
-    flecks = round(43 + max(0, min(100, GRAIN)) * 4.4)
-    for i in range(flecks):
-        x1, y1, x2, y2, width = segments[i % len(segments)]
-        t = ((i * 37) % 97) / 97
-        # jitter across the stroke, never past its edge
-        across = (((i * 13) % 9) - 4) / 4 * (width / 2 - 1)
-        dx, dy = x2 - x1, y2 - y1
-        length = (dx * dx + dy * dy) ** 0.5 or 1.0
-        nx, ny = -dy / length, dx / length  # unit normal
-        x = x1 + dx * t + nx * across
-        y = y1 + dy * t + ny * across
-        radius = .45 + (i % 4) * .22
-        grain_tone = "#ffffff" if i % 7 == 0 else INTERSECTION
-        commands.append(f"{rgb(grain_tone)} setrgbcolor newpath {x:.1f} {height-y:.1f} {radius:.2f} 0 360 arc fill")
+        commands.append(line(x, TOP, x, BOTTOM, STEM_STROKE - GHOST * 2, paper))
+    commands.append(line(LEFT - OVERHANG, CROSS, RIGHT + OVERHANG, CROSS, 5.5, paper))
+    commands.extend((
+        line(LEFT - SPREAD, TOP - RISE, AXIS + TAIL, drop, 5.5, paper),
+        line(RIGHT + SPREAD, TOP - RISE, AXIS - TAIL, drop, 5.5, paper),
+    ))
     if lockup:
         commands.extend((
-            f"{rgb(INTERSECTION)} setrgbcolor /Helvetica-Bold findfont 58 scalefont setfont",
-            f"(HugiMuni) dup stringwidth pop 2 div neg {BOARD/2} add 130 moveto show",
+            line(142, 535, 142, 580, 8, cmyk_a),
+            line(178, 535, 178, 580, 8, cmyk_a),
+            line(142, 557, 178, 557, 8, cmyk_a),
+            line(142, 600, 142, 645, 8, cmyk_b),
+            line(178, 600, 178, 645, 8, cmyk_b),
+            line(142, 600, 160, 642, 8, cmyk_b),
+            line(178, 600, 160, 642, 8, cmyk_b),
+            "0 0 0 0 setcmykcolor /Helvetica findfont 34 scalefont setfont",
+            "194 108 moveto (UGI) show",
+            "194 43 moveto (UNI) show",
         ))
     return "\n".join((
         "%!PS-Adobe-3.0 EPSF-3.0", f"%%BoundingBox: 0 0 {BOARD} {height}",
@@ -212,6 +209,36 @@ def eps(name: str, *, lockup: bool = False) -> str:
         "%%Creator: media/brand/hugimuni/build.py", "%%EndComments",
         *commands, "showpage", "%%EOF", "",
     ))
+
+
+def print_svg(name: str, *, lockup: bool = False) -> str:
+    """Portable visual proof of the flat EPS register."""
+    a, b = PALETTES[name]
+    height = 690 if lockup else BOARD
+    white = "#ffffff"
+    wordmark = ""
+    if lockup:
+        wordmark = f"""
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="8">
+    <path stroke="{a}" d="M142 535V580M178 535V580M142 557H178"/>
+    <path stroke="{b}" d="M142 600V645M178 600V645M142 600L160 642L178 600"/>
+  </g>
+  <g fill="{white}" font-family="Helvetica, Arial, sans-serif" font-size="34">
+    <text x="194" y="582">UGI</text><text x="194" y="647">UNI</text>
+  </g>"""
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{BOARD}" height="{height}" viewBox="0 0 {BOARD} {height}">
+  <title>hugimuni print register ({name})</title>
+  <rect width="{BOARD}" height="{height}" fill="#000"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <g stroke="{a}" stroke-width="{STEM_STROKE}" transform="translate({-GHOST},0)">{STEMS}</g>
+    <g stroke="{b}" stroke-width="{STEM_STROKE}" transform="translate({GHOST},0)">{STEMS}</g>
+    <g stroke="{a}" stroke-width="{STROKE}">{BAR_H}</g>
+    <g stroke="{b}" stroke-width="{STROKE}">{vee_m()}</g>
+    <g stroke="{white}" stroke-width="{STEM_STROKE - GHOST * 2}">{STEMS}</g>
+    <g stroke="{white}" stroke-width="5.5">{BAR_H}{vee_m()}</g>
+  </g>{wordmark}
+</svg>
+"""
 
 
 if __name__ == "__main__":
@@ -222,4 +249,6 @@ if __name__ == "__main__":
         (OUT / f"hugimuni-{name}.svg").write_text(svg(name))
         (OUT / f"hugimuni-{name}.eps").write_text(eps(name))
         (OUT / f"hugimuni-{name}-lockup.eps").write_text(eps(name, lockup=True))
-    print("wrote SVG mark + EPS mark/lockup variants")
+        (OUT / f"hugimuni-{name}-print.svg").write_text(print_svg(name))
+        (OUT / f"hugimuni-{name}-print-lockup.svg").write_text(print_svg(name, lockup=True))
+    print("wrote screen SVG + print EPS/SVG mark and lockup variants")

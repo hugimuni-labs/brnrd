@@ -22,15 +22,19 @@ The shared stems carry both hues offset around a pale core, which is the same
 chromatic-aberration grammar brnrd's screen register already speaks — parent
 and product rhyme without wearing each other's mark.
 
-The generator now emits the normal SVG mark plus two genuine vector EPS
-deliverables for each palette: the standalone mark and a conference-lockup
-version with `HugiMuni` sized below it. The EPS treatment uses vector scanlines
-and deterministic phosphor flecks rather than embedding a bitmap; `GRAIN`
-controls their density and the live bench applies the same strength to its SVG
-noise and scanlines. `INTERSECTION` is also exposed as a colour input there,
-with warm phosphor white as the current default. The wordmark
-uses standard PostScript Helvetica Bold; convert the text to outlines in the
-final layout application if a printer requires embedded outlines.
+The generator emits the normal emissive SVG plus two genuine vector EPS
+deliverables for each palette: the standalone mark and a conference lockup.
+The EPS is a separate **stone/print register**, not a flattened imitation of
+the screen effect: explicit process-CMYK inks, no raster content, no glow,
+scanlines, or grain, and paper-white knockout cores on every stroke. That last
+rule makes the diagonal/bar crossings white instead of whichever colour was
+painted last. `false setoverprint` is explicit so the white clears every plate.
+
+The lockup spells the company name as two rows: the mark's own vector `H` plus
+lower-register `UGI`, then its own vector `M` plus lower-register `UNI`. The
+continuations use Helvetica, a PostScript base face; outline them in the final
+imposition application if the printer's preflight requires all type converted
+to paths.
 
 `STEM_STROKE` is deliberately independent from `STROKE`: the side legs can
 carry more visual weight without fattening the crossbar and diagonals.
@@ -79,9 +83,12 @@ as a grained monitor bezel.
 **Dark grounds only.** Screen blending against a light ground washes the
 mark toward white — that is physics, not a bug: a glow cannot exist on
 white. Place the SVG on near-black (`#030504` is what /brand-bench judges
-on). The EPS variants keep their own opaque ink ground for print, with the
-phosphor flecks sampled along the strokes to rhyme with the screen render.
+on). The EPS variants keep their own opaque process-black ground for print and
+deliberately drop the phosphor texture. At a stand, the weave and the name have
+to survive distance and a real RIP before they get to be atmospheric.
 
 Regenerate everything: `python3 media/brand/hugimuni/build.py` — writes the
-SVG marks and the EPS mark/lockup variants beside this file. Tune first on
-`/brand-bench`, copy the constants block back into `build.py`, rerun.
+emissive SVG, the EPS mark/lockup variants, and flat `-print.svg` visual proofs
+beside this file. The proofs intentionally share the EPS geometry and are the
+portable review surface when a workstation has no PostScript rasterizer. Tune
+the screen register first on `/brand-bench`; judge print from the flat proof.
