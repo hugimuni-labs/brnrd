@@ -222,6 +222,66 @@ test('the line height is a fallback, not the stylesheet copied into TypeScript',
 	// would live, and it does not have one.
 });
 
+test('garage names binding provider fuel in frame and in the off-frame HOME bearing', () => {
+	const graph = compileRoomGraph(liveWire([]), null, undefined, {
+		quota: {
+			generated_at: '2026-08-27T10:20:00Z',
+			runner_quotas: [
+				{
+					shell: 'claude',
+					status: 'stale',
+					daemon_stale: true,
+					windows: [
+						{
+							label: 'weekly',
+							used: null,
+							limit: null,
+							percent: null,
+							reset: null,
+							last_known: { used: null, limit: null, percent: 44, reset: null }
+						},
+						{
+							label: '5h window',
+							used: null,
+							limit: null,
+							percent: null,
+							reset: null,
+							last_known: { used: null, limit: null, percent: 12, reset: null }
+						},
+						{
+							label: 'weekly (Fable)',
+							used: null,
+							limit: null,
+							percent: null,
+							reset: null,
+							last_known: { used: null, limit: null, percent: 1, reset: null }
+						}
+					]
+				}
+			]
+		}
+	});
+	const topo = compileTopology(graph);
+	const layout = layoutRoom(topo, emptyAtlas()).layout;
+	const home = layout.nodes[topo.homeId];
+	const inFrame = renderWorld(topo, layout, graph, {
+		center: home,
+		cols: 80,
+		rows: 18,
+		level: 'island'
+	});
+	assert.match(inFrame, /⛁ ✗ claude 5h 12%/);
+	assert.ok(!inFrame.includes('fable'), 'a core allowance is not the shell ceiling');
+
+	const offFrame = renderWorld(topo, layout, graph, {
+		center: { x: 200, y: 200 },
+		cols: 80,
+		rows: 18,
+		level: 'island'
+	});
+	assert.match(offFrame, /HOME.*⛁ ✗ claude 5h 12%/);
+});
+
 // ── the reference trace: eight boundaries, one journey ──────────────────────
 
 test('the reference trace walks the journey the spec names, on stable coordinates', () => {
