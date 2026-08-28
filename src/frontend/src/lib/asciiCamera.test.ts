@@ -154,7 +154,8 @@ test('pager overflow rows stay inside the camera width', () => {
 		glyph: '@',
 		at: '2026-08-27T10:00:00Z',
 		act: 'read',
-		detail: null
+		detail: null,
+		injection: null
 	}));
 	const board = renderWorld(
 		topo,

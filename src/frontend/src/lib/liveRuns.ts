@@ -165,6 +165,11 @@ export interface LiveRunEdge {
 	detail: string | null;
 	out_bytes: number | null;
 	injected: boolean;
+	/** The injected block itself — bounded and newline-collapsed daemon-side.
+	 *  `injected` says a crossing happened; this says what crossed. Optional
+	 *  because a daemon predating the field publishes the bool alone, and a
+	 *  renderer must not read the absence as "nothing was injected". */
+	injection?: string | null;
 	/** Where the act ran, relative to the run's own tree (`.` = the tree
 	 *  root) — relativized daemon-side; a host path never rides the wire. */
 	dir?: string | null;
