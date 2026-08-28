@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="690" viewBox="0 0 512 690">
+  <title>hugimuni print register (amber-sky)</title>
+  <rect width="512" height="690" fill="#000"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <g stroke="#ff9a1f" stroke-width="40" transform="translate(-7,0)"><path d="M 152 156 V 356"/><path d="M 360 156 V 356"/></g>
+    <g stroke="#69c7df" stroke-width="40" transform="translate(7,0)"><path d="M 152 156 V 356"/><path d="M 360 156 V 356"/></g>
+    <g stroke="#ff9a1f" stroke-width="28"><path d="M 132 276 H 380"/></g>
+    <g stroke="#69c7df" stroke-width="28"><path d="M 132 156 L 276.0 356"/><path d="M 380 156 L 236.0 356"/></g>
+    <g stroke="#ffffff" stroke-width="26"><path d="M 152 156 V 356"/><path d="M 360 156 V 356"/></g>
+    <g stroke="#ffffff" stroke-width="5.5"><path d="M 132 276 H 380"/><path d="M 132 156 L 276.0 356"/><path d="M 380 156 L 236.0 356"/></g>
+  </g>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="8">
+    <path stroke="#ff9a1f" d="M142 535V580M178 535V580M142 557H178"/>
+    <path stroke="#69c7df" d="M142 600V645M178 600V645M142 600L160 642L178 600"/>
+  </g>
+  <g fill="#ffffff" font-family="Helvetica, Arial, sans-serif" font-size="34">
+    <text x="194" y="582">UGI</text><text x="194" y="647">UNI</text>
+  </g>
+</svg>
