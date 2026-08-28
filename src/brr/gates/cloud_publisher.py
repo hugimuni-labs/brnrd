@@ -1520,6 +1520,42 @@ def _edge_dir(record_cwd: Any, manifest: Mapping[str, Any], brr_dir: Path) -> st
     return ("." if text == "." else text)[:256]
 
 
+#: Disclosure bound for a boundary's ``detail`` **on the wire**, distinct from
+#: ``hooks._DETAIL_BASH_MAX`` (500), which is a *retention* cap sized for
+#: transport and storage of the local, gitignored ``boundaries.jsonl``.
+#:
+#: Measured 2026-08-28: the two were the same number doing two different jobs,
+#: and the room rendered the body of a chat message off a boundary line —
+#: ``cat > /tmp/reply5.md <<'MDEOF' **#1671 merged — thanks. …**`` — because a
+#: reply written as a heredoc puts its whole text into argv. ``redact_detail``
+#: did not catch it: prose is not a secret pattern, and it is right not to
+#: become a prose classifier.
+#:
+#: The bound lives **here**, at the seam between the local log and the wire,
+#: rather than in a renderer. There are four renderers of ``edge.detail``
+#: today (the ASCII room, ``ResidentField``, the ``/new`` HUD, and
+#: ``liveRuns``' own summary); bounding one leaves three, and a fifth would
+#: have to remember. Nothing beyond this ever leaves the machine, so no
+#: renderer has to.
+_WIRE_DETAIL_MAX = 120
+
+#: A heredoc's *operator and delimiter* are command shape and stay; its body
+#: is a payload that merely travelled through argv and goes. Kept separate
+#: from the length bound: the bound is the guarantee, this is legibility —
+#: without it a truncated heredoc reads as 120 characters of someone's prose
+#: instead of as "a file was written here".
+_HEREDOC_RE = re.compile(r"<<-?\s*(?:'[^']+'|\"[^\"]+\"|[\w.-]+)")
+
+
+def _wire_detail(detail: object) -> str | None:
+    """Bound a boundary detail for publication. See ``_WIRE_DETAIL_MAX``."""
+    if not isinstance(detail, str) or not detail:
+        return None
+    match = _HEREDOC_RE.search(detail)
+    shaped = detail[: match.end()] + " …" if match else detail
+    return shaped[:_WIRE_DETAIL_MAX] or None
+
+
 def _edge_payload(
     brr_dir: Path, run_id: str, manifest: Mapping[str, Any] | None = None
 ) -> dict[str, Any] | None:
@@ -1567,7 +1603,7 @@ def _edge_payload(
             "phase": phase[:16],
             "act": act[:32] if isinstance(act, str) and act else None,
             "tools": tools,
-            "detail": detail[:500] if isinstance(detail, str) and detail else None,
+            "detail": _wire_detail(detail),
             "out_bytes": out_bytes if isinstance(out_bytes, int) else None,
             "injected": bool(record.get("inject")),
             "dir": _edge_dir(record.get("cwd"), manifest or {}, brr_dir),

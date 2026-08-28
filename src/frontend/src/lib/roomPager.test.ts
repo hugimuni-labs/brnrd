@@ -149,26 +149,6 @@ test('the PAGER strip renders pages by carrier and flashes as state', () => {
 	assert.match(empty, /none read yet/);
 });
 
-test('the room renders heredoc command shape without its message body', () => {
-	const { graph, topo, layout } = sceneAt(4);
-	const command =
-		"cat > /tmp/reply5.md <<'MDEOF' #1671 merged — private message text that must not render";
-	const actor = graph.actors.find((candidate) => candidate.runId === RESIDENT)!;
-	actor.detail = command;
-	const page: PagerPage = {
-		at: '2026-08-27T10:14:00Z',
-		runId: RESIDENT,
-		glyph: '@',
-		act: 'publish',
-		detail: command
-	};
-	const out = renderWorld(topo, layout, graph, { ...CAM, cols: 200 }, { pages: [page] });
-
-	assert.match(out, /cat > \/tmp\/reply5\.md <<'MDEOF' …/);
-	assert.doesNotMatch(out, /#1671 merged/);
-	assert.doesNotMatch(out, /private message text/);
-});
-
 test('the mind-connect renders in place: tether at the actor, no relocation', () => {
 	const { graph, topo, layout } = sceneAt(4);
 	// frame the actor: the ceremony happens where it stands
