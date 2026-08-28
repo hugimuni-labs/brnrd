@@ -4,7 +4,14 @@ import test from 'node:test';
 import { compileRoomGraph, fileFromDetail, type TrailStep } from './roomGraph.ts';
 import { compileTopology, dirId, islandRootId, routeBetween } from './roomTopology.ts';
 import { emptyAtlas, layoutRoom, type AtlasMemory } from './roomLayout.ts';
-import { cameraCenterFor, renderWorld, type Camera } from './asciiCamera.ts';
+import {
+	CAMERA_LINE_HEIGHT_PX,
+	LEGEND,
+	cameraCenterFor,
+	isCameraHotkey,
+	renderWorld,
+	type Camera
+} from './asciiCamera.ts';
 import { referenceFrames } from './referenceTrace.ts';
 import type { LiveRun, LiveRunsResponse } from './liveRuns.ts';
 
@@ -137,6 +144,55 @@ test('atlas level compresses the same coordinates — islands only, no different
 	assert.ok(board.includes('hugimuni-labs/brnrd'));
 	assert.ok(board.includes('hugimuni-labs/brnrd-knowledge'));
 	assert.ok(!board.includes('frontend/'), 'chamber terrain stays below atlas scale');
+	assert.ok(!/[─│═║┄┆]/.test(board), 'corridors stay below atlas scale');
+});
+
+test('pager overflow rows stay inside the camera width', () => {
+	const { graph, topo, layout } = pipeline([], {}, emptyAtlas());
+	const pages = Array.from({ length: 4 }, (_, i) => ({
+		runId: `r${i}`,
+		glyph: '@',
+		at: '2026-08-27T10:00:00Z',
+		act: 'read',
+		detail: null
+	}));
+	const board = renderWorld(
+		topo,
+		layout,
+		graph,
+		{ center: { x: 0, y: 0 }, cols: 10, rows: 4, level: 'island' },
+		{ pages }
+	);
+	assert.ok(board.split('\n').every((line) => line.length <= 10));
+});
+
+test('camera countdowns preserve overdue truth from the shared scheduler formatter', () => {
+	const frames = referenceFrames();
+	const { graph, topo, layout } = pipeline(frames[0], {}, emptyAtlas());
+	graph.clockwork = [
+		{ summary: 'late', nextAt: '2026-08-27T09:00:00Z', status: 'scheduled', repoLabel: null }
+	];
+	const board = renderWorld(
+		topo,
+		layout,
+		graph,
+		{ center: { x: -4, y: 2 }, cols: 76, rows: 20, level: 'island' },
+		{ now: Date.parse('2026-08-27T10:00:00Z') }
+	);
+	assert.match(board, /T overdue 1h 0m/);
+});
+
+test('legend names every rendered home fixture and admits the shared home glyph', () => {
+	assert.match(LEGEND, /lib library/);
+	assert.match(LEGEND, /⌂ HOME/);
+	assert.match(LEGEND, /shared glyph/);
+});
+
+test('camera hotkeys yield browser shortcuts and vertical drag uses the CSS line height', () => {
+	assert.equal(isCameraHotkey({ key: 'f', metaKey: false, ctrlKey: false }), true);
+	assert.equal(isCameraHotkey({ key: 'f', metaKey: false, ctrlKey: true }), false);
+	assert.equal(isCameraHotkey({ key: 'a', metaKey: true, ctrlKey: false }), false);
+	assert.equal(CAMERA_LINE_HEIGHT_PX, 16.2);
 });
 
 // ── the reference trace: eight boundaries, one journey ──────────────────────
