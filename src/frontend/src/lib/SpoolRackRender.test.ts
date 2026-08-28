@@ -3,6 +3,7 @@ import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, test } from 'node:test';
+import { OFF_MARK } from './stateChrome.ts';
 import { compile } from 'svelte/compiler';
 import { render } from 'svelte/server';
 
@@ -21,6 +22,7 @@ const generated = join(here, '.spoolRack.generated.mjs');
 
 async function renderRack(props: {
 	profiles: RunnerProfile[];
+	shell?: string;
 	defaultProfile?: string | null;
 	stale?: boolean;
 	wakeRequest?: null;
@@ -37,6 +39,10 @@ async function renderRack(props: {
 		const module = await import(`${generated}?t=${process.pid}-${Math.random()}`);
 		return render(module.default, {
 			props: {
+				// `shell` is required and is not a default the rack picks: the
+				// caller knows it, because pressing that provider's fuel row is
+				// what opened this rack. The harness stands in for that caller.
+				shell: 'claude',
 				defaultProfile: null,
 				stale: false,
 				wakeRequest: null,
@@ -50,10 +56,16 @@ async function renderRack(props: {
 
 after(() => rmSync(generated, { force: true }));
 
-// The maintainer's steer, verbatim: "a very dumb but already good
-// improvement would be to add a separate shell selector which renders
-// available cores for it below."
-test("the rack is a two-stage picker: shell tabs, then the selected shell's cores", async () => {
+// The two-stage picker (shell tabs, then that shell's cores) was the
+// maintainer's own 2026-08-19 steer and it did its job — until the tab strip
+// turned out to be a *second* place a provider could be selected, drifting
+// from the page's own value and putting a codex core list under a claude
+// heading. His follow-up on 2026-08-28 removed the stage rather than
+// synchronising it: "the fuel bars would be clearly pressable, and they
+// would contain the core/shell selection." The rack lists one shell's cores
+// and offers no way to change which shell — that question is answered by
+// which fuel row you pressed.
+test("the rack lists one shell's cores and offers no way to change the shell", async () => {
 	const body = await renderRack({
 		profiles: [
 			{ name: 'claude-haiku', shell: 'claude', available: true },
@@ -61,23 +73,41 @@ test("the rack is a two-stage picker: shell tabs, then the selected shell's core
 			{ name: 'codex', shell: 'codex', available: true }
 		]
 	});
-	ok(body.includes('role="tablist"'), 'the shell selector renders as tabs');
-	// Two shell tabs, both named once each.
-	const claudeTab = body.match(/>claude</g) ?? [];
-	equal(claudeTab.length, 1, 'the shell name renders once, as its own tab');
-	// The selected shell (carrying the pin) opens by default: its cores render.
-	ok(body.includes('claude-haiku'), "the default-opened shell's cores render");
-	ok(body.includes('claude-sonnet'), "the default-opened shell's cores render");
-	// The other shell's cores do not render until its tab is picked — there is
-	// no live interaction in this SSR harness, so codex (unselected) stays a
-	// tab only.
-	ok(!body.includes('>codex<'.replace('>', '')) || true); // codex is the shell name, appears once as a tab
+	ok(!body.includes('role="tablist"'), 'the shell selector is gone, not hidden');
+	ok(!body.includes('role="tab"'), 'and so is every tab it held');
+	// The named shell's cores render…
+	ok(body.includes('claude-haiku'), "the named shell's cores render");
+	ok(body.includes('claude-sonnet'), "the named shell's cores render");
+	// …and no other shell's do, from the same catalog. Previously the codex
+	// row was absent because a tab had not been picked; now it is absent
+	// because this rack is not about codex at all.
+	ok(!body.includes('>codex<'), "another shell's cores never leak in");
+	// The header says which shell it is listing, since the tab strip that
+	// used to answer that is gone.
+	ok(body.includes('claude · cores') || body.includes('>claude<'), 'the rack names its shell');
+});
+
+test('the shell it lists is the one it was given, not one it resolved', async () => {
+	// The old rack fell back to `defaultShell(...)` whenever nothing was
+	// picked — a resolution step that only made sense while the rack owned a
+	// selection. It owns none, so the pin no longer decides what is listed.
+	const body = await renderRack({
+		shell: 'codex',
+		defaultProfile: 'claude-sonnet',
+		profiles: [
+			{ name: 'claude-sonnet', shell: 'claude', available: true, selected: true },
+			{ name: 'codex-mini', shell: 'codex', available: true }
+		]
+	});
+	ok(body.includes('codex-mini'), 'the requested shell is listed');
+	ok(!body.includes('claude-sonnet'), 'the pinned profile does not drag its own shell in');
 });
 
 // His second steer, verbatim: unavailable stays, designed off, with its
 // reason; "stale" never reaches the reader as its own state.
 test('a verified-unavailable row renders off with its real reason, never the word "stale"', async () => {
 	const body = await renderRack({
+		shell: 'codex',
 		profiles: [{ name: 'codex', shell: 'codex', available: false, availability: 'shell-not-found' }]
 	});
 	ok(body.includes('not installed on this daemon'), 'the concrete reason renders');
@@ -87,9 +117,13 @@ test('a verified-unavailable row renders off with its real reason, never the wor
 
 test('an unverified row ("we don\'t know") renders the same off bucket as verified-unavailable — no third state', async () => {
 	const unavailable = await renderRack({
+		shell: 'codex',
 		profiles: [{ name: 'dead', shell: 'codex', available: false, availability: 'shell-not-found' }]
 	});
-	const unverified = await renderRack({ profiles: [{ name: 'ghost', shell: 'codex' }] });
+	const unverified = await renderRack({
+		shell: 'codex',
+		profiles: [{ name: 'ghost', shell: 'codex' }]
+	});
 	ok(unverified.includes('disabled'), 'unverified never taps');
 	// Same off recipe both ways — `border-dashed` is the *general* off
 	// treatment now (design it off, don't grey it out), not a third state's
@@ -135,19 +169,27 @@ test('a row whose own daemon report is stale is disabled even when the account-w
 	ok(body.includes('disabled'), 'the row itself does not tap');
 });
 
-test('a shell with only dead cores still offers a tab — off is legitimate and stays, not hidden', async () => {
+test('a shell with only dead cores still lists them, designed off — never hidden', async () => {
+	// This pinned "the dead shell still offers a tab" while the tab strip
+	// existed. The fact it was protecting survives the strip's removal: an
+	// entirely-unavailable provider is still pressable from its fuel row and
+	// still renders, with the reason. Off is legitimate and stays.
 	const body = await renderRack({
+		shell: 'claude',
 		profiles: [
-			{ name: 'codex', shell: 'codex', available: false, availability: 'shell-not-found' },
-			{ name: 'codex-mini', shell: 'codex', available: false, availability: 'shell-not-found' }
+			{
+				name: 'claude-bare-api-only',
+				shell: 'claude',
+				available: false,
+				availability: 'auth-env-missing'
+			}
 		]
 	});
-	ok(body.includes('not installed on this daemon'), 'the off tab still states its reason');
+	ok(body.includes('claude-bare-api-only'), 'the dead row renders rather than vanishing');
+	ok(body.includes('auth not configured'), 'with its concrete reason');
+	ok(body.includes(OFF_MARK), 'and the off grammar, not a dim variant of the live one');
 });
 
-// The "default"/"default" row (#1515, kept honest through the rework): a
-// pinned row whose core is unpinned must never print "default" twice for two
-// different meanings.
 test('a pinned row whose core is unpinned never prints "default" for two different meanings', async () => {
 	const body = await renderRack({
 		profiles: [{ name: 'claude', shell: 'claude', available: true, selected: true }]
@@ -180,26 +222,20 @@ test("rank, quota source, and capability move to the row's own open state, off t
 	ok(body.includes('detail'), 'the row offers a disclosure for the justification fields');
 });
 
-test('the rack keeps no provider cursor of its own', () => {
-	// It used to: a `manualShell` `$state` seeded once from the incoming
-	// focus and free to drift afterwards, which is how a codex core list
-	// came to render under a claude Resources heading (2026-08-28). The tab
-	// strip is a *rendering* of the bench's cursor and a control that moves
-	// it — never a second place it is stored.
+test('the rack keeps no provider cursor of its own — there is no control to keep one for', () => {
+	// First it kept a `manualShell` `$state` seeded from a prop and free to
+	// drift. #1671 made it render the page's value instead. This deletes the
+	// control entirely: `shell` is a required input, so there is neither a
+	// stored selection nor a way to change one from in here.
 	const source = readFileSync(componentPath, 'utf8');
-	ok(!/manualShell\s*=\s*\$state/u.test(source), 'no local copy of the selection');
+	ok(!/manualShell/u.test(source), 'no local copy of the selection');
+	ok(!/onShellSelect/u.test(source), 'and no callback to change it from here');
 	ok(
-		!/\$effect\(\(\) => \{\s*if \(focusShell/u.test(source),
-		'and no effect re-anchoring one from a prop'
+		!/role="tablist"/u.test(source),
+		'the tab strip is gone from the source, not merely unrendered'
 	);
-	ok(
-		/onclick=\{\(\) => onShellSelect\?\.\(group\.shell\)\}/u.test(source),
-		'a tab tap raises the change to the owner instead of applying it locally'
-	);
-	ok(
-		/selectedShell !== null && groups\.some/u.test(source),
-		'the active tab is derived from the incoming cursor'
-	);
+	ok(!/defaultShell/u.test(source), 'and the fallback resolution that only a cursor needed');
+	ok(/shell: string;/u.test(source), 'the shell is a required input');
 });
 
 test('a core-scope allowance renders on the row where that core is picked', () => {

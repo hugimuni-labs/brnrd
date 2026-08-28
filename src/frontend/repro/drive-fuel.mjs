@@ -1,8 +1,17 @@
-// Drives the rebuilt fuel deck + bench against fixtures shaped like the
-// live account: claude with three windows (a burned 5h session, a weekly
-// ceiling, fable's core allowance) and codex with two. Shoots the deck,
-// the bench opened from a fuel row, and the bench after a *tab* tap — the
-// third shot is the one that proves the two cursors became one.
+// Drives the fuel deck against fixtures shaped like the live account:
+// claude with three windows (a burned 5h session, a weekly ceiling, fable's
+// core allowance) and codex with two.
+//
+// The load-bearing measurement is `deckAfterOpen`. A provider row is a
+// control now — pressing it opens that provider's windows and cores — and
+// the whole design rests on the expansion mounting *below* the sticky gauge
+// rather than inside it. If `.fuel-deck` is anything but 85px after a press,
+// the fixed-height rule has been broken by the very feature that was
+// supposed to respect it.
+//
+// It also presses the second row and reads the bay's heading back: with the
+// tab strip gone there is no second control that could disagree, and
+// `openRows === 1` is the check that pressing one folds the other.
 //
 // Usage: node repro/drive-fuel.mjs [--out DIR] [--port N]
 import { chromium } from 'playwright';
@@ -149,24 +158,39 @@ async function main() {
 			const deck = page.locator('[data-measure="gauge"]');
 			await deck.screenshot({ path: `${OUT}/${vp.name}-1-deck.png` });
 
-			// open the bench by pressing the CLAUDE fuel row, as a reader would
+			// press the CLAUDE fuel row, as a reader would
 			await page.locator('.fuel-provider-row').first().click();
-			await page.waitForSelector('[data-measure="spool-rack"]', { timeout: 15000 });
+			await page.waitForSelector('[data-measure="provider-bay"]', { timeout: 15000 });
 			await delay(600);
-			await page.screenshot({ path: `${OUT}/${vp.name}-2-bench-claude.png`, fullPage: false });
-
-			// the cursor test: tap the CODEX tab and read the Resources heading
+			const deckAfterOpen = await page.evaluate(() =>
+				Math.round(document.querySelector('[data-measure="fuel"]').getBoundingClientRect().height)
+			);
+			await page.screenshot({ path: `${OUT}/${vp.name}-2-open-claude.png`, fullPage: false });
 			const before = await page.locator('[data-measure="resources"] .workshop-label').textContent();
-			await page.locator('[data-measure="spool-rack"] button[role="tab"]').nth(1).click();
+
+			// press CODEX: the open row folds, this one opens, and the bay follows.
+			// There is no second control that could disagree with it.
+			await page.locator('.fuel-provider-row').nth(1).click();
 			await delay(500);
 			const after = await page.locator('[data-measure="resources"] .workshop-label').textContent();
-			const activeTab = await page
-				.locator('[data-measure="spool-rack"] button[role="tab"][aria-selected="true"]')
-				.textContent();
-			await page.screenshot({ path: `${OUT}/${vp.name}-3-bench-codex.png`, fullPage: false });
+			const openRows = await page.evaluate(
+				() => document.querySelectorAll('.fuel-provider-row[aria-expanded="true"]').length
+			);
+			await page.screenshot({ path: `${OUT}/${vp.name}-3-open-codex.png`, fullPage: false });
+
+			// settings is its own small block now, and holds no core picker
+			await page.getByRole('button', { name: /open settings/ }).click();
+			await page.waitForSelector('[data-measure="settings"]', { timeout: 15000 });
+			await delay(400);
+			await page.screenshot({ path: `${OUT}/${vp.name}-5-settings.png`, fullPage: false });
+			const settingsHasRack = await page.evaluate(
+				() =>
+					document.querySelector('[data-measure="settings"] [data-measure="spool-rack"]') !== null
+			);
 
 			// back to claude, and read the allowance chip off the fable row
-			await page.locator('[data-measure="spool-rack"] button[role="tab"]').nth(0).click();
+			await page.locator('.fuel-provider-row').first().click();
+			await page.waitForSelector('[data-measure="provider-bay"]', { timeout: 15000 });
 			await delay(400);
 			const allowanceChip = await page.evaluate(() => {
 				const row = [...document.querySelectorAll('[data-role="rack-row-tap"]')].find((b) =>
@@ -193,10 +217,12 @@ async function main() {
 						width: vp.name,
 						gaugeHeight: gaugeH,
 						rows,
+						deckAfterOpen,
 						resourcesBefore: before?.trim(),
 						resourcesAfter: after?.trim(),
-						activeTab: activeTab?.trim(),
-						cursorHolds: after?.trim().startsWith('codex') && activeTab?.trim() === 'codex',
+						openRows,
+						settingsHasRack,
+						cursorHolds: after?.trim().startsWith('codex') && openRows === 1,
 						allowanceChip
 					},
 					null,
