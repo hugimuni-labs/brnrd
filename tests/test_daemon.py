@@ -11008,6 +11008,32 @@ def test_card_now_projection_keeps_the_full_body_off_the_live_card():
     assert daemon._card_now_projection("Plain legacy note") == "Plain legacy note"
 
 
+def test_card_drain_derives_course_from_full_body_below_now(tmp_path):
+    """The wire fact comes from the full card, not its Now-only projection."""
+    body = (
+        "## Now\n\nDriving tests.\n\n## Plan\n\n"
+        "- [x] inspect\n- [x] derive\n- [ ] publish the course\n- [ ] verify"
+    )
+    card_path = tmp_path / ".card"
+    card_path.write_text(body)
+    packets = []
+
+    assert daemon._drain_agent_card(
+        lambda kind, **payload: packets.append((kind, payload)),
+        Run(id="run-course", event_id="evt-course", body="work", source="spawn"),
+        "evt-course",
+        card_path,
+        {},
+    )
+
+    assert packets == [("card_composed", {
+        "run_id": "run-course",
+        "event_id": "evt-course",
+        "text": "Driving tests.",
+        "course": {"done": 2, "total": 4, "current": "publish the course"},
+    })]
+
+
 def test_boot_janitor_reaps_only_provably_dead_running_state_docs(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

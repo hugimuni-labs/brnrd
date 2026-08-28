@@ -45,6 +45,7 @@ export interface LiveRun {
 	// not-yet-built slice — nothing persists that state today.
 	phase: string | null;
 	card_text: string | null;
+	course?: RunCourse | null;
 	card_updated_at: string | null;
 	// #342 relics-so-far: counts of the run's attested produce mid-flight
 	// (`{commit: 2, kb: 1}`), from the daemon's heartbeat-refreshed portal
@@ -518,9 +519,17 @@ export function edgeLine(edge: LiveRunEdge | null | undefined): string | null {
  * `null` when the card carries no checkbox course at all — a run without a
  * course renders nothing rather than `0/0`. `current` is the first open
  * row, the reader's "where the plan is standing". */
+export interface RunCourse {
+	done: number;
+	total: number;
+	current: string | null;
+}
+
 export function runCourse(
-	cardText: string | null | undefined
-): { done: number; total: number; current: string | null } | null {
+	cardText: string | null | undefined,
+	published?: RunCourse | null
+): RunCourse | null {
+	if (published) return published;
 	if (!cardText) return null;
 	let done = 0;
 	let total = 0;
