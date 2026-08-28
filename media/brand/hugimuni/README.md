@@ -1,94 +1,75 @@
 # hugimuni — H and M on shared stems
 
-A sketch for the parent org, done in the same evening and the same way: the
-geometry is authored, the material is not generated.
+The parent-company mark is one authored glyph, not two letters stacked in a box. H and M share the two verticals: H spends the middle on a crossbar, M spends it on the valley. The shoulders, bar, and crossed lower legs deliberately run through one another, so the eye can switch between H and M instead of resolving one as a container for the other.
 
-H and M already share their skeleton — two verticals. H spends its middle on a
-crossbar, M spends it on a valley. Superimposed on one pair of stems they are a
-single glyph that reads as either letter depending on which stroke your eye
-follows, and giving each letter its own hue hands that choice to the viewer
-instead of resolving it.
+Amber/sky is the canonical palette: BRNRD amber `#ff9a1f` plus cold sky `#69c7df`. The earlier coral/turquoise exploration is retired from generated assets; git history is its archive.
 
-**The two letters interpenetrate; neither contains the other.** The M is the
-larger letter: its diagonals cross the stems *above* their tops and its valley
-dips *below* their feet, and the H's bar runs past both stems. That is the
-maintainer's sketch, and it is the difference between a monogram and two
-letters parked in the same box — the first draft here nested the M inside the
-H and read as an M with a line through it.
+## Registers
 
-Where the strokes cross, the colours **average** rather than stack: every
-drawing group blends in `screen`, so a crossing is genuinely a third colour.
-The shared stems carry both hues offset around a pale core, which is the same
-chromatic-aberration grammar brnrd's screen register already speaks — parent
-and product rhyme without wearing each other's mark.
+The geometry is shared, but screen and print use different materials on purpose.
 
-The generator emits the normal emissive SVG plus two genuine vector EPS
-deliverables for each palette: the standalone mark and a conference lockup.
-The EPS is a separate **stone/print register**, not a flattened imitation of
-the screen effect: explicit process-CMYK inks, no raster content, no glow,
-scanlines, or grain, and paper-white knockout cores on every stroke. That last
-rule makes the diagonal/bar crossings white instead of whichever colour was
-painted last. `false setoverprint` is explicit so the white clears every plate.
+### Screen — emitted light
 
-The lockup spells the company name as two rows: the mark's own vector `H` plus
-lower-register `UGI`, then its own vector `M` plus lower-register `UNI`. The
-continuations use Helvetica, a PostScript base face; outline them in the final
-imposition application if the printer's preflight requires all type converted
-to paths.
+`hugimuni-amber-sky.svg` is the master screen mark. It is transparent and expects a dark host surface. The mark uses screen-blended amber/sky strokes, a restrained warm neutral shared-stem core, a modest bloom pass, thin hot cores, and phosphor texture masked onto the strokes.
 
-`STEM_STROKE` is deliberately independent from `STROKE`: the side legs can
-carry more visual weight without fattening the crossbar and diagonals.
+The screen treatment is intentionally quieter than the first emissive draft:
 
-Two palettes:
+- shared-stem neutral core: `16` instead of the old `26`
+- bloom: `6px` at `0.58` opacity instead of `9px` at `0.9`
+- hot cores: ~14% of stroke width at `0.48` opacity
+- phosphor grain: `42/100`, with weaker overlay/scanline multipliers
 
-| file | pair |
-| --- | --- |
-| `hugimuni-amber-sky` | brnrd's own amber `#ff9a1f` + a cold sky `#69c7df` |
-| `hugimuni-coral-turquoise` | coral `#ff6f61` + turquoise `#3ec9bd` |
+The retro-computer texture should be noticed after the monogram, not before it.
 
-The first ties the parent to the product; the second lets the parent stand
-apart. That is the actual decision underneath the colour question.
+`hugimuni-amber-sky-icon.svg` is the same screen mark on the near-black rounded board. The board is a composition, not part of the master logo.
 
-**Where the crossings sit is geometry, not taste.** A straight leg crosses a
-vertical exactly once, so the stems alone can only weave the mark in one band.
-Six crossings need three strokes doing the work: the legs cross the stems high,
-the bar crosses the stems at its own height, and the bar crosses the legs low —
-which is why `CROSS` sits at 276 rather than at the optical middle. Move the bar
-up and the bottom half comes apart; that was the first draft's actual defect,
-and no amount of widening the M fixed it.
+### Flat — no filters
 
-The M levels with the stems rather than overshooting them: same cap height,
-same feet, one silhouette. Only the valley drops below, which is the single
-place the mark is allowed to break its own box.
+`hugimuni-amber-sky-flat.svg` is a transparent, filter-free vector fallback. Use it when SVG filters or bloom are undesirable, at very small sizes, or as a neutral handoff surface.
 
-One trap, the same family as the brnrd mark's: **`mix-blend-mode` has to sit on
-the drawing group, not only on the isolating parent.** A parent alone
-establishes the group and blends it against the page, leaving its children in
-plain z-order — which renders as "the last colour wins" and looks exactly like
-a design decision rather than a bug.
+### Print — ink, not fake neon
+
+`hugimuni-amber-sky.eps` and `hugimuni-amber-sky-lockup.eps` are Level-2 process-CMYK EPS files for physical production. `*-print.svg` files are portable visual proofs of that register.
+
+The print register does **not** imitate glow, scanlines, or grain. The old print draft put a white tube through every crossbar and diagonal; at distance that turned the mark into a generic white monoline logo with coloured shadows. The current register instead keeps:
+
+- full amber H and sky M strokes
+- chromatic displacement on the shared stems
+- a much narrower `10`-unit warm neutral stem core
+- six small local pale highlight segments at the actual authored H/M crossings
+
+Those local marks are deliberately short lines, not dots: dots read as rivets; short segments read as a material overlap / registration event.
+
+`PRINT_BLACK` is explicit in `build.py` and intentionally defaults to process black. For a real stand or large-format job, replace it with the printer/RIP profile's requested rich black if the vendor specifies one. Do not invent a rich-black recipe here.
+
+The lockup still uses PostScript base Helvetica for `UGI` / `UNI`. Outline the type in the final imposition/preflight application if the printer requires all type converted to paths.
+
+## Deliverables
+
+Running the generator writes the canonical family:
+
+- `hugimuni-amber-sky.svg` — transparent emissive screen master
+- `hugimuni-amber-sky-icon.svg` — screen mark on the rounded dark board
+- `hugimuni-amber-sky-flat.svg` — transparent filter-free vector fallback
+- `hugimuni-amber-sky.eps` — CMYK print mark
+- `hugimuni-amber-sky-lockup.eps` — CMYK conference lockup
+- `hugimuni-amber-sky-print.svg` — print mark proof
+- `hugimuni-amber-sky-print-lockup.svg` — print lockup proof
+
+For a printer that asks for PDF/X-4, export the EPS/outlined lockup through the final layout/imposition tool using the printer's actual ICC/profile settings. `build.py` deliberately does not guess production colour management.
 
 ```bash
 python3 media/brand/hugimuni/build.py
 ```
 
-## The emissive render, and the ground it needs (2026-08-28)
+## Geometry
 
-The SVG mark is **transparent and self-lit**: three passes per stroke (bloom
-halo → saturated body → blurred white-hot core), screen-blended in one
-isolated group so every crossing adds up, with the grain — turbulence plus
-scanlines — masked *onto the strokes* so `GRAIN` modulates the letter light
-itself. There is no background board anymore; the old rounded ink rect read
-as a grained monitor bezel.
+The current geometry remains the authored one:
 
-**Dark grounds only.** Screen blending against a light ground washes the
-mark toward white — that is physics, not a bug: a glow cannot exist on
-white. Place the SVG on near-black (`#030504` is what /brand-bench judges
-on). The EPS variants keep their own opaque process-black ground for print and
-deliberately drop the phosphor texture. At a stand, the weave and the name have
-to survive distance and a real RIP before they get to be atmospheric.
+- stems: `x=152` and `x=360`, `y=156..356`
+- H bar: `y=276`, overhanging each stem by `20`
+- M shoulders: `20` outside the stems
+- M legs cross rather than merely meeting at a V, with `TAIL=20`
+- H/M weave has six derived crossing points; the print highlights are computed from the line intersections rather than hard-coded coordinates
 
-Regenerate everything: `python3 media/brand/hugimuni/build.py` — writes the
-emissive SVG, the EPS mark/lockup variants, and flat `-print.svg` visual proofs
-beside this file. The proofs intentionally share the EPS geometry and are the
-portable review surface when a workstation has no PostScript rasterizer. Tune
-the screen register first on `/brand-bench`; judge print from the flat proof.
+That last rule matters. If the geometry moves, the print weave follows it automatically instead of leaving decorative highlights behind.
