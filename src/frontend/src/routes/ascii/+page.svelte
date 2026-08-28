@@ -194,6 +194,9 @@
 	}
 
 	// the flash marks *state* motion only: diff on the clock-free render
+	// Recomputed on every scene build; the paint tick reuses the same set so a
+	// walking frame cannot silently widen the feed.
+	let liveRunIds = new Set<string>();
 	let prevBare: string[] = [];
 	// motion state (#1654 slice 3): walks derive from BoundaryTransition
 	// receipts only; the camera eases toward its target between paints
@@ -270,9 +273,15 @@
 		// (pages are state — a fresh page flashes; the reading tether is
 		// presentation and stays off this render, like walk positions)
 		const cam: Camera = { center: camCenter, cols, rows: ROWS, level };
+		// Scoped to the runs still on the wire. The store keeps a finished
+		// run's pages on purpose — that is how its traffic stays inspectable —
+		// but the strip is a *condition* readout, and a condition is about
+		// now. Unscoped it read `✉×152 read` on a quiet account, of which 149
+		// rode runs that ended days ago.
+		liveRunIds = new Set(graph.actors.map((a) => a.runId));
 		const bare = renderWorld(topo, layout, graph, cam, {
 			highlightRoute: lastRoute,
-			pages: pagerFeed(pager)
+			pages: pagerFeed(pager, liveRunIds)
 		}).split('\n');
 		const delta: number[] = [];
 		for (let i = 0; i < bare.length; i++) {
@@ -292,7 +301,7 @@
 			now: lastNow,
 			highlightRoute: lastRoute,
 			actorPositions: walkPositions(walks),
-			pages: pagerFeed(pager),
+			pages: pagerFeed(pager, liveRunIds),
 			reading: readingPhases(readings)
 		}).split('\n');
 	}

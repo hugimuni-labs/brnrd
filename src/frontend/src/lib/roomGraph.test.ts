@@ -433,8 +433,67 @@ test('garage and clockwork compile their real wire extras, preserving stale bind
 		['Tend the room']
 	);
 	assert.deepEqual(graph.garage, [
-		{ shell: 'claude', status: 'stale', windows: [{ label: '5h', percent: 12 }] }
+		{
+			shell: 'claude',
+			status: 'stale',
+			windows: [{ label: '5h', percent: 12 }],
+			// No reset instant on this stale snapshot, so no clock — null, not
+			// a zero. A ceiling without its clock is half an instruction (10%
+			// resetting in 40 minutes and 10% resetting in three days are
+			// opposite advice), so the row carries the clock when the wire
+			// attests one and says nothing when it does not.
+			resetShort: null
+		}
 	]);
+});
+
+test('the binding row carries its reset clock when the wire attests one', () => {
+	const graph = compileRoomGraph(liveWire([]), null, undefined, {
+		quota: {
+			generated_at: '2026-08-26T10:20:00Z',
+			runner_quotas: [
+				{
+					shell: 'claude',
+					status: 'known',
+					windows: [
+						{
+							label: '5h window',
+							used: null,
+							limit: null,
+							percent: 12,
+							reset: 'resets 8:10pm',
+							resets_at: 1787950000
+						},
+						{
+							label: 'weekly',
+							used: null,
+							limit: null,
+							percent: 43,
+							reset: 'resets Aug 29',
+							resets_at: 1788005000
+						}
+					]
+				}
+			]
+		}
+	} as never);
+	assert.equal(graph.garage[0].windows[0].label, '5h', 'the binding window, not the weekly one');
+	assert.ok(graph.garage[0].resetShort, 'and its clock rides with it');
+});
+
+test('slots read the pool the wire has carried all along', () => {
+	// `spawn_max_concurrent` has been on the live-runs response since the loom
+	// envelope's phase 1 and nothing read it onto the graph, so the room could
+	// show a resident and three strands without ever saying how many more it
+	// could hold.
+	const wire = liveWire([]);
+	const graph = compileRoomGraph({ ...wire, spawn_max_concurrent: 8 }, null);
+	assert.deepEqual(graph.slots, { active: 0, max: 8 });
+
+	// A daemon that never reported a width says so: null is not zero, and
+	// `0/0 slots` would be a claim nobody made.
+	const unreported = compileRoomGraph({ ...wire, spawn_max_concurrent: null }, null);
+	assert.equal(unreported.slots.max, null);
 });
 
 test('terrain accretes from the trail, deduped by boundary timestamp', () => {

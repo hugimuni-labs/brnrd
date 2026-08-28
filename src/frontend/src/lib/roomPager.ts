@@ -68,11 +68,28 @@ export function recordPages(
 	return fresh;
 }
 
-/** All pages across actors, newest first — the strip's reading order. */
-export function pagerFeed(store: Record<string, PagerPage[]>): PagerPage[] {
-	return Object.values(store)
-		.flat()
-		.sort((a, b) => b.at.localeCompare(a.at));
+/** Pages newest first — the strip's reading order.
+ *
+ *  `liveRunIds` scopes the feed to runs that still exist. Without it the
+ *  store is every page from up to 24 run ids × `PAGER_CAP`, so a quiet
+ *  account read `✉×152 read · nothing waiting` — a number that is neither
+ *  wrong nor about anything the reader can act on, since 149 of those rode
+ *  runs that ended days ago (reported 2026-08-28: "which is quite a useless
+ *  info"). The store deliberately keeps them, because a page is how a
+ *  finished run's traffic stays inspectable; what changes is that the
+ *  *strip* is a condition readout, and a condition is about now.
+ *
+ *  Omitted (the default) the feed is unscoped, which is what the trail
+ *  history wants. Passing an empty set is a real, different answer: no runs
+ *  are live, so nothing is current. */
+export function pagerFeed(
+	store: Record<string, PagerPage[]>,
+	liveRunIds?: ReadonlySet<string>
+): PagerPage[] {
+	const entries = Object.entries(store).filter(
+		([runId]) => liveRunIds === undefined || liveRunIds.has(runId)
+	);
+	return entries.flatMap(([, pages]) => pages).sort((a, b) => b.at.localeCompare(a.at));
 }
 
 /** A reading in progress: presentation state minted from one attested
