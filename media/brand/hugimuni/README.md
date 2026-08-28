@@ -1,75 +1,87 @@
-# hugimuni — H and M on shared stems
+# HugiMuni — H and M occupying the same plane
 
-The parent-company mark is one authored glyph, not two letters stacked in a box. H and M share the two verticals: H spends the middle on a crossbar, M spends it on the valley. The shoulders, bar, and crossed lower legs deliberately run through one another, so the eye can switch between H and M instead of resolving one as a container for the other.
+The mark has one canonical geometry and one simple material rule:
 
-Amber/sky is the canonical palette: BRNRD amber `#ff9a1f` plus cold sky `#69c7df`. The earlier coral/turquoise exploration is retired from generated assets; git history is its archive.
+- **amber = H only**
+- **sky = M only**
+- **cream = H ∩ M**
 
-## Registers
+That third region is not a highlight painted on top of the logo. It is the real
+boolean overlap of two complete letterforms. The shared stems therefore produce
+the broad amber / cream / sky registration band automatically, while the H bar
+and M diagonals produce their own cream overlap footprints. The lower X stays
+sky because it is M crossing itself, not H meeting M.
 
-The geometry is shared, but screen and print use different materials on purpose.
+This is the identity source. Everything else is a material treatment of it.
 
-### Screen — emitted light
+## Flat first
 
-`hugimuni-amber-sky.svg` is the master screen mark. It is transparent and expects a dark host surface. The mark uses screen-blended amber/sky strokes, a restrained warm neutral shared-stem core, a modest bloom pass, thin hot cores, and phosphor texture masked onto the strokes.
+`hugimuni-amber-sky-flat.svg` is the canonical master artwork. It is transparent,
+filter-free and intentionally good enough to use directly. The SVG renders H and
+M as opaque vectors and derives the cream intersection with a vector mask; there
+are no fake white tubes, crossing dashes, glow, grain or z-order-dependent colour
+accidents.
 
-The screen treatment is intentionally quieter than the first emissive draft:
+`hugimuni-amber-sky-flat-on-dark.svg` is the same artwork on the canonical dark
+ground and exists mainly as a convenient review/proof surface. GitHub's
+checkerboard is useful for confirming transparency but is not the intended brand
+ground.
 
-- shared-stem neutral core: `16` instead of the old `26`
-- bloom: `6px` at `0.58` opacity instead of `9px` at `0.9`
-- hot cores: ~14% of stroke width at `0.48` opacity
-- phosphor grain: `42/100`, with weaker overlay/scanline multipliers
+## Screen is atmosphere, not different geometry
 
-The retro-computer texture should be noticed after the monogram, not before it.
+`hugimuni-amber-sky.svg` starts from the exact flat artwork and adds only screen
+material: a restrained bloom, a small hot pass on the already-defined H/M
+intersection, and faint phosphor grain/scanlines. `hugimuni-amber-sky-icon.svg`
+adds the rounded dark board around that screen register.
 
-`hugimuni-amber-sky-icon.svg` is the same screen mark on the near-black rounded board. The board is a composition, not part of the master logo.
+If all filters vanished, the logo underneath would still be the logo. That is
+the test the earlier neon-tube approach failed.
 
-### Flat — no filters
+## Print is a colour-space/export mapping
 
-`hugimuni-amber-sky-flat.svg` is a transparent, filter-free vector fallback. Use it when SVG filters or bloom are undesirable, at very small sizes, or as a neutral handoff surface.
+`hugimuni-amber-sky.eps` and the lockup are Level-2 process-CMYK renderings of the
+same three-region topology. The EPS does not approximate the overlaps with little
+cream marks: it uses `strokepath` clipping to paint the actual pairwise H ∩ M
+regions. `false setoverprint` is explicit.
 
-### Print — ink, not fake neon
+CMYK is deliberately **not** the master colour space. Browsers and normal SVG
+pipelines are RGB-first, while CMYK output depends on the press, stock, RIP and
+ICC profile. Putting CMYK values at the centre of the identity would make the
+screen version less portable without making print more correct. Instead:
 
-`hugimuni-amber-sky.eps` and `hugimuni-amber-sky-lockup.eps` are Level-2 process-CMYK EPS files for physical production. `*-print.svg` files are portable visual proofs of that register.
+1. geometry/topology is shared exactly;
+2. the canonical visual colours are authored in sRGB;
+3. `PRINT_AMBER`, `PRINT_SKY`, `PRINT_INTERSECTION` and `PRINT_BLACK` map those
+   colours for physical production;
+4. when the stand printer supplies an ICC/profile or preferred rich black, tune
+   those output values for that vendor rather than changing the master artwork.
 
-The print register does **not** imitate glow, scanlines, or grain. The old print draft put a white tube through every crossbar and diagonal; at distance that turned the mark into a generic white monoline logo with coloured shadows. The current register instead keeps:
+The RGB `*-print.svg` files are **geometry proofs**, not contractual colour
+proofs. A final press PDF/PDF-X should be exported with the actual vendor profile.
 
-- full amber H and sky M strokes
-- chromatic displacement on the shared stems
-- a much narrower `10`-unit warm neutral stem core
-- six small local pale highlight segments at the actual authored H/M crossings
+## Files
 
-Those local marks are deliberately short lines, not dots: dots read as rivets; short segments read as a material overlap / registration event.
+- `hugimuni-amber-sky-flat.svg` — canonical transparent master
+- `hugimuni-amber-sky-flat-on-dark.svg` — canonical master on dark review ground
+- `hugimuni-amber-sky.svg` — transparent emissive screen register
+- `hugimuni-amber-sky-icon.svg` — screen register on rounded dark icon board
+- `hugimuni-amber-sky-print.svg` — portable print-geometry proof on black
+- `hugimuni-amber-sky.eps` — CMYK production mark
+- `hugimuni-amber-sky-print-lockup.svg` / `hugimuni-amber-sky-lockup.eps` — stand lockup
 
-`PRINT_BLACK` is explicit in `build.py` and intentionally defaults to process black. For a real stand or large-format job, replace it with the printer/RIP profile's requested rich black if the vendor specifies one. Do not invent a rich-black recipe here.
+The lockup keeps the existing vector H/M prefixes plus `UGI` / `UNI` in Helvetica,
+a PostScript base face. Outline the continuation type during final imposition if
+the printer's preflight requires path-only artwork.
 
-The lockup still uses PostScript base Helvetica for `UGI` / `UNI`. Outline the type in the final imposition/preflight application if the printer requires all type converted to paths.
+The old coral/turquoise exploration is intentionally retired from the generated
+asset set. Git history remains its archive; amber/sky is the HugiMuni identity.
 
-## Deliverables
-
-Running the generator writes the canonical family:
-
-- `hugimuni-amber-sky.svg` — transparent emissive screen master
-- `hugimuni-amber-sky-icon.svg` — screen mark on the rounded dark board
-- `hugimuni-amber-sky-flat.svg` — transparent filter-free vector fallback
-- `hugimuni-amber-sky.eps` — CMYK print mark
-- `hugimuni-amber-sky-lockup.eps` — CMYK conference lockup
-- `hugimuni-amber-sky-print.svg` — print mark proof
-- `hugimuni-amber-sky-print-lockup.svg` — print lockup proof
-
-For a printer that asks for PDF/X-4, export the EPS/outlined lockup through the final layout/imposition tool using the printer's actual ICC/profile settings. `build.py` deliberately does not guess production colour management.
+## Regenerate
 
 ```bash
 python3 media/brand/hugimuni/build.py
 ```
 
-## Geometry
-
-The current geometry remains the authored one:
-
-- stems: `x=152` and `x=360`, `y=156..356`
-- H bar: `y=276`, overhanging each stem by `20`
-- M shoulders: `20` outside the stems
-- M legs cross rather than merely meeting at a V, with `TAIL=20`
-- H/M weave has six derived crossing points; the print highlights are computed from the line intersections rather than hard-coded coordinates
-
-That last rule matters. If the geometry moves, the print weave follows it automatically instead of leaving decorative highlights behind.
+The important invariant is not a particular effect or file format. It is that
+all registers preserve the same statement: **H, M, and the space they genuinely
+share.**

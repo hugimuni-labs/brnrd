@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""Generate the canonical HugiMuni H/M mark for screen and print.
+"""Generate the HugiMuni H/M identity from one flat region model.
 
-The geometry is shared by every register. Material is not: the screen master
-emits light; print uses flat inks and small pale crossing knots instead of
-trying to imitate glow.
+The canonical mark is not neon tubing. It is two opaque letterforms occupying
+one plane:
 
-Run: python3 media/brand/hugimuni/build.py
+    amber = H only
+    sky   = M only
+    cream = H ∩ M
+
+The flat SVG is the master artwork. Screen adds atmosphere around that same
+artwork. EPS maps the same topology to process CMYK for physical production.
 """
 from pathlib import Path
 
@@ -22,305 +26,267 @@ RISE, DIP = 0, 0
 TAIL = 20
 STROKE = 28
 STEM_STROKE = 40
-STEM_CORE = 16
-PRINT_STEM_CORE = 10
 GHOST = 7
-GRAIN = 42
-INTERSECTION = "#eadfca"
+
+AMBER = "#ff9a1f"
+SKY = "#69c7df"
+INTERSECTION = "#f0e3cf"
 GROUND = "#050705"
 GROUND_RX = 64
-BLOOM_BLUR = 6
-BLOOM_OPACITY = 0.58
-CORE_BLUR = 0.8
-CORE_OPACITY = 0.48
 
-# One canonical palette. The former coral/turquoise exploration remains in git
-# history rather than shipping beside the production mark as a second identity.
-PALETTE = ("#ff9a1f", "#69c7df")
-NAME = "amber-sky"
+# Screen material only. The flat mark remains the thing being branded.
+BLOOM_BLUR = 7
+BLOOM_OPACITY = 0.42
+HOT_BLUR = 1.4
+HOT_OPACITY = 0.28
+GRAIN = 22
 
-# Print values are explicit and intentionally boring. PRINT_BLACK is a hook for
-# the actual printer/RIP profile: replace it with the vendor's requested rich
-# black if the stand producer specifies one rather than guessing here.
-PRINT_CMYK = ((0.00, 0.47, 0.88, 0.00), (0.56, 0.05, 0.03, 0.00))
-PRINT_INTERSECTION = (0.03, 0.05, 0.13, 0.00)
+# Process values are output mappings, not the identity source. Replace these
+# with the printer/RIP profile's preferred values when the production vendor
+# gives us an ICC/profile target.
+PRINT_AMBER = (0.00, 0.47, 0.88, 0.00)
+PRINT_SKY = (0.56, 0.05, 0.03, 0.00)
+PRINT_INTERSECTION = (0.03, 0.06, 0.15, 0.00)
 PRINT_BLACK = (0.00, 0.00, 0.00, 1.00)
-PRINT_KNOT_W = 3
-PRINT_KNOT_LEN = 10
-
-STEMS = f'<path d="M {LEFT} {TOP} V {BOTTOM}"/><path d="M {RIGHT} {TOP} V {BOTTOM}"/>'
-BAR_H = f'<path d="M {LEFT - OVERHANG} {CROSS} H {RIGHT + OVERHANG}"/>'
 
 
-def vee_m() -> str:
+def _line(x1, y1, x2, y2, width):
+    return (x1, y1, x2, y2, width)
+
+
+def h_components():
+    """H as three independent stroked vector components."""
+    return [
+        _line(LEFT - GHOST, TOP, LEFT - GHOST, BOTTOM, STEM_STROKE),
+        _line(RIGHT - GHOST, TOP, RIGHT - GHOST, BOTTOM, STEM_STROKE),
+        _line(LEFT - OVERHANG, CROSS, RIGHT + OVERHANG, CROSS, STROKE),
+    ]
+
+
+def m_components():
+    """M as four components: displaced stems + the two crossing diagonals."""
     drop = BOTTOM + DIP
+    return [
+        _line(LEFT + GHOST, TOP, LEFT + GHOST, BOTTOM, STEM_STROKE),
+        _line(RIGHT + GHOST, TOP, RIGHT + GHOST, BOTTOM, STEM_STROKE),
+        _line(LEFT - SPREAD, TOP - RISE, AXIS + TAIL, drop, STROKE),
+        _line(RIGHT + SPREAD, TOP - RISE, AXIS - TAIL, drop, STROKE),
+    ]
+
+
+def _svg_component(component, color):
+    x1, y1, x2, y2, width = component
     return (
-        f'<path d="M {LEFT - SPREAD} {TOP - RISE} L {AXIS + TAIL} {drop}"/>'
-        f'<path d="M {RIGHT + SPREAD} {TOP - RISE} L {AXIS - TAIL} {drop}"/>'
+        f'<path d="M {x1:g} {y1:g} L {x2:g} {y2:g}" '
+        f'stroke="{color}" stroke-width="{width:g}" '
+        'stroke-linecap="round" stroke-linejoin="round" fill="none"/>'
     )
 
 
-def _attrs(width: float) -> str:
-    return (
-        f'fill="none" stroke-width="{width}" '
-        'stroke-linecap="round" stroke-linejoin="round" '
-        'style="mix-blend-mode:screen"'
-    )
+def _svg_group(components, color):
+    return "".join(_svg_component(c, color) for c in components)
 
 
-def _screen_glyph(scale, a: str, b: str, core: str) -> str:
-    """Draw the shared screen geometry for one material pass."""
-    return (
-        f'<g {_attrs(scale(STEM_STROKE))} stroke="{a}" transform="translate({-GHOST},0)">{STEMS}</g>'
-        f'<g {_attrs(scale(STEM_STROKE))} stroke="{b}" transform="translate({GHOST},0)">{STEMS}</g>'
-        f'<g {_attrs(scale(STEM_CORE))} stroke="{core}">{STEMS}</g>'
-        f'<g {_attrs(scale(STROKE))} stroke="{a}">{BAR_H}</g>'
-        f'<g {_attrs(scale(STROKE))} stroke="{b}">{vee_m()}</g>'
-    )
+def _h_mask_def():
+    # A luminance mask is deliberately used here rather than painted fake
+    # highlights. It expresses the actual boolean rule H ∩ M while preserving
+    # the authored rounded stroke geometry.
+    return f'''<mask id="hm-h" maskUnits="userSpaceOnUse" x="0" y="0" width="{BOARD}" height="{BOARD}">
+      <rect width="{BOARD}" height="{BOARD}" fill="#000"/>
+      {_svg_group(h_components(), '#fff')}
+    </mask>'''
 
 
-def screen_svg(*, with_ground: bool = False) -> str:
-    """Emissive screen register; transparent master, optional icon board."""
-    a, b = PALETTE
-    grain = max(0, min(100, GRAIN)) / 100
-    body = _screen_glyph(lambda w: w, a, b, INTERSECTION)
-    cores = _screen_glyph(
-        lambda w: max(2, round(w * 0.14)),
-        "#fff6e4",
-        "#eefbff",
-        "#ffffff",
-    )
-    mask_body = _screen_glyph(lambda w: w, "#fff", "#fff", "#fff")
+def _mark_mask_def():
+    return f'''<mask id="hm-mark" maskUnits="userSpaceOnUse" x="0" y="0" width="{BOARD}" height="{BOARD}">
+      <rect width="{BOARD}" height="{BOARD}" fill="#000"/>
+      {_svg_group(h_components(), '#fff')}
+      {_svg_group(m_components(), '#fff')}
+    </mask>'''
+
+
+def _flat_art():
+    """Three-region identity: H-only / M-only / H∩M."""
+    h = _svg_group(h_components(), AMBER)
+    m = _svg_group(m_components(), SKY)
+    overlap = _svg_group(m_components(), INTERSECTION)
+    return f'''<g id="hm-flat-art">
+      <g id="hm-h-only">{h}</g>
+      <g id="hm-m-only">{m}</g>
+      <g id="hm-intersection" mask="url(#hm-h)">{overlap}</g>
+    </g>'''
+
+
+def flat_svg(*, with_ground=False):
     ground = (
         f'  <rect width="{BOARD}" height="{BOARD}" rx="{GROUND_RX}" fill="{GROUND}"/>\n'
-        if with_ground
-        else ""
+        if with_ground else ''
     )
-    title_suffix = "icon" if with_ground else "screen"
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{BOARD}" height="{BOARD}" viewBox="0 0 {BOARD} {BOARD}">
-  <title>hugimuni — H and M on shared stems ({title_suffix})</title>
+    return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{BOARD}" height="{BOARD}" viewBox="0 0 {BOARD} {BOARD}">
+  <title>HugiMuni — canonical flat H/M mark</title>
   <defs>
+    {_h_mask_def()}
+  </defs>
+{ground}  {_flat_art()}
+</svg>
+'''
+
+
+def screen_svg(*, with_ground=False):
+    """Screen register: the flat master plus light/texture, never new geometry."""
+    ground = (
+        f'  <rect width="{BOARD}" height="{BOARD}" rx="{GROUND_RX}" fill="{GROUND}"/>\n'
+        if with_ground else ''
+    )
+    grain = max(0, min(100, GRAIN)) / 100
+    # A separate white-hot overlap pass is allowed on screen because it is a
+    # material treatment of the already-defined intersection region.
+    hot = _svg_group(m_components(), '#fffaf1')
+    return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{BOARD}" height="{BOARD}" viewBox="0 0 {BOARD} {BOARD}">
+  <title>HugiMuni — emissive screen register</title>
+  <defs>
+    {_h_mask_def()}
+    {_mark_mask_def()}
     <filter id="hm-bloom" x="-40%" y="-40%" width="180%" height="180%">
       <feGaussianBlur stdDeviation="{BLOOM_BLUR}"/>
     </filter>
-    <filter id="hm-core" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur stdDeviation="{CORE_BLUR}"/>
+    <filter id="hm-hot" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="{HOT_BLUR}"/>
     </filter>
     <filter id="hm-grain" x="0" y="0" width="100%" height="100%">
-      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" seed="23"/>
+      <feTurbulence type="fractalNoise" baseFrequency="0.72" numOctaves="2" seed="23"/>
       <feColorMatrix type="saturate" values="0"/>
     </filter>
     <pattern id="hm-scanlines" width="4" height="4" patternUnits="userSpaceOnUse">
-      <path d="M0 3.5H4" stroke="#000" stroke-width="0.6" opacity="0.5"/>
+      <path d="M0 3.5H4" stroke="#000" stroke-width="0.55" opacity="0.42"/>
     </pattern>
-    <mask id="hm-strokes">
-      <rect width="{BOARD}" height="{BOARD}" fill="#000"/>
-      {mask_body}
-    </mask>
   </defs>
 {ground}  <g style="isolation:isolate">
-    <g filter="url(#hm-bloom)" opacity="{BLOOM_OPACITY}">{body}</g>
-    {body}
-    <g filter="url(#hm-core)" opacity="{CORE_OPACITY}">{cores}</g>
-    <g mask="url(#hm-strokes)">
-      <rect width="{BOARD}" height="{BOARD}" filter="url(#hm-grain)" opacity="{grain * .42:.3f}" style="mix-blend-mode:overlay"/>
-      <rect width="{BOARD}" height="{BOARD}" fill="url(#hm-scanlines)" opacity="{grain * .36:.3f}" style="mix-blend-mode:multiply"/>
+    <g filter="url(#hm-bloom)" opacity="{BLOOM_OPACITY}" style="mix-blend-mode:screen">{_flat_art()}</g>
+    {_flat_art()}
+    <g mask="url(#hm-h)" filter="url(#hm-hot)" opacity="{HOT_OPACITY}" style="mix-blend-mode:screen">{hot}</g>
+    <g mask="url(#hm-mark)">
+      <rect width="{BOARD}" height="{BOARD}" filter="url(#hm-grain)" opacity="{grain * .34:.3f}" style="mix-blend-mode:overlay"/>
+      <rect width="{BOARD}" height="{BOARD}" fill="url(#hm-scanlines)" opacity="{grain * .28:.3f}" style="mix-blend-mode:multiply"/>
     </g>
   </g>
 </svg>
-"""
+'''
 
 
-def _segment_intersection(a1, a2, b1, b2):
-    """Return the intersection of two finite segments, or None."""
-    x1, y1 = a1
-    x2, y2 = a2
-    x3, y3 = b1
-    x4, y4 = b2
-    den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
-    if abs(den) < 1e-9:
-        return None
-    t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / den
-    u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / den
-    if not (0 <= t <= 1 and 0 <= u <= 1):
-        return None
-    return (x1 + t * (x2 - x1), y1 + t * (y2 - y1))
+def _ps_cmyk(value):
+    return " ".join(f"{channel:.3f}" for channel in value)
 
 
-def crossing_marks():
-    """The six H/M weave crossings as local highlight segments.
-
-    A short segment reads as a material overlap/registration event; a dot
-    reads as a rivet. Bar crossings highlight horizontally, stem/leg
-    crossings vertically.
-    """
-    drop = BOTTOM + DIP
-    bar = ((LEFT - OVERHANG, CROSS), (RIGHT + OVERHANG, CROSS))
-    stems = [((LEFT, TOP), (LEFT, BOTTOM)), ((RIGHT, TOP), (RIGHT, BOTTOM))]
-    legs = [
-        ((LEFT - SPREAD, TOP - RISE), (AXIS + TAIL, drop)),
-        ((RIGHT + SPREAD, TOP - RISE), (AXIS - TAIL, drop)),
-    ]
-    specs = [
-        (bar, stems[0], "h"),
-        (bar, stems[1], "h"),
-        (bar, legs[0], "h"),
-        (bar, legs[1], "h"),
-        (stems[0], legs[0], "v"),
-        (stems[1], legs[1], "v"),
-    ]
-    marks = []
-    for first, second, orientation in specs:
-        point = _segment_intersection(*first, *second)
-        if point is None:
-            raise ValueError("HugiMuni geometry lost one of its six authored crossings")
-        marks.append((*point, orientation))
-    return marks
+def _ps_path(component, *, height):
+    x1, y1, x2, y2, _ = component
+    return f"{x1:g} {height-y1:g} moveto {x2:g} {height-y2:g} lineto"
 
 
-def _rgb_print_body(*, with_ground: bool) -> str:
-    """Flat RGB proof/fallback using the exact print-register geometry."""
-    a, b = PALETTE
-    ground = f'  <rect width="{BOARD}" height="{BOARD}" fill="#000"/>\n' if with_ground else ""
-    knots = "".join(
-        (
-            f'<path d="M {x - PRINT_KNOT_LEN / 2:.3f} {y:.3f} H {x + PRINT_KNOT_LEN / 2:.3f}" stroke="{INTERSECTION}" stroke-width="{PRINT_KNOT_W}" stroke-linecap="round"/>'
-            if orientation == "h"
-            else f'<path d="M {x:.3f} {y - PRINT_KNOT_LEN / 2:.3f} V {y + PRINT_KNOT_LEN / 2:.3f}" stroke="{INTERSECTION}" stroke-width="{PRINT_KNOT_W}" stroke-linecap="round"/>'
-        )
-        for x, y, orientation in crossing_marks()
+def _ps_stroke(component, color, *, height):
+    *_, width = component
+    return (
+        f"{_ps_cmyk(color)} setcmykcolor {width:g} setlinewidth newpath "
+        f"{_ps_path(component, height=height)} stroke"
     )
-    return f"""{ground}  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <g stroke="{a}" stroke-width="{STEM_STROKE}" transform="translate({-GHOST},0)">{STEMS}</g>
-    <g stroke="{b}" stroke-width="{STEM_STROKE}" transform="translate({GHOST},0)">{STEMS}</g>
-    <g stroke="{INTERSECTION}" stroke-width="{PRINT_STEM_CORE}">{STEMS}</g>
-    <g stroke="{a}" stroke-width="{STROKE}">{BAR_H}</g>
-    <g stroke="{b}" stroke-width="{STROKE}">{vee_m()}</g>
-  </g>
-  <g>{knots}</g>"""
 
 
-def flat_svg() -> str:
-    """Transparent, filter-free vector fallback for small/web uses."""
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{BOARD}" height="{BOARD}" viewBox="0 0 {BOARD} {BOARD}">
-  <title>hugimuni flat mark ({NAME})</title>
-{_rgb_print_body(with_ground=False)}
-</svg>
-"""
+def _ps_intersection(hc, mc, *, height):
+    """Paint exactly one pairwise H∩M region using strokepath clipping."""
+    *_, hw = hc
+    *_, mw = mc
+    return "\n".join((
+        "gsave",
+        f"{hw:g} setlinewidth newpath {_ps_path(hc, height=height)} strokepath clip newpath",
+        f"{_ps_cmyk(PRINT_INTERSECTION)} setcmykcolor {mw:g} setlinewidth newpath {_ps_path(mc, height=height)} stroke",
+        "grestore",
+    ))
 
 
-def print_svg(*, lockup: bool = False) -> str:
-    """Portable RGB visual proof of the EPS print register."""
+def eps(*, lockup=False):
+    """CMYK production mapping of the exact three-region flat topology."""
     height = 690 if lockup else BOARD
-    body = _rgb_print_body(with_ground=True)
-    if height != BOARD:
-        body = body.replace(f'height="{BOARD}"', f'height="{height}"')
-    wordmark = ""
-    if lockup:
-        a, b = PALETTE
-        wordmark = f"""
-  <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="8">
-    <path stroke="{a}" d="M142 535V580M178 535V580M142 557H178"/>
-    <path stroke="{b}" d="M142 600V645M178 600V645M142 600L160 642L178 600"/>
-  </g>
-  <g fill="#ffffff" font-family="Helvetica, Arial, sans-serif" font-size="34">
-    <text x="194" y="582">UGI</text><text x="194" y="647">UNI</text>
-  </g>"""
-    # _rgb_print_body is board-sized by construction; replace its background
-    # line for the taller lockup proof while leaving the mark geometry alone.
-    proof = _rgb_print_body(with_ground=False)
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{BOARD}" height="{height}" viewBox="0 0 {BOARD} {height}">
-  <title>hugimuni print register ({NAME})</title>
-  <rect width="{BOARD}" height="{height}" fill="#000"/>
-{proof}{wordmark}
-</svg>
-"""
-
-
-def eps(*, lockup: bool = False) -> str:
-    """Level-2 process-CMYK EPS for physical production."""
-    cmyk_a, cmyk_b = PRINT_CMYK
-    height = 690 if lockup else BOARD
-
-    def cmyk(value) -> str:
-        return " ".join(f"{channel:.3f}" for channel in value)
-
-    def line(x1, y1, x2, y2, width, color):
-        return (
-            f"{cmyk(color)} setcmykcolor {width} setlinewidth "
-            f"{x1} {height-y1} moveto {x2} {height-y2} lineto stroke"
-        )
-
-    def highlight(x, y, orientation, color):
-        half = PRINT_KNOT_LEN / 2
-        if orientation == "h":
-            return line(x - half, y, x + half, y, PRINT_KNOT_W, color)
-        return line(x, y - half, x, y + half, PRINT_KNOT_W, color)
-
     commands = [
-        f"{cmyk(PRINT_BLACK)} setcmykcolor 0 0 {BOARD} {height} rectfill",
+        f"{_ps_cmyk(PRINT_BLACK)} setcmykcolor 0 0 {BOARD} {height} rectfill",
         "false setoverprint",
         "1 setlinecap 1 setlinejoin",
     ]
-    for x in (LEFT - GHOST, RIGHT - GHOST):
-        commands.append(line(x, TOP, x, BOTTOM, STEM_STROKE, cmyk_a))
-    for x in (LEFT + GHOST, RIGHT + GHOST):
-        commands.append(line(x, TOP, x, BOTTOM, STEM_STROKE, cmyk_b))
-    for x in (LEFT, RIGHT):
-        commands.append(line(x, TOP, x, BOTTOM, PRINT_STEM_CORE, PRINT_INTERSECTION))
-
-    commands.append(line(LEFT - OVERHANG, CROSS, RIGHT + OVERHANG, CROSS, STROKE, cmyk_a))
-    drop = BOTTOM + DIP
-    commands.extend(
-        (
-            line(LEFT - SPREAD, TOP - RISE, AXIS + TAIL, drop, STROKE, cmyk_b),
-            line(RIGHT + SPREAD, TOP - RISE, AXIS - TAIL, drop, STROKE, cmyk_b),
-        )
-    )
-    commands.extend(highlight(x, y, orientation, PRINT_INTERSECTION) for x, y, orientation in crossing_marks())
+    commands.extend(_ps_stroke(c, PRINT_AMBER, height=height) for c in h_components())
+    commands.extend(_ps_stroke(c, PRINT_SKY, height=height) for c in m_components())
+    for hc in h_components():
+        for mc in m_components():
+            commands.append(_ps_intersection(hc, mc, height=height))
 
     if lockup:
-        commands.extend(
-            (
-                line(142, 535, 142, 580, 8, cmyk_a),
-                line(178, 535, 178, 580, 8, cmyk_a),
-                line(142, 557, 178, 557, 8, cmyk_a),
-                line(142, 600, 142, 645, 8, cmyk_b),
-                line(178, 600, 178, 645, 8, cmyk_b),
-                line(142, 600, 160, 642, 8, cmyk_b),
-                line(178, 600, 160, 642, 8, cmyk_b),
-                "0 0 0 0 setcmykcolor /Helvetica findfont 34 scalefont setfont",
-                "194 108 moveto (UGI) show",
-                "194 43 moveto (UNI) show",
-            )
-        )
+        # Preserve the existing two-row lockup grammar: an authored vector H/M
+        # prefix followed by UGI / UNI. Type can be outlined at imposition.
+        lock_h = [
+            _line(142, 535, 142, 580, 8),
+            _line(178, 535, 178, 580, 8),
+            _line(142, 557, 178, 557, 8),
+        ]
+        lock_m = [
+            _line(142, 600, 142, 645, 8),
+            _line(178, 600, 178, 645, 8),
+            _line(142, 600, 160, 642, 8),
+            _line(178, 600, 160, 642, 8),
+        ]
+        commands.extend(_ps_stroke(c, PRINT_AMBER, height=height) for c in lock_h)
+        commands.extend(_ps_stroke(c, PRINT_SKY, height=height) for c in lock_m)
+        commands.extend((
+            f"{_ps_cmyk(PRINT_INTERSECTION)} setcmykcolor /Helvetica findfont 34 scalefont setfont",
+            "194 108 moveto (UGI) show",
+            "194 43 moveto (UNI) show",
+        ))
 
-    return "\n".join(
-        (
-            "%!PS-Adobe-3.0 EPSF-3.0",
-            f"%%BoundingBox: 0 0 {BOARD} {height}",
-            "%%LanguageLevel: 2",
-            "%%DocumentData: Clean7Bit",
-            "%%Creator: media/brand/hugimuni/build.py",
-            "%%EndComments",
-            *commands,
-            "showpage",
-            "%%EOF",
-            "",
-        )
-    )
+    return "\n".join((
+        "%!PS-Adobe-3.0 EPSF-3.0",
+        f"%%BoundingBox: 0 0 {BOARD} {height}",
+        "%%LanguageLevel: 2",
+        "%%DocumentData: Clean7Bit",
+        "%%Creator: media/brand/hugimuni/build.py",
+        "%%EndComments",
+        *commands,
+        "showpage",
+        "%%EOF",
+        "",
+    ))
 
 
-def _write(path: str, content: str):
-    (OUT / path).write_text(content)
+def print_proof_svg(*, lockup=False):
+    height = 690 if lockup else BOARD
+    base = flat_svg(with_ground=False)
+    # Pull only defs+art body out of the flat document for the proof.
+    body = base.split('<defs>', 1)[1].split('</svg>', 1)[0]
+    body = '<defs>' + body
+    wordmark = ''
+    if lockup:
+        wordmark = f'''\n  <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="8">
+    <path stroke="{AMBER}" d="M142 535V580M178 535V580M142 557H178"/>
+    <path stroke="{SKY}" d="M142 600V645M178 600V645M142 600L160 642L178 600"/>
+  </g>
+  <g fill="{INTERSECTION}" font-family="Helvetica, Arial, sans-serif" font-size="34">
+    <text x="194" y="582">UGI</text><text x="194" y="647">UNI</text>
+  </g>'''
+    return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{BOARD}" height="{height}" viewBox="0 0 {BOARD} {height}">
+  <title>HugiMuni — print proof</title>
+  <rect width="{BOARD}" height="{height}" fill="#000"/>
+  {body}{wordmark}
+</svg>
+'''
 
 
-if __name__ == "__main__":
-    _write(f"hugimuni-{NAME}.svg", screen_svg())
-    _write(f"hugimuni-{NAME}-icon.svg", screen_svg(with_ground=True))
-    _write(f"hugimuni-{NAME}-flat.svg", flat_svg())
-    _write(f"hugimuni-{NAME}.eps", eps())
-    _write(f"hugimuni-{NAME}-lockup.eps", eps(lockup=True))
-    _write(f"hugimuni-{NAME}-print.svg", print_svg())
-    _write(f"hugimuni-{NAME}-print-lockup.svg", print_svg(lockup=True))
-    print("wrote canonical amber-sky screen, flat, icon, EPS, and print proof assets")
+def write_all():
+    (OUT / 'hugimuni-amber-sky-flat.svg').write_text(flat_svg())
+    (OUT / 'hugimuni-amber-sky-flat-on-dark.svg').write_text(flat_svg(with_ground=True))
+    (OUT / 'hugimuni-amber-sky.svg').write_text(screen_svg())
+    (OUT / 'hugimuni-amber-sky-icon.svg').write_text(screen_svg(with_ground=True))
+    (OUT / 'hugimuni-amber-sky-print.svg').write_text(print_proof_svg())
+    (OUT / 'hugimuni-amber-sky-print-lockup.svg').write_text(print_proof_svg(lockup=True))
+    (OUT / 'hugimuni-amber-sky.eps').write_text(eps())
+    (OUT / 'hugimuni-amber-sky-lockup.eps').write_text(eps(lockup=True))
+    print('wrote canonical flat + screen + CMYK print registers')
+
+
+if __name__ == '__main__':
+    write_all()
