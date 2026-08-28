@@ -1,6 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
-  <title>HugiMuni — print proof</title>
-  <rect width="512" height="512" fill="#000"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="560" viewBox="0 0 512 560">
+  <title>HugiMuni — canonical lockup</title>
   <defs>
     <mask id="hm-h" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
       <rect width="512" height="512" fill="#000"/>
@@ -12,5 +11,5 @@
       <g id="hm-m-only"><path d="M 159 156 L 159 356" stroke="#69c7df" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 367 156 L 367 356" stroke="#69c7df" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 132 156 L 276 356" stroke="#69c7df" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 380 156 L 236 356" stroke="#69c7df" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>
       <g id="hm-intersection" mask="url(#hm-h)"><path d="M 159 156 L 159 356" stroke="#f0e3cf" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 367 156 L 367 356" stroke="#f0e3cf" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 132 156 L 276 356" stroke="#f0e3cf" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 380 156 L 236 356" stroke="#f0e3cf" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>
     </g>
-
+  <text x="256" y="490" text-anchor="middle" fill="#f0e3cf" font-family="Helvetica, Arial, sans-serif" font-size="42" font-weight="400">HugiMuni</text>
 </svg>
