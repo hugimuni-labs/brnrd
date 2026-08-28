@@ -5,6 +5,7 @@ import { compileRoomGraph, fileFromDetail, resolvePlace } from './roomGraph.ts';
 import { compileTopology } from './roomTopology.ts';
 import type { LiveRun, LiveRunsResponse } from './liveRuns.ts';
 import type { RunLedgerResponse, RunLedgerRow } from './runLedger.ts';
+import type { ScheduledWake, ScheduledWakesResponse } from './scheduledWakes.ts';
 
 // ── fixtures — the wire's shape, not a private vocabulary ───────────────────
 
@@ -95,6 +96,27 @@ function ledgerWire(rows: RunLedgerRow[]): RunLedgerResponse {
 		stale: false,
 		reported_at: '2026-08-26T10:20:00Z',
 		span_seconds_served: 86400
+	};
+}
+
+function wakesWire(rows: ScheduledWake[]): ScheduledWakesResponse {
+	return { generated_at: '2026-08-26T10:20:00Z', rows, total: rows.length };
+}
+
+function scheduledWake(id: string, status: string, scheduledFor: string | null): ScheduledWake {
+	return {
+		id,
+		kind: 'scheduled',
+		source: 'schedule',
+		status,
+		phase: 'at',
+		bucket: 'scheduled',
+		summary: id,
+		repo_label: null,
+		daemon_name: null,
+		conversation_key: null,
+		scheduled_for: scheduledFor,
+		reported_at: null
 	};
 }
 
@@ -248,6 +270,39 @@ test('an armed await stands a ^ watch fact carrying its deadline', () => {
 	// a weaving run stands no ^ fact — the tower reports armed waits only
 	const calm = compileRoomGraph(liveWire([liveRun({ run_id: 'r-live' })]), null);
 	assert.equal(calm.watch.filter((w) => w.mark === '^').length, 0);
+});
+
+test('clockwork keeps every row the schedule wire sent — the narrowing is upstream', () => {
+	// The predecessor of this test fed `completed` / `cancelled` /
+	// `anchoring` rows and asserted a hand-written blocklist dropped them.
+	// It was green against data production cannot make: `fetchScheduledWakes`
+	// requests `?kind=scheduled`, so a finished run never reaches this wire,
+	// and `anchoring` is not a status — it is `scheduled_for === null`. The
+	// server's real dead vocabulary is eleven spellings over two sets
+	// (`dashboard.py:63-64`); a listed pair caught two. A fixture is coverage
+	// only if production can still produce it.
+	const graph = compileRoomGraph(liveWire([]), null, undefined, {
+		wakes: wakesWire([
+			scheduledWake('nightly', 'recurring', '2026-08-26T11:00:00Z'),
+			scheduledWake('paced', 'quota-paced', '2026-08-26T12:00:00Z')
+		])
+	});
+	assert.deepEqual(
+		graph.clockwork.map((entry) => entry.summary),
+		['nightly', 'paced'],
+		'a quota-paced wake is deferred, not dead — dropping it would hide real future intent'
+	);
+});
+
+test('an anchoring entry carries no instant, so it can never own the countdown', () => {
+	// The real shape of "not scheduled yet": an `every:` row the daemon has
+	// seen but not yet computed a first fire for. It stays on the wire; the
+	// camera's own `.filter((e) => e.nextAt)` is what keeps it off the T.
+	const graph = compileRoomGraph(liveWire([]), null, undefined, {
+		wakes: wakesWire([scheduledWake('anchoring', 'recurring', null)])
+	});
+	assert.equal(graph.clockwork.length, 1, 'the entry is real intent and stays');
+	assert.equal(graph.clockwork[0].nextAt, null, 'it just has no instant to count to');
 });
 
 test('forge counts aggregate the island’s attested PR / issue / merge produce', () => {

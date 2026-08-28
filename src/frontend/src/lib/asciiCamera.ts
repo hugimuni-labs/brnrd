@@ -19,6 +19,7 @@ import {
 } from './roomTopology.ts';
 import { MAX_DIR_LABEL_CHARS, type Point, type RoomLayout } from './roomLayout.ts';
 import type { PagerPage } from './roomPager.ts';
+import { untilText } from './scheduledWakes.ts';
 
 export type CameraLevel = 'island' | 'atlas';
 
@@ -84,12 +85,21 @@ function minutesLabel(iso: string | null, now: number | undefined): string | nul
 }
 
 function untilLabel(iso: string | null, now: number | undefined): string | null {
-	if (!iso || now === undefined) return null;
-	const t = Date.parse(iso);
-	if (Number.isNaN(t)) return null;
-	const m = Math.max(0, Math.round((t - now) / 60000));
-	return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${m % 60 ? String(m % 60) + 'm' : ''}`;
+	if (now === undefined) return null;
+	const text = untilText(iso, now);
+	return text?.startsWith('in ') ? text.slice(3) : text;
 }
+
+/** Camera controls must yield modified keys to the browser. */
+export function isCameraHotkey(e: Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey'>): boolean {
+	return !e.metaKey && !e.ctrlKey && (e.key === 'f' || e.key === 'a');
+}
+
+/** Fallback only — the page measures the real line box off the rendered
+ *  board, the same way it already measures `charW`. A constant restating
+ *  `.board`'s 12px × 1.35 would be the stylesheet's number stored twice,
+ *  and the next person to touch the CSS would silently un-fix the drag. */
+export const CAMERA_LINE_HEIGHT_FALLBACK_PX = 16.2;
 
 function wallLabel(seconds: number | null): string | null {
 	if (seconds === null || !Number.isFinite(seconds)) return null;
@@ -448,9 +458,9 @@ export function renderWorld(
 
 	// 1 · corridors — ground, never claiming; labels own their cells
 	for (const e of topo.edges) {
+		if (cam.level === 'atlas') continue; // atlas shows islands only; every corridor stays below this scale
 		const chars = EDGE_CHARS[e.kind];
 		if (!chars || chars.h === '') continue;
-		if (cam.level === 'atlas' && e.kind !== 'sea-lane') continue; // atlas shows islands, not corridors
 		const pts = layout.edgeRoutes[`${e.from}->${e.to}`];
 		if (!pts) continue;
 		for (let i = 0; i + 1 < pts.length; i++) {
@@ -648,7 +658,7 @@ export function renderWorld(
 				)
 			);
 		}
-		if (pages.length > 3) out.push(`    … ${pages.length - 3} older`);
+		if (pages.length > 3) out.push(clip(`    … ${pages.length - 3} older`, cam.cols));
 		out.push('');
 		for (const actor of graph.actors) out.push(clip(actorFootline(actor, now), cam.cols));
 		out.push('');
@@ -672,10 +682,15 @@ export function renderWorld(
 	return out.join('\n');
 }
 
-/** The legend, as its own block so the page can render it apart. */
+/** The legend, as its own block so the page can render it apart.
+ *  `⌂` currently names two different kinds — an island root and HOME — and
+ *  the legend says so by printing them together rather than by carrying a
+ *  note about it. A legend names what is on screen; a legend that explains
+ *  its own open questions to the reader has become a TODO with an
+ *  audience. Splitting the glyph is a visual-design call, not this one. */
 export const LEGEND = [
 	'the mood face is the resident (@ when faceless)   a…z strands   ◇ pending letter   ✉>>> boundary injection',
-	'⌂ island root   name/ chamber   · file leaf   ▛ camp   ∙ current route',
+	'⌂ island root · ⌂ HOME   name/ chamber   · file leaf   ▛ camp   lib library   ∙ current route',
 	'P portal  K chart  B bay  W watch  D wake  X cut  $ bench (uncategorized shell work)  R rig  F FORGE (+pr/mg/is counts)',
 	'─│ corridors  ═║ branch/shore rail  ┄┆ station tether  G gate (HOME)  ▛ camp +Nc commits',
 	'^ watch — armed `brnrd await`s count down here  T clockwork  ⛁ garage  arrows = off-camera bearings',
