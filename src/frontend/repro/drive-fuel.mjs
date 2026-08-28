@@ -30,17 +30,52 @@ ROUTES['/v1/dashboard/quota'] = {
 			shell: 'claude',
 			status: 'known',
 			windows: [
-				{ label: '5h window', used: 88, limit: 100, percent: 12, reset: 'resets 8:10pm', resets_at: 1787950000 },
-				{ label: 'weekly', used: 67, limit: 100, percent: 33, reset: 'resets Aug 29', resets_at: 1788005000 },
-				{ label: 'weekly (Fable)', used: 96, limit: 100, percent: 4, reset: 'resets Aug 29', resets_at: 1788005000 }
+				{
+					label: '5h window',
+					used: 88,
+					limit: 100,
+					percent: 12,
+					reset: 'resets 8:10pm',
+					resets_at: 1787950000
+				},
+				{
+					label: 'weekly',
+					used: 67,
+					limit: 100,
+					percent: 33,
+					reset: 'resets Aug 29',
+					resets_at: 1788005000
+				},
+				{
+					label: 'weekly (Fable)',
+					used: 96,
+					limit: 100,
+					percent: 4,
+					reset: 'resets Aug 29',
+					resets_at: 1788005000
+				}
 			]
 		},
 		{
 			shell: 'codex',
 			status: 'known',
 			windows: [
-				{ label: '5h window', used: 5, limit: 100, percent: 95, reset: 'resets 6pm', resets_at: 1787945000 },
-				{ label: 'weekly', used: 19, limit: 100, percent: 81, reset: 'resets Sep 3', resets_at: 1788400000 }
+				{
+					label: '5h window',
+					used: 5,
+					limit: 100,
+					percent: 95,
+					reset: 'resets 6pm',
+					resets_at: 1787945000
+				},
+				{
+					label: 'weekly',
+					used: 19,
+					limit: 100,
+					percent: 81,
+					reset: 'resets Sep 3',
+					resets_at: 1788400000
+				}
 			]
 		}
 	]
@@ -121,14 +156,10 @@ async function main() {
 			await page.screenshot({ path: `${OUT}/${vp.name}-2-bench-claude.png`, fullPage: false });
 
 			// the cursor test: tap the CODEX tab and read the Resources heading
-			const before = await page
-				.locator('[data-measure="resources"] .workshop-label')
-				.textContent();
+			const before = await page.locator('[data-measure="resources"] .workshop-label').textContent();
 			await page.locator('[data-measure="spool-rack"] button[role="tab"]').nth(1).click();
 			await delay(500);
-			const after = await page
-				.locator('[data-measure="resources"] .workshop-label')
-				.textContent();
+			const after = await page.locator('[data-measure="resources"] .workshop-label').textContent();
 			const activeTab = await page
 				.locator('[data-measure="spool-rack"] button[role="tab"][aria-selected="true"]')
 				.textContent();
