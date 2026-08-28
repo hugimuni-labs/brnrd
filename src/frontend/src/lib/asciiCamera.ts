@@ -20,6 +20,7 @@ import {
 import { MAX_DIR_LABEL_CHARS, type Point, type RoomLayout } from './roomLayout.ts';
 import type { PagerPage } from './roomPager.ts';
 import { untilText } from './scheduledWakes.ts';
+import { OFF_MARK } from './stateChrome.ts';
 
 export type CameraLevel = 'island' | 'atlas';
 
@@ -48,6 +49,18 @@ export interface WorldRenderOpts {
 	/** Reading-ceremony phase per actor run id (ticksLeft) — presentation,
 	 *  like walk positions: passed on display paints, never the flash diff. */
 	reading?: Record<string, number> | null;
+}
+
+function garageReadings(graph: RoomGraph): string[] {
+	return graph.garage.map((fuel) => {
+		const off = fuel.status === 'known' ? '' : OFF_MARK;
+		const window = fuel.windows[0];
+		const figure =
+			window?.percent === null || window?.percent === undefined
+				? '?'
+				: `${Math.round(window.percent)}%`;
+		return `${off}${fuel.shell}${window ? ` ${window.label} ${figure}` : ''}`;
+	});
 }
 
 // chars per world unit: island scale is the readable default; atlas
@@ -322,7 +335,10 @@ function nodeText(
 				const inWhen = next ? untilLabel(next.nextAt, now) : null;
 				return inWhen ? `T ${inWhen}` : 'T';
 			}
-			if (node.label === 'garage') return '⛁';
+			if (node.label === 'garage') {
+				const fuel = garageReadings(graph);
+				return fuel.length > 0 ? `⛁ ${fuel.join(' · ')}` : '⛁';
+			}
 			if (node.label === 'library') return 'lib';
 			return node.label;
 		}
@@ -605,12 +621,7 @@ export function renderWorld(
 			.sort((a, b) => (a.nextAt ?? '').localeCompare(b.nextAt ?? ''))[0];
 		const inWhen = next ? untilLabel(next.nextAt, now) : null;
 		if (inWhen) bits.push(`T ${inWhen}`);
-		const fuel = graph.garage
-			.filter((g) => g.windows.some((w) => w.percent !== null))
-			.map((g) => {
-				const w = g.windows.find((w) => w.percent !== null);
-				return `⛁ ${g.shell} ${Math.round(w!.percent!)}%`;
-			});
+		const fuel = garageReadings(graph).map((reading) => `⛁ ${reading}`);
 		bits.push(...fuel.slice(0, 2));
 		offFrame.unshift(bits.join(' · '));
 	}
