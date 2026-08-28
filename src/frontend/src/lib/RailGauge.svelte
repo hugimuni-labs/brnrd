@@ -15,12 +15,16 @@
 	import { STATUS_BURNING, STATUS_COOLING, STATUS_SPENT, STATUS_UNKNOWN } from './statusPalette';
 
 	// THE GAUGE (w-68, signed 2026-08-19: "Gauge + Bench - yes, exactly,
-	// thanks!"). One line, fixed height, never grows, sticky forever, no
-	// disclosure — next pick · fuel · tank, the three things a reader
-	// glances at without ever meaning to touch. Nothing here may become
-	// tall: picking a project, an environment, or a core is THE BENCH's
-	// job now, one tap away via `onBenchToggle` below, never this
-	// component's own accordion.
+	// thanks!"). One line, fixed height, never grows, sticky forever —
+	// next pick · fuel · tank, the three things a reader glances at without
+	// meaning to touch.
+	//
+	// Since 2026-08-28 a provider row is also a *control*: pressing it opens
+	// that provider's windows and cores. The fixed-height rule is untouched
+	// and load-bearing — the expansion mounts **below** this component, never
+	// inside it, so `.fuel-deck` stays 85px however many providers or windows
+	// an account grows. What the row owns is the press and the pressed state;
+	// what it must never grow is itself.
 	//
 	// The whole line is one `overflow-x-auto` row rather than the old slim
 	// bar's `flex-wrap` — wrapping is exactly what let the old rail grow
@@ -36,14 +40,17 @@
 		now?: number;
 		activeSpawns?: number | null;
 		maxSpawns?: number | null;
-		benchOpen: boolean;
-		onBenchToggle: () => void;
-		/** A provider row was tapped — "press a provider row" from the fuel
-		 *  design (design-resident-field.md §Settings, fuel, and the next
-		 *  dispatch): the parent opens the Bench focused on that provider's
-		 *  Resources + Next-run (Shell/Core) selection. The gauge itself stays
-		 *  disclosure-free — it only reports the tap. */
-		onProviderExpand?: (provider: string) => void;
+		/** Project · environment. Provider-independent, so it is its own small
+		 *  block rather than a fourth thing under one heading. */
+		settingsOpen: boolean;
+		onSettingsToggle: () => void;
+		/** Which provider row is pressed open, or null. **This is the provider
+		 *  selection** — not a pointer to one stored elsewhere. A pressed row
+		 *  shows that provider's windows and that provider's cores directly
+		 *  beneath the gauge, which is why no `CLAUDE | CODEX` tab strip
+		 *  exists any more and why nothing can disagree with it. */
+		openProvider?: string | null;
+		onProviderToggle?: (provider: string) => void;
 	}
 
 	let {
@@ -54,9 +61,10 @@
 		now = Date.now(),
 		activeSpawns = null,
 		maxSpawns = null,
-		benchOpen,
-		onBenchToggle,
-		onProviderExpand
+		settingsOpen,
+		onSettingsToggle,
+		openProvider = null,
+		onProviderToggle
 	}: Props = $props();
 
 	let blocks = $derived(
@@ -115,8 +123,8 @@
 		return parts.length > 0 ? parts.join(' · ') : `${group.provider}: no quota report`;
 	}
 
-	function expandProvider(provider: string) {
-		onProviderExpand?.(provider);
+	function toggleProvider(provider: string) {
+		onProviderToggle?.(provider);
 	}
 </script>
 
@@ -140,11 +148,17 @@
 			{#each providerGroups as group (group.provider)}
 				{@const primary = group.primary}
 				{@const level = quotaLevel(primary?.percent ?? null)}
+				{@const open = openProvider === group.provider}
 				<button
 					type="button"
 					class="fuel-provider-row"
+					class:is-open={open}
+					aria-expanded={open}
+					aria-label={`${group.provider} — ${
+						open ? 'fold' : 'open'
+					} its windows and cores. ${providerTooltip(group)}`}
 					title={providerTooltip(group)}
-					onclick={() => expandProvider(group.provider)}
+					onclick={() => toggleProvider(group.provider)}
 				>
 					<div class="fuel-provider-head">
 						<span class="fuel-label">{group.provider}</span>
@@ -162,6 +176,7 @@
 						{:else}
 							<span class="fuel-empty">no report</span>
 						{/if}
+						<span class="fuel-caret" aria-hidden="true">{open ? '▾' : '▸'}</span>
 					</div>
 					<!-- One track, one quantity: the binding window's remaining fuel.
 					     Every other reading this provider has is a number on the ledger
@@ -246,12 +261,12 @@
 		</span>
 		<button
 			type="button"
-			aria-expanded={benchOpen}
-			aria-label={benchOpen ? 'fold the bench' : 'open the bench — project, environment, core'}
-			onclick={onBenchToggle}
+			aria-expanded={settingsOpen}
+			aria-label={settingsOpen ? 'fold settings' : 'open settings — project and environment'}
+			onclick={onSettingsToggle}
 			class="bench-toggle"
 		>
-			{benchOpen ? '▾ bench' : '▸ bench'}
+			{settingsOpen ? '▾ settings' : '▸ settings'}
 		</button>
 	</div>
 </div>
@@ -319,6 +334,10 @@
 		text-align: left;
 		cursor: pointer;
 	}
+	.fuel-provider-row.is-open .fuel-label,
+	.fuel-provider-row:hover .fuel-label {
+		color: rgb(231 229 228);
+	}
 	.fuel-provider-head {
 		grid-column: 1 / -1;
 		display: flex;
@@ -326,6 +345,18 @@
 		justify-content: space-between;
 		gap: 6px;
 		min-width: 0;
+	}
+	/* The row is the control now, so it has to look like one at a glance —
+	   a caret costs 1 character and is the difference between a readout and
+	   an affordance. */
+	.fuel-caret {
+		flex: none;
+		width: 7px;
+		font-size: 8px;
+		color: rgb(120 113 108);
+	}
+	.fuel-provider-row.is-open .fuel-caret {
+		color: rgb(214 211 209);
 	}
 	.fuel-label {
 		overflow: hidden;
