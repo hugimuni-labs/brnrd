@@ -17,12 +17,17 @@
 	// here too, with the control that caused them.
 	//
 	// design-resident-field.md §"Settings, fuel, and the next dispatch":
-	// "press a provider row" opens exactly this surface. `focusProvider`
-	// carries which one, so the Resources readout below and the Next-run
-	// picker (SpoolRack, already the Shell/Core selector) both open already
-	// pointed at it — the resource reading informs the choice without
-	// becoming a second choice mechanism (no new POST: `SpoolRack`'s own
-	// tap-to-request machinery is untouched).
+	// "press a provider row" opens exactly this surface. `focusProvider` is
+	// **the** provider cursor for the whole bench — not a one-shot hint. The
+	// Resources readout and SpoolRack's shell tabs are two renderings of it,
+	// and `onProviderSelect` is how either of them moves it.
+	//
+	// Before 2026-08-28 there were two: this prop seeded a `manualShell`
+	// `$state` inside SpoolRack once, and a subsequent tab tap moved only
+	// that copy. The panel then showed one provider's Resources above
+	// another provider's cores, under one heading — the reported defect
+	// ("select codex core and see completely unrelated data"). A cursor
+	// stored twice is a cursor that will disagree with itself.
 	interface Props {
 		runners: RunnersResponse | null;
 		runnersError?: string | null;
@@ -33,6 +38,9 @@
 		now?: number;
 		onTap?: (profileName: string, repoLabel: string | null, environment: string | null) => void;
 		onReleaseSticky?: () => void;
+		/** Move the bench's one provider cursor — raised by SpoolRack's shell
+		 *  tabs, owned by the page, read back through `focusProvider`. */
+		onProviderSelect?: (provider: string) => void;
 	}
 
 	let {
@@ -44,17 +52,33 @@
 		focusProvider = null,
 		now = Date.now(),
 		onTap,
-		onReleaseSticky
+		onReleaseSticky,
+		onProviderSelect
 	}: Props = $props();
 
-	// Every observed meter for the focused provider — "Resources" in the
-	// design's own vocabulary: window, remaining, reset age, one row each,
-	// no ghost/primary distinction here (that compression is the collapsed
-	// gauge's job; expanded, every reading is equally readable).
+	// Every observed meter for the provider under the cursor — "Resources"
+	// in the design's own vocabulary. Expanded, every reading gets an equal
+	// full-width bar: the collapsed gauge compresses to the binding window
+	// because it has 12px; this surface has the room, so it spends it on the
+	// breakdown rather than on the same one number again.
+	let providerGroups = $derived(fuelProviderGroups(shells ?? []));
+	// With no explicit tap yet, the bench still has a provider — whichever
+	// one SpoolRack's tabs will land on. Resolving it here rather than
+	// rendering nothing keeps Resources and the core list from opening in
+	// two different states on the bench's very first paint.
 	let resourceGroup = $derived(
-		focusProvider
-			? (fuelProviderGroups(shells ?? []).find((group) => group.provider === focusProvider) ?? null)
-			: null
+		providerGroups.find((group) => group.provider === focusProvider) ?? null
+	);
+	/** The core-scope allowances for the provider under the cursor, keyed by
+	 *  the core they gate. A `fable · week` window constrains the `fable`
+	 *  core, never the whole claude shell — so it renders on that core's own
+	 *  row in the rack, where the choice it constrains is actually made. */
+	let coreAllowances = $derived(
+		new Map(
+			(resourceGroup?.meters ?? [])
+				.filter((meter) => meter.scope === 'core' && meter.coreId !== null)
+				.map((meter) => [meter.coreId as string, meter])
+		)
 	);
 
 	const LEVEL_COLOR: Record<string, string> = {
@@ -99,46 +123,6 @@
 			<p class="mb-2 font-mono text-xs text-amber-300">{runnersNote}</p>
 		{/if}
 	</div>
-	{#if resourceGroup}
-		<!-- Resources: every meter this provider reports, expanded — the
-		     fuel design's first half of "press a provider row". Sits above
-		     the shell/core picker below, which the same tap already opened
-		     to this provider's tab, so the reading and the choice it informs
-		     share one view. -->
-		<section data-measure="resources" class="resource-bay mb-3">
-			<div class="workshop-label">{resourceGroup.provider} · resources</div>
-			{#if resourceGroup.meters.length === 0}
-				<p class="font-mono text-xs text-ink-quiet">
-					No quota report for {resourceGroup.provider}.
-				</p>
-			{:else}
-				<div class="space-y-1">
-					{#each resourceGroup.meters as meter (meter.id)}
-						{@const level = quotaLevel(meter.percent)}
-						<div
-							class="resource-row flex items-baseline justify-between gap-3 border border-stone-800/60 bg-stone-900/40 px-2 py-1.5"
-							title={meter.tooltip}
-						>
-							<span class="flex min-w-0 items-baseline gap-2 font-mono text-xs">
-								<span class="text-stone-300">{meter.label}</span>
-								{#if meter.scope === 'core'}
-									<span class="text-[10px] tracking-wide text-ink-quiet uppercase"
-										>core allowance</span
-									>
-								{/if}
-							</span>
-							<span class="flex items-baseline gap-2 font-mono text-[11px]">
-								<strong style={`color: ${LEVEL_COLOR[level]}`}
-									>{meter.percent === null ? '?' : `${Math.round(meter.percent)}%`}</strong
-								>
-								{#if meter.resetShort}<span class="text-ink-quiet">↻{meter.resetShort}</span>{/if}
-							</span>
-						</div>
-					{/each}
-				</div>
-			{/if}
-		</section>
-	{/if}
 	{#if runners === null}
 		{#if !runnersError}
 			<p class="text-sm text-ink-quiet">Loading…</p>
@@ -254,6 +238,67 @@
 				</div>
 			</section>
 		</div>
+		{#if resourceGroup}
+			<!-- RESOURCES — every window this provider reports, one full-width bar
+		     each, sitting directly on top of the core list the same cursor
+		     drives. Text percentages lived here until 2026-08-28, which had
+		     the levels exactly inverted: the 12px collapsed row drew the
+		     graphics and this surface, with room to spare, drew the words. -->
+			<section data-measure="resources" class="resource-bay mb-3">
+				<div class="workshop-label">{resourceGroup.provider} · resources</div>
+				{#if resourceGroup.meters.length === 0}
+					<p class="font-mono text-xs text-ink-quiet">
+						No quota report for {resourceGroup.provider}.
+					</p>
+				{:else}
+					<div class="resource-list">
+						{#each resourceGroup.meters as meter (meter.id)}
+							{@const level = quotaLevel(meter.percent)}
+							{@const binding = meter.id === resourceGroup.primary?.id}
+							<div class="resource-row" title={meter.tooltip}>
+								<!-- A core allowance keeps its own window name: `fable · week`
+								     is a weekly ceiling on one core, and "fable" alone loses which
+								     of fable's ceilings this row is reading. -->
+								<span class="resource-name" class:is-binding={binding}>
+									{meter.scope === 'core'
+										? `${meter.coreId} · ${meter.windowName}`
+										: meter.windowName}
+								</span>
+								<span
+									class="resource-track"
+									role="img"
+									aria-label={`${meter.label}: ${
+										meter.percent === null ? 'unknown' : `${Math.round(meter.percent)}% left`
+									}`}
+								>
+									{#if meter.percent !== null}
+										<span
+											class="resource-fill"
+											style={`width: ${meter.percent}%; color: ${LEVEL_COLOR[level]}`}
+										></span>
+									{/if}
+								</span>
+								<strong class="resource-percent" style={`color: ${LEVEL_COLOR[level]}`}>
+									{meter.percent === null ? '?' : `${Math.round(meter.percent)}%`}
+								</strong>
+								<span class="resource-note">
+									{#if meter.resetShort}<span class="resource-reset">↻{meter.resetShort}</span>{/if}
+									{#if binding}
+										<span class="resource-tag is-binding" title="the ceiling that stops a run first"
+											>binding</span
+										>
+									{:else if meter.scope === 'core'}
+										<span class="resource-tag" title="gates this core only, not the whole shell"
+											>core allowance</span
+										>
+									{/if}
+								</span>
+							</div>
+						{/each}
+					</div>
+				{/if}
+			</section>
+		{/if}
 		<div class="spool-bay">
 			<SpoolRack
 				profiles={runners.profiles}
@@ -264,7 +309,9 @@
 				{now}
 				onTap={tapRunner}
 				{onReleaseSticky}
-				focusShell={focusProvider}
+				selectedShell={focusProvider}
+				onShellSelect={onProviderSelect}
+				{coreAllowances}
 			/>
 		</div>
 	{/if}
@@ -283,8 +330,94 @@
 	.resource-bay {
 		min-width: 0;
 	}
+	.resource-list {
+		border-top: 1px solid rgb(68 64 60 / 0.35);
+	}
+	/* Name · bar · number · note. One axis per row, all four bars sharing a
+	   left edge and a scale, so the readings compare by length the way the
+	   overlaid stack only pretended to. */
 	.resource-row {
+		display: grid;
 		min-width: 0;
+		grid-template-columns: minmax(0, 6.5rem) minmax(0, 1fr) 2.75rem;
+		grid-template-areas:
+			'name track pct'
+			'note note note';
+		align-items: center;
+		column-gap: 0.7rem;
+		row-gap: 2px;
+		border-bottom: 1px solid rgb(68 64 60 / 0.35);
+		padding: 0.5rem 0;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	}
+	@media (min-width: 768px) {
+		.resource-row {
+			grid-template-columns: minmax(0, 7.5rem) minmax(0, 1fr) 2.75rem minmax(0, 9.5rem);
+			grid-template-areas: 'name track pct note';
+			row-gap: 0;
+		}
+	}
+	.resource-name {
+		grid-area: name;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-size: 0.8rem;
+		color: rgb(168 162 158);
+	}
+	.resource-name.is-binding {
+		color: rgb(231 229 228);
+	}
+	.resource-track {
+		position: relative;
+		grid-area: track;
+		display: block;
+		height: 8px;
+		background: rgb(41 37 36);
+		box-shadow: inset 0 0 0 1px rgb(68 64 60 / 0.45);
+	}
+	.resource-fill {
+		position: absolute;
+		inset: 0 auto 0 0;
+		display: block;
+		background: currentColor;
+		box-shadow: 0 0 7px currentColor;
+		transition: width 500ms ease-out;
+	}
+	.resource-percent {
+		grid-area: pct;
+		font-size: 0.75rem;
+		font-weight: 500;
+		font-variant-numeric: tabular-nums;
+		text-align: right;
+	}
+	.resource-note {
+		grid-area: note;
+		display: flex;
+		align-items: baseline;
+		gap: 0.5rem;
+		overflow: hidden;
+		font-size: 0.625rem;
+		font-variant-numeric: tabular-nums;
+		white-space: nowrap;
+		color: rgb(120 113 108);
+	}
+	@media (min-width: 768px) {
+		.resource-note {
+			justify-content: flex-end;
+		}
+	}
+	.resource-reset {
+		flex: none;
+	}
+	.resource-tag {
+		flex: none;
+		letter-spacing: 0.1em;
+		text-transform: uppercase;
+		color: rgb(87 83 78);
+	}
+	.resource-tag.is-binding {
+		color: rgb(168 162 158);
 	}
 	.workshop-label {
 		margin-bottom: 0.4rem;
