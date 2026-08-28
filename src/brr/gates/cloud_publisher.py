@@ -1631,6 +1631,42 @@ def _wire_detail(detail: object) -> str | None:
     return shaped[:_WIRE_DETAIL_MAX] or None
 
 
+#: How much of the *injected block* one boundary publishes.
+#:
+#: `boundaries.jsonl` has always stored the injection verbatim under
+#: `inject` — the daemon-composed status line, the pending-event rows, the
+#: course line. `_boundary_row` then wrote `bool(record.get("inject"))` and
+#: the text died at that cast. The pager consequently rendered `detail` (the
+#: command the boundary rode in on), which is why the maintainer asked four
+#: separate times for "the accumulated block that you gonna get injected"
+#: and was told each time that it was already built. It was: recorded, then
+#: narrowed to one bit at the wire. **A surface that narrows renders as if
+#: it hadn't.**
+#:
+#: Larger than `_WIRE_DETAIL_MAX` because the two are bounded for opposite
+#: reasons. A `detail` is argv that may have swallowed a heredoc body by
+#: accident, so its bound is a *containment*. An injection is text the daemon
+#: wrote on purpose, to be read — so its bound is a *legibility* budget, and
+#: cutting it to 120 would deliver the same "implemented, not readable" the
+#: bool did. Still bounded: a wake block runs to kilobytes and no ceremony
+#: needs the whole boot kernel to say a letter arrived.
+_WIRE_INJECTION_MAX = 280
+
+
+def _wire_injection(inject: object) -> str | None:
+    """Bound an injected block for publication. See ``_WIRE_INJECTION_MAX``.
+
+    Newlines collapse to ` · ` because every renderer of this field paints on
+    a character grid and a raw `\n` would shear the row it lands in. The
+    collapse happens here, once, for the same reason the detail bound does:
+    four renderers exist and a fifth would have to remember.
+    """
+    if not isinstance(inject, str):
+        return None
+    shaped = " · ".join(part.strip() for part in inject.splitlines() if part.strip())
+    return shaped[:_WIRE_INJECTION_MAX] or None
+
+
 #: How many *crossings* — boundaries at which the daemon injected context —
 #: one publish tick carries. The `edge` row is the run's current boundary and
 #: is therefore a **cursor**: a client polling every 2s sees whichever edge
@@ -1703,7 +1739,13 @@ def _boundary_row(
         "tools": tools,
         "detail": _wire_detail(record.get("detail")),
         "out_bytes": out_bytes if isinstance(out_bytes, int) else None,
+        # Both, deliberately. `injected` stays the predicate every gate reads
+        # (`_crossings_payload` filters on it, the pager mints on it) — a bool
+        # is the right shape for *did a crossing happen*. `injection` is what
+        # crossed. Collapsing the second into the first is the defect this
+        # pair replaces.
         "injected": bool(record.get("inject")),
+        "injection": _wire_injection(record.get("inject")),
         "dir": _edge_dir(record.get("cwd"), manifest or {}, brr_dir, record.get("detail")),
     }
 

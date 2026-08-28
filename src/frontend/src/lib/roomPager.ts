@@ -30,8 +30,24 @@ export interface PagerPage {
 	glyph: string;
 	/** The act the page rode in on. */
 	act: string | null;
-	/** The carrier boundary's already-redacted detail. */
+	/** The carrier boundary's already-redacted detail — the *command* the
+	 *  page rode in on. Kept: the action log is genuinely useful and the
+	 *  maintainer said so ("that is not to say the action log is bad it is
+	 *  actually good, it is just not what you get injected"). */
 	detail: string | null;
+	/** THE BLOCK ITSELF — what the daemon actually injected at this boundary.
+	 *
+	 *  This is the field the pager exists to show, and until 2026-08-28 it
+	 *  could not: `boundaries.jsonl` stored the injection verbatim, the
+	 *  publisher wrote `bool(...)`, and the page had nothing left to render
+	 *  but `detail`. So the pager showed commands, was reported as wrong four
+	 *  separate times, and was four times correctly described as "implemented
+	 *  and not rendered".
+	 *
+	 *  `null` on a daemon predating the wire field — which is why the row
+	 *  falls back to the carrier rather than rendering an empty page. An
+	 *  absent block is not an empty one. */
+	injection: string | null;
 }
 
 /** Pages kept per run — enough feed to scroll a thought, not an archive. */
@@ -59,7 +75,8 @@ export function recordPages(
 			runId: run.run_id,
 			glyph: glyphByRun?.[run.run_id] ?? '@',
 			act: edge.act ?? null,
-			detail: edge.detail ?? null
+			detail: edge.detail ?? null,
+			injection: edge.injection ?? null
 		};
 		feed.push(page);
 		if (feed.length > PAGER_CAP) feed.splice(0, feed.length - PAGER_CAP);

@@ -722,6 +722,20 @@ export function renderWorld(
 		// much is busy.
 		const condition = conditionLine(graph, now);
 		if (condition) out.push(clip(condition, cam.cols));
+		// THE PAGE IS THE BLOCK. It used to be the carrier — `rode mutate ·
+		// cat > RailBench.svelte` — because the carrier was the only thing
+		// left on the wire after `bool(record.get("inject"))` ate the
+		// injection daemon-side. So the device built to show "the accumulated
+		// block that you gonna get injected at the boundary" showed the
+		// command log instead, and was reported wrong four times.
+		//
+		// The carrier is not deleted — "the action log is bad, it is actually
+		// good, it is just not what you get injected" (maintainer,
+		// 2026-08-27). It rides a continuation line under the page **in
+		// transit only**: that is the one page a reader is being asked to
+		// watch, and giving all three a second row would trade the map for
+		// the strip. Its permanent home is the terminal over the camp
+		// (design-the-crossing.md rung 4), not here.
 		const marked = new Set<string>();
 		for (const p of pages.slice(0, 3)) {
 			const hhmm = p.at.length >= 16 ? p.at.slice(11, 16) : p.at;
@@ -732,12 +746,15 @@ export function renderWorld(
 			// this is that actor's newest page — the waiting → read transit
 			const fresh = readingNow.has(p.runId) && !marked.has(p.runId);
 			marked.add(p.runId);
-			out.push(
-				clip(
-					`  ${fresh ? '▸' : ' '} ${hhmm} ✉ ${p.glyph} rode ${carrier || 'a boundary'}`,
-					cam.cols
-				)
-			);
+			// An absent block is not an empty one: a daemon predating the
+			// `injection` wire field publishes the bool alone, and the row
+			// falls back to the carrier rather than rendering a blank page
+			// that would read as "nothing was injected".
+			const body = p.injection ?? (carrier ? `rode ${carrier}` : 'a boundary');
+			out.push(clip(`  ${fresh ? '▸' : ' '} ${hhmm} ✉ ${p.glyph} ${body}`, cam.cols));
+			if (fresh && p.injection && carrier) {
+				out.push(clip(`        ↳ rode ${carrier}`, cam.cols));
+			}
 		}
 		if (pages.length > 3) out.push(clip(`    … ${pages.length - 3} older`, cam.cols));
 		out.push('');
@@ -778,5 +795,6 @@ export const LEGEND = [
 	'⌁ attested boundary   ══ CLOTH time register — live, then history',
 	'┈≻ the claw — a letter carried from HOME to the actor that received it   ◇ the letter, in flight',
 	'▯⌁@ mind-connect — reading the pager   ✎ writing  ☰ reading  ✉ opening a letter',
-	'▯ PAGER — injection status: ◇ waiting (accumulated, not yet injected) · ✉ read · ▸ in transit'
+	'▯ PAGER — injection status: ◇ waiting (accumulated, not yet injected) · ✉ read · ▸ in transit',
+	'  a read page shows the injected block itself; ↳ names the boundary that carried it'
 ].join('\n');
