@@ -1,32 +1,45 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
-  <title>hugimuni — H and M on shared stems (icon)</title>
+  <title>HugiMuni — emissive screen register</title>
   <defs>
+    <mask id="hm-h" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
+      <rect width="512" height="512" fill="#000"/>
+      <path d="M 145 156 L 145 356" stroke="#fff" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 353 156 L 353 356" stroke="#fff" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 132 276 L 380 276" stroke="#fff" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    </mask>
+    <mask id="hm-mark" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
+      <rect width="512" height="512" fill="#000"/>
+      <path d="M 145 156 L 145 356" stroke="#fff" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 353 156 L 353 356" stroke="#fff" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 132 276 L 380 276" stroke="#fff" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <path d="M 159 156 L 159 356" stroke="#fff" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 367 156 L 367 356" stroke="#fff" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 132 156 L 276 356" stroke="#fff" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 380 156 L 236 356" stroke="#fff" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    </mask>
     <filter id="hm-bloom" x="-40%" y="-40%" width="180%" height="180%">
-      <feGaussianBlur stdDeviation="6"/>
+      <feGaussianBlur stdDeviation="7"/>
     </filter>
-    <filter id="hm-core" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur stdDeviation="0.8"/>
+    <filter id="hm-hot" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="1.4"/>
     </filter>
     <filter id="hm-grain" x="0" y="0" width="100%" height="100%">
-      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" seed="23"/>
+      <feTurbulence type="fractalNoise" baseFrequency="0.72" numOctaves="2" seed="23"/>
       <feColorMatrix type="saturate" values="0"/>
     </filter>
     <pattern id="hm-scanlines" width="4" height="4" patternUnits="userSpaceOnUse">
-      <path d="M0 3.5H4" stroke="#000" stroke-width="0.6" opacity="0.5"/>
+      <path d="M0 3.5H4" stroke="#000" stroke-width="0.55" opacity="0.42"/>
     </pattern>
-    <mask id="hm-strokes">
-      <rect width="512" height="512" fill="#000"/>
-      <g fill="none" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#fff" transform="translate(-7,0)"><path d="M 152 156 V 356"/><path d="M 360 156 V 356"/></g><g fill="none" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#fff" transform="translate(7,0)"><path d="M 152 156 V 356"/><path d="M 360 156 V 356"/></g><g fill="none" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#fff"><path d="M 152 156 V 356"/><path d="M 360 156 V 356"/></g><g fill="none" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#fff"><path d="M 132 276 H 380"/></g><g fill="none" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#fff"><path d="M 132 156 L 276.0 356"/><path d="M 380 156 L 236.0 356"/></g>
-    </mask>
   </defs>
   <rect width="512" height="512" rx="64" fill="#050705"/>
   <g style="isolation:isolate">
-    <g filter="url(#hm-bloom)" opacity="0.58"><g fill="none" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#ff9a1f" transform="translate(-7,0)"><path d="M 152 156 V 356"/><path d="M 360 156 V 356"/></g><g fill="none" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#69c7df" transform="translate(7,0)"><path d="M 152 156 V 356"/><path d="M 360 156 V 356"/></g><g fill="none" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#eadfca"><path d="M 152 156 V 356"/><path d="M 360 156 V 356"/></g><g fill="none" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#ff9a1f"><path d="M 132 276 H 380"/></g><g fill="none" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#69c7df"><path d="M 132 156 L 276.0 356"/><path d="M 380 156 L 236.0 356"/></g></g>
-    <g fill="none" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#ff9a1f" transform="translate(-7,0)"><path d="M 152 156 V 356"/><path d="M 360 156 V 356"/></g><g fill="none" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#69c7df" transform="translate(7,0)"><path d="M 152 156 V 356"/><path d="M 360 156 V 356"/></g><g fill="none" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#eadfca"><path d="M 152 156 V 356"/><path d="M 360 156 V 356"/></g><g fill="none" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#ff9a1f"><path d="M 132 276 H 380"/></g><g fill="none" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#69c7df"><path d="M 132 156 L 276.0 356"/><path d="M 380 156 L 236.0 356"/></g>
-    <g filter="url(#hm-core)" opacity="0.48"><g fill="none" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#fff6e4" transform="translate(-7,0)"><path d="M 152 156 V 356"/><path d="M 360 156 V 356"/></g><g fill="none" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#eefbff" transform="translate(7,0)"><path d="M 152 156 V 356"/><path d="M 360 156 V 356"/></g><g fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#ffffff"><path d="M 152 156 V 356"/><path d="M 360 156 V 356"/></g><g fill="none" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#fff6e4"><path d="M 132 276 H 380"/></g><g fill="none" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" style="mix-blend-mode:screen" stroke="#eefbff"><path d="M 132 156 L 276.0 356"/><path d="M 380 156 L 236.0 356"/></g></g>
-    <g mask="url(#hm-strokes)">
-      <rect width="512" height="512" filter="url(#hm-grain)" opacity="0.176" style="mix-blend-mode:overlay"/>
-      <rect width="512" height="512" fill="url(#hm-scanlines)" opacity="0.151" style="mix-blend-mode:multiply"/>
+    <g filter="url(#hm-bloom)" opacity="0.42" style="mix-blend-mode:screen"><g id="hm-flat-art">
+      <g id="hm-h-only"><path d="M 145 156 L 145 356" stroke="#ff9a1f" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 353 156 L 353 356" stroke="#ff9a1f" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 132 276 L 380 276" stroke="#ff9a1f" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>
+      <g id="hm-m-only"><path d="M 159 156 L 159 356" stroke="#69c7df" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 367 156 L 367 356" stroke="#69c7df" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 132 156 L 276 356" stroke="#69c7df" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 380 156 L 236 356" stroke="#69c7df" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>
+      <g id="hm-intersection" mask="url(#hm-h)"><path d="M 159 156 L 159 356" stroke="#f0e3cf" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 367 156 L 367 356" stroke="#f0e3cf" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 132 156 L 276 356" stroke="#f0e3cf" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 380 156 L 236 356" stroke="#f0e3cf" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>
+    </g></g>
+    <g id="hm-flat-art">
+      <g id="hm-h-only"><path d="M 145 156 L 145 356" stroke="#ff9a1f" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 353 156 L 353 356" stroke="#ff9a1f" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 132 276 L 380 276" stroke="#ff9a1f" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>
+      <g id="hm-m-only"><path d="M 159 156 L 159 356" stroke="#69c7df" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 367 156 L 367 356" stroke="#69c7df" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 132 156 L 276 356" stroke="#69c7df" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 380 156 L 236 356" stroke="#69c7df" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>
+      <g id="hm-intersection" mask="url(#hm-h)"><path d="M 159 156 L 159 356" stroke="#f0e3cf" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 367 156 L 367 356" stroke="#f0e3cf" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 132 156 L 276 356" stroke="#f0e3cf" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 380 156 L 236 356" stroke="#f0e3cf" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>
+    </g>
+    <g mask="url(#hm-h)" filter="url(#hm-hot)" opacity="0.28" style="mix-blend-mode:screen"><path d="M 159 156 L 159 356" stroke="#fffaf1" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 367 156 L 367 356" stroke="#fffaf1" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 132 156 L 276 356" stroke="#fffaf1" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 380 156 L 236 356" stroke="#fffaf1" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>
+    <g mask="url(#hm-mark)">
+      <rect width="512" height="512" filter="url(#hm-grain)" opacity="0.075" style="mix-blend-mode:overlay"/>
+      <rect width="512" height="512" fill="url(#hm-scanlines)" opacity="0.062" style="mix-blend-mode:multiply"/>
     </g>
   </g>
 </svg>
