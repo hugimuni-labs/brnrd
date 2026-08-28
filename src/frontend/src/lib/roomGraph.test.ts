@@ -347,6 +347,40 @@ test('without a remembered trail the current boundary still grows one chamber', 
 	);
 });
 
+test('only a daemon-attested tree directory grows terrain', () => {
+	const observedRootDetails = [
+		'git fetch origin/brr/room-fuel.md',
+		'opacity 0.4/0.3/0.2',
+		'gh api pull/1671',
+		'Write /tmp/reply1.md'
+	];
+	const runs = observedRootDetails.map((detail, index) =>
+		liveRun({
+			run_id: `root-${index}`,
+			room: { env: 'worktree', branch: `brr/observed-${index}`, dir: `run-observed-${index}` },
+			edge: edge('mutate', detail)
+		})
+	);
+	runs.push(
+		liveRun({
+			run_id: 'in-tree',
+			room: { env: 'worktree', branch: 'brr/real-path', dir: 'run-real-path' },
+			edge: edge('mutate', 'Edit roomGraph.ts', { dir: 'src/frontend/src/lib' })
+		})
+	);
+	const graph = compileRoomGraph(liveWire(runs), null);
+	assert.deepEqual(
+		graph.islands[0].camps.flatMap((camp) => camp.chambers.map((chamber) => chamber.dir)),
+		['src/frontend/src/lib']
+	);
+	for (const run of runs.slice(0, -1)) {
+		assert.equal(
+			graph.actors.find((actor) => actor.runId === run.run_id)?.place.label,
+			run.room?.dir
+		);
+	}
+});
+
 test('fileFromDetail reads the leaf and refuses the non-file', () => {
 	assert.equal(fileFromDetail('Edit asciiRoom.ts'), 'asciiRoom.ts');
 	assert.equal(fileFromDetail('node --test src/lib/roomGraph.test.ts'), 'roomGraph.test.ts');

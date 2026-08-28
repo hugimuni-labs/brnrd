@@ -67,75 +67,21 @@ const DESK_RE = /inbox\.json|portal-state\.json|\bbrnrd (do|await)\b|\boutbox\b/
 const KB_RE = /\bkb\/|\.brnrd-kb\/|knowledge\//;
 
 /**
- * The repo-relative dir an edge attests. The cwd when it isn't the tree
- * root; else the directory of a path the *detail itself* names — because
- * most acts run from the root and name their true location only in the
- * detail ("you moved, but only on cd" — the measured gap: a dozen edits
- * into src/frontend grew zero terrain).
- *
- * Absolute detail paths relativize through the island's own directory
- * segment (the repo short name, last occurrence); relative tokens need ≥3
- * segments so `origin/main` never becomes a chamber. Conservative on
- * purpose: machinery roots (`.brr`, `.git`) and a truncation-cut final
- * segment stay off the map — a fabricated chamber is worse than a missing
- * one, and every kept prefix is true even when the leaf was cut.
- *
- * The hidden-segment fence (2026-08-27, from four screenshots of garbage
- * terrain): any token that passes through a dot-prefixed directory is
- * machinery, wherever the dot sits. The measured failure: the account home
- * lives under `~/.local/state/brnrd/…`, whose `brnrd` segment matches the
- * repo short name, so dominion writes were minting fake chambers
- * (`accounts/acc_…/home/…`) on the island. `.local` before the match is
- * the tell — hidden trees stay off the map entirely.
+ * The repo-relative directory the daemon attested for this boundary.
+ * `_edge_dir` resolves the cwd against the run's actual checkout/worktree
+ * before the live-runs wire is published; `.` means that known tree's root.
+ * Detail is display text, not filesystem identity: slash-bearing versions,
+ * refs, URL fragments, and out-of-tree paths remain visible on the actor's
+ * boundary line without becoming terrain.
  */
-function hasHiddenSegment(segs: string[]): boolean {
-	return segs.some((s) => (s.startsWith('.') && s !== '.') || s === '~');
-}
-export function dirFromEdge(
-	edge: LiveRun['edge'],
-	repoLabel: string | null | undefined
-): string | null {
-	const cwd = edge?.dir && edge.dir !== '.' ? edge.dir : null;
-	if (cwd) return cwd;
-	const detail = edge?.detail;
-	if (!detail || !repoLabel) return null;
-	const short = repoLabel.includes('/') ? (repoLabel.split('/').pop() ?? repoLabel) : repoLabel;
-	let best: string | null = null;
-	const consider = (segsIn: string[], truncated: boolean) => {
-		// relativize through the repo's own segment when the token carries it
-		const k = segsIn.lastIndexOf(short);
-		let rel = k >= 0 ? segsIn.slice(k + 1) : segsIn;
-		if (truncated) rel = rel.slice(0, -1); // the cut segment is not a fact
-		const last = rel[rel.length - 1];
-		if (last && (last.startsWith('.') || /\.[A-Za-z][A-Za-z0-9]{0,6}$/.test(last)))
-			rel = rel.slice(0, -1); // drop the file leaf; chambers are directories
-		if (rel.length === 0 || hasHiddenSegment(rel)) return;
-		best = rel.join('/');
-	};
-	for (const m of detail.matchAll(/(?:\/[\w.@~-]+){2,}/g)) {
-		const segs = m[0].split('/').filter(Boolean);
-		// an absolute path is only legible through the repo's own segment,
-		// and only when no hidden directory sits on the way there — the
-		// account home's `.local/state/brnrd/…` also carries the segment
-		const k = segs.lastIndexOf(short);
-		if (k < 0 || k >= segs.length - 1) continue;
-		if (hasHiddenSegment(segs.slice(0, k + 1))) continue;
-		consider(segs.slice(k + 1), detail[m.index + m[0].length] === '…');
-	}
-	for (const m of detail.matchAll(/(?<=^|[\s'"(=])(?:[\w.@~-]+\/){2,}[\w.@~-]+/g)) {
-		consider(m[0].split('/').filter(Boolean), detail[m.index + m[0].length] === '…');
-	}
-	return best;
+export function dirFromEdge(edge: LiveRun['edge']): string | null {
+	return edge?.dir && edge.dir !== '.' ? edge.dir : null;
 }
 
-/** The resource anchor for a tree place: prefer what the boundary attests
- * (cwd, or the detail's own path); the camp names the root otherwise. */
-function chamberLabel(
-	edge: LiveRun['edge'],
-	room: LiveRun['room'],
-	repoLabel?: string | null
-): string | null {
-	return dirFromEdge(edge, repoLabel) ?? room?.dir ?? null;
+/** The resource anchor for a tree place: prefer the boundary's attested cwd;
+ * the camp names the known checkout/worktree root otherwise. */
+function chamberLabel(edge: LiveRun['edge'], room: LiveRun['room']): string | null {
+	return dirFromEdge(edge) ?? room?.dir ?? null;
 }
 
 /**
@@ -167,20 +113,20 @@ export function resolvePlace(
 			if (FORGE_RE.test(detail)) return { kind: 'forge-dock', label: edge.detail };
 			return {
 				kind: 'test-rig',
-				label: chamberLabel(edge, run.room, run.repo_label) ?? edge.detail
+				label: chamberLabel(edge, run.room) ?? edge.detail
 			};
 		case 'orient':
 			if (DESK_RE.test(detail)) return { kind: 'correspondence-desk', label: edge.detail };
 			if (CONTROL_FILE_RE.test(detail)) return { kind: 'chart-table', label: edge.detail };
 			if (FORGE_RE.test(detail)) return { kind: 'forge-dock', label: edge.detail };
 			if (KB_RE.test(detail)) return { kind: 'chamber', label: 'the library' };
-			return { kind: 'chamber', label: chamberLabel(edge, run.room, run.repo_label) };
+			return { kind: 'chamber', label: chamberLabel(edge, run.room) };
 		case 'mutate':
 			if (CONTROL_FILE_RE.test(detail)) return { kind: 'chart-table', label: edge.detail };
 			if (DESK_RE.test(detail)) return { kind: 'correspondence-desk', label: edge.detail };
-			return { kind: 'chamber', label: chamberLabel(edge, run.room, run.repo_label) };
+			return { kind: 'chamber', label: chamberLabel(edge, run.room) };
 		default:
-			return { kind: 'chamber', label: chamberLabel(edge, run.room, run.repo_label) };
+			return { kind: 'chamber', label: chamberLabel(edge, run.room) };
 	}
 }
 
@@ -398,7 +344,7 @@ export function compileRoomGraph(
 		act: run.edge?.act ?? null,
 		detail: run.edge?.detail ?? null,
 		injected: !!run.edge?.injected,
-		cameFrom: priorChamber(trails?.[run.run_id], dirFromEdge(run.edge, run.repo_label)),
+		cameFrom: priorChamber(trails?.[run.run_id], dirFromEdge(run.edge)),
 		lifecycle: run.lifecycle ?? null,
 		awaitUntil: run.await_until ?? null,
 		moodRest: run.mood_rest ?? run.mood_glyph ?? null,
@@ -433,7 +379,7 @@ export function compileRoomGraph(
 		// terrain accretes from the trail — attested footsteps only, current
 		// boundary included so the actor always stands on known ground.
 		const steps: TrailStep[] = [...(trails?.[run.run_id] ?? [])];
-		const edgeDir = dirFromEdge(run.edge, run.repo_label);
+		const edgeDir = dirFromEdge(run.edge);
 		const edgeAt = run.edge?.at ?? null;
 		const alreadyRecorded = edgeAt !== null && steps.some((s) => s.at === edgeAt);
 		if (edgeDir && !alreadyRecorded)
