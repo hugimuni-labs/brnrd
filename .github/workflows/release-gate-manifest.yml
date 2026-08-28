@@ -1,0 +1,33 @@
+name: Temporary release-gate legal manifest refresh
+
+on:
+  push:
+    branches:
+      - brr/release-gate-0.6.17
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: brr/release-gate-0.6.17
+
+      - name: Refresh legal export pins
+        run: python scripts/legal_manifest.py --write
+
+      - name: Commit generated manifest only
+        shell: bash
+        run: |
+          if git diff --quiet -- docs/legal/export/SHA256SUMS docs/legal/export/document-manifest.md; then
+            echo "Legal manifest already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/legal/export/SHA256SUMS docs/legal/export/document-manifest.md
+          git commit -m "docs: refresh legal export manifest"
+          git push origin HEAD:brr/release-gate-0.6.17
