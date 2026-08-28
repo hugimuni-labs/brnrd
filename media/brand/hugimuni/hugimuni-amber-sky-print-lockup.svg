@@ -4,11 +4,11 @@
   <g fill="none" stroke-linecap="round" stroke-linejoin="round">
     <g stroke="#ff9a1f" stroke-width="40" transform="translate(-7,0)"><path d="M 152 156 V 356"/><path d="M 360 156 V 356"/></g>
     <g stroke="#69c7df" stroke-width="40" transform="translate(7,0)"><path d="M 152 156 V 356"/><path d="M 360 156 V 356"/></g>
+    <g stroke="#eadfca" stroke-width="10"><path d="M 152 156 V 356"/><path d="M 360 156 V 356"/></g>
     <g stroke="#ff9a1f" stroke-width="28"><path d="M 132 276 H 380"/></g>
     <g stroke="#69c7df" stroke-width="28"><path d="M 132 156 L 276.0 356"/><path d="M 380 156 L 236.0 356"/></g>
-    <g stroke="#ffffff" stroke-width="26"><path d="M 152 156 V 356"/><path d="M 360 156 V 356"/></g>
-    <g stroke="#ffffff" stroke-width="5.5"><path d="M 132 276 H 380"/><path d="M 132 156 L 276.0 356"/><path d="M 380 156 L 236.0 356"/></g>
   </g>
+  <g><path d="M 147.000 276.000 H 157.000" stroke="#eadfca" stroke-width="3" stroke-linecap="round"/><path d="M 355.000 276.000 H 365.000" stroke="#eadfca" stroke-width="3" stroke-linecap="round"/><path d="M 213.400 276.000 H 223.400" stroke="#eadfca" stroke-width="3" stroke-linecap="round"/><path d="M 288.600 276.000 H 298.600" stroke="#eadfca" stroke-width="3" stroke-linecap="round"/><path d="M 152.000 178.778 V 188.778" stroke="#eadfca" stroke-width="3" stroke-linecap="round"/><path d="M 360.000 178.778 V 188.778" stroke="#eadfca" stroke-width="3" stroke-linecap="round"/></g>
   <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="8">
     <path stroke="#ff9a1f" d="M142 535V580M178 535V580M142 557H178"/>
     <path stroke="#69c7df" d="M142 600V645M178 600V645M142 600L160 642L178 600"/>
