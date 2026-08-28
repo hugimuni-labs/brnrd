@@ -102,13 +102,22 @@ test('the last-looked load effect reads the stored anchor before re-arming it to
 	ok(readAt < rearmAt, 'the read happens before the re-arm write, not after');
 });
 
-test('the machine dock leaves the bench disclosure seam while the bench is open', () => {
+test('the machine dock leaves the disclosure seam while either expansion is open', () => {
+	// Two things can be open under the rail now — settings, and a pressed
+	// provider — so the docking guard asks one question (`railOpen`) rather
+	// than tracking whichever of them happened to be wired.
 	const src = source();
 	const machineAt = src.indexOf('class="ignite machine-dock');
 	ok(machineAt >= 0, 'the machine dock exists');
-	const guardAt = src.lastIndexOf('{#if !benchOpen}', machineAt);
-	ok(guardAt >= 0, 'the machine dock is guarded by the closed-bench state');
+	const guardAt = src.lastIndexOf('{#if !railOpen}', machineAt);
+	ok(guardAt >= 0, 'the machine dock is guarded by the nothing-open state');
 	ok(machineAt - guardAt < 1_000, 'the guard belongs to the machine dock, not an earlier lane');
+	ok(
+		/let railOpen = \$derived\(settingsOpen \|\| openProvider !== null\)/u.test(src),
+		'and that state is derived from both, not from one of them'
+	);
+	const bayAt = src.indexOf('<ProviderBay', machineAt);
 	const benchAt = src.indexOf('<RailBench', machineAt);
-	ok(benchAt > machineAt, 'the non-sticky bench remains after the sticky stack');
+	ok(bayAt > machineAt, 'the provider bay mounts after the sticky stack');
+	ok(benchAt > bayAt, 'and settings after it — the pressed row is nearest the row that opened it');
 });

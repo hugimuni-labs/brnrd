@@ -8,80 +8,56 @@ import type { ConnectedRepo } from './repos.ts';
 const source = readFileSync(new URL('./RailBench.svelte', import.meta.url), 'utf8');
 const repo = { environment_default: 'host · default' } as ConnectedRepo;
 
-// design-resident-field.md §"Settings, fuel, and the next dispatch": "press a
-// provider row" opens the Bench already pointed at that provider — Resources
-// (every observed meter) plus Next-run (SpoolRack, already tabbed there via
-// `focusShell`). RailBench imports SpoolRack.svelte directly, which the
-// RailGaugeRender/SpoolRackRender SSR-compile harness (a bare-node import of
-// the compiled output, no bundler) cannot resolve — a `.svelte` import has no
-// loader outside vite. Structural, source-level assertions are this file's
-// own established pattern for exactly that reason (see the mobile-first and
-// 44px-floor tests below); this test follows it rather than reaching for a
-// harness this repo doesn't otherwise use.
-test('a focused provider gets a Resources readout, conditionally rendered and wired to the rack', () => {
-	assert.match(
-		source,
-		/\{#if resourceGroup\}/u,
-		'Resources only renders once a provider is focused'
-	);
-	assert.ok(source.includes('data-measure="resources"'), 'the section carries its own measure');
-	assert.match(
-		source,
-		/\{resourceGroup\.provider\}\s*·\s*resources/u,
-		'the label names which provider is expanded'
-	);
-	assert.match(
-		source,
-		/resourceGroup\.meters as meter/u,
-		'every observed meter renders, not only the primary'
-	);
-	// ONE CURSOR. `focusProvider` is not a hint the rack copies into its own
-	// state — it *is* the bench's provider selection, and the rack's tabs
-	// move it through `onProviderSelect` rather than moving a private twin.
-	// The twin is what put a codex core list under a claude Resources
-	// heading (reported 2026-08-28 with the screenshot).
-	assert.match(
-		source,
-		/selectedShell=\{focusProvider\}/u,
-		'the rack renders the bench cursor rather than seeding a copy of it'
-	);
-	assert.match(
-		source,
-		/onShellSelect=\{onProviderSelect\}/u,
-		'and a tab tap moves that same cursor, so Resources cannot describe another provider'
-	);
-	assert.ok(!/focusShell=/u.test(source), 'the one-shot seeding prop is gone, not merely unused');
+// RailBench is the settings block now: project · environment, and nothing
+// else. It held four things under one heading — project, environment, a
+// provider's Resources, and a CLAUDE|CODEX core picker — two of which
+// belonged to a provider and two of which did not, which is why the panel
+// never read as one object. The provider half moved to `ProviderBay`,
+// opened by pressing that provider's fuel row (maintainer, 2026-08-28).
+const bayPath = new URL('./ProviderBay.svelte', import.meta.url);
+const bay = readFileSync(bayPath, 'utf8');
+
+test('settings holds where the work happens, and nothing about which body runs it', () => {
+	assert.ok(source.includes('data-measure="settings"'), 'the block names itself for what it is');
+	assert.ok(source.includes('data-measure="project"'));
+	assert.ok(source.includes('data-measure="environment"'));
+	assert.ok(!source.includes('SpoolRack'), 'the core picker is not here');
+	assert.ok(!source.includes('data-measure="resources"'), 'and neither are a provider’s windows');
+	assert.ok(!/focusProvider|onProviderSelect/u.test(source), 'no provider cursor passes through');
 });
 
-test('Resources renders each window as its own bar, adjacent to the cores the same cursor drives', () => {
-	// The levels used to be inverted: the 12px collapsed row drew graphics
-	// and this surface, with room to spare, drew text percentages. His own
-	// note on the screenshot — "which if kept, should also itself be a
-	// visual bar".
-	assert.match(source, /class="resource-track"/u, 'every window gets a track');
-	assert.match(source, /class="resource-fill"/u, 'and a fill measured on it');
+test('the place a wake lands is announced, never reached across for', () => {
+	// The settings block does not know what the rack does with the pair; it
+	// raises the change and the page hands it on. One-way, so the two blocks
+	// can move apart on the page without either learning about the other.
+	assert.match(source, /onPlaceChange\?\.\(/u);
+	assert.match(source, /function selectEnvironment/u, 'every environment pick announces');
+});
+
+test('the provider bay carries the windows as bars, beside the cores of that one shell', () => {
+	assert.ok(bay.includes('data-measure="resources"'), 'the windows moved here');
+	assert.match(bay, /class="resource-track"/u, 'every window gets a track');
+	assert.match(bay, /class="resource-fill"/u, 'and a fill measured on it');
 	assert.match(
-		source,
+		bay,
 		/grid-template-areas:\s*\n?\s*'name track pct'/u,
 		'name · bar · number share one grid, so the bars compare by length'
 	);
-	// Adjacency is the structural half of "one cursor": the provider's
-	// readings sit directly above the provider's cores, with nothing
-	// provider-independent wedged between them.
-	const resources = source.indexOf('data-measure="resources"');
-	const bays = source.indexOf('class="bench-bays');
-	const rack = source.indexOf('class="spool-bay"');
-	assert.ok(resources > bays, 'the provider block sits below the project/environment bays');
-	assert.ok(rack > resources, 'and immediately above the core rack it belongs to');
+	// Adjacency is the structural half: one provider's readings and one
+	// provider's cores, in one component, with nothing provider-independent
+	// wedged between them.
+	const resources = bay.indexOf('data-measure="resources"');
+	const rack = bay.indexOf('<SpoolRack');
+	assert.ok(resources > 0 && rack > resources, 'the windows sit directly above the cores');
+	assert.match(bay, /shell=\{group\.provider\}/u, 'the rack is told its shell, not asked to pick');
+	assert.ok(!/role="tab"/u.test(bay), 'and there is no strip to pick a different one');
 });
 
 test('a core-scope allowance is handed to the rack, not drawn on the shell bar', () => {
 	// A `fable · week` window gates the fable core, never the whole claude
-	// shell — so it renders on the row where that core is picked. On the
-	// shell's fuel bar it was a third overlaid fill answering a question
-	// nobody had asked yet.
-	assert.match(source, /meter\.scope === 'core' && meter\.coreId !== null/u);
-	assert.match(source, /\{coreAllowances\}/u, 'the rack receives them keyed by core');
+	// shell — so it renders on the row where that core is picked.
+	assert.match(bay, /meter\.scope === 'core' && meter\.coreId !== null/u);
+	assert.match(bay, /\{coreAllowances\}/u, 'the rack receives them keyed by core');
 });
 
 test('the resolved default renders its name and the default badge as two separate facts', () => {
@@ -107,11 +83,37 @@ test('the bench is mobile-first: bays stack compactly before widening at md', ()
 	assert.doesNotMatch(source, /class="panel[^"]*"/);
 });
 
-test('every bench pick and inherited rack control has a 44px floor', () => {
+test('every settings pick and every rack row keeps its 44px floor', () => {
 	assert.equal((source.match(/data-role="bench-pick"/g) ?? []).length, 3);
 	assert.match(source, /\.pick-row\s*\{\s*min-height:\s*44px;?\s*\}/);
-	assert.match(source, /button\[role='tab'\][\s\S]*min-height: 44px/);
-	assert.match(source, /button\[data-role='rack-row-tap'\][\s\S]*min-height: 44px/);
+	// The tab rule went with the tabs. The rack-row floor followed the rack
+	// into the provider bay rather than being dropped.
+	assert.ok(!/button\[role='tab'\]/u.test(source), 'no tab rule survives the tab strip');
+	assert.match(bay, /button\[data-role='rack-row-tap'\][\s\S]*min-height: 44px/);
+});
+
+test('THE UNREACHABLE FLOOR: the gauge rows are controls that cannot meet 44px', () => {
+	// Named, not silently resolved. Making a provider row pressable turned a
+	// readout into this surface's primary control — and the 44px floor this
+	// file has enforced since 2026-08-19 cannot reach it, because two rules
+	// the maintainer signed now contradict each other:
+	//
+	//   `.fuel-deck` is 85px, fixed, `overflow-y: auto`, with its own
+	//   acceptance test (RailGaugeRender) pinning that twelve providers stay
+	//   twelve rows. Interior box ≈ 76px. Two rows at 44px need 92px.
+	//
+	// The row is 34px and full-bleed, so it is a far larger target than a
+	// 44px square — but that is an argument, not the rule as written. The
+	// options are: accept full-width height as the floor's real intent for a
+	// row (cheap, needs saying out loud), raise the deck and re-sign the
+	// fixed-height number (touches a signed acceptance), or scroll two
+	// providers in one viewport (worst — it hides codex behind a gesture).
+	// This test exists so the conflict cannot be rediscovered as a surprise.
+	const gauge = readFileSync(new URL('./RailGauge.svelte', import.meta.url), 'utf8');
+	assert.match(gauge, /grid-template-rows: 14px 12px 8px/u, 'the row is 34px of grid');
+	assert.match(gauge, /height: 85px/u, 'inside a deck that may not grow');
+	assert.match(gauge, /class="fuel-provider-row"/u);
+	assert.match(gauge, /aria-expanded=\{open\}/u, 'and it is a real control, not a readout');
 });
 
 test('mobile labels name the choices without ornamental bay numbers or rails', () => {
