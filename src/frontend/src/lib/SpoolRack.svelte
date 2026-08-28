@@ -9,6 +9,9 @@
 		offReasonOf,
 		groupByShell
 	} from './spoolRack';
+	import { quotaLevel } from './quota';
+	import type { FuelMeter } from './fuelProviders';
+	import { STATUS_BURNING, STATUS_COOLING, STATUS_SPENT, STATUS_UNKNOWN } from './statusPalette';
 	import {
 		IDLE_ROW,
 		LIVE_CLAIM,
@@ -61,13 +64,22 @@
 		onTap?: (profileName: string) => void;
 		/** The sticky's exit: drop it now instead of waiting out the TTL. */
 		onReleaseSticky?: () => void;
-		/** The fuel gauge's own "press a provider row" ask
-		 *  (design-resident-field.md §Settings, fuel, and the next dispatch):
-		 *  open the rack already tabbed to that provider's shell, since a
-		 *  provider *is* the shell family this rack already groups by. Read
-		 *  once per change, not fought on every re-render — a reader who then
-		 *  taps a different tab keeps that choice until the next expand. */
-		focusShell?: string | null;
+		/** The bench's one provider cursor, owned by the page and rendered
+		 *  here as the shell tab strip — a provider *is* the shell family
+		 *  this rack already groups by. Controlled, not seeded: the rack
+		 *  keeps no copy of it, so the Resources readout above can never end
+		 *  up describing a different provider than the cores below.
+		 *  `null` means "nobody has picked" — `defaultShell` answers. */
+		selectedShell?: string | null;
+		/** A shell tab was tapped. The page moves the cursor; this component
+		 *  reads the result back through `selectedShell`. */
+		onShellSelect?: (shell: string) => void;
+		/** Core-scope quota windows for the shell under the cursor, keyed by
+		 *  the core they gate (`fable` → its own weekly allowance). Rendered
+		 *  on the row that core is picked from, because that is the only
+		 *  place the number changes a decision: it constrains that core, not
+		 *  the shell, so it never belonged on the shell's own fuel bar. */
+		coreAllowances?: Map<string, FuelMeter>;
 	}
 
 	let {
@@ -79,8 +91,25 @@
 		now = Date.now(),
 		onTap,
 		onReleaseSticky,
-		focusShell = null
+		selectedShell = null,
+		onShellSelect,
+		coreAllowances = new Map<string, FuelMeter>()
 	}: Props = $props();
+
+	const LEVEL_COLOR: Record<string, string> = {
+		burning: STATUS_BURNING,
+		cooling: STATUS_COOLING,
+		spent: STATUS_SPENT,
+		unknown: STATUS_UNKNOWN
+	};
+
+	/** The allowance gating this row's core, if any. Matches on the model
+	 *  the profile actually pins (`claude-fable` → `fable`), never the
+	 *  profile name, so a renamed profile keeps its allowance. */
+	function coreAllowance(profile: RunnerProfile): FuelMeter | null {
+		const model = profile.model;
+		return model ? (coreAllowances.get(model) ?? null) : null;
+	}
 
 	let stickyLive = $derived(liveSticky(sticky, now));
 	let groups = $derived(groupByShell(profiles));
@@ -106,33 +135,20 @@
 		wakeRequest?.profile ?? stickyLive?.profile ?? defaultProfile ?? null
 	);
 
-	// The reader's own tab pick, if any — `$derived`, not an `$effect`
-	// re-anchoring `$state`, so the default resolves the same way on the
-	// server render as in the browser (an `$effect` never runs during SSR,
-	// which left every row unrendered server-side the first way this was
-	// written). Falls back to `defaultShell` whenever the reader hasn't
-	// chosen, or their choice no longer exists in a fresh report.
-	let manualShell = $state<string | null>(null);
-
-	// `focusShell` is only ever set from a browser click on the fuel gauge's
-	// provider row (RailGauge → RailBench → here), never present on the
-	// first server render, so `$effect`'s SSR gap doesn't apply the way it
-	// would to the tab's own default (the comment above `manualShell`
-	// explains that constraint; this is a distinct, later-arriving override,
-	// not the initial pick). Once the reader taps a different tab manually,
-	// `manualShell` moves and this effect stays quiet until the next expand.
-	$effect(() => {
-		if (focusShell && groups.some((group) => group.shell === focusShell)) {
-			manualShell = focusShell;
-		}
-	});
-
-	let selectedShell = $derived(
-		manualShell !== null && groups.some((group) => group.shell === manualShell)
-			? manualShell
+	// The rack holds no selection state of its own. It used to: a
+	// `manualShell` `$state` seeded once from the incoming focus, which then
+	// drifted the moment the reader tapped a tab — the Resources heading
+	// above kept naming the originally-tapped provider while these rows
+	// listed another one's cores (reported 2026-08-28 with a screenshot).
+	// Two stores of one cursor will eventually disagree; the fix is to have
+	// one. Still `$derived` rather than an `$effect`, which is what makes
+	// the default resolve identically during SSR and in the browser.
+	let activeShell = $derived(
+		selectedShell !== null && groups.some((group) => group.shell === selectedShell)
+			? selectedShell
 			: defaultShell(groups, nextWakeProfile) || null
 	);
-	let activeGroup = $derived(groups.find((group) => group.shell === selectedShell) ?? null);
+	let activeGroup = $derived(groups.find((group) => group.shell === activeShell) ?? null);
 
 	/** Which platform the sticky's thread lives on (`telegram`, `slack`) —
 	 *  the human-scale half of its correspondent key; never the raw id. */
@@ -218,13 +234,13 @@
 		<div class="mb-3 flex flex-wrap gap-1.5" role="tablist" aria-label="shell">
 			{#each groups as group (group.shell)}
 				{@const off = group.allUnavailable}
-				{@const active = group.shell === selectedShell}
+				{@const active = group.shell === activeShell}
 				<button
 					type="button"
 					role="tab"
 					aria-selected={active}
 					title={off ? `${group.shell} — ${deadShellReason(group)}` : group.shell}
-					onclick={() => (manualShell = group.shell)}
+					onclick={() => onShellSelect?.(group.shell)}
 					class="border px-2.5 py-1 font-mono text-[11px] tracking-wide uppercase transition-colors {off
 						? OFF_ROW
 						: active
@@ -282,6 +298,25 @@
 							{#if profile.class}
 								<span class="font-mono text-[10px] tracking-wide text-stone-400 uppercase"
 									>{profile.class}</span
+								>
+							{/if}
+							{#if coreAllowance(profile)}
+								{@const allowance = coreAllowance(profile)!}
+								<!-- A core-scope ceiling, shown where the core is chosen.
+								     On the shell's own fuel bar this number was a third
+								     overlaid fill answering a question nobody had asked
+								     yet; here it is the one fact that decides the tap. -->
+								<span
+									class="font-mono text-[10px] tracking-wide whitespace-nowrap"
+									style={`color: ${LEVEL_COLOR[quotaLevel(allowance.percent)]}`}
+									title={`${allowance.label}: ${
+										allowance.percent === null
+											? 'unknown'
+											: `${Math.round(allowance.percent)}% left`
+									} — this core's own allowance${allowance.resetShort ? `, resets in ${allowance.resetShort}` : ''}`}
+									>{allowance.percent === null
+										? '? allowance'
+										: `${Math.round(allowance.percent)}% allowance`}</span
 								>
 							{/if}
 						</button>

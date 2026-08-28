@@ -4,7 +4,7 @@ import test from 'node:test';
 import { fuelProviderGroups } from './fuelProviders.ts';
 import type { QuotaShell } from './quota.ts';
 
-test('both providers present: each gets its own group, claude carries the ghosts', () => {
+test('both providers present: each gets its own group, claude carries the secondaries', () => {
 	const shells: QuotaShell[] = [
 		{
 			shell: 'claude',
@@ -42,7 +42,7 @@ test('both providers present: each gets its own group, claude carries the ghosts
 	assert.deepEqual(codex.secondary, [], 'a provider with one meter never manufactures a ghost');
 });
 
-test('a provider with one meter renders a primary and no ghosts', () => {
+test('a provider with one meter renders a primary and no secondaries', () => {
 	const shells: QuotaShell[] = [
 		{
 			shell: 'codex',
@@ -125,4 +125,83 @@ test('stale readings carry their staleness flags through the grouping unchanged'
 	assert.equal(codex.primary?.percentLabel.startsWith('42%'), true);
 	assert.equal(claude.primary?.daemonStale, true);
 	assert.equal(claude.primary?.stale, false, 'daemon-stale and scrape-stale stay distinct facts');
+});
+
+test('the primary is the binding window, not whichever one is called week', () => {
+	// The rule this replaces read `label.endsWith(' · week')`. It agreed with
+	// the truth only while the weekly ceiling happened to be the lowest one.
+	const groups = fuelProviderGroups(
+		[
+			{
+				shell: 'claude',
+				status: 'ok',
+				windows: [
+					{ label: '5h window', used: null, limit: null, percent: 4, reset: null, resets_at: null },
+					{ label: 'weekly', used: null, limit: null, percent: 82, reset: null, resets_at: null }
+				]
+			}
+		] as never,
+		0
+	);
+	assert.equal(groups[0].primary?.percent, 4, 'the ceiling that stops a run first is the reading');
+	assert.equal(groups[0].primary?.windowName, '5h', 'and it carries the window it measures');
+	assert.deepEqual(
+		groups[0].secondary.map((meter) => meter.percent),
+		[82],
+		'the weekly reading is kept, as a secondary — never dropped'
+	);
+});
+
+test("a core allowance can never become the shell's binding window", () => {
+	// A `fable · week` at 1% does not stop a `claude-sonnet` run. Letting it
+	// drive the shell bar would report the shell as spent while every other
+	// core on it still runs.
+	const groups = fuelProviderGroups(
+		[
+			{
+				shell: 'claude',
+				status: 'ok',
+				windows: [
+					{ label: 'weekly', used: null, limit: null, percent: 60, reset: null, resets_at: null },
+					{
+						label: 'weekly (Fable)',
+						used: null,
+						limit: null,
+						percent: 1,
+						reset: null,
+						resets_at: null
+					}
+				]
+			}
+		] as never,
+		0
+	);
+	assert.equal(groups[0].primary?.percent, 60);
+	assert.equal(groups[0].primary?.scope, 'provider');
+	assert.equal(groups[0].secondary[0].scope, 'core');
+	assert.equal(groups[0].secondary[0].coreId, 'fable');
+});
+
+test('an unreadable percentage still names a window rather than falling silent', () => {
+	const groups = fuelProviderGroups(
+		[
+			{
+				shell: 'codex',
+				status: 'stale',
+				windows: [
+					{
+						label: 'weekly',
+						used: null,
+						limit: null,
+						percent: null,
+						reset: null,
+						resets_at: null
+					}
+				]
+			}
+		] as never,
+		0
+	);
+	assert.equal(groups[0].primary?.windowName, 'week');
+	assert.equal(groups[0].primary?.percent, null);
 });
