@@ -760,7 +760,111 @@ def derive_auto(
         url = _pr_url(pr_number)
         if url:
             out.append({"kind": "pr", "number": int(pr_number), "url": url})
+    # Every *other* PR this run opened, observed rather than remembered.
+    out.extend(
+        _prs_from_forge_state(
+            outbox_dir,
+            {sha for sha, _subject, _parents, _committer in commits} if branch else set(),
+            _pr_url,
+            repo_root,
+        )
+    )
     return out
+
+
+def _prs_from_forge_state(
+    outbox_dir: Path | None,
+    own_shas: set[str],
+    pr_url: Any,
+    repo_root: Path | None,
+) -> list[dict[str, Any]]:
+    """PRs this run opened, derived from the daemon's own forge poll.
+
+    **The memory tax.** ``.pr`` holds *one* number, because one run opening
+    one PR was the shape when it was written. A run that opens several had
+    to call ``brnrd relic pr <n>`` for each — and a produce manifest that
+    depends on the resident remembering is wrong on exactly the runs where
+    remembering is hardest, with nothing on any surface saying which kind of
+    run you are looking at. Measured 2026-08-28: a run opened fourteen PRs
+    and its manifest was complete only because the verb was typed thirteen
+    times (the maintainer, on an earlier run: "not every run actually
+    produces a PR and lists it even if the PR was made").
+
+    It is the mirror of the polling tax the wake exists to remove. Injected
+    state is free perception; a fact the resident must *remember to record*
+    fails the same way a fact it must *poll for* does — silently, and worst
+    when the run is busiest.
+
+    Nothing new is fetched. ``.brr/forge-pr-state.json`` is the daemon's own
+    poll and already carries every PR with its head ``branch``. The join:
+
+        **a PR is this run's when its head branch's tip commit is one of the
+        commits this run made.**
+
+    That cannot over-claim — a PR off someone else's branch has a tip this
+    run never wrote — and unlike ``.pr`` it does not care how many branches
+    the run published. ``brnrd relic pr`` stays as the escape hatch for what
+    the forge poll cannot see: a hand-opened PR elsewhere, or a sibling repo.
+    """
+    if outbox_dir is None or repo_root is None or not own_shas:
+        return []
+    # `.brr/outbox/<event>/` -> `.brr/`
+    state_path = outbox_dir.parent.parent / "forge-pr-state.json"
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []  # no poll on disk is not "no PRs" — it is nothing to say
+    rows = payload.get("prs")
+    if not isinstance(rows, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for row in rows[:_MAX_RECORDS]:
+        if not isinstance(row, dict):
+            continue
+        number = row.get("number")
+        head = str(row.get("branch") or "").strip()
+        if not isinstance(number, int) or not head:
+            continue
+        tip = _branch_tip(repo_root, head)
+        # Both sides are abbreviated by git, and git may choose different
+        # lengths for the same object in two invocations. Compare on the
+        # shorter prefix rather than requiring the two abbreviations to be
+        # byte-equal.
+        if tip is None or not any(
+            sha.startswith(tip) or tip.startswith(sha) for sha in own_shas
+        ):
+            continue
+        url = row.get("url") or pr_url(str(number))
+        record: dict[str, Any] = {"kind": "pr", "number": number}
+        if url:
+            record["url"] = url
+        out.append(record)
+    return out
+
+
+def _branch_tip(repo_root: Path, branch: str) -> str | None:
+    """The tip sha of a local branch, abbreviated, or None.
+
+    Local on purpose: the forge's own head sha would be a second source that
+    can disagree, and this run's commits are measured locally too — one side
+    of a join must not be measured somewhere the other cannot see.
+
+    ``--short`` is not cosmetic. ``_commits_since_seed`` formats with ``%h``,
+    so the shas it yields are abbreviated; a full 40-char tip would never
+    equal one of them and the derivation would quietly match nothing —
+    correct-looking code producing an empty result forever, which is the
+    failure mode this module has the most history with.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--short", "--verify", "--quiet", f"refs/heads/{branch}"],
+            cwd=repo_root, capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip() or None
 
 
 def _identity(
