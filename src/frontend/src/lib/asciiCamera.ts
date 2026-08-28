@@ -10,6 +10,7 @@
 //     intent and cost are control state, not terrain.
 
 import { fileFromDetail, type RoomActor, type RoomGraph, type ClothRow } from './roomGraph.ts';
+import { terminalBox, type TerminalLine } from './roomTerminal.ts';
 import {
 	campId,
 	type PlaceId,
@@ -55,6 +56,11 @@ export interface WorldRenderOpts {
 	 *  from an attested crossing (`RoomGraph.crossings`) and the caller owns
 	 *  the clock, so this never rides the clock-free flash diff. */
 	crossings?: CrossingFrame[] | null;
+	/** THE TERMINAL's contents, newest first — the commands this run has run.
+	 *  Accumulated by the caller across polls (`roomTerminal.recordCommands`),
+	 *  like the trail and the pager, because the wire carries one cursor and
+	 *  a crossing tail, never a run's whole labour. */
+	terminal?: TerminalLine[] | null;
 }
 
 /** The resident's own state, in the pager's own grid: what it is burning,
@@ -609,6 +615,36 @@ export function renderWorld(
 		if (frame.letter) {
 			const c = toChar(f, frame.letter);
 			canvas.text(c.x, c.y, '◇');
+		}
+	}
+
+	// 3c · THE TERMINAL — the place, drawn on the camp (his 2026-08-28
+	// dimensions: "a window rendered on top of the camp, a few lines in
+	// height, about 50 in width"). It sits *above* the camp glyph so the
+	// actor standing at the camp reads as below it — "which you kinda walk
+	// into, and stay below" — and it claims its cells rather than laying
+	// down as ground: unlike a corridor or the claw, a window with terrain
+	// showing through it is not a window.
+	//
+	// Anchored to the camp rather than floated at a screen corner on
+	// purpose. A panel pinned to the viewport is a HUD, and a HUD is the
+	// feed-under-the-map defect wearing a border; the whole argument is that
+	// commands happen *somewhere*.
+	const termLines = opts.terminal ?? null;
+	if (termLines && cam.level !== 'atlas') {
+		const campNode = Object.values(topo.nodes).find((n) => n.kind === 'camp');
+		const campPos = campNode ? layout.nodes[campNode.id] : undefined;
+		if (campPos) {
+			const box = terminalBox(termLines);
+			const anchor = toChar(f, campPos);
+			// one row of air between the floor of the window and the camp it
+			// stands on, so the two read as stacked rather than collided
+			const top = anchor.y - box.length - 1;
+			for (let i = 0; i < box.length; i++) {
+				const y = top + i;
+				if (y < 0 || y >= cam.rows) continue;
+				canvas.text(Math.max(0, anchor.x), y, clip(box[i], cam.cols - Math.max(0, anchor.x)));
+			}
 		}
 	}
 

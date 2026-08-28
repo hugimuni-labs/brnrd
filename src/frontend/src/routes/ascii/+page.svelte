@@ -37,6 +37,7 @@
 		type PagerPage,
 		type Reading
 	} from '$lib/roomPager';
+	import { recordCommands, terminalFeed, type TerminalLine } from '$lib/roomTerminal';
 	import { crossingsFor, advanceCrossings, crossingFrames, type Crossing } from '$lib/roomCrossing';
 	import {
 		renderWorld,
@@ -133,6 +134,14 @@
 	// name their carrier boundary, never content (roomPager.ts)
 	const PAGER_KEY = 'brnrd-ascii-pager';
 	let pager: Record<string, PagerPage[]> = {};
+	// THE TERMINAL's scrollback. Session-local by design for now: the trail
+	// and the pager persist because terrain and correspondence outlive a
+	// reload, while a command log that survived one would show the last
+	// visit's labour inside this visit's window.
+	let terminal: Record<string, TerminalLine[]> = {};
+	// Whose hands the window shows — the lead actor, the same run the camera
+	// follows. One window, because the camp is one place.
+	let terminalRunId: string | null = null;
 	let readings: Reading[] = [];
 
 	// the camera
@@ -243,6 +252,8 @@
 		// pages: attested injections accumulate; a fresh page starts the
 		// mind-connect ceremony for its reader (bounded, receipt-driven)
 		const glyphs = Object.fromEntries(graph.actors.map((a) => [a.runId, a.glyph]));
+		recordCommands(live?.runs ?? [], terminal);
+		terminalRunId = graph.actors[0]?.runId ?? null;
 		const freshPages = recordPages(live?.runs ?? [], pager, glyphs);
 		if (freshPages.length > 0) {
 			readings = readingsFor(freshPages, readings);
@@ -318,7 +329,8 @@
 		liveRunIds = new Set(graph.actors.map((a) => a.runId));
 		const bare = renderWorld(topo, layout, graph, cam, {
 			highlightRoute: lastRoute,
-			pages: pagerFeed(pager, liveRunIds)
+			pages: pagerFeed(pager, liveRunIds),
+			terminal: terminalRunId ? terminalFeed(terminal, terminalRunId, liveRunIds) : null
 		}).split('\n');
 		const delta: number[] = [];
 		for (let i = 0; i < bare.length; i++) {
@@ -339,6 +351,7 @@
 			highlightRoute: lastRoute,
 			actorPositions: walkPositions(walks),
 			pages: pagerFeed(pager, liveRunIds),
+			terminal: terminalRunId ? terminalFeed(terminal, terminalRunId, liveRunIds) : null,
 			reading: readingPhases(readings),
 			crossings: crossingFrames(crossings)
 		}).split('\n');
