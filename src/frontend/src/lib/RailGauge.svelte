@@ -340,10 +340,11 @@
 		align-items: baseline;
 		gap: 5px;
 	}
+	/* Lowercase, matching the ledger's own tokens two lines down. Uppercased,
+	   `5H` sat directly above a `5h` in the same row and read as a typo. */
 	.fuel-window {
 		font-size: 8px;
-		letter-spacing: 0.1em;
-		text-transform: uppercase;
+		letter-spacing: 0.08em;
 		color: rgb(120 113 108);
 	}
 	.fuel-provider-head strong {

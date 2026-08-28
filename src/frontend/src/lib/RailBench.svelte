@@ -256,8 +256,13 @@
 							{@const level = quotaLevel(meter.percent)}
 							{@const binding = meter.id === resourceGroup.primary?.id}
 							<div class="resource-row" title={meter.tooltip}>
+								<!-- A core allowance keeps its own window name: `fable · week`
+								     is a weekly ceiling on one core, and "fable" alone loses which
+								     of fable's ceilings this row is reading. -->
 								<span class="resource-name" class:is-binding={binding}>
-									{meter.scope === 'core' ? meter.coreId : meter.windowName}
+									{meter.scope === 'core'
+										? `${meter.coreId} · ${meter.windowName}`
+										: meter.windowName}
 								</span>
 								<span
 									class="resource-track"
@@ -334,7 +339,7 @@
 	.resource-row {
 		display: grid;
 		min-width: 0;
-		grid-template-columns: minmax(0, 4.5rem) minmax(0, 1fr) 2.75rem;
+		grid-template-columns: minmax(0, 6.5rem) minmax(0, 1fr) 2.75rem;
 		grid-template-areas:
 			'name track pct'
 			'note note note';
@@ -347,7 +352,7 @@
 	}
 	@media (min-width: 768px) {
 		.resource-row {
-			grid-template-columns: minmax(0, 6rem) minmax(0, 1fr) 2.75rem minmax(0, 11rem);
+			grid-template-columns: minmax(0, 7.5rem) minmax(0, 1fr) 2.75rem minmax(0, 9.5rem);
 			grid-template-areas: 'name track pct note';
 			row-gap: 0;
 		}
@@ -367,7 +372,7 @@
 		position: relative;
 		grid-area: track;
 		display: block;
-		height: 6px;
+		height: 8px;
 		background: rgb(41 37 36);
 		box-shadow: inset 0 0 0 1px rgb(68 64 60 / 0.45);
 	}
