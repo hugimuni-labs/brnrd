@@ -380,3 +380,70 @@ test('an older daemon publishing only the bool yields a null block, never an emp
 	assert.equal(fresh.length, 1, 'the crossing is still a crossing');
 	assert.equal(fresh[0].injection, null, 'null, not ""');
 });
+
+// THE MAP THAT DREW ONE LEAF (2026-08-28). A 142-boundary run rendered as a
+// near-empty trie with a single file on it, because terrain was mined out of
+// `edge.detail` — argv — which names no file for a heredoc, belongs to a cwd
+// the room never joined it against, and reaches the client as eight
+// crossings of a hundred and forty-two. `room.paths` is git's own answer.
+test('attested paths grow the trie, not just the cwd the actor stood in', () => {
+	const runs = [
+		{
+			run_id: 'run-1',
+			name: 'the-run',
+			room: {
+				env: 'host',
+				branch: 'brr/work',
+				dir: null,
+				// typed from two different cwds, written through heredocs that
+				// named none of them — argv could not have produced this list
+				paths: [
+					'src/frontend/src/lib/roomPager.ts',
+					'src/frontend/src/lib/asciiCamera.ts',
+					'src/brr/gates/cloud_publisher.py'
+				]
+			},
+			edge: {
+				at: '2026-08-28T22:00:00Z',
+				phase: 'post-tool',
+				act: 'mutate',
+				tools: ['Bash'],
+				detail: "python3 - <<'PY' …",
+				out_bytes: 12,
+				injected: false
+			}
+		}
+	] as unknown as LiveRun[];
+	const graph = compileRoomGraph({ runs } as LiveRunsResponse, null, undefined);
+	const camp = graph.islands[0]?.camps[0];
+	assert.ok(camp, 'the run has a camp');
+	const dirs = camp.chambers.map((c) => c.dir).sort();
+	assert.deepEqual(
+		dirs,
+		['src/brr/gates', 'src/frontend/src/lib'],
+		'both chambers exist, from paths alone — no cwd ever landed in either'
+	);
+	const lib = camp.chambers.find((c) => c.dir === 'src/frontend/src/lib');
+	assert.deepEqual(lib?.files.sort(), ['asciiCamera.ts', 'roomPager.ts']);
+
+	// and they reach the drawable topology as leaves, not just the model
+	const topo = compileTopology(graph);
+	const labels = Object.values(topo.nodes)
+		.filter((n) => n.kind === 'file')
+		.map((n) => n.label)
+		.sort();
+	assert.deepEqual(labels, ['asciiCamera.ts', 'cloud_publisher.py', 'roomPager.ts']);
+});
+
+// Absent is not empty. A daemon predating the field publishes no `paths`,
+// and reading that as "this run touched nothing" would erase real terrain.
+test('a room without paths changes nothing — absent stays absent', () => {
+	const base = {
+		run_id: 'run-1',
+		name: 'the-run',
+		room: { env: 'host', branch: 'brr/work', dir: null },
+		edge: null
+	} as unknown as LiveRun;
+	const graph = compileRoomGraph({ runs: [base] } as LiveRunsResponse, null, undefined);
+	assert.deepEqual(graph.islands[0]?.camps[0]?.chambers ?? [], []);
+});

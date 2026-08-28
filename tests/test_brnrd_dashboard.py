@@ -2268,6 +2268,11 @@ def test_put_live_runs_carries_room_edge_and_lifecycle():
     assert room_row["await_until"] == "2026-08-25T19:00:00Z"
     assert room_row["room"] == {
         "env": "worktree", "branch": "brr/the-room", "dir": "run-room",
+        # `paths` (2026-08-28): what the run touched, attested by git rather
+        # than mined out of argv. Empty here because this row is posted
+        # directly rather than derived from a tree — and empty is the honest
+        # answer for a payload that carried none.
+        "paths": [],
     }
     assert room_row["edge"]["act"] == "run"
     assert room_row["edge"]["injected"] is True

@@ -4398,7 +4398,15 @@ def test_live_runs_snapshot_publishes_room_edge_and_lifecycle(tmp_path, monkeypa
     row = {r["run_id"]: r for r in cloud._live_runs_snapshot(brr_dir)}["run-room"]
     # Room: manifest facts; the branch falls back to the manifest seed when
     # the worktree path is not a real git tree.
-    assert row["room"] == {"env": "worktree", "branch": "brr/the-room", "dir": "run-room"}
+    # `paths` (2026-08-28): git's own answer for what this run touched. The
+    # fixture tree here is not a git repo, so `_run_paths` declines rather
+    # than guesses — which is the contract, not an accident of the fixture.
+    assert row["room"] == {
+        "env": "worktree",
+        "branch": "brr/the-room",
+        "dir": "run-room",
+        "paths": [],
+    }
     # Edge: the newest *resident* boundary — the subagent row is skipped.
     assert row["edge"]["act"] == "run"
     assert row["edge"]["detail"] == "pytest -q"
