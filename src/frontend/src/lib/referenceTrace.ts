@@ -123,7 +123,10 @@ export function referenceFrames(): LiveRun[][] {
 		// #84 dispatch — to its bay while a strand crosses to the knowledge island
 		[
 			resident({
-				edge: edge('dispatch', 'spawn: the-design-sweep', '2026-08-27T10:12:00Z')
+				edge: edge('dispatch', 'spawn: the-design-sweep', '2026-08-27T10:12:00Z'),
+				// The next boundary injects this waiting letter. Keeping the pending
+				// state in the preceding frame makes the gate marker observable.
+				portals: { pending: 1, oldest_at: '2026-08-27T10:12:30Z' }
 			}),
 			strand()
 		],
