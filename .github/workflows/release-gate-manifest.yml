@@ -1,4 +1,4 @@
-name: Temporary release-gate legal manifest refresh
+name: Temporary release-gate generated fixes
 
 on:
   push:
@@ -16,18 +16,37 @@ jobs:
         with:
           ref: brr/release-gate-0.6.17
 
-      - name: Refresh legal export pins
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: src/frontend/package-lock.json
+
+      - name: Install frontend formatter
+        working-directory: src/frontend
+        run: npm ci
+
+      - name: Format pricing page
+        working-directory: src/frontend
+        run: npx prettier --write src/routes/pricing/+page.svelte
+
+      - name: Refresh legal export pins after formatting
         run: python scripts/legal_manifest.py --write
 
-      - name: Commit generated manifest only
+      - name: Commit generated release-gate fixes only
         shell: bash
         run: |
-          if git diff --quiet -- docs/legal/export/SHA256SUMS docs/legal/export/document-manifest.md; then
-            echo "Legal manifest already current."
+          paths=(
+            src/frontend/src/routes/pricing/+page.svelte
+            docs/legal/export/SHA256SUMS
+            docs/legal/export/document-manifest.md
+          )
+          if git diff --quiet -- "${paths[@]}"; then
+            echo "Generated release-gate files already current."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/legal/export/SHA256SUMS docs/legal/export/document-manifest.md
-          git commit -m "docs: refresh legal export manifest"
+          git add -- "${paths[@]}"
+          git commit -m "chore: refresh generated release-gate files"
           git push origin HEAD:brr/release-gate-0.6.17
