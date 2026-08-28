@@ -16,7 +16,9 @@ import { readFileSync, mkdirSync } from 'node:fs';
 
 const PORT = 5193;
 const OUT = process.env.REPRO_OUT ?? '/tmp/ascii-drive';
-const COOKIE_PATH = new URL('../../../.tmp/brnrd_session.cookie', import.meta.url).pathname;
+const COOKIE_PATH = process.env.BRR_HOST_ROOT
+	? `${process.env.BRR_HOST_ROOT}/.tmp/brnrd_session.cookie`
+	: new URL('../../../.tmp/brnrd_session.cookie', import.meta.url).pathname;
 
 function readCookie() {
 	try {
@@ -56,11 +58,16 @@ async function driveLive(browser, cookie) {
 	await page.goto(`http://localhost:${PORT}/ascii`, { waitUntil: 'networkidle' });
 	await delay(2500);
 	const text = await boardText(page);
-	if (!text.includes('THE SEA')) throw new Error('live board missing the sea header');
-	if (!/╔═ .+ ═+╗/.test(text)) throw new Error('live board raised no island');
+	// Catches a camera render that loses its level/header row in either active
+	// island mode or the dormant atlas mode.
+	if (!/THE (SEA|ATLAS)/.test(text)) throw new Error('live board missing its camera header');
+	// Catches the HOME fixture falling out of topology or out-of-frame bearings;
+	// a quiet live account still has a real home, rather than a made-up status.
+	if (!/(?:⌂ HOME|(?:←|→|↑|↓|↖|↗|↘|↙) HOME)/.test(text)) throw new Error('live board missing HOME');
 	const hasActor = text.includes('@');
-	const quiet = text.includes('G ·');
-	if (!hasActor && !quiet) throw new Error('live board neither shows an actor nor admits quiet');
+	// Catches an attested live resident disappearing from both the map and its
+	// actor rows; dormant accounts are covered by the HOME assertion above.
+	if (text.includes('CHARTS') && !hasActor) throw new Error('live board lost its resident actor');
 	console.log(`live: island up · ${hasActor ? 'actor present' : 'dormant (honest)'}`);
 	console.log('--- live board ---\n' + text + '\n------------------');
 	await page.screenshot({ path: `${OUT}/live-desktop.png`, fullPage: true });
@@ -85,14 +92,19 @@ async function driveDemo(browser) {
 	).newPage();
 	await page.goto(`http://localhost:${PORT}/ascii?demo`, { waitUntil: 'networkidle' });
 	// Sample across the replay; the stages must surface the ceremonies.
-	const seen = { strand: false, letter: false, inject: false, watch: false };
+	const seen = { strand: false, letter: false, inject: false, publish: false };
 	for (let i = 0; i < 11; i++) {
 		const text = await boardText(page);
-		if (/^ {3}[a-z] /m.test(text) || / [a-z] {2}(RIG|WATCH|FORGE|CHART|DESK|BAY)/.test(text))
-			seen.strand = true;
-		if (text.includes('◇×')) seen.letter = true;
-		if (text.includes('✉>>>')) seen.inject = true;
-		if (text.includes('WATCH')) seen.watch = true;
+		// Catches the dispatched child being omitted from the actor/control rows.
+		if (/^a the-design-sweep\b/m.test(text)) seen.strand = true;
+		// Catches pending portal counts failing to reach the HOME gate, weather,
+		// pager, or actor row. Frame #84 supplies the real pending count.
+		if (text.includes('◇×1')) seen.letter = true;
+		// Catches frame #85's attested injected boundary losing its actor pulse.
+		if (/^@ the-reference-journey.*✉>>>/m.test(text)) seen.inject = true;
+		// Catches frame #87's publish boundary disappearing from the resident's
+		// control row even when the forge and chart detail are outside the frame.
+		if (/^@ the-reference-journey.*⌁ publish\b/m.test(text)) seen.publish = true;
 		if (i === 2) await page.screenshot({ path: `${OUT}/demo-early.png`, fullPage: true });
 		if (i === 5) await page.screenshot({ path: `${OUT}/demo-mid.png`, fullPage: true });
 		if (i === 9) await page.screenshot({ path: `${OUT}/demo-late.png`, fullPage: true });
@@ -102,7 +114,7 @@ async function driveDemo(browser) {
 		.filter(([, v]) => !v)
 		.map(([k]) => k);
 	if (missing.length) throw new Error(`demo replay never showed: ${missing.join(', ')}`);
-	console.log('demo: strand ✓ letter ✓ inject ✓ watch ✓');
+	console.log('demo: strand ✓ letter ✓ inject ✓ publish ✓');
 }
 
 mkdirSync(OUT, { recursive: true });
