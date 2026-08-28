@@ -16,6 +16,9 @@
 	} from '$lib/digest';
 	import RailGauge from '$lib/RailGauge.svelte';
 	import RailBench from '$lib/RailBench.svelte';
+	import ProviderBay from '$lib/ProviderBay.svelte';
+	import { fuelProviderGroups } from '$lib/fuelProviders';
+	import { availableQuotaShells } from '$lib/railGauge';
 	import ColdStart from '$lib/ColdStart.svelte';
 	import PublishConsentNotice from '$lib/PublishConsentNotice.svelte';
 	import { DOCS_URL } from '$lib/publicStats';
@@ -550,24 +553,50 @@
 	let clothHeadingEl = $state<HTMLElement | null>(null);
 	let corpusHeadingEl = $state<HTMLElement | null>(null);
 	let billingHeadingEl = $state<HTMLElement | null>(null);
-	let benchOpen = $state(false);
-	// design-resident-field.md §"Settings, fuel, and the next dispatch":
-	// "press a provider row" opens the bench already pointed at that
-	// provider's Resources + Next-run — the gauge stays disclosure-free and
-	// only reports which provider was tapped.
+	let settingsOpen = $state(false);
+	// THE ROW IS THE CHOICE. `openProvider` is the provider selection itself,
+	// not a pointer to one held elsewhere: a pressed fuel row shows that
+	// provider's windows and cores directly beneath the gauge.
 	//
-	// THE ONE CURSOR: this is the bench's whole provider selection, and both
-	// controls that can move it — a fuel row tap up in the gauge, a shell tab
-	// down in the rack — write here. SpoolRack used to keep a second copy
-	// (`manualShell`), seeded from this one and then free to drift, which is
-	// how a codex core came to sit under claude's Resources heading.
-	let benchProvider = $state<string | null>(null);
-	function onProviderExpand(provider: string) {
-		benchProvider = provider;
-		benchOpen = true;
+	// It had been two values — this one, plus SpoolRack's own `manualShell`
+	// copy behind a `CLAUDE | CODEX` tab strip — which drifted apart and put
+	// a codex core list under a claude heading (2026-08-28). #1671
+	// synchronised them; this deletes the rival control, which is the version
+	// where the bug has nowhere to live (his steer, same day: "the fuel bars
+	// would be clearly pressable, and they would contain the core/shell
+	// selection").
+	let openProvider = $state<string | null>(null);
+	// The docking machinery only ever asked one question of the old
+	// `benchOpen`: is anything expanded under the rail right now. Two things
+	// can be now, so the question keeps its own name rather than the layout
+	// silently tracking whichever one happened to be wired.
+	let railOpen = $derived(settingsOpen || openProvider !== null);
+	// The group behind the pressed row, resolved through exactly the same
+	// call the gauge itself renders from — so the bay can never describe a
+	// provider the deck is not showing.
+	let openProviderGroup = $derived(
+		openProvider === null
+			? null
+			: (fuelProviderGroups(availableQuotaShells(shells ?? [], runnersData?.profiles)).find(
+					(group) => group.provider === openProvider
+				) ?? null)
+	);
+	function onProviderToggle(provider: string) {
+		// One open at a time — several would grow the page the way the fixed
+		// gauge height exists to stop.
+		openProvider = openProvider === provider ? null : provider;
 	}
-	function onProviderSelect(provider: string) {
-		benchProvider = provider;
+	// Where the next wake lands, chosen in settings and used on whichever
+	// core row is tapped. The settings block announces changes rather than
+	// the rack reaching into it.
+	let placeRepo = $state<string | null>(null);
+	let placeEnvironment = $state<string | null>(null);
+	function onPlaceChange(repoLabel: string | null, environment: string | null) {
+		placeRepo = repoLabel;
+		placeEnvironment = environment;
+	}
+	function tapOpenProviderRunner(profileName: string) {
+		tapWakeRunner(profileName, placeRepo, placeEnvironment);
 	}
 	let clocks = $state<StackClocks>(initialStackClocks());
 	let railCondensed = $derived(clocks.rail.settled);
@@ -610,7 +639,7 @@
 
 		// Local authority; the reactive `clocks` is assigned only on change
 		// (reference-identity dirtying). `step` runs from listeners and
-		// timers — async, so its reads of `benchOpen` are untracked and this
+		// timers — async, so its reads of `railOpen` are untracked and this
 		// effect re-runs only when an element binding changes.
 		//
 		// Raw verdicts are computed from live rects inside `step`, never
@@ -657,7 +686,7 @@
 					docked: current.lane.settled
 				})
 			};
-			const result = stepStackClocks(current, raws, benchOpen, now);
+			const result = stepStackClocks(current, raws, railOpen, now);
 			current = result.clocks;
 			if (result.changed) clocks = result.clocks;
 			const nextSection = activeSectionFrom(
@@ -692,7 +721,7 @@
 			if (rounded !== stickyStackHeight) stickyStackHeight = rounded;
 			if (
 				stackAtRest({
-					railOpen: benchOpen,
+					railOpen,
 					railCondensed: current.rail.settled,
 					heddleDocked: current.heddle.settled,
 					machineDocked: current.lane.settled
@@ -710,7 +739,7 @@
 		window.addEventListener('resize', scheduleStep, { passive: true });
 		// `untrack`, load-bearing (THE RAIL THAT COULDN'T DECIDE, 2026-08-13):
 		// every other `step()` call runs from listeners and timers — async, so
-		// its `benchOpen`/`activeSection` reads are untracked, exactly as the
+		// its `railOpen`/`activeSection` reads are untracked, exactly as the
 		// comment at the top of this effect promises. This first call is the
 		// one synchronous exception: unwrapped, its reads made `activeSection`
 		// a dependency of this whole wiring effect, so every scroll-spy
@@ -768,7 +797,7 @@
 		void railCondensed;
 		void heddleDocked;
 		void machineDocked;
-		void benchOpen;
+		void railOpen;
 		if (typeof window === 'undefined' || !stackEl) return;
 		const height = Math.round(stackEl.getBoundingClientRect().height);
 		if (height > 0 && height !== stickyStackHeight) stickyStackHeight = height;
@@ -832,14 +861,9 @@
 	// `machineReturnY` below: neither value drives a template read, so the
 	// rune buys no reactivity either one actually needs.
 	let railReturnY = $state<number | null>(null);
-	function onBenchToggle() {
-		const open = !benchOpen;
-		benchOpen = open;
-		// A generic close drops the provider cursor — reopening via the plain
-		// "▸ bench" tap (as opposed to another provider-row tap) should not
-		// silently keep showing the last provider. Null is a real state, not
-		// an empty one: the rack's own `defaultShell` answers for it.
-		if (!open) benchProvider = null;
+	function onSettingsToggle() {
+		const open = !settingsOpen;
+		settingsOpen = open;
 		// Un-docking is immediate, never debounced — step the clocks in the
 		// same act, before the smooth scroll below has moved anything.
 		requestStackStep();
@@ -1468,7 +1492,7 @@
 			     `PublishConsentNotice` already stated once, above, in the variant
 			     that carries the action (`set a scope`). -->
 			<div
-				class="ignite -mx-6 bg-stone-950/95 px-6 pt-3 backdrop-blur-sm {railCondensed && !benchOpen
+				class="ignite -mx-6 bg-stone-950/95 px-6 pt-3 backdrop-blur-sm {railCondensed && !railOpen
 					? 'pb-0'
 					: 'pb-2'}"
 				style="--ignite-delay: 120ms"
@@ -1481,9 +1505,10 @@
 					{now}
 					activeSpawns={liveRuns === null ? null : activeSpawns}
 					maxSpawns={spawnMaxConcurrent}
-					{benchOpen}
-					{onBenchToggle}
-					{onProviderExpand}
+					{settingsOpen}
+					{onSettingsToggle}
+					{openProvider}
+					{onProviderToggle}
 				/>
 			</div>
 
@@ -1538,7 +1563,7 @@
 			     the machine here while the body remains deliberately outside the
 			     sticky stack split that pair, so park this one-line dock while a
 			     pick is open; it returns unchanged when the bench closes. -->
-			{#if !benchOpen}
+			{#if !railOpen}
 				<div
 					class="ignite machine-dock -mx-6 bg-stone-950/95 px-6 backdrop-blur-sm {machineDocked
 						? ''
@@ -1607,23 +1632,29 @@
 		     measured off a sibling in normal flow because the head itself is
 		     always stuck. -->
 		<div bind:this={machineSentinel} class="h-px -mb-px" aria-hidden="true"></div>
-		<!-- THE BENCH (w-68, signed 2026-08-19): project · environment · core,
-		     mounted only on request, outside the sticky stack entirely — opening
-		     it never touches the gauge's own layout or the docking sentinels
-		     above, which is the whole point of pulling it out of THE STACK. Its
-		     own `panel`, free to be as tall as the catalog needs. -->
-		{#if benchOpen}
+		<!-- Both expansions mount here, outside the sticky stack entirely: opening
+		     either never touches the gauge's own layout or the docking sentinels
+		     above, which is the whole point of pulling them out of THE STACK.
+		     THE PRESSED PROVIDER comes first, because the row that opened it is
+		     directly above — the reading and the choice it informs stay
+		     adjacent, and the reader's eye does not have to travel past
+		     provider-independent settings to get from one to the other. -->
+		{#if openProviderGroup && runnersData}
+			<ProviderBay
+				group={openProviderGroup}
+				runners={runnersData}
+				{now}
+				onTap={tapOpenProviderRunner}
+				onReleaseSticky={releaseStickyRunner}
+			/>
+		{/if}
+		{#if settingsOpen}
 			<RailBench
 				runners={runnersData}
 				repos={connectedRepos}
-				{shells}
-				focusProvider={benchProvider}
-				{onProviderSelect}
 				{runnersError}
 				{runnersNote}
-				{now}
-				onTap={tapWakeRunner}
-				onReleaseSticky={releaseStickyRunner}
+				{onPlaceChange}
 			/>
 		{/if}
 		<section class="ignite" style="--ignite-delay: 260ms" aria-label="the machine's lane">

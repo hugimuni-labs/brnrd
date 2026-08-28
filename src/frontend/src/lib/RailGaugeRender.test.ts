@@ -19,7 +19,8 @@ const generated = join(here, '.railGauge.generated.mjs');
 async function renderGauge(props: {
 	runners: null;
 	shells: null | Array<Record<string, unknown>>;
-	benchOpen: boolean;
+	settingsOpen: boolean;
+	openProvider?: string | null;
 	now?: number;
 }): Promise<string> {
 	const source = readFileSync(componentPath, 'utf8');
@@ -33,7 +34,7 @@ async function renderGauge(props: {
 	try {
 		const module = await import(`${generated}?t=${process.pid}-${Math.random()}`);
 		return render(module.default, {
-			props: { onBenchToggle: () => {}, ...props }
+			props: { onSettingsToggle: () => {}, ...props }
 		}).body;
 	} finally {
 		rmSync(generated, { force: true });
@@ -43,7 +44,7 @@ async function renderGauge(props: {
 after(() => rmSync(generated, { force: true }));
 
 test('the gauge names its three sections — next pick, fuel, tank — every render', async () => {
-	const body = await renderGauge({ runners: null, shells: null, benchOpen: false });
+	const body = await renderGauge({ runners: null, shells: null, settingsOpen: false });
 	ok(body.includes('data-measure="gauge"'), 'the whole line carries its own measure');
 	ok(body.includes('data-measure="next-pick"'), 'next pick renders');
 	ok(body.includes('data-measure="fuel"'), 'fuel renders');
@@ -51,25 +52,87 @@ test('the gauge names its three sections — next pick, fuel, tank — every ren
 	// shell data this test omits — covered separately below.
 });
 
-test('there is no disclosure to open — one button only, and it names the bench', async () => {
-	const body = await renderGauge({ runners: null, shells: null, benchOpen: false });
-	ok(!body.includes('expand the rack'), 'the rack disclosure is gone with the rack');
+// This used to pin "the gauge owns exactly one control", which was true of
+// the shape it had: the rows were readouts and the bench toggle was the only
+// button. Since 2026-08-28 a provider row *is* the control that opens that
+// provider — so the count changed, and the count was never the invariant.
+// The invariant is that no control here can make the gauge taller: every
+// expansion mounts below this component, and `.fuel-deck` stays 85px (see
+// the fixed-height test below, which is the one that must never bend).
+test('the only fixed control is the settings toggle; the rows are the rest', async () => {
+	const bare = await renderGauge({ runners: null, shells: null, settingsOpen: false });
+	ok(!bare.includes('expand the rack'), 'the rack disclosure is gone with the rack');
 	ok(
-		!body.includes('expand the rail'),
+		!bare.includes('expand the rail'),
 		'the slim-bar disclosure is gone too — there is no other form'
 	);
-	const buttons = body.match(/<button/g) ?? [];
-	equal(buttons.length, 1, 'the gauge owns exactly one control: the bench toggle');
-	ok(body.includes('aria-label="open the bench'), 'closed, the control names what it opens');
+	equal(
+		(bare.match(/<button/g) ?? []).length,
+		1,
+		'with no quota report there is exactly one control: settings'
+	);
+	ok(bare.includes('aria-label="open settings'), 'closed, the control names what it opens');
+
+	const withRows = await renderGauge({
+		runners: null,
+		shells: [
+			{
+				shell: 'claude',
+				status: 'ok',
+				windows: [
+					{ label: 'weekly', used: null, limit: null, percent: 82, reset: null, resets_at: null }
+				]
+			}
+		],
+		settingsOpen: false
+	});
+	equal(
+		(withRows.match(/<button/g) ?? []).length,
+		2,
+		'one provider row is one control — the row is how you open that provider'
+	);
+	ok(withRows.includes('aria-expanded="false"'), 'and it says so, closed');
 });
 
-test('the bench toggle reflects benchOpen honestly', async () => {
-	const open = await renderGauge({ runners: null, shells: null, benchOpen: true });
+test('a pressed provider row reports itself open; an unpressed one does not', async () => {
+	const shells = [
+		{
+			shell: 'claude',
+			status: 'ok',
+			windows: [
+				{ label: 'weekly', used: null, limit: null, percent: 82, reset: null, resets_at: null }
+			]
+		},
+		{
+			shell: 'codex',
+			status: 'ok',
+			windows: [
+				{ label: 'weekly', used: null, limit: null, percent: 40, reset: null, resets_at: null }
+			]
+		}
+	];
+	const body = await renderGauge({
+		runners: null,
+		shells,
+		settingsOpen: false,
+		openProvider: 'claude'
+	});
+	// Exactly one row open — several would grow the page the way the gauge's
+	// own fixed height exists to stop.
+	equal((body.match(/aria-expanded="true"/g) ?? []).length, 1, 'one row open, never two');
+	ok(/claude — fold its windows and cores/u.test(body), 'the open row offers to fold');
+	ok(/codex — open its windows and cores/u.test(body), 'the closed row offers to open');
+	ok(body.includes('▾'), 'the open row wears the open caret');
+	ok(body.includes('▸'), 'the closed row wears the closed one');
+});
+
+test('the settings toggle reflects settingsOpen honestly', async () => {
+	const open = await renderGauge({ runners: null, shells: null, settingsOpen: true });
 	ok(open.includes('aria-expanded="true"'));
-	ok(open.includes('▾ bench'));
-	const closed = await renderGauge({ runners: null, shells: null, benchOpen: false });
+	ok(open.includes('▾ settings'));
+	const closed = await renderGauge({ runners: null, shells: null, settingsOpen: false });
 	ok(closed.includes('aria-expanded="false"'));
-	ok(closed.includes('▸ bench'));
+	ok(closed.includes('▸ settings'));
 });
 
 // design-resident-field.md §"Settings, fuel, and the next dispatch": the
@@ -88,7 +151,7 @@ test('the fuel deck never grows — its fixed-height track absorbs provider-coun
 			{ label: '5h window', used: null, limit: null, percent: 40, reset: null, resets_at: null }
 		]
 	}));
-	const body = await renderGauge({ runners: null, shells, benchOpen: false });
+	const body = await renderGauge({ runners: null, shells, settingsOpen: false });
 	ok(
 		(body.match(/class="fuel-provider-row(?:"| )/g) ?? []).length === 12,
 		'one row per provider, all twelve render'
@@ -130,7 +193,7 @@ test('a provider row reports the tap target the fuel design asks for', async () 
 			]
 		}
 	];
-	const body = await renderGauge({ runners: null, shells, benchOpen: false });
+	const body = await renderGauge({ runners: null, shells, settingsOpen: false });
 	// Two provider rows, never four meter cells — the collapsed shape the
 	// design page's "truthful shape" example draws.
 	ok(
@@ -181,7 +244,7 @@ test('the row reads the window that binds, not the one that happens to be weekly
 			]
 		}
 	];
-	const body = await renderGauge({ runners: null, shells, benchOpen: false });
+	const body = await renderGauge({ runners: null, shells, settingsOpen: false });
 	ok(body.includes('>4%<'), 'the row shows the ceiling that stops a run first');
 	ok(body.includes('>5h</span>'), 'and names it, so the figure is never ambiguous');
 	ok(

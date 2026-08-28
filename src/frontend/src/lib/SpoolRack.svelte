@@ -2,13 +2,7 @@
 	import { SvelteSet } from 'svelte/reactivity';
 	import { liveSticky, type RunnerProfile, type RunnerSticky, type WakeRequest } from './runners';
 	import { stickyCountdown } from './railGauge';
-	import {
-		defaultShell,
-		deadShellReason,
-		isTappable,
-		offReasonOf,
-		groupByShell
-	} from './spoolRack';
+	import { deadShellReason, isTappable, offReasonOf, groupByShell } from './spoolRack';
 	import { quotaLevel } from './quota';
 	import type { FuelMeter } from './fuelProviders';
 	import { STATUS_BURNING, STATUS_COOLING, STATUS_SPENT, STATUS_UNKNOWN } from './statusPalette';
@@ -64,16 +58,15 @@
 		onTap?: (profileName: string) => void;
 		/** The sticky's exit: drop it now instead of waiting out the TTL. */
 		onReleaseSticky?: () => void;
-		/** The bench's one provider cursor, owned by the page and rendered
-		 *  here as the shell tab strip — a provider *is* the shell family
-		 *  this rack already groups by. Controlled, not seeded: the rack
-		 *  keeps no copy of it, so the Resources readout above can never end
-		 *  up describing a different provider than the cores below.
-		 *  `null` means "nobody has picked" — `defaultShell` answers. */
-		selectedShell?: string | null;
-		/** A shell tab was tapped. The page moves the cursor; this component
-		 *  reads the result back through `selectedShell`. */
-		onShellSelect?: (shell: string) => void;
+		/** Which shell's cores to list. **Required, and not a cursor.**
+		 *  The rack used to own a `CLAUDE | CODEX` tab strip, which made the
+		 *  provider selectable in two places at once — the page's own value
+		 *  and this component's copy of it — and they drifted (2026-08-28).
+		 *  #1671 synchronised them; this deletes the second control instead.
+		 *  The provider is chosen by pressing its fuel row, so the disclosure
+		 *  state *is* the selection and there is nowhere for a rival cursor
+		 *  to live. */
+		shell: string;
 		/** Core-scope quota windows for the shell under the cursor, keyed by
 		 *  the core they gate (`fable` → its own weekly allowance). Rendered
 		 *  on the row that core is picked from, because that is the only
@@ -91,8 +84,7 @@
 		now = Date.now(),
 		onTap,
 		onReleaseSticky,
-		selectedShell = null,
-		onShellSelect,
+		shell,
 		coreAllowances = new Map<string, FuelMeter>()
 	}: Props = $props();
 
@@ -127,28 +119,10 @@
 		return wakeRequest ? isRequested(profile) : isPinned(profile);
 	}
 
-	/** Who answers the next wake right now, across every profile — the
-	 *  shell tab a fresh rack should open on (see `defaultShell`'s own
-	 *  doc). Priority matches `isNextWake`'s own: a parked request beats
-	 *  the sticky beats the pin. */
-	let nextWakeProfile = $derived(
-		wakeRequest?.profile ?? stickyLive?.profile ?? defaultProfile ?? null
-	);
-
-	// The rack holds no selection state of its own. It used to: a
-	// `manualShell` `$state` seeded once from the incoming focus, which then
-	// drifted the moment the reader tapped a tab — the Resources heading
-	// above kept naming the originally-tapped provider while these rows
-	// listed another one's cores (reported 2026-08-28 with a screenshot).
-	// Two stores of one cursor will eventually disagree; the fix is to have
-	// one. Still `$derived` rather than an `$effect`, which is what makes
-	// the default resolve identically during SSR and in the browser.
-	let activeShell = $derived(
-		selectedShell !== null && groups.some((group) => group.shell === selectedShell)
-			? selectedShell
-			: defaultShell(groups, nextWakeProfile) || null
-	);
-	let activeGroup = $derived(groups.find((group) => group.shell === activeShell) ?? null);
+	// No selection state at all now — not a copy, not a synchronised one.
+	// The caller already knows which provider the reader pressed, because
+	// pressing the provider is what opened this rack.
+	let activeGroup = $derived(groups.find((group) => group.shell === shell) ?? null);
 
 	/** Which platform the sticky's thread lives on (`telegram`, `slack`) —
 	 *  the human-scale half of its correspondent key; never the raw id. */
@@ -216,7 +190,7 @@
 		     as two different rooms). Amber stays reserved for the DEFAULT
 		     badge and selection marks, per the selection-vs-action split. -->
 		<span class="font-mono font-bold tracking-[0.14em] uppercase" style="color: rgb(214 211 209)"
-			>core</span
+			>{shell} · cores</span
 		>
 		{#if stale}
 			<span
@@ -229,30 +203,9 @@
 	{#if profiles.length === 0}
 		<p class="font-mono text-xs text-ink-quiet">No daemon has reported its catalog yet.</p>
 	{:else}
-		<!-- Stage one: the shell selector. A small, stable set — never grows
-		     with the core count the way the old flat list did. -->
-		<div class="mb-3 flex flex-wrap gap-1.5" role="tablist" aria-label="shell">
-			{#each groups as group (group.shell)}
-				{@const off = group.allUnavailable}
-				{@const active = group.shell === activeShell}
-				<button
-					type="button"
-					role="tab"
-					aria-selected={active}
-					title={off ? `${group.shell} — ${deadShellReason(group)}` : group.shell}
-					onclick={() => onShellSelect?.(group.shell)}
-					class="border px-2.5 py-1 font-mono text-[11px] tracking-wide uppercase transition-colors {off
-						? OFF_ROW
-						: active
-							? 'border-l-2 border-l-stone-100 border-stone-800/60 bg-stone-800/50 text-stone-100'
-							: `${IDLE_ROW} text-stone-300`}"
-				>
-					{off ? OFF_MARK : ''}{group.shell}
-				</button>
-			{/each}
-		</div>
-
-		<!-- Stage two: the selected shell's cores. -->
+		<!-- The chosen shell's cores. The stage-one tab strip that used to
+		     sit above this was the second place a provider could be picked;
+		     the fuel row is the only one now. -->
 		{#if activeGroup}
 			{#if activeGroup.allUnavailable}
 				<p class="mb-2 font-mono text-[10px] text-ink-mute">
