@@ -108,6 +108,21 @@ export interface LiveRun {
 	 *  detail summary (secrets masked at write time, hooks._tool_detail),
 	 *  response bytes, and whether the daemon injected context there. */
 	edge?: LiveRunEdge | null;
+	/** THE CROSSINGS — the boundaries that carried an injection, newest first,
+	 *  bounded daemon-side at 8 (`cloud_publisher._CROSSINGS_MAX`).
+	 *
+	 *  Distinct from `edge` for one reason: `edge` is a **cursor**, whichever
+	 *  boundary was current at publish time. This page polls on an interval,
+	 *  so two injections inside one window meant one was never published —
+	 *  and a "read" count counted polls that landed rather than crossings
+	 *  (measured 2026-08-28). A cursor cannot be sampled into a stream, so
+	 *  the stream is published as one.
+	 *
+	 *  Empty is a real answer: nothing crossed since the transcript tail
+	 *  began. Absent on a daemon predating the field, which is a different
+	 *  fact and stays one — a client that required it would show every
+	 *  un-upgraded daemon as having never received a message. */
+	crossings?: LiveRunEdge[] | null;
 	/** Pending correspondence at the run's portal — the message ceremony's
 	 *  *resting, put to read* state. `null`/absent = no portal attested
 	 *  (ad-hoc session, pre-upgrade daemon); `pending: 0` = a known-empty
