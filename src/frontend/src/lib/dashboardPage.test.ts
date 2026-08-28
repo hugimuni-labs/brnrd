@@ -121,3 +121,23 @@ test('the machine dock leaves the disclosure seam while either expansion is open
 	ok(bayAt > machineAt, 'the provider bay mounts after the sticky stack');
 	ok(benchAt > bayAt, 'and settings after it — the pressed row is nearest the row that opened it');
 });
+
+test('the trail store is versioned by the rule that derived it', () => {
+	// Trail rows are *derived* state: `compileRoomGraph` re-accretes the
+	// island from them on every load. The old `dirFromEdge` minted a chamber
+	// from any three-segment token, so `0.4/0.3/0.2` and `pull/1671` sat in
+	// every reader's localStorage and kept rendering after the rule was fixed
+	// — the code correct, the map wrong, indefinitely, with nothing saying
+	// why. A fix that cannot reach the state it invalidates is a fix the
+	// reader has to discover by clearing storage.
+	const src = readFileSync(new URL('../routes/ascii/+page.svelte', import.meta.url), 'utf8');
+	ok(/TRAILS_KEY = 'brnrd-ascii-trails-v\d+'/u.test(src), 'the key carries a version');
+	ok(
+		/TRAILS_KEY_RETIRED = \[[^\]]*'brnrd-ascii-trails'/u.test(src),
+		'and names the predecessor it replaces'
+	);
+	ok(
+		/for \(const dead of TRAILS_KEY_RETIRED\) localStorage\.removeItem\(dead\)/u.test(src),
+		'which is removed rather than left to rot — an abandoned key is a quiet leak'
+	);
+});

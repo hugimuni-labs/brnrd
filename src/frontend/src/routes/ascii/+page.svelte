@@ -104,7 +104,21 @@
 
 	// terrain memory: attested footsteps per run, deduped by boundary
 	// timestamp — "only what you touch comes into being"
-	const TRAILS_KEY = 'brnrd-ascii-trails';
+	// Bumped to -v2 on 2026-08-28, and the bump is the point: **a persisted
+	// trail is derived state, and derived state is versioned by the rule that
+	// derived it.** Trail rows accreted under the old `dirFromEdge` — the one
+	// that minted a chamber from any three-segment token — and
+	// `compileRoomGraph` re-accretes the island from those rows on every load.
+	// So `0.4/0.3/0.2`, `pull/1671` and `origin/brr/…` survived the fix in
+	// every reader's own storage: the code was right and the map stayed wrong,
+	// indefinitely, with nothing on any surface to say why.
+	//
+	// `ATLAS_KEY` already knew this and carries a `-v1`. This key did not, and
+	// it is the one holding the rows a rule change invalidates. A fix that
+	// cannot reach the state it invalidates is a fix the reader has to
+	// discover by clearing storage.
+	const TRAILS_KEY = 'brnrd-ascii-trails-v2';
+	const TRAILS_KEY_RETIRED = ['brnrd-ascii-trails'];
 	let trails: Record<string, TrailStep[]> = {};
 	const TRAIL_CAP = 60;
 	const TRAIL_RUNS_CAP = 24;
@@ -127,6 +141,10 @@
 
 	function loadStores() {
 		try {
+			// Retire the predecessors rather than leaving them to rot in the
+			// reader's storage — an abandoned key is a quiet leak, and this one
+			// holds up to 24 runs of rows.
+			for (const dead of TRAILS_KEY_RETIRED) localStorage.removeItem(dead);
 			const raw = localStorage.getItem(TRAILS_KEY);
 			if (raw) trails = JSON.parse(raw) as Record<string, TrailStep[]>;
 		} catch {
