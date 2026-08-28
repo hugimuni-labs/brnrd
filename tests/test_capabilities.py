@@ -98,7 +98,9 @@ def test_catalog_is_non_empty_with_at_least_one_row_per_scope():
 
 
 def test_every_catalog_id_appears_for_an_account_with_repos_and_a_daemon():
-    client = _client()
+    # This is a catalog-coverage fixture, not a free-tier limit test. Give it
+    # the two repositories its subject-shape coverage intentionally needs.
+    client = _client(limit_free_repos=2)
     token = _login(client)
     repo_id = _create_repo(client, token, repo="Gurio/brr")
     _create_repo(client, token, repo="Gurio/second")
