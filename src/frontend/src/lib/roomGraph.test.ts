@@ -582,11 +582,24 @@ test('the empty world is a graph, not a crash', () => {
 
 // ── TERRAIN GROWS FROM TERRAIN ─────────────────────────────────────────────
 
+/** A boundary as `dirFromEdge` reads it: this function looks only at `dir`
+ *  and `detail`, so the fixtures name only those. Cast at one place with the
+ *  reason stated, rather than each call carrying four fields it never reads
+ *  — a fixture padded to satisfy a type teaches the next reader that the
+ *  padding matters. */
+const asEdge = (e: { act: string; detail: string; dir: string; at: string | null }) =>
+	e as unknown as NonNullable<LiveRun['edge']>;
+
 test('a detail path extends attested ground, and only that', () => {
 	// `src` was attested by a real cwd, so `src/frontend/src/lib` — named in
 	// a detail while the actor sat at the root — is ground it can reach.
 	const grown = dirFromEdge(
-		{ act: 'orient', detail: "sed -n '1,180p' src/frontend/src/lib/quota.ts", dir: '.', at: null },
+		asEdge({
+			act: 'orient',
+			detail: "sed -n '1,180p' src/frontend/src/lib/quota.ts",
+			dir: '.',
+			at: null
+		}),
 		['src']
 	);
 	assert.equal(grown, 'src/frontend/src/lib', 'the file leaf drops; chambers are directories');
@@ -606,7 +619,7 @@ test('the shapes that kept minting fake chambers cannot extend anything', () => 
 		'cat ~/.local/state/brnrd/accounts/acc_x/home/knowledge/index.md'
 	]) {
 		assert.equal(
-			dirFromEdge({ act: 'orient', detail, dir: '.', at: null }, attested),
+			dirFromEdge(asEdge({ act: 'orient', detail, dir: '.', at: null }), attested),
 			null,
 			detail
 		);
@@ -617,7 +630,7 @@ test('an attested cwd is terrain without needing to extend anything', () => {
 	// The daemon resolved it against the run's real checkout before
 	// publishing. It is the ground everything else grows from.
 	assert.equal(
-		dirFromEdge({ act: 'mutate', detail: 'Edit x.ts', dir: 'src/brr', at: null }, []),
+		dirFromEdge(asEdge({ act: 'mutate', detail: 'Edit x.ts', dir: 'src/brr', at: null }), []),
 		'src/brr'
 	);
 });
@@ -626,11 +639,11 @@ test('with nothing attested yet, a detail path grows nothing', () => {
 	// Not a silent drop: the boundary is still rendered on the actor's own
 	// line. It just does not mint ground out of a string nobody has stood on.
 	assert.equal(
-		dirFromEdge({ act: 'orient', detail: 'cat src/frontend/x.ts', dir: '.', at: null }, []),
+		dirFromEdge(asEdge({ act: 'orient', detail: 'cat src/frontend/x.ts', dir: '.', at: null }), []),
 		null
 	);
 	assert.equal(
-		dirFromEdge({ act: 'orient', detail: 'cat src/frontend/x.ts', dir: '.', at: null }),
+		dirFromEdge(asEdge({ act: 'orient', detail: 'cat src/frontend/x.ts', dir: '.', at: null })),
 		null,
 		'and omitting the attested set is the same answer, never a wider one'
 	);
@@ -638,7 +651,7 @@ test('with nothing attested yet, a detail path grows nothing', () => {
 
 test('the deepest attested ground wins when several could grow', () => {
 	const dir = dirFromEdge(
-		{ act: 'mutate', detail: 'Edit src/frontend/src/lib/roomGraph.ts', dir: '.', at: null },
+		asEdge({ act: 'mutate', detail: 'Edit src/frontend/src/lib/roomGraph.ts', dir: '.', at: null }),
 		['src', 'src/frontend']
 	);
 	assert.equal(dir, 'src/frontend/src/lib');
@@ -652,7 +665,7 @@ test('the island takes its first step off the root from the run own room', () =>
 		liveWire([
 			liveRun({
 				run_id: 'r1',
-				room: { branch: 'brr/x', dir: 'src' },
+				room: { branch: 'brr/x', dir: 'src', env: 'host' },
 				edge: edge('mutate', 'Edit src/frontend/src/lib/quota.ts', {
 					dir: '.',
 					at: '2026-08-28T10:00:00Z'
