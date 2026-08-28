@@ -18,7 +18,7 @@ import shutil
 import subprocess
 import time
 import traceback
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping
 
 from .. import (
@@ -1500,24 +1500,99 @@ def _room_payload(brr_dir: Path, manifest: Mapping[str, Any]) -> dict[str, Any] 
     }
 
 
-def _edge_dir(record_cwd: Any, manifest: Mapping[str, Any], brr_dir: Path) -> str | None:
+#: How many slash-separated tokens of a detail are worth `stat`-ing. A
+#: bounded scan, because a detail is arbitrary argv and this runs on the
+#: publish tick.
+_DETAIL_DIR_SCAN = 12
+
+#: A token that could be a repo-relative path. Deliberately permissive: the
+#: filesystem, not this pattern, decides what is terrain.
+_DETAIL_PATH_TOKEN = re.compile(r"(?<![\w/.-])[\w.@-]+(?:/[\w.@-]+)+")
+
+
+def _edge_dir(
+    record_cwd: Any,
+    manifest: Mapping[str, Any],
+    brr_dir: Path,
+    detail: Any = None,
+) -> str | None:
     """The boundary's working dir, publishable — relative or basename only.
 
     The transcript records the raw cwd (local surface); the wire must not
     carry a host path. Relativize against the run's own tree (worktree
     path, else the checkout the daemon serves); the tree root itself
     publishes as ``.``; a cwd outside the tree degrades to its basename.
+
+    **When the cwd is the tree root, the detail is asked** — and the answer
+    comes from the filesystem rather than from a pattern.
+
+    Measured on run-260828-1518-mwnd: 328 of its 511 boundaries ran from the
+    repo root and 183 from ``src/frontend``. A room that grows terrain only
+    from the cwd therefore sees almost nothing, because a resident runs
+    ``sed -n … src/frontend/src/lib/quota.ts`` from wherever it is standing.
+    The room used to close that gap client-side by mining paths out of the
+    detail string, which is how a version ramp (``0.4/0.3/0.2``), a git ref
+    and a GitHub URL fragment all became rooms on the island: **the browser
+    can only ask what a token looks like.**
+
+    The daemon can ask what it *is*. A version string is not a directory
+    that exists in this tree; a URL fragment is not either. So the check is
+    a ``stat``, and needs no list of shapes to exclude — which is the one
+    thing every previous attempt at this needed, and the reason each of them
+    met the shape nobody had listed.
+
+    Only *directories* qualify, and only inside the tree: a file leaf is not
+    a chamber, and a path outside the run's own tree is not its terrain.
     """
     if not isinstance(record_cwd, str) or not record_cwd.strip():
         return None
     cwd = record_cwd.strip()
     tree = str(manifest.get("worktree_path") or "").strip() or str(brr_dir.parent)
     try:
-        rel = Path(cwd).resolve().relative_to(Path(tree).resolve())
+        root = Path(tree).resolve()
+        rel = Path(cwd).resolve().relative_to(root)
     except (OSError, ValueError):
         return (Path(cwd).name or None) and Path(cwd).name[:256]
     text = str(rel)
-    return ("." if text == "." else text)[:256]
+    if text != ".":
+        return text[:256]
+    named = _detail_dir(detail, root)
+    return (named or ".")[:256]
+
+
+def _detail_dir(detail: Any, root: Path) -> str | None:
+    """The deepest directory a detail names that really exists under `root`.
+
+    Deepest, because a boundary that mentions both ``src`` and
+    ``src/frontend/src/lib`` happened at the more specific place — and a
+    room that always resolved to the shallowest would stall the island one
+    level below the root forever.
+    """
+    if not isinstance(detail, str) or not detail:
+        return None
+    best: str | None = None
+    for match in list(_DETAIL_PATH_TOKEN.finditer(detail))[:_DETAIL_DIR_SCAN]:
+        token = match.group(0)
+        # A file leaf is not a chamber; try the token, then its parent.
+        for candidate in (token, str(PurePosixPath(token).parent)):
+            if not candidate or candidate in (".", "/"):
+                continue
+            try:
+                resolved = (root / candidate).resolve()
+                # `.resolve()` follows `..` and symlinks, so re-check
+                # containment rather than trusting the joined string.
+                resolved.relative_to(root)
+                if not resolved.is_dir():
+                    continue
+                if resolved == root:
+                    continue
+            except (OSError, ValueError):
+                continue
+            rel = str(resolved.relative_to(root))
+            if best is None or len(rel) > len(best):
+                best = rel
+            break
+    return best
 
 
 #: Disclosure bound for a boundary's ``detail`` **on the wire**, distinct from
@@ -1629,7 +1704,7 @@ def _boundary_row(
         "detail": _wire_detail(record.get("detail")),
         "out_bytes": out_bytes if isinstance(out_bytes, int) else None,
         "injected": bool(record.get("inject")),
-        "dir": _edge_dir(record.get("cwd"), manifest or {}, brr_dir),
+        "dir": _edge_dir(record.get("cwd"), manifest or {}, brr_dir, record.get("detail")),
     }
 
 
