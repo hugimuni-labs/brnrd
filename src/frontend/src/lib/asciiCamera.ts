@@ -51,6 +51,27 @@ export interface WorldRenderOpts {
 	reading?: Record<string, number> | null;
 }
 
+/** The resident's own state, in the pager's own grid: what it is burning,
+ *  how soon that comes back, and how much body is free. Null when the wire
+ *  has attested none of it — an empty strip beats a row of zeroes, which
+ *  would read as measured. */
+function conditionLine(graph: RoomGraph, now: number | undefined): string | null {
+	const bits: string[] = [];
+	for (const fuel of graph.garage) {
+		const window = fuel.windows[0];
+		if (!window || window.percent === null) continue;
+		const until = fuel.resetShort ? ` ↻${fuel.resetShort}` : '';
+		bits.push(`⛁ ${fuel.shell} ${window.label} ${Math.round(window.percent)}%${until}`);
+	}
+	const { active, max } = graph.slots;
+	// `max` null means no daemon has reported a pool width. `active/?` says
+	// that; `active/0` would be a claim nobody made.
+	if (max !== null || active > 0) bits.push(`◈ ${active}/${max ?? '?'} slots`);
+	if (graph.pendingLetters > 0) bits.push(`◇×${graph.pendingLetters} unread`);
+	void now;
+	return bits.length > 0 ? `  ⌁ ${bits.join('  ·  ')}` : null;
+}
+
 function garageReadings(graph: RoomGraph): string[] {
 	return graph.garage.map((fuel) => {
 		const off = fuel.status === 'known' ? '' : OFF_MARK;
@@ -652,6 +673,17 @@ export function renderWorld(
 		const readCount = pages.length > 0 ? `✉×${pages.length} read` : '✉ none read yet';
 		const plug = readingNow.size > 0 ? '▯⌁' : '▯';
 		out.push(clip(`${plug} PAGER   ${waiting}   ${readCount}`, cam.cols));
+		// THE CONDITION LINE. The pager read out the *log* and nothing about
+		// the body carrying it, which is the difference between a feed and a
+		// worn device — "it should be your diegetic device, shown to a user"
+		// (maintainer, 2026-08-28). Fuel is the binding ceiling **with its
+		// reset clock**, because "10% resetting in 40 minutes" and "10%
+		// resetting in three days" are opposite instructions and the
+		// percentage alone cannot tell them apart (his own fourth question,
+		// same day). Slots say how much more body is available, not just how
+		// much is busy.
+		const condition = conditionLine(graph, now);
+		if (condition) out.push(clip(condition, cam.cols));
 		const marked = new Set<string>();
 		for (const p of pages.slice(0, 3)) {
 			const hhmm = p.at.length >= 16 ? p.at.slice(11, 16) : p.at;
