@@ -9,7 +9,9 @@ import {
 	hugimuniHComponents,
 	hugimuniLockupSvg,
 	hugimuniMComponents,
-	hugimuniScreenSvg
+	hugimuniScreenSvg,
+	hugimuniWordmarkMetrics,
+	hugimuniWordmarkSvg
 } from './hugimuniBrandGeometry.ts';
 
 test('canonical H and M components keep the authored displaced geometry', () => {
@@ -43,10 +45,26 @@ test('screen register is the flat identity plus atmosphere', () => {
 	assert.match(out, /fractalNoise/);
 });
 
-test('lockup is one HugiMuni word centred below the mark', () => {
-	const out = hugimuniLockupSvg(HUGIMUNI_DEFAULTS, 'flat', 'test-lockup');
+test('wordmark reuses authored H/M geometry but keeps the initials separate', () => {
+	const out = hugimuniWordmarkSvg(HUGIMUNI_DEFAULTS, 'test-wordmark');
+	const metrics = hugimuniWordmarkMetrics(HUGIMUNI_DEFAULTS);
 	assert.equal(HUGIMUNI_WORDMARK, 'HugiMuni');
-	assert.match(out, /text-anchor="middle"[^>]*>HugiMuni<\/text>/);
+	assert.equal(Number(metrics.scale.toFixed(2)), 0.16);
+	assert.ok(metrics.ugiX < metrics.mX);
+	assert.match(out, /id="test-wordmark-h"/);
+	assert.match(out, /id="test-wordmark-m"/);
+	assert.match(out, /fill="#ff9a1f"[^>]*>ugi<\/text>/);
+	assert.match(out, /fill="#69c7df"[^>]*>uni<\/text>/);
+	assert.doesNotMatch(out, />HugiMuni<\/text>/);
+	assert.doesNotMatch(out, /mask="url\(/);
+});
+
+test('lockup is one visual word below the mark: Hugi amber, Muni sky', () => {
+	const out = hugimuniLockupSvg(HUGIMUNI_DEFAULTS, 'flat', 'test-lockup');
+	assert.match(out, /test-lockup-wordmark-h/);
+	assert.match(out, /test-lockup-wordmark-m/);
+	assert.match(out, /fill="#ff9a1f"[^>]*>ugi<\/text>/);
+	assert.match(out, /fill="#69c7df"[^>]*>uni<\/text>/);
 	assert.doesNotMatch(out, />UGI</);
 	assert.doesNotMatch(out, />UNI</);
 });

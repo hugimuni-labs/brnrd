@@ -30,7 +30,14 @@ That rule is the logo. Screen glow and print colour conversion are material trea
 
 `hugimuni-amber-sky-flat-on-dark.svg` is only a review proof on the intended near-black ground. GitHub's transparency checkerboard is useful for verifying alpha and terrible for judging this palette.
 
-`hugimuni-amber-sky-lockup.svg` is the canonical company lockup: the monogram with **HugiMuni as one word, centred strictly below the symbol**. The wordmark is deliberately quiet cream; the symbol already carries the three-colour identity.
+`hugimuni-amber-sky-lockup.svg` is the canonical company lockup: the monogram with one visual `HugiMuni` word centred strictly below the symbol.
+
+The wordmark no longer uses generic typed capitals. Its initial **H** and **M** are uniformly scaled copies of the actual standalone H and M component geometry used by the monogram, but they are kept separate rather than overlapped. The lowercase continuations stay quiet Helvetica for now:
+
+- custom `H` + `ugi` = amber
+- custom `M` + `uni` = sky
+
+That keeps the word easy to read while making the lockup belong to the same authored system as the symbol.
 
 ### Screen — atmosphere, not a second logo
 
@@ -38,13 +45,15 @@ That rule is the logo. Screen glow and print colour conversion are material trea
 
 `hugimuni-amber-sky-icon.svg` is that screen treatment on the rounded near-black board. The board is a composition, not part of the master mark.
 
+The screen lockup shown in `/brand-bench` keeps the wordmark crisp; only the monogram receives bloom and phosphor treatment.
+
 ### Print — the same topology in ink
 
 `hugimuni-amber-sky.eps` and `hugimuni-amber-sky-lockup.eps` are Level-2 process-CMYK production mappings of the same three regions. H and M are stroked in process inks and H∩M is produced with `strokepath` clipping, so the print file does not fake the screen glow or rely on decorative white tubes.
 
 `hugimuni-amber-sky-print.svg` and `hugimuni-amber-sky-print-lockup.svg` are RGB visual proofs of that geometry. They are not colour-managed press proofs.
 
-The EPS lockup uses live PostScript Helvetica for the single `HugiMuni` word. Outline it in final imposition/preflight if the printer requires path-only artwork.
+The EPS lockup draws the custom H and M as vector strokes and keeps only the lowercase `ugi` / `uni` continuations as live PostScript Helvetica. Outline those continuations in final imposition/preflight if the printer requires path-only artwork.
 
 ## RGB vs CMYK
 
@@ -61,20 +70,22 @@ The intended architecture is:
 
 ## Lockup
 
-The old two-row `H + UGI` / `M + UNI` construction is retired. It read as two words stacked vertically. The lockup now uses one centred `HugiMuni` word below the symbol in flat SVG, print proof and EPS.
+The old two-row `H + UGI` / `M + UNI` construction is retired. The intermediate all-cream typed `HugiMuni` lockup is retired as well.
+
+The current lockup reads as one word, but the colour boundary carries the name structure: **Hugi** is amber and **Muni** is sky. The custom H/M initials reuse the same component grammar as the monogram above, scaled to wordmark cap height and laid out independently so they never create cream intersections.
 
 ## Tuning bench
 
 `/brand-bench` mirrors the canonical HugiMuni model via `src/frontend/src/lib/hugimuniBrandGeometry.ts`.
 
-For HugiMuni the bench now exposes:
+For HugiMuni the bench exposes:
 
 - flat vs screen register;
 - H/M geometry and registration offset;
 - amber / sky / intersection / ground colours;
 - screen-only bloom, hot-overlap and grain controls;
 - small-size previews;
-- the one-line HugiMuni lockup;
+- the authored two-colour HugiMuni lockup;
 - a copyable constant block matching `build.py`.
 
 The flat register is the one to judge first. Screen controls should never be used to rescue weak geometry.
@@ -100,3 +111,5 @@ The generator writes:
 ## Next optical pass
 
 The remaining work is logo design rather than format conversion. The most useful variables to judge in `/brand-bench` are `SPREAD`, `GHOST`, `STROKE`, `STEM_STROKE`, `CROSS` and `TAIL`: they control the shoulder "ears", the amount of chromatic registration, the crossbar/diagonal hierarchy, and the lower X. Tune those on the flat mark first at 320px, 32px and 16px; only then tune the screen atmosphere.
+
+For the wordmark specifically, the next variables worth judging are the custom initial height and the three spacing values around `H + ugi + M + uni`. The current defaults deliberately favour readability over making the initials oversized.
