@@ -9,6 +9,11 @@ Keep the suite's ambient repo headroom deliberately above those fixture
 needs, then let the dedicated limits tests pin the production Free contract
 explicitly. Setting this before pytest imports the test modules matters:
 ``Settings`` captures environment-backed dataclass defaults at import time.
+
+This is intentionally an assignment rather than ``setdefault``: a developer
+shell carrying production-like BRNRD settings must not change the topology
+available to unrelated integration fixtures. Tests that exercise repo limits
+pass their limit to ``Settings`` explicitly.
 """
 
 from __future__ import annotations
@@ -16,4 +21,4 @@ from __future__ import annotations
 import os
 
 
-os.environ.setdefault("BRNRD_LIMIT_FREE_REPOS", "10")
+os.environ["BRNRD_LIMIT_FREE_REPOS"] = "10"
