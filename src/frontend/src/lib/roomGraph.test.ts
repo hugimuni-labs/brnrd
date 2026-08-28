@@ -5,6 +5,7 @@ import { compileRoomGraph, fileFromDetail, resolvePlace } from './roomGraph.ts';
 import { compileTopology } from './roomTopology.ts';
 import type { LiveRun, LiveRunsResponse } from './liveRuns.ts';
 import type { RunLedgerResponse, RunLedgerRow } from './runLedger.ts';
+import type { ScheduledWake, ScheduledWakesResponse } from './scheduledWakes.ts';
 
 // ── fixtures — the wire's shape, not a private vocabulary ───────────────────
 
@@ -95,6 +96,27 @@ function ledgerWire(rows: RunLedgerRow[]): RunLedgerResponse {
 		stale: false,
 		reported_at: '2026-08-26T10:20:00Z',
 		span_seconds_served: 86400
+	};
+}
+
+function wakesWire(rows: ScheduledWake[]): ScheduledWakesResponse {
+	return { generated_at: '2026-08-26T10:20:00Z', rows, total: rows.length };
+}
+
+function scheduledWake(id: string, status: string, scheduledFor: string | null): ScheduledWake {
+	return {
+		id,
+		kind: 'scheduled',
+		source: 'schedule',
+		status,
+		phase: 'at',
+		bucket: 'scheduled',
+		summary: id,
+		repo_label: null,
+		daemon_name: null,
+		conversation_key: null,
+		scheduled_for: scheduledFor,
+		reported_at: null
 	};
 }
 
@@ -248,6 +270,21 @@ test('an armed await stands a ^ watch fact carrying its deadline', () => {
 	// a weaving run stands no ^ fact — the tower reports armed waits only
 	const calm = compileRoomGraph(liveWire([liveRun({ run_id: 'r-live' })]), null);
 	assert.equal(calm.watch.filter((w) => w.mark === '^').length, 0);
+});
+
+test('clockwork contains only live scheduled intent', () => {
+	const graph = compileRoomGraph(liveWire([]), null, undefined, {
+		wakes: wakesWire([
+			scheduledWake('live', 'scheduled', '2026-08-26T11:00:00Z'),
+			scheduledWake('done', 'completed', '2026-08-26T10:30:00Z'),
+			scheduledWake('cancelled', 'cancelled', '2026-08-26T10:15:00Z'),
+			scheduledWake('anchoring', 'anchoring', '2026-08-26T10:05:00Z')
+		])
+	});
+	assert.deepEqual(
+		graph.clockwork.map((entry) => entry.summary),
+		['live']
+	);
 });
 
 test('forge counts aggregate the island’s attested PR / issue / merge produce', () => {

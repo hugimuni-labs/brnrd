@@ -41,6 +41,8 @@
 		renderWorld,
 		cameraCenterFor,
 		LEGEND,
+		CAMERA_LINE_HEIGHT_PX,
+		isCameraHotkey,
 		type Camera,
 		type CameraLevel
 	} from '$lib/asciiCamera';
@@ -319,10 +321,10 @@
 		else if (e.key === 'ArrowRight') pan(PAN_STEP, 0);
 		else if (e.key === 'ArrowUp') pan(0, -PAN_STEP);
 		else if (e.key === 'ArrowDown') pan(0, PAN_STEP);
-		else if (e.key === 'f') {
+		else if (e.key === 'f' && isCameraHotkey(e)) {
 			follow = !follow;
 			paint();
-		} else if (e.key === 'a') {
+		} else if (e.key === 'a' && isCameraHotkey(e)) {
 			levelForced = true;
 			level = level === 'island' ? 'atlas' : 'island';
 			paint();
@@ -340,7 +342,7 @@
 	}
 	function onPointerMove(e: PointerEvent) {
 		if (!dragging) return;
-		const lineH = charW * 2.25; // 12px font · 1.35 line-height vs ~7.2px cell
+		const lineH = CAMERA_LINE_HEIGHT_PX;
 		const sx = level === 'island' ? 2 : 0.5;
 		const sy = level === 'island' ? 1 : 0.25;
 		const dx = (e.clientX - dragLast.x) / charW / sx;

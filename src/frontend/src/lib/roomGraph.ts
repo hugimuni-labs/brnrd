@@ -504,12 +504,15 @@ export function compileRoomGraph(
 	}
 
 	// CLOCKWORK: future intent from the schedule wire — never a body.
-	const clockwork: ClockEntry[] = (extras?.wakes?.rows ?? []).map((w) => ({
-		summary: w.summary || w.id,
-		nextAt: w.scheduled_for,
-		status: w.status,
-		repoLabel: w.repo_label
-	}));
+	const deadWakeStatuses = new Set(['completed', 'cancelled', 'anchoring']);
+	const clockwork: ClockEntry[] = (extras?.wakes?.rows ?? [])
+		.filter((w) => !deadWakeStatuses.has(w.status ?? ''))
+		.map((w) => ({
+			summary: w.summary || w.id,
+			nextAt: w.scheduled_for,
+			status: w.status,
+			repoLabel: w.repo_label
+		}));
 
 	// GARAGE: capacity per shell, live readings only — a stale snapshot's
 	// preserved values stay off the rack (its status says stale instead).
