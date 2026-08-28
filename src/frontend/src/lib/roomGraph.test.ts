@@ -368,6 +368,75 @@ test('pending letters sum across actors; stale daemon rows are never actors', ()
 	assert.ok(!graph.actors.some((a) => a.runId === 'dead'));
 });
 
+test('garage and clockwork compile their real wire extras, preserving stale binding fuel', () => {
+	const graph = compileRoomGraph(liveWire([]), null, undefined, {
+		wakes: {
+			generated_at: '2026-08-26T10:20:00Z',
+			total: 1,
+			rows: [
+				{
+					id: 'wake-1',
+					kind: 'scheduled',
+					source: 'schedule',
+					summary: 'Tend the room',
+					scheduled_for: '2026-08-26T12:00:00Z',
+					status: 'armed',
+					phase: 'at',
+					bucket: 'at',
+					repo_label: 'hugimuni-labs/brnrd',
+					daemon_name: 'brnrd',
+					conversation_key: null,
+					reported_at: '2026-08-26T10:20:00Z'
+				}
+			]
+		},
+		quota: {
+			generated_at: '2026-08-26T10:20:00Z',
+			runner_quotas: [
+				{
+					shell: 'claude',
+					status: 'stale',
+					daemon_stale: true,
+					windows: [
+						{
+							label: 'weekly',
+							used: null,
+							limit: null,
+							percent: null,
+							reset: null,
+							last_known: { used: null, limit: null, percent: 43, reset: null }
+						},
+						{
+							label: '5h window',
+							used: null,
+							limit: null,
+							percent: null,
+							reset: null,
+							last_known: { used: null, limit: null, percent: 12, reset: null }
+						},
+						{
+							label: 'weekly (Fable)',
+							used: null,
+							limit: null,
+							percent: null,
+							reset: null,
+							last_known: { used: null, limit: null, percent: 2, reset: null }
+						}
+					]
+				}
+			]
+		}
+	});
+
+	assert.deepEqual(
+		graph.clockwork.map((entry) => entry.summary),
+		['Tend the room']
+	);
+	assert.deepEqual(graph.garage, [
+		{ shell: 'claude', status: 'stale', windows: [{ label: '5h', percent: 12 }] }
+	]);
+});
+
 test('terrain accretes from the trail, deduped by boundary timestamp', () => {
 	const run = liveRun({
 		run_id: 'r1',
