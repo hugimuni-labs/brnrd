@@ -67,15 +67,63 @@ const DESK_RE = /inbox\.json|portal-state\.json|\bbrnrd (do|await)\b|\boutbox\b/
 const KB_RE = /\bkb\/|\.brnrd-kb\/|knowledge\//;
 
 /**
- * The repo-relative directory the daemon attested for this boundary.
- * `_edge_dir` resolves the cwd against the run's actual checkout/worktree
- * before the live-runs wire is published; `.` means that known tree's root.
- * Detail is display text, not filesystem identity: slash-bearing versions,
- * refs, URL fragments, and out-of-tree paths remain visible on the actor's
- * boundary line without becoming terrain.
+ * The repo-relative directory a boundary puts the actor in.
+ *
+ * **TERRAIN GROWS FROM TERRAIN.** The cwd the daemon attested is always
+ * terrain — `_edge_dir` resolved it against the run's real checkout before
+ * publishing. A path merely *named in the detail* is terrain only when it
+ * **extends ground already attested**: a prefix-extension of a chamber some
+ * real cwd, or this run's own trail, already put on the map.
+ *
+ * That property is what the two previous rules were reaching for and missing.
+ *
+ * - The first matched any relative token with three or more segments. Three
+ *   segments is a *shape*, and the shapes kept arriving: `0.4/0.3/0.2` (a
+ *   version or an opacity ramp) and `origin/brr/the-fuel…` (a git ref) both
+ *   grew chambers on the live map, as `~/.local/state/brnrd/…` had before
+ *   them — that one matched because the account home carries the project's
+ *   own name, and it was patched with a hidden-directory fence. Each fix met
+ *   the next shape nobody listed.
+ * - The second (2026-08-28) removed detail-derived terrain altogether. That
+ *   ends the fakes and re-opens the gap the first was built for, in its own
+ *   deleted words: *"most acts run from the root and name their true location
+ *   only in the detail — a dozen edits into `src/frontend` grew zero
+ *   terrain."* A trie that only grows on `cd` barely grows.
+ *
+ * Accretion answers both. `0.4/0.3/0.2` cannot extend attested ground under
+ * any account, without anyone having to list it; `src/frontend/src/lib`
+ * extends `src` the moment a real cwd attested `src`. And it is the growth
+ * model the room already wants: the island spreads outward from where the
+ * resident has actually stood.
+ *
+ * Everything that fails the test is still real and stays on the actor's own
+ * boundary line — a forge interaction, a kb write, an out-of-tree path. Not
+ * terrain, not discarded.
  */
-export function dirFromEdge(edge: LiveRun['edge']): string | null {
-	return edge?.dir && edge.dir !== '.' ? edge.dir : null;
+export function dirFromEdge(edge: LiveRun['edge'], attested?: Iterable<string>): string | null {
+	const cwd = edge?.dir && edge.dir !== '.' ? edge.dir : null;
+	if (cwd) return cwd;
+	const detail = edge?.detail;
+	if (!detail || !attested) return null;
+	// Roots to grow from, longest first, so the deepest attested ground wins.
+	const roots = [...attested].filter(Boolean).sort((a, b) => b.length - a.length);
+	if (roots.length === 0) return null;
+	let best: string | null = null;
+	for (const match of detail.matchAll(/(?<=^|[\s'"(=])[\w.@-]+(?:\/[\w.@-]+)+/g)) {
+		const token = match[0];
+		// A leaf that looks like a file is not a chamber; chambers are dirs.
+		const segs = token.split('/').filter(Boolean);
+		const last = segs[segs.length - 1];
+		const dirSegs = last && /\.[A-Za-z][A-Za-z0-9]{0,6}$/.test(last) ? segs.slice(0, -1) : segs;
+		if (dirSegs.length === 0) continue;
+		const dir = dirSegs.join('/');
+		// The accretion test: this must be attested ground, or ground directly
+		// beneath it. `src/frontend` extends `src`; `origin/brr` extends nothing.
+		const grows = roots.some((root) => dir === root || dir.startsWith(root + '/'));
+		if (!grows) continue;
+		if (best === null || dir.length > best.length) best = dir;
+	}
+	return best;
 }
 
 /** The resource anchor for a tree place: prefer the boundary's attested cwd;
@@ -344,7 +392,13 @@ export function compileRoomGraph(
 		act: run.edge?.act ?? null,
 		detail: run.edge?.detail ?? null,
 		injected: !!run.edge?.injected,
-		cameFrom: priorChamber(trails?.[run.run_id], dirFromEdge(run.edge)),
+		cameFrom: priorChamber(
+			trails?.[run.run_id],
+			dirFromEdge(
+				run.edge,
+				(trails?.[run.run_id] ?? []).map((s) => s.dir).filter(Boolean) as string[]
+			)
+		),
 		lifecycle: run.lifecycle ?? null,
 		awaitUntil: run.await_until ?? null,
 		moodRest: run.mood_rest ?? run.mood_glyph ?? null,
@@ -378,8 +432,18 @@ export function compileRoomGraph(
 		camp.commits += run.relics_counts?.commit ?? 0;
 		// terrain accretes from the trail — attested footsteps only, current
 		// boundary included so the actor always stands on known ground.
+		//
+		// The trail is also what the current boundary may grow *from*: a
+		// detail-named path counts only when it extends ground a real cwd
+		// already put here (see `dirFromEdge`). The run's own root is seeded
+		// so the very first `src/frontend/x.ts` after a root-level cwd has
+		// something to extend — without it the island could never take its
+		// first step off the root, and a trie that only grows on `cd` barely
+		// grows at all.
 		const steps: TrailStep[] = [...(trails?.[run.run_id] ?? [])];
-		const edgeDir = dirFromEdge(run.edge);
+		const attested = new Set<string>(steps.map((s) => s.dir).filter(Boolean) as string[]);
+		if (run.room?.dir && run.room.dir !== '.') attested.add(run.room.dir);
+		const edgeDir = dirFromEdge(run.edge, attested);
 		const edgeAt = run.edge?.at ?? null;
 		const alreadyRecorded = edgeAt !== null && steps.some((s) => s.at === edgeAt);
 		if (edgeDir && !alreadyRecorded)
