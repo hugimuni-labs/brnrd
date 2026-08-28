@@ -3,7 +3,11 @@ const AXIS = HUGIMUNI_BOARD / 2;
 export const HUGIMUNI_LOCKUP_HEIGHT = 560;
 export const HUGIMUNI_WORDMARK = 'HugiMuni';
 export const HUGIMUNI_WORDMARK_SIZE = 42;
-export const HUGIMUNI_WORDMARK_Y = 490;
+export const HUGIMUNI_WORDMARK_Y = 500;
+export const HUGIMUNI_WORDMARK_GLYPH_HEIGHT = 32;
+export const HUGIMUNI_WORDMARK_TEXT_WIDTH = 56;
+export const HUGIMUNI_WORDMARK_GLYPH_TEXT_GAP = 2;
+export const HUGIMUNI_WORDMARK_JOIN_GAP = 6;
 
 export type HugimuniRegister = 'flat' | 'screen';
 
@@ -176,24 +180,80 @@ export function hugimuniScreenSvg(c: HugimuniConstants, idPrefix = 'hm-screen'):
 </svg>`;
 }
 
+interface WordmarkMetrics {
+	sourceLeft: number;
+	sourceBottom: number;
+	scale: number;
+	glyphWidth: number;
+	hX: number;
+	ugiX: number;
+	mX: number;
+	uniX: number;
+}
+
+export function hugimuniWordmarkMetrics(c: HugimuniConstants): WordmarkMetrics {
+	const sourceLeft = Math.min(c.LEFT - c.OVERHANG, c.LEFT - c.SPREAD);
+	const sourceRight = Math.max(c.RIGHT + c.OVERHANG, c.RIGHT + c.SPREAD);
+	const sourceTop = Math.min(c.TOP, c.TOP - c.RISE);
+	const sourceBottom = Math.max(c.BOTTOM, c.BOTTOM + c.DIP);
+	const scale = HUGIMUNI_WORDMARK_GLYPH_HEIGHT / (sourceBottom - sourceTop);
+	const glyphWidth = (sourceRight - sourceLeft) * scale;
+	const totalWidth =
+		glyphWidth * 2 +
+		HUGIMUNI_WORDMARK_TEXT_WIDTH * 2 +
+		HUGIMUNI_WORDMARK_GLYPH_TEXT_GAP * 2 +
+		HUGIMUNI_WORDMARK_JOIN_GAP;
+	const startX = AXIS - totalWidth / 2;
+	const hX = startX;
+	const ugiX = hX + glyphWidth + HUGIMUNI_WORDMARK_GLYPH_TEXT_GAP;
+	const mX = ugiX + HUGIMUNI_WORDMARK_TEXT_WIDTH + HUGIMUNI_WORDMARK_JOIN_GAP;
+	const uniX = mX + glyphWidth + HUGIMUNI_WORDMARK_GLYPH_TEXT_GAP;
+	return { sourceLeft, sourceBottom, scale, glyphWidth, hX, ugiX, mX, uniX };
+}
+
+function wordmarkGlyph(
+	components: Component[],
+	color: string,
+	x: number,
+	metrics: WordmarkMetrics
+): string {
+	const tx = x - metrics.sourceLeft * metrics.scale;
+	const ty = HUGIMUNI_WORDMARK_Y - metrics.sourceBottom * metrics.scale;
+	return `<g transform="translate(${tx.toFixed(3)} ${ty.toFixed(3)}) scale(${metrics.scale.toFixed(5)})">${group(components, color)}</g>`;
+}
+
+export function hugimuniWordmarkSvg(
+	c: HugimuniConstants,
+	idPrefix = 'hm-wordmark'
+): string {
+	const metrics = hugimuniWordmarkMetrics(c);
+	return `<g id="${idPrefix}">
+    <g id="${idPrefix}-h">${wordmarkGlyph(hugimuniHComponents(c), c.AMBER, metrics.hX, metrics)}</g>
+    <text x="${metrics.ugiX.toFixed(3)}" y="${HUGIMUNI_WORDMARK_Y}" fill="${c.AMBER}" font-family="Helvetica, Arial, sans-serif" font-size="${HUGIMUNI_WORDMARK_SIZE}" font-weight="400" textLength="${HUGIMUNI_WORDMARK_TEXT_WIDTH}" lengthAdjust="spacingAndGlyphs">ugi</text>
+    <g id="${idPrefix}-m">${wordmarkGlyph(hugimuniMComponents(c), c.SKY, metrics.mX, metrics)}</g>
+    <text x="${metrics.uniX.toFixed(3)}" y="${HUGIMUNI_WORDMARK_Y}" fill="${c.SKY}" font-family="Helvetica, Arial, sans-serif" font-size="${HUGIMUNI_WORDMARK_SIZE}" font-weight="400" textLength="${HUGIMUNI_WORDMARK_TEXT_WIDTH}" lengthAdjust="spacingAndGlyphs">uni</text>
+  </g>`;
+}
+
 export function hugimuniLockupSvg(
 	c: HugimuniConstants,
 	register: HugimuniRegister,
 	idPrefix = 'hm-lockup'
 ): string {
-	const hMask = `${idPrefix}-h`;
+	const hMask = `${idPrefix}-h-mask`;
 	const mark = flatArt(c, hMask, idPrefix);
+	const wordmark = hugimuniWordmarkSvg(c, `${idPrefix}-wordmark`);
 	if (register === 'flat') {
 		return `<svg xmlns="http://www.w3.org/2000/svg" width="${HUGIMUNI_BOARD}" height="${HUGIMUNI_LOCKUP_HEIGHT}" viewBox="0 0 ${HUGIMUNI_BOARD} ${HUGIMUNI_LOCKUP_HEIGHT}">
   <title>HugiMuni — canonical lockup</title>
   <defs>${hMaskDef(c, hMask)}</defs>
   ${ground(c, HUGIMUNI_LOCKUP_HEIGHT)}
   ${mark}
-  <text x="${AXIS}" y="${HUGIMUNI_WORDMARK_Y}" text-anchor="middle" fill="${c.INTERSECTION}" font-family="Helvetica, Arial, sans-serif" font-size="${HUGIMUNI_WORDMARK_SIZE}" font-weight="400">${HUGIMUNI_WORDMARK}</text>
+  ${wordmark}
 </svg>`;
 	}
 
-	// Keep the lockup word quiet; only the symbol receives the screen material.
+	// Only the monogram receives the screen material; the wordmark stays crisp.
 	const markOnly = hugimuniScreenSvg({ ...c, GROUND_ON: false }, `${idPrefix}-screen`)
 		.replace(/^<svg[^>]*>/, '')
 		.replace(/<\/svg>$/, '');
@@ -201,7 +261,7 @@ export function hugimuniLockupSvg(
   <title>HugiMuni — screen lockup</title>
   ${ground(c, HUGIMUNI_LOCKUP_HEIGHT)}
   ${markOnly}
-  <text x="${AXIS}" y="${HUGIMUNI_WORDMARK_Y}" text-anchor="middle" fill="${c.INTERSECTION}" font-family="Helvetica, Arial, sans-serif" font-size="${HUGIMUNI_WORDMARK_SIZE}" font-weight="400">${HUGIMUNI_WORDMARK}</text>
+  ${wordmark}
 </svg>`;
 }
 

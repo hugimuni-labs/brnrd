@@ -9,6 +9,10 @@ The canonical mark is two opaque letterforms occupying one plane:
 
 The flat SVG is the identity source. Screen adds atmosphere around that same
 artwork. EPS maps the same topology to process CMYK for physical production.
+
+The lockup follows the same rule rather than dropping to generic typed caps:
+its H and M are scaled copies of the authored standalone H and M geometry,
+kept separate so the word remains readable. Hugi is amber; Muni is sky.
 """
 from pathlib import Path
 
@@ -40,12 +44,18 @@ HOT_BLUR = 1.4
 HOT_OPACITY = 0.28
 GRAIN = 22
 
-# Lockup material. The monogram already carries the colour story; the company
-# name is one quiet cream word, centred strictly below it.
+# Lockup material. H and M reuse the mark's actual component geometry at a
+# wordmark scale, but they do not overlap. Lowercase continuations stay quiet
+# Helvetica for now so the custom initials carry the family resemblance without
+# turning the whole word into a novelty alphabet.
 LOCKUP_HEIGHT = 560
 WORDMARK = "HugiMuni"
 WORDMARK_SIZE = 42
-WORDMARK_Y = 490
+WORDMARK_Y = 500
+WORDMARK_GLYPH_HEIGHT = 32
+WORDMARK_TEXT_WIDTH = 56
+WORDMARK_GLYPH_TEXT_GAP = 2
+WORDMARK_JOIN_GAP = 6
 
 # Process values are output mappings, not the identity source. Replace these
 # with the printer/RIP profile's preferred values when production gives us an
@@ -183,8 +193,61 @@ def screen_svg(*, with_ground=False):
 '''
 
 
+def _wordmark_metrics():
+    """Deterministic layout for custom H + `ugi` + custom M + `uni`."""
+    source_left = min(LEFT - OVERHANG, LEFT - SPREAD)
+    source_right = max(RIGHT + OVERHANG, RIGHT + SPREAD)
+    source_top = min(TOP, TOP - RISE)
+    source_bottom = max(BOTTOM, BOTTOM + DIP)
+    scale = WORDMARK_GLYPH_HEIGHT / (source_bottom - source_top)
+    glyph_width = (source_right - source_left) * scale
+    total_width = (
+        glyph_width * 2
+        + WORDMARK_TEXT_WIDTH * 2
+        + WORDMARK_GLYPH_TEXT_GAP * 2
+        + WORDMARK_JOIN_GAP
+    )
+    start_x = AXIS - total_width / 2
+    h_x = start_x
+    ugi_x = h_x + glyph_width + WORDMARK_GLYPH_TEXT_GAP
+    m_x = ugi_x + WORDMARK_TEXT_WIDTH + WORDMARK_JOIN_GAP
+    uni_x = m_x + glyph_width + WORDMARK_GLYPH_TEXT_GAP
+    return {
+        "source_left": source_left,
+        "source_bottom": source_bottom,
+        "scale": scale,
+        "glyph_width": glyph_width,
+        "h_x": h_x,
+        "ugi_x": ugi_x,
+        "m_x": m_x,
+        "uni_x": uni_x,
+    }
+
+
+def _wordmark_glyph_svg(components, color, x, metrics):
+    scale = metrics["scale"]
+    tx = x - metrics["source_left"] * scale
+    ty = WORDMARK_Y - metrics["source_bottom"] * scale
+    return (
+        f'<g transform="translate({tx:.3f} {ty:.3f}) scale({scale:.5f})">'
+        f'{_svg_group(components, color)}</g>'
+    )
+
+
+def _wordmark_svg():
+    metrics = _wordmark_metrics()
+    h = _wordmark_glyph_svg(h_components(), AMBER, metrics["h_x"], metrics)
+    m = _wordmark_glyph_svg(m_components(), SKY, metrics["m_x"], metrics)
+    return f'''<g id="hugimuni-wordmark">
+    <g id="hugimuni-wordmark-h">{h}</g>
+    <text x="{metrics['ugi_x']:.3f}" y="{WORDMARK_Y}" fill="{AMBER}" font-family="Helvetica, Arial, sans-serif" font-size="{WORDMARK_SIZE}" font-weight="400" textLength="{WORDMARK_TEXT_WIDTH}" lengthAdjust="spacingAndGlyphs">ugi</text>
+    <g id="hugimuni-wordmark-m">{m}</g>
+    <text x="{metrics['uni_x']:.3f}" y="{WORDMARK_Y}" fill="{SKY}" font-family="Helvetica, Arial, sans-serif" font-size="{WORDMARK_SIZE}" font-weight="400" textLength="{WORDMARK_TEXT_WIDTH}" lengthAdjust="spacingAndGlyphs">uni</text>
+  </g>'''
+
+
 def flat_lockup_svg(*, with_ground=False):
-    """Canonical horizontal-reading lockup: mark, then one HugiMuni word."""
+    """Canonical lockup: shared mark above, authored-colour wordmark below."""
     ground = (
         f'  <rect width="{BOARD}" height="{LOCKUP_HEIGHT}" fill="{GROUND}"/>\n'
         if with_ground else ''
@@ -195,7 +258,7 @@ def flat_lockup_svg(*, with_ground=False):
     {_h_mask_def()}
   </defs>
 {ground}  {_flat_art(ids=True)}
-  <text x="{AXIS:g}" y="{WORDMARK_Y}" text-anchor="middle" fill="{INTERSECTION}" font-family="Helvetica, Arial, sans-serif" font-size="{WORDMARK_SIZE}" font-weight="400">{WORDMARK}</text>
+  {_wordmark_svg()}
 </svg>
 '''
 
@@ -239,8 +302,43 @@ def _ps_mark(*, height):
     return commands
 
 
+def _transform_wordmark_components(components, x, metrics):
+    s = metrics["scale"]
+    source_left = metrics["source_left"]
+    source_bottom = metrics["source_bottom"]
+    transformed = []
+    for x1, y1, x2, y2, width in components:
+        transformed.append(_line(
+            x + (x1 - source_left) * s,
+            WORDMARK_Y - (source_bottom - y1) * s,
+            x + (x2 - source_left) * s,
+            WORDMARK_Y - (source_bottom - y2) * s,
+            width * s,
+        ))
+    return transformed
+
+
+def _ps_wordmark(*, height):
+    metrics = _wordmark_metrics()
+    h = _transform_wordmark_components(h_components(), metrics["h_x"], metrics)
+    m = _transform_wordmark_components(m_components(), metrics["m_x"], metrics)
+    baseline = height - WORDMARK_Y
+    commands = []
+    commands.extend(_ps_stroke(c, PRINT_AMBER, height=height) for c in h)
+    commands.extend((
+        f"{_ps_cmyk(PRINT_AMBER)} setcmykcolor /Helvetica findfont {WORDMARK_SIZE} scalefont setfont",
+        f"{metrics['ugi_x']:.3f} {baseline:g} moveto (ugi) show",
+    ))
+    commands.extend(_ps_stroke(c, PRINT_SKY, height=height) for c in m)
+    commands.extend((
+        f"{_ps_cmyk(PRINT_SKY)} setcmykcolor /Helvetica findfont {WORDMARK_SIZE} scalefont setfont",
+        f"{metrics['uni_x']:.3f} {baseline:g} moveto (uni) show",
+    ))
+    return commands
+
+
 def eps(*, lockup=False):
-    """CMYK production mapping of the exact three-region flat topology."""
+    """CMYK production mapping of the exact flat topology."""
     height = LOCKUP_HEIGHT if lockup else BOARD
     commands = [
         f"{_ps_cmyk(PRINT_BLACK)} setcmykcolor 0 0 {BOARD} {height} rectfill",
@@ -250,13 +348,7 @@ def eps(*, lockup=False):
     ]
 
     if lockup:
-        # A single quiet wordmark, centred strictly below the monogram. The
-        # font remains live PostScript type for now; outline at final imposition
-        # if the printer requires path-only artwork.
-        commands.extend((
-            f"{_ps_cmyk(PRINT_INTERSECTION)} setcmykcolor /Helvetica findfont {WORDMARK_SIZE} scalefont setfont",
-            f"({WORDMARK}) dup stringwidth pop 2 div {AXIS:g} exch sub {height-WORDMARK_Y:g} moveto show",
-        ))
+        commands.extend(_ps_wordmark(height=height))
 
     return "\n".join((
         "%!PS-Adobe-3.0 EPSF-3.0",
@@ -277,13 +369,7 @@ def print_proof_svg(*, lockup=False):
     base = flat_svg(with_ground=False)
     body = base.split('<defs>', 1)[1].split('</svg>', 1)[0]
     body = '<defs>' + body
-    wordmark = ''
-    if lockup:
-        wordmark = (
-            f'\n  <text x="{AXIS:g}" y="{WORDMARK_Y}" text-anchor="middle" '
-            f'fill="{INTERSECTION}" font-family="Helvetica, Arial, sans-serif" '
-            f'font-size="{WORDMARK_SIZE}" font-weight="400">{WORDMARK}</text>'
-        )
+    wordmark = f'\n  {_wordmark_svg()}' if lockup else ''
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{BOARD}" height="{height}" viewBox="0 0 {BOARD} {height}">
   <title>HugiMuni — print proof</title>
   <rect width="{BOARD}" height="{height}" fill="#000"/>
@@ -302,7 +388,7 @@ def write_all():
     (OUT / 'hugimuni-amber-sky-print-lockup.svg').write_text(print_proof_svg(lockup=True))
     (OUT / 'hugimuni-amber-sky.eps').write_text(eps())
     (OUT / 'hugimuni-amber-sky-lockup.eps').write_text(eps(lockup=True))
-    print('wrote canonical flat + lockup + screen + CMYK print registers')
+    print('wrote canonical flat + authored wordmark + screen + CMYK print registers')
 
 
 if __name__ == '__main__':
