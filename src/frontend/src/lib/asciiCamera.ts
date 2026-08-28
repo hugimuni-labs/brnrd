@@ -116,6 +116,22 @@ export function foldPathTokens(detail: string): string {
 	});
 }
 
+// Disclosure bound for boundary detail on the public room surface. This is
+// intentionally independent of camera width: layout may show less, but must
+// never gain enough source text to reconstruct content carried through argv.
+const PUBLIC_DETAIL_MAX = 120;
+
+function publicBoundaryDetail(detail: string): string {
+	const folded = foldPathTokens(detail);
+	// The hook normalises command newlines before the wire sees them, so retain
+	// the heredoc operator and delimiter (command shape), then drop its body.
+	const heredoc = folded.match(/<<-?\s*(?:'[^']+'|"[^"]+"|[\w.-]+)/);
+	const shaped = heredoc
+		? folded.slice(0, (heredoc.index ?? 0) + heredoc[0].length) + ' …'
+		: folded;
+	return clip(shaped, PUBLIC_DETAIL_MAX);
+}
+
 function countsLabel(counts: Record<string, number>): string {
 	const order = ['commit', 'merge', 'pr', 'issue', 'kb', 'file', 'comment', 'message', 'reply'];
 	const short: Record<string, string> = {
@@ -390,7 +406,7 @@ function actorFootline(actor: RoomActor, now: number | undefined): string {
 	const lifecycle =
 		actor.lifecycle === 'awaiting' ? ` (awaiting${until ? ' → ' + until : ''})` : '';
 	const pulse = actor.injected ? '  ✉>>>' : '';
-	const detail = actor.detail ? foldPathTokens(actor.detail) : null;
+	const detail = actor.detail ? publicBoundaryDetail(actor.detail) : null;
 	const boundary = [actor.act, detail].filter(Boolean).join(' · ');
 	const letters =
 		actor.portalsPending > 0
@@ -644,7 +660,7 @@ export function renderWorld(
 		const marked = new Set<string>();
 		for (const p of pages.slice(0, 3)) {
 			const hhmm = p.at.length >= 16 ? p.at.slice(11, 16) : p.at;
-			const carrier = [p.act, p.detail ? foldPathTokens(p.detail) : null]
+			const carrier = [p.act, p.detail ? publicBoundaryDetail(p.detail) : null]
 				.filter(Boolean)
 				.join(' · ');
 			// ▸ the page being read right now: its actor is mid-ceremony and
