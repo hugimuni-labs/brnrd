@@ -1,48 +1,32 @@
 <script lang="ts">
-	// /brand-bench — a tuning bench, not a product surface.
-	//
-	// His ask, verbatim: "a temp web app on one of our routes, where I could
-	// move the values with sliders and inputs and see it renders differently"
-	// — "something simple". This route renders the brnrd and hugimuni marks
-	// as live inline SVG from the same named constants `media/brand/build.py`
-	// and `media/brand/hugimuni/build.py` draw from (geometry ported to
-	// `$lib/brandGeometry.ts` — see that file's module doc for the vendoring
-	// note and the one formatting quirk that resisted a byte-for-byte port).
-	//
-	// Deliberately unstyled beyond legibility, deliberately unlinked from any
-	// nav — reachable only by typing the URL. No auth guard: the task said
-	// "does not need auth", and gating a route nobody links to behind a
-	// dev-only check adds a decision (what "dev" means in this deploy) this
-	// bench doesn't need to make. If this route needs to outlive the current
-	// tuning pass, that's the moment to reconsider — a bench with no auth and
-	// no nav entry is still a real URL if the app is public.
+	// /brand-bench is deliberately an unlinked tuning surface. BRNRD keeps its
+	// existing generated geometry; HugiMuni now mirrors the canonical three-
+	// region master in media/brand/hugimuni/build.py.
 	import {
 		BRNRD_COLORS,
 		BRNRD_DEFAULTS,
 		FACES,
-		HUGIMUNI_DEFAULTS,
-		HUGIMUNI_PALETTES,
 		brnrdAberrationSvg,
 		brnrdConstantBlock,
-		brnrdStoneSvg,
+		brnrdStoneSvg
+	} from '$lib/brandGeometry';
+	import type { BrnrdConstants, BrnrdFrame } from '$lib/brandGeometry';
+	import {
+		HUGIMUNI_DEFAULTS,
 		hugimuniConstantBlock,
-		hugimuniSvg
-	} from '$lib/brandGeometry';
-	import type {
-		BrnrdConstants,
-		BrnrdFrame,
-		HugimuniConstants,
-		HugimuniPaletteName
-	} from '$lib/brandGeometry';
+		hugimuniFlatSvg,
+		hugimuniLockupSvg,
+		hugimuniScreenSvg
+	} from '$lib/hugimuniBrandGeometry';
+	import type { HugimuniConstants, HugimuniRegister } from '$lib/hugimuniBrandGeometry';
 
 	type Mark = 'brnrd' | 'hugimuni';
-	type Register = 'stone' | 'screen';
+	type BrnrdRegister = 'stone' | 'screen';
 
 	let mark = $state<Mark>('hugimuni');
-	let register = $state<Register>('stone'); // hugimuni only has one register (see below)
+	let brnrdRegister = $state<BrnrdRegister>('stone');
+	let hugimuniRegister = $state<HugimuniRegister>('flat');
 	let frame = $state<BrnrdFrame>('rest');
-	let palette = $state<HugimuniPaletteName>('amber-sky');
-
 	let brnrdConstants = $state<BrnrdConstants>({ ...BRNRD_DEFAULTS });
 	let hugimuniConstants = $state<HugimuniConstants>({ ...HUGIMUNI_DEFAULTS });
 
@@ -56,66 +40,70 @@
 
 	const BRNRD_SLIDERS: SliderSpec[] = [
 		{ key: 'SLOT', label: 'SLOT — grid cell width', min: 20, max: 140, step: 1 },
-		{ key: 'STAVE_TOP', label: 'STAVE_TOP — top of b/d ascender', min: 0, max: 260, step: 1 },
-		{ key: 'BASELINE', label: 'BASELINE — foot of every stroke', min: 260, max: 512, step: 1 },
-		{ key: 'BOWL_TOP', label: 'BOWL_TOP — x-height / bowl start', min: 150, max: 420, step: 1 },
-		{ key: 'BOWL_W', label: 'BOWL_W — bowl reach off the stave', min: 10, max: 150, step: 1 },
-		{
-			key: 'STAVE_INSET',
-			label: 'STAVE_INSET — stave inset from cell edge',
-			min: 0,
-			max: 80,
-			step: 1
-		},
+		{ key: 'STAVE_TOP', label: 'STAVE_TOP — ascender top', min: 0, max: 260, step: 1 },
+		{ key: 'BASELINE', label: 'BASELINE — stroke foot', min: 260, max: 512, step: 1 },
+		{ key: 'BOWL_TOP', label: 'BOWL_TOP — bowl start', min: 150, max: 420, step: 1 },
+		{ key: 'BOWL_W', label: 'BOWL_W — bowl reach', min: 10, max: 150, step: 1 },
+		{ key: 'STAVE_INSET', label: 'STAVE_INSET — stave inset', min: 0, max: 80, step: 1 },
 		{ key: 'STROKE', label: 'STROKE — stroke width', min: 2, max: 60, step: 1 },
-		{ key: 'XTOP', label: 'XTOP — resting-frame x-height', min: 150, max: 420, step: 1 },
+		{ key: 'XTOP', label: 'XTOP — resting x-height', min: 150, max: 420, step: 1 },
 		{ key: 'EYE_Y', label: 'EYE_Y — eye row', min: 200, max: 460, step: 1 },
 		{ key: 'MOUTH_Y', label: 'MOUTH_Y — mouth row', min: 250, max: 490, step: 1 },
-		{ key: 'EYE_R', label: 'EYE_R — eye/dot radius', min: 2, max: 50, step: 1 }
+		{ key: 'EYE_R', label: 'EYE_R — eye radius', min: 2, max: 50, step: 1 }
 	];
 
-	const HUGIMUNI_SLIDERS: SliderSpec[] = [
-		{ key: 'LEFT', label: 'LEFT — left stem x', min: 0, max: 256, step: 1 },
-		{ key: 'RIGHT', label: 'RIGHT — right stem x', min: 256, max: 512, step: 1 },
-		{ key: 'TOP', label: 'TOP — stem top y', min: 0, max: 256, step: 1 },
-		{ key: 'BOTTOM', label: 'BOTTOM — stem foot y', min: 256, max: 512, step: 1 },
-		{ key: 'CROSS', label: "CROSS — H's crossbar y", min: 0, max: 512, step: 1 },
-		{ key: 'OVERHANG', label: 'OVERHANG — crossbar past both stems', min: 0, max: 100, step: 1 },
-		{ key: 'SPREAD', label: "SPREAD — M's shoulders past the stems", min: 0, max: 150, step: 1 },
-		{ key: 'RISE', label: 'RISE — leg crossing offset, top', min: -100, max: 100, step: 1 },
-		{ key: 'DIP', label: 'DIP — leg crossing offset, foot', min: -100, max: 100, step: 1 },
-		{
-			key: 'TAIL',
-			label: 'TAIL — how far each leg runs past the other',
-			min: 0,
-			max: 150,
-			step: 1
-		},
-		{ key: 'STROKE', label: 'STROKE — stroke width', min: 2, max: 80, step: 1 },
-		{ key: 'STEM_STROKE', label: 'STEM_STROKE — side-leg width', min: 2, max: 100, step: 1 },
-		{ key: 'GHOST', label: 'GHOST — chromatic-aberration offset', min: 0, max: 40, step: 1 },
-		{ key: 'GRAIN', label: 'GRAIN — phosphor texture', min: 0, max: 100, step: 1 },
-		{ key: 'GROUND_RX', label: 'GROUND_RX — backdrop corner radius', min: 0, max: 256, step: 1 }
+	const HUGIMUNI_GEOMETRY: SliderSpec[] = [
+		{ key: 'LEFT', label: 'LEFT — left stem anchor', min: 80, max: 220, step: 1 },
+		{ key: 'RIGHT', label: 'RIGHT — right stem anchor', min: 292, max: 432, step: 1 },
+		{ key: 'TOP', label: 'TOP — cap line', min: 80, max: 220, step: 1 },
+		{ key: 'BOTTOM', label: 'BOTTOM — stem foot', min: 290, max: 430, step: 1 },
+		{ key: 'CROSS', label: 'CROSS — H crossbar', min: 190, max: 330, step: 1 },
+		{ key: 'OVERHANG', label: 'OVERHANG — H bar outside stems', min: 0, max: 70, step: 1 },
+		{ key: 'SPREAD', label: 'SPREAD — M shoulder overshoot', min: -20, max: 80, step: 1 },
+		{ key: 'RISE', label: 'RISE — M shoulder vertical offset', min: -60, max: 60, step: 1 },
+		{ key: 'DIP', label: 'DIP — M lower-leg depth', min: -60, max: 80, step: 1 },
+		{ key: 'TAIL', label: 'TAIL — lower crossing overshoot', min: 0, max: 80, step: 1 },
+		{ key: 'STROKE', label: 'STROKE — bar / diagonal weight', min: 10, max: 60, step: 1 },
+		{ key: 'STEM_STROKE', label: 'STEM_STROKE — stem weight', min: 14, max: 80, step: 1 },
+		{ key: 'GHOST', label: 'GHOST — H/M registration offset', min: 0, max: 24, step: 1 },
+		{ key: 'GROUND_RX', label: 'GROUND_RX — icon corner radius', min: 0, max: 160, step: 1 }
 	];
 
-	function resetBrnrd() {
-		brnrdConstants = { ...BRNRD_DEFAULTS };
-	}
-	function resetHugimuni() {
-		hugimuniConstants = { ...HUGIMUNI_DEFAULTS };
+	const HUGIMUNI_SCREEN: SliderSpec[] = [
+		{ key: 'BLOOM_BLUR', label: 'BLOOM_BLUR — halo radius', min: 0, max: 18, step: 0.5 },
+		{ key: 'BLOOM_OPACITY', label: 'BLOOM_OPACITY — halo strength', min: 0, max: 1, step: 0.02 },
+		{ key: 'HOT_BLUR', label: 'HOT_BLUR — overlap glow radius', min: 0, max: 6, step: 0.1 },
+		{ key: 'HOT_OPACITY', label: 'HOT_OPACITY — overlap glow strength', min: 0, max: 1, step: 0.02 },
+		{ key: 'GRAIN', label: 'GRAIN — phosphor texture', min: 0, max: 100, step: 1 }
+	];
+
+	const FACE_NAMES = Object.keys(FACES) as (keyof typeof FACES)[];
+
+	function reset() {
+		if (mark === 'brnrd') brnrdConstants = { ...BRNRD_DEFAULTS };
+		else hugimuniConstants = { ...HUGIMUNI_DEFAULTS };
 	}
 
-	// The live render — every slider above feeds this, so any change redraws
-	// it instantly. No pre-rendered file anywhere in this route: the SVG
-	// markup is built fresh from state on every derive.
-	let svgMarkup = $derived(
+	function hugiMarkup(prefix: string) {
+		return hugimuniRegister === 'flat'
+			? hugimuniFlatSvg(hugimuniConstants, prefix)
+			: hugimuniScreenSvg(hugimuniConstants, prefix);
+	}
+
+	let mainMarkup = $derived(
 		mark === 'brnrd'
-			? register === 'stone'
+			? brnrdRegister === 'stone'
 				? brnrdStoneSvg(frame, brnrdConstants)
 				: brnrdAberrationSvg(frame, brnrdConstants)
-			: hugimuniSvg(hugimuniConstants, palette)
+			: hugiMarkup('bench-main')
 	);
-
+	let small32Markup = $derived(mark === 'brnrd' ? mainMarkup : hugiMarkup('bench-32'));
+	let small16Markup = $derived(mark === 'brnrd' ? mainMarkup : hugiMarkup('bench-16'));
+	let lockupMarkup = $derived(
+		mark === 'hugimuni'
+			? hugimuniLockupSvg(hugimuniConstants, hugimuniRegister, 'bench-lockup')
+			: ''
+	);
 	let constantBlock = $derived(
 		mark === 'brnrd' ? brnrdConstantBlock(brnrdConstants) : hugimuniConstantBlock(hugimuniConstants)
 	);
@@ -130,25 +118,20 @@
 			copied = true;
 			setTimeout(() => (copied = false), 1500);
 		} catch {
-			// Clipboard permission can be denied in some embeds — the block is
-			// already visible in the <pre> below and manually selectable, so
-			// this isn't a dead end, just a quieter one.
 			copied = false;
 		}
 	}
-
-	const FACE_NAMES = Object.keys(FACES) as (keyof typeof FACES)[];
 </script>
 
-<svelte:head><title>brand-bench (temporary) · brnrd</title></svelte:head>
+<svelte:head><title>brand-bench · brnrd</title></svelte:head>
 
-<div class="mx-auto flex max-w-5xl flex-col gap-4 p-6 font-mono text-sm text-stone-200">
+<div class="mx-auto flex max-w-6xl flex-col gap-4 p-6 font-mono text-sm text-stone-200">
 	<header>
 		<p class="eyebrow">temporary · unlinked · /brand-bench</p>
 		<h1 class="text-lg font-semibold text-amber-100">the mark you can drag</h1>
-		<p class="mt-1 text-xs text-ink-quiet">
-			Every constant `media/brand/build.py` and `media/brand/hugimuni/build.py` draw from, as a
-			slider. Move one, the preview redraws — nothing here shells out to Python or serves a file.
+		<p class="mt-1 max-w-3xl text-xs text-ink-quiet">
+			HugiMuni now treats the flat H/M overlap as the identity source: amber = H only, sky = M only,
+			cream = H∩M. Screen mode is that same mark with atmosphere layered on top.
 		</p>
 	</header>
 
@@ -156,215 +139,174 @@
 		<label class="flex items-center gap-2">
 			<span class="text-ink-quiet">mark</span>
 			<select class="panel px-2 py-1" bind:value={mark}>
-				<option value="brnrd">brnrd</option>
 				<option value="hugimuni">hugimuni</option>
+				<option value="brnrd">brnrd</option>
 			</select>
 		</label>
 
 		{#if mark === 'brnrd'}
 			<label class="flex items-center gap-2">
+				<span class="text-ink-quiet">register</span>
+				<select class="panel px-2 py-1" bind:value={brnrdRegister}>
+					<option value="stone">stone</option>
+					<option value="screen">screen</option>
+				</select>
+			</label>
+			<label class="flex items-center gap-2">
 				<span class="text-ink-quiet">frame</span>
 				<select class="panel px-2 py-1" bind:value={frame}>
-					<option value="name">name (bRnЯd, resting)</option>
-					{#each FACE_NAMES as name (name)}
-						<option value={name}>{name}</option>
-					{/each}
+					<option value="name">name</option>
+					{#each FACE_NAMES as name (name)}<option value={name}>{name}</option>{/each}
 				</select>
 			</label>
 			<label class="flex items-center gap-2">
 				<span class="text-ink-quiet">crown</span>
 				<select class="panel px-2 py-1" bind:value={brnrdConstants.CROWN}>
-					<option value="none">none</option>
-					<option value="branch">branch</option>
-					<option value="fork">fork</option>
+					<option value="none">none</option><option value="branch">branch</option><option value="fork">fork</option>
 				</select>
 			</label>
-		{/if}
-
-		<label class="flex items-center gap-2" class:opacity-40={mark === 'hugimuni'}>
-			<span class="text-ink-quiet">register</span>
-			<select
-				class="panel px-2 py-1"
-				bind:value={register}
-				disabled={mark === 'hugimuni'}
-				title={mark === 'hugimuni'
-					? 'hugimuni only has one register in build.py — always the chromatic-aberration weave'
-					: undefined}
-			>
-				<option value="stone">stone</option>
-				<option value="screen">screen (chromatic aberration)</option>
-			</select>
-		</label>
-
-		<label class="flex items-center gap-2" class:opacity-40={mark === 'brnrd'}>
-			<span class="text-ink-quiet">palette</span>
-			<select class="panel px-2 py-1" bind:value={palette} disabled={mark === 'brnrd'}>
-				{#each Object.keys(HUGIMUNI_PALETTES) as name (name)}
-					<option value={name}>{name}</option>
-				{/each}
-			</select>
-		</label>
-
-		{#if mark === 'hugimuni'}
+		{:else}
 			<label class="flex items-center gap-2">
-				<span class="text-ink-quiet">intersection</span>
-				<input
-					type="color"
-					bind:value={hugimuniConstants.INTERSECTION}
-					class="h-8 w-12 cursor-pointer border border-stone-700 bg-transparent p-0.5"
-					aria-label="intersection colour"
-				/>
-				<input
-					type="text"
-					bind:value={hugimuniConstants.INTERSECTION}
-					class="panel w-24 px-2 py-1 text-[11px]"
-					aria-label="intersection colour hex"
-				/>
+				<span class="text-ink-quiet">register</span>
+				<select class="panel px-2 py-1" bind:value={hugimuniRegister}>
+					<option value="flat">flat — canonical</option>
+					<option value="screen">screen — atmosphere</option>
+				</select>
 			</label>
 			<label class="flex items-center gap-2">
-				<input
-					type="checkbox"
-					bind:checked={hugimuniConstants.GROUND_ON}
-					aria-label="ground backdrop on/off"
-				/>
+				<input type="checkbox" bind:checked={hugimuniConstants.GROUND_ON} />
 				<span class="text-ink-quiet">ground</span>
-				<input
-					type="color"
-					bind:value={hugimuniConstants.GROUND}
-					class="h-8 w-12 cursor-pointer border border-stone-700 bg-transparent p-0.5"
-					aria-label="ground colour"
-					disabled={!hugimuniConstants.GROUND_ON}
-				/>
-				<input
-					type="text"
-					bind:value={hugimuniConstants.GROUND}
-					class="panel w-24 px-2 py-1 text-[11px]"
-					aria-label="ground colour hex"
-					disabled={!hugimuniConstants.GROUND_ON}
-				/>
 			</label>
 		{/if}
 
-		<button
-			class="panel panel--pressable px-2 py-1 text-ink-quiet hover:text-amber-100"
-			onclick={mark === 'brnrd' ? resetBrnrd : resetHugimuni}
-		>
-			reset {mark} constants
+		<button class="panel panel--pressable px-2 py-1 text-ink-quiet hover:text-amber-100" onclick={reset}>
+			reset {mark}
 		</button>
 	</div>
 
+	{#if mark === 'hugimuni'}
+		<div class="panel flex flex-wrap items-center gap-4 p-3">
+			{#each [
+				['AMBER', 'amber'],
+				['SKY', 'sky'],
+				['INTERSECTION', 'intersection'],
+				['GROUND', 'ground']
+			] as [key, label]}
+				<label class="flex items-center gap-2">
+					<span class="text-[10px] text-ink-quiet">{label}</span>
+					<input
+						type="color"
+						bind:value={hugimuniConstants[key as 'AMBER' | 'SKY' | 'INTERSECTION' | 'GROUND']}
+						class="h-7 w-10 cursor-pointer border border-stone-700 bg-transparent p-0.5"
+					/>
+					<input
+						type="text"
+						bind:value={hugimuniConstants[key as 'AMBER' | 'SKY' | 'INTERSECTION' | 'GROUND']}
+						class="panel w-24 px-2 py-1 text-[10px]"
+					/>
+				</label>
+			{/each}
+		</div>
+	{/if}
+
 	<div class="flex flex-wrap items-start gap-6">
 		<div class="panel flex flex-col items-center gap-3 p-4">
-			<!-- eslint-disable-next-line svelte/no-at-html-tags -- locally generated SVG, no user input -->
-			<div class="mark-frame" style="width: 320px; height: 320px;">{@html svgMarkup}</div>
-			<p class="text-[10px] text-ink-mute">320px — the tuning size</p>
+			<!-- eslint-disable-next-line svelte/no-at-html-tags -- locally generated SVG -->
+			<div class="mark-frame" style="width: 320px; height: 320px;">{@html mainMarkup}</div>
+			<p class="text-[10px] text-ink-mute">320px tuning size</p>
 		</div>
 
 		<div class="panel flex flex-col gap-3 p-4">
-			<p class="text-[10px] text-ink-mute">the sizes that actually decide whether a mark works</p>
+			<p class="text-[10px] text-ink-mute">small-size survival</p>
 			<div class="flex items-end gap-4">
 				<div class="flex flex-col items-center gap-1">
 					<!-- eslint-disable-next-line svelte/no-at-html-tags -->
-					<div class="mark-frame" style="width: 32px; height: 32px;">{@html svgMarkup}</div>
+					<div class="mark-frame" style="width: 32px; height: 32px;">{@html small32Markup}</div>
 					<p class="text-[9px] text-ink-mute">32px</p>
 				</div>
 				<div class="flex flex-col items-center gap-1">
 					<!-- eslint-disable-next-line svelte/no-at-html-tags -->
-					<div class="mark-frame" style="width: 16px; height: 16px;">{@html svgMarkup}</div>
+					<div class="mark-frame" style="width: 16px; height: 16px;">{@html small16Markup}</div>
 					<p class="text-[9px] text-ink-mute">16px</p>
 				</div>
 			</div>
 		</div>
 
-		<div class="panel flex min-w-[320px] flex-1 flex-col gap-2 p-4">
-			<div class="flex items-center justify-between">
-				<p class="text-[10px] text-ink-mute">copy constants → paste into {constantBlockTarget}</p>
-				<button
-					class="panel panel--pressable px-2 py-1 text-amber-100 hover:text-amber-50"
-					onclick={copyConstants}
-				>
+		{#if mark === 'hugimuni'}
+			<div class="panel flex flex-col items-center gap-3 p-4">
+				<p class="text-[10px] text-ink-mute">canonical lockup · one word below symbol</p>
+				<!-- eslint-disable-next-line svelte/no-at-html-tags -->
+				<div class="lockup-frame" style="width: 274px; height: 300px;">{@html lockupMarkup}</div>
+			</div>
+		{/if}
+
+		<div class="panel min-w-[320px] flex-1 p-4">
+			<div class="mb-2 flex items-center justify-between gap-4">
+				<p class="text-[10px] text-ink-mute">copy constants → {constantBlockTarget}</p>
+				<button class="panel panel--pressable px-2 py-1 text-amber-100" onclick={copyConstants}>
 					{copied ? 'copied ✓' : 'copy constants'}
 				</button>
 			</div>
-			<pre
-				class="max-h-64 overflow-auto rounded bg-black/40 p-2 text-[11px] leading-relaxed text-stone-300">{constantBlock}</pre>
+			<pre class="max-h-72 overflow-auto rounded bg-black/40 p-2 text-[11px] leading-relaxed text-stone-300">{constantBlock}</pre>
 		</div>
 	</div>
 
-	<div class="panel flex flex-col gap-2 p-4">
-		<p class="text-[10px] text-ink-mute">
-			every constant, live — drag a slider or type in the number beside it, either drives the other
-		</p>
-		<div class="grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2">
+	<div class="panel flex flex-col gap-3 p-4">
+		<p class="text-[10px] text-ink-mute">geometry · every change redraws the actual vector model</p>
+		<div class="grid grid-cols-1 gap-x-6 gap-y-2 lg:grid-cols-2">
 			{#if mark === 'brnrd'}
 				{#each BRNRD_SLIDERS as spec (spec.key)}
 					<label class="flex items-center gap-2">
-						<span class="w-56 shrink-0 text-[11px] text-ink-quiet">{spec.label}</span>
-						<input
-							type="range"
-							min={spec.min}
-							max={spec.max}
-							step={spec.step}
-							bind:value={brnrdConstants[spec.key as keyof BrnrdConstants]}
-							class="flex-1"
-						/>
-						<input
-							type="number"
-							min={spec.min}
-							max={spec.max}
-							step={spec.step}
-							bind:value={brnrdConstants[spec.key as keyof BrnrdConstants]}
-							class="panel w-20 px-1 py-0.5 text-right"
-						/>
+						<span class="w-60 shrink-0 text-[11px] text-ink-quiet">{spec.label}</span>
+						<input type="range" min={spec.min} max={spec.max} step={spec.step} bind:value={brnrdConstants[spec.key as keyof BrnrdConstants]} class="min-w-24 flex-1" />
+						<input type="number" min={spec.min} max={spec.max} step={spec.step} bind:value={brnrdConstants[spec.key as keyof BrnrdConstants]} class="panel w-20 px-1 py-0.5 text-right" />
 					</label>
 				{/each}
 			{:else}
-				{#each HUGIMUNI_SLIDERS as spec (spec.key)}
+				{#each HUGIMUNI_GEOMETRY as spec (spec.key)}
 					<label class="flex items-center gap-2">
-						<span class="w-56 shrink-0 text-[11px] text-ink-quiet">{spec.label}</span>
-						<input
-							type="range"
-							min={spec.min}
-							max={spec.max}
-							step={spec.step}
-							bind:value={hugimuniConstants[spec.key as keyof HugimuniConstants]}
-							class="flex-1"
-						/>
-						<input
-							type="number"
-							min={spec.min}
-							max={spec.max}
-							step={spec.step}
-							bind:value={hugimuniConstants[spec.key as keyof HugimuniConstants]}
-							class="panel w-20 px-1 py-0.5 text-right"
-						/>
+						<span class="w-60 shrink-0 text-[11px] text-ink-quiet">{spec.label}</span>
+						<input type="range" min={spec.min} max={spec.max} step={spec.step} bind:value={hugimuniConstants[spec.key as keyof HugimuniConstants]} class="min-w-24 flex-1" />
+						<input type="number" min={spec.min} max={spec.max} step={spec.step} bind:value={hugimuniConstants[spec.key as keyof HugimuniConstants]} class="panel w-20 px-1 py-0.5 text-right" />
 					</label>
 				{/each}
 			{/if}
 		</div>
 	</div>
 
+	{#if mark === 'hugimuni' && hugimuniRegister === 'screen'}
+		<div class="panel flex flex-col gap-3 p-4">
+			<p class="text-[10px] text-ink-mute">screen material · these do not change the flat logo</p>
+			<div class="grid grid-cols-1 gap-x-6 gap-y-2 lg:grid-cols-2">
+				{#each HUGIMUNI_SCREEN as spec (spec.key)}
+					<label class="flex items-center gap-2">
+						<span class="w-60 shrink-0 text-[11px] text-ink-quiet">{spec.label}</span>
+						<input type="range" min={spec.min} max={spec.max} step={spec.step} bind:value={hugimuniConstants[spec.key as keyof HugimuniConstants]} class="min-w-24 flex-1" />
+						<input type="number" min={spec.min} max={spec.max} step={spec.step} bind:value={hugimuniConstants[spec.key as keyof HugimuniConstants]} class="panel w-20 px-1 py-0.5 text-right" />
+					</label>
+				{/each}
+			</div>
+		</div>
+	{/if}
+
 	<p class="text-[10px] text-ink-mute">
-		brnrd colours remain fixed — stone {BRNRD_COLORS.STONE}, molten {BRNRD_COLORS.MOLTEN}→{BRNRD_COLORS.EMBER},
-		screen ghosts {BRNRD_COLORS.RED}/{BRNRD_COLORS.CYAN} on {BRNRD_COLORS.CREAM}. HugiMuni's
-		intersection is tunable above; its two palette pairs remain named identity choices.
+		{#if mark === 'hugimuni'}
+			flat is canonical. Amber means H-only, sky M-only, cream H∩M. The lower M-on-M crossing stays sky by construction.
+		{:else}
+			brnrd colours: stone {BRNRD_COLORS.STONE}, molten {BRNRD_COLORS.MOLTEN}→{BRNRD_COLORS.EMBER}, screen ghosts {BRNRD_COLORS.RED}/{BRNRD_COLORS.CYAN}.
+		{/if}
 	</p>
 </div>
 
 <style>
-	/* The generated SVG carries its own width="512" height="512" (straight
-	   off the Python's f-string, faithfully) — without this it overflows
-	   its wrapping div instead of scaling down, which is exactly the "32px
-	   row that isn't actually 32px" failure this bench exists to catch. */
-	.mark-frame :global(svg) {
+	.mark-frame :global(svg),
+	.lockup-frame :global(svg) {
 		display: block;
 		width: 100%;
 		height: 100%;
 	}
-	/* The hugimuni mark is transparent since the emissive rework (2026-08-28)
-	   — it carries its own light and no longer ships a rounded ink board. The
-	   bench provides the near-black ground a glowing mark is judged on. */
-	.mark-frame {
+	.mark-frame,
+	.lockup-frame {
 		background: #030504;
 	}
 </style>

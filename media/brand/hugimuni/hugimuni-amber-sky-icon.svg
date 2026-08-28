@@ -24,6 +24,7 @@
       <path d="M0 3.5H4" stroke="#000" stroke-width="0.55" opacity="0.42"/>
     </pattern>
   </defs>
+  <rect width="512" height="512" rx="64" fill="#050705"/>
   <g style="isolation:isolate">
     <g filter="url(#hm-bloom)" opacity="0.42" style="mix-blend-mode:screen"><g>
       <g><path d="M 145 156 L 145 356" stroke="#ff9a1f" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 353 156 L 353 356" stroke="#ff9a1f" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M 132 276 L 380 276" stroke="#ff9a1f" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>
