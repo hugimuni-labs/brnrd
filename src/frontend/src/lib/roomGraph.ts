@@ -421,7 +421,7 @@ export function compileRoomGraph(
 		lifecycle: run.lifecycle ?? null,
 		awaitUntil: run.await_until ?? null,
 		moodRest: run.mood_rest ?? run.mood_glyph ?? null,
-		course: runCourse(run.card_text),
+		course: runCourse(run.card_text, run.course),
 		portalsPending: run.portals?.pending ?? 0,
 		portalsOldestAt: run.portals?.oldest_at ?? null,
 		relics: liveRelicChips(run.relics_counts),
@@ -503,7 +503,7 @@ export function compileRoomGraph(
 	const cutIds = new Set((ledger?.rows ?? []).map((r) => r.run_id).filter(Boolean));
 	for (const run of [...residents, ...strands]) {
 		if (cutIds.has(run.run_id)) continue;
-		const course = runCourse(run.card_text);
+		const course = runCourse(run.card_text, run.course);
 		cloth.push({
 			runId: run.run_id,
 			name: liveRunDisplayName(run),

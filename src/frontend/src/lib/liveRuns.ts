@@ -45,6 +45,7 @@ export interface LiveRun {
 	// not-yet-built slice — nothing persists that state today.
 	phase: string | null;
 	card_text: string | null;
+	course?: RunCourse | null;
 	card_updated_at: string | null;
 	// #342 relics-so-far: counts of the run's attested produce mid-flight
 	// (`{commit: 2, kb: 1}`), from the daemon's heartbeat-refreshed portal
@@ -513,14 +514,37 @@ export function edgeLine(edge: LiveRunEdge | null | undefined): string | null {
 	return parts.length ? parts.join(' · ') : null;
 }
 
-/** Course position parsed from the run's own card: `- [ ]` / `- [x]` rows
- * anywhere in the card text (the resident's `## Plan` convention). Returns
- * `null` when the card carries no checkbox course at all — a run without a
- * course renders nothing rather than `0/0`. `current` is the first open
- * row, the reader's "where the plan is standing". */
+/** Where a run's plan is standing: rows done, rows in total, and the first
+ *  open one. */
+export interface RunCourse {
+	done: number;
+	total: number;
+	current: string | null;
+}
+
+/**
+ * A run's course, published by the daemon when it can and parsed from the
+ * card when it cannot.
+ *
+ * The parse is the **fallback**, not the source. It reads `- [ ]` / `- [x]`
+ * rows out of `card_text` — which is the `## Now` *projection* only
+ * (`card.now_projection`, capped at 4096 so an overflow cannot 422 the whole
+ * live-runs PUT), and plan rows live *below* `Now`. So it has always
+ * returned `null` on every real card, and the room has always printed
+ * `· no chart` for a run carrying eleven plan rows. The renderer was honest;
+ * the fact was missing one layer up.
+ *
+ * `published` is that fact, derived daemon-side from the **whole** body
+ * (`brr.card.course`). The parse stays because a daemon predating the field
+ * sends nothing, and a client that required it would render every
+ * un-upgraded daemon as having no plan at all — which is the same defect
+ * wearing the fix's clothes.
+ */
 export function runCourse(
-	cardText: string | null | undefined
-): { done: number; total: number; current: string | null } | null {
+	cardText: string | null | undefined,
+	published?: RunCourse | null
+): RunCourse | null {
+	if (published) return published;
 	if (!cardText) return null;
 	let done = 0;
 	let total = 0;
