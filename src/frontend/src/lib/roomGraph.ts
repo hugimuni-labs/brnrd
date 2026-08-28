@@ -337,6 +337,12 @@ export interface RoomGraph {
 	 *  strands without ever saying how many more it could hold. `max` is null
 	 *  on a daemon that has not reported one — a different fact from zero. */
 	slots: { active: number; max: number | null };
+	/** Attested crossings — one row per published boundary that carried an
+	 *  injection (`LiveRun.crossings`, brnrd#1679), newest first. The claw
+	 *  ceremony is minted from these and from nothing else: a reach that
+	 *  animates on a poll tick rather than on an attested crossing is exactly
+	 *  the fabricated motion the movement doctrine forbids. */
+	crossings: { actorRunId: string; at: string }[];
 	clockwork: ClockEntry[];
 	garage: FuelRow[];
 	watch: WatchFact[];
@@ -613,6 +619,11 @@ export function compileRoomGraph(
 			active: actors.filter((a) => a.strand).length,
 			max: live?.spawn_max_concurrent ?? null
 		},
+		crossings: runs.flatMap((run) =>
+			(run.crossings ?? [])
+				.filter((c) => typeof c.at === 'string' && c.at)
+				.map((c) => ({ actorRunId: run.run_id, at: c.at as string }))
+		),
 		clockwork,
 		garage,
 		watch,
