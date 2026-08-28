@@ -105,15 +105,24 @@ def _mark_mask_def():
     </mask>'''
 
 
-def _flat_art():
-    """Three-region identity: H-only / M-only / H∩M."""
+def _flat_art(*, ids=False):
+    """Three-region identity: H-only / M-only / H∩M.
+
+    IDs are useful on the canonical flat asset for editing/inspection, but
+    omitted from duplicate atmospheric passes in the screen register so the
+    emitted SVG never contains duplicate document IDs.
+    """
     h = _svg_group(h_components(), AMBER)
     m = _svg_group(m_components(), SKY)
     overlap = _svg_group(m_components(), INTERSECTION)
-    return f'''<g id="hm-flat-art">
-      <g id="hm-h-only">{h}</g>
-      <g id="hm-m-only">{m}</g>
-      <g id="hm-intersection" mask="url(#hm-h)">{overlap}</g>
+    art_id = ' id="hm-flat-art"' if ids else ''
+    h_id = ' id="hm-h-only"' if ids else ''
+    m_id = ' id="hm-m-only"' if ids else ''
+    i_id = ' id="hm-intersection"' if ids else ''
+    return f'''<g{art_id}>
+      <g{h_id}>{h}</g>
+      <g{m_id}>{m}</g>
+      <g{i_id} mask="url(#hm-h)">{overlap}</g>
     </g>'''
 
 
@@ -127,7 +136,7 @@ def flat_svg(*, with_ground=False):
   <defs>
     {_h_mask_def()}
   </defs>
-{ground}  {_flat_art()}
+{ground}  {_flat_art(ids=True)}
 </svg>
 '''
 
@@ -163,7 +172,7 @@ def screen_svg(*, with_ground=False):
   </defs>
 {ground}  <g style="isolation:isolate">
     <g filter="url(#hm-bloom)" opacity="{BLOOM_OPACITY}" style="mix-blend-mode:screen">{_flat_art()}</g>
-    {_flat_art()}
+    {_flat_art(ids=True)}
     <g mask="url(#hm-h)" filter="url(#hm-hot)" opacity="{HOT_OPACITY}" style="mix-blend-mode:screen">{hot}</g>
     <g mask="url(#hm-mark)">
       <rect width="{BOARD}" height="{BOARD}" filter="url(#hm-grain)" opacity="{grain * .34:.3f}" style="mix-blend-mode:overlay"/>
