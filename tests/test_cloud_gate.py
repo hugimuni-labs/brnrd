@@ -1860,6 +1860,30 @@ def test_live_runs_snapshot_carries_selected_shell_and_core(tmp_path):
     assert rows["run-without-runner"]["runner"] == {}
 
 
+def test_live_runs_snapshot_publishes_derived_card_course(tmp_path, monkeypatch):
+    """The real publisher carries the bounded fact projected from card packets."""
+    from brr import presence, run_progress
+
+    brr_dir = tmp_path / ".brr"
+    presence.register(
+        brr_dir, kind="daemon", stream="telegram:1:", run_id="run-course",
+        repo_label="Gurio/brr", pid=os.getpid(),
+    )
+    view = run_progress.RunProgressView("telegram:1:", "run-course")
+    view.agent_card_text = "Driving tests."
+    view.agent_card_course = {
+        "done": 2, "total": 4, "current": "publish the course",
+    }
+    monkeypatch.setattr(cloud._publisher, "_live_run_progress", lambda *_: view)
+
+    row = cloud._live_runs_snapshot(brr_dir)[0]
+
+    assert row["card_text"] == "Driving tests."
+    assert row["course"] == {
+        "done": 2, "total": 4, "current": "publish the course",
+    }
+
+
 def test_loop_publishes_live_runs_snapshot(tmp_path, monkeypatch):
     """#258: the local presence registry mirrors into the account-scoped
     live/coexisting-runs view, the same publish shape as quota (#237)."""

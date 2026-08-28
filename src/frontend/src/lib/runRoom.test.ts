@@ -83,6 +83,20 @@ test('runCourse reads checkbox rows off the card and points at the first open on
 	assert.equal(runCourse(null), null);
 });
 
+test('runCourse prefers the published course and falls back for an old daemon', () => {
+	const published = { done: 3, total: 5, current: 'the full-card row' };
+	// card_text is only the Now projection on a current daemon, so it cannot
+	// contain the Plan rows. The bounded wire fact wins when present.
+	assert.deepEqual(runCourse('Driving tests.', published), published);
+	// An older daemon has no course field; retain the card parser for cards
+	// that did carry checkbox rows on the legacy wire.
+	assert.deepEqual(runCourse('- [x] inspect\n- [ ] fallback', undefined), {
+		done: 1,
+		total: 2,
+		current: 'fallback'
+	});
+});
+
 test('runWarpAttachments joins taken and done items to the run, done outranking taken', () => {
 	const files = [
 		{

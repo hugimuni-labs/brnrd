@@ -787,6 +787,14 @@ class LiveRunPortalsIn(BaseModel):
     oldest_at: str | None = None
 
 
+class LiveRunCourseIn(BaseModel):
+    """Bounded checkbox progress derived from the run's full card."""
+
+    done: int = Field(ge=0)
+    total: int = Field(ge=1)
+    current: str | None = Field(default=None, max_length=256)
+
+
 class LiveRunIn(BaseModel):
     """One entry from the local presence registry (``src/brr/presence.py``)
     — a thought currently awake on this daemon, or an ad-hoc session
@@ -819,6 +827,7 @@ class LiveRunIn(BaseModel):
     # conversation record yet or no card note has been written.
     phase: str | None = Field(default=None, max_length=32)
     card_text: str | None = Field(default=None, max_length=4096)
+    course: LiveRunCourseIn | None = None
     card_updated_at: str | None = None
     # #342 relics-so-far: counts of the run's attested produce mid-flight
     # (`{"commit": 2, "kb": 1}`), read by the daemon from its own

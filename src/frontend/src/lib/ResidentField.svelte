@@ -525,7 +525,7 @@
 					)}
 					{@const room = roomLine(run.room)}
 					{@const edge = edgeParts(run.edge)}
-					{@const course = runCourse(run.card_text)}
+					{@const course = runCourse(run.card_text, run.course)}
 					{@const color = statusColor(run)}
 					<!-- The root cell: the thought's face on its room's plinth. The
 				     run's hash hue survives as the port-edge accent only — the

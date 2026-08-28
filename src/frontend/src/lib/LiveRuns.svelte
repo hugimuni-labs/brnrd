@@ -184,7 +184,7 @@
 				{@const color = labelColor(run, lvl)}
 				{@const room = roomLine(run.room)}
 				{@const edgeText = edgeLine(run.edge)}
-				{@const course = runCourse(run.card_text)}
+				{@const course = runCourse(run.card_text, run.course)}
 				{@const parentLabel = run.parent_run_id
 					? runs.find((r) => r.run_id === run.parent_run_id)?.label
 					: null}

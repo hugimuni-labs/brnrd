@@ -83,7 +83,7 @@
 	let focusRun = $derived(
 		(selected && runs.find((r) => fieldRunKey(r) === selected)) || residentRun
 	);
-	let focusCourse = $derived(runCourse(focusRun?.card_text));
+	let focusCourse = $derived(runCourse(focusRun?.card_text, focusRun?.course));
 
 	// ── the face the figure wears ─────────────────────────────────────────
 	// The run's own authored mood, resolved daemon-side (`moodFace`'s honesty
@@ -699,7 +699,7 @@
 							anat.bench.h
 						)}
 						{@const trail = trails[m.key] ?? []}
-						{@const course = runCourse(run.card_text)}
+						{@const course = runCourse(run.card_text, run.course)}
 						{@const crown = anat.head
 							? iso(
 									anat.head.x + anat.head.w / 2,
