@@ -13,7 +13,7 @@ Hash snapshot:
 
 - Date: 2026-08-28
 - Source revision (parent of this export-only change):
-  `999c0009397cd3cf25f80df7075fe5dceb41c2fe`
+  `3f7892fe145b36f094da6d74340199a4900f83d4`
 - Algorithm: SHA-256 over raw repository file bytes
 - Machine-readable list: [`SHA256SUMS`](SHA256SUMS)
 - Verification from the repository root:
