@@ -131,7 +131,13 @@ export function referenceFrames(): LiveRun[][] {
 			strand()
 		],
 		// #85 probe + injected evt-B — a letter reaches the resident at tests
-		// without moving the resident
+		// without moving the resident.
+		//
+		// `crossings` carries the same boundary the `edge` above marks
+		// injected. The wire publishes both (brnrd#1679) because `edge` is a
+		// cursor and `crossings` is the stream; the replay has to publish both
+		// too, or the ceremony would have nothing attested to ride and the
+		// demo lane would silently exercise none of it.
 		[
 			resident({
 				edge: edge(
@@ -140,7 +146,16 @@ export function referenceFrames(): LiveRun[][] {
 					'2026-08-27T10:14:00Z',
 					'src/frontend/tests',
 					true
-				)
+				),
+				crossings: [
+					edge(
+						'probe',
+						'node --test asciiRoom.test.ts',
+						'2026-08-27T10:14:00Z',
+						'src/frontend/tests',
+						true
+					)
+				]
 			}),
 			strand()
 		],
