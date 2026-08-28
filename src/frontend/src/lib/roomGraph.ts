@@ -29,6 +29,7 @@ import type { RunLedgerRow, RunLedgerResponse } from './runLedger.ts';
 import { relicCounts } from './runLedger.ts';
 import type { ScheduledWakesResponse } from './scheduledWakes.ts';
 import type { QuotaResponse } from './quota.ts';
+import { fuelProviderGroups } from './fuelProviders.ts';
 
 // ── PROCESS: places ─────────────────────────────────────────────────────────
 
@@ -300,11 +301,11 @@ export interface ClockEntry {
 	repoLabel: string | null;
 }
 
-/** One shell's capacity at the fuel rack. Capacity, not spend. */
+/** One shell's binding provider allowance at the fuel rack. Capacity, not spend. */
 export interface FuelRow {
 	shell: string;
 	status: string;
-	/** `label pct%` fragments for known windows, live readings only. */
+	/** The named binding provider window. Core allowances never enter this row. */
 	windows: { label: string; percent: number | null }[];
 }
 
@@ -527,16 +528,20 @@ export function compileRoomGraph(
 		repoLabel: w.repo_label
 	}));
 
-	// GARAGE: capacity per shell, live readings only — a stale snapshot's
-	// preserved values stay off the rack (its status says stale instead).
-	const garage: FuelRow[] = (extras?.quota?.runner_quotas ?? []).map((shell) => ({
-		shell: shell.shell,
-		status: shell.status,
-		windows:
-			shell.status === 'known'
-				? shell.windows.map((w) => ({ label: w.label, percent: w.percent }))
-				: []
-	}));
+	// GARAGE: one binding provider allowance per shell. `fuelProviderGroups`
+	// owns provider/core scope and reads preserved stale values through
+	// `quotaWindowReading`; the room keeps that shared interpretation intact.
+	const quotaShells = extras?.quota?.runner_quotas ?? [];
+	const quotaByShell = new Map(quotaShells.map((shell) => [shell.shell, shell]));
+	const garage: FuelRow[] = fuelProviderGroups(quotaShells).map((group) => {
+		const shell = quotaByShell.get(group.provider)!;
+		const primary = group.primary;
+		return {
+			shell: group.provider,
+			status: shell.daemon_stale === true ? 'stale' : shell.status,
+			windows: primary ? [{ label: primary.windowName, percent: primary.percent }] : []
+		};
+	});
 
 	// WATCH: only beacons that resolve to a source. Letters resolve to their
 	// run; armed waits resolve to the run that armed them (`brnrd await` →
