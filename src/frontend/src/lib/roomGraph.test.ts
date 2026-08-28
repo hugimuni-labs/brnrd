@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { compileRoomGraph, fileFromDetail, resolvePlace } from './roomGraph.ts';
+import { compileRoomGraph, dirFromEdge, fileFromDetail, resolvePlace } from './roomGraph.ts';
 import { compileTopology } from './roomTopology.ts';
 import type { LiveRun, LiveRunsResponse } from './liveRuns.ts';
 import type { RunLedgerResponse, RunLedgerRow } from './runLedger.ts';
@@ -471,6 +471,40 @@ test('without a remembered trail the current boundary still grows one chamber', 
 	);
 });
 
+test('only a daemon-attested tree directory grows terrain', () => {
+	const observedRootDetails = [
+		'git fetch origin/brr/room-fuel.md',
+		'opacity 0.4/0.3/0.2',
+		'gh api pull/1671',
+		'Write /tmp/reply1.md'
+	];
+	const runs = observedRootDetails.map((detail, index) =>
+		liveRun({
+			run_id: `root-${index}`,
+			room: { env: 'worktree', branch: `brr/observed-${index}`, dir: `run-observed-${index}` },
+			edge: edge('mutate', detail)
+		})
+	);
+	runs.push(
+		liveRun({
+			run_id: 'in-tree',
+			room: { env: 'worktree', branch: 'brr/real-path', dir: 'run-real-path' },
+			edge: edge('mutate', 'Edit roomGraph.ts', { dir: 'src/frontend/src/lib' })
+		})
+	);
+	const graph = compileRoomGraph(liveWire(runs), null);
+	assert.deepEqual(
+		graph.islands[0].camps.flatMap((camp) => camp.chambers.map((chamber) => chamber.dir)),
+		['src/frontend/src/lib']
+	);
+	for (const run of runs.slice(0, -1)) {
+		assert.equal(
+			graph.actors.find((actor) => actor.runId === run.run_id)?.place.label,
+			run.room?.dir
+		);
+	}
+});
+
 test('fileFromDetail reads the leaf and refuses the non-file', () => {
 	assert.equal(fileFromDetail('Edit asciiRoom.ts'), 'asciiRoom.ts');
 	assert.equal(fileFromDetail('node --test src/lib/roomGraph.test.ts'), 'roomGraph.test.ts');
@@ -485,4 +519,92 @@ test('the empty world is a graph, not a crash', () => {
 	assert.deepEqual(graph.actors, []);
 	assert.deepEqual(graph.cloth, []);
 	assert.equal(graph.pendingLetters, 0);
+});
+
+// ── TERRAIN GROWS FROM TERRAIN ─────────────────────────────────────────────
+
+test('a detail path extends attested ground, and only that', () => {
+	// `src` was attested by a real cwd, so `src/frontend/src/lib` — named in
+	// a detail while the actor sat at the root — is ground it can reach.
+	const grown = dirFromEdge(
+		{ act: 'orient', detail: "sed -n '1,180p' src/frontend/src/lib/quota.ts", dir: '.', at: null },
+		['src']
+	);
+	assert.equal(grown, 'src/frontend/src/lib', 'the file leaf drops; chambers are directories');
+});
+
+test('the shapes that kept minting fake chambers cannot extend anything', () => {
+	// Each of these grew a room on the live map at some point, and each was
+	// answered with a narrower shape rule that then met the next shape.
+	// `0.4/0.3/0.2` is a version or an opacity ramp; `origin/brr/…` is a git
+	// ref; `pull/1671` is a URL fragment; `~/.local/state/brnrd/…` is the
+	// account home, which matches because it carries the project's own name.
+	const attested = ['src', 'src/frontend'];
+	for (const detail of [
+		'stroke-opacity 0.4/0.3/0.2 across the ramp',
+		'git push origin/brr/the-fuel-you-can-read',
+		'gh api repos/hugimuni-labs/brnrd/pulls/1671/comments',
+		'cat ~/.local/state/brnrd/accounts/acc_x/home/knowledge/index.md'
+	]) {
+		assert.equal(
+			dirFromEdge({ act: 'orient', detail, dir: '.', at: null }, attested),
+			null,
+			detail
+		);
+	}
+});
+
+test('an attested cwd is terrain without needing to extend anything', () => {
+	// The daemon resolved it against the run's real checkout before
+	// publishing. It is the ground everything else grows from.
+	assert.equal(
+		dirFromEdge({ act: 'mutate', detail: 'Edit x.ts', dir: 'src/brr', at: null }, []),
+		'src/brr'
+	);
+});
+
+test('with nothing attested yet, a detail path grows nothing', () => {
+	// Not a silent drop: the boundary is still rendered on the actor's own
+	// line. It just does not mint ground out of a string nobody has stood on.
+	assert.equal(
+		dirFromEdge({ act: 'orient', detail: 'cat src/frontend/x.ts', dir: '.', at: null }, []),
+		null
+	);
+	assert.equal(
+		dirFromEdge({ act: 'orient', detail: 'cat src/frontend/x.ts', dir: '.', at: null }),
+		null,
+		'and omitting the attested set is the same answer, never a wider one'
+	);
+});
+
+test('the deepest attested ground wins when several could grow', () => {
+	const dir = dirFromEdge(
+		{ act: 'mutate', detail: 'Edit src/frontend/src/lib/roomGraph.ts', dir: '.', at: null },
+		['src', 'src/frontend']
+	);
+	assert.equal(dir, 'src/frontend/src/lib');
+});
+
+test('the island takes its first step off the root from the run own room', () => {
+	// A fresh run has no trail. Without seeding the room's own dir there is
+	// nothing to extend, and the island could never grow past its root — the
+	// exact "a dozen edits into src/frontend grew zero terrain" gap.
+	const graph = compileRoomGraph(
+		liveWire([
+			liveRun({
+				run_id: 'r1',
+				room: { branch: 'brr/x', dir: 'src' },
+				edge: edge('mutate', 'Edit src/frontend/src/lib/quota.ts', {
+					dir: '.',
+					at: '2026-08-28T10:00:00Z'
+				})
+			})
+		]),
+		null
+	);
+	const chambers = graph.islands[0].camps[0].chambers ?? [];
+	assert.ok(
+		JSON.stringify(chambers).includes('src/frontend'),
+		'the detail reached ground the room block already attested'
+	);
 });

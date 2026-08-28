@@ -181,7 +181,7 @@
 	function recordTrails() {
 		let moved = false;
 		for (const run of live?.runs ?? []) {
-			const dir = dirFromEdge(run.edge, run.repo_label);
+			const dir = dirFromEdge(run.edge);
 			const at = run.edge?.at ?? null;
 			if (!dir || !at) continue;
 			const trail = (trails[run.run_id] ??= []);
