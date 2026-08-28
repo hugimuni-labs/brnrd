@@ -4,7 +4,14 @@ import test from 'node:test';
 import { compileRoomGraph, fileFromDetail, type TrailStep } from './roomGraph.ts';
 import { compileTopology, dirId, islandRootId, routeBetween } from './roomTopology.ts';
 import { emptyAtlas, layoutRoom, type AtlasMemory } from './roomLayout.ts';
-import { cameraCenterFor, renderWorld, type Camera } from './asciiCamera.ts';
+import {
+	CAMERA_LINE_HEIGHT_FALLBACK_PX,
+	LEGEND,
+	cameraCenterFor,
+	isCameraHotkey,
+	renderWorld,
+	type Camera
+} from './asciiCamera.ts';
 import { referenceFrames } from './referenceTrace.ts';
 import type { LiveRun, LiveRunsResponse } from './liveRuns.ts';
 
@@ -137,6 +144,82 @@ test('atlas level compresses the same coordinates — islands only, no different
 	assert.ok(board.includes('hugimuni-labs/brnrd'));
 	assert.ok(board.includes('hugimuni-labs/brnrd-knowledge'));
 	assert.ok(!board.includes('frontend/'), 'chamber terrain stays below atlas scale');
+	assert.ok(!/[─│═║┄┆]/.test(board), 'corridors stay below atlas scale');
+});
+
+test('pager overflow rows stay inside the camera width', () => {
+	const { graph, topo, layout } = pipeline([], {}, emptyAtlas());
+	const pages = Array.from({ length: 4 }, (_, i) => ({
+		runId: `r${i}`,
+		glyph: '@',
+		at: '2026-08-27T10:00:00Z',
+		act: 'read',
+		detail: null
+	}));
+	const board = renderWorld(
+		topo,
+		layout,
+		graph,
+		{ center: { x: 0, y: 0 }, cols: 10, rows: 4, level: 'island' },
+		{ pages }
+	);
+	assert.ok(board.split('\n').every((line) => line.length <= 10));
+});
+
+test('camera countdowns preserve overdue truth from the shared scheduler formatter', () => {
+	const frames = referenceFrames();
+	const { graph, topo, layout } = pipeline(frames[0], {}, emptyAtlas());
+	graph.clockwork = [
+		{ summary: 'late', nextAt: '2026-08-27T09:00:00Z', status: 'scheduled', repoLabel: null }
+	];
+	const board = renderWorld(
+		topo,
+		layout,
+		graph,
+		{ center: { x: -4, y: 2 }, cols: 76, rows: 20, level: 'island' },
+		{ now: Date.parse('2026-08-27T10:00:00Z') }
+	);
+	assert.match(board, /T overdue 1h 0m/);
+});
+
+test('the legend names every glyph the camera actually renders', () => {
+	// `lib` and HOME were rendered and unlisted. The legend prints the two
+	// `⌂` kinds side by side rather than carrying a note about the
+	// collision: a legend that explains its own open questions to the reader
+	// has become a TODO with an audience.
+	assert.match(LEGEND, /lib library/);
+	assert.match(LEGEND, /⌂ island root · ⌂ HOME/);
+	assert.ok(!/proposed|TODO/i.test(LEGEND), 'no design note ships inside the legend');
+});
+
+test('camera hotkeys yield modified keys back to the browser', () => {
+	assert.equal(isCameraHotkey({ key: 'f', metaKey: false, ctrlKey: false }), true);
+	assert.equal(isCameraHotkey({ key: 'a', metaKey: false, ctrlKey: false }), true);
+	assert.equal(
+		isCameraHotkey({ key: 'f', metaKey: false, ctrlKey: true }),
+		false,
+		'Ctrl+F is find'
+	);
+	assert.equal(
+		isCameraHotkey({ key: 'a', metaKey: true, ctrlKey: false }),
+		false,
+		'Cmd+A is select all'
+	);
+	assert.equal(isCameraHotkey({ key: 'z', metaKey: false, ctrlKey: false }), false);
+});
+
+test('the line height is a fallback, not the stylesheet copied into TypeScript', () => {
+	// Asserting `CONSTANT === 16.2` was a test of nothing: the value and the
+	// assertion were the same fact written twice, and it would have gone on
+	// passing while the CSS moved underneath it. What is actually load-bearing
+	// is that the page *measures* — `getComputedStyle(probeEl).lineHeight` in
+	// `measureCols`, beside the `charW` measurement it already trusted — and
+	// falls back only when that read is unusable.
+	assert.ok(Number.isFinite(CAMERA_LINE_HEIGHT_FALLBACK_PX));
+	assert.ok(CAMERA_LINE_HEIGHT_FALLBACK_PX > 0);
+	// Honestly uncovered: the measurement itself is DOM-side and this harness
+	// is node-only. `repro/drive-ascii.mjs` is where a real drag-scale check
+	// would live, and it does not have one.
 });
 
 // ── the reference trace: eight boundaries, one journey ──────────────────────
