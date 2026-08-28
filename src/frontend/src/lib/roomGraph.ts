@@ -307,6 +307,12 @@ export interface FuelRow {
 	status: string;
 	/** The named binding provider window. Core allowances never enter this row. */
 	windows: { label: string; percent: number | null }[];
+	/** How soon the binding window comes back, short form. Carried because a
+	 *  ceiling without its clock is only half an instruction: 10% left with
+	 *  40 minutes to reset and 10% left with three days are opposite advice,
+	 *  and the percentage cannot tell them apart. Null when the wire attested
+	 *  no reset instant. */
+	resetShort: string | null;
 }
 
 /** A watchtower sighting. Every fact resolves to a source — the tower
@@ -331,6 +337,12 @@ export interface RoomGraph {
 	/** Letters resting at the gate across all live runs — count only; the
 	 *  wire carries no per-event identity (doc §Gaps #2). */
 	pendingLetters: number;
+	/** Bodies at work against the pool that bounds them. The wire has carried
+	 *  `spawn_max_concurrent` since the loom envelope's phase 1; nothing had
+	 *  read it onto the graph, so the room could show a resident and three
+	 *  strands without ever saying how many more it could hold. `max` is null
+	 *  on a daemon that has not reported one — a different fact from zero. */
+	slots: { active: number; max: number | null };
 	clockwork: ClockEntry[];
 	garage: FuelRow[];
 	watch: WatchFact[];
@@ -539,7 +551,8 @@ export function compileRoomGraph(
 		return {
 			shell: group.provider,
 			status: shell.daemon_stale === true ? 'stale' : shell.status,
-			windows: primary ? [{ label: primary.windowName, percent: primary.percent }] : []
+			windows: primary ? [{ label: primary.windowName, percent: primary.percent }] : [],
+			resetShort: primary?.resetShort ?? null
 		};
 	});
 
@@ -586,6 +599,10 @@ export function compileRoomGraph(
 		actors,
 		cloth,
 		pendingLetters: actors.reduce((n, a) => n + a.portalsPending, 0),
+		slots: {
+			active: actors.filter((a) => a.strand).length,
+			max: live?.spawn_max_concurrent ?? null
+		},
 		clockwork,
 		garage,
 		watch,
