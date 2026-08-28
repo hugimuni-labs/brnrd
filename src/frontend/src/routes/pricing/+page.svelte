@@ -128,8 +128,7 @@
 					<div class="mt-auto pt-6">
 						<a
 							class="inline-flex w-full items-center justify-center border border-amber-700 bg-amber-950/40 px-3 py-2.5 font-mono text-[12px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/70"
-							href={resolve('/login')}
-							>subscribe · {subscriberMonthly}/mo</a
+							href={resolve('/login')}>subscribe · {subscriberMonthly}/mo</a
 						>
 					</div>
 				</article>

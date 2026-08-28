@@ -138,9 +138,58 @@ test('a provider row reports the tap target the fuel design asks for', async () 
 		'one row per provider, not per meter'
 	);
 	ok(body.includes('>claude<'), 'the provider itself is the readable label');
-	ok(body.includes('>82%<'), "claude's weekly reading is the primary, full-opacity figure");
+	ok(body.includes('>82%<'), "claude's binding reading is the row's one figure");
+	// ONE AXIS PER TRACK. Until 2026-08-28 every non-binding window drew a
+	// second, third, fourth semi-transparent fill on this same 12px track at
+	// a 3px vertical offset — so the headline number and the longest visible
+	// fill were different readings with no key saying so ("not readable when
+	// all 3 are clobbered up like so"). Two providers, two fills, ever.
 	ok(
-		(body.match(/class="fuel-ghost(?:"| )/g) ?? []).length === 2,
-		"claude's 5h and fable's week layer behind it, and codex — one meter — manufactures no ghost track"
+		(body.match(/class="fuel-fill(?:"| )/g) ?? []).length === 2,
+		'exactly one fill per provider row — never a second quantity on the same axis'
+	);
+	ok(!body.includes('fuel-ghost'), 'the overlaid ghost fills are gone, not merely dimmed');
+	// The number never travels unlabelled: the window it measures renders
+	// beside it, and every other window keeps its own named number.
+	ok(body.includes('>week</span>'), 'the binding figure says which ceiling it is a percentage of');
+	ok(
+		/fuel-ledger-name[^>]*>5h<\/span> <span[^>]*>93%</u.test(body),
+		"claude's 5h keeps its own number in the ledger rather than an unlabelled bar"
+	);
+	ok(
+		/fuel-ledger-name[^>]*>fable\/week<\/span> <span[^>]*>91%</u.test(body),
+		"the core allowance is named as a core's, not shown as a peer of the shell's own windows"
+	);
+	ok(
+		(body.match(/class="fuel-ledger(?:"| )/g) ?? []).length === 2,
+		'codex — one meter — manufactures no ledger entries'
+	);
+});
+
+test('the row reads the window that binds, not the one that happens to be weekly', async () => {
+	// The old rule was "primary = the meter labelled week". A burned 5h
+	// session under a comfortable weekly ceiling therefore rendered a
+	// reassuring 82% over a machine that could not take a run at all. The
+	// binding window is the one with the least left.
+	const shells = [
+		{
+			shell: 'claude',
+			status: 'ok',
+			windows: [
+				{ label: '5h window', used: null, limit: null, percent: 4, reset: null, resets_at: null },
+				{ label: 'weekly', used: null, limit: null, percent: 82, reset: null, resets_at: null }
+			]
+		}
+	];
+	const body = await renderGauge({ runners: null, shells, benchOpen: false });
+	ok(body.includes('>4%<'), 'the row shows the ceiling that stops a run first');
+	ok(body.includes('>5h</span>'), 'and names it, so the figure is never ambiguous');
+	ok(
+		/fuel-ledger-name[^>]*>week<\/span> <span[^>]*>82%</u.test(body),
+		'the weekly reading is still there — on the ledger, not driving the bar'
+	);
+	ok(
+		/class="fuel-fill[^"]*" style="width: 4%/u.test(body),
+		'and the bar draws the same number the row prints'
 	);
 });

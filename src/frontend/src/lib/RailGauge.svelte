@@ -73,8 +73,12 @@
 	// One row per harness provider — the flat per-meter grid this replaces
 	// (`git log` on this file/`fuelRows` carries it) named a shell·window pair
 	// per cell and grew a cell for every window a provider reported. Grouped,
-	// the provider itself is the readable primary, and everything else it
-	// reports layers behind it as topology, not a second row.
+	// the provider's *binding* window is the row's one bar, and every other
+	// window it reports is a named number on the ledger line beneath it.
+	// (Those used to be overlaid fills on the same track; removed 2026-08-28,
+	// see `fuelProviders.ts`' own note — three near-coincident bars with no
+	// key made the headline number and the longest fill read as different
+	// answers to the same question.)
 	let providerGroups = $derived(fuelProviderGroups(availableShells));
 	let slots = $derived(activeSpawns === null ? null : slotChip(activeSpawns, maxSpawns));
 	let tanks = $derived(readTanks(availableShells, ledgerRows, scheduledWakes, now));
@@ -98,14 +102,16 @@
 		return profile ? `${profile.shell ?? '?'} · ${profile.model ?? 'default'}` : name;
 	}
 
-	/** The collapsed row's own tooltip/aria text: the primary reading plus
-	 *  every ghost, so a reader who can't see opacity still gets the topology
-	 *  ("there is more here") in words. */
+	/** The collapsed row's own tooltip/aria text: every meter in words, with
+	 *  the binding one named as such — the same fact the bar draws, for a
+	 *  reader who is not looking at the bar. */
 	function providerTooltip(group: FuelProviderGroup): string {
-		const parts = group.meters.map(
-			(meter) =>
-				`${meter.label}: ${meter.percent === null ? 'unknown' : `${Math.round(meter.percent)}% left`}`
-		);
+		const parts = group.meters.map((meter) => {
+			const reading = meter.percent === null ? 'unknown' : `${Math.round(meter.percent)}% left`;
+			if (meter.id === group.primary?.id) return `${meter.label}: ${reading} — binding`;
+			if (meter.scope === 'core') return `${meter.label}: ${reading} (core allowance)`;
+			return `${meter.label}: ${reading}`;
+		});
 		return parts.length > 0 ? parts.join(' · ') : `${group.provider}: no quota report`;
 	}
 
@@ -143,30 +149,29 @@
 					<div class="fuel-provider-head">
 						<span class="fuel-label">{group.provider}</span>
 						{#if primary}
-							<strong style={`color: ${LEVEL_COLOR[level]}`}
-								>{primary.percent === null ? '?' : `${Math.round(primary.percent)}%`}</strong
-							>
+							<!-- The number never travels without the window it measures.
+							     Unlabelled, "34%" was read against whichever fill happened
+							     to be longest, and the two were routinely different
+							     readings. -->
+							<span class="fuel-reading">
+								<span class="fuel-window">{primary.windowName}</span>
+								<strong style={`color: ${LEVEL_COLOR[level]}`}
+									>{primary.percent === null ? '?' : `${Math.round(primary.percent)}%`}</strong
+								>
+							</span>
 						{:else}
 							<span class="fuel-empty">no report</span>
 						{/if}
 					</div>
-					<span class="fuel-stack" role="img" aria-label={providerTooltip(group)}>
-						<!-- Ghosts render first (painted behind), dimmest-and-narrowest
-						     last in source order so a later, more-recent-window ghost
-						     doesn't visually cover an earlier one — enough topology to
-						     read "there is more here" without asking the reader to
-						     decode every meter. Never averaged or normalized against
-						     the primary: each track keeps its own width and color. -->
-						{#each group.secondary as ghost, index (ghost.id)}
-							<span
-								class="fuel-ghost"
-								style={`width: ${ghost.percent ?? 0}%; bottom: ${(index + 1) * 3}px; background-color: ${LEVEL_COLOR[quotaLevel(ghost.percent)]}; opacity: ${0.4 - index * 0.1}`}
-							></span>
-						{/each}
+					<!-- One track, one quantity: the binding window's remaining fuel.
+					     Every other reading this provider has is a number on the ledger
+					     line below and a full-width bar in the bench's Resources list —
+					     never a second fill on this axis. -->
+					<span class="fuel-track" role="img" aria-label={providerTooltip(group)}>
 						{#if primary}
 							<span
 								class="fuel-fill"
-								style={`width: ${primary.percent ?? 0}%; background-color: ${LEVEL_COLOR[level]}`}
+								style={`width: ${primary.percent ?? 0}%; color: ${LEVEL_COLOR[level]}`}
 							></span>
 						{/if}
 					</span>
@@ -196,10 +201,24 @@
 								/>
 							</svg>
 						{/if}
-						{#if primary?.resetShort}↻{primary.resetShort}{/if}
-						{#if group.secondary.length > 0}
-							<span class="fuel-more" aria-hidden="true">+{group.secondary.length}</span>
-						{/if}
+						{#if primary?.resetShort}<span class="fuel-reset-clock">↻{primary.resetShort}</span
+							>{/if}
+						<!-- THE LEDGER: every window this provider reports that is not
+						     the binding one, named and numbered. This is what the ghost
+						     stack was trying to say in overlapping fills, and it says it
+						     in the one notation that needs no key. -->
+						{#each group.secondary as meter (meter.id)}
+							<span class="fuel-ledger" title={meter.tooltip}>
+								<span class="fuel-ledger-name"
+									>{meter.scope === 'core'
+										? meter.label.replace(' · ', '/')
+										: meter.windowName}</span
+								>
+								<span style={`color: ${LEVEL_COLOR[quotaLevel(meter.percent)]}`}
+									>{meter.percent === null ? '?' : `${Math.round(meter.percent)}%`}</span
+								>
+							</span>
+						{/each}
 					</span>
 				</button>
 			{/each}
@@ -315,55 +334,79 @@
 		font-size: 10px;
 		color: rgb(168 162 158);
 	}
+	.fuel-reading {
+		display: flex;
+		flex: none;
+		align-items: baseline;
+		gap: 5px;
+	}
+	.fuel-window {
+		font-size: 8px;
+		letter-spacing: 0.1em;
+		text-transform: uppercase;
+		color: rgb(120 113 108);
+	}
 	.fuel-provider-head strong {
 		font-size: 11px;
 		font-weight: 500;
+		font-variant-numeric: tabular-nums;
 	}
-	/* The ghost stack: a dim baseline track, then every secondary meter
-	   layered above it at falling opacity, then the primary fill on top —
-	   "there is more here" as topology, never averaged into the primary
-	   reading and never a manufactured symmetrical track. */
-	.fuel-stack {
+	/* One fill on one track. The `color` (not `background-color`) is set
+	   inline so the bar's own glow is its own colour rather than the row
+	   text's — the fill reads as lit, not painted. */
+	.fuel-track {
 		grid-column: 1 / -1;
 		position: relative;
 		display: block;
 		height: 12px;
 	}
-	.fuel-stack::before {
+	.fuel-track::before {
 		content: '';
 		position: absolute;
-		inset: 0 0 0 0;
-		bottom: 0;
-		height: 5px;
+		inset: 3px 0 3px 0;
 		background: rgb(41 37 36);
 		box-shadow: inset 0 0 0 1px rgb(68 64 60 / 0.45);
 	}
-	.fuel-fill,
-	.fuel-ghost {
-		position: absolute;
-		left: 0;
-		bottom: 0;
-		display: block;
-	}
 	.fuel-fill {
-		height: 5px;
-		transition: width 500ms ease-out;
-		box-shadow: 0 0 8px currentColor;
-	}
-	.fuel-ghost {
-		height: 4px;
+		position: absolute;
+		top: 3px;
+		bottom: 3px;
+		left: 0;
+		display: block;
+		background: currentColor;
+		box-shadow: 0 0 7px currentColor;
 		transition: width 500ms ease-out;
 	}
 	.fuel-reset {
 		grid-column: 1 / -1;
 		display: flex;
 		align-items: center;
-		gap: 3px;
+		gap: 6px;
+		min-width: 0;
+		overflow: hidden;
 		font-size: 8px;
+		font-variant-numeric: tabular-nums;
+		white-space: nowrap;
 		color: rgb(120 113 108);
 	}
-	.fuel-more {
-		color: rgb(120 113 108);
+	.fuel-reset-clock {
+		flex: none;
+	}
+	.fuel-ledger {
+		display: flex;
+		flex: none;
+		align-items: baseline;
+		gap: 3px;
+	}
+	/* A separator the ledger owns, so the row reads as one list of readings
+	   rather than a run of unrelated chips. */
+	.fuel-ledger::before {
+		content: '·';
+		margin-right: 3px;
+		color: rgb(68 64 60);
+	}
+	.fuel-ledger-name {
+		color: rgb(87 83 78);
 	}
 	.fuel-empty {
 		align-self: center;
