@@ -1907,6 +1907,7 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
                 # just-registered entry) or projection failed.
                 "phase": (view.phase if view is not None else None) or None,
                 "card_text": (view.agent_card_text if view is not None else None) or None,
+                "course": (view.agent_card_course if view is not None else None) or None,
                 "card_updated_at": (view.agent_card_updated_at if view is not None else None) or None,
                 # #342: relics-so-far. Joined by ``project_run`` from the
                 # daemon-refreshed portal capsule (``relics.live_portal_counts``)

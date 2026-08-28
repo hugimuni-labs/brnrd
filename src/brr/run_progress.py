@@ -159,6 +159,7 @@ class RunProgressView:
     # relay-not-store stance the seam preserves: brnrd still only edits
     # a card it does not author or store.
     agent_card_text: str | None = None
+    agent_card_course: dict[str, object] | None = None
     agent_card_updated_at: str | None = None
     # Success-signal axis (§8 re-alignment): which signal closed the run
     # — current_reply | other_reply | outbound | commit | internal —
@@ -543,6 +544,8 @@ def _project(
                 stripped = text.strip()
                 view.agent_card_text = stripped or None
                 view.agent_card_updated_at = ts
+            course = record.get("course")
+            view.agent_card_course = course if isinstance(course, dict) else None
         elif ptype == "heartbeat":
             # Compatibility for older logs that persisted heartbeat
             # records. New heartbeats are daemon-only liveness/card
