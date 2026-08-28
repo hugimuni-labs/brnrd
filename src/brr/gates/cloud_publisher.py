@@ -1556,17 +1556,31 @@ def _wire_detail(detail: object) -> str | None:
     return shaped[:_WIRE_DETAIL_MAX] or None
 
 
-def _edge_payload(
-    brr_dir: Path, run_id: str, manifest: Mapping[str, Any] | None = None
-) -> dict[str, Any] | None:
-    """The latest attested tool boundary, from a bounded transcript tail.
+#: How many *crossings* — boundaries at which the daemon injected context —
+#: one publish tick carries. The `edge` row is the run's current boundary and
+#: is therefore a **cursor**: a client polling every 2s sees whichever edge
+#: happened to be current, so two crossings inside one poll window means one
+#: is never published at all, and `✉×N read` counted polls-that-landed rather
+#: than injections (measured 2026-08-28: one wake crossed 119 boundaries in
+#: ~75 minutes, bursty).
+#:
+#: A cursor cannot be sampled into a stream. This is the stream: a bounded
+#: tail, so a ceremony can render *the crossing that happened* rather than
+#: the crossing a poll caught. Eight covers a burst between polls with room
+#: to spare; a run quiet enough to publish fewer has nothing to lose, and a
+#: run louder than eight per tick has already lost the reader's attention.
+_CROSSINGS_MAX = 8
 
-    Skips a subagent's boundaries (#1095 — a limb's act is not the run's)
-    and returns ``None`` rather than a zero-valued row when the transcript
-    is absent or unreadable: no edge attested is different from a quiet one.
+
+def _boundary_records(brr_dir: Path, run_id: str) -> list[dict[str, Any]]:
+    """Attested boundaries from a bounded transcript tail, newest first.
+
+    Skips a subagent's boundaries (#1095 — a limb's act is not the run's).
+    One reader for both the current edge and the crossing tail, so the two
+    can never disagree about what counts as a boundary.
     """
     if not run_id:
-        return None
+        return []
     path = brr_dir / "runs" / run_id / "boundaries.jsonl"
     try:
         with path.open("rb") as handle:
@@ -1575,7 +1589,8 @@ def _edge_payload(
             handle.seek(max(0, size - _EDGE_TAIL_BYTES))
             tail = handle.read().decode("utf-8", errors="replace")
     except OSError:
-        return None
+        return []
+    out: list[dict[str, Any]] = []
     for raw in reversed(tail.splitlines()):
         raw = raw.strip()
         if not raw:
@@ -1589,26 +1604,62 @@ def _edge_payload(
         phase = record.get("phase")
         if not isinstance(phase, str) or not phase:
             continue
-        tools = [
-            str(name)[:64]
-            for name in (record.get("tools") or [])
-            if isinstance(name, str)
-        ][:16]
-        at = record.get("at")
-        act = record.get("act")
-        detail = record.get("detail")
-        out_bytes = record.get("out_bytes")
-        return {
-            "at": at if isinstance(at, str) else None,
-            "phase": phase[:16],
-            "act": act[:32] if isinstance(act, str) and act else None,
-            "tools": tools,
-            "detail": _wire_detail(detail),
-            "out_bytes": out_bytes if isinstance(out_bytes, int) else None,
-            "injected": bool(record.get("inject")),
-            "dir": _edge_dir(record.get("cwd"), manifest or {}, brr_dir),
-        }
+        out.append(record)
+    return out
+
+
+def _boundary_row(
+    record: Mapping[str, Any], brr_dir: Path, manifest: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """One boundary, projected for the wire. The single projection — the edge
+    and every crossing share it, so a detail bounded for one is bounded for
+    both and no future field lands on only half of them."""
+    tools = [
+        str(name)[:64] for name in (record.get("tools") or []) if isinstance(name, str)
+    ][:16]
+    at = record.get("at")
+    act = record.get("act")
+    out_bytes = record.get("out_bytes")
+    phase = record.get("phase")
+    return {
+        "at": at if isinstance(at, str) else None,
+        "phase": phase[:16] if isinstance(phase, str) else None,
+        "act": act[:32] if isinstance(act, str) and act else None,
+        "tools": tools,
+        "detail": _wire_detail(record.get("detail")),
+        "out_bytes": out_bytes if isinstance(out_bytes, int) else None,
+        "injected": bool(record.get("inject")),
+        "dir": _edge_dir(record.get("cwd"), manifest or {}, brr_dir),
+    }
+
+
+def _edge_payload(
+    brr_dir: Path, run_id: str, manifest: Mapping[str, Any] | None = None
+) -> dict[str, Any] | None:
+    """The latest attested tool boundary, from a bounded transcript tail.
+
+    Returns ``None`` rather than a zero-valued row when the transcript is
+    absent or unreadable: no edge attested is different from a quiet one.
+    """
+    for record in _boundary_records(brr_dir, run_id):
+        return _boundary_row(record, brr_dir, manifest)
     return None
+
+
+def _crossings_payload(
+    brr_dir: Path, run_id: str, manifest: Mapping[str, Any] | None = None
+) -> list[dict[str, Any]]:
+    """The recent crossings — boundaries that carried an injection — newest
+    first, capped at ``_CROSSINGS_MAX``. Empty is a real answer: this run has
+    crossed nothing since its transcript tail began."""
+    out: list[dict[str, Any]] = []
+    for record in _boundary_records(brr_dir, run_id):
+        if not record.get("inject"):
+            continue
+        out.append(_boundary_row(record, brr_dir, manifest))
+        if len(out) >= _CROSSINGS_MAX:
+            break
+    return out
 
 
 def _await_facet(brr_dir: Path, manifest: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -1816,6 +1867,11 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
                 "await_until": await_until,
                 "room": _room_payload(brr_dir, manifest) if manifest else None,
                 "edge": _edge_payload(brr_dir, run_id, manifest),
+                # The crossings themselves, not the cursor. `edge` is whichever
+                # boundary is current; this is the bounded tail of the ones that
+                # actually carried a letter, so a ceremony can ride the crossing
+                # instead of riding a 2-second poll. See `_CROSSINGS_MAX`.
+                "crossings": _crossings_payload(brr_dir, run_id, manifest),
                 # the-field-takes-its-body: the message-ceremony fact — how
                 # many pending events stand at this run's portal and when
                 # the oldest arrived, so a sent message can render as
