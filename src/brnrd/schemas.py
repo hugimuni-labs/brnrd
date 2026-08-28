@@ -870,6 +870,17 @@ class LiveRunIn(BaseModel):
     await_until: str | None = None
     room: LiveRunRoomIn | None = None
     edge: LiveRunEdgeIn | None = None
+    # THE CROSSINGS, distinct from `edge` above and for one reason: `edge` is
+    # a **cursor** — whichever boundary is current at publish time. A client
+    # polling on an interval sees whichever edge that poll caught, so two
+    # injections inside one window means one was never published at all, and
+    # a "messages read" count counted polls-that-landed rather than crossings
+    # (measured 2026-08-28). A cursor cannot be sampled into a stream, so the
+    # stream is published as one: the bounded tail of boundaries that carried
+    # an injection, newest first, from `cloud_publisher._crossings_payload`.
+    # Empty is a real answer — nothing crossed since the transcript tail
+    # began — and absent stays absent on a daemon predating the field.
+    crossings: list[LiveRunEdgeIn] = Field(default_factory=list, max_length=8)
     # the-field-takes-its-body: pending correspondence at the run's portal
     # — the *put to read* half of the message ceremony. Documented on its
     # model above; `None` for an ad-hoc session or a daemon predating the
