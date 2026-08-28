@@ -555,10 +555,19 @@
 	// "press a provider row" opens the bench already pointed at that
 	// provider's Resources + Next-run — the gauge stays disclosure-free and
 	// only reports which provider was tapped.
-	let benchFocusProvider = $state<string | null>(null);
+	//
+	// THE ONE CURSOR: this is the bench's whole provider selection, and both
+	// controls that can move it — a fuel row tap up in the gauge, a shell tab
+	// down in the rack — write here. SpoolRack used to keep a second copy
+	// (`manualShell`), seeded from this one and then free to drift, which is
+	// how a codex core came to sit under claude's Resources heading.
+	let benchProvider = $state<string | null>(null);
 	function onProviderExpand(provider: string) {
-		benchFocusProvider = provider;
+		benchProvider = provider;
 		benchOpen = true;
+	}
+	function onProviderSelect(provider: string) {
+		benchProvider = provider;
 	}
 	let clocks = $state<StackClocks>(initialStackClocks());
 	let railCondensed = $derived(clocks.rail.settled);
@@ -826,10 +835,11 @@
 	function onBenchToggle() {
 		const open = !benchOpen;
 		benchOpen = open;
-		// A generic close drops the fuel gauge's own focus — reopening via
-		// the plain "▸ bench" tap (as opposed to another provider-row tap)
-		// should not silently keep showing the last provider's Resources.
-		if (!open) benchFocusProvider = null;
+		// A generic close drops the provider cursor — reopening via the plain
+		// "▸ bench" tap (as opposed to another provider-row tap) should not
+		// silently keep showing the last provider. Null is a real state, not
+		// an empty one: the rack's own `defaultShell` answers for it.
+		if (!open) benchProvider = null;
 		// Un-docking is immediate, never debounced — step the clocks in the
 		// same act, before the smooth scroll below has moved anything.
 		requestStackStep();
@@ -1607,7 +1617,8 @@
 				runners={runnersData}
 				repos={connectedRepos}
 				{shells}
-				focusProvider={benchFocusProvider}
+				focusProvider={benchProvider}
+				{onProviderSelect}
 				{runnersError}
 				{runnersNote}
 				{now}

@@ -179,3 +179,35 @@ test("rank, quota source, and capability move to the row's own open state, off t
 	ok(!body.includes('cap 82'), 'capability does not render on the row line by default');
 	ok(body.includes('detail'), 'the row offers a disclosure for the justification fields');
 });
+
+test('the rack keeps no provider cursor of its own', () => {
+	// It used to: a `manualShell` `$state` seeded once from the incoming
+	// focus and free to drift afterwards, which is how a codex core list
+	// came to render under a claude Resources heading (2026-08-28). The tab
+	// strip is a *rendering* of the bench's cursor and a control that moves
+	// it — never a second place it is stored.
+	const source = readFileSync(componentPath, 'utf8');
+	ok(!/manualShell\s*=\s*\$state/u.test(source), 'no local copy of the selection');
+	ok(
+		!/\$effect\(\(\) => \{\s*if \(focusShell/u.test(source),
+		'and no effect re-anchoring one from a prop'
+	);
+	ok(
+		/onclick=\{\(\) => onShellSelect\?\.\(group\.shell\)\}/u.test(source),
+		'a tab tap raises the change to the owner instead of applying it locally'
+	);
+	ok(
+		/selectedShell !== null && groups\.some/u.test(source),
+		'the active tab is derived from the incoming cursor'
+	);
+});
+
+test('a core-scope allowance renders on the row where that core is picked', () => {
+	// The number that decides a `claude-fable` tap is fable's own weekly
+	// allowance. On the claude fuel bar it was a third overlaid fill; here
+	// it sits on the row it constrains, matched on the model the profile
+	// pins rather than on the profile's name.
+	const source = readFileSync(componentPath, 'utf8');
+	ok(/coreAllowances\.get\(model\)/u.test(source), 'matched by pinned model, not by name');
+	ok(/allowance\.percent\)\}% allowance`/u.test(source), 'and rendered on the row');
+});
