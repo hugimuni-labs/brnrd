@@ -324,3 +324,35 @@ test("a route leaving terrain turns at its own row, not down the tree's trunk", 
 	const trunk = layout.edgeRoutes[`${dirId(REPO, ['src'])}->${dirId(REPO, ['src', 'b'])}`];
 	assert.equal(trunk[1].x, layout.nodes[dirId(REPO, ['src'])].x, 'tree edges turn at the parent');
 });
+
+test('no two terrain nodes share a character row, however their labels fall', () => {
+	// Measured on the deployed board 2026-08-29, with two actors exploring
+	// different parts of one repo:
+	//
+	//     |  tests/--· prodshot.mjs        two nodes, one row
+	//     |  brr/└---· .prodshot.mjs       two junctions, one row
+	//
+	// The first allocator let a node share a row whenever the two painted
+	// *extents* missed each other. On one subtree that is invisible; with
+	// interleaved discoveries it garbles into a path that does not exist.
+	// `tree(1)` never shares a row and this is the reason.
+	//
+	// Two subtrees at very different depths on purpose: a shallow node and a
+	// deep one are exactly the pair whose extents miss.
+	const topo = topoWith([
+		'src/frontend/tests',
+		'src/frontend/tests/repro/deep/deeper',
+		'src/brnrd/brr/gates',
+		'src/brnrd/brr/prompts',
+		'docs'
+	]);
+	const { layout } = layoutRoom(topo);
+	const rows = new Map<number, string[]>();
+	for (const node of Object.values(topo.nodes)) {
+		if (node.kind !== 'directory' && node.kind !== 'file') continue;
+		const y = layout.nodes[node.id].y;
+		(rows.get(y) ?? rows.set(y, []).get(y)!).push(node.id);
+	}
+	for (const [y, ids] of rows)
+		assert.equal(ids.length, 1, `row ${y} holds ${ids.length} nodes: ${ids.join(' + ')}`);
+});

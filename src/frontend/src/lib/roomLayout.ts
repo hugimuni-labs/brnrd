@@ -254,7 +254,9 @@ export function layoutRoom(
 					coords[node.id] = shelf.claim(parent.x + DEPTH_DX, extentUnits(node), {
 						preferY: parent.y + 1,
 						direction: 'south',
-						minY: root.y + TERRAIN_TOP
+						minY: root.y + TERRAIN_TOP,
+						// one node, one row — see Shelf.free
+						exclusive: true
 					});
 				}
 				walk(node.id);

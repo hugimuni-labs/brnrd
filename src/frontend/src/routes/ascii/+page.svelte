@@ -138,8 +138,8 @@
 	// geography, and `layoutRoom` never moves a remembered node — a returning
 	// reader would have kept the wide board forever and read the fix as not
 	// shipped.
-	const ATLAS_KEY = 'brnrd-ascii-atlas-v2';
-	const ATLAS_KEY_RETIRED = ['brnrd-ascii-atlas-v1'];
+	const ATLAS_KEY = 'brnrd-ascii-atlas-v3';
+	const ATLAS_KEY_RETIRED = ['brnrd-ascii-atlas-v1', 'brnrd-ascii-atlas-v2'];
 	let atlas: AtlasMemory = emptyAtlas();
 
 	// pager memory: injections attested while this reader watched — pages

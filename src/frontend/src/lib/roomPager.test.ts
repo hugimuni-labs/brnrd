@@ -145,7 +145,7 @@ test('the PAGER strip renders the injected block, carrier subordinate', () => {
 	const store: Record<string, PagerPage[]> = {};
 	recordPages(referenceFrames()[4], store, { [RESIDENT]: '@' });
 	const out = renderWorld(topo, layout, graph, CAM, { pages: pagerFeed(store) });
-	assert.match(out, /▯ PAGER/);
+	assert.match(out, /▷ PAGER/);
 	assert.match(out, /✉×1 read/);
 	assert.match(out, /10:14 ✉ @ ⌁\[·\]/, 'the page body is the block that crossed');
 	assert.doesNotMatch(out, /10:14 ✉ @ rode probe/, 'never the command as the page body');
@@ -155,7 +155,7 @@ test('the PAGER strip renders the injected block, carrier subordinate', () => {
 	// injection-status instrument now, not a sometimes-strip): both tenses
 	// named, nothing invented
 	const empty = renderWorld(topo, layout, graph, CAM, {});
-	assert.match(empty, /▯ PAGER/);
+	assert.match(empty, /▷ PAGER/);
 	assert.match(empty, /none read yet/);
 });
 
@@ -169,10 +169,10 @@ test('the mind-connect renders in place: tether at the actor, no relocation', ()
 		reading: { [RESIDENT]: READING_TICKS }
 	});
 	// the bare render has the standing PAGER field but no tether — the plug
-	// only closes (▯⌁) while a reading ceremony is live
-	assert.doesNotMatch(bare, /▯⌁/);
-	assert.match(reading, /▯⌁ PAGER/, 'the pager field shows the connection');
-	assert.match(reading, /▯[⌁∿≋]b·_·d/, 'pager + tether + the face that is the body');
+	// only closes (▷⌁) while a reading ceremony is live
+	assert.doesNotMatch(bare, /▷⌁/);
+	assert.match(reading, /▷⌁ PAGER/, 'the pager field shows the connection');
+	assert.match(reading, /▷[⌁∿≋]b·_·d/, 'pager + tether + the face that is the body');
 	// the mind-connect reaches *down* toward the pager field below the map:
 	// the reading render carries tether frames the bare render does not
 	const tetherFrames = (s: string) => (s.match(/[∿≋]/g) ?? []).length;
