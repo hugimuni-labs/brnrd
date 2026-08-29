@@ -79,31 +79,118 @@ test('two observed paths with a shared prefix share the same structural corridor
 		]
 	};
 	const topo = topoFor([liveRun({ run_id: 'r1' })], trails);
-	// shared prefixes exist once each
-	for (const id of [
-		dirId(REPO, ['src']),
-		dirId(REPO, ['src', 'frontend']),
-		dirId(REPO, ['src', 'frontend', 'src']),
-		dirId(REPO, ['src', 'frontend', 'src', 'lib']),
-		dirId(REPO, ['src', 'frontend', 'tests']),
-		dirId(REPO, ['docs']),
-		dirId(REPO, ['docs', 'legal']),
-		dirId(REPO, ['docs', 'legal', 'export'])
-	]) {
-		assert.ok(topo.nodes[id], `missing ${id}`);
-	}
-	// both full paths hang off the one `src/frontend` node
+	// THE PROPERTY, unchanged by the fold: a shared prefix is one node, and
+	// both paths hang off it. `src/frontend` is a fork — two directory
+	// children — so it survives as a place.
+	assert.ok(topo.nodes[dirId(REPO, ['src', 'frontend'])]);
 	assert.equal(
 		topo.nodes[dirId(REPO, ['src', 'frontend', 'tests'])].parentId,
 		dirId(REPO, ['src', 'frontend'])
 	);
 	assert.equal(
-		topo.nodes[dirId(REPO, ['src', 'frontend', 'src'])].parentId,
+		topo.nodes[dirId(REPO, ['src', 'frontend', 'src', 'lib'])].parentId,
 		dirId(REPO, ['src', 'frontend'])
 	);
-	// intermediate prefixes are structural directories, not something else
-	assert.equal(topo.nodes[dirId(REPO, ['src'])].kind, 'directory');
-	assert.equal(topo.nodes[dirId(REPO, ['src'])].depth, 1);
+	// and it is still a structural directory, not something else
+	assert.equal(topo.nodes[dirId(REPO, ['src', 'frontend'])].kind, 'directory');
+
+	// THE FOLD: a chain of single-child directories is punctuation, not
+	// terrain. `src` had one child and is gone into it; so is
+	// `src/frontend/src`, and all of `docs/legal`. The surviving node keeps
+	// the *deep* id — `dirId` still addresses the chamber a caller names —
+	// and wears the whole folded path as its label.
+	for (const gone of [
+		dirId(REPO, ['src']),
+		dirId(REPO, ['src', 'frontend', 'src']),
+		dirId(REPO, ['docs']),
+		dirId(REPO, ['docs', 'legal'])
+	]) {
+		assert.equal(topo.nodes[gone], undefined, `${gone} should have folded`);
+	}
+	assert.equal(topo.nodes[dirId(REPO, ['src', 'frontend'])].label, 'src/frontend');
+	assert.equal(topo.nodes[dirId(REPO, ['src', 'frontend', 'src', 'lib'])].label, 'src/lib');
+	assert.equal(
+		topo.nodes[dirId(REPO, ['docs', 'legal', 'export'])].label,
+		'docs/legal/export'
+	);
+	assert.equal(
+		topo.nodes[dirId(REPO, ['docs', 'legal', 'export'])].parentId,
+		islandRootId(REPO)
+	);
+
+	// Nine segment-nodes became four places. The count is the whole point of
+	// the change (maintainer, 2026-08-29: "not like too flat, as it currently
+	// is") and a fold that quietly stopped folding would still pass every
+	// assertion above.
+	const dirs = Object.values(topo.nodes).filter((n) => n.kind === 'directory');
+	assert.equal(dirs.length, 4);
+});
+
+test('a fork is a place: folding chains makes the trie branch, it does not flatten it', () => {
+	// The rule has two halves and this is the half that is easy to lose: a
+	// directory with two or more directory children is a fork in the terrain,
+	// and a fork is the structure a map exists to show. Collapse those too and
+	// you get a flat list of full paths — legible, and not a place.
+	const trails: Record<string, TrailStep[]> = {
+		r1: [
+			{ dir: 'src/a/deep', act: 'mutate', at: '2026-08-27T10:01:00Z' },
+			{ dir: 'src/b/deep', act: 'mutate', at: '2026-08-27T10:02:00Z' }
+		]
+	};
+	const topo = topoFor([liveRun({ run_id: 'r1' })], trails);
+	// `src` forks, so it stays — and it did NOT absorb either branch
+	assert.ok(topo.nodes[dirId(REPO, ['src'])]);
+	assert.equal(topo.nodes[dirId(REPO, ['src'])].label, 'src');
+	// each single-child branch below it folds to one node
+	assert.equal(topo.nodes[dirId(REPO, ['src', 'a', 'deep'])].label, 'a/deep');
+	assert.equal(topo.nodes[dirId(REPO, ['src', 'b', 'deep'])].label, 'b/deep');
+	assert.equal(topo.nodes[dirId(REPO, ['src', 'a'])], undefined);
+	for (const seg of ['a', 'b']) {
+		assert.equal(
+			topo.nodes[dirId(REPO, ['src', seg, 'deep'])].parentId,
+			dirId(REPO, ['src'])
+		);
+	}
+});
+
+test('an actor standing in a pass-through directory pins it — the fold never moves a hand', () => {
+	// The fold runs *after* actor resolution for exactly this reason.
+	// `resolveActorPlace` looks a chamber up by `dirId` and falls back to the
+	// camp when the node is missing, so folding first would silently demote an
+	// actor standing on a scaffolding node — a move nobody made, rendered as a
+	// move, which is worse than not drawing it.
+	const trails: Record<string, TrailStep[]> = {
+		r1: [{ dir: 'src/frontend/src/lib', act: 'mutate', at: '2026-08-27T10:01:00Z' }]
+	};
+	const graph = compileRoomGraph(
+		liveWire([
+			liveRun({
+				run_id: 'r1',
+				edge: {
+					at: '2026-08-27T10:03:00Z',
+					phase: 'post-tool',
+					act: 'orient',
+					tools: ['Bash'],
+					detail: 'ls',
+					out_bytes: 1,
+					injected: false,
+					dir: 'src/frontend'
+				}
+			})
+		]),
+		null,
+		trails
+	);
+	const topo = compileTopology(graph);
+	const stood = topo.actorPlaces.r1;
+	assert.ok(topo.nodes[stood], 'the actor stands on a node that exists');
+	if (stood === dirId(REPO, ['src', 'frontend'])) {
+		assert.equal(
+			topo.nodes[dirId(REPO, ['src', 'frontend'])].label,
+			'src/frontend',
+			'pinned by the actor, and it kept its own place rather than folding away'
+		);
+	}
 });
 
 test('ids are stable: repo identity + normalized path prefix', () => {
@@ -195,15 +282,21 @@ test('publish stands at the island forge dock; closing at the cut loom', () => {
 
 test('a node existing does not imply the actor acted there — structural prefixes carry no touch data', () => {
 	const trails: Record<string, TrailStep[]> = {
-		r1: [{ dir: 'src/frontend/tests', act: 'probe', at: '2026-08-27T10:01:00Z' }]
+		r1: [
+			{ dir: 'src/frontend/tests', act: 'probe', at: '2026-08-27T10:01:00Z' },
+			// a second branch, so `src/frontend` is a fork and survives the
+			// fold: with one path the whole chain folds to a single node and
+			// this test would pass by having nothing structural left to check
+			{ dir: 'src/frontend/src', act: 'probe', at: '2026-08-27T10:02:00Z' }
+		]
 	};
 	const graph = compileRoomGraph(liveWire([liveRun({ run_id: 'r1' })]), null, trails);
 	const topo = compileTopology(graph);
-	// `src` and `src/frontend` exist structurally…
-	assert.ok(topo.nodes[dirId(REPO, ['src'])]);
+	// `src/frontend` exists structurally — it forks, so the fold keeps it…
+	assert.ok(topo.nodes[dirId(REPO, ['src', 'frontend'])]);
 	// …but the graph's chamber list (first-touch data) has only the observed dir
 	const chambers = graph.islands[0].camps[0].chambers.map((c) => c.dir);
-	assert.deepEqual(chambers, ['src/frontend/tests']);
+	assert.deepEqual(chambers, ['src/frontend/tests', 'src/frontend/src']);
 });
 
 // ── routing ─────────────────────────────────────────────────────────────────
@@ -221,12 +314,20 @@ test('a directory-to-directory route follows the trie through the lowest common 
 		dirId(REPO, ['src', 'frontend', 'src', 'lib']),
 		dirId(REPO, ['src', 'frontend', 'tests'])
 	);
+	// THE PROPERTY: up to the lowest common ancestor, then down. The LCA is
+	// still `src/frontend` — a fork, so the fold keeps it — and the walk is
+	// one hop shorter because `src/frontend/src` was a single-child chain and
+	// folded into `src/lib`. A shorter route through the *same* ancestor is
+	// the fold working; a route that skipped the ancestor would be a bug.
 	assert.deepEqual(route, [
 		dirId(REPO, ['src', 'frontend', 'src', 'lib']),
-		dirId(REPO, ['src', 'frontend', 'src']),
 		dirId(REPO, ['src', 'frontend']),
 		dirId(REPO, ['src', 'frontend', 'tests'])
 	]);
+	assert.ok(
+		route!.includes(dirId(REPO, ['src', 'frontend'])),
+		'the LCA is on the path — the fold shortens a route, it never bypasses one'
+	);
 });
 
 test('a same-place route is the single place; unknown ends are null', () => {
