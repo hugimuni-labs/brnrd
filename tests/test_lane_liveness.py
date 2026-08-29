@@ -277,15 +277,80 @@ def test_live_and_dead_lanes_render_distinctly_in_the_wake_block(tmp_path):
 
 
 def test_a_lane_with_no_safe_probe_renders_its_reason(tmp_path):
-    """`cloud` and `signal` are unprobeable for stated reasons — and say so."""
+    """`signal` is unprobeable for a stated reason — and says so."""
     repo = _repo(tmp_path)
-    _configure_gates(repo, telegram=False, slack=False, cloud=True, signal=True)
+    _configure_gates(repo, telegram=False, slack=False, signal=True)
     lane_liveness.refresh(repo)
     rendered = _render(repo)
-    assert "cloud not probed" in rendered
-    assert "long-poll cursor" in rendered
     assert "signal not probed" in rendered
     assert "no credential to test" in rendered
+
+
+# ── cloud: the lane the feature was actually built for ───────────────
+#
+# Measured on the account this module exists for: `cloud` is the *only*
+# configured gate. A block that skipped it rendered one "not probed" row and
+# nothing else — a liveness feature whose sole lane is unprobed is a no-op
+# wearing a receipt. `/v1/daemons/whoami` is the read-only route that fixes
+# that; these are the four answers it can give.
+
+
+def test_cloud_probes_whoami_and_a_live_token_renders_its_code(tmp_path):
+    repo = _repo(tmp_path)
+    _configure_gates(repo, telegram=False, slack=False, cloud=True)
+    with mock.patch.object(lane_liveness, "_SESSION", _session({
+        "/v1/daemons/whoami": _Response(200, {"account_id": "acc_1", "kind": "daemon"}),
+    })):
+        lane_liveness.refresh(repo)
+    assert "cloud 200" in _render(repo)
+
+
+def test_cloud_a_refused_daemon_token_is_an_auth_failure_with_its_code(tmp_path):
+    repo = _repo(tmp_path)
+    _configure_gates(repo, telegram=False, slack=False, cloud=True)
+    with mock.patch.object(lane_liveness, "_SESSION", _session({
+        "/v1/daemons/whoami": _Response(401),
+    })):
+        lane_liveness.refresh(repo)
+    assert "cloud 401" in _render(repo)
+
+
+def test_cloud_an_old_server_is_not_probed_and_is_never_a_probe_failure(tmp_path):
+    """404 means *this deployment offers no probe*, not *your token is bad*.
+
+    The distinction is the whole point. brnrd.dev answered 404 to this exact
+    call the day the route was written, with a perfectly live token — and
+    "cloud probe failed" beside a working credential sends a reader to check
+    something that is fine, which is a false alarm rather than a false green
+    but is still a verdict the surface cannot support.
+    """
+    repo = _repo(tmp_path)
+    _configure_gates(repo, telegram=False, slack=False, cloud=True)
+    with mock.patch.object(lane_liveness, "_SESSION", _session({
+        "/v1/daemons/whoami": _Response(404),
+    })):
+        lane_liveness.refresh(repo)
+    rendered = _render(repo)
+    assert "cloud not probed" in rendered
+    assert "404" in rendered
+    assert "probe failed" not in rendered
+    assert "cloud 404" not in rendered
+
+
+def test_cloud_never_leaks_its_bearer_token_through_a_transport_error(tmp_path):
+    repo = _repo(tmp_path)
+    _configure_gates(repo, telegram=False, slack=False, cloud=True)
+    leaky = requests.RequestException(
+        "connection failed for Bearer cloud-secret at https://brnrd.dev"
+    )
+    with mock.patch.object(lane_liveness, "_SESSION", _session({
+        "/v1/daemons/whoami": leaky,
+    })):
+        lane_liveness.refresh(repo)
+    rendered = _render(repo)
+    assert "cloud-secret" not in rendered
+    assert "cloud-secret" not in lane_liveness.cache_path(repo).read_text()
+    assert "<redacted>" in rendered
 
 
 def test_a_configured_gate_absent_from_PROBES_still_gets_a_row(tmp_path):

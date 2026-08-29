@@ -354,20 +354,64 @@ def _probe_github(brr_dir: Path) -> dict[str, Any]:
 
 
 def _probe_cloud(brr_dir: Path) -> dict[str, Any]:
-    """No probe, and the reason is the point.
+    """``GET /v1/daemons/whoami`` — the one daemon read with no side effect.
 
-    ``/v1/daemons`` exposes exactly two authenticated GETs, and the only one
-    that would answer "is this bearer token alive" is ``/v1/daemons/inbox`` —
-    the gate loop's own cursored long-poll. Racing the loop's cursor from a
-    second caller is a side effect, and a 25-second long-poll is not
-    probe-shaped. A dedicated whoami route is the fix; until then this lane
-    renders as unprobed rather than as healthy.
+    This lane shipped as ``no_probe`` for exactly one tick, and the reason it
+    could not stay that way is the measurement: on the account this module was
+    built for, ``cloud`` is the **only** configured gate, so a block that
+    skipped it rendered one "not probed" row and nothing else. A liveness
+    feature whose sole lane is unprobed is a no-op wearing a receipt.
+
+    The route it needed did not exist. ``/v1/daemons`` exposed two
+    authenticated GETs and neither was probe-shaped: ``/inbox`` advances the
+    gate loop's own cursor and touches ``last_seen`` (probing with it makes
+    the probe indistinguishable from work, and races the loop), and an
+    attachment fetch needs an event id. ``whoami`` was added beside them for
+    this: ``require_daemon`` resolves the bearer, the handler writes nothing,
+    and the status code is the entire answer.
+
+    **State comes from the gate module, not from** ``runtime.load_state``.
+    :func:`brr.gates.cloud._load_state` is documented as the only correct
+    reader for this gate — it merges the separately-stored credential back in,
+    and the raw runtime state carries no usable token.
     """
-    return _outcome(
-        "cloud",
-        "no_probe",
-        detail="no whoami route; the only authenticated read is the gate's own long-poll cursor",
-    )
+    from .gates import cloud as cloud_gate
+
+    try:
+        state = cloud_gate._load_state(brr_dir)
+    except Exception as exc:  # noqa: BLE001 - a state read never breaks the sweep
+        return _outcome("cloud", "error", detail=_blind_detail(exc))
+    token = str(state.get("token") or "").strip()
+    base = str(state.get("brnrd_url") or "").strip().rstrip("/")
+    if not token or not base:
+        return _outcome(
+            "cloud", "no_probe",
+            detail="no token" if not token else "no brnrd_url in gate state",
+        )
+    try:
+        response = _SESSION.get(
+            f"{base}/v1/daemons/whoami",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=PROBE_TIMEOUT_SECONDS,
+        )
+    except requests.Timeout:
+        return _outcome("cloud", "error", detail="timeout")
+    except requests.RequestException as exc:
+        return _outcome("cloud", "error", detail=_scrub(exc, token))
+    if response.status_code == 404:
+        # An old server, or a wrong `brnrd_url` — either way this deployment
+        # offers no side-effect-free read, which is the definition of
+        # `no_probe`. Deliberately not `error`: "probe failed" beside a
+        # perfectly live token reads as trouble and sends a reader to check a
+        # credential that is fine. The lane has no probe here; say that.
+        return _outcome(
+            "cloud", "no_probe",
+            detail="no /whoami on this server (404) — predates the route, or brnrd_url is wrong",
+        )
+    # No envelope declared: this route answers by status code on purpose. 401
+    # is a refusal, 5xx and the rest are "we asked and could not tell" — and
+    # an old server never lands in either, because of the branch above.
+    return _classify_http("cloud", response.status_code, secrets=(token,))
 
 
 def _probe_signal(brr_dir: Path) -> dict[str, Any]:
