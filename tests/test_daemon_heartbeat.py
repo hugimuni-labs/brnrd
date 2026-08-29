@@ -74,24 +74,46 @@ def test_invoke_with_heartbeat_drains_on_flush_signal(tmp_path):
 def test_invoke_with_heartbeat_ticks_during_long_run():
     """A runner that takes longer than the interval gets at least one
     heartbeat tick while it's still alive."""
+    # The runner stays alive until the heartbeat has actually ticked
+    # twice, not for a guessed wall-clock duration (brnrd#1574). The old
+    # shape slept a fixed 0.25s and asserted `>= 2` ticks at a 0.05s
+    # interval — arithmetic that holds on an idle box and loses under
+    # load, because a single `worker.join(timeout=0.05)` can consume most
+    # of the 250ms budget when the OS delays the thread handoff. Observed
+    # failures showed exactly one tick at `[0.058]` / `[0.187]`. That is
+    # scheduler jitter, not a defect in the loop's own math: production's
+    # interval is a hard-coded 30s where a few hundred ms is invisible,
+    # and the test only compresses it because it cannot sleep at
+    # production scale (see the module docstring).
+    #
+    # Waiting on the tick count itself removes the wall-clock dependence
+    # instead of loosening the assertion to `>= 1` to match the worst
+    # observed run — the strictness is kept and the clock is dropped. A
+    # heartbeat that never fires still fails, just via the 5s ceiling.
     ticks: list[float] = []
     started = time.monotonic()
+    ticked_twice = threading.Event()
+
+    def _tick() -> None:
+        ticks.append(time.monotonic() - started)
+        if len(ticks) >= 2:
+            ticked_twice.set()
 
     def slow_invoke(_ctx, _runner, invocation, cfg, *, trace=False):
-        time.sleep(0.25)
+        ticked_twice.wait(timeout=5)
         return _ok_result(invocation)
 
     backend = SimpleNamespace(invoke=slow_invoke)
     result = daemon._invoke_with_heartbeat(
         backend, None, "codex", _invocation(),
         cfg={}, trace=False,
-        on_heartbeat=lambda: ticks.append(time.monotonic() - started),
+        on_heartbeat=_tick,
         interval=0.05,
     )
 
     assert result.returncode == 0
-    assert len(ticks) >= 2  # 0.25s run / 0.05s interval ≈ 5 ticks
-    assert all(t < 1.0 for t in ticks)  # sanity: didn't run forever
+    assert len(ticks) >= 2, f"heartbeat did not tick twice in 5s: {ticks}"
+    assert all(t < 5.0 for t in ticks)  # sanity: didn't run forever
 
 
 def test_invoke_with_heartbeat_skips_for_fast_runs():

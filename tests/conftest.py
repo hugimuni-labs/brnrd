@@ -186,3 +186,40 @@ def _no_real_power_assertion(monkeypatch):
 
     monkeypatch.setattr(runner_mod.shutil, "which", _which)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_dev_reload_image_fingerprint(monkeypatch):
+    """Undo ``dev_reload.capture_image_fingerprint()``'s process-global write.
+
+    ``daemon.start()`` calls ``reload_mod.capture_image_fingerprint()``
+    unconditionally (not gated on ``dev_reload=True``), which sets the
+    module globals ``dev_reload._IMAGE_FINGERPRINT`` /
+    ``_IMAGE_CAPTURED_AT`` for the rest of the *process* — there is no
+    per-test daemon instance to scope it to. Any test that calls
+    ``daemon.start()`` in-process (``test_daemon.py``'s
+    ``test_dev_reload_does_not_stall_concurrent_spawn_dispatch`` and
+    ``test_dev_reload_does_not_hold_the_resident_seat_for_active_spawns``
+    are the two that do today) leaves a real fingerprint behind, and
+    ``test_boot_replay.py``'s snapshot tests embed
+    ``dev_reload.image_fingerprint_digest()`` in the rendered prompt they
+    diff against a golden file — so whichever test runs next flips the
+    kernel's "daemon image: not tracked" line to "current · fp …" and
+    fails on a snapshot mismatch that has nothing to do with its own
+    behaviour (brnrd#1574). Reproduced with a fixed order/seed:
+    ``pytest tests/test_daemon.py::test_dev_reload_does_not_stall_concurrent_spawn_dispatch
+    tests/test_boot_replay.py::TestBootReplay::test_claude_snapshot -p no:randomly``
+    (100% before this fixture; both pass after).
+
+    ``monkeypatch.setattr`` records the pre-test value (``None``, unless a
+    prior fixture already primed it) and restores exactly that value at
+    teardown regardless of what the test under it writes in between — the
+    same mechanism ``test_dev_reload.py``'s own tests use by hand
+    (``dev_reload._IMAGE_FINGERPRINT = None``), applied once here so every
+    test gets it, not only the ones that thought to ask.
+    """
+    from brr import dev_reload
+
+    monkeypatch.setattr(dev_reload, "_IMAGE_FINGERPRINT", dev_reload._IMAGE_FINGERPRINT)
+    monkeypatch.setattr(dev_reload, "_IMAGE_CAPTURED_AT", dev_reload._IMAGE_CAPTURED_AT)
+    yield
