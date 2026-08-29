@@ -170,10 +170,31 @@ export class Shelf {
 		}
 	}
 
-	free(x: number, y: number, w: number, h = 1): boolean {
+	/**
+	 * Is `w × h` at `(x, y)` claimable?
+	 *
+	 * `exclusive` asks the stronger question — *is this row empty* — and the
+	 * terrain allocator asks it. Extent-overlap alone was the first version
+	 * and it is measurably wrong: it lets two nodes from different subtrees
+	 * share a character row whenever their painted labels happen not to
+	 * touch, which is invisible on one subtree and garbles into a path that
+	 * does not exist the moment two actors interleave discoveries. Seen live
+	 * 2026-08-29 on the deployed board:
+	 *
+	 *     |  tests/--· prodshot.mjs        <- two nodes, one row
+	 *     |  brr/└---· .prodshot.mjs       <- two junctions, one row
+	 *
+	 * `tree(1)` never shares a row, and this is the reason. Instruments in
+	 * the labour band still pack by extent — several windows side by side is
+	 * a layout, not a garble, because each carries its own frame.
+	 */
+	free(x: number, y: number, w: number, h = 1, exclusive = false): boolean {
 		const width = Math.max(1, w);
 		for (let r = y; r < y + h; r++) {
-			for (const s of this.rows.get(r) ?? []) {
+			const spans = this.rows.get(r);
+			if (!spans) continue;
+			if (exclusive && spans.length > 0) return false;
+			for (const s of spans) {
 				if (x < s.x + s.w && s.x < x + width) return false;
 			}
 		}
@@ -198,6 +219,8 @@ export class Shelf {
 			minY?: number;
 			maxY?: number;
 			limit?: number;
+			/** Take the whole row, not just the extent — see `free`. */
+			exclusive?: boolean;
 		}
 	): { x: number; y: number } {
 		const h = opts.h ?? 1;
@@ -208,7 +231,7 @@ export class Shelf {
 		for (let i = 0; i < limit; i++) {
 			const y = opts.preferY + step(i, dir);
 			if (y < minY || y + h - 1 > maxY) continue;
-			if (this.free(x, y, w, h)) {
+			if (this.free(x, y, w, h, opts.exclusive)) {
 				this.occupy(x, y, w, h);
 				return { x, y };
 			}

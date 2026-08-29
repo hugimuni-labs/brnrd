@@ -438,6 +438,12 @@ const TETHER_FRAMES = ['⌁', '∿', '≋'];
  *  by eye and, as the first driven check discovered, by any measurement of
  *  the board. A ceremony you cannot tell apart from the room is a ceremony
  *  you cannot prove is running. */
+/** Character columns between a parent's turn and its child's label — the
+ *  layout's DEPTH_DX at island scale. The actor stands west of this. */
+const JUNCTION_WIDTH = 4;
+/** Edge kinds whose turns are drawn as junctions. Solid rails only: a `├` on
+ *  a dotted control corridor claims a hierarchy the graph does not have. */
+const JUNCTION_KINDS = new Set(['tree', 'branch', 'shore']);
 const CLAW_CHAR = '┈';
 const CLAW_TIP = '≻';
 
@@ -540,7 +546,9 @@ export function renderWorld(
 	// an earlier sibling's turn, so painting the junction inline means the
 	// last child drawn wins and every corner reads as a pass-through. That
 	// is the difference between a tree and a column of dashes.
-	const corners = new Map<string, { x: number; y: number; parent: PlaceId }>();
+	const corners = new Map<string, { x: number; y: number; parent: PlaceId; kind: string }>();
+	const columnFloor = new Map<number, number>();
+	const columnGlyph = new Map<number, string>();
 	for (const e of topo.edges) {
 		if (cam.level === 'atlas') continue; // atlas shows islands only; every corridor stays below this scale
 		const chars = EDGE_CHARS[e.kind];
@@ -557,12 +565,21 @@ export function renderWorld(
 				for (let x = Math.min(a.x, b.x) + 1; x < Math.max(a.x, b.x); x++)
 					canvas.ground(x, a.y, chars.h);
 			}
-			// only the tree's own turns. The control corridors radiating from
-			// HOME are drawn dotted and are not a hierarchy — a `├` in that
-			// column would be a solid junction on a dotted line claiming a
-			// parent/child relation the graph does not have.
-			if (e.kind === 'tree' && i > 0 && a.x === toChar(f, pts[i - 1]).x && a.y === b.y)
-				corners.set(`${a.x},${a.y}`, { x: a.x, y: a.y, parent: e.from });
+			// Every vertical cell this pass draws, per column — the elbow rule
+			// below needs to know whether anything continues *below* a turn,
+			// and only the renderer knows that.
+			if (a.x === b.x) {
+				columnFloor.set(a.x, Math.max(columnFloor.get(a.x) ?? -Infinity, Math.max(a.y, b.y)));
+				if (JUNCTION_KINDS.has(e.kind)) columnGlyph.set(a.x, chars.v);
+			}
+			// A turn: the segment before this one was vertical and this one is
+			// horizontal. Only the *solid* kinds. The control corridors
+			// radiating from HOME are drawn dotted and are not a hierarchy —
+			// a solid `├` in that column would be a junction on a dotted line
+			// claiming a parent/child relation the graph does not have, and
+			// the first version of this pass drew exactly that (`T┄┄┄┄┄┄┄╠`).
+			if (JUNCTION_KINDS.has(e.kind) && i > 0 && a.x === toChar(f, pts[i - 1]).x && a.y === b.y)
+				corners.set(`${a.x},${a.y}`, { x: a.x, y: a.y, parent: e.from, kind: e.kind });
 		}
 	}
 
@@ -573,11 +590,46 @@ export function renderWorld(
 	// a character column, so a column-wise `last` gave the elbow to whichever
 	// subtree happened to sit lowest and drew every other subtree's final
 	// child as if more followed.
+	//
+	// The elbow needs **both** conditions, and the second one cost a live
+	// board to find (2026-08-29, a reader given only the screenshot):
+	//
+	//   (i)  it is the last child of *its own parent* — a structural fact;
+	//   (ii) nothing else this pass drew continues below it in that column —
+	//        a rendering fact.
+	//
+	// (i) alone drew `└──brr/` with a rail running straight through it: two
+	// subtrees at the same depth share a character column, so an elbow can be
+	// correct for its parent while another parent's trunk keeps going down
+	// the same cells. The elbow asserts *this column ends here*; only the
+	// renderer can tell whether it does. Same class as the shared row —
+	// two owners, one cell.
 	const lastChildRow = new Map<PlaceId, number>();
 	for (const c of corners.values())
 		lastChildRow.set(c.parent, Math.max(lastChildRow.get(c.parent) ?? -Infinity, c.y));
+	// A tee must point at something. Two subtrees sharing a column can leave a
+	// blank row between one subtree's last turn and the next subtree's first,
+	// so the column is filled between its outermost turns before they are
+	// drawn — `ground`, so labels keep their cells.
+	//
+	// The shared column is the real root cause and this is the honest patch,
+	// not the cure: depth maps to x, so every subtree at the same depth lands
+	// in one character column whether or not they are related. Curing it means
+	// indenting by *subtree* rather than by depth — a layout change, not a
+	// renderer one.
+	const columnTop = new Map<number, number>();
 	for (const c of corners.values())
-		canvas.ground(c.x, c.y, lastChildRow.get(c.parent) === c.y ? '└' : '├');
+		columnTop.set(c.x, Math.min(columnTop.get(c.x) ?? Infinity, c.y));
+	for (const [x, top] of columnTop) {
+		const floor = columnFloor.get(x) ?? top;
+		for (let y = top + 1; y < floor; y++) canvas.ground(x, y, columnGlyph.get(x) ?? '│');
+	}
+	for (const c of corners.values()) {
+		const lastOfParent = lastChildRow.get(c.parent) === c.y;
+		const columnEnds = (columnFloor.get(c.x) ?? -Infinity) <= c.y;
+		const solid = c.kind !== 'tree';
+		canvas.ground(c.x, c.y, lastOfParent && columnEnds ? (solid ? '╚' : '└') : solid ? '╠' : '├');
+	}
 
 	// 2 · the current route, marked on the ground
 	if (opts.highlightRoute && opts.highlightRoute.length > 1) {
@@ -725,7 +777,7 @@ export function renderWorld(
 		// frames in place — the pager at its wrist, the tether cycling. The
 		// actor never moves for a page; traffic comes to it.
 		const phase = opts.reading?.[actor.runId];
-		const tether = phase !== undefined ? `▯${TETHER_FRAMES[phase % TETHER_FRAMES.length]}` : '';
+		const tether = phase !== undefined ? `▷${TETHER_FRAMES[phase % TETHER_FRAMES.length]}` : '';
 		// the act, embodied: writing/reading marks at the station the actor
 		// stands at — a busy status line is not a body.
 		const mark = walking ? null : activityMark(actor, pid ? (topo.nodes[pid]?.kind ?? null) : null);
@@ -735,7 +787,14 @@ export function renderWorld(
 		// compacted to one node per row (2026-08-29). A body drawn on a
 		// neighbour's label is the same cross-owner claim the terminal had.
 		const text = `${tether}${body}${mark ? ' ' + mark : ''}`;
-		canvas.text(Math.max(0, c.x - 1 - text.length - n * 8), c.y, text);
+		// West of the *junction*, not merely west of the label. With a two-unit
+		// indent the corner sits JUNCTION_WIDTH cells west of the label and
+		// there is no room between them, so painting at `c.x - 1 - len`
+		// overwrote the `├──` and left the actor's own node the only one on
+		// the board with no connector (found 2026-08-29 by a reader given the
+		// deployed screenshot and forbidden to open the source). Standing west
+		// of the branch is also the truer picture: the actor is on the way in.
+		canvas.text(Math.max(0, c.x - JUNCTION_WIDTH - 1 - text.length - n * 8), c.y, text);
 		// the mind-connect reaches the pager field below the map: a dotted
 		// line from the reading actor down through the frame's bottom edge,
 		// meeting the PAGER strip that sits directly under it. Ground chars —
@@ -754,7 +813,15 @@ export function renderWorld(
 	if (graph.stale) weather.push('wire stale');
 	canvas.text(2, 0, cam.level === 'atlas' ? '· · ~ THE ATLAS ~ · ·' : '· · ~ THE SEA ~ · ·');
 	const right = weather.join(' · ');
-	if (right) canvas.text(Math.max(24, cam.cols - right.length - 2), 0, right);
+	if (right) {
+		// Clipped with the ellipsis, not by the canvas edge. `THE SEA` owns the
+		// first 24 columns, so on a narrow board the weather line has less room
+		// than it wants — and a silent cut reads as a value: the deployed board
+		// showed `◇×1 · 1 strand ou`, where `ou` is a word the reader has to
+		// decide is not a number. Every other truncation here says `…`.
+		const at = Math.max(24, cam.cols - right.length - 2);
+		canvas.text(at, 0, clip(right, cam.cols - at));
+	}
 
 	// 6 · bearings for what the frame cannot see (never shrink the world in)
 	const home = layout.nodes[topo.homeId];
@@ -796,7 +863,16 @@ export function renderWorld(
 				: '· nothing waiting';
 		const pages = opts.pages ?? [];
 		const readCount = pages.length > 0 ? `✉×${pages.length} read` : '✉ none read yet';
-		const plug = readingNow.size > 0 ? '▯⌁' : '▯';
+		// `▷`, not `▯` (2026-08-29). U+25AF renders *correctly* in every font the
+		// board has met — and a white vertical rectangle is the exact shape of a
+		// missing-glyph box, so a first-time reader parses the pager's own marker
+		// as a broken build. Found by a reader given the screenshot and forbidden
+		// to open the source; a bitmap probe against the deployed font's notdef
+		// then proved the glyph was present, which makes this the harder defect:
+		// **no font-coverage rule can catch a glyph whose correct rendering looks
+		// like failure.** `glyphSubset` reasons about coverage and is right to;
+		// this is legibility, and it needs an eye.
+		const plug = readingNow.size > 0 ? '▷⌁' : '▷';
 		out.push(clip(`${plug} PAGER   ${waiting}   ${readCount}`, cam.cols));
 		// THE CONDITION LINE. The pager read out the *log* and nothing about
 		// the body carrying it, which is the difference between a feed and a
@@ -881,7 +957,7 @@ export const LEGEND = [
 	'^ watch — armed `brnrd await`s count down here  T clockwork  ⛁ garage  arrows = off-camera bearings',
 	'⌁ attested boundary   ══ CLOTH time register — live, then history',
 	'┈≻ the claw — a letter carried from HOME to the actor that received it   ◇ the letter, in flight',
-	'▯⌁@ mind-connect — reading the pager   ✎ writing  ☰ reading  ✉ opening a letter',
-	'▯ PAGER — injection status: ◇ waiting (accumulated, not yet injected) · ✉ read · ▸ in transit',
+	'▷⌁@ mind-connect — reading the pager   ✎ writing  ☰ reading  ✉ opening a letter',
+	'▷ PAGER — injection status: ◇ waiting (accumulated, not yet injected) · ✉ read · ▸ in transit',
 	'  a read page shows the injected block itself; ↳ names the boundary that carried it'
 ].join('\n');

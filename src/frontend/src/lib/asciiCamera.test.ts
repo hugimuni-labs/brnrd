@@ -509,13 +509,19 @@ function boardOf(dirs: string[], opts: Parameters<typeof renderWorld>[4] = {}) {
 	return { board: renderWorld(topo, layout, graph, cam, opts), topo, layout };
 }
 
-test('the tree draws its turns: a tee while siblings remain, an elbow at the last', () => {
+test('the elbow needs both conditions: last of its parent, and a column that ends', () => {
 	// `tree(1)` is legible because the junction says whether the column
-	// continues. Two subtrees on purpose: `frontend` and `brnrd/brr` sit at
-	// the same depth and therefore share a character column, and the first
-	// version of this keyed "last child" by column — which gave the elbow to
-	// whichever subtree happened to sit lowest and drew every other
-	// subtree's final child as if more followed.
+	// continues. Two conditions, and the second one cost a live board to find
+	// (2026-08-29, a reader given only the deployed screenshot):
+	//
+	//   (i)  last child of its own parent — structural;
+	//   (ii) nothing else drawn below it in that column — a rendering fact.
+	//
+	// (i) alone drew `└──brr/` with a rail running straight through it, and
+	// column-keying alone (the version before that) gave the elbow to
+	// whichever subtree sat lowest. The fixture separates the two: `frontend`
+	// and `brnrd/brr` are at the same depth so their *children* share a
+	// character column, and `frontend`'s last child is not the column's last.
 	const { board } = boardOf([
 		'src/frontend/repro',
 		'src/frontend/tests',
@@ -523,9 +529,23 @@ test('the tree draws its turns: a tee while siblings remain, an elbow at the las
 		'src/brnrd/brr/prompts'
 	]);
 	assert.match(board, /├───repro\//u, 'a sibling follows, so a tee');
-	assert.match(board, /└───tests\//u, 'the last child of frontend gets the elbow');
+	assert.match(
+		board,
+		/├───tests\//u,
+		'last child of frontend, but the shared column keeps going — a tee, not an elbow'
+	);
+	assert.doesNotMatch(board, /└───tests\//u, 'an elbow here would assert a column that ends');
 	assert.match(board, /├───gates\//u);
-	assert.match(board, /└───prompts\//u, 'and so does the last child of the other subtree');
+	assert.match(board, /└───prompts\//u, 'and the column really does end here — the elbow');
+});
+
+test('a subtree alone in its column still gets its elbow', () => {
+	// The other half of the pair: with nothing else sharing the column,
+	// condition (ii) is satisfied and the last child must read as last. A rule
+	// that only ever emitted tees would pass the test above and fail this one.
+	const { board } = boardOf(['src/frontend/repro', 'src/frontend/tests']);
+	assert.match(board, /├───repro\//u);
+	assert.match(board, /└───tests\//u);
 });
 
 test('the terminal is drawn on allocated ground, and on none if none was allocated', () => {
@@ -586,5 +606,99 @@ test('no region allocated ⇒ no window, rather than one invented beside a camp'
 	assert.ok(
 		!board.includes('$ bench'),
 		'a window on unallocated ground is the defect wearing a fix'
+	);
+});
+
+test("an actor standing at a place does not paint over that place's junction", () => {
+	// Found 2026-08-29 on the deployed board: `b·_·d—frontend/` was the only
+	// node with no connector at all. The actor had been moved onto its own row
+	// when the tree compacted, and its own row is where its junction lives —
+	// with a two-unit indent there is no room between the corner and the
+	// label, so the body simply overwrote the `├──`.
+	//
+	// The first fix shipped with nothing asserting it, which is how a fix
+	// becomes a regression later. This is that assertion.
+	const run = {
+		id: 'r1',
+		run_id: 'r1',
+		kind: 'daemon',
+		stream: 'cloud:telegram:1:',
+		label: '',
+		name: 'the run',
+		repo_label: REPO,
+		started_at: '2026-08-27T10:00:00Z',
+		last_seen: '2026-08-27T10:20:00Z',
+		parent_run_id: null,
+		is_subspawn: false,
+		runner: { name: 'claude', shell: 'claude', core: 'opus' },
+		phase: 'running',
+		card_text: null,
+		card_updated_at: null,
+		relics_counts: null,
+		portals: { pending: 0, oldest_at: null },
+		room: { env: 'host', branch: 'brr/ground', dir: 'src/frontend/lib' },
+		edge: {
+			at: '2026-08-27T10:20:00Z',
+			act: 'orient',
+			dir: 'src/frontend/lib',
+			detail: null,
+			injected: false
+		},
+		daemon_stale: false
+	} as unknown as LiveRun;
+	const trails: Record<string, TrailStep[]> = {
+		r1: [
+			{ dir: 'src/frontend/lib', act: 'orient', at: '2026-08-27T10:01:00Z' },
+			{ dir: 'src/frontend/tests', act: 'orient', at: '2026-08-27T10:02:00Z' }
+		]
+	};
+	const graph = compileRoomGraph(liveWire([run]), null, trails);
+	const topo = compileTopology(graph);
+	const { layout } = layoutRoom(topo, emptyAtlas());
+	const cam: Camera = { center: { x: 2, y: 2 }, cols: 120, rows: 30, level: 'island' };
+	const board = renderWorld(topo, layout, graph, cam, {});
+	const row = board.split('\n').find((l) => l.includes('lib/'));
+	assert.ok(row, "the actor's own place is on the board");
+	assert.match(row!, /[├└]───lib\//u, `the junction survived the body: ${JSON.stringify(row)}`);
+});
+
+test('the header weather line elides rather than being cut by the canvas edge', () => {
+	// `◇×1 · 1 strand ou` on the deployed board — `THE SEA` owns the first 24
+	// columns, so a narrow board leaves the weather line less room than it
+	// wants, and the cut was the canvas edge rather than an ellipsis. A
+	// silent truncation reads as a value; `ou` is a word the reader has to
+	// decide is not a number.
+	const run = {
+		id: 'r1',
+		run_id: 'r1',
+		kind: 'daemon',
+		stream: 's',
+		label: '',
+		name: 'r',
+		repo_label: REPO,
+		started_at: '2026-08-27T10:00:00Z',
+		last_seen: '2026-08-27T10:20:00Z',
+		parent_run_id: null,
+		is_subspawn: false,
+		runner: { name: 'claude', shell: 'claude', core: 'opus' },
+		phase: 'running',
+		card_text: null,
+		card_updated_at: null,
+		relics_counts: null,
+		portals: { pending: 7, oldest_at: null },
+		room: { env: 'host', branch: 'brr/ground', dir: null },
+		edge: null,
+		daemon_stale: false
+	} as unknown as LiveRun;
+	const graph = compileRoomGraph(liveWire([run]), null, {});
+	graph.stale = true;
+	const topo = compileTopology(graph);
+	const { layout } = layoutRoom(topo, emptyAtlas());
+	const cam: Camera = { center: { x: 0, y: 0 }, cols: 34, rows: 12, level: 'island' };
+	const head = renderWorld(topo, layout, graph, cam, {}).split('\n')[0];
+	assert.ok(head.length <= 34, 'the header fits the board');
+	assert.ok(
+		head.includes('…') || head.endsWith('wire stale'),
+		`a cut header must say it was cut: ${JSON.stringify(head)}`
 	);
 });

@@ -68,7 +68,26 @@ async function driveLive(browser, cookie) {
 	// Catches an attested live resident disappearing from both the map and its
 	// actor rows; dormant accounts are covered by the HOME assertion above.
 	if (text.includes('CHARTS') && !hasActor) throw new Error('live board lost its resident actor');
-	console.log(`live: island up · ${hasActor ? 'actor present' : 'dormant (honest)'}`);
+	// THE ROW THAT DIDN'T FIT. The camera can only clip what it knows the width
+	// of, and it was being told the wrong one: `measureCols` sized the board
+	// from its container's `clientWidth`, which *includes* the deck's 16px
+	// padding on each side. Measured 2026-08-29 at 1280px — deck 1280, board
+	// 1248, first row rendered 1257.1px — so `1 strand out` arrived on screen
+	// as `1 strand ou`, cut by CSS overflow rather than by anything the
+	// renderer could see. No unit test can reach this: the string was
+	// complete and the pixels were not there. Only a driven page can.
+	const fit = await page.evaluate(() => {
+		const b = document.querySelector('pre.board');
+		return { client: b.clientWidth, scroll: b.scrollWidth };
+	});
+	if (fit.scroll > fit.client)
+		throw new Error(
+			`live board overflows its own box: scrollWidth ${fit.scroll} > clientWidth ${fit.client} — ` +
+				'a row is being cut by CSS, not by the camera'
+		);
+	console.log(
+		`live: island up · ${hasActor ? 'actor present' : 'dormant (honest)'} · board fits (${fit.scroll}/${fit.client})`
+	);
 	console.log('--- live board ---\n' + text + '\n------------------');
 	await page.screenshot({ path: `${OUT}/live-desktop.png`, fullPage: true });
 	const phone = await (
