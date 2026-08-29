@@ -572,7 +572,7 @@ def render_lines(state: dict[str, Any]) -> list[str]:
     """
     status = str(state.get("status") or "")
     if status == "absent":
-        return [f"Lane liveness: never probed — {EDGE_NOTE}"]
+        return ["Lane liveness: never probed", f"- {EDGE_NOTE}"]
     lanes = state.get("lanes")
     if not isinstance(lanes, list) or not lanes:
         return []

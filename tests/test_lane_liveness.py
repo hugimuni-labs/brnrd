@@ -137,6 +137,7 @@ def test_never_probed_renders_loudly_and_is_not_silence(tmp_path):
     repo = _repo(tmp_path)
     rendered = _render(repo)
     assert "Lane liveness: never probed" in rendered
+    assert lane_liveness.EDGE_NOTE in rendered
     assert "200" not in rendered
 
 
