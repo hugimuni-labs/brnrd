@@ -169,11 +169,26 @@ def test_a_200_envelope_saying_not_ok_is_an_auth_failure_not_a_200(tmp_path):
     })):
         lane_liveness.refresh(repo)
     rendered = _render(repo)
-    assert "telegram 200 (Unauthorized)" in rendered or "telegram 200" not in rendered
-    assert "invalid_auth" in rendered
     lanes = {row["lane"]: row for row in lane_liveness.read_state(repo)["lanes"]}
     assert lanes["telegram"]["outcome"] == "auth_failed"
     assert lanes["slack"]["outcome"] == "auth_failed"
+    assert "telegram auth failed (Unauthorized)" in rendered
+    assert "slack auth failed (invalid_auth)" in rendered
+    # And the number is gone entirely. Printing `telegram 200 (Unauthorized)`
+    # would put the exact token a skimmer looks for beside a dead lane —
+    # this feature's own failure mode, turned on its rendering.
+    assert "200" not in rendered
+
+
+def test_a_real_401_still_prints_its_code_because_the_code_is_the_refusal(tmp_path):
+    """The 200-envelope rule must not swallow the honest case."""
+    repo = _repo(tmp_path)
+    _configure_gates(repo, telegram=False, slack=False, github=True)
+    with mock.patch.object(lane_liveness, "_SESSION", _session({
+        "api.github.com": _Response(401, {"message": "Bad credentials"}),
+    })):
+        lane_liveness.refresh(repo)
+    assert "github 401" in _render(repo)
 
 
 def test_live_and_dead_lanes_render_distinctly_in_the_wake_block(tmp_path):
