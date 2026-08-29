@@ -152,7 +152,12 @@ _AMOUNT_RE = re.compile(r"(?P<currency>[$\u20ac\u00a3])?\s*(?P<amount>\d+(?:[.,]
 _RESET_ELIDE_TOLERANCE_SECONDS = 120.0
 
 
-def _reset_epoch(reset_text: str | None, *, now: datetime | None = None) -> float | None:
+def _reset_epoch(
+    reset_text: str | None,
+    *,
+    now: datetime | None = None,
+    log_unparsed: bool = True,
+) -> float | None:
     """Best-effort UTC epoch for a TUI-scraped reset string, or ``None``.
 
     Claude's ``/usage`` panel never gives a raw epoch the way Codex's
@@ -169,7 +174,10 @@ def _reset_epoch(reset_text: str | None, *, now: datetime | None = None) -> floa
     The year is never in the source text, so this computes the next future
     occurrence of that wall-clock instant in that zone. Never raises — any
     parse or zone failure is ``None``, not a guess, and a non-empty string
-    that yields nothing is logged rather than dropped in silence.
+    that yields nothing is logged rather than dropped in silence — unless
+    ``log_unparsed`` is ``False``, for a caller reading a screen still mid
+    repaint, where a partial string is expected and not a shape change (see
+    ``_log_unparsed_reset``'s docstring).
     """
     if not reset_text:
         return None
@@ -178,12 +186,14 @@ def _reset_epoch(reset_text: str | None, *, now: datetime | None = None) -> floa
 
     zone_match = _RESET_ZONE_RE.search(text)
     if not zone_match:
-        _log_unparsed_reset(text, "no trailing (zone)")
+        if log_unparsed:
+            _log_unparsed_reset(text, "no trailing (zone)")
         return None
     try:
         zone = ZoneInfo(zone_match.group("zone"))
     except Exception:
-        _log_unparsed_reset(text, "unknown zone")
+        if log_unparsed:
+            _log_unparsed_reset(text, "unknown zone")
         return None
 
     body = text[: zone_match.start()]
@@ -192,7 +202,8 @@ def _reset_epoch(reset_text: str | None, *, now: datetime | None = None) -> floa
     # number can never be read as an hour.
     time_match = _RESET_TIME_RE.search(body, date_match.end() if date_match else 0)
     if not date_match and not time_match:
-        _log_unparsed_reset(text, "neither a date nor a time")
+        if log_unparsed:
+            _log_unparsed_reset(text, "neither a date nor a time")
         return None
 
     now_local = now.astimezone(zone)
@@ -202,7 +213,8 @@ def _reset_epoch(reset_text: str | None, *, now: datetime | None = None) -> floa
         hour = int(time_match.group("hour"))
         minute = int(time_match.group("minute") or 0)
         if not (1 <= hour <= 12) or not (0 <= minute <= 59):
-            _log_unparsed_reset(text, "clock time out of range")
+            if log_unparsed:
+                _log_unparsed_reset(text, "clock time out of range")
             return None
         if time_match.group("ampm").lower() == "am":
             hour = 0 if hour == 12 else hour
@@ -217,7 +229,8 @@ def _reset_epoch(reset_text: str | None, *, now: datetime | None = None) -> floa
                 hour=hour, minute=minute, second=0, microsecond=0,
             )
         except ValueError:
-            _log_unparsed_reset(text, "no such day in the named month")
+            if log_unparsed:
+                _log_unparsed_reset(text, "no such day in the named month")
             return None
         # No year in the source text: a result more than 2 days in the past
         # means the reset is actually next year (a week-boundary date named
@@ -327,7 +340,9 @@ def _usage_credits_summary(
     return "usage credits " + ("; ".join(parts) if parts else "available")
 
 
-def _scan_usage_credits(lines: list[str], start: int) -> dict[str, Any] | None:
+def _scan_usage_credits(
+    lines: list[str], start: int, *, log_unparsed: bool = True
+) -> dict[str, Any] | None:
     used: float | None = None
     spent: float | None = None
     limit: float | None = None
@@ -366,7 +381,7 @@ def _scan_usage_credits(lines: list[str], start: int) -> dict[str, Any] | None:
         "limit_amount": limit,
         "currency": currency,
         "reset": reset,
-        "resets_at": _reset_epoch(reset),
+        "resets_at": _reset_epoch(reset, log_unparsed=log_unparsed),
         "summary": _usage_credits_summary(used, spent, limit, currency, reset),
     }
 
@@ -472,8 +487,15 @@ def _week_model_label(line: str) -> str | None:
     return content
 
 
-def parse_usage_text(raw: bytes | str) -> dict[str, Any]:
-    """Normalize a Claude ``/usage`` terminal capture into a levels snapshot."""
+def parse_usage_text(raw: bytes | str, *, log_unparsed: bool = True) -> dict[str, Any]:
+    """Normalize a Claude ``/usage`` terminal capture into a levels snapshot.
+
+    ``log_unparsed=False`` is for a reader polling a screen still mid
+    repaint (``capture_usage_raw``'s own loop) — a partial reset string
+    there is expected, not a shape change, and logging it on every ~100ms
+    tick would drown the trail ``_log_unparsed_reset`` exists to leave for a
+    *settled* read (``capture_levels``, which keeps today's default).
+    """
     text = _clean_terminal_text(raw)
     lines = [
         re.sub(r"\s+", " ", line).strip()
@@ -488,7 +510,7 @@ def parse_usage_text(raw: bytes | str) -> dict[str, Any]:
     for idx, line in enumerate(lines):
         key = _line_key(line)
         if "usagecredits" in key:
-            found_credits = _scan_usage_credits(lines, idx)
+            found_credits = _scan_usage_credits(lines, idx, log_unparsed=log_unparsed)
             if found_credits:
                 usage_credits = found_credits
         elif "currentsession" in key:
@@ -525,14 +547,14 @@ def parse_usage_text(raw: bytes | str) -> dict[str, Any]:
         levels["session_reset"] = session[1]
         # Computed, not scraped (2026-07-06) — see `_reset_epoch`'s docstring
         # for why this can't be a passthrough the way Codex's is.
-        levels["session_resets_at"] = _reset_epoch(session[1])
+        levels["session_resets_at"] = _reset_epoch(session[1], log_unparsed=log_unparsed)
         parts.append(str(bucket["summary"]))
         buckets["session"] = {"remaining_percentage": bucket["remaining_percentage"]}
     if week:
         bucket = _bucket_summary("week", week[0], week[1])
         levels["week_used_percentage"] = week[0]
         levels["week_reset"] = week[1]
-        levels["week_resets_at"] = _reset_epoch(week[1])
+        levels["week_resets_at"] = _reset_epoch(week[1], log_unparsed=log_unparsed)
         parts.append(str(bucket["summary"]))
         buckets["week"] = {"remaining_percentage": bucket["remaining_percentage"]}
     week_model_buckets: dict[str, Any] = {}
@@ -548,7 +570,7 @@ def parse_usage_text(raw: bytes | str) -> dict[str, Any]:
         # wider than the observed 60s skew, still tight enough that two
         # genuinely different resets (which differ by hours at least) never
         # collide.
-        model_reset_epoch = _reset_epoch(found[1])
+        model_reset_epoch = _reset_epoch(found[1], log_unparsed=log_unparsed)
         summary_reset = found[1]
         if week:
             week_epoch = levels.get("week_resets_at")
@@ -681,7 +703,11 @@ def capture_usage_raw(
         while time.monotonic() < deadline:
             _read_available(master, chunks, min(deadline, time.monotonic() + 0.1))
             if _quota_buckets_complete(
-                parse_usage_text(b"".join(chunks)),
+                # This screen is still mid-repaint on every ~100ms tick, so a
+                # trailing-zone-less reset string here is expected, not a
+                # shape change — the settled read in capture_levels keeps the
+                # default logging.
+                parse_usage_text(b"".join(chunks), log_unparsed=False),
                 wait_for_credits=wait_for_credits,
             ):
                 # session+week are in; linger briefly for trailing per-model

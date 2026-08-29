@@ -882,3 +882,51 @@ def test_parse_usage_text_gives_the_week_window_an_epoch_in_the_at_form():
         "week 84% left (resets Aug 29 at 1:59pm (Europe/Paris)); "
         "Fable week 91% left"
     )
+
+
+# A half-drawn PTY frame: the same panel `capture_usage_raw`'s 100ms poll
+# would see mid-repaint, session/week percentages already in but the week
+# reset string still growing one keystroke of terminal paint at a time. This
+# is the literal shape of the flood in the bug report — "Resets Aug", "Resets
+# Au", "Resets A", "Resets Aug 29" — not a hand-shortened stand-in for it.
+_USAGE_SCREEN_MID_REPAINT = """
+Current session
+2% used
+Resets 5:40pm (Europe/Paris)
+Current week (all models)
+16% used
+Resets Aug
+"""
+
+
+def test_parse_usage_text_log_unparsed_false_is_silent_on_the_probe_path(caplog):
+    with caplog.at_level("WARNING", logger="brr.claude_usage"):
+        levels = claude_usage.parse_usage_text(
+            _USAGE_SCREEN_MID_REPAINT, log_unparsed=False
+        )
+
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]
+    # The predicate `capture_usage_raw` polls on still reads the settled
+    # buckets fine — only the still-drawing reset string is unreadable.
+    assert levels["session_used_percentage"] == 2
+    assert levels["week_used_percentage"] == 16
+    assert levels["week_resets_at"] is None
+
+
+def test_parse_usage_text_default_still_logs_the_trail_1617_paid_for(caplog):
+    with caplog.at_level("WARNING", logger="brr.claude_usage"):
+        levels = claude_usage.parse_usage_text(_USAGE_SCREEN_MID_REPAINT)
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "Aug" in warnings[0].message
+    assert levels["week_resets_at"] is None
+
+
+def test_parse_usage_text_log_unparsed_only_moves_logging_not_values():
+    quiet = claude_usage.parse_usage_text(
+        _USAGE_SCREEN_MID_REPAINT, log_unparsed=False
+    )
+    loud = claude_usage.parse_usage_text(_USAGE_SCREEN_MID_REPAINT)
+
+    assert quiet == loud
