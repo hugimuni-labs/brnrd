@@ -4582,3 +4582,174 @@ def test_live_runs_snapshot_publishes_portal_pending(tmp_path, monkeypatch):
     (outbox / "portal-state.json").unlink()
     row = {r["run_id"]: r for r in cloud._live_runs_snapshot(brr_dir)}["run-door"]
     assert row["portals"] is None
+
+
+# ── `brnrd connect`'s durability question (2026-08-29) ──────────────────
+
+
+def _connect_args(**over):
+    """The Namespace `cmd_brnrd_connect` reads, with `no_service` on so the
+    test stops at the memory step instead of installing a launchd job."""
+    from types import SimpleNamespace
+
+    base = dict(
+        url_option=None, url="http://brnrd.example", daemon_name="testbox",
+        local_memory=False, no_service=True, defaults=False,
+        no_linger=True, yes_linger=False,
+    )
+    base.update(over)
+    return SimpleNamespace(**base)
+
+
+def _stub_connect(monkeypatch, tmp_path, order, *, linked):
+    """Wire `cmd_brnrd_connect`'s collaborators and record the call order.
+
+    Everything network- or disk-durable is stubbed; what the tests below
+    actually assert on is the *sequence*, which is the whole fix.
+    """
+    from brr import cli, home_link
+    from brr.gates import cloud
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_brr_dir_for_repo", lambda _r: tmp_path / ".brr")
+    monkeypatch.setattr(
+        cloud, "connect",
+        lambda *a, **k: order.append("pair"),
+    )
+    monkeypatch.setattr(
+        home_link, "existing_home_remotes",
+        lambda *a, **k: (
+            {"dominion": "https://github.com/o/brnrd-home.git",
+             "knowledge": "https://github.com/o/brnrd-knowledge.git"}
+            if linked else None
+        ),
+    )
+    monkeypatch.setattr(
+        cli, "_connect_memory",
+        lambda _root, *, local_only: order.append(f"memory(local_only={local_only})"),
+    )
+    monkeypatch.setattr(cli, "_connect_finish_setup", lambda *a, **k: None)
+
+    from brr import adopt
+
+    def _confirm(_prompt, default=True):
+        order.append("ask")
+        return True
+
+    monkeypatch.setattr(adopt, "_confirm", _confirm)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True, raising=False)
+
+
+def test_connect_does_not_ask_to_back_up_memory_that_is_already_backed_up(
+    tmp_path, monkeypatch, capsys,
+):
+    """2026-08-29, live: adding a second repo to an account whose home had
+    been in two private GitHub repos for weeks still asked "back up the
+    resident home and knowledge to private GitHub repos?" — consent for
+    finished work. The prompt sat *above* `cloud.connect`, where nothing
+    has yet resolved whose memory is being discussed, so it could not have
+    known.
+
+    `link_home` was always idempotent, so answering `y` was harmless; the
+    cost was a door that reads as not knowing its own state."""
+    init_git_repo(tmp_path)
+    order: list[str] = []
+    _stub_connect(monkeypatch, tmp_path, order, linked=True)
+
+    from brr import cli
+
+    cli.cmd_brnrd_connect(_connect_args())
+
+    assert "ask" not in order, f"asked about an already-linked home: {order}"
+    # And the *call* is not skipped with it: `link_home` still runs and
+    # reports each already-linked slot. Short-circuiting to local_only here
+    # would print "memory: local-only (explicit --local-memory)" at someone
+    # whose memory is on GitHub — a redundant question traded for a false
+    # receipt.
+    assert "memory(local_only=False)" in order, order
+
+
+def test_connect_asks_after_pairing_not_before(tmp_path, monkeypatch):
+    """The unlinked home still gets the question — and the ordering *is*
+    the fix. `account.resolve_context` reads the account id out of this
+    repo's own cloud state, which pairing is what writes, so a question
+    asked before `cloud.connect` is a question that cannot see its own
+    answer."""
+    init_git_repo(tmp_path)
+    order: list[str] = []
+    _stub_connect(monkeypatch, tmp_path, order, linked=False)
+
+    from brr import cli
+
+    cli.cmd_brnrd_connect(_connect_args())
+
+    assert order[:3] == ["pair", "ask", "memory(local_only=False)"], order
+
+
+def test_connect_local_memory_flag_still_skips_the_question(tmp_path, monkeypatch):
+    """`--local-memory` is an answer already given; it must not be asked
+    again, and it must reach `_connect_memory` as `local_only=True`."""
+    init_git_repo(tmp_path)
+    order: list[str] = []
+    _stub_connect(monkeypatch, tmp_path, order, linked=False)
+
+    from brr import cli
+
+    cli.cmd_brnrd_connect(_connect_args(local_memory=True))
+
+    assert "ask" not in order, order
+    assert "memory(local_only=True)" in order, order
+
+
+def test_existing_home_remotes_reads_both_slots_or_nothing(tmp_path, monkeypatch):
+    """The predicate itself, against real git repos rather than a stub: a
+    half-linked home has a real question to answer, so it must not read as
+    durable."""
+    import subprocess
+
+    from brr import account, home_link
+
+    home = tmp_path / "home"
+    (home / "dominion").mkdir(parents=True)
+    (home / "knowledge").mkdir(parents=True)
+
+    class _Ctx:
+        kind = "account"
+        dominion_repo = home / "dominion"
+
+    monkeypatch.setattr(account, "resolve_context", lambda *a, **k: _Ctx())
+    monkeypatch.setattr(account, "knowledge_path", lambda _ctx: home / "knowledge")
+
+    def _make(path, *, remote: bool):
+        subprocess.run(["git", "init", "-q", str(path)], check=True)
+        (path / "f.txt").write_text("x", encoding="utf-8")
+        subprocess.run(["git", "-C", str(path), "add", "-A"], check=True)
+        subprocess.run(
+            ["git", "-C", str(path), "-c", "user.email=t@e", "-c", "user.name=t",
+             "commit", "-qm", "seed"],
+            check=True,
+        )
+        if remote:
+            subprocess.run(
+                ["git", "-C", str(path), "remote", "add", "origin",
+                 f"https://github.com/o/{path.name}.git"],
+                check=True,
+            )
+
+    _make(home / "dominion", remote=True)
+    _make(home / "knowledge", remote=False)
+    assert home_link.existing_home_remotes(tmp_path, {}) is None, (
+        "one slot linked and the other not is not a durable home"
+    )
+
+    # A wired origin alone is not enough either — #1422's lesson: a first
+    # push that never landed left every later run believing it was done.
+    subprocess.run(
+        ["git", "-C", str(home / "knowledge"), "remote", "add", "origin",
+         "https://github.com/o/knowledge.git"],
+        check=True,
+    )
+    assert home_link.existing_home_remotes(tmp_path, {}) is None, (
+        "wired but never pushed must not read as backed up"
+    )
