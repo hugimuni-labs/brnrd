@@ -67,6 +67,7 @@
 	let cols = $state(76);
 	let probeEl = $state<HTMLElement | null>(null);
 	let deckEl = $state<HTMLElement | null>(null);
+	let boardEl = $state<HTMLElement | null>(null);
 
 	let charW = 7.2; // measured at mount/resize; used to convert drag px → chars
 	// Measured beside it, for the same reason: the vertical drag used to
@@ -83,7 +84,21 @@
 		charW = w;
 		const measured = parseFloat(getComputedStyle(probeEl).lineHeight);
 		if (Number.isFinite(measured) && measured > 0) lineHeightPx = measured;
-		const avail = deckEl.clientWidth - 8;
+		// Measure the element that actually shows the text, not its container.
+		// `deckEl.clientWidth` *includes* the deck's own 16px padding on each
+		// side, and the `- 8` fudge that stood here was not 32. Measured on the
+		// deployed page 2026-08-29 at 1280px: deck 1280, board 1248, and the
+		// header row rendered 1257.1px wide — so `1 strand out` arrived as
+		// `1 strand ou`, cut by CSS overflow, not by the canvas. The camera's
+		// own ellipsis could never have fixed it: the string was complete and
+		// the pixels were not there.
+		//
+		// The 2px is sub-pixel rounding slack, and it is a fudge — the same
+		// kind of fudge the `- 8` was. The difference is that this one is
+		// *checked*: `repro/drive-ascii.mjs` fails the run if the board's
+		// scrollWidth ever exceeds its clientWidth, so a wrong constant here
+		// is a red driver rather than a character nobody notices missing.
+		const avail = (boardEl?.clientWidth ?? deckEl.clientWidth - 32) - 2;
 		cols = Math.max(MIN_COLS, Math.min(MAX_COLS, Math.floor(avail / w)));
 	}
 
@@ -581,6 +596,7 @@
 
 	{#if !signedOut}
 		<pre
+			bind:this={boardEl}
 			class="board"
 			class:grabbing={dragging}
 			onpointerdown={onPointerDown}
