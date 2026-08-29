@@ -1071,6 +1071,60 @@ def test_await_reports_its_own_arming_verdict(tmp_path, capsys, monkeypatch):
     assert "await dropped" in payload["detail"]
 
 
+def test_await_arms_through_a_capped_advisory_notice(tmp_path, capsys, monkeypatch):
+    """brnrd#1693's verdict-layer fix reaches every ``await_verdict`` caller,
+    not just ``brnrd do --note``: the daemon's own "await capped" notice is
+    ``kind="advisory"`` (the directive armed; the ceiling was just clamped
+    to this run's remaining budget) — before the fix, any fresh matching
+    notice collapsed to ``FAILED`` here too, so a capped-but-armed wait
+    would have reported ``✗ not armed`` for a wait that was, in fact,
+    armed and live."""
+    outbox = _await_outbox(tmp_path, notices=[])
+    state = outbox / "portal-state.json"
+    calls = {"n": 0}
+
+    def drain():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            for path in _staged_await(outbox):
+                path.unlink()
+            state.write_text(
+                json.dumps({
+                    "version": 1,
+                    "notices": [{
+                        "at": "2026-08-07T11:20:00Z", "kind": "advisory",
+                        "text": (
+                            "await capped: the requested timeout would "
+                            "outlive this run's remaining budget ceiling"
+                        ),
+                    }],
+                }),
+                encoding="utf-8",
+            )
+            return
+        state.write_text(
+            json.dumps({
+                "version": 1,
+                "await": {
+                    "armed": True, "generation": "222", "resolved": True,
+                    "outcome": "event", "which": None,
+                    "deadline": "2026-08-07T12:00:00Z", "capped": True,
+                },
+            }),
+            encoding="utf-8",
+        )
+
+    clock = _FakeClock(on_sleep=drain)
+    monkeypatch.setattr(time, "sleep", clock.sleep)
+    monkeypatch.setattr(time, "monotonic", clock.monotonic)
+
+    assert main(["await", "--outbox", str(outbox), "--json"]) == 0
+    captured = capsys.readouterr()
+    assert "armed (advisory: await capped" in captured.err
+    payload = json.loads(captured.out)
+    assert payload["outcome"] == "event"
+
+
 def test_await_never_reports_a_previous_calls_resolution(
     tmp_path, capsys, monkeypatch,
 ):
