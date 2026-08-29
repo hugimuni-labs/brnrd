@@ -198,6 +198,12 @@ left off, a respawn is a full resident continuation — the shape
 - `respawn:` = dispatch, not outcome. Nothing else queued ⇒ leave an `at:`
   self-wake just past expected completion whose one job is: read the strand's
   diff whole → fold a *reviewed* reply into the thread.
+- **A strand reasons per item; cross-item transfer is yours.** A technique it
+  proves on one item of a list does not reach the next — it answers each as its
+  own question and hands the leftover back as a fork. So read the *parked
+  forks* with the diff: a fork standing beside an answer the same report
+  already demonstrated is the tell, and closing it is convergence, not scope
+  creep.
 - `spawn:` = concurrent pool. Headroom from portal-state
   (`resources.coexisting_runs.spawn_pool`), never a remembered cap. Default:
   linger, review inline, fold before closeout; the scheduled-wake fallback is
