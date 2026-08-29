@@ -133,6 +133,16 @@ BOLT_GRACE_SECONDS = 12.0
 OK = "ok"
 FAILED = "failed"
 QUEUED = "queued"
+#: Consumed, and the fresh notice that names this directive is
+#: `kind="advisory"` (`daemon.py`'s own vocabulary, `_NOTICE_KINDS` at
+#: L7359) rather than a refusal/drop/redirect. The directive was accepted
+#: and acted on — an advisory is an FYI riding along, not evidence the act
+#: failed — so this is a distinct outcome from :data:`FAILED`, not a
+#: sub-case of it. Brnrd#1693: before this status existed, the verdict
+#: layer only ever asked "is there a fresh notice", so *any* matching
+#: notice — advisory included — rendered as `✗`, indistinguishable from a
+#: real refusal.
+ADVISORY = "advisory"
 
 PORTAL_STATE_NAME = "portal-state.json"
 
@@ -176,10 +186,19 @@ def stage_message(
 
 
 def stage_note(outbox_dir: Path, event_id: str, *, index: int = 0) -> Path:
-    """Stage a `note: <event-id>` directive — retire a pending event, silently."""
+    """Stage a `note: <event-id>` directive — retire a pending event, silently.
+
+    Body-less, deliberately (brnrd#1693's second half). `note:` *means*
+    "close this event without speaking" — the daemon's own drain
+    (`daemon.py`'s note-handling branch, ~L7159) treats any non-empty body
+    as a mistake worth flagging back (`kind="advisory"`, "body text
+    ignored"). Staging a body here and then having the daemon tell the
+    caller it was ignored was the CLI arguing with itself: the directive
+    already said, structurally, that nothing would be spoken.
+    """
     return stage_message(
         outbox_dir, stage_filename("note", index), meta={"note": event_id},
-        body="noted via `brnrd do`\n",
+        body="",
     )
 
 
@@ -458,10 +477,14 @@ def await_verdict(
 
     Returns ``(status, detail)`` — ``status`` is one of :data:`OK` (consumed,
     no matching fresh notice — including after the grace window below),
-    :data:`FAILED` (consumed, and a fresh notice names this directive —
-    *detail* is that notice's `kind: text`), or :data:`QUEUED` (still
-    sitting in the outbox when the timeout hit — never hangs forever, per
-    the task's own "30s, flag-tunable, never hang" rule).
+    :data:`ADVISORY` (consumed, and the fresh notice that names this
+    directive is `kind="advisory"` — the act happened, the notice is an FYI;
+    *detail* is that notice's bare text, no `kind:` prefix since the kind is
+    always advisory here), :data:`FAILED` (consumed, and a fresh notice
+    names this directive with any other kind — *detail* is that notice's
+    `kind: text`), or :data:`QUEUED` (still sitting in the outbox when the
+    timeout hit — never hangs forever, per the task's own "30s,
+    flag-tunable, never hang" rule).
 
     **The file-gone-but-notice-not-yet-visible race (#1219).** The instant
     *staged_path* is observed gone is not proof the daemon's own
@@ -502,6 +525,8 @@ def await_verdict(
             hit = find_matching_notice(fresh, needles, source_file=source_file)
             if hit is not None:
                 kind = hit.get("kind") or "refused"
+                if kind == "advisory":
+                    return ADVISORY, str(hit.get("text") or "")
                 return FAILED, f"{kind}: {hit.get('text')}"
             if grace_polls_left is None:
                 grace_polls_left = _grace_poll_count(NOTICE_GRACE_SECONDS, poll_seconds)
@@ -576,10 +601,11 @@ def await_verdict_batch(
     directive whose file is gone gets the same #1219 grace window (an
     iteration count, not a second wall-clock deadline) before a notice-less
     read is trusted as :data:`OK`; a fresh matching notice at any point
-    still returns :data:`FAILED` immediately; a directive whose file is
-    still on disk when the shared deadline passes reports :data:`QUEUED`
-    with its own staged file's age, exactly as the single-directive path
-    does (#1379).
+    still returns :data:`ADVISORY` (an FYI, the act happened) when its
+    `kind` is `"advisory"`, or :data:`FAILED` immediately for any other
+    kind; a directive whose file is still on disk when the shared deadline
+    passes reports :data:`QUEUED` with its own staged file's age, exactly
+    as the single-directive path does (#1379).
 
     **Batching widens the correlation gap named in this module's own
     docstring, and this function caps the amplification rather than closing
@@ -632,7 +658,10 @@ def await_verdict_batch(
                 if hit is not None:
                     claimed_notices.add(_notice_key(hit))
                     kind = hit.get("kind") or "refused"
-                    results[i] = (FAILED, f"{kind}: {hit.get('text')}")
+                    if kind == "advisory":
+                        results[i] = (ADVISORY, str(hit.get("text") or ""))
+                    else:
+                        results[i] = (FAILED, f"{kind}: {hit.get('text')}")
                     continue
                 if grace_polls_left[i] is None:
                     grace_polls_left[i] = _grace_poll_count(NOTICE_GRACE_SECONDS, poll_seconds)

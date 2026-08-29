@@ -18,6 +18,7 @@ from brr import (
     card,
     conversations,
     daemon,
+    do as do_mod,
     hooks,
     message_store,
     portals,
@@ -1610,6 +1611,38 @@ class TestDrainOutboxNote:
         assert n == 1
         [notice] = daemon._read_outbox_notices(outbox)
         assert notice["kind"] == "advisory"
+
+    def test_note_staged_by_do_stage_note_closes_silently_with_no_advisory(
+        self, tmp_path, monkeypatch,
+    ):
+        """brnrd#1693, half 2, from the producer side: the file
+        ``do.stage_note`` actually writes today (body-less, since the fix)
+        still closes the event through the real daemon drain used above,
+        and does not trip the "body text ignored" advisory the test right
+        above pins as still firing for a *hand-written* note that does
+        carry a body. Feeding the drain the literal bytes ``stage_note``
+        writes — not a hand-authored fixture string — ties this test to
+        the actual producer, so a future change to ``stage_note`` that
+        reintroduces a body would fail it.
+        """
+        inbox = tmp_path / ".brr" / "inbox"
+        protocol.create_event(inbox, source="telegram", body="ping")
+        bid = protocol.list_pending(inbox)[0]["id"]
+
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        staged = do_mod.stage_note(scratch, bid)
+        text = staged.read_text(encoding="utf-8")
+
+        n, responses, inbox, outbox, _emitted = self._drain(
+            tmp_path, monkeypatch, [("close.md", text)],
+        )
+        assert n == 1
+        fm = protocol.parse_frontmatter(
+            (inbox / f"{bid}.md").read_text(encoding="utf-8"))
+        assert fm.get("status") == "noted"
+        assert protocol.list_partials(responses, bid) == []
+        assert daemon._read_outbox_notices(outbox) == []
 
 
 class TestDrainAgentCard:
