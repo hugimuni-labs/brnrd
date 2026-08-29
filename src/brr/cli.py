@@ -3098,8 +3098,14 @@ def cmd_do(args):
             # reply's own drain verdict is OK. A refused reply must not
             # leave a debt row for a message nobody got — `--no-promise`
             # writes nothing by design, the explicit zero.
+            # `accepted`, not `== OK`: an advisory verdict means the reply
+            # *was* delivered, so the debt it promises is real. Asking for OK
+            # alone would drop the blueprint row for a message that landed —
+            # the same class as brnrd#1693 one call site over, and hidden
+            # behind the fact that no advisory the daemon emits today names a
+            # `reply` directive.
             if args.promise and reply_verdicts and all(
-                status == do_mod.OK for status in reply_verdicts
+                do_mod.accepted(status) for status in reply_verdicts
             ):
                 seg, ok = _do_promise(outbox_dir, args.promise, args.promise_count)
                 segments.append(seg)
@@ -4524,7 +4530,7 @@ def cmd_await(args):
         # same wait an OK verdict takes (brnrd#1693's verdict layer applies
         # here too, not only to `brnrd do`).
         print(f"[brnrd await] armed (advisory: {detail})", file=sys.stderr)
-    elif status != do_mod.OK:
+    elif not do_mod.accepted(status):
         # The arming verdict, in the call that armed it. `failed` = the
         # daemon refused/dropped the directive and named it in a notice;
         # `unarmed` = the drain never consumed the file, so nothing is
@@ -4616,9 +4622,10 @@ def cmd_cut(args):
         outbox_dir, staged, before, ("cut",),
         timeout_seconds=timeout, source_file=staged.name,
     )
-    if status == do_mod.OK:
-        # An OK drain verdict only means the directive was consumed with no
-        # refusal notice naming it — it is not proof the accept branch's own
+    if do_mod.accepted(status):
+        # A drain verdict of OK-or-advisory only means the directive was
+        # consumed with no *refusal* notice naming it — it is not proof the
+        # accept branch's own
         # `task.meta["bolt"]` write has reached this run's portal-state.json
         # yet (the same intra-tick race `await_verdict` already grace-polls
         # for, applied to a different facet — #1221). Confirm the bolt
