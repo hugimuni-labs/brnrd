@@ -220,8 +220,22 @@ export interface CampChamber {
 	/** The last file the work touched here, parsed from the redacted detail —
 	 *  the leaf on the branch the reader actually watches move. */
 	lastFile: string | null;
+	/** Every file this run has touched in this chamber, attested by git
+	 *  (`room.paths`) rather than parsed out of a command line.
+	 *
+	 *  `lastFile` answers *where is the hand right now* and is necessarily a
+	 *  sample of one; this answers *what has this run done here*, which is
+	 *  the question a map is for. They are different facts and the second
+	 *  was previously unobtainable: a heredoc names no file, a relative path
+	 *  belongs to a cwd the room never joined it against, and the crossing
+	 *  tail is eight boundaries of a run that may have crossed a hundred. */
+	files: string[];
 	visits: number;
 }
+
+/** Files drawn per chamber. A chamber that touched more has already said
+ *  what it is; past this the leaves stop being terrain and become a list. */
+export const CHAMBER_FILES_MAX = 6;
 
 /** The file a boundary's detail names, when one is legible: the last token
  * that looks like a filename with an extension, or a dotfile (`.card`,
@@ -484,8 +498,35 @@ export function compileRoomGraph(
 					dir: step.dir,
 					lastAct: step.act,
 					lastFile: step.file ?? null,
+					files: [],
 					visits: 1
 				});
+			}
+		}
+		// GIT'S OWN ANSWER, laid over the trail. The trail is where the actor
+		// *stood*; this is what the run *changed* — and until the daemon
+		// attested it, the second could only be guessed at from argv, which
+		// is why a 142-boundary run drew one file leaf (maintainer,
+		// 2026-08-28: "the map rendered is whaaaaa, compared to the actual
+		// edits and reads you have made so far over this run").
+		//
+		// It grows chambers rather than only decorating known ones: a
+		// directory this run demonstrably edited is terrain by the same rule
+		// a cwd is, and requiring a cwd to have landed there first is what
+		// kept the trie flat. `undefined` paths (older daemon) change
+		// nothing here — absent stays absent.
+		for (const rel of run.room?.paths ?? []) {
+			const cut = rel.lastIndexOf('/');
+			const dir = cut === -1 ? '.' : rel.slice(0, cut);
+			const file = cut === -1 ? rel : rel.slice(cut + 1);
+			if (!file) continue;
+			let chamber = camp.chambers.find((c) => c.dir === dir);
+			if (!chamber) {
+				chamber = { dir, lastAct: null, lastFile: null, files: [], visits: 0 };
+				camp.chambers.push(chamber);
+			}
+			if (!chamber.files.includes(file) && chamber.files.length < CHAMBER_FILES_MAX) {
+				chamber.files.push(file);
 			}
 		}
 		camps.set(key, camp);

@@ -711,11 +711,28 @@ class LiveRunRoomIn(BaseModel):
     env: str | None = Field(default=None, max_length=16)
     branch: str | None = Field(default=None, max_length=256)
     dir: str | None = Field(default=None, max_length=256)
+    # WHAT THE RUN TOUCHED, attested by git rather than mined out of argv
+    # (`cloud_publisher._run_paths`). The room used to grow terrain from
+    # paths spotted in `edge.detail`, which loses a heredoc's target
+    # entirely, joins a relative path against the wrong chamber, and in any
+    # case only ever sees a bounded crossing tail rather than the run. Git
+    # answers all three exactly: the diff against the run's fork point plus
+    # what is untracked, repo-relative, whichever cwd it was typed from.
+    # Empty on a daemon predating the field *and* on a run that has touched
+    # nothing — the two are told apart by `room` itself being absent, never
+    # by reading a zero as an answer.
+    paths: list[str] = Field(default_factory=list, max_length=64)
 
     @model_validator(mode="before")
     @classmethod
     def _truncate(cls, data: Any) -> Any:
         return _truncate_to_bounds(cls, data)
+
+    @field_validator("paths")
+    @classmethod
+    def _bound_paths(cls, value: list[str]) -> list[str]:
+        """Per-item bound — ``max_length`` only counts the outer list."""
+        return [str(p)[:256] for p in value if str(p).strip()]
 
 
 class LiveRunEdgeIn(BaseModel):
