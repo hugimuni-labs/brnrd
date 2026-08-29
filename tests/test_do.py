@@ -469,6 +469,19 @@ def test_do_reply_with_no_promise_stages_the_reply_and_writes_nothing(
     assert not (outbox / ".promises.jsonl").exists()
 
 
+def test_stage_note_writes_a_body_less_directive(tmp_path):
+    """brnrd#1693, half 2. ``note:`` means "close this event without
+    speaking" — staging a body and then having the daemon flag it back as
+    ignored is the CLI arguing with itself. Pinned directly against
+    :func:`do.stage_note`'s own output, independent of the verdict-layer
+    fix above: this must hold even if half 1 were reverted."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    path = do_mod.stage_note(outbox, "evt-1")
+    text = path.read_text(encoding="utf-8")
+    assert text == "---\nnote: evt-1\n---\n"
+
+
 def test_do_note_alone_is_unaffected_by_the_reply_debt_contract(
     tmp_path, monkeypatch, capsys,
 ):
@@ -519,6 +532,69 @@ def test_do_note_ignores_a_stale_pre_existing_notice(tmp_path, monkeypatch, caps
 
     assert main(["do", "--note", "evt-1"]) == 0
     assert capsys.readouterr().out.strip() == "note evt-1 ✓"
+
+
+def test_do_note_renders_an_advisory_notice_as_ok_not_failed(
+    tmp_path, monkeypatch, capsys,
+):
+    """brnrd#1693, half 1. The daemon's drain flags any body-carrying
+    ``note:`` file with ``kind="advisory"`` (``daemon.py``'s "body text
+    ignored" notice) — the event still closes; the notice is FYI, not a
+    refusal. Before the fix, ``await_verdict`` classified a verdict purely
+    by "is there a fresh matching notice", discarding ``kind`` entirely, so
+    this rendered as ``✗`` even though the note it names succeeded — the
+    exact defect brnrd#1693 reports ("the note always worked"). This test
+    fails on pre-fix code with ``note evt-1 ✗ advisory: ...``."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    notice = {
+        "at": "2026-08-08T00:00:00Z", "kind": "advisory",
+        "text": (
+            "note: body text ignored — a note closes event evt-1 without "
+            "speaking; use event: to reply"
+        ),
+    }
+    monkeypatch.setattr(
+        time, "sleep",
+        _consume_after_one_sleep(outbox, "do-*-note-*.md", notice=notice),
+    )
+
+    assert main(["do", "--note", "evt-1"]) == 0
+    out = capsys.readouterr().out.strip()
+    assert out == (
+        "note evt-1 ✓ (advisory: note: body text ignored — a note closes "
+        "event evt-1 without speaking; use event: to reply)"
+    )
+
+
+def test_do_note_mutation_guard_a_real_refusal_still_fails(
+    tmp_path, monkeypatch, capsys,
+):
+    """The companion to the test above, run against the same shape of fresh
+    notice but with a non-advisory ``kind`` — pinning that the verdict is
+    read from ``kind``, not merely from "a fresh notice exists". A fix that
+    reverted to the old presence-only check (or that special-cased on
+    notice *text* rather than ``kind``) would pass the advisory test above
+    by accident while failing to ever report a real refusal; this test
+    exists so that shortcut cannot sneak through unnoticed."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    notice = {
+        "at": "2026-08-08T00:00:00Z", "kind": "refused",
+        "text": "note refused: event evt-1 belongs to another thread",
+    }
+    monkeypatch.setattr(
+        time, "sleep",
+        _consume_after_one_sleep(outbox, "do-*-note-*.md", notice=notice),
+    )
+
+    assert main(["do", "--note", "evt-1"]) == 1
+    out = capsys.readouterr().out.strip()
+    assert out == "note evt-1 ✗ refused: note refused: event evt-1 belongs to another thread"
 
 
 def _consume_then_notice_after_delay(outbox, glob, notice, *, delay_calls=3):

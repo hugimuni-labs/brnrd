@@ -2789,6 +2789,13 @@ def _do_render(verb: str, label: str, status: str, detail: str) -> tuple[str, bo
 
     if status == do_mod.OK:
         return f"{verb} {label} ✓", True
+    if status == do_mod.ADVISORY:
+        # brnrd#1693: the directive was accepted and acted on — the daemon's
+        # own `kind="advisory"` notice is an FYI riding along, not evidence
+        # the act failed. Rendered distinctly from a bare `✓` (there is
+        # something worth reading) and from `✗` (nothing here means the act
+        # didn't happen) — a reader keeps a reason to trust `✗`.
+        return f"{verb} {label} ✓ (advisory: {detail})", True
     if status == do_mod.QUEUED:
         return f"{verb} {label} ? {detail or 'still queued'}", False
     return f"{verb} {label} ✗ {detail}", False
@@ -4510,7 +4517,14 @@ def cmd_await(args):
         outbox_dir, staged, before, ("await",),
         timeout_seconds=do_mod.DEFAULT_TIMEOUT_SECONDS,
     )
-    if status != do_mod.OK:
+    if status == do_mod.ADVISORY:
+        # The directive armed — e.g. the daemon capped the requested
+        # timeout to this run's own budget ceiling — and the notice is an
+        # FYI riding along, not a refusal. Say it, then fall through to the
+        # same wait an OK verdict takes (brnrd#1693's verdict layer applies
+        # here too, not only to `brnrd do`).
+        print(f"[brnrd await] armed (advisory: {detail})", file=sys.stderr)
+    elif status != do_mod.OK:
         # The arming verdict, in the call that armed it. `failed` = the
         # daemon refused/dropped the directive and named it in a notice;
         # `unarmed` = the drain never consumed the file, so nothing is
