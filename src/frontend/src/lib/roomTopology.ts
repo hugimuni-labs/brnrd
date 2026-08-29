@@ -134,16 +134,32 @@ function addEdge(b: Builder, from: PlaceId, to: PlaceId, kind: PlaceEdgeKind) {
 /** Ensure the trie path for `dir` exists under its island; returns the
  *  terminal directory node's id. Rule 3: intermediate prefixes are
  *  structural, derived from the attested path — never extra boundaries. */
-function ensureDirPath(b: Builder, repoLabel: string, dir: string): PlaceId {
+/**
+ * The chambers one camp has walked, as a trie rooted at **that camp**.
+ *
+ * Keyed by the camp, not by the repo — 2026-08-29, from his own screenshot:
+ * terrain was already built per camp (`for (const chamber of camp.chambers)`)
+ * but every chamber minted its node with `dirId(island.label, segs)`, so two
+ * runs walking `src/` addressed *the same node*. The trie was island-scoped
+ * while the walk that filled it was camp-scoped, and the strand's tree and
+ * the resident's were one tree — not a collision, a shared key.
+ *
+ * The consequence, which is a real semantic choice and not a side effect:
+ * **two runs in one directory draw two chambers.** That is right, because
+ * this tree is a *trail* — where this run has been — and not a filesystem
+ * listing. A run that has never opened `src/` has no `src/`.
+ */
+function ensureDirPath(b: Builder, repoLabel: string, campKey: PlaceId, dir: string): PlaceId {
 	const segs = pathSegments(dir);
-	let parent = islandRootId(repoLabel);
+	let parent = campKey;
 	for (let i = 0; i < segs.length; i++) {
-		const id = dirId(repoLabel, segs.slice(0, i + 1));
+		const id = dirId(campKey, segs.slice(0, i + 1));
 		addNode(b, {
 			id,
 			kind: 'directory',
 			label: segs[i],
 			repoId: repoLabel,
+			campId: campKey,
 			parentId: parent,
 			depth: i + 1
 		});
@@ -245,7 +261,7 @@ export function compileTopology(graph: RoomGraph): RoomTopology {
 			}
 			// terrain: the observed chambers of this camp, as a shared-prefix trie
 			for (const chamber of camp.chambers) {
-				const leafDir = ensureDirPath(b, island.label, chamber.dir);
+				const leafDir = ensureDirPath(b, island.label, cid, chamber.dir);
 				// Every attested file, then the one the hand is on. Deduped by
 				// id, so a file that is both git-attested and the current
 				// `lastFile` mints one leaf and not two — the same node either
@@ -400,16 +416,17 @@ function resolveActorPlace(b: Builder, graph: RoomGraph, actor: RoomActor): Plac
 				}
 				return fallback;
 			}
-			const id = dirId(actor.islandLabel, pathSegments(place.label));
-			return b.nodes[id] ? id : fallback;
+			// the actor's *own* camp's chamber — with a per-camp trie, another
+			// run's identical path is a different node and standing there
+			// would put this actor in someone else's trail
+			const id = camp ? dirId(camp, pathSegments(place.label)) : null;
+			return id && b.nodes[id] ? id : fallback;
 		}
 		case 'test-rig': {
 			// the rig attaches to the directory actually probed when that
 			// chamber exists; otherwise it is the camp's own rig
-			const anchorDir =
-				place.label && b.nodes[dirId(actor.islandLabel, pathSegments(place.label))]
-					? dirId(actor.islandLabel, pathSegments(place.label))
-					: camp;
+			const probed = place.label && camp ? dirId(camp, pathSegments(place.label)) : null;
+			const anchorDir = probed && b.nodes[probed] ? probed : camp;
 			if (!anchorDir) return fallback;
 			const rid = rigId(anchorDir);
 			addNode(b, {

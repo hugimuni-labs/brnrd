@@ -111,7 +111,9 @@ function extentUnits(node: PlaceNode): number {
 const ISLAND_DY = 44; // vertical distance between island origins
 const HOME_POS: Point = { x: -26, y: 0 };
 const CAMP_DX = -9; // camps sit west of the root, home-facing shore
-const CAMP_LANE_STEP = 5;
+/** Rows of air between one run's band and the next. Two: one for the gap to
+ *  read as a gap, one for the next camp's station cluster to reach north into. */
+const CAMP_BAND_GAP = 4;
 const FORGE_OFFSET: Point = { x: -16, y: 5 }; // the outward shore dock
 const STATION_OFFSETS: Record<string, Point> = {
 	'portal-rack': { x: -4, y: -2 },
@@ -188,6 +190,8 @@ export function layoutRoom(
 			districts[`${rootId}#${name}`] = districtOf(name, root);
 		}
 
+		const camps = childrenOf(topo, rootId).filter((n) => n.kind === 'camp');
+
 		// Pass 3 · lay out locally. One shelf per island holds the terrain
 		// district's occupancy: every already-remembered node re-occupies its
 		// own extent first, so a new chamber packs against the remembered
@@ -202,29 +206,6 @@ export function layoutRoom(
 		}
 		if (!islandNodes.some((n) => n.id === rootId))
 			shelf.occupy(root.x, root.y, extentUnits(topo.nodes[rootId]));
-
-		// camps on the west shore, stable lanes
-		const camps = childrenOf(topo, rootId).filter((n) => n.kind === 'camp');
-		for (const campNode of camps) {
-			if (!coords[campNode.id]) {
-				// south-only: a camp's stations reach CAMP_TOP rows north of it,
-				// and north of that is the labour band's ground. The old
-				// alternation put the second camp five rows north — inside the
-				// terminal's rectangle, which is the collision this pass exists
-				// to make impossible rather than unlikely.
-				const lane = nextFreeLane(
-					camps.map((c) => coords[c.id]).filter(Boolean),
-					root.y,
-					CAMP_LANE_STEP
-				);
-				coords[campNode.id] = { x: root.x + CAMP_DX, y: root.y + lane };
-			}
-			const camp = coords[campNode.id];
-			for (const st of childrenOf(topo, campNode.id)) {
-				const off = STATION_OFFSETS[stationSuffix(st.id)] ?? { x: 0, y: 2 };
-				claim(st.id, { x: camp.x + off.x, y: camp.y + off.y });
-			}
-		}
 
 		// the forge dock on the outward shore
 		claim(`${rootId}#forge-dock`, { x: root.x + FORGE_OFFSET.x, y: root.y + FORGE_OFFSET.y });
@@ -246,6 +227,11 @@ export function layoutRoom(
 			const key = n.parentId ?? rootId;
 			(byParent.get(key) ?? byParent.set(key, []).get(key)!).push(n);
 		}
+		// Each camp walks its own trie (2026-08-29 — a run owns its ground).
+		// The roots to walk from are the camps, not the island root: a tree
+		// keyed by camp has its camp as its parent, and starting at the island
+		// root would find nothing and place every chamber by the defensive
+		// fallback beside HOME.
 		const walk = (parentId: PlaceId) => {
 			const parent = coords[parentId];
 			if (!parent) return;
@@ -263,6 +249,32 @@ export function layoutRoom(
 			}
 		};
 		walk(rootId);
+
+		// A run owns its ground (2026-08-29, his screenshot: "the runs should
+		// have dynamic size, we stack them up ... the fs path should just have
+		// their place"). Camp and tree are placed together, in one pass, and
+		// the next camp starts below everything the shelf has already claimed —
+		// so a band is exactly as tall as the trail inside it, no constant to
+		// tune and nothing to reflow when a trail grows. Append-only: a
+		// remembered camp keeps its row and its tree grows into the rows under
+		// it, pushing only *later* bands down.
+		for (const campNode of camps) {
+			if (!coords[campNode.id]) {
+				const floor = shelf.floor();
+				const y = floor === null ? root.y : Math.max(root.y, floor + CAMP_BAND_GAP);
+				coords[campNode.id] = { x: root.x + CAMP_DX, y };
+			}
+			const camp = coords[campNode.id];
+			// the camp's own row is claimed so the next band cannot start on it
+			shelf.occupy(camp.x, camp.y, 1);
+			for (const st of childrenOf(topo, campNode.id)) {
+				const off = STATION_OFFSETS[stationSuffix(st.id)] ?? { x: 0, y: 2 };
+				claim(st.id, { x: camp.x + off.x, y: camp.y + off.y });
+				const p = coords[st.id];
+				shelf.occupy(p.x, p.y, 1);
+			}
+			walk(campNode.id);
+		}
 
 		// rigs and island-scoped fixtures hang off their owner at a fixed offset
 		for (const node of islandNodes) {
@@ -401,18 +413,6 @@ function childrenOf(topo: RoomTopology, parentId: PlaceId): PlaceNode[] {
 function stationSuffix(id: PlaceId): string {
 	const i = id.lastIndexOf('#');
 	return i >= 0 ? id.slice(i + 1) : '';
-}
-
-/** The nearest free lane around `originY`: walk the alternation until a
- *  lane no sibling occupies. Occupancy derives from already-assigned
- *  sibling coordinates, so it is reload-stable via the atlas memory. */
-function nextFreeLane(placedSiblings: Point[], originY: number, step: number): number {
-	const taken = new Set(placedSiblings.map((p) => p.y - originY));
-	for (let i = 0; i < 64; i++) {
-		const lane = i * step;
-		if (!taken.has(lane)) return lane;
-	}
-	return 64 * step;
 }
 
 /** True when this edge starts inside a terrain district and ends outside it.

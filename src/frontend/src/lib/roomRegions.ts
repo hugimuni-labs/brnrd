@@ -188,6 +188,16 @@ export class Shelf {
 	 * the labour band still pack by extent — several windows side by side is
 	 * a layout, not a garble, because each carries its own frame.
 	 */
+	/** The lowest row anything has claimed, or null on an empty shelf. What
+	 *  makes a band "as tall as the trail inside it": the next band starts
+	 *  below this, so no constant has to guess a run's size. */
+	floor(): number | null {
+		let out: number | null = null;
+		for (const [row, spans] of this.rows)
+			if (spans.length > 0) out = out === null ? row : Math.max(out, row);
+		return out;
+	}
+
 	free(x: number, y: number, w: number, h = 1, exclusive = false): boolean {
 		const width = Math.max(1, w);
 		for (let r = y; r < y + h; r++) {
