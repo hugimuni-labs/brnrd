@@ -533,6 +533,14 @@ export function renderWorld(
 	const canvas = new Canvas(cam.cols, cam.rows);
 
 	// 1 · corridors — ground, never claiming; labels own their cells
+	//
+	// Corner cells are collected rather than painted here. A route's turn is
+	// the one cell where a `│` and a `─` meet, and each edge is drawn
+	// independently: a later sibling's vertical run passes straight through
+	// an earlier sibling's turn, so painting the junction inline means the
+	// last child drawn wins and every corner reads as a pass-through. That
+	// is the difference between a tree and a column of dashes.
+	const corners = new Map<string, { x: number; y: number; parent: PlaceId }>();
 	for (const e of topo.edges) {
 		if (cam.level === 'atlas') continue; // atlas shows islands only; every corridor stays below this scale
 		const chars = EDGE_CHARS[e.kind];
@@ -549,8 +557,27 @@ export function renderWorld(
 				for (let x = Math.min(a.x, b.x) + 1; x < Math.max(a.x, b.x); x++)
 					canvas.ground(x, a.y, chars.h);
 			}
+			// only the tree's own turns. The control corridors radiating from
+			// HOME are drawn dotted and are not a hierarchy — a `├` in that
+			// column would be a solid junction on a dotted line claiming a
+			// parent/child relation the graph does not have.
+			if (e.kind === 'tree' && i > 0 && a.x === toChar(f, pts[i - 1]).x && a.y === b.y)
+				corners.set(`${a.x},${a.y}`, { x: a.x, y: a.y, parent: e.from });
 		}
 	}
+
+	// 1b · the junctions. `tree(1)` is legible because its turns are drawn:
+	// `├──` while siblings remain below, `└──` at the last one. A column that
+	// only ever prints `│` and `─` makes the reader infer the branching.
+	// Last *per parent*, not per column: two parents at the same depth share
+	// a character column, so a column-wise `last` gave the elbow to whichever
+	// subtree happened to sit lowest and drew every other subtree's final
+	// child as if more followed.
+	const lastChildRow = new Map<PlaceId, number>();
+	for (const c of corners.values())
+		lastChildRow.set(c.parent, Math.max(lastChildRow.get(c.parent) ?? -Infinity, c.y));
+	for (const c of corners.values())
+		canvas.ground(c.x, c.y, lastChildRow.get(c.parent) === c.y ? '└' : '├');
 
 	// 2 · the current route, marked on the ground
 	if (opts.highlightRoute && opts.highlightRoute.length > 1) {
