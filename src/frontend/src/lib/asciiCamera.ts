@@ -18,7 +18,7 @@ import {
 	type PlaceNodeKind,
 	type RoomTopology
 } from './roomTopology.ts';
-import { MAX_DIR_LABEL_CHARS, type Point, type RoomLayout } from './roomLayout.ts';
+import { MAX_DIR_LABEL_CHARS, type Point, type Rect, type RoomLayout } from './roomLayout.ts';
 import type { PagerPage } from './roomPager.ts';
 import { untilText } from './scheduledWakes.ts';
 import { OFF_MARK } from './stateChrome.ts';
@@ -386,6 +386,25 @@ const EDGE_CHARS: Record<string, { h: string; v: string }> = {
 	'sea-lane': { h: '', v: '' } // sea lanes are open water; traffic marks them
 };
 
+/** The terminal's allocated ground: the resident's own window when the wire
+ *  names one, otherwise the single allocation on the board. Returns null when
+ *  nothing was allocated — the camera draws no instrument it was not given
+ *  ground for. */
+function terminalRegionFor(layout: RoomLayout, graph: RoomGraph): Rect | null {
+	// Same actor the page's `terminalFeed` scopes to (`graph.actors[0]`) —
+	// two different rules would render one run's commands inside another
+	// run's window, which is a lie no test on either side would catch.
+	const mine = graph.actors[0];
+	if (mine) {
+		const own = layout.regions?.[`labour:terminal:${mine.runId}`];
+		if (own) return own;
+	}
+	for (const [id, rect] of Object.entries(layout.regions ?? {})) {
+		if (id.startsWith('labour:terminal:')) return rect;
+	}
+	return null;
+}
+
 // ── the render ──────────────────────────────────────────────────────────────
 
 function bearingArrow(from: Point, to: Point): string {
@@ -514,6 +533,14 @@ export function renderWorld(
 	const canvas = new Canvas(cam.cols, cam.rows);
 
 	// 1 · corridors — ground, never claiming; labels own their cells
+	//
+	// Corner cells are collected rather than painted here. A route's turn is
+	// the one cell where a `│` and a `─` meet, and each edge is drawn
+	// independently: a later sibling's vertical run passes straight through
+	// an earlier sibling's turn, so painting the junction inline means the
+	// last child drawn wins and every corner reads as a pass-through. That
+	// is the difference between a tree and a column of dashes.
+	const corners = new Map<string, { x: number; y: number; parent: PlaceId }>();
 	for (const e of topo.edges) {
 		if (cam.level === 'atlas') continue; // atlas shows islands only; every corridor stays below this scale
 		const chars = EDGE_CHARS[e.kind];
@@ -530,8 +557,27 @@ export function renderWorld(
 				for (let x = Math.min(a.x, b.x) + 1; x < Math.max(a.x, b.x); x++)
 					canvas.ground(x, a.y, chars.h);
 			}
+			// only the tree's own turns. The control corridors radiating from
+			// HOME are drawn dotted and are not a hierarchy — a `├` in that
+			// column would be a solid junction on a dotted line claiming a
+			// parent/child relation the graph does not have.
+			if (e.kind === 'tree' && i > 0 && a.x === toChar(f, pts[i - 1]).x && a.y === b.y)
+				corners.set(`${a.x},${a.y}`, { x: a.x, y: a.y, parent: e.from });
 		}
 	}
+
+	// 1b · the junctions. `tree(1)` is legible because its turns are drawn:
+	// `├──` while siblings remain below, `└──` at the last one. A column that
+	// only ever prints `│` and `─` makes the reader infer the branching.
+	// Last *per parent*, not per column: two parents at the same depth share
+	// a character column, so a column-wise `last` gave the elbow to whichever
+	// subtree happened to sit lowest and drew every other subtree's final
+	// child as if more followed.
+	const lastChildRow = new Map<PlaceId, number>();
+	for (const c of corners.values())
+		lastChildRow.set(c.parent, Math.max(lastChildRow.get(c.parent) ?? -Infinity, c.y));
+	for (const c of corners.values())
+		canvas.ground(c.x, c.y, lastChildRow.get(c.parent) === c.y ? '└' : '├');
 
 	// 2 · the current route, marked on the ground
 	if (opts.highlightRoute && opts.highlightRoute.length > 1) {
@@ -632,18 +678,21 @@ export function renderWorld(
 	// commands happen *somewhere*.
 	const termLines = opts.terminal ?? null;
 	if (termLines && cam.level !== 'atlas') {
-		const campNode = Object.values(topo.nodes).find((n) => n.kind === 'camp');
-		const campPos = campNode ? layout.nodes[campNode.id] : undefined;
-		if (campPos) {
-			const box = terminalBox(termLines);
-			const anchor = toChar(f, campPos);
-			// one row of air between the floor of the window and the camp it
-			// stands on, so the two read as stacked rather than collided
-			const top = anchor.y - box.length - 1;
+		// The rectangle is *allocated*, never derived here. Until 2026-08-29
+		// this block read the camp's point and invented a 50×7 box beside it,
+		// while `RoomLayout` independently grew the tree east — two owners,
+		// one cell, and `canvas.text` claiming meant the label lost. Now the
+		// labour district owns the ground and the camera only transforms it;
+		// no region, no window, because a window drawn on unallocated ground
+		// is the defect wearing a fix.
+		const rect = terminalRegionFor(layout, graph);
+		if (rect) {
+			const box = terminalBox(termLines, { cols: rect.w * SCALE.island.x, rows: rect.h - 2 });
+			const origin = toChar(f, { x: rect.x, y: rect.y });
 			for (let i = 0; i < box.length; i++) {
-				const y = top + i;
+				const y = origin.y + i;
 				if (y < 0 || y >= cam.rows) continue;
-				canvas.text(Math.max(0, anchor.x), y, clip(box[i], cam.cols - Math.max(0, anchor.x)));
+				canvas.text(Math.max(0, origin.x), y, clip(box[i], cam.cols - Math.max(0, origin.x)));
 			}
 		}
 	}
@@ -680,11 +729,13 @@ export function renderWorld(
 		// the act, embodied: writing/reading marks at the station the actor
 		// stands at — a busy status line is not a body.
 		const mark = walking ? null : activityMark(actor, pid ? (topo.nodes[pid]?.kind ?? null) : null);
-		canvas.text(
-			Math.max(0, c.x - 2 - tether.length - n * 8),
-			c.y - 1 < 0 ? c.y : c.y - 1,
-			`${tether}${body}${mark ? ' ' + mark : ''}`
-		);
+		// The actor stands *on* its own row, immediately west of the place's
+		// label. It used to paint one row north — free ground when terrain
+		// spent four rows per lane, another place's row since the tree
+		// compacted to one node per row (2026-08-29). A body drawn on a
+		// neighbour's label is the same cross-owner claim the terminal had.
+		const text = `${tether}${body}${mark ? ' ' + mark : ''}`;
+		canvas.text(Math.max(0, c.x - 1 - text.length - n * 8), c.y, text);
 		// the mind-connect reaches the pager field below the map: a dotted
 		// line from the reading actor down through the frame's bottom edge,
 		// meeting the PAGER strip that sits directly under it. Ground chars —

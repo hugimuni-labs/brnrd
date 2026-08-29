@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { compileRoomGraph, fileFromDetail, type TrailStep } from './roomGraph.ts';
 import { compileTopology, dirId, islandRootId, routeBetween } from './roomTopology.ts';
-import { emptyAtlas, layoutRoom, type AtlasMemory } from './roomLayout.ts';
+import { emptyAtlas, layoutRoom, terminalRequest, type AtlasMemory } from './roomLayout.ts';
 import {
 	CAMERA_LINE_HEIGHT_FALLBACK_PX,
 	LEGEND,
@@ -472,4 +472,119 @@ test('a board with nothing attested grows no condition line at all', () => {
 	const board = pagerBoard({ generated_at: '2026-08-27T10:20:00Z', runner_quotas: [] }, null);
 	assert.ok(board.includes('PAGER'), 'the pager itself still renders');
 	assert.ok(!/⌁ .*⛁/u.test(board), 'but no fuel line is fabricated');
+});
+
+// ── the tree's own turns, and the ground under the terminal ────────────────
+
+function boardOf(dirs: string[], opts: Parameters<typeof renderWorld>[4] = {}) {
+	const run = {
+		id: 'r1',
+		run_id: 'r1',
+		kind: 'daemon',
+		stream: 'cloud:telegram:1:',
+		label: '',
+		name: 'the run',
+		repo_label: REPO,
+		started_at: '2026-08-27T10:00:00Z',
+		last_seen: '2026-08-27T10:20:00Z',
+		parent_run_id: null,
+		is_subspawn: false,
+		runner: { name: 'claude', shell: 'claude', core: 'opus' },
+		phase: 'running',
+		card_text: null,
+		card_updated_at: null,
+		relics_counts: null,
+		portals: { pending: 0, oldest_at: null },
+		room: { env: 'host', branch: 'brr/ground', dir: null },
+		edge: null,
+		daemon_stale: false
+	} as unknown as LiveRun;
+	const trails: Record<string, TrailStep[]> = {
+		r1: dirs.map((dir, i) => ({ dir, act: 'orient', at: `2026-08-27T10:0${i}:00Z` }))
+	};
+	const graph = compileRoomGraph(liveWire([run]), null, trails);
+	const topo = compileTopology(graph);
+	const { layout } = layoutRoom(topo, emptyAtlas(), [terminalRequest('r1', 50, 7)]);
+	const cam: Camera = { center: { x: 0, y: 2 }, cols: 120, rows: 34, level: 'island' };
+	return { board: renderWorld(topo, layout, graph, cam, opts), topo, layout };
+}
+
+test('the tree draws its turns: a tee while siblings remain, an elbow at the last', () => {
+	// `tree(1)` is legible because the junction says whether the column
+	// continues. Two subtrees on purpose: `frontend` and `brnrd/brr` sit at
+	// the same depth and therefore share a character column, and the first
+	// version of this keyed "last child" by column — which gave the elbow to
+	// whichever subtree happened to sit lowest and drew every other
+	// subtree's final child as if more followed.
+	const { board } = boardOf([
+		'src/frontend/repro',
+		'src/frontend/tests',
+		'src/brnrd/brr/gates',
+		'src/brnrd/brr/prompts'
+	]);
+	assert.match(board, /├───repro\//u, 'a sibling follows, so a tee');
+	assert.match(board, /└───tests\//u, 'the last child of frontend gets the elbow');
+	assert.match(board, /├───gates\//u);
+	assert.match(board, /└───prompts\//u, 'and so does the last child of the other subtree');
+});
+
+test('the terminal is drawn on allocated ground, and on none if none was allocated', () => {
+	const lines = [{ at: '2026-08-27T10:20:00Z', act: 'Bash', detail: 'git status' }];
+	const { board } = boardOf(['src/frontend/src/lib'], { terminal: lines });
+	assert.ok(board.includes('$ bench'), 'the window renders where it was allocated');
+	// every board row carrying a frame edge carries no directory label: the
+	// defect was a `┐` printing over `prompts/`, so the assertion is that no
+	// row holds both.
+	for (const row of board.split('\n')) {
+		if (!/[┌└│┐┘]/u.test(row) || !row.includes('bench')) continue;
+		assert.ok(!/\w+\//u.test(row.replace('$ bench', '')), `terrain inside the window row: ${row}`);
+	}
+});
+
+test('no region allocated ⇒ no window, rather than one invented beside a camp', () => {
+	const run = {
+		id: 'r1',
+		run_id: 'r1',
+		kind: 'daemon',
+		stream: 's',
+		label: '',
+		name: 'r',
+		repo_label: REPO,
+		started_at: '2026-08-27T10:00:00Z',
+		last_seen: '2026-08-27T10:20:00Z',
+		parent_run_id: null,
+		is_subspawn: false,
+		runner: { name: 'claude', shell: 'claude', core: 'opus' },
+		phase: 'running',
+		card_text: null,
+		card_updated_at: null,
+		relics_counts: null,
+		portals: { pending: 0, oldest_at: null },
+		room: { env: 'host', branch: 'brr/ground', dir: null },
+		edge: null,
+		daemon_stale: false
+	} as unknown as LiveRun;
+	const trails: Record<string, TrailStep[]> = {
+		r1: [{ dir: 'src/lib', act: 'orient', at: '2026-08-27T10:01:00Z' }]
+	};
+	const graph = compileRoomGraph(liveWire([run]), null, trails);
+	const topo = compileTopology(graph);
+	const lines = [{ at: '2026-08-27T10:20:00Z', act: 'Bash', detail: 'git status' }];
+	// One camera, framed wide enough to hold the whole labour band — otherwise
+	// the absence proves only that the window fell off the top of the frame,
+	// and a camera that invented a rectangle would pass this by luck. The
+	// positive half is the control: the same camera *does* draw it when the
+	// ground exists.
+	const cam: Camera = { center: { x: 0, y: -4 }, cols: 100, rows: 30, level: 'island' };
+	const allocated = layoutRoom(topo, emptyAtlas(), [terminalRequest('r1', 50, 7)]).layout;
+	assert.ok(
+		renderWorld(topo, allocated, graph, cam, { terminal: lines }).includes('$ bench'),
+		'the same camera renders the window when ground was allocated'
+	);
+	const { layout } = layoutRoom(topo, emptyAtlas()); // no requests
+	const board = renderWorld(topo, layout, graph, cam, { terminal: lines });
+	assert.ok(
+		!board.includes('$ bench'),
+		'a window on unallocated ground is the defect wearing a fix'
+	);
 });
