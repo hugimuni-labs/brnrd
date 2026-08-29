@@ -95,8 +95,8 @@ describes, staged and drained exactly the way a hand-written `note.md` /
 `event: <id>` reply would be. What it adds is the read-back — instead of
 staging a file and separately remembering to poll `notices`, one call
 stages the file, waits for the daemon's own drain to consume it, and diffs
-`notices` from just before the stage to report `✓` / `✗ <notice>` / `?
-still queued` in the same call.
+`notices` from just before the stage to report `✓` / `✓ (advisory: …)` / `✗
+<notice>` / `? still queued` in the same call.
 
 ```
 brnrd do [--outbox DIR] [--timeout SECONDS] \
@@ -112,8 +112,14 @@ brnrd do [--outbox DIR] [--timeout SECONDS] \
 - `--note` / `--reply` / `--gate` each stage the canonical `note:` /
   `event:` / `gate:` fenced frontmatter this manual already specifies, wait
   up to `--timeout` (default 30s) for the drain to consume the file, and
-  report the verdict: `✓` (consumed, no fresh matching notice), `✗
-  <kind>: <text>` (a fresh notice named this directive), or `? still
+  report the verdict: `✓` (consumed, no fresh matching notice), `✓
+  (advisory: <text>)` (consumed, and the fresh notice naming this directive
+  is `kind="advisory"` — the daemon acted on the directive and is only
+  flagging something FYI, e.g. a hand-shaped `--note` body it ignored; this
+  is not a failure, so it renders distinctly from both `✓` and `✗` rather
+  than collapsing into `✗` the way any fresh matching notice used to,
+  brnrd#1693), `✗ <kind>: <text>` (a fresh notice of any other kind —
+  `refused` / `dropped` / `redirected` — named this directive), or `? still
   queued` (still sitting in the outbox at the timeout — never a hang).
   `--mood` / `--card` write the `.mood` / `.card` control files directly
   (never drained, so the verdict is just the write) — `--mood` resolves

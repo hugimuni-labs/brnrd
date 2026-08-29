@@ -2789,6 +2789,13 @@ def _do_render(verb: str, label: str, status: str, detail: str) -> tuple[str, bo
 
     if status == do_mod.OK:
         return f"{verb} {label} ✓", True
+    if status == do_mod.ADVISORY:
+        # brnrd#1693: the directive was accepted and acted on — the daemon's
+        # own `kind="advisory"` notice is an FYI riding along, not evidence
+        # the act failed. Rendered distinctly from a bare `✓` (there is
+        # something worth reading) and from `✗` (nothing here means the act
+        # didn't happen) — a reader keeps a reason to trust `✗`.
+        return f"{verb} {label} ✓ (advisory: {detail})", True
     if status == do_mod.QUEUED:
         return f"{verb} {label} ? {detail or 'still queued'}", False
     return f"{verb} {label} ✗ {detail}", False
@@ -3091,8 +3098,14 @@ def cmd_do(args):
             # reply's own drain verdict is OK. A refused reply must not
             # leave a debt row for a message nobody got — `--no-promise`
             # writes nothing by design, the explicit zero.
+            # `accepted`, not `== OK`: an advisory verdict means the reply
+            # *was* delivered, so the debt it promises is real. Asking for OK
+            # alone would drop the blueprint row for a message that landed —
+            # the same class as brnrd#1693 one call site over, and hidden
+            # behind the fact that no advisory the daemon emits today names a
+            # `reply` directive.
             if args.promise and reply_verdicts and all(
-                status == do_mod.OK for status in reply_verdicts
+                do_mod.accepted(status) for status in reply_verdicts
             ):
                 seg, ok = _do_promise(outbox_dir, args.promise, args.promise_count)
                 segments.append(seg)
@@ -4510,7 +4523,14 @@ def cmd_await(args):
         outbox_dir, staged, before, ("await",),
         timeout_seconds=do_mod.DEFAULT_TIMEOUT_SECONDS,
     )
-    if status != do_mod.OK:
+    if status == do_mod.ADVISORY:
+        # The directive armed — e.g. the daemon capped the requested
+        # timeout to this run's own budget ceiling — and the notice is an
+        # FYI riding along, not a refusal. Say it, then fall through to the
+        # same wait an OK verdict takes (brnrd#1693's verdict layer applies
+        # here too, not only to `brnrd do`).
+        print(f"[brnrd await] armed (advisory: {detail})", file=sys.stderr)
+    elif not do_mod.accepted(status):
         # The arming verdict, in the call that armed it. `failed` = the
         # daemon refused/dropped the directive and named it in a notice;
         # `unarmed` = the drain never consumed the file, so nothing is
@@ -4602,9 +4622,10 @@ def cmd_cut(args):
         outbox_dir, staged, before, ("cut",),
         timeout_seconds=timeout, source_file=staged.name,
     )
-    if status == do_mod.OK:
-        # An OK drain verdict only means the directive was consumed with no
-        # refusal notice naming it — it is not proof the accept branch's own
+    if do_mod.accepted(status):
+        # A drain verdict of OK-or-advisory only means the directive was
+        # consumed with no *refusal* notice naming it — it is not proof the
+        # accept branch's own
         # `task.meta["bolt"]` write has reached this run's portal-state.json
         # yet (the same intra-tick race `await_verdict` already grace-polls
         # for, applied to a different facet — #1221). Confirm the bolt
