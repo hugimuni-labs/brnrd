@@ -69,8 +69,8 @@ from . import dominion
 from . import envs
 from . import facets
 from . import forge_pr_cache
-from . import lane_liveness
 from . import forge_state
+from . import lane_liveness
 from . import forges
 from .gates import BUILTIN_GATES as _BUILTIN_GATES
 from . import gate_receipt
@@ -3854,7 +3854,9 @@ def _run_worker(
         # `absent` verdict is itself the answer a wake must see: "nobody has
         # probed" must not render as silence, which reads as fine.
         if not is_home_root:
-            communication_snapshot["lanes"] = lane_liveness.read_state(repo_root)
+            communication_snapshot[lane_liveness.FACET_KEY] = (
+                lane_liveness.read_state(repo_root)
+            )
         # Reader fluency (#217): which language this thread's reader reads.
         # v1 reads the repo-level `fluency` config key (weave | prose);
         # per-correspondent declaration at the gate boundary stays the

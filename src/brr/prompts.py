@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from . import account, card, config as conf, dev_reload, forge_state, menus, protocol
+from . import lane_liveness
 
 
 _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
@@ -5348,7 +5349,7 @@ def _format_communication_snapshot(
     # something this host holds or could probe. These are the local lanes.
     # Cache-backed and network-free here, same contract the forge block keeps
     # (see `brr.lane_liveness`); the daemon tick owns the probes.
-    lane_block = _format_lane_liveness(snapshot.get("lanes"))
+    lane_block = _format_lane_liveness(snapshot.get(lane_liveness.FACET_KEY))
     if lane_block:
         if lines:
             lines.append("")
@@ -5429,8 +5430,6 @@ def _format_lane_liveness(lanes: Any) -> str:
     """
     if not isinstance(lanes, dict) or not lanes:
         return ""
-    from . import lane_liveness
-
     rendered = lane_liveness.render_lines(lanes)
     return "\n".join(rendered) if rendered else ""
 

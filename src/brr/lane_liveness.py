@@ -70,6 +70,13 @@ from . import gitops
 CACHE_NAME = "lane-liveness.json"
 SCHEMA = 1
 
+#: The key this facet occupies on the wake's communication snapshot. Named
+#: once and imported by both ends (``daemon`` writes it, ``prompts`` reads it)
+#: so the two cannot drift: a typo on either side would unwire the block
+#: silently, and a block that silently stops rendering is exactly the failure
+#: this module exists to make impossible.
+FACET_KEY = "lanes"
+
 #: Credential liveness moves on human timescales (a revoke, an expiry), and
 #: every probe is a real network round-trip against someone else's API. Five
 #: minutes matches ``forge_pr_cache`` and keeps the block honest without
@@ -89,11 +96,19 @@ PROBE_TIMEOUT_SECONDS = 6.0
 
 _SESSION = requests.Session()
 
+#: Sentinel for :func:`_classify_http`: this lane reports purely by status
+#: code and declares no JSON envelope, so no body check applies.
+_NO_BODY_CHECK = object()
+
 # One in-flight refresh at a time, process-wide: the daemon ticks every few
 # seconds and a full sweep can take PROBE_TIMEOUT_SECONDS per lane, so without
 # this a slow endpoint would stack threads.
 _refresh_lock = threading.Lock()
 _refreshing = False
+
+#: Epoch of the last refresh whose cache write failed. Guards the one path
+#: where the on-disk cache cannot carry the TTL (read-only FS, ENOSPC).
+_last_failed_write = 0.0
 
 
 # ── Outcomes ─────────────────────────────────────────────────────────
@@ -125,7 +140,10 @@ def _scrub(text: str, *secrets: str | None) -> str:
     """
     out = str(text)
     for secret in secrets:
-        if isinstance(secret, str) and len(secret.strip()) >= 8:
+        # >= 4, not >= 8: nothing enforces that a probed credential is long,
+        # and a guard that silently stops redacting below some length is the
+        # same class of bug as a verdict that silently stops refreshing.
+        if isinstance(secret, str) and len(secret.strip()) >= 4:
             out = out.replace(secret.strip(), "<redacted>")
     out = " ".join(out.split())
     return out[:160]
@@ -156,20 +174,49 @@ def _outcome(
     return row
 
 
+#: Error markers that mean *the credential was refused*, as opposed to *the
+#: request was malformed*. Deliberately specific: a bare ``invalid`` or
+#: ``token`` matches Slack's ``invalid_arguments`` / ``invalid_cursor``, which
+#: a perfectly live credential can produce — and sending a reader to rotate a
+#: working token is its own kind of false verdict.
+_AUTH_MARKERS = (
+    "auth",           # invalid_auth · not_authed · missing_auth
+    "unauthorized",
+    "forbidden",
+    "token_revoked",
+    "token_expired",
+    "expired",
+    "revoked",
+)
+
+
 def _classify_http(
     lane: str,
     status: int,
     *,
-    api_ok: bool | None = None,
-    api_error: str | None = None,
+    payload: Any = _NO_BODY_CHECK,
+    ok_key: str | None = "ok",
+    error_key: str | None = None,
     secrets: tuple[str | None, ...] = (),
 ) -> dict[str, Any]:
     """Turn one HTTP answer into an outcome row.
 
-    *api_ok* / *api_error* carry the envelope verdict for APIs that answer
-    ``200`` with ``{"ok": false, "error": "invalid_auth"}`` — Telegram and
-    Slack both do, and reading only the status code would render a revoked
-    token as ``200``. That is the single most direct way to build this wrong.
+    Two separate traps live here, and both render a dead or unreached lane as
+    ``200`` if you miss them.
+
+    **The envelope.** Telegram and Slack answer ``200`` with
+    ``{"ok": false, "error": "invalid_auth"}``. Reading only the status code
+    renders a revoked token as green.
+
+    **The body that is not an envelope at all.** A corporate MITM proxy, a
+    captive portal, or a Cloudflare interstitial answers ``200 text/html``.
+    The request never reached the API, ``response.json()`` raises, and a
+    classifier that treats "no envelope" as "no refusal" prints ``200`` for a
+    probe that spoke to a proxy. So a lane that *declares* an envelope
+    (*payload* passed) must **get** one: a 2xx that is not a JSON object, or a
+    JSON object missing the key that carries the verdict, is ``error`` — we
+    asked and could not tell. Only a lane that passes no *payload* at all is
+    classified on the status code alone.
     """
     if status in (401, 403):
         return _outcome(lane, "auth_failed", code=status)
@@ -177,20 +224,36 @@ def _classify_http(
         return _outcome(lane, "error", code=status, detail="server error")
     if not 200 <= status < 300:
         return _outcome(lane, "error", code=status, detail="unexpected status")
-    if api_ok is False:
-        detail = _scrub(api_error or "api refused", *secrets)
-        lowered = detail.lower()
-        auth_shaped = any(
-            mark in lowered
-            for mark in ("auth", "token", "unauthorized", "invalid", "expired", "revoked")
-        )
+
+    if payload is _NO_BODY_CHECK:
+        return _outcome(lane, "ok", code=status)
+    if not isinstance(payload, dict):
+        # Includes the bodyless 2xx (204) and the HTML interstitial.
         return _outcome(
-            lane,
-            "auth_failed" if auth_shaped else "error",
-            code=status,
-            detail=detail,
+            lane, "error", code=status, detail="2xx with no JSON object body",
         )
-    return _outcome(lane, "ok", code=status)
+    if ok_key is None:
+        return _outcome(lane, "ok", code=status)
+    verdict = payload.get(ok_key)
+    if verdict is True:
+        return _outcome(lane, "ok", code=status)
+    if verdict is None:
+        return _outcome(
+            lane, "error", code=status,
+            detail=f"2xx envelope carries no {ok_key!r}",
+        )
+    detail = _scrub(
+        (error_key and str(payload.get(error_key) or "")) or "api refused",
+        *secrets,
+    )
+    lowered = detail.lower()
+    auth_shaped = any(mark in lowered for mark in _AUTH_MARKERS)
+    return _outcome(
+        lane,
+        "auth_failed" if auth_shaped else "error",
+        code=status,
+        detail=detail,
+    )
 
 
 # ── Probes ───────────────────────────────────────────────────────────
@@ -210,11 +273,10 @@ def _probe_telegram(brr_dir: Path) -> dict[str, Any]:
         return _outcome("telegram", "error", detail="timeout")
     except requests.RequestException as exc:
         return _outcome("telegram", "error", detail=_scrub(exc, token))
-    payload = _json_or_none(response)
-    ok = payload.get("ok") if isinstance(payload, dict) else None
-    error = str(payload.get("description") or "") if isinstance(payload, dict) else ""
     return _classify_http(
-        "telegram", response.status_code, api_ok=ok, api_error=error, secrets=(token,)
+        "telegram", response.status_code,
+        payload=_json_or_none(response), ok_key="ok", error_key="description",
+        secrets=(token,),
     )
 
 
@@ -235,22 +297,32 @@ def _probe_slack(brr_dir: Path) -> dict[str, Any]:
         return _outcome("slack", "error", detail="timeout")
     except requests.RequestException as exc:
         return _outcome("slack", "error", detail=_scrub(exc, token))
-    payload = _json_or_none(response)
-    ok = payload.get("ok") if isinstance(payload, dict) else None
-    error = str(payload.get("error") or "") if isinstance(payload, dict) else ""
     return _classify_http(
-        "slack", response.status_code, api_ok=ok, api_error=error, secrets=(token,)
+        "slack", response.status_code,
+        payload=_json_or_none(response), ok_key="ok", error_key="error",
+        secrets=(token,),
     )
 
 
 def _probe_github(brr_dir: Path) -> dict[str, Any]:
     """``GET /rate_limit`` — the one GitHub read that costs literally nothing.
 
-    Not ``/user`` (which :func:`brr.gates.github.state._validate_token` uses)
-    for two reasons: ``/rate_limit`` is documented as not counting against the
-    quota it reports, and it authenticates every GitHub credential *kind* —
-    including the App installation token ``cloud_credentials`` mints, for
-    which ``/user`` is a 403 that would render as a dead credential.
+    Not ``/user`` (which :func:`brr.gates.github.state._validate_token` uses):
+    ``/rate_limit`` is documented as not counting against the quota it reports,
+    which is the strictest available reading of *never spend a credential to
+    test it*, and it authenticates every GitHub credential *kind* rather than
+    just user-shaped ones. (An earlier draft of this docstring justified it by
+    the App installation token ``cloud_credentials`` mints — that was wrong:
+    :func:`~brr.gates.github.state.resolve_token` reads only a stored token,
+    ``gh auth token``, or ``GH_TOKEN``/``GITHUB_TOKEN``, so this probe can
+    never see that credential. The two real reasons stand on their own.)
+
+    **This lane's wall-clock ceiling is not** :data:`PROBE_TIMEOUT_SECONDS`.
+    ``resolve_token`` may fall through to ``gh auth token``, its own
+    ``subprocess.run(timeout=10)``, *before* the HTTP call starts — so a wedged
+    ``gh`` makes this lane ~16s, not 6s. It runs on a background thread inside
+    a 300s TTL and cannot stall a wake, so the extra latency is accepted rather
+    than worked around by reaching into the gate's credential resolution.
     """
     from .gates.github import state as gh_state
     from .gates import runtime as gate_runtime
@@ -275,7 +347,10 @@ def _probe_github(brr_dir: Path) -> dict[str, Any]:
         return _outcome("github", "error", detail="timeout")
     except requests.RequestException as exc:
         return _outcome("github", "error", detail=_scrub(exc, token))
-    return _classify_http("github", response.status_code, secrets=(token,))
+    return _classify_http(
+        "github", response.status_code,
+        payload=_json_or_none(response), ok_key=None, secrets=(token,),
+    )
 
 
 def _probe_cloud(brr_dir: Path) -> dict[str, Any]:
@@ -325,9 +400,18 @@ PROBES: dict[str, Callable[[Path], dict[str, Any]]] = {
 
 
 def _json_or_none(response: requests.Response) -> Any:
+    """The decoded body, or ``None`` when it is not JSON.
+
+    ``requests.exceptions.JSONDecodeError`` is a ``ValueError``, but
+    ``ChunkedEncodingError`` — raised when a lazily-read body dies mid-transfer
+    — is not, so catching ``ValueError`` alone lets a transport failure escape
+    the probe and lose its lane classification. ``None`` is never "no
+    refusal": :func:`_classify_http` treats it as ``error`` for any lane that
+    declared an envelope.
+    """
     try:
         return response.json()
-    except ValueError:
+    except (ValueError, requests.RequestException):
         return None
 
 
@@ -390,6 +474,7 @@ def read_state(
             "checked_at": None,
             "age_seconds": None,
             "lanes": None,
+            "discovery": None,
         }
     checked_at = cached.get("checked_at")
     checked_epoch = parse_iso(checked_at)
@@ -404,19 +489,26 @@ def read_state(
             "checked_at": None,
             "age_seconds": None,
             "lanes": None,
+            "discovery": None,
         }
+    discovery = cached.get("discovery")
     return {
         "status": "stale" if age is None or age >= stale_after else "fresh",
         "checked_at": checked_at if isinstance(checked_at, str) else None,
         "age_seconds": age,
         "lanes": lanes,
+        # Older caches (written before this field existed) carry no
+        # ``discovery`` key. That reads as ``None`` — unknown — and never as
+        # ``"ok"``, which would be a guess about a sweep this code did not run.
+        "discovery": discovery if discovery in ("ok", "failed") else None,
+        "discovery_detail": cached.get("discovery_detail"),
     }
 
 
 # ── Refresh ──────────────────────────────────────────────────────────
 
 
-def refresh(repo_root: Path, *, brr_dir: Path | None = None) -> dict[str, Any]:
+def refresh(repo_root: Path) -> dict[str, Any]:
     """Probe every configured lane and write the cache. Daemon-side only.
 
     Never raises. A lane whose probe blows up in an unforeseen way lands as
@@ -425,11 +517,25 @@ def refresh(repo_root: Path, *, brr_dir: Path | None = None) -> dict[str, Any]:
     """
     from .gates import runtime as gate_runtime
 
-    root = gitops.shared_brr_dir(repo_root) if brr_dir is None else brr_dir
+    try:
+        root = gitops.shared_brr_dir(repo_root)
+    except Exception as exc:  # noqa: BLE001 - "never raises" has to be true
+        payload = {
+            "schema": SCHEMA, "checked_at": _utc_now_iso(),
+            "discovery": "failed", "discovery_detail": _blind_detail(exc),
+            "lanes": [],
+        }
+        _write(repo_root, payload)
+        return payload
+
+    discovery = "ok"
+    discovery_detail: str | None = None
     try:
         configured = gate_runtime.configured_gates(root)
-    except Exception:  # noqa: BLE001 - discovery failing is not a reason to write nothing
+    except Exception as exc:  # noqa: BLE001 - one failure, rendered, not swallowed
         configured = []
+        discovery = "failed"
+        discovery_detail = _blind_detail(exc)
 
     lanes: list[dict[str, Any]] = []
     for gate in configured:
@@ -442,8 +548,21 @@ def refresh(repo_root: Path, *, brr_dir: Path | None = None) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001 - one lane never kills the sweep
             lanes.append(_outcome(gate, "error", detail=_blind_detail(exc)))
 
-    payload = {"schema": SCHEMA, "checked_at": _utc_now_iso(), "lanes": lanes}
-    _write(repo_root, payload)
+    payload = {
+        "schema": SCHEMA,
+        "checked_at": _utc_now_iso(),
+        "discovery": discovery,
+        "lanes": lanes,
+    }
+    if discovery_detail:
+        payload["discovery_detail"] = discovery_detail
+    if _write(repo_root, payload) is None:
+        # The cache is the TTL. With no file on disk, `read_state` answers
+        # `absent` forever and `refresh_if_stale` would re-probe on *every*
+        # daemon tick — hammering Telegram/Slack/GitHub for as long as the disk
+        # stays unwritable. This in-memory floor is the backstop for that.
+        global _last_failed_write
+        _last_failed_write = time.time()
     return payload
 
 
@@ -454,6 +573,8 @@ def refresh_if_stale(
     now: float | None = None,
 ) -> bool:
     """Refresh when the cache is older than *ttl*. Returns whether it ran."""
+    if (now or time.time()) - _last_failed_write < ttl:
+        return False
     state = read_state(repo_root, now=now, stale_after=ttl)
     if state["status"] == "fresh":
         return False
@@ -473,6 +594,8 @@ def refresh_if_stale_async(repo_root: Path, *, ttl: float = DEFAULT_TTL_SECONDS)
     with _refresh_lock:
         if _refreshing:
             return False
+        if time.time() - _last_failed_write < ttl:
+            return False
         if read_state(repo_root, stale_after=ttl)["status"] == "fresh":
             return False
         _refreshing = True
@@ -482,12 +605,24 @@ def refresh_if_stale_async(repo_root: Path, *, ttl: float = DEFAULT_TTL_SECONDS)
         try:
             refresh(repo_root)
         except Exception as exc:  # noqa: BLE001 - a cache refresh never kills the daemon
-            print(f"[brnrd] lane liveness refresh failed: {exc}")
+            # The type only: this is the catch-all, so it cannot know which
+            # secret the failing lane held, and the daemon log is not a place
+            # to find out.
+            print(f"[brnrd] lane liveness refresh failed: {_blind_detail(exc)}")
         finally:
             with _refresh_lock:
                 _refreshing = False
 
-    threading.Thread(target=_work, name="lane-liveness", daemon=True).start()
+    try:
+        threading.Thread(target=_work, name="lane-liveness", daemon=True).start()
+    except RuntimeError:
+        # Thread creation can fail under exhaustion. Without this, `_refreshing`
+        # stays True for the life of the process and the daemon never probes
+        # again — a permanent silent stop, which is the failure mode this whole
+        # module is about.
+        with _refresh_lock:
+            _refreshing = False
+        return False
     return True
 
 
@@ -574,16 +709,33 @@ def render_lines(state: dict[str, Any]) -> list[str]:
     if status == "absent":
         return ["Lane liveness: never probed", f"- {EDGE_NOTE}"]
     lanes = state.get("lanes")
-    if not isinstance(lanes, list) or not lanes:
-        return []
+    if not isinstance(lanes, list):
+        return ["Lane liveness: never probed", f"- {EDGE_NOTE}"]
+
     age = format_age(state.get("age_seconds"))
     stamp = _short_stamp(state.get("checked_at"))
     when = f"{stamp}, {age}" if stamp else age
     head = f"Lane liveness (stale — checked {when}):" if status == "stale" else (
         f"Lane liveness (checked {when}):"
     )
-    body = " · ".join(render_lane(row) for row in lanes)
-    return [head, f"- {body}", f"- {EDGE_NOTE}"]
+
+    if not lanes:
+        # A sweep that ran and found nothing is a real answer, and it is not
+        # the same answer as a sweep that could not look. Rendering neither —
+        # dropping the whole block — makes both read as "nothing to worry
+        # about", which is the exact shape this module was built to forbid.
+        if state.get("discovery") == "failed":
+            detail = str(state.get("discovery_detail") or "").strip()
+            reason = f" ({detail})" if detail else ""
+            body = f"lane discovery failed{reason} — cannot say which lanes exist"
+        else:
+            body = "no configured gate to probe"
+        return [head, f"- {body}", f"- {EDGE_NOTE}"]
+
+    rows = [render_lane(row) for row in lanes]
+    if state.get("discovery") == "failed":
+        rows.append("lane discovery failed — this list may be short")
+    return [head, f"- {' · '.join(rows)}", f"- {EDGE_NOTE}"]
 
 
 def render_block(repo_root: Path, *, now: float | None = None) -> str:
