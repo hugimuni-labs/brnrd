@@ -23,8 +23,11 @@ notes.
   not a probe that quietly costs something.
 - *The probed value never appears in the rendered block.* ``.card`` is
   mirrored to the dashboard unredacted, and Telegram carries its bot token in
-  the URL path, so a bare ``requests`` exception string leaks it. Every
-  outcome string goes through :func:`_scrub`.
+  the URL path, so a bare ``requests`` exception string leaks it. Two
+  defences, because they cover different failures: a probe that knows which
+  secret it holds routes its detail through :func:`_scrub`; a **catch-all**,
+  which by construction does not know, reports only the exception type via
+  :func:`_blind_detail`.
 - *No verdict is cached where a later wake could read it as fresh.* The cache
   carries ``checked_at`` and the renderer always prints the age. Past
   :data:`STALE_AFTER_SECONDS` it says ``stale`` and prints the age anyway.
