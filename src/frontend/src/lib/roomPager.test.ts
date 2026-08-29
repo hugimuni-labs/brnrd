@@ -85,6 +85,7 @@ test('the feed is capped and ordered newest first', () => {
 						act: 'orient',
 						tools: [],
 						detail: null,
+						injection: null,
 						out_bytes: null,
 						injected: true
 					}
@@ -106,7 +107,8 @@ test('a fresh page starts one bounded reading; it advances and ends', () => {
 		runId: RESIDENT,
 		glyph: '@',
 		act: 'probe',
-		detail: null
+		detail: null,
+		injection: null
 	};
 	let readings = readingsFor([page], []);
 	assert.equal(readings.length, 1);
@@ -131,14 +133,22 @@ test('a fresh page starts one bounded reading; it advances and ends', () => {
 
 const CAM: Camera = { center: { x: 6, y: 0 }, cols: 96, rows: 20, level: 'island' };
 
-test('the PAGER strip renders pages by carrier and flashes as state', () => {
+// This test used to assert `10:14 ✉ @ rode probe` — that the strip renders
+// pages **by carrier**. It passed for weeks, and it was pinning the defect:
+// the carrier was all that survived `bool(record.get("inject"))` daemon-side,
+// so the test encoded the loss as the contract. A test rewritten to fit a
+// change is not a test the change passed — this one is rewritten because the
+// claim it made was wrong, and the claim it makes now is the one the pager
+// was built for.
+test('the PAGER strip renders the injected block, carrier subordinate', () => {
 	const { graph, topo, layout } = sceneAt(4); // #85, the injection
 	const store: Record<string, PagerPage[]> = {};
 	recordPages(referenceFrames()[4], store, { [RESIDENT]: '@' });
 	const out = renderWorld(topo, layout, graph, CAM, { pages: pagerFeed(store) });
 	assert.match(out, /▯ PAGER/);
 	assert.match(out, /✉×1 read/);
-	assert.match(out, /10:14 ✉ @ rode probe/);
+	assert.match(out, /10:14 ✉ @ ⌁\[·\]/, 'the page body is the block that crossed');
+	assert.doesNotMatch(out, /10:14 ✉ @ rode probe/, 'never the command as the page body');
 	// clock-free and deterministic: the flash diff can ride it
 	assert.equal(out, renderWorld(topo, layout, graph, CAM, { pages: pagerFeed(store) }));
 	// no pages ⇒ the field still stands, honestly empty (the pager is the
@@ -255,11 +265,32 @@ test('the feed scopes to live runs, and the store keeps the rest', () => {
 	// readout, and a condition is about now.
 	const store: Record<string, PagerPage[]> = {
 		'run-live': [
-			{ at: '2026-08-28T16:30:00Z', runId: 'run-live', glyph: '@', act: 'orient', detail: null }
+			{
+				at: '2026-08-28T16:30:00Z',
+				runId: 'run-live',
+				glyph: '@',
+				act: 'orient',
+				detail: null,
+				injection: null
+			}
 		],
 		'run-dead': [
-			{ at: '2026-08-27T09:00:00Z', runId: 'run-dead', glyph: 'a', act: 'mutate', detail: null },
-			{ at: '2026-08-27T09:05:00Z', runId: 'run-dead', glyph: 'a', act: 'publish', detail: null }
+			{
+				at: '2026-08-27T09:00:00Z',
+				runId: 'run-dead',
+				glyph: 'a',
+				act: 'mutate',
+				detail: null,
+				injection: null
+			},
+			{
+				at: '2026-08-27T09:05:00Z',
+				runId: 'run-dead',
+				glyph: 'a',
+				act: 'publish',
+				detail: null,
+				injection: null
+			}
 		]
 	};
 	assert.equal(pagerFeed(store).length, 3, 'unscoped is still the whole history');
@@ -277,9 +308,75 @@ test('no live runs is a real answer, not a missing argument', () => {
 	// as if it were current — the exact defect this scoping exists to end.
 	const store: Record<string, PagerPage[]> = {
 		'run-dead': [
-			{ at: '2026-08-27T09:00:00Z', runId: 'run-dead', glyph: 'a', act: 'mutate', detail: null }
+			{
+				at: '2026-08-27T09:00:00Z',
+				runId: 'run-dead',
+				glyph: 'a',
+				act: 'mutate',
+				detail: null,
+				injection: null
+			}
 		]
 	};
 	assert.equal(pagerFeed(store, new Set()).length, 0);
 	assert.equal(pagerFeed(store, undefined).length, 1);
+});
+
+// THE BOOL THAT ATE THE LETTER (2026-08-28). `boundaries.jsonl` stored the
+// injected block verbatim under `inject`; the publisher wrote
+// `bool(record.get("inject"))`; the page had nothing left but `detail`, so
+// the pager rendered the *command* a boundary rode in on. The maintainer
+// reported it four times and was four times told it was built — which it
+// was, up to one cast.
+test('a page carries the injected block, not only the command that rode it', () => {
+	const store: Record<string, PagerPage[]> = {};
+	const fresh = recordPages(
+		[
+			{
+				run_id: 'run-1',
+				edge: {
+					at: '2026-08-28T21:54:14Z',
+					phase: 'post-tool',
+					act: 'mutate',
+					tools: ['Bash'],
+					detail: 'grep -n "injected" src/brr/gates/cloud_publisher.py',
+					out_bytes: 331,
+					injected: true,
+					injection: '⌁[·]: q S73·W29·F4'
+				}
+			}
+		],
+		store
+	);
+	assert.equal(fresh.length, 1);
+	assert.equal(fresh[0].injection, '⌁[·]: q S73·W29·F4');
+	// the carrier survives beside it — the action log is good, it is just
+	// not the pager (his words, 2026-08-27)
+	assert.match(fresh[0].detail ?? '', /^grep -n/u);
+});
+
+// An absent block is not an empty one. A daemon predating the `injection`
+// wire field publishes `injected: true` and no text; reading that as "an
+// empty injection" would render a blank page for a real crossing.
+test('an older daemon publishing only the bool yields a null block, never an empty one', () => {
+	const store: Record<string, PagerPage[]> = {};
+	const fresh = recordPages(
+		[
+			{
+				run_id: 'run-1',
+				edge: {
+					at: '2026-08-28T21:54:14Z',
+					phase: 'post-tool',
+					act: 'mutate',
+					tools: ['Bash'],
+					detail: 'ls',
+					out_bytes: 1,
+					injected: true
+				}
+			}
+		],
+		store
+	);
+	assert.equal(fresh.length, 1, 'the crossing is still a crossing');
+	assert.equal(fresh[0].injection, null, 'null, not ""');
 });

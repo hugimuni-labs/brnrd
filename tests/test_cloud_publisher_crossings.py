@@ -99,3 +99,62 @@ def test_a_crossing_carries_the_same_bounded_detail_as_the_edge(tmp_path):
 def test_an_unreadable_transcript_yields_nothing_rather_than_a_zero_row(tmp_path):
     assert _crossings_payload(tmp_path, "nope") == []
     assert _edge_payload(tmp_path, "nope") is None
+
+
+# THE BOOL THAT ATE THE LETTER (2026-08-28).
+#
+# `boundaries.jsonl` has always stored the injected block verbatim under
+# `inject`. `_boundary_row` wrote `bool(record.get("inject"))` — and the
+# text died at that cast, one line before the wire. The pager therefore
+# rendered `detail`, the *command* a boundary rode in on, and the
+# maintainer reported it wrong four separate times (2026-08-27 21:20,
+# 21:32, 2026-08-28 16:35 "I am asking for it, 3rd time around, which gets
+# me thinking it is implemented and not rendered", and a screenshot the
+# same evening). He was right on both halves: implemented, not rendered.
+def test_the_injected_block_reaches_the_wire_not_only_the_fact_of_one(tmp_path):
+    brr = _write(tmp_path, "run-1", [_b("2026-08-28T21:54:14Z", inject=True)])
+    edge = _edge_payload(brr, "run-1")
+    assert edge["injected"] is True, "the predicate every gate reads survives"
+    assert edge["injection"] == "a letter arrived", "and so does what crossed"
+
+
+def test_a_boundary_with_no_injection_carries_no_block(tmp_path):
+    """`None`, never `""` — an absent block is not an empty one, and a
+    renderer must not read the second as a crossing that said nothing."""
+    brr = _write(tmp_path, "run-1", [_b("2026-08-28T21:54:14Z")])
+    edge = _edge_payload(brr, "run-1")
+    assert edge["injected"] is False
+    assert edge["injection"] is None
+
+
+def test_the_block_is_bounded_and_never_shears_the_grid(tmp_path):
+    """Every renderer of this field paints on a character grid, so the
+    newline collapse happens once, here, at the seam — the same argument
+    `_WIRE_DETAIL_MAX` makes for bounding detail daemon-side rather than in
+    four renderers."""
+    from brr.gates.cloud_publisher import _WIRE_INJECTION_MAX
+
+    block = "line one\n\nline two\n" + ("x" * 400)
+    rec = _b("2026-08-28T21:54:14Z", inject=True)
+    rec["inject"] = block
+    brr = _write(tmp_path, "run-1", [rec])
+    got = _edge_payload(brr, "run-1")["injection"]
+    assert "\n" not in got, "a raw newline would shear the row it lands in"
+    assert got.startswith("line one · line two · ")
+    assert len(got) <= _WIRE_INJECTION_MAX
+
+
+def test_the_crossing_tail_carries_the_block_too(tmp_path):
+    """`_boundary_row` is the single projection precisely so a field cannot
+    land on the cursor and miss the stream."""
+    brr = _write(
+        tmp_path,
+        "run-1",
+        [
+            _b("2026-08-28T21:54:14Z", inject=True),
+            _b("2026-08-28T21:53:00Z", inject=True),
+        ],
+    )
+    tail = _crossings_payload(brr, "run-1")
+    assert len(tail) == 2
+    assert all(row["injection"] == "a letter arrived" for row in tail)
