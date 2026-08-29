@@ -7261,6 +7261,9 @@ def test_dev_reload_does_not_stall_concurrent_spawn_dispatch(tmp_path, monkeypat
 
     resident_started = threading.Event()
     release_resident = threading.Event()
+    # Set the instant "spawn-run" is recorded, so the injector below can
+    # wait on the real event instead of a fixed sleep (see its comment).
+    spawn_run_recorded = threading.Event()
 
     class FakeWatcher:
         def __init__(self):
@@ -7293,6 +7296,7 @@ def test_dev_reload_does_not_stall_concurrent_spawn_dispatch(tmp_path, monkeypat
                 status="done",
             )
         record("spawn-run")
+        spawn_run_recorded.set()
         return Run(
             id="task-spawn", event_id=eid, body="spawned work",
             status="done", meta={"strand": True},
@@ -7323,10 +7327,22 @@ def test_dev_reload_does_not_stall_concurrent_spawn_dispatch(tmp_path, monkeypat
             tmp_path / ".brr" / "inbox", "spawn", "spawned work",
             spawn_immediate=True, strand=True, environment="worktree",
         )
-        # Give the loop a couple of ticks to observe reload_requested
-        # flip true and still dispatch the spawn before unblocking the
-        # resident thought.
-        time.sleep(0.15)
+        # Wait for the loop to actually observe and dispatch the spawn
+        # before unblocking the resident thought — a real synchronization
+        # point rather than a fixed sleep. A hard-coded `time.sleep(0.15)`
+        # here raced the daemon's scan/dispatch/thread-start latency
+        # against wall-clock time: on an idle box the loop (mocked
+        # `_SCAN_INTERVAL=0.02`) reliably dispatches and completes the fake
+        # spawn worker well inside 150ms, but under real system load (the
+        # exact "full suite, background load" scenario brnrd#1574
+        # measured) that latency can exceed it, so `release_resident.set()`
+        # fires before "spawn-run" lands and
+        # `order.index("spawn-run") < order.index("resident-done")` flips.
+        # Waiting on the event this thread actually cares about removes
+        # the wall-clock dependence outright instead of padding the sleep.
+        assert spawn_run_recorded.wait(timeout=5), (
+            "spawn never dispatched while the resident thought was still running"
+        )
         release_resident.set()
 
     injector = threading.Thread(target=_inject_spawn_once_resident_running)
