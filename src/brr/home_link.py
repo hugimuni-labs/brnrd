@@ -480,6 +480,56 @@ def _retry_push_if_needed(
 # ── entry point ─────────────────────────────────────────────────────────
 
 
+def existing_home_remotes(
+    repo_root: Path,
+    cfg: dict[str, Any] | None = None,
+) -> dict[str, str] | None:
+    """Both home slots already wired *and* pushed → ``{slot: url}``; else ``None``.
+
+    The read behind "don't ask for consent to work that is already done".
+    :func:`link_home` has always been idempotent, but the *question* in
+    front of it was not: ``brnrd connect`` asked whether to back the home
+    up on every interactive run, including on a machine whose home had
+    been living in two private repos for weeks (2026-08-29, adding a
+    second repo to an account that already had one).
+
+    Deliberately the same predicate :func:`link_home` uses to decide a
+    slot needs nothing — an ``origin`` **and**
+    :func:`gitops.has_pushed_upstream` — so this never reports durable for
+    a state ``link_home`` would still act on. Anything short of that reads
+    as ``None``: an unresolvable home, a missing knowledge checkout, one
+    slot linked and the other not. A partially-linked home has a real
+    question to answer, and answering it for the user is the failure this
+    guards against in the other direction.
+
+    Zero network and zero ``gh``: git config reads only, so it is safe on
+    the interactive path where the caller has not yet paid for either.
+    """
+    try:
+        ctx = account.resolve_context(repo_root, cfg or {}, create=False)
+    except Exception:
+        return None
+    if ctx.kind != "account":
+        return None
+
+    slots = {
+        "dominion": ctx.dominion_repo,
+        "knowledge": account.knowledge_path(ctx),
+    }
+    linked: dict[str, str] = {}
+    for slot, path in slots.items():
+        if path is None or not Path(path).exists():
+            return None
+        remote = gitops.default_remote(path)
+        if not remote:
+            return None
+        url = gitops.remote_url(path, remote)
+        if not url or not gitops.has_pushed_upstream(path):
+            return None
+        linked[slot] = url
+    return linked
+
+
 def link_home(
     repo_root: Path,
     cfg: dict[str, Any] | None = None,
