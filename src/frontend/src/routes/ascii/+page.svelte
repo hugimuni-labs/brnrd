@@ -19,7 +19,7 @@
 	import { fetchQuota, type QuotaResponse } from '$lib/quota';
 	import { compileRoomGraph, dirFromEdge, fileFromDetail, type TrailStep } from '$lib/roomGraph';
 	import { compileTopology, type PlaceId } from '$lib/roomTopology';
-	import { layoutRoom, emptyAtlas, type AtlasMemory } from '$lib/roomLayout';
+	import { layoutRoom, emptyAtlas, terminalRequest, type AtlasMemory } from '$lib/roomLayout';
 	import {
 		diffTransitions,
 		walkFor,
@@ -37,7 +37,13 @@
 		type PagerPage,
 		type Reading
 	} from '$lib/roomPager';
-	import { recordCommands, terminalFeed, type TerminalLine } from '$lib/roomTerminal';
+	import {
+		TERMINAL_COLS,
+		TERMINAL_ROWS,
+		recordCommands,
+		terminalFeed,
+		type TerminalLine
+	} from '$lib/roomTerminal';
 	import { crossingsFor, advanceCrossings, crossingFrames, type Crossing } from '$lib/roomCrossing';
 	import {
 		renderWorld,
@@ -127,7 +133,13 @@
 	// atlas memory: assigned world coordinates. Client-persisted for now
 	// (the spec's accepted first slice; server-side atlas is the durable
 	// target) — a reload rebuilds the same map because this survives.
-	const ATLAS_KEY = 'brnrd-ascii-atlas-v1';
+	// v2 (2026-08-29): the trie compacted to one node per row and the
+	// terminal moved onto allocated ground. A `-v1` blob is a map of the old
+	// geography, and `layoutRoom` never moves a remembered node — a returning
+	// reader would have kept the wide board forever and read the fix as not
+	// shipped.
+	const ATLAS_KEY = 'brnrd-ascii-atlas-v2';
+	const ATLAS_KEY_RETIRED = ['brnrd-ascii-atlas-v1'];
 	let atlas: AtlasMemory = emptyAtlas();
 
 	// pager memory: injections attested while this reader watched — pages
@@ -160,9 +172,11 @@
 			trails = {};
 		}
 		try {
+			for (const dead of ATLAS_KEY_RETIRED) localStorage.removeItem(dead);
 			const raw = localStorage.getItem(ATLAS_KEY);
 			if (raw) atlas = JSON.parse(raw) as AtlasMemory;
 			if (!atlas || typeof atlas.nodes !== 'object') atlas = emptyAtlas();
+			else if (typeof atlas.regions !== 'object' || !atlas.regions) atlas.regions = {};
 		} catch {
 			atlas = emptyAtlas();
 		}
@@ -261,8 +275,23 @@
 		}
 		stale = graph.stale;
 		const topo = compileTopology(graph);
-		const placed = layoutRoom(topo, atlas);
-		if (Object.keys(placed.memory.nodes).length !== Object.keys(atlas.nodes).length) {
+		// The terminal asks for ground rather than being painted onto some.
+		// `TERMINAL_COLS/ROWS` are its rendered size; `terminalRequest`
+		// converts them to world units and the labour district decides where.
+		const placed = layoutRoom(
+			topo,
+			atlas,
+			terminalRunId ? [terminalRequest(terminalRunId, TERMINAL_COLS, TERMINAL_ROWS + 2)] : []
+		);
+		// Count-only was the old dirty check, and it could not see a region
+		// arriving into a board whose node count had not changed — the
+		// allocation would have been recomputed every poll and never
+		// persisted, which is a stable coordinate that is only stable within
+		// one session.
+		if (
+			Object.keys(placed.memory.nodes).length !== Object.keys(atlas.nodes).length ||
+			Object.keys(placed.memory.regions ?? {}).length !== Object.keys(atlas.regions ?? {}).length
+		) {
 			atlas = placed.memory;
 			if (!demo) saveAtlas();
 		}
