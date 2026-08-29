@@ -5681,15 +5681,6 @@ def cmd_brnrd_connect(args):
     url = args.url_option or args.url or os.environ.get("BRNRD_URL", "https://brnrd.dev")
     daemon_name = args.daemon_name or socket.gethostname()
     local_memory = bool(args.local_memory)
-    if not local_memory and sys.stdin.isatty():
-        from .adopt import _confirm
-
-        print()
-        if not _confirm(
-            "Back up the resident home and knowledge to two private GitHub repos?",
-            default=True,
-        ):
-            local_memory = True
     try:
         cloud.connect(brr_dir, brnrd_url=url, daemon_name=daemon_name)
     except (cloud.CloudUnavailableError, TimeoutError) as exc:
@@ -5700,6 +5691,41 @@ def cmd_brnrd_connect(args):
         # during the pairing-approval poll leaves the pending pair code to
         # expire server-side on its own TTL and this machine untouched.
         raise _connect_interrupted("pairing approval") from None
+    # The durability question, asked *after* pairing and only when the
+    # answer can still change something.
+    #
+    # It used to be asked here-but-earlier, above `cloud.connect`, on every
+    # interactive run. At that point nothing has resolved *whose* memory is
+    # being discussed: `account.resolve_context` reads the account id out of
+    # this repo's own cloud state, and a repo being connected for the first
+    # time has none. So a user adding a second repo to an account whose home
+    # had been living in two private GitHub repos for weeks was asked to
+    # consent to that backup again, with no way for the prompt to know it
+    # was describing finished work (2026-08-29, connecting `hugimuni`).
+    #
+    # Pairing is what makes the home resolvable, so the question moves below
+    # it and behind a read. `link_home` was always idempotent — answering
+    # `y` was harmless — but a prompt that cannot see its own answer teaches
+    # the reader that brnrd does not know its own state, which is the more
+    # expensive loss.
+    # Only the *question* is skipped, never the call: `_connect_memory`
+    # still runs `link_home`, which reports each already-linked slot with
+    # its remote and touches no network. Short-circuiting to
+    # `local_only=True` here would have printed "memory: local-only
+    # (explicit --local-memory)" at someone whose memory is on GitHub —
+    # trading a redundant question for a false receipt.
+    if not local_memory and sys.stdin.isatty():
+        from . import home_link
+
+        if home_link.existing_home_remotes(repo_root) is None:
+            from .adopt import _confirm
+
+            print()
+            if not _confirm(
+                "Back up the resident home and knowledge to two private GitHub repos?",
+                default=True,
+            ):
+                local_memory = True
     _connect_memory(repo_root, local_only=local_memory)
     if args.no_service:
         print(
