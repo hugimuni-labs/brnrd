@@ -51,9 +51,13 @@ test('a place change mints exactly one transition receipt with the trie route', 
 	const moved = diffTransitions(a.topo.actorPlaces, b.topo.actorPlaces, b.topo);
 	assert.equal(moved.length, 1);
 	assert.equal(moved[0].actorRunId, RESIDENT);
+	// The route still walks the trie through the lowest common ancestor —
+	// that is the property. It is one hop shorter since the trie fold
+	// (2026-08-29): `src/frontend/src` had a single child and folded into it,
+	// so there is no longer a scaffolding node to step through. The endpoints
+	// keep their ids, because the fold always keeps the *deep* one.
 	assert.deepEqual(moved[0].route, [
 		dirId(REPO, ['src', 'frontend']),
-		dirId(REPO, ['src', 'frontend', 'src']),
 		dirId(REPO, ['src', 'frontend', 'src', 'lib'])
 	]);
 });

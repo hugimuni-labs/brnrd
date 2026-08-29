@@ -273,6 +273,12 @@ export function compileTopology(graph: RoomGraph): RoomTopology {
 		actorPlaces[actor.runId] = resolveActorPlace(b, graph, actor);
 	}
 
+	// ── fold the scaffolding ────────────────────────────────────────────────
+	// After actors, deliberately: an actor standing in a pass-through
+	// directory pins it, and folding first would drop the node its own
+	// `dirId` lookup resolves to, silently demoting that actor to its camp.
+	foldPassThroughDirs(b, new Set(Object.values(actorPlaces)));
+
 	return {
 		nodes: b.nodes,
 		edges: b.edges,
@@ -280,6 +286,75 @@ export function compileTopology(graph: RoomGraph): RoomTopology {
 		islandRoots,
 		homeId: HOME_ID
 	};
+}
+
+/**
+ * Radix-compress the directory trie: a chamber is a place, scaffolding is not.
+ *
+ * **The measurement** (maintainer, 2026-08-29, on the map of a run that had
+ * just attested ten paths): *"the fact that the tree grows only left probably
+ * points out at a poor design choice ... I think we could had a better dynamic
+ * compact rendering of any 'path', not like too flat, as it currently is."*
+ *
+ * He is reading a real cost. Every path segment used to mint its own node, and
+ * every node charges full width — `depthAdvance()` bills for its label plus a
+ * corridor. So `src/frontend/src/lib` was four eastward hops to name one
+ * place, and the trie read as a single long line rather than a shape. On those
+ * ten paths: **nine directory nodes to express five chambers**, four of them
+ * holding nothing at all.
+ *
+ * The rule is one line: **a directory is a place when it holds something, or
+ * when it branches.** Anything else is punctuation, and it folds into its only
+ * child — `brr` + `gates` becomes `brr/gates`, one node with one label.
+ *
+ * Note what is deliberately *kept*. A directory with two or more directory
+ * children is a fork in the terrain, and a fork is exactly the structure a map
+ * is for; collapsing those too would give a flat list of full paths, which is
+ * legible and is not a place. Folding chains makes the trie branch *more*
+ * visibly, not less.
+ *
+ * **The surviving node is the child, not the parent**, so `dirId()` keeps
+ * addressing the chamber a caller actually names — `dirFromEdge`, actor
+ * resolution and the atlas's persisted coordinates all key on that id, and a
+ * fold that renamed the deep end would quietly move every one of them.
+ */
+function foldPassThroughDirs(b: Builder, pinned: Set<PlaceId>) {
+	const childrenOf = (): Map<PlaceId, PlaceNode[]> => {
+		const out = new Map<PlaceId, PlaceNode[]>();
+		for (const node of Object.values(b.nodes)) {
+			if (!node.parentId) continue;
+			const list = out.get(node.parentId);
+			if (list) list.push(node);
+			else out.set(node.parentId, [node]);
+		}
+		return out;
+	};
+
+	// Loop to a fixpoint: folding `brr` into `gates` can leave `src` with one
+	// child where it had two, and that node is now foldable in its turn.
+	// Bounded by the node count — every pass removes at least one node or
+	// stops.
+	for (let pass = 0; pass < Object.keys(b.nodes).length; pass++) {
+		const children = childrenOf();
+		const victim = Object.values(b.nodes).find((node) => {
+			if (node.kind !== 'directory' || pinned.has(node.id)) return false;
+			if (!node.parentId) return false;
+			const kids = children.get(node.id) ?? [];
+			// One child, and it is terrain rather than a file or a rig: a
+			// directory holding *anything* of its own is a place and stays.
+			return kids.length === 1 && kids[0].kind === 'directory';
+		});
+		if (!victim) return;
+
+		const heir = (children.get(victim.id) ?? [])[0];
+		heir.label = `${victim.label}/${heir.label}`;
+		heir.parentId = victim.parentId;
+		delete b.nodes[victim.id];
+		b.edges = b.edges.filter((e) => e.from !== victim.id && e.to !== victim.id);
+		b.edgeSeen.clear();
+		for (const e of b.edges) b.edgeSeen.add(`${e.from}|${e.to}|${e.kind}`);
+		addEdge(b, victim.parentId as PlaceId, heir.id, 'tree');
+	}
 }
 
 /** The camp an actor belongs to, by its glyph on the island's camp rosters. */
