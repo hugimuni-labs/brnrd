@@ -1491,13 +1491,111 @@ def _room_payload(brr_dir: Path, manifest: Mapping[str, Any]) -> dict[str, Any] 
             or None
         )
     dir_name = Path(worktree).name if worktree else None
-    if not (env or branch or dir_name):
+    paths = _run_paths(brr_dir, manifest)
+    if not (env or branch or dir_name or paths):
         return None
     return {
         "env": (env or "")[:16] or None,
         "branch": (branch or "")[:256] or None,
         "dir": (dir_name or "")[:256] or None,
+        "paths": paths,
     }
+
+
+#: How many touched paths one run publishes. A run that edits more than this
+#: has already said what its shape is; the tail adds rows, not terrain.
+_RUN_PATHS_MAX = 64
+
+
+def _git(tree: Path, *args: str) -> str | None:
+    """One bounded, best-effort git read. ``None`` on any failure.
+
+    A publish tick must not hang on a wedged git, and a missing answer is a
+    real answer here — a room that draws nothing beats a room that draws a
+    guess.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(tree), *args],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout if out.returncode == 0 else None
+
+
+def _run_base_ref(tree: Path) -> str | None:
+    """Where this run's work begins — the fork point from the default branch.
+
+    Asked of git, like ``_live_branch``: the manifest records the seed, and a
+    run legitimately switches branches mid-flight.
+    """
+    head = _git(tree, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD")
+    default = (head or "").strip() or "refs/remotes/origin/main"
+    base = _git(tree, "merge-base", "HEAD", default.replace("refs/remotes/", ""))
+    return (base or "").strip() or None
+
+
+def _run_paths(brr_dir: Path, manifest: Mapping[str, Any]) -> list[str]:
+    """The paths this run has actually touched — asked of git, not of argv.
+
+    **The measurement this exists for** (maintainer, 2026-08-28, on a map of
+    a 142-boundary run that drew one file leaf): "the map rendered is whaaaaa,
+    compared to the actual edits and reads you have made so far over this
+    run. Which likely means a path assembly issue. What if we track on daemon
+    the run path as a part of a run card or a run file."
+
+    He is right, and the reason is structural rather than a bug in any one
+    hop. The room grew terrain by reading paths out of ``edge.detail`` —
+    argv — and argv is a lossy record of what a run touched, three ways at
+    once:
+
+    - a heredoc names no file. ``python3 - <<'PY'`` writes whatever the body
+      writes, and the body is stripped at the wire on purpose. Measured on
+      that run: 67 of 142 boundaries named no path at all.
+    - a relative path is relative to *that boundary's* cwd, which the room
+      does not join it against — so ``src/lib/roomPager.test.ts`` run from
+      ``src/frontend`` lands as a leaf of the wrong chamber, or of none.
+    - the room sees ``_CROSSINGS_MAX`` crossings plus one cursor, not the
+      run. Eight boundaries of a hundred and forty-two.
+
+    Git already knows the answer to all three, exactly, with no parsing:
+    the diff against the run's own fork point, plus what is untracked.
+    Committed or not, whichever cwd it was typed from, whether or not the
+    command that did it ever spelled the name. This is #1686's rule
+    ("the daemon attests ground it can stat") applied to the datum the map
+    is actually about.
+
+    Repo-relative and bounded. Absent stays absent: an empty list from a
+    tree with no diff and an empty list from a git that would not answer are
+    told apart by the caller omitting the field, never by a zero.
+    """
+    worktree = str(manifest.get("worktree_path") or "").strip() or None
+    tree = Path(worktree) if worktree else brr_dir.parent
+    base = _run_base_ref(tree)
+    if base is None:
+        return []
+    seen: dict[str, None] = {}
+    # `git diff <base>` compares the *working tree* against the fork point,
+    # so one call covers committed and uncommitted alike. Untracked files
+    # are invisible to it by definition and need the second call — a new
+    # file is exactly the kind of terrain a room should show.
+    tracked = _git(tree, "diff", "--name-only", base, "--") or ""
+    untracked = _git(tree, "ls-files", "--others", "--exclude-standard") or ""
+    for line in (*tracked.splitlines(), *untracked.splitlines()):
+        rel = line.strip()
+        if not rel or rel.startswith(".brr/"):
+            # The runtime dir is machinery, never terrain — the same rule
+            # `dirFromEdge` learned in #1664 when a hidden directory in the
+            # account path minted fake chambers.
+            continue
+        if rel not in seen:
+            seen[rel] = None
+        if len(seen) >= _RUN_PATHS_MAX:
+            break
+    return list(seen)
 
 
 #: How many slash-separated tokens of a detail are worth `stat`-ing. A

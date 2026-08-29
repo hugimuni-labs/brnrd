@@ -147,6 +147,11 @@ export interface LiveRunRoom {
 	env: string | null;
 	branch: string | null;
 	dir: string | null;
+	/** The paths this run has actually touched, attested by git daemon-side
+	 *  (`cloud_publisher._run_paths`) — repo-relative, bounded at 64.
+	 *  Optional: absent on a daemon predating the field, which is not the
+	 *  same fact as a run that has touched nothing. */
+	paths?: string[];
 }
 
 /** Correspondence waiting at the run's portal — the *put to read* fact of

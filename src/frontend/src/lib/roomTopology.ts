@@ -246,12 +246,18 @@ export function compileTopology(graph: RoomGraph): RoomTopology {
 			// terrain: the observed chambers of this camp, as a shared-prefix trie
 			for (const chamber of camp.chambers) {
 				const leafDir = ensureDirPath(b, island.label, chamber.dir);
-				if (chamber.lastFile) {
-					const fid = fileId(leafDir, chamber.lastFile);
+				// Every attested file, then the one the hand is on. Deduped by
+				// id, so a file that is both git-attested and the current
+				// `lastFile` mints one leaf and not two — the same node either
+				// way, which is what `fileId` being a pure function of
+				// (dir, name) buys.
+				for (const name of [...chamber.files, chamber.lastFile]) {
+					if (!name) continue;
+					const fid = fileId(leafDir, name);
 					addNode(b, {
 						id: fid,
 						kind: 'file',
-						label: chamber.lastFile,
+						label: name,
 						repoId: island.label,
 						parentId: leafDir
 					});
