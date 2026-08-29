@@ -1755,3 +1755,75 @@ def test_telegram_fresh_send_without_a_bot_token_is_honest_503(monkeypatch):
             _Settings(), {"chat_id": 1}, "hello",
         )
     assert getattr(exc_info.value, "status_code", None) == 503
+
+
+# ── whoami: the read that costs nothing (w-71) ───────────────────────────────
+#
+# The route exists so a daemon credential can be *checked* without being
+# *spent*. Every assertion below is one of the ways that promise can be broken.
+
+
+def test_whoami_names_the_token_holder_and_writes_nothing(env):
+    """200 with the caller's own identity — and `last_seen` must not move.
+
+    The side-effect freedom is the whole feature. `/inbox`, the only other
+    authenticated daemon GET, advances a cursor and touches `last_seen`, so a
+    probe built on it is indistinguishable from work. If `whoami` ever starts
+    touching, a liveness probe every 5 minutes would keep a dead daemon
+    looking alive forever — the exact class of false-green this route was
+    added to end.
+    """
+    app, client, _ = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
+    assert client.post(
+        "/v1/daemons/register", json={"daemon_name": "laptop"}, headers=dmn
+    ).status_code == 200
+
+    def _last_seen():
+        with app.state.SessionLocal() as db:
+            from brnrd.models import Daemon
+
+            rows = db.execute(select(Daemon)).scalars().all()
+            return [r.last_seen_at for r in rows]
+
+    before = _last_seen()
+
+    r = client.get("/v1/daemons/whoami", headers=dmn)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["repo_id"] == rid
+    assert body["kind"] == "daemon"
+    assert body["account_id"]
+
+    assert _last_seen() == before, "whoami must not touch last_seen"
+
+    # And it never echoes the credential back, however the body grows.
+    assert "token" not in json_dumps_lower(body)
+
+
+def json_dumps_lower(obj) -> str:
+    import json as _json
+
+    return _json.dumps(obj).lower()
+
+
+def test_whoami_refuses_a_missing_or_wrong_token(env):
+    """401 for no/unknown bearer, 403 for a non-daemon one.
+
+    A prober reads the status code and nothing else, so these three codes are
+    the whole API. 401 and 403 must stay distinguishable from each other and
+    from a 404 — "this credential is refused", "this credential is the wrong
+    kind", and "this server has no such route" are three different worlds and
+    a caller that conflated them would send a reader to rotate a live token.
+    """
+    _, client, _ = env
+    acc = _account(client)
+
+    assert client.get("/v1/daemons/whoami").status_code == 401
+    assert client.get(
+        "/v1/daemons/whoami", headers={"Authorization": "Bearer nope"}
+    ).status_code == 401
+    # An account credential is a real token of the wrong kind.
+    assert client.get("/v1/daemons/whoami", headers=acc).status_code == 403
