@@ -1371,3 +1371,65 @@ def test_cut_reports_the_annotated_count_on_a_forced_accept(
     assert main(["cut", str(declaration)]) == 0
     out = capsys.readouterr().out
     assert "accepted, annotated — 2 check(s) unresolved" in out
+
+
+def test_accepted_is_one_fact_across_every_verdict_consumer():
+    """`ADVISORY` means the daemon took the directive — everywhere, not in
+    some call sites.
+
+    Before `do.accepted`, three consumers asked `status == OK` directly while
+    `_do_render` treated ADVISORY as success, so the same status meant
+    "delivered" in one place and "refused" in the next. Nothing bit only
+    because no advisory the daemon emits today happens to name a `reply` or a
+    `cut` directive — a reachability argument, not a guarantee. This pins the
+    predicate instead.
+    """
+    from brr import do
+
+    assert do.accepted(do.OK) is True
+    assert do.accepted(do.ADVISORY) is True
+    assert do.accepted(do.FAILED) is False
+    assert do.accepted(do.QUEUED) is False
+
+
+def test_a_reply_accepted_with_an_advisory_still_owes_its_promise(
+    tmp_path, monkeypatch, capsys,
+):
+    """A reply that landed carries a real debt — through ``cmd_do`` itself.
+
+    The promise gate required ``== OK`` from every staged reply, so a reply
+    accepted *with* an advisory would have written no blueprint row for a
+    message the correspondent actually received: brnrd#1693's own class (a
+    success treated as a failure) one call site over. Nothing bit only
+    because no advisory the daemon emits today happens to name a ``reply``
+    directive — a reachability argument, not a guarantee, and the kind of
+    argument that stops being true the moment someone adds a notice.
+
+    Driven through the real verb, not through the predicate: a test that
+    asserts ``accepted(ADVISORY)`` twice proves the predicate and nothing
+    about the gate that was wrong.
+    """
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    notice = {
+        "at": "2026-08-08T00:00:00Z", "kind": "advisory",
+        "text": "reply for event evt-1: something the daemon wants the caller to know",
+    }
+    monkeypatch.setattr(
+        time, "sleep",
+        _consume_after_one_sleep(outbox, "do-*-reply-*.md", notice=notice),
+    )
+    body = tmp_path / "body.md"
+    body.write_text("the reply\n", encoding="utf-8")
+
+    assert main([
+        "do", "--reply", "evt-1", "--body-file", str(body),
+        "--promise", "commit",
+    ]) == 0
+    out = capsys.readouterr().out
+    assert "✓ (advisory:" in out, out
+    rows = (outbox / ".promises.jsonl")
+    assert rows.exists(), "an accepted reply owes its promise row"
+    assert "commit" in rows.read_text(encoding="utf-8")

@@ -144,6 +144,26 @@ QUEUED = "queued"
 #: real refusal.
 ADVISORY = "advisory"
 
+
+def accepted(status: str) -> bool:
+    """Did the daemon take this directive?
+
+    One predicate, because "the act happened" is one fact and it was about to
+    be stored in four places. :data:`ADVISORY` is a *success* — every
+    `kind="advisory"` the daemon emits names something it accepted and acted
+    on: a capped await still arms, a legacy `worker:` spelling still spawns, a
+    colliding spawn report proceeds regardless, a bodied `note:` still retires
+    its event. But three call sites asked `status == OK` directly, so the
+    same status meant success in one and failure in the next, and what kept
+    that from biting was a *reachability* argument — no advisory the daemon
+    emits today happens to name a `reply` or a `cut` directive — living in a
+    review rather than in the code.
+
+    A guard that is only correct because of what nobody has written yet is a
+    claim, not a check. Ask this instead.
+    """
+    return status in (OK, ADVISORY)
+
 PORTAL_STATE_NAME = "portal-state.json"
 
 
