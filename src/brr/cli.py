@@ -5747,6 +5747,31 @@ def cmd_brnrd_connect(args):
 
     from . import daemon_install
 
+    # A background service is machine-scoped: one LaunchAgent / one systemd
+    # unit, serving every connected repo. Installing again from a second
+    # repo does not add a daemon — it boots the running one out, repoints
+    # it at this checkout, and races launchd's teardown on the way back up.
+    # Measured 2026-08-29: connecting a second repo took the first repo's
+    # daemon down for five minutes, lost the bootstrap race, and killed
+    # this command before it finished setting the *new* repo up. So when a
+    # daemon is already alive here, leave it alone and say where it lives;
+    # `brnrd daemon install` stays the explicit verb for repointing it.
+    running = daemon_install.service_alive()
+    if running is not None:
+        pid, workdir = running
+        print(f"[brnrd] background service already running (pid {pid}) from {workdir}")
+        if Path(workdir).resolve() != repo_root.resolve():
+            print(
+                "[brnrd] one daemon serves every connected repo — this one is "
+                "now connected too, nothing to install"
+            )
+            print(
+                f"[brnrd] to run the service from this checkout instead: "
+                f"`{brnrd_cmd()} daemon install` here"
+            )
+        _connect_finish_setup(repo_root, brr_dir, defaults=bool(args.defaults))
+        return
+
     try:
         result = daemon_install.install(
             no_start=False,
