@@ -390,7 +390,9 @@ def test_one_lane_blowing_up_does_not_cost_the_others(tmp_path):
     _configure_gates(repo)
 
     def _explode(_brr_dir):
-        raise RuntimeError("probe is broken")
+        # The message carries a live token, which is the case the catch-all
+        # cannot scrub: it does not know which secret this lane holds.
+        raise RuntimeError(f"probe is broken near {TELEGRAM_TOKEN}")
 
     with mock.patch.dict(lane_liveness.PROBES, {"telegram": _explode}):
         with mock.patch.object(lane_liveness, "_SESSION", _session({
@@ -400,6 +402,11 @@ def test_one_lane_blowing_up_does_not_cost_the_others(tmp_path):
     rendered = _render(repo)
     assert "slack 200" in rendered
     assert "telegram probe failed" in rendered
+    # The unforeseen path reports the exception *type* and nothing else — a
+    # message nobody anticipated is a message nobody can promise is clean.
+    assert "unexpected RuntimeError" in rendered
+    assert TELEGRAM_TOKEN not in rendered
+    assert TELEGRAM_TOKEN not in lane_liveness.cache_path(repo).read_text("utf-8")
 
 
 def test_the_daemon_tick_refreshes_and_the_wake_facet_reads_it(tmp_path):

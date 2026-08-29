@@ -128,6 +128,18 @@ def _scrub(text: str, *secrets: str | None) -> str:
     return out[:160]
 
 
+def _blind_detail(exc: BaseException) -> str:
+    """The exception's *type* only — never its message.
+
+    For the catch-all handlers, which exist precisely for failures nobody
+    foresaw. :func:`_scrub` can only remove secrets a caller knows to pass it,
+    and an unforeseen exception is by definition one whose message I cannot
+    promise is clean. A class name is diagnostic enough to start from and
+    cannot carry a credential.
+    """
+    return f"unexpected {type(exc).__name__}"
+
+
 def _outcome(
     lane: str,
     outcome: str,
@@ -243,7 +255,7 @@ def _probe_github(brr_dir: Path) -> dict[str, Any]:
     try:
         token = gh_state.resolve_token(gate_runtime.load_state(brr_dir, "github"))
     except Exception as exc:  # noqa: BLE001 - a credential read never breaks the sweep
-        return _outcome("github", "error", detail=_scrub(exc))
+        return _outcome("github", "error", detail=_blind_detail(exc))
     token = (token or "").strip()
     if not token:
         return _outcome("github", "no_probe", detail="no token resolved")
@@ -425,7 +437,7 @@ def refresh(repo_root: Path, *, brr_dir: Path | None = None) -> dict[str, Any]:
         try:
             lanes.append(probe(root))
         except Exception as exc:  # noqa: BLE001 - one lane never kills the sweep
-            lanes.append(_outcome(gate, "error", detail=_scrub(exc)))
+            lanes.append(_outcome(gate, "error", detail=_blind_detail(exc)))
 
     payload = {"schema": SCHEMA, "checked_at": _utc_now_iso(), "lanes": lanes}
     _write(repo_root, payload)
