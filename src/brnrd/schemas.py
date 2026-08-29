@@ -736,6 +736,16 @@ class LiveRunEdgeIn(BaseModel):
     detail: str | None = Field(default=None, max_length=500)
     out_bytes: int | None = None
     injected: bool = False
+    # WHAT crossed, not merely that something did. `boundaries.jsonl` has
+    # always stored the injected block verbatim; the publisher used to write
+    # `bool(record.get("inject"))` and the text died at that cast, which is
+    # why a pager asked for four times rendered the *command* a boundary rode
+    # in on instead of the block it carried. Bounded and newline-collapsed
+    # daemon-side (`cloud_publisher._wire_injection`); this bound is the
+    # hostile-payload backstop, not the design bound. `None` on a daemon
+    # predating the field — absent stays absent, and a reader must not read
+    # that as "nothing was injected" when `injected` says otherwise.
+    injection: str | None = Field(default=None, max_length=500)
     # Where the act ran, already relativized daemon-side against the run's
     # own tree (`cloud_publisher._edge_dir`) — never a host-absolute path.
     dir: str | None = Field(default=None, max_length=256)

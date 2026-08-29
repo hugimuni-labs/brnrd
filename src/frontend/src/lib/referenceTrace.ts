@@ -51,7 +51,13 @@ function edge(
 	detail: string,
 	at: string,
 	dir = '.',
-	injected = false
+	injected = false,
+	// The block itself, not only the fact of one. A replay that published
+	// `injected: true` with no text would exercise the pager's *fallback*
+	// path (carrier-only, for a daemon predating the field) while looking
+	// exactly like the real thing — the fixture masquerading as the wire
+	// this file exists not to do.
+	injection: string | null = null
 ): NonNullable<LiveRun['edge']> {
 	return {
 		at,
@@ -61,9 +67,18 @@ function edge(
 		detail,
 		out_bytes: 412,
 		injected,
+		injection,
 		dir
 	};
 }
+
+/** What the daemon actually writes at a boundary that carries a letter —
+ *  the status line, then the pending row naming the correspondent. Shaped
+ *  from a real `boundaries.jsonl` row, newline-collapsed the way
+ *  `cloud_publisher._wire_injection` collapses it. */
+const REFERENCE_BLOCK =
+	'⌁[·]: ⏱ 12m │ q S76·W38·F4 │ pending 1 · ' +
+	'✉ evt-1787695836762878000-9ugc · cloud · Gurio · 2m · 344 B';
 
 const resident = (over: Partial<LiveRun>) =>
 	liveRun({
@@ -145,7 +160,8 @@ export function referenceFrames(): LiveRun[][] {
 					'node --test asciiRoom.test.ts',
 					'2026-08-27T10:14:00Z',
 					'src/frontend/tests',
-					true
+					true,
+					REFERENCE_BLOCK
 				),
 				crossings: [
 					edge(
@@ -153,7 +169,8 @@ export function referenceFrames(): LiveRun[][] {
 						'node --test asciiRoom.test.ts',
 						'2026-08-27T10:14:00Z',
 						'src/frontend/tests',
-						true
+						true,
+						REFERENCE_BLOCK
 					)
 				]
 			}),
