@@ -1345,6 +1345,11 @@ def test_account_connect_pairs_installs_and_starts_service(
     # since #1244 fork 1 — see test_account_connect_installs_without_agents_md.
     (repo / "AGENTS.md").write_text("# Project\n", encoding="utf-8")
     monkeypatch.chdir(repo)
+    # No background service on this machine — `connect` skips the install
+    # entirely when one is already up (a machine has one daemon serving
+    # every connected repo), and without this the suite would read the
+    # developer's own live LaunchAgent.
+    monkeypatch.setattr("brr.daemon_install.service_alive", lambda: None)
     calls = []
 
     monkeypatch.setattr(
@@ -1386,6 +1391,74 @@ def test_account_connect_pairs_installs_and_starts_service(
     assert "Connected and listening in the background" in capsys.readouterr().out
 
 
+def test_account_connect_leaves_a_running_daemon_alone(
+    monkeypatch, tmp_path, capsys,
+):
+    """Connecting a second repo must not decapitate the first repo's daemon.
+
+    A background service is machine-scoped: one LaunchAgent, serving every
+    connected repo. The old code reinstalled unconditionally, which means
+    `bootout` the live daemon, repoint its `WorkingDirectory` at this
+    checkout, and race launchd's teardown on the way back up. Measured
+    2026-08-29 on the maintainer's machine: the first repo lost its daemon
+    for five minutes, the bootstrap lost the race, and the `SystemExit`
+    killed `connect` before it set the *new* repo up at all.
+    """
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    (repo / "AGENTS.md").write_text("# Project\n", encoding="utf-8")
+    monkeypatch.chdir(repo)
+    installed = []
+
+    monkeypatch.setattr("brr.gates.cloud.connect", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        "brr.daemon_install.install",
+        lambda **kwargs: installed.append(kwargs) or 0,
+    )
+    monkeypatch.setattr(
+        "brr.daemon_install.service_alive",
+        lambda: (4242, tmp_path / "the-first-repo"),
+    )
+
+    assert main(["account", "connect", "https://brnrd.example"]) is None
+
+    assert installed == []
+    out = capsys.readouterr().out
+    assert "background service already running (pid 4242)" in out
+    assert str(tmp_path / "the-first-repo") in out
+    # The explicit repoint verb is named, so the behaviour is a default and
+    # not a wall.
+    assert "brnrd daemon install" in out
+
+
+def test_account_connect_still_installs_when_no_daemon_is_running(
+    monkeypatch, tmp_path, capsys,
+):
+    """The skip is conditional on a *live* daemon, never on a plist.
+
+    A machine whose service is installed-but-dead (or never installed at
+    all) still gets the install — otherwise the first repo on a fresh
+    machine would connect to nothing.
+    """
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    (repo / "AGENTS.md").write_text("# Project\n", encoding="utf-8")
+    monkeypatch.chdir(repo)
+    installed = []
+
+    monkeypatch.setattr("brr.gates.cloud.connect", lambda *_a, **_kw: {})
+    monkeypatch.setattr(
+        "brr.daemon_install.install",
+        lambda **kwargs: installed.append(kwargs) or 0,
+    )
+    monkeypatch.setattr("brr.daemon_install.service_alive", lambda: None)
+
+    assert main(["account", "connect", "https://brnrd.example"]) is None
+
+    assert len(installed) == 1
+    assert "Connected and listening in the background" in capsys.readouterr().out
+
+
 def test_account_connect_reports_when_the_service_does_not_come_up(
     monkeypatch, tmp_path, capsys,
 ):
@@ -1395,6 +1468,11 @@ def test_account_connect_reports_when_the_service_does_not_come_up(
     init_git_repo(repo)
     (repo / "AGENTS.md").write_text("# Project\n", encoding="utf-8")
     monkeypatch.chdir(repo)
+    # No background service on this machine — `connect` skips the install
+    # entirely when one is already up (a machine has one daemon serving
+    # every connected repo), and without this the suite would read the
+    # developer's own live LaunchAgent.
+    monkeypatch.setattr("brr.daemon_install.service_alive", lambda: None)
 
     monkeypatch.setattr("brr.gates.cloud.connect", lambda *_a, **_kw: {})
     monkeypatch.setattr("brr.daemon_install.install", lambda **_kw: 1)
@@ -1423,6 +1501,11 @@ def test_account_connect_installs_without_agents_md(
     init_git_repo(repo)
     assert not (repo / "AGENTS.md").exists()
     monkeypatch.chdir(repo)
+    # No background service on this machine — `connect` skips the install
+    # entirely when one is already up (a machine has one daemon serving
+    # every connected repo), and without this the suite would read the
+    # developer's own live LaunchAgent.
+    monkeypatch.setattr("brr.daemon_install.service_alive", lambda: None)
     installed = []
 
     monkeypatch.setattr("brr.gates.cloud.connect", lambda *_a, **_kw: {})
@@ -1670,6 +1753,11 @@ def test_account_connect_ctrl_c_during_service_install_exits_cleanly(
     repo = tmp_path / "repo"
     init_git_repo(repo)
     monkeypatch.chdir(repo)
+    # No background service on this machine — `connect` skips the install
+    # entirely when one is already up (a machine has one daemon serving
+    # every connected repo), and without this the suite would read the
+    # developer's own live LaunchAgent.
+    monkeypatch.setattr("brr.daemon_install.service_alive", lambda: None)
 
     monkeypatch.setattr("brr.gates.cloud.connect", lambda *_a, **_kw: {})
 
