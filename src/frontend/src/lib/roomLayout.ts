@@ -37,6 +37,7 @@ import {
 	Shelf,
 	TERRAIN_TOP,
 	districtOf,
+	inDistrict,
 	type DistrictName,
 	type Rect,
 	type SpatialRequest
@@ -305,13 +306,33 @@ export function layoutRoom(
 		if (!coords[id]) coords[id] = { x: HOME_POS.x, y: HOME_POS.y + 8 };
 	}
 
-	// edge polylines: vertical at the origin's x, then east on the target lane
+	// Edge polylines. One turn, and **which** turn is a district question, not
+	// a style one: the default (vertical at the origin's x, then along the
+	// target's row) is right for the tree, where the vertical run *is* the
+	// parent's trunk. It is wrong for an edge leaving terrain — the shore
+	// rail from the root to the forge dock ran four rows straight down the
+	// tree's own trunk column before turning west, which is the same
+	// cross-district claim the terminal's box was, one layer down: placement
+	// was allocated, routing was not.
+	//
+	// So an edge whose ends sit in different districts turns at its *source's*
+	// row instead, leaving the source's district immediately and travelling
+	// the rest of the way through the destination's own column.
+	//
+	// No `kind !== 'tree'` guard, deliberately. It was here and it is
+	// redundant — a tree edge joins a parent and a child that are both in
+	// terrain, so the predicate is already false for it — and a mutation test
+	// proved nothing could tell the two versions apart. A guard the run
+	// cannot be proven wrong about is a claim, not a check.
 	const edgeRoutes: Record<string, Point[]> = {};
 	for (const e of topo.edges) {
 		const a = coords[e.from];
 		const b = coords[e.to];
 		if (!a || !b) continue;
-		const pts: Point[] = a.y === b.y || a.x === b.x ? [a, b] : [a, { x: a.x, y: b.y }, b];
+		let pts: Point[];
+		if (a.y === b.y || a.x === b.x) pts = [a, b];
+		else if (leavesTerrain(topo, coords, e.from, a, b)) pts = [a, { x: b.x, y: a.y }, b];
+		else pts = [a, { x: a.x, y: b.y }, b];
 		edgeRoutes[`${e.from}->${e.to}`] = pts;
 	}
 
@@ -390,4 +411,22 @@ function nextFreeLane(placedSiblings: Point[], originY: number, step: number): n
 		if (!taken.has(lane)) return lane;
 	}
 	return 64 * step;
+}
+
+/** True when this edge starts inside a terrain district and ends outside it.
+ *  Deliberately asked of the *source's own island origin* rather than of the
+ *  world: districts are island-relative, and a second island's terrain is not
+ *  this one's. */
+function leavesTerrain(
+	topo: RoomTopology,
+	coords: Record<PlaceId, Point>,
+	fromId: PlaceId,
+	a: Point,
+	b: Point
+): boolean {
+	const repoId = topo.nodes[fromId]?.repoId;
+	const rootId = topo.islandRoots.find((r) => topo.nodes[r]?.repoId === repoId);
+	const origin = rootId ? coords[rootId] : undefined;
+	if (!origin) return false;
+	return inDistrict('terrain', origin, a) && !inDistrict('terrain', origin, b);
 }

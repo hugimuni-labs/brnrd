@@ -291,3 +291,36 @@ test('the districts an island owns are disjoint', () => {
 		}
 	}
 });
+
+test("a route leaving terrain turns at its own row, not down the tree's trunk", () => {
+	// The same cross-district claim the terminal's box was, one layer down.
+	// The shore rail from the root to the forge dock used to run four rows
+	// straight down the tree's own trunk column before turning west — visible
+	// on the live board as a `║` cutting through `lib/` and its files.
+	const topo = topoWith(['src/a', 'src/b', 'docs']);
+	const { layout } = layoutRoom(topo);
+	const rootId = islandRootId(REPO);
+	const origin = layout.nodes[rootId];
+	const route = layout.edgeRoutes[`${rootId}->${rootId}#forge-dock`];
+	assert.ok(route, 'the shore edge is routed');
+	// walk the polyline cell by cell: past the origin itself, no cell of this
+	// route may sit in the terrain district
+	for (let i = 0; i + 1 < route.length; i++) {
+		const [p, q] = [route[i], route[i + 1]];
+		const steps = Math.max(Math.abs(q.x - p.x), Math.abs(q.y - p.y));
+		for (let k = 1; k <= steps; k++) {
+			const cell = {
+				x: p.x + Math.sign(q.x - p.x) * Math.min(k, Math.abs(q.x - p.x)),
+				y: p.y + Math.sign(q.y - p.y) * Math.min(k, Math.abs(q.y - p.y))
+			};
+			assert.ok(
+				!inDistrict('terrain', origin, cell),
+				`the shore rail crosses terrain at (${cell.x}, ${cell.y})`
+			);
+		}
+	}
+	// and the tree's own edges keep the vertical-first turn: there the
+	// vertical run *is* the parent's trunk, which is what a tree looks like
+	const trunk = layout.edgeRoutes[`${dirId(REPO, ['src'])}->${dirId(REPO, ['src', 'b'])}`];
+	assert.equal(trunk[1].x, layout.nodes[dirId(REPO, ['src'])].x, 'tree edges turn at the parent');
+});
