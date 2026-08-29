@@ -20,8 +20,7 @@ The four invariants, each of which is a way this could be built wrong:
 
 from __future__ import annotations
 
-import json
-import subprocess
+import threading
 import time
 from pathlib import Path
 from unittest import mock
@@ -119,13 +118,16 @@ def _render(repo: Path) -> str:
     network would fail here rather than silently becoming the shape this whole
     module exists to forbid.
     """
-    facet = lane_liveness.read_state(repo)
     poison = mock.MagicMock()
     poison.get.side_effect = AssertionError("render path made a network call")
     poison.post.side_effect = AssertionError("render path made a network call")
     with mock.patch.object(lane_liveness, "_SESSION", poison):
+        # The facet build is inside the poison too: in production it runs in
+        # daemon.py at snapshot time, which is just as much "assembly" as the
+        # render itself, and a probe there would break the same promise.
+        facet = lane_liveness.read_state(repo)
         return prompts._format_communication_snapshot({
-            "current_thread": "t", "lanes": facet,
+            lane_liveness.FACET_KEY: facet, "current_thread": "t",
         })
 
 
@@ -179,6 +181,72 @@ def test_a_200_envelope_saying_not_ok_is_an_auth_failure_not_a_200(tmp_path):
     # would put the exact token a skimmer looks for beside a dead lane —
     # this feature's own failure mode, turned on its rendering.
     assert "200" not in rendered
+
+
+@pytest.mark.parametrize("body,label", [
+    (None, "HTML interstitial (unparseable body)"),
+    ([1, 2, 3], "JSON that is not an object"),
+    ({"result": {}}, "JSON object with no `ok` key"),
+])
+def test_a_200_that_is_not_the_promised_envelope_is_never_ok(tmp_path, body, label):
+    """A captive portal / MITM proxy / Cloudflare page answers `200 text/html`.
+
+    The request never reached Telegram. A classifier that treats "no envelope"
+    as "no refusal" prints `telegram 200` for a probe that spoke to a proxy —
+    failure rendering as health, which is the one thing this must never do.
+    """
+    repo = _repo(tmp_path)
+    _configure_gates(repo, telegram=True, slack=False)
+    with mock.patch.object(lane_liveness, "_SESSION", _session({
+        "api.telegram.org": _Response(200, body),
+    })):
+        lane_liveness.refresh(repo)
+    rows = lane_liveness.read_state(repo)["lanes"]
+    assert rows[0]["outcome"] == "error", label
+    rendered = _render(repo)
+    assert "telegram probe failed" in rendered, label
+    assert "telegram 200" not in rendered, label
+
+
+def test_a_204_does_not_print_a_bare_code(tmp_path):
+    """Same class as the interstitial: a bodyless 2xx proves nothing."""
+    repo = _repo(tmp_path)
+    _configure_gates(repo, telegram=True, slack=False)
+    with mock.patch.object(lane_liveness, "_SESSION", _session({
+        "api.telegram.org": _Response(204, None),
+    })):
+        lane_liveness.refresh(repo)
+    rendered = _render(repo)
+    assert "telegram 204" not in rendered
+    assert "telegram probe failed" in rendered
+
+
+def test_a_live_credential_still_reads_green(tmp_path):
+    """The envelope rule must not make every lane permanently red."""
+    repo = _repo(tmp_path)
+    _configure_gates(repo, github=True)
+    with mock.patch.object(lane_liveness, "_SESSION", _session({
+        "api.telegram.org": _Response(200, {"ok": True, "result": {"id": 1}}),
+        "slack.com": _Response(200, {"ok": True, "user_id": "U1"}),
+        "api.github.com": _Response(200, {"resources": {}, "rate": {}}),
+    })):
+        lane_liveness.refresh(repo)
+    rendered = _render(repo)
+    assert "telegram 200" in rendered
+    assert "slack 200" in rendered
+    assert "github 200" in rendered
+
+
+def test_a_non_auth_api_error_is_not_reported_as_a_dead_credential(tmp_path):
+    """Slack's `invalid_arguments` on a live token must not say "auth failed"."""
+    repo = _repo(tmp_path)
+    _configure_gates(repo, telegram=False, slack=True)
+    with mock.patch.object(lane_liveness, "_SESSION", _session({
+        "slack.com": _Response(200, {"ok": False, "error": "invalid_arguments"}),
+    })):
+        lane_liveness.refresh(repo)
+    assert lane_liveness.read_state(repo)["lanes"][0]["outcome"] == "error"
+    assert "slack auth failed" not in _render(repo)
 
 
 def test_a_real_401_still_prints_its_code_because_the_code_is_the_refusal(tmp_path):
@@ -274,8 +342,15 @@ def test_read_state_makes_no_call_even_with_no_cache(tmp_path):
 
 
 @pytest.mark.parametrize("answer", [
+    # Each of these takes a *different* branch of `_classify_http`, and the
+    # last two are the ones that actually construct a detail string — the only
+    # paths on which a token could be emitted at all. The first two are the
+    # trivially-safe branches, kept so a regression that starts emitting detail
+    # on them is caught too.
     _Response(200, {"ok": True}),
     _Response(401, {"ok": False, "description": "Unauthorized"}),
+    _Response(200, {"ok": False, "error": "invalid_auth"}),
+    _Response(200, "not an object at all"),
 ])
 def test_the_token_never_reaches_the_cache_or_the_block(tmp_path, answer):
     repo = _repo(tmp_path)
@@ -421,15 +496,88 @@ def test_the_daemon_tick_refreshes_and_the_wake_facet_reads_it(tmp_path):
         "api.telegram.org": _Response(200, {"ok": True}),
     })):
         assert lane_liveness.refresh_if_stale_async(repo) is True
-        for _ in range(200):
-            if lane_liveness.read_state(repo)["status"] == "fresh":
-                break
-            time.sleep(0.02)
+        # Join the worker *inside* the patch. Letting the patch exit while the
+        # thread may still be running restores the real session and fires a
+        # live request to api.telegram.org carrying the fixture token — and
+        # leaks `_refreshing = True` into the next test.
+        for thread in threading.enumerate():
+            if thread.name == "lane-liveness":
+                thread.join(timeout=30)
+        assert lane_liveness.read_state(repo)["status"] == "fresh"
     assert "telegram 200" in _render(repo)
 
 
-def test_no_configured_gate_renders_nothing_rather_than_a_hollow_header(tmp_path):
+def test_the_two_wiring_points_exist_in_the_daemon(tmp_path):
+    """A structural guard, because neither point is reachable from a test.
+
+    Both live inside ``daemon.start()``'s scan loop and snapshot assembly,
+    which no unit test drives. An adversarial review of this file mutated each
+    of them — renaming the snapshot key, deleting the tick call — and the
+    suite stayed green, so the coverage claim this test replaces was false.
+
+    The key itself is now a shared constant rather than two string literals,
+    which is the real fix: ``daemon`` writes ``lane_liveness.FACET_KEY`` and
+    ``prompts`` reads it, so they cannot drift. This pins the remaining half —
+    that the tick still calls the refresh at all.
+    """
+    from brr import daemon
+
+    source = Path(daemon.__file__).read_text(encoding="utf-8")
+    assert "lane_liveness.refresh_if_stale_async(repo_root)" in source, (
+        "the daemon tick no longer refreshes the lane cache — the block would "
+        "render `never probed` forever, a correct guard nothing feeds"
+    )
+    assert "lane_liveness.FACET_KEY" in source, (
+        "the daemon no longer attaches the lane facet to the wake snapshot"
+    )
+    assert "lane_liveness.FACET_KEY" in Path(prompts.__file__).read_text("utf-8"), (
+        "the wake renderer no longer reads the lane facet off the snapshot"
+    )
+
+
+def test_a_sweep_that_found_no_gate_says_so_instead_of_vanishing(tmp_path):
+    """An empty sweep is an answer. Dropping the block makes it look like fine.
+
+    This test previously asserted the opposite — that the block disappears —
+    which locked in the bug: "we looked and there is nothing configured" and
+    "we could not look" both rendered as silence, and silence reads as health.
+    """
     repo = _repo(tmp_path)
     lane_liveness.refresh(repo)
-    assert lane_liveness.read_state(repo)["lanes"] == []
-    assert "Lane liveness" not in _render(repo)
+    state = lane_liveness.read_state(repo)
+    assert state["lanes"] == []
+    assert state["discovery"] == "ok"
+    rendered = _render(repo)
+    assert "Lane liveness" in rendered
+    assert "no configured gate to probe" in rendered
+
+
+def test_discovery_failure_is_rendered_not_swallowed(tmp_path):
+    """`configured_gates` blowing up must not read like "no lanes exist"."""
+    repo = _repo(tmp_path)
+    _configure_gates(repo)
+    with mock.patch.object(
+        gate_runtime, "configured_gates", side_effect=OSError("gate dir gone"),
+    ):
+        lane_liveness.refresh(repo)
+    state = lane_liveness.read_state(repo)
+    assert state["discovery"] == "failed"
+    rendered = _render(repo)
+    assert "lane discovery failed" in rendered
+    assert "cannot say which lanes exist" in rendered
+
+
+def test_an_older_cache_without_a_discovery_field_reads_as_unknown(tmp_path):
+    """Never as "ok" — that would be a guess about a sweep this code did not run."""
+    repo = _repo(tmp_path)
+    _configure_gates(repo, telegram=True, slack=False)
+    with mock.patch.object(lane_liveness, "_SESSION", _session({
+        "api.telegram.org": _Response(200, {"ok": True}),
+    })):
+        lane_liveness.refresh(repo)
+    path = lane_liveness.cache_path(repo)
+    import json as _json
+    data = _json.loads(path.read_text("utf-8"))
+    del data["discovery"]
+    path.write_text(_json.dumps(data), encoding="utf-8")
+    assert lane_liveness.read_state(repo)["discovery"] is None
