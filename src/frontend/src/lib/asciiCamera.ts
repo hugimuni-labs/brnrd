@@ -725,7 +725,7 @@ export function renderWorld(
 		// frames in place — the pager at its wrist, the tether cycling. The
 		// actor never moves for a page; traffic comes to it.
 		const phase = opts.reading?.[actor.runId];
-		const tether = phase !== undefined ? `▯${TETHER_FRAMES[phase % TETHER_FRAMES.length]}` : '';
+		const tether = phase !== undefined ? `▷${TETHER_FRAMES[phase % TETHER_FRAMES.length]}` : '';
 		// the act, embodied: writing/reading marks at the station the actor
 		// stands at — a busy status line is not a body.
 		const mark = walking ? null : activityMark(actor, pid ? (topo.nodes[pid]?.kind ?? null) : null);
@@ -796,7 +796,16 @@ export function renderWorld(
 				: '· nothing waiting';
 		const pages = opts.pages ?? [];
 		const readCount = pages.length > 0 ? `✉×${pages.length} read` : '✉ none read yet';
-		const plug = readingNow.size > 0 ? '▯⌁' : '▯';
+		// `▷`, not `▯` (2026-08-29). U+25AF renders *correctly* in every font the
+		// board has met — and a white vertical rectangle is the exact shape of a
+		// missing-glyph box, so a first-time reader parses the pager's own marker
+		// as a broken build. Found by a reader given the screenshot and forbidden
+		// to open the source; a bitmap probe against the deployed font's notdef
+		// then proved the glyph was present, which makes this the harder defect:
+		// **no font-coverage rule can catch a glyph whose correct rendering looks
+		// like failure.** `glyphSubset` reasons about coverage and is right to;
+		// this is legibility, and it needs an eye.
+		const plug = readingNow.size > 0 ? '▷⌁' : '▷';
 		out.push(clip(`${plug} PAGER   ${waiting}   ${readCount}`, cam.cols));
 		// THE CONDITION LINE. The pager read out the *log* and nothing about
 		// the body carrying it, which is the difference between a feed and a
@@ -881,7 +890,7 @@ export const LEGEND = [
 	'^ watch — armed `brnrd await`s count down here  T clockwork  ⛁ garage  arrows = off-camera bearings',
 	'⌁ attested boundary   ══ CLOTH time register — live, then history',
 	'┈≻ the claw — a letter carried from HOME to the actor that received it   ◇ the letter, in flight',
-	'▯⌁@ mind-connect — reading the pager   ✎ writing  ☰ reading  ✉ opening a letter',
-	'▯ PAGER — injection status: ◇ waiting (accumulated, not yet injected) · ✉ read · ▸ in transit',
+	'▷⌁@ mind-connect — reading the pager   ✎ writing  ☰ reading  ✉ opening a letter',
+	'▷ PAGER — injection status: ◇ waiting (accumulated, not yet injected) · ✉ read · ▸ in transit',
 	'  a read page shows the injected block itself; ↳ names the boundary that carried it'
 ].join('\n');
