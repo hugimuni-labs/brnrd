@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { compileRoomGraph, type TrailStep } from './roomGraph.ts';
 import { compileTopology, campId, dirId, islandRootId } from './roomTopology.ts';
-import { emptyAtlas, layoutRoom } from './roomLayout.ts';
+import { MAX_DIR_LABEL_CHARS, emptyAtlas, layoutRoom } from './roomLayout.ts';
 import type { LiveRun, LiveRunsResponse } from './liveRuns.ts';
 
 function liveRun(over: Partial<LiveRun> & { run_id: string }): LiveRun {
@@ -57,20 +57,27 @@ function topoWith(trailDirs: string[], runs?: LiveRun[]) {
 }
 
 test('the repository root sits at its island origin; depth advances just past the parent label', () => {
-	const topo = topoWith(['src/frontend/src/lib']);
+	// Two branches on purpose. Since the trie fold (2026-08-29) a single
+	// chain collapses to one node, and a depth test on a one-node trie would
+	// pass by having no depth to advance through. A fork keeps real levels —
+	// and it is the harder case anyway, because a folded label
+	// (`src/frontend`, 12 chars) is longer than any single segment, which is
+	// exactly where a label-aware advance earns its cap.
+	const topo = topoWith(['src/frontend/src/lib', 'src/frontend/tests']);
 	const { layout } = layoutRoom(topo);
 	const root = layout.nodes[islandRootId(REPO)];
 	assert.deepEqual(root, { x: 0, y: 0 });
-	const src = layout.nodes[dirId(REPO, ['src'])];
 	const frontend = layout.nodes[dirId(REPO, ['src', 'frontend'])];
-	const src2 = layout.nodes[dirId(REPO, ['src', 'frontend', 'src'])];
+	const lib = layout.nodes[dirId(REPO, ['src', 'frontend', 'src', 'lib'])];
 	// the advance is label-aware (2026-08-27, the width fold): each child
 	// clears its parent's painted label at island scale (2 chars/unit) plus
 	// a short corridor — never the old fixed 11-unit stride
-	assert.ok(src.x > root.x);
-	assert.ok((frontend.x - src.x) * 2 >= 'src/'.length + 2, 'clears the parent label');
-	assert.ok((src2.x - frontend.x) * 2 >= 'frontend/'.length + 2, 'clears the longer label');
-	assert.ok(frontend.x - src.x <= 14, 'and never sprawls past the cap');
+	assert.ok(frontend.x > root.x);
+	assert.ok(
+		(lib.x - frontend.x) * 2 >= Math.min('src/frontend/'.length + 2, MAX_DIR_LABEL_CHARS),
+		'clears the folded parent label'
+	);
+	assert.ok(lib.x - frontend.x <= 14, 'and never sprawls past the cap');
 	// deterministic: the same topology lays out to the same coordinates
 	assert.deepEqual(layoutRoom(topo).layout.nodes, layout.nodes);
 });
