@@ -69,6 +69,7 @@ from . import dominion
 from . import envs
 from . import facets
 from . import forge_pr_cache
+from . import lane_liveness
 from . import forge_state
 from . import forges
 from .gates import BUILTIN_GATES as _BUILTIN_GATES
@@ -3847,6 +3848,13 @@ def _run_worker(
         )
         if forge_facet:
             communication_snapshot["forge"] = forge_facet
+        # Lane liveness (w-71): `200` beside `set`. A pure cache read — the
+        # probes ride the scan tick below, never prompt assembly. Always
+        # attached (never gated on "has any lane"), because the facet's
+        # `absent` verdict is itself the answer a wake must see: "nobody has
+        # probed" must not render as silence, which reads as fine.
+        if not is_home_root:
+            communication_snapshot["lanes"] = lane_liveness.read_state(repo_root)
         # Reader fluency (#217): which language this thread's reader reads.
         # v1 reads the repo-level `fluency` config key (weave | prose);
         # per-correspondent declaration at the gate boundary stays the
@@ -15745,6 +15753,11 @@ def start(
             # reason to exist). TTL-guarded: at most one `gh` round-trip every
             # few minutes, and never two at once.
             forge_pr_cache.refresh_if_stale_async(repo_root)
+            # Same contract, credential-side: probe each configured gate's
+            # credential read-only and off the loop thread, so the wake can
+            # serve `telegram 200` instead of leaving a resident to *remember*
+            # whether a token still works. Remembering is what rots (w-71).
+            lane_liveness.refresh_if_stale_async(repo_root)
             # Same contract, one lane over: keep the deploy-run cache warm off
             # the loop thread so `forge_state.render_prod_line` can say *why*
             # prod is behind without a network call at prompt-assembly time.

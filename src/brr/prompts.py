@@ -5342,6 +5342,18 @@ def _format_communication_snapshot(
             lines.append("")
         lines.append(forge_block)
 
+    # Credential *liveness*, beside the forge block rather than inside it: the
+    # `webhook secret set · bot token set · app auth set` bits on the `prod:`
+    # line are prod's self-report about a remote server's own environment, not
+    # something this host holds or could probe. These are the local lanes.
+    # Cache-backed and network-free here, same contract the forge block keeps
+    # (see `brr.lane_liveness`); the daemon tick owns the probes.
+    lane_block = _format_lane_liveness(snapshot.get("lanes"))
+    if lane_block:
+        if lines:
+            lines.append("")
+        lines.append(lane_block)
+
     live_menu = snapshot.get("live_menu")
     if isinstance(live_menu, dict):
         resolved_prs = forge_state.resolved_pr_lookup(snapshot.get("forge"))
@@ -5403,6 +5415,24 @@ def _format_pr_state(pr_state: Any, *, default_branch: str | None = None) -> lis
             noun = "resolution" if omitted == 1 else "resolutions"
             lines.append(f"  - {omitted} older {noun} in the last 24h omitted")
     return lines
+
+
+def _format_lane_liveness(lanes: Any) -> str:
+    """Render the lane-liveness facet the daemon put on the snapshot.
+
+    *lanes* is a :func:`brr.lane_liveness.read_state` verdict. Returns the
+    empty string only when the facet is absent (no daemon wrote one — an
+    ad-hoc render, a home-root wake) or when the sweep found no configured
+    gate at all. A facet that *is* present and says "never probed" renders,
+    deliberately: the failure this whole block answers is a surface that
+    narrows reading identically to one that didn't.
+    """
+    if not isinstance(lanes, dict) or not lanes:
+        return ""
+    from . import lane_liveness
+
+    rendered = lane_liveness.render_lines(lanes)
+    return "\n".join(rendered) if rendered else ""
 
 
 def _format_forge_state(forge: Any) -> str:
