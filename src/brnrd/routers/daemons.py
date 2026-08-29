@@ -143,6 +143,29 @@ def register(payload: schemas.DaemonRegister, principal: Principal = Depends(req
     return schemas.DaemonRegistered(daemon_id=daemon.id, repo_id=repo_id)
 
 
+@router.get("/whoami", response_model=schemas.DaemonWhoami)
+def whoami(principal: Principal = Depends(require_daemon)) -> schemas.DaemonWhoami:
+    """Is this daemon token still alive? The status code is the whole answer.
+
+    **Deliberately side-effect free**, and that is the entire reason it exists.
+    `/inbox` — the only other authenticated daemon GET — advances a cursor and
+    touches `last_seen`, so probing with it makes the probe indistinguishable
+    from work and races the gate loop's own poll. This route touches nothing:
+    no DB write, no `last_seen`, no cursor. `require_daemon` has already done
+    the only thing being asked (resolve the bearer, refuse a non-daemon kind),
+    so the handler's body is the receipt that it succeeded.
+
+    A caller is expected to read the **status code**, not the body: 200 alive,
+    401 no such token, 403 wrong token kind. The body carries only the account
+    and repo the caller's own token already names, so there is nothing here
+    worth polling for content.
+    """
+    return schemas.DaemonWhoami(
+        account_id=principal.account_id,
+        repo_id=principal.repo_id,
+    )
+
+
 @router.post("/publishing-credential", response_model=schemas.PublishingCredential)
 def publishing_credential(
     request: Request,

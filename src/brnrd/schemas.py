@@ -171,6 +171,26 @@ class DaemonRegistered(BaseModel):
     repo_id: str | None = None
 
 
+class DaemonWhoami(BaseModel):
+    """The identity a daemon token resolves to — nothing more.
+
+    Exists so a credential can be *checked* without being *spent*. Every other
+    authenticated daemon read has a side effect: `/inbox` advances a cursor and
+    touches `last_seen`, an attachment fetch needs an event that may not exist.
+    A resident that wanted to know whether its own token still worked therefore
+    had no read-only way to ask, and kept the answer in a note instead — which
+    is the rot `brr.lane_liveness` exists to end (`w-71`).
+
+    Carries only what the caller already holds: the account and repo its own
+    token names. Never the token, never a count, never anything a probe could
+    be tempted to poll for its content rather than its status code.
+    """
+
+    account_id: str
+    repo_id: str | None = None
+    kind: str = "daemon"
+
+
 class PublishingCredential(BaseModel):
     token: str
     expires_at: datetime
