@@ -499,27 +499,42 @@ def _short_stamp(raw: Any) -> str:
     return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%H:%MZ")
 
 
+#: Status codes that *are themselves* the refusal, and so may be rendered as
+#: the verdict. Anything else — notably the ``200`` Telegram and Slack wrap a
+#: revoked token in — must not have its number printed beside a dead lane.
+_AUTH_CODES = frozenset({401, 403})
+
+
 def render_lane(row: dict[str, Any]) -> str:
     """One lane as ``name verdict`` — a status code, or a named non-answer.
 
-    Never renders a non-answer in a shape a reader could skim as healthy:
-    ``ok`` is the only outcome that prints a bare number.
+    **Only a live credential ever prints a bare number.** The subtle case is an
+    auth failure carried inside a ``200``: printing ``telegram 200
+    (Unauthorized)`` puts the exact token a skimming reader is looking for —
+    ``200`` — next to a dead lane, which is this feature's own failure mode
+    turned on its rendering. So a refusal prints its code only when the code
+    *is* the refusal (401/403); a refused ``200`` renders ``auth failed`` and
+    the number is dropped entirely.
     """
     lane = str(row.get("lane") or "?").strip() or "?"
     outcome = str(row.get("outcome") or "").strip()
     code = row.get("code")
     detail = str(row.get("detail") or "").strip()
     if outcome == "ok":
-        return f"{lane} {code if isinstance(code, int) else 'ok'}"
+        return f"{lane} {code}" if isinstance(code, int) else f"{lane} ok"
     if outcome == "auth_failed":
-        head = f"{lane} {code}" if isinstance(code, int) else f"{lane} refused"
+        head = (
+            f"{lane} {code}"
+            if isinstance(code, int) and code in _AUTH_CODES
+            else f"{lane} auth failed"
+        )
         return f"{head} ({detail})" if detail else head
     if outcome == "no_probe":
         return f"{lane} not probed ({detail})" if detail else f"{lane} not probed"
-    head = f"{lane} probe failed"
-    if isinstance(code, int):
-        head = f"{lane} probe failed ({code})"
-    return f"{head} — {detail}" if detail and not isinstance(code, int) else head
+    bits = [str(code)] if isinstance(code, int) else []
+    if detail:
+        bits.append(detail)
+    return f"{lane} probe failed ({'; '.join(bits)})" if bits else f"{lane} probe failed"
 
 
 #: The boundary this surface cannot see past, rendered rather than assumed.
