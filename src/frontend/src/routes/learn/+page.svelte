@@ -56,7 +56,9 @@
 		<section class="mt-10 grid grid-cols-1 gap-6 md:grid-cols-2" aria-label="technical topics">
 			{#each SEARCH_TOPICS as topic (topic.slug)}
 				<article class="border-t border-stone-800 pt-4">
-					<p class="font-mono text-[10px] tracking-wide text-amber-200/70 uppercase">{topic.kicker}</p>
+					<p class="font-mono text-[10px] tracking-wide text-amber-200/70 uppercase">
+						{topic.kicker}
+					</p>
 					<h2 class="mt-2 font-mono text-lg font-semibold tracking-tight text-amber-100">
 						<a class="hover:text-amber-200" href={resolve(`/learn/${topic.slug}`)}>{topic.title}</a>
 					</h2>

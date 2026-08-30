@@ -222,10 +222,7 @@ function wordmarkGlyph(
 	return `<g transform="translate(${tx.toFixed(3)} ${ty.toFixed(3)}) scale(${metrics.scale.toFixed(5)})">${group(components, color)}</g>`;
 }
 
-export function hugimuniWordmarkSvg(
-	c: HugimuniConstants,
-	idPrefix = 'hm-wordmark'
-): string {
+export function hugimuniWordmarkSvg(c: HugimuniConstants, idPrefix = 'hm-wordmark'): string {
 	const metrics = hugimuniWordmarkMetrics(c);
 	return `<g id="${idPrefix}">
     <g id="${idPrefix}-h">${wordmarkGlyph(hugimuniHComponents(c), c.AMBER, metrics.hX, metrics)}</g>

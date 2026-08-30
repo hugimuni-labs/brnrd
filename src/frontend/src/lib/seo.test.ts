@@ -21,7 +21,15 @@ test('only intentional public surfaces are indexable', () => {
 	for (const path of publicPaths) {
 		ok(isIndexablePath(path), `${path} should be indexable`);
 	}
-	for (const path of ['/login', '/new', '/daily', '/garage', '/connect', '/brand-bench', '/ascii']) {
+	for (const path of [
+		'/login',
+		'/new',
+		'/daily',
+		'/garage',
+		'/connect',
+		'/brand-bench',
+		'/ascii'
+	]) {
 		ok(!isIndexablePath(path), `${path} should remain out of search inventory`);
 	}
 	for (const topic of SEARCH_TOPICS) {
@@ -36,7 +44,10 @@ test('search topics are unique and substantial enough to be useful pages', () =>
 		slugs.add(topic.slug);
 		ok(topic.lede.length > 140, `${topic.slug} has a thin lede`);
 		ok(topic.sections.length >= 2, `${topic.slug} needs at least two substantive sections`);
-		ok(topic.sections.every((section) => section.paragraphs.length >= 2), `${topic.slug} has a thin section`);
+		ok(
+			topic.sections.every((section) => section.paragraphs.length >= 2),
+			`${topic.slug} has a thin section`
+		);
 	}
 });
 
