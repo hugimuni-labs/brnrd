@@ -6,13 +6,16 @@
 	import { repoRunSlug, runIdSlug, runNodeHref } from './runNode';
 	import { STATUS_BURNING, STATUS_COOLING, STATUS_UNKNOWN, STATUS_WARN } from './statusPalette';
 	import {
+		allRepos,
 		blockedItems,
 		blockers,
 		dependents,
+		itemInRepos,
 		itemInTopics,
 		itemRepos,
 		liveTakenRuns,
 		readyItems,
+		repoCounts,
 		resolveTopics,
 		topicFaces,
 		type ItemType,
@@ -20,6 +23,7 @@
 		type WarpItem
 	} from './warpGraph';
 	import { openReducer } from './warpGraphOpen';
+	import { toggleHeddleSelection } from './heddleSelection';
 
 	// The warp, rendered as the maintainer asked for it: the unblocked items
 	// colorful on top — glance, decide or do — and the blocked ones greyed
@@ -101,9 +105,34 @@
 		return item.type === null ? '▫' : TYPE_MARK[item.type];
 	}
 
+	// The repo lens — a second filter axis beside the topic heddles, self-
+	// contained here rather than threaded through HeddleRail: a repo is
+	// derived from an item's refs (`itemRepos`), never an authored property
+	// the way a topic is, so it earns its own small control rather than
+	// joining the topic rail's shared-across-pages state. Same all-lit /
+	// membership shape as the topic axis (`toggleHeddleSelection`,
+	// `itemInRepos`); the two compose by plain conjunction below — AND
+	// across axes, OR within one.
+	// svelte-ignore state_referenced_locally
+	let selectedRepos = $state<Set<string> | null>(null);
+	let repos = $derived(allRepos(graph));
+	let repoCountsMap = $derived(repoCounts(graph));
+
+	function toggleRepo(repo: string) {
+		selectedRepos = toggleHeddleSelection(selectedRepos, repo, repos);
+	}
+
 	let faces = $derived(topicFaces(graph));
-	let ready = $derived(readyItems(graph).filter((item) => itemInTopics(item, graph, selected)));
-	let held = $derived(blockedItems(graph).filter((item) => itemInTopics(item, graph, selected)));
+	let ready = $derived(
+		readyItems(graph).filter(
+			(item) => itemInTopics(item, graph, selected) && itemInRepos(item, selectedRepos)
+		)
+	);
+	let held = $derived(
+		blockedItems(graph).filter(
+			(item) => itemInTopics(item, graph, selected) && itemInRepos(item, selectedRepos)
+		)
+	);
 	let openTotal = $derived(graph.items.filter((item) => item.state === 'open').length);
 	let shown = $derived(ready.length + held.length);
 
@@ -131,6 +160,7 @@
 
 {#snippet itemRow(item: WarpItem, band: 'ready' | 'held')}
 	{@const topics = resolveTopics(item, graph)}
+	{@const repos = itemRepos(item)}
 	{@const live = liveTakenRuns(item, liveRunIds)}
 	{@const edge = blockers(item, graph)}
 	<li
@@ -178,6 +208,18 @@
 						{#if face}
 							<span style={`color: ${face.color}`} title={topic.title}>{face.glyph}</span>
 						{/if}
+					{/each}
+				</span>
+			{/if}
+			{#if repos.length > 0}
+				<!-- The repo chip: derived, never authored, so it must not read as
+				     the same kind of thing as a topic — a plain bordered label
+				     rather than the rune+hue face topics wear. -->
+				<span class="flex shrink-0 gap-x-1 font-mono text-[9px]" aria-label="repos">
+					{#each repos as repo (repo)}
+						<span class="rounded-xs border border-stone-700 px-1 py-px text-ink-quiet" title={repo}
+							>{repo}</span
+						>
 					{/each}
 				</span>
 			{/if}
@@ -285,6 +327,57 @@
 		{/if}
 	</li>
 {/snippet}
+
+{#if repos.length > 0}
+	{@const untaggedCount = repoCountsMap.get('')}
+	<!-- The repo lens: a second filter axis beside the topic heddles above,
+	     self-contained here since a repo is derived from an item's refs
+	     rather than an authored property the topic rail's shared state was
+	     built for. Square bordered pills (not the topic rail's rune+hue
+	     dots) so it reads as its own kind of control, not a copy of the
+	     heddles. Composes with the topic `selected` prop by conjunction —
+	     see `ready`/`held` above. -->
+	<div class="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-1 font-mono text-[10px]">
+		<span class="shrink-0 tracking-wide text-ink-mute uppercase">repos</span>
+		{#each repos as repo (repo)}
+			{@const lit = selectedRepos === null || selectedRepos.has(repo)}
+			{@const count = repoCountsMap.get(repo)}
+			<button
+				type="button"
+				class="cursor-pointer rounded-xs border px-1.5 py-0.5 leading-none"
+				class:border-stone-600={lit}
+				class:text-stone-300={lit}
+				class:border-stone-800={!lit}
+				class:text-ink-mute={!lit}
+				class:opacity-50={!lit}
+				aria-pressed={lit}
+				title={`${repo} · ${lit ? 'lit — filtering it in' : 'off — press to filter to it'}`}
+				onclick={() => toggleRepo(repo)}
+			>
+				{repo}{#if count}<span class="ml-1 text-ink-mute"
+						>{count.ready}{count.blocked > 0 ? `/${count.blocked}` : ''}</span
+					>{/if}
+			</button>
+		{/each}
+		{#if selectedRepos !== null}
+			<button
+				type="button"
+				class="cursor-pointer font-mono text-[9px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+				onclick={() => (selectedRepos = null)}
+			>
+				all
+			</button>
+		{/if}
+		{#if untaggedCount}
+			<!-- Same convention as the topic rail's own untagged line
+			     (`HeddleRail.svelte`): informational, never a toggle — an
+			     item naming no repo passes only the all-lit view. -->
+			<span class="text-ink-mute">
+				· untagged {untaggedCount.ready + untaggedCount.blocked} — pass only the all-lit view
+			</span>
+		{/if}
+	</div>
+{/if}
 
 {#if shown < openTotal}
 	<p class="mb-1 font-mono text-[10px] text-ink-mute">
