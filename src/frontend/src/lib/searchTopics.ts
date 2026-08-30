@@ -58,12 +58,14 @@ export const SEARCH_TOPICS: SearchTopic[] = [
 				paragraphs: [
 					'Use agent when you are talking about delegated intent: fix this bug, investigate that failure, review this pull request, or keep working until tests pass. The emphasis is autonomy across a sequence of decisions.',
 					'Two products can expose very different harnesses while still presenting a similar coding-agent experience.'
+				]
 			},
 			{
 				heading: 'When “harness” is the better word',
 				paragraphs: [
 					'Use harness when the important question is how the work is executed: which tools exist, where commands run, what context is loaded, what approvals are required, how files are changed, and what evidence returns.',
 					'That distinction becomes especially useful when composing systems. brnrd does not try to replace every coding harness with another one; it coordinates persistent identity, project context and remote reach above harnesses such as Codex CLI and Claude Code.'
+				]
 			}
 		]
 	},
@@ -81,12 +83,14 @@ export const SEARCH_TOPICS: SearchTopic[] = [
 				paragraphs: [
 					'For serious use, compare the surfaces around the model: how repository instructions are discovered, how approvals work, which tools are exposed, how sessions resume, how shell commands are represented, and how well the agent fits your existing development environment.',
 					'Model quality matters, but the harness determines much of the day-to-day ergonomics and operational safety.'
+				]
 			},
 			{
 				heading: 'Avoid turning a workflow into a vendor-shaped room',
 				paragraphs: [
 					'If project state, routing and remote control live entirely inside one CLI’s session format, switching harnesses becomes expensive. A harness-agnostic layer keeps higher-level continuity outside any one provider.',
 					'brnrd follows that topology: the resident owns durable continuity and dispatch, while the selected coding harness remains the bounded execution engine on the local machine.'
+				]
 			}
 		]
 	},
@@ -104,12 +108,14 @@ export const SEARCH_TOPICS: SearchTopic[] = [
 				paragraphs: [
 					'Useful continuity includes decisions, pitfalls, project knowledge, unresolved bearings, previous receipts and the identity of the thread or project that asked for work. None of that requires an inference process to stay warm.',
 					'A resident can sleep, wake for a bounded run, restore the relevant context, execute through a coding harness, record what happened, and go quiet again.'
+				]
 			},
 			{
 				heading: 'Why this changes the product shape',
 				paragraphs: [
 					'When persistence is outside the model session, the user can close a terminal without conceptually destroying the agent. Work can arrive later from another surface and still resolve to the same project-aware identity.',
 					'That is the core of brnrd’s “resident” model: persistent identity and state around bounded local harness runs, rather than a chatbot tab pretending to be permanent.'
+				]
 			}
 		]
 	},
@@ -127,12 +133,14 @@ export const SEARCH_TOPICS: SearchTopic[] = [
 				paragraphs: [
 					'A message, issue or review can arrive through a hosted route. A small local daemon can receive the bounded task, resolve the project, invoke the coding harness beside the real checkout, and send progress or durable results back to the originating thread.',
 					'The control plane coordinates identity and routing; it does not need to become the machine doing the coding.'
+				]
 			},
 			{
 				heading: 'Why local execution can be attractive',
 				paragraphs: [
 					'Your machine already has the repository, build cache, credentials, test environment and paid harness subscription. Reusing that environment can reduce setup duplication and keeps the execution boundary legible.',
 					'brnrd is designed around this split: hosted reach is optional, while the open-source resident engine and coding harness execute where the developer already works.'
+				]
 			}
 		]
 	},
@@ -150,12 +158,14 @@ export const SEARCH_TOPICS: SearchTopic[] = [
 				paragraphs: [
 					'A good remote-agent flow lets you ask for a bounded outcome, receive progress, steer when necessary and get a receipt such as a commit, pull request, issue update or concise result. The repository operations still happen in the development environment.',
 					'This keeps the interaction lightweight without flattening the engineering work into chat history.'
+				]
 			},
 			{
 				heading: 'Project identity is the hard part',
 				paragraphs: [
 					'The system must know which repository, branch policy, environment and durable context a message belongs to. Otherwise remote messaging becomes a dangerous generic shell with ambiguous state.',
 					'brnrd routes messaging ingress through a persistent resident that resolves project context before dispatching work to the local coding harness.'
+				]
 			}
 		]
 	},
@@ -173,12 +183,14 @@ export const SEARCH_TOPICS: SearchTopic[] = [
 				paragraphs: [
 					'The orchestration layer should own the concerns that survive any individual run: persistent identity, project resolution, durable context, routing, concurrency policy, scheduling, steering and receipts.',
 					'The execution harness should remain good at the bounded job it already knows how to do: inspect the checkout, use tools, edit files, run tests and reason about the task.'
+				]
 			},
 			{
 				heading: 'Harness-agnostic does not mean lowest-common-denominator',
 				paragraphs: [
 					'A useful orchestrator can expose a small common contract while still allowing provider-specific strengths underneath. The goal is not to erase Codex, Claude Code or future harnesses into identical boxes; it is to stop the rest of the system from being trapped inside one of them.',
 					'brnrd calls the persistent coordinating identity a resident and bounded delegated workers strands. The vocabulary is unusual; the separation of responsibilities is conventional systems design.'
+				]
 			}
 		]
 	}
