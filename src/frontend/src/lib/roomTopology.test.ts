@@ -109,14 +109,8 @@ test('two observed paths with a shared prefix share the same structural corridor
 	}
 	assert.equal(topo.nodes[dirId(REPO, ['src', 'frontend'])].label, 'src/frontend');
 	assert.equal(topo.nodes[dirId(REPO, ['src', 'frontend', 'src', 'lib'])].label, 'src/lib');
-	assert.equal(
-		topo.nodes[dirId(REPO, ['docs', 'legal', 'export'])].label,
-		'docs/legal/export'
-	);
-	assert.equal(
-		topo.nodes[dirId(REPO, ['docs', 'legal', 'export'])].parentId,
-		islandRootId(REPO)
-	);
+	assert.equal(topo.nodes[dirId(REPO, ['docs', 'legal', 'export'])].label, 'docs/legal/export');
+	assert.equal(topo.nodes[dirId(REPO, ['docs', 'legal', 'export'])].parentId, islandRootId(REPO));
 
 	// Nine segment-nodes became four places. The count is the whole point of
 	// the change (maintainer, 2026-08-29: "not like too flat, as it currently
@@ -146,10 +140,7 @@ test('a fork is a place: folding chains makes the trie branch, it does not flatt
 	assert.equal(topo.nodes[dirId(REPO, ['src', 'b', 'deep'])].label, 'b/deep');
 	assert.equal(topo.nodes[dirId(REPO, ['src', 'a'])], undefined);
 	for (const seg of ['a', 'b']) {
-		assert.equal(
-			topo.nodes[dirId(REPO, ['src', seg, 'deep'])].parentId,
-			dirId(REPO, ['src'])
-		);
+		assert.equal(topo.nodes[dirId(REPO, ['src', seg, 'deep'])].parentId, dirId(REPO, ['src']));
 	}
 });
 

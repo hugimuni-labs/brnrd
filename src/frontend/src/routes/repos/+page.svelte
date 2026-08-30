@@ -697,8 +697,8 @@
 										     sensor was watching. Name the sensor gap instead. -->
 										<p class="mt-2 font-mono text-[11px] text-stone-400">
 											init state unknown — no daemon has reported for this repo yet; check
-											<code class="text-stone-300">brnrd daemon status</code> in the checkout its
-											daemon runs from
+											<code class="text-stone-300">brnrd daemon status</code> in the checkout its daemon
+											runs from
 										</p>
 									{/if}
 									<div class="mt-2 border-t border-stone-800/70 pt-2">

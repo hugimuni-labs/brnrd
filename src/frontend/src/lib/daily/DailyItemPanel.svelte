@@ -123,8 +123,10 @@
 			refs
 			{#each item.refs as ref (ref.label)}
 				{#if ref.href}
-					<a class="ml-1 text-amber-200/80 underline decoration-amber-200/30" href={ref.href}
-						>{ref.label}</a
+					<a
+						class="ml-1 text-amber-200/80 underline decoration-amber-200/30"
+						href={ref.href}
+						rel="external">{ref.label}</a
 					>
 				{:else}
 					<span class="ml-1 text-stone-400">{ref.label}</span>
