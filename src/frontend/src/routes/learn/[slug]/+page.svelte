@@ -5,14 +5,12 @@
 
 	let { data }: { data: PageData } = $props();
 	let topic = $derived(data.topic);
-	let canonical = $derived(`https://brnrd.dev/learn/${topic.slug}`);
 	let pageTitle = $derived(`${topic.title} · brnrd`);
 </script>
 
 <svelte:head>
 	<title>{pageTitle}</title>
 	<meta name="description" content={topic.description} />
-	<link rel="canonical" href={canonical} />
 	<meta property="og:title" content={pageTitle} />
 	<meta property="og:description" content={topic.description} />
 	<meta property="og:image" content={SOCIAL_IMAGE} />
