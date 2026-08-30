@@ -156,6 +156,7 @@ _PUBLISHING_TOKEN_REFRESH_S = 10 * 60
 # *floor* rather than inheriting the poll loop's ceiling.
 _PUBLISHING_TOKEN_DISPATCH_MIN_S = 50 * 60
 _publishing_token_expires_at = 0.0
+_publishing_token_expires_by_repo: dict[str, float] = {}
 # Set by run_loop: the brr dir whose cloud state mints the managed token.
 _publishing_state_dir: Path | None = None
 # Where the daemon publishes the managed GitHub credential as a *pointer* the
@@ -431,9 +432,12 @@ def _repo_capabilities(brr_dir: Path) -> dict:
     return caps
 
 
-def _set_credential_expiry(value: float) -> None:
+def _set_credential_expiry(repo_full_name: str | None, value: float) -> None:
     global _publishing_token_expires_at
-    _publishing_token_expires_at = value
+    if repo_full_name is None:
+        _publishing_token_expires_at = value
+    else:
+        _publishing_token_expires_by_repo[repo_full_name] = value
 
 
 def _set_credential_retry_at(value: float) -> None:
@@ -446,7 +450,10 @@ def _credential_context() -> _credentials.CredentialContext:
         request=_request,
         load_state=_load_state,
         state_dir=_publishing_state_dir,
-        token_expires_at=_publishing_token_expires_at,
+        token_expires_at={
+            None: _publishing_token_expires_at,
+            **_publishing_token_expires_by_repo,
+        },
         set_token_expires_at=_set_credential_expiry,
         retry_at=_publishing_token_retry_at,
         set_retry_at=_set_credential_retry_at,
@@ -790,7 +797,20 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
 def _register(brr_dir: Path, state: dict) -> None:
     caps = dict(state.get("capabilities") or {})
     caps.update(_repo_capabilities(brr_dir))
-    _request(state["brnrd_url"], "POST", "/v1/daemons/register", token=state["token"], json={"daemon_name": state.get("daemon_name", _DEFAULT_DAEMON_NAME), "capabilities": caps})
+    body = {
+        "daemon_name": state.get("daemon_name", _DEFAULT_DAEMON_NAME),
+        "capabilities": caps,
+    }
+    from .. import account as account_mod
+    try:
+        ctx = account_mod.resolve_context(brr_dir.parent, create=False)
+        body["repos"] = sorted(
+            repo.label for repo in ctx.repos.values()
+            if not account_mod.is_home_label(repo.label)
+        )
+    except Exception:
+        pass
+    _request(state["brnrd_url"], "POST", "/v1/daemons/register", token=state["token"], json=body)
 
 
 def _sanitize_meta_str(value: str) -> str:

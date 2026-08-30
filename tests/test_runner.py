@@ -113,6 +113,27 @@ def test_clean_runner_environ_points_managed_path_at_pointer_dir(tmp_path, monke
     assert cleaned["GIT_CONFIG_KEY_0"] == "url.https://github.com/.insteadOf"
     assert cleaned["GIT_CONFIG_KEY_2"] == "credential.helper"
     assert f"cat {str(pointer_dir / 'token')}" in cleaned["GIT_CONFIG_VALUE_2"]
+
+
+def test_clean_runner_environ_targets_the_dispatched_repos_pointer(tmp_path, monkeypatch):
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setenv("BRNRD_MANAGED_GITHUB_TOKEN", "app-token")
+    repo_b_brr = tmp_path / "repo-b" / ".brr"
+    pointer = repo_b_brr / "credentials" / "github"
+    pointer.mkdir(parents=True)
+    (pointer / "token").write_text("repo-b-token\n")
+    from brr.gates import cloud as cloud_mod
+
+    refreshes = []
+    monkeypatch.setattr(
+        cloud_mod, "ensure_publishing_credential_fresh",
+        lambda brr_dir=None, **kw: refreshes.append((brr_dir, kw["repo_full_name"])),
+    )
+
+    cleaned = runner_mod.clean_runner_environ(repo_b_brr, "org/repo-b")
+
+    assert refreshes == [(repo_b_brr, "org/repo-b")]
+    assert cleaned["GH_CONFIG_DIR"] == str(pointer)
     assert "$GH_TOKEN" not in cleaned["GIT_CONFIG_VALUE_2"]
     monkeypatch.delenv("GIT_TERMINAL_PROMPT", raising=False)
     assert "GIT_TERMINAL_PROMPT" not in runner_mod.clean_runner_environ()

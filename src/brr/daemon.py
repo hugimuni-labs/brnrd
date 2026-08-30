@@ -4764,6 +4764,8 @@ def _run_worker(
                 prompt=prompt,
                 cwd=run_root,
                 repo_root=repo_root,
+                publishing_brr_dir=repo_root / ".brr",
+                repo_full_name=repo_label,
                 response_path=str(env_ctx.response_path_host),
                 timeout_seconds=hard_cap_seconds,
                 env=runner_env,
