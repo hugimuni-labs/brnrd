@@ -109,11 +109,35 @@
 		</p>
 	{/if}
 
+	{#if item.prompt}
+		<!-- For many items — decisions especially — the `prompt:` row *is* the
+		     content; a panel that renders only bodyMarkdown calls a stated
+		     question "no body text" (measured on the real w-1, 2026-08-30). -->
+		<p class="mt-3 border-l-2 border-amber-700/50 pl-2 text-[11px] leading-snug text-stone-300">
+			{item.prompt}
+		</p>
+	{/if}
+
+	{#if item.refs.length > 0}
+		<p class="mt-2 text-[10px] text-ink-quiet">
+			refs
+			{#each item.refs as ref (ref.label)}
+				{#if ref.href}
+					<a class="ml-1 text-amber-200/80 underline decoration-amber-200/30" href={ref.href}
+						>{ref.label}</a
+					>
+				{:else}
+					<span class="ml-1 text-stone-400">{ref.label}</span>
+				{/if}
+			{/each}
+		</p>
+	{/if}
+
 	{#if item.bodyMarkdown}
 		<div class="mt-3 text-[11px]">
 			<MarkdownContent markdown={item.bodyMarkdown} sourcePath={item.path} />
 		</div>
-	{:else}
+	{:else if !item.prompt}
 		<p class="mt-3 text-[11px] text-ink-quiet italic">no body text on this item.</p>
 	{/if}
 </div>
