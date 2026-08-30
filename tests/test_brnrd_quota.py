@@ -180,6 +180,63 @@ def test_daemon_quota_round_trips_repo_initialised_facts():
     assert omitted.json()["repo_kb_missing"] is None
 
 
+def test_register_declares_full_repo_set_and_prunes_it():
+    client = _client()
+    account_headers, daemon_headers, first_id = _repo_and_daemon(client)
+    second = client.post(
+        "/v1/accounts/repos",
+        json={"repo_full_name": "Gurio/other", "default_branch": "main", "publish_layers": PUBLISH_EVERYTHING},
+        headers=account_headers,
+    ).json()
+    assert client.post(
+        "/v1/daemons/register",
+        json={"daemon_name": "laptop", "repos": ["Gurio/brr", "Gurio/other", "Gurio/missing"]},
+        headers=daemon_headers,
+    ).status_code == 200
+
+    from brnrd.models import DaemonRepo
+    with client.app.state.SessionLocal() as db:
+        assert {row.repo_id for row in db.query(DaemonRepo).all()} == {first_id, second["repo_id"]}
+
+    client.post(
+        "/v1/daemons/register",
+        json={"daemon_name": "laptop", "repos": ["Gurio/other"]},
+        headers=daemon_headers,
+    )
+    with client.app.state.SessionLocal() as db:
+        assert {row.repo_id for row in db.query(DaemonRepo).all()} == {second["repo_id"]}
+
+
+def test_quota_repo_states_are_join_local_and_consent_gated():
+    client = _client()
+    account_headers, daemon_headers, first_id = _repo_and_daemon(client)
+    second = client.post(
+        "/v1/accounts/repos",
+        json={"repo_full_name": "Gurio/private", "default_branch": "main", "publish_layers": "none"},
+        headers=account_headers,
+    ).json()
+    client.post(
+        "/v1/daemons/register",
+        json={"daemon_name": "laptop", "repos": ["Gurio/brr", "Gurio/private"]},
+        headers=daemon_headers,
+    )
+    response = client.put(
+        "/v1/daemons/quota",
+        json={"repo_states": [
+            {"repo_full_name": "Gurio/brr", "agents_md_missing": False, "kb_missing": True},
+            {"repo_full_name": "Gurio/private", "agents_md_missing": True, "kb_missing": True},
+        ]},
+        headers=daemon_headers,
+    )
+    assert response.status_code == 200, response.text
+
+    from brnrd.models import DaemonRepo
+    with client.app.state.SessionLocal() as db:
+        rows = {row.repo_id: row for row in db.query(DaemonRepo).all()}
+        assert (rows[first_id].agents_md_missing, rows[first_id].kb_missing) == (False, True)
+        assert (rows[second["repo_id"]].agents_md_missing, rows[second["repo_id"]].kb_missing) == (None, None)
+
+
 def test_daemon_quota_round_trips_updated_at_and_credits():
     """2026-07-07: `updated_at` (the scrape's own age, for real staleness
     detection) and `credits` (real per-run USD once metered overage kicks

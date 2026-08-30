@@ -37,6 +37,7 @@ from .models import (
     Account,
     ChannelRoute,
     Daemon,
+    DaemonRepo,
     GitHubInstallation,
     Repo,
     TermsAcceptance,
@@ -317,6 +318,7 @@ class _Context:
     terms_rows: list[TermsAcceptance]
     channel_bound_repo_ids: dict[str, datetime | None]
     latest_daemon_by_repo: dict[str, Daemon]
+    latest_daemon_repo_by_repo: dict[str, DaemonRepo]
 
     @classmethod
     def build(cls, db: Session, account: Account, settings: Settings) -> "_Context":
@@ -382,6 +384,18 @@ class _Context:
             repo_id: max(rows, key=lambda d: _dt(d.last_seen_at) or _epoch)
             for repo_id, rows in daemons_by_repo.items()
         }
+        daemon_repo_rows = list(db.execute(
+            select(DaemonRepo)
+            .join(Daemon, Daemon.id == DaemonRepo.daemon_id)
+            .where(Daemon.account_id == account.id)
+        ).scalars())
+        daemon_repos_by_repo: dict[str, list[DaemonRepo]] = {}
+        for row in daemon_repo_rows:
+            daemon_repos_by_repo.setdefault(row.repo_id, []).append(row)
+        latest_daemon_repo_by_repo = {
+            repo_id: max(rows, key=lambda row: _dt(row.last_seen_at) or _epoch)
+            for repo_id, rows in daemon_repos_by_repo.items()
+        }
 
         return cls(
             db=db,
@@ -394,6 +408,7 @@ class _Context:
             terms_rows=terms_rows,
             channel_bound_repo_ids=channel_bound_repo_ids,
             latest_daemon_by_repo=latest_daemon_by_repo,
+            latest_daemon_repo_by_repo=latest_daemon_repo_by_repo,
         )
 
 
@@ -596,6 +611,19 @@ def _detect_repo_initialised(ctx: _Context, cdef: CapabilityDef) -> list[Capabil
     # for *every* repo regardless of pairing.
     out: list[Capability] = []
     for repo in ctx.repos:
+        joined = ctx.latest_daemon_repo_by_repo.get(repo.id)
+        if joined is not None:
+            if joined.agents_md_missing is None or joined.kb_missing is None:
+                out.append(
+                    _build(cdef, repo.id, STATE_UNOBSERVABLE, Evidence("none", None), Act(ACT_COMMAND, None))
+                )
+                continue
+            initialised = not (joined.agents_md_missing or joined.kb_missing)
+            out.append(_build(
+                cdef, repo.id, STATE_LIT if initialised else STATE_DARK,
+                Evidence("daemon-heartbeat", _iso(joined.last_seen_at)), Act(ACT_COMMAND, None),
+            ))
+            continue
         daemon = ctx.latest_daemon_by_repo.get(repo.id)
         if daemon is None or daemon.repo_agents_md_missing is None or daemon.repo_kb_missing is None:
             out.append(

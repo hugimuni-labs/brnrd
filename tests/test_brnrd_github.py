@@ -264,6 +264,37 @@ def test_daemon_mints_repo_scoped_app_publishing_credential(env, monkeypatch):
     }
 
 
+def test_daemon_mints_credential_for_named_sibling_repo(env, monkeypatch):
+    app, client, _ = env
+    acc = _account(client)
+    default_id = _repo(client, acc)
+    sibling_id = _repo(client, acc, "owner/sibling")
+    daemon_headers = _daemon_headers(client, acc, default_id)
+    with app.state.SessionLocal() as db:
+        sibling = db.get(Repo, sibling_id)
+        sibling.forge_repo_id = "5252"
+        installation = GitHubInstallation(
+            id=ids.github_installation_id(), account_id=sibling.account_id,
+            installation_id="88", target_login="owner", target_type="User",
+        )
+        db.add(installation)
+        db.flush()
+        db.add(GitHubInstalledRepo(
+            id=ids.github_installed_repo_id(), github_installation_id=installation.id,
+            repo_full_name=sibling.repo_full_name, forge_repo_id="5252",
+        ))
+        db.commit()
+
+    seen = _capture_credential(monkeypatch)
+    response = client.post(
+        "/v1/daemons/publishing-credential",
+        json={"repo_full_name": "owner/sibling"}, headers=daemon_headers,
+    )
+    assert response.status_code == 200, response.text
+    assert seen["installation_id"] == "88"
+    assert seen["repository_ids"] == [5252]
+
+
 def _payload(*, repo="owner/repo", body="@brr-bot do the thing",
              installation_id=42, number=17, comment_id=100, is_pr=False,
              action="created", association="COLLABORATOR", author="alice"):
