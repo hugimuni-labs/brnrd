@@ -153,7 +153,7 @@
 			<div class="buoy-field" aria-label="ready warp items">
 				{#each buoyField.shown as buoy (buoy.item.id)}
 					<a
-						href={resolve('/daily') + `#${buoy.item.id}`}
+						href={`#${buoy.item.id}`}
 						class:call={buoy.item.type !== 'action'}
 						class="buoy"
 						style={`--thread: ${buoy.color}`}
