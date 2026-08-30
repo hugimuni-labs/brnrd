@@ -3,6 +3,7 @@
 	import { resolve } from '$app/paths';
 	import LiveRuns from '$lib/LiveRuns.svelte';
 	import RunOverlay from '$lib/RunOverlay.svelte';
+	import DailyItemPanel from '$lib/daily/DailyItemPanel.svelte';
 	import { fetchLiveRuns, type LiveRun } from '$lib/liveRuns';
 	import { fetchRunLedger, relicLabel, type RunLedgerRow } from '$lib/runLedger';
 	import { fetchSurface, type SurfaceResponse } from '$lib/surface';
@@ -12,6 +13,7 @@
 		dailyBuoys,
 		dailyIslands,
 		dailyLiveBars,
+		hashItemId,
 		knowledgePageCount,
 		surfaceBuoys
 	} from '$lib/daily/daily';
@@ -31,7 +33,17 @@
 	let graph = $derived(buildWarpGraph(surface?.files ?? []));
 	let bars = $derived(dailyLiveBars(runs));
 	let buoys = $derived(dailyBuoys(graph));
-	let buoyField = $derived(surfaceBuoys(buoys));
+	// The buoy anchor: `/daily#<item-id>`, read on mount for a cold deep link
+	// and kept live via `hashchange` for a manual URL edit or the back
+	// button. `selectedItem` resolving to `null` until the surface load
+	// lands is deliberate — the panel simply appears once the graph has the
+	// id, rather than the page needing to know load order.
+	let selectedItemId = $state<string | null>(null);
+	let selectedItem = $derived(selectedItemId ? (graph.itemById.get(selectedItemId) ?? null) : null);
+	let expandedBuoys = $state(false);
+	const BUOY_CAP = 10;
+	let overCap = $derived(buoys.length > BUOY_CAP);
+	let buoyField = $derived(surfaceBuoys(buoys, expandedBuoys ? Infinity : BUOY_CAP));
 	let islands = $derived(dailyIslands(runs, rows));
 	let kbPages = $derived(knowledgePageCount(surface?.files ?? []));
 
@@ -59,11 +71,36 @@
 		now = Date.now();
 	}
 
+	function syncItemFromHash() {
+		selectedItemId = hashItemId(window.location.hash);
+	}
+
+	/** A buoy press: same address a plain `<a href>` already carries (so a
+	 *  modified click — new tab, new window — still works untouched), but a
+	 *  plain click opens the item in place instead of leaving the page. */
+	function openItem(event: MouseEvent, id: string) {
+		if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
+			return;
+		event.preventDefault();
+		history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${id}`);
+		selectedItemId = id;
+	}
+
+	function closeItem() {
+		history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+		selectedItemId = null;
+	}
+
 	onMount(() => {
 		void load(true);
 		timer = setInterval(() => void load(false), POLL_MS);
+		syncItemFromHash();
+		window.addEventListener('hashchange', syncItemFromHash);
 	});
-	onDestroy(() => timer && clearInterval(timer));
+	onDestroy(() => {
+		if (timer) clearInterval(timer);
+		if (typeof window !== 'undefined') window.removeEventListener('hashchange', syncItemFromHash);
+	});
 </script>
 
 <svelte:head><title>daily · brnrd</title></svelte:head>
@@ -116,11 +153,12 @@
 			<div class="buoy-field" aria-label="ready warp items">
 				{#each buoyField.shown as buoy (buoy.item.id)}
 					<a
-						href={resolve('/warp') + `#${buoy.item.id}`}
+						href={resolve('/daily') + `#${buoy.item.id}`}
 						class:call={buoy.item.type !== 'action'}
 						class="buoy"
 						style={`--thread: ${buoy.color}`}
 						title={buoy.topic ?? buoy.item.type ?? 'untyped'}
+						onclick={(event) => openItem(event, buoy.item.id)}
 					>
 						<span aria-hidden="true">{buoy.mark}</span><b>{buoy.item.id}</b><span
 							>{buoy.item.headline}</span
@@ -128,8 +166,15 @@
 					</a>
 				{/each}
 				{#if buoyField.hidden > 0}
-					<a class="buoy more-buoys" href={resolve('/warp')} title="the rest of the ready warp"
-						>+{buoyField.hidden} more ↗</a
+					<button
+						type="button"
+						class="buoy more-buoys"
+						title="show the rest of the ready warp"
+						onclick={() => (expandedBuoys = true)}>+{buoyField.hidden} more</button
+					>
+				{:else if expandedBuoys && overCap}
+					<button type="button" class="buoy more-buoys" onclick={() => (expandedBuoys = false)}
+						>show fewer</button
 					>
 				{/if}
 				{#if !loading && buoys.length === 0}<span class="empty-buoys">no ready buoys</span>{/if}
@@ -168,8 +213,8 @@
 			<div class="settled-grid">
 				<section class="reef">
 					<p>⌂ kb reef</p>
-					<a href={resolve('/')} title="open the dashboard library"
-						>{kbPages === null ? 'library ↗' : `${kbPages} pages ↗`}</a
+					<span title="the kb count — no in-page browser here yet"
+						>{kbPages === null ? 'library' : `${kbPages} pages`}</span
 					>
 				</section>
 				<section class="cloth-rows">
@@ -194,6 +239,12 @@
 {#if selectedRun}
 	<RunOverlay label={selectedRun.name || selectedRun.run_id} onClose={() => (selectedRun = null)}>
 		<LiveRuns runs={[selectedRun]} {stale} {now} />
+	</RunOverlay>
+{/if}
+
+{#if selectedItem}
+	<RunOverlay label={selectedItem.headline} onClose={closeItem}>
+		<DailyItemPanel item={selectedItem} {graph} />
 	</RunOverlay>
 {/if}
 
@@ -486,7 +537,7 @@
 		letter-spacing: 0.1em;
 		color: #a98b58;
 	}
-	.reef a {
+	.reef span {
 		display: block;
 		margin-top: 0.6rem;
 		font:
