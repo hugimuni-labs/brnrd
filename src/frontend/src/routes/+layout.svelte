@@ -1,10 +1,24 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { page } from '$app/state';
 	import './layout.css';
 	import { markBooted } from '$lib/boot';
 	import favicon from '$lib/assets/favicon.svg';
+	import {
+		HOME_DESCRIPTION,
+		HOME_TITLE,
+		SOCIAL_IMAGE,
+		canonicalUrl,
+		isIndexablePath,
+		normalizePathname
+	} from '$lib/seo';
 
 	let { children } = $props();
+
+	let currentPath = $derived(normalizePathname(page.url.pathname));
+	let indexable = $derived(isIndexablePath(currentPath));
+	let canonical = $derived(canonicalUrl(currentPath));
+	let isHome = $derived(currentPath === '/');
 
 	// Boot glitch (kb/design-brand-visual-language.md §3): a real spec,
 	// named in enough detail to be checkable, never built until this pass.
@@ -51,7 +65,26 @@
 	});
 </script>
 
-<svelte:head><link rel="icon" href={favicon} /></svelte:head>
+<svelte:head>
+	<link rel="icon" href={favicon} />
+	{#if indexable}
+		<link rel="canonical" href={canonical} />
+		<meta name="robots" content="index,follow,max-image-preview:large" />
+		<meta property="og:url" content={canonical} />
+	{:else}
+		<meta name="robots" content="noindex,nofollow" />
+	{/if}
+	{#if isHome}
+		<title>{HOME_TITLE}</title>
+		<meta name="description" content={HOME_DESCRIPTION} />
+		<meta property="og:title" content={HOME_TITLE} />
+		<meta property="og:description" content={HOME_DESCRIPTION} />
+		<meta property="og:image" content={SOCIAL_IMAGE} />
+		<meta name="twitter:title" content={HOME_TITLE} />
+		<meta name="twitter:description" content={HOME_DESCRIPTION} />
+		<meta name="twitter:image" content={SOCIAL_IMAGE} />
+	{/if}
+</svelte:head>
 
 {#if booting}
 	<div

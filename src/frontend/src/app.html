@@ -4,17 +4,57 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="text-scale" content="scale" />
+		<title>brnrd</title>
 		<!-- The product mark is the site's face (his ask, 2026-08-12, #1329):
 		     the power-rune — the engineering glyph cut as a galdrastafur —
 		     same brr-avatar the docs use as favicon and logo, so every
 		     surface wears one identity in a tab strip. -->
 		<link rel="icon" type="image/png" href="/brr-avatar.png" />
 		<link rel="apple-touch-icon" href="/brr-avatar.png" />
+		<!-- Site/entity signals live in the initial SPA shell so crawlers do not
+		     have to execute JavaScript before they can identify brnrd. Route-
+		     specific title, description, canonical and robots directives are
+		     owned by +layout.svelte / public pages. -->
+		<meta property="og:site_name" content="brnrd" />
+		<meta property="og:type" content="website" />
 		<!-- Social card: the banner (#1329) — die-floorplan basalt, the rune,
 		     the bitmap wordmark. og:image wants absolute URLs; brnrd.dev is
 		     the canonical host for the dashboard build. -->
 		<meta property="og:image" content="https://brnrd.dev/brr-banner.png" />
 		<meta name="twitter:card" content="summary_large_image" />
+		<script type="application/ld+json">
+			{
+				"@context": "https://schema.org",
+				"@graph": [
+					{
+						"@type": "WebSite",
+						"@id": "https://brnrd.dev/#website",
+						"url": "https://brnrd.dev/",
+						"name": "brnrd",
+						"alternateName": "brnrd.dev",
+						"publisher": { "@id": "https://brnrd.dev/#organization" }
+					},
+					{
+						"@type": "Organization",
+						"@id": "https://brnrd.dev/#organization",
+						"name": "HugiMuni SAS",
+						"sameAs": ["https://github.com/hugimuni-labs"]
+					},
+					{
+						"@type": "SoftwareApplication",
+						"@id": "https://brnrd.dev/#software",
+						"name": "brnrd",
+						"url": "https://brnrd.dev/",
+						"applicationCategory": "DeveloperApplication",
+						"description": "An open-source resident layer for persistent coding agents that keeps continuity around the agent CLI already running on your machine.",
+						"codeRepository": "https://github.com/hugimuni-labs/brnrd",
+						"license": "https://github.com/hugimuni-labs/brnrd/blob/main/LICENSE",
+						"isAccessibleForFree": true,
+						"publisher": { "@id": "https://brnrd.dev/#organization" }
+					}
+				]
+			}
+		</script>
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">
