@@ -835,7 +835,12 @@ export function renderWorld(
 		// call, 2026-08-27 — the face beats the glyph as a body); the glyph
 		// remains the handle in the control rows below, and the body for
 		// actors with no attested mood.
-		const body = actor.moodRest ?? actor.glyph;
+		// Every run wears the brand face until its mood attests one (his
+		// steer, 2026-08-31: 'all the runs should start with brnrd as the
+		// face instead of @ or a, b, c — more readable'). The a…z glyph stays
+		// the strand's handle in the control rows below; the board shows a
+		// body, and the body is a brnrd.
+		const body = actor.moodRest ?? 'b·_·d';
 		// the mind-connect: an attested injection drops the actor into reading
 		// frames in place — the pager at its wrist, the tether cycling. The
 		// actor never moves for a page; traffic comes to it.
@@ -1018,7 +1023,7 @@ export function renderWorld(
  *  its own open questions to the reader has become a TODO with an
  *  audience. Splitting the glyph is a visual-design call, not this one. */
 export const LEGEND = [
-	'the mood face is the resident (@ when faceless)   a…z strands   ◇ pending letter   ✉>>> boundary injection',
+	'every run wears the b·_·d face until its mood attests one   a…z strand handles (control rows)   ◇ pending letter   ✉>>> boundary injection',
 	'⌂ island root · ⌂ HOME   name/ chamber   · file leaf   ▛ camp   lib library   ∙ current route',
 	'P portal  K chart  B bay  W watch  D wake  X cut  $ bench (uncategorized shell work)  R rig  F FORGE (+pr/mg/is counts)',
 	'─│ corridors  ═║ branch/shore rail  ┄┆ station tether  G gate (HOME)  ▛ camp +Nc commits',
