@@ -188,12 +188,12 @@ def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
         lambda task, eid, rp, root, **kw: f"PROMPT {eid} {kw.get('run_id')} -> {rp}",
     )
 
-    invocations: list[str] = []
+    invocations = []
 
     base_env = envs.get_env("worktree")
 
     def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
-        invocations.append(invocation.kind)
+        invocations.append(invocation)
         Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
         Path(invocation.response_path).write_text("plain answer\n", encoding="utf-8")
         return RunnerResult(
@@ -218,7 +218,9 @@ def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
     # Happy path: the daemon-run invocation is the only runner call —
     # no separate triage stage, no retry. The labelled-kind check
     # captures both halves of that intent in one assertion.
-    assert invocations == ["daemon-run"]
+    assert [invocation.kind for invocation in invocations] == ["daemon-run"]
+    assert invocations[0].publishing_brr_dir == tmp_path / ".brr"
+    assert invocations[0].repo_full_name == task.meta["repo_label"]
     persisted = Run.from_file(tmp_path / ".brr" / "runs" / task.id / "run.md")
     assert persisted is not None
     assert persisted.status == "done"

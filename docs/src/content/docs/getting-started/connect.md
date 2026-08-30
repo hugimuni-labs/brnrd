@@ -50,6 +50,29 @@ and starts it immediately. Use `--no-service` when you want to keep the daemon
 in a foreground terminal instead. Add further repositories to the same account
 later with `brnrd account add <path>`.
 
+## A machine with several repositories
+
+The daemon is **machine-scoped**: one process serves every repository
+connected on this machine. Each repository keeps its own inbox, runs, and
+credentials, but there is one service, one process, and one checkout it
+runs from — the first one you connected, unless you repoint it.
+
+- `brnrd account add <path>` registers another repository with the running
+  daemon. Nothing restarts; the new repository starts draining work
+  immediately.
+- Running `brnrd account connect` inside a second checkout also works: it
+  pairs the repository and **leaves the live daemon alone**. It will not
+  stop or move the service another repository is being served by.
+- `brnrd daemon install` is the explicit verb for repointing the service
+  at a different checkout. You rarely need it — which checkout hosts the
+  process does not affect which repositories it serves.
+
+Every served repository reports its own initialisation state, credential,
+and activity to the dashboard — a repository the daemon serves from a
+sibling checkout is a first-class citizen, not a guest. Publishing
+credentials are minted **per repository**: a run working in repository B
+pushes with a token scoped to B, never with a neighbour's.
+
 ## Self-hosted: bring your own gate
 
 Telegram is the shortest setup path:

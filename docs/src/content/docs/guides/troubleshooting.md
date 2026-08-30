@@ -39,6 +39,23 @@ brnrd runners list --all
 Authenticate the selected Claude Code or Codex CLI outside brnrd, then
 retry.
 
+## A repo card reads "not initialised" or "init state unknown"
+
+Two different facts wear these labels on `/repos`:
+
+- **"not initialised"** — a daemon measured the checkout and found
+  `AGENTS.md` or the knowledge base missing. The advice on the card is
+  the fix: run `brnrd` in that checkout.
+- **"init state unknown"** — no daemon has reported for this repository
+  yet. Running `brnrd` in the checkout will not change this line, because
+  nothing is watching that tree. Check `brnrd daemon status` in the
+  checkout the daemon runs from, and confirm the repository is registered
+  with `brnrd account add <path>` — a machine's one daemon serves every
+  repository it has been told about, and reports each one separately.
+
+If the second line persists after the daemon restarts, the daemon predates
+per-repository reporting — update it (`npm install -g brnrd`).
+
 ## A run died and the error mentions sleep
 
 If a run comes back with something like *"your computer went to sleep

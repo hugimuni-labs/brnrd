@@ -1286,6 +1286,37 @@ def test_docker_inject_github_token_from_gate_state(tmp_path, monkeypatch):
     assert "GITHUB_TOKEN=ghs_stored_token" in kv_env
 
 
+def test_docker_github_token_prefers_repo_pointer_over_env_slot(tmp_path, monkeypatch):
+    """The frozen token a container receives must be scoped to the repo it
+    will push. The env var holds only the *principal* repo's token (one
+    machine-wide slot), so the repo's own credential pointer file wins over
+    it — otherwise a run for repo B ships with whatever repo refreshed the
+    env last."""
+    fake_home = _isolate_docker_creds(monkeypatch, tmp_path)  # noqa: F841
+    _stub_worktree(monkeypatch, tmp_path)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setenv("BRNRD_MANAGED_GITHUB_TOKEN", "ghs_principal_repo_token")
+
+    pointer_dir = tmp_path / ".brr" / "credentials" / "github"
+    pointer_dir.mkdir(parents=True)
+    (pointer_dir / "token").write_text("ghs_this_repos_token\n", encoding="utf-8")
+
+    task = Run(id="task-gh", event_id="evt-gh", body="review PR", source="github")
+    command = _build_docker_invoke_with_task(tmp_path, monkeypatch, task=task)
+
+    kv_env = [
+        command[i + 1]
+        for i, arg in enumerate(command)
+        if arg == "-e" and "=" in command[i + 1]
+    ]
+    # With a managed env token present the injected name is GH_TOKEN
+    # (`github_token_env`), but the *value* must be the repo's own pointer
+    # token, never the principal's env-slot value.
+    assert "GH_TOKEN=ghs_this_repos_token" in kv_env
+    assert not any(v.endswith("=ghs_principal_repo_token") for v in kv_env)
+
+
 def test_docker_github_token_rewrites_ssh_remotes(tmp_path, monkeypatch):
     """A GitHub token must also help plain ``git push`` when origin is SSH.
 
