@@ -9,6 +9,8 @@ import { canonicalUrl, isIndexablePath, normalizePathname } from './seo.ts';
 const here = dirname(fileURLToPath(import.meta.url));
 const staticDir = join(here, '..', '..', 'static');
 
+const publicPaths = ['/', '/pricing', '/terms', '/privacy', '/legal-notice', '/learn'];
+
 test('canonical paths are normalized to the brnrd.dev origin', () => {
 	equal(normalizePathname('/learn//agent-orchestration/'), '/learn/agent-orchestration');
 	equal(canonicalUrl('/'), 'https://brnrd.dev/');
@@ -16,7 +18,7 @@ test('canonical paths are normalized to the brnrd.dev origin', () => {
 });
 
 test('only intentional public surfaces are indexable', () => {
-	for (const path of ['/', '/pricing', '/terms', '/privacy', '/legal-notice', '/learn']) {
+	for (const path of publicPaths) {
 		ok(isIndexablePath(path), `${path} should be indexable`);
 	}
 	for (const path of ['/login', '/new', '/daily', '/garage', '/connect', '/brand-bench', '/ascii']) {
@@ -38,12 +40,14 @@ test('search topics are unique and substantial enough to be useful pages', () =>
 	}
 });
 
-test('robots advertises the sitemap and the sitemap covers every search topic', () => {
+test('robots advertises the sitemap and the sitemap covers all public search inventory', () => {
 	const robots = readFileSync(join(staticDir, 'robots.txt'), 'utf8');
 	const sitemap = readFileSync(join(staticDir, 'sitemap.xml'), 'utf8');
 	ok(robots.includes('Sitemap: https://brnrd.dev/sitemap.xml'));
-	ok(sitemap.includes('<loc>https://brnrd.dev/</loc>'));
-	ok(sitemap.includes('<loc>https://brnrd.dev/pricing</loc>'));
+	for (const path of publicPaths) {
+		const url = path === '/' ? 'https://brnrd.dev/' : `https://brnrd.dev${path}`;
+		ok(sitemap.includes(`<loc>${url}</loc>`), `sitemap missing ${path}`);
+	}
 	for (const topic of SEARCH_TOPICS) {
 		ok(
 			sitemap.includes(`<loc>https://brnrd.dev/learn/${topic.slug}</loc>`),
