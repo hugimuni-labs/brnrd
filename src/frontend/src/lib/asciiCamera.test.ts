@@ -695,7 +695,12 @@ test('the header weather line elides rather than being cut by the canvas edge', 
 	const topo = compileTopology(graph);
 	const { layout } = layoutRoom(topo, emptyAtlas());
 	const cam: Camera = { center: { x: 0, y: 0 }, cols: 34, rows: 12, level: 'island' };
-	const head = renderWorld(topo, layout, graph, cam, {}).split('\n')[0];
+	// 2026-08-31: the sky band renders above the sea header now — find the
+	// header by its own name rather than by row index; the rule is unchanged.
+	const head =
+		renderWorld(topo, layout, graph, cam, {})
+			.split('\n')
+			.find((l) => l.includes('THE SEA')) ?? '';
 	assert.ok(head.length <= 34, 'the header fits the board');
 	assert.ok(
 		head.includes('…') || head.endsWith('wire stale'),
