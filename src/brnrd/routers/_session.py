@@ -24,6 +24,7 @@ from brnrd.models import (
     ChannelRoute,
     ConfigChangeRequest,
     Daemon,
+    DaemonRepo,
     Event,
     GitHubInstallation,
     GitHubInstalledRepo,
@@ -284,12 +285,19 @@ def pairing_command(repo_dir: str) -> str:
 # every account-level view the way the old repo-scoped-only gate did.
 def _machine_views(db: Session, account_id: str) -> list[dict[str, Any]]:
     daemons = list(db.execute(select(Daemon).where(Daemon.account_id == account_id)).scalars())
-    repo_ids = {d.repo_id for d in daemons if d.repo_id}
+    daemon_ids = {d.id for d in daemons}
+    memberships = list(db.execute(select(DaemonRepo).where(
+        DaemonRepo.daemon_id.in_(daemon_ids)
+    )).scalars()) if daemon_ids else []
+    repo_ids = {m.repo_id for m in memberships} | {d.repo_id for d in daemons if d.repo_id}
     repos_by_id: dict[str, Repo] = {}
     if repo_ids:
         repos_by_id = {r.id: r for r in db.execute(select(Repo).where(Repo.id.in_(repo_ids))).scalars()}
     now = datetime.now(timezone.utc)
     views: list[dict[str, Any]] = []
+    memberships_by_daemon: dict[str, list[DaemonRepo]] = {}
+    for membership in memberships:
+        memberships_by_daemon.setdefault(membership.daemon_id, []).append(membership)
     for daemon in daemons:
         last_seen = _dt(daemon.last_seen_at)
         # Same predicate as `_repo_views`' `online` and
@@ -298,13 +306,14 @@ def _machine_views(db: Session, account_id: str) -> list[dict[str, Any]]:
         # `capabilities._DAEMON_ONLINE_AFTER`'s own comment): each caller
         # would otherwise pull in a dependency shape it doesn't want.
         online = bool(daemon.online) and last_seen is not None and now - last_seen <= _DAEMON_ONLINE_AFTER
+        joined_repos = [repos_by_id[m.repo_id] for m in memberships_by_daemon.get(daemon.id, []) if m.repo_id in repos_by_id]
         repo = repos_by_id.get(daemon.repo_id) if daemon.repo_id else None
         views.append(
             {
                 "daemon": daemon,
                 "online": online,
                 "last_seen": last_seen,
-                "enabled_repos": [repo] if repo is not None else [],
+                "enabled_repos": joined_repos if joined_repos else ([repo] if repo is not None else []),
             }
         )
     return sorted(
@@ -321,11 +330,23 @@ def _repo_views(db: Session, repos: list[Repo]) -> list[dict]:
     daemons_by_repo: dict[str, list[Daemon]] = {r.id: [] for r in repos}
     daemon_rows: list[Daemon] = []
     if repo_ids:
-        daemon_rows = list(
-            db.execute(select(Daemon).where(Daemon.repo_id.in_(repo_ids))).scalars()
-        )
-        for daemon in daemon_rows:
+        joined = list(db.execute(
+            select(DaemonRepo, Daemon)
+            .join(Daemon, Daemon.id == DaemonRepo.daemon_id)
+            .where(DaemonRepo.repo_id.in_(repo_ids))
+        ))
+        joined_repo_ids = {membership.repo_id for membership, _daemon in joined}
+        for membership, daemon in joined:
+            daemon_rows.append(daemon)
+            daemons_by_repo.setdefault(membership.repo_id, []).append(daemon)
+        legacy_repo_ids = set(repo_ids) - joined_repo_ids
+        legacy = list(db.execute(select(Daemon).where(Daemon.repo_id.in_(legacy_repo_ids))).scalars()) if legacy_repo_ids else []
+        daemon_rows.extend(legacy)
+        for daemon in legacy:
             daemons_by_repo.setdefault(daemon.repo_id, []).append(daemon)
+        # One daemon may serve several repos; account-wide projections below
+        # still consume machines, not memberships.
+        daemon_rows = list({daemon.id: daemon for daemon in daemon_rows}.values())
 
     # Account-first (see `_account_channel_directory`): one query for the
     # whole account's channel directory, then grouped by repo in Python —

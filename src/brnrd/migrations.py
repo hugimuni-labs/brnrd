@@ -27,6 +27,7 @@ def run_startup_migrations(engine: Engine) -> None:
             _migrate_github_installed_repos(conn)
         if _table_exists(conn, "daemons"):
             _migrate_daemons(conn)
+            _migrate_daemon_repos(conn)
         if _table_exists(conn, "runner_wake_requests"):
             _migrate_runner_wake_requests(conn)
         if _table_exists(conn, "channel_routes"):
@@ -225,6 +226,28 @@ def _migrate_daemons(conn: Connection) -> None:
     # #932 conversation-sticky mirror + release ask — see models.Daemon.
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS runner_sticky_json TEXT"))
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS runner_sticky_release_at TIMESTAMP"))
+
+
+def _migrate_daemon_repos(conn: Connection) -> None:
+    """Create the additive membership join and seed the legacy singular face."""
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS daemon_repos ("
+        "id VARCHAR(64) PRIMARY KEY, "
+        "daemon_id VARCHAR(64) NOT NULL REFERENCES daemons(id), "
+        "repo_id VARCHAR(64) NOT NULL REFERENCES repos(id), "
+        "last_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "agents_md_missing BOOLEAN, kb_missing BOOLEAN, "
+        "CONSTRAINT uq_daemon_repo UNIQUE (daemon_id, repo_id))"
+    ))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_daemon_repos_daemon_id ON daemon_repos (daemon_id)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_daemon_repos_repo_id ON daemon_repos (repo_id)"))
+    conn.execute(text(
+        "INSERT INTO daemon_repos "
+        "(id, daemon_id, repo_id, last_seen_at, agents_md_missing, kb_missing) "
+        "SELECT 'dmnr_' || md5(id || ':' || repo_id), id, repo_id, last_seen_at, "
+        "repo_agents_md_missing, repo_kb_missing FROM daemons WHERE repo_id IS NOT NULL "
+        "ON CONFLICT (daemon_id, repo_id) DO NOTHING"
+    ))
 
 
 def _migrate_runner_wake_requests(conn: Connection) -> None:

@@ -27,6 +27,10 @@ def daemon_id() -> str:
     return _rid("dmn")
 
 
+def daemon_repo_id() -> str:
+    return _rid("dmnr")
+
+
 def event_id() -> str:
     return _rid("ev")
 
