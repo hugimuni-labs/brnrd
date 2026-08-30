@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+	<url><loc>https://brnrd.dev/</loc></url>
+	<url><loc>https://brnrd.dev/pricing</loc></url>
+	<url><loc>https://brnrd.dev/learn</loc></url>
+	<url><loc>https://brnrd.dev/learn/what-is-an-ai-harness</loc></url>
+	<url><loc>https://brnrd.dev/learn/ai-harness-vs-coding-agent</loc></url>
+	<url><loc>https://brnrd.dev/learn/codex-cli-vs-claude-code</loc></url>
+	<url><loc>https://brnrd.dev/learn/persistent-coding-agents</loc></url>
+	<url><loc>https://brnrd.dev/learn/remote-coding-agents</loc></url>
+	<url><loc>https://brnrd.dev/learn/coding-agents-from-telegram</loc></url>
+	<url><loc>https://brnrd.dev/learn/agent-orchestration</loc></url>
+</urlset>
