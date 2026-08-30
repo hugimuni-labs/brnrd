@@ -4,6 +4,8 @@ import { describe, it } from 'node:test';
 
 import {
 	allRepos,
+	repoAxisApplies,
+	repoShortLabels,
 	blockedItems,
 	blockers,
 	blockersOnYou,
@@ -761,5 +763,57 @@ describe('goal readings ordering across the stamp-width change', () => {
 		assert.ok(
 			readingTsOrderKey('2026-08-20T18:10:56Z') < readingTsOrderKey('2026-08-20T18:10:56.4Z')
 		);
+	});
+});
+
+describe('repoShortLabels — the owner prefix is dropped only when it says nothing', () => {
+	// The 390px measurement this exists for: `hugimuni-labs/hugimuni` is 22
+	// characters and wraps its own pill onto a second line beside the topic
+	// rail's single-rune glyphs. The prefix is repeated noise while one
+	// owner holds the board — and the only disambiguator the moment two do.
+	it('drops a sole shared owner', () => {
+		const labels = repoShortLabels(['hugimuni-labs/brnrd', 'hugimuni-labs/hugimuni']);
+		assert.equal(labels.get('hugimuni-labs/brnrd'), 'brnrd');
+		assert.equal(labels.get('hugimuni-labs/hugimuni'), 'hugimuni');
+	});
+
+	it('keeps every label qualified as soon as a second owner appears', () => {
+		// The failure this forbids: two owners, one short label. A bare
+		// `brnrd` that could mean either repo is worse than a wide one that
+		// cannot — so the whole map goes back to qualified, not just the
+		// colliding pair.
+		const labels = repoShortLabels(['hugimuni-labs/brnrd', 'Gurio/BeCenter']);
+		assert.equal(labels.get('hugimuni-labs/brnrd'), 'hugimuni-labs/brnrd');
+		assert.equal(labels.get('Gurio/BeCenter'), 'Gurio/BeCenter');
+	});
+
+	it('is total over its input and empty-safe', () => {
+		assert.equal(repoShortLabels([]).size, 0);
+		const one = repoShortLabels(['hugimuni-labs/brnrd']);
+		assert.equal(one.get('hugimuni-labs/brnrd'), 'brnrd');
+	});
+});
+
+describe('repoAxisApplies — an axis with one value is not an axis', () => {
+	// The real board on 2026-08-30: 54 refs, every one `hugimuni-labs/brnrd`.
+	// A lens over a single value filters nothing and a chip repeating the
+	// same word on every row says nothing; the axis has to earn its pixels.
+	const boardOf = (...refs: string[]) =>
+		graphOf(
+			...refs.map((ref, i) =>
+				file(`surface/warp/w-${i + 1}.md`, `# item ${i + 1}\n\ntype: action\nrefs: ${ref}\n`)
+			)
+		);
+
+	it('is off when every item names the same repo', () => {
+		assert.equal(repoAxisApplies(boardOf('a/one#1', 'a/one#2')), false);
+	});
+
+	it('is off when no item names a repo at all', () => {
+		assert.equal(repoAxisApplies(boardOf()), false);
+	});
+
+	it('turns itself on the moment a second repo appears — no edit anywhere', () => {
+		assert.equal(repoAxisApplies(boardOf('a/one#1', 'b/two#2')), true);
 	});
 });

@@ -887,6 +887,35 @@ export function allRepos(graph: WarpGraph): string[] {
 	return repos;
 }
 
+/** Does the repo axis distinguish anything on this board?
+ *
+ *  Measured 2026-08-30 against the real warp: all 54 refs name
+ *  `hugimuni-labs/brnrd` — one repo. A lens over a single value filters
+ *  nothing, and a chip repeating the same word on every row carries no
+ *  information; both are decoration until a second repo exists. Gate the
+ *  whole axis on this rather than on "any repo at all", and it lights up
+ *  by itself the day an item names a sibling repo — no edit anywhere,
+ *  which is the same property `itemRepos` was built for. */
+export function repoAxisApplies(graph: WarpGraph): boolean {
+	return allRepos(graph).length > 1;
+}
+
+/** Display labels for a repo axis, keyed by full `owner/repo`.
+ *
+ *  When every repo on the board shares one owner, the owner segment is
+ *  noise repeated on every chip — and it is *expensive* noise: at 390px a
+ *  22-character `hugimuni-labs/hugimuni` pill wraps to its own line beside
+ *  the topic rail's single-rune glyphs. Drop the prefix in that one case
+ *  only; the moment a second owner appears every label goes back to being
+ *  qualified, because a bare `brnrd` that could mean two repos is worse
+ *  than a wide one that cannot. The full name stays on the element's
+ *  `title` either way, so nothing is lost — only unrepeated. */
+export function repoShortLabels(repos: readonly string[]): Map<string, string> {
+	const owners = new Set(repos.map((repo) => repo.split('/')[0]));
+	const short = owners.size === 1;
+	return new Map(repos.map((repo) => [repo, short ? repo.slice(repo.indexOf('/') + 1) : repo]));
+}
+
 /** Open-item counts per repo, split ready/blocked — the repo lens's own
  *  chips, same shape as `topicCounts`. Untagged (no repo named) items
  *  count under `''`, matching the topic axis's convention for the same

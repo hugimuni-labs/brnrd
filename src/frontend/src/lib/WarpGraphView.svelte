@@ -15,7 +15,9 @@
 		itemRepos,
 		liveTakenRuns,
 		readyItems,
+		repoAxisApplies,
 		repoCounts,
+		repoShortLabels,
 		resolveTopics,
 		topicFaces,
 		type ItemType,
@@ -117,6 +119,12 @@
 	let selectedRepos = $state<Set<string> | null>(null);
 	let repos = $derived(allRepos(graph));
 	let repoCountsMap = $derived(repoCounts(graph));
+	// One owner on the board ⇒ the `owner/` prefix is noise on every chip;
+	// two owners ⇒ it is the only thing telling them apart. Computed once
+	// over the whole graph, never per row.
+	let repoLabels = $derived(repoShortLabels(repos));
+	// One repo on the board is not an axis. See `repoAxisApplies`.
+	let repoAxisOn = $derived(repoAxisApplies(graph));
 
 	function toggleRepo(repo: string) {
 		selectedRepos = toggleHeddleSelection(selectedRepos, repo, repos);
@@ -211,14 +219,14 @@
 					{/each}
 				</span>
 			{/if}
-			{#if repos.length > 0}
+			{#if repoAxisOn && repos.length > 0}
 				<!-- The repo chip: derived, never authored, so it must not read as
 				     the same kind of thing as a topic — a plain bordered label
 				     rather than the rune+hue face topics wear. -->
 				<span class="flex shrink-0 gap-x-1 font-mono text-[9px]" aria-label="repos">
 					{#each repos as repo (repo)}
 						<span class="rounded-xs border border-stone-700 px-1 py-px text-ink-quiet" title={repo}
-							>{repo}</span
+							>{repoLabels.get(repo) ?? repo}</span
 						>
 					{/each}
 				</span>
@@ -328,7 +336,7 @@
 	</li>
 {/snippet}
 
-{#if repos.length > 0}
+{#if repoAxisOn}
 	{@const untaggedCount = repoCountsMap.get('')}
 	<!-- The repo lens: a second filter axis beside the topic heddles above,
 	     self-contained here since a repo is derived from an item's refs
@@ -354,7 +362,7 @@
 				title={`${repo} · ${lit ? 'lit — filtering it in' : 'off — press to filter to it'}`}
 				onclick={() => toggleRepo(repo)}
 			>
-				{repo}{#if count}<span class="ml-1 text-ink-mute"
+				{repoLabels.get(repo) ?? repo}{#if count}<span class="ml-1 text-ink-mute"
 						>{count.ready}{count.blocked > 0 ? `/${count.blocked}` : ''}</span
 					>{/if}
 			</button>
