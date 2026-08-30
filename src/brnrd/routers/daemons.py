@@ -70,7 +70,18 @@ def _replace_daemon_repos(db: Session, daemon: Daemon, names: list[str]) -> None
     )).scalars())
     for repo in repos:
         if repo.id not in existing:
-            db.add(DaemonRepo(id=ids.daemon_repo_id(), daemon_id=daemon.id, repo_id=repo.id))
+            # Seed the principal repo's row from the legacy singular reading:
+            # register fires on every daemon boot, and a fresh row with None
+            # readings would flip a lit `repo-initialised` to `unobservable`
+            # until the next quota tick — a flicker with no new information.
+            own = repo.id == daemon.repo_id
+            db.add(DaemonRepo(
+                id=ids.daemon_repo_id(),
+                daemon_id=daemon.id,
+                repo_id=repo.id,
+                agents_md_missing=daemon.repo_agents_md_missing if own else None,
+                kb_missing=daemon.repo_kb_missing if own else None,
+            ))
 
 
 def _inbox_scope(
