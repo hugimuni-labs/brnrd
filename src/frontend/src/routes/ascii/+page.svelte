@@ -617,14 +617,36 @@
 </div>
 
 <style>
+	/* Amber phosphor pass (2026-08-30): this route was the last green
+	   surface on the dashboard — `/` and everything else already wear the
+	   warm amber/gold register `layout.css` binds (`#f3e8d8` text on
+	   `#0c0906` void, `rgba(217, 164, 65, …)` panel amber). Every stop
+	   below is the old green rung's hex re-derived at the *same relative
+	   luminance* in that amber hue (~43°) rather than picked by eye, so
+	   the current-route / corridor / sea-noise hierarchy this camera's
+	   glyphs depend on survives the recolor unchanged:
+	     #9be9a8 0.681 -> #f7d47b 0.683   (bright: actor glyphs, the link)
+	     #6ea87a 0.327 -> #c49318 0.327   (title)
+	     #587a61 0.169 -> #906d14 0.169   (status / legend)
+	     #3d5a46 0.088 -> #695011 0.088   (hint)
+	     #2a4030 0.044 -> #4a380d 0.044   (legend-toggle border)
+	   `#e8c15a` / `#ffe9b0` were already amber-family and untouched. Body
+	   void reuses `layout.css`'s own `#0c0906` rather than inventing a
+	   fourth dark token for one page. */
 	:global(body) {
-		background: #0b0f0c;
+		background: #0c0906;
 	}
 	.deck {
 		min-height: 100vh;
 		padding: 1rem;
 		font-family: 'SFMono-Regular', ui-monospace, Menlo, monospace;
-		color: #9be9a8;
+		color: #f7d47b;
+		/* "Glowing a bit" (maintainer ask, 2026-08-30) — a tight phosphor
+		   bloom on the brightest rung only. Kept small enough not to bleed
+		   across the monospace grid: this shadow inherits onto every board
+		   glyph, and a wider blur smears adjacent characters together at
+		   the board's 12px size. */
+		text-shadow: 0 0 2px rgba(247, 212, 123, 0.45);
 	}
 	header {
 		display: flex;
@@ -637,19 +659,19 @@
 		font-weight: 600;
 	}
 	.title {
-		color: #6ea87a;
+		color: #c49318;
 	}
 	.hint {
-		color: #3d5a46;
+		color: #695011;
 		font-size: 0.75rem;
 	}
 	.status {
 		margin-left: auto;
-		color: #587a61;
+		color: #906d14;
 		font-size: 0.85rem;
 	}
 	.status a {
-		color: #9be9a8;
+		color: #f7d47b;
 	}
 	.probe {
 		position: absolute;
@@ -688,8 +710,8 @@
 	.legend-toggle {
 		margin-top: 1rem;
 		background: none;
-		border: 1px solid #2a4030;
-		color: #587a61;
+		border: 1px solid #4a380d;
+		color: #906d14;
 		font: inherit;
 		font-size: 0.8rem;
 		padding: 0.2rem 0.6rem;
@@ -697,7 +719,7 @@
 	}
 	.legend {
 		margin-top: 0.5rem;
-		color: #587a61;
+		color: #906d14;
 		font-size: 0.8rem;
 	}
 </style>
