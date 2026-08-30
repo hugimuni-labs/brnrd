@@ -1,6 +1,7 @@
 import { edgeLine, liveRunDisplayName, runCourse, type LiveRun } from '../liveRuns.ts';
 import type { RelicRecord, RunLedgerRow } from '../runLedger.ts';
 import {
+	isBlocked,
 	readyItems,
 	resolveTopics,
 	topicFaces,
@@ -129,4 +130,28 @@ export function surfaceBuoys(buoys: DailyBuoy[], cap = 10): SurfaceBuoyField {
 	const actions = buoys.filter((buoy) => buoy.item.type === 'action');
 	const ordered = [...calls, ...actions];
 	return { shown: ordered.slice(0, cap), hidden: Math.max(0, ordered.length - cap) };
+}
+
+/** The buoy hash grammar: `#<item-id>`, trimmed and de-hashed — the one parse
+ *  a cold `/daily#w-47` load and a live buoy press both resolve against, so
+ *  they can't drift into two different notions of "what does this hash
+ *  mean." Blank (`''`, `'#'`) reads as no selection rather than an id. */
+export function hashItemId(hash: string): string | null {
+	const id = hash.replace(/^#/, '').trim();
+	return id.length > 0 ? id : null;
+}
+
+export type DailyItemState = 'ready' | 'blocked' | 'taken' | 'done' | 'retired';
+
+/** The lifecycle the item detail panel reports, layered over the graph's
+ *  plain open/done/retired: blocked and taken can both be true of an *open*
+ *  item, so this picks the one that answers "what do I do about it" —
+ *  blocked (something else has to move first) outranks taken (a run already
+ *  claimed it) outranks plain ready. */
+export function dailyItemState(item: WarpItem, graph: WarpGraph): DailyItemState {
+	if (item.state === 'done') return 'done';
+	if (item.state === 'retired') return 'retired';
+	if (isBlocked(item, graph)) return 'blocked';
+	if (item.taken.length > 0) return 'taken';
+	return 'ready';
 }
