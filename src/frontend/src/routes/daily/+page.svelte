@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import { resolve } from '$app/paths';
+	import AsciiField from '$lib/AsciiField.svelte';
 	import LiveRuns from '$lib/LiveRuns.svelte';
 	import RunOverlay from '$lib/RunOverlay.svelte';
 	import DailyItemPanel from '$lib/daily/DailyItemPanel.svelte';
@@ -142,6 +143,16 @@
 				{/each}
 			</ul>
 		{/if}
+	</section>
+
+	<section class="field" aria-label="the room, live">
+		<div class="section-heading">
+			<h2 id="field-heading">the field</h2>
+			<span>drag / arrows · f follow</span>
+		</div>
+		<div class="field-frame">
+			<AsciiField rows={22} header={false} legendDefault={false} />
+		</div>
 	</section>
 
 	<section class="world" aria-label="the account water line">
@@ -324,6 +335,15 @@
 		font-family: ui-monospace, monospace;
 		font-size: 0.7rem;
 		color: #a8a29e;
+	}
+	.field {
+		margin-bottom: 1rem;
+	}
+	.field-frame {
+		overflow: hidden;
+		border: 1px solid rgba(217, 164, 65, 0.3);
+		background: #0c0906;
+		box-shadow: 0 0 35px rgba(217, 164, 65, 0.05);
 	}
 	.world {
 		overflow: hidden;
