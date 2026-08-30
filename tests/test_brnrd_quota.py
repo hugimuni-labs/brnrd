@@ -207,6 +207,32 @@ def test_register_declares_full_repo_set_and_prunes_it():
         assert {row.repo_id for row in db.query(DaemonRepo).all()} == {second["repo_id"]}
 
 
+def test_register_seeds_principal_repo_reading_from_legacy_columns():
+    # Register fires on every daemon boot. A fresh join row with None
+    # readings would flip a lit `repo-initialised` to `unobservable` until
+    # the next quota tick — so the principal repo's new row inherits the
+    # daemon's legacy singular reading; sibling repos stay honestly None.
+    client = _client()
+    account_headers, daemon_headers, first_id = _repo_and_daemon(client)
+    client.post(
+        "/v1/daemons/register", json={"daemon_name": "laptop"}, headers=daemon_headers,
+    )
+    client.put(
+        "/v1/daemons/quota",
+        json={"shells": [], "repo_agents_md_missing": False, "repo_kb_missing": False},
+        headers=daemon_headers,
+    )
+    client.post(
+        "/v1/daemons/register",
+        json={"daemon_name": "laptop", "repos": ["Gurio/brr"]},
+        headers=daemon_headers,
+    )
+    from brnrd.models import DaemonRepo
+    with client.app.state.SessionLocal() as db:
+        rows = {row.repo_id: row for row in db.query(DaemonRepo).all()}
+        assert (rows[first_id].agents_md_missing, rows[first_id].kb_missing) == (False, False)
+
+
 def test_quota_repo_states_are_join_local_and_consent_gated():
     client = _client()
     account_headers, daemon_headers, first_id = _repo_and_daemon(client)
