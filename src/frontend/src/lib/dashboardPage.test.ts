@@ -162,7 +162,9 @@ test('the trail store is versioned by the rule that derived it', () => {
 	// — the code correct, the map wrong, indefinitely, with nothing saying
 	// why. A fix that cannot reach the state it invalidates is a fix the
 	// reader has to discover by clearing storage.
-	const src = readFileSync(new URL('../routes/ascii/+page.svelte', import.meta.url), 'utf8');
+	// 2026-08-31: the field extracted to AsciiField.svelte (the water-line
+	// rework's rung 1); the invariant is unchanged, its address moved.
+	const src = readFileSync(new URL('./AsciiField.svelte', import.meta.url), 'utf8');
 	ok(/TRAILS_KEY = 'brnrd-ascii-trails-v\d+'/u.test(src), 'the key carries a version');
 	ok(
 		/TRAILS_KEY_RETIRED = \[[^\]]*'brnrd-ascii-trails'/u.test(src),
