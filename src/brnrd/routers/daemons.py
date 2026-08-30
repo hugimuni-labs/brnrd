@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from .. import ids, inbox as inbox_service, publish_scope, run_stop_requests, schemas, wake_requests
 from ..activity_records import ACTIVITY_STALE_TTL
 from ..auth import Principal, get_db, require_daemon
-from ..models import Account, ActivityRecord, Daemon, Event, GitHubInstallation, GitHubInstalledRepo, Repo
+from ..models import Account, ActivityRecord, Daemon, DaemonRepo, Event, GitHubInstallation, GitHubInstalledRepo, Repo
 from ..platforms import github_app as github_app_client
 
 router = APIRouter(prefix="/v1/daemons", tags=["daemons"])
@@ -53,6 +53,24 @@ def _account_repos(db: Session, principal: Principal) -> list[Repo]:
             select(Repo).where(Repo.account_id == principal.account_id)
         ).scalars()
     )
+
+
+def _replace_daemon_repos(db: Session, daemon: Daemon, names: list[str]) -> None:
+    repos = list(db.execute(select(Repo).where(
+        Repo.account_id == daemon.account_id,
+        Repo.repo_full_name.in_(set(names)),
+    )).scalars()) if names else []
+    repo_ids = {repo.id for repo in repos}
+    db.execute(delete(DaemonRepo).where(
+        DaemonRepo.daemon_id == daemon.id,
+        DaemonRepo.repo_id.notin_(repo_ids) if repo_ids else True,
+    ))
+    existing = set(db.execute(select(DaemonRepo.repo_id).where(
+        DaemonRepo.daemon_id == daemon.id,
+    )).scalars())
+    for repo in repos:
+        if repo.id not in existing:
+            db.add(DaemonRepo(id=ids.daemon_repo_id(), daemon_id=daemon.id, repo_id=repo.id))
 
 
 def _inbox_scope(
@@ -135,10 +153,14 @@ def register(payload: schemas.DaemonRegister, principal: Principal = Depends(req
         existing.capabilities = caps
         existing.token_id = principal.token.id
         existing.repo_id = repo_id
+        if payload.repos is not None:
+            _replace_daemon_repos(db, existing, payload.repos)
         db.commit()
         return schemas.DaemonRegistered(daemon_id=existing.id, repo_id=repo_id)
     daemon = Daemon(id=ids.daemon_id(), account_id=principal.account_id, repo_id=repo_id, token_id=principal.token.id, daemon_name=payload.daemon_name, capabilities=caps, online=True)
     db.add(daemon)
+    if payload.repos is not None:
+        _replace_daemon_repos(db, daemon, payload.repos)
     db.commit()
     return schemas.DaemonRegistered(daemon_id=daemon.id, repo_id=repo_id)
 
@@ -170,11 +192,18 @@ def whoami(principal: Principal = Depends(require_daemon)) -> schemas.DaemonWhoa
 def publishing_credential(
     request: Request,
     response: Response,
+    payload: schemas.PublishingCredentialRequest | None = None,
     principal: Principal = Depends(require_daemon),
     db: Session = Depends(get_db),
 ):
     """Mint the repo-scoped App identity used by managed runner publishing."""
-    repo = db.get(Repo, principal.repo_id)
+    if payload is None:
+        repo = db.get(Repo, principal.repo_id)
+    else:
+        repo = db.execute(select(Repo).where(
+            Repo.account_id == principal.account_id,
+            Repo.repo_full_name == payload.repo_full_name,
+        )).scalar_one_or_none()
     if repo is None or repo.forge != "github":
         raise HTTPException(status_code=404, detail="GitHub repo not found")
     # Match by forge repo id first: it is stable across transfers and renames,
@@ -446,6 +475,28 @@ def put_quota(payload: schemas.QuotaReport, principal: Principal = Depends(requi
     repo_kb_missing = payload.repo_kb_missing if permitted else None
     daemon.repo_agents_md_missing = repo_agents_md_missing
     daemon.repo_kb_missing = repo_kb_missing
+    if payload.repo_states is not None:
+        repos_by_name = {
+            repo.repo_full_name: repo
+            for repo in db.execute(select(Repo).where(
+                Repo.account_id == principal.account_id,
+                Repo.repo_full_name.in_({row.repo_full_name for row in payload.repo_states}),
+            )).scalars()
+        }
+        joins = {
+            row.repo_id: row
+            for row in db.execute(select(DaemonRepo).where(
+                DaemonRepo.daemon_id == daemon.id,
+            )).scalars()
+        }
+        for state in payload.repo_states:
+            repo = repos_by_name.get(state.repo_full_name)
+            join = joins.get(repo.id) if repo is not None else None
+            if join is None or not publish_scope.lane_permitted(db, repo_id=repo.id, lane="quota"):
+                continue
+            join.agents_md_missing = state.agents_md_missing
+            join.kb_missing = state.kb_missing
+            join.last_seen_at = now
     daemon.quota_updated_at = now
     daemon.online = True
     daemon.last_seen_at = now

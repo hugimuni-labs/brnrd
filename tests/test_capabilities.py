@@ -34,7 +34,7 @@ from brnrd.capabilities import (  # noqa: E402
     validate_catalog,
 )
 from brnrd.config import Settings  # noqa: E402
-from brnrd.models import Account, Daemon, Token  # noqa: E402
+from brnrd.models import Account, Daemon, DaemonRepo, Token  # noqa: E402
 from brnrd.oauth import GitHubIdentity  # noqa: E402
 from brnrd.routers.accounts import account_for_github_identity, issue_session_token  # noqa: E402
 
@@ -356,6 +356,29 @@ def test_repo_initialised_darkens_when_either_fact_is_missing():
     caps = _evaluate(client, account_id)
     repo_init = next(c for c in caps if c.id == "repo-initialised" and c.subject == repo_id)
     assert repo_init.state == STATE_DARK
+
+
+def test_repo_initialised_prefers_fresh_join_reading_over_legacy_columns():
+    """Mutation guard: singular-only detection would incorrectly stay dark."""
+    client = _client()
+    token = _login(client)
+    repo_id = _create_repo(client, token)
+    account_id = _account_id(client)
+    with client.app.state.SessionLocal() as db:
+        db.add(Daemon(
+            id="dmn-init", account_id=account_id, repo_id=repo_id,
+            token_id="tok-init", daemon_name="laptop",
+            repo_agents_md_missing=True, repo_kb_missing=True,
+        ))
+        db.add(DaemonRepo(
+            id="dmnr-init", daemon_id="dmn-init", repo_id=repo_id,
+            agents_md_missing=False, kb_missing=False,
+        ))
+        db.commit()
+
+    caps = _evaluate(client, account_id)
+    repo_init = next(c for c in caps if c.id == "repo-initialised" and c.subject == repo_id)
+    assert repo_init.state == STATE_LIT
 
 
 def test_bot_collaborator_unknown_is_unobservable_never_checked_yet():

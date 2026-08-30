@@ -308,6 +308,21 @@ class Daemon(Base):
     runner_sticky_release_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class DaemonRepo(Base):
+    """A repo served by a machine-scoped daemon, with repo-local readings."""
+
+    __tablename__ = "daemon_repos"
+    __table_args__ = (
+        UniqueConstraint("daemon_id", "repo_id", name="uq_daemon_repo"),
+    )
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    daemon_id: Mapped[str] = mapped_column(ForeignKey("daemons.id"), index=True)
+    repo_id: Mapped[str] = mapped_column(ForeignKey("repos.id"), index=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    agents_md_missing: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
+    kb_missing: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
+
+
 class ActivityRecord(Base):
     # Unlike the JSON snapshots above, activity is a row store.  The same
     # model-level marker lets publish_scope derive its purge coverage from the

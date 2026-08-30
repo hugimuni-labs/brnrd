@@ -164,6 +164,7 @@ class ConfigChangeRequestOut(BaseModel):
 class DaemonRegister(BaseModel):
     daemon_name: str = Field(min_length=1, max_length=128)
     capabilities: dict[str, Any] = Field(default_factory=dict)
+    repos: list[str] | None = None
 
 
 class DaemonRegistered(BaseModel):
@@ -197,17 +198,16 @@ class PublishingCredential(BaseModel):
     login: str
 
 
+class PublishingCredentialRequest(BaseModel):
+    repo_full_name: str
+
+
 class DaemonDeregister(BaseModel):
     daemon_name: str = Field(min_length=1, max_length=128)
 
 
 class MachineRepoOut(BaseModel):
-    """One repo a machine is currently the default-routing daemon for.
-
-    Not a membership record (see ``_session._machine_views``) — a machine
-    that has re-registered against a different repo since carries neither
-    row here for the one it left.
-    """
+    """One repo a machine currently declares that it serves."""
 
     repo_id: str
     repo_full_name: str
@@ -477,6 +477,13 @@ class QuotaReport(BaseModel):
     # field is simply absent, same as a pre-#360 payload had no `gates`.
     repo_agents_md_missing: bool | None = None
     repo_kb_missing: bool | None = None
+    repo_states: list["RepoStateIn"] | None = None
+
+
+class RepoStateIn(BaseModel):
+    repo_full_name: str
+    agents_md_missing: bool
+    kb_missing: bool
 
 
 class QuotaOut(BaseModel):
