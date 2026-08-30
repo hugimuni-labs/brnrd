@@ -2,7 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildWarpGraph } from '../warpGraph.ts';
 import type { LiveRun } from '../liveRuns.ts';
-import { dailyBuoys, dailyIslands, dailyLiveBars, knowledgePageCount, surfaceBuoys } from './daily.ts';
+import {
+	dailyBuoys,
+	dailyIslands,
+	dailyItemState,
+	dailyLiveBars,
+	hashItemId,
+	knowledgePageCount,
+	surfaceBuoys
+} from './daily.ts';
 
 const run = (id: string, parent: string | null = null): LiveRun =>
 	({
@@ -93,4 +101,32 @@ test('surface buoys with room to spare hide nothing', () => {
 	const field = surfaceBuoys(dailyBuoys(buildWarpGraph(files)));
 	assert.equal(field.shown.length, 1);
 	assert.equal(field.hidden, 0);
+});
+
+test('hash item id strips the leading # and blanks to null', () => {
+	assert.equal(hashItemId('#w-47'), 'w-47');
+	assert.equal(hashItemId('w-47'), 'w-47');
+	assert.equal(hashItemId('#'), null);
+	assert.equal(hashItemId(''), null);
+});
+
+test('daily item state ranks blocked over taken over ready, and reads done/retired off the lifecycle', () => {
+	const graph = buildWarpGraph([
+		{ path: 'surface/warp/w-1.md', markdown: '# decide\ntype: decision\n' },
+		{ path: 'surface/warp/w-2.md', markdown: '# blocked\ntype: action\nneeds: w-1\n' },
+		{ path: 'surface/warp/w-3.md', markdown: '# taken\ntype: action\ntaken: run-1\n' },
+		{ path: 'surface/warp/w-4.md', markdown: '# ready\ntype: action\n' },
+		{ path: 'surface/warp/w-5.md', markdown: '# shipped\ntype: action\ndone: 2026-08-30\n' },
+		{
+			path: 'surface/warp/w-6.md',
+			markdown: '# dropped\ntype: action\nretired: 2026-08-30 no longer needed\n'
+		}
+	]);
+	const state = (id: string) => dailyItemState(graph.itemById.get(id)!, graph);
+	assert.equal(state('w-1'), 'ready');
+	assert.equal(state('w-2'), 'blocked');
+	assert.equal(state('w-3'), 'taken');
+	assert.equal(state('w-4'), 'ready');
+	assert.equal(state('w-5'), 'done');
+	assert.equal(state('w-6'), 'retired');
 });
