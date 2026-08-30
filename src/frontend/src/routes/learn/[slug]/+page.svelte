@@ -60,13 +60,13 @@
 							{section.heading}
 						</h2>
 						<div class="mt-4 space-y-4 text-sm leading-relaxed text-stone-400 sm:text-base">
-							{#each section.paragraphs as paragraph}
+							{#each section.paragraphs as paragraph, pi (pi)}
 								<p>{paragraph}</p>
 							{/each}
 						</div>
 						{#if section.bullets}
 							<ul class="mt-5 space-y-2 border-l border-amber-900/60 pl-5 text-sm text-stone-400">
-								{#each section.bullets as bullet}
+								{#each section.bullets as bullet, bi (bi)}
 									<li>{bullet}</li>
 								{/each}
 							</ul>

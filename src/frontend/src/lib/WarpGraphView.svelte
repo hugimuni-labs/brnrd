@@ -59,7 +59,6 @@
 	// carry more than one id. `openReducer` (`warpGraphOpen.ts`) owns the two
 	// rules (toggle collapses to one, follow adds) as plain, tested logic;
 	// this component only wires DOM events to it.
-	// svelte-ignore state_referenced_locally
 	let openIds = $state<Set<string>>(new Set(initialOpenId ? [initialOpenId] : []));
 
 	function toggleOpen(id: string) {
@@ -115,7 +114,6 @@
 	// membership shape as the topic axis (`toggleHeddleSelection`,
 	// `itemInRepos`); the two compose by plain conjunction below — AND
 	// across axes, OR within one.
-	// svelte-ignore state_referenced_locally
 	let selectedRepos = $state<Set<string> | null>(null);
 	let repos = $derived(allRepos(graph));
 	let repoCountsMap = $derived(repoCounts(graph));
