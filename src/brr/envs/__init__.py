@@ -660,8 +660,30 @@ def _resolve_docker_github_token(brr_dir: Path) -> str | None:
     # and best-effort; see runner._ensure_publishing_token_fresh.
     try:
         from ..gates import cloud
+        from .. import account as account_mod
 
-        cloud.ensure_publishing_credential_fresh(brr_dir)
+        repo_full_name: str | None = None
+        try:
+            label = account_mod.repo_label(brr_dir.parent)
+            repo_full_name = label if "/" in label else None
+        except Exception:
+            pass
+        try:
+            cloud.ensure_publishing_credential_fresh(brr_dir, repo_full_name=repo_full_name)
+        except Exception:
+            pass
+        # Prefer this repo's own pointer file over the env var: the env slot
+        # is machine-wide and holds the *principal* repo's token only, while
+        # the frozen copy handed to the container must be scoped to the repo
+        # it will actually push. Read it even when the refresh above failed —
+        # a still-valid earlier pointer beats the wrong repo's env token.
+        pointer_dir = cloud.github_credentials_dir(brr_dir)
+        if pointer_dir is not None:
+            token_path = pointer_dir / "token"
+            if token_path.exists():
+                stored = token_path.read_text(encoding="utf-8").strip()
+                if stored:
+                    return stored
     except Exception:
         pass
     token = os.environ.get("BRNRD_MANAGED_GITHUB_TOKEN")

@@ -3245,6 +3245,30 @@ def test_repo_credentials_refresh_independently_and_write_their_own_pointers(
     assert (repo_b_brr / "credentials/github/token").read_text().strip() == "token-org/b"
 
 
+def test_named_repo_refresh_never_writes_the_shared_env_slot(tmp_path, monkeypatch):
+    # BRNRD_MANAGED_GITHUB_TOKEN is one machine-wide slot; if a named repo's
+    # refresh wrote it, whichever repo refreshed last would own every later
+    # env snapshot — the single-slot failure this split exists to end. Named
+    # tokens travel only through their repo's own pointer dir.
+    repo_brr = tmp_path / "b" / ".brr"
+    _reset_publishing_globals(monkeypatch, expires_in=0, state_dir=tmp_path / ".brr")
+    monkeypatch.delenv("BRNRD_MANAGED_GITHUB_TOKEN", raising=False)
+    monkeypatch.setattr(
+        cloud, "_load_state",
+        lambda _d: {"token": "acct", "brnrd_url": "https://brnrd.dev"},
+    )
+
+    def fake_request(url, method, path, **kwargs):
+        expires = datetime.fromtimestamp(time.time() + 3600, tz=timezone.utc)
+        return {"token": "token-org/b", "expires_at": expires.isoformat()}
+
+    monkeypatch.setattr(cloud, "_request", fake_request)
+    cloud.ensure_publishing_credential_fresh(repo_brr, repo_full_name="org/b")
+
+    assert "BRNRD_MANAGED_GITHUB_TOKEN" not in os.environ
+    assert (repo_brr / "credentials/github/token").read_text().strip() == "token-org/b"
+
+
 def test_dispatch_never_blocks_a_run_when_the_credential_service_is_down(tmp_path, monkeypatch):
     """A run that cannot push is bad; a run that cannot start is worse. brnrd
     mid-deploy, offline, or refusing must leave dispatch exactly where it was."""
