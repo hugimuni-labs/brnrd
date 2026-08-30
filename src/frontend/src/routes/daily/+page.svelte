@@ -8,7 +8,13 @@
 	import { fetchSurface, type SurfaceResponse } from '$lib/surface';
 	import { fetchRepos } from '$lib/repos';
 	import { buildWarpGraph } from '$lib/warpGraph';
-	import { dailyBuoys, dailyIslands, dailyLiveBars, knowledgePageCount } from '$lib/daily/daily';
+	import {
+		dailyBuoys,
+		dailyIslands,
+		dailyLiveBars,
+		knowledgePageCount,
+		surfaceBuoys
+	} from '$lib/daily/daily';
 
 	const POLL_MS = 2_000;
 	let runs = $state<LiveRun[]>([]);
@@ -25,6 +31,7 @@
 	let graph = $derived(buildWarpGraph(surface?.files ?? []));
 	let bars = $derived(dailyLiveBars(runs));
 	let buoys = $derived(dailyBuoys(graph));
+	let buoyField = $derived(surfaceBuoys(buoys));
 	let islands = $derived(dailyIslands(runs, rows));
 	let kbPages = $derived(knowledgePageCount(surface?.files ?? []));
 
@@ -107,7 +114,7 @@
 				<div><small>raft · account</small><strong>{account}</strong></div>
 			</div>
 			<div class="buoy-field" aria-label="ready warp items">
-				{#each buoys as buoy (buoy.item.id)}
+				{#each buoyField.shown as buoy (buoy.item.id)}
 					<a
 						href={resolve('/warp') + `#${buoy.item.id}`}
 						class:call={buoy.item.type !== 'action'}
@@ -120,6 +127,11 @@
 						>
 					</a>
 				{/each}
+				{#if buoyField.hidden > 0}
+					<a class="buoy more-buoys" href={resolve('/warp')} title="the rest of the ready warp"
+						>+{buoyField.hidden} more ↗</a
+					>
+				{/if}
 				{#if !loading && buoys.length === 0}<span class="empty-buoys">no ready buoys</span>{/if}
 			</div>
 		</div>
@@ -344,9 +356,14 @@
 	}
 	.buoy b {
 		color: var(--thread);
+		white-space: nowrap;
 	}
 	.buoy.call {
 		border-style: double;
+	}
+	.more-buoys {
+		border-top-style: dashed;
+		color: #d6b878;
 	}
 	.empty-buoys {
 		font:
@@ -373,9 +390,22 @@
 		gap: 1rem;
 	}
 	.island {
+		/* The silhouette lives on ::before, NOT on the content box: a
+		   clip-path here cut the header's own text at both viewports
+		   ("ISLAND" → "SLAND") — terrain may shape the ground, never the
+		   words standing on it. `isolation` keeps the z-index:-1 layer
+		   inside this island instead of dropping behind .world. */
+		position: relative;
+		isolation: isolate;
 		align-self: end;
 		border-bottom: 3px double rgba(217, 164, 65, 0.42);
 		padding: 1.2rem 0.8rem 0.65rem;
+	}
+	.island::before {
+		content: '';
+		position: absolute;
+		inset: 0;
+		z-index: -1;
 		background: linear-gradient(145deg, rgba(84, 56, 24, 0.27), rgba(25, 18, 11, 0.2));
 		clip-path: polygon(4% 12%, 16% 0, 78% 0, 96% 22%, 100% 100%, 0 100%);
 	}
@@ -466,7 +496,7 @@
 	}
 	.cloth-rows li {
 		display: grid;
-		grid-template-columns: auto minmax(7rem, 1fr) minmax(7rem, 1fr) auto;
+		grid-template-columns: auto minmax(7rem, 1fr) minmax(4rem, auto) minmax(0, 12rem);
 		gap: 0.5rem;
 		padding: 0.27rem 0;
 		border-bottom: 1px solid rgba(120, 95, 55, 0.13);
@@ -476,9 +506,15 @@
 		color: #8a827a;
 	}
 	.cloth-rows li b {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 		color: #c7b79f;
 	}
 	.cloth-rows li em {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 		font-style: normal;
 		color: #a98b58;
 	}

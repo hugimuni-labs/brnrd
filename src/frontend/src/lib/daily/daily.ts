@@ -112,3 +112,21 @@ export function knowledgePageCount(files: { layer?: string }[]): number | null {
 	const served = files.some((file) => file.layer === 'knowledge');
 	return served ? files.filter((file) => file.layer === 'knowledge').length : null;
 }
+
+export interface SurfaceBuoyField {
+	shown: DailyBuoy[];
+	hidden: number;
+}
+
+/**
+ * The strip stays a line, not a wall. The live warp serves ~40 ready items;
+ * rendering them all re-creates the `/` wall with color. Needs-you calls
+ * (decisions/preparations) surface first, then dispatchable actions, capped —
+ * and the remainder is counted, never vanished (the heddle rail's own rule).
+ */
+export function surfaceBuoys(buoys: DailyBuoy[], cap = 10): SurfaceBuoyField {
+	const calls = buoys.filter((buoy) => buoy.item.type !== 'action');
+	const actions = buoys.filter((buoy) => buoy.item.type === 'action');
+	const ordered = [...calls, ...actions];
+	return { shown: ordered.slice(0, cap), hidden: Math.max(0, ordered.length - cap) };
+}
