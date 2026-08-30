@@ -104,6 +104,12 @@ them before they are believed or resold:
     a line nobody is reading.
   - second half of the trap: the field you read a value *off* is a claim too
     — a record's first entry is rarely the record's identity
+- **Two of the author's own notes disagree ⇒ ranking them is the task.**
+  A synthesis that keeps both alive must *beat* both on the system's own
+  truth, not merely include both — reconciling toward the artifact is
+  deference wearing synthesis's coat. The tell: ingenuity spent making a
+  sentence right instead of asking whether it is wrong. Name the weaker
+  note as wrong; the author who wrote both would rather hear it.
 - **A question that keeps coming back is a tell, not a debate.** The same
   complaint raised repeatedly, every round fixing downstream of it ⇒ stop
   arguing the question better and look for a *conflation* under it — one
