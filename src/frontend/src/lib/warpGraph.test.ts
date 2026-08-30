@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
 import {
+	allRepos,
 	blockedItems,
 	blockers,
 	blockersOnYou,
@@ -18,7 +19,9 @@ import {
 	isRunTopicsFile,
 	isTopicFile,
 	isWarpItemFile,
+	itemInRepos,
 	itemInTopics,
+	itemRepos,
 	liveTakenRuns,
 	parseGoalReadings,
 	readingTsOrderKey,
@@ -27,6 +30,7 @@ import {
 	parseWarpTopic,
 	readingsNewestFirst,
 	readyItems,
+	repoCounts,
 	resolveTopics,
 	runIdForTopicsPath,
 	runTopicIndex,
@@ -298,6 +302,64 @@ describe('the graph', () => {
 		const counts = topicCounts(graph);
 		assert.deepEqual(counts.get('loom'), { ready: 1, blocked: 1 });
 		assert.deepEqual(counts.get('post'), { ready: 1, blocked: 0 });
+		assert.deepEqual(counts.get(''), { ready: 1, blocked: 0 });
+	});
+
+	it('itemRepos derives repos from refs, deduped, in first-mention order', () => {
+		const item = parseWarpItem(
+			'surface/warp/w-8.md',
+			'# X\n\nrefs: hugimuni-labs/brnrd#1 · hugimuni-labs/hugimuni#2 · hugimuni-labs/brnrd#3\n'
+		);
+		assert.deepEqual(itemRepos(item), ['hugimuni-labs/brnrd', 'hugimuni-labs/hugimuni']);
+	});
+
+	it('repo filter: untagged passes only the all-lit filter, same shape as itemInTopics', () => {
+		const untagged = graph.itemById.get('w-5')!;
+		assert.equal(itemInRepos(untagged, null), true);
+		assert.equal(itemInRepos(untagged, new Set(['hugimuni-labs/brnrd'])), false);
+	});
+
+	it('repo filter: OR within the axis — any named repo in the selected set passes', () => {
+		const item = parseWarpItem(
+			'surface/warp/w-8.md',
+			'# X\n\nrefs: hugimuni-labs/brnrd#1 · hugimuni-labs/hugimuni#2\n'
+		);
+		assert.equal(itemInRepos(item, new Set(['hugimuni-labs/hugimuni'])), true);
+		assert.equal(itemInRepos(item, new Set(['nobody/nothing'])), false);
+	});
+
+	it('the topic and repo axes AND: an item must pass both filters, each an OR within itself', () => {
+		const withRepo = graphOf(
+			TOPIC_LOOM,
+			file(
+				'surface/warp/w-1.md',
+				'# Decide the shape\n\ntype: decision\ntopics: loom\nrefs: hugimuni-labs/brnrd#1\n'
+			)
+		);
+		const item = withRepo.itemById.get('w-1')!;
+		const passesBoth = (topics: Set<string> | null, repos: Set<string> | null) =>
+			itemInTopics(item, withRepo, topics) && itemInRepos(item, repos);
+		assert.equal(passesBoth(new Set(['loom']), new Set(['hugimuni-labs/brnrd'])), true);
+		assert.equal(passesBoth(new Set(['post']), new Set(['hugimuni-labs/brnrd'])), false);
+		assert.equal(passesBoth(new Set(['loom']), new Set(['nobody/nothing'])), false);
+	});
+
+	it('allRepos: derived list in first-mention order across the graph, never hardcoded', () => {
+		const withRepos = graphOf(
+			file('surface/warp/w-1.md', '# A\n\ntype: action\nrefs: b/two#1 · a/one#2\n'),
+			file('surface/warp/w-2.md', '# B\n\ntype: action\nrefs: a/one#3\n')
+		);
+		assert.deepEqual(allRepos(withRepos), ['b/two', 'a/one']);
+	});
+
+	it('repoCounts splits ready/blocked per repo, untagged under empty key', () => {
+		const withRepos = graphOf(
+			file('surface/warp/w-1.md', '# A\n\ntype: action\nrefs: a/one#1\n'),
+			file('surface/warp/w-2.md', '# B\n\ntype: action\nneeds: w-1\nrefs: a/one#2\n'),
+			file('surface/warp/w-3.md', '# C\n\ntype: action\n')
+		);
+		const counts = repoCounts(withRepos);
+		assert.deepEqual(counts.get('a/one'), { ready: 1, blocked: 1 });
 		assert.deepEqual(counts.get(''), { ready: 1, blocked: 0 });
 	});
 
