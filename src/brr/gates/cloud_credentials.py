@@ -54,7 +54,10 @@ def publishing_token_seconds_remaining(repo_full_name: str | None = None) -> flo
     if os.environ.get("GH_TOKEN"):
         # Operator-supplied identity: brnrd never minted it and cannot date it.
         return float("inf")
-    if not os.environ.get("BRNRD_MANAGED_GITHUB_TOKEN"):
+    if repo_full_name is None and not os.environ.get("BRNRD_MANAGED_GITHUB_TOKEN"):
+        # The env guard is a legacy-slot fact only: named repos never write
+        # the env var (see _refresh_publishing_credential), so their runway
+        # is answered by the keyed expiry alone.
         return 0.0
     return max(0.0, _context().token_expires_at.get(repo_full_name, 0.0) - time.time())
 
@@ -211,7 +214,13 @@ def _refresh_publishing_credential(
         )
         expires_at = datetime.fromisoformat(str(credential["expires_at"]).replace("Z", "+00:00"))
         token = str(credential["token"])
-        os.environ["BRNRD_MANAGED_GITHUB_TOKEN"] = token
+        if repo_full_name is None:
+            # The env var is a single machine-wide slot — the exact shape this
+            # per-repo split exists to end. Only the legacy/principal refresh
+            # may write it; a named repo's token travels solely through that
+            # repo's own pointer dir, or a concurrent refresh for repo B would
+            # hand repo A's next env snapshot the wrong repo's credential.
+            os.environ["BRNRD_MANAGED_GITHUB_TOKEN"] = token
         ctx.set_token_expires_at(repo_full_name, expires_at.timestamp())
         _write_github_credential_pointer(brr_dir, token)
         print(

@@ -272,7 +272,12 @@ def clean_runner_environ(
         cleaned.pop("GITHUB_TOKEN", None)
         cleaned.pop("GH_CONFIG_DIR", None)
         _inject_github_git_config(cleaned)
-    elif managed_github_token:
+    elif managed_github_token or _github_credential_pointer_dir(brr_dir) is not None:
+        # The env var names only the *principal* repo's token now (see
+        # cloud_credentials._refresh_publishing_credential) — a run for a
+        # sibling repo may hold a live pointer while the env slot is empty,
+        # and the pointer is the credential that actually matches this run's
+        # repo, so its existence opens the managed branch on its own.
         pointer_dir = _github_credential_pointer_dir(brr_dir)
         if pointer_dir is not None:
             # Hand the runner a *pointer*, not a value (issue #477): gh reads
