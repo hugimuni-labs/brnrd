@@ -679,7 +679,7 @@
 											Pair a local daemon from a checkout when this repo should drain work.
 										</p>
 									{/if}
-									{#if repoInitialised[repo.id] && repoInitialised[repo.id].state !== 'lit'}
+									{#if repoInitialised[repo.id] && repoInitialised[repo.id].state === 'dark'}
 										<!-- `repo-initialised` is the one capability row with no
 										     other representation on this page: AGENTS.md, kb,
 										     .brr/config. Only shown when not lit — a quiet absence
@@ -687,6 +687,18 @@
 										<p class="mt-2 font-mono text-[11px] text-amber-400">
 											not initialised — run <code class="text-amber-200">brnrd</code> in this checkout
 											to write AGENTS.md and the kb
+										</p>
+									{:else if repoInitialised[repo.id] && repoInitialised[repo.id].state === 'unobservable'}
+										<!-- Unobservable is NOT dark (#1268 follow-up, 2026-08-30):
+										     `dark` means a daemon measured the checkout and found
+										     AGENTS.md / kb missing; `unobservable` means no daemon
+										     has ever reported a reading for this repo — advising
+										     "run brnrd" here sent an operator to fix a checkout no
+										     sensor was watching. Name the sensor gap instead. -->
+										<p class="mt-2 font-mono text-[11px] text-stone-400">
+											init state unknown — no daemon has reported for this repo yet; check
+											<code class="text-stone-300">brnrd daemon status</code> in the checkout its
+											daemon runs from
 										</p>
 									{/if}
 									<div class="mt-2 border-t border-stone-800/70 pt-2">
