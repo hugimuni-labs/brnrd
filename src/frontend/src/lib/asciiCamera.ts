@@ -523,6 +523,69 @@ function clothLine(row: ClothRow, width: number, now: number | undefined): strin
 }
 
 /**
+ * THE SKY BAND — the mothership, above the sea (the water-line rework's
+ * rung 2, design-the-water-line.md §The vertical model + his 08-31 read:
+ * the ship reads as a vessel, keeps a live terminal readout on the hull,
+ * and every daemon-operated station hangs off it). Three rows, pure:
+ * desk (letters waiting) · hull (name + newest bench command) · keel
+ * (clockwork next-wake, claw state) · gauges starboard. All of it is
+ * data the render already holds — nothing new is invented up here.
+ */
+function skyBand(
+	graph: RoomGraph,
+	opts: WorldRenderOpts,
+	cols: number,
+	now: number | undefined,
+	level: CameraLevel
+): string[] {
+	// Atlas is the bare chart — the ship is scene furniture and stays below
+	// that scale, like the corridors.
+	if (level === 'atlas') return [];
+	const desk = graph.pendingLetters > 0 ? `✉ ◇×${graph.pendingLetters}` : '✉ ·';
+	const termLines = opts.terminal ?? [];
+	const lastLine = [...termLines].reverse().find((l) => l.act || l.detail);
+	const lastCmd = lastLine
+		? [lastLine.act, lastLine.detail ? foldPathTokens(lastLine.detail) : null]
+				.filter(Boolean)
+				.join(' · ')
+		: null;
+	const hullReadout = lastCmd ? `$ ${lastCmd}` : '$ idle';
+	const next = graph.clockwork
+		.filter((e) => e.nextAt)
+		.sort((a, b) => (a.nextAt ?? '').localeCompare(b.nextAt ?? ''))[0];
+	const inWhen = next ? untilLabel(next.nextAt, now) : null;
+	const keelBits = [`^ watch`, inWhen ? `T ${inWhen}` : null].filter(Boolean).join(' · ');
+	const clawBusy = (opts.crossings?.length ?? 0) > 0;
+	const claw = clawBusy ? 'claw │ out' : 'claw ┊ stowed';
+	const fuel = garageReadings(graph)
+		.slice(0, 2)
+		.map((r) => `⛁ ${r}`)
+		.join('  ');
+
+	// The hull: a vessel, not a rectangle. Antennae port and starboard,
+	// twin fins on the spine, the claw bay under the keel.
+	const deskCol = 4;
+	const hullCol = Math.max(deskCol + desk.length + 3, 18);
+	const r1 =
+		' '.repeat(deskCol) +
+		desk +
+		' '.repeat(Math.max(1, hullCol - deskCol - desk.length)) +
+		'╔═◀▶═╦═▲▲═╦═◀▶═╗' +
+		(fuel ? '   ' + fuel : '');
+	const r2 =
+		' ◁╌╌' +
+		'╌'.repeat(Math.max(0, hullCol - 6)) +
+		'╢ MOTHERSHIP · ' +
+		// Capped: the hull is a vessel, not a wire — a long command must not
+		// stretch the ship across the whole sky.
+		clipMid(hullReadout, Math.min(44, Math.max(12, cols - hullCol - 22))) +
+		' ╟╌╌▷';
+	const r3 =
+		' '.repeat(hullCol) + '╚══════╤═◉═╤══════╝   ' + [keelBits, claw].filter(Boolean).join(' · ');
+	return [clip(r1, cols), clip(r2, cols), clip(r3, cols)];
+}
+
+/**
  * Render the window. Pure and deterministic: same inputs, same bytes.
  * The board (terrain in frame + bearings for what is out of it), then the
  * control rows: actor boundaries, CHARTS, and the Cloth selvage.
@@ -841,7 +904,7 @@ export function renderWorld(
 	if (offFrame.length > 0) canvas.text(2, cam.rows - 1, clip(offFrame.join('   '), cam.cols - 4));
 
 	canvas.sea();
-	const out = canvas.toLines();
+	const out = [...skyBand(graph, opts, cam.cols, now, cam.level), ...canvas.toLines()];
 	out.push('');
 
 	// 7 · the pager field — boundary-injection status, in two tenses,
@@ -932,7 +995,12 @@ export function renderWorld(
 	const live = graph.cloth.filter((r) => r.tense === 'live');
 	const cut = graph.cloth.filter((r) => r.tense === 'cut').slice(0, opts.clothRows ?? 4);
 	if (live.length > 0 || cut.length > 0) {
-		out.push('══ CLOTH ' + '═'.repeat(Math.max(0, cam.cols - 9)));
+		// The water line: the cloth settles under it (below = settled; the
+		// tide is home growth). The word CLOTH stays on the line — it is the
+		// same register, now wearing its depth.
+		out.push(
+			clip('~~~~ the water line ~~~~ CLOTH ' + '~'.repeat(Math.max(0, cam.cols - 31)), cam.cols)
+		);
 		for (const row of live) out.push(clothLine(row, cam.cols, now));
 		if (cut.length > 0) {
 			out.push('──── CUT ' + '─'.repeat(Math.max(0, cam.cols - 9)));
@@ -957,6 +1025,8 @@ export const LEGEND = [
 	'^ watch — armed `brnrd await`s count down here  T clockwork  ⛁ garage  arrows = off-camera bearings',
 	'⌁ attested boundary   ══ CLOTH time register — live, then history',
 	'┈≻ the claw — a letter carried from HOME to the actor that received it   ◇ the letter, in flight',
+	'╔◀▲╤ the MOTHERSHIP — the daemon, in the sky: ✉ desk (letters waiting) · $ hull terminal (newest command) · claw bay under the keel · ⛁ gauges',
+	'~~~~ the water line — the cloth settles under it; the tide is home growth',
 	'▷⌁@ mind-connect — reading the pager   ✎ writing  ☰ reading  ✉ opening a letter',
 	'▷ PAGER — injection status: ◇ waiting (accumulated, not yet injected) · ✉ read · ▸ in transit',
 	'  a read page shows the injected block itself; ↳ names the boundary that carried it'
