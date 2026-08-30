@@ -73,7 +73,13 @@
 		{ key: 'BLOOM_BLUR', label: 'BLOOM_BLUR — halo radius', min: 0, max: 18, step: 0.5 },
 		{ key: 'BLOOM_OPACITY', label: 'BLOOM_OPACITY — halo strength', min: 0, max: 1, step: 0.02 },
 		{ key: 'HOT_BLUR', label: 'HOT_BLUR — overlap glow radius', min: 0, max: 6, step: 0.1 },
-		{ key: 'HOT_OPACITY', label: 'HOT_OPACITY — overlap glow strength', min: 0, max: 1, step: 0.02 },
+		{
+			key: 'HOT_OPACITY',
+			label: 'HOT_OPACITY — overlap glow strength',
+			min: 0,
+			max: 1,
+			step: 0.02
+		},
 		{ key: 'GRAIN', label: 'GRAIN — phosphor texture', min: 0, max: 100, step: 1 }
 	];
 
@@ -162,7 +168,9 @@
 			<label class="flex items-center gap-2">
 				<span class="text-ink-quiet">crown</span>
 				<select class="panel px-2 py-1" bind:value={brnrdConstants.CROWN}>
-					<option value="none">none</option><option value="branch">branch</option><option value="fork">fork</option>
+					<option value="none">none</option><option value="branch">branch</option><option
+						value="fork">fork</option
+					>
 				</select>
 			</label>
 		{:else}
@@ -179,19 +187,17 @@
 			</label>
 		{/if}
 
-		<button class="panel panel--pressable px-2 py-1 text-ink-quiet hover:text-amber-100" onclick={reset}>
+		<button
+			class="panel panel--pressable px-2 py-1 text-ink-quiet hover:text-amber-100"
+			onclick={reset}
+		>
 			reset {mark}
 		</button>
 	</div>
 
 	{#if mark === 'hugimuni'}
 		<div class="panel flex flex-wrap items-center gap-4 p-3">
-			{#each [
-				['AMBER', 'amber'],
-				['SKY', 'sky'],
-				['INTERSECTION', 'intersection'],
-				['GROUND', 'ground']
-			] as [key, label]}
+			{#each [['AMBER', 'amber'], ['SKY', 'sky'], ['INTERSECTION', 'intersection'], ['GROUND', 'ground']] as [key, label] (key)}
 				<label class="flex items-center gap-2">
 					<span class="text-[10px] text-ink-quiet">{label}</span>
 					<input
@@ -247,7 +253,8 @@
 					{copied ? 'copied ✓' : 'copy constants'}
 				</button>
 			</div>
-			<pre class="max-h-72 overflow-auto rounded bg-black/40 p-2 text-[11px] leading-relaxed text-stone-300">{constantBlock}</pre>
+			<pre
+				class="max-h-72 overflow-auto rounded bg-black/40 p-2 text-[11px] leading-relaxed text-stone-300">{constantBlock}</pre>
 		</div>
 	</div>
 
@@ -258,16 +265,44 @@
 				{#each BRNRD_SLIDERS as spec (spec.key)}
 					<label class="flex items-center gap-2">
 						<span class="w-60 shrink-0 text-[11px] text-ink-quiet">{spec.label}</span>
-						<input type="range" min={spec.min} max={spec.max} step={spec.step} bind:value={brnrdConstants[spec.key as keyof BrnrdConstants]} class="min-w-24 flex-1" />
-						<input type="number" min={spec.min} max={spec.max} step={spec.step} bind:value={brnrdConstants[spec.key as keyof BrnrdConstants]} class="panel w-20 px-1 py-0.5 text-right" />
+						<input
+							type="range"
+							min={spec.min}
+							max={spec.max}
+							step={spec.step}
+							bind:value={brnrdConstants[spec.key as keyof BrnrdConstants]}
+							class="min-w-24 flex-1"
+						/>
+						<input
+							type="number"
+							min={spec.min}
+							max={spec.max}
+							step={spec.step}
+							bind:value={brnrdConstants[spec.key as keyof BrnrdConstants]}
+							class="panel w-20 px-1 py-0.5 text-right"
+						/>
 					</label>
 				{/each}
 			{:else}
 				{#each HUGIMUNI_GEOMETRY as spec (spec.key)}
 					<label class="flex items-center gap-2">
 						<span class="w-60 shrink-0 text-[11px] text-ink-quiet">{spec.label}</span>
-						<input type="range" min={spec.min} max={spec.max} step={spec.step} bind:value={hugimuniConstants[spec.key as keyof HugimuniConstants]} class="min-w-24 flex-1" />
-						<input type="number" min={spec.min} max={spec.max} step={spec.step} bind:value={hugimuniConstants[spec.key as keyof HugimuniConstants]} class="panel w-20 px-1 py-0.5 text-right" />
+						<input
+							type="range"
+							min={spec.min}
+							max={spec.max}
+							step={spec.step}
+							bind:value={hugimuniConstants[spec.key as keyof HugimuniConstants]}
+							class="min-w-24 flex-1"
+						/>
+						<input
+							type="number"
+							min={spec.min}
+							max={spec.max}
+							step={spec.step}
+							bind:value={hugimuniConstants[spec.key as keyof HugimuniConstants]}
+							class="panel w-20 px-1 py-0.5 text-right"
+						/>
 					</label>
 				{/each}
 			{/if}
@@ -281,8 +316,22 @@
 				{#each HUGIMUNI_SCREEN as spec (spec.key)}
 					<label class="flex items-center gap-2">
 						<span class="w-60 shrink-0 text-[11px] text-ink-quiet">{spec.label}</span>
-						<input type="range" min={spec.min} max={spec.max} step={spec.step} bind:value={hugimuniConstants[spec.key as keyof HugimuniConstants]} class="min-w-24 flex-1" />
-						<input type="number" min={spec.min} max={spec.max} step={spec.step} bind:value={hugimuniConstants[spec.key as keyof HugimuniConstants]} class="panel w-20 px-1 py-0.5 text-right" />
+						<input
+							type="range"
+							min={spec.min}
+							max={spec.max}
+							step={spec.step}
+							bind:value={hugimuniConstants[spec.key as keyof HugimuniConstants]}
+							class="min-w-24 flex-1"
+						/>
+						<input
+							type="number"
+							min={spec.min}
+							max={spec.max}
+							step={spec.step}
+							bind:value={hugimuniConstants[spec.key as keyof HugimuniConstants]}
+							class="panel w-20 px-1 py-0.5 text-right"
+						/>
 					</label>
 				{/each}
 			</div>
@@ -291,9 +340,11 @@
 
 	<p class="text-[10px] text-ink-mute">
 		{#if mark === 'hugimuni'}
-			flat is canonical. Amber means H-only, sky M-only, cream H∩M. The lower M-on-M crossing stays sky by construction.
+			flat is canonical. Amber means H-only, sky M-only, cream H∩M. The lower M-on-M crossing stays
+			sky by construction.
 		{:else}
-			brnrd colours: stone {BRNRD_COLORS.STONE}, molten {BRNRD_COLORS.MOLTEN}→{BRNRD_COLORS.EMBER}, screen ghosts {BRNRD_COLORS.RED}/{BRNRD_COLORS.CYAN}.
+			brnrd colours: stone {BRNRD_COLORS.STONE}, molten {BRNRD_COLORS.MOLTEN}→{BRNRD_COLORS.EMBER},
+			screen ghosts {BRNRD_COLORS.RED}/{BRNRD_COLORS.CYAN}.
 		{/if}
 	</p>
 </div>

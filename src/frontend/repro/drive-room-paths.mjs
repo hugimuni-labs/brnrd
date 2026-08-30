@@ -88,7 +88,9 @@ for (let i = 0; i < 90; i++) {
 	try {
 		const r = await fetch(`http://localhost:${PORT}/`);
 		if (r.ok || r.status === 404) break;
-	} catch {}
+	} catch {
+		// server not up yet — keep polling
+	}
 	await delay(500);
 }
 const browser = await chromium.launch();

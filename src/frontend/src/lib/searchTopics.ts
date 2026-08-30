@@ -20,8 +20,7 @@ export const SEARCH_TOPICS: SearchTopic[] = [
 		description:
 			'An AI harness is the execution layer around a model: tools, repository access, context, permissions, loops, and receipts that turn inference into useful work.',
 		kicker: 'concept',
-		lede:
-			'A model can generate tokens. A harness gives those tokens somewhere to act. In coding systems, the harness is the runtime that lets a model inspect a repository, edit files, run commands, call tools, keep a task loop moving, and return evidence of what happened.',
+		lede: 'A model can generate tokens. A harness gives those tokens somewhere to act. In coding systems, the harness is the runtime that lets a model inspect a repository, edit files, run commands, call tools, keep a task loop moving, and return evidence of what happened.',
 		sections: [
 			{
 				heading: 'Model, agent, harness: three different layers',
@@ -50,8 +49,7 @@ export const SEARCH_TOPICS: SearchTopic[] = [
 		description:
 			'A coding agent describes goal-directed behavior; an AI harness describes the execution environment that gives the agent tools, context, permissions and a loop.',
 		kicker: 'concept',
-		lede:
-			'The terms overlap because modern coding products often ship both at once. The useful distinction is behavioral versus infrastructural: “agent” describes what the system does, while “harness” describes the machinery that lets it do it.',
+		lede: 'The terms overlap because modern coding products often ship both at once. The useful distinction is behavioral versus infrastructural: “agent” describes what the system does, while “harness” describes the machinery that lets it do it.',
 		sections: [
 			{
 				heading: 'When “agent” is the better word',
@@ -75,8 +73,7 @@ export const SEARCH_TOPICS: SearchTopic[] = [
 		description:
 			'Codex CLI and Claude Code are both coding-agent harnesses. Compare them by execution model, tool behavior, context, policy and fit rather than treating one as a universal winner.',
 		kicker: 'comparison',
-		lede:
-			'Codex CLI and Claude Code occupy the same broad category: model-backed coding harnesses that can inspect a project, edit files, run commands and iterate on a task. The more durable architectural question is not which name wins, but how tightly your workflow depends on either one.',
+		lede: 'Codex CLI and Claude Code occupy the same broad category: model-backed coding harnesses that can inspect a project, edit files, run commands and iterate on a task. The more durable architectural question is not which name wins, but how tightly your workflow depends on either one.',
 		sections: [
 			{
 				heading: 'Compare the harness contract',
@@ -100,8 +97,7 @@ export const SEARCH_TOPICS: SearchTopic[] = [
 		description:
 			'Persistence does not require keeping an LLM process alive. Durable state can preserve project knowledge, unfinished work, routing and receipts between bounded agent runs.',
 		kicker: 'architecture',
-		lede:
-			'A coding agent is often treated as a session: start a CLI, give it context, finish a task, lose the conversational state. Persistence is a different property. It can live in durable project state while model processes wake only when there is work to do.',
+		lede: 'A coding agent is often treated as a session: start a CLI, give it context, finish a task, lose the conversational state. Persistence is a different property. It can live in durable project state while model processes wake only when there is work to do.',
 		sections: [
 			{
 				heading: 'Persist state, not inference',
@@ -125,8 +121,7 @@ export const SEARCH_TOPICS: SearchTopic[] = [
 		description:
 			'Remote reach and remote execution are separate concerns. A control plane can route intent to an agent that still executes beside the repository, tools and credentials on your own machine.',
 		kicker: 'architecture',
-		lede:
-			'“Use my coding agent remotely” often gets interpreted as “copy the repository into someone else’s compute.” That is one topology, but it is not the only one. The ingress can be remote while execution remains local.',
+		lede: '“Use my coding agent remotely” often gets interpreted as “copy the repository into someone else’s compute.” That is one topology, but it is not the only one. The ingress can be remote while execution remains local.',
 		sections: [
 			{
 				heading: 'Separate ingress from execution',
@@ -150,8 +145,7 @@ export const SEARCH_TOPICS: SearchTopic[] = [
 		description:
 			'A messaging surface can be a useful ingress for coding work when tasks retain project identity, bounded execution and durable receipts instead of becoming an unstructured remote shell.',
 		kicker: 'workflow',
-		lede:
-			'Telegram is a surprisingly useful control surface for coding agents because it is already good at asynchronous threads, notifications and short steering messages. The mistake is treating the messenger itself as the development environment.',
+		lede: 'Telegram is a surprisingly useful control surface for coding agents because it is already good at asynchronous threads, notifications and short steering messages. The mistake is treating the messenger itself as the development environment.',
 		sections: [
 			{
 				heading: 'The messenger should carry intent',
@@ -175,8 +169,7 @@ export const SEARCH_TOPICS: SearchTopic[] = [
 		description:
 			'Agent orchestration coordinates identity, routing, concurrency, context and receipts across bounded coding-agent runs without requiring a new universal execution harness.',
 		kicker: 'architecture',
-		lede:
-			'Orchestration becomes useful when one agent session is no longer the whole system. Work may arrive from several surfaces, target several repositories, spawn bounded workers, require different harnesses, and need to return to the thread that asked.',
+		lede: 'Orchestration becomes useful when one agent session is no longer the whole system. Work may arrive from several surfaces, target several repositories, spawn bounded workers, require different harnesses, and need to return to the thread that asked.',
 		sections: [
 			{
 				heading: 'What belongs in the orchestration layer',
