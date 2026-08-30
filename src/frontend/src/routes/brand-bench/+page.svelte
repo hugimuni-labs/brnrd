@@ -197,7 +197,7 @@
 
 	{#if mark === 'hugimuni'}
 		<div class="panel flex flex-wrap items-center gap-4 p-3">
-			{#each [['AMBER', 'amber'], ['SKY', 'sky'], ['INTERSECTION', 'intersection'], ['GROUND', 'ground']] as [key, label]}
+			{#each [['AMBER', 'amber'], ['SKY', 'sky'], ['INTERSECTION', 'intersection'], ['GROUND', 'ground']] as [key, label] (key)}
 				<label class="flex items-center gap-2">
 					<span class="text-[10px] text-ink-quiet">{label}</span>
 					<input

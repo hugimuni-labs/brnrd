@@ -32,7 +32,6 @@
 
 import type { PlaceId, PlaceNode, RoomTopology } from './roomTopology.ts';
 import {
-	CAMP_TOP,
 	LABOUR_FLOOR,
 	Shelf,
 	TERRAIN_TOP,
