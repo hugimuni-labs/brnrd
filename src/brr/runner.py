@@ -214,7 +214,9 @@ _RUNNER_ENV_CONTAMINANTS: frozenset[str] = frozenset(
 )
 
 
-def _ensure_publishing_token_fresh() -> None:
+def _ensure_publishing_token_fresh(
+    brr_dir: Path | None = None, repo_full_name: str | None = None,
+) -> None:
     """Top up the managed GitHub token before a runner snapshots it.
 
     The runner env is a *copy* of the daemon's environment taken once, at
@@ -233,12 +235,16 @@ def _ensure_publishing_token_fresh() -> None:
     try:
         from .gates import cloud
 
-        cloud.ensure_publishing_credential_fresh()
+        cloud.ensure_publishing_credential_fresh(
+            brr_dir, repo_full_name=repo_full_name,
+        )
     except Exception:
         return
 
 
-def clean_runner_environ() -> dict[str, str]:
+def clean_runner_environ(
+    brr_dir: Path | None = None, repo_full_name: str | None = None,
+) -> dict[str, str]:
     """A copy of ``os.environ`` with parent-agent-session leakage removed.
 
     The base env every runner subprocess starts from. Stripping the
@@ -246,7 +252,7 @@ def clean_runner_environ() -> dict[str, str]:
     agent's session identity and, critically, its safe-mode flag — so hooks,
     skills, and plugins behave as they would for a normal top-level run.
     """
-    _ensure_publishing_token_fresh()
+    _ensure_publishing_token_fresh(brr_dir, repo_full_name)
     cleaned = {
         k: v for k, v in os.environ.items() if k not in _RUNNER_ENV_CONTAMINANTS
     }
@@ -267,7 +273,7 @@ def clean_runner_environ() -> dict[str, str]:
         cleaned.pop("GH_CONFIG_DIR", None)
         _inject_github_git_config(cleaned)
     elif managed_github_token:
-        pointer_dir = _github_credential_pointer_dir()
+        pointer_dir = _github_credential_pointer_dir(brr_dir)
         if pointer_dir is not None:
             # Hand the runner a *pointer*, not a value (issue #477): gh reads
             # the current token from the pointer dir's hosts.yml and git's
@@ -376,7 +382,7 @@ def _inject_github_credential_reset(env: dict[str, str]) -> None:
         env[f"GIT_CONFIG_VALUE_{index}"] = value
 
 
-def _github_credential_pointer_dir() -> Path | None:
+def _github_credential_pointer_dir(brr_dir: Path | None = None) -> Path | None:
     """The daemon-refreshed GitHub credential pointer dir, if usable here.
 
     ``None`` unless a cloud gate in this process publishes the pointer *and*
@@ -386,7 +392,7 @@ def _github_credential_pointer_dir() -> Path | None:
     try:
         from .gates import cloud
 
-        pointer_dir = cloud.github_credentials_dir()
+        pointer_dir = cloud.github_credentials_dir(brr_dir)
     except Exception:
         return None
     if pointer_dir is None:
@@ -682,6 +688,11 @@ class RunnerInvocation:
     label: str
     prompt: str
     repo_root: Path
+    # The registered checkout whose managed publishing credential this run
+    # uses. A daemon worktree is not that checkout: its own `.brr` is run
+    # machinery, while the credential pointer belongs to the served repo.
+    publishing_brr_dir: Path | None = None
+    repo_full_name: str | None = None
     cwd: Path | None = None
     response_path: str | None = None
     required_artifacts: list[RunnerArtifactSpec] = field(default_factory=list)
@@ -2339,7 +2350,10 @@ def invoke_runner(
     # Always start from a cleaned base env so a parent agent session's
     # safe-mode / identity vars never leak into the runner (and silently
     # disable its hooks); layer the run's own env on top.
-    proc_env = clean_runner_environ()
+    proc_env = clean_runner_environ(
+        invocation.publishing_brr_dir,
+        invocation.repo_full_name,
+    )
     if invocation.env:
         proc_env.update({str(k): str(v) for k, v in invocation.env.items()})
     stdout = ""

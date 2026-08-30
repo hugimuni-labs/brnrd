@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import time
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -33,6 +34,30 @@ class _StopLoop(BaseException):
     the point of it), so a RuntimeError sentinel would be swallowed and retried
     forever — a hang, not a test.
     """
+
+
+def test_register_announces_every_served_repo(tmp_path, monkeypatch):
+    from brr import account
+
+    ctx = SimpleNamespace(repos={
+        "org/a": SimpleNamespace(label="org/a", root=tmp_path / "a"),
+        "org/b": SimpleNamespace(label="org/b", root=tmp_path / "b"),
+    })
+    monkeypatch.setattr(account, "resolve_context", lambda *_a, **_k: ctx)
+    calls = []
+    monkeypatch.setattr(cloud, "_repo_capabilities", lambda _d: {})
+    monkeypatch.setattr(cloud, "_request", lambda *a, **kw: calls.append(kw["json"]))
+
+    cloud._register(
+        tmp_path / ".brr",
+        {"brnrd_url": "u", "token": "t", "daemon_name": "machine"},
+    )
+
+    assert calls == [{
+        "daemon_name": "machine",
+        "capabilities": {},
+        "repos": ["org/a", "org/b"],
+    }]
 
 
 def test_schedule_activity_uses_scheduler_pacing_verdict(tmp_path, monkeypatch):
@@ -1427,6 +1452,50 @@ def test_loop_publishes_quota_snapshot_survives_malformed_gate_state(
     # simply missing from the health rows rather than taking the rest down —
     # "cloud" is still there (its own state, written above, is well-formed).
     assert [row["gate"] for row in gates] == ["cloud"]
+
+
+def test_publish_quota_collects_each_repo_independently(tmp_path, monkeypatch):
+    from brr import account, config, knowledge
+    from brr.gates import cloud_publisher
+
+    repo_a = tmp_path / "a"
+    repo_b = tmp_path / "b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+    (repo_a / "AGENTS.md").write_text("# A\n")
+    ctx = SimpleNamespace(repos={
+        "org/a": SimpleNamespace(label="org/a", root=repo_a),
+        "org/b": SimpleNamespace(label="org/b", root=repo_b),
+    })
+    monkeypatch.setattr(account, "resolve_context", lambda *_a, **_k: ctx)
+    monkeypatch.setattr(config, "load_config", lambda _root: {})
+
+    def active_kb(root, _cfg):
+        if root == repo_b:
+            raise OSError("unreadable")
+        return root / "knowledge"
+
+    monkeypatch.setattr(knowledge, "active_kb_dir", active_kb)
+    requests = []
+    monkeypatch.setattr(
+        cloud_publisher, "_context", lambda: SimpleNamespace(
+            request=lambda *a, **kw: requests.append(kw["json"]) or {},
+            quota_snapshot=lambda _d: [],
+        ),
+    )
+    monkeypatch.setattr(cloud_publisher, "_gate_health_snapshot", lambda _d: [])
+    brr_dir = tmp_path / ".brr"
+
+    cloud_publisher._publish_quota(
+        brr_dir, None, {"token": "t", "brnrd_url": "u"},
+        responses_dir=brr_dir / "responses",
+    )
+
+    assert requests[0]["repo_states"] == [{
+        "repo_full_name": "org/a",
+        "agents_md_missing": False,
+        "kb_missing": False,
+    }]
 
 
 def test_publish_quota_logs_traceback_once_per_distinct_failure_cause(
@@ -3093,6 +3162,7 @@ def test_codex_quota_burn_is_absent_when_the_evidence_is_too_thin(tmp_path, monk
 
 def _reset_publishing_globals(monkeypatch, *, expires_in: float, state_dir=None):
     monkeypatch.setattr(cloud, "_publishing_token_expires_at", time.time() + expires_in)
+    monkeypatch.setattr(cloud, "_publishing_token_expires_by_repo", {})
     monkeypatch.setattr(cloud, "_publishing_token_retry_at", 0.0)
     monkeypatch.setattr(cloud, "_publishing_state_dir", state_dir)
     monkeypatch.delenv("GH_TOKEN", raising=False)
@@ -3144,6 +3214,35 @@ def test_dispatch_leaves_an_already_fresh_token_alone(tmp_path, monkeypatch):
 
     assert calls == []
     assert os.environ["BRNRD_MANAGED_GITHUB_TOKEN"] == "stale-token"
+
+
+def test_repo_credentials_refresh_independently_and_write_their_own_pointers(
+    tmp_path, monkeypatch,
+):
+    account_brr = tmp_path / "account" / ".brr"
+    repo_a_brr = tmp_path / "a" / ".brr"
+    repo_b_brr = tmp_path / "b" / ".brr"
+    _reset_publishing_globals(monkeypatch, expires_in=3600, state_dir=account_brr)
+    monkeypatch.setattr(
+        cloud, "_load_state",
+        lambda _d: {"token": "acct", "brnrd_url": "https://brnrd.dev"},
+    )
+    calls = []
+
+    def fake_request(url, method, path, **kwargs):
+        repo = kwargs["json"]["repo_full_name"]
+        calls.append(repo)
+        expires = datetime.fromtimestamp(time.time() + 3600, tz=timezone.utc)
+        return {"token": f"token-{repo}", "expires_at": expires.isoformat()}
+
+    monkeypatch.setattr(cloud, "_request", fake_request)
+    cloud.ensure_publishing_credential_fresh(repo_a_brr, repo_full_name="org/a")
+    cloud.ensure_publishing_credential_fresh(repo_b_brr, repo_full_name="org/b")
+    cloud.ensure_publishing_credential_fresh(repo_a_brr, repo_full_name="org/a")
+
+    assert calls == ["org/a", "org/b"]
+    assert (repo_a_brr / "credentials/github/token").read_text().strip() == "token-org/a"
+    assert (repo_b_brr / "credentials/github/token").read_text().strip() == "token-org/b"
 
 
 def test_dispatch_never_blocks_a_run_when_the_credential_service_is_down(tmp_path, monkeypatch):

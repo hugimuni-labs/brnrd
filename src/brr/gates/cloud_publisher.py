@@ -1156,6 +1156,27 @@ def _publish_quota(brr_dir: Path, inbox_dir: Path | None, state: dict, responses
         return
     try:
         init_facts = _repo_initialised_snapshot(brr_dir)
+        repo_states = []
+        try:
+            from .. import account as account_mod, config as conf, knowledge
+
+            ctx = account_mod.resolve_context(brr_dir.parent, create=False)
+            repos = sorted(ctx.repos.values(), key=lambda repo: repo.label)
+        except Exception:
+            repos = []
+        for repo in repos:
+            if account_mod.is_home_label(repo.label):
+                continue
+            try:
+                repo_states.append({
+                    "repo_full_name": repo.label,
+                    "agents_md_missing": not (repo.root / "AGENTS.md").exists(),
+                    "kb_missing": knowledge.active_kb_dir(
+                        repo.root, conf.load_config(repo.root)
+                    ) is None,
+                })
+            except Exception as exc:
+                print(f"[brnrd:cloud] repo state skipped for {repo.label}: {exc}")
         _context().request(
             state["brnrd_url"],
             "PUT",
@@ -1166,6 +1187,7 @@ def _publish_quota(brr_dir: Path, inbox_dir: Path | None, state: dict, responses
                 "gates": _gate_health_snapshot(brr_dir),
                 "repo_agents_md_missing": init_facts["agents_md_missing"],
                 "repo_kb_missing": init_facts["kb_missing"],
+                "repo_states": repo_states,
             },
             timeout=10,
         )

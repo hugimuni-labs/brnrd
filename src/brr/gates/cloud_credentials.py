@@ -8,7 +8,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Mapping
 
 
 @dataclass(frozen=True)
@@ -18,8 +18,8 @@ class CredentialContext:
     request: Callable[..., dict]
     load_state: Callable[[Path], dict]
     state_dir: Path | None
-    token_expires_at: float
-    set_token_expires_at: Callable[[float], None]
+    token_expires_at: Mapping[str | None, float]
+    set_token_expires_at: Callable[[str | None, float], None]
     retry_at: float
     set_retry_at: Callable[[float], None]
     lock: threading.Lock
@@ -44,7 +44,7 @@ _GITHUB_CREDENTIAL_SUBPATH = ("credentials", "github")
 _CREDENTIAL_DIR_MODE = 0o700
 _CREDENTIAL_FILE_MODE = 0o600
 
-def publishing_token_seconds_remaining() -> float:
+def publishing_token_seconds_remaining(repo_full_name: str | None = None) -> float:
     """Seconds of life left on the managed token, or ``0.0`` when there is none.
 
     Reported rather than inferred: callers that want to *say* how much runway
@@ -56,13 +56,14 @@ def publishing_token_seconds_remaining() -> float:
         return float("inf")
     if not os.environ.get("BRNRD_MANAGED_GITHUB_TOKEN"):
         return 0.0
-    return max(0.0, _context().token_expires_at - time.time())
+    return max(0.0, _context().token_expires_at.get(repo_full_name, 0.0) - time.time())
 
 
 def ensure_publishing_credential_fresh(
     brr_dir: Path | None = None,
     *,
     min_remaining_s: float = _PUBLISHING_TOKEN_DISPATCH_MIN_S,
+    repo_full_name: str | None = None,
 ) -> float:
     """Renew the managed token if it has less than *min_remaining_s* left.
 
@@ -84,15 +85,18 @@ def ensure_publishing_credential_fresh(
     if target is None:
         # No cloud gate running in this process — nothing mints a managed
         # token here, so there is nothing to keep fresh.
-        return publishing_token_seconds_remaining()
+        return publishing_token_seconds_remaining(repo_full_name)
     try:
         state = _context().load_state(target)
     except Exception:
-        return publishing_token_seconds_remaining()
+        return publishing_token_seconds_remaining(repo_full_name)
     if not state.get("token") or not state.get("brnrd_url"):
-        return publishing_token_seconds_remaining()
-    _try_refresh_publishing_credential(state, min_remaining_s=min_remaining_s, brr_dir=target)
-    return publishing_token_seconds_remaining()
+        return publishing_token_seconds_remaining(repo_full_name)
+    _try_refresh_publishing_credential(
+        state, min_remaining_s=min_remaining_s, brr_dir=target,
+        repo_full_name=repo_full_name,
+    )
+    return publishing_token_seconds_remaining(repo_full_name)
 
 
 def github_credentials_dir(brr_dir: Path | None = None) -> Path | None:
@@ -172,6 +176,7 @@ def _refresh_publishing_credential(
     force: bool = False,
     min_remaining_s: float = _PUBLISHING_TOKEN_REFRESH_S,
     brr_dir: Path | None = None,
+    repo_full_name: str | None = None,
 ) -> None:
     """Keep the managed GitHub App token in memory, never cloud state.
 
@@ -190,19 +195,24 @@ def _refresh_publishing_credential(
     now = time.time()
     ctx = _context()
     with ctx.lock:
-        if not force and ctx.token_expires_at - now > min_remaining_s:
+        if not force and ctx.token_expires_at.get(repo_full_name, 0.0) - now > min_remaining_s:
             return
+        request_kwargs = {
+            "token": state["token"],
+            "timeout": 20,
+        }
+        if repo_full_name is not None:
+            request_kwargs["json"] = {"repo_full_name": repo_full_name}
         credential = _context().request(
             state["brnrd_url"],
             "POST",
             "/v1/daemons/publishing-credential",
-            token=state["token"],
-            timeout=20,
+            **request_kwargs,
         )
         expires_at = datetime.fromisoformat(str(credential["expires_at"]).replace("Z", "+00:00"))
         token = str(credential["token"])
         os.environ["BRNRD_MANAGED_GITHUB_TOKEN"] = token
-        ctx.set_token_expires_at(expires_at.timestamp())
+        ctx.set_token_expires_at(repo_full_name, expires_at.timestamp())
         _write_github_credential_pointer(brr_dir, token)
         print(
             f"[brnrd:cloud] publishing as {credential.get('login') or 'GitHub App'} "
@@ -216,6 +226,7 @@ def _try_refresh_publishing_credential(
     force: bool = False,
     min_remaining_s: float = _PUBLISHING_TOKEN_REFRESH_S,
     brr_dir: Path | None = None,
+    repo_full_name: str | None = None,
 ) -> None:
     """Refresh best-effort without letting publishing auth stall chat ingress."""
     now = time.time()
@@ -223,11 +234,11 @@ def _try_refresh_publishing_credential(
         return
     try:
         _refresh_publishing_credential(
-            state, force=force, min_remaining_s=min_remaining_s, brr_dir=brr_dir
+            state, force=force, min_remaining_s=min_remaining_s, brr_dir=brr_dir,
+            repo_full_name=repo_full_name,
         )
     except Exception as exc:
         _context().set_retry_at(now + 5 * 60)
         print(f"[brnrd:cloud] publishing credential unavailable: {exc}")
     else:
         _context().set_retry_at(0.0)
-
