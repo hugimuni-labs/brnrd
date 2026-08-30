@@ -50,7 +50,9 @@
 
 			<div class="mt-10 space-y-10">
 				{#each topic.sections as section (section.heading)}
-					<section aria-labelledby={`section-${section.heading.toLowerCase().replaceAll(/[^a-z0-9]+/g, '-')}`}>
+					<section
+						aria-labelledby={`section-${section.heading.toLowerCase().replaceAll(/[^a-z0-9]+/g, '-')}`}
+					>
 						<h2
 							id={`section-${section.heading.toLowerCase().replaceAll(/[^a-z0-9]+/g, '-')}`}
 							class="border-t border-stone-800 pt-4 font-mono text-lg font-semibold tracking-tight text-amber-100"
@@ -74,7 +76,9 @@
 			</div>
 
 			<aside class="mt-12 border-y border-amber-900/60 py-5" aria-label="brnrd relationship">
-				<p class="font-mono text-[10px] tracking-wide text-amber-200/70 uppercase">where brnrd fits</p>
+				<p class="font-mono text-[10px] tracking-wide text-amber-200/70 uppercase">
+					where brnrd fits
+				</p>
 				<p class="mt-2 text-sm leading-relaxed text-stone-400">
 					brnrd keeps persistent identity, project context and routing above bounded coding-harness
 					runs. The open-source resident executes on your machine; brnrd.dev is an optional control
@@ -82,7 +86,9 @@
 				</p>
 				<div class="mt-4 flex flex-wrap gap-4 font-mono text-[11px]">
 					<a class="text-sky-400 underline underline-offset-2" href={resolve('/')}>see brnrd →</a>
-					<a class="text-sky-400 underline underline-offset-2" href={resolve('/learn')}>more notes →</a>
+					<a class="text-sky-400 underline underline-offset-2" href={resolve('/learn')}
+						>more notes →</a
+					>
 				</div>
 			</aside>
 		</article>
