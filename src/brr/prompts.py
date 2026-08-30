@@ -4061,18 +4061,17 @@ def build_init_wake_prompt(
     residency. The injected resident blocks must therefore degrade on a
     repo with no connected account — the normal state at minute zero.
     """
-    task_parts = [read_prompt(INIT_PLAYBOOK_NAME, repo_root).strip()]
-    if facts:
-        task_parts.append(build_init_wake_facts(facts))
-    from . import constitution
-
-    tpl_path = constitution.TEMPLATE_PATH
-    if tpl_path.exists():
-        task_parts.append(
-            "---\n\n## Adopter template (author `AGENTS.md` from this)\n\n"
-            + tpl_path.read_text(encoding="utf-8")
-        )
-    task = "\n\n".join(p for p in task_parts if p)
+    # One assembly, three callers. This builder used to re-implement
+    # `_first_wake_task_parts`'s body inline, and drifted from it exactly
+    # where it mattered: the door-carried wakes grew the knowledge-shape
+    # directive, this one never did. So `brnrd init` on an account-paired
+    # machine handed the run a playbook that says "scaffold a committed
+    # `kb/`" and nothing that said the knowledge lives in the account home
+    # — and the run did as it was told, into the adopted repo's own tree
+    # (measured 2026-08-30 in `hugimuni-labs/hugimuni`, whose feature PRs
+    # have carried kb diffs ever since). The preamble is this path's only
+    # genuine difference, and it is empty.
+    task = _first_wake_task_parts(repo_root, "", facts)
 
     kwargs.setdefault("stage", INIT_WAKE_STAGE)
     kwargs.setdefault("source", "init")

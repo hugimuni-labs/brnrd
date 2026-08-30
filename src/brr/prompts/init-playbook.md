@@ -175,9 +175,12 @@ under the template's own mechanics:
   boilerplate. Remove placeholder comments and stub lines.
 - Merge path when `AGENTS.md` exists: refresh stale universal blocks,
   keep their tailoring.
-- Committed-`kb/` shape only: scaffold `kb/index.md` and `kb/log.md` from
-  the seeds provided with the template, and add `kb/log.md merge=union` to
-  `.gitattributes`.
+- **The knowledge shape decides this row, and the wake states it.** A
+  *Knowledge shape for this adopter* section in your task is
+  authoritative: follow it, and scaffold no repo-local `kb/`. Only when
+  no such section is present is the shape committed-`kb/` — then scaffold
+  `kb/index.md` and `kb/log.md` from the seeds provided with the
+  template, and add `kb/log.md merge=union` to `.gitattributes`.
 - Do **not** write `CLAUDE.md`/`GEMINI.md` bridges — brnrd writes and
   verifies those after you finish.
 

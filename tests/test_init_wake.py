@@ -285,6 +285,61 @@ class TestPromptAssembly:
         )
         assert "GitHub identity" not in prompt
 
+    def test_paired_init_wake_forbids_a_repo_local_kb(self, tmp_path):
+        """The terminal `brnrd init` path gets the same directive the door does.
+
+        `_first_wake_task_parts` exists so the door-carried first wakes
+        "cannot drift apart in what they hand the run" — and this builder
+        assembled the same four parts inline, outside that guard, and
+        drifted at exactly the row that matters. Measured 2026-08-30:
+        `hugimuni-labs/hugimuni` was initialised on an account-paired
+        machine, scaffolded a committed `kb/` because the playbook told it
+        to and nothing told it otherwise, and its feature PRs have carried
+        knowledge diffs ever since.
+        """
+        repo = _repo(tmp_path)
+        prompt, _ = prompts.build_init_wake_prompt(
+            repo,
+            event_id="evt-1",
+            response_path="r",
+            outbox_path="o",
+            facts={"runner_name": "mock", "account_paired": True},
+        )
+        assert "Knowledge shape for this adopter: **home**" in prompt
+        assert "Do **not** create a repo-local" in prompt
+
+    def test_unpaired_init_wake_keeps_the_committed_kb_shape(self, tmp_path):
+        """The other direction: no account, no directive, and the playbook's
+        own committed-`kb/` row is what the run follows. A guard that fired
+        unconditionally would strip the kb from every standalone adopter."""
+        repo = _repo(tmp_path)
+        prompt, _ = prompts.build_init_wake_prompt(
+            repo,
+            event_id="evt-1",
+            response_path="r",
+            outbox_path="o",
+            facts={"runner_name": "mock"},
+        )
+        # The *section*, not the phrase: the playbook itself now names the
+        # section in prose, so a bare substring check could never fail and
+        # would pin nothing. `Do **not** create a repo-local` appears only
+        # inside the directive.
+        assert "## Knowledge shape for this adopter" not in prompt
+        assert "Do **not** create a repo-local" not in prompt
+        assert "scaffold\n  `kb/index.md`" in prompt
+
+    def test_playbook_defers_its_kb_row_to_the_wake_s_shape_section(
+        self, tmp_path,
+    ):
+        """Two surfaces, one fact. The playbook used to prescribe a
+        committed `kb/` flatly while the shape section said the opposite,
+        so a paired wake read two contradictory instructions and the
+        earlier, unconditional one is the one hugimuni followed."""
+        repo = _repo(tmp_path)
+        playbook = prompts.read_prompt(prompts.INIT_PLAYBOOK_NAME, repo)
+        assert "Knowledge shape for this adopter" in playbook
+        assert "Only when\n  no such section is present" in playbook
+
     def test_playbook_is_the_task(self, tmp_path):
         repo = _repo(tmp_path)
         prompt, _ = prompts.build_init_wake_prompt(
