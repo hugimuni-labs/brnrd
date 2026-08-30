@@ -39,6 +39,13 @@ def install(
         # here until the pidfile was actually read back (issue #1238).
         if result.alive:
             print(f"[brnrd] launchd service loaded and kickstarted — running (pid {result.pid})")
+        elif result.error:
+            # launchd refused the job outright, so there is no process and
+            # no fresh stderr to tail — printing the log here would show the
+            # *previous* daemon's last words as if they were the cause.
+            print("[brnrd] launchd would not load the service:")
+            for line in result.error.splitlines():
+                print(f"  {line}")
         else:
             print("[brnrd] launchd service kickstarted, but the daemon did not start.")
             _, err_log = macos.log_paths()
@@ -104,18 +111,46 @@ def status(*, direct_brr_dir: Path | None = None) -> int:
         print(f"[brnrd] logs: {service.log_dir}")
         direct_code = _print_direct_status(direct_brr_dir)
         if service.loaded is True and direct_code != 0:
-            # launchd's "loaded" only proves the job is registered, not that
-            # it is alive: a `KeepAlive: {SuccessfulExit: False}` unit whose
-            # program hard-exits before `_write_pid` (no `AGENTS.md`) reports
-            # "loaded" forever through a throttled crash loop. `direct_code`
-            # reads the pidfile the daemon process itself writes — the
-            # launchd-managed process and a plain foreground one write the
-            # same file (`daemon.py:330`) — so it, never `loaded`, decides
-            # whether this command succeeds (issue #1238).
-            print("[brnrd] launchd reports loaded, but the daemon process is not running")
-            _, err_log = macos.log_paths()
-            print(f"[brnrd] last stderr ({err_log}):")
-            print(_tail_lines(err_log))
+            # Two different truths look identical from here, and #1238 only
+            # named one of them.
+            #
+            # (a) the crash loop: a `KeepAlive: {SuccessfulExit: False}` unit
+            #     whose program hard-exits before `_write_pid` reports
+            #     "loaded" forever. `direct_code` reads the pidfile the daemon
+            #     writes (`daemon.py:330`), so it — never `loaded` — decides
+            #     whether this command succeeds.
+            #
+            # (b) the daemon is alive and simply lives somewhere else. One
+            #     machine has one `dev.brnrd.brr`, pinned at install time to
+            #     the repo it was installed from, and it writes its pidfile
+            #     under *that* repo's `.brr/`. Connect a second repo and the
+            #     pin moves; a status read from the first repo then finds no
+            #     pidfile and, before this branch existed, announced a crash
+            #     loop for a daemon that was serving it at that moment
+            #     (2026-08-29). Ask the plist where the house is before
+            #     declaring the house empty.
+            elsewhere = _daemon_running_elsewhere(service, direct_brr_dir)
+            if elsewhere is not None:
+                pid, workdir = elsewhere
+                print(
+                    f"[brnrd] daemon running (pid {pid}) — but from {workdir}, "
+                    "not this checkout"
+                )
+                print(
+                    "[brnrd] this machine has one LaunchAgent; it is pinned to "
+                    "the repo it was last installed from, and writes its "
+                    "pidfile there"
+                )
+                print(
+                    "[brnrd] to move it here: `brnrd daemon install` from this "
+                    "checkout"
+                )
+                direct_code = 0
+            else:
+                print("[brnrd] launchd reports loaded, but the daemon process is not running")
+                _, err_log = macos.log_paths()
+                print(f"[brnrd] last stderr ({err_log}):")
+                print(_tail_lines(err_log))
         _print_gate_health(direct_brr_dir)
         return direct_code
 
@@ -124,6 +159,49 @@ def status(*, direct_brr_dir: Path | None = None) -> int:
     code = _print_direct_status(direct_brr_dir)
     _print_gate_health(direct_brr_dir)
     return code
+
+
+def _daemon_running_elsewhere(
+    service: "macos.ServiceStatus",
+    direct_brr_dir: Path | None,
+) -> tuple[int, Path] | None:
+    """``(pid, workdir)`` when the service is alive under a *different* repo.
+
+    ``None`` when the plist names no workdir, names this very checkout, or
+    names a repo whose pidfile is empty — in every one of those cases the
+    caller's original "loaded but not running" reading stands.
+    """
+    workdir = service.workdir
+    if workdir is None:
+        return None
+    try:
+        from brr import gitops
+
+        here = gitops.shared_brr_dir(workdir)
+    except (OSError, RuntimeError):
+        return None
+    if direct_brr_dir is not None and here == Path(direct_brr_dir):
+        return None
+    pid = macos.daemon_pid_for_workdir(workdir)
+    return None if pid is None else (pid, workdir)
+
+
+def service_alive() -> tuple[int, Path] | None:
+    """``(pid, workdir)`` for a background service already up on this machine.
+
+    Machine-scoped on purpose: the question `brnrd connect` needs answered
+    in a second repo is *is a daemon already running here*, not *is one
+    running for me*. One LaunchAgent / one systemd unit serves every
+    connected repo, so a live one is a reason to leave the service alone
+    rather than boot it out and take the first repo down with it.
+    """
+    if _is_macos():
+        workdir = macos.installed_workdir()
+        pid = macos.daemon_pid_for_workdir(workdir)
+        if pid is not None and workdir is not None:
+            return pid, workdir
+        return None
+    return None
 
 
 def logs(*, follow: bool = True, lines: int = 80) -> int | None:

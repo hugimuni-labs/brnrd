@@ -23,6 +23,18 @@ RunFn = Callable[..., subprocess.CompletedProcess]
 #: anything survived (issue #1238).
 DEFAULT_POLL_TIMEOUT = 5.0
 
+#: How long to wait for `bootout` to actually remove the job from the user
+#: domain before bootstrapping over it. The old budget was a blind
+#: 4 x 0.25s retry *after* bootout returned; a daemon with live run
+#: children outlasts it, and every attempt inside that window comes back
+#: error 5 / EIO (measured 2026-08-29: `brnrd connect` in a second repo on
+#: this machine, which then died on launchd's advice to try again as root).
+BOOTOUT_SETTLE_TIMEOUT = 10.0
+
+#: Backstop retries for a bootstrap that still hits EIO after the settle
+#: wait, backing off exponentially from 0.25s.
+BOOTSTRAP_ATTEMPTS = 5
+
 
 @dataclass(frozen=True)
 class InstallResult:
@@ -34,6 +46,13 @@ class InstallResult:
     #: entirely — there was nothing to confirm.
     alive: bool | None = None
     pid: int | None = None
+    #: launchd's own words when the job could not be brought up, carried
+    #: instead of raised. `brnrd connect` renders a "paired, but the
+    #: background service did not come up" branch and then finishes repo
+    #: setup; a `SystemExit` out of `install` vaulted over both, so a
+    #: machine that lost the bootstrap race ended up paired, serviceless,
+    #: *and* uninitialised (2026-08-29).
+    error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -50,6 +69,12 @@ class ServiceStatus:
     installed: bool
     loaded: bool | None
     detail: str
+    #: ``WorkingDirectory`` out of the installed plist — the repo this
+    #: machine's single LaunchAgent calls home, which is *not* necessarily
+    #: the repo the reader is standing in. The daemon writes its pidfile
+    #: under that repo's ``.brr/``, so a status read from anywhere else
+    #: finds no pidfile and used to conclude "not running".
+    workdir: Path | None = None
 
 
 def launch_agents_dir(*, home: Path | None = None) -> Path:
@@ -166,17 +191,21 @@ def install(
     started = False
     alive: bool | None = None
     pid: int | None = None
+    error: str | None = None
     if not no_start:
         _bootout(run=run, check=False)
-        # `bootout` returns before launchd has always finished tearing the
-        # old job down. A bootstrap in that window fails with error 5 / EIO
-        # and suggests root, although this is a user-domain service. Retry
-        # that one transient shape; preserve every real failure verbatim.
-        _bootstrap_after_bootout(path, run=run, sleep=sleep)
-        _run_launchctl(["kickstart", _gui_service()], run=run)
-        started = True
-        pid = _poll_for_pid(workdir_value, timeout=poll_timeout, sleep=sleep)
-        alive = pid is not None
+        # `bootout` is a request, not a receipt. Wait for the job to leave
+        # the domain before bootstrapping over it, rather than bootstrapping
+        # into the teardown window and calling the resulting EIO transient.
+        _await_job_gone(run=run, sleep=sleep)
+        error = _bootstrap_after_bootout(path, run=run, sleep=sleep)
+        if error is None:
+            _run_launchctl(["kickstart", _gui_service()], run=run)
+            started = True
+            pid = _poll_for_pid(workdir_value, timeout=poll_timeout, sleep=sleep)
+            alive = pid is not None
+        else:
+            alive = False
 
     return InstallResult(
         plist_path=path,
@@ -184,7 +213,42 @@ def install(
         started=started,
         alive=alive,
         pid=pid,
+        error=error,
     )
+
+
+def _await_job_gone(
+    *,
+    run: RunFn,
+    sleep: Callable[[float], None],
+    timeout: float = BOOTOUT_SETTLE_TIMEOUT,
+    poll_interval: float = 0.2,
+) -> bool:
+    """Block until launchd no longer knows the job, or *timeout* passes.
+
+    For a daemon with live run children the job stays in the user domain
+    for seconds after `bootout` returns, and the whole EIO class below is
+    a bootstrap landing inside that window. Read the state back —
+    `launchctl print` starts failing once the job is gone — instead of
+    sleeping a guessed interval and hoping.
+
+    Returns whether the job actually left. ``False`` is not fatal: the
+    bootstrap retry below still gets its turn.
+    """
+    elapsed = 0.0
+    while True:
+        result = run(
+            ["launchctl", "print", _gui_service()],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            return True
+        if elapsed >= timeout:
+            return False
+        sleep(poll_interval)
+        elapsed += poll_interval
 
 
 def _bootstrap_after_bootout(
@@ -192,18 +256,74 @@ def _bootstrap_after_bootout(
     *,
     run: RunFn,
     sleep: Callable[[float], None],
-    attempts: int = 4,
-) -> None:
+    attempts: int = BOOTSTRAP_ATTEMPTS,
+) -> str | None:
+    """Bootstrap the job; ``None`` on success, else the failure detail.
+
+    Returns rather than raises, so `install` can report a service that did
+    not come up without taking its caller down with it.
+    """
     args = ["bootstrap", _gui_domain(), str(path)]
+    delay = 0.25
     for attempt in range(attempts):
         result = _run_launchctl(args, run=run, check=False)
         if result.returncode == 0:
-            return
+            return None
         detail = (result.stderr or result.stdout or "").strip()
         transient_eio = "Bootstrap failed: 5" in detail or "Input/output error" in detail
-        if not transient_eio or attempt == attempts - 1:
-            raise SystemExit(detail or f"[brnrd] launchctl {' '.join(args)} failed")
-        sleep(0.25)
+        if not transient_eio:
+            return detail or f"[brnrd] launchctl {' '.join(args)} failed"
+        if attempt == attempts - 1:
+            # Never hand launchd's last line back unqualified: it ends in
+            # "Try re-running the command as root", and root is the one
+            # thing that cannot help a `gui/<uid>` domain. Name the real
+            # cause and the act that clears it.
+            return (
+                "launchd would not take the job (error 5 / EIO): the "
+                "previous daemon was still shutting down. This is a "
+                "user-domain service, so running as root will not help. "
+                "Wait for the old daemon to exit, then re-run "
+                "`brnrd daemon install` from the checkout the service "
+                "should run from.\n"
+                f"  launchd said: {detail}"
+            )
+        sleep(delay)
+        delay *= 2
+    return None
+
+
+def installed_workdir(*, home: Path | None = None) -> Path | None:
+    """``WorkingDirectory`` out of the installed plist, or ``None``.
+
+    One machine has one ``dev.brnrd.brr``. Which repo it runs from is an
+    install-time snapshot (:func:`resolve_workdir`), so a reader that wants
+    to know where the daemon's pidfile landed has to ask the plist instead
+    of assuming its own checkout.
+    """
+    try:
+        payload = plistlib.loads(plist_path(home=home).read_bytes())
+    except (OSError, ValueError):
+        return None
+    raw = payload.get("WorkingDirectory")
+    return Path(raw) if isinstance(raw, str) and raw else None
+
+
+def daemon_pid_for_workdir(workdir: Path | None) -> int | None:
+    """The live pid of the daemon that calls *workdir* home, if any.
+
+    Reads the same pidfile `brnrd daemon status` reads, only under the repo
+    the plist names rather than the repo the caller happens to stand in.
+    """
+    if workdir is None:
+        return None
+    from brr import daemon as daemon_mod
+    from brr import gitops
+
+    try:
+        brr_dir = gitops.shared_brr_dir(workdir)
+        return daemon_mod.read_pid(brr_dir)
+    except (OSError, RuntimeError):
+        return None
 
 
 def _poll_for_pid(
@@ -280,6 +400,7 @@ def status(
         installed=path.exists(),
         loaded=loaded,
         detail=detail,
+        workdir=installed_workdir(home=home),
     )
 
 
