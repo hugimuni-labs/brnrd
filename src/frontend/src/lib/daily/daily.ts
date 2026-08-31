@@ -1,13 +1,13 @@
+// What `/daily` still owns after 2026-08-31. The route used to compile its
+// own account of the world here — buoys off the warp, islands off branch
+// relics, a kb reef, a cloth digest — a second, thinner telling of facts the
+// main dashboard already states. The maintainer ditched that composition
+// wholesale ("there is nothing to salvage there"), and it took
+// `dailyBuoys`/`surfaceBuoys`/`dailyIslands`/`knowledgePageCount`/
+// `hashItemId`/`dailyItemState` and `DailyItemPanel.svelte` with it. `/daily`
+// wears `$lib/Dashboard.svelte` now; what is left in this file is the two
+// things that view still needs and nothing else can answer.
 import { edgeLine, liveRunDisplayName, runCourse, type LiveRun } from '../liveRuns.ts';
-import type { RelicRecord, RunLedgerRow } from '../runLedger.ts';
-import {
-	isBlocked,
-	readyItems,
-	resolveTopics,
-	topicFaces,
-	type WarpGraph,
-	type WarpItem
-} from '../warpGraph.ts';
 
 export interface DailyLiveBar {
 	run: LiveRun;
@@ -46,112 +46,55 @@ export function dailyLiveBars(runs: LiveRun[]): DailyLiveBar[] {
 	return out;
 }
 
-export interface DailyBuoy {
-	item: WarpItem;
-	mark: string;
-	color: string;
-	topic: string | null;
-}
+/** Lines `renderWorld` paints below the `rows`-tall board (measured, above). */
+export const SCENE_CONTROL_ROWS = 18;
+/** The deck's own padding + legend toggle, in px (measured, above). */
+export const SCENE_CHROME_PX = 77;
 
-/** The surface claim is exactly open ∧ unblocked; goals have their own future band. */
-export function dailyBuoys(graph: WarpGraph): DailyBuoy[] {
-	const faces = topicFaces(graph);
-	return readyItems(graph).map((item) => {
-		const topic = resolveTopics(item, graph)[0] ?? null;
-		return {
-			item,
-			mark: item.type === 'action' ? '♦' : '◇',
-			color: (topic && faces.get(topic.canonicalId)?.color) || '#d9a441',
-			topic: topic?.title ?? null
-		};
-	});
-}
+export const MAP_ROW_BOUNDS = {
+	inline: { share: 0.62, min: 10, max: 22 },
+	full: { share: 0.92, min: 14, max: 48 }
+} as const;
 
-export interface DailyIsland {
-	repo: string;
-	branches: { name: string; pr: number | null; live: boolean }[];
-}
+export type MapPlacement = keyof typeof MAP_ROW_BOUNDS;
 
-function relicBranch(refs: RelicRecord[] | null): { name: string; pr: number | null } | null {
-	const branch = refs?.find((ref) => ref.kind === 'branch');
-	if (!branch?.name) return null;
-	const pr = refs?.find((ref) => ref.kind === 'pr');
-	return { name: String(branch.name), pr: typeof pr?.number === 'number' ? pr.number : null };
-}
-
-/** Only branch and PR facts present on the browser wire become terrain. */
-export function dailyIslands(runs: LiveRun[], rows: RunLedgerRow[]): DailyIsland[] {
-	const byRepo = new Map<string, Map<string, { name: string; pr: number | null; live: boolean }>>();
-	const add = (
-		repo: string | null | undefined,
-		branch: string,
-		pr: number | null,
-		live: boolean
-	) => {
-		const label = repo || 'unknown project';
-		const branches = byRepo.get(label) ?? new Map();
-		const prior = branches.get(branch);
-		branches.set(branch, {
-			name: branch,
-			pr: pr ?? prior?.pr ?? null,
-			live: live || prior?.live || false
-		});
-		byRepo.set(label, branches);
-	};
-	for (const run of runs) if (run.room?.branch) add(run.repo_label, run.room.branch, null, true);
-	for (const row of rows) {
-		const branch = relicBranch(row.external_refs);
-		if (branch) add(row.repo_label, branch.name, branch.pr, false);
-	}
-	return [...byRepo.entries()].map(([repo, branches]) => ({
-		repo,
-		branches: [...branches.values()]
-	}));
-}
-
-export function knowledgePageCount(files: { layer?: string }[]): number | null {
-	const served = files.some((file) => file.layer === 'knowledge');
-	return served ? files.filter((file) => file.layer === 'knowledge').length : null;
-}
-
-export interface SurfaceBuoyField {
-	shown: DailyBuoy[];
-	hidden: number;
-}
-
-/**
- * The strip stays a line, not a wall. The live warp serves ~40 ready items;
- * rendering them all re-creates the `/` wall with color. Needs-you calls
- * (decisions/preparations) surface first, then dispatchable actions, capped —
- * and the remainder is counted, never vanished (the heddle rail's own rule).
+/** How tall the ascii scene stands, in board rows.
+ *
+ *  `AsciiField` takes its height as a row count and derives its width from
+ *  the box it is given — so a constant here is the same number of rows on a
+ *  phone and a 27" display, and 22 rows (the old standalone `/daily`) is most
+ *  of a phone viewport. Inside the dashboard that pushes every section under
+ *  the field below the horizon, on exactly the device the compact view exists
+ *  for. So both placements read the viewport.
+ *
+ *  The arithmetic is not `height / lineHeight`, and that is the whole reason
+ *  this is a function with a test rather than two numbers at the call sites.
+ *  `rows` is the *board*; `renderWorld` paints a fixed tail of control rows
+ *  under it — actor bearings, CHARTS, the cloth selvage — and the deck adds
+ *  its own padding and legend toggle around the lot. Measured at both widths
+ *  on 2026-08-31 (`repro/drive-daily.mjs` prints these live): 18 board rows
+ *  rendered 36 lines in a 644px frame at 390x844. Ask for a share of the
+ *  viewport without subtracting that, and every answer is ~300px too tall.
+ *
+ *  - `inline` — the live-runs slot. Bounded near two thirds of the viewport
+ *    *including* the tail, so the warp is reachable with one thumb-flick.
+ *  - `full` — the stage behind `↙ collapse`. The overlay's own 92svh cap.
+ *
+ *  The floors are load-bearing in both directions: a 0/absent viewport (SSR,
+ *  the first client frame) renders the minimum rather than an empty bordered
+ *  box, and on a short phone the tail alone can eat the whole budget — a
+ *  small map reads as a map, a zero-row one reads as broken.
  */
-export function surfaceBuoys(buoys: DailyBuoy[], cap = 10): SurfaceBuoyField {
-	const calls = buoys.filter((buoy) => buoy.item.type !== 'action');
-	const actions = buoys.filter((buoy) => buoy.item.type === 'action');
-	const ordered = [...calls, ...actions];
-	return { shown: ordered.slice(0, cap), hidden: Math.max(0, ordered.length - cap) };
-}
 
-/** The buoy hash grammar: `#<item-id>`, trimmed and de-hashed — the one parse
- *  a cold `/daily#w-47` load and a live buoy press both resolve against, so
- *  they can't drift into two different notions of "what does this hash
- *  mean." Blank (`''`, `'#'`) reads as no selection rather than an id. */
-export function hashItemId(hash: string): string | null {
-	const id = hash.replace(/^#/, '').trim();
-	return id.length > 0 ? id : null;
-}
-
-export type DailyItemState = 'ready' | 'blocked' | 'taken' | 'done' | 'retired';
-
-/** The lifecycle the item detail panel reports, layered over the graph's
- *  plain open/done/retired: blocked and taken can both be true of an *open*
- *  item, so this picks the one that answers "what do I do about it" —
- *  blocked (something else has to move first) outranks taken (a run already
- *  claimed it) outranks plain ready. */
-export function dailyItemState(item: WarpItem, graph: WarpGraph): DailyItemState {
-	if (item.state === 'done') return 'done';
-	if (item.state === 'retired') return 'retired';
-	if (isBlocked(item, graph)) return 'blocked';
-	if (item.taken.length > 0) return 'taken';
-	return 'ready';
+export function mapRows(
+	placement: MapPlacement,
+	viewportHeight: number,
+	lineHeightPx = 16.2
+): number {
+	const { share, min, max } = MAP_ROW_BOUNDS[placement];
+	if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return min;
+	if (!Number.isFinite(lineHeightPx) || lineHeightPx <= 0) return min;
+	const painted = viewportHeight * share - SCENE_CHROME_PX;
+	const lines = Math.round(painted / lineHeightPx) - SCENE_CONTROL_ROWS;
+	return Math.max(min, Math.min(max, lines));
 }
