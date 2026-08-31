@@ -845,6 +845,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="send to a destination with no waiting event; pair with "
              "--body-file (repeatable)")
     do_p.add_argument(
+        "--item", dest="item", action=_OrderedAppend, default=None,
+        metavar="ITEM-ID",
+        help="bind the immediately preceding --reply to a warp item that "
+             "exists (`brnrd item list`); repeatable — one reply may "
+             "answer several items. Refused (nothing staged) against an "
+             "unknown id or with no preceding --reply. Records the join "
+             "in .asks.jsonl once that reply's own drain verdict is "
+             "accepted")
+    do_p.add_argument(
         "--body-file", dest="body_file", action=_OrderedAppend, default=None,
         metavar="FILE",
         help="body for the immediately preceding --reply or --gate")
@@ -2739,19 +2748,25 @@ def cmd_relic_file(args):
 
 
 def _reconstruct_do_ops(ordered_ops):
-    """Pair ``--reply``/``--gate`` with the ``--body-file``/``--body`` that
-    immediately follows them in ``ordered_ops`` (command-line order, from
-    ``_OrderedAppend`` — only ``reply``/``gate``/``body_file``/``body``
-    entries, ``--note`` is not routed through this list).
+    """Pair ``--reply``/``--gate`` with the ``--item``/``--body-file``/
+    ``--body`` that immediately follow them in ``ordered_ops`` (command-line
+    order, from ``_OrderedAppend`` — only ``reply``/``gate``/``item``/
+    ``body_file``/``body`` entries, ``--note`` is not routed through this
+    list).
 
-    Returns ``(replies, gates, error)``: ``replies``/``gates`` are lists of
-    ``(target, body_text)``; ``error`` is a human string naming the first
-    unpaired flag, or ``None``. A ``--body-file`` reads its file eagerly here
-    so a bad path fails before anything is staged, not mid-batch.
+    Returns ``(replies, gates, error)``: ``gates`` is a list of
+    ``(target, body_text)``; ``replies`` is a list of
+    ``(target, body_text, item_ids)`` — ``item_ids`` is every ``--item``
+    that landed between this ``--reply`` and its body, in command-line
+    order, ``[]`` when none did. ``error`` is a human string naming the
+    first unpaired/misplaced flag, or ``None``. A ``--body-file`` reads its
+    file eagerly here so a bad path fails before anything is staged, not
+    mid-batch.
     """
-    replies: list[tuple[str, str]] = []
+    replies: list[tuple[str, str, list[str]]] = []
     gates: list[tuple[str, str]] = []
     pending: tuple[str, str] | None = None
+    pending_items: list[str] = []
     for dest, value in ordered_ops:
         if dest in ("reply", "gate"):
             if pending is not None:
@@ -2761,6 +2776,21 @@ def _reconstruct_do_ops(ordered_ops):
                     f"the next --{dest}"
                 )
             pending = (dest, value)
+            pending_items = []
+            continue
+        if dest == "item":
+            if pending is None:
+                return replies, gates, (
+                    "--item given with no preceding --reply. There is no "
+                    "reply to bind"
+                )
+            kind, target = pending
+            if kind == "gate":
+                return replies, gates, (
+                    f"--item {value} follows --gate {target}, not --reply "
+                    "— a gate send has no event to bind"
+                )
+            pending_items.append(value)
             continue
         # dest in ("body_file", "body")
         if pending is None:
@@ -2776,8 +2806,12 @@ def _reconstruct_do_ops(ordered_ops):
             if kind == "gate":
                 return replies, gates, "--gate only pairs with --body-file, not --body"
             text = value
-        (replies if kind == "reply" else gates).append((target, text))
+        if kind == "reply":
+            replies.append((target, text, pending_items))
+        else:
+            gates.append((target, text))
         pending = None
+        pending_items = []
     if pending is not None:
         kind, target = pending
         return replies, gates, f"--{kind} {target} has no --body-file/--body"
@@ -2960,6 +2994,19 @@ def cmd_do(args):
     this module's own notices-diff window closes — is not this change; see
     ``do.py``'s module docstring for that gap.
 
+    **The asks join** (design-the-water-line.md §The asks lane, rung 2).
+    ``--item <id>``, repeatable, binds the immediately preceding ``--reply``
+    to a warp item — one reply may answer several asks. Checked client-side
+    before anything is staged, same all-or-nothing shape as the two
+    contracts above: an id that doesn't resolve (``items.resolve_item``)
+    refuses the whole call, and an ``--item`` with no preceding ``--reply``
+    (or trailing a ``--gate``, which has no event to bind) is a pairing
+    error from ``_reconstruct_do_ops``. Unlike the promise row, the write is
+    **per reply, not per call** — each staged reply's own drain verdict
+    gates only its own item rows in ``.asks.jsonl`` (``do.append_ask``), so
+    one refused reply in a multi-``--reply`` batch never blocks another
+    reply's bindings.
+
     ``-- <command> [args…]`` (split out of argv in ``main`` before this
     parser ever sees it) runs after the verbs are staged: verdict lines move
     to stderr (so the command's own stdout stays pipeable) and the command
@@ -2993,7 +3040,7 @@ def cmd_do(args):
     # spelling send the same chat message once per event. Refuse that batch
     # before any file exists, and name the economy shape the caller wanted.
     duplicate_targets: dict[str, list[str]] = {}
-    for event_id, body in replies:
+    for event_id, body, _item_ids in replies:
         duplicate_targets.setdefault(body, []).append(event_id)
     repeated = next((ids for ids in duplicate_targets.values() if len(ids) > 1), None)
     if repeated is not None:
@@ -3005,6 +3052,34 @@ def cmd_do(args):
             file=sys.stderr,
         )
         return 1
+
+    # `--item` names an item that exists (design-the-water-line.md §The asks
+    # lane, rung 2). Checked once for the whole batch, before anything is
+    # staged — the same all-or-nothing "nothing was staged" guarantee the
+    # promise-debt and live-inbox checks below already give: a binding to
+    # `w-999` is worse than no binding, so it refuses the call rather than
+    # silently dropping just that `--item`. `items.resolve_item` is the
+    # exact-id authority `brnrd item list` itself is built on — no fuzzy
+    # headline match here, unlike `_resolve_item_arg`, since a caller typing
+    # a wrong id should be told the id is wrong, not have it silently
+    # resolved to something else it happens to fuzzy-match.
+    all_item_ids = [item_id for _e, _b, item_ids in replies for item_id in item_ids]
+    if all_item_ids:
+        from . import items as items_mod
+
+        warp_root, _warp_err = _item_context()
+        unknown = sorted({
+            item_id for item_id in all_item_ids
+            if items_mod.resolve_item(warp_root, item_id) is None
+        })
+        if unknown:
+            print(
+                "[brnrd do] --item names an item that doesn't exist: "
+                + ", ".join(unknown)
+                + ". Nothing was staged.",
+                file=sys.stderr,
+            )
+            return 1
 
     # The reply-debt contract: a call with any --reply must own exactly one
     # of --promise/--no-promise (argparse's mutually-exclusive group already
@@ -3084,7 +3159,7 @@ def cmd_do(args):
         # ambiguous short-id match, never blocks a call this check cannot
         # actually verify.
         non_pending: list[str] = []
-        for event_id, _body in replies:
+        for event_id, _body, _item_ids in replies:
             status = do_mod.reply_target_status(
                 do_mod.read_live_inbox(outbox_dir), event_id,
             )
@@ -3127,7 +3202,7 @@ def cmd_do(args):
             ]
             waitable += [
                 _do_stage_reply(do_mod, outbox_dir, event_id, body, i)
-                for i, (event_id, body) in enumerate(replies)
+                for i, (event_id, body, _item_ids) in enumerate(replies)
             ]
             waitable += [
                 _do_stage_gate(do_mod, outbox_dir, gate_name, body, i)
@@ -3138,12 +3213,26 @@ def cmd_do(args):
                 timeout_seconds=timeout,
             )
             reply_verdicts = []
+            reply_index = 0
             for (verb, label, _directive), (status, detail) in zip(waitable, verdicts):
                 seg, ok = _do_render(verb, label, status, detail)
                 segments.append(seg)
                 any_failed = any_failed or not ok
                 if verb == "reply":
                     reply_verdicts.append(status)
+                    # The asks.jsonl write: per-reply, not per-batch — a
+                    # binding for a reply that never landed is the same
+                    # debt-row lie `--promise` already refuses to leave
+                    # (design-the-water-line.md §The asks lane). Each
+                    # reply's own drain verdict gates its own item rows, so
+                    # one refused reply in a multi-`--reply` batch does not
+                    # block another reply's bindings from being recorded.
+                    event_id, _body, item_ids = replies[reply_index]
+                    if item_ids and do_mod.accepted(status):
+                        for item_id in item_ids:
+                            do_mod.append_ask(outbox_dir, event_id, item_id)
+                            segments.append(f"item {item_id} ✓")
+                    reply_index += 1
 
             # The promise write: one row for the whole call (never one per
             # --reply — see cmd_do's docstring), and only once every staged
