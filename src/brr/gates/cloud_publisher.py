@@ -2030,20 +2030,11 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
     # Presence is physically repo-local, but a connected daemon is
     # account-scoped.  Publishing only this checkout's registry made a
     # cross-repo strand consume a real pool slot while disappearing from
-    # every dashboard surface (#1727).  Resolve every registered repo here,
-    # at the serving edge, and keep the project-only fallback unchanged.
-    presence_dirs = [brr_dir]
-    try:
-        from .. import account as account_mod
-
-        ctx = account_mod.resolve_context(brr_dir.parent, create=False)
-        presence_dirs = [
-            repo.root / ".brr"
-            for repo in sorted(ctx.repos.values(), key=lambda item: item.label)
-            if (repo.root / ".brr").is_dir()
-        ] or [brr_dir]
-    except Exception:
-        pass
+    # every dashboard surface (#1727).  ``presence.account_dirs`` owns that
+    # walk now — this loop still needs the *producing* directory (manifests,
+    # conversation records and portals are all repo-local too), so it
+    # iterates the dirs rather than calling ``list_active_account``.
+    presence_dirs = presence.account_dirs(brr_dir)
 
     out: list[dict[str, Any]] = []
     seen_entries: set[str] = set()
@@ -2199,8 +2190,18 @@ def _daemon_mood_payload(brr_dir: Path) -> dict[str, Any] | None:
     richer states (quota_starved, failing, …) belong to whoever computes
     them, and inventing them here from partial signals would break the
     honesty bar the emote library states for itself.
+
+    Account-scoped for the same reason ``_live_runs_snapshot`` above is
+    (#1727): the *board's* face answers "is my daemon working", and a
+    strand outliving its parent in a sibling repo is the one case where
+    this checkout's registry is empty and the daemon is anything but idle.
+    A face that rests through live work is exactly the honesty bar this
+    docstring claims to hold.
     """
-    active = [e for e in presence.list_active(brr_dir) if str(e.get("run_id") or "")]
+    active = [
+        e for e in presence.list_active_account(brr_dir)
+        if str(e.get("run_id") or "")
+    ]
     state = "running" if active else "idle"
     emote = emotes.for_telemetry(state)
     if emote is None:
