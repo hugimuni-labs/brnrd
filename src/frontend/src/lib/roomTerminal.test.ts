@@ -101,12 +101,28 @@ test('the window is exactly its declared size, whatever it is given', () => {
 });
 
 // An empty window and a broken one must not look alike — the defect this
-// whole round has been about, in miniature.
-test('an empty terminal says it is empty, and still holds its shape', () => {
+// whole round has been about, in miniature. Since 2026-08-31 the window
+// fits its contents (`rows` is a ceiling, not a padding target), so empty
+// means one honest row, not a quadrant of blank frame.
+test('an empty terminal says it is empty, on one row, and a full one stops at its ceiling', () => {
 	const box = terminalBox([]);
-	assert.equal(box.length, TERMINAL_ROWS + 2);
+	assert.equal(box.length, 3, 'frame + one body row');
 	assert.ok(box.some((r) => r.includes('no commands yet')));
 	assert.ok(!box.at(-1)?.includes('older'), 'nothing hidden, so no overflow claim');
+	const two = terminalBox([
+		{ at: '2026-08-28T22:00:00Z', act: 'mutate', detail: 'a' },
+		{ at: '2026-08-28T22:01:00Z', act: 'probe', detail: 'b' }
+	]);
+	assert.equal(two.length, 4, 'two commands, two rows — no padding to the ceiling');
+	const many = terminalBox(
+		Array.from({ length: TERMINAL_ROWS + 3 }, (_, i) => ({
+			at: `2026-08-28T22:0${i}:00Z`,
+			act: 'probe',
+			detail: `cmd${i}`
+		}))
+	);
+	assert.equal(many.length, TERMINAL_ROWS + 2, 'the ceiling still bounds a long log');
+	assert.ok(many.at(-1)?.includes('3 older'), 'and the overflow says how much it hides');
 });
 
 test('the box is pure — the same lines render the same window', () => {
