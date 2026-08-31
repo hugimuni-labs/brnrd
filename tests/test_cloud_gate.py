@@ -3867,6 +3867,41 @@ def test_daemon_mood_payload_reports_board_state(tmp_path):
     assert busy["name"] == emotes.for_telemetry("running").name
 
 
+def test_daemon_mood_payload_wakes_for_a_sibling_repo(tmp_path, monkeypatch):
+    """The board's face is the account's, not this checkout's (#1727).
+
+    A `spawn:` strand with `repo:` outlives its parent often enough that
+    "nothing is live here" and "the daemon is idle" are different claims —
+    and the face is the surface that says the second one out loud.
+    """
+    from brr import account, emotes, presence
+
+    parent = tmp_path / "parent" / ".brr"
+    sibling = tmp_path / "sibling" / ".brr"
+    parent.mkdir(parents=True)
+    sibling.mkdir(parents=True)
+    monkeypatch.setattr(
+        account,
+        "resolve_context",
+        lambda *_a, **_k: SimpleNamespace(
+            repos={
+                "org/parent": SimpleNamespace(label="org/parent", root=parent.parent),
+                "org/sibling": SimpleNamespace(label="org/sibling", root=sibling.parent),
+            }
+        ),
+    )
+    assert cloud._daemon_mood_payload(parent)["state"] == "idle"
+
+    presence.register(
+        sibling, kind="daemon", run_id="run-strand", repo_label="org/sibling",
+        pid=os.getpid(), is_subspawn=True, parent_run_id="run-parent",
+    )
+
+    board = cloud._daemon_mood_payload(parent)
+    assert board["state"] == "running"
+    assert board["name"] == emotes.for_telemetry("running").name
+
+
 # --- #417: the off switch SECURITY.md promises ---------------------------
 #
 # `SECURITY.md` tells a reader that `publish.layers` "opts the mirror down to

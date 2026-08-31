@@ -3920,8 +3920,12 @@ def _run_worker(
     # Other thoughts awake right now (presence registry), excluding this
     # one — so the resident knows it may share the dominion with a
     # concurrent session and reconciles rather than fights (slice 5).
+    # Account-wide (#1727): the dominion these thoughts share is the
+    # account's, and a `spawn:` strand with `repo:` registers in the repo
+    # it runs in — reading only this checkout reported the run's own
+    # sibling as absent.
     present_snapshot = [
-        e for e in presence.list_active(brr_dir)
+        e for e in presence.list_active_account(brr_dir)
         if e.get("run_id") != task.id
     ]
 
@@ -6676,8 +6680,12 @@ def _write_live_portal_state(
         coexisting_snapshot: list[dict[str, object]] | None = None
         if brr_dir is not None:
             try:
+                # Account-wide, same reason as `present_snapshot` above
+                # (#1727): this facet is what tells a resident it has a
+                # live strand at all, and a cross-repo strand's presence
+                # never lands in this checkout's registry.
                 coexisting_snapshot = [
-                    e for e in presence.list_active(brr_dir)
+                    e for e in presence.list_active_account(brr_dir)
                     if e.get("run_id") != task.id
                 ]
             except OSError:
