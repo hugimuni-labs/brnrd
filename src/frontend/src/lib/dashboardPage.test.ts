@@ -5,12 +5,16 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 // Source-level, deliberately — same call as ColdStart.test.ts's
-// SIGNED_IN_ROUTES check and reposPage.test.ts: `routes/+page.svelte` reads
-// `page`, `onMount`, and `localStorage`, none of which the SSR-compile-and-
-// render harness the other component tests use can stub cheaply, and the
-// claims here are about which components render, not derived state.
+// SIGNED_IN_ROUTES check and reposPage.test.ts: the dashboard reads `page`,
+// `onMount`, and `localStorage`, none of which the SSR-compile-and-render
+// harness the other component tests use can stub cheaply, and the claims here
+// are about which components render, not derived state.
+//
+// The body lives in `$lib/Dashboard.svelte` since 2026-08-31 (`/` and
+// `/daily` are both thin routes over it). Every claim below is about that
+// body and is unchanged; only the path it is read from moved.
 const here = dirname(fileURLToPath(import.meta.url));
-const dashboardPagePath = join(here, '..', 'routes', '+page.svelte');
+const dashboardPagePath = join(here, 'Dashboard.svelte');
 
 function source(): string {
 	return readFileSync(dashboardPagePath, 'utf8');

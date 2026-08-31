@@ -1,13 +1,13 @@
+// What `/daily` still owns after 2026-08-31. The route used to compile its
+// own account of the world here — buoys off the warp, islands off branch
+// relics, a kb reef, a cloth digest — a second, thinner telling of facts the
+// main dashboard already states. The maintainer ditched that composition
+// wholesale ("there is nothing to salvage there"), and it took
+// `dailyBuoys`/`surfaceBuoys`/`dailyIslands`/`knowledgePageCount`/
+// `hashItemId`/`dailyItemState` and `DailyItemPanel.svelte` with it. `/daily`
+// wears `$lib/Dashboard.svelte` now; what is left in this file is the two
+// things that view still needs and nothing else can answer.
 import { edgeLine, liveRunDisplayName, runCourse, type LiveRun } from '../liveRuns.ts';
-import type { RelicRecord, RunLedgerRow } from '../runLedger.ts';
-import {
-	isBlocked,
-	readyItems,
-	resolveTopics,
-	topicFaces,
-	type WarpGraph,
-	type WarpItem
-} from '../warpGraph.ts';
 
 export interface DailyLiveBar {
 	run: LiveRun;
@@ -46,112 +46,40 @@ export function dailyLiveBars(runs: LiveRun[]): DailyLiveBar[] {
 	return out;
 }
 
-export interface DailyBuoy {
-	item: WarpItem;
-	mark: string;
-	color: string;
-	topic: string | null;
-}
-
-/** The surface claim is exactly open ∧ unblocked; goals have their own future band. */
-export function dailyBuoys(graph: WarpGraph): DailyBuoy[] {
-	const faces = topicFaces(graph);
-	return readyItems(graph).map((item) => {
-		const topic = resolveTopics(item, graph)[0] ?? null;
-		return {
-			item,
-			mark: item.type === 'action' ? '♦' : '◇',
-			color: (topic && faces.get(topic.canonicalId)?.color) || '#d9a441',
-			topic: topic?.title ?? null
-		};
-	});
-}
-
-export interface DailyIsland {
-	repo: string;
-	branches: { name: string; pr: number | null; live: boolean }[];
-}
-
-function relicBranch(refs: RelicRecord[] | null): { name: string; pr: number | null } | null {
-	const branch = refs?.find((ref) => ref.kind === 'branch');
-	if (!branch?.name) return null;
-	const pr = refs?.find((ref) => ref.kind === 'pr');
-	return { name: String(branch.name), pr: typeof pr?.number === 'number' ? pr.number : null };
-}
-
-/** Only branch and PR facts present on the browser wire become terrain. */
-export function dailyIslands(runs: LiveRun[], rows: RunLedgerRow[]): DailyIsland[] {
-	const byRepo = new Map<string, Map<string, { name: string; pr: number | null; live: boolean }>>();
-	const add = (
-		repo: string | null | undefined,
-		branch: string,
-		pr: number | null,
-		live: boolean
-	) => {
-		const label = repo || 'unknown project';
-		const branches = byRepo.get(label) ?? new Map();
-		const prior = branches.get(branch);
-		branches.set(branch, {
-			name: branch,
-			pr: pr ?? prior?.pr ?? null,
-			live: live || prior?.live || false
-		});
-		byRepo.set(label, branches);
-	};
-	for (const run of runs) if (run.room?.branch) add(run.repo_label, run.room.branch, null, true);
-	for (const row of rows) {
-		const branch = relicBranch(row.external_refs);
-		if (branch) add(row.repo_label, branch.name, branch.pr, false);
-	}
-	return [...byRepo.entries()].map(([repo, branches]) => ({
-		repo,
-		branches: [...branches.values()]
-	}));
-}
-
-export function knowledgePageCount(files: { layer?: string }[]): number | null {
-	const served = files.some((file) => file.layer === 'knowledge');
-	return served ? files.filter((file) => file.layer === 'knowledge').length : null;
-}
-
-export interface SurfaceBuoyField {
-	shown: DailyBuoy[];
-	hidden: number;
-}
-
-/**
- * The strip stays a line, not a wall. The live warp serves ~40 ready items;
- * rendering them all re-creates the `/` wall with color. Needs-you calls
- * (decisions/preparations) surface first, then dispatchable actions, capped —
- * and the remainder is counted, never vanished (the heddle rail's own rule).
+/** How tall the ascii scene stands, in character rows.
+ *
+ *  `AsciiField` derives its *width* from the box it is given and takes its
+ *  *height* as a row count — so a constant here is a constant number of rows
+ *  on every screen, and 22 rows (the old standalone `/daily`) is roughly a
+ *  full phone viewport. Inside the dashboard that would push every section
+ *  under it below the horizon on exactly the device the compact view exists
+ *  for. So the two placements read the viewport instead:
+ *
+ *  - `inline` — the glance in the live-runs slot. A third of the viewport,
+ *    floored at something still legible as a map and capped so a tall desktop
+ *    doesn't turn the glance back into the wall.
+ *  - `full` — the expanded stage. Nearly the whole overlay; the cap is well
+ *    past any real viewport and exists only so a bad measurement can't ask
+ *    the camera to render a thousand rows.
+ *
+ *  A zero/absent viewport (SSR, a detached measurement) falls to the floor
+ *  rather than to zero: a map with no rows renders as a blank frame, which
+ *  reads as broken, while a short one reads as a small map.
  */
-export function surfaceBuoys(buoys: DailyBuoy[], cap = 10): SurfaceBuoyField {
-	const calls = buoys.filter((buoy) => buoy.item.type !== 'action');
-	const actions = buoys.filter((buoy) => buoy.item.type === 'action');
-	const ordered = [...calls, ...actions];
-	return { shown: ordered.slice(0, cap), hidden: Math.max(0, ordered.length - cap) };
-}
+export const MAP_ROW_BOUNDS = {
+	inline: { share: 0.34, min: 10, max: 22 },
+	full: { share: 0.86, min: 14, max: 48 }
+} as const;
 
-/** The buoy hash grammar: `#<item-id>`, trimmed and de-hashed — the one parse
- *  a cold `/daily#w-47` load and a live buoy press both resolve against, so
- *  they can't drift into two different notions of "what does this hash
- *  mean." Blank (`''`, `'#'`) reads as no selection rather than an id. */
-export function hashItemId(hash: string): string | null {
-	const id = hash.replace(/^#/, '').trim();
-	return id.length > 0 ? id : null;
-}
+export type MapPlacement = keyof typeof MAP_ROW_BOUNDS;
 
-export type DailyItemState = 'ready' | 'blocked' | 'taken' | 'done' | 'retired';
-
-/** The lifecycle the item detail panel reports, layered over the graph's
- *  plain open/done/retired: blocked and taken can both be true of an *open*
- *  item, so this picks the one that answers "what do I do about it" —
- *  blocked (something else has to move first) outranks taken (a run already
- *  claimed it) outranks plain ready. */
-export function dailyItemState(item: WarpItem, graph: WarpGraph): DailyItemState {
-	if (item.state === 'done') return 'done';
-	if (item.state === 'retired') return 'retired';
-	if (isBlocked(item, graph)) return 'blocked';
-	if (item.taken.length > 0) return 'taken';
-	return 'ready';
+export function mapRows(
+	placement: MapPlacement,
+	viewportHeight: number,
+	lineHeightPx = 16.2
+): number {
+	const { share, min, max } = MAP_ROW_BOUNDS[placement];
+	if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return min;
+	if (!Number.isFinite(lineHeightPx) || lineHeightPx <= 0) return min;
+	return Math.max(min, Math.min(max, Math.round((viewportHeight * share) / lineHeightPx)));
 }

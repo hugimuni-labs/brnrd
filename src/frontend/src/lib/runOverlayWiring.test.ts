@@ -9,7 +9,10 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const page = readFileSync(join(here, '../routes/+page.svelte'), 'utf8');
+// The dashboard body moved to `$lib/Dashboard.svelte` on 2026-08-31 so
+// `/daily` could wear the same interface; `routes/+page.svelte` is a two-line
+// route over it now. Same source, same claims — new path.
+const page = readFileSync(join(here, 'Dashboard.svelte'), 'utf8');
 const node = readFileSync(join(here, 'RunNodeInline.svelte'), 'utf8');
 const card = readFileSync(join(here, 'LiveRuns.svelte'), 'utf8');
 const overlay = readFileSync(join(here, 'RunOverlay.svelte'), 'utf8');
@@ -55,7 +58,12 @@ test('the edge re-reveals slowly — the ceremony can afford to be watched', () 
 
 test('the overlay closes on Escape and backdrop, and scrolls its own sheet', () => {
 	match(overlay, /Escape/);
-	match(overlay, /aria-label="close run detail"/);
+	// The backdrop's accessible name is a prop since 2026-08-31 (the map stage
+	// dismisses as "collapse the map"), so the pin follows it to the default
+	// rather than the attribute — and pins the wiring too, which the literal
+	// never did: the attribute must actually read that prop.
+	match(overlay, /dismissLabel = 'close run detail'/);
+	match(overlay, /aria-label=\{dismissLabel\}/);
 	match(overlay, /max-h-\[92svh\]/);
 	// aria-modal dialog semantics — a stage, not a decoration.
 	match(overlay, /aria-modal="true"/);
