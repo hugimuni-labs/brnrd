@@ -62,6 +62,7 @@
 		type CameraLevel
 	} from '$lib/asciiCamera';
 	import { referenceFrames } from '$lib/referenceTrace';
+	import { colsForWidth } from '$lib/asciiFieldCols';
 
 	interface Props {
 		/** board height in character rows */
@@ -87,8 +88,6 @@
 	const SLOW_MS = 60_000;
 	const DEMO_STEP_MS = 3600;
 	const TICK_MS = 160; // motion ticker: walk steps + camera easing
-	const MIN_COLS = 64;
-	const MAX_COLS = 220;
 	const PAN_STEP = 4; // world units per keypress
 	let cols = $state(76);
 	let probeEl = $state<HTMLElement | null>(null);
@@ -125,7 +124,16 @@
 		// scrollWidth ever exceeds its clientWidth, so a wrong constant here
 		// is a red driver rather than a character nobody notices missing.
 		const avail = (boardEl?.clientWidth ?? deckEl.clientWidth - 32) - 2;
-		cols = Math.max(MIN_COLS, Math.min(MAX_COLS, Math.floor(avail / w)));
+		// The clamp is `colsForWidth` (asciiFieldCols.ts) — a pure function so
+		// its floor/ceiling behaviour is unit-tested without a DOM. The floor
+		// used to be 64, a number with no relation to any box this component
+		// ever measured: below ~500px of real board width (any phone, and
+		// `/daily`'s narrower `.field-frame` well past that) it forced more
+		// columns than the box had, and CSS quietly cut the excess — the room
+		// this file is dispatched to make fit (#1652 follow-up, "the room fits
+		// the reader", 2026-09-01). See asciiFieldCols.ts's own comment for the
+		// measured numbers behind the new floor.
+		cols = colsForWidth(avail, w);
 	}
 
 	let lines = $state<string[]>([]);
@@ -752,5 +760,19 @@
 		margin-top: 0.5rem;
 		color: #906d14;
 		font-size: 0.8rem;
+		/* This block is a fixed multi-line string (`LEGEND`, asciiCamera.ts)
+		   whose longest row is ~230 characters — a constant, viewport-independent
+		   width (~1729px measured at 0.8rem), unlike `.board` which is always
+		   asked for exactly as many columns as its box measures. Plain `<pre>`
+		   (`white-space: pre`, `overflow: visible`) doesn't clip or resize for
+		   that: the box itself stays container-width, but the unwrapped text
+		   paints past it — ink overflow that still widens the nearest scrolling
+		   ancestor's scrollWidth (here, the document, since nothing between here
+		   and <body> scrolls on its own). `pre-wrap` keeps every literal space
+		   (the legend's own column alignment survives on any row that already
+		   fits) and wraps only the rows that don't, inside this box — never the
+		   document. */
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
 	}
 </style>
