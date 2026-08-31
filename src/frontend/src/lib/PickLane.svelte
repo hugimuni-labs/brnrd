@@ -4,8 +4,9 @@
 	import type { ScheduledWake } from './scheduledWakes';
 	import type { WeavingRow } from './warpGraph';
 	import { armedOverflow, pickRows, PICKING_ROW_CAP, type PickRow } from './pickLane';
-	import { runFacesInWindow, type RunFace } from './runFace';
+	import type { RunFace } from './runFace';
 	import Crossing from './Crossing.svelte';
+	import TopicRunes from './TopicRunes.svelte';
 	import { crossingCells } from './crossing';
 	import { statusDotStyle, glowFor, STATUS_BURNING } from './statusPalette';
 
@@ -37,12 +38,10 @@
 		 *  pre-upgrade daemon that publishes no mood, and then the idle line
 		 *  renders its hollow dot rather than inventing a face. */
 		daemonMood?: DaemonMood | null;
-		/** The warp threads in authored order, and run id → threads crossed
-		 *  (`crossing.ts`). Same alphabet everywhere it is drawn — same threads,
-		 *  same cells, same width — so a strip here and a strip on the cloth line
-		 *  this pick becomes are legibly one statement. Armed rows read their
-		 *  threads from the schedule entry's `serves:` row instead of this index;
-		 *  see `PickRow.crosses`. */
+		/** The warp threads in authored order, and run id → threads crossed.
+		 *  Burning runs now wear the topic runes directly; the crossing strip
+		 *  remains for armed picks, where it is the forward-looking serve map
+		 *  rather than a duplicate run mark. */
 		threads?: string[];
 		crossingIndex?: Map<string, string[]>;
 		/** The set-probed topic faces (`warpGraph.topicFaces`). */
@@ -90,12 +89,6 @@
 	let picking = $derived(rows.filter((row) => row.phase === 'picking'));
 	let armed = $derived(rows.filter((row) => row.phase === 'armed'));
 	let shownPicking = $derived(picking.slice(0, PICKING_ROW_CAP));
-	// THE FACE IN THREE TENSES, piece 2: display-time collision re-roll, over
-	// exactly the rows this lane draws (`shownPicking`, not `picking` — the
-	// folded-past-the-cap rows never render, so they shouldn't spend a probe
-	// slot). Armed rows carry no face at all (see the comment at the render
-	// site below), so the window is picking-only.
-	let faceWindow = $derived(runFacesInWindow(shownPicking.map((row) => row.id)));
 	let restingFace = $derived(daemonMood ? moodFace(daemonMood.name, daemonMood.glyph) : null);
 	let clockLabel = $derived(
 		new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -134,11 +127,6 @@
 		{:else}
 			<div class="flex flex-col gap-1">
 				{#each shownPicking as row, index (row.id)}
-					<!-- The face, only on this heat: `row.id` is a real run id here,
-					     while an armed row's is a schedule entry's — a wake is not a
-					     run, and a mark drawn on one would claim an identity that has
-					     no other surface to travel to. -->
-					{@const face = faceWindow.get(row.id)}
 					<!-- Picking: the same object, lit. `|global` (#970) because the
 					     0→1 case creates this whole branch, and a local intro inside
 					     a freshly-born each block never fires — the most common
@@ -156,22 +144,15 @@
 						in:glitchReveal|global={{ duration: 260, delay: 35 + index * 38 }}
 					>
 						<span class="flex min-w-0 items-baseline gap-1.5">
-							<!-- Same 8px lead slot the armed row's dot occupies, so the
-							     crossing strip after it starts at the same x whatever the
-							     row's heat. Alignment across the *cloth* is not claimed:
-							     that row wraps, so what travels between the two surfaces is
-							     the strip's alphabet — same threads, same order, same
-							     width — not its position. -->
 							<span
 								class="inline-block w-2 shrink-0 text-center text-amber-300/80"
 								aria-hidden="true">↯</span
 							>
-							<Crossing cells={crossingCells(threads, rowTopics(row), topicFaces)} />
-							{#if face}
-								<span class="shrink-0 text-[9px]" aria-hidden="true" style={`color: ${face.color}`}
-									>{face.glyph}</span
-								>
-							{/if}
+							<!-- Once a pick is a real run, the topic runes are its one topic
+							     mark. The old crossing strip plus a separate run-id face said
+							     the same thing twice — and, worse, the second mark was not even
+							     topic identity. -->
+							<TopicRunes topicIds={rowTopics(row)} {topicFaces} className="text-[9px]" />
 							<span class="min-w-0 flex-1 truncate text-[9px]">{row.label}</span>
 							{#if row.clock || row.note}
 								<span class="shrink-0 text-[8px] text-amber-500/80">{row.note ?? row.clock}</span>
@@ -237,10 +218,8 @@
 					></span>
 					<!-- The forward weld: an armed pick draws its crossing from the
 				     schedule entry's own `serves:` row, in the same cells as the
-				     burning pick above it — and at the same x, since both rows
-				     share this lead slot and padding box. Before this existed it
-				     was the one row in the lane with a blank where its threads
-				     belong. -->
+				     future topic alphabet. Before it becomes a run this strip is not
+				     duplicating a run mark; it is the pick's serve map. -->
 					<Crossing
 						cells={crossingCells(threads, rowTopics(row), topicFaces)}
 						label="threads this pick serves"
