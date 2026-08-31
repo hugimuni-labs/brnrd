@@ -684,17 +684,26 @@ def test_do_item_with_no_reply_is_refused(tmp_path, monkeypatch, capsys):
 
 def test_do_item_after_gate_is_refused(tmp_path, monkeypatch, capsys):
     """A gate send has no waiting event to bind — ``--item`` pairs only
-    with ``--reply``."""
+    with ``--reply``. A ``--body-file`` follows so this exercises the
+    item-after-gate guard specifically, not the separate (and otherwise
+    indistinguishable from stderr alone) "gate has no body yet" pairing
+    error: with the guard gone the call would stage cleanly instead of
+    refusing, which the two assertions below both catch."""
     _repo_with_warp_item(tmp_path, monkeypatch)
     capsys.readouterr()
     outbox = tmp_path / "outbox"
     outbox.mkdir()
     _do_env(monkeypatch, outbox)
     _portal_state(outbox)
+    body_file = tmp_path / "gate-body.md"
+    body_file.write_text("hi", encoding="utf-8")
 
-    assert main(["do", "--gate", "telegram", "--item", "w-1"]) == 1
+    assert main([
+        "do", "--gate", "telegram", "--item", "w-1", "--body-file", str(body_file),
+    ]) == 1
     err = capsys.readouterr().err
     assert "--gate" in err
+    assert "not --reply" in err
     assert "Nothing was staged" in err
     assert not list(outbox.glob("do-*.md"))
 
