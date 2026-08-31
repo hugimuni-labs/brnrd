@@ -395,6 +395,118 @@ def test_do_promise_flag_without_reply_is_refused(tmp_path, monkeypatch, capsys)
     assert not list(outbox.glob("do-*.md"))
 
 
+# ── --reply's live-inbox pre-check (brnrd#1698 half 2) ──────────────────
+
+
+def _live_inbox(outbox: Path, events: list[dict]):
+    payload = {
+        "version": 1,
+        "generated_at": "2026-08-30T00:00:00Z",
+        "current_event": "evt-current",
+        "events": events,
+    }
+    (outbox / "inbox.json").write_text(json.dumps(payload), encoding="utf-8")
+    return payload
+
+
+def test_do_reply_against_non_pending_event_is_refused_before_staging(
+    tmp_path, monkeypatch, capsys,
+):
+    """`inbox.json` lists the target with a terminal status — the exact
+    shape brnrd#1698 measured: the daemon would drop this reply with
+    ``status=delivered (not pending)``, and the old verdict layer still
+    reported ✓ because the drain had *consumed* the staged file. Refuse it
+    client-side instead, before anything is written."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _live_inbox(outbox, [{"id": "evt-1", "status": "delivered"}])
+
+    assert main([
+        "do", "--reply", "evt-1", "--body", "hi", "--no-promise",
+    ]) == 1
+    err = capsys.readouterr().err
+    assert "evt-1" in err
+    assert "status=delivered" in err
+    assert "Nothing was staged" in err
+    assert not list(outbox.glob("do-*.md"))
+
+
+def test_do_reply_absent_from_live_inbox_is_refused_before_staging(
+    tmp_path, monkeypatch, capsys,
+):
+    """The common real-world shape: `inbox.json` only ever lists *pending*
+    events, so an already-answered/retired target is not present-with-a-
+    status, it is simply gone from the list. That absence is still enough
+    to refuse — the message says so honestly rather than naming a status
+    this file never carried."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _live_inbox(outbox, [])
+
+    assert main([
+        "do", "--reply", "evt-9", "--body", "hi", "--no-promise",
+    ]) == 1
+    err = capsys.readouterr().err
+    assert "evt-9" in err
+    assert "not found among pending events" in err
+    assert "Nothing was staged" in err
+    assert not list(outbox.glob("do-*.md"))
+
+
+def test_do_multi_reply_all_or_nothing_when_one_target_is_not_pending(
+    tmp_path, monkeypatch, capsys,
+):
+    """Mirrors the promise-debt contract's own all-or-nothing shape: one
+    non-pending target in a multi-`--reply` call refuses the *whole* call,
+    not just the offending reply — nothing is staged for the pending target
+    either."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _live_inbox(outbox, [{"id": "evt-1", "status": "pending"}])
+
+    assert main([
+        "do",
+        "--reply", "evt-1", "--body", "one answer",
+        "--reply", "evt-2", "--body", "a different answer",
+        "--no-promise",
+    ]) == 1
+    err = capsys.readouterr().err
+    assert "evt-2" in err
+    assert "not found among pending events" in err
+    assert not list(outbox.glob("do-*.md"))
+
+
+def test_do_reply_pending_in_live_inbox_still_stages(tmp_path, monkeypatch, capsys):
+    """Sanity check on the happy path: a target `inbox.json` actually lists
+    as pending is unaffected by the new check."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    _live_inbox(outbox, [{"id": "evt-1", "status": "pending"}])
+    monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-reply-*.md"))
+
+    assert main(["do", "--reply", "evt-1", "--body", "hi", "--no-promise"]) == 0
+    assert capsys.readouterr().out.strip() == "reply evt-1 ✓"
+
+
+def test_do_reply_with_no_live_inbox_file_fails_open(tmp_path, monkeypatch, capsys):
+    """No `inbox.json` at all — the ordinary case in these tests, and in any
+    environment where the daemon hasn't written one yet — must not block a
+    reply the check has no way to verify."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-reply-*.md"))
+
+    assert main(["do", "--reply", "evt-1", "--body", "hi", "--no-promise"]) == 0
+    assert capsys.readouterr().out.strip() == "reply evt-1 ✓"
+
+
 def test_do_reply_with_promise_stages_both_matching_brnrd_promise_shape(
     tmp_path, monkeypatch, capsys,
 ):
@@ -480,6 +592,44 @@ def test_stage_note_writes_a_body_less_directive(tmp_path):
     path = do_mod.stage_note(outbox, "evt-1")
     text = path.read_text(encoding="utf-8")
     assert text == "---\nnote: evt-1\n---\n"
+
+
+def test_reply_target_status_matches_exact_id():
+    payload = {"events": [{"id": "evt-1788159733748722000-9ha9", "status": "pending"}]}
+    assert do_mod.reply_target_status(payload, "evt-1788159733748722000-9ha9") == "pending"
+
+
+def test_reply_target_status_resolves_an_unambiguous_short_id():
+    """A resident's reply naturally reconstructs the shortened form
+    (``daemon.py``'s ``_short_id_tail`` — a leading ``evt-`` and any
+    ``.``/``…`` run stripped), so the client-side check has to resolve it
+    the same way or it would false-positive-refuse a genuinely pending
+    reply addressed by its short id."""
+    payload = {"events": [{"id": "evt-1788159733748722000-9ha9", "status": "pending"}]}
+    assert do_mod.reply_target_status(payload, "evt-…9ha9") == "pending"
+    assert do_mod.reply_target_status(payload, "9ha9") == "pending"
+
+
+def test_reply_target_status_is_inconclusive_on_an_ambiguous_short_id():
+    """Two events sharing a tail — the same ambiguity ``daemon.py``'s own
+    short-id resolution refuses rather than guesses through. `None` means
+    "cannot verify", so the caller must not refuse on this read."""
+    payload = {
+        "events": [
+            {"id": "evt-1-9ha9", "status": "pending"},
+            {"id": "evt-2-9ha9", "status": "pending"},
+        ],
+    }
+    assert do_mod.reply_target_status(payload, "9ha9") is None
+
+
+def test_reply_target_status_is_none_with_no_events_list():
+    assert do_mod.reply_target_status({}, "evt-1") is None
+    assert do_mod.reply_target_status({"events": "not-a-list"}, "evt-1") is None
+
+
+def test_reply_target_status_is_empty_string_when_absent():
+    assert do_mod.reply_target_status({"events": []}, "evt-1") == ""
 
 
 def test_do_note_alone_is_unaffected_by_the_reply_debt_contract(
