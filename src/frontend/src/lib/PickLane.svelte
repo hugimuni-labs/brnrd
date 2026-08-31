@@ -5,9 +5,7 @@
 	import type { WeavingRow } from './warpGraph';
 	import { armedOverflow, pickRows, PICKING_ROW_CAP, type PickRow } from './pickLane';
 	import type { RunFace } from './runFace';
-	import Crossing from './Crossing.svelte';
 	import TopicRunes from './TopicRunes.svelte';
-	import { crossingCells } from './crossing';
 	import { statusDotStyle, glowFor, STATUS_BURNING } from './statusPalette';
 
 	// THE PICK — one object, one place, moving (his 2026-08-02 steer: "really
@@ -38,10 +36,9 @@
 		 *  pre-upgrade daemon that publishes no mood, and then the idle line
 		 *  renders its hollow dot rather than inventing a face. */
 		daemonMood?: DaemonMood | null;
-		/** The warp threads in authored order, and run id → threads crossed.
-		 *  Burning runs now wear the topic runes directly; the crossing strip
-		 *  remains for armed picks, where it is the forward-looking serve map
-		 *  rather than a duplicate run mark. */
+		/** Legacy authored thread alphabet kept at the component boundary while
+		 *  the dashboard still passes it. Topic identity is rendered as runes in
+		 *  both armed and burning rows now; the crossing strip has no lane role. */
 		threads?: string[];
 		crossingIndex?: Map<string, string[]>;
 		/** The set-probed topic faces (`warpGraph.topicFaces`). */
@@ -60,7 +57,6 @@
 		onSelect,
 		selectedId = null,
 		daemonMood = null,
-		threads = [],
 		crossingIndex = new Map(),
 		topicFaces = new Map<string, RunFace>(),
 		selectedTopics = null
@@ -148,10 +144,7 @@
 								class="inline-block w-2 shrink-0 text-center text-amber-300/80"
 								aria-hidden="true">↯</span
 							>
-							<!-- Once a pick is a real run, the topic runes are its one topic
-							     mark. The old crossing strip plus a separate run-id face said
-							     the same thing twice — and, worse, the second mark was not even
-							     topic identity. -->
+							<!-- Topic runes are the lane's one topic mark at every heat. -->
 							<TopicRunes topicIds={rowTopics(row)} {topicFaces} className="text-[9px]" />
 							<span class="min-w-0 flex-1 truncate text-[9px]">{row.label}</span>
 							{#if row.clock || row.note}
@@ -216,14 +209,10 @@
 						style={statusDotStyle('burning', row.color, row.urgency)}
 						aria-hidden="true"
 					></span>
-					<!-- The forward weld: an armed pick draws its crossing from the
-				     schedule entry's own `serves:` row, in the same cells as the
-				     future topic alphabet. Before it becomes a run this strip is not
-				     duplicating a run mark; it is the pick's serve map. -->
-					<Crossing
-						cells={crossingCells(threads, rowTopics(row), topicFaces)}
-						label="threads this pick serves"
-					/>
+					<!-- Armed picks already know the topics they serve, so use the same
+					     topic-rune vocabulary before and after ignition. The phase changes;
+					     the topic identity does not. -->
+					<TopicRunes topicIds={rowTopics(row)} {topicFaces} className="text-[9px]" />
 					<span
 						class="h-[7px] shrink-0 rounded-r-[1px]"
 						style={`width: ${(row.barFraction * 34).toFixed(2)}%; background-color: ${row.color}`}
