@@ -9,6 +9,7 @@
 	import { deliveryToneClass } from '$lib/deliveryTone';
 	import MarkdownContent from './MarkdownContent.svelte';
 	import MoodChip from './MoodChip.svelte';
+	import TopicRunes from './TopicRunes.svelte';
 	import {
 		LiveRunsAuthError,
 		edgeLine,
@@ -31,7 +32,7 @@
 		type NodeIdentity
 	} from './runNode';
 	import { STATUS_GOOD, STATUS_WARN, STATUS_UNKNOWN, statusDotStyle } from './statusPalette';
-	import { runFace, type RunFace } from './runFace';
+	import type { RunFace } from './runFace';
 	import type { SurfaceResponse } from './surface';
 	import { glitchReveal, typeReveal } from './transitions';
 	import { fade } from 'svelte/transition';
@@ -82,12 +83,11 @@
 		identity?: NodeIdentity | null;
 		/**
 		 * The run⇄topic join (`warpGraph.runTopicIndex`) and the set-probed
-		 * topic faces (`warpGraph.topicFaces`) — how this panel finds the
-		 * run's face now that the rune wears a topic, not the run id
-		 * (2026-08-11 mark doctrine: "a run wears the topics of the work it
-		 * did, never a hue of its own"). Optional and empty by default so a
-		 * caller that hasn't wired the warp graph through yet gets no face
-		 * rather than a stale one.
+		 * topic faces (`warpGraph.topicFaces`) — how this panel finds every
+		 * topic rune the run wears (2026-08-11 mark doctrine: "a run wears the
+		 * topics of the work it did, never a hue of its own"). Optional and
+		 * empty by default so a caller that hasn't wired the warp graph through
+		 * yet gets no face rather than a stale one.
 		 */
 		crossingIndex?: Map<string, string[]>;
 		topicFaces?: Map<string, RunFace>;
@@ -187,17 +187,13 @@
 		)
 	);
 	let cornerLabel = $derived([identity?.age, 'run node'].filter(Boolean).join(' · '));
-	// The face is the run's first crossed topic (2026-08-11 mark doctrine:
-	// the rune transitioned from run ids to topic ids — a run wears the
-	// topics of the work it did, never a hue of its own; same join and same
-	// "first topic" reading the parked machine block uses). `topicFaces`
-	// carries the set-probed hue so this panel agrees with the cloth and the
-	// rail rather than re-hashing its own; `runFace` is only the fallback
-	// for a topic the probe hasn't assigned yet. A run that crossed no topic
-	// wears no fabricated mark — `face` is null and the glyph simply doesn't
-	// render.
-	let topicId = $derived(crossingIndex.get(runId)?.[0] ?? null);
-	let face = $derived(topicId ? (topicFaces.get(topicId) ?? runFace(topicId)) : null);
+	// A live run can claim topics before the warp graph has caught up, while a
+	// closed run is known only through the run→topic index. Union both sources
+	// in source order: the expanded card must show the same complete topic set
+	// as the live pick, never just the first rune.
+	let topicIds = $derived([
+		...new Set([...(crossingIndex.get(runId) ?? []), ...(liveRun?.topics ?? [])])
+	]);
 	let runnerLine = $derived.by(() => {
 		const runner = identity?.runner || digest?.runner || '';
 		return runner ? `runner: ${runner}` : null;
@@ -276,14 +272,7 @@
 			</div>
 			{#if identity?.name}
 				<p class="mt-1.5 flex min-w-0 items-center gap-1.5">
-					{#if face}
-						<span
-							class="shrink-0 text-sm"
-							aria-hidden="true"
-							style={`color: ${face.color}`}
-							title={topicId}>{face.glyph}</span
-						>
-					{/if}
+					<TopicRunes {topicIds} {topicFaces} className="text-sm" />
 					<span
 						class="truncate text-sm font-medium text-amber-100"
 						use:typeReveal={{ text: identity.name }}>{identity.name}</span
@@ -623,4 +612,4 @@
 			</div>
 		{/if}
 	</div>
-{/if}
+{/if>
