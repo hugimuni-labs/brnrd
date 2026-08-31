@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { compileRoomGraph, fileFromDetail, type TrailStep } from './roomGraph.ts';
-import { compileTopology, dirId, islandRootId, routeBetween } from './roomTopology.ts';
+import { campDirId, campId, compileTopology, islandRootId, routeBetween } from './roomTopology.ts';
 import { emptyAtlas, layoutRoom, terminalRequest, type AtlasMemory } from './roomLayout.ts';
 import {
 	CAMERA_LINE_HEIGHT_FALLBACK_PX,
@@ -16,6 +16,10 @@ import { referenceFrames } from './referenceTrace.ts';
 import type { LiveRun, LiveRunsResponse } from './liveRuns.ts';
 
 const REPO = 'hugimuni-labs/brnrd';
+// The reference journey's camp — the canopy is per branch (2026-08-31), so
+// chamber ids nest under the camp, not the island root.
+const JCAMP = campId(REPO, { branch: 'brr/the-reference-journey', dir: null });
+const jd = (segs: string[]) => campDirId(JCAMP, segs);
 
 function liveWire(runs: LiveRun[]): LiveRunsResponse {
 	return {
@@ -97,7 +101,7 @@ test('panning reveals space that was genuinely outside the previous view', () =>
 	recordTrails(trails, frames[2]);
 	const { graph, topo, layout } = pipeline(frames[2], trails, emptyAtlas());
 	const rootP = layout.nodes[islandRootId(REPO)];
-	const testsP = layout.nodes[dirId(REPO, ['src', 'frontend', 'tests'])];
+	const testsP = layout.nodes[jd(['src', 'frontend', 'tests'])];
 	const camA: Camera = {
 		center: { x: rootP.x - 20, y: rootP.y },
 		cols: 64,
@@ -123,8 +127,8 @@ test('cameraCenterFor frames the bounding box when it fits, else the destination
 	const frames = referenceFrames();
 	for (const frame of frames.slice(0, 3)) recordTrails(trails, frame);
 	const { layout } = pipeline(frames[2], trails, emptyAtlas());
-	const a = dirId(REPO, ['src', 'frontend', 'src', 'lib']);
-	const b = dirId(REPO, ['src', 'frontend', 'tests']);
+	const a = jd(['src', 'frontend', 'src', 'lib']);
+	const b = jd(['src', 'frontend', 'tests']);
 	const fits = cameraCenterFor(layout, [a, b], 200, 60);
 	assert.deepEqual(fits, {
 		x: (layout.nodes[a].x + layout.nodes[b].x) / 2,
@@ -223,7 +227,7 @@ test('the line height is a fallback, not the stylesheet copied into TypeScript',
 	// would live, and it does not have one.
 });
 
-test('garage names binding provider fuel in frame and in the off-frame HOME bearing', () => {
+test('fuel rides the mothership spine; the off-frame HOME bearing stays a bearing', () => {
 	const graph = compileRoomGraph(liveWire([]), null, undefined, {
 		quota: {
 			generated_at: '2026-08-27T10:20:00Z',
@@ -274,13 +278,19 @@ test('garage names binding provider fuel in frame and in the off-frame HOME bear
 	assert.match(inFrame, /⛁ ✗ claude 5h 12%/);
 	assert.ok(!inFrame.includes('fable'), 'a core allowance is not the shell ceiling');
 
+	// The bearing is a direction, not a dashboard (2026-08-31): the gauges
+	// live on the ship's spine and the condition line, and nowhere else —
+	// the old strip pinned a second instrument panel to the board's bottom.
 	const offFrame = renderWorld(topo, layout, graph, {
 		center: { x: 200, y: 200 },
 		cols: 80,
 		rows: 18,
 		level: 'island'
 	});
-	assert.match(offFrame, /HOME.*⛁ ✗ claude 5h 12%/);
+	assert.match(offFrame, /⛁ ✗ claude 5h 12%/); // still on the spine
+	const bearing = offFrame.split('\n').find((l) => l.includes('HOME') && !l.includes('⌂'));
+	assert.ok(bearing, 'the HOME bearing renders');
+	assert.ok(!bearing!.includes('⛁'), 'and carries no gauges');
 });
 
 // ── the reference trace: eight boundaries, one journey ──────────────────────
@@ -306,11 +316,11 @@ test('the reference trace walks the journey the spec names, on stable coordinate
 
 	const campPrefix = `camp:${REPO}::brr/the-reference-journey::`;
 	assert.deepEqual(places, [
-		dirId(REPO, ['src', 'frontend']), // #81 wakes inside the tree
-		dirId(REPO, ['src', 'frontend', 'src', 'lib']), // #82 walks deeper to edit
-		`${dirId(REPO, ['src', 'frontend', 'tests'])}#rig`, // #83 the local rig
+		jd(['src', 'frontend']), // #81 wakes inside the tree
+		jd(['src', 'frontend', 'src', 'lib']), // #82 walks deeper to edit
+		`${jd(['src', 'frontend', 'tests'])}#rig`, // #83 the local rig
 		`${campPrefix}#strand-bay`, // #84 its bay, while the strand crosses
-		`${dirId(REPO, ['src', 'frontend', 'tests'])}#rig`, // #85 back at tests; letter arrives
+		`${jd(['src', 'frontend', 'tests'])}#rig`, // #85 back at tests; letter arrives
 		`${campPrefix}#chart-table`, // #86 the chart — it edits control state
 		`${islandRootId(REPO)}#forge-dock`, // #87 the forge
 		`${campPrefix}#cut-loom` // #88 cut
@@ -324,7 +334,13 @@ test('the strand crosses to the knowledge island while the parent stays put (#84
 	const { topo } = pipeline(frames[3], trails, emptyAtlas());
 	assert.equal(
 		topo.actorPlaces['run-260827-1012-des1'],
-		dirId('hugimuni-labs/brnrd-knowledge', ['design'])
+		campDirId(
+			campId('hugimuni-labs/brnrd-knowledge', {
+				branch: 'brr/the-design-sweep',
+				dir: 'brr-wt-des1'
+			}),
+			['design']
+		)
 	);
 	assert.ok(topo.actorPlaces['run-260827-1000-ref1'].startsWith('camp:' + REPO));
 	// and the crossing has a sea route
@@ -344,10 +360,7 @@ test('the injected boundary (#85) marks traffic to the actor, not actor movement
 	const resident = graph.actors.find((a) => a.runId === 'run-260827-1000-ref1');
 	assert.equal(resident?.injected, true);
 	// same place as #83 — the letter came to it
-	assert.equal(
-		topo.actorPlaces['run-260827-1000-ref1'],
-		`${dirId(REPO, ['src', 'frontend', 'tests'])}#rig`
-	);
+	assert.equal(topo.actorPlaces['run-260827-1000-ref1'], `${jd(['src', 'frontend', 'tests'])}#rig`);
 });
 
 test('the trace renders the journey on the board: terrain, actor, forge, cloth', () => {

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { compileRoomGraph, fileFromDetail, type TrailStep } from './roomGraph.ts';
-import { compileTopology, dirId } from './roomTopology.ts';
+import { campDirId, campId, compileTopology } from './roomTopology.ts';
 import { emptyAtlas, layoutRoom } from './roomLayout.ts';
 import { advanceWalks, diffTransitions, easeCamera, walkFor, walkPositions } from './roomMotion.ts';
 import { referenceFrames } from './referenceTrace.ts';
@@ -56,9 +56,10 @@ test('a place change mints exactly one transition receipt with the trie route', 
 	// (2026-08-29): `src/frontend/src` had a single child and folded into it,
 	// so there is no longer a scaffolding node to step through. The endpoints
 	// keep their ids, because the fold always keeps the *deep* one.
+	const camp = campId(REPO, { branch: 'brr/the-reference-journey', dir: null });
 	assert.deepEqual(moved[0].route, [
-		dirId(REPO, ['src', 'frontend']),
-		dirId(REPO, ['src', 'frontend', 'src', 'lib'])
+		campDirId(camp, ['src', 'frontend']),
+		campDirId(camp, ['src', 'frontend', 'src', 'lib'])
 	]);
 });
 
