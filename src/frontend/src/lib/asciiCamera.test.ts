@@ -66,6 +66,29 @@ test('same graph, layout, camera and now ⇒ same bytes', () => {
 	);
 });
 
+test('a commit lift carries material upward to the mothership, not from HOME across the sea', () => {
+	const trails: Record<string, TrailStep[]> = {};
+	const frames = referenceFrames();
+	recordTrails(trails, frames[1]);
+	const { graph, topo, layout } = pipeline(frames[1], trails, emptyAtlas());
+	const actor = graph.actors[0];
+	const place = topo.actorPlaces[actor.runId];
+	const center = layout.nodes[place];
+	const board = renderWorld(
+		topo,
+		layout,
+		graph,
+		{ center, cols: 100, rows: 28, level: 'island' },
+		{ lifts: [{ actorRunId: actor.runId, tick: 12 }] }
+	);
+	const rows = board.split('\n');
+	const materialRow = rows.findIndex((row) => row.includes('◆'));
+
+	assert.ok(materialRow >= 3, 'the produced material is visible below the sky band');
+	assert.ok(materialRow < 3 + 14, 'mid-carry it has moved upward from the actor');
+	assert.match(rows[2], /claw ┈≻ out/, 'the mothership reports its own active claw');
+});
+
 test('resizing changes the camera window, never world coordinates', () => {
 	const trails: Record<string, TrailStep[]> = {};
 	const frames = referenceFrames();

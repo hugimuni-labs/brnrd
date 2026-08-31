@@ -18,6 +18,7 @@
 	// between two polls flashes once (diffed on a clock-free render, so a
 	// minute passing moves nothing); everything else holds still.
 	import { onMount } from 'svelte';
+	import { SvelteMap } from 'svelte/reactivity';
 	import { resolve } from '$app/paths';
 	import { fetchLiveRuns, LiveRunsAuthError, type LiveRunsResponse } from '$lib/liveRuns';
 	import { fetchRunLedger, type RunLedgerResponse } from '$lib/runLedger';
@@ -50,7 +51,7 @@
 		terminalFeed,
 		type TerminalLine
 	} from '$lib/roomTerminal';
-	import { crossingsFor, advanceCrossings, crossingFrames, type Crossing } from '$lib/roomCrossing';
+	import { crossingsFor, advanceCrossings, type Crossing } from '$lib/roomCrossing';
 	import {
 		renderWorld,
 		cameraCenterFor,
@@ -199,6 +200,10 @@
 	// follows. One window, because the camp is one place.
 	let terminalRunId: string | null = null;
 	let readings: Reading[] = [];
+	// The claw carries produced material, not incoming context. First sight is
+	// a baseline; only a later attested commit-count increase mints a lift.
+	let commitCounts = new SvelteMap<string, number>();
+	let lifts: { actorRunId: string; tick: number }[] = [];
 
 	// the camera
 	let camCenter = { x: 0, y: 0 };
@@ -300,6 +305,17 @@
 	function compute(now: number) {
 		recordTrails();
 		const graph = compileRoomGraph(live, ledger, trails, { wakes, quota });
+		for (const run of live?.runs ?? []) {
+			const count = run.relics_counts?.commit ?? 0;
+			const previous = commitCounts.get(run.run_id);
+			if (previous !== undefined && count > previous) {
+				lifts = [
+					...lifts.filter((lift) => lift.actorRunId !== run.run_id),
+					{ actorRunId: run.run_id, tick: 0 }
+				];
+			}
+			commitCounts.set(run.run_id, count);
+		}
 		// pages: attested injections accumulate; a fresh page starts the
 		// mind-connect ceremony for its reader (bounded, receipt-driven)
 		const glyphs = Object.fromEntries(graph.actors.map((a) => [a.runId, a.glyph]));
@@ -407,7 +423,7 @@
 			pages: pagerFeed(pager, liveRunIds),
 			terminal: terminalRunId ? terminalFeed(terminal, terminalRunId, liveRunIds) : null,
 			reading: readingPhases(readings),
-			crossings: crossingFrames(crossings)
+			lifts
 		}).split('\n');
 	}
 
@@ -431,6 +447,12 @@
 		}
 		if (crossings.length > 0) {
 			crossings = advanceCrossings(crossings);
+			moved = true;
+		}
+		if (lifts.length > 0) {
+			lifts = lifts
+				.map((lift) => ({ ...lift, tick: lift.tick + 1 }))
+				.filter((lift) => lift.tick < 21);
 			moved = true;
 		}
 		if (follow && (camCenter.x !== camTarget.x || camCenter.y !== camTarget.y)) {
