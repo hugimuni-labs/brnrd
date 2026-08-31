@@ -2027,15 +2027,40 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
     would need new state-threading, not just a read — named as the
     remaining gap rather than guessed at.
     """
+    # Presence is physically repo-local, but a connected daemon is
+    # account-scoped.  Publishing only this checkout's registry made a
+    # cross-repo strand consume a real pool slot while disappearing from
+    # every dashboard surface (#1727).  Resolve every registered repo here,
+    # at the serving edge, and keep the project-only fallback unchanged.
+    presence_dirs = [brr_dir]
+    try:
+        from .. import account as account_mod
+
+        ctx = account_mod.resolve_context(brr_dir.parent, create=False)
+        presence_dirs = [
+            repo.root / ".brr"
+            for repo in sorted(ctx.repos.values(), key=lambda item: item.label)
+            if (repo.root / ".brr").is_dir()
+        ] or [brr_dir]
+    except Exception:
+        pass
+
     out: list[dict[str, Any]] = []
-    for entry in presence.list_active(brr_dir):
-        stream = str(entry.get("stream") or "")
-        run_id = str(entry.get("run_id") or "")
-        view = _live_run_progress(brr_dir, stream, run_id)
-        manifest = _live_run_manifest(brr_dir, run_id)
-        lifecycle, await_until = _lifecycle_payload(brr_dir, manifest, view)
-        out.append(
-            _bounded_live_run({
+    seen_entries: set[str] = set()
+    for source_brr_dir in presence_dirs:
+        for entry in presence.list_active(source_brr_dir):
+            entry_id = str(entry.get("id") or "")
+            if entry_id and entry_id in seen_entries:
+                continue
+            if entry_id:
+                seen_entries.add(entry_id)
+            stream = str(entry.get("stream") or "")
+            run_id = str(entry.get("run_id") or "")
+            view = _live_run_progress(source_brr_dir, stream, run_id)
+            manifest = _live_run_manifest(source_brr_dir, run_id)
+            lifecycle, await_until = _lifecycle_payload(source_brr_dir, manifest, view)
+            out.append(
+                _bounded_live_run({
                 "id": str(entry.get("id") or ""),
                 "kind": str(entry.get("kind") or ""),
                 "stream": stream,
@@ -2103,21 +2128,21 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
                 # for an ad-hoc session (no run dir) — absent stays absent.
                 "lifecycle": lifecycle,
                 "await_until": await_until,
-                "room": _room_payload(brr_dir, manifest) if manifest else None,
-                "edge": _edge_payload(brr_dir, run_id, manifest),
+                "room": _room_payload(source_brr_dir, manifest) if manifest else None,
+                "edge": _edge_payload(source_brr_dir, run_id, manifest),
                 # The crossings themselves, not the cursor. `edge` is whichever
                 # boundary is current; this is the bounded tail of the ones that
                 # actually carried a letter, so a ceremony can ride the crossing
                 # instead of riding a 2-second poll. See `_CROSSINGS_MAX`.
-                "crossings": _crossings_payload(brr_dir, run_id, manifest),
+                "crossings": _crossings_payload(source_brr_dir, run_id, manifest),
                 # the-field-takes-its-body: the message-ceremony fact — how
                 # many pending events stand at this run's portal and when
                 # the oldest arrived, so a sent message can render as
                 # *resting, put to read* until the boundary that folds it
                 # in attests the read. Counts only, never bodies.
-                "portals": _portals_payload(brr_dir, manifest) if manifest else None,
-            })
-        )
+                "portals": _portals_payload(source_brr_dir, manifest) if manifest else None,
+                })
+            )
     return out
 
 

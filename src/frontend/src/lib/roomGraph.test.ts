@@ -680,3 +680,33 @@ test('the island takes its first step off the root from the run own room', () =>
 		'the detail reached ground the room block already attested'
 	);
 });
+
+test('a cut run keeps the trail it grew after presence disappears', () => {
+	const graph = compileRoomGraph(
+		liveWire([]),
+		ledgerWire([
+			ledgerRow({
+				run_id: 'r-cut',
+				external_refs: [{ kind: 'branch', name: 'brr/the-ground-that-stays' }]
+			})
+		]),
+		{
+			'r-cut': [
+				{ dir: 'src/frontend', act: 'orient', at: '2026-08-31T10:00:00Z' },
+				{
+					dir: 'src/frontend/src/lib',
+					act: 'mutate',
+					at: '2026-08-31T10:01:00Z',
+					file: 'roomGraph.ts'
+				}
+			]
+		}
+	);
+
+	assert.equal(graph.actors.length, 0);
+	assert.equal(graph.islands[0].camps[0].branch, 'brr/the-ground-that-stays');
+	assert.deepEqual(
+		graph.islands[0].camps[0].chambers.map((chamber) => chamber.dir),
+		['src/frontend', 'src/frontend/src/lib']
+	);
+});

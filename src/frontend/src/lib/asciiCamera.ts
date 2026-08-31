@@ -22,7 +22,6 @@ import { MAX_DIR_LABEL_CHARS, type Point, type Rect, type RoomLayout } from './r
 import type { PagerPage } from './roomPager.ts';
 import { untilText } from './scheduledWakes.ts';
 import { OFF_MARK } from './stateChrome.ts';
-import type { CrossingFrame } from './roomCrossing.ts';
 
 export type CameraLevel = 'island' | 'atlas';
 
@@ -51,11 +50,10 @@ export interface WorldRenderOpts {
 	/** Reading-ceremony phase per actor run id (ticksLeft) — presentation,
 	 *  like walk positions: passed on display paints, never the flash diff. */
 	reading?: Record<string, number> | null;
-	/** THE CROSSING, mid-ceremony: the claw's current extent and the letter
-	 *  it carries. Presentation, like walk positions — the frames are derived
-	 *  from an attested crossing (`RoomGraph.crossings`) and the caller owns
-	 *  the clock, so this never rides the clock-free flash diff. */
-	crossings?: CrossingFrame[] | null;
+	/** A commit lift: the mothership's claw reaches to the producing actor,
+	 *  then carries the new material upward. Minted only when the attested
+	 *  commit count increases — injection traffic keeps its pager tether. */
+	lifts?: { actorRunId: string; tick: number }[] | null;
 	/** THE TERMINAL's contents, newest first — the commands this run has run.
 	 *  Accumulated by the caller across polls (`roomTerminal.recordCommands`),
 	 *  like the trail and the pager, because the wire carries one cursor and
@@ -553,7 +551,7 @@ function skyBand(
 	const watchIn = soonestWatch ? untilLabel(soonestWatch, now) : null;
 	const watchBit =
 		graph.watch.length > 0 ? `^ ×${graph.watch.length}${watchIn ? ' → ' + watchIn : ''}` : null;
-	const clawBusy = (opts.crossings?.length ?? 0) > 0;
+	const clawBusy = (opts.lifts?.length ?? 0) > 0;
 	const claw = clawBusy ? 'claw ┈≻ out' : 'claw ┊';
 	const keelBits = [watchBit, nextIn ? `T ${nextIn}` : null, claw].filter(Boolean).join(' · ');
 	const fuel = garageReadings(graph)
@@ -781,27 +779,32 @@ export function renderWorld(
 		}
 	}
 
-	// 3b · THE CROSSING — the claw, drawn under the actors so a delivery
-	// never covers the body receiving it. Ground, like corridors: it uses
-	// `canvas.ground` so terrain and labels keep their cells, because a
-	// ceremony that erases the room to show itself is a cutscene.
-	//
-	// The letter is a *claiming* write: it is the one thing in the frame the
-	// reader is meant to follow, and it occupies exactly one cell for exactly
-	// the beats it is in flight.
-	for (const frame of opts.crossings ?? []) {
-		frame.arm.forEach((point, i) => {
-			const c = toChar(f, point);
-			// The leading cell wears the tip. Without it the reach reads as a
-			// dotted trail that happens to be there — legible, but it does not
-			// say which end is doing the reaching, and the direction is the
-			// entire argument for the claw having a source.
-			const tip = !frame.settling && i === frame.arm.length - 1;
-			canvas.ground(c.x, c.y, tip ? CLAW_TIP : CLAW_CHAR);
-		});
-		if (frame.letter) {
-			const c = toChar(f, frame.letter);
-			canvas.text(c.x, c.y, '◇');
+	// 3b · THE CLAW — commits rise from the producing body to the ship.
+	// The older implementation reused incoming-message crossings and drew
+	// HOME→actor across the sea; it was a connect animation wearing a claw's
+	// name.  The ship is a screen-space fixture above this canvas, so its bay
+	// is the top-center cell and the cable deliberately terminates there.
+	for (const lift of opts.lifts ?? []) {
+		const place = topo.actorPlaces[lift.actorRunId];
+		const point = place ? layout.nodes[place] : null;
+		if (!point) continue;
+		const actor = toChar(f, point);
+		if (!inFrame(f, actor)) continue;
+		const shipX = Math.floor(cam.cols * 0.55);
+		const total = Math.max(1, actor.y);
+		const reach = Math.min(1, (lift.tick + 1) / 8);
+		const carry = Math.min(1, Math.max(0, lift.tick - 7) / 8);
+		const withdraw = Math.min(1, Math.max(0, lift.tick - 15) / 5);
+		const startY = lift.tick < 16 ? 0 : Math.round(total * withdraw);
+		const endY = lift.tick < 8 ? Math.round(total * reach) : total;
+		for (let y = startY; y <= endY; y++) {
+			const x = Math.round(shipX + ((actor.x - shipX) * y) / total);
+			canvas.ground(x, y, y === endY && lift.tick < 8 ? CLAW_TIP : CLAW_CHAR);
+		}
+		if (lift.tick >= 8 && lift.tick < 16) {
+			const y = Math.round(total * (1 - carry));
+			const x = Math.round(shipX + ((actor.x - shipX) * y) / total);
+			canvas.text(x, y, '◆');
 		}
 	}
 
