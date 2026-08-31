@@ -187,6 +187,14 @@ class RunProgressView:
     # is invisible to every collector brnrd has, so an empty bucket can only
     # ever mean nobody reported one.
     issue_actions: relics_mod.IssueActions | None = None
+    # design-the-water-line.md "The kb is the reef": the kb pages this run
+    # has *committed* so far, path (+ url) — read from the same capsule as
+    # `relics_counts`, one field further in (`relics.live_portal_kb_pages`).
+    # `None` = unrecorded (no capsule, or an older daemon's facet); `[]` =
+    # known, no kb page committed yet. A committed page is already sunk
+    # (the doctrine's own bar), so this can be non-empty on a run that is
+    # still weaving.
+    relics_kb_pages: list[dict[str, str]] | None = None
 
     @property
     def is_terminal(self) -> bool:
@@ -257,6 +265,9 @@ def _enrich_with_live_relics(
             brr_dir, view.event_id,
         )
         view.issue_actions = relics_mod.live_portal_issue_actions(
+            brr_dir, view.event_id,
+        )
+        view.relics_kb_pages = relics_mod.live_portal_kb_pages(
             brr_dir, view.event_id,
         )
     return view
