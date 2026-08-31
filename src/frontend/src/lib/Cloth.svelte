@@ -16,8 +16,7 @@
 	import { LENS_ALL, applyLens, availableLenses, reconcileLens } from './loomLens';
 	import type { RunLedgerRow } from './runLedger';
 	import RunNodeInline from './RunNodeInline.svelte';
-	import Crossing from './Crossing.svelte';
-	import { crossingCells } from './crossing';
+	import TopicRunes from './TopicRunes.svelte';
 	import {
 		nodeDigest,
 		repoRunSlug,
@@ -25,7 +24,7 @@
 		runNodeFromSurface,
 		type NodeIdentity
 	} from './runNode';
-	import { runFace, type RunFace } from './runFace';
+	import type { RunFace } from './runFace';
 	import type { SurfaceResponse } from './surface';
 	import MoodChip from './MoodChip.svelte';
 
@@ -57,12 +56,12 @@
 		 *  their place on the way back). Null while loading; the unfold then
 		 *  falls back to a plain run-page link. */
 		surface?: SurfaceResponse | null;
-		/** THE CROSSING (`crossing.ts`): the warp threads in authored order, and
-		 *  run id → the ones each run lifted. Same alphabet the pick lane draws —
-		 *  same threads, same cells, same width — so a burning pick and the cloth
-		 *  line it becomes carry legibly the same strip. Not the same *x*: this
-		 *  row wraps, so the strip sits where the row's own content puts it. */
+		/** Legacy dashboard input kept at the component boundary while the
+		 *  caller still owns the crossing alphabet. The cloth deliberately no
+		 *  longer draws the crossing/notch strip: topic runes are its one mark. */
 		threads?: string[];
+		/** Run id → every topic the run touched. The cloth renders that set as
+		 *  runes once, immediately before the name. */
 		crossingIndex?: Map<string, string[]>;
 	}
 
@@ -76,7 +75,6 @@
 		onCaughtUp = null,
 		topicFaces = new Map<string, RunFace>(),
 		surface = null,
-		threads = [],
 		crossingIndex = new Map()
 	}: Props = $props();
 
@@ -259,27 +257,12 @@
 	     leftover space like before; `min-w-[9ch]` is the floor that stops the
 	     collapse — the row wraps onto a second flex line (`flex-wrap` on the
 	     row, below) rather than crushing the name into a column of letters. -->
-	<Crossing
-		cells={crossingCells(
-			threads,
-			line.runId ? crossingIndex.get(line.runId) : undefined,
-			topicFaces
-		)}
-	/>
-	<!-- The sigils, immediately before the name: the runes transitioned from
-	     run ids to topic ids (2026-08-11) — a run wears the topics of the
-	     work it did, the same glyph+hue the heddle rail introduces. A run
-	     that crossed no topic wears nothing rather than a fabricated mark. -->
 	{#if line.runId}
-		{@const sigils = (crossingIndex.get(line.runId) ?? []).slice(0, 3)}
-		{#if sigils.length > 0}
-			<span class="shrink-0 font-mono" aria-hidden="true">
-				{#each sigils as topicId (topicId)}
-					{@const face = topicFaces.get(topicId) ?? runFace(topicId)}
-					<span style={`color: ${face.color}`} title={topicId}>{face.glyph}</span>
-				{/each}
-			</span>
-		{/if}
+		<!-- One fact, one mark: the crossing/notch strip used to repeat exactly
+		     the same run→topic set beside these runes. The cloth now keeps the
+		     runes only, and keeps *all* touched topics rather than an arbitrary
+		     first three. -->
+		<TopicRunes topicIds={crossingIndex.get(line.runId) ?? []} {topicFaces} />
 	{/if}
 	{#if line.href}
 		<!-- A tap unfolds the node here (his 08-02 steer) — the row stopped
