@@ -89,10 +89,6 @@ export interface PickRow {
 	 * opinion about what a mood is.
 	 */
 	mood: MoodFace | null;
-	/** Imminence as geometry, 0..1. Always 1 while picking: a burning run has
-	 *  arrived, and a shrinking bar under it would read as a countdown to
-	 *  nothing. */
-	barFraction: number;
 	serves: PickServes[];
 	/**
 	 * Warp threads this pick crosses, for `crossing.ts` — the forward weld.
@@ -194,13 +190,6 @@ export function pickRows(input: {
 					: null,
 			color: row.color,
 			urgency: row.urgency,
-			// Inverted from `futureShelfRows`' distance fraction, and the reason is
-			// a disagreement the first cut shipped: the thermal colour *warms* as a
-			// wake nears, while the bar *grew* with distance. Two encodings of the
-			// same quantity pointing opposite ways is unreadable however correct
-			// each is alone — long and warm now both mean imminent, and a wake four
-			// days out recedes to a stub instead of dominating the lane.
-			barFraction: 1 - row.barFraction,
 			serves: [],
 			crosses: servesThreads(row.wake),
 			// Armed: not yet fired, nothing to have felt. See the field's own
@@ -233,7 +222,6 @@ export function pickRows(input: {
 			note: run.stop_requested ? 'stopping…' : null,
 			color: THERMAL_STOPS.amber,
 			urgency: freshRuns.length > 1 ? ('attention' as const) : ('calm' as const),
-			barFraction: 1,
 			serves: servesByRun.get(id) ?? [],
 			// A live run's threads: its own claimed topics off the wire
 			// (`.topics` → presence heartbeat → live-runs payload), fresher
