@@ -2942,6 +2942,24 @@ def cmd_do(args):
     message nobody got. ``--note``/``--mood``/``--card``/pure ``--gate``
     calls carry no such requirement; a gate handoff's debt is the PR itself.
 
+    **The reply-pending pre-check** (brnrd#1698 half 2). Before anything is
+    staged, every ``--reply`` target is checked against this run's own live
+    ``inbox.json`` (``do.reply_target_status``); a target that reads as
+    anything other than pending there refuses the *whole* call, the same
+    all-or-nothing shape as the reply-debt contract above. This catches the
+    common case client-side — a resident believing a reply landed when the
+    daemon actually dropped it (``... found ... but status=... (not
+    pending)``) because the old verdict layer only asked whether the drain
+    *consumed* the staged file, never whether the event was still
+    answerable. Deliberately fail-open: ``inbox.json`` only ever lists
+    pending (or provably-orphaned processing) events, so it can name an
+    *actual* status only in the rare case one is present with something
+    other than ``"pending"``; an inconclusive read (no file, an ambiguous
+    short-id) never blocks a call this check cannot verify. The other half
+    of #1698 — the daemon-side race where a refusal notice lands *after*
+    this module's own notices-diff window closes — is not this change; see
+    ``do.py``'s module docstring for that gap.
+
     ``-- <command> [args…]`` (split out of argv in ``main`` before this
     parser ever sees it) runs after the verbs are staged: verdict lines move
     to stderr (so the command's own stdout stays pipeable) and the command
@@ -3047,6 +3065,40 @@ def cmd_do(args):
                 "stages directives into a live run's outbox; pass "
                 "--outbox, or run inside a daemon wake. Nothing was "
                 "written.",
+                file=sys.stderr,
+            )
+            return 1
+
+        # brnrd#1698 half 2: a `--reply` against an event the daemon will
+        # refuse ("found ... but status=... (not pending)") used to still
+        # report ✓ — the drain consumed the file, and the verdict layer
+        # only ever asked "was it consumed", not "was it actually
+        # deliverable". Catch the common case client-side, the same
+        # before-anything-is-staged way the promise-debt check above does:
+        # read this run's own `inbox.json` (what the daemon's own
+        # pending-event view already reflects) and refuse the whole call —
+        # not just the offending `--reply` — when any reply target reads as
+        # not pending there. Fail-open by construction
+        # (`do.reply_target_status` returns `None` rather than a status
+        # whenever the file can't be trusted): no `inbox.json`, or an
+        # ambiguous short-id match, never blocks a call this check cannot
+        # actually verify.
+        non_pending: list[str] = []
+        for event_id, _body in replies:
+            status = do_mod.reply_target_status(
+                do_mod.read_live_inbox(outbox_dir), event_id,
+            )
+            if status is None or status == "pending":
+                continue
+            detail = f"status={status}" if status else "not found among pending events"
+            non_pending.append(f"{event_id} ({detail})")
+        if non_pending:
+            print(
+                "[brnrd do] --reply targets a non-pending event: "
+                + "; ".join(non_pending)
+                + " — a resident cannot re-open a closed letter with "
+                "`event:`; send a bare message to the waking thread "
+                "instead. Nothing was staged.",
                 file=sys.stderr,
             )
             return 1

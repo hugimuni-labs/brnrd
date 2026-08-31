@@ -166,6 +166,10 @@ def accepted(status: str) -> bool:
 
 PORTAL_STATE_NAME = "portal-state.json"
 
+#: Same file `daemon.py`'s `_pending_events_for_agent` / `portals.write_live_inbox`
+#: refresh every heartbeat — see :func:`reply_target_status`.
+LIVE_INBOX_NAME = "inbox.json"
+
 
 # ── Outbox message staging ──────────────────────────────────────────
 
@@ -408,6 +412,71 @@ def read_portal_state(outbox_dir: Path) -> dict[str, Any]:
         return payload if isinstance(payload, dict) else {}
     except (OSError, ValueError):
         return {}
+
+
+def read_live_inbox(outbox_dir: Path) -> dict[str, Any]:
+    """Best-effort read of this run's live `inbox.json`. `{}` on any failure —
+    same fail-open shape as :func:`read_portal_state`, for the same reason:
+    an absent or unparseable file is "nothing to check against", never a
+    refusal in its own right.
+    """
+    try:
+        raw = (outbox_dir / LIVE_INBOX_NAME).read_text(encoding="utf-8")
+        payload = json.loads(raw)
+        return payload if isinstance(payload, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def reply_target_status(inbox_payload: dict[str, Any], event_id: str) -> str | None:
+    """The live status of *event_id* per this run's own `inbox.json`, or
+    `None` when it cannot be determined from that file (brnrd#1698 half 2).
+
+    `inbox.json` (`daemon.py`'s `_pending_events_for_agent`, mirrored by
+    `portals.write_live_inbox`) lists only the events currently *pending*
+    (or `processing` and provably orphaned) and visible to this run — a
+    non-pending event is not listed with its terminal status, it is simply
+    absent. So this can name an *actual* status only for the rare case
+    `inbox.json` does carry one (a non-`"pending"` entry); the common
+    already-answered/retired case this issue is about reads as "not found",
+    and the caller renders that honestly rather than guessing a status word
+    this file never carried.
+
+    `None` is reserved for genuine inconclusiveness — no `inbox.json` to
+    read at all, or a short-id target matching more than one entry (the same
+    ambiguity `daemon.py`'s own short-id resolution refuses rather than
+    guesses, `_locate_event_any_status`) — so a caller building a fail-open
+    check never refuses on a read it could not trust. An id found nowhere in
+    the list returns `""` (falsy, but distinct from `None`): known-absent,
+    not merely unread.
+    """
+    events = inbox_payload.get("events") if inbox_payload else None
+    if not isinstance(events, list):
+        return None
+    target = str(event_id).strip()
+    for ev in events:
+        if isinstance(ev, dict) and str(ev.get("id") or "") == target:
+            return str(ev.get("status") or "")
+
+    # No exact match — try the same short-id tail a resident's own reply
+    # naturally reconstructs (`daemon.py`'s `_short_id_tail`): strip a
+    # leading `evt-` and any `.`/`…` run, then match the id's last `-`
+    # segment. More than one hit is the same ambiguity the daemon itself
+    # refuses to guess through, so it reports inconclusive rather than
+    # picking one.
+    tail = target[len("evt-"):] if target.startswith("evt-") else target
+    tail = tail.lstrip(".…")
+    if not tail:
+        return ""
+    matches = [
+        ev for ev in events
+        if isinstance(ev, dict) and str(ev.get("id") or "").rsplit("-", 1)[-1] == tail
+    ]
+    if len(matches) > 1:
+        return None
+    if len(matches) == 1:
+        return str(matches[0].get("status") or "")
+    return ""
 
 
 def notices_of(payload: dict[str, Any]) -> list[dict[str, Any]]:
