@@ -3392,10 +3392,18 @@ def test_run_loop_records_where_the_credential_state_lives(tmp_path, monkeypatch
 
     monkeypatch.setattr(cloud.threading, "Thread", lambda **kw: type("T", (), {"start": stop})())
 
-    with pytest.raises(_StopLoop):
-        cloud.run_loop(brr_dir, tmp_path / "inbox", tmp_path / "resp")
+    # run_loop mutates the module global directly (`global _publishing_state_dir`),
+    # not through monkeypatch.setattr — that reassignment is invisible to
+    # monkeypatch's own undo stack, so restore it by hand or this test's own
+    # exercise of run_loop leaks the tmp_path forward into later tests (#1721).
+    before = cloud._publishing_state_dir
+    try:
+        with pytest.raises(_StopLoop):
+            cloud.run_loop(brr_dir, tmp_path / "inbox", tmp_path / "resp")
 
-    assert cloud._publishing_state_dir == brr_dir
+        assert cloud._publishing_state_dir == brr_dir
+    finally:
+        cloud._publishing_state_dir = before
 
 
 def test_publish_selection_windows_runs_and_honors_layers(tmp_path):
