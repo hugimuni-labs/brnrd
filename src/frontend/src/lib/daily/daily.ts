@@ -46,32 +46,45 @@ export function dailyLiveBars(runs: LiveRun[]): DailyLiveBar[] {
 	return out;
 }
 
-/** How tall the ascii scene stands, in character rows.
- *
- *  `AsciiField` derives its *width* from the box it is given and takes its
- *  *height* as a row count — so a constant here is a constant number of rows
- *  on every screen, and 22 rows (the old standalone `/daily`) is roughly a
- *  full phone viewport. Inside the dashboard that would push every section
- *  under it below the horizon on exactly the device the compact view exists
- *  for. So the two placements read the viewport instead:
- *
- *  - `inline` — the glance in the live-runs slot. A third of the viewport,
- *    floored at something still legible as a map and capped so a tall desktop
- *    doesn't turn the glance back into the wall.
- *  - `full` — the expanded stage. Nearly the whole overlay; the cap is well
- *    past any real viewport and exists only so a bad measurement can't ask
- *    the camera to render a thousand rows.
- *
- *  A zero/absent viewport (SSR, a detached measurement) falls to the floor
- *  rather than to zero: a map with no rows renders as a blank frame, which
- *  reads as broken, while a short one reads as a small map.
- */
+/** Lines `renderWorld` paints below the `rows`-tall board (measured, above). */
+export const SCENE_CONTROL_ROWS = 18;
+/** The deck's own padding + legend toggle, in px (measured, above). */
+export const SCENE_CHROME_PX = 77;
+
 export const MAP_ROW_BOUNDS = {
-	inline: { share: 0.34, min: 10, max: 22 },
-	full: { share: 0.86, min: 14, max: 48 }
+	inline: { share: 0.62, min: 10, max: 22 },
+	full: { share: 0.92, min: 14, max: 48 }
 } as const;
 
 export type MapPlacement = keyof typeof MAP_ROW_BOUNDS;
+
+/** How tall the ascii scene stands, in board rows.
+ *
+ *  `AsciiField` takes its height as a row count and derives its width from
+ *  the box it is given — so a constant here is the same number of rows on a
+ *  phone and a 27" display, and 22 rows (the old standalone `/daily`) is most
+ *  of a phone viewport. Inside the dashboard that pushes every section under
+ *  the field below the horizon, on exactly the device the compact view exists
+ *  for. So both placements read the viewport.
+ *
+ *  The arithmetic is not `height / lineHeight`, and that is the whole reason
+ *  this is a function with a test rather than two numbers at the call sites.
+ *  `rows` is the *board*; `renderWorld` paints a fixed tail of control rows
+ *  under it — actor bearings, CHARTS, the cloth selvage — and the deck adds
+ *  its own padding and legend toggle around the lot. Measured at both widths
+ *  on 2026-08-31 (`repro/drive-daily.mjs` prints these live): 18 board rows
+ *  rendered 36 lines in a 644px frame at 390x844. Ask for a share of the
+ *  viewport without subtracting that, and every answer is ~300px too tall.
+ *
+ *  - `inline` — the live-runs slot. Bounded near two thirds of the viewport
+ *    *including* the tail, so the warp is reachable with one thumb-flick.
+ *  - `full` — the stage behind `↙ collapse`. The overlay's own 92svh cap.
+ *
+ *  The floors are load-bearing in both directions: a 0/absent viewport (SSR,
+ *  the first client frame) renders the minimum rather than an empty bordered
+ *  box, and on a short phone the tail alone can eat the whole budget — a
+ *  small map reads as a map, a zero-row one reads as broken.
+ */
 
 export function mapRows(
 	placement: MapPlacement,
@@ -81,5 +94,7 @@ export function mapRows(
 	const { share, min, max } = MAP_ROW_BOUNDS[placement];
 	if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return min;
 	if (!Number.isFinite(lineHeightPx) || lineHeightPx <= 0) return min;
-	return Math.max(min, Math.min(max, Math.round((viewportHeight * share) / lineHeightPx)));
+	const painted = viewportHeight * share - SCENE_CHROME_PX;
+	const lines = Math.round(painted / lineHeightPx) - SCENE_CONTROL_ROWS;
+	return Math.max(min, Math.min(max, lines));
 }
