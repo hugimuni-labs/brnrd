@@ -849,6 +849,26 @@ class LiveRunCourseIn(BaseModel):
     current: str | None = Field(default=None, max_length=256)
 
 
+class LiveRunKbPageIn(BaseModel):
+    """One kb page a live run has committed (design-the-water-line.md "The
+    kb is the reef") — path, plus a link when the daemon could derive one.
+
+    Derived daemon-side from the same portal capsule ``relics_counts``
+    reads, one field further in (`brr.relics.live_portal_kb_pages`): a
+    committed page, never one merely planned or in-flight. All display, no
+    identity — a hostile/over-long value truncates rather than rejects the
+    row, same posture as every other nested live-run model here.
+    """
+
+    path: str = Field(min_length=1, max_length=256)
+    url: str | None = Field(default=None, max_length=2048)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _truncate(cls, data: Any) -> Any:
+        return _truncate_to_bounds(cls, data)
+
+
 class LiveRunIn(BaseModel):
     """One entry from the local presence registry (``src/brr/presence.py``)
     — a thought currently awake on this daemon, or an ad-hoc session
@@ -891,6 +911,14 @@ class LiveRunIn(BaseModel):
     # a conservative identifier shape daemon-side; the cap here only
     # bounds a hostile payload.
     relics_counts: dict[str, int] | None = None
+    # design-the-water-line.md "The kb is the reef": the kb pages this run
+    # has committed so far, named — read by the daemon from the same
+    # capsule as `relics_counts`, one field further in
+    # (`brr.relics.live_portal_kb_pages`). `None` = nothing attested (same
+    # three cases as `relics_counts`); `[]` = known, no page committed yet.
+    # A committed page is already sunk (the doctrine's own bar for "in the
+    # reef"), so this can be non-empty on a run that is still weaving.
+    relics_kb_pages: list[LiveRunKbPageIn] | None = None
     # #566 slice 0: resident-authored mood. `mood` is the raw handle from
     # the run's `.mood` control file; glyph/pitch are resolved daemon-side
     # against `brr.emotes` (`cloud.py::_mood_payload`) so this API and the
@@ -1022,6 +1050,15 @@ class LiveRunIn(BaseModel):
             str(kind)[:32]: count
             for kind, count in list(value.items())[:24]
         }
+
+    @field_validator("relics_kb_pages")
+    @classmethod
+    def _bound_relics_kb_pages(
+        cls, value: list[LiveRunKbPageIn] | None,
+    ) -> list[LiveRunKbPageIn] | None:
+        if value is None:
+            return None
+        return value[:24]
 
 
 class LiveRunsReport(BaseModel):

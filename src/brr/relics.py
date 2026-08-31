@@ -1178,6 +1178,63 @@ def live_portal_counts(brr_dir: Path, event_id: str | None) -> dict[str, int] | 
     return out
 
 
+# Bound on the kb-page list a single live capsule read may hand back — a
+# hostile-payload backstop only (the collector caps produce at
+# ``_MAX_RECORDS`` already), and generous for honest use: a run that has
+# committed more than a dozen kb pages before its own closeout is not the
+# case this reef outcrop feed is optimised for.
+_LIVE_KB_PAGES_MAX = 12
+
+
+def live_portal_kb_pages(
+    brr_dir: Path, event_id: str | None,
+) -> list[dict[str, str]] | None:
+    """The kb pages a *live* run has committed so far — path (+ url), not
+    just a count.
+
+    Same capsule :func:`live_portal_counts` reads (the ``produce`` facet of
+    ``outbox/<event>/portal-state.json``), one field further in: that facet
+    already carries the *full* relic manifest under ``"records"`` (see
+    :func:`live_summary`'s own return, whose ``"counts"`` is a collapse of
+    the very same list) — ``live_portal_counts`` only ever looked at the
+    collapsed view. This reads the manifest directly and keeps the ``kb``
+    kind, so the reef (kb/design-the-water-line.md "The kb is the reef")
+    can name the outcrop instead of only counting it. No new collection: a
+    kb relic is auto-reported by the daemon's own knowledge capture the
+    moment it commits a page, which is the doctrine's own bar for "in the
+    reef" (committed, not in-flight) — a still-*running* run can already own
+    a sunk outcrop this way, same as a closed one.
+
+    ``None`` when nothing attested is available (no event, no capsule, the
+    facet reports ``known: false``) — same three cases
+    :func:`live_portal_counts` collapses to ``None``. ``[]`` when the facet
+    is known and the run has committed no kb page yet. Bounded at
+    :data:`_LIVE_KB_PAGES_MAX`, oldest-appended first (the manifest's own
+    order); never raises.
+    """
+    produce = _read_produce_facet(brr_dir, event_id)
+    if produce is None:
+        return None
+    records = produce.get("records")
+    if not isinstance(records, list):
+        return None
+    out: list[dict[str, str]] = []
+    for record in records:
+        if not isinstance(record, dict) or record.get("kind") != "kb":
+            continue
+        path = str(record.get("path") or "").strip()
+        if not path:
+            continue
+        page: dict[str, str] = {"path": path}
+        url = str(record.get("url") or "").strip()
+        if url:
+            page["url"] = url
+        out.append(page)
+        if len(out) >= _LIVE_KB_PAGES_MAX:
+            break
+    return out
+
+
 # Compact-tail vocabulary: singular/plural noun per kind, in render order.
 # ``branch`` is deliberately absent — mid-flight every commit-bearing run
 # has exactly one branch (derive_auto appends it whenever commits exist),

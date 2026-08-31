@@ -53,6 +53,15 @@ export interface LiveRun {
 	// attested (ad-hoc session, pre-upgrade daemon); `{}` = known, no
 	// produce yet. Render via `liveRelicChips` below.
 	relics_counts?: Record<string, number> | null;
+	// design-the-water-line.md "The kb is the reef": the kb pages this run
+	// has *committed* so far, named — not just counted (`cloud_publisher.py::
+	// _live_runs_snapshot`, sourced from the same portal capsule as
+	// `relics_counts` via `relics.live_portal_kb_pages`). `null`/absent =
+	// nothing attested (ad-hoc session, pre-upgrade daemon, or a daemon
+	// older than this field); `[]` = known, no page committed yet. A
+	// committed page is already sunk — the water line's own doctrine — so
+	// this can be non-empty on a run that is still weaving.
+	relics_kb_pages?: LiveRunKbPage[] | null;
 	// #566 slice 0: the resident-authored mood — raw handle from the run's
 	// `.mood` control file, glyph/pitch resolved daemon-side against
 	// `brr.emotes` so the frontend owns no emote table. All null/absent when
@@ -141,6 +150,13 @@ export interface LiveRun {
 	// `pickLane.ts::pickRows`) must skip a row with this true, or a dead run's
 	// stale data can win the pick forever.
 	daemon_stale?: boolean | null;
+}
+
+/** One kb page a live run has committed. `url` absent when the daemon
+ *  could not derive a link (unattested repo/forge, cross-scope report). */
+export interface LiveRunKbPage {
+	path: string;
+	url?: string | null;
 }
 
 export interface LiveRunRoom {
