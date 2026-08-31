@@ -3067,7 +3067,19 @@ def cmd_do(args):
     if all_item_ids:
         from . import items as items_mod
 
-        warp_root, _warp_err = _item_context()
+        warp_root, warp_err = _item_context()
+        # Two failures, and only one of them is the caller's typo. With no
+        # warp resolvable, `resolve_item(None, …)` answers None for *every*
+        # id — so the unknown-id branch below would tell a caller its
+        # correct id does not exist. Name the ambiguity instead of asserting
+        # the half that happens to be cheaper to print (#792).
+        if warp_err is not None:
+            print(
+                f"[brnrd do] --item needs the account's warp, and {warp_err}. "
+                "Nothing was staged.",
+                file=sys.stderr,
+            )
+            return 1
         unknown = sorted({
             item_id for item_id in all_item_ids
             if items_mod.resolve_item(warp_root, item_id) is None

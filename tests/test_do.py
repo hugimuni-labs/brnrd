@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from brr import do as do_mod
+from brr import cli
 from brr.cli import main
 
 
@@ -636,6 +637,37 @@ def test_do_item_unknown_item_is_refused_before_staging(tmp_path, monkeypatch, c
     ]) == 1
     err = capsys.readouterr().err
     assert "w-999" in err
+    assert "Nothing was staged" in err
+    assert not list(outbox.glob("do-*.md"))
+    assert not (outbox / ".asks.jsonl").exists()
+
+
+def test_do_item_says_no_warp_rather_than_no_item(tmp_path, monkeypatch, capsys):
+    """A missing warp and a typo'd id are different failures.
+
+    `items.resolve_item(None, …)` answers None for every id, so without this
+    branch a repo with no account warp tells the caller its perfectly good
+    `w-1` does not exist — a confident wrong diagnosis, and the remedy it
+    implies (go fix your id) is the wrong remedy. Name the ambiguity (#792).
+    """
+    from _helpers import init_git_repo
+
+    repo = tmp_path / "bare"
+    init_git_repo(repo)
+    monkeypatch.chdir(repo)
+    capsys.readouterr()
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    monkeypatch.setattr(cli, "_item_context", lambda **_kw: (None, "no warp here"))
+
+    assert main([
+        "do", "--reply", "evt-1", "--item", "w-1", "--body", "hi", "--no-promise",
+    ]) == 1
+    err = capsys.readouterr().err
+    assert "warp" in err
+    assert "does" not in err.split("Nothing was staged")[0].replace("doesn", "")
     assert "Nothing was staged" in err
     assert not list(outbox.glob("do-*.md"))
     assert not (outbox / ".asks.jsonl").exists()
