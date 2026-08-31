@@ -376,6 +376,79 @@ def stage_cut(
     return path, None
 
 
+#: The event→item join recorded at disposition (design-the-water-line.md
+#: §The asks lane, rung 2: "the binding attested"). Dot-prefixed like every
+#: other control file this directory already carries (`.relics.jsonl`,
+#: `.promises.jsonl`, `.pr`) — `daemon.py`'s own drain skips a file outright
+#: once its name starts with `.` (`_drain_outbox`, ~L9186-9190) and never
+#: reaches `CONTROL_NAMES` for anything else; a bare `asks.jsonl` sitting in
+#: this same directory would instead be swept up as an undelivered chat
+#: message and fail to parse as outbox frontmatter. The design page's own
+#: spelling predates checking that constraint against the drain; this name
+#: is the reconciliation.
+ASKS_CONTROL_NAME = ".asks.jsonl"
+
+
+def append_ask(outbox_dir: Path | None, event_id: str, item_id: str) -> None:
+    """Append one ``.asks.jsonl`` row binding *event_id* to *item_id*.
+
+    Same best-effort append-only JSONL shape :func:`relics.append` already
+    uses for ``.relics.jsonl`` — but a sibling file, not a new record
+    ``kind`` folded into the produce manifest: an ask binding is a
+    conversation-thread fact ("this reply answered this item"), not
+    something the run *produced*, and the produce table
+    (``docs/portals.md``) already reads the manifest that way. Never raises;
+    a bug producing an unserialisable payload should not corrupt the file
+    for every later reader.
+
+    Caller's responsibility to call this only once the binding's own reply
+    has a drain verdict :func:`accepted` — see ``cli.cmd_do``, which is the
+    only caller today.
+    """
+    if outbox_dir is None or not event_id or not item_id:
+        return
+    record = {"event": event_id, "item": item_id}
+    try:
+        line = json.dumps(record, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return
+    path = outbox_dir / ASKS_CONTROL_NAME
+    try:
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+    except OSError:
+        pass
+
+
+def read_asks(outbox_dir: Path | None) -> list[dict[str, Any]]:
+    """Parse the self-reported ``.asks.jsonl`` control file.
+
+    Tolerant of blank or malformed lines (skipped, not fatal); a missing
+    file reads as ``[]``, same as no bindings recorded — mirrors
+    :func:`relics.read_reported`'s shape for its sibling file. Rung 3 (the
+    rail rendering open asks grouped by item, design-the-water-line.md
+    §The asks lane) is the eventual reader; not wired to anything yet.
+    """
+    if outbox_dir is None:
+        return []
+    try:
+        text = (outbox_dir / ASKS_CONTROL_NAME).read_text(encoding="utf-8")
+    except OSError:
+        return []
+    out: list[dict[str, Any]] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(record, dict) and record.get("event") and record.get("item"):
+            out.append(record)
+    return out
+
+
 def write_mood(
     outbox_dir: Path, emote_name: str, note: str | None = None,
 ) -> Path:
