@@ -36,6 +36,14 @@ from starlette.responses import Response
 # for a route nobody declared, and gets the same 404 the API would have given.
 _READ_METHODS = frozenset({"GET", "HEAD"})
 
+# The shell contains the content-hashed chunk URLs for exactly one frontend
+# build. Letting a browser heuristically cache it across a container rollout
+# can therefore pin the whole UI to the previous build even while the backend
+# and image are current. ``no-cache`` keeps normal browser caching but requires
+# revalidation before reuse; the hashed ``/_app/immutable`` files remain free
+# to use their own long-lived cache semantics.
+_SHELL_CACHE_CONTROL = "no-cache"
+
 
 def resolve_frontend_dir(configured: str = "") -> Path | None:
     """The directory holding the built SPA, or ``None`` when there is none.
@@ -127,7 +135,12 @@ def mount_frontend(app: FastAPI, directory: Path, claimed: frozenset[str]) -> No
             return JSONResponse({"detail": "Not Found"}, status_code=404)
         asset = _safe_file(root, spa_path)
         if asset is not None:
-            return FileResponse(asset)
+            response = FileResponse(asset)
+            # ``/index.html`` is just another spelling of the shell. It must
+            # obey the same revalidation rule as `/` and deep SPA routes.
+            if asset == index:
+                response.headers["Cache-Control"] = _SHELL_CACHE_CONTROL
+            return response
         # `_app/` is SvelteKit's own build namespace — every URL under it is
         # minted by the build (hashed chunks, version.json), never a client
         # route, so the shell is always the wrong answer there. Serving it
@@ -142,5 +155,8 @@ def mount_frontend(app: FastAPI, directory: Path, claimed: frozenset[str]) -> No
             return JSONResponse({"detail": "Not Found"}, status_code=404)
         # 200, not 404: the client router owns the path from here, including
         # its own not-found page. This is the behaviour the platform router
-        # gave us and the behaviour a deep link needs.
-        return FileResponse(index, media_type="text/html")
+        # gave us and the behaviour a deep link needs. The shell points at one
+        # build's hashed chunks, so every reuse must first revalidate it.
+        response = FileResponse(index, media_type="text/html")
+        response.headers["Cache-Control"] = _SHELL_CACHE_CONTROL
+        return response
