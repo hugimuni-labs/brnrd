@@ -573,6 +573,44 @@ export function compileRoomGraph(
 		}
 		camps.set(key, camp);
 	}
+	// A live branch disappearing from presence is a lifecycle transition, not
+	// an instruction to erase the ground the reader watched it grow.  Trails
+	// are already the persisted evidence; join their run id to the closed
+	// ledger row and keep a bodyless camp after cut/merge.  The branch relic is
+	// the only durable branch name on this wire. Older rows without one retain
+	// the terrain under a stable `settled` camp instead of guessing a name.
+	const liveIds = new Set(runs.map((run) => run.run_id));
+	for (const [runId, steps] of Object.entries(trails ?? {})) {
+		if (liveIds.has(runId) || steps.length === 0) continue;
+		const row = (ledger?.rows ?? []).find((candidate) => candidate.run_id === runId);
+		const label = row?.repo_label;
+		if (!label) continue;
+		const branchRelic = (row.external_refs ?? []).find((ref) => ref.kind === 'branch');
+		const branch = typeof branchRelic?.name === 'string' ? branchRelic.name : 'settled';
+		const camps = islands.get(label) ?? new Map<string, RoomCamp>();
+		islands.set(label, camps);
+		const key = campKey(branch, null);
+		const camp = camps.get(key) ?? {
+			branch,
+			dir: null,
+			env: null,
+			actorGlyphs: [],
+			chambers: [],
+			commits: 0
+		};
+		for (const step of steps) {
+			if (!step.dir) continue;
+			let chamber = camp.chambers.find((candidate) => candidate.dir === step.dir);
+			if (!chamber) {
+				chamber = { dir: step.dir, lastAct: null, lastFile: null, files: [], visits: 0 };
+				camp.chambers.push(chamber);
+			}
+			chamber.visits += 1;
+			if (step.act) chamber.lastAct = step.act;
+			if (step.file) chamber.lastFile = step.file;
+		}
+		camps.set(key, camp);
+	}
 	for (const row of ledger?.rows ?? []) {
 		const label = row.repo_label;
 		if (!label || islands.has(label)) continue;

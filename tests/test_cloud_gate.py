@@ -1929,6 +1929,52 @@ def test_live_runs_snapshot_carries_selected_shell_and_core(tmp_path):
     assert rows["run-without-runner"]["runner"] == {}
 
 
+def test_live_runs_snapshot_joins_presence_from_every_account_repo(tmp_path, monkeypatch):
+    """A cross-repo strand occupies one account pool and must share one wire."""
+    from brr import account, presence
+
+    repo_a = tmp_path / "a"
+    repo_b = tmp_path / "b"
+    a_brr = repo_a / ".brr"
+    b_brr = repo_b / ".brr"
+    a_brr.mkdir(parents=True)
+    b_brr.mkdir(parents=True)
+    presence.register(
+        a_brr,
+        kind="daemon",
+        run_id="run-a",
+        repo_label="org/a",
+        pid=os.getpid(),
+        entry_id="presence-a",
+    )
+    presence.register(
+        b_brr,
+        kind="daemon",
+        run_id="run-b",
+        repo_label="org/b",
+        pid=os.getpid(),
+        entry_id="presence-b",
+        is_subspawn=True,
+        parent_run_id="run-a",
+    )
+    monkeypatch.setattr(
+        account,
+        "resolve_context",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            repos={
+                "org/a": SimpleNamespace(label="org/a", root=repo_a),
+                "org/b": SimpleNamespace(label="org/b", root=repo_b),
+            }
+        ),
+    )
+
+    rows = {row["run_id"]: row for row in cloud._live_runs_snapshot(a_brr)}
+
+    assert set(rows) == {"run-a", "run-b"}
+    assert rows["run-b"]["repo_label"] == "org/b"
+    assert rows["run-b"]["parent_run_id"] == "run-a"
+
+
 def test_live_runs_snapshot_publishes_derived_card_course(tmp_path, monkeypatch):
     """The real publisher carries the bounded fact projected from card packets."""
     from brr import presence, run_progress
