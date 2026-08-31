@@ -98,9 +98,8 @@ test('a pick with no warp items carries no chips — absence is a fact, not a ga
 	assert.deepEqual(rows[0].serves, []);
 });
 
-test('a burning pick reads elapsed, never a countdown bar', () => {
+test('a burning pick reads elapsed, never a countdown', () => {
 	const rows = pickRows({ liveRuns: [run()], scheduledWakes: null, now: NOW });
-	assert.equal(rows[0].barFraction, 1);
 	assert.equal(rows[0].clock, '7m 00s');
 });
 
@@ -189,22 +188,7 @@ test('a burning pick takes its threads from the taken: index, never from serves'
 	assert.deepEqual(rows[0].crosses, []);
 });
 
-// The armed row's two readings must agree in direction, and the label must be a
-// name rather than the wire's machine prefix.
-
-test('the bar fills as the fire nears, agreeing with the thermal colour', () => {
-	const rows = pickRows({
-		liveRuns: [],
-		scheduledWakes: [
-			wake({ id: 'soon', scheduled_for: at(5 * MINUTE) }),
-			wake({ id: 'far', scheduled_for: at(90 * 60 * MINUTE) })
-		],
-		now: NOW
-	});
-	const soon = rows.find((row) => row.id === 'soon')?.barFraction ?? 0;
-	const far = rows.find((row) => row.id === 'far')?.barFraction ?? 0;
-	assert.ok(soon > far, `imminent should draw longer: ${soon} vs ${far}`);
-});
+// The armed row's label must be a name rather than the wire's machine prefix.
 
 test('a wake is labelled by its name, not by the daemon prefix the wire carries', () => {
 	const rows = pickRows({

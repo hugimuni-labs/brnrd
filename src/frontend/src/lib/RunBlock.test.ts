@@ -25,7 +25,6 @@ function pick(overrides: Partial<PickRow> & Pick<PickRow, 'id' | 'label'>): Pick
 		note: null,
 		color: '#f59e0b',
 		urgency: 'calm',
-		barFraction: 1,
 		serves: [],
 		crosses: [],
 		...overrides
