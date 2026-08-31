@@ -56,10 +56,6 @@
 		 *  their place on the way back). Null while loading; the unfold then
 		 *  falls back to a plain run-page link. */
 		surface?: SurfaceResponse | null;
-		/** Legacy dashboard input kept at the component boundary while the
-		 *  caller still owns the crossing alphabet. The cloth deliberately no
-		 *  longer draws the crossing/notch strip: topic runes are its one mark. */
-		threads?: string[];
 		/** Run id → every topic the run touched. The cloth renders that set as
 		 *  runes once, immediately before the name. */
 		crossingIndex?: Map<string, string[]>;

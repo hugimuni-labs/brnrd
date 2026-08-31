@@ -203,7 +203,7 @@ def _daemon_headers(client, acc, repo_id):
     return {"Authorization": f"Bearer {token}"}
 
 
-def test_daemon_mints_repo_scoped_app_publishing_credential(env, monkeypatch):
+def test_daemon_mints_installation_wide_app_publishing_credential(env, monkeypatch):
     app, client, _ = env
     acc = _account(client)
     repo_id = _repo(client, acc)
@@ -240,7 +240,7 @@ def test_daemon_mints_repo_scoped_app_publishing_credential(env, monkeypatch):
             repository_ids=repository_ids,
             repositories=repositories,
         )
-        return {"token": "ghs_repo_scoped", "expires_at": "2099-01-01T00:00:00Z"}
+        return {"token": "ghs_installation", "expires_at": "2099-01-01T00:00:00Z"}
 
     monkeypatch.setattr(
         "brnrd.routers.daemons.github_app_client.installation_access_credential",
@@ -253,13 +253,13 @@ def test_daemon_mints_repo_scoped_app_publishing_credential(env, monkeypatch):
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
     assert response.json() == {
-        "token": "ghs_repo_scoped",
+        "token": "ghs_installation",
         "expires_at": "2099-01-01T00:00:00Z",
         "login": "brnrd-dev[bot]",
     }
     assert seen == {
         "installation_id": "73",
-        "repository_ids": [4242],
+        "repository_ids": None,
         "repositories": None,
     }
 
@@ -292,7 +292,8 @@ def test_daemon_mints_credential_for_named_sibling_repo(env, monkeypatch):
     )
     assert response.status_code == 200, response.text
     assert seen["installation_id"] == "88"
-    assert seen["repository_ids"] == [5252]
+    assert seen["repository_ids"] is None
+    assert seen["repositories"] is None
 
 
 def _payload(*, repo="owner/repo", body="@brr-bot do the thing",
@@ -1822,7 +1823,8 @@ def test_publishing_credential_survives_repo_transfer(env, monkeypatch):
 
     assert response.status_code == 200
     assert seen["installation_id"] == "200"
-    assert seen["repository_ids"] == [1194527686]
+    assert seen["repository_ids"] is None
+    assert seen["repositories"] is None
     with app.state.SessionLocal() as db:
         repo = db.get(Repo, repo_id)
         assert repo.repo_full_name == "neworg/newrepo"
@@ -1866,7 +1868,8 @@ def test_publishing_credential_name_fallback_without_forge_repo_id(
 
     assert response.status_code == 200
     assert seen["installation_id"] == "73"
-    assert seen["repositories"] == ["repo"]
+    assert seen["repository_ids"] is None
+    assert seen["repositories"] is None
     with app.state.SessionLocal() as db:
         assert db.get(Repo, repo_id).repo_full_name == "owner/repo"
 
