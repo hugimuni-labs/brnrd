@@ -188,9 +188,15 @@
 		<div class="mt-1.5 flex flex-col">
 			{#each armed as row, index (row.id)}
 				<!-- Armed: the same object, cold — the queue behind the rule, soonest
-			     first. Frost thaws toward amber as the fire nears, and the bar is
-			     imminence drawn as geometry, so reading down from the rule is
-			     reading further into the future. -->
+			     first. Frost thaws toward amber as the fire nears; reading down from
+			     the rule is reading further into the future.
+
+			     No imminence bar. It drew, imprecisely, the number its own clock
+			     label states exactly two characters to its right — and it was the
+			     loudest mark in the lane while carrying the least of its meaning.
+			     It also collapsed to nothing on far-future rows, so its presence
+			     was what made this column ragged. The rows are already sorted
+			     soonest-first: the order is the geometry. -->
 				<button
 					type="button"
 					class="flex h-[20px] w-full cursor-pointer items-center justify-start gap-1.5 border border-transparent px-1.5 text-left"
@@ -209,11 +215,6 @@
 					     topic-rune vocabulary before and after ignition. The phase changes;
 					     the topic identity does not. -->
 					<TopicRunes topicIds={rowTopics(row)} {topicFaces} className="text-[9px]" />
-					<span
-						class="h-[7px] shrink-0 rounded-r-[1px]"
-						style={`width: ${(row.barFraction * 34).toFixed(2)}%; background-color: ${row.color}`}
-						aria-hidden="true"
-					></span>
 					<span class="truncate font-mono text-[9px] leading-none whitespace-nowrap">
 						{row.clock ? `${row.clock} · ` : ''}{row.note ? `${row.note} · ` : ''}{row.label}
 					</span>
