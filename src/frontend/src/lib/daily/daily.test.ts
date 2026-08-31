@@ -1,16 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildWarpGraph } from '../warpGraph.ts';
 import type { LiveRun } from '../liveRuns.ts';
 import {
-	dailyBuoys,
-	dailyIslands,
-	dailyItemState,
+	MAP_ROW_BOUNDS,
+	SCENE_CHROME_PX,
+	SCENE_CONTROL_ROWS,
 	dailyLiveBars,
-	hashItemId,
-	knowledgePageCount,
-	surfaceBuoys
+	mapRows
 } from './daily.ts';
+
+// The buoy / island / reef / hash-deep-link tests that stood here went with
+// the composition they covered (2026-08-31): `/daily` wears the main
+// dashboard now, so there is no second telling of the warp, the branch
+// terrain, or the kb count to assert about. What is left is the two things
+// the live-runs view on that route still computes for itself.
 
 const run = (id: string, parent: string | null = null): LiveRun =>
 	({
@@ -45,88 +48,75 @@ test('daily live bars nest strands beneath their live parent', () => {
 	);
 });
 
-test('daily buoys exclude blocked, completed, and goal items', () => {
-	const graph = buildWarpGraph([
-		{ path: 'surface/warp/w-1.md', markdown: '# decide\ntype: decision\n' },
-		{ path: 'surface/warp/w-2.md', markdown: '# act\ntype: action\nneeds: w-1\n' },
-		{ path: 'surface/warp/w-3.md', markdown: '# done\ntype: action\ndone: 2026-08-30\n' },
-		{ path: 'surface/warp/g-1.md', markdown: '# goal\ntype: goal\n' }
-	]);
-	assert.deepEqual(
-		dailyBuoys(graph).map((buoy) => [buoy.item.id, buoy.mark]),
-		[['w-1', '◇']]
+test('the inline scene takes a share of the viewport, not a constant row count', () => {
+	// A phone and a desktop must not get the same map: 22 rows is most of a
+	// phone viewport, which is what pushed every section below the field off
+	// the first `/daily`.
+	const phone = mapRows('inline', 844);
+	const desktop = mapRows('inline', 1080);
+	assert.ok(phone < desktop, `expected the phone scene to be shorter (${phone} vs ${desktop})`);
+});
+
+test('the row count is a painted-height budget, not height / line-height', () => {
+	// The regression this exists to stop: `renderWorld` paints a fixed tail of
+	// control rows *below* the board, so a naive share overshoots by that tail
+	// plus the deck's chrome — measured at 644px against a 422px budget on
+	// 2026-08-31 before this was subtracted.
+	const naive = Math.round((1080 * MAP_ROW_BOUNDS.inline.share) / 16.2);
+	assert.ok(
+		mapRows('inline', 1080) < naive,
+		`the tail must be subtracted (${mapRows('inline', 1080)} vs the naive ${naive})`
+	);
+	// And what it returns is what the budget implies, exactly.
+	assert.equal(
+		mapRows('inline', 1080),
+		Math.round((1080 * MAP_ROW_BOUNDS.inline.share - SCENE_CHROME_PX) / 16.2) - SCENE_CONTROL_ROWS
 	);
 });
 
-test('daily islands render only branch facts carried by live and cloth wires', () => {
-	const islands = dailyIslands(
-		[run('one')],
-		[
-			{
-				repo_label: 'org/repo',
-				external_refs: [
-					{ kind: 'branch', name: 'brr/cut' },
-					{ kind: 'pr', number: 12 }
-				]
-			} as never
-		]
-	);
-	assert.deepEqual(islands[0].branches, [
-		{ name: 'brr/one', pr: null, live: true },
-		{ name: 'brr/cut', pr: 12, live: false }
-	]);
-	assert.equal(knowledgePageCount([{ layer: 'authored' }]), null);
-	assert.equal(knowledgePageCount([{ layer: 'knowledge' }, { layer: 'knowledge' }]), 2);
-});
-
-test('surface buoys cap the field, calls first, remainder counted', () => {
-	const files = [
-		{ path: 'surface/warp/w-1.md', markdown: '# a1\ntype: action\n' },
-		{ path: 'surface/warp/w-2.md', markdown: '# call\ntype: decision\n' },
-		{ path: 'surface/warp/w-3.md', markdown: '# a2\ntype: action\n' },
-		{ path: 'surface/warp/w-4.md', markdown: '# prep\ntype: preparation\n' }
-	];
-	const buoys = dailyBuoys(buildWarpGraph(files));
-	const field = surfaceBuoys(buoys, 3);
-	assert.equal(field.shown.length, 3);
-	assert.equal(field.hidden, 1);
-	assert.deepEqual(
-		field.shown.slice(0, 2).map((b) => b.item.type),
-		['decision', 'preparation']
-	);
-});
-
-test('surface buoys with room to spare hide nothing', () => {
-	const files = [{ path: 'surface/warp/w-1.md', markdown: '# solo\ntype: action\n' }];
-	const field = surfaceBuoys(dailyBuoys(buildWarpGraph(files)));
-	assert.equal(field.shown.length, 1);
-	assert.equal(field.hidden, 0);
-});
-
-test('hash item id strips the leading # and blanks to null', () => {
-	assert.equal(hashItemId('#w-47'), 'w-47');
-	assert.equal(hashItemId('w-47'), 'w-47');
-	assert.equal(hashItemId('#'), null);
-	assert.equal(hashItemId(''), null);
-});
-
-test('daily item state ranks blocked over taken over ready, and reads done/retired off the lifecycle', () => {
-	const graph = buildWarpGraph([
-		{ path: 'surface/warp/w-1.md', markdown: '# decide\ntype: decision\n' },
-		{ path: 'surface/warp/w-2.md', markdown: '# blocked\ntype: action\nneeds: w-1\n' },
-		{ path: 'surface/warp/w-3.md', markdown: '# taken\ntype: action\ntaken: run-1\n' },
-		{ path: 'surface/warp/w-4.md', markdown: '# ready\ntype: action\n' },
-		{ path: 'surface/warp/w-5.md', markdown: '# shipped\ntype: action\ndone: 2026-08-30\n' },
-		{
-			path: 'surface/warp/w-6.md',
-			markdown: '# dropped\ntype: action\nretired: 2026-08-30 no longer needed\n'
+test('a scene painted at the returned row count fits its share of the viewport', () => {
+	// The claim the whole function is for, checked the way the driver checks it
+	// live: total painted height ≤ the placement's share, wherever the answer
+	// is not sitting on the floor (a short phone cannot fit the tail at all,
+	// and the floor is deliberate — see the doc).
+	for (const placement of ['inline', 'full'] as const) {
+		const { share, min } = MAP_ROW_BOUNDS[placement];
+		for (const height of [740, 844, 900, 1080, 1440]) {
+			const rows = mapRows(placement, height);
+			if (rows === min) continue;
+			const painted = (rows + SCENE_CONTROL_ROWS) * 16.2 + SCENE_CHROME_PX;
+			assert.ok(
+				painted <= height * share + 16.2,
+				`${placement} at ${height}px painted ${Math.round(painted)}px of a ${Math.round(height * share)}px budget`
+			);
 		}
-	]);
-	const state = (id: string) => dailyItemState(graph.itemById.get(id)!, graph);
-	assert.equal(state('w-1'), 'ready');
-	assert.equal(state('w-2'), 'blocked');
-	assert.equal(state('w-3'), 'taken');
-	assert.equal(state('w-4'), 'ready');
-	assert.equal(state('w-5'), 'done');
-	assert.equal(state('w-6'), 'retired');
+	}
+});
+
+test('the inline scene stays inside its own bounds at both extremes', () => {
+	assert.equal(mapRows('inline', 200), MAP_ROW_BOUNDS.inline.min);
+	assert.equal(mapRows('inline', 6000), MAP_ROW_BOUNDS.inline.max);
+});
+
+test('the expanded stage is bounded too — a bad measurement cannot ask for a thousand rows', () => {
+	assert.equal(mapRows('full', 200), MAP_ROW_BOUNDS.full.min);
+	assert.equal(mapRows('full', 20000), MAP_ROW_BOUNDS.full.max);
+});
+
+test('the expanded stage is always taller than the glance it replaces', () => {
+	for (const height of [640, 740, 900, 1080, 1440]) {
+		assert.ok(
+			mapRows('full', height) > mapRows('inline', height),
+			`the stage must gain rows at ${height}px`
+		);
+	}
+});
+
+test('an unmeasured viewport floors to a small map, never an empty frame', () => {
+	// SSR and the first client frame both report 0. Zero rows renders as a
+	// blank bordered box, which reads as broken; a short map reads as a map.
+	assert.equal(mapRows('inline', 0), MAP_ROW_BOUNDS.inline.min);
+	assert.equal(mapRows('full', 0), MAP_ROW_BOUNDS.full.min);
+	assert.equal(mapRows('inline', Number.NaN), MAP_ROW_BOUNDS.inline.min);
+	assert.equal(mapRows('inline', 740, 0), MAP_ROW_BOUNDS.inline.min);
 });

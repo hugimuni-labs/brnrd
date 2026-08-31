@@ -368,8 +368,13 @@ test('the docs constant points at the published site, not the retired host', asy
 // pinned is the property that was actually missing — that each signed-in
 // surface reaches the docs at all, through the shared constant rather than
 // its own literal.
+// `Dashboard.svelte`, not `routes/+page.svelte`: the dashboard body moved
+// into a component on 2026-08-31 so `/daily` could render the same interface
+// (the route file is now two lines over it). The surface this sweep is about
+// — the signed-in page a reader actually looks at — is unchanged; only the
+// file holding it moved.
 const SIGNED_IN_ROUTES = [
-	join(here, '..', 'routes', '+page.svelte'),
+	join(here, 'Dashboard.svelte'),
 	join(here, '..', 'routes', 'repos', '+page.svelte')
 ];
 
