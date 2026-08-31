@@ -513,7 +513,6 @@
 	let machineRows = $derived(pickRows({ liveRuns, scheduledWakes, now }));
 	let burningRows = $derived(machineRows.filter((row) => row.phase === 'picking'));
 	let armedRows = $derived(machineRows.filter((row) => row.phase === 'armed'));
-	let threads = $derived(topicThreadList.map((thread) => thread.canonicalId));
 	// Which topics have an item weaving right now — the answer to "which one
 	// is being worked", rendered on the heddle rail where the question gets
 	// asked rather than only on the run that is doing it.
@@ -1736,7 +1735,6 @@
 							{liveRuns}
 							{scheduledWakes}
 							{weaving}
-							{threads}
 							{crossingIndex}
 							topicFaces={topicFaceMap}
 							selectedTopics={heddleSelection}
@@ -2090,7 +2088,6 @@
 						windowMs={runLedgerWindowMs}
 						stale={runLedgerStale}
 						surface={surfaceData}
-						{threads}
 						{crossingIndex}
 						topicFaces={topicFaceMap}
 						selectedTopics={heddleSelection}

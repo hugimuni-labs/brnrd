@@ -36,10 +36,6 @@
 		 *  pre-upgrade daemon that publishes no mood, and then the idle line
 		 *  renders its hollow dot rather than inventing a face. */
 		daemonMood?: DaemonMood | null;
-		/** Legacy authored thread alphabet kept at the component boundary while
-		 *  the dashboard still passes it. Topic identity is rendered as runes in
-		 *  both armed and burning rows now; the crossing strip has no lane role. */
-		threads?: string[];
 		crossingIndex?: Map<string, string[]>;
 		/** The set-probed topic faces (`warpGraph.topicFaces`). */
 		topicFaces?: Map<string, RunFace>;
