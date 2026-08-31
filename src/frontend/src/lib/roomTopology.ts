@@ -101,6 +101,13 @@ export function campId(repoLabel: string, camp: Pick<RoomCamp, 'branch' | 'dir'>
 	return `camp:${repoLabel}::${camp.branch ?? ''}::${camp.dir ?? ''}`;
 }
 
+/** A chamber id under a camp — the canopy is per *branch* (his 08-31 read:
+ *  "bind accretion to the branch, not the island root"), so the same observed
+ *  path under two camps mints two places, each in its own scaffold. */
+export function campDirId(camp: PlaceId, segments: string[]): PlaceId {
+	return segments.length === 0 ? camp : `${camp}/${segments.join('/')}`;
+}
+
 function fileId(ownerDirId: PlaceId, name: string): PlaceId {
 	return `${ownerDirId}#file:${name}`;
 }
@@ -131,19 +138,22 @@ function addEdge(b: Builder, from: PlaceId, to: PlaceId, kind: PlaceEdgeKind) {
 	b.edges.push({ from, to, kind });
 }
 
-/** Ensure the trie path for `dir` exists under its island; returns the
+/** Ensure the trie path for `dir` exists under its *camp*; returns the
  *  terminal directory node's id. Rule 3: intermediate prefixes are
- *  structural, derived from the attested path — never extra boundaries. */
-function ensureDirPath(b: Builder, repoLabel: string, dir: string): PlaceId {
+ *  structural, derived from the attested path — never extra boundaries.
+ *  (Rebound from the island root to the camp 2026-08-31 — the canopy is
+ *  the branch's, so parallel work on two branches grows two scaffolds.) */
+function ensureDirPath(b: Builder, repoLabel: string, camp: PlaceId, dir: string): PlaceId {
 	const segs = pathSegments(dir);
-	let parent = islandRootId(repoLabel);
+	let parent = camp;
 	for (let i = 0; i < segs.length; i++) {
-		const id = dirId(repoLabel, segs.slice(0, i + 1));
+		const id = campDirId(camp, segs.slice(0, i + 1));
 		addNode(b, {
 			id,
 			kind: 'directory',
 			label: segs[i],
 			repoId: repoLabel,
+			campId: camp,
 			parentId: parent,
 			depth: i + 1
 		});
@@ -180,17 +190,15 @@ function stationId(camp: PlaceId, suffix: string): PlaceId {
 export function compileTopology(graph: RoomGraph): RoomTopology {
 	const b: Builder = { nodes: {}, edges: [], edgeSeen: new Set() };
 
-	// HOME — the account fixture; account-wide instruments live here, not
-	// as peer blocks beside repository terrain.
+	// HOME — the account fixture. Only the gate remains on the ground: the
+	// watchtower, clockwork and garage moved to the mothership (his sign,
+	// 2026-08-30 — daemon-operated stations live in the sky), and their
+	// ground fixtures had become the third copy of facts the sky band and
+	// the condition line already carry.
 	addNode(b, { id: HOME_ID, kind: 'home-fixture', label: 'HOME' });
-	for (const [suffix, label] of [
-		['gate', 'gate'],
-		['watch', 'watch'],
-		['clockwork', 'clockwork'],
-		['garage', 'garage']
-	]) {
-		const id = `${HOME_ID}#${suffix}`;
-		addNode(b, { id, kind: 'home-fixture', label, parentId: HOME_ID });
+	{
+		const id = `${HOME_ID}#gate`;
+		addNode(b, { id, kind: 'home-fixture', label: 'gate', parentId: HOME_ID });
 		addEdge(b, HOME_ID, id, 'control');
 	}
 
@@ -230,7 +238,9 @@ export function compileTopology(graph: RoomGraph): RoomTopology {
 				repoId: island.label,
 				parentId: rootId
 			});
-			addEdge(b, cid, rootId, 'branch'); // the branch spur
+			// Root → camp, parent-first like a tree edge: the camp is a branch
+			// off the trunk and draws with a junction, on the ═║ rail.
+			addEdge(b, rootId, cid, 'branch');
 			for (const st of CAMP_STATIONS) {
 				const sid = stationId(cid, st.suffix);
 				addNode(b, {
@@ -243,9 +253,10 @@ export function compileTopology(graph: RoomGraph): RoomTopology {
 				});
 				addEdge(b, cid, sid, 'control');
 			}
-			// terrain: the observed chambers of this camp, as a shared-prefix trie
+			// terrain: the observed chambers of this camp, as a shared-prefix
+			// trie growing off the camp itself — the branch's own canopy
 			for (const chamber of camp.chambers) {
-				const leafDir = ensureDirPath(b, island.label, chamber.dir);
+				const leafDir = ensureDirPath(b, island.label, cid, chamber.dir);
 				// Every attested file, then the one the hand is on. Deduped by
 				// id, so a file that is both git-attested and the current
 				// `lastFile` mints one leaf and not two — the same node either
@@ -259,6 +270,7 @@ export function compileTopology(graph: RoomGraph): RoomTopology {
 						kind: 'file',
 						label: name,
 						repoId: island.label,
+						campId: cid,
 						parentId: leafDir
 					});
 					addEdge(b, leafDir, fid, 'tree');
@@ -400,16 +412,17 @@ function resolveActorPlace(b: Builder, graph: RoomGraph, actor: RoomActor): Plac
 				}
 				return fallback;
 			}
-			const id = dirId(actor.islandLabel, pathSegments(place.label));
+			// the chamber lives in this actor's own camp's canopy (the
+			// branch-bound trie) — no camp, no chamber to stand in
+			if (!camp) return fallback;
+			const id = campDirId(camp, pathSegments(place.label));
 			return b.nodes[id] ? id : fallback;
 		}
 		case 'test-rig': {
 			// the rig attaches to the directory actually probed when that
-			// chamber exists; otherwise it is the camp's own rig
-			const anchorDir =
-				place.label && b.nodes[dirId(actor.islandLabel, pathSegments(place.label))]
-					? dirId(actor.islandLabel, pathSegments(place.label))
-					: camp;
+			// chamber exists in this camp's canopy; otherwise the camp's own rig
+			const probed = camp ? campDirId(camp, pathSegments(place.label ?? '')) : null;
+			const anchorDir = place.label && probed && b.nodes[probed] ? probed : camp;
 			if (!anchorDir) return fallback;
 			const rid = rigId(anchorDir);
 			addNode(b, {

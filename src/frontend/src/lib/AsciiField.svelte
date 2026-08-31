@@ -11,8 +11,8 @@
 	// RoomGraph → RoomTopology → RoomLayout, and asks the ASCII camera for
 	// one window into the world. The world is never laid out to fit this
 	// viewport: resizing changes the window, panning moves it, and node
-	// coordinates live in the atlas memory (persisted) — never recomputed
-	// to fit.
+	// coordinates are derived from the observed trie each poll — never
+	// stored, never fitted to the viewport.
 	//
 	// Motion doctrine, ASCII edition: nothing animates. A line that changed
 	// between two polls flashes once (diffed on a clock-free render, so a
@@ -23,9 +23,9 @@
 	import { fetchRunLedger, type RunLedgerResponse } from '$lib/runLedger';
 	import { fetchScheduledWakes, type ScheduledWakesResponse } from '$lib/scheduledWakes';
 	import { fetchQuota, type QuotaResponse } from '$lib/quota';
-	import { compileRoomGraph, dirFromEdge, fileFromDetail, type TrailStep } from '$lib/roomGraph';
+	import { compileRoomGraph, dirFromEdge, fileForChamber, type TrailStep } from '$lib/roomGraph';
 	import { compileTopology, type PlaceId } from '$lib/roomTopology';
-	import { layoutRoom, emptyAtlas, terminalRequest, type AtlasMemory } from '$lib/roomLayout';
+	import { layoutRoom, emptyAtlas, terminalRequest } from '$lib/roomLayout';
 	import {
 		diffTransitions,
 		walkFor,
@@ -165,23 +165,26 @@
 	// it is the one holding the rows a rule change invalidates. A fix that
 	// cannot reach the state it invalidates is a fix the reader has to
 	// discover by clearing storage.
-	const TRAILS_KEY = 'brnrd-ascii-trails-v2';
-	const TRAILS_KEY_RETIRED = ['brnrd-ascii-trails'];
+	// v3 (2026-08-31): the machinery fence landed (`machineryPath`) — v2 rows
+	// accreted `.brr/…` staging dirs as terrain and would re-grow them from
+	// storage on every load, same class as the v1→v2 bump.
+	const TRAILS_KEY = 'brnrd-ascii-trails-v3';
+	const TRAILS_KEY_RETIRED = ['brnrd-ascii-trails', 'brnrd-ascii-trails-v2'];
 	let trails: Record<string, TrailStep[]> = {};
 	const TRAIL_CAP = 60;
 	const TRAIL_RUNS_CAP = 24;
 
-	// atlas memory: assigned world coordinates. Client-persisted for now
-	// (the spec's accepted first slice; server-side atlas is the durable
-	// target) — a reload rebuilds the same map because this survives.
-	// v2 (2026-08-29): the trie compacted to one node per row and the
-	// terminal moved onto allocated ground. A `-v1` blob is a map of the old
-	// geography, and `layoutRoom` never moves a remembered node — a returning
-	// reader would have kept the wide board forever and read the fix as not
-	// shipped.
-	const ATLAS_KEY = 'brnrd-ascii-atlas-v3';
-	const ATLAS_KEY_RETIRED = ['brnrd-ascii-atlas-v1', 'brnrd-ascii-atlas-v2'];
-	let atlas: AtlasMemory = emptyAtlas();
+	// The atlas is retired (2026-08-31, his sign: "I don't think it has a
+	// place in the current model"). Layout is a pure function of the
+	// observed trie now — a fresh tree(1) walk every poll — so the *trail*
+	// is the persistent memory (the set of visited ground, his framing) and
+	// coordinates are derived, never stored. The retired keys are still
+	// removed so no reader carries dead blobs.
+	const ATLAS_KEY_RETIRED = [
+		'brnrd-ascii-atlas-v1',
+		'brnrd-ascii-atlas-v2',
+		'brnrd-ascii-atlas-v3'
+	];
 
 	// pager memory: injections attested while this reader watched — pages
 	// name their carrier boundary, never content (roomPager.ts)
@@ -214,12 +217,8 @@
 		}
 		try {
 			for (const dead of ATLAS_KEY_RETIRED) localStorage.removeItem(dead);
-			const raw = localStorage.getItem(ATLAS_KEY);
-			if (raw) atlas = JSON.parse(raw) as AtlasMemory;
-			if (!atlas || typeof atlas.nodes !== 'object') atlas = emptyAtlas();
-			else if (typeof atlas.regions !== 'object' || !atlas.regions) atlas.regions = {};
 		} catch {
-			atlas = emptyAtlas();
+			/* storage blocked — nothing to clean */
 		}
 		try {
 			const raw = localStorage.getItem(PAGER_KEY);
@@ -238,14 +237,6 @@
 			localStorage.setItem(TRAILS_KEY, JSON.stringify(trails));
 		} catch {
 			/* storage full/blocked — the map stays session-local */
-		}
-	}
-
-	function saveAtlas() {
-		try {
-			localStorage.setItem(ATLAS_KEY, JSON.stringify(atlas));
-		} catch {
-			/* same forgiveness */
 		}
 	}
 
@@ -269,7 +260,12 @@
 			if (!dir || !at) continue;
 			const trail = (trails[run.run_id] ??= []);
 			if (trail.some((s) => s.at === at)) continue;
-			trail.push({ dir, act: run.edge?.act ?? null, at, file: fileFromDetail(run.edge?.detail) });
+			trail.push({
+				dir,
+				act: run.edge?.act ?? null,
+				at,
+				file: fileForChamber(run.edge?.detail, dir)
+			});
 			if (trail.length > TRAIL_CAP) trail.splice(0, trail.length - TRAIL_CAP);
 			moved = true;
 		}
@@ -321,21 +317,9 @@
 		// converts them to world units and the labour district decides where.
 		const placed = layoutRoom(
 			topo,
-			atlas,
+			emptyAtlas(),
 			terminalRunId ? [terminalRequest(terminalRunId, TERMINAL_COLS, TERMINAL_ROWS + 2)] : []
 		);
-		// Count-only was the old dirty check, and it could not see a region
-		// arriving into a board whose node count had not changed — the
-		// allocation would have been recomputed every poll and never
-		// persisted, which is a stable coordinate that is only stable within
-		// one session.
-		if (
-			Object.keys(placed.memory.nodes).length !== Object.keys(atlas.nodes).length ||
-			Object.keys(placed.memory.regions ?? {}).length !== Object.keys(atlas.regions ?? {}).length
-		) {
-			atlas = placed.memory;
-			if (!demo) saveAtlas();
-		}
 		// The claw is minted here, after the layout, because a delivery needs
 		// two real positions — HOME's and the actor's. It rides an attested
 		// crossing (`graph.crossings`), never a poll: the tail is republished
@@ -434,6 +418,11 @@
 		if (walks.length > 0) {
 			const adv = advanceWalks(walks);
 			walks = adv.walks;
+			// The route mark fades with the walk (2026-08-31): left up, the ∙
+			// trail of the *last* transition stayed painted over corridors and
+			// labels indefinitely — the "overwritten and slightly corrupted"
+			// rows in his screenshots were mostly this.
+			if (walks.length === 0) lastRoute = null;
 			moved = true;
 		}
 		if (readings.length > 0) {
@@ -506,7 +495,6 @@
 		let stop = false;
 		let timer: ReturnType<typeof setTimeout> | null = null;
 		if (!demo) loadStores();
-		else atlas = emptyAtlas();
 		measureCols();
 		const onResize = () => measureCols();
 		window.addEventListener('resize', onResize);

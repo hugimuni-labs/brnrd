@@ -102,7 +102,7 @@ const KB_RE = /\bkb\/|\.brnrd-kb\/|knowledge\//;
  * terrain, not discarded.
  */
 export function dirFromEdge(edge: LiveRun['edge'], attested?: Iterable<string>): string | null {
-	const cwd = edge?.dir && edge.dir !== '.' ? edge.dir : null;
+	const cwd = edge?.dir && edge.dir !== '.' && !machineryPath(edge.dir) ? edge.dir : null;
 	if (cwd) return cwd;
 	const detail = edge?.detail;
 	if (!detail || !attested) return null;
@@ -118,6 +118,7 @@ export function dirFromEdge(edge: LiveRun['edge'], attested?: Iterable<string>):
 		const dirSegs = last && /\.[A-Za-z][A-Za-z0-9]{0,6}$/.test(last) ? segs.slice(0, -1) : segs;
 		if (dirSegs.length === 0) continue;
 		const dir = dirSegs.join('/');
+		if (machineryPath(dir)) continue;
 		// The accretion test: this must be attested ground, or ground directly
 		// beneath it. `src/frontend` extends `src`; `origin/brr` extends nothing.
 		const grows = roots.some((root) => dir === root || dir.startsWith(root + '/'));
@@ -125,6 +126,46 @@ export function dirFromEdge(edge: LiveRun['edge'], attested?: Iterable<string>):
 		if (best === null || dir.length > best.length) best = dir;
 	}
 	return best;
+}
+
+/**
+ * A path through a hidden directory is machinery, never terrain (2026-08-31,
+ * measured on the live board: `.brr/outbox…-eevl/` and its `*.md.tmp` staging
+ * files rendered as chambers of the island — the run's own delivery plumbing
+ * wearing terrain's clothes). The old /daily renderer learned this rule in
+ * brnrd#1664; the room never inherited it. Applies to the attested cwd, to
+ * detail-token accretion, and to git-attested `room.paths` alike: a hidden
+ * segment anywhere in the path fences the whole path.
+ */
+export function machineryPath(path: string): boolean {
+	return path.split('/').some((seg) => seg.startsWith('.') && seg !== '.' && seg !== '..');
+}
+
+/**
+ * The leaf a boundary plants in a chamber — `fileFromDetail`, plus the join
+ * check the raw parse lacks. The detail's file token is a basename; when the
+ * detail also names an explicit path for it, the leaf belongs to *that* path,
+ * and planting it in whatever chamber the actor stood in cross-attributes it
+ * (measured 2026-08-31: an outbox `.tmp` staged elsewhere grew as a leaf of
+ * the directory under edit). Pessimistic by design: an unattributable leaf is
+ * dropped, never guessed into a chamber.
+ */
+export function fileForChamber(
+	detail: string | null | undefined,
+	dir: string | null
+): string | null {
+	const leaf = fileFromDetail(detail);
+	if (!leaf || !detail) return leaf;
+	const escaped = leaf.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const withPath = detail.match(new RegExp(`([\\w.@~-]+(?:/[\\w.@~-]+)*)/${escaped}`));
+	if (!withPath) return leaf; // bare basename — the cwd chamber owns it
+	const tokDir = withPath[1];
+	if (machineryPath(tokDir + '/' + leaf)) return null;
+	if (!dir) return null;
+	// The token's dir and the chamber may be the same ground spelled from
+	// different roots (repo-relative vs cwd-relative) — accept a suffix match
+	// either way; anything else is another chamber's leaf.
+	return dir === tokDir || dir.endsWith('/' + tokDir) || tokDir.endsWith('/' + dir) ? leaf : null;
 }
 
 /** The resource anchor for a tree place: prefer the boundary's attested cwd;
@@ -484,7 +525,7 @@ export function compileRoomGraph(
 				dir: edgeDir,
 				act: run.edge?.act ?? null,
 				at: edgeAt,
-				file: fileFromDetail(run.edge?.detail)
+				file: fileForChamber(run.edge?.detail, edgeDir)
 			});
 		for (const step of steps) {
 			if (!step.dir) continue;
@@ -516,6 +557,7 @@ export function compileRoomGraph(
 		// kept the trie flat. `undefined` paths (older daemon) change
 		// nothing here — absent stays absent.
 		for (const rel of run.room?.paths ?? []) {
+			if (machineryPath(rel)) continue;
 			const cut = rel.lastIndexOf('/');
 			const dir = cut === -1 ? '.' : rel.slice(0, cut);
 			const file = cut === -1 ? rel : rel.slice(cut + 1);

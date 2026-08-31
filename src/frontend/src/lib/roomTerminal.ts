@@ -105,17 +105,20 @@ export function terminalBox(
 	const title = ` ${opts.title ?? '$ bench'} `;
 	const head = `┌${title}${'─'.repeat(Math.max(0, inner - title.length))}┐`.slice(0, cols);
 	const out = [head];
-	const body = lines.slice(0, rows);
+	// The window fits its contents (2026-08-31, his /daily read: a mostly
+	// empty box ate the northeast quadrant). `rows` is the *ceiling* the
+	// allocated ground grants, never a height to pad to — one command is a
+	// one-row window. An empty terminal still says so, on one row: a window
+	// with no floor showing is a room the reader cannot tell from a broken
+	// one.
+	const want = Math.max(1, Math.min(rows, lines.length));
+	const body = lines.slice(0, want);
 	for (const line of body) {
 		const text = [line.act, line.detail].filter(Boolean).join(' · ');
 		out.push(`│${fit(text || 'a boundary', inner)}│`);
 	}
-	// An empty terminal says so. A window with no floor showing is a room
-	// the reader cannot tell from a broken one.
-	for (let i = body.length; i < rows; i++) {
-		out.push(`│${fit(i === 0 && lines.length === 0 ? 'no commands yet' : '', inner)}│`);
-	}
-	const more = lines.length > rows ? ` ${lines.length - rows} older ` : '';
+	if (body.length === 0) out.push(`│${fit('no commands yet', inner)}│`);
+	const more = lines.length > want ? ` ${lines.length - want} older ` : '';
 	out.push(`└${more}${'─'.repeat(Math.max(0, inner - more.length))}┘`.slice(0, cols));
 	return out;
 }

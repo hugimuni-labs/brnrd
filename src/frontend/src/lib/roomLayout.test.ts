@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { compileRoomGraph, type TrailStep } from './roomGraph.ts';
-import { compileTopology, campId, dirId, islandRootId } from './roomTopology.ts';
+import { campDirId, campId, compileTopology, islandRootId } from './roomTopology.ts';
 import { MAX_DIR_LABEL_CHARS, emptyAtlas, layoutRoom, terminalRequest } from './roomLayout.ts';
 import { LABOUR_FLOOR, TERRAIN_TOP, inDistrict } from './roomRegions.ts';
 import type { LiveRun, LiveRunsResponse } from './liveRuns.ts';
@@ -43,6 +43,9 @@ function liveWire(runs: LiveRun[]): LiveRunsResponse {
 }
 
 const REPO = 'hugimuni-labs/brnrd';
+// The canopy is per branch (2026-08-31): chamber ids nest under the camp.
+const CAMP = campId(REPO, { branch: 'brr/layout', dir: null });
+const cid = (segs: string[]) => campDirId(CAMP, segs);
 
 function topoWith(trailDirs: string[], runs?: LiveRun[]) {
 	const trails: Record<string, TrailStep[]> = {
@@ -65,8 +68,8 @@ test('the root sits at its island origin; depth advances a constant tree(1) inde
 	const { layout } = layoutRoom(topo);
 	const root = layout.nodes[islandRootId(REPO)];
 	assert.deepEqual(root, { x: 0, y: 0 });
-	const frontend = layout.nodes[dirId(REPO, ['src', 'frontend'])];
-	const lib = layout.nodes[dirId(REPO, ['src', 'frontend', 'src', 'lib'])];
+	const frontend = layout.nodes[cid(['src', 'frontend'])];
+	const lib = layout.nodes[cid(['src', 'frontend', 'src', 'lib'])];
 	// The advance no longer clears the parent's painted label, because no
 	// child shares its parent's row any more. It is `tree(1)`'s indent: two
 	// world units, four characters at island scale — whatever the label says.
@@ -111,10 +114,10 @@ test('no two nodes share a row their painted labels would both reach', () => {
 test('the tree walks depth-first downward — a subtree is a contiguous block', () => {
 	const topo = topoWith(['src/a', 'src/b', 'src/c']);
 	const { layout } = layoutRoom(topo);
-	const src = layout.nodes[dirId(REPO, ['src'])];
-	const a = layout.nodes[dirId(REPO, ['src', 'a'])];
-	const b = layout.nodes[dirId(REPO, ['src', 'b'])];
-	const c = layout.nodes[dirId(REPO, ['src', 'c'])];
+	const src = layout.nodes[cid(['src'])];
+	const a = layout.nodes[cid(['src', 'a'])];
+	const b = layout.nodes[cid(['src', 'b'])];
+	const c = layout.nodes[cid(['src', 'c'])];
 	// `tree(1)`: every entry gets its own line, children below their parent,
 	// siblings in observation order. Before 2026-08-29 the first child
 	// continued its parent's lane and the next two claimed ±4 — which is what
@@ -131,10 +134,10 @@ test('a subtree occupies the rows between its parent and the next sibling', () =
 	// there is no subtree left to be contiguous.
 	const topo = topoWith(['src/one/x', 'src/one/y', 'src/two']);
 	const { layout } = layoutRoom(topo);
-	const one = layout.nodes[dirId(REPO, ['src', 'one'])];
-	const x = layout.nodes[dirId(REPO, ['src', 'one', 'x'])];
-	const y = layout.nodes[dirId(REPO, ['src', 'one', 'y'])];
-	const two = layout.nodes[dirId(REPO, ['src', 'two'])];
+	const one = layout.nodes[cid(['src', 'one'])];
+	const x = layout.nodes[cid(['src', 'one', 'x'])];
+	const y = layout.nodes[cid(['src', 'one', 'y'])];
+	const two = layout.nodes[cid(['src', 'two'])];
 	assert.ok(x.y > one.y && y.y > x.y, 'children descend below their parent');
 	assert.ok(two.y > y.y, "and the parent's next sibling is below the whole block");
 });
@@ -148,8 +151,8 @@ test('adding a new observed path does not move any existing node', () => {
 		assert.deepEqual(second.layout.nodes[id], p, `${id} moved`);
 	}
 	// and the new terrain exists somewhere real
-	assert.ok(second.layout.nodes[dirId(REPO, ['src', 'routes', 'new'])]);
-	assert.ok(second.layout.nodes[dirId(REPO, ['scripts'])]);
+	assert.ok(second.layout.nodes[cid(['src', 'routes', 'new'])]);
+	assert.ok(second.layout.nodes[cid(['scripts'])]);
 });
 
 test('the same topology + atlas memory yields the same coordinates (renderer independence)', () => {
@@ -171,19 +174,28 @@ test('file leaves occupy a small stable offset from their directory', () => {
 		compileRoomGraph(liveWire([liveRun({ run_id: 'r1' })]), null, trails)
 	);
 	const { layout } = layoutRoom(topo);
-	const dir = layout.nodes[dirId(REPO, ['src', 'lib'])];
-	const file = layout.nodes[`${dirId(REPO, ['src', 'lib'])}#file:a.ts`];
+	const dir = layout.nodes[cid(['src', 'lib'])];
+	const file = layout.nodes[`${cid(['src', 'lib'])}#file:a.ts`];
 	assert.ok(Math.abs(file.x - dir.x) <= 5 && Math.abs(file.y - dir.y) <= 4);
 });
 
-test('camps anchor on the west shore with their stations around them', () => {
+test('camps stand as branches off the trunk, stations west on their own row', () => {
+	// Rebound 2026-08-31 (his read: "bind accretion to the branch, not the
+	// island root"): a camp is a tree child of the root, its canopy nests
+	// under it, and its control stations march west of it on its own row —
+	// self-contained ground a sibling camp's row never shares.
 	const topo = topoWith(['src']);
 	const { layout } = layoutRoom(topo);
 	const root = layout.nodes[islandRootId(REPO)];
-	const camp = layout.nodes[campId(REPO, { branch: 'brr/layout', dir: null })];
-	assert.ok(camp.x < root.x, 'camp west of the root');
-	const chart = layout.nodes[`${campId(REPO, { branch: 'brr/layout', dir: null })}#chart-table`];
-	assert.ok(Math.abs(chart.x - camp.x) <= 5 && Math.abs(chart.y - camp.y) <= 4);
+	const camp = layout.nodes[CAMP];
+	assert.equal(camp.x, root.x + 2, 'one tree indent east of the trunk');
+	assert.ok(camp.y > root.y, 'on its own row below the root');
+	const src = layout.nodes[cid(['src'])];
+	assert.equal(src.x, camp.x + 2, "the camp's canopy nests under the camp");
+	assert.ok(src.y > camp.y);
+	const chart = layout.nodes[`${CAMP}#chart-table`];
+	assert.equal(chart.y, camp.y, "a station stays on its camp's row");
+	assert.ok(chart.x < camp.x, 'west of the camp, toward open water');
 });
 
 test('a second island claims its own origin south, and a third never moves the second', () => {
@@ -321,8 +333,8 @@ test("a route leaving terrain turns at its own row, not down the tree's trunk", 
 	}
 	// and the tree's own edges keep the vertical-first turn: there the
 	// vertical run *is* the parent's trunk, which is what a tree looks like
-	const trunk = layout.edgeRoutes[`${dirId(REPO, ['src'])}->${dirId(REPO, ['src', 'b'])}`];
-	assert.equal(trunk[1].x, layout.nodes[dirId(REPO, ['src'])].x, 'tree edges turn at the parent');
+	const trunk = layout.edgeRoutes[`${cid(['src'])}->${cid(['src', 'b'])}`];
+	assert.equal(trunk[1].x, layout.nodes[cid(['src'])].x, 'tree edges turn at the parent');
 });
 
 test('no two terrain nodes share a character row, however their labels fall', () => {

@@ -213,12 +213,16 @@ class Canvas {
 		for (let i = 0; i < s.length; i++) this.put(x + i, y, s[i]);
 	}
 	sea() {
+		// Thinned 2026-08-31 (his /daily read: the noise dots outnumber the
+		// signal): ~1% of open water carries a mark, down from ~2% — the sea
+		// reads as texture at the edge of vision, not as confetti between
+		// every label.
 		for (let y = 0; y < this.rows.length; y++) {
 			for (let x = 0; x < this.width; x++) {
 				if (this.claimed[y][x] || this.rows[y][x] !== ' ') continue;
-				const k = (x * 31 + y * 17) % 97;
+				const k = (x * 31 + y * 17) % 211;
 				if (k === 5) this.rows[y][x] = '·';
-				else if (k === 61) this.rows[y][x] = '~';
+				else if (k === 127) this.rows[y][x] = '~';
 			}
 		}
 	}
@@ -309,15 +313,14 @@ function nodeText(
 		case 'file':
 			return `· ${node.label}`;
 		case 'camp': {
-			// the camp sits 9 units (18 chars) west of its root: the label must
-			// live inside that shore gap or it collides with the root's own.
-			// Commits accreted on this spur ride the label — the branch is the
-			// place changes pile up before they reach the forge.
+			// The camp is a branch off the trunk now — a tree child with its
+			// own canopy beneath it, so the row-clip governs its width like
+			// any other label. Commits accreted on this spur ride the label —
+			// the branch is the place changes pile up before they reach the
+			// forge; the suffix survives, the branch name gives way.
 			const commits = aux?.campCommits.get(node.id) ?? 0;
 			const suffix = commits > 0 ? ` +${commits}c` : '';
-			// the suffix survives; the branch name gives way — the shore gap is
-			// 18 chars and the material mark is the fresher fact
-			return `▛ ${clip(node.label, 15 - suffix.length)}${suffix}`;
+			return `▛ ${clip(node.label, 24 - suffix.length)}${suffix}`;
 		}
 		case 'portal-rack':
 			return 'P';
@@ -348,30 +351,10 @@ function nodeText(
 			if (node.label === 'gate') {
 				return graph.pendingLetters > 0 ? `G ◇×${graph.pendingLetters}` : 'G';
 			}
-			if (node.label === 'watch') {
-				// the tower and `brnrd await` are one instrument: an armed wait
-				// (`lifecycle: awaiting`) stands a `^` fact with its deadline,
-				// and the tower shows the soonest one counting down
-				const soonest =
-					graph.watch
-						.filter((w) => w.mark === '^' && w.until)
-						.map((w) => w.until!)
-						.sort()[0] ?? null;
-				const inWhen = soonest ? untilLabel(soonest, now) : null;
-				const base = graph.watch.length > 0 ? `^ ×${graph.watch.length}` : '^';
-				return inWhen ? `${base} → ${inWhen}` : base;
-			}
-			if (node.label === 'clockwork') {
-				const next = graph.clockwork
-					.filter((e) => e.nextAt)
-					.sort((a, b) => (a.nextAt ?? '').localeCompare(b.nextAt ?? ''))[0];
-				const inWhen = next ? untilLabel(next.nextAt, now) : null;
-				return inWhen ? `T ${inWhen}` : 'T';
-			}
-			if (node.label === 'garage') {
-				const fuel = garageReadings(graph);
-				return fuel.length > 0 ? `⛁ ${fuel.join(' · ')}` : '⛁';
-			}
+			// watch / clockwork / garage retired from the ground 2026-08-31:
+			// the mothership consolidation (his sign, 08-30 — daemon-operated
+			// stations live in the sky) made their HOME readouts the third
+			// copy of facts the sky band and condition line already carry.
 			if (node.label === 'library') return 'lib';
 			return node.label;
 		}
@@ -523,13 +506,18 @@ function clothLine(row: ClothRow, width: number, now: number | undefined): strin
 }
 
 /**
- * THE SKY BAND — the mothership, above the sea (the water-line rework's
- * rung 2, design-the-water-line.md §The vertical model + his 08-31 read:
- * the ship reads as a vessel, keeps a live terminal readout on the hull,
- * and every daemon-operated station hangs off it). Three rows, pure:
- * desk (letters waiting) · hull (name + newest bench command) · keel
- * (clockwork next-wake, claw state) · gauges starboard. All of it is
- * data the render already holds — nothing new is invented up here.
+ * THE SKY BAND — the mothership, above the sea (design-the-water-line.md
+ * §The vertical model; reworked for his 08-31 read: **the ship must not
+ * spell "mothership" — it must look like one**). Three rows, pure. The
+ * hull is the daemon's own body — it wears the brand face the runs wear,
+ * because the mothership IS a brnrd — with antennae above, landing struts
+ * and the claw-bay port on the keel. Port side: the correspondence desk
+ * tethered in. Starboard: the live terminal readout (newest command).
+ * Keel line: watchtower/clockwork countdowns and the claw state — the
+ * daemon-operated stations, consolidated up here (his sign, 08-30).
+ * Gauges ride the spine (fuel stores are a mothership station); the full
+ * readings with reset clocks stay on the condition line below the board.
+ * All of it is data the render already holds — nothing is invented here.
  */
 function skyBand(
 	graph: RoomGraph,
@@ -542,8 +530,11 @@ function skyBand(
 	// that scale, like the corridors.
 	if (level === 'atlas') return [];
 	const desk = graph.pendingLetters > 0 ? `✉ ◇×${graph.pendingLetters}` : '✉ ·';
+	// `opts.terminal` is newest-first (terminalFeed's contract). The old
+	// band reversed it *again* and showed the oldest command as the live
+	// readout — invisible on a young store, wrong on a long one.
 	const termLines = opts.terminal ?? [];
-	const lastLine = [...termLines].reverse().find((l) => l.act || l.detail);
+	const lastLine = termLines.find((l) => l.act || l.detail);
 	const lastCmd = lastLine
 		? [lastLine.act, lastLine.detail ? foldPathTokens(lastLine.detail) : null]
 				.filter(Boolean)
@@ -553,35 +544,39 @@ function skyBand(
 	const next = graph.clockwork
 		.filter((e) => e.nextAt)
 		.sort((a, b) => (a.nextAt ?? '').localeCompare(b.nextAt ?? ''))[0];
-	const inWhen = next ? untilLabel(next.nextAt, now) : null;
-	const keelBits = [`^ watch`, inWhen ? `T ${inWhen}` : null].filter(Boolean).join(' · ');
+	const nextIn = next ? untilLabel(next.nextAt, now) : null;
+	const soonestWatch =
+		graph.watch
+			.filter((w) => w.mark === '^' && w.until)
+			.map((w) => w.until!)
+			.sort()[0] ?? null;
+	const watchIn = soonestWatch ? untilLabel(soonestWatch, now) : null;
+	const watchBit =
+		graph.watch.length > 0 ? `^ ×${graph.watch.length}${watchIn ? ' → ' + watchIn : ''}` : null;
 	const clawBusy = (opts.crossings?.length ?? 0) > 0;
-	const claw = clawBusy ? 'claw │ out' : 'claw ┊ stowed';
+	const claw = clawBusy ? 'claw ┈≻ out' : 'claw ┊';
+	const keelBits = [watchBit, nextIn ? `T ${nextIn}` : null, claw].filter(Boolean).join(' · ');
 	const fuel = garageReadings(graph)
 		.slice(0, 2)
 		.map((r) => `⛁ ${r}`)
-		.join('  ');
+		.join(' · ');
 
-	// The hull: a vessel, not a rectangle. Antennae port and starboard,
-	// twin fins on the spine, the claw bay under the keel.
-	const deskCol = 4;
-	const hullCol = Math.max(deskCol + desk.length + 3, 18);
-	const r1 =
-		' '.repeat(deskCol) +
-		desk +
-		' '.repeat(Math.max(1, hullCol - deskCol - desk.length)) +
-		'╔═◀▶═╦═▲▲═╦═◀▶═╗' +
-		(fuel ? '   ' + fuel : '');
-	const r2 =
-		' ◁╌╌' +
-		'╌'.repeat(Math.max(0, hullCol - 6)) +
-		'╢ MOTHERSHIP · ' +
-		// Capped: the hull is a vessel, not a wire — a long command must not
-		// stretch the ship across the whole sky.
-		clipMid(hullReadout, Math.min(44, Math.max(12, cols - hullCol - 22))) +
-		' ╟╌╌▷';
-	const r3 =
-		' '.repeat(hullCol) + '╚══════╤═◉═╤══════╝   ' + [keelBits, claw].filter(Boolean).join(' · ');
+	// The vessel, centered-east (his read: "sits centered/east"). Nine
+	// cells of hull; the face is the bridge. `◁╌╌ ... ├╌╌▷` are the two
+	// tether stubs — traffic reaches the ship, the ship reaches down.
+	const HULL_TOP = '╭─▲─────▲─╮';
+	const HULL_MID = '┤ b ·_· d ├';
+	const HULL_KEEL = '╰──╥─◉─╥──╯';
+	const hullW = HULL_MID.length;
+	const hullL = Math.min(
+		Math.max(desk.length + 8, Math.floor(cols * 0.55) - Math.floor(hullW / 2)),
+		Math.max(0, cols - hullW - 2)
+	);
+	const r1 = ' '.repeat(hullL) + HULL_TOP + (fuel ? '   ' + fuel : '');
+	const port = ' ' + desk + ' ◁╌' + '╌'.repeat(Math.max(0, hullL - desk.length - 5)) + '╌';
+	const readout = clipMid(hullReadout, Math.max(10, cols - hullL - hullW - 6));
+	const r2 = port.slice(0, hullL) + HULL_MID + '╌╌▷ ' + readout;
+	const r3 = ' '.repeat(hullL) + HULL_KEEL + (keelBits ? '   ' + keelBits : '');
 	return [clip(r1, cols), clip(r2, cols), clip(r3, cols)];
 }
 
@@ -601,6 +596,14 @@ export function renderWorld(
 	const now = opts.now;
 	const canvas = new Canvas(cam.cols, cam.rows);
 
+	// Stations draw only when someone stands at them (2026-08-31, his /daily
+	// read: a scatter of single-letter stations is furniture only the legend
+	// can explain, and every glyph carried equal visual weight). The topology
+	// keeps every station — walks still route through them, the atlas still
+	// remembers their ground — the camera just declines to paint an empty
+	// desk. What earns ink is a body at work, or state (the gate's letters).
+	const occupied = new Set(Object.values(topo.actorPlaces));
+
 	// 1 · corridors — ground, never claiming; labels own their cells
 	//
 	// Corner cells are collected rather than painted here. A route's turn is
@@ -609,13 +612,25 @@ export function renderWorld(
 	// an earlier sibling's turn, so painting the junction inline means the
 	// last child drawn wins and every corner reads as a pass-through. That
 	// is the difference between a tree and a column of dashes.
-	const corners = new Map<string, { x: number; y: number; parent: PlaceId; kind: string }>();
-	const columnFloor = new Map<number, number>();
-	const columnGlyph = new Map<number, string>();
+	// Column state is scoped per island (2026-08-31): the floor/top fill used
+	// to key on the bare character column, so two islands sharing a column —
+	// guaranteed now that origins stack subscenes vertically — drew one
+	// island's rail straight through the open water into the next.
+	const corners = new Map<
+		string,
+		{ x: number; y: number; parent: PlaceId; kind: string; scope: string }
+	>();
+	const columnFloor = new Map<string, number>();
+	const columnGlyph = new Map<string, string>();
+	const scopeOf = (id: PlaceId) => topo.nodes[id]?.repoId ?? 'home';
 	for (const e of topo.edges) {
 		if (cam.level === 'atlas') continue; // atlas shows islands only; every corridor stays below this scale
 		const chars = EDGE_CHARS[e.kind];
 		if (!chars || chars.h === '') continue;
+		// A tether to a station nobody occupies is a corridor to a place the
+		// camera won't draw — skip it with the station.
+		const toKind = topo.nodes[e.to]?.kind;
+		if (toKind && STATION_KINDS.has(toKind) && !occupied.has(e.to)) continue;
 		const pts = layout.edgeRoutes[`${e.from}->${e.to}`];
 		if (!pts) continue;
 		for (let i = 0; i + 1 < pts.length; i++) {
@@ -628,12 +643,13 @@ export function renderWorld(
 				for (let x = Math.min(a.x, b.x) + 1; x < Math.max(a.x, b.x); x++)
 					canvas.ground(x, a.y, chars.h);
 			}
-			// Every vertical cell this pass draws, per column — the elbow rule
-			// below needs to know whether anything continues *below* a turn,
-			// and only the renderer knows that.
+			// Every vertical cell this pass draws, per island-scoped column —
+			// the elbow rule below needs to know whether anything continues
+			// *below* a turn, and only the renderer knows that.
 			if (a.x === b.x) {
-				columnFloor.set(a.x, Math.max(columnFloor.get(a.x) ?? -Infinity, Math.max(a.y, b.y)));
-				if (JUNCTION_KINDS.has(e.kind)) columnGlyph.set(a.x, chars.v);
+				const key = `${scopeOf(e.from)}|${a.x}`;
+				columnFloor.set(key, Math.max(columnFloor.get(key) ?? -Infinity, Math.max(a.y, b.y)));
+				if (JUNCTION_KINDS.has(e.kind)) columnGlyph.set(key, chars.v);
 			}
 			// A turn: the segment before this one was vertical and this one is
 			// horizontal. Only the *solid* kinds. The control corridors
@@ -642,7 +658,13 @@ export function renderWorld(
 			// claiming a parent/child relation the graph does not have, and
 			// the first version of this pass drew exactly that (`T┄┄┄┄┄┄┄╠`).
 			if (JUNCTION_KINDS.has(e.kind) && i > 0 && a.x === toChar(f, pts[i - 1]).x && a.y === b.y)
-				corners.set(`${a.x},${a.y}`, { x: a.x, y: a.y, parent: e.from, kind: e.kind });
+				corners.set(`${a.x},${a.y}`, {
+					x: a.x,
+					y: a.y,
+					parent: e.from,
+					kind: e.kind,
+					scope: scopeOf(e.from)
+				});
 		}
 	}
 
@@ -680,16 +702,19 @@ export function renderWorld(
 	// in one character column whether or not they are related. Curing it means
 	// indenting by *subtree* rather than by depth — a layout change, not a
 	// renderer one.
-	const columnTop = new Map<number, number>();
-	for (const c of corners.values())
-		columnTop.set(c.x, Math.min(columnTop.get(c.x) ?? Infinity, c.y));
-	for (const [x, top] of columnTop) {
-		const floor = columnFloor.get(x) ?? top;
-		for (let y = top + 1; y < floor; y++) canvas.ground(x, y, columnGlyph.get(x) ?? '│');
+	const columnTop = new Map<string, number>();
+	for (const c of corners.values()) {
+		const key = `${c.scope}|${c.x}`;
+		columnTop.set(key, Math.min(columnTop.get(key) ?? Infinity, c.y));
+	}
+	for (const [key, top] of columnTop) {
+		const floor = columnFloor.get(key) ?? top;
+		const x = Number(key.slice(key.lastIndexOf('|') + 1));
+		for (let y = top + 1; y < floor; y++) canvas.ground(x, y, columnGlyph.get(key) ?? '│');
 	}
 	for (const c of corners.values()) {
 		const lastOfParent = lastChildRow.get(c.parent) === c.y;
-		const columnEnds = (columnFloor.get(c.x) ?? -Infinity) <= c.y;
+		const columnEnds = (columnFloor.get(`${c.scope}|${c.x}`) ?? -Infinity) <= c.y;
 		const solid = c.kind !== 'tree';
 		canvas.ground(c.x, c.y, lastOfParent && columnEnds ? (solid ? '╚' : '└') : solid ? '╠' : '├');
 	}
@@ -735,6 +760,7 @@ export function renderWorld(
 	for (const { node, p } of paintable) {
 		if (cam.level === 'atlas' && node.kind !== 'repo-root' && node.kind !== 'home-fixture')
 			continue;
+		if (STATION_KINDS.has(node.kind) && !occupied.has(node.id)) continue;
 		const c = toChar(f, p);
 		if (!inFrame(f, c)) continue;
 		const text = nodeText(node, graph, cam.level, now, aux);
@@ -891,19 +917,16 @@ export function renderWorld(
 		canvas.text(at, 0, clip(right, cam.cols - at));
 	}
 
-	// 6 · bearings for what the frame cannot see (never shrink the world in)
+	// 6 · bearings for what the frame cannot see (never shrink the world in).
+	// Slimmed 2026-08-31: this strip used to restate the clockwork and the
+	// fuel gauges — facts the sky band and the condition line already carry —
+	// which pinned a second instrument panel to the board's bottom edge. A
+	// bearing is a direction, not a dashboard.
 	const home = layout.nodes[topo.homeId];
 	if (home && !inFrame(f, toChar(f, home))) {
 		const arrow = bearingArrow({ x: cam.center.x, y: cam.center.y }, home);
 		const bits = [`${arrow} HOME`];
 		if (graph.pendingLetters > 0) bits.push(`◇×${graph.pendingLetters}`);
-		const next = graph.clockwork
-			.filter((e) => e.nextAt)
-			.sort((a, b) => (a.nextAt ?? '').localeCompare(b.nextAt ?? ''))[0];
-		const inWhen = next ? untilLabel(next.nextAt, now) : null;
-		if (inWhen) bits.push(`T ${inWhen}`);
-		const fuel = garageReadings(graph).map((reading) => `⛁ ${reading}`);
-		bits.push(...fuel.slice(0, 2));
 		offFrame.unshift(bits.join(' · '));
 	}
 	if (offFrame.length > 0) canvas.text(2, cam.rows - 1, clip(offFrame.join('   '), cam.cols - 4));
@@ -1024,13 +1047,12 @@ export function renderWorld(
  *  audience. Splitting the glyph is a visual-design call, not this one. */
 export const LEGEND = [
 	'every run wears the b·_·d face until its mood attests one   a…z strand handles (control rows)   ◇ pending letter   ✉>>> boundary injection',
-	'⌂ island root · ⌂ HOME   name/ chamber   · file leaf   ▛ camp   lib library   ∙ current route',
-	'P portal  K chart  B bay  W watch  D wake  X cut  $ bench (uncategorized shell work)  R rig  F FORGE (+pr/mg/is counts)',
-	'─│ corridors  ═║ branch/shore rail  ┄┆ station tether  G gate (HOME)  ▛ camp +Nc commits',
-	'^ watch — armed `brnrd await`s count down here  T clockwork  ⛁ garage  arrows = off-camera bearings',
+	'⌂ island root · ⌂ HOME   ▛ camp (+Nc commits) — a branch off the trunk, its own canopy beneath it   name/ chamber   · file leaf   lib library   ∙ current route',
+	'stations draw only when a body stands at them: P portal  K chart  B bay  W watch  D wake  X cut  $ bench  R rig   F FORGE (+pr/mg/is counts)',
+	'─│ corridors  ═║ branch rail  ┄┆ station tether  G gate (HOME)  arrows = off-camera bearings',
 	'⌁ attested boundary   ══ CLOTH time register — live, then history',
 	'┈≻ the claw — a letter carried from HOME to the actor that received it   ◇ the letter, in flight',
-	'╔◀▲╤ the MOTHERSHIP — the daemon, in the sky: ✉ desk (letters waiting) · $ hull terminal (newest command) · claw bay under the keel · ⛁ gauges',
+	'╭▲╮┤b·_·d├ the mothership — the daemon, in the sky, wearing the face: ✉ desk tethered to port · $ readout starboard (newest command) · ◉ claw bay on the keel · ⛁ stores on the spine · ^ watch / T clockwork on the keel line',
 	'~~~~ the water line — the cloth settles under it; the tide is home growth',
 	'▷⌁@ mind-connect — reading the pager   ✎ writing  ☰ reading  ✉ opening a letter',
 	'▷ PAGER — injection status: ◇ waiting (accumulated, not yet injected) · ✉ read · ▸ in transit',
