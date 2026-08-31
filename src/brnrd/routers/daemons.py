@@ -207,7 +207,16 @@ def publishing_credential(
     principal: Principal = Depends(require_daemon),
     db: Session = Depends(get_db),
 ):
-    """Mint the repo-scoped App identity used by managed runner publishing."""
+    """Mint the installation identity used by managed runner publishing.
+
+    The requested repo selects and authorizes the GitHub App installation; it
+    does not narrow the resulting token back to that one repository.  A
+    resident is account-scoped and may legitimately continue work in a sibling
+    checkout during the same thought.  GitHub already confines the token to
+    repositories the operator granted to this installation, so an additional
+    one-repo restriction only removes intended authority and makes a correct
+    cross-repo commit impossible to publish.
+    """
     if payload is None:
         repo = db.get(Repo, principal.repo_id)
     else:
@@ -258,17 +267,10 @@ def publishing_credential(
             repo.repo_owner = owner
             repo.repo_name = name
             db.commit()
-    raw_repo_id = installed_repo.forge_repo_id or repo.forge_repo_id
-    try:
-        repository_id = int(raw_repo_id or "")
-    except ValueError:
-        repository_id = None
     try:
         credential = github_app_client.installation_access_credential(
             request.app.state.settings,
             installation.installation_id,
-            repository_ids=[repository_id] if repository_id is not None else None,
-            repositories=None if repository_id is not None else [repo.repo_name],
         )
     except github_app_client.GitHubAppConfigError as exc:
         # The App identity is missing from this deployment's environment.
