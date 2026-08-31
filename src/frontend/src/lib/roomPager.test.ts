@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { compileRoomGraph, dirFromEdge, fileFromDetail, type TrailStep } from './roomGraph.ts';
-import { compileTopology, dirId } from './roomTopology.ts';
+import { campDirId, campId, compileTopology } from './roomTopology.ts';
 import { emptyAtlas, layoutRoom } from './roomLayout.ts';
 import { renderWorld, activityMark, type Camera } from './asciiCamera.ts';
 import {
@@ -240,7 +240,10 @@ test('an attested in-tree cwd grows the trie and places the actor in its chamber
 	const chamberDirs = graph.islands[0].camps[0].chambers.map((c) => c.dir);
 	assert.deepEqual(chamberDirs, ['src/frontend/src/lib']);
 	const topo = compileTopology(graph);
-	assert.equal(topo.actorPlaces['r-root'], dirId(REPO, ['src', 'frontend', 'src', 'lib']));
+	assert.equal(
+		topo.actorPlaces['r-root'],
+		campDirId(campId(REPO, { branch: 'brr/x', dir: null }), ['src', 'frontend', 'src', 'lib'])
+	);
 });
 
 test('an orient at the portal rack reads as opening a letter', () => {

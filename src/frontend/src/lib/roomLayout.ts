@@ -99,6 +99,7 @@ function labelChars(node: PlaceNode): number {
 		return short.length + 2; // `⌂ `
 	}
 	if (node.kind === 'file') return node.label.length + 2;
+	if (node.kind === 'camp') return Math.min(node.label.length + 7, 30); // `▛ label +Nc`
 	return Math.min(node.label.length + 1, MAX_DIR_LABEL_CHARS); // `label/`
 }
 /** A node's painted extent in world units — what it claims on its row so no
@@ -107,25 +108,30 @@ function labelChars(node: PlaceNode): number {
 function extentUnits(node: PlaceNode): number {
 	return Math.ceil(labelChars(node) / NOMINAL_CHARS_PER_UNIT) + 1;
 }
-const ISLAND_DY = 44; // vertical distance between island origins
+/** Open water between one island's floor and the next origin. Wide enough
+ *  that the next island's labour band (which reaches LABOUR_FLOOR rows north
+ *  of its root, terminal included) can never overlap the previous island's
+ *  deepest terrain. */
+const ISLAND_GAP = 14;
 const HOME_POS: Point = { x: -26, y: 0 };
-const CAMP_DX = -9; // camps sit west of the root, home-facing shore
-const CAMP_LANE_STEP = 5;
 const FORGE_OFFSET: Point = { x: -16, y: 5 }; // the outward shore dock
+/** Stations march west of their camp on the camp's own row — into the open
+ *  water between the canopy and HOME. Same-row keeps a camp's control ground
+ *  self-contained: with the camera drawing only occupied stations, at most a
+ *  body and one glyph occupy the lane, and a sibling camp's row stays its
+ *  own. (The old cluster reached ±3 rows around a west-shore camp; camps are
+ *  tree children now and those rows belong to the canopy.) */
 const STATION_OFFSETS: Record<string, Point> = {
-	'portal-rack': { x: -4, y: -2 },
-	'chart-table': { x: 0, y: -3 },
-	'strand-bay': { x: 4, y: -2 },
-	'watch-perch': { x: -4, y: 1 },
-	'wake-dock': { x: 4, y: 1 },
-	'cut-loom': { x: 0, y: 3 },
-	'work-bench': { x: 4, y: 3 }
+	'portal-rack': { x: -5, y: 0 },
+	'chart-table': { x: -9, y: 0 },
+	'strand-bay': { x: -13, y: 0 },
+	'watch-perch': { x: -17, y: 0 },
+	'wake-dock': { x: -21, y: 0 },
+	'cut-loom': { x: -25, y: 0 },
+	'work-bench': { x: -29, y: 0 }
 };
 const HOME_FIXTURE_OFFSETS: Record<string, Point> = {
 	gate: { x: 0, y: -4 },
-	watch: { x: -4, y: -2 },
-	clockwork: { x: -4, y: 2 },
-	garage: { x: 0, y: 4 },
 	library: { x: -3, y: -6 }
 };
 const RIG_OFFSET: Point = { x: 2, y: 2 }; // off the lane grid
@@ -168,18 +174,24 @@ export function layoutRoom(
 		}
 	}
 
-	// island origins: stable slots in first-seen order; a new island claims
-	// the next free slot south of everything already placed
-	for (const rootId of topo.islandRoots) {
-		if (coords[rootId]) continue;
-		const taken = topo.islandRoots.filter((r) => coords[r]).map((r) => coords[r].y);
-		const y = taken.length === 0 ? 0 : Math.max(...taken) + ISLAND_DY;
-		claim(rootId, { x: 0, y });
-	}
-
 	const districts: Record<string, Rect> = {};
 
+	// Island origins are dynamic (2026-08-31, the atlas retirement — his
+	// sign: "I don't think it has a place in the current model"): each
+	// island is a subscene whose origin sits below the previous island's
+	// *actual* extent, so a canopy that grows pushes the next subscene down
+	// rather than colliding with a slot picked before anything was known.
+	let islandCursorY = 0;
+	// A memory-remembered island keeps its origin wherever it stood; a new
+	// island must still start below every remembered one, whatever order the
+	// roots arrive in — the cursor alone only knows about islands already
+	// walked this pass.
 	for (const rootId of topo.islandRoots) {
+		const remembered = coords[rootId];
+		if (remembered) islandCursorY = Math.max(islandCursorY, remembered.y + ISLAND_GAP);
+	}
+	for (const rootId of topo.islandRoots) {
+		if (!coords[rootId]) claim(rootId, { x: 0, y: islandCursorY });
 		const root = coords[rootId];
 		if (!root) continue;
 
@@ -202,37 +214,19 @@ export function layoutRoom(
 		if (!islandNodes.some((n) => n.id === rootId))
 			shelf.occupy(root.x, root.y, extentUnits(topo.nodes[rootId]));
 
-		// camps on the west shore, stable lanes
-		const camps = childrenOf(topo, rootId).filter((n) => n.kind === 'camp');
-		for (const campNode of camps) {
-			if (!coords[campNode.id]) {
-				// south-only: a camp's stations reach CAMP_TOP rows north of it,
-				// and north of that is the labour band's ground. The old
-				// alternation put the second camp five rows north — inside the
-				// terminal's rectangle, which is the collision this pass exists
-				// to make impossible rather than unlikely.
-				const lane = nextFreeLane(
-					camps.map((c) => coords[c.id]).filter(Boolean),
-					root.y,
-					CAMP_LANE_STEP
-				);
-				coords[campNode.id] = { x: root.x + CAMP_DX, y: root.y + lane };
-			}
-			const camp = coords[campNode.id];
-			for (const st of childrenOf(topo, campNode.id)) {
-				const off = STATION_OFFSETS[stationSuffix(st.id)] ?? { x: 0, y: 2 };
-				claim(st.id, { x: camp.x + off.x, y: camp.y + off.y });
-			}
-		}
-
 		// the forge dock on the outward shore
 		claim(`${rootId}#forge-dock`, { x: root.x + FORGE_OFFSET.x, y: root.y + FORGE_OFFSET.y });
 
-		// The tree, in DFS pre-order — the tree(1) walk. Depth is a constant
+		// The canopy, in DFS pre-order — the tree(1) walk. Depth is a constant
 		// indent and the *row* is what separates a child from its parent, so a
 		// pre-order walk claiming rows downward reproduces `tree`'s shape
 		// exactly: a subtree occupies a contiguous block, and a sibling that
 		// comes after it starts below it.
+		//
+		// Camps walk as the root's own children (2026-08-31): a branch is a
+		// fork in the island the same way a directory is a fork in a branch,
+		// and each camp's chambers nest under *it* — two live branches stand
+		// as two side-by-side scaffolds, the notebook sketch drawn literally.
 		//
 		// Append-only is what this costs. A directory observed later cannot be
 		// inserted into the middle of its parent's block without moving every
@@ -241,7 +235,7 @@ export function layoutRoom(
 		// tree draws it as `tree` would; the hundredth draws a tree that grew.
 		const byParent = new Map<PlaceId, PlaceNode[]>();
 		for (const n of islandNodes) {
-			if (n.kind !== 'directory' && n.kind !== 'file') continue;
+			if (n.kind !== 'directory' && n.kind !== 'file' && n.kind !== 'camp') continue;
 			const key = n.parentId ?? rootId;
 			(byParent.get(key) ?? byParent.set(key, []).get(key)!).push(n);
 		}
@@ -262,6 +256,18 @@ export function layoutRoom(
 			}
 		};
 		walk(rootId);
+
+		// stations hang west of their camp, on the camp's own row — control
+		// ground between the canopy and HOME, drawn only when occupied
+		for (const campNode of childrenOf(topo, rootId).filter((n) => n.kind === 'camp')) {
+			const camp = coords[campNode.id];
+			if (!camp) continue;
+			for (const st of childrenOf(topo, campNode.id)) {
+				if (st.kind === 'directory' || st.kind === 'file') continue;
+				const off = STATION_OFFSETS[stationSuffix(st.id)] ?? { x: -5, y: 0 };
+				claim(st.id, { x: camp.x + off.x, y: camp.y + off.y });
+			}
+		}
 
 		// rigs and island-scoped fixtures hang off their owner at a fixed offset
 		for (const node of islandNodes) {
@@ -287,7 +293,9 @@ export function layoutRoom(
 		for (const req of requests) {
 			if (regions[req.id]) continue;
 			if (req.district !== 'labour') continue;
-			const x = req.preferX ?? root.x + CAMP_DX;
+			// over the canopy's west edge — the camps' own column, now that
+			// camps stand as tree children just east of the root
+			const x = req.preferX ?? root.x - 4;
 			// the window stands one row of air above the labour floor and
 			// grows north from there, so it reads as *over* the camp the actor
 			// walks into rather than as a panel pinned somewhere.
@@ -300,6 +308,17 @@ export function layoutRoom(
 			});
 			regions[req.id] = { x: slot.x, y: slot.y, w: req.w, h: req.h };
 		}
+
+		// the subscene's floor: the next island's origin clears everything
+		// this one actually placed, plus a band of open water
+		let floor = root.y;
+		for (const node of islandNodes) {
+			const p = coords[node.id];
+			if (p && p.y > floor) floor = p.y;
+		}
+		// Monotonic: an island walked early must never pull the cursor back
+		// above ground a later-remembered island already holds.
+		islandCursorY = Math.max(islandCursorY, floor + ISLAND_GAP);
 	}
 
 	// any node still unplaced (defensive): pin beside home so it exists
@@ -400,18 +419,6 @@ function childrenOf(topo: RoomTopology, parentId: PlaceId): PlaceNode[] {
 function stationSuffix(id: PlaceId): string {
 	const i = id.lastIndexOf('#');
 	return i >= 0 ? id.slice(i + 1) : '';
-}
-
-/** The nearest free lane around `originY`: walk the alternation until a
- *  lane no sibling occupies. Occupancy derives from already-assigned
- *  sibling coordinates, so it is reload-stable via the atlas memory. */
-function nextFreeLane(placedSiblings: Point[], originY: number, step: number): number {
-	const taken = new Set(placedSiblings.map((p) => p.y - originY));
-	for (let i = 0; i < 64; i++) {
-		const lane = i * step;
-		if (!taken.has(lane)) return lane;
-	}
-	return 64 * step;
 }
 
 /** True when this edge starts inside a terrain district and ends outside it.
