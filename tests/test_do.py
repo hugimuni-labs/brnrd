@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from brr import do as do_mod
+from brr import cli
 from brr.cli import main
 
 
@@ -579,6 +580,192 @@ def test_do_reply_with_no_promise_stages_the_reply_and_writes_nothing(
     assert main(["do", "--reply", "evt-1", "--body", "hi", "--no-promise"]) == 0
     assert capsys.readouterr().out.strip() == "reply evt-1 ✓"
     assert not (outbox / ".promises.jsonl").exists()
+
+
+# ── --item: the asks join (design-the-water-line.md §The asks lane) ────
+
+
+def _repo_with_warp_item(tmp_path, monkeypatch, headline="Ship the digest"):
+    """A tmp git repo with an enabled account home and one open item —
+    the minimum ``_item_context`` needs to resolve ``w-1`` at all. Mirrors
+    ``test_item_cli.py``'s own ``_repo_with_home`` fixture exactly, since
+    ``--item``'s existence check runs through the same ``items.resolve_item``
+    authority ``brnrd item`` itself is built on."""
+    from _helpers import init_git_repo
+
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    monkeypatch.chdir(repo)
+    from brr import account
+
+    account.resolve_context(repo, {}, create=True)
+    assert main(["item", "new", headline, "--type", "action"]) == 0
+    return repo
+
+
+def test_do_item_binds_reply_and_writes_asks_jsonl_row(tmp_path, monkeypatch, capsys):
+    _repo_with_warp_item(tmp_path, monkeypatch)
+    capsys.readouterr()
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-reply-*.md"))
+
+    assert main([
+        "do", "--reply", "evt-1", "--item", "w-1", "--body", "hi", "--no-promise",
+    ]) == 0
+    out = capsys.readouterr().out.strip()
+    assert out == "reply evt-1 ✓ · item w-1 ✓"
+    rows = [
+        json.loads(line)
+        for line in (outbox / ".asks.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows == [{"event": "evt-1", "item": "w-1"}]
+
+
+def test_do_item_unknown_item_is_refused_before_staging(tmp_path, monkeypatch, capsys):
+    _repo_with_warp_item(tmp_path, monkeypatch)
+    capsys.readouterr()
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+
+    assert main([
+        "do", "--reply", "evt-1", "--item", "w-999", "--body", "hi", "--no-promise",
+    ]) == 1
+    err = capsys.readouterr().err
+    assert "w-999" in err
+    assert "Nothing was staged" in err
+    assert not list(outbox.glob("do-*.md"))
+    assert not (outbox / ".asks.jsonl").exists()
+
+
+def test_do_item_says_no_warp_rather_than_no_item(tmp_path, monkeypatch, capsys):
+    """A missing warp and a typo'd id are different failures.
+
+    `items.resolve_item(None, …)` answers None for every id, so without this
+    branch a repo with no account warp tells the caller its perfectly good
+    `w-1` does not exist — a confident wrong diagnosis, and the remedy it
+    implies (go fix your id) is the wrong remedy. Name the ambiguity (#792).
+    """
+    from _helpers import init_git_repo
+
+    repo = tmp_path / "bare"
+    init_git_repo(repo)
+    monkeypatch.chdir(repo)
+    capsys.readouterr()
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    monkeypatch.setattr(cli, "_item_context", lambda **_kw: (None, "no warp here"))
+
+    assert main([
+        "do", "--reply", "evt-1", "--item", "w-1", "--body", "hi", "--no-promise",
+    ]) == 1
+    err = capsys.readouterr().err
+    assert "warp" in err
+    assert "does" not in err.split("Nothing was staged")[0].replace("doesn", "")
+    assert "Nothing was staged" in err
+    assert not list(outbox.glob("do-*.md"))
+    assert not (outbox / ".asks.jsonl").exists()
+
+
+def test_do_item_repeated_binds_multiple_items_to_one_reply(tmp_path, monkeypatch, capsys):
+    _repo_with_warp_item(tmp_path, monkeypatch)
+    capsys.readouterr()
+    assert main(["item", "new", "A second ask", "--type", "action"]) == 0
+    capsys.readouterr()
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-reply-*.md"))
+
+    assert main([
+        "do", "--reply", "evt-1", "--item", "w-1", "--item", "w-2",
+        "--body", "answers both", "--no-promise",
+    ]) == 0
+    out = capsys.readouterr().out.strip()
+    assert out == "reply evt-1 ✓ · item w-1 ✓ · item w-2 ✓"
+    rows = [
+        json.loads(line)
+        for line in (outbox / ".asks.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows == [
+        {"event": "evt-1", "item": "w-1"}, {"event": "evt-1", "item": "w-2"},
+    ]
+
+
+def test_do_item_with_no_reply_is_refused(tmp_path, monkeypatch, capsys):
+    _repo_with_warp_item(tmp_path, monkeypatch)
+    capsys.readouterr()
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+
+    assert main(["do", "--note", "evt-1", "--item", "w-1"]) == 1
+    err = capsys.readouterr().err
+    assert "no preceding --reply" in err
+    assert "Nothing was staged" in err
+    assert not list(outbox.glob("do-*.md"))
+
+
+def test_do_item_after_gate_is_refused(tmp_path, monkeypatch, capsys):
+    """A gate send has no waiting event to bind — ``--item`` pairs only
+    with ``--reply``. A ``--body-file`` follows so this exercises the
+    item-after-gate guard specifically, not the separate (and otherwise
+    indistinguishable from stderr alone) "gate has no body yet" pairing
+    error: with the guard gone the call would stage cleanly instead of
+    refusing, which the two assertions below both catch."""
+    _repo_with_warp_item(tmp_path, monkeypatch)
+    capsys.readouterr()
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    body_file = tmp_path / "gate-body.md"
+    body_file.write_text("hi", encoding="utf-8")
+
+    assert main([
+        "do", "--gate", "telegram", "--item", "w-1", "--body-file", str(body_file),
+    ]) == 1
+    err = capsys.readouterr().err
+    assert "--gate" in err
+    assert "not --reply" in err
+    assert "Nothing was staged" in err
+    assert not list(outbox.glob("do-*.md"))
+
+
+def test_do_item_writes_no_row_when_reply_drain_fails(tmp_path, monkeypatch, capsys):
+    """The row is written only when the reply's own drain verdict comes back
+    ✓ — an ask binding for a reply that never landed is the same lie
+    ``--promise`` already refuses to leave (docs/portals.md)."""
+    _repo_with_warp_item(tmp_path, monkeypatch)
+    capsys.readouterr()
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    notice = {
+        "at": "2026-08-19T00:00:00Z", "kind": "refused",
+        "text": "reply refused: event evt-1 not pending",
+    }
+    monkeypatch.setattr(
+        time, "sleep",
+        _consume_after_one_sleep(outbox, "do-*-reply-*.md", notice=notice),
+    )
+
+    assert main([
+        "do", "--reply", "evt-1", "--item", "w-1", "--body", "hi", "--no-promise",
+    ]) == 1
+    out = capsys.readouterr().out.strip()
+    assert "reply evt-1 ✗" in out
+    assert "item w-1" not in out
+    assert not (outbox / ".asks.jsonl").exists()
 
 
 def test_stage_note_writes_a_body_less_directive(tmp_path):
