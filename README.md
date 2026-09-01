@@ -198,6 +198,12 @@ are inspectable in [the execution map](src/brr/docs/execution-map.md) and
 
 ## ✦ Docs
 
+The full guide — prerequisites, install, connect, first task, concepts,
+troubleshooting, CLI reference — lives at
+**[hugimuni-labs.github.io/brnrd](https://hugimuni-labs.github.io/brnrd/)**.
+The pages below are deeper, implementation-facing notes for the pieces that
+guide doesn't unpack:
+
 | | |
 |---|---|
 | [Portals](src/brr/docs/portals.md) | live interaction and handoff surfaces |
