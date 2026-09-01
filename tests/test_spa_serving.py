@@ -327,3 +327,71 @@ def test_the_html_suffix_branch_cannot_reach_a_sibling_of_the_build_root(tmp_pat
     root = build.resolve()
     assert _safe_file(root, ".") == root / "index.html"
     assert _safe_file(root, "..") is None
+
+
+def _client_for(build: Path):
+    settings = Settings(
+        database_url="sqlite://",
+        telegram_auto_webhook=False,
+        frontend_dir=str(build),
+    )
+    return TestClient(create_app(settings))
+
+
+def test_the_shell_and_the_prerendered_landing_are_different_documents(tmp_path):
+    """``/`` is baked; every client route gets the fallback.
+
+    Until the fallback was renamed these were one filename, and SvelteKit
+    writes the fallback *after* prerendering — it warns ("Overwriting
+    build/index.html with fallback page") and then does it, so `/`'s real
+    content was silently replaced by the generic shell every build.
+    """
+    build = tmp_path / "build"
+    (build / "_app").mkdir(parents=True)
+    (build / "200.html").write_text(
+        "<!doctype html><title>brnrd</title>", encoding="utf-8")
+    (build / "index.html").write_text(
+        "<!doctype html><title>brnrd — a resident, not a chatbot</title>",
+        encoding="utf-8")
+
+    with _client_for(build) as client:
+        landing = client.get("/")
+        assert "a resident, not a chatbot" in landing.text
+        for path in ("/repos", "/login", "/connect/BR-123"):
+            r = client.get(path)
+            assert r.status_code == 200, path
+            assert "<title>brnrd</title>" in r.text, path
+            assert "a resident" not in r.text, path
+
+
+def test_a_build_without_the_renamed_fallback_still_serves_client_routes(tmp_path):
+    """A backend deployed ahead of a frontend that still writes the old shape.
+
+    It must degrade to exactly the previous behaviour — every client route on
+    ``index.html`` — never to a 404 on every deep link.
+    """
+    build = tmp_path / "build"
+    (build / "_app").mkdir(parents=True)
+    (build / "index.html").write_text(
+        "<!doctype html><title>brnrd</title>", encoding="utf-8")
+
+    with _client_for(build) as client:
+        for path in ("/", "/repos", "/login"):
+            r = client.get(path)
+            assert r.status_code == 200, path
+            assert "<title>brnrd</title>" in r.text, path
+
+
+def test_the_backend_prefers_the_fallback_name_the_build_actually_writes():
+    """One fact, two files — so it is checked, not trusted.
+
+    ``vite.config.ts`` decides the fallback's filename and ``spa.py`` decides
+    which filename it serves as the shell. A rename on one side alone blanks
+    every client route on the site, which is the failure this pins.
+    """
+    fallback = re.search(r"fallback:\s*'([^']+)'", VITE_CONFIG.read_text(encoding="utf-8"))
+    assert fallback, "vite.config.ts no longer declares an adapter fallback"
+    spa_source = (REPO_ROOT / "src" / "brnrd" / "spa.py").read_text(encoding="utf-8")
+    assert f'root / "{fallback.group(1)}"' in spa_source, (
+        f"vite writes the fallback as {fallback.group(1)!r}; spa.py does not prefer it"
+    )
