@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
-from brr import updates
+from brr import run_progress, updates
 from brr.gates import telegram
 from brr.run import Run
 
@@ -324,6 +325,27 @@ def test_render_update_skips_api_when_text_unchanged(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     _save_token(brr_dir)
     task = _seed_run(brr_dir, "task-tg-dedupe", chat_id=111)
+
+    # Freeze the card renderer's clock (#1723). ``_render_compact``'s
+    # active-phase line grows a " · Ns" elapsed suffix once real wall-clock
+    # time since the phase opened crosses 1s (run_progress.py, the
+    # ``elif is_active`` branch) — correct for a live-ticking card, but this
+    # test's premise ("these packets produce zero traffic") only holds if
+    # *no* wall-clock second elapses between the three emits below. That is
+    # true in microseconds standalone; under the full suite (thousands of
+    # tests deep, GC/scheduler pressure) it occasionally isn't, and the
+    # phase line grows exactly the same suffix a genuinely slow container
+    # start would legitimately earn — one unexpected editMessageText. Not a
+    # leaked global (cross-file pollution ruled out in #1723): the renderer
+    # is scoped correctly, it is simply reading the real clock. Pin it.
+    frozen_now = datetime.now(timezone.utc)
+
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen_now if tz is None else frozen_now.astimezone(tz)
+
+    monkeypatch.setattr(run_progress, "datetime", _FrozenDateTime)
 
     api_calls: list[tuple] = []
 
