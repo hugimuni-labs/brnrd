@@ -235,3 +235,90 @@ def _read(path: Path) -> dict[str, Any] | None:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+
+
+#: How long a resolved account registry is trusted before it is read again.
+#: :func:`account_dirs` is called from ``_write_live_portal_state``, which runs
+#: at **every tool boundary** — and resolving the account costs ~270ms of git
+#: and config I/O (measured 2026-09-01, on this machine, both for a real
+#: account and a bare tmp repo). Paid per boundary that is a quarter second of
+#: the resident's own latency for a fact that changes when someone runs
+#: ``brnrd connect``, which is to say almost never. The registry is not
+#: watched: a sibling repo connected mid-run becomes visible within this
+#: window, and that is the honest cost of not re-reading it every time.
+ACCOUNT_DIRS_TTL_S = 30.0
+
+_account_dirs_cache: "dict[Path, tuple[float, list[Path]]]" = {}
+
+
+def account_dirs(brr_dir: Path, *, now: float | None = None) -> list[Path]:
+    """Every registered repo's ``.brr`` dir for the account *brr_dir* serves.
+
+    Presence is physically repo-local — each participant writes into the
+    checkout it works in — but a connected daemon is **account-scoped**: it
+    dispatches ``spawn:`` strands with ``repo:`` into sibling repos, and
+    those strands register where they run. Any reader answering *who is
+    awake right now* on the account's behalf has to walk all of them, or it
+    reports a real, slot-consuming run as absent (#1727).
+
+    Returns ``[brr_dir]`` unchanged for a project-scoped home, an
+    unresolvable account, or a registry whose repos have no ``.brr`` yet —
+    a narrowing here would be the very failure this exists to close, so the
+    fallback is always a superset-of-nothing, never an empty list. The
+    import is deferred because ``account`` reads config and git state;
+    presence is the leaf module every one of those layers already uses.
+    """
+    stamp = now if now is not None else time.time()
+    cached = _account_dirs_cache.get(brr_dir)
+    if cached is not None and stamp - cached[0] < ACCOUNT_DIRS_TTL_S:
+        return list(cached[1])
+    dirs: list[Path] = []
+    try:
+        from . import account as account_mod
+
+        ctx = account_mod.resolve_context(brr_dir.parent, create=False)
+        dirs = [
+            repo.root / ".brr"
+            for repo in sorted(ctx.repos.values(), key=lambda item: item.label)
+            if (repo.root / ".brr").is_dir()
+        ]
+    except Exception:
+        dirs = []
+    if brr_dir not in dirs:
+        dirs.insert(0, brr_dir)
+    _account_dirs_cache[brr_dir] = (stamp, list(dirs))
+    return dirs
+
+
+def list_active_account(
+    brr_dir: Path,
+    *,
+    stale_after_s: float = DEFAULT_STALE_AFTER_S,
+    now: float | None = None,
+) -> list[dict[str, Any]]:
+    """:func:`list_active` across every repo the account governs.
+
+    Same entries, same prune-on-read, same oldest-first order — only the
+    search widened from one checkout to :func:`account_dirs`. Each entry
+    already carries its own ``repo_label``, so a caller that wants to say
+    *which* repo a sibling is in reads it off the row rather than tracking
+    which directory produced it; callers that need the producing directory
+    (to resolve a run manifest, say) iterate :func:`account_dirs`
+    themselves.
+
+    Deduplicated by entry id: registry paths can resolve to the same
+    checkout twice (a symlinked root, a repo registered under two labels),
+    and one body must not be two live runs.
+    """
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for source in account_dirs(brr_dir):
+        for entry in list_active(source, stale_after_s=stale_after_s, now=now):
+            entry_id = str(entry.get("id") or "")
+            if entry_id:
+                if entry_id in seen:
+                    continue
+                seen.add(entry_id)
+            out.append(entry)
+    out.sort(key=lambda e: float(e.get("started_at") or 0))
+    return out
