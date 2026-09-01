@@ -102,7 +102,7 @@ stages the file, waits for the daemon's own drain to consume it, and diffs
 brnrd do [--outbox DIR] [--timeout SECONDS] \
   [--mood <feeling-or-handle> [--mood-note "…"]] \
   [--note <event-id>]... \
-  [--reply <event-id> --body-file FILE | --body "…"]... \
+  [--reply <event-id> [--item <item-id>]... --body-file FILE | --body "…"]... \
   (--promise <what> [--promise-count N] | --no-promise) \
   [--gate <name> --body-file FILE]... \
   [--card FILE] \
@@ -150,6 +150,17 @@ brnrd do [--outbox DIR] [--timeout SECONDS] \
   say) carry no such requirement — a gate handoff's debt is the PR itself,
   and `--promise`/`--no-promise` given without any `--reply` in the same
   call is refused the same way.
+- **`--item <id>` binds the immediately preceding `--reply` to a warp item**
+  (design-the-water-line.md §The asks lane, rung 2 — the join rung 3's rail
+  is blocked on). Repeatable; one reply may answer several asks. An id that
+  does not resolve, or an `--item` with no `--reply` before it, refuses the
+  whole call before anything is staged — the promise contract's own
+  "nothing staged" guarantee. Existence is the only gate: binding to a
+  `done:` item is legal, because the row records a conversation fact, not a
+  claim on the work. **Per reply, not per call** (the one place this differs
+  from `--promise`): each reply's own drain verdict gates only its own rows,
+  so one refused reply never blocks a sibling's bindings. Accepted rows land
+  in `.asks.jsonl` as `{"event": <id>, "item": <id>}`.
 - Bare `brnrd do` (no verbs) prints a compact one-screen read of pending
   events, outbound counts, notices, the quota line, and spawn-pool
   headroom — the canonical replacement for hand-parsing
