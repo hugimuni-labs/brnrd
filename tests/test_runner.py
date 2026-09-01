@@ -740,10 +740,21 @@ def test_available_runner_catalog_marks_selected_generated_core(tmp_path, monkey
     assert "cmd" not in mini
 
 
-def test_available_runner_catalog_marks_unavailable_auth_env_profiles(
+def test_available_runner_catalog_excludes_auth_variant_profiles(
     tmp_path, monkeypatch,
 ):
-    """API-key auth variants without their key appear with available=False, not excluded."""
+    """An auth-variant profile is a fuel line, not a Core — never a catalog row.
+
+    2026-09-01 maintainer steer (evt-1788301736315679000-twmg): a bare-API-key
+    profile is a second way to pay for the same Shell, not a second shell and
+    not a core. It used to appear in ``available_runner_catalog`` marked
+    ``available=False`` — a catalog row naming no model at all
+    (``model: None``) when its own generated per-model twins duplicated the
+    same models the base Shell already lists. Both are noise in the one list
+    a user reads to pick a body; the whole family is excluded now, whatever
+    the auth env's presence — see ``test_auth_fuel_lines_*`` for the
+    joinable replacement.
+    """
     (tmp_path / ".brr").mkdir()
     monkeypatch.setattr(runner_mod.Path, "home", lambda: tmp_path / "empty-home")
     monkeypatch.setattr(
@@ -777,16 +788,53 @@ def test_available_runner_catalog_marks_unavailable_auth_env_profiles(
     by_name = {item["name"]: item for item in runner_mod.available_runner_catalog(tmp_path)}
     assert "claude" in by_name
     assert by_name["claude"]["available"] is True
-    # Profile appears but is marked unavailable (not silently dropped).
-    bare_matches = [v for k, v in by_name.items() if k.startswith("claude-bare-api-only")]
-    assert bare_matches, "claude-bare-api-only should appear in catalog (marked unavailable)"
-    assert bare_matches[0]["available"] is False
-    assert bare_matches[0]["availability"] == "auth-env-missing"
+    # Neither the bare declaration nor any generated per-model twin appears.
+    bare_matches = [k for k in by_name if k.startswith("claude-bare-api-only")]
+    assert bare_matches == [], f"auth-variant rows must not appear in the cores list: {bare_matches}"
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     by_name2 = {item["name"]: item for item in runner_mod.available_runner_catalog(tmp_path)}
-    assert by_name2["claude-bare-api-only"]["available"] is True
-    assert by_name2["claude-bare-api-only"]["availability"] == "available"
+    still_absent = [k for k in by_name2 if k.startswith("claude-bare-api-only")]
+    assert still_absent == [], "an available auth variant is still not a core row"
+
+
+def test_auth_fuel_lines_reports_key_lane_presence(tmp_path, monkeypatch):
+    """`auth_fuel_lines` is the joinable replacement for the excluded rows."""
+    (tmp_path / ".brr").mkdir()
+    monkeypatch.setattr(runner_mod.Path, "home", lambda: tmp_path / "empty-home")
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "claude": {"cmd": "claude --print", "class": "balanced", "cost_rank": 30},
+            "claude-bare-api-only": {
+                "binary": "claude",
+                "shell": "claude",
+                "cmd": "claude --print --bare",
+                "auth_variant": "anthropic-api-key",
+                "auth_env": "ANTHROPIC_API_KEY",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/claude" if name == "claude" else None,
+    )
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    lines = runner_mod.auth_fuel_lines(tmp_path)
+    assert "claude" in lines
+    lane = lines["claude"][0]
+    assert lane["auth_variant"] == "anthropic-api-key"
+    assert lane["available"] is False
+    # A key lane has no plan denominator — named explicitly so a renderer
+    # never invents a 0% for it (the maintainer's own worked example).
+    assert lane["quota_kind"] == "dollars"
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    lines2 = runner_mod.auth_fuel_lines(tmp_path)
+    assert lines2["claude"][0]["available"] is True
 
 
 def test_runner_auth_error_survives_restart_and_clear(tmp_path, monkeypatch):

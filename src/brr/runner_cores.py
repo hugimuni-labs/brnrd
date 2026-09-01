@@ -79,6 +79,8 @@ CLAUDE_ALIASES: frozenset[str] = frozenset({"haiku", "sonnet", "opus", "fable"})
 _BARE_FAMILY_WORD = re.compile(r"^[a-z]+$")
 
 _PROBE_TIMEOUT_S = 2.0
+_VERSION_PROBE_TIMEOUT_S = 2.0
+_VERSION_RE = re.compile(r"\b\d+(?:\.\d+){1,3}\b")
 _MODEL_TOKEN_RE = re.compile(
     r"\b(?:claude|gpt|o\d|llama|mistral|qwen|deepseek|devstral|grok)"
     r"[A-Za-z0-9_.:/+-]*\b",
@@ -499,6 +501,9 @@ def generated_profile_entries(
             }
             if pin:
                 generated["pin"] = pin
+            upgrade = entry.get("upgrade")
+            if isinstance(upgrade, dict):
+                generated["upgrade"] = upgrade
             generated.update(runner_capabilities.metadata_for_model(model))
             hooks = _str(entry.get("hooks")) or _str(base.get("hooks"))
             if hooks:
@@ -594,24 +599,40 @@ def _probe_commands(shell: str, binary: str) -> list[list[str]]:
     return [[binary, "--help"]]
 
 
-def _models_from_disk(shell: str) -> list[str]:
-    """Model IDs the Shell itself keeps on disk — the authoritative probe.
-
-    Codex maintains ``$CODEX_HOME/models_cache.json`` (refreshed by the CLI
-    on its own network calls; we only read it). Help-text probing never
-    surfaces codex model lists, so this file is the primary discovery source
-    for that Shell. Hidden entries (``visibility: "hide"``) are internal
-    models, not selectable Cores.
-    """
-    if shell != "codex":
-        return []
+def _codex_cache_path() -> Path:
     home = os.environ.get("CODEX_HOME") or str(Path.home() / ".codex")
-    cache = Path(home) / "models_cache.json"
+    return Path(home) / "models_cache.json"
+
+
+def _codex_cache_payload() -> dict[str, Any]:
+    """The full parsed ``models_cache.json``, or ``{}`` when absent/malformed.
+
+    Not memoized — codex refreshes this file from its own network calls, and
+    the read is a single small local JSON parse (no subprocess), so a cache
+    here would only risk staleness for no measured cost saved. Callers that
+    need the model list only (:func:`_codex_disk_entries`) and callers that
+    need the feed's own freshness (:func:`_codex_feed_fetched_at`,
+    :func:`stale_entries`'s live half) share this one read.
+    """
     try:
-        payload = json.loads(cache.read_text(encoding="utf-8"))
+        payload = json.loads(_codex_cache_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return []
-    models: list[str] = []
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _codex_disk_entries() -> dict[str, dict[str, Any]]:
+    """Full parsed rows from ``models_cache.json``, keyed by slug.
+
+    Carries every field the old ``_models_from_disk`` threw away: ``priority``
+    (:func:`_probed_core_entries`'s rank signal) and the vendor's own
+    ``upgrade`` block (``{model, retirement_at, migration_markdown}`` — read
+    by :func:`retirement_status`) when a Core is being retired. Hidden
+    entries (``visibility: "hide"``) are internal models, not selectable
+    Cores, same exclusion as before.
+    """
+    payload = _codex_cache_payload()
+    out: dict[str, dict[str, Any]] = {}
     entries = payload.get("models") if isinstance(payload, dict) else None
     for entry in entries or []:
         if not isinstance(entry, dict):
@@ -619,9 +640,239 @@ def _models_from_disk(shell: str) -> list[str]:
         if str(entry.get("visibility") or "").strip().lower() == "hide":
             continue
         slug = _str(entry.get("slug"))
-        if slug and _valid_model_token(slug):
-            models.append(slug)
-    return list(dict.fromkeys(models))
+        if not slug or not _valid_model_token(slug):
+            continue
+        row: dict[str, Any] = {}
+        priority = entry.get("priority")
+        if isinstance(priority, (int, float)) and not isinstance(priority, bool):
+            row["priority"] = priority
+        upgrade = entry.get("upgrade")
+        if isinstance(upgrade, dict):
+            trimmed = {
+                key: upgrade.get(key)
+                for key in ("model", "retirement_at", "migration_markdown")
+                if upgrade.get(key) is not None
+            }
+            if trimmed:
+                row["upgrade"] = trimmed
+        out[slug] = row
+    return out
+
+
+def _codex_feed_fetched_at() -> str | None:
+    """The live codex feed's own ``fetched_at`` — the measured freshness signal.
+
+    Codex refreshes ``models_cache.json`` from its own network calls; this
+    timestamp records when that last happened, independent of any hand-typed
+    ``freshness_date`` in brnrd's own registry.
+    """
+    return _str(_codex_cache_payload().get("fetched_at"))
+
+
+def _models_from_disk(shell: str) -> list[str]:
+    """Model IDs the Shell itself keeps on disk — the authoritative probe.
+
+    Codex maintains ``$CODEX_HOME/models_cache.json`` (refreshed by the CLI
+    on its own network calls; we only read it). Help-text probing never
+    surfaces codex model lists, so this file is the primary discovery source
+    for that Shell.
+    """
+    if shell != "codex":
+        return []
+    return list(_codex_disk_entries().keys())
+
+
+def retirement_status(
+    entry: dict[str, Any], *, now: "datetime.datetime | None" = None
+) -> dict[str, Any] | None:
+    """The vendor's own retirement verdict for *entry*'s effective model.
+
+    Reads ``upgrade`` straight off *entry* when the registry already carries
+    it (a discovered codex Core, populated by :func:`_probed_core_entries`
+    from the live feed at discovery time); otherwise falls back to a live
+    disk lookup, so a *bundled*, hand-authored row is not exempt from the
+    same check the day its pinned model is the one that gets retired.
+
+    Returns ``None`` when there is nothing to report (no ``upgrade`` block —
+    not retired, and no successor named); otherwise a dict with ``retired``
+    (bool — has ``retirement_at`` already passed), ``retirement_at``,
+    ``successor`` (the vendor-named replacement model), and
+    ``migration_markdown`` (the vendor's own migration prose, when present).
+
+    A core whose retirement has passed still resolves here — this function
+    only reports the verdict; :func:`~brr.runner._catalog_record` (the live
+    catalog projection) is where that verdict becomes a visible mark rather
+    than a plain selectable option, per the maintainer's stated prior:
+    shown, marked, with the successor named — hiding it makes a pinned
+    config fail silently, the same disease one layer down.
+    """
+    upgrade = entry.get("upgrade")
+    if not isinstance(upgrade, dict):
+        shell = (_str(entry.get("shell")) or "").lower()
+        model = effective_model(entry)
+        if shell == "codex" and model:
+            disk = _codex_disk_entries().get(model.strip())
+            upgrade = disk.get("upgrade") if disk else None
+    if not isinstance(upgrade, dict):
+        return None
+    retirement_at = _str(upgrade.get("retirement_at"))
+    successor = _str(upgrade.get("model"))
+    migration = _str(upgrade.get("migration_markdown"))
+    if not retirement_at and not successor:
+        return None
+    retired = False
+    if retirement_at:
+        try:
+            deadline = datetime.datetime.fromisoformat(
+                retirement_at.replace("Z", "+00:00")
+            )
+        except ValueError:
+            deadline = None
+        if deadline is not None:
+            if deadline.tzinfo is None:
+                deadline = deadline.replace(tzinfo=datetime.timezone.utc)
+            current = now or datetime.datetime.now(datetime.timezone.utc)
+            if current.tzinfo is None:
+                current = current.replace(tzinfo=datetime.timezone.utc)
+            retired = current >= deadline
+    return {
+        "retired": retired,
+        "retirement_at": retirement_at,
+        "successor": successor,
+        "migration_markdown": migration,
+    }
+
+
+def catalog_freshness(
+    entry: dict[str, Any],
+    *,
+    now: "datetime.date | str | None" = None,
+    threshold_days: int = 30,
+) -> dict[str, Any]:
+    """Re-derive one catalog row's staleness from a *measured* signal.
+
+    Three sources, tried in the order that actually applies — never more
+    than one is true for a given entry:
+
+    1. **The live codex feed.** When *entry*'s effective model is currently
+       known to ``models_cache.json``, judge freshness against the feed's
+       own ``fetched_at`` (:func:`_codex_feed_fetched_at`) — how old the
+       *vendor's* answer is — not a hand-typed ``freshness_date`` several
+       commits old. This is the inversion fix: a codex row backed by a feed
+       fetched minutes ago no longer flags stale because nobody bumped a
+       string, and a row the feed no longer lists at all falls through to
+       case 3 rather than reading as artificially fresh.
+    2. **Alias tracking.** A Claude alias (``sonnet``) resolves to the
+       latest model in its family at dispatch time — never stale, by
+       construction, regardless of any date (:func:`is_alias_tracked`).
+    3. **The hand-authored floor.** What's left once neither measurement
+       applies: a ``pin:`` (exact model ID — reproducibility chosen over
+       freshness) on a Shell with no live discovery feed. Today that means
+       Claude pins only. Nothing *measures* whether a pinned Claude model ID
+       is still current — the entitlement probe that would (a live
+       ``-p "ok"`` call) is unbuilt — so ``freshness_date`` stays the honest
+       floor for exactly this case: it records "last verified by a human",
+       never "still true".
+
+    Returns ``{"stale": bool, "source": "codex-feed" | "alias-tracked" |
+    "pinned-date" | "unmeasured", "measured_at": str | None}``.
+    """
+    if now is None:
+        today = datetime.date.today()
+    elif isinstance(now, str):
+        today = datetime.date.fromisoformat(now)
+    else:
+        today = now
+    threshold = datetime.timedelta(days=threshold_days)
+
+    shell = (_str(entry.get("shell")) or "").lower()
+    model = effective_model(entry)
+    if shell == "codex" and model and model.strip() in _codex_disk_entries():
+        fetched_at = _codex_feed_fetched_at()
+        if fetched_at:
+            try:
+                fetched_date = datetime.datetime.fromisoformat(
+                    fetched_at.replace("Z", "+00:00")
+                ).date()
+            except ValueError:
+                fetched_date = None
+            if fetched_date is not None:
+                return {
+                    "stale": (today - fetched_date) > threshold,
+                    "source": "codex-feed",
+                    "measured_at": fetched_at,
+                }
+        return {"stale": False, "source": "codex-feed", "measured_at": None}
+
+    if is_alias_tracked(entry):
+        return {"stale": False, "source": "alias-tracked", "measured_at": None}
+
+    raw = _str(entry.get("freshness_date"))
+    if not raw:
+        return {"stale": False, "source": "unmeasured", "measured_at": None}
+    try:
+        freshness = datetime.date.fromisoformat(raw)
+    except ValueError:
+        return {"stale": False, "source": "unmeasured", "measured_at": None}
+    return {
+        "stale": (today - freshness) > threshold,
+        "source": "pinned-date",
+        "measured_at": raw,
+    }
+
+
+def shell_version(shell_name: str, *, timeout: float = _VERSION_PROBE_TIMEOUT_S) -> str | None:
+    """The installed Shell binary's own version — the ceiling on every selectable model name.
+
+    No model name in the catalog can be trusted past what the installed
+    binary actually knows about (an alias resolves *within* that binary; a
+    ``pin:`` either exists in it or fails loud at dispatch — see the rc-0
+    fix in ``runner.py``). This was previously unmeasured: no ``claude
+    --version`` / ``codex --version`` call existed anywhere in ``src/``.
+
+    Cheap, cached, and it must never block or slow a dispatch: a
+    ``--version`` call, bounded and memoized exactly like
+    :func:`probe_shell_models` (same PATH-flip-safe split — see
+    :func:`_shell_version_cached`). No published-version comparison is
+    attempted here: that needs a network call this module deliberately never
+    makes (the same contract :func:`probe_shell_models` already holds); a
+    caller that can afford one composes it on top of this installed-version
+    reading rather than this function inventing a "latest" it cannot source.
+    """
+    shell = shell_name.strip()
+    if not shell:
+        return None
+    on_path = shutil.which(shell) is not None
+    return _shell_version_cached(shell, on_path, timeout=timeout)
+
+
+@lru_cache(maxsize=32)
+def _shell_version_cached(
+    shell_name: str, on_path: bool, *, timeout: float = _VERSION_PROBE_TIMEOUT_S
+) -> str | None:
+    if not on_path:
+        return None
+    binary = shutil.which(shell_name)
+    if not binary:
+        return None
+    try:
+        proc = subprocess.run(
+            [binary, "--version"],
+            input="",
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    text = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    match = _VERSION_RE.search(text)
+    return match.group(0) if match else None
+
+
+shell_version.cache_clear = _shell_version_cached.cache_clear
+shell_version.cache_info = _shell_version_cached.cache_info
 
 
 def _models_from_text(text: str) -> list[str]:
@@ -662,19 +913,36 @@ def _probed_core_entries(
     }
     out: dict[str, dict[str, Any]] = {}
     for shell in sorted(shells):
+        disk = _codex_disk_entries() if shell == "codex" else {}
         for model in probe_shell_models(shell):
             key = (shell.lower(), model.lower())
             if key in known:
                 continue
             name = _unique_name(f"{shell}-{_slug_model(model)}", registry, out)
-            out[name] = {
+            entry: dict[str, Any] = {
                 "shell": shell,
                 "model": model,
                 "provider": _provider_for_shell(shell),
                 "class": runner_capabilities.derived_cost_class(model),
+                # Ranked below when the live feed names a priority; None
+                # (→ last place, runner_select._UNKNOWN_COST_RANK) is only
+                # the fallback for shells with no such signal (claude), or a
+                # codex model found by help-text probing rather than the
+                # feed. A discovered core that can never win a cost-aware
+                # race is a list, not a discovery mechanism.
                 "cost_rank": None,
                 "freshness_source": "cli-help",
             }
+            disk_meta = disk.get(model.strip())
+            if disk_meta:
+                entry["freshness_source"] = "codex-cache"
+                priority = disk_meta.get("priority")
+                if isinstance(priority, (int, float)):
+                    entry["cost_rank"] = int(priority)
+                upgrade = disk_meta.get("upgrade")
+                if isinstance(upgrade, dict):
+                    entry["upgrade"] = upgrade
+            out[name] = entry
             known.add(key)
     return out
 
