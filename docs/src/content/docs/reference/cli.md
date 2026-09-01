@@ -12,6 +12,7 @@ This page reflects the public command tree printed by the installed CLI on
 |---|---|
 | `brnrd` (no arguments) | Narrated guided setup: checks for a Runner, pairs your account (approve in browser), picks memory, offers a door, and queues the first run that writes `AGENTS.md`. Resumable; the default onboarding path. |
 | `brnrd init [url]` | Set up a repo directly, no account or door needed; the interview runs by default on a TTY. |
+| `brnrd enable [path]` | Enable a git project locally: seed the convention files ordinary agent shells already read, and record the project in the account household. `--borrowed` keeps every seeded addition clone-local via git's `info/exclude`; `--label` names the household entry. |
 | `brnrd run "<instruction>"` | Run one task through the configured Runner. |
 | `brnrd review <pack>` | Validate or project a diffense review pack; supports `--check`, `--pr-body`, `--pr-title`, `--relay`, and `--json`. |
 | `brnrd up [--foreground] [--dev-reload]` | Start the daemon; shortcut for `daemon up`. |

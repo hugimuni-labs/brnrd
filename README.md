@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Local agents go brr. From anywhere.</strong><br>
-  Claude Code and Codex on your machine — reachable from Telegram, Slack, GitHub, and the web.
+  Claude Code and Codex on your machine — reachable from Telegram, WhatsApp, Signal, Slack, GitHub, and the web.
 </p>
 
 <p align="center">
