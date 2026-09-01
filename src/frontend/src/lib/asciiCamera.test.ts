@@ -832,7 +832,11 @@ test('a directory label with more than one path segment folds by segment, never 
 	} as unknown as RoomGraph;
 	const cam: Camera = { center: { x: 4, y: 1 }, cols: 40, rows: 10, level: 'island' };
 	const board = renderWorld(topo, layout, graph, cam);
-	assert.match(board, /…\/src\/routes\/ascii\//u, `expected a whole-segment fold, got board:\n${board}`);
+	assert.match(
+		board,
+		/…\/src\/routes\/ascii\//u,
+		`expected a whole-segment fold, got board:\n${board}`
+	);
 	assert.doesNotMatch(
 		board,
 		/sr…outes/u,
@@ -861,7 +865,11 @@ test('a shell command clips at a token boundary, never inside one, on the hull r
 		'mutate · ls src/routes/ && echo hi src/routes/ascii src/routes/daily 2>/dev/null';
 	const hullReadout = `$ ${fullCommand}`;
 	const terminal = [
-		{ at: '2026-08-27T10:00:00Z', act: 'mutate', detail: 'ls src/routes/ && echo hi src/routes/ascii src/routes/daily 2>/dev/null' }
+		{
+			at: '2026-08-27T10:00:00Z',
+			act: 'mutate',
+			detail: 'ls src/routes/ && echo hi src/routes/ascii src/routes/daily 2>/dev/null'
+		}
 	];
 	let sawTruncation = false;
 	for (let cols = 150; cols <= 215; cols += 1) {
@@ -944,7 +952,11 @@ test('the spine drops whole fuel gauges rather than clipping one mid-name, and s
 	const cam: Camera = { center: { x: 0, y: 0 }, cols: 60, rows: 10, level: 'island' };
 	const board = renderWorld(topo, layout, graph, cam, {});
 	const line = board.split('\n').find((l) => l.includes('╭')) ?? '';
-	assert.match(line, /⛁ claude 5h 69%/u, `the reading that fit must be whole: ${JSON.stringify(line)}`);
+	assert.match(
+		line,
+		/⛁ claude 5h 69%/u,
+		`the reading that fit must be whole: ${JSON.stringify(line)}`
+	);
 	assert.doesNotMatch(line, /codex/u, 'a reading that does not fit must not appear partially');
 	assert.match(line, /\+1(?!\d)/u, 'the dropped reading must be counted, not silently absent');
 });
