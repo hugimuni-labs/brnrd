@@ -6,13 +6,19 @@ when not, zero model cost.** Where the kb preflight reads the shared
 knowledge graph, this reads the surfaces :mod:`brr.notes` registers — the
 run's control files, the dominion, the work surface.
 
-Four checks, one per measured failure, and deliberately no speculative
-fifth:
+Five checks, one per measured failure, and deliberately no speculative
+sixth:
 
 - ``inert-pitfall`` / ``unindexed-pitfall-section`` — a ``## `` section in
   ``pitfalls.md`` that the matcher will never fire on. (#985: a lesson
   spelled ``**Trigger:**`` where :func:`brr.pitfalls.parse_pitfalls` reads
   ``trigger:`` sat inert for nine days, looking perfectly filed.)
+- ``pitfall-cites-closed-issue`` — a pitfall entry citing a ticket that has
+  since closed. (#1298: a lesson stayed in the present tense for weeks
+  after the issue it named shipped a fix, and got quoted to the maintainer
+  as a live constraint. A pitfall is a claim with a date on it; the ticket
+  number it cites is the cheapest available falsifier.) A prompt to
+  re-check, never a deletion — see :func:`check_pitfall_issue_refs`.
 - ``eviction-preview`` — what the *current* budget will drop from an
   injected surface, **before** the wake that pays for it. (#1020: the
   dominion playbook ran 1,855 B over its 20,480 B ceiling and lost its
@@ -71,6 +77,26 @@ from pathlib import Path
 from typing import Any
 
 from .kb_preflight import Finding
+
+#: A pitfall heading the store itself marks as spent — see
+#: :func:`is_retired`. The written convention (confirmed against this
+#: dominion's own live store, not assumed): ``## (retired YYYY-MM-DD) …``.
+_RETIRED_TITLE_RE = re.compile(r"^\(retired\s+\d{4}-\d{2}-\d{2}\)")
+
+#: A GitHub issue/PR URL, anywhere in a pitfall's title or body. The path
+#: segment (``issues`` vs ``pull``) disambiguates what GitHub's shared
+#: numbering otherwise leaves ambiguous — see :class:`IssueRef`.
+_ISSUE_URL_RE = re.compile(
+    r"https?://[^\s)\]]*?/(?P<kind>issues|pull)/(?P<num>\d+)"
+)
+
+#: A bare ``#NNNN`` reference. Requires a non-word, non-``/``, non-``#``
+#: character (or start of string) before it and a word boundary after, so
+#: this never fires inside a URL's own ``/issues/1298`` (no ``#`` there to
+#: match), a run id, or a longer digit run. Two or more digits: this
+#: dominion's own citations start at ``#128``, and a bare ``#1`` is common
+#: enough as a list marker or shell exit code to be worth excluding.
+_ISSUE_HASH_RE = re.compile(r"(?<![\w/#])#(?P<num>\d{2,})\b")
 
 #: How far back the signature staleness walk reads per section. A section
 #: whose last *rewrite* is older than this many commits is reported as
@@ -262,6 +288,203 @@ def check_pitfall_store(dominion_dir: Path, label: str = "") -> list[Finding]:
                 "never been injected — it reads as filed and behaves as "
                 f"deleted{where}. Add a `trigger: <keyword>, <keyword>` line "
                 "under the heading, or delete the entry if the lesson is spent."
+            ),
+            severity="info",
+        ))
+    return out
+
+
+# ── 1b. Pitfalls that cite a since-closed ticket ─────────────────────
+
+
+def is_retired(pitfall) -> bool:
+    """True when the store itself has already marked *pitfall* spent.
+
+    A retirement notice that still cites its ticket (this dominion's own
+    ``(retired 2026-09-01) A host-env parent…`` entry does exactly that,
+    quoting #1298 while explaining the retirement) must stay quiet forever —
+    it is not a live claim any more, it is the record of one, and the whole
+    point of :func:`check_pitfall_issue_refs` is to stop citing closed
+    tickets as if they still bound anything.
+    """
+    return bool(_RETIRED_TITLE_RE.match(pitfall.title.strip()))
+
+
+@dataclass(frozen=True)
+class IssueRef:
+    """One ``#NNNN``-shaped citation found in a pitfall entry.
+
+    ``kind`` is ``"issue"`` / ``"pr"`` when a full forge URL said so
+    explicitly (GitHub's ``/issues/`` vs ``/pull/`` path segment), or
+    ``"ambiguous"`` for a bare ``#NNNN`` — GitHub shares one numbering space
+    between issues and PRs, so a bare reference alone never says which.
+    :func:`brr.notes_preflight.check_pitfall_issue_refs` resolves an
+    ambiguous ref against *both* :mod:`brr.forge_issue_cache` and
+    :mod:`brr.forge_pr_cache` rather than guessing.
+    """
+
+    number: int
+    kind: str  # "issue" | "pr" | "ambiguous"
+
+
+def extract_issue_refs(pitfall) -> list[IssueRef]:
+    """Every ``#NNNN`` / forge-URL ticket reference in *pitfall*.
+
+    Scans the title and body only — not the ``trigger:`` line, which
+    :func:`brr.pitfalls.parse_pitfalls` already strips out of ``body``. A
+    trigger line can legitimately contain a bare number as a *matching
+    keyword* (this store's own "Closely-spaced message fragments" entry
+    triggers in part on the literal text ``#128``), which is a different
+    thing from citing that ticket as evidence in the lesson's prose — only
+    the latter is what a closed-ticket check should be reading.
+
+    Order is first-seen; a number cited twice (as a bare ``#N`` and again in
+    a full URL, or simply repeated) appears once, keeping its most specific
+    ``kind`` — a URL's explicit ``issues``/``pull`` beats an ambiguous bare
+    mention of the same number anywhere in the entry.
+    """
+    text = f"{pitfall.title}\n{pitfall.body}"
+    by_number: dict[int, str] = {}
+    order: list[int] = []
+
+    def _record(number: int, kind: str) -> None:
+        if number not in by_number:
+            order.append(number)
+            by_number[number] = kind
+        elif by_number[number] == "ambiguous" and kind != "ambiguous":
+            by_number[number] = kind
+
+    for m in _ISSUE_URL_RE.finditer(text):
+        kind = "pr" if m.group("kind") == "pull" else "issue"
+        _record(int(m.group("num")), kind)
+    for m in _ISSUE_HASH_RE.finditer(text):
+        _record(int(m.group("num")), "ambiguous")
+
+    return [IssueRef(number=n, kind=by_number[n]) for n in order]
+
+
+def cited_issue_numbers(dominion_dir: Path) -> set[int]:
+    """Every number :func:`brr.forge_issue_cache` should try as an issue.
+
+    Union of ``issue`` and ``ambiguous`` refs across every entry in this
+    dominion's ``pitfalls.md`` (retired or not — a number costs nothing
+    extra to keep checking, and a retirement being un-done should not have
+    to wait out a stale cache first). Explicit ``pull`` refs are excluded:
+    :mod:`brr.forge_pr_cache` already covers those, and ``gh issue view``
+    would only fail on them.
+    """
+    from . import pitfalls as pitfalls_mod
+
+    parsed = pitfalls_mod.parse_pitfalls(dominion_dir)
+    numbers: set[int] = set()
+    for p in parsed:
+        for ref in extract_issue_refs(p):
+            if ref.kind in ("issue", "ambiguous"):
+                numbers.add(ref.number)
+    return numbers
+
+
+def _closed_date(row: dict) -> str | None:
+    """The date-only portion of a cache row's closure timestamp, if any."""
+    raw = row.get("closed_at") or row.get("merged_at")
+    if not raw or not isinstance(raw, str):
+        return None
+    return raw[:10] or None
+
+
+def check_pitfall_issue_refs(
+    dominion_dir: Path, repo_root: Path, label: str = "",
+) -> list[Finding]:
+    """Findings for pitfall entries citing a ticket that has since closed.
+
+    **Never a deletion, never an accusation — a prompt to re-check.** A
+    closed ticket does not prove the failure class is gone: it can close as
+    wontfix, as a duplicate, or by a fix that covered one instance of a
+    wider species while the lesson describes the species. The wording below
+    says exactly that; getting it read as an invitation rather than an
+    order is most of this check's value (#1298 is the entry that motivated
+    it — a fix shipped, the pitfall kept the present tense, and it got
+    quoted to the maintainer as a live constraint three weeks later).
+
+    Reads two daemon-warmed, network-free caches — never fetches anything
+    itself, and a preflight that shelled out to ``gh`` at wake time is
+    exactly the mistake this module's sibling checks exist to avoid:
+
+    - :mod:`brr.forge_issue_cache` for ``issue`` / ``ambiguous`` refs;
+    - :mod:`brr.forge_pr_cache` (already warmed for the wake's Forge block,
+      read here for free) for ``pr`` / ``ambiguous`` refs.
+
+    **An absent or errored cache proves nothing** — a number missing from
+    ``issues``/``prs`` is *unknown*, not open and not closed, and never
+    earns a finding. This is the guard that matters most here: the failure
+    mode this check exists to prevent (a stale claim asserted with
+    confidence) is exactly what a "no cache yet ⇒ assume closed" bug would
+    reproduce one layer up.
+
+    Retired entries (:func:`is_retired`) are skipped unconditionally — the
+    entry has already said "not to be trusted"; re-flagging it would be
+    noise on a page whose text is now literally *about* not trusting it.
+    """
+    from . import forge_issue_cache
+    from . import forge_pr_cache
+    from . import pitfalls as pitfalls_mod
+
+    parsed = pitfalls_mod.parse_pitfalls(dominion_dir)
+    if not parsed:
+        return []
+
+    issue_state = forge_issue_cache.read_state(repo_root)
+    issue_rows = issue_state["issues"] or {}
+    pr_state = forge_pr_cache.read_state(repo_root)
+    pr_by_number: dict[int, dict] = {}
+    for row in (pr_state["prs"] or []):
+        try:
+            pr_by_number[int(row["number"])] = row
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    where = f" (dominion `{label}`)" if label else ""
+    out: list[Finding] = []
+
+    for p in parsed:
+        if is_retired(p):
+            continue
+        hits: list[tuple[int, str | None]] = []
+        seen_numbers: set[int] = set()
+        for ref in extract_issue_refs(p):
+            if ref.number in seen_numbers:
+                continue
+            closed_on: str | None = None
+            found = False
+            if ref.kind in ("issue", "ambiguous"):
+                row = issue_rows.get(str(ref.number))
+                if isinstance(row, dict) and row.get("state") == "CLOSED":
+                    found = True
+                    closed_on = _closed_date(row)
+            if not found and ref.kind in ("pr", "ambiguous"):
+                row = pr_by_number.get(ref.number)
+                if isinstance(row, dict) and row.get("state") in ("MERGED", "CLOSED"):
+                    found = True
+                    closed_on = _closed_date(row)
+            if found:
+                seen_numbers.add(ref.number)
+                hits.append((ref.number, closed_on))
+
+        if not hits:
+            continue
+        hits.sort(key=lambda h: h[0])
+        cites = ", ".join(
+            f"#{n} (closed {d})" if d else f"#{n} (closed)" for n, d in hits
+        )
+        out.append(Finding(
+            type="pitfall-cites-closed-issue",
+            target=f"{pitfalls_mod.PITFALLS_FILE} § {p.title}",
+            description=(
+                f"this entry cites {cites}{where} — closed since this lesson "
+                "was written. A closed ticket is not proof the failure class "
+                "is gone (wontfix, duplicate, and a fix that covered one "
+                "instance of a wider species all close the same way) — "
+                "verify the failure still reproduces, or retire the entry."
             ),
             severity="info",
         ))
@@ -1095,6 +1318,9 @@ def scan_scoped(
             if not candidate.path.is_dir():
                 continue
             out.extend(check_pitfall_store(candidate.path, candidate.label))
+            out.extend(check_pitfall_issue_refs(
+                candidate.path, repo_root, candidate.label,
+            ))
             out.extend(check_self_inject_eviction(
                 candidate.path, cfg=cfg, label=candidate.label,
             ))

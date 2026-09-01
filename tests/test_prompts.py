@@ -5300,6 +5300,92 @@ class TestInertPitfallReachesTheWake:
         assert [p.title for p in parsed] == ["Half-drafted", "Docker rebuild"]
 
 
+class TestPitfallCitesClosedIssueReachesTheWake:
+    """`pitfall-cites-closed-issue`, end to end: real dominion resolution,
+    real parse, real cache read, through the same wake-time block
+    `TestInertPitfallReachesTheWake` exercises for its sibling finding.
+    """
+
+    def _write_issue_cache(self, repo, issues: dict) -> None:
+        from brr import forge_issue_cache
+
+        path = forge_issue_cache.cache_path(repo)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"fetched_at": "2026-09-01T00:00:00Z", "issues": issues}),
+            encoding="utf-8",
+        )
+
+    def test_a_closed_citation_reaches_the_wake_block(self, tmp_path, monkeypatch):
+        from brr.prompts import _build_notes_health_block
+
+        repo = TestInertPitfallReachesTheWake._repo(tmp_path, monkeypatch)
+        _seed_pitfalls(
+            repo,
+            "## Host strand clone shape\ntrigger: strand\nFixed by #1298.\n",
+        )
+        self._write_issue_cache(repo, {
+            "1298": {"number": 1298, "state": "CLOSED", "closed_at": "2026-08-05T00:00:00Z"},
+        })
+
+        block = _build_notes_health_block(repo)
+
+        assert "pitfall-cites-closed-issue" in block
+        assert "Host strand clone shape" in block
+        assert "#1298" in block
+        assert "2026-08-05" in block
+
+    def test_a_retired_entry_stays_quiet_even_citing_the_same_closed_ticket(
+        self, tmp_path, monkeypatch
+    ):
+        """The exact shape this dominion's own store carries: a retirement
+        notice explaining itself by quoting the now-closed ticket must never
+        re-fire — see notes_preflight.is_retired."""
+        from brr.prompts import _build_notes_health_block
+
+        repo = TestInertPitfallReachesTheWake._repo(tmp_path, monkeypatch)
+        _seed_pitfalls(
+            repo,
+            "## (retired 2026-09-01) A host-env parent…\n"
+            "trigger: spawn, strand\n"
+            "Retired — #1298 is closed, the clone shape fixed it.\n",
+        )
+        self._write_issue_cache(repo, {
+            "1298": {"number": 1298, "state": "CLOSED", "closed_at": "2026-08-05T00:00:00Z"},
+        })
+
+        assert _build_notes_health_block(repo) == ""
+
+    def test_an_open_citation_and_an_absent_cache_are_both_silent(
+        self, tmp_path, monkeypatch
+    ):
+        from brr.prompts import _build_notes_health_block
+
+        repo = TestInertPitfallReachesTheWake._repo(tmp_path, monkeypatch)
+        _seed_pitfalls(repo, "## Still tracked\ntrigger: x\nSee #1298.\n")
+        # No forge_issue_cache write at all — absent, must never read closed.
+
+        assert _build_notes_health_block(repo) == ""
+
+    def test_scan_scoped_carries_the_same_finding(self, tmp_path, monkeypatch):
+        """Drives `notes_preflight.scan_scoped` directly — the function the
+        block above wraps — so this survives independently of the block's
+        own prose."""
+        from brr import config as conf
+        from brr import notes_preflight
+
+        repo = TestInertPitfallReachesTheWake._repo(tmp_path, monkeypatch)
+        _seed_pitfalls(repo, "## Host strand clone shape\ntrigger: x\nFixed by #1298.\n")
+        self._write_issue_cache(repo, {
+            "1298": {"number": 1298, "state": "CLOSED", "closed_at": "2026-08-05T00:00:00Z"},
+        })
+
+        findings, _scope = notes_preflight.scan_scoped(repo, conf.load_config(repo))
+        matching = [f for f in findings if f.type == "pitfall-cites-closed-issue"]
+        assert len(matching) == 1
+        assert "#1298" in matching[0].description
+
+
 class TestPromptsTeachOnlyLiveGrammar:
     """A prompt file is injected into every wake and read as instruction.
 

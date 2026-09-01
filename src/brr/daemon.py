@@ -15779,6 +15779,15 @@ def start(
             # nothing feeds.
             from . import forge_workflow_cache
             forge_workflow_cache.refresh_if_stale_async(repo_root)
+            # Same contract, one lane over again: keep the cited-issue cache
+            # warm so `notes_preflight.check_pitfall_issue_refs` can say a
+            # pitfall entry cites a now-closed ticket without a network call
+            # at wake time. TTL-guarded and scoped to exactly the numbers the
+            # resident's own pitfall stores currently cite (see
+            # forge_issue_cache's module docstring for why that's targeted
+            # rather than a bulk recent-N list).
+            from . import forge_issue_cache
+            forge_issue_cache.refresh_if_stale_async(repo_root)
             # Local-only cross-run sweep: once the shared forge cache is warm,
             # name brr branches whose producing run has gone away. The helper
             # owns process-lifetime dedup so heartbeat cadence cannot spam.
