@@ -148,7 +148,7 @@ def _state_identity() -> str | None:
     return identity
 
 
-def bootstrap(url: str | None = None) -> tuple[Path, list[str]]:
+def bootstrap(url: str | None = None, *, borrowed: bool = False) -> tuple[Path, list[str]]:
     """Phase 1 — the mechanical substrate both init paths share (spec §2).
 
     Steps 1–5 of the old ``init_repo``: clone-or-detect, ``.brr/`` tree,
@@ -176,8 +176,9 @@ def bootstrap(url: str | None = None) -> tuple[Path, list[str]]:
         os.chdir(name)
 
     repo_root = _ensure_repo()
-    _setup_brr_dir(repo_root)
+    _setup_brr_dir(repo_root, borrowed=borrowed)
     _bootstrap_dominion(repo_root)
+    _register_repo(repo_root)
 
     available = runner.detect_all_runners(repo_root)
     if not available:
@@ -189,7 +190,7 @@ def bootstrap(url: str | None = None) -> tuple[Path, list[str]]:
 
 def init_repo(
     url: str | None = None, *, interactive: bool = False, defaults: bool = False,
-    knowledge_shape: str | None = None,
+    knowledge_shape: str | None = None, borrowed: bool = False,
 ) -> None:
     """Initialize a repository for brr management.
 
@@ -218,15 +219,24 @@ def init_repo(
     ``interactive`` is the retired ``-i``: a no-op on the wake path (the
     interview *is* the point) and the old timed-question path when the wake
     was skipped.
+
+    ``borrowed`` (#1746, folded in from the retired ``brnrd enable``) keeps
+    every file this install step seeds — the contract, its shell bridges,
+    the committed knowledge shape's files, whatever else the setup wake
+    decides to write — local to this checkout via ``.git/info/exclude``
+    instead of left for the user to commit, and reverts any commit the
+    wake makes on its own initiative (a full agentic session has shell
+    access and may ``git commit`` unprompted): the enablement path for a
+    repo you don't own.
     """
-    repo_root, available = bootstrap(url)
+    repo_root, available = bootstrap(url, borrowed=borrowed)
     identity = _state_identity()
 
     if defaults:
         print(f"[brnrd] {style.dim('--defaults: skipping the interview')}")
         _init_auto(
             repo_root, available, interactive=False,
-            knowledge_shape=knowledge_shape,
+            knowledge_shape=knowledge_shape, borrowed=borrowed,
         )
         return
 
@@ -237,10 +247,14 @@ def init_repo(
         repo_root, interactive=tty,
     )
     if wake_ok:
-        _init_via_wake(repo_root, available, init_wake_mod, identity=identity)
+        _init_via_wake(
+            repo_root, available, init_wake_mod, identity=identity, borrowed=borrowed,
+        )
         return
     print(f"[brnrd] {why_not}")
-    _init_auto(repo_root, available, interactive=interactive and tty)
+    _init_auto(
+        repo_root, available, interactive=interactive and tty, borrowed=borrowed,
+    )
 
 
 def _init_via_wake(
@@ -249,6 +263,7 @@ def _init_via_wake(
     init_wake_mod,
     *,
     identity: str | None = None,
+    borrowed: bool = False,
 ) -> None:
     """Phase 2 — hand the session to the agent, then verify mechanically.
 
@@ -267,6 +282,13 @@ def _init_via_wake(
     # the whole handoff.
     print()
 
+    # #1746 borrowed guard: one filesystem snapshot before the wake touches
+    # anything, one commit-undo + exclude pass in `finally` — covers a
+    # normal finish, an abort, and an error alike, and needs no per-file
+    # allowlist (see `_snapshot_files`'s docstring for why that matters).
+    pre_files = _snapshot_files(repo_root) if borrowed else None
+    restore = _guard_against_agent_commits(repo_root, borrowed)
+
     facts = init_wake_mod.collect_facts(
         repo_root,
         runner_name=runner_name,
@@ -274,34 +296,39 @@ def _init_via_wake(
         detected_shells=_detect_shells(),
         github_identity=identity,
     )
-    result = init_wake_mod.run_init_wake(
-        repo_root, runner_name, cfg=cfg, facts=facts,
-    )
-
-    if result.card:
-        print("\n[brnrd] run body:\n")
-        print(result.card.strip())
-    if result.reply:
-        print(f"\n{result.reply.strip()}\n")
-
-    if result.aborted:
-        print(
-            f"\n[brnrd] {style.warn_glyph()} interrupted. Nothing was rolled back — "
-            "every artifact already written is independently useful.\n"
-            f"        Re-run `{brnrd_cmd()} init` to continue where this left off."
+    try:
+        result = init_wake_mod.run_init_wake(
+            repo_root, runner_name, cfg=cfg, facts=facts,
         )
-        return
-    if result.error:
-        print(f"\n[brnrd] {style.cross()} the init wake did not finish: {result.error}\n")
-        print(
-            runner_mod_doctor(repo_root, attempted=runner_name, error=result.error)
-        )
-        raise SystemExit(1)
 
-    shells = _detect_shells()
-    written = constitution.write_bridges(repo_root, shells)
-    if written:
-        print(f"[brnrd] {style.check()} shell bridges written: {', '.join(sorted(written))}")
+        if result.card:
+            print("\n[brnrd] run body:\n")
+            print(result.card.strip())
+        if result.reply:
+            print(f"\n{result.reply.strip()}\n")
+
+        if result.aborted:
+            print(
+                f"\n[brnrd] {style.warn_glyph()} interrupted. Nothing was rolled back — "
+                "every artifact already written is independently useful.\n"
+                f"        Re-run `{brnrd_cmd()} init` to continue where this left off."
+            )
+            return
+        if result.error:
+            print(f"\n[brnrd] {style.cross()} the init wake did not finish: {result.error}\n")
+            print(
+                runner_mod_doctor(repo_root, attempted=runner_name, error=result.error)
+            )
+            raise SystemExit(1)
+
+        shells = _detect_shells()
+        written = _finish_bridges(repo_root, shells, borrowed=borrowed)
+        if written:
+            print(f"[brnrd] {style.check()} shell bridges written: {', '.join(sorted(written))}")
+    finally:
+        restore()
+        if pre_files is not None:
+            _exclude_new_files(repo_root, pre_files)
     # F5(a): the shape was chosen *inside* the interview, so brnrd reads it
     # back off the tree rather than pretending it decided. A wake that
     # scaffolded no `kb/` chose home knowledge; verifying against "repo"
@@ -361,14 +388,16 @@ def runner_mod_doctor(repo_root: Path, *, attempted: str, error: str) -> str:
 
 def _init_auto(
     repo_root: Path, available: list[str], *, interactive: bool = False,
-    knowledge_shape: str | None = None,
+    knowledge_shape: str | None = None, borrowed: bool = False,
 ) -> None:
     """The pre-#507 install, unchanged — what init degrades *to*.
 
     Not a mode the user can ask for: reached only when the wake genuinely
-    cannot run (no TTY, no playbook). Kept byte-for-byte so a CI install and
-    an install on a machine without a terminal keep behaving exactly as they
-    did before this issue.
+    cannot run (no TTY, no playbook). Kept byte-for-byte for the default
+    (non-``borrowed``) case, so a CI install and an install on a machine
+    without a terminal keep behaving exactly as they did before this issue;
+    ``borrowed`` (#1746) is a pure addition on top — every file the run
+    below seeds gets excluded from git instead of left to commit.
     """
     if interactive:
         runner_name, cfg_overrides = _interactive_configure(available)
@@ -399,16 +428,28 @@ def _init_auto(
     # mismatch only when home-linking is offered afterwards.
     knowledge_shape = knowledge_shape or _resolve_knowledge_shape(interactive)
 
-    _run_setup(runner_name, repo_root, knowledge_shape=knowledge_shape)
+    # #1746 borrowed guard — see `_init_via_wake`'s matching comment: one
+    # snapshot before `_run_setup` hands off to the runner, one commit-undo
+    # + exclude pass in `finally` so a `_run_setup` failure (it can
+    # `SystemExit(1)` internally) still leaves nothing uncommitted-but-
+    # unexcluded behind.
+    pre_files = _snapshot_files(repo_root) if borrowed else None
+    restore = _guard_against_agent_commits(repo_root, borrowed)
+    try:
+        _run_setup(runner_name, repo_root, knowledge_shape=knowledge_shape)
 
-    # L2: every *detected* shell gets a bridge to the contract, not only the
-    # configured runner — the drop-in audience switches tools, and a bare
-    # A Claude session in an adopted repo is otherwise never told
-    # AGENTS.md exists.
-    shells = _detect_shells()
-    written = constitution.write_bridges(repo_root, shells)
-    if written:
-        print(f"[brnrd] {style.check()} shell bridges written: {', '.join(sorted(written))}")
+        # L2: every *detected* shell gets a bridge to the contract, not only
+        # the configured runner — the drop-in audience switches tools, and a
+        # bare Claude session in an adopted repo is otherwise never told
+        # AGENTS.md exists.
+        shells = _detect_shells()
+        written = _finish_bridges(repo_root, shells, borrowed=borrowed)
+        if written:
+            print(f"[brnrd] {style.check()} shell bridges written: {', '.join(sorted(written))}")
+    finally:
+        restore()
+        if pre_files is not None:
+            _exclude_new_files(repo_root, pre_files)
 
     _verify(repo_root, knowledge_shape=knowledge_shape, shells=shells)
 
@@ -746,7 +787,7 @@ def _git_missing() -> SystemExit:
     )
 
 
-def _setup_brr_dir(repo_root: Path) -> None:
+def _setup_brr_dir(repo_root: Path, *, borrowed: bool = False) -> None:
     """Create ``.brr/`` structure and update .gitignore."""
     brr = repo_root / ".brr"
     for sub in (
@@ -788,9 +829,17 @@ def _setup_brr_dir(repo_root: Path) -> None:
             "introspect.enabled": False,
         })
 
-    gi = repo_root / ".gitignore"
     marker = ".brr/"
-    if gi.exists():
+    gi = repo_root / ".gitignore"
+    if borrowed:
+        # A borrowed checkout never touches the shared `.gitignore` — not to
+        # create one the owner didn't ask for, and not to append to an
+        # existing one, which would edit a file this checkout doesn't own.
+        # `.brr/` gets ignored the same clone-local way every other
+        # borrowed addition does: `.git/info/exclude` (#1746).
+        if not gi.exists() or marker not in gi.read_text(encoding="utf-8"):
+            gitops.exclude_from_git(repo_root, marker)
+    elif gi.exists():
         text = gi.read_text(encoding="utf-8")
         if marker not in text:
             with gi.open("a", encoding="utf-8") as f:
@@ -825,6 +874,156 @@ def _bootstrap_dominion(repo_root: Path) -> None:
         )
     except Exception as exc:  # noqa: BLE001
         print(f"[brnrd] dominion setup skipped: {exc}")
+
+
+def _guard_against_agent_commits(repo_root: Path, borrowed: bool):
+    """Snapshot HEAD before an agent-driven install step; return a closure
+    that undoes any commit(s) the agent made on its own initiative.
+
+    Found while driving ``--borrowed`` for real (#1746): the setup runner
+    is a full agentic session with shell access, and — unprompted, exactly
+    following this repo's own "if you wrote files, commit them" convention
+    — it committed ``AGENTS.md``/``kb/`` itself. ``.git/info/exclude`` only
+    keeps *untracked* files out of ``git status``; it cannot un-happen a
+    commit that already landed. ``--borrowed`` promises a repo you don't
+    own keeps its history untouched, so a borrowed run keeps this guard
+    armed around every call that hands control to a runner; a no-op when
+    not borrowed.
+    """
+    if not borrowed:
+        return lambda: None
+    try:
+        branch = gitops.current_branch(repo_root)
+    except gitops.CurrentBranchUnresolvable:
+        return lambda: None
+    pre_sha = gitops.rev_parse(repo_root, "HEAD")
+
+    def _restore() -> None:
+        post_sha = gitops.rev_parse(repo_root, "HEAD")
+        if post_sha == pre_sha:
+            return
+        if pre_sha is None:
+            # Was unborn (zero commits) before this call — make it unborn
+            # again rather than resetting to a commit that never existed.
+            # Deleting the ref alone leaves the index holding whatever the
+            # commit staged; empty it too so the files fall back to
+            # untracked, not "added".
+            subprocess.run(
+                ["git", "-C", str(repo_root), "update-ref", "-d", f"refs/heads/{branch}"],
+                check=False,
+            )
+            subprocess.run(
+                ["git", "-C", str(repo_root), "read-tree", "--empty"],
+                check=False,
+            )
+        else:
+            # --mixed: drop the commit(s), keep the resulting files on disk
+            # (now untracked/modified again) so the ordinary borrowed-
+            # exclude pass still runs over them.
+            subprocess.run(
+                ["git", "-C", str(repo_root), "reset", "--mixed", pre_sha],
+                check=False,
+            )
+        print(
+            f"[brnrd] {style.warn_glyph()} borrowed: the setup agent committed on its "
+            "own initiative; undone (kept the files, dropped the commit) so "
+            "nothing reaches this checkout's history"
+        )
+
+    return _restore
+
+
+def _register_repo(repo_root: Path) -> None:
+    """Put this repo in the resolved home's project view (issue #1746).
+
+    ``brnrd enable`` used to be the only path that called
+    ``account.register_repo`` outside ``account connect`` / ``account add``
+    — every plain ``init`` left the repo mechanically un-registered even
+    though the dominion and knowledge homes were already being created for
+    it. Folded in here so ``init`` keeps that live behaviour without the
+    unread ``registry.toml`` consent ledger ``enable`` used to write
+    alongside it. Best-effort, like ``_bootstrap_dominion``: no committer
+    identity yet, or a home that fails to resolve, is a soft skip, not a
+    fatal init error.
+    """
+    from . import account
+
+    try:
+        ctx = account.resolve_context(repo_root, conf.load_config(repo_root))
+        account.register_repo(ctx, repo_root, make_default=False)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[brnrd] repo registration skipped: {exc}")
+
+
+def _borrow_safe_shells(repo_root: Path, shells: list[str]) -> list[str]:
+    """*shells* whose bridge file is entirely absent.
+
+    ``constitution.write_bridges`` can *repair* a hand-authored bridge by
+    prepending the import — exactly the clobber a borrowed checkout must
+    never see (mirrors the guard ``enable_project`` used to apply). Shells
+    that read ``AGENTS.md`` natively (no bridge file) always pass through.
+    """
+    safe: list[str] = []
+    for shell in shells:
+        bridge = constitution.bridge_filename(shell)
+        if bridge is None:
+            safe.append(shell)
+            continue
+        target = repo_root / bridge
+        if not target.exists() and not target.is_symlink():
+            safe.append(shell)
+    return safe
+
+
+def _snapshot_files(repo_root: Path) -> set[str]:
+    """Relative paths of every file under *repo_root*, ``.git``/``.brr`` excluded.
+
+    ``.brr/`` already has its own exclusion mechanism (``_setup_brr_dir``);
+    ``.git`` is git's own bookkeeping, never a seeded file. Everything else
+    is fair game — the point is not to *guess* which filenames an install
+    step seeds (a setup wake writes whatever it decides to write, and #1746
+    found one in the wild — ``.gitattributes`` — that a fixed AGENTS.md/
+    bridges/kb list never anticipated), only to diff a before/after.
+    """
+    out: set[str] = set()
+    for path in repo_root.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(repo_root)
+        if rel.parts and rel.parts[0] in (".git", ".brr"):
+            continue
+        out.add(rel.as_posix())
+    return out
+
+
+def _exclude_new_files(repo_root: Path, pre_files: set[str]) -> None:
+    """Borrowed only: exclude every file that appeared since *pre_files*.
+
+    Runs after the commit-undo guard, so a file the runner committed and
+    then had that commit reverted shows up here as an ordinary new
+    untracked file, same as one that was never committed at all — one
+    mechanism covers both cases.
+    """
+    new_files = sorted(_snapshot_files(repo_root) - pre_files)
+    for rel in new_files:
+        gitops.exclude_from_git(repo_root, rel)
+    if new_files:
+        print(f"[brnrd] {style.check()} borrowed: excluded from git — {', '.join(new_files)}")
+
+
+def _finish_bridges(repo_root: Path, shells: list[str], *, borrowed: bool) -> list[str]:
+    """Write shell bridges, borrow-safely when *borrowed* (#1746).
+
+    A borrowed checkout admits additions only: ``constitution.write_bridges``
+    can *repair* a hand-authored bridge by prepending the import, which is
+    exactly the clobber a checkout you don't own must never see — so a
+    borrowed call restricts itself to shells with no bridge file at all
+    (mirrors the guard ``enable_project`` used to apply). Actual git
+    exclusion for whatever this call (and the rest of the install step)
+    seeds is a separate, broader pass — see ``_exclude_new_files``.
+    """
+    bridge_shells = _borrow_safe_shells(repo_root, shells) if borrowed else shells
+    return constitution.write_bridges(repo_root, bridge_shells)
 
 
 def _run_setup(

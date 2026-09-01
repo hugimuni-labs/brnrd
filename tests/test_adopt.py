@@ -1195,3 +1195,307 @@ class TestChannelMenu:
             ["up"],
         ):
             parser.parse_args(argv)  # raises SystemExit on an unknown verb
+
+
+# ── #1746: `brnrd enable` folded into `init` ──────────────────────────
+#
+# `enable_project`'s three "live" behaviours (seed AGENTS.md + bridges,
+# register the repo in the resolved home, keep borrowed additions
+# clone-local) now run through `init_repo` itself; the two unread
+# artifacts it also wrote (`account/registry.toml`, the `~/brnrd`
+# household symlink, `.brnrd-enabled`) went with the verb. These tests
+# are `tests/test_enable.py`'s live-behaviour assertions, re-pointed at
+# `init`'s own entrypoint.
+
+
+def _git_out(repo, *args):
+    return subprocess.run(
+        ["git", *args], cwd=repo, check=True, text=True,
+        stdout=subprocess.PIPE,
+    ).stdout
+
+
+class TestRegisterRepo:
+    """AGENTS.md seeded + bridges written + repo registered — live behaviour
+    `enable_project` used to own; now every `init_repo()` call does it."""
+
+    def test_init_registers_repo_in_resolved_home(self, tmp_path, monkeypatch):
+        from brr import account
+
+        repo = tmp_path / "repo"
+        _init_git(repo)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(adopt, "_detect_shells", lambda: ["claude"])
+        _mock_runner_writing(monkeypatch)
+
+        adopt.init_repo()
+
+        assert (repo / "AGENTS.md").exists()
+        assert (repo / "CLAUDE.md").exists()
+        ctx = account.resolve_context(repo)
+        label = account.repo_label(repo)
+        assert label in ctx.repos
+        assert ctx.repos[label].root == repo.resolve()
+
+    def test_registration_failure_does_not_fail_init(self, tmp_path, monkeypatch, capsys):
+        repo = tmp_path / "repo"
+        _init_git(repo)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(adopt, "_detect_shells", lambda: [])
+        _mock_runner_writing(monkeypatch)
+
+        def _boom(*a, **kw):
+            raise RuntimeError("no home for you")
+
+        monkeypatch.setattr("brr.account.resolve_context", _boom)
+
+        adopt.init_repo()  # must not raise — registration is best-effort
+
+        assert "repo registration skipped" in capsys.readouterr().out
+        assert (repo / "AGENTS.md").exists()
+
+
+class TestBorrowed:
+    """`--borrowed`: every file this install step seeds stays out of git,
+    kept clone-local via `.git/info/exclude` (`enable_project`'s one live
+    behaviour worth keeping, per issue #1746)."""
+
+    def test_borrowed_leaves_repo_git_empty(self, tmp_path, monkeypatch):
+        repo = tmp_path / "borrowed"
+        _init_git(repo)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(adopt, "_detect_shells", lambda: ["claude"])
+        _mock_runner_writing(monkeypatch)
+
+        adopt.init_repo(borrowed=True)
+
+        assert _git_out(repo, "status", "--porcelain") == ""
+        assert _git_out(repo, "ls-files") == ""
+        exclude_rel = _git_out(
+            repo, "rev-parse", "--git-path", "info/exclude",
+        ).strip()
+        excluded = (repo / exclude_rel).resolve().read_text(encoding="utf-8")
+        assert {"AGENTS.md", "CLAUDE.md", ".brr/"} <= set(excluded.splitlines())
+        assert not (repo / ".gitignore").exists()
+
+    def test_non_borrowed_leaves_seeded_files_staged_normally(self, tmp_path, monkeypatch):
+        # The control case: without --borrowed, nothing is excluded — the
+        # seeded files are ordinary untracked additions for the user to
+        # commit, exactly as init behaved before #1746.
+        repo = tmp_path / "owned"
+        _init_git(repo)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(adopt, "_detect_shells", lambda: ["claude"])
+        _mock_runner_writing(monkeypatch)
+
+        adopt.init_repo()
+
+        status = _git_out(repo, "status", "--porcelain")
+        assert "AGENTS.md" in status
+        assert "CLAUDE.md" in status
+
+    def test_borrowed_does_not_repair_existing_bridge(self, tmp_path, monkeypatch):
+        repo = tmp_path / "borrowed-existing"
+        _init_git(repo)
+        bridge = b"upstream-owned bridge, not brnrd's to rewrite\n"
+        (repo / "CLAUDE.md").write_bytes(bridge)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(adopt, "_detect_shells", lambda: ["claude"])
+        _mock_runner_writing(monkeypatch)
+
+        adopt.init_repo(borrowed=True)
+
+        assert (repo / "CLAUDE.md").read_bytes() == bridge
+
+    def test_borrowed_excludes_freshly_seeded_kb_files(self, tmp_path, monkeypatch):
+        repo = tmp_path / "borrowed-kb"
+        _init_git(repo)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(adopt, "_detect_shells", lambda: [])
+
+        def _invoke(runner_name, invocation, cfg=None):
+            (invocation.repo_root / "AGENTS.md").write_text(_VALID_AGENTS, encoding="utf-8")
+            kb = invocation.repo_root / "kb"
+            kb.mkdir()
+            (kb / "index.md").write_text("# index\n", encoding="utf-8")
+            (kb / "log.md").write_text("# log\n", encoding="utf-8")
+            return RunnerResult(
+                invocation=invocation, runner_name=runner_name, command=["mock"],
+                stdout="", stderr="", returncode=0, trace_dir=None,
+                artifacts=[
+                    adopt.runner.RunnerArtifactRecord(
+                        path=a.path, label=a.label or str(a.path),
+                        exists=a.path.exists(), trace_copy=None,
+                    )
+                    for a in invocation.required_artifacts
+                ],
+            )
+
+        monkeypatch.setattr("brr.runner.detect_runner", lambda *a, **kw: "mock-runner")
+        monkeypatch.setattr("brr.runner.detect_all_runners", lambda *a, **kw: ["mock-runner"])
+        monkeypatch.setattr("brr.runner.invoke_runner", _invoke)
+
+        adopt.init_repo(borrowed=True, knowledge_shape="repo")
+
+        assert _git_out(repo, "status", "--porcelain") == ""
+        exclude_rel = _git_out(
+            repo, "rev-parse", "--git-path", "info/exclude",
+        ).strip()
+        excluded = set(
+            (repo / exclude_rel).resolve().read_text(encoding="utf-8").splitlines()
+        )
+        assert {"AGENTS.md", "kb/index.md", "kb/log.md"} <= excluded
+
+    def test_borrowed_excludes_files_outside_the_known_set(self, tmp_path, monkeypatch):
+        # Driven for real against a scratch repo (#1746 report): a live
+        # setup wake wrote `.gitattributes` — a file no fixed AGENTS.md/
+        # bridges/kb allowlist anticipated — and it leaked into `git
+        # status`. The exclusion pass must be a filesystem-snapshot diff,
+        # not an enumerated filename list, or the next surprise file leaks
+        # the same way.
+        repo = tmp_path / "borrowed-extra-file"
+        _init_git(repo)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(adopt, "_detect_shells", lambda: [])
+
+        def _invoke(runner_name, invocation, cfg=None):
+            (invocation.repo_root / "AGENTS.md").write_text(_VALID_AGENTS, encoding="utf-8")
+            (invocation.repo_root / ".gitattributes").write_text(
+                "kb/log.md merge=union\n", encoding="utf-8",
+            )
+            return RunnerResult(
+                invocation=invocation, runner_name=runner_name, command=["mock"],
+                stdout="", stderr="", returncode=0, trace_dir=None,
+                artifacts=[
+                    adopt.runner.RunnerArtifactRecord(
+                        path=a.path, label=a.label or str(a.path),
+                        exists=a.path.exists(), trace_copy=None,
+                    )
+                    for a in invocation.required_artifacts
+                ],
+            )
+
+        monkeypatch.setattr("brr.runner.detect_runner", lambda *a, **kw: "mock-runner")
+        monkeypatch.setattr("brr.runner.detect_all_runners", lambda *a, **kw: ["mock-runner"])
+        monkeypatch.setattr("brr.runner.invoke_runner", _invoke)
+
+        adopt.init_repo(borrowed=True)
+
+        assert _git_out(repo, "status", "--porcelain") == ""
+        exclude_rel = _git_out(
+            repo, "rev-parse", "--git-path", "info/exclude",
+        ).strip()
+        excluded = set(
+            (repo / exclude_rel).resolve().read_text(encoding="utf-8").splitlines()
+        )
+        assert {"AGENTS.md", ".gitattributes"} <= excluded
+
+    def test_borrowed_never_excludes_pre_existing_files(self, tmp_path, monkeypatch):
+        # Re-running `init --borrowed` over an already-seeded, already
+        # git-tracked repo must not sweep the user's own committed files
+        # into the exclude — only what *this call* created.
+        repo = tmp_path / "already-seeded"
+        _init_git(repo)
+        (repo / "AGENTS.md").write_text(_VALID_AGENTS, encoding="utf-8")
+        _git_out(repo, "add", "AGENTS.md")
+        _git_out(repo, "-c", "user.email=t@t.com", "-c", "user.name=t", "commit", "-m", "seed")
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(adopt, "_detect_shells", lambda: [])
+        _mock_runner_writing(monkeypatch)  # AGENTS.md already exists — not rewritten
+
+        adopt.init_repo(borrowed=True)
+
+        exclude_rel = _git_out(
+            repo, "rev-parse", "--git-path", "info/exclude",
+        ).strip()
+        exclude_path = (repo / exclude_rel).resolve()
+        excluded = exclude_path.read_text(encoding="utf-8") if exclude_path.exists() else ""
+        assert "AGENTS.md" not in excluded.splitlines()
+
+    def test_borrowed_undoes_a_commit_the_runner_makes_on_its_own(self, tmp_path, monkeypatch):
+        # Driven for real against a scratch repo (#1746 report): the setup
+        # runner is a full agentic session with shell access, and — simply
+        # following this repo's own "if you wrote files, commit them"
+        # convention — committed AGENTS.md unprompted. `.git/info/exclude`
+        # alone cannot undo a commit that already landed, so a borrowed run
+        # must detect and revert it (starting from an unborn branch: zero
+        # commits before this call).
+        repo = tmp_path / "borrowed-committer"
+        _init_git(repo)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(adopt, "_detect_shells", lambda: [])
+
+        def _invoke(runner_name, invocation, cfg=None):
+            (invocation.repo_root / "AGENTS.md").write_text(_VALID_AGENTS, encoding="utf-8")
+            subprocess.run(
+                ["git", "add", "AGENTS.md"], cwd=invocation.repo_root, check=True,
+            )
+            subprocess.run(
+                ["git", "-c", "user.email=a@a.com", "-c", "user.name=a",
+                 "commit", "-m", "agent committed on its own"],
+                cwd=invocation.repo_root, check=True,
+            )
+            return RunnerResult(
+                invocation=invocation, runner_name=runner_name, command=["mock"],
+                stdout="", stderr="", returncode=0, trace_dir=None,
+                artifacts=[
+                    adopt.runner.RunnerArtifactRecord(
+                        path=a.path, label=a.label or str(a.path),
+                        exists=a.path.exists(), trace_copy=None,
+                    )
+                    for a in invocation.required_artifacts
+                ],
+            )
+
+        monkeypatch.setattr("brr.runner.detect_runner", lambda *a, **kw: "mock-runner")
+        monkeypatch.setattr("brr.runner.detect_all_runners", lambda *a, **kw: ["mock-runner"])
+        monkeypatch.setattr("brr.runner.invoke_runner", _invoke)
+
+        adopt.init_repo(borrowed=True)
+
+        # `main` is unborn again — no commit reaches the branch the user
+        # would actually see. (The dominion's own `brr-home` branch is a
+        # separate, legitimate history; only `main` is this assertion's
+        # concern.)
+        assert _git_out(repo, "branch", "--list", "main") == ""
+        assert _git_out(repo, "status", "--porcelain") == ""
+        assert (repo / "AGENTS.md").exists()
+
+    def test_non_borrowed_leaves_a_runner_commit_alone(self, tmp_path, monkeypatch):
+        # The control case: without --borrowed the guard is a no-op — a
+        # runner that commits on a normal (non-borrowed) install keeps its
+        # commit exactly as it always has.
+        repo = tmp_path / "owned-committer"
+        _init_git(repo)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(adopt, "_detect_shells", lambda: [])
+
+        def _invoke(runner_name, invocation, cfg=None):
+            (invocation.repo_root / "AGENTS.md").write_text(_VALID_AGENTS, encoding="utf-8")
+            subprocess.run(
+                ["git", "add", "AGENTS.md"], cwd=invocation.repo_root, check=True,
+            )
+            subprocess.run(
+                ["git", "-c", "user.email=a@a.com", "-c", "user.name=a",
+                 "commit", "-m", "agent committed"],
+                cwd=invocation.repo_root, check=True,
+            )
+            return RunnerResult(
+                invocation=invocation, runner_name=runner_name, command=["mock"],
+                stdout="", stderr="", returncode=0, trace_dir=None,
+                artifacts=[
+                    adopt.runner.RunnerArtifactRecord(
+                        path=a.path, label=a.label or str(a.path),
+                        exists=a.path.exists(), trace_copy=None,
+                    )
+                    for a in invocation.required_artifacts
+                ],
+            )
+
+        monkeypatch.setattr("brr.runner.detect_runner", lambda *a, **kw: "mock-runner")
+        monkeypatch.setattr("brr.runner.detect_all_runners", lambda *a, **kw: ["mock-runner"])
+        monkeypatch.setattr("brr.runner.invoke_runner", _invoke)
+
+        adopt.init_repo()
+
+        assert "agent committed" in _git_out(repo, "log", "--oneline", "--all")
