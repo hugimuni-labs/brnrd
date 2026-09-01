@@ -49,6 +49,7 @@ import tempfile
 import threading
 import time
 import traceback
+import types
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -104,6 +105,7 @@ from . import sync
 from . import transcript
 from . import trust
 from . import updates
+from . import news_lane
 from . import release_availability
 from . import usage_samples
 from . import weld
@@ -10171,10 +10173,12 @@ def _resolve_notify_gate(
        never a crash and never a silent fall-through to inference, which
        would surprise an operator who deliberately named a gate. A gate
        that *is* configured but structurally cannot originate an
-       unaddressed send (:func:`_gate_can_send_unaddressed` — today, only
-       ``cloud``, #1205) resolves the same way: this fallback never carries
-       addressing of its own, so an incapable gate here can never work,
-       explicit or not.
+       unaddressed send (:func:`_gate_can_send_unaddressed` — before #1205
+       this was ``cloud``; its relay grew a fresh-send primitive there and
+       every built-in gate defaults to capable today, so this arm is dead
+       code until some future gate opts back out) resolves the same way:
+       this fallback never carries addressing of its own, so an incapable
+       gate here can never work, explicit or not.
     2. **Single-gate inference**, only when unset: exactly *one* capable
        user-chat gate (:data:`_NOTIFY_GATE_FALLBACK_CANDIDATES` — telegram /
        slack / cloud, filtered to those that can send unaddressed) is
@@ -10598,6 +10602,92 @@ def _deliver_out_of_bound(
             body=body,
         )
     return True
+
+
+_news_announce_lock = threading.Lock()
+_news_announce_inflight = False
+
+
+def _news_lane_send(
+    brr_dir: Path,
+    cfg: dict,
+    account_context: account.AccountContext | None,
+    event_id: str,
+    body: str,
+) -> bool:
+    """One outbound send, shared by the interrupt and briefing lanes below.
+
+    The delivery seam :mod:`news_lane`'s own docstring names: today this is
+    the only thing that plugs in here (a chat gate); a future dated-file
+    writer to the account home is a second call alongside this one, not a
+    change to either lane's own logic.
+    """
+    gate = _resolve_notify_gate(cfg, brr_dir)
+    if not gate:
+        return False
+    emit = _WorkerEmit(brr_dir=brr_dir, conversation_key="", event_id="news-lane")
+    task = types.SimpleNamespace(id=event_id, meta={})
+    return _deliver_out_of_bound(
+        emit,
+        task,
+        brr_dir / "responses",
+        brr_dir / "inbox",
+        event_id,
+        gate,
+        {},
+        body,
+        account_context=account_context,
+    )
+
+
+def _announce_pending_news(
+    repo_root: Path,
+    cfg: dict,
+    brr_dir: Path,
+    account_context: account.AccountContext | None,
+) -> None:
+    """The chat half of the news lane (see :mod:`news_lane`).
+
+    Two lanes, both gated on the same delivery question — nobody is
+    waiting, so a message either goes out through a gate that can
+    originate a fresh send, or it does not go out at all
+    (``_resolve_notify_gate`` / ``_deliver_out_of_bound``, the same pair
+    the terminal-reply fallback already uses, so "which gate can speak
+    first" is answered in exactly one place):
+
+    - **Interrupts** (:func:`news_lane.pending_interrupts`) — a dependency
+      with an expiry, sent the moment it's new.
+    - **The daily briefing** (:func:`news_lane.due_briefing`) — everything
+      else, batched into at most one message per
+      ``news_lane.BRIEFING_INTERVAL_SECONDS``. This tick fires every ~10s;
+      the interval check inside ``due_briefing`` is what keeps that from
+      composing more than one message a day — there is no separate
+      ``schedule.md`` entry for it.
+
+    Never fabricates a delivery: an unresolved gate (none configured, or
+    every configured gate structurally cannot originate an unaddressed
+    send) leaves the item(s) unrecorded and unsent; the dashboard half
+    (``news_lane.collect``) still carries them regardless of whether chat
+    can.
+    """
+    global _news_announce_inflight
+    with _news_announce_lock:
+        if _news_announce_inflight:
+            return
+        _news_announce_inflight = True
+    try:
+        for item in news_lane.pending_interrupts(repo_root):
+            if _news_lane_send(brr_dir, cfg, account_context, f"news-lane-{item.key}", item.render()):
+                news_lane.record_announced(repo_root, item)
+
+        briefing = news_lane.due_briefing(repo_root)
+        if briefing is not None and _news_lane_send(
+            brr_dir, cfg, account_context, "news-lane-briefing", briefing.render()
+        ):
+            news_lane.record_briefing_sent(repo_root, briefing)
+    finally:
+        with _news_announce_lock:
+            _news_announce_inflight = False
 
 
 def _drain_agent_card(
@@ -15800,6 +15890,15 @@ def start(
             # This is a daily, background observation; a release endpoint can
             # never delay dispatch or make the daemon unhealthy.
             release_availability.refresh_if_stale_async(repo_root)
+            # The news lane's chat half: cheap (a JSON read + at most one
+            # gate resolution) so it rides every tick rather than its own
+            # timer — the item itself is already rate-limited by the
+            # refresh above, and the ledger makes a resend of an
+            # already-announced value a no-op.
+            try:
+                _announce_pending_news(repo_root, cfg, brr_dir, account_context)
+            except Exception as exc:  # noqa: BLE001 — a chat ping must never sink the loop
+                print(f"[brnrd] news-lane announce skipped this tick: {exc}")
 
             # One scan feeds both dispatch decisions below — a spawn-
             # marked event is never a resident-lead candidate and vice

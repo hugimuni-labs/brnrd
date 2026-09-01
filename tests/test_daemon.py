@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from brr import daemon, envs, presence, promises, protocol, release_availability
+from brr import daemon, envs, news_lane, presence, promises, protocol, release_availability
 from brr import runner_failures
 from brr import schedule as schedule_mod
 from brr.run import Run
@@ -13726,3 +13726,95 @@ def test_weld_ignite_retired_item_also_not_a_candidate(tmp_path):
 
     assert resolved == []
     assert "taken:" not in (warp / "w-8.md").read_text(encoding="utf-8")
+
+
+class TestNewsLaneAnnounce:
+    """``daemon._announce_pending_news`` — the news lane's chat half (see
+    ``news_lane.py``): a real gate-resolution + ``_deliver_out_of_bound``
+    call, exercised through the actual daemon entry point the heartbeat
+    loop calls, with only ``_gate_can_deliver`` faked to control which
+    gates read as configured (same technique as ``TestNotifyGateFallback``
+    above)."""
+
+    def _setup(self, tmp_path, monkeypatch, *, configured_gates=()):
+        monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+        init_git_repo(tmp_path)
+        commit_files(tmp_path, {"AGENTS.md": "# Project\n"})
+        (tmp_path / ".brr" / "inbox").mkdir(parents=True)
+        (tmp_path / ".brr" / "responses").mkdir(parents=True)
+        release_availability.cache_path(tmp_path).parent.mkdir(parents=True, exist_ok=True)
+        cfg = {"repo.label": "Gurio/news", "home.path": str(tmp_path / "account-home")}
+        ctx = daemon.account.resolve_context(tmp_path, cfg)
+        monkeypatch.setattr(
+            daemon, "_gate_can_deliver", lambda _brr, gate: gate in configured_gates,
+        )
+        brr_dir = tmp_path / ".brr"
+        return cfg, ctx, brr_dir
+
+    def test_interrupt_item_delivers_immediately_and_is_not_resent(
+        self, tmp_path, monkeypatch,
+    ):
+        cfg, ctx, brr_dir = self._setup(tmp_path, monkeypatch, configured_gates=("telegram",))
+        monkeypatch.setitem(news_lane.CHAT_POLICY, "core-retirement", True)
+        item = news_lane.NewsItem(
+            kind="core-retirement", subject="gpt-5-codex", prior=None,
+            current="pinned", observed_at=1.0, source="codex-feed",
+            expires_at="2026-12-01",
+        )
+        monkeypatch.setattr(news_lane, "DEFAULT_PRODUCERS", (lambda _r: [item],))
+
+        daemon._announce_pending_news(tmp_path, cfg, brr_dir, ctx)
+
+        [fallback] = protocol.list_done(brr_dir / "inbox", "telegram")
+        body = protocol.read_response(brr_dir / "responses", fallback["id"])
+        assert "gpt-5-codex" in body
+        assert "2026-12-01" in body
+
+        # A second tick with the same current value must not resend.
+        daemon._announce_pending_news(tmp_path, cfg, brr_dir, ctx)
+        assert len(protocol.list_done(brr_dir / "inbox", "telegram")) == 1
+
+    def test_briefing_bundles_and_only_sends_once_per_interval(
+        self, tmp_path, monkeypatch,
+    ):
+        cfg, ctx, brr_dir = self._setup(tmp_path, monkeypatch, configured_gates=("telegram",))
+        monkeypatch.setitem(news_lane.CHAT_POLICY, "release", True)
+        pypi_item = news_lane.NewsItem(
+            kind="release", subject="pypi", prior="0.1.0", current="0.2.0",
+            observed_at=1.0, source="https://pypi.org",
+        )
+        npm_item = news_lane.NewsItem(
+            kind="release", subject="npm", prior="0.1.0", current="0.2.1",
+            observed_at=1.0, source="https://registry.npmjs.org",
+        )
+        monkeypatch.setattr(news_lane, "DEFAULT_PRODUCERS", (lambda _r: [pypi_item, npm_item],))
+
+        daemon._announce_pending_news(tmp_path, cfg, brr_dir, ctx)
+
+        [fallback] = protocol.list_done(brr_dir / "inbox", "telegram")
+        body = protocol.read_response(brr_dir / "responses", fallback["id"])
+        assert "pypi update available" in body
+        assert "npm update available" in body
+
+        # Same tick's worth of news, called again immediately: the daily
+        # clock (not just the per-item ledger) suppresses a second send.
+        daemon._announce_pending_news(tmp_path, cfg, brr_dir, ctx)
+        assert len(protocol.list_done(brr_dir / "inbox", "telegram")) == 1
+
+    def test_no_configured_gate_never_fabricates_a_delivery(
+        self, tmp_path, monkeypatch,
+    ):
+        cfg, ctx, brr_dir = self._setup(tmp_path, monkeypatch, configured_gates=())
+        monkeypatch.setitem(news_lane.CHAT_POLICY, "release", True)
+        item = news_lane.NewsItem(
+            kind="release", subject="pypi", prior="0.1.0", current="0.2.0",
+            observed_at=1.0, source="https://pypi.org",
+        )
+        monkeypatch.setattr(news_lane, "DEFAULT_PRODUCERS", (lambda _r: [item],))
+
+        daemon._announce_pending_news(tmp_path, cfg, brr_dir, ctx)
+
+        assert protocol.list_done(brr_dir / "inbox", "telegram") == []
+        # Unsent means unrecorded too — a future tick, once a gate exists,
+        # must still be able to say it.
+        assert news_lane._load_ledger(tmp_path) == {}

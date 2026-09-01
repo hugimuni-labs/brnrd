@@ -306,6 +306,19 @@ class Daemon(Base):
     # ask survives it). The daemon owns the record; this column only carries
     # the ask until the daemon's next publish shows it honoured or obsolete.
     runner_sticky_release_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # The news lane (the-user-hears-it-first): typed, receipted facts about
+    # the product itself — a newer release available today, a shell version
+    # or model-availability change once a sibling producer exists — mirrored
+    # from `brr.news_lane.collect()` via `PUT /v1/daemons/news`. Repo-scoped
+    # like `quota_json`: this is what makes the fact reach the dashboard at
+    # all, since the web service never reads a daemon's own `.brr/` cache
+    # directly.
+    news_json: Mapped[str] = mapped_column(
+        Text,
+        default="[]",
+        info=_publish_store("news", "repo"),
+    )
+    news_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class DaemonRepo(Base):

@@ -570,6 +570,54 @@ def test_quota_lane_gated_by_the_connecting_repos_own_consent():
     assert r.json()["shells"] == []
 
 
+_NEWS_ITEM = {
+    "kind": "release", "subject": "pypi", "prior": "0.6.18", "current": "0.7.0",
+    "observed_at": 1.0, "source": "https://pypi.org/pypi/brnrd/json",
+}
+
+
+def test_news_lane_gated_by_the_connecting_repos_own_consent():
+    """Same shape as `test_quota_lane_gated_by_the_connecting_repos_own_consent`
+    one lane over (the-user-hears-it-first): a repo that consented to
+    `activity` but not `news` gets its news snapshot dropped at the write
+    seam, not merely hidden on read."""
+    client = _client()
+    _login(client)
+    client.post(
+        "/v1/repos/connect",
+        json={"repo_full_name": "Gurio/new", "publish_layers": "activity"},  # not "news"
+    )
+    with client.app.state.SessionLocal() as db:
+        repo_id = db.query(Repo).filter(Repo.repo_full_name == "Gurio/new").one().id
+    daemon_token = _pair_daemon(client, repo_id)
+    headers = {"Authorization": f"Bearer {daemon_token}"}
+    client.post("/v1/daemons/register", json={"daemon_name": "laptop"}, headers=headers)
+
+    r = client.put("/v1/daemons/news", json={"items": [_NEWS_ITEM]}, headers=headers)
+    assert r.status_code == 200
+    assert r.json()["items"] == []
+
+
+def test_news_lane_permitted_by_an_explicit_consent():
+    client = _client()
+    _login(client)
+    client.post(
+        "/v1/repos/connect",
+        json={"repo_full_name": "Gurio/new", "publish_layers": "news"},
+    )
+    with client.app.state.SessionLocal() as db:
+        repo_id = db.query(Repo).filter(Repo.repo_full_name == "Gurio/new").one().id
+    daemon_token = _pair_daemon(client, repo_id)
+    headers = {"Authorization": f"Bearer {daemon_token}"}
+    client.post("/v1/daemons/register", json={"daemon_name": "laptop"}, headers=headers)
+
+    r = client.put("/v1/daemons/news", json={"items": [_NEWS_ITEM]}, headers=headers)
+    assert r.status_code == 200
+    [item] = r.json()["items"]
+    assert item["subject"] == "pypi"
+    assert item["current"] == "0.7.0"
+
+
 def test_legacy_repo_with_no_recorded_consent_publishes_nothing():
     """A repo that never recorded a consent (`publish_layers IS NULL`) goes
     dark.

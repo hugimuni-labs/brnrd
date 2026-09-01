@@ -494,6 +494,40 @@ class QuotaOut(BaseModel):
     quota_updated_at: datetime | None = None
 
 
+class NewsItemIn(BaseModel):
+    """One item from `brr.news_lane.NewsItem`, wire shape for `PUT /v1/daemons/news`.
+
+    Field-for-field mirror of the dataclass the daemon collects locally —
+    this endpoint's whole job is to make that fact reach a machine the
+    daemon isn't running on, not to reshape it.
+    """
+
+    kind: str = Field(min_length=1, max_length=64)
+    subject: str = Field(min_length=1, max_length=128)
+    prior: str | None = Field(default=None, max_length=128)
+    current: str = Field(min_length=1, max_length=128)
+    observed_at: float
+    source: str = Field(default="", max_length=512)
+    expires_at: str | None = Field(default=None, max_length=64)
+
+
+class NewsReport(BaseModel):
+    """The news lane's own publish payload — see `brr.news_lane.collect`.
+
+    Replaces this daemon's whole news snapshot, same last-write-wins shape
+    as `QuotaReport`: the dashboard renders exactly what the most recent
+    tick observed to be true, never an accumulation this endpoint would
+    otherwise have to dedupe itself.
+    """
+
+    items: list[NewsItemIn] = Field(default_factory=list)
+
+
+class NewsOut(BaseModel):
+    items: list[NewsItemIn] = Field(default_factory=list)
+    news_updated_at: datetime | None = None
+
+
 class RunnerProfileIn(BaseModel):
     """One selectable Shell+Core profile from a daemon's local catalog (#328).
 
