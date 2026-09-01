@@ -11,9 +11,9 @@ population was empty of third parties, so no re-acceptance was owed).
 
 Hash snapshot:
 
-- Date: 2026-08-31
+- Date: 2026-09-01
 - Source revision (parent of this export-only change):
-  `26fd5c2bcd4298e3e1dd3b4efa563630c146fa5c`
+  `a410e9cc330fe5860b8d41a897121fdbe123d359`
 - Algorithm: SHA-256 over raw repository file bytes
 - Machine-readable list: [`SHA256SUMS`](SHA256SUMS)
 - Verification from the repository root:
@@ -44,7 +44,7 @@ hashes below remain authoritative for the snapshot if a deployed page changes.
 | Privacy Notice | [`src/frontend/src/routes/privacy/+page.svelte`](../../../src/frontend/src/routes/privacy/+page.svelte) | `3fa8ff91a685af6ad19040473cf0615a1bb36c7de0bb5e8518a6a2d6829447c4` |
 | Legal Notice / *mentions légales* | [`src/frontend/src/routes/legal-notice/+page.svelte`](../../../src/frontend/src/routes/legal-notice/+page.svelte) | `cbbfae6ecb231148d5fa63828c592cc81d005d1472ff2ec795667b5c899c28c6` |
 | K-bis-backed company and host facts rendered by the Legal Notice | [`src/frontend/src/lib/legalNotice.ts`](../../../src/frontend/src/lib/legalNotice.ts) | `e2fc3b4c0c956e35f151c6bd52cc5f256b1f123e2b50574a6794280c0b1d6d20` |
-| Sub-processor list | [`src/frontend/src/routes/sub-processors/+page.svelte`](../../../src/frontend/src/routes/sub-processors/+page.svelte) | `22108856edeec8982213147926d678b6237bc5073257cfce0b86e4813436930e` |
+| Sub-processor list | [`src/frontend/src/routes/sub-processors/+page.svelte`](../../../src/frontend/src/routes/sub-processors/+page.svelte) | `7c408e9d9743364a98c943611b8059c70845b9e046860d202c6b064704f7a2a5` |
 | Data Processing Agreement | [`docs/legal/dpa.md`](../dpa.md) | `ee366853701826282da0326092fc4ff504aab99f726e6dfcf234f4d9854f43fd` |
 | Article 30 record of processing | [`docs/legal/art-30-record.md`](../art-30-record.md) | `84d3186f7cf3263cf67d5377aca4d6a94fc56facf0416710cfc0390abb4c446f` |
 | Driven data-flow and trust inventory | [`SECURITY.md`](../../../SECURITY.md) | `2883c0835519ffd0aafed284983b8e5bbe9ef6662aaaa3da476701f0446645a5` |
