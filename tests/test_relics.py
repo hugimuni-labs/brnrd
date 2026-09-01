@@ -958,6 +958,68 @@ def test_counts_phrase_matches_issue_example():
     assert relics.counts_phrase({"commit": 2, "kb": 1}) == "2 commits · 1 page"
 
 
+# ── design-the-water-line.md "The kb is the reef": named pages, not counts ──
+
+
+def test_live_portal_kb_pages_reads_records_not_counts(tmp_path: Path):
+    """Same capsule `live_portal_counts` reads, one field further in: the
+    full manifest under `records`, filtered to `kind == "kb"` and reduced
+    to path (+ url) — never the resident-facing full relic shape."""
+    brr_dir = tmp_path / ".brr"
+    _write_portal_state(
+        brr_dir, "evt-1",
+        {
+            "known": True,
+            "counts": {"commit": 1, "kb": 2},
+            "records": [
+                {"kind": "commit", "sha": "abc123", "subject": "wip"},
+                # A `file` relic carries a `path` too — so this is the record
+                # that actually pins the `kind == "kb"` filter. Without it the
+                # commit above is filtered by the *pathless* guard instead,
+                # and dropping the kind check entirely breaks nothing: the
+                # reef would fill with every produced file, and every test
+                # here would still pass.
+                {"kind": "file", "path": "src/brr/relics.py"},
+                {"kind": "kb", "path": "design-the-water-line.md", "url": "https://x/reef"},
+                {"kind": "kb", "path": "design-the-crossing.md"},
+            ],
+        },
+    )
+    assert relics.live_portal_kb_pages(brr_dir, "evt-1") == [
+        {"path": "design-the-water-line.md", "url": "https://x/reef"},
+        {"path": "design-the-crossing.md"},
+    ]
+
+
+def test_live_portal_kb_pages_absent_paths_degrade_to_none(tmp_path: Path):
+    brr_dir = tmp_path / ".brr"
+    assert relics.live_portal_kb_pages(brr_dir, None) is None
+    assert relics.live_portal_kb_pages(brr_dir, "evt-missing") is None
+    _write_portal_state(brr_dir, "evt-unknown", {"known": False})
+    assert relics.live_portal_kb_pages(brr_dir, "evt-unknown") is None
+    # A facet known before `records` shipped (only `counts`) degrades the
+    # same way as no capsule at all — absent stays absent, never a guess.
+    _write_portal_state(brr_dir, "evt-old", {"known": True, "counts": {"kb": 1}})
+    assert relics.live_portal_kb_pages(brr_dir, "evt-old") is None
+
+
+def test_live_portal_kb_pages_known_but_empty_is_empty_list(tmp_path: Path):
+    brr_dir = tmp_path / ".brr"
+    _write_portal_state(brr_dir, "evt-idle", {"known": True, "counts": {}, "records": []})
+    assert relics.live_portal_kb_pages(brr_dir, "evt-idle") == []
+
+
+def test_live_portal_kb_pages_drops_pathless_records_and_bounds_the_list(tmp_path: Path):
+    records = [{"kind": "kb", "path": ""}]
+    records += [{"kind": "kb", "path": f"page-{i}.md"} for i in range(20)]
+    brr_dir = tmp_path / ".brr"
+    _write_portal_state(brr_dir, "evt-h", {"known": True, "counts": {}, "records": records})
+    pages = relics.live_portal_kb_pages(brr_dir, "evt-h")
+    assert pages is not None
+    assert len(pages) == relics._LIVE_KB_PAGES_MAX
+    assert pages[0] == {"path": "page-0.md"}
+
+
 def test_counts_phrase_singular_plural_and_order():
     phrase = relics.counts_phrase(
         {"kb": 2, "commit": 1, "pr": 1, "issue": 3, "merge": 1},

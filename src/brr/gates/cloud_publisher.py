@@ -2094,6 +2094,11 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
                 # per-tick git work. ``None`` = nothing attested (ad-hoc
                 # session, no capsule yet); ``{}`` = known, no produce yet.
                 "relics_counts": (view.relics_counts if view is not None else None),
+                # design-the-water-line.md "The kb is the reef": the kb
+                # pages this run has committed so far, named (not only
+                # counted) — same capsule read as `relics_counts` above,
+                # one field further in (`relics.live_portal_kb_pages`).
+                "relics_kb_pages": (view.relics_kb_pages if view is not None else None),
                 # #566 slice 0: resident-authored mood. The raw handle rides
                 # from the presence entry (heartbeat-refreshed from `.mood`);
                 # glyph and pitch are resolved *here*, where `brr.emotes`

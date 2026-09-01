@@ -355,6 +355,59 @@ test('one run, one row: a live run already in the ledger keeps the cut row', () 
 	assert.equal(rows[0].tense, 'cut');
 });
 
+test('cloth: a live row joins its committed kb pages from relics_kb_pages', () => {
+	const graph = compileRoomGraph(
+		liveWire([
+			liveRun({
+				run_id: 'live1',
+				relics_kb_pages: [
+					{ path: 'design-the-water-line.md', url: 'https://example/reef' },
+					{ path: 'no-url-yet.md' }
+				]
+			}),
+			liveRun({ run_id: 'live2', relics_kb_pages: [] }),
+			liveRun({ run_id: 'live3' })
+		]),
+		ledgerWire([])
+	);
+	assert.deepEqual(graph.cloth.find((r) => r.runId === 'live1')?.kbPages, [
+		{ path: 'design-the-water-line.md', url: 'https://example/reef' },
+		{ path: 'no-url-yet.md', url: null }
+	]);
+	// known-empty (the facet is attested, nothing committed yet) and
+	// unattested (older daemon / ad-hoc session) both land on the same `[]`
+	// — the graph's own contract is absence-stays-absence upstream of this
+	// join, not a distinction this row is asked to carry.
+	assert.deepEqual(graph.cloth.find((r) => r.runId === 'live2')?.kbPages, []);
+	assert.deepEqual(graph.cloth.find((r) => r.runId === 'live3')?.kbPages, []);
+});
+
+// MUTATION CHECKED: dropped the `r.kind !== 'kb'` filter in `ledgerKbPages`
+// (roomGraph.ts). Failed on the `file` fixture below (a non-kb record that
+// still carries a `path`, so only the kind check keeps it out) until the
+// mutation was reverted. See report-reef.md.
+test('cloth: a cut row joins its kb pages from the ledger external_refs, ignoring non-kb kinds', () => {
+	const graph = compileRoomGraph(
+		liveWire([]),
+		ledgerWire([
+			ledgerRow({
+				run_id: 'cut1',
+				external_refs: [
+					{ kind: 'kb', path: 'design-the-crossing.md', url: 'https://example/crossing' },
+					{ kind: 'commit', sha: 'abc123', subject: 'unrelated' },
+					{ kind: 'kb', path: '' }, // pathless kb record: not a page, dropped
+					// a non-kb kind that *also* carries a `path` field, so only the
+					// kind check (not the emptiness check) keeps it out of kbPages
+					{ kind: 'file', path: 'src/unrelated.py' }
+				]
+			})
+		])
+	);
+	assert.deepEqual(graph.cloth.find((r) => r.runId === 'cut1')?.kbPages, [
+		{ path: 'design-the-crossing.md', url: 'https://example/crossing' }
+	]);
+});
+
 test('pending letters sum across actors; stale daemon rows are never actors', () => {
 	const graph = compileRoomGraph(
 		liveWire([
