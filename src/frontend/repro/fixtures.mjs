@@ -106,7 +106,6 @@ export const liveRuns = {
 };
 
 export const scheduledWakes = { generated_at: now, rows: [], total: 0 };
-export const prReviewQueue = { generated_at: now, prs: [], stale: false, reported_at: now };
 export const configRequests = { generated_at: now, requests: [] };
 export const runLedger = {
 	generated_at: now,
@@ -153,7 +152,6 @@ export const ROUTES = {
 	'/v1/dashboard/paired-chats': pairedChats,
 	'/v1/dashboard/live-runs': liveRuns,
 	'/v1/dashboard/activity': scheduledWakes,
-	'/v1/dashboard/pr-review-queue': prReviewQueue,
 	'/v1/dashboard/config-requests': configRequests,
 	'/v1/dashboard/run-ledger': runLedger,
 	'/v1/dashboard/surface': surface
@@ -324,7 +322,6 @@ export function buildRoutes(scale = {}) {
 		'/v1/dashboard/repos': scaledRepos,
 		'/v1/dashboard/live-runs': liveRuns,
 		'/v1/dashboard/activity': scheduledWakes,
-		'/v1/dashboard/pr-review-queue': prReviewQueue,
 		'/v1/dashboard/config-requests': configRequests,
 		'/v1/dashboard/run-ledger': runLedger,
 		'/v1/dashboard/surface': surface
