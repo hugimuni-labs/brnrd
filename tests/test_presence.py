@@ -150,3 +150,152 @@ def test_dead_pid_same_host_is_pruned(tmp_path):
 
 def test_missing_dir_is_empty(tmp_path):
     assert presence.list_active(tmp_path / ".brr") == []
+
+
+def test_account_dirs_falls_back_to_the_one_checkout(tmp_path, monkeypatch):
+    """An unresolvable account never narrows the walk below its own repo."""
+    from brr import account
+
+    brr = tmp_path / "repo" / ".brr"
+    brr.mkdir(parents=True)
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("no home here")
+
+    monkeypatch.setattr(account, "resolve_context", boom)
+    assert presence.account_dirs(brr) == [brr]
+
+
+def test_account_dirs_keeps_this_checkout_even_when_unregistered(tmp_path, monkeypatch):
+    """The reader's own repo is never dropped by a registry that omits it.
+
+    A checkout can be live before the registry names it (first connect, a
+    label rename mid-flight). Losing it here would swap #1727's missing
+    sibling for a missing self — the same lie, one row over.
+    """
+    from brr import account
+    from types import SimpleNamespace
+
+    mine = tmp_path / "mine" / ".brr"
+    other = tmp_path / "other" / ".brr"
+    mine.mkdir(parents=True)
+    other.mkdir(parents=True)
+    monkeypatch.setattr(
+        account,
+        "resolve_context",
+        lambda *_a, **_k: SimpleNamespace(
+            repos={"org/other": SimpleNamespace(label="org/other", root=other.parent)}
+        ),
+    )
+    assert presence.account_dirs(mine) == [mine, other]
+
+
+def test_list_active_account_joins_siblings_oldest_first(tmp_path, monkeypatch):
+    """A strand in a sibling repo is a coexisting run, not an absent one."""
+    import os
+    from types import SimpleNamespace
+
+    from brr import account
+
+    a = tmp_path / "a" / ".brr"
+    b = tmp_path / "b" / ".brr"
+    a.mkdir(parents=True)
+    b.mkdir(parents=True)
+    presence.register(
+        a, kind="daemon", run_id="run-parent", repo_label="org/a",
+        pid=os.getpid(), entry_id="p-a", now=1000.0,
+    )
+    presence.register(
+        b, kind="daemon", run_id="run-strand", repo_label="org/b",
+        pid=os.getpid(), entry_id="p-b", now=900.0,
+        is_subspawn=True, parent_run_id="run-parent",
+    )
+    monkeypatch.setattr(
+        account,
+        "resolve_context",
+        lambda *_a, **_k: SimpleNamespace(
+            repos={
+                "org/a": SimpleNamespace(label="org/a", root=a.parent),
+                "org/b": SimpleNamespace(label="org/b", root=b.parent),
+            }
+        ),
+    )
+
+    rows = presence.list_active_account(a, now=1000.0)
+
+    assert [row["run_id"] for row in rows] == ["run-strand", "run-parent"]
+    assert rows[0]["repo_label"] == "org/b"
+
+
+def test_list_active_account_counts_one_body_once(tmp_path, monkeypatch):
+    """A repo reachable under two labels is still one live run."""
+    import os
+    from types import SimpleNamespace
+
+    from brr import account
+
+    brr = tmp_path / "solo" / ".brr"
+    brr.mkdir(parents=True)
+    presence.register(
+        brr, kind="daemon", run_id="run-solo", pid=os.getpid(), entry_id="p-solo",
+    )
+    monkeypatch.setattr(
+        account,
+        "resolve_context",
+        lambda *_a, **_k: SimpleNamespace(
+            repos={
+                "org/one": SimpleNamespace(label="org/one", root=brr.parent),
+                "org/two": SimpleNamespace(label="org/two", root=brr.parent),
+            }
+        ),
+    )
+
+    assert [row["run_id"] for row in presence.list_active_account(brr)] == ["run-solo"]
+
+
+def test_account_dirs_reads_the_registry_once_per_ttl(tmp_path, monkeypatch):
+    """The resolve is ~270ms of git and config I/O, and this runs at every
+    tool boundary. A quarter second per boundary for a fact that changes
+    when someone runs `brnrd connect` is the resident's own latency spent
+    on nothing."""
+    from types import SimpleNamespace
+
+    from brr import account
+
+    mine = tmp_path / "mine" / ".brr"
+    mine.mkdir(parents=True)
+    calls = []
+
+    def counted(*_a, **_k):
+        calls.append(1)
+        return SimpleNamespace(repos={})
+
+    monkeypatch.setattr(account, "resolve_context", counted)
+    presence._account_dirs_cache.clear()
+
+    assert presence.account_dirs(mine, now=1000.0) == [mine]
+    # A literal five seconds, not `TTL - 1`: a window derived from the
+    # constant it is meant to pin moves with it, so `TTL = 0` would still
+    # pass and the guard would be measuring nothing.
+    assert presence.account_dirs(mine, now=1005.0) == [mine]
+    assert len(calls) == 1, "a second read inside the window is the cost this cache exists to refuse"
+
+    assert presence.account_dirs(mine, now=1000.0 + presence.ACCOUNT_DIRS_TTL_S + 1) == [mine]
+    assert len(calls) == 2, "past the window it must read again — a connected sibling has to become visible"
+
+
+def test_account_dirs_cache_is_keyed_per_checkout(tmp_path, monkeypatch):
+    """Two repos on one machine must not inherit each other's answer."""
+    from types import SimpleNamespace
+
+    from brr import account
+
+    a = tmp_path / "a" / ".brr"
+    b = tmp_path / "b" / ".brr"
+    a.mkdir(parents=True)
+    b.mkdir(parents=True)
+    monkeypatch.setattr(account, "resolve_context", lambda *_a, **_k: SimpleNamespace(repos={}))
+    presence._account_dirs_cache.clear()
+
+    assert presence.account_dirs(a, now=1000.0) == [a]
+    assert presence.account_dirs(b, now=1000.0) == [b]
