@@ -28,6 +28,7 @@ from brr import (
     updates,
 )
 from brr.envs import RunContext
+from brr.gates import cloud as cloud_gate
 from brr.run import Run
 
 from _helpers import init_git_repo, write_repo_scaffold
@@ -2471,7 +2472,20 @@ def test_notify_gate_for_conversation_key_is_the_leading_field():
 # (`event: <id>`) that does route to a specific thread.
 
 
-def _drain_gate_message(tmp_path, monkeypatch, body_text):
+def _account_context(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir(exist_ok=True)
+    return account.resolve_context(
+        repo, {"home.path": str(tmp_path / "home"), "repo.label": "Gurio/brr"},
+    )
+
+
+def _staged_messages(ctx):
+    return message_store.list_messages(
+        message_store.run_messages_dir(ctx, "Gurio/brr", "task-A"))
+
+
+def _drain_gate_message(tmp_path, monkeypatch, body_text, account_context=None):
     brr_dir = tmp_path / ".brr"
     responses = brr_dir / "responses"
     inbox = brr_dir / "inbox"
@@ -2483,8 +2497,11 @@ def _drain_gate_message(tmp_path, monkeypatch, body_text):
     monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
     emit = daemon._WorkerEmit(
         brr_dir=brr_dir, conversation_key="", event_id="evt-A")
-    task = types.SimpleNamespace(id="task-A")
-    n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
+    task = types.SimpleNamespace(id="task-A", meta={"repo_label": "Gurio/brr"})
+    n = daemon._drain_outbox(
+        emit, task, responses, "evt-A", outbox, inbox,
+        account_context=account_context,
+    )
     notices_path = outbox / daemon.NOTICES_FILE
     notices = (
         [json.loads(line) for line in notices_path.read_text().splitlines() if line.strip()]
@@ -2550,6 +2567,50 @@ def test_gate_can_route_thread_defaults_false_for_every_built_in_gate():
         assert daemon._gate_can_route_thread(gate) is False
 
 
+def test_unrouted_thread_is_named_on_the_durable_message_record(
+    tmp_path, monkeypatch,
+):
+    # #1750's own table indicts two surfaces, not one: `notices: []` *and*
+    # the record reading `target_thread: … · status: delivered`. The
+    # advisory fixes the first; without this the second still reads as a
+    # routed delivery. `reason` is the field that survives the DELIVERED
+    # transition untouched, so it is where the difference lands.
+    ctx = _account_context(tmp_path)
+    n, outbox, inbox, notices = _drain_gate_message(
+        tmp_path, monkeypatch,
+        "---\ngate: cloud\nthread: cloud:whatsapp:4915121024376:\n---\nhi\n",
+        account_context=ctx,
+    )
+    assert n == 1
+    records = _staged_messages(ctx)
+    assert len(records) == 1
+    rec = records[0]
+    # The ask is still recorded — that half was never the lie.
+    assert rec["target_thread"] == "cloud:whatsapp:4915121024376:"
+    assert "not routed" in rec["reason"]
+    assert "cloud:whatsapp:4915121024376:" in rec["reason"]
+    # And it survives the receipt, which is the whole point.
+    message_store.transition(
+        rec["_path"], message_store.DELIVERED, gate="cloud", platform_message_id=7,
+    )
+    after = message_store.read(rec["_path"])
+    assert after["status"] == message_store.DELIVERED
+    assert "not routed" in after["reason"]
+
+
+def test_routable_send_leaves_the_message_record_reason_empty(
+    tmp_path, monkeypatch,
+):
+    # The mirror: no thread named, nothing to explain away.
+    ctx = _account_context(tmp_path)
+    _drain_gate_message(
+        tmp_path, monkeypatch, "---\ngate: cloud\n---\nhi\n",
+        account_context=ctx,
+    )
+    # Empty metadata is omitted from the rendered record entirely.
+    assert _staged_messages(ctx)[0].get("reason", "") == ""
+
+
 def test_gate_thread_destination_names_clouds_real_default():
     assert (
         daemon._gate_thread_destination("cloud", {})
@@ -2559,6 +2620,48 @@ def test_gate_thread_destination_names_clouds_real_default():
         daemon._gate_thread_destination("cloud", {"cloud_platform": "whatsapp"})
         == "the account's default whatsapp chat"
     )
+
+
+def test_thread_notice_silent_when_the_send_carries_the_gates_own_addressing(
+    tmp_path, monkeypatch,
+):
+    # Convergence catch on #1750's own fix: the notice's sentence says
+    # *unaddressed*, and `cloud_event_id` (passed straight through by the
+    # `target_meta` walk) makes the send addressed — `cloud.addressed()`
+    # answers True and the delivery resolves through `POST
+    # /v1/daemons/responses` keyed on that event, landing on the event's own
+    # thread. Firing here would have the advisory name "the account's
+    # default telegram chat" for a message that never goes there: a
+    # diagnostic asserting a destination it never checked, which is the
+    # class of polite wrong answer this whole issue exists to end.
+    n, outbox, inbox, notices = _drain_gate_message(
+        tmp_path, monkeypatch,
+        "---\ngate: cloud\ncloud_event_id: srv-evt-9\n"
+        "thread: cloud:whatsapp:4915121024376:\n---\nit's ready\n",
+    )
+    assert n == 1
+    done = protocol.list_done(inbox, "cloud")
+    assert len(done) == 1
+    # The precondition the guard turns on, asserted rather than assumed.
+    assert cloud_gate.addressed(done[0]) is True
+    assert notices == []
+
+
+def test_thread_notice_never_claims_a_delivery_that_has_not_happened(
+    tmp_path, monkeypatch,
+):
+    # The notice is written at synthesis, before the gate's deliver loop has
+    # sent anything, so it may promise queueing and never a completed send.
+    # #1750 *is* "a receipt that claimed a delivery nobody got"; the fix's
+    # own words must not repeat it.
+    _n, _outbox, _inbox, notices = _drain_gate_message(
+        tmp_path, monkeypatch,
+        "---\ngate: cloud\nthread: cloud:whatsapp:4915121024376:\n---\nhi\n",
+    )
+    text = [x for x in notices if x["kind"] == "advisory"][0]["text"]
+    assert "queued for delivery" in text
+    assert "Delivery still happened" not in text
+    assert "it went to" not in text
 
 
 def test_gate_thread_destination_names_the_ambiguity_when_unknown():

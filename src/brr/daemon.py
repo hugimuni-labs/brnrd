@@ -9635,6 +9635,9 @@ def _drain_outbox(
             # and cleans up; it never wakes a thought.
             with _OutboxEntryGuard(outbox_dir, fpath):
                 gate_available = _gate_can_deliver(emit.brr_dir, gate)
+                unrouted_thread = (
+                    _unroutable_thread(gate, fm) if gate_available else ""
+                )
                 message_path, blocked = _stage_outbound(
                     task,
                     account_context,
@@ -9648,9 +9651,17 @@ def _drain_outbox(
                         if gate_available else message_store.UNDELIVERABLE
                     ),
                     reason=(
-                        "" if gate_available
-                        else f"gate {gate!r} is not deliverable on this account"
-                    ),
+                        # #1750: `target_thread` records what was *asked*
+                        # and stays honest doing it; paired with a bare
+                        # `status: delivered` it reads as a routed delivery
+                        # the gate never performed. The reason field is the
+                        # one part of this record that survives the
+                        # DELIVERED transition unchanged, so it is where
+                        # the difference belongs.
+                        _unrouted_thread_reason(gate, unrouted_thread)
+                        if unrouted_thread else ""
+                    ) if gate_available
+                    else f"gate {gate!r} is not deliverable on this account",
                     outbox_dir=outbox_dir,
                 )
                 if blocked:
@@ -10130,6 +10141,49 @@ def _gate_thread_destination(gate: str, fm: dict) -> str:
         return str(destination_fn(fm))
     except Exception:  # noqa: BLE001 - a diagnostic must never crash delivery
         return _UNKNOWN_THREAD_DESTINATION
+
+
+def _unroutable_thread(gate: str, fm: dict) -> str:
+    """The ``thread:`` this message named that *gate* will not honour, or ``""``.
+
+    #1750's single predicate, deliberately read by **two** surfaces: the
+    live `notices` advisory the resident reads inside the run, and the
+    durable message record an operator reads afterwards. The issue's own
+    table is what forces that — it indicts `notices: []` *and*
+    ``target_thread: … · status: delivered`` in the same breath, and a
+    second inlined copy of this test is exactly how those two would come to
+    disagree about whether a send was routed ("a fact stored twice is
+    repaired once").
+
+    Empty when there is no thread to honour, when the gate declares it can
+    route one (:func:`_gate_can_route_thread`), or when the message carries
+    the gate's own addressing (:func:`_gate_addressed`) — an addressed send
+    resolves its destination from that address, so its thread was never
+    ignored and saying otherwise would be a diagnostic asserting a
+    destination it never checked.
+    """
+    thread = str(fm.get("thread") or "").strip()
+    if not thread:
+        return ""
+    if _gate_can_route_thread(gate) or _gate_addressed(gate, fm):
+        return ""
+    return thread
+
+
+def _unrouted_thread_reason(gate: str, thread: str) -> str:
+    """The durable message record's own words for an ignored ``thread:``.
+
+    Survives the ``DELIVERED`` transition (:func:`message_store.transition`
+    leaves ``reason`` alone on a receipted status), so the record reads
+    ``target_thread: … · status: delivered · reason: … not routed …``
+    instead of the bare pair #1750 opens with, which reads as a routed
+    delivery and is not one.
+    """
+    return (
+        f"thread {thread!r} was not routed — gate {gate!r} cannot address a "
+        f"thread on an unaddressed send; it went to that gate's own default "
+        f"destination"
+    )
 
 
 def _configured_gate_names(brr_dir: Path) -> list[str]:
@@ -10615,8 +10669,8 @@ def _deliver_out_of_bound(
             lifetime="run",
         )
         return False
-    thread = str(fm.get("thread") or "").strip()
-    if thread and not _gate_can_route_thread(gate):
+    thread = _unroutable_thread(gate, fm)
+    if thread:
         # #1750: "recorded, rendered, and inert" — `thread:` used to be
         # threaded into the message-store record's `target_thread` field
         # (the reply-drain call site above) and then never consulted by any
@@ -10629,17 +10683,32 @@ def _deliver_out_of_bound(
         # thread it answers (the addressed reply resolves through the
         # inbound event's own recorded chat/platform, not this key) — it is
         # the alternative this notice points at, not an assumption.
+        #
+        # `not _gate_addressed(...)` is load-bearing, not belt-and-braces:
+        # this notice's own sentence says *unaddressed*, and a message that
+        # carries the gate's own addressing (cloud's `cloud_event_id`,
+        # passed straight through by the `target_meta` walk below) is not
+        # that. Such a send resolves its destination from the addressed
+        # event — `cloud.addressed()` -> `POST /v1/daemons/responses` — so
+        # naming the account's default chat there would be a diagnostic
+        # asserting a destination it never checked, which is the exact
+        # class of polite wrong answer #1750 exists to end.
         _record_outbox_notice(
             outbox_dir,
             f"gate {gate!r}: thread {thread!r} was requested but this gate "
             f"cannot route an unaddressed send to a specific thread — it "
-            f"went to {_gate_thread_destination(gate, fm)} instead. "
-            f"Delivery still happened; only the routing was ignored. To "
-            f"reach a specific pending conversation, reply with "
-            f"`event: <id>` instead — that lane routes to the thread it "
-            f"answers.",
+            f"goes to {_gate_thread_destination(gate, fm)} instead. The "
+            f"message is queued for delivery unchanged; only the routing "
+            f"was ignored. To reach a specific pending conversation, reply "
+            f"with `event: <id>` instead — that lane routes to the thread "
+            f"it answers.",
             # The directive *was* carried out — this is FYI on how, not a
-            # failure; a wrong kind here renders as one (#1693).
+            # failure; a wrong kind here renders as one (#1693). Tense is
+            # deliberate: this runs at synthesis, before the gate's own
+            # deliver loop has sent anything, so a past-tense "delivery
+            # happened" would be the same unearned receipt the issue is
+            # about. The sibling refusals above can say "was NOT delivered"
+            # because a refusal *is* synchronous; this one cannot.
             kind="advisory",
             lifetime="run",
         )
