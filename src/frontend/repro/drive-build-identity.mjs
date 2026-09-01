@@ -14,7 +14,9 @@ async function waitForServer(url, tries = 90) {
 		try {
 			const res = await fetch(url);
 			if (res.ok || res.status === 404) return;
-		} catch {}
+		} catch {
+			/* not up yet */
+		}
 		await delay(500);
 	}
 	throw new Error(`dev server never came up at ${url}`);
