@@ -74,18 +74,21 @@ test('no standalone per-lane WithheldNotice repeats the page-head banner', () =>
 	);
 });
 
-// The derived needs-you strip already receives `withheld` and folds it
-// into `BackchannelQueue`'s empty state — a standalone banner inside the
-// warp section would be a second repeat of the same fact for that lane
-// alone (#1281's rule, carried through the graph rewrite).
-test('the warp section feeds the queue its withheld lane instead of also rendering a standalone notice', () => {
+// The PR-review half of the old needs-you strip (and the withheld/consent
+// notion that rode along with it — GitHub publish consent, not a config-
+// approval concept) retired 2026-09-01: GitHub already lists open PRs, so
+// duplicating that read poorly on a phone. What survives is config-change
+// approvals, which carry no withheld lane of their own (the daemon writes
+// that row directly, no publish/mirror step — configRequests.ts's own
+// comment says so) — so no standalone WithheldNotice belongs in the warp
+// section any more than it did before.
+test('no standalone WithheldNotice renders inside the warp section', () => {
 	const src = source();
 	const warpSection = src.match(
 		/aria-labelledby="warp-heading"[\s\S]*?aria-labelledby="cloth-heading"/
 	);
 	ok(warpSection, 'the warp section exists');
 	const body = warpSection![0];
-	ok(/withheld=\{prReviewQueueWithheld\}/.test(body), 'the queue still receives the withheld lane');
 	ok(!/<WithheldNotice/.test(body), 'no standalone WithheldNotice remains inside the warp section');
 });
 

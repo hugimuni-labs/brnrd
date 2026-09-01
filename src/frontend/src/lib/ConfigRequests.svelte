@@ -8,27 +8,39 @@
 	interface Props {
 		requests: ConfigChangeRequestItem[];
 		now: number;
+		error?: string | null;
 	}
 
-	let { requests, now }: Props = $props();
+	let { requests, now, error = null }: Props = $props();
 
 	// A pending request is always "needs your action" — frost, the same
-	// hue PRReviewQueue uses for a draft PR waiting on the author, not
+	// hue PRReviewQueue used for a draft PR waiting on the author, not
 	// amber (that's reserved for a healthy/settled state) or void
 	// (reserved for an actual exhaustion/critical signal).
 	const PENDING_COLOR = STATUS_WARN;
 </script>
 
-<div class="panel p-4">
+<!-- The dashboard's one surviving "needs you" surface (2026-09-01): the PR
+     review half retired (GitHub already lists open PRs; duplicating that
+     read poorly on a phone) and the authored half moved into the warp
+     earlier — what's left is config-change requests, the one population
+     with no other list anywhere in the app (the per-request
+     /config-approve/[id] page answers "decide this one", never "what's
+     waiting"). The caller (Dashboard.svelte) only mounts this component
+     when there is something to show — a pending request, or a fetch
+     error — so "nothing pending" never needs a sentence of its own: an
+     empty, resolved, error-free queue is absent, not a panel announcing
+     absence. -->
+<div class="panel mt-2 p-4">
 	<div class="mb-3 flex items-center justify-between text-sm">
 		<span class="font-mono font-medium tracking-wide text-amber-200 uppercase"
-			>config-change requests</span
+			>config approvals</span
 		>
 	</div>
-	{#if requests.length === 0}
-		<p class="text-sm text-ink-quiet">No pending settings requests from any daemon.</p>
+	{#if error}
+		<p class="text-sm text-red-400">{error}</p>
 	{:else}
-		<ul class="space-y-2">
+		<ul class="space-y-1.5">
 			{#each requests as req (req.id)}
 				<li
 					class="subpanel px-2.5 py-2 text-xs"
