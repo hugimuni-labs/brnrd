@@ -2918,7 +2918,20 @@ def _join_prompt_parts(
     """
     # The kernel leads.  Everything after it is reference the wake may consult;
     # the kernel is the wake's own first move (``bootscore.format_kernel``).
-    parts = [kernel, preamble] if kernel else [preamble]
+    # Falsy entries dropped, not just `None`-checked: `preamble` renders ""
+    # when every one of its sub-blocks mounted out of the prose (`_take` in
+    # `build_daemon_prompt` — the ordinary case for a mounted daemon wake,
+    # since run.md/weave.md/daemon-substrate.md/portal-verb-grammar are all
+    # normally present and so all normally mount). An unconditional
+    # `[kernel, preamble]` still gave that empty string a slot in `parts`,
+    # so `"\n\n".join` emitted a *second* blank-line pair around nothing —
+    # every mounted wake in this repo carried a spurious extra `"\n\n"`
+    # between the kernel and whatever came next, silently, because nothing
+    # checked the separator count (#1753: found while teaching `replay` to
+    # reconstitute a mounted wake byte-for-byte — its offset walk assumes
+    # exactly one glue between consecutive non-empty blocks and caught the
+    # drift the first time anything actually counted the bytes).
+    parts = [p for p in (kernel, preamble) if p]
     if inject_blocks:
         # The scored builder supplies this pair from one source read.  The
         # ordinary path stays lazy, but a replay/inspection run must not
@@ -2936,7 +2949,10 @@ def _join_prompt_parts(
                 )
             )
     if diffense:
-        pack_step = read_prompt("diffense.md", repo_root)
+        # `.strip()` to match `_collect_toggle_contracts`'s manifest byte count
+        # (#1753 fork 3: the manifest measured this block stripped while this
+        # line appended it raw — a confirmed 1-byte drift, trailing newline).
+        pack_step = read_prompt("diffense.md", repo_root).strip()
         if pack_step:
             parts.append(pack_step)
     if inject_blocks and not strand:
@@ -3061,14 +3077,24 @@ def _collect_preamble_contracts(
     *,
     is_strand: bool = False,
     is_daemon: bool = True,
-    has_diffense: bool = False,
-    has_introspection: bool = False,
 ) -> list[Any]:
-    """Compute ContractEntry items for the preamble + substrate + config-toggle blocks.
+    """Compute ContractEntry items for the preamble + substrate blocks.
 
-    These are the blocks that live *outside* ``_build_injected_blocks`` — the
-    prompt frame before and after the inject stack.  Returns the list in the
-    order they appear in a rendered prompt.
+    These are the blocks that live *before* ``_build_injected_blocks`` in a
+    rendered prompt (plus the Run Context Bundle trailer, always last).
+    Returns the list in the order they appear in a rendered prompt.
+
+    Does **not** include the ``diffense`` / ``introspection`` config-toggle
+    blocks — see :func:`_collect_toggle_contracts`. They used to be built
+    here, between the portal-verb-grammar entry and the trailer, which put
+    them *before* the inject stack in every manifest this function produced.
+    ``_join_prompt_parts`` has never rendered them there: both blocks are
+    appended after the inject stack, immediately before the trailer (#1753).
+    Splitting them into their own function, called by each composer after
+    its own inject-stack contracts are built, makes the manifest's order
+    match the render's order at the source instead of compensating for the
+    mismatch in the reader (see :func:`replay._true_render_order`, which
+    still exists for the captures written before this split).
     """
     from .bootscore import (
         ContractEntry,
@@ -3165,23 +3191,6 @@ def _collect_preamble_contracts(
             bytes=_rendered_bytes(portal_grammar_text),
         ))
 
-    # Config-toggle blocks — present only when the toggle is on *and* the
-    # template exists.
-    entries.append(_file_entry(
-        "diffense.md",
-        block_key="diffense",
-        label="diffense review-pack prompt",
-        authority=AUTHORITY_CONFIG,
-        present=has_diffense,
-    ))
-    entries.append(_file_entry(
-        "introspection.md",
-        block_key="introspection",
-        label="Introspection dev-mode invitation",
-        authority=AUTHORITY_CONFIG,
-        present=has_introspection,
-    ))
-
     # Run Context Bundle — daemon-live runtime trailer.  ``bytes`` stays None
     # here: this function is also the CLI's path, where no bundle is rendered
     # and its size is genuinely *unknown*, not zero.  The daemon stamps the
@@ -3198,6 +3207,59 @@ def _collect_preamble_contracts(
             present=is_daemon,
         ))
 
+    return entries
+
+
+def _collect_toggle_contracts(
+    repo_root: Path,
+    *,
+    has_diffense: bool = False,
+    has_introspection: bool = False,
+) -> list[Any]:
+    """ContractEntry items for the ``diffense`` / ``introspection`` config-toggle blocks.
+
+    Split out of :func:`_collect_preamble_contracts` (#1753) so a caller can
+    place them where ``_join_prompt_parts`` actually renders them: *after*
+    the inject stack, immediately before the Run Context Bundle trailer —
+    never inline with the preamble. Present only when the toggle is on
+    *and* the template exists, same as before the split.
+    """
+    from .bootscore import ContractEntry, OWNER_PRODUCT, AUTHORITY_CONFIG
+
+    entries: list[Any] = []
+
+    def _file_entry(
+        name: str, *, block_key: str, label: str, authority: str, present: bool | None = None
+    ) -> Any:
+        path = effective_prompt_path(name, repo_root)
+        exists = path.exists()
+        is_present = exists if present is None else (present and exists)
+        text = read_prompt(name, repo_root).strip() if is_present else ""
+        return ContractEntry(
+            block_key=block_key,
+            label=label,
+            owner=OWNER_PRODUCT,
+            authority=authority,
+            freshness=_mtime_iso(path),
+            location=str(path),
+            present=is_present,
+            bytes=_rendered_bytes(text),
+        )
+
+    entries.append(_file_entry(
+        "diffense.md",
+        block_key="diffense",
+        label="diffense review-pack prompt",
+        authority=AUTHORITY_CONFIG,
+        present=has_diffense,
+    ))
+    entries.append(_file_entry(
+        "introspection.md",
+        block_key="introspection",
+        label="Introspection dev-mode invitation",
+        authority=AUTHORITY_CONFIG,
+        present=has_introspection,
+    ))
     return entries
 
 
@@ -3594,13 +3656,11 @@ def build_boot_score(
     effective_root = repo_root if repo_root is not None else Path.cwd()
 
     if contracts is None:
-        # Preamble + substrate + toggle blocks
+        # Preamble + substrate blocks
         preamble_contracts = _collect_preamble_contracts(
             effective_root,
             is_strand=is_strand,
             is_daemon=is_daemon,
-            has_diffense=has_diffense,
-            has_introspection=has_introspection,
         )
 
         # Inject-stack blocks (skipped for strands, except pitfalls — #1185)
@@ -3618,11 +3678,17 @@ def build_boot_score(
         if injected_whole is None:
             injected_whole = block_whole
 
-        # Ordered: preamble blocks first, then inject stack (mirrors prompt
-        # order). The runtime trailer comes after the inject stack.
+        # Ordered: preamble blocks, then inject stack, then the diffense/
+        # introspection toggles, then the runtime trailer — mirrors
+        # `_join_prompt_parts`'s actual render order (#1753; see
+        # `_collect_toggle_contracts`'s docstring for why the toggles are
+        # collected separately rather than inline with the preamble).
         pre_inject = [c for c in preamble_contracts if c.block_key != "run-context-bundle"]
         runtime_entries = [c for c in preamble_contracts if c.block_key == "run-context-bundle"]
-        all_contracts = pre_inject + inject_contracts + runtime_entries
+        toggle_contracts = _collect_toggle_contracts(
+            effective_root, has_diffense=has_diffense, has_introspection=has_introspection,
+        )
+        all_contracts = pre_inject + inject_contracts + toggle_contracts + runtime_entries
     else:
         all_contracts = contracts
         if injected_whole is None:
@@ -3832,11 +3898,14 @@ def build_daemon_prompt_with_score(
         repo_root,
         is_strand=strand,
         is_daemon=True,
-        has_diffense=has_diff,
-        has_introspection=bool(introspection_block),
     )
     pre_inject = [c for c in preamble_contracts if c.block_key != "run-context-bundle"]
     runtime_entries = [c for c in preamble_contracts if c.block_key == "run-context-bundle"]
+    # After the inject stack, before the trailer — matches
+    # `_join_prompt_parts`'s actual render order (#1753).
+    toggle_contracts = _collect_toggle_contracts(
+        repo_root, has_diffense=has_diff, has_introspection=bool(introspection_block),
+    )
 
     from .bootscore import (
         ContractEntry, OWNER_DAEMON_LIVE, AUTHORITY_RUNTIME, replace_bytes,
@@ -3853,7 +3922,7 @@ def build_daemon_prompt_with_score(
         location="computed",
         present=True,
     )
-    contracts = [kernel_entry] + pre_inject + inject_contracts + runtime_entries
+    contracts = [kernel_entry] + pre_inject + inject_contracts + toggle_contracts + runtime_entries
 
     # Which blocks *could* be mounted as seeded perceptions rather than prose:
     # exactly the ones backed by a real file. A block at ``location == "computed"``
@@ -4316,7 +4385,15 @@ def _preamble_parts(repo_root: Path, *, strand: bool) -> list[tuple[str, str]]:
     string is precisely what made that impossible.
     """
     key = "strand-preamble" if strand else "run-preamble"
-    parts = [(key, read_prompt("strand.md" if strand else "run.md", repo_root))]
+    # `.strip()` here too (not just the riders below): `_glue_preamble`'s own
+    # `.rstrip()` on every join absorbed this part's trailing whitespace when
+    # the block stayed in prose, so the drift was invisible — but `_take`
+    # (mount) reads this exact tuple *before* `_glue_preamble` ever runs, so a
+    # mounted wake stored the raw, unstripped text in `mount_sink` while
+    # `_collect_preamble_contracts` recorded the stripped byte count for the
+    # same block (#1753 fork 3: the same "manifest strips, render doesn't"
+    # drift class as the diffense fix above, one property over).
+    parts = [(key, read_prompt("strand.md" if strand else "run.md", repo_root).strip())]
     # Order mirrors read/authority: how you write (weave), you having written
     # (register — resident only), then who drives (daemon-substrate), then the
     # verb grammar that section's own frontmatter table only gestures at. Kept

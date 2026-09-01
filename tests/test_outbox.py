@@ -2798,6 +2798,28 @@ def test_write_prompt_file_creates_file_in_run_dir(tmp_path):
     assert path.read_text(encoding="utf-8") == prompt_text
 
 
+def test_write_mounted_blocks_persists_the_sidecar_beside_the_prompt(tmp_path):
+    """write_mounted_blocks (#1753) persists the exact mount_sink dict a
+    mounted wake diverted out of its prose — the sidecar `brnrd prompts
+    replay` needs to reconstitute a mounted run's full assembly."""
+    import json
+
+    from brr import run_context
+    from brr.run import Run
+
+    brr_dir = tmp_path / ".brr"
+    task = Run(id="task-mounted-1", event_id="evt-1", body="fix it")
+    mount_sink = {"run-preamble": "You wake mid-project...", "weave": "## The weave..."}
+
+    path = run_context.write_mounted_blocks(brr_dir, task, mount_sink)
+
+    assert path is not None
+    assert path == brr_dir / "runs" / "task-mounted-1" / "prompt-mounted.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["run_id"] == "task-mounted-1"
+    assert payload["blocks"] == mount_sink
+
+
 class TestTerminalStreamDedupe:
     """The static-dispatch dedupe (ceremony cut 2026-07-16): a terminal
     stream that exactly duplicates a reply already delivered to the waking

@@ -1076,10 +1076,11 @@ def build_parser() -> argparse.ArgumentParser:
              "register.md, daemon-substrate.md, identity-core.md, "
              "diffense.md, introspection.md, the portals.md verb-grammar "
              "extract); every other byte of the captured wake is held "
-             "identical. Refuses rather than guessing when the captured "
-             "run's block layout cannot be verified (e.g. a boot.mount "
-             "run, whose file-backed blocks never entered prompt.md's own "
-             "text).")
+             "identical. On a boot.mount run, reconstitutes the full "
+             "assembly from prompt.md plus its prompt-mounted.json sidecar "
+             "before substituting (#1753). Refuses rather than guessing "
+             "when the captured run's block layout cannot be verified — "
+             "including a mounted run captured before the sidecar existed.")
     p.add_argument("run_id", help="run id to replay (must have a captured prompt.md + boot-score.json)")
     p.add_argument(
         "--prompts", required=True, metavar="DIR",
@@ -1610,11 +1611,12 @@ def cmd_prompts_wake(args):
 def cmd_prompts_replay(args):
     """``brnrd replay <run-id> --prompts <dir> [--block NAME]... [--json]``.
 
-    w-56 rung 1 — rebuild a captured run's ``prompt.md`` with its
-    file-backed blocks substituted from ``--prompts <dir>``, print the
-    substitution roster and diff, hold every other byte identical. See
-    :mod:`brr.replay` for the locate mechanism and why it refuses rather
-    than guesses on a run it cannot verify.
+    w-56 rung 1 — rebuild a captured run's assembled prompt (reconstituted
+    from ``prompt.md`` plus its ``prompt-mounted.json`` sidecar on a
+    ``boot.mount`` run, #1753) with its file-backed blocks substituted from
+    ``--prompts <dir>``, print the substitution roster and diff, hold every
+    other byte identical. See :mod:`brr.replay` for the locate mechanism
+    and why it refuses rather than guesses on a run it cannot verify.
     """
     import json
     import sys
