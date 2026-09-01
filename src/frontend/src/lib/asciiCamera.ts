@@ -94,6 +94,30 @@ function garageReadings(graph: RoomGraph): string[] {
 	});
 }
 
+/** Fit whole readings into `budget` chars, joined by ` · `. A composed row
+ *  of independent instruments (each gauge is its own reading, not a
+ *  fragment of one text) must never show half a reading — a reading that
+ *  would need a mid-name cut is dropped whole instead, and the row says how
+ *  many it dropped (`+N`) rather than leaving the reader to notice a gauge
+ *  died mid-word. */
+function fitReadings(readings: string[], budget: number): string {
+	if (budget <= 0 || readings.length === 0) return '';
+	const kept: string[] = [];
+	let used = 0;
+	for (const r of readings) {
+		const next = used + (kept.length > 0 ? 3 : 0) + r.length;
+		if (next > budget) break;
+		used = next;
+		kept.push(r);
+	}
+	const dropped = readings.length - kept.length;
+	if (dropped === 0) return kept.join(' · ');
+	const suffix = `+${dropped}`;
+	if (kept.length === 0) return suffix.length <= budget ? suffix : '';
+	const withSuffix = `${kept.join(' · ')} ${suffix}`;
+	return withSuffix.length <= budget ? withSuffix : kept.join(' · ');
+}
+
 // chars per world unit: island scale is the readable default; atlas
 // compresses the same coordinates — never a different geography.
 const SCALE: Record<CameraLevel, { x: number; y: number }> = {
@@ -106,18 +130,60 @@ const SCALE: Record<CameraLevel, { x: number; y: number }> = {
 function clip(text: string, max: number): string {
 	if (max <= 0) return '';
 	if (text.length <= max) return text;
-	return max <= 1 ? text.slice(0, max) : text.slice(0, max - 1) + '…';
+	// A cut with nowhere left for the mark used to fall back to a bare
+	// character — a truncation indistinguishable from the real, short value
+	// it happened to match. One rule for this whole board: a cut is either
+	// invisible (nothing shown, `max <= 0`) or marked; it is never a lie
+	// wearing the shape of a complete answer.
+	return max === 1 ? '…' : text.slice(0, max - 1) + '…';
 }
 
-/** Middle-elide: keeps the start and the end, which for the long labels the
- *  room actually meets (`evt-1787…-coep.attachments`) are the two halves
- *  that identify it. */
-function clipMid(text: string, max: number): string {
+/** Fold a (possibly multi-segment) label to fit `max` chars without ever
+ *  cutting a path segment in half. A directory node's label can itself be
+ *  several segments when the trie collapses a single-child chain into one
+ *  node (`frontend/src/routes/ascii` as one label) — `clipMid`'s head+tail
+ *  elision used to fuse two half-cut segments around the mark
+ *  (`frontend/sr…outes/ascii`), which reads as a different, plausible,
+ *  non-existent directory rather than as a folded one. Whole segments only:
+ *  drop leading segments, marked with a leading `…/`, until the tail fits.
+ *  A single segment has no boundary to fold at, so it falls back to a
+ *  marked tail clip — that clip only ever removes a definite ending, never
+ *  fuses two fragments into a plausible fake, so the character-level cut is
+ *  honest there in a way `clipMid` is not for a multi-segment path. */
+function foldDirLabel(label: string, max: number): string {
+	if (label.length <= max) return label;
+	const segs = label.split('/').filter(Boolean);
+	if (segs.length <= 1) return clip(label, max);
+	for (let drop = 1; drop < segs.length; drop++) {
+		const candidate = '…/' + segs.slice(drop).join('/');
+		if (candidate.length <= max) return candidate;
+	}
+	// Even the last segment alone does not fit behind the fold marker — the
+	// fragment still reads as a fragment (leading `…/`), never as a whole
+	// other path.
+	return '…/' + clip(segs[segs.length - 1], Math.max(0, max - 2));
+}
+
+/** Clip token-structured text (a shell command, chiefly) at a whitespace
+ *  boundary, never inside a token: a command truncated mid-token can read
+ *  as a different, syntactically plausible command that would actually run
+ *  (`2>/dev/null` chopped to `2>/de` redirects to a file named `de` instead
+ *  of discarding stderr). Drops whole trailing tokens until what remains
+ *  fits behind the mark; a single token wider than the whole budget falls
+ *  back to a character clip of the full text, since there is no boundary
+ *  inside one token to fold at. */
+function clipTokens(text: string, max: number): string {
 	if (text.length <= max) return text;
 	if (max <= 1) return clip(text, max);
-	const head = Math.ceil((max - 1) / 2);
-	const tail = max - 1 - head;
-	return text.slice(0, head) + '…' + (tail > 0 ? text.slice(-tail) : '');
+	const budget = max - 1; // reserve one column for the mark
+	const parts = text.split(/(\s+)/); // odd indices are the whitespace runs
+	let out = '';
+	for (const part of parts) {
+		if (out.length + part.length > budget) break;
+		out += part;
+	}
+	out = out.replace(/\s+$/, '');
+	return out.length > 0 ? out + '…' : clip(text, max);
 }
 
 function minutesLabel(iso: string | null, now: number | undefined): string | null {
@@ -209,6 +275,29 @@ class Canvas {
 	}
 	text(x: number, y: number, s: string) {
 		for (let i = 0; i < s.length; i++) this.put(x + i, y, s[i]);
+	}
+	/** Blank a whole row back to open ground. `put`/`text` only ever write
+	 *  the cells they are given — they never erase what an earlier pass left
+	 *  in the cells *after* them. That is fine for two writers who never
+	 *  share a row, and a lie for the header and bearings strips: both are
+	 *  the row's *sole authority* — painted once, meant to be the entire
+	 *  content of that row — but a node can legitimately be laid out at
+	 *  world coordinates that map to row 0 or the last row too, and it
+	 *  paints first. A shorter, correctly marked header/bearings string then
+	 *  overwrites only its own prefix, leaving that earlier label's tail
+	 *  sitting directly after the mark with no separator — one row, two
+	 *  writers, and the second one's "…" reads as the end of a sentence that
+	 *  isn't (found live, four strands out: `↙ a the …a…`, the trailing `a…`
+	 *  a fused leftover of a camp's own branch label, not part of the
+	 *  bearing chip it appears fused to). Call before a strip's authoritative
+	 *  write so it owns the whole row it claims, not just the prefix it
+	 *  writes. */
+	clearRow(y: number) {
+		if (y < 0 || y >= this.rows.length) return;
+		for (let x = 0; x < this.width; x++) {
+			this.rows[y][x] = ' ';
+			this.claimed[y][x] = false;
+		}
 	}
 	sea() {
 		// Thinned 2026-08-31 (his /daily read: the noise dots outnumber the
@@ -307,7 +396,7 @@ function nodeText(
 			return `⌂ ${level === 'atlas' ? node.label : short}`;
 		}
 		case 'directory':
-			return `${clipMid(node.label, MAX_DIR_LABEL_CHARS - 1)}/`;
+			return `${foldDirLabel(node.label, MAX_DIR_LABEL_CHARS - 1)}/`;
 		case 'file':
 			return `· ${node.label}`;
 		case 'camp': {
@@ -554,10 +643,6 @@ function skyBand(
 	const clawBusy = (opts.lifts?.length ?? 0) > 0;
 	const claw = clawBusy ? 'claw ┈≻ out' : 'claw ┊';
 	const keelBits = [watchBit, nextIn ? `T ${nextIn}` : null, claw].filter(Boolean).join(' · ');
-	const fuel = garageReadings(graph)
-		.slice(0, 2)
-		.map((r) => `⛁ ${r}`)
-		.join(' · ');
 
 	// The vessel, centered-east (his read: "sits centered/east"). Nine
 	// cells of hull; the face is the bridge. `◁╌╌ ... ├╌╌▷` are the two
@@ -570,10 +655,31 @@ function skyBand(
 		Math.max(desk.length + 8, Math.floor(cols * 0.55) - Math.floor(hullW / 2)),
 		Math.max(0, cols - hullW - 2)
 	);
+	// Whole gauges only, fit to the row's actual remaining width — this used
+	// to compose at a fixed top-2 width and let the final `clip(r1, cols)`
+	// cut whatever didn't fit, which on a narrower field died mid-gauge-name
+	// (`≋ codex…`). A gauge that will not fit is dropped whole, and the drop
+	// is said (`+1`) rather than left for the reader to notice on their own;
+	// the full readings (with reset clocks) still live on the condition line
+	// below the board regardless of what the spine can show.
+	const fuel = fitReadings(
+		garageReadings(graph)
+			.slice(0, 2)
+			.map((r) => `⛁ ${r}`),
+		Math.max(0, cols - hullL - HULL_TOP.length - 3)
+	);
 	const r1 = ' '.repeat(hullL) + HULL_TOP + (fuel ? '   ' + fuel : '');
 	const port = ' ' + desk + ' ◁╌' + '╌'.repeat(Math.max(0, hullL - desk.length - 5)) + '╌';
-	const readout = clipMid(hullReadout, Math.max(10, cols - hullL - hullW - 6));
-	const r2 = port.slice(0, hullL) + HULL_MID + '╌╌▷ ' + readout;
+	// Token-boundary, not middle-elide: `hullReadout` is a shell command, and
+	// `clipMid`'s head+tail fusion used to chop `2>/dev/null` to `2>/de` —
+	// still marked, but a different, syntactically plausible command (a
+	// redirect to a file named `de`) rather than an honestly folded one.
+	const readout = clipTokens(hullReadout, Math.max(10, cols - hullL - hullW - 6));
+	// `clip`, not a raw `.slice`: `hullL` is only guaranteed >= desk.length+8
+	// in the common case — the outer `Math.min` can clamp it below that on a
+	// genuinely narrow board, and a bare `.slice(0, hullL)` would cut into
+	// `desk`'s own content with no mark at all.
+	const r2 = clip(port, hullL) + HULL_MID + '╌╌▷ ' + readout;
 	const r3 = ' '.repeat(hullL) + HULL_KEEL + (keelBits ? '   ' + keelBits : '');
 	return [clip(r1, cols), clip(r2, cols), clip(r3, cols)];
 }
@@ -908,6 +1014,11 @@ export function renderWorld(
 	const strandsOut = graph.actors.filter((a) => a.strand).length;
 	if (strandsOut > 0) weather.push(`${strandsOut} strand${strandsOut > 1 ? 's' : ''} out`);
 	if (graph.stale) weather.push('wire stale');
+	// This row is the header's alone (see `clearRow`'s own note): a node
+	// whose world coordinate happens to map to screen row 0 painted first,
+	// during §3, and would otherwise leave a tail sitting past the title or
+	// the weather line with nothing to say it isn't part of either.
+	canvas.clearRow(0);
 	canvas.text(2, 0, cam.level === 'atlas' ? '· · ~ THE ATLAS ~ · ·' : '· · ~ THE SEA ~ · ·');
 	const right = weather.join(' · ');
 	if (right) {
@@ -932,7 +1043,13 @@ export function renderWorld(
 		if (graph.pendingLetters > 0) bits.push(`◇×${graph.pendingLetters}`);
 		offFrame.unshift(bits.join(' · '));
 	}
-	if (offFrame.length > 0) canvas.text(2, cam.rows - 1, clip(offFrame.join('   '), cam.cols - 4));
+	if (offFrame.length > 0) {
+		// Same authority claim as the header (see `clearRow`): a node laid
+		// out at the frame's last row paints first, in §3, and the bearings
+		// strip must own the whole row it writes into, not just the prefix.
+		canvas.clearRow(cam.rows - 1);
+		canvas.text(2, cam.rows - 1, clip(offFrame.join('   '), cam.cols - 4));
+	}
 
 	canvas.sea();
 	const out = [...skyBand(graph, opts, cam.cols, now, cam.level), ...canvas.toLines()];

@@ -1,9 +1,22 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { compileRoomGraph, fileFromDetail, type TrailStep } from './roomGraph.ts';
-import { campDirId, campId, compileTopology, islandRootId, routeBetween } from './roomTopology.ts';
-import { emptyAtlas, layoutRoom, terminalRequest, type AtlasMemory } from './roomLayout.ts';
+import { compileRoomGraph, fileFromDetail, type RoomGraph, type TrailStep } from './roomGraph.ts';
+import {
+	campDirId,
+	campId,
+	compileTopology,
+	islandRootId,
+	routeBetween,
+	type RoomTopology
+} from './roomTopology.ts';
+import {
+	emptyAtlas,
+	layoutRoom,
+	terminalRequest,
+	type AtlasMemory,
+	type RoomLayout
+} from './roomLayout.ts';
 import {
 	CAMERA_LINE_HEIGHT_FALLBACK_PX,
 	LEGEND,
@@ -741,5 +754,273 @@ test('the header weather line elides rather than being cut by the canvas edge', 
 	assert.ok(
 		head.includes('…') || head.endsWith('wire stale'),
 		`a cut header must say it was cut: ${JSON.stringify(head)}`
+	);
+});
+
+test('a truncation with room for exactly one column still carries the mark, never a bare unmarked character (#clip-mark)', () => {
+	// `clip()`'s own `max <= 1` branch used to fall back to `text.slice(0,
+	// max)` — a bare character with no `…`, indistinguishable from a real,
+	// short value it happened to match. This is the site the board's own
+	// comment ("Every other truncation here says `…`") stakes a claim on;
+	// the claim only holds if every `clip()` call honours it, including
+	// this one-column edge.
+	const graph = compileRoomGraph(
+		{ generated_at: 't', runs: [], stale: false, reported_at: 't', spawn_max_concurrent: 3 },
+		null,
+		undefined
+	);
+	const topo = compileTopology(graph);
+	const { layout } = layoutRoom(topo, emptyAtlas());
+	// Home is always off-frame at this center; `cols - 4 === 1` is the
+	// bearings strip's own budget formula, landing exactly on the edge case.
+	const cam: Camera = { center: { x: 1000, y: 1000 }, cols: 5, rows: 6, level: 'island' };
+	const board = renderWorld(topo, layout, graph, cam, {});
+	// Structural index, not content match: with only one column of room the
+	// content itself is gone, leaving only the mark — nothing left to grep
+	// for by name.
+	const bearingsRow = board.split('\n')[3 + cam.rows - 1] ?? '';
+	assert.equal(
+		bearingsRow.trim(),
+		'…',
+		`one column of room must show the mark alone, never a bare character: ${JSON.stringify(bearingsRow)}`
+	);
+});
+
+// ── the grid that cannot lie: no truncation may read as something whole ────
+//
+// design goal, driven live on prod (2026-08-31 22:50Z): a cut on this grid
+// may never produce a string that reads as a complete, valid thing of its
+// own kind. Four concrete defects measured, four guards below.
+
+test('a directory label with more than one path segment folds by segment, never mid-segment (#foldDirLabel)', () => {
+	// The measured defect, reproduced exactly: `clipMid`'s head+tail elision
+	// treats a path like an opaque id, cutting mid-word on both sides of the
+	// mark. `frontend/sr…outes/ascii` reads as a different, plausible,
+	// non-existent directory — the reader cannot tell it apart from a real
+	// one. `roomTopology.ts`'s trie (`ensureDirPath`, ~L146) gives each path
+	// segment its own node today, so a multi-segment label isn't reachable
+	// through the live compiler — but the renderer must not lie about a
+	// label it's handed regardless of how it was minted, so this fixture
+	// hands `renderWorld` the shape directly.
+	const topo = {
+		nodes: {
+			'repo:R': { id: 'repo:R', kind: 'repo-root', label: 'R' },
+			dir: { id: 'dir', kind: 'directory', label: 'frontend/src/routes/ascii', parentId: 'repo:R' }
+		},
+		edges: [],
+		actorPlaces: {},
+		islandRoots: ['repo:R'],
+		homeId: 'home:'
+	} as unknown as RoomTopology;
+	const layout = {
+		nodes: { 'repo:R': { x: 0, y: 0 }, dir: { x: 4, y: 1 } },
+		edgeRoutes: {},
+		regions: {},
+		districts: {},
+		worldBounds: { minX: -5, minY: -5, maxX: 10, maxY: 10 }
+	} as unknown as RoomLayout;
+	const graph = {
+		islands: [],
+		actors: [],
+		cloth: [],
+		pendingLetters: 0,
+		slots: { active: 0, max: null },
+		clockwork: [],
+		garage: [],
+		watch: [],
+		stale: false
+	} as unknown as RoomGraph;
+	const cam: Camera = { center: { x: 4, y: 1 }, cols: 40, rows: 10, level: 'island' };
+	const board = renderWorld(topo, layout, graph, cam);
+	assert.match(board, /…\/src\/routes\/ascii\//u, `expected a whole-segment fold, got board:\n${board}`);
+	assert.doesNotMatch(
+		board,
+		/sr…outes/u,
+		'must never fuse two half-cut segments around the mark into a fake segment'
+	);
+});
+
+test('a shell command clips at a token boundary, never inside one, on the hull readout (#clipTokens)', () => {
+	// The measured defect: `clipMid` chopped `2>/dev/null` to `2>/de` —
+	// still marked, but a different, syntactically plausible command (a
+	// redirect to a file named `de`) rather than a folded one.
+	const graph = compileRoomGraph(
+		{
+			generated_at: '2026-08-27T10:20:00Z',
+			runs: [],
+			stale: false,
+			reported_at: '2026-08-27T10:20:00Z',
+			spawn_max_concurrent: 3
+		},
+		null,
+		undefined
+	);
+	const topo = compileTopology(graph);
+	const { layout } = layoutRoom(topo, emptyAtlas());
+	const fullCommand =
+		'mutate · ls src/routes/ && echo hi src/routes/ascii src/routes/daily 2>/dev/null';
+	const hullReadout = `$ ${fullCommand}`;
+	const terminal = [
+		{ at: '2026-08-27T10:00:00Z', act: 'mutate', detail: 'ls src/routes/ && echo hi src/routes/ascii src/routes/daily 2>/dev/null' }
+	];
+	let sawTruncation = false;
+	for (let cols = 150; cols <= 215; cols += 1) {
+		const cam: Camera = { center: { x: 0, y: 0 }, cols, rows: 10, level: 'island' };
+		const board = renderWorld(topo, layout, graph, cam, { terminal });
+		const line = board.split('\n').find((l) => l.includes('╌╌▷')) ?? '';
+		const after = line.split('╌╌▷ ')[1] ?? '';
+		if (!after.endsWith('…')) continue;
+		sawTruncation = true;
+		const shown = after.slice(0, -1);
+		assert.ok(
+			hullReadout.startsWith(shown),
+			`shown text must be a real prefix of the command at cols=${cols}: ${JSON.stringify(shown)}`
+		);
+		const nextChar = hullReadout[shown.length];
+		assert.ok(
+			nextChar === undefined || /\s/u.test(nextChar),
+			`cols=${cols}: cut landed mid-token — the character right after the shown prefix is ` +
+				`${JSON.stringify(nextChar)}, not whitespace or end-of-string: ${JSON.stringify(line)}`
+		);
+	}
+	assert.ok(sawTruncation, 'the sweep must exercise at least one truncated width');
+});
+
+test('the spine drops whole fuel gauges rather than clipping one mid-name, and says how many (#fitReadings)', () => {
+	// The measured defect: the fuel row composed at full width, then the
+	// row-budget clip cut the second gauge in half (`≋ codex week 68% · ≋
+	// codex…`). A composed row of independent instruments must drop a whole
+	// reading rather than show half of one.
+	const graph = compileRoomGraph(
+		{
+			generated_at: '2026-08-27T10:20:00Z',
+			runs: [],
+			stale: false,
+			reported_at: '2026-08-27T10:20:00Z',
+			spawn_max_concurrent: 3
+		},
+		null,
+		undefined,
+		{
+			quota: {
+				generated_at: '2026-08-27T10:20:00Z',
+				runner_quotas: [
+					{
+						shell: 'claude',
+						status: 'known',
+						daemon_stale: false,
+						windows: [
+							{
+								label: '5h window',
+								used: null,
+								limit: null,
+								percent: 69,
+								reset: null,
+								last_known: null
+							}
+						]
+					},
+					{
+						shell: 'codex',
+						status: 'known',
+						daemon_stale: false,
+						windows: [
+							{
+								label: '5h window',
+								used: null,
+								limit: null,
+								percent: 84,
+								reset: null,
+								last_known: null
+							}
+						]
+					}
+				]
+			}
+		}
+	);
+	const topo = compileTopology(graph);
+	const { layout } = layoutRoom(topo, emptyAtlas());
+	const cam: Camera = { center: { x: 0, y: 0 }, cols: 60, rows: 10, level: 'island' };
+	const board = renderWorld(topo, layout, graph, cam, {});
+	const line = board.split('\n').find((l) => l.includes('╭')) ?? '';
+	assert.match(line, /⛁ claude 5h 69%/u, `the reading that fit must be whole: ${JSON.stringify(line)}`);
+	assert.doesNotMatch(line, /codex/u, 'a reading that does not fit must not appear partially');
+	assert.match(line, /\+1(?!\d)/u, 'the dropped reading must be counted, not silently absent');
+});
+
+test('a row painted by a bearings/header strip does not carry a leftover from an earlier label (#clearRow)', () => {
+	// Fresh evidence from the live drive (four strands out, 1440px): the
+	// off-frame bearings strip painted a chip ending correctly in `…`, and
+	// immediately after — no separator, no bearing arrow — a fragment of a
+	// different node's already-clipped label leaked through
+	// (`↙ a the …a…`, the trailing `a…` a tail of a camp's branch label
+	// sharing the same screen row). `clip`/`clipMid` were never wrong here:
+	// the row had two writers, and the later one only ever overwrote its
+	// own prefix, leaving the earlier writer's tail sitting untouched.
+	const LONG_BRANCH = 'brr/' + 'a'.repeat(60);
+	const runA = {
+		id: 'a',
+		run_id: 'a',
+		kind: 'daemon',
+		stream: 's',
+		label: '',
+		name: 'a',
+		repo_label: REPO,
+		started_at: '2026-08-27T10:00:00Z',
+		last_seen: '2026-08-27T10:20:00Z',
+		parent_run_id: null,
+		is_subspawn: false,
+		runner: { name: 'claude', shell: 'claude', core: 'opus' },
+		phase: 'running',
+		card_text: null,
+		card_updated_at: null,
+		relics_counts: null,
+		portals: { pending: 0, oldest_at: null },
+		room: { env: 'host', branch: LONG_BRANCH, dir: null },
+		edge: null,
+		daemon_stale: false
+	} as unknown as LiveRun;
+	const runB = {
+		id: 'b',
+		run_id: 'b',
+		kind: 'strand',
+		stream: 's',
+		label: '',
+		name: 'the off-frame strand',
+		repo_label: 'other-org/other-repo',
+		started_at: '2026-08-27T10:00:00Z',
+		last_seen: '2026-08-27T10:20:00Z',
+		parent_run_id: null,
+		is_subspawn: true,
+		runner: { name: 'claude', shell: 'claude', core: 'opus' },
+		phase: 'running',
+		card_text: null,
+		card_updated_at: null,
+		relics_counts: null,
+		portals: { pending: 0, oldest_at: null },
+		room: { env: 'worktree', branch: 'brr/short', dir: null },
+		edge: null,
+		daemon_stale: false
+	} as unknown as LiveRun;
+	const trails: Record<string, TrailStep[]> = {
+		a: [{ dir: 'src', act: 'orient', at: '2026-08-27T10:01:00Z' }]
+	};
+	const graph = compileRoomGraph(liveWire([runA, runB]), null, trails);
+	const topo = compileTopology(graph);
+	const { layout } = layoutRoom(topo, emptyAtlas());
+	// Tuned so the camp (a branch-labelled node) lands on the camera's own
+	// last screen row — the same row the off-frame bearings strip claims.
+	const cam: Camera = { center: { x: 4.5, y: -8 }, cols: 30, rows: 20, level: 'island' };
+	const board = renderWorld(topo, layout, graph, cam, {});
+	// The bearings row is identified by its bearing arrows, not by its text
+	// content: how much of the off-frame actor's own name survives its own
+	// clip() is exactly what a narrower or wider fixture would change.
+	const bearingsRow = board.split('\n').find((l) => /[↑↓←→↖↗↘↙]/u.test(l)) ?? '';
+	assert.ok(bearingsRow, 'the fixture must actually produce the bearings row');
+	assert.doesNotMatch(
+		bearingsRow,
+		/…\S/u,
+		`a truncation mark must end the row (or trail into whitespace), never sit mid-fusion: ${JSON.stringify(bearingsRow)}`
 	);
 });
