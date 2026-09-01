@@ -159,6 +159,7 @@ isolate — none of them is a cage for a hostile agent (see [Trust & privacy](#-
 | `host` | Nothing beyond your own shell. Edits hit your working tree immediately. | you trust the agent and want zero friction — the dogfooded default. |
 | `worktree` | A separate worktree and branch, so your working tree stays clean. Shares your `.git`, credentials, network, and filesystem — **not a security boundary.** | you want runs off your working tree without container overhead. |
 | `docker` | Dependencies and network, and it narrows the agent's host-filesystem view to the repo plus mounted credential dirs. **Not** a credential or containment boundary: the repo is mounted read-write, your model/GitHub/SSH credentials cross in, and the network is on by default. | you want a clean toolchain or network control (`docker.network=none`) — defense-in-depth over a trusted agent, not a sandbox. |
+| `solitary` | Provider-only egress and per-run copies of the selected Shell's credentials, with no GitHub credential handed in. The repo is still read-write. | a collaborator or untrusted-tier sender triggers the run — it's the default hardened environment for that tier (`trust.untrusted_env`, `trust.collaborator_env`). |
 
 Full isolation matrix: [SECURITY.md](SECURITY.md) · semantics: [Environments](src/brr/docs/envs.md) · scope tracked in [#80](https://github.com/hugimuni-labs/brnrd/issues/80).
 
