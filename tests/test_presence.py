@@ -251,3 +251,51 @@ def test_list_active_account_counts_one_body_once(tmp_path, monkeypatch):
     )
 
     assert [row["run_id"] for row in presence.list_active_account(brr)] == ["run-solo"]
+
+
+def test_account_dirs_reads_the_registry_once_per_ttl(tmp_path, monkeypatch):
+    """The resolve is ~270ms of git and config I/O, and this runs at every
+    tool boundary. A quarter second per boundary for a fact that changes
+    when someone runs `brnrd connect` is the resident's own latency spent
+    on nothing."""
+    from types import SimpleNamespace
+
+    from brr import account
+
+    mine = tmp_path / "mine" / ".brr"
+    mine.mkdir(parents=True)
+    calls = []
+
+    def counted(*_a, **_k):
+        calls.append(1)
+        return SimpleNamespace(repos={})
+
+    monkeypatch.setattr(account, "resolve_context", counted)
+    presence._account_dirs_cache.clear()
+
+    assert presence.account_dirs(mine, now=1000.0) == [mine]
+    # A literal five seconds, not `TTL - 1`: a window derived from the
+    # constant it is meant to pin moves with it, so `TTL = 0` would still
+    # pass and the guard would be measuring nothing.
+    assert presence.account_dirs(mine, now=1005.0) == [mine]
+    assert len(calls) == 1, "a second read inside the window is the cost this cache exists to refuse"
+
+    assert presence.account_dirs(mine, now=1000.0 + presence.ACCOUNT_DIRS_TTL_S + 1) == [mine]
+    assert len(calls) == 2, "past the window it must read again — a connected sibling has to become visible"
+
+
+def test_account_dirs_cache_is_keyed_per_checkout(tmp_path, monkeypatch):
+    """Two repos on one machine must not inherit each other's answer."""
+    from types import SimpleNamespace
+
+    from brr import account
+
+    a = tmp_path / "a" / ".brr"
+    b = tmp_path / "b" / ".brr"
+    a.mkdir(parents=True)
+    b.mkdir(parents=True)
+    monkeypatch.setattr(account, "resolve_context", lambda *_a, **_k: SimpleNamespace(repos={}))
+    presence._account_dirs_cache.clear()
+
+    assert presence.account_dirs(a, now=1000.0) == [a]
+    assert presence.account_dirs(b, now=1000.0) == [b]

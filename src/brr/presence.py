@@ -237,7 +237,21 @@ def _read(path: Path) -> dict[str, Any] | None:
         return None
 
 
-def account_dirs(brr_dir: Path) -> list[Path]:
+#: How long a resolved account registry is trusted before it is read again.
+#: :func:`account_dirs` is called from ``_write_live_portal_state``, which runs
+#: at **every tool boundary** — and resolving the account costs ~270ms of git
+#: and config I/O (measured 2026-09-01, on this machine, both for a real
+#: account and a bare tmp repo). Paid per boundary that is a quarter second of
+#: the resident's own latency for a fact that changes when someone runs
+#: ``brnrd connect``, which is to say almost never. The registry is not
+#: watched: a sibling repo connected mid-run becomes visible within this
+#: window, and that is the honest cost of not re-reading it every time.
+ACCOUNT_DIRS_TTL_S = 30.0
+
+_account_dirs_cache: "dict[Path, tuple[float, list[Path]]]" = {}
+
+
+def account_dirs(brr_dir: Path, *, now: float | None = None) -> list[Path]:
     """Every registered repo's ``.brr`` dir for the account *brr_dir* serves.
 
     Presence is physically repo-local — each participant writes into the
@@ -254,6 +268,10 @@ def account_dirs(brr_dir: Path) -> list[Path]:
     import is deferred because ``account`` reads config and git state;
     presence is the leaf module every one of those layers already uses.
     """
+    stamp = now if now is not None else time.time()
+    cached = _account_dirs_cache.get(brr_dir)
+    if cached is not None and stamp - cached[0] < ACCOUNT_DIRS_TTL_S:
+        return list(cached[1])
     dirs: list[Path] = []
     try:
         from . import account as account_mod
@@ -268,6 +286,7 @@ def account_dirs(brr_dir: Path) -> list[Path]:
         dirs = []
     if brr_dir not in dirs:
         dirs.insert(0, brr_dir)
+    _account_dirs_cache[brr_dir] = (stamp, list(dirs))
     return dirs
 
 
