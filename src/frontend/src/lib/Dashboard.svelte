@@ -1893,11 +1893,12 @@
 		     `serves:`/`taken:` references, never a merge, and the crossing
 		     strip is that weld drawn.
 
-		     The backchannel is not a sibling section but this band's needs-you
-		     strip — the center element by construction (his 07-31 read: "it
-		     should be one of the center elements"), because a returning reader
-		     asks "what does the resident need from me?" first, and it is
-		     answered without ever hiding the layers. -->
+		     Config approvals are not a sibling section but this band's own
+		     needs-you element (his 07-31 read: "it should be one of the
+		     center elements") — a returning reader asks "what does the
+		     resident need from me?" first, and it is answered without ever
+		     hiding the layers. (The PR-review half that used to share this
+		     spot retired 2026-09-01: GitHub already lists open PRs.) -->
 		<section
 			class="ignite mt-6 border-l-2 pl-3 transition-colors duration-300 {sectionActive(
 				'warp-heading'
