@@ -45,112 +45,114 @@
 					systems:
 				</p>
 
-				<table class="mt-4 w-full border-collapse text-xs leading-5">
-					<thead>
-						<tr class="border-b border-stone-700">
-							<th
-								class="border-r border-stone-700 px-3 py-2 text-left font-semibold text-amber-100"
-							>
-								Name & jurisdiction
-							</th>
-							<th
-								class="border-r border-stone-700 px-3 py-2 text-left font-semibold text-amber-100"
-							>
-								Function
-							</th>
-							<th
-								class="border-r border-stone-700 px-3 py-2 text-left font-semibold text-amber-100"
-							>
-								Data categories
-							</th>
-							<th class="px-3 py-2 text-left font-semibold text-amber-100"> Transfer basis </th>
-						</tr>
-					</thead>
-					<tbody class="divide-y divide-stone-700">
-						<tr>
-							<td class="border-r border-stone-700 px-3 py-3">
-								<strong class="text-stone-200">Scaleway</strong>
-								<br />
-								<span class="text-xs text-ink-quiet">France (region <code>fr-par</code>)</span>
-							</td>
-							<td class="border-r border-stone-700 px-3 py-3">
-								Cloud hosting infrastructure; PostgreSQL database
-							</td>
-							<td class="border-r border-stone-700 px-3 py-3">
-								Account identity (GitHub user ID, login), email, billing records, conversation and
-								event data, corpus mirror, run metadata
-							</td>
-							<td class="px-3 py-3">
-								Not applicable. Scaleway SAS is a French company and processing occurs within the
-								EU/EEA — this is not an international transfer.
-							</td>
-						</tr>
-
-						<tr>
-							<td class="border-r border-stone-700 px-3 py-3">
-								<strong class="text-stone-200">Stripe</strong>
-								<br />
-								<span class="text-xs text-ink-quiet">United States</span>
-							</td>
-							<td class="border-r border-stone-700 px-3 py-3">
-								Payment processing and billing; Stripe Managed Payments (merchant of record)
-							</td>
-							<td class="border-r border-stone-700 px-3 py-3">
-								Email address, account identifiers (Stripe customer ID)
-								<br />
-								<span class="text-xs text-ink-quiet"
-									>Note: card data does not pass through brnrd.dev</span
+				<div class="mt-4 overflow-x-auto">
+					<table class="w-full min-w-[640px] border-collapse text-xs leading-5">
+						<thead>
+							<tr class="border-b border-stone-700">
+								<th
+									class="border-r border-stone-700 px-3 py-2 text-left font-semibold text-amber-100"
 								>
-							</td>
-							<td class="px-3 py-3">
-								Data Protection Framework (DPF) and Standard Contractual Clauses (SCCs)
-							</td>
-						</tr>
-
-						<tr>
-							<td class="border-r border-stone-700 px-3 py-3">
-								<strong class="text-stone-200">GitHub</strong>
-								<br />
-								<span class="text-xs text-ink-quiet">United States</span>
-							</td>
-							<td class="border-r border-stone-700 px-3 py-3">
-								Identity provider (OAuth 2.0) and repository API integration
-							</td>
-							<td class="border-r border-stone-700 px-3 py-3">
-								GitHub user ID, login, email, repository and issue/pull-request metadata
-							</td>
-							<td class="px-3 py-3">
-								Data Protection Framework (DPF) and Standard Contractual Clauses (SCCs)
-							</td>
-						</tr>
-
-						<tr>
-							<td class="border-r border-stone-700 px-3 py-3">
-								<strong class="text-stone-200">Telegram</strong>
-								<br />
-								<span class="text-xs text-ink-quiet">United Arab Emirates</span>
-							</td>
-							<td class="border-r border-stone-700 px-3 py-3">
-								Message transport channel (optional, user-elected)
-							</td>
-							<td class="border-r border-stone-700 px-3 py-3">
-								Telegram chat ID, user ID, username, message content (when user elects Telegram as
-								output channel)
-							</td>
-							<td class="px-3 py-3">
-								Telegram is used only when explicitly selected by the user for message relay. Users
-								should review
-								<a
-									href="https://telegram.org/privacy"
-									class="text-sky-400 underline"
-									target="_blank"
-									rel="noopener noreferrer">Telegram's privacy terms</a
+									Name & jurisdiction
+								</th>
+								<th
+									class="border-r border-stone-700 px-3 py-2 text-left font-semibold text-amber-100"
 								>
-								before selecting this channel.
-							</td>
-						</tr>
-					</tbody>
-				</table>
+									Function
+								</th>
+								<th
+									class="border-r border-stone-700 px-3 py-2 text-left font-semibold text-amber-100"
+								>
+									Data categories
+								</th>
+								<th class="px-3 py-2 text-left font-semibold text-amber-100"> Transfer basis </th>
+							</tr>
+						</thead>
+						<tbody class="divide-y divide-stone-700">
+							<tr>
+								<td class="border-r border-stone-700 px-3 py-3">
+									<strong class="text-stone-200">Scaleway</strong>
+									<br />
+									<span class="text-xs text-ink-quiet">France (region <code>fr-par</code>)</span>
+								</td>
+								<td class="border-r border-stone-700 px-3 py-3">
+									Cloud hosting infrastructure; PostgreSQL database
+								</td>
+								<td class="border-r border-stone-700 px-3 py-3">
+									Account identity (GitHub user ID, login), email, billing records, conversation and
+									event data, corpus mirror, run metadata
+								</td>
+								<td class="px-3 py-3">
+									Not applicable. Scaleway SAS is a French company and processing occurs within the
+									EU/EEA — this is not an international transfer.
+								</td>
+							</tr>
+
+							<tr>
+								<td class="border-r border-stone-700 px-3 py-3">
+									<strong class="text-stone-200">Stripe</strong>
+									<br />
+									<span class="text-xs text-ink-quiet">United States</span>
+								</td>
+								<td class="border-r border-stone-700 px-3 py-3">
+									Payment processing and billing; Stripe Managed Payments (merchant of record)
+								</td>
+								<td class="border-r border-stone-700 px-3 py-3">
+									Email address, account identifiers (Stripe customer ID)
+									<br />
+									<span class="text-xs text-ink-quiet"
+										>Note: card data does not pass through brnrd.dev</span
+									>
+								</td>
+								<td class="px-3 py-3">
+									Data Protection Framework (DPF) and Standard Contractual Clauses (SCCs)
+								</td>
+							</tr>
+
+							<tr>
+								<td class="border-r border-stone-700 px-3 py-3">
+									<strong class="text-stone-200">GitHub</strong>
+									<br />
+									<span class="text-xs text-ink-quiet">United States</span>
+								</td>
+								<td class="border-r border-stone-700 px-3 py-3">
+									Identity provider (OAuth 2.0) and repository API integration
+								</td>
+								<td class="border-r border-stone-700 px-3 py-3">
+									GitHub user ID, login, email, repository and issue/pull-request metadata
+								</td>
+								<td class="px-3 py-3">
+									Data Protection Framework (DPF) and Standard Contractual Clauses (SCCs)
+								</td>
+							</tr>
+
+							<tr>
+								<td class="border-r border-stone-700 px-3 py-3">
+									<strong class="text-stone-200">Telegram</strong>
+									<br />
+									<span class="text-xs text-ink-quiet">United Arab Emirates</span>
+								</td>
+								<td class="border-r border-stone-700 px-3 py-3">
+									Message transport channel (optional, user-elected)
+								</td>
+								<td class="border-r border-stone-700 px-3 py-3">
+									Telegram chat ID, user ID, username, message content (when user elects Telegram as
+									output channel)
+								</td>
+								<td class="px-3 py-3">
+									Telegram is used only when explicitly selected by the user for message relay.
+									Users should review
+									<a
+										href="https://telegram.org/privacy"
+										class="text-sky-400 underline"
+										target="_blank"
+										rel="noopener noreferrer">Telegram's privacy terms</a
+									>
+									before selecting this channel.
+								</td>
+							</tr>
+						</tbody>
+					</table>
+				</div>
 			</section>
 
 			<section>
