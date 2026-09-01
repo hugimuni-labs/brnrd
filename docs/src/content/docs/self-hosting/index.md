@@ -34,8 +34,10 @@ Telegram, Slack, or GitHub gate still carries messages through the transport's
 own service.
 
 Read [Security & privacy](../security/) before exposing a gate. In particular,
-the currently shipped gates authorize rooms or trigger syntax rather than each
-sender.
+Telegram and Signal bind authorization to the paired sender (plus an explicit
+allowlist), and self-hosted GitHub checks the sender's repository permission;
+only Slack is channel-scoped, authorizing every member of the configured
+channel rather than an individual sender.
 
 For managed service availability and pricing, see [brnrd.dev](https://brnrd.dev).
 This page makes no parity or hosted-compute claim.
