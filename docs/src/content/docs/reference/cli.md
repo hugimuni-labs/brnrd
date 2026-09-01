@@ -28,8 +28,11 @@ This page reflects the public command tree printed by the installed CLI on
 | `brnrd account connect [url]` | Pair with brnrd, prepare account home + external knowledge, create/adopt their private GitHub remotes, then install and start the native user service; `--local-memory` explicitly skips remote linking. Also accepts `--daemon-name`, `--no-service`, `--defaults`, and Linux linger controls. |
 | `brnrd account disconnect` | Remove the local managed-gate identity while keeping the account home and its durable memory. |
 | `brnrd account add <repo>` | Add a repo to the connected account home. |
+| `brnrd account relabel <old> <new>` | Follow a repo that changed address (e.g. renamed org), carrying its memory to the new label; supports `--dry-run` and `--yes`. |
 | `brnrd account status [--json]` | Show the resolved home and its repos. |
 | `brnrd home link` | Retry or customize the private GitHub remotes for resident memory and project knowledge; managed connect normally performs this automatically. |
+| `brnrd home manifest [--json]` | Count what the resolved home holds — kb pages, warp items, topics, run records, surface pages, git state. |
+| `brnrd home sweep-orphans [--delete]` | List (and, with `--delete`, remove) project homes holding nothing but default scaffold. |
 
 The retired top-level spellings `auth`, `bind`, `setup`, `add`, and `connect`
 are not aliases. Use the noun-first commands above.
@@ -44,6 +47,7 @@ are not aliases. Use the noun-first commands above.
 | `brnrd daemon install` | Install the systemd user service or macOS LaunchAgent; supports `--no-start`. |
 | `brnrd daemon uninstall` | Remove the service. |
 | `brnrd daemon logs [-n LINES] [--no-follow]` | Read or follow service logs. |
+| `brnrd gc [--dry-run]` | Prune daemon-accumulated state past its retention window; `--dry-run` prints counts and bytes without deleting. |
 
 ## Knowledge, diagnostics, and resident tools
 
@@ -63,6 +67,7 @@ are not aliases. Use the noun-first commands above.
 | Command | Purpose |
 |---|---|
 | `brnrd runners list [--json] [--all]` | List configured profiles and bundled Cores. |
+| `brnrd runners doctor` | Check runner catalog health: stale cores, missing shells, auth issues. |
 | `brnrd bench scenarios` | List scripted seam probes. |
 | `brnrd bench run [--scenario NAME] [--shell SHELL]` | Run a probe in a sandbox; it spends real Runner quota. |
 | `brnrd completions bash` | Print Bash completions. |
