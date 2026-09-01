@@ -111,7 +111,26 @@ def _safe_file(root: Path, url_path: str) -> Path | None:
     candidate = (root / url_path.lstrip("/")).resolve()
     if not candidate.is_relative_to(root):
         return None
-    return candidate if candidate.is_file() else None
+    if candidate.is_file():
+        return candidate
+    # adapter-static writes a prerendered page as ``<route>.html`` (its
+    # ``trailingSlash`` default), so a request for ``/pricing`` names a file
+    # that does not exist under that spelling and would fall through to the
+    # shell — a prerender 100% correct in the build output and 0% effective
+    # on the wire. Both siblings stay inside ``root`` by construction: the
+    # traversal check above already ran on the resolved candidate, and
+    # neither branch adds a ``..`` segment.
+    # ``candidate != root`` is load-bearing, not tidiness: ``/.`` resolves
+    # to ``root`` itself and passes the containment check above, and
+    # ``root.with_name(root.name + ".html")`` is root's *sibling* — outside
+    # the build tree. The equality guard is what keeps the suffix branch
+    # from reaching it.
+    if url_path and candidate != root:
+        html_sibling = candidate.with_name(candidate.name + ".html")
+        if html_sibling.is_file():
+            return html_sibling
+    index_child = candidate / "index.html"
+    return index_child if index_child.is_file() else None
 
 
 def mount_frontend(app: FastAPI, directory: Path, claimed: frozenset[str]) -> None:
@@ -136,9 +155,14 @@ def mount_frontend(app: FastAPI, directory: Path, claimed: frozenset[str]) -> No
         asset = _safe_file(root, spa_path)
         if asset is not None:
             response = FileResponse(asset)
-            # ``/index.html`` is just another spelling of the shell. It must
-            # obey the same revalidation rule as `/` and deep SPA routes.
-            if asset == index:
+            # Every HTML document this build ships points at one build's
+            # hashed chunks, so all of them must revalidate — not just the
+            # shell. ``/index.html`` is another spelling of ``/``; a
+            # prerendered ``pricing.html`` is a different document with the
+            # same lifetime. Caching either across a deploy is #1732 one
+            # route over: a page that renders a previous build's UI and
+            # never asks whether it is current.
+            if asset.suffix == ".html":
                 response.headers["Cache-Control"] = _SHELL_CACHE_CONTROL
             return response
         # `_app/` is SvelteKit's own build namespace — every URL under it is
