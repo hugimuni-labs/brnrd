@@ -10,8 +10,11 @@ const INDEXABLE_EXACT_PATHS = new Set([
 	'/terms',
 	'/privacy',
 	'/legal-notice',
-	'/learn'
+	'/learn',
+	'/log'
 ]);
+
+const INDEXABLE_PREFIXES = ['/learn/', '/log/'];
 
 export function normalizePathname(pathname: string): string {
 	if (!pathname || pathname === '/') return '/';
@@ -20,7 +23,10 @@ export function normalizePathname(pathname: string): string {
 
 export function isIndexablePath(pathname: string): boolean {
 	const normalized = normalizePathname(pathname);
-	return INDEXABLE_EXACT_PATHS.has(normalized) || normalized.startsWith('/learn/');
+	return (
+		INDEXABLE_EXACT_PATHS.has(normalized) ||
+		INDEXABLE_PREFIXES.some((prefix) => normalized.startsWith(prefix))
+	);
 }
 
 export function canonicalUrl(pathname: string): string {
