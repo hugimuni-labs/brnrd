@@ -2869,9 +2869,16 @@ def build_injected_context(repo_root: Path, *, task_text: str | None = None) -> 
     cfg = conf.load_config(repo_root)
     parts = list(_build_injected_blocks(repo_root, task_text=task_text))
     if diffense_emit_enabled(cfg):
-        pack_step = read_prompt("diffense.md", repo_root)
+        # `.strip()` for the same reason `_join_prompt_parts` strips: the
+        # manifest (`_collect_toggle_contracts`) measures this block stripped.
+        # The two append sites are one fact rendered twice — when #1753 fixed
+        # the strip drift at `_join_prompt_parts` alone, this line's own
+        # comment ("keep as-is to match _join_prompt_parts") became false and
+        # the two paths diverged by a trailing newline. Repaired together;
+        # either site changing alone is the bug.
+        pack_step = read_prompt("diffense.md", repo_root).strip()
         if pack_step:
-            parts.append(pack_step)  # keep as-is to match _join_prompt_parts
+            parts.append(pack_step)
     introspection = _build_introspection_block(repo_root)
     if introspection:
         parts.append(introspection)
