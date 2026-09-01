@@ -10073,6 +10073,65 @@ def _gate_addressed(gate: str, fm: dict) -> bool:
     return bool(addressed_fn(fm)) if addressed_fn else False
 
 
+def _gate_can_route_thread(gate: str) -> bool:
+    """True when *gate*'s owning module declares it can route on ``thread:``.
+
+    #1750: same shape as :func:`_gate_can_send_unaddressed` — the capability
+    lives on the gate module (``CAN_ROUTE_THREAD``), never a name list here,
+    so a gate that gains this later declares it itself instead of teaching
+    this function a new name. ("A class defined by listing its members meets
+    the member nobody listed.") Unlike ``CAN_SEND_UNADDRESSED`` — which
+    defaults ``True`` to preserve every pre-existing gate's behaviour — this
+    defaults **False**: no built-in gate has ever honoured a ``thread:``
+    frontmatter key on its fresh-send lane (measured, not assumed — none
+    reads a ``thread`` field for outbound routing), so an undeclared gate
+    answering "no" is the true state, not a guess. A module unresolved (bad
+    alias, import failure) also defaults False — fail toward the advisory
+    firing, never toward silently trusting an unproven routing capability.
+    """
+    delivery_gate = _delivery_source_for_gate(gate)
+    if delivery_gate not in _BUILTIN_GATES:
+        return False
+    try:
+        from .gates import import_gate
+        mod = import_gate(delivery_gate)
+    except ImportError:
+        return False
+    return bool(getattr(mod, "CAN_ROUTE_THREAD", False))
+
+
+#: Fallback phrase for :func:`_gate_thread_destination` when the target
+#: gate names no :func:`_gate_thread_destination` hook of its own — an
+#: honest "not known" rather than a fabricated place (#1750 asks for
+#: exactly this: name the ambiguity instead of guessing).
+_UNKNOWN_THREAD_DESTINATION = "this gate's configured default destination (not further identified)"
+
+
+def _gate_thread_destination(gate: str, fm: dict) -> str:
+    """Where the message actually lands when *gate* cannot route ``thread:``.
+
+    Consults the gate module's own ``unaddressed_destination(fm)`` hook when
+    it declares one (``cloud.py``'s, today) so the advisory names the real
+    destination instead of "somewhere else". A gate with no such hook, or
+    one whose hook raises, has not proven where its default lands either —
+    :data:`_UNKNOWN_THREAD_DESTINATION` says that plainly rather than
+    fabricating a place.
+    """
+    delivery_gate = _delivery_source_for_gate(gate)
+    try:
+        from .gates import import_gate
+        mod = import_gate(delivery_gate)
+    except ImportError:
+        return _UNKNOWN_THREAD_DESTINATION
+    destination_fn = getattr(mod, "unaddressed_destination", None)
+    if destination_fn is None:
+        return _UNKNOWN_THREAD_DESTINATION
+    try:
+        return str(destination_fn(fm))
+    except Exception:  # noqa: BLE001 - a diagnostic must never crash delivery
+        return _UNKNOWN_THREAD_DESTINATION
+
+
 def _configured_gate_names(brr_dir: Path) -> list[str]:
     """Delivery-loop gate names deliverable on this account.
 
@@ -10556,6 +10615,34 @@ def _deliver_out_of_bound(
             lifetime="run",
         )
         return False
+    thread = str(fm.get("thread") or "").strip()
+    if thread and not _gate_can_route_thread(gate):
+        # #1750: "recorded, rendered, and inert" — `thread:` used to be
+        # threaded into the message-store record's `target_thread` field
+        # (the reply-drain call site above) and then never consulted by any
+        # gate's fresh-send lane, so a `status: delivered` receipt looked
+        # identical whether the message reached the requested thread or
+        # not. The issue's own text asks for the informative half, not a
+        # refusal: delivery still proceeds below, unchanged — this is only
+        # the loud FYI that lets the resident read `notices` and reach for
+        # `event: <id>` next time. That lane really does route to the
+        # thread it answers (the addressed reply resolves through the
+        # inbound event's own recorded chat/platform, not this key) — it is
+        # the alternative this notice points at, not an assumption.
+        _record_outbox_notice(
+            outbox_dir,
+            f"gate {gate!r}: thread {thread!r} was requested but this gate "
+            f"cannot route an unaddressed send to a specific thread — it "
+            f"went to {_gate_thread_destination(gate, fm)} instead. "
+            f"Delivery still happened; only the routing was ignored. To "
+            f"reach a specific pending conversation, reply with "
+            f"`event: <id>` instead — that lane routes to the thread it "
+            f"answers.",
+            # The directive *was* carried out — this is FYI on how, not a
+            # failure; a wrong kind here renders as one (#1693).
+            kind="advisory",
+            lifetime="run",
+        )
     # Never let agent-written frontmatter override the reserved event keys
     # (a stray `status:` would resurrect the event as pending and spawn a
     # stray thought).

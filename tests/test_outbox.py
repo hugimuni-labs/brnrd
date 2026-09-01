@@ -2459,6 +2459,117 @@ def test_notify_gate_for_conversation_key_is_the_leading_field():
     assert daemon._notify_gate_for_conversation_key("") == ""
 
 
+# ── #1750: a `thread:` frontmatter key the resolved gate cannot route on ──
+#
+# Measured live: `gate: cloud` + `thread: cloud:whatsapp:…:` reported
+# `status: delivered`, `notices: []`, and the correspondent never got it —
+# the fresh-send lane shipped to the account's configured default chat
+# regardless of what `thread:` asked for, and nothing said so. The fix is
+# informative, not a refusal (the issue's own text rules that half out):
+# delivery still proceeds unchanged; an `advisory` notice names the thread
+# that was asked for, the destination it actually went to, and the lane
+# (`event: <id>`) that does route to a specific thread.
+
+
+def _drain_gate_message(tmp_path, monkeypatch, body_text):
+    brr_dir = tmp_path / ".brr"
+    responses = brr_dir / "responses"
+    inbox = brr_dir / "inbox"
+    inbox.mkdir(parents=True)
+    outbox = brr_dir / "outbox" / "evt-A"
+    outbox.mkdir(parents=True)
+    (outbox / "ping.md").write_text(body_text)
+    monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
+    monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+    emit = daemon._WorkerEmit(
+        brr_dir=brr_dir, conversation_key="", event_id="evt-A")
+    task = types.SimpleNamespace(id="task-A")
+    n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
+    notices_path = outbox / daemon.NOTICES_FILE
+    notices = (
+        [json.loads(line) for line in notices_path.read_text().splitlines() if line.strip()]
+        if notices_path.exists() else []
+    )
+    return n, outbox, inbox, notices
+
+
+def test_thread_notice_fires_when_gate_cannot_route_it(tmp_path, monkeypatch):
+    # Reproduces #1750's live measurement: red before the fix (no notice
+    # existed at all), green after.
+    n, outbox, inbox, notices = _drain_gate_message(
+        tmp_path, monkeypatch,
+        "---\ngate: cloud\nthread: cloud:whatsapp:4915121024376:\n---\n"
+        "it's ready\n",
+    )
+    assert n == 1
+    # Unchanged behaviour: the message still ships — a `done` cloud event
+    # is synthesized, never refused. Trading a wrong-channel delivery for
+    # no delivery is exactly what the issue's own text rules out.
+    assert len(protocol.list_done(inbox, "cloud")) == 1
+    advisories = [x for x in notices if x["kind"] == "advisory"]
+    assert len(advisories) == 1
+    text = advisories[0]["text"]
+    assert "cloud:whatsapp:4915121024376:" in text  # the thread asked for
+    assert "telegram" in text  # the destination it actually went to
+    assert "event: <id>" in text  # the lane that does route to a thread
+    # A wrong `kind` here renders as a failure and is its own bug (#1693).
+    assert all(x["kind"] != "refused" and x["kind"] != "dropped" for x in notices)
+
+
+def test_thread_notice_silent_when_no_thread_key(tmp_path, monkeypatch):
+    # The guard must not fire on every out-of-bound send — only one that
+    # actually named a thread the gate can't use.
+    n, outbox, inbox, notices = _drain_gate_message(
+        tmp_path, monkeypatch,
+        "---\ngate: cloud\n---\nit's ready\n",
+    )
+    assert n == 1
+    assert len(protocol.list_done(inbox, "cloud")) == 1
+    assert notices == []
+
+
+def test_thread_notice_silent_when_gate_declares_routing_capable(tmp_path, monkeypatch):
+    # A gate that opts in via CAN_ROUTE_THREAD must not trip the advisory
+    # the way an undeclared gate does — the property is per-gate, not a
+    # hardcoded "cloud" check.
+    monkeypatch.setattr(daemon, "_gate_can_route_thread", lambda gate: True)
+    n, outbox, inbox, notices = _drain_gate_message(
+        tmp_path, monkeypatch,
+        "---\ngate: cloud\nthread: cloud:whatsapp:123:\n---\nit's ready\n",
+    )
+    assert n == 1
+    assert notices == []
+
+
+def test_gate_can_route_thread_defaults_false_for_every_built_in_gate():
+    # No built-in gate has ever honoured a `thread:` frontmatter key on its
+    # fresh-send lane — an undeclared gate answering False is the true
+    # state, not a permissive guess (contrast CAN_SEND_UNADDRESSED, which
+    # defaults True to preserve pre-existing behaviour).
+    for gate in ("telegram", "slack", "github", "signal", "forge", "cloud"):
+        assert daemon._gate_can_route_thread(gate) is False
+
+
+def test_gate_thread_destination_names_clouds_real_default():
+    assert (
+        daemon._gate_thread_destination("cloud", {})
+        == "the account's default telegram chat"
+    )
+    assert (
+        daemon._gate_thread_destination("cloud", {"cloud_platform": "whatsapp"})
+        == "the account's default whatsapp chat"
+    )
+
+
+def test_gate_thread_destination_names_the_ambiguity_when_unknown():
+    # telegram declares no `unaddressed_destination` hook — the diagnostic
+    # says so honestly rather than fabricating a place.
+    assert (
+        daemon._gate_thread_destination("telegram", {})
+        == daemon._UNKNOWN_THREAD_DESTINATION
+    )
+
+
 def test_resolve_notify_gate_ambiguous_prefers_the_runs_own_conversation(
     tmp_path, monkeypatch,
 ):
