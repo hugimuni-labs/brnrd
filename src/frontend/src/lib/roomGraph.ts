@@ -326,6 +326,14 @@ export interface RoomIsland {
 	forge: Record<string, number>;
 }
 
+/** One kb page a run's row cites — the reef's own join unit
+ * (design-the-water-line.md "The kb is the reef": "the work that cited
+ * them"). `url` absent when the daemon couldn't derive a link. */
+export interface ClothKbPage {
+	path: string;
+	url: string | null;
+}
+
 export interface ClothRow {
 	runId: string | null;
 	name: string;
@@ -340,6 +348,36 @@ export interface ClothRow {
 	counts: Record<string, number>;
 	course: { done: number; total: number } | null;
 	childOf: string | null;
+	/** The kb pages this run's row has committed — live rows from
+	 *  `LiveRun.relics_kb_pages`, cut rows from the ledger's own
+	 *  `external_refs` (kind `"kb"`). `[]` when known-empty or the wire
+	 *  predates the field; `roomReef.ts` is the one consumer, and a run
+	 *  with none simply contributes no outcrop (absence stays absence). */
+	kbPages: ClothKbPage[];
+}
+
+/** `LiveRun.relics_kb_pages` → the cloth row's bounded, url-normalized
+ * shape. Shared by the live and (were the ledger ever to carry the same
+ * nested shape) any future cut-row reader — one parse, not two. */
+function liveKbPages(pages: LiveRun['relics_kb_pages']): ClothKbPage[] {
+	if (!pages) return [];
+	return pages
+		.filter((p): p is { path: string; url?: string | null } => !!p && typeof p.path === 'string')
+		.map((p) => ({ path: p.path, url: typeof p.url === 'string' ? p.url : null }));
+}
+
+/** A closed run's `external_refs` → the kb subset in the same shape,
+ * matching `relics.label`'s own `kind === "kb"` reading (`path`/`url`). */
+function ledgerKbPages(refs: RunLedgerRow['external_refs']): ClothKbPage[] {
+	if (!refs) return [];
+	const out: ClothKbPage[] = [];
+	for (const r of refs) {
+		if (!r || r.kind !== 'kb') continue;
+		const path = typeof r.path === 'string' ? r.path : '';
+		if (!path) continue;
+		out.push({ path, url: typeof r.url === 'string' ? r.url : null });
+	}
+	return out;
 }
 
 /** A clockwork entry — future intent, never a body on the floor. */
@@ -635,7 +673,8 @@ export function compileRoomGraph(
 			usd: null,
 			counts: Object.fromEntries(liveRelicChips(run.relics_counts).map((c) => [c.kind, c.count])),
 			course: course ? { done: course.done, total: course.total } : null,
-			childOf: run.parent_run_id
+			childOf: run.parent_run_id,
+			kbPages: liveKbPages(run.relics_kb_pages)
 		});
 	}
 	for (const row of ledger?.rows ?? []) {
@@ -649,7 +688,8 @@ export function compileRoomGraph(
 			usd: ledgerUsd(row),
 			counts: relicCounts(row.external_refs ?? []),
 			course: null,
-			childOf: row.is_subspawn ? (row.parent_run_id ?? null) : null
+			childOf: row.is_subspawn ? (row.parent_run_id ?? null) : null,
+			kbPages: ledgerKbPages(row.external_refs)
 		});
 	}
 

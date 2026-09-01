@@ -2058,9 +2058,25 @@ def test_loop_publishes_live_runs_snapshot(tmp_path, monkeypatch):
     # (via the projection) rather than re-deriving from git.
     capsule_dir = brr_dir / "outbox" / "evt-live"
     capsule_dir.mkdir(parents=True)
+    # design-the-water-line.md "The kb is the reef": the same capsule read
+    # carries the full relic manifest under "records" — the kb page a name,
+    # not just a count.
     (capsule_dir / "portal-state.json").write_text(
         json_mod.dumps(
-            {"produce": {"known": True, "counts": {"commit": 2, "kb": 1}}},
+            {
+                "produce": {
+                    "known": True,
+                    "counts": {"commit": 2, "kb": 1},
+                    "records": [
+                        {"kind": "commit", "sha": "abc123", "subject": "wip"},
+                        {
+                            "kind": "kb",
+                            "path": "design-the-water-line.md",
+                            "url": "https://example/reef",
+                        },
+                    ],
+                },
+            },
         ),
         encoding="utf-8",
     )
@@ -2112,6 +2128,12 @@ def test_loop_publishes_live_runs_snapshot(tmp_path, monkeypatch):
     # #342: relics-so-far counts survive the publish round-trip through
     # the server-side LiveRunIn schema.
     assert resident["relics_counts"] == {"commit": 2, "kb": 1}
+    # design-the-water-line.md "The kb is the reef": the page name (+ url)
+    # survives the same publish round-trip through LiveRunIn — the commit
+    # relic in the fixture above is filtered out, only the kb one remains.
+    assert resident["relics_kb_pages"] == [
+        {"path": "design-the-water-line.md", "url": "https://example/reef"}
+    ]
     spawn = by_run_id["run-live-spawn"]
     assert spawn["is_subspawn"] is True
     assert spawn["parent_run_id"] == "run-live-test"
@@ -2124,6 +2146,7 @@ def test_loop_publishes_live_runs_snapshot(tmp_path, monkeypatch):
     # No conversation records for the spawn's run_id → no event id → no
     # capsule to read: nothing attested reads as None, not `{}`.
     assert spawn["relics_counts"] is None
+    assert spawn["relics_kb_pages"] is None
 
 
 def test_loop_publishes_pr_review_queue_snapshot(tmp_path, monkeypatch):
