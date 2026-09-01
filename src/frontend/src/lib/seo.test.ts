@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { SEARCH_TOPICS } from './searchTopics.ts';
-import { canonicalUrl, isIndexablePath, normalizePathname } from './seo.ts';
+import { canonicalUrl, hasCanonicalMeta, isIndexablePath, normalizePathname } from './seo.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const staticDir = join(here, '..', '..', 'static');
@@ -34,6 +34,16 @@ test('only intentional public surfaces are indexable', () => {
 	}
 	for (const topic of SEARCH_TOPICS) {
 		ok(isIndexablePath(`/learn/${topic.slug}`), `${topic.slug} should be indexable`);
+	}
+});
+
+test('sub-processors and beta-hosted-execution get canonical + og:url without joining search inventory', () => {
+	for (const path of ['/sub-processors', '/beta-hosted-execution']) {
+		ok(hasCanonicalMeta(path), `${path} should carry a canonical + og:url`);
+		ok(!isIndexablePath(path), `${path} should stay out of the sitemap / robots index`);
+	}
+	for (const path of publicPaths) {
+		ok(hasCanonicalMeta(path), `${path} should still carry a canonical + og:url`);
 	}
 });
 

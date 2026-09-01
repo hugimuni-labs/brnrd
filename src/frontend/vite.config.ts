@@ -22,6 +22,25 @@ export default defineConfig({
 			// previewed under "/app/" first (2026-07-06), which needed an
 			// explicit `paths.base` override since every emitted asset URL
 			// is absolute; root needs no override (default base is '').
+			// `fallback` is the generic SPA-shell file adapter-static writes for
+			// every route that can't be prerendered (ssr=false client-only pages:
+			// /login, /daily, /new, /connect, the dashboard's other paths).
+			//
+			// It is named 'index.html' — the same name `/`'s own prerendered
+			// output wants now that `routes/+page.ts` prerenders `/` to bake real
+			// anon-face SEO into its raw HTML (kb: the unfurl fix, 2026-09-01).
+			// SvelteKit writes the fallback *after* the prerendered pages and
+			// warns "Overwriting build/index.html with fallback page" — the
+			// fallback silently clobbers `/`'s real prerendered content, so in
+			// today's build `/` is back to the generic shell despite prerender
+			// succeeding. Fixing this for real means renaming this fallback (the
+			// conventional distinct name is '200.html') *and* updating the
+			// hardcoded fallback filename in src/brnrd/spa.py (outside this
+			// package — not changed here). Left as 'index.html' rather than
+			// renamed unilaterally: renaming without the matching backend change
+			// deployed in the same release would break every client-only route's
+			// bootstrap shell (backend keeps looking for 'index.html'). See
+			// /tmp/brnrd-unfurl.md for the precise two-file fix this needs.
 			adapter: adapter({
 				pages: 'build',
 				assets: 'build',
