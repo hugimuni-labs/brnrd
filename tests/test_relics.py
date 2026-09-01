@@ -973,6 +973,13 @@ def test_live_portal_kb_pages_reads_records_not_counts(tmp_path: Path):
             "counts": {"commit": 1, "kb": 2},
             "records": [
                 {"kind": "commit", "sha": "abc123", "subject": "wip"},
+                # A `file` relic carries a `path` too — so this is the record
+                # that actually pins the `kind == "kb"` filter. Without it the
+                # commit above is filtered by the *pathless* guard instead,
+                # and dropping the kind check entirely breaks nothing: the
+                # reef would fill with every produced file, and every test
+                # here would still pass.
+                {"kind": "file", "path": "src/brr/relics.py"},
                 {"kind": "kb", "path": "design-the-water-line.md", "url": "https://x/reef"},
                 {"kind": "kb", "path": "design-the-crossing.md"},
             ],
