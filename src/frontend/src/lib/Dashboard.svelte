@@ -70,11 +70,6 @@
 		type ScheduledWake
 	} from '$lib/scheduledWakes';
 	import {
-		PRReviewQueueAuthError,
-		fetchPRReviewQueue,
-		type PRReviewItem
-	} from '$lib/prReviewQueue';
-	import {
 		RunLedgerAuthError,
 		fetchRunLedger,
 		servedWindowMs,
@@ -94,8 +89,6 @@
 	import HeddleRail from '$lib/HeddleRail.svelte';
 	import { toggleHeddleSelection } from '$lib/heddleSelection';
 	import WarpGraphView from '$lib/WarpGraphView.svelte';
-	import BackchannelQueue from '$lib/BackchannelQueue.svelte';
-	import { buildDerivedAsks, derivedAsksChip } from '$lib/backchannel';
 	import { pickRows } from '$lib/pickLane';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
 	import { CLOTH_WINDOW_MS } from '$lib/cloth';
@@ -118,6 +111,7 @@
 		fetchConfigRequests,
 		type ConfigChangeRequestItem
 	} from '$lib/configRequests';
+	import ConfigRequests from '$lib/ConfigRequests.svelte';
 	import { sectionFrameLit } from '$lib/collapse';
 	import { machineTapVerdict } from '$lib/machineDock';
 	import {
@@ -330,11 +324,6 @@
 	let daemonMood = $state<DaemonMood | null>(null);
 	let wordmark = $derived(wordmarkMood(liveRuns, daemonMood));
 
-	let prReviewQueue = $state<PRReviewItem[] | null>(null);
-	let prReviewQueueWithheld = $state<WithheldLane | null>(null);
-	let prReviewQueueStale = $state(false);
-	let prReviewQueueError = $state<string | null>(null);
-
 	let runLedgerRows = $state<RunLedgerRow[] | null>(null);
 	let runLedgerWithheld = $state<WithheldLane | null>(null);
 	let runLedgerStale = $state(false);
@@ -409,12 +398,6 @@
 	let topicThreadList = $derived(topicThreads(warpGraphData));
 	let topicCountsMap = $derived(topicCounts(warpGraphData));
 	let warpReadyCount = $derived(readyItems(warpGraphData).length);
-	// The derived half of needs-you (PR review queue + config requests) —
-	// authored asks live in the warp as decision/preparation items now. A
-	// draft PR is filtered out by buildDerivedAsks itself (not here), so
-	// this count, the strip's visibility below, and its chip all agree.
-	let derivedNeedsItems = $derived(buildDerivedAsks(prReviewQueue ?? [], configRequests ?? []));
-	let needsOpen = $state(false);
 	// The heddle selection: canonical topic ids lit; null = all (default).
 	// Per-viewer, per-account, persisted like the digest anchor.
 	let heddleSelection = $state<Set<string> | null>(null);
@@ -519,18 +502,6 @@
 	let weavingCallSigns = $derived(new Set(weaving.map((row) => row.callSign).filter(Boolean)));
 	let crossingIndex = $derived(runTopicIndex(warpGraphData, surfaceData?.files ?? []));
 	let topicFaceMap = $derived(topicFaces(warpGraphData));
-	// All three feeds resolved (loaded or errored) — until then the needs
-	// strip's sum is a partial read, and rendering it as a verdict is the
-	// measured 20 → "clear" → 4 flicker. `derivedNeedsItems.length === 0`
-	// alone cannot tell "feeds not yet fetched" from "genuinely nothing
-	// waiting"; only the feed handles can. The strip's chip is the only
-	// place this state renders — the layer stack below it never hears
-	// about it.
-	let derivedAsksFeedsResolved = $derived(
-		(surfaceData !== null || surfaceError !== null) &&
-			(prReviewQueue !== null || prReviewQueueError !== null) &&
-			(configRequests !== null || configRequestsError !== null)
-	);
 
 	// The loom is the page (#972): the tenses replace the numbered panels.
 	// The cloth owns its window constant (30d by design); the ledger fetch's
@@ -1341,17 +1312,6 @@
 				scheduledWakesError = e instanceof Error ? e.message : 'scheduled-wakes fetch failed';
 			}
 		}
-		try {
-			const queue = await fetchPRReviewQueue();
-			prReviewQueue = queue.prs;
-			prReviewQueueWithheld = queue.withheld ?? null;
-			prReviewQueueStale = queue.stale;
-			prReviewQueueError = null;
-		} catch (e) {
-			if (!(e instanceof PRReviewQueueAuthError)) {
-				prReviewQueueError = e instanceof Error ? e.message : 'pr-review-queue fetch failed';
-			}
-		}
 		await refreshRunLedger();
 		try {
 			const requests = await fetchConfigRequests();
@@ -1986,46 +1946,15 @@
 					onAll={allHeddles}
 				/>
 			</div>
-			<!-- The derived half of needs-you: PR review + config approvals —
-			     feeds the daemon derives, not items anyone authored. Authored
-			     asks are decision/preparation items in the warp itself now, so
-			     this strip renders only when something derived actually waits. -->
-			{#if derivedNeedsItems.length > 0 || prReviewQueueError || configRequestsError}
-				<div class="subpanel mt-2 px-3 py-2 text-xs">
-					<button
-						type="button"
-						class="flex w-full cursor-pointer flex-wrap items-baseline gap-x-2 text-left"
-						aria-expanded={needsOpen}
-						onclick={() => (needsOpen = !needsOpen)}
-					>
-						<span class="font-mono text-[10px] text-ink-quiet" aria-hidden="true"
-							>{needsOpen ? '▾' : '▸'}</span
-						>
-						<span class="font-mono text-[11px] tracking-wide text-amber-200 uppercase"
-							>needs you</span
-						>
-						<span class="font-mono text-[10px] text-ink-quiet"
-							>· {derivedAsksChip(derivedAsksFeedsResolved, derivedNeedsItems.length)}</span
-						>
-					</button>
-					{#if needsOpen}
-						<div class="mt-2">
-							{#if prReviewQueueError}
-								<p class="mb-2 text-sm text-red-400">{prReviewQueueError}</p>
-							{/if}
-							{#if configRequestsError}
-								<p class="mb-2 text-sm text-red-400">{configRequestsError}</p>
-							{/if}
-							<BackchannelQueue
-								prs={prReviewQueue ?? []}
-								requests={configRequests ?? []}
-								stale={prReviewQueueStale}
-								{now}
-								withheld={prReviewQueueWithheld}
-							/>
-						</div>
-					{/if}
-				</div>
+			<!-- Config-change approvals waiting on the account owner — the PR
+			     review half retired 2026-09-01 (GitHub already lists open PRs;
+			     the strip read poorly on a phone) and the authored half moved
+			     into the warp earlier, so this is the one surviving population.
+			     Mounts only when there is something to show: a pending request,
+			     or a fetch error. A resolved, error-free, empty queue renders
+			     nothing — see ConfigRequests.svelte for why. -->
+			{#if (configRequests && configRequests.length > 0) || configRequestsError}
+				<ConfigRequests requests={configRequests ?? []} error={configRequestsError} {now} />
 			{/if}
 			<!-- The graph: unblocked items colorful on top — glance, decide or
 			     do — blocked ones greyed below, live-held ones framed in place. -->
