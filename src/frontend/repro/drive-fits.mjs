@@ -131,7 +131,8 @@ async function measureFit(page) {
 			clientW: de.clientWidth,
 			overLines,
 			lineCount: lines.length,
-			legendOverflows: legendRect !== null && deckRight !== null && legendRect.right > deckRight + 1,
+			legendOverflows:
+				legendRect !== null && deckRight !== null && legendRect.right > deckRight + 1,
 			legendRight: legendRect ? Math.round(legendRect.right) : null,
 			deckRight: deckRight !== null ? Math.round(deckRight) : null
 		};
