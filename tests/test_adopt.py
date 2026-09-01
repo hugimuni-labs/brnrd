@@ -1412,6 +1412,105 @@ class TestBorrowed:
         excluded = exclude_path.read_text(encoding="utf-8") if exclude_path.exists() else ""
         assert "AGENTS.md" not in excluded.splitlines()
 
+    def test_borrowed_refuses_to_rewind_when_the_agent_also_switched_branches(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """`reset` moves whatever branch HEAD is on *now*, not the one the
+        guard measured. An agent that committed and then switched branches
+        would otherwise have that second branch's tip rewound to a sha from a
+        different line of history — destructively, from a `finally`, in a repo
+        the caller said they do not own. Refuse, and say so."""
+        repo = tmp_path / "borrowed-branch-hop"
+        _init_git(repo)
+        subprocess.run(["git", "-c", "user.email=a@a.com", "-c", "user.name=a",
+                        "commit", "--allow-empty", "-m", "base"],
+                       cwd=repo, check=True, capture_output=True)
+        base = _git_out(repo, "rev-parse", "HEAD").strip()
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(adopt, "_detect_shells", lambda: [])
+
+        def _invoke(runner_name, invocation, cfg=None):
+            root = invocation.repo_root
+            (root / "AGENTS.md").write_text(_VALID_AGENTS, encoding="utf-8")
+            subprocess.run(["git", "checkout", "-b", "elsewhere"],
+                           cwd=root, check=True, capture_output=True)
+            subprocess.run(["git", "add", "AGENTS.md"], cwd=root, check=True)
+            subprocess.run(["git", "-c", "user.email=a@a.com", "-c", "user.name=a",
+                            "commit", "-m", "agent work on another branch"],
+                           cwd=root, check=True, capture_output=True)
+            return RunnerResult(
+                invocation=invocation, runner_name=runner_name, command=["mock"],
+                stdout="", stderr="", returncode=0, trace_dir=None,
+                artifacts=[
+                    adopt.runner.RunnerArtifactRecord(
+                        path=a.path, label=a.label or str(a.path),
+                        exists=a.path.exists(), trace_copy=None,
+                    )
+                    for a in invocation.required_artifacts
+                ],
+            )
+
+        monkeypatch.setattr("brr.runner.detect_runner", lambda *a, **kw: "mock-runner")
+        monkeypatch.setattr("brr.runner.detect_all_runners", lambda *a, **kw: ["mock-runner"])
+        monkeypatch.setattr("brr.runner.invoke_runner", _invoke)
+
+        adopt.init_repo(borrowed=True)
+
+        # `elsewhere` still holds the agent's commit; nothing was rewound.
+        assert _git_out(repo, "rev-parse", "elsewhere").strip() != base
+        assert _git_out(repo, "log", "--oneline", "elsewhere").count("\n") >= 2
+        out = capsys.readouterr().out
+        assert "did NOT rewind" in out
+
+    def test_borrowed_says_so_when_the_undo_does_not_take(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """Every git call in the guard runs `check=False`, so a failed reset
+        and a successful one are indistinguishable at the print. Read HEAD back
+        through a different call before claiming the undo happened — a receipt
+        printed on an unchecked exit code is a claim."""
+        repo = tmp_path / "borrowed-undo-fails"
+        _init_git(repo)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(adopt, "_detect_shells", lambda: [])
+
+        real_run = subprocess.run
+
+        def _neutered(cmd, *a, **kw):
+            if isinstance(cmd, list) and "update-ref" in cmd:
+                return real_run(["git", "--version"], *a, **kw)
+            return real_run(cmd, *a, **kw)
+
+        def _invoke(runner_name, invocation, cfg=None):
+            root = invocation.repo_root
+            (root / "AGENTS.md").write_text(_VALID_AGENTS, encoding="utf-8")
+            subprocess.run(["git", "add", "AGENTS.md"], cwd=root, check=True)
+            subprocess.run(["git", "-c", "user.email=a@a.com", "-c", "user.name=a",
+                            "commit", "-m", "agent committed"],
+                           cwd=root, check=True, capture_output=True)
+            monkeypatch.setattr(adopt.subprocess, "run", _neutered)
+            return RunnerResult(
+                invocation=invocation, runner_name=runner_name, command=["mock"],
+                stdout="", stderr="", returncode=0, trace_dir=None,
+                artifacts=[
+                    adopt.runner.RunnerArtifactRecord(
+                        path=a.path, label=a.label or str(a.path),
+                        exists=a.path.exists(), trace_copy=None,
+                    )
+                    for a in invocation.required_artifacts
+                ],
+            )
+
+        monkeypatch.setattr("brr.runner.detect_runner", lambda *a, **kw: "mock-runner")
+        monkeypatch.setattr("brr.runner.detect_all_runners", lambda *a, **kw: ["mock-runner"])
+        monkeypatch.setattr("brr.runner.invoke_runner", _invoke)
+
+        adopt.init_repo(borrowed=True)
+
+        out = capsys.readouterr().out
+        assert "did NOT take" in out
+        assert "undo it by hand" in out
+
     def test_borrowed_undoes_a_commit_the_runner_makes_on_its_own(self, tmp_path, monkeypatch):
         # Driven for real against a scratch repo (#1746 report): the setup
         # runner is a full agentic session with shell access, and — simply

@@ -902,6 +902,24 @@ def _guard_against_agent_commits(repo_root: Path, borrowed: bool):
         post_sha = gitops.rev_parse(repo_root, "HEAD")
         if post_sha == pre_sha:
             return
+        # ``reset``/``update-ref`` move *whatever branch HEAD is on now*, not
+        # the one this closure snapshotted. An agent that also switched
+        # branches would otherwise have its own tip rewound to a sha from a
+        # different line of history — a destructive act, in a ``finally``, on
+        # a repo the caller explicitly said they do not own. Refuse and say
+        # so; a stated no-op beats a silent wrong write.
+        try:
+            post_branch = gitops.current_branch(repo_root)
+        except gitops.CurrentBranchUnresolvable:
+            post_branch = None
+        if post_branch != branch:
+            print(
+                f"[brnrd] {style.warn_glyph()} borrowed: HEAD moved from "
+                f"{branch!r} to {post_branch!r} during setup, so the commit "
+                "guard did NOT rewind anything — resetting would move a "
+                "branch this run never measured. Check `git log` yourself."
+            )
+            return
         if pre_sha is None:
             # Was unborn (zero commits) before this call — make it unborn
             # again rather than resetting to a commit that never existed.
@@ -924,11 +942,25 @@ def _guard_against_agent_commits(repo_root: Path, borrowed: bool):
                 ["git", "-C", str(repo_root), "reset", "--mixed", pre_sha],
                 check=False,
             )
-        print(
-            f"[brnrd] {style.warn_glyph()} borrowed: the setup agent committed on its "
-            "own initiative; undone (kept the files, dropped the commit) so "
-            "nothing reaches this checkout's history"
-        )
+        # Read the state back through a different call before claiming the
+        # undo happened: every subprocess above runs ``check=False``, so a
+        # failed reset is indistinguishable from a successful one at this
+        # line, and a receipt printed on the strength of an unchecked exit
+        # code is a claim, not a receipt.
+        now_sha = gitops.rev_parse(repo_root, "HEAD")
+        if now_sha == pre_sha:
+            print(
+                f"[brnrd] {style.warn_glyph()} borrowed: the setup agent committed "
+                "on its own initiative; undone (kept the files, dropped the "
+                "commit) so nothing reaches this checkout's history"
+            )
+        else:
+            print(
+                f"[brnrd] {style.warn_glyph()} borrowed: the setup agent committed on "
+                f"its own initiative and the undo did NOT take — HEAD is "
+                f"{now_sha!r}, expected {pre_sha!r}. The commit is still in this "
+                "checkout's history; undo it by hand."
+            )
 
     return _restore
 
