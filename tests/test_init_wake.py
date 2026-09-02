@@ -784,7 +784,7 @@ class TestTerminalLoop:
         assert session._current_emote().name == "ooh_"
 
         mood.write_text("satisfied\na family word\n")
-        assert session._current_emote().name == emotes.TELEMETRY_DEFAULTS["running"]
+        assert session._current_emote().family == "satisfied"
 
     def test_the_resident_arrives_with_a_face(self, tmp_path):
         """The wake writes `.mood`; the one conversation that is a person's
@@ -813,11 +813,11 @@ class TestTerminalLoop:
         mood.write_text("ooh_\nfound it\n")
         session._show_face()          # moved — renders
         mood.write_text("satisfied\na family word, four faces\n")
-        session._show_face()          # unresolvable — silent
+        session._show_face()          # canonical family default — renders
 
         faces = [line.strip() for line in printed if line.strip()]
-        assert len(faces) == 2, printed
-        assert faces[0] != faces[1]
+        assert len(faces) == 3, printed
+        assert len(set(faces)) == 3
         assert not any("satisfied" in line for line in printed)
 
     def test_event_is_real_and_retired_at_closeout(self, tmp_path):

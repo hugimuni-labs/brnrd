@@ -47,17 +47,12 @@ def test_mood_accepts_trailing_narration(monkeypatch, tmp_path, capsys):
     assert "the repro is in hand" in capsys.readouterr().out
 
 
-def test_mood_family_word_matches_nothing_and_writes_nothing(
+def test_mood_family_word_chooses_the_palette_default(
     monkeypatch, tmp_path, capsys,
 ):
-    """A family word is several faces at once — never a guess between them."""
-    assert _run(monkeypatch, tmp_path, ["mood", "satisfied"]) == 1
-    assert not (tmp_path / hooks.MOOD_NAME).exists()
-    err = capsys.readouterr().err
-    assert "no face matches" in err
-    assert "nothing was written" in err.lower()
-    # The near misses: the same family `emotes.near_misses` would name.
-    assert "ahh_" in err or "clean_" in err or "fine_" in err
+    """A family word selects its stable palette-order default."""
+    assert _run(monkeypatch, tmp_path, ["mood", "satisfied"]) == 0
+    assert _mood_text(tmp_path).splitlines()[0]
 
 
 def test_mood_invented_handle_with_no_near_misses_still_writes_nothing(
