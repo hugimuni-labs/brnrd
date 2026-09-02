@@ -88,6 +88,7 @@ __all__ = [
     "TELEMETRY_DEFAULTS",
     "TELEMETRY_STATES",
     "lookup",
+    "resolve_nearest",
     "near_misses",
     "glyph",
     "for_telemetry",
@@ -629,6 +630,45 @@ _SITUATIONAL: tuple[Emote, ...] = (
 
 EMOTES: dict[str, Emote] = _build(_TELEMETRY + _SITUATIONAL)
 
+# Common resident vocabulary mapped onto the palette's existing families.
+# This is interface vocabulary, deliberately dependency-free, not a general
+# thesaurus. Palette order chooses the default shade within each family.
+FAMILY_SYNONYMS: dict[str, tuple[str, ...]] = {
+    "amused": ("entertained", "funny", "playful", "wry", "chuckling"),
+    "annoyed": ("irritated", "frustrated", "vexed", "angry", "blunt"),
+    "betrayed": ("deceived", "let-down", "backstabbed", "abandoned", "misled"),
+    "bored": ("uninterested", "dull", "listless", "idle", "understimulated"),
+    "calm": ("patient", "steady", "peaceful", "composed", "unhurried"),
+    "content": ("comfortable", "okay", "settled", "fulfilled", "easy"),
+    "curious": ("inquisitive", "interested", "observant", "exploring", "wondering"),
+    "delighted": ("happy", "joyful", "pleased", "excited", "cheerful"),
+    "determined": ("resolute", "committed", "persistent", "hopeful", "driven"),
+    "dread": ("anxious", "afraid", "fearful", "doomed", "foreboding"),
+    "focused": ("concentrating", "intent", "surgical", "precise", "attentive"),
+    "gleeful": ("ecstatic", "exuberant", "thrilled", "buoyant", "giddy"),
+    "grateful": ("thankful", "appreciative", "obliged", "touched", "indebted"),
+    "greedy": ("eager", "hungry", "grasping", "covetous", "wanting"),
+    "grumpy": ("cranky", "grouchy", "cross", "sour", "testy"),
+    "humbled": ("chastened", "modest", "grounded", "corrected", "sobered"),
+    "overwhelmed": ("swamped", "overloaded", "buried", "flooded", "snowed-under"),
+    "puzzled": ("confused", "uncertain", "baffled", "perplexed", "mystified"),
+    "relieved": ("reassured", "unburdened", "safe", "released", "unworried"),
+    "satisfied": ("successful", "complete", "done", "gratified", "clean"),
+    "second-guessing": ("doubtful", "hesitant", "unsure", "reconsidering", "wavering"),
+    "sheepish": ("embarrassed", "awkward", "bashful", "guilty", "abashed"),
+    "smug": ("self-satisfied", "cocky", "knowing", "superior", "smirking"),
+    "spooked": ("startled", "alarmed", "jumpy", "haunted", "rattled"),
+    "stuck": ("blocked", "trapped", "stalled", "stranded", "wedged"),
+    "surprise": ("surprised", "astonished", "amazed", "shocked", "unexpected"),
+    "suspicious": ("skeptical", "dubious", "distrustful", "unconvinced", "questioning"),
+    "triumphant": ("victorious", "proud", "winning", "accomplished", "conquering"),
+    "uncanny": ("eerie", "strange", "unsettling", "weird", "otherworldly"),
+    "vindicated": ("validated", "proven", "justified", "right", "confirmed"),
+    "wary": ("cautious", "guarded", "careful", "watchful", "leery"),
+    "weary": ("tired", "exhausted", "drained", "fatigued", "spent"),
+    "wincing": ("pained", "cringing", "sore", "flinching", "aching"),
+}
+
 
 # Daemon state → face. Every ``TELEMETRY_STATES`` entry is mapped; the
 # daemon computes the state and renders the mapped face without asking the
@@ -664,38 +704,40 @@ def _norm(text: str) -> str:
     return "".join(c for c in text.lower() if c.isalnum())
 
 
+def _distance(left: str, right: str) -> int:
+    """Small Levenshtein distance helper for the resident-sized index."""
+    if len(left) > len(right):
+        left, right = right, left
+    previous = list(range(len(left) + 1))
+    for row, rchar in enumerate(right, 1):
+        current = [row]
+        for col, lchar in enumerate(left, 1):
+            current.append(min(current[-1] + 1, previous[col] + 1,
+                               previous[col - 1] + (lchar != rchar)))
+        previous = current
+    return previous[-1]
+
+
+def _family_face(family: str) -> Emote | None:
+    return next((e for e in EMOTES.values()
+                 if e.kind == "situational" and e.family == family), None)
+
+
+def _word_families() -> dict[str, str]:
+    words: dict[str, str] = {}
+    for family, synonyms in FAMILY_SYNONYMS.items():
+        words[_norm(family)] = family
+        for synonym in synonyms:
+            words[_norm(synonym)] = family
+    return words
+
+
 def lookup(name: str) -> Emote | None:
-    """Return the emote for *name*, or ``None`` if nothing resolves.
+    """Resolve an exact handle, feeling, synonym, or typo within two edits.
 
-    This is the resident's path: the first line of ``.mood`` comes in here,
-    and whatever this returns is what the dashboard draws.
-
-    **Why this is not a plain dict get.** It was one until 2026-07-25, and
-    it cost the feature its whole first week. ``.mood`` is a machine-parsed
-    channel, and the weave contract is explicit that the register decorates
-    nothing a parser reads — but the *handles themselves* were minted as
-    weave marks (``fo.cus``, ``sa.tis``-shaped things that don't exist) and
-    then matched byte for byte. A run writing the obvious thing, the word
-    for the feeling, resolved to ``None``: no glyph, no frames, no pitch,
-    and a dashboard with nothing to draw fell back to printing the raw
-    string. Every mood any run wore on brnrd.dev was that fallback. The
-    module *taught* the tolerant form too — ``search``'s own docstring
-    promises "``focus``, ``focused`` and ``fo.cus`` all land on the same
-    face" — and only the command nobody publishes through honoured it. Two
-    resolvers, one contract, and the strict one owned the wire.
-
-    So: exact first, then the stripped form, then a prefix either way
-    (``focused`` → ``fo.cus``), and **only when exactly one face matches**.
-    That is the line the honesty bar actually draws. A guess between two
-    candidates would be a face the resident didn't mean — forbidden, and
-    still is. A single unambiguous spelling of a face it plainly did mean
-    was never a lie; it was a parser refusing to read its own handwriting.
-
-    Still ``None`` for a family word (``satisfied`` is four faces, and
-    picking one is the forbidden guess) and for an invented handle. Those
-    are real misses — but they are no longer *silent* ones: see
-    ``near_misses``, which the wake surfaces so the run learns its face
-    didn't land while it can still fix it.
+    Families with several shades use their first palette entry as a stable
+    default. Completely unknown words remain unresolved here; the CLI's
+    non-strict always-write path explicitly opts into :func:`resolve_nearest`.
     """
 
     exact = EMOTES.get(name)
@@ -712,15 +754,51 @@ def lookup(name: str) -> Emote | None:
     if same:
         return None
 
-    # Prefix either way, but only on words long enough to mean something:
-    # a two-letter handle would swallow half the language.
-    close = [
-        e
-        for e in EMOTES.values()
-        if min(len(_norm(e.name)), len(needle)) >= 4
-        and (_norm(e.name).startswith(needle) or needle.startswith(_norm(e.name)))
-    ]
-    return close[0] if len(close) == 1 else None
+    family = _word_families().get(needle)
+    if family:
+        return _family_face(family)
+
+    candidates: list[tuple[int, str, Emote]] = []
+    for emote in EMOTES.values():
+        if emote.kind != "situational":
+            continue
+        for token in (_norm(emote.name), _norm(emote.family)):
+            distance = _distance(needle, token)
+            if distance <= 2:
+                candidates.append((distance, token, emote))
+    for token, candidate_family in _word_families().items():
+        distance = _distance(needle, token)
+        if distance <= 2:
+            face = _family_face(candidate_family)
+            if face:
+                candidates.append((distance, token, face))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda row: (row[0], row[1], row[2].name))
+    best_distance = candidates[0][0]
+    best = {row[2].family: row[2] for row in candidates if row[0] == best_distance}
+    return next(iter(best.values())) if len(best) == 1 else None
+
+
+def resolve_nearest(name: str) -> Emote | None:
+    """Resolve *name*, falling back to the lexically nearest face."""
+    resolved = lookup(name)
+    if resolved is not None:
+        return resolved
+    needle = _norm(name)
+    if not needle:
+        return None
+    ranked: list[tuple[int, str, Emote]] = []
+    for token, family in _word_families().items():
+        face = _family_face(family)
+        if face:
+            ranked.append((_distance(needle, token), token, face))
+    for emote in EMOTES.values():
+        if emote.kind == "situational":
+            token = _norm(emote.name)
+            ranked.append((_distance(needle, token), token, emote))
+    ranked.sort(key=lambda row: (row[0], row[1], row[2].name))
+    return ranked[0][2] if ranked else None
 
 
 def near_misses(name: str, *, limit: int = 4) -> list[Emote]:
@@ -733,10 +811,8 @@ def near_misses(name: str, *, limit: int = 4) -> list[Emote]:
     An absent reading rendering as fine, on the one channel whose entire
     purpose is the resident being legible.
 
-    Returns ``[]`` when the handle resolves; otherwise the nearest faces, so
-    the caller can say *which* ones. Family words land here on purpose:
-    ``satisfied`` is not a face, but it is four faces, and naming them is
-    the honest answer to a resident that asked for a feeling.
+    Returns ``[]`` when the word resolves; otherwise a ranked shortlist over
+    handles, feelings, and synonyms so the caller can say *which* ones.
     """
 
     if lookup(name) is not None:
@@ -747,7 +823,26 @@ def near_misses(name: str, *, limit: int = 4) -> list[Emote]:
     # and this returned nothing, while `daemon-substrate.md` promised "the
     # chip names near misses". Fall through to the typo pass rather than
     # leave the contract aspirational.
-    return hits or nearest(name, limit=limit)
+    if hits:
+        return hits
+    needle = _norm(name)
+    ranked: list[tuple[int, str, Emote]] = []
+    for token, family in _word_families().items():
+        face = _family_face(family)
+        if face:
+            ranked.append((_distance(needle, token), token, face))
+    for emote in EMOTES.values():
+        if emote.kind == "situational":
+            token = _norm(emote.name)
+            ranked.append((_distance(needle, token), token, emote))
+    ranked.sort(key=lambda row: (row[0], row[1], row[2].name))
+    unique: list[Emote] = []
+    for _score, _token, emote in ranked:
+        if emote not in unique:
+            unique.append(emote)
+        if len(unique) == limit:
+            break
+    return unique
 
 
 def families() -> tuple[str, ...]:
@@ -898,6 +993,8 @@ def search(query: str = "", *, limit: int = 12) -> list[Emote]:
     if not needle:
         return [e for e in EMOTES.values() if e.kind == "situational"][:limit]
 
+    query_family = _word_families().get(needle)
+
     scored: list[tuple[int, int, Emote]] = []
     for e in EMOTES.values():
         name = _norm(e.name)
@@ -907,6 +1004,8 @@ def search(query: str = "", *, limit: int = 12) -> list[Emote]:
             rank = 0
         elif name.startswith(needle) or needle.startswith(name):
             rank = 1
+        elif query_family and e.family == query_family:
+            rank = 2
         elif family and (
             family == needle
             or family.startswith(needle)
