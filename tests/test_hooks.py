@@ -3827,15 +3827,15 @@ def test_seed_and_stop_render_mood_as_a_plain_prose_line(tmp_path):
 def test_seed_says_so_when_the_mood_handle_did_not_resolve(tmp_path):
     """The boundary that can still fix it is the boundary that says so.
 
-    ``curious`` is the word; ``hmn_``/``ooh_``/``peek_`` are the faces. A
+    ``curiousity`` is a slip past the typo tolerance (``curious`` itself now resolves to its family's face); ``hmn_``/``itch_``/``ooh_`` are the faces it was reaching for. A
     resident writing the word believed it wore one for the whole run, and
     the dashboard published the word as an id. Now the seed answers back.
     """
     _portal(tmp_path, token="t1", pending=0)
-    (tmp_path / hooks.MOOD_NAME).write_text("curious", encoding="utf-8")
+    (tmp_path / hooks.MOOD_NAME).write_text("curiousity", encoding="utf-8")
     out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "- mood: ✗ curious → " in ctx
+    assert "- mood: ✗ curiousity → " in ctx
 
 
 def test_mood_malformed_file_is_read_defensively(tmp_path):
