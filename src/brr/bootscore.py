@@ -53,7 +53,7 @@ from .assignments import Assignment
 
 # ── Schema version ────────────────────────────────────────────────────────────
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
 # ── Event age (#1491) ────────────────────────────────────────────────────────
 #
@@ -524,6 +524,8 @@ class BootPosture:
     branch: str | None = None      # e.g. ``"brr/my-work"``
     handoff: str | None = None     # e.g. ``"no PR recorded"``
     delivery_state: str | None = None
+    needs_sync: str | None = None  # a knowledge push was rejected; the marker text
+    is_strand: bool = False        # a dispatched strand: its debts face the parent
 
 
 @dataclass(frozen=True)
@@ -755,7 +757,17 @@ def format_kernel(score: BootScore) -> str:
 
     Facts and pointers only — no LLM, no inferred intent, deterministic.
     """
-    lines: list[str] = [f"brnrd boot · score v{score.schema_version} · depth {score.depth}"]
+    lines: list[str] = [f"brnrd boot · v{score.schema_version} · depth {score.depth}"]
+    # v2 (2026-09-02, the boot lobotomy): three beats — what the resident
+    # *is* (restore), what body it woke into (incarnate), what the world holds
+    # right now (receive) — then the three standing debts. The v1 kernel
+    # rendered the same facts as numbered *assignments* with escalation
+    # windows (w-69); measured on two dumps of a live boot, that grammar
+    # taught a foreman's posture the identity files above it had spent
+    # 7 KB refusing. Facts are facts; debts are three; nothing here escalates.
+    restore: list[str] = []
+    incarnate: list[str] = []
+    receive: list[str] = []
 
     body = score.body
     runner = " / ".join(p for p in (body.shell, body.core) if p)
@@ -766,7 +778,7 @@ def format_kernel(score: BootScore) -> str:
     if body_bits:
         # A boot score exists before the Shell has produced attestation. This
         # line therefore names the requested body, never claims observation.
-        lines.append(f"body requested: {' · '.join(body_bits)}")
+        incarnate.append(f"body requested: {' · '.join(body_bits)}")
 
     if body.mounted:
         # Differential, like every other kernel line: absent — and costing nothing —
@@ -791,18 +803,20 @@ def format_kernel(score: BootScore) -> str:
         # (`transcript.SNAPSHOT_SEAM` carries the full reasoning): the memory is the
         # resident's own and predates this run; what is new here is only the run, whose
         # ledger of deeds starts empty. Nothing above the seam is a receipt.
-        lines.append(
-            "boot: mounted · <snapshot restored> · memory: yours, predates this run · "
-            "acts *here*: none yet"
+        restore.append(
+            "memory: yours, predates this run · <snapshot restored> · acts *here*: none yet"
         )
 
     host = score.host
     host_bits = [host.kind] + [b for b in (host.environment, host.publication_owner) if b]
-    lines.append(f"host: {' · '.join(host_bits)}")
+    host_line = f"host: {' · '.join(host_bits)}"
+    if (host.environment or "").strip() == "host":
+        host_line += " — shared checkout: branch off the default before you edit; your push, or nothing leaves this machine"
+    incarnate.append(host_line)
     if host.image_stale:
         # Differential, like everything else in the kernel: costs nothing on a
         # healthy wake, and on an unhealthy one it is the first thing read.
-        lines.append(
+        incarnate.append(
             "  stale: ⚠ boot rendered by a daemon image the checkout has "
             "superseded · prompt .md is current, kernel/orientation code is "
             "NOT · a boot-code change cannot be measured from this wake"
@@ -821,12 +835,12 @@ def format_kernel(score: BootScore) -> str:
         # current — no fingerprint was ever captured (an ad-hoc run: a fresh
         # interpreter, never daemon-hosted) — so it gets its own honest word
         # rather than being folded into "current".
-        lines.append(
+        incarnate.append(
             f"daemon image: current · fp {host.image_digest} · "
             f"captured {host.image_captured_at}"
         )
     else:
-        lines.append(
+        incarnate.append(
             "daemon image: not tracked · no fingerprint captured in this process"
         )
 
@@ -850,7 +864,7 @@ def format_kernel(score: BootScore) -> str:
         else:
             missing_bits = "no committed/home kb"
             cause = "no kb is wired up for this repo yet"
-        lines.append(
+        incarnate.append(
             f"  {missing_bits}: {cause}. Bounded work only: answer, "
             "inspect, or run the setup interview; don't invent a kb "
             "location to write into, and don't assume an AGENTS.md "
@@ -863,9 +877,9 @@ def format_kernel(score: BootScore) -> str:
         # common case — most blocks are never trimmed, and a trim in
         # chronological order stays silent), and on a stale one is among
         # the first things read.
-        lines.append(f"attest: {finding}")
+        incarnate.append(f"attest: {finding}")
 
-    lines.extend(_format_continuity(score.continuity))
+    restore.extend(_format_continuity(score.continuity))
 
     att = score.attention
     if att.event_ids:
@@ -878,7 +892,7 @@ def format_kernel(score: BootScore) -> str:
         retry_note = format_retry_note(att.retry_of, att.retry_failure_kind)
         if retry_note:
             att_line += f" · {retry_note}"
-        lines.append(att_line)
+        receive.append(att_line)
 
     posture = score.posture
     p_bits = [
@@ -886,42 +900,67 @@ def format_kernel(score: BootScore) -> str:
             posture.branch,
             posture.quota,
             f"budget {posture.budget}" if posture.budget else None,
-            f"{posture.pending_count} pending" if posture.pending_count else None,
+            # A strand never sees the resident's queue (2026-07-13: two strands
+            # answered twelve of the user's messages in the resident's thread).
+            f"{posture.pending_count} pending" if posture.pending_count and not posture.is_strand else None,
             posture.handoff,
         ) if b
     ]
     if p_bits:
-        lines.append(f"posture: {' · '.join(p_bits)}")
+        receive.append(f"posture: {' · '.join(p_bits)}")
 
-    if score.assignments:
-        # The ignition assignments (w-69): the wake's obligations as one
-        # typed list — the fold-in that replaced the `next:` prose list and
-        # the standalone `orient:` meter (both retired 2026-08-20,
-        # `design-the-ignition-assignments.md` fork 4, signed). Each row
-        # names its discharge act (`⇢`) and, when the boundary ledger meters
-        # it, the escalation window in boundaries (`↗Nb`) — priced per wake
-        # from the live quota posture, so a scarce week reads later, smaller
-        # escalations than a rich one. The header's scaffold clause is the
-        # `## Plan` offer (fork 1, signed): the rows as checkboxes, adopted,
-        # edited, or replaced by the resident's first card write — offered,
-        # never imposed; a deleted row is a deferral the escalation
-        # respects. The orientation files render under their own row, full
-        # absolute paths on purpose: the line exists to be *acted on* (each
-        # entry is one Read call), and a basename the wake would have to
-        # resolve first is a walk with a toll booth.
-        lines.append(
-            f"assignments: {len(score.assignments)} — discharge each "
-            "(⇢ names the act; ↗Nb = escalation starts after N boundaries), "
-            "adopt them as your .card ## Plan (`- [ ]` rows), or defer with "
-            "a named reason on the card"
+    if posture.needs_sync:
+        receive.append(
+            f"needs-sync: the knowledge push was rejected — {posture.needs_sync}; "
+            "reconcile the remote, brnrd clears the marker on the next clean capture"
         )
-        for i, a in enumerate(score.assignments, 1):
-            window = f" ↗{a.window}b" if a.window is not None else ""
-            lines.append(f"  {i}. {a.title} ⇢ {a.discharge}{window}")
-            if a.kind == "orient":
-                for f in score.orientation_set:
-                    lines.append(f"     · {f.path} ({f.bytes:,}B)")
+    if score.orientation_set:
+        # The walk (#513): files this wake did NOT carry whole. Served state
+        # is a fact of the wake, not a debt of the resident — a file already
+        # in the scroll is read, and asking for it again taxed every v1 boot
+        # 125 KB of confessions ("assuming prior knowledge, skipping"). What
+        # remains listed is what perception could not carry; reading it is a
+        # reach the resident prices, never a row it owes.
+        n = len(score.orientation_set)
+        total = sum(f.bytes for f in score.orientation_set)
+        receive.append(
+            f"reach: {n} file(s) · {total:,}B not carried whole by this wake — "
+            "read what the task touches; the surface block above already "
+            "serves the rest"
+        )
+        for f in score.orientation_set:
+            receive.append(f"  · {f.path} ({f.bytes:,}B)")
 
+    incarnate.append(
+        "seam: the world reaches you only at tool boundaries — a long call-less "
+        "think is deaf; shell nudges (\"hasn't heard from you\", batching, card "
+        "chips) are the body's reflexes, not the thread's voice"
+    )
+
+    lines.append("::restore")
+    lines.extend(f"  {l}" for l in restore)
+    lines.append("::incarnate")
+    lines.extend(f"  {l}" for l in incarnate)
+    lines.append("::receive")
+    lines.extend(f"  {l}" for l in receive)
+    if posture.is_strand:
+        lines.append(
+            "debts — three, standing: the report at its declared path · the "
+            "branch published · the return message on stdout (to the parent, "
+            "never a chat)"
+        )
+    else:
+        lines.append(
+            "debts — three, standing, yours: answer the person · leave receipts "
+            "(commit what you mean to keep; branch off the default on a host "
+            "checkout) · lose no work (`## Now` on .card before any long act; "
+            "what only you know, written)"
+        )
+        lines.append(
+            "telemetry: .name and .mood by your first outward act (reply or "
+            "commit) · .topics by the first produce — absent then, the daemon "
+            "derives a plain fallback and says so next wake"
+        )
     lines.append(
         "below: reference · `brnrd prompts show` names every block and its cost"
     )

@@ -1911,6 +1911,43 @@ def resolve_runner(repo_root: Path, overrides: dict[str, Any] | None = None) -> 
 
 
 _PROMPT_PLACEHOLDER = "{prompt}"
+#: The resident protonucleus (``prompts/protonucleus.md``): the smallest
+#: invariant of what a resident *is*, placed in the highest brnrd-owned
+#: instruction slot each Shell offers. ``{protonucleus}`` substitutes the
+#: packaged file's path (claude: ``--system-prompt-file``, so nothing lands in
+#: the process string); ``{protonucleus_text}`` substitutes its content where
+#: a Shell only takes inline text (codex: ``-c base_instructions=``).
+_PROTONUCLEUS_PATH_PLACEHOLDER = "{protonucleus}"
+_PROTONUCLEUS_TEXT_PLACEHOLDER = "{protonucleus_text}"
+
+
+def protonucleus_path() -> Path:
+    return Path(__file__).resolve().parent / "prompts" / "protonucleus.md"
+
+
+def _fill_protonucleus(cmd: list[str]) -> list[str]:
+    """Substitute the protonucleus placeholders in a profile argv template.
+
+    Path form: whole-argument only, like ``{prompt}``. Text form: embedded,
+    because its one consumer is a ``key=value`` config token. Neither touches
+    a pinned ``runner_cmd`` override — a pinned command is the user's.
+    """
+    if not any(_PROTONUCLEUS_PATH_PLACEHOLDER in p or _PROTONUCLEUS_TEXT_PLACEHOLDER in p for p in cmd):
+        return cmd
+    path = protonucleus_path()
+    text = path.read_text(encoding="utf-8").strip()
+    out: list[str] = []
+    for part in cmd:
+        if part == _PROTONUCLEUS_PATH_PLACEHOLDER:
+            out.append(str(path))
+        elif _PROTONUCLEUS_PATH_PLACEHOLDER in part:
+            raise ValueError(
+                "runner cmd element %r embeds {protonucleus}; make it its own "
+                "argv token (or use {protonucleus_text} for inline text)" % part
+            )
+        else:
+            out.append(part.replace(_PROTONUCLEUS_TEXT_PLACEHOLDER, text))
+    return out
 
 
 def _cmd_template(
@@ -1944,7 +1981,7 @@ def _cmd_template(
         profile = _selection_profiles(repo_root, probe=False).get(runner_name)
         profile_cmd = str(profile.get("cmd", runner_name)) if profile else runner_name
     if profile_cmd:
-        cmd = shlex.split(profile_cmd)
+        cmd = _fill_protonucleus(shlex.split(profile_cmd))
         cmd.extend(extra)
         return cmd
 

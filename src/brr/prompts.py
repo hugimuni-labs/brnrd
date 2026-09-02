@@ -3306,14 +3306,7 @@ def _build_assignments(
     """
     from . import assignments as assignments_mod
 
-    needs_sync: str | None = None
-    if repo_root is not None and not is_strand:
-        try:
-            from . import gitops, knowledge
-
-            needs_sync = knowledge.needs_sync(gitops.shared_brr_dir(repo_root))
-        except Exception:  # noqa: BLE001 — a boot score must never fail a wake
-            needs_sync = None
+    needs_sync = _needs_sync_marker(repo_root, is_strand=is_strand)
 
     return assignments_mod.derive(
         is_strand=is_strand,
@@ -3327,6 +3320,20 @@ def _build_assignments(
         needs_sync=needs_sync,
         pricing=assignments_mod.price(quota_binding_pct),
     )
+
+
+def _needs_sync_marker(repo_root: Path | None, *, is_strand: bool) -> str | None:
+    """The knowledge needs-sync marker text, or None. A strand never carries
+    it (the resident's duty, not the child's); a boot score must never fail
+    a wake, so any error reads as no marker."""
+    if repo_root is None or is_strand:
+        return None
+    try:
+        from . import gitops, knowledge
+
+        return knowledge.needs_sync(gitops.shared_brr_dir(repo_root))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 #: Cap on the orientation set (#513: "3–5 files"). The cap bounds the walk's
@@ -3800,6 +3807,8 @@ def build_boot_score(
             budget=budget,
             quota=quota,
             branch=branch,
+            needs_sync=_needs_sync_marker(repo_root, is_strand=is_strand),
+            is_strand=is_strand,
         ),
         assignments=_build_assignments(
             repo_root,
