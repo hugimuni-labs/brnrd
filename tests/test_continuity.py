@@ -910,12 +910,52 @@ def test_orientation_files_render_as_reach_not_as_a_row() -> None:
     assert "orient:" not in kernel
 
 
-def test_empty_assignments_cost_the_kernel_nothing() -> None:
-    # Differential like every kernel line — and this negative can fail: the
-    # positive twin above proves this same renderer emits `assignments:`
-    # when rows exist.
-    kernel = _kernel()
+def test_kernel_renders_debts_and_reach_not_rows(tmp_path):
+    from brr import prompts
+
+    (tmp_path / "AGENTS.md").write_text("# rules\ncontract\n", encoding="utf-8")
+    score = prompts.build_boot_score(
+        tmp_path, is_daemon=True, environment="host",
+        event_ids=("evt-1",), pending_count=2, has_event_body=True,
+    )
+    kernel = format_kernel(score)
+    assert "×3 standing · self-owned" in kernel
+    assert "answer the person · leave receipts" in kernel
+    assert "pending×2" in kernel
+    assert "branch off the default before you edit" in kernel
+    assert "first outward ⇒ .name + .mood" in kernel
     assert "assignments:" not in kernel
+    assert "⇢" not in kernel and "↗" not in kernel
+    assert "discharge each" not in kernel
+    assert "next:" not in kernel
+    assert "\norient:" not in kernel
+    assert "reach: files×1" in kernel
+    assert str((tmp_path / "AGENTS.md").resolve()) in kernel
+
+
+def test_a_strand_kernel_faces_the_parent(tmp_path):
+    from brr import prompts
+
+    score = prompts.build_boot_score(
+        tmp_path, is_daemon=True, is_strand=True, environment="host",
+        pending_count=12, has_event_body=True,
+    )
+    kernel = format_kernel(score)
+    assert "pending" not in kernel
+    assert "the return message on stdout (to the parent" in kernel
+    assert "answer the person" not in kernel
+    assert "first outward" not in kernel
+
+
+def test_the_persisted_score_carries_no_assignments_field(tmp_path):
+    from brr import prompts
+    from brr.bootscore import to_dict
+
+    (tmp_path / "AGENTS.md").write_text("# rules\n", encoding="utf-8")
+    score = prompts.build_boot_score(
+        tmp_path, is_daemon=True, has_event_body=True,
+    )
+    assert "assignments" not in to_dict(score)
 
 
 def test_orientation_set_rides_to_dict() -> None:
