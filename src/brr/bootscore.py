@@ -804,7 +804,8 @@ def format_kernel(score: BootScore) -> str:
         # resident's own and predates this run; what is new here is only the run, whose
         # ledger of deeds starts empty. Nothing above the seam is a receipt.
         restore.append(
-            "memory: yours, predates this run · <snapshot restored> · acts *here*: none yet"
+            "boot: mounted · <snapshot restored> · memory: yours, predates this run · "
+            "acts *here*: none yet"
         )
 
     host = score.host
