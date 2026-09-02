@@ -16,6 +16,18 @@ test('build log entries are unique, dated, and substantial', () => {
 		ok(entry.links.length >= 1, `${entry.slug} carries no receipts`);
 		for (const link of entry.links) {
 			ok(/^https?:\/\//.test(link.url), `${entry.slug} link is not an absolute URL: ${link.url}`);
+			// A receipt has to still resolve years from now. A forge blob URL
+			// pinned to a *branch* stops being a receipt the moment that branch
+			// is deleted or moves — and the branch this entry was written on is
+			// exactly the branch that gets merged and swept. Require a 40-char
+			// commit SHA in the ref position.
+			const blob = link.url.match(/^https:\/\/github\.com\/[^/]+\/[^/]+\/blob\/([^/]+)\//);
+			if (blob) {
+				ok(
+					/^[0-9a-f]{40}$/.test(blob[1]),
+					`${entry.slug} pins a receipt to a mutable ref instead of a commit SHA: ${link.url}`
+				);
+			}
 		}
 	}
 });
