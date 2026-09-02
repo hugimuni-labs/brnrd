@@ -31,6 +31,8 @@ _RUNNER_BASE = (
     "You are a brnrd runner. Follow the supplied prompt and operate on the "
     "files available in the working directory."
 )
+_NUCLEUS_PATH = str(runner_mod.protonucleus_path())
+_NUCLEUS_TEXT = runner_mod.protonucleus_path().read_text(encoding="utf-8").strip()
 
 
 def test_clean_runner_environ_strips_parent_agent_session_leakage(monkeypatch):
@@ -1277,7 +1279,7 @@ class TestCommandBuilding:
             "--dangerously-bypass-approvals-and-sandbox",
             "--dangerously-bypass-hook-trust",
             "-c",
-            f"base_instructions={_RUNNER_BASE}",
+            f"base_instructions={_NUCLEUS_TEXT}",
             "-c",
             "include_permissions_instructions=false",
             "-c",
@@ -1302,8 +1304,8 @@ class TestCommandBuilding:
             # installs for the `hooks: claude` profile.
             "--setting-sources",
             "local",
-            "--system-prompt",
-            _RUNNER_BASE,
+            "--system-prompt-file",
+            _NUCLEUS_PATH,
         ]
 
     def test_build_cmd_claude_bare_api_only_headless(self):
@@ -1315,8 +1317,8 @@ class TestCommandBuilding:
             "json",
             "--dangerously-skip-permissions",
             "--bare",
-            "--system-prompt",
-            _RUNNER_BASE,
+            "--system-prompt-file",
+            _NUCLEUS_PATH,
         ]
 
     def test_build_cmd_generated_claude_bare_api_core_headless(self):
@@ -1331,8 +1333,8 @@ class TestCommandBuilding:
             "json",
             "--dangerously-skip-permissions",
             "--bare",
-            "--system-prompt",
-            _RUNNER_BASE,
+            "--system-prompt-file",
+            _NUCLEUS_PATH,
         ]
 
     def test_invoke_runner_unwraps_claude_json_response(self, tmp_path):

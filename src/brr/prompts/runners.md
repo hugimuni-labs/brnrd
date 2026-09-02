@@ -1,6 +1,6 @@
 ---
 claude:
-  cmd: 'claude --print --output-format json --dangerously-skip-permissions --setting-sources local --system-prompt "You are a brnrd runner. Follow the supplied prompt and operate on the files available in the working directory."'
+  cmd: 'claude --print --output-format json --dangerously-skip-permissions --setting-sources local --system-prompt-file {protonucleus}'
   hooks: claude
   provider: anthropic
   owner: user
@@ -10,7 +10,7 @@ claude:
 claude-bare-api-only:
   binary: claude
   shell: claude
-  cmd: 'claude --print --output-format json --dangerously-skip-permissions --bare --system-prompt "You are a brnrd runner. Follow the supplied prompt and operate on the files available in the working directory."'
+  cmd: 'claude --print --output-format json --dangerously-skip-permissions --bare --system-prompt-file {protonucleus}'
   provider: anthropic
   owner: user
   class: balanced
@@ -18,7 +18,7 @@ claude-bare-api-only:
   auth_variant: anthropic-api-key
   auth_env: ANTHROPIC_API_KEY
 codex:
-  cmd: 'codex exec --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -c base_instructions="You are a brnrd runner. Follow the supplied prompt and operate on the files available in the working directory." -c include_permissions_instructions=false -c include_apps_instructions=false -c include_collaboration_mode_instructions=false -c include_skill_instructions=false'
+  cmd: 'codex exec --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -c base_instructions={protonucleus_text} -c include_permissions_instructions=false -c include_apps_instructions=false -c include_collaboration_mode_instructions=false -c include_skill_instructions=false'
   hooks: codex
   provider: openai
   owner: user

@@ -728,7 +728,7 @@ class TestBootScore:
                                   runner_core="claude-sonnet-4-6")
         text = format_manifest(score)
         assert "brnrd boot" in text
-        assert "schema v1" in text
+        assert "schema v2" in text
         assert "source manifest:" in text
         assert "owner" in text
         assert "authority" in text
@@ -912,9 +912,12 @@ class TestBootScore:
         host = build_boot_score(
             empty_repo, environment="host", pending_count=3, has_event_body=True
         )
-        titles = [a.title for a in host.assignments]
-        assert "branch before you edit" in titles
-        assert "answer 3 queued events" in titles
+        assert host.assignments == []  # v2: facts and debts, not rows
+        from brr.bootscore import format_kernel
+
+        kernel = format_kernel(host)
+        assert "branch off the default before you edit" in kernel
+        assert "3 pending" in kernel
 
         worktree = build_boot_score(
             empty_repo, environment="worktree", pending_count=0, has_event_body=True

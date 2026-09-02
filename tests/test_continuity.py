@@ -57,7 +57,7 @@ def test_body_provenance_renders_on_the_body_line() -> None:
         ),
     )
     body_line = next(
-        ln for ln in out.splitlines() if ln.startswith("body requested:")
+        ln for ln in out.splitlines() if ln.lstrip().startswith("body requested:")
     )
     assert "requested from the dashboard spool rack" in body_line
 
@@ -76,7 +76,7 @@ def test_attention_line_names_the_gate_not_the_runner() -> None:
         ),
         attention=BootAttention(event_ids=("evt-xlqg",), source_gate="telegram"),
     )
-    att = next(ln for ln in out.splitlines() if ln.startswith("attention:"))
+    att = next(ln for ln in out.splitlines() if ln.lstrip().startswith("attention:"))
     assert "via telegram" in att
     # The exact shape of the original bug: the runner note leaking onto the
     # attention line, where it asserted a falsehood in the wake's hottest slot.
@@ -154,7 +154,7 @@ def test_attention_line_stale_event_renders_age_and_soft_language() -> None:
             age_seconds=6 * 3600 + 6 * 60,
         ),
     )
-    att = next(ln for ln in out.splitlines() if ln.startswith("attention:"))
+    att = next(ln for ln in out.splitlines() if ln.lstrip().startswith("attention:"))
     assert "via telegram" in att
     assert "sent 2026-08-18T14:58:06Z" in att
     assert "6h06m ago" in att
@@ -172,7 +172,7 @@ def test_attention_line_fresh_event_stays_quiet() -> None:
             age_seconds=12.0,
         ),
     )
-    att = next(ln for ln in out.splitlines() if ln.startswith("attention:"))
+    att = next(ln for ln in out.splitlines() if ln.lstrip().startswith("attention:"))
     assert "sent 2026-08-18T21:33:00Z" in att
     assert "ago" not in att
     assert "asleep" not in att
@@ -184,8 +184,8 @@ def test_attention_line_missing_created_degrades_quietly() -> None:
     out = _kernel(
         attention=BootAttention(event_ids=("evt-x",), source_gate="telegram"),
     )
-    att = next(ln for ln in out.splitlines() if ln.startswith("attention:"))
-    assert att == "attention: evt-x · via telegram"
+    att = next(ln for ln in out.splitlines() if ln.lstrip().startswith("attention:"))
+    assert att.strip() == "attention: evt-x · via telegram"
 
 
 def test_attention_line_renders_retry_provenance() -> None:
@@ -197,7 +197,7 @@ def test_attention_line_renders_retry_provenance() -> None:
             retry_failure_kind="host_interrupted",
         ),
     )
-    att = next(ln for ln in out.splitlines() if ln.startswith("attention:"))
+    att = next(ln for ln in out.splitlines() if ln.lstrip().startswith("attention:"))
     assert "retry of run-260818-1834-lcu3 (host interrupt)" in att
 
 
@@ -223,25 +223,16 @@ def test_worker_is_never_told_to_answer_the_residents_queue() -> None:
     thesis confirmed from its ugly end: **the imperative list at the hot slot is
     what gets acted on; the prose contract beneath it is what gets skimmed.**
     """
-    from brr.prompts import _build_assignments
+    from brr.bootscore import BootPosture
 
-    def titles(*, is_strand: bool) -> list[str]:
-        return [
-            a.title
-            for a in _build_assignments(
-                None,
-                is_strand=is_strand,
-                environment="worktree",
-                pending_count=12,
-                has_event_body=True,
-                orientation_set=[],
-                quota_binding_pct=None,
-            )
-        ]
+    def kernel(*, is_strand: bool) -> str:
+        return _kernel(posture=BootPosture(pending_count=12, is_strand=is_strand))
 
-    assert not any("queued event" in t for t in titles(is_strand=True))
+    assert "pending" not in kernel(is_strand=True)
+    assert "the return message on stdout (to the parent" in kernel(is_strand=True)
     # …and the resident still gets it: the fix is a gate, not a deletion.
-    assert any("queued event" in t for t in titles(is_strand=False))
+    assert "12 pending" in kernel(is_strand=False)
+    assert "answer the person" in kernel(is_strand=False)
 
 
 # ── Continuity ────────────────────────────────────────────────────────────────
@@ -700,12 +691,12 @@ def test_stale_image_is_announced_in_the_kernel() -> None:
     """
     out = _kernel(host=BootHost(kind="daemon", environment="worktree", image_stale=True))
     lines = out.splitlines()
-    host_i = next(i for i, ln in enumerate(lines) if ln.startswith("host:"))
+    host_i = next(i for i, ln in enumerate(lines) if ln.lstrip().startswith("host:"))
 
     # Directly under `host:` — it is a fact about the host's image, and it is
     # above `next:`, so it cannot be reached by acting on the list first.
     stale = lines[host_i + 1]
-    assert stale.startswith("  stale: ⚠"), out
+    assert stale.lstrip().startswith("stale: ⚠"), out
     assert "superseded" in stale
     # Names *what* is stale. "The boot is stale" would send a reader to re-read
     # the prose, which is the one part that is always current.
@@ -750,13 +741,13 @@ def test_current_image_is_announced_in_the_kernel() -> None:
         )
     )
     lines = out.splitlines()
-    host_i = next(i for i, ln in enumerate(lines) if ln.startswith("host:"))
+    host_i = next(i for i, ln in enumerate(lines) if ln.lstrip().startswith("host:"))
 
     # Same position as `stale:` — directly under `host:`, above `next:` — so a
     # reader who has learned to check the first line after `host:` gets the
     # answer either way, instead of only when it's bad news.
     current = lines[host_i + 1]
-    assert current.startswith("daemon image: current"), out
+    assert current.lstrip().startswith("daemon image: current"), out
     assert "8f3a91c2ab" in current
     assert "2026-07-27T16:32:59Z" in current
     assert "stale:" not in out
@@ -770,9 +761,9 @@ def test_untracked_image_is_not_the_same_word_as_current() -> None:
     """
     out = _kernel(host=BootHost(kind="ad-hoc"))
     lines = out.splitlines()
-    host_i = next(i for i, ln in enumerate(lines) if ln.startswith("host:"))
+    host_i = next(i for i, ln in enumerate(lines) if ln.lstrip().startswith("host:"))
 
-    line = lines[host_i + 1]
+    line = lines[host_i + 1].strip()
     assert line == (
         "daemon image: not tracked · no fingerprint captured in this process"
     ), out
@@ -792,9 +783,9 @@ def test_stale_line_wins_over_the_current_line() -> None:
         )
     )
     lines = out.splitlines()
-    host_i = next(i for i, ln in enumerate(lines) if ln.startswith("host:"))
+    host_i = next(i for i, ln in enumerate(lines) if ln.lstrip().startswith("host:"))
 
-    assert lines[host_i + 1].startswith("  stale: ⚠"), out
+    assert lines[host_i + 1].lstrip().startswith("stale: ⚠"), out
     assert "daemon image: current" not in out
     assert "not tracked" not in out
 
@@ -836,7 +827,7 @@ def test_stale_block_is_announced_in_the_kernel() -> None:
         host=BootHost(kind="daemon", environment="worktree"),
         contracts=[_stale_ledger_entry()],
     )
-    lines = [ln for ln in out.splitlines() if ln.startswith("attest:")]
+    lines = [ln for ln in out.splitlines() if ln.lstrip().startswith("attest:")]
     assert len(lines) == 1, out
     line = lines[0]
     assert "⚠" in line
@@ -897,30 +888,23 @@ def test_attest_blocks_names_the_block_and_both_dates() -> None:
 # them apart so the naming collision this slice inherited cannot regrow.
 
 
-def test_orientation_files_render_under_their_assignment_row() -> None:
-    # w-69: the standalone `orient:` block and the `next:` list retired
-    # into one typed assignment list; the walk's files render under the
-    # orient row, full absolute paths, byte costs intact.
-    from brr.assignments import Assignment
+def test_orientation_files_render_as_reach_not_as_a_row() -> None:
+    # v2 (the boot lobotomy): the walk's files render under `reach:` in the
+    # `::receive` beat — full absolute paths, byte costs intact — as a fact
+    # of what the wake did not carry, never as a row the resident owes.
     from brr.bootscore import OrientationFile
 
     kernel = _kernel(
-        assignments=[Assignment(
-            id="a-orient", kind="orient",
-            title="walk the orientation set (2 file(s) · 13,921B)",
-            discharge="Read each, or declare the skip on .card",
-            window=6,
-        )],
         orientation_set=[
             OrientationFile(path="/repo/AGENTS.md", bytes=4120),
             OrientationFile(path="/home/kb/subject-envs.md", bytes=9801),
         ],
     )
-    assert "assignments: 1" in kernel
-    assert "walk the orientation set (2 file(s) · 13,921B)" in kernel
-    assert "     · /repo/AGENTS.md (4,120B)" in kernel
-    assert "     · /home/kb/subject-envs.md (9,801B)" in kernel
-    assert "↗6b" in kernel
+    assert "reach: 2 file(s) · 13,921B" in kernel
+    assert "    · /repo/AGENTS.md (4,120B)" in kernel
+    assert "    · /home/kb/subject-envs.md (9,801B)" in kernel
+    assert "assignments:" not in kernel
+    assert "↗" not in kernel
     # The retired blocks stay retired.
     assert "next:" not in kernel
     assert "orient:" not in kernel
@@ -1174,7 +1158,7 @@ def test_rendered_kernel_names_every_file_the_persisted_score_meters(
     for entry in score.orientation_set:
         assert entry.path in prompt, f"kernel never names {entry.path}"
     assert (
-        f"walk the orientation set ({len(score.orientation_set)} file(s)"
+        f"reach: {len(score.orientation_set)} file(s)"
         in prompt
     )
 

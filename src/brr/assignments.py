@@ -1,5 +1,13 @@
 """The ignition assignments (w-69) — the boot as typed obligations.
 
+**Stood down 2026-09-02 (the boot lobotomy, design-the-boot-that-remembers-
+itself.md).** :func:`derive` now returns no rows: the v2 kernel renders the
+same facts as perception (``::receive``) and three standing debts as text,
+and nothing escalates. The boundary ledger below (:func:`advance` and its
+readers in :mod:`brr.hooks`) degrades to "no ledger" by construction when the
+persisted score carries no rows — kept intact for one release so an older
+``boot-score.json`` still reads; the hooks-side retirement is the next cut.
+
 The boot used to be *blocks to read*; the run's obligations arrived as prose
 scattered across them (a ``next:`` list, a portal seed, an orientation meter,
 standing nags). This module makes the boot *assignments to discharge*: one
@@ -176,6 +184,27 @@ def derive(
     identity claims; the 2026-07-13 incident (strands answering the
     resident's queue) is why ``pending_count`` never reaches a strand row.
     """
+    # v2: the boot renders facts and debts, not rows. Every input above is
+    # still a fact the kernel shows (``bootscore.format_kernel``); none is a
+    # row the resident owes. Returning the empty list here — rather than
+    # deleting the engine — keeps ``boot-score.json`` readable across the
+    # seam and the hooks ledger inert.
+    del pricing, is_strand, environment, has_event_body, pending_count
+    del orientation_files, orientation_bytes, needs_sync
+    return []
+
+
+def _derive_v1(  # pragma: no cover — kept for one release, unreachable
+    *,
+    is_strand: bool = False,
+    environment: str | None = None,
+    has_event_body: bool = False,
+    pending_count: int = 0,
+    orientation_files: int = 0,
+    orientation_bytes: int = 0,
+    needs_sync: str | None = None,
+    pricing: Pricing | None = None,
+) -> list[Assignment]:
     p = pricing or price(None)
     rows: list[Assignment] = []
 

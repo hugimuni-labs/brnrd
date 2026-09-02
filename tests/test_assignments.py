@@ -41,41 +41,25 @@ def test_unmeasured_quota_prices_neutral():
     assert p.label == "unmeasured"
 
 
-def test_windows_scale_with_the_price():
-    rich = am.derive(has_event_body=True, pending_count=1, pricing=am.price(80.0))
-    scarce = am.derive(has_event_body=True, pending_count=1, pricing=am.price(5.0))
-    rich_pending = next(a for a in rich if a.kind == am.KIND_PENDING)
-    scarce_pending = next(a for a in scarce if a.kind == am.KIND_PENDING)
-    assert scarce_pending.window > rich_pending.window
-    assert scarce_pending.cadence > rich_pending.cadence
+def test_pricing_still_answers_but_derive_no_longer_spends_it():
+    # v2: the price is still a fact (the scheduler reads the same floors);
+    # nothing in the boot is metered by it any more.
+    assert am.price(5.0).multiplier > am.price(80.0).multiplier
+    assert am.derive(has_event_body=True, pending_count=1, pricing=am.price(5.0)) == []
 
 
 # ── Derivation ─────────────────────────────────────────────────────────────
 
 
-def test_the_waking_event_is_assignment_one():
-    # The signed rider (evt-…-pbrc): the run's own reason arrives as
-    # assignment #1, not special-cased prose above the list.
-    rows = am.derive(has_event_body=True, pending_count=3, pricing=am.price(None))
-    assert rows[0].kind == am.KIND_EVENT
-    # And it is unmetered: its normal discharge (the final stdout reply)
-    # post-dates every boundary; the Stop capsule governs that seam.
-    assert rows[0].window is None
-
-
-def test_a_strand_never_sees_the_residents_queue():
-    # The 2026-07-13 incident, re-pinned against the new list: a strand
-    # inherited the parent's pending count at position 1 of the old `next:`
-    # list and answered the user's messages in the resident's thread.
-    rows = am.derive(
-        is_strand=True, has_event_body=True, pending_count=12,
-        environment="host", pricing=am.price(None),
-    )
-    assert all(a.kind != am.KIND_PENDING for a in rows)
-    # Nor the resident-only card/claims rows.
-    assert all(a.kind not in (am.KIND_CARD, am.KIND_CLAIMS) for a in rows)
-    # But the host branch rule still reaches it.
-    assert any(a.kind == am.KIND_BRANCH for a in rows)
+def test_derive_stands_down_for_every_shape():
+    # v2 (the boot lobotomy): the kernel renders facts (`::receive`) and
+    # three standing debts as text; no row, no window, no escalation.
+    for kw in (
+        dict(has_event_body=True, pending_count=3),
+        dict(is_strand=True, has_event_body=True, pending_count=12, environment="host"),
+        dict(environment="host", needs_sync="rejected at 12:00Z"),
+    ):
+        assert am.derive(pricing=am.price(None), **kw) == []
 
 
 def test_escalation_detail_is_capped_by_construction():
@@ -83,7 +67,7 @@ def test_escalation_detail_is_capped_by_construction():
         assert len(am.detail_lines_for(kind)) <= am.ESCALATION_CAP
 
 
-def test_kernel_renders_rows_with_discharge_and_window(tmp_path):
+def test_kernel_renders_debts_and_reach_not_rows(tmp_path):
     (tmp_path / "AGENTS.md").write_text("# rules\ncontract\n", encoding="utf-8")
     score = prompts.build_boot_score(
         tmp_path, is_daemon=True, environment="host",
@@ -91,27 +75,46 @@ def test_kernel_renders_rows_with_discharge_and_window(tmp_path):
         quota_binding_pct=80.0,
     )
     kernel = format_kernel(score)
-    assert "assignments:" in kernel
-    assert "1. answer the waking event" in kernel
-    assert "⇢" in kernel               # every row names its discharge
-    assert "↗" in kernel               # metered rows name their window
-    assert "## Plan" in kernel         # the scaffold offer (fork 1, signed)
+    assert "::restore" in kernel and "::incarnate" in kernel and "::receive" in kernel
+    assert "debts — three, standing, yours: answer the person" in kernel
+    assert "2 pending" in kernel
+    assert "branch off the default before you edit" in kernel
+    assert "telemetry: .name and .mood by your first outward act" in kernel
+    # The v1 grammar is gone, not renamed.
+    assert "assignments:" not in kernel
+    assert "⇢" not in kernel and "↗" not in kernel
+    assert "discharge each" not in kernel
     # The retired surfaces stay retired.
     assert "next:" not in kernel
     assert "\norient:" not in kernel
-    # The orientation files render under their own row.
+    # The orientation files render under `reach:`.
+    assert "reach: 1 file(s)" in kernel
     assert str((tmp_path / "AGENTS.md").resolve()) in kernel
 
 
-def test_assignments_ride_the_persisted_score(tmp_path):
+def test_a_strand_kernel_faces_the_parent(tmp_path):
+    # The 2026-07-13 incident, re-pinned on the kernel itself: a strand
+    # never sees the resident's queue, and its debts face the parent.
+    score = prompts.build_boot_score(
+        tmp_path, is_daemon=True, is_strand=True, environment="host",
+        pending_count=12, has_event_body=True, quota_binding_pct=None,
+    )
+    kernel = format_kernel(score)
+    assert "pending" not in kernel
+    assert "the return message on stdout (to the parent" in kernel
+    assert "answer the person" not in kernel
+    assert "telemetry:" not in kernel
+
+
+def test_the_persisted_score_carries_no_rows_and_the_ledger_stands_down(tmp_path):
     (tmp_path / "AGENTS.md").write_text("# rules\n", encoding="utf-8")
     score = prompts.build_boot_score(
         tmp_path, is_daemon=True, has_event_body=True, quota_binding_pct=None,
     )
     persisted = to_dict(score)
-    rows = am.rows_from_score(persisted)
-    assert rows and rows[0]["id"] == "a-event"
-    # And an older score without the field degrades to no ledger.
+    assert persisted["assignments"] == []
+    assert am.rows_from_score(persisted) == []
+    # And an older score without the field degrades the same way.
     assert am.rows_from_score({"orientation_set": []}) == []
 
 
