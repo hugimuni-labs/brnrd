@@ -26,7 +26,7 @@ from fastapi.testclient import TestClient
 
 from brnrd.app import create_app
 from brnrd.config import Settings
-from brnrd.spa import backend_namespaces, resolve_frontend_dir
+from brnrd.spa import _safe_file, backend_namespaces, resolve_frontend_dir
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_ROUTES = REPO_ROOT / "src" / "frontend" / "src" / "routes"
@@ -230,3 +230,168 @@ def test_missing_app_asset_is_a_404_not_the_shell(spa_client):
     assert "text/html" not in response.headers.get("content-type", "")
     # An `_app` file that *does* exist still serves normally.
     assert spa_client.get("/_app/app.js").status_code == 200
+
+
+@pytest.fixture
+def prerendered_client(tmp_path):
+    """A build tree that also carries prerendered pages, the way
+    ``adapter-static`` actually writes them.
+
+    Its ``trailingSlash`` default emits ``<route>.html``, not
+    ``<route>/index.html`` — so the file a request for ``/pricing`` needs is
+    not named ``pricing``. A lookup that only tries the literal path finds
+    nothing, falls through to the shell, and the prerender is 100% correct in
+    the build output and 0% effective on the wire.
+
+    The escape file outside ``build/`` is not decoration: it is what the
+    ``.html``-suffix branch would reach for ``/.`` without its guard.
+    """
+    build = tmp_path / "build"
+    (build / "_app").mkdir(parents=True)
+    (build / "index.html").write_text(
+        "<!doctype html><title>brnrd</title>", encoding="utf-8")
+    (build / "pricing.html").write_text(
+        "<!doctype html><title>pricing · brnrd</title>"
+        '<meta property="og:title" content="pricing · brnrd">', encoding="utf-8")
+    (build / "learn").mkdir()
+    (build / "learn" / "agent-orchestration.html").write_text(
+        "<!doctype html><title>agent orchestration · brnrd</title>",
+        encoding="utf-8")
+    (build / "robots.txt").write_text("User-agent: *\n", encoding="utf-8")
+    (tmp_path / "build.html").write_text("ESCAPED", encoding="utf-8")
+    settings = Settings(
+        database_url="sqlite://",
+        telegram_auto_webhook=False,
+        frontend_dir=str(build),
+    )
+    with TestClient(create_app(settings)) as client:
+        yield client
+
+
+def test_a_prerendered_route_is_served_not_the_shell(prerendered_client):
+    """The whole point of prerendering: the crawler sees the page's own head.
+
+    A crawler runs no JavaScript, so if this falls through to the shell the
+    link unfurls as the bare word "brnrd" no matter how correct the build is.
+    """
+    r = prerendered_client.get("/pricing")
+    assert r.status_code == 200
+    assert "<title>pricing · brnrd</title>" in r.text
+    assert 'property="og:title"' in r.text
+
+    nested = prerendered_client.get("/learn/agent-orchestration")
+    assert nested.status_code == 200
+    assert "<title>agent orchestration · brnrd</title>" in nested.text
+
+
+def test_a_route_with_no_prerender_still_gets_the_shell(prerendered_client):
+    """The fallback is unchanged for genuinely client-only routes."""
+    r = prerendered_client.get("/repos")
+    assert r.status_code == 200
+    assert "<title>brnrd</title>" in r.text
+
+
+def test_every_served_html_document_must_revalidate(prerendered_client):
+    """Not just the shell (#1732 one route over).
+
+    A prerendered page points at one build's hashed chunks exactly as the
+    shell does. Caching it across a deploy renders a previous build's UI and
+    never asks whether it is current.
+    """
+    for path in ("/", "/index.html", "/pricing", "/learn/agent-orchestration", "/repos"):
+        r = prerendered_client.get(path)
+        assert r.status_code == 200, path
+        assert r.headers.get("cache-control") == "no-cache", path
+
+
+def test_the_html_suffix_branch_cannot_reach_a_sibling_of_the_build_root(tmp_path):
+    """``/.`` resolves to the build root itself and passes the containment
+    check — and ``root.with_name(root.name + ".html")`` is root's *sibling*,
+    outside the tree. The ``candidate != root`` guard is what stops it.
+
+    Pinned at ``_safe_file`` rather than through the client on purpose, and
+    the distinction is the honest part: httpx (and any RFC-3986 conforming
+    client, including curl) removes the dot segment before the request is
+    sent, so a ``TestClient.get("/.")`` never delivers ``spa_path == "."`` and
+    a test written at that layer passes with the guard deleted — measured.
+    A raw ``GET /. HTTP/1.1`` on a socket is not normalised by anything
+    between h11 and this function, so the vector is not disproven, only
+    unreachable through this client. Guarding it costs one comparison; the
+    test says which layer it actually covers.
+    """
+    build = tmp_path / "build"
+    build.mkdir()
+    (build / "index.html").write_text("shell", encoding="utf-8")
+    (tmp_path / "build.html").write_text("ESCAPED", encoding="utf-8")
+
+    root = build.resolve()
+    assert _safe_file(root, ".") == root / "index.html"
+    assert _safe_file(root, "..") is None
+
+
+def _client_for(build: Path):
+    settings = Settings(
+        database_url="sqlite://",
+        telegram_auto_webhook=False,
+        frontend_dir=str(build),
+    )
+    return TestClient(create_app(settings))
+
+
+def test_the_shell_and_the_prerendered_landing_are_different_documents(tmp_path):
+    """``/`` is baked; every client route gets the fallback.
+
+    Until the fallback was renamed these were one filename, and SvelteKit
+    writes the fallback *after* prerendering — it warns ("Overwriting
+    build/index.html with fallback page") and then does it, so `/`'s real
+    content was silently replaced by the generic shell every build.
+    """
+    build = tmp_path / "build"
+    (build / "_app").mkdir(parents=True)
+    (build / "200.html").write_text(
+        "<!doctype html><title>brnrd</title>", encoding="utf-8")
+    (build / "index.html").write_text(
+        "<!doctype html><title>brnrd — a resident, not a chatbot</title>",
+        encoding="utf-8")
+
+    with _client_for(build) as client:
+        landing = client.get("/")
+        assert "a resident, not a chatbot" in landing.text
+        for path in ("/repos", "/login", "/connect/BR-123"):
+            r = client.get(path)
+            assert r.status_code == 200, path
+            assert "<title>brnrd</title>" in r.text, path
+            assert "a resident" not in r.text, path
+
+
+def test_a_build_without_the_renamed_fallback_still_serves_client_routes(tmp_path):
+    """A backend deployed ahead of a frontend that still writes the old shape.
+
+    It must degrade to exactly the previous behaviour — every client route on
+    ``index.html`` — never to a 404 on every deep link.
+    """
+    build = tmp_path / "build"
+    (build / "_app").mkdir(parents=True)
+    (build / "index.html").write_text(
+        "<!doctype html><title>brnrd</title>", encoding="utf-8")
+
+    with _client_for(build) as client:
+        for path in ("/", "/repos", "/login"):
+            r = client.get(path)
+            assert r.status_code == 200, path
+            assert "<title>brnrd</title>" in r.text, path
+
+
+def test_the_backend_prefers_the_fallback_name_the_build_actually_writes():
+    """One fact, two files — so it is checked, not trusted.
+
+    ``vite.config.ts`` decides the fallback's filename and ``spa.py`` decides
+    which filename it serves as the shell. A rename on one side alone blanks
+    every client route on the site, which is the failure this pins.
+    """
+    fallback = re.search(r"fallback:\s*'([^']+)'", VITE_CONFIG.read_text(encoding="utf-8"))
+    assert fallback, "vite.config.ts no longer declares an adapter fallback"
+    spa_source = (REPO_ROOT / "src" / "brnrd" / "spa.py").read_text(encoding="utf-8")
+    assert f'root / "{fallback.group(1)}"' in spa_source, (
+        f"vite writes the fallback as {fallback.group(1)!r}; spa.py does not prefer it"
+    )

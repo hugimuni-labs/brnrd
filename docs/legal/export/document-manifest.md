@@ -13,7 +13,7 @@ Hash snapshot:
 
 - Date: 2026-09-01
 - Source revision (parent of this export-only change):
-  `a410e9cc330fe5860b8d41a897121fdbe123d359`
+  `67dbc907a47c76efb8bdb6c4e037dc30a6697ff8`
 - Algorithm: SHA-256 over raw repository file bytes
 - Machine-readable list: [`SHA256SUMS`](SHA256SUMS)
 - Verification from the repository root:
@@ -37,18 +37,18 @@ hashes below remain authoritative for the snapshot if a deployed page changes.
 
 | Document | Canonical source | SHA-256 |
 |---|---|---|
-| Terms of Service — rendered source | [`src/frontend/src/routes/terms/+page.svelte`](../../../src/frontend/src/routes/terms/+page.svelte) | `7495dd077ee533cf29159e825a859a1a2ba9b30f5f93263c9bd727eb68352d7a` |
+| Terms of Service — rendered source | [`src/frontend/src/routes/terms/+page.svelte`](../../../src/frontend/src/routes/terms/+page.svelte) | `5863162b3911af6a45fd31bf6853b496c8e70d80abb0f0668bd5784b7f4cc35d` |
 | Terms of Service — exact current acceptance pin | [`src/brnrd/legal/tos-2026-07-24-r3.txt`](../../../src/brnrd/legal/tos-2026-07-24-r3.txt) | `3a752022d307f241f07a3cc0ff8401b0f66d06124e1bc9d50e9d003db311760b` |
-| Hosted-Execution Beta Terms — rendered source | [`src/frontend/src/routes/beta-hosted-execution/+page.svelte`](../../../src/frontend/src/routes/beta-hosted-execution/+page.svelte) | `c86191bde58adb66cea09c90f0632e899a1bd9ff9f484954f70a3fda4b79a9f1` |
+| Hosted-Execution Beta Terms — rendered source | [`src/frontend/src/routes/beta-hosted-execution/+page.svelte`](../../../src/frontend/src/routes/beta-hosted-execution/+page.svelte) | `c4d1b6fbd6f6537ff6b0df82ab6bb30a767e2ad8279ef1f0cc678e9a88cbb24c` |
 | Hosted-Execution Beta Terms — exact current acceptance pin | [`src/brnrd/legal/hosted-execution-2026-07-08.txt`](../../../src/brnrd/legal/hosted-execution-2026-07-08.txt) | `4c6b86ba299b9f37b5b1ec5eabe1632919f8a359fea7b6e83408bad70260d94e` |
-| Privacy Notice | [`src/frontend/src/routes/privacy/+page.svelte`](../../../src/frontend/src/routes/privacy/+page.svelte) | `3fa8ff91a685af6ad19040473cf0615a1bb36c7de0bb5e8518a6a2d6829447c4` |
-| Legal Notice / *mentions légales* | [`src/frontend/src/routes/legal-notice/+page.svelte`](../../../src/frontend/src/routes/legal-notice/+page.svelte) | `cbbfae6ecb231148d5fa63828c592cc81d005d1472ff2ec795667b5c899c28c6` |
+| Privacy Notice | [`src/frontend/src/routes/privacy/+page.svelte`](../../../src/frontend/src/routes/privacy/+page.svelte) | `15fcc50e45a9970e422fdbc9d3f559bd1f213877e81f83c7ee3661941c5826bd` |
+| Legal Notice / *mentions légales* | [`src/frontend/src/routes/legal-notice/+page.svelte`](../../../src/frontend/src/routes/legal-notice/+page.svelte) | `d0f996654db687200b29d648510f1482bd8dfe05a667def38119999e4ba32c2b` |
 | K-bis-backed company and host facts rendered by the Legal Notice | [`src/frontend/src/lib/legalNotice.ts`](../../../src/frontend/src/lib/legalNotice.ts) | `e2fc3b4c0c956e35f151c6bd52cc5f256b1f123e2b50574a6794280c0b1d6d20` |
-| Sub-processor list | [`src/frontend/src/routes/sub-processors/+page.svelte`](../../../src/frontend/src/routes/sub-processors/+page.svelte) | `7c408e9d9743364a98c943611b8059c70845b9e046860d202c6b064704f7a2a5` |
+| Sub-processor list | [`src/frontend/src/routes/sub-processors/+page.svelte`](../../../src/frontend/src/routes/sub-processors/+page.svelte) | `4e0f5df17271fcc32fb4ab677b4ff499a6493a0cab0a68a49fcdfd702230fb75` |
 | Data Processing Agreement | [`docs/legal/dpa.md`](../dpa.md) | `ee366853701826282da0326092fc4ff504aab99f726e6dfcf234f4d9854f43fd` |
 | Article 30 record of processing | [`docs/legal/art-30-record.md`](../art-30-record.md) | `84d3186f7cf3263cf67d5377aca4d6a94fc56facf0416710cfc0390abb4c446f` |
 | Driven data-flow and trust inventory | [`SECURITY.md`](../../../SECURITY.md) | `2883c0835519ffd0aafed284983b8e5bbe9ef6662aaaa3da476701f0446645a5` |
-| Pricing and offer page | [`src/frontend/src/routes/pricing/+page.svelte`](../../../src/frontend/src/routes/pricing/+page.svelte) | `7ec1c79201ffa95e11e8784f3a8c0f96bc97433ae79a28f632c08b0533c4d7bf` |
+| Pricing and offer page | [`src/frontend/src/routes/pricing/+page.svelte`](../../../src/frontend/src/routes/pricing/+page.svelte) | `bbbe96d6db93ed6a875ddb4e6ce6849734de6cbc96414853479e97c9eb2c2e3d` |
 | MIT license | [`LICENSE`](../../../LICENSE) | `3101d42b24f94e634de450ea11eca86b144900590896948376f67936acf02d92` |
 | License boundary overview | [`LICENSE-OVERVIEW.md`](../../../LICENSE-OVERVIEW.md) | `37ed3bb589c5b2a46bcb4a674548d49d433efdda573c003332f7c13405ada0d8` |
 

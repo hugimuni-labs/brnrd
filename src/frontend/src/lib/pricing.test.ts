@@ -78,10 +78,17 @@ test('the page compares hosted tiers and separates deployment from patronage', a
 	);
 });
 
-test('the page carries a search description and canonical URL', async () => {
+test('the page carries a search description and its own og/twitter head', async () => {
 	const { head } = await renderRoute();
 	ok(head.includes('name="description"'), 'pricing has no meta description');
-	ok(head.includes('https://brnrd.dev/pricing'), 'pricing has no canonical URL');
+	ok(head.includes('property="og:title"'), 'pricing has no og:title');
+	ok(head.includes('property="og:description"'), 'pricing has no og:description');
+	ok(head.includes('name="twitter:title"'), 'pricing has no twitter:title');
+	ok(head.includes('name="twitter:description"'), 'pricing has no twitter:description');
+	// canonical + og:url are +layout.svelte's job now (one computation for every
+	// route, via $lib/seo's hasCanonicalMeta) rather than each page repeating a
+	// literal URL — this component, rendered in isolation here, never sees its
+	// own layout. seo.test.ts covers '/pricing' being canonical-eligible.
 });
 
 test('the subscriber offer has one price and no founder-cohort language', async () => {

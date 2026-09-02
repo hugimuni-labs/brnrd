@@ -29,7 +29,23 @@
 	const complete = isComplete();
 </script>
 
-<svelte:head><title>Mentions légales · brnrd</title></svelte:head>
+<svelte:head>
+	<title>Mentions légales · brnrd</title>
+	<meta
+		name="description"
+		content="Mentions légales de brnrd.dev : identification de l'éditeur, de l'hébergeur et informations réglementaires (art. 6-III LCEN)."
+	/>
+	<meta property="og:title" content="Mentions légales · brnrd" />
+	<meta
+		property="og:description"
+		content="Mentions légales de brnrd.dev : identification de l'éditeur, de l'hébergeur et informations réglementaires (art. 6-III LCEN)."
+	/>
+	<meta name="twitter:title" content="Mentions légales · brnrd" />
+	<meta
+		name="twitter:description"
+		content="Mentions légales de brnrd.dev : identification de l'éditeur, de l'hébergeur et informations réglementaires (art. 6-III LCEN)."
+	/>
+</svelte:head>
 
 <div class="mx-auto max-w-2xl p-6">
 	<div class="flex items-start justify-between gap-4">
