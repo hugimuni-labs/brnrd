@@ -57,7 +57,7 @@ def test_body_provenance_renders_on_the_body_line() -> None:
         ),
     )
     body_line = next(
-        ln for ln in out.splitlines() if ln.lstrip().startswith("body requested:")
+        ln for ln in out.splitlines() if ln.lstrip().startswith("body:")
     )
     assert "req-origin←dashboard spool rack" in body_line
 
@@ -232,7 +232,7 @@ def test_worker_is_never_told_to_answer_the_residents_queue() -> None:
     assert "the return message on stdout (to the parent" in kernel(is_strand=True)
     # …and the resident still gets it: the fix is a gate, not a deletion.
     assert "pending×12" in kernel(is_strand=False)
-    assert "answer the person" in kernel(is_strand=False)
+    assert "op⇐reply owed" in kernel(is_strand=False)
 
 
 # ── Continuity ────────────────────────────────────────────────────────────────

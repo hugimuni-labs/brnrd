@@ -695,7 +695,10 @@ def _format_continuity(c: BootContinuity) -> list[str]:
         # when uncommitted memory or a rejected push matters most.
         return [f"continuity: {c.mount}"] + [f"  drift: {d}" for d in c.drift]
 
-    bits = [b for b in (c.last_run, c.last_age) if b]
+    age = c.last_age
+    if age and age.endswith(" ago"):
+        age = "@ -" + age[: -len(" ago")]
+    bits = [b for b in (c.last_run, age) if b]
     head = "continuity: ✓ " + " ".join(bits) if bits else "continuity: ✓"
     if c.shipped:
         head += " · shipped " + " ".join(c.shipped)
@@ -747,10 +750,8 @@ def format_kernel(score: BootScore) -> str:
     receive: list[str] = []
 
     body = score.body
-    runner = " / ".join(p for p in (body.shell, body.core) if p)
-    body_head = " ".join(
-        b for b in (body.name, f"({runner})" if runner else "") if b
-    )
+    runner = "/".join(p for p in (body.shell, body.core) if p)
+    body_head = runner or (body.name or "")
     tier = body.tier
     if tier == "Tier 2 hooks installed":
         tier = "T2 hooks ✓"
@@ -764,7 +765,7 @@ def format_kernel(score: BootScore) -> str:
         # A boot score exists before the Shell has produced attestation. This
         # line therefore names the requested body, never claims observation.
         # "body requested:" is the honest verb; the rest is his spelling.
-        incarnate.append(f"body requested: {' · '.join(body_bits)}")
+        incarnate.append(f"body: {' · '.join(body_bits)}")
 
     if body.mounted:
         # Differential, like every other kernel line: absent — and costing nothing —
@@ -790,16 +791,20 @@ def format_kernel(score: BootScore) -> str:
         # resident's own and predates this run; what is new here is only the run, whose
         # ledger of deeds starts empty. Nothing above the seam is a receipt.
         restore.append(
-            "boot: mounted · <snapshot restored> · memory: yours, predates this run · "
-            "acts *here*: none yet"
+            "memory: self · <snapshot restored> · Δhere=∅ — yours, predates this "
+            "run; acts *here*: none yet"
         )
 
     host = score.host
     host_bits = [host.kind] + [b for b in (host.environment, host.publication_owner) if b]
     host_line = f"host: {' · '.join(host_bits)}"
     if (host.environment or "").strip() == "host":
-        host_line += " — shared checkout: branch off the default before you edit; your push, or nothing leaves this machine"
     incarnate.append(host_line)
+    if (host.environment or "").strip() == "host":
+        incarnate.append(
+            "shared checkout: dflt↗branch ⇢ edit ; op⇐↑push owed ∨ Δ=∅ — branch "
+            "off the default before you edit; your push, or nothing leaves"
+        )
     if host.image_stale:
         # Differential, like everything else in the kernel: costs nothing on a
         # healthy wake, and on an unhealthy one it is the first thing read.
@@ -944,15 +949,18 @@ def format_kernel(score: BootScore) -> str:
         )
     else:
         lines.append("×3 standing · self-owned")
+        lines.append("op⇐reply owed — answer the person")
         lines.append(
-            "answer the person · leave receipts (commit what you mean to keep; "
-            "branch off the default on a host checkout) · lose no work "
-            "(`## Now` on .card before any long act; what only you know, written)"
+            "keep⇒commit ; shared⇒dflt↗branch ; Δ⇒op⇐↑push — leave receipts: "
+            "commit what you mean to keep"
         )
         lines.append(
-            "first outward ⇒ .name + .mood ; first produce ⇒ .topics ; "
-            "∅then ⇒ daemon→plain fallback ; next-wake→declare"
+            "long-act⇒.card/## Now first ; private-knowledge⇒write — lose no work"
         )
+        lines.append("")
+        lines.append("first outward ⇒ .name + .mood")
+        lines.append("first produce ⇒ .topics")
+        lines.append("∅then ⇒ daemon→plain fallback ; next-wake→declare")
     lines.append("")
     lines.append("reference: `brnrd prompts show` ⇒ blocks + cost")
     return "\n".join(lines)

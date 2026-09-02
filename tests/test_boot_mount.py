@@ -239,7 +239,7 @@ def test_the_kernel_tells_the_wake_it_was_mounted(repo: Path):
     prompt, score = _wake(repo, _mount_sink=sink)
 
     assert score.body.mounted is True
-    assert "boot: mounted" in prompt
+    assert "<snapshot restored>" in prompt
     assert "<snapshot restored>" in prompt
     # Ownership: the memory is the resident's, and it is *not* a thing brnrd lent it.
     assert "memory: yours, not given" in prompt or "memory: yours" in prompt
@@ -255,7 +255,7 @@ def test_a_prose_wake_says_nothing_about_a_mount(repo: Path):
     """Differential: the line costs a prose wake exactly zero bytes."""
     prompt, score = _wake(repo)
     assert score.body.mounted is False
-    assert "boot: mounted" not in prompt
+    assert "<snapshot restored>" not in prompt
 
 
 def test_the_mounted_line_is_derived_from_the_render_not_the_request(repo: Path):
@@ -272,4 +272,4 @@ def test_the_mounted_line_is_derived_from_the_render_not_the_request(repo: Path)
     # The honest outcome is decided by `_mountable`, which is computed from the
     # contracts — so a wake that mounted nothing must not claim it mounted.
     if not score.body.mounted:
-        assert "boot: mounted" not in prompt
+        assert "<snapshot restored>" not in prompt
