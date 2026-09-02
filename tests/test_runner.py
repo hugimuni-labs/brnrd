@@ -3282,3 +3282,59 @@ class TestFallbackRunnerNearestClass:
         )
 
         assert chosen == "claude-opus"
+
+
+def test_process_runner_stdout_reports_api_error_only_when_the_envelope_says_so():
+    """The rc-0 fix's own predicate, both directions.
+
+    `claude --model <unknown> -p hi` exits **0** and prints
+    `[claude-code:unrecognized_model]` as prose; only the JSON envelope's
+    `is_error` / `terminal_reason: api_error` say otherwise. The flip in
+    `invoke_runner` is the highest-blast-radius line in this change — it turns a
+    clean exit into a failure for *every* Claude-shell run — so both directions
+    are pinned here, and the false-positive direction is the one that matters:
+    a successful envelope must never flip.
+    """
+    failed = json.dumps(
+        {
+            "is_error": True,
+            "terminal_reason": "api_error",
+            "result": "There's an issue with the selected model (nope).",
+            "modelUsage": {},
+        }
+    )
+    _, _, api_error = runner_mod._process_runner_stdout("claude-opus", failed, {})
+    assert api_error is True
+
+    # `terminal_reason` alone is enough — an envelope may carry the reason
+    # without the boolean.
+    reason_only = json.dumps({"terminal_reason": "api_error", "result": "boom"})
+    _, _, api_error = runner_mod._process_runner_stdout("claude-opus", reason_only, {})
+    assert api_error is True
+
+    # `is_error` alone is enough too — the predicate is an OR, and pinning
+    # only the `terminal_reason` half would let the boolean's removal pass.
+    flag_only = json.dumps({"is_error": True, "terminal_reason": "completed"})
+    _, _, api_error = runner_mod._process_runner_stdout("claude-opus", flag_only, {})
+    assert api_error is True
+
+    # The direction that must never fire: a real, successful turn.
+    ok = json.dumps(
+        {
+            "is_error": False,
+            "terminal_reason": "completed",
+            "result": "ok",
+            "modelUsage": {"claude-opus-5": {"costUSD": 0.01}},
+        }
+    )
+    _, _, api_error = runner_mod._process_runner_stdout("claude-opus", ok, {})
+    assert api_error is False
+
+    # A non-Claude Shell has no envelope to read; never invent one, whatever
+    # the bytes happen to look like.
+    _, _, api_error = runner_mod._process_runner_stdout("codex-full", failed, {})
+    assert api_error is False
+
+    # Plain prose from a Claude Shell (not JSON at all) is not an error either.
+    _, _, api_error = runner_mod._process_runner_stdout("claude-opus", "just text", {})
+    assert api_error is False
