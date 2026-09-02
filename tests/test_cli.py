@@ -2341,8 +2341,11 @@ def test_help_stays_small_enough_to_read():
     # arguing that it earns one of these slots.
     from brr.cli import PUBLIC_COMMANDS
 
-    # `enable` earns the nineteenth slot as the tier-1 adoption verb.
-    assert len(PUBLIC_COMMANDS) <= 19
+    # `enable` (#856) briefly took a nineteenth slot; #1746 folded its one
+    # live behaviour (`--borrowed`) into `init` and retired the verb, so
+    # the ceiling reverts to 18 — back in step with cli.py's own
+    # `HIDDEN_COMMANDS` comment on `config`, which names the same number.
+    assert len(PUBLIC_COMMANDS) <= 18
 
 
 def test_hidden_commands_parse_but_are_not_listed():
