@@ -898,7 +898,7 @@ class TestBootScore:
             runner_name="claude-fable", runner_shell="claude",
             runner_core="claude-fable-5",
         )
-        kernel = prompt.split("\n\n", 1)[0]
+        kernel = prompt.split("\nreference: `brnrd prompts show`", 1)[0]  # the kernel ends on its reference line; its groups are blank-line separated
         assert "claude / claude-fable-5" in kernel
 
     def test_orientation_is_derived_from_posture_not_boilerplate(self, empty_repo):
@@ -917,7 +917,7 @@ class TestBootScore:
 
         kernel = format_kernel(host)
         assert "branch off the default before you edit" in kernel
-        assert "3 pending" in kernel
+        assert "pending×3" in kernel
 
         worktree = build_boot_score(
             empty_repo, environment="worktree", pending_count=0, has_event_body=True
