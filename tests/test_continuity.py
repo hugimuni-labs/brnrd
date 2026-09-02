@@ -919,11 +919,11 @@ def test_kernel_renders_debts_and_reach_not_rows(tmp_path):
         event_ids=("evt-1",), pending_count=2, has_event_body=True,
     )
     kernel = format_kernel(score)
-    assert "::restore" in kernel and "::incarnate" in kernel and "::receive" in kernel
-    assert "debts — three, standing, yours: answer the person" in kernel
-    assert "2 pending" in kernel
+    assert "×3 standing · self-owned" in kernel
+    assert "answer the person · leave receipts" in kernel
+    assert "pending×2" in kernel
     assert "branch off the default before you edit" in kernel
-    assert "telemetry: first outward ⇒ .name + .mood" in kernel
+    assert "first outward ⇒ .name + .mood" in kernel
     assert "assignments:" not in kernel
     assert "⇢" not in kernel and "↗" not in kernel
     assert "discharge each" not in kernel
@@ -944,7 +944,7 @@ def test_a_strand_kernel_faces_the_parent(tmp_path):
     assert "pending" not in kernel
     assert "the return message on stdout (to the parent" in kernel
     assert "answer the person" not in kernel
-    assert "telemetry:" not in kernel
+    assert "first outward" not in kernel
 
 
 def test_the_persisted_score_carries_no_assignments_field(tmp_path):
