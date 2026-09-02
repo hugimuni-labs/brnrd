@@ -252,17 +252,28 @@ def _last_briefing_at(repo_root: Path) -> float | None:
 
 
 def _write_state(repo_root: Path, *, announced: dict[str, str], last_briefing_at: float | None) -> None:
+    """Persist the ledger, or raise.
+
+    Found reviewing #1761, before merge: this used to swallow ``OSError``
+    the way a best-effort cache write reasonably does elsewhere in this
+    codebase — but ``record_announced``/``record_briefing_sent`` are not
+    best-effort here. ``daemon._news_record_or_disable``'s whole reason to
+    exist is to catch a failed record and disable the chat lane before a
+    persistently unwritable ledger turns one delivered item into a message
+    resent every ~10s heartbeat, forever (its own docstring says so in as
+    many words). A swallowed ``OSError`` never reaches that ``try/except``,
+    so the exact failure the breaker exists to prevent — disk full,
+    read-only FS, permission denied — was the one class of failure it could
+    not see. Propagate; the caller is the one place this must be loud.
+    """
     path = ledger_path(repo_root)
     payload: dict[str, object] = {"schema": SCHEMA, "announced": announced}
     if last_briefing_at is not None:
         payload["last_briefing_at"] = last_briefing_at
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix(path.suffix + ".tmp")
-        temporary.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
-        temporary.replace(path)
-    except OSError:
-        pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    temporary.replace(path)
 
 
 def record_announced(repo_root: Path, item: NewsItem) -> None:

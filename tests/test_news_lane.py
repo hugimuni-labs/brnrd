@@ -267,6 +267,30 @@ def test_record_briefing_sent_persists_both_ledger_and_clock(tmp_path, monkeypat
     assert reloaded["last_briefing_at"] == 42.0
 
 
+def test_record_announced_propagates_a_real_write_failure(tmp_path, monkeypatch):
+    """Found reviewing #1761, before merge: `_write_state` used to swallow
+    `OSError` (`except OSError: pass`), so `daemon._news_record_or_disable`'s
+    breaker — which exists specifically to catch a failed record and disable
+    the chat lane before a resend-every-heartbeat loop — never saw the one
+    class of failure its own docstring names (disk full, read-only FS,
+    permission denied). `test_a_delivered_item_that_cannot_be_recorded_...`
+    above proves the breaker trips when `record()` raises; this proves
+    `record()` (`news_lane.record_announced`, going through the real
+    `_write_state`) actually *does* raise on a real unwritable ledger path,
+    rather than returning quietly and letting the next tick resend.
+    """
+    repo = _repo(tmp_path, monkeypatch)
+    # Make the ledger *path itself* a directory, so the atomic tmp-write
+    # succeeds but the final `temporary.replace(path)` fails with a real
+    # OSError (IsADirectoryError) — no mocking of the write call itself,
+    # the filesystem does it.
+    ledger_path = news_lane.ledger_path(repo)
+    ledger_path.mkdir(parents=True, exist_ok=True)
+
+    with pytest.raises(OSError):
+        news_lane.record_announced(repo, _item())
+
+
 def test_a_delivered_item_that_cannot_be_recorded_disables_the_chat_lane(monkeypatch, capsys):
     """The send-then-record ordering has one bad tail, and this closes it.
 
