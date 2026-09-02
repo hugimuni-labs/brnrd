@@ -4297,11 +4297,6 @@ def _run_worker(
     runtime = _runner_runtime(runner_choice)
     runner_meta = runtime.meta
     quota_summary = runtime.quota
-    # The ignition assignments' escalation budget (w-69): the same
-    # binding-percent reducer the scheduler's `every:` pacing trusts,
-    # computed once per run from the attempt-1 level snapshot below.
-    # `None` until (and unless) a snapshot resolves — prices neutral.
-    quota_binding_pct: float | None = None
     runner_env = runtime.env
     extra_runner_args = runtime.extra_args
     run_hooks_installed = runtime.hooks_installed
@@ -4410,12 +4405,6 @@ def _run_worker(
             )
             level_quota = runner_quota.summary_from_levels(run_levels)
             quota_summary = level_quota or quota_summary
-            try:
-                quota_binding_pct = runner_quota.binding_quota_remaining_pct(
-                    run_levels, model=task.meta.get("runner_core") or None
-                )
-            except Exception:  # noqa: BLE001 — pricing must never fail a wake
-                quota_binding_pct = None
 
         # ── Boot mount (`boot.mount`, default ON) ────────────────────────
         # On: the file-backed contracts leave the prose and are seeded as `Read`
@@ -4517,7 +4506,6 @@ def _run_worker(
                 ),
             ),
             runner_quota=quota_summary,
-            quota_binding_pct=quota_binding_pct,
             update_available=(
                 update_observation.render() if update_observation else None
             ),
