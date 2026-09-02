@@ -774,10 +774,19 @@ def format_kernel(score: BootScore) -> str:
     body_head = " ".join(
         b for b in (body.name, f"({runner})" if runner else "") if b
     )
-    body_bits = [b for b in (body_head, body.tier, body.provenance) if b]
+    tier = body.tier
+    if tier == "Tier 2 hooks installed":
+        tier = "T2 hooks ✓"
+    elif tier == "Tier 1 heartbeat-polled (no hooks)":
+        tier = "T1 heartbeat-polled · hooks ✗"
+    origin = body.provenance
+    if origin and origin.startswith("requested from the "):
+        origin = "req-origin←" + origin[len("requested from the "):]
+    body_bits = [b for b in (body_head, tier, origin) if b]
     if body_bits:
         # A boot score exists before the Shell has produced attestation. This
         # line therefore names the requested body, never claims observation.
+        # "body requested:" is the honest verb; the rest is his spelling.
         incarnate.append(f"body requested: {' · '.join(body_bits)}")
 
     if body.mounted:
@@ -837,13 +846,10 @@ def format_kernel(score: BootScore) -> str:
         # interpreter, never daemon-hosted) — so it gets its own honest word
         # rather than being folded into "current".
         incarnate.append(
-            f"daemon image: current · fp {host.image_digest} · "
-            f"captured {host.image_captured_at}"
+            f"image: current · fp {host.image_digest} · captured {host.image_captured_at}"
         )
     else:
-        incarnate.append(
-            "daemon image: not tracked · no fingerprint captured in this process"
-        )
+        incarnate.append("image: untracked · fingerprint∅ (none captured in this process)")
 
     if host.agents_md_missing or host.kb_missing:
         # Differential like `image_stale` above: silent on an initialized
@@ -886,7 +892,7 @@ def format_kernel(score: BootScore) -> str:
     if att.event_ids:
         att_line = "attention: " + ", ".join(att.event_ids)
         if att.source_gate:
-            att_line += f" · via {att.source_gate}"
+            att_line += f" ←{att.source_gate}"
         age_note = format_event_age(att.created, att.age_seconds)
         if age_note:
             att_line += f" · {age_note}"
@@ -903,7 +909,7 @@ def format_kernel(score: BootScore) -> str:
             f"budget {posture.budget}" if posture.budget else None,
             # A strand never sees the resident's queue (2026-07-13: two strands
             # answered twelve of the user's messages in the resident's thread).
-            f"{posture.pending_count} pending" if posture.pending_count and not posture.is_strand else None,
+            f"pending×{posture.pending_count}" if posture.pending_count and not posture.is_strand else None,
             posture.handoff,
         ) if b
     ]
@@ -925,9 +931,9 @@ def format_kernel(score: BootScore) -> str:
         n = len(score.orientation_set)
         total = sum(f.bytes for f in score.orientation_set)
         receive.append(f"reach: files×{n} · {total:,}B ∉ wake")
-        receive.append("  task∩file ⇒ read ; surface↑ already-held")
+        receive.append("task∩file ⇒ read ; surface↑ already-held")
         for f in score.orientation_set:
-            receive.append(f"  · {f.path} · {f.bytes:,}B")
+            receive.append(f"· {f.path} · {f.bytes:,}B")
 
     # The seam, in the weave: every mark here is a measured fact of the body
     # (his form, 2026-09-02 #1767 comment) — the world reaches the resident
@@ -937,34 +943,41 @@ def format_kernel(score: BootScore) -> str:
         "seam: world→self @ tool-boundary only ; think∖call ⇒ deaf to world, "
         "incl. follow-ups"
     )
-    incarnate.append("  shell nudge ∈ body-reflex ≠ thread-voice")
+    incarnate.append("shell nudge ∈ body-reflex ≠ thread-voice")
 
-    lines.append("::restore")
-    lines.extend(f"  {l}" for l in restore)
-    lines.append("::incarnate")
-    lines.extend(f"  {l}" for l in incarnate)
-    lines.append("::receive")
-    lines.extend(f"  {l}" for l in receive)
+    # Layout, his (2026-09-02, #1767 comment): groups separated by blank
+    # lines, no beat headers — the row names are the grammar. Three rows keep
+    # their words on purpose and say why in the design page: the mount line
+    # (measured equal to the seam's own sentence, haiku n=3+3), the host
+    # rule and the debts (rules, read by something that has not agreed yet).
+    def _group(rows: list[str]) -> None:
+        if rows:
+            lines.append("")
+            lines.extend(rows)
+
+    _group(restore)
+    _group(incarnate)
+    _group(receive)
+    lines.append("")
     if posture.is_strand:
+        lines.append("×3 standing · strand-owned")
         lines.append(
-            "debts — three, standing: the report at its declared path · the "
-            "branch published · the return message on stdout (to the parent, "
-            "never a chat)"
+            "the report at its declared path · the branch published · the "
+            "return message on stdout (to the parent, never a chat)"
         )
     else:
+        lines.append("×3 standing · self-owned")
         lines.append(
-            "debts — three, standing, yours: answer the person · leave receipts "
-            "(commit what you mean to keep; branch off the default on a host "
-            "checkout) · lose no work (`## Now` on .card before any long act; "
-            "what only you know, written)"
+            "answer the person · leave receipts (commit what you mean to keep; "
+            "branch off the default on a host checkout) · lose no work "
+            "(`## Now` on .card before any long act; what only you know, written)"
         )
         lines.append(
-            "telemetry: first outward ⇒ .name + .mood ; first produce ⇒ .topics ; "
+            "first outward ⇒ .name + .mood ; first produce ⇒ .topics ; "
             "∅then ⇒ daemon→plain fallback ; next-wake→declare"
         )
-    lines.append(
-        "below: reference · `brnrd prompts show` names every block and its cost"
-    )
+    lines.append("")
+    lines.append("reference: `brnrd prompts show` ⇒ blocks + cost")
     return "\n".join(lines)
 
 

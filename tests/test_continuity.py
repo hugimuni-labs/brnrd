@@ -59,7 +59,7 @@ def test_body_provenance_renders_on_the_body_line() -> None:
     body_line = next(
         ln for ln in out.splitlines() if ln.lstrip().startswith("body requested:")
     )
-    assert "requested from the dashboard spool rack" in body_line
+    assert "req-origin←dashboard spool rack" in body_line
 
 
 def test_attention_line_names_the_gate_not_the_runner() -> None:
@@ -77,7 +77,7 @@ def test_attention_line_names_the_gate_not_the_runner() -> None:
         attention=BootAttention(event_ids=("evt-xlqg",), source_gate="telegram"),
     )
     att = next(ln for ln in out.splitlines() if ln.lstrip().startswith("attention:"))
-    assert "via telegram" in att
+    assert "←telegram" in att
     # The exact shape of the original bug: the runner note leaking onto the
     # attention line, where it asserted a falsehood in the wake's hottest slot.
     assert "spool rack" not in att
@@ -155,7 +155,7 @@ def test_attention_line_stale_event_renders_age_and_soft_language() -> None:
         ),
     )
     att = next(ln for ln in out.splitlines() if ln.lstrip().startswith("attention:"))
-    assert "via telegram" in att
+    assert "←telegram" in att
     assert "sent 2026-08-18T14:58:06Z" in att
     assert "6h06m ago" in att
     assert "daemon was only asleep" in att
@@ -185,7 +185,7 @@ def test_attention_line_missing_created_degrades_quietly() -> None:
         attention=BootAttention(event_ids=("evt-x",), source_gate="telegram"),
     )
     att = next(ln for ln in out.splitlines() if ln.lstrip().startswith("attention:"))
-    assert att.strip() == "attention: evt-x · via telegram"
+    assert att.strip() == "attention: evt-x ←telegram"
 
 
 def test_attention_line_renders_retry_provenance() -> None:
@@ -231,7 +231,7 @@ def test_worker_is_never_told_to_answer_the_residents_queue() -> None:
     assert "pending" not in kernel(is_strand=True)
     assert "the return message on stdout (to the parent" in kernel(is_strand=True)
     # …and the resident still gets it: the fix is a gate, not a deletion.
-    assert "12 pending" in kernel(is_strand=False)
+    assert "pending×12" in kernel(is_strand=False)
     assert "answer the person" in kernel(is_strand=False)
 
 
@@ -747,7 +747,7 @@ def test_current_image_is_announced_in_the_kernel() -> None:
     # reader who has learned to check the first line after `host:` gets the
     # answer either way, instead of only when it's bad news.
     current = lines[host_i + 1]
-    assert current.lstrip().startswith("daemon image: current"), out
+    assert current.lstrip().startswith("image: current"), out
     assert "8f3a91c2ab" in current
     assert "2026-07-27T16:32:59Z" in current
     assert "stale:" not in out
@@ -765,7 +765,7 @@ def test_untracked_image_is_not_the_same_word_as_current() -> None:
 
     line = lines[host_i + 1].strip()
     assert line == (
-        "daemon image: not tracked · no fingerprint captured in this process"
+        "image: untracked · fingerprint∅ (none captured in this process)"
     ), out
     assert "current" not in line
 
@@ -786,8 +786,8 @@ def test_stale_line_wins_over_the_current_line() -> None:
     host_i = next(i for i, ln in enumerate(lines) if ln.lstrip().startswith("host:"))
 
     assert lines[host_i + 1].lstrip().startswith("stale: ⚠"), out
-    assert "daemon image: current" not in out
-    assert "not tracked" not in out
+    assert "image: current" not in out
+    assert "untracked" not in out
 
 
 # ── P1 — per-block content attestation, the kernel alarm (move 4a) ────────────
@@ -901,8 +901,8 @@ def test_orientation_files_render_as_reach_not_as_a_row() -> None:
         ],
     )
     assert "reach: files×2 · 13,921B ∉ wake" in kernel
-    assert "    · /repo/AGENTS.md · 4,120B" in kernel
-    assert "    · /home/kb/subject-envs.md · 9,801B" in kernel
+    assert "· /repo/AGENTS.md · 4,120B" in kernel
+    assert "· /home/kb/subject-envs.md · 9,801B" in kernel
     assert "assignments:" not in kernel
     assert "↗" not in kernel
     # The retired blocks stay retired.
