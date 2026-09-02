@@ -130,6 +130,20 @@ del _compat_module
 #: exists to let a gate opt *out* of, not into.
 CAN_SEND_UNADDRESSED = True
 
+#: #1750: a `thread:` frontmatter key on a `gate: cloud` message used to be
+#: recorded (`daemon.py`'s `target_thread`, `message_store.py`'s persisted
+#: field) and then never consulted — the relay's fresh-send primitive
+#: (``POST /v1/daemons/messages``) takes a *platform*, never a thread/chat
+#: identity, so the message shipped to the account's configured default chat
+#: regardless of what `thread:` asked for, and reported `status: delivered`
+#: for it. False is the honest capability answer `daemon._gate_can_route_thread`
+#: reads — a future gate that actually can route on a thread declares its own
+#: `CAN_ROUTE_THREAD = True` instead of this module's name being special-cased
+#: in the daemon ("a class defined by listing its members meets the member
+#: nobody listed"). See :func:`unaddressed_destination` for where the message
+#: lands instead, named so the advisory this drives can say so honestly.
+CAN_ROUTE_THREAD = False
+
 _POLL_WAIT_S = 25
 _HTTP_TIMEOUT_S = 60
 _DEFAULT_DAEMON_NAME = "daemon"
@@ -500,6 +514,35 @@ def addressed(fm: Mapping[str, object]) -> bool:
     doesn't).
     """
     return bool(fm.get("cloud_event_id"))
+
+
+def _unaddressed_platform(fm: Mapping[str, object]) -> str:
+    """The platform an unaddressed (no ``cloud_event_id``) send resolves to.
+
+    The one and only place this fallback is decided — :func:`_deliver_responses`'s
+    ``post()`` calls this directly, and :func:`unaddressed_destination` builds
+    its notice-facing phrase from it, so the two can never quietly drift
+    apart the way a second inlined copy of ``"telegram"`` would invite.
+    ``cloud_platform`` is the one addressing key this lane honours (set by a
+    caller via ``target_meta``, e.g. ``_deliver_out_of_bound``'s pass-through
+    of unreserved frontmatter); absent, the server's fresh-send primitive can
+    only originate on telegram today (see the ``CAN_SEND_UNADDRESSED`` block
+    comment above), so that is where it lands.
+    """
+    return str(fm.get("cloud_platform") or "") or "telegram"
+
+
+def unaddressed_destination(fm: Mapping[str, object]) -> str:
+    """Human-readable phrase for where a ``gate: cloud`` fresh send lands.
+
+    #1750: read by ``daemon._deliver_out_of_bound`` when a message carries a
+    ``thread:`` this gate cannot route on (:data:`CAN_ROUTE_THREAD` is
+    ``False``) — so the advisory it emits can name the true destination
+    instead of "somewhere else". Always the account's configured default
+    chat on whichever platform :func:`_unaddressed_platform` resolves; never
+    the thread the frontmatter named, because nothing on this lane reads it.
+    """
+    return f"the account's default {_unaddressed_platform(fm)} chat"
 
 
 def read_server_fingerprint(brr_dir: Path) -> dict | None:
@@ -1264,7 +1307,9 @@ def _deliver_responses(brr_dir: Path, inbox_dir: Path, responses_dir: Path, stat
             # telegram — the only platform the server can originate a
             # fresh send on today — when it didn't, which is the common
             # shape: `notify.gate`'s fallback path never sets one.
-            platform = str(event.get("cloud_platform") or "") or "telegram"
+            # `_unaddressed_platform` is the one place this resolves (also
+            # read by `unaddressed_destination` for #1750's advisory).
+            platform = _unaddressed_platform(event)
             limit = _RESPONSE_LIMITS.get(platform)
             if limit is not None:
                 body = delivery.resolve_overflow(
