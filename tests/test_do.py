@@ -297,7 +297,7 @@ def test_do_reply_stages_canonical_frontmatter_and_reports_ok(
     monkeypatch.setattr(time, "sleep", _sleep)
 
     assert main([
-        "do", "--reply", "evt-9s45", "--body-file", str(body_file), "--no-promise",
+        "do", "--reply", "evt-9s45", "--body-file", str(body_file), "--no-follow-up",
     ]) == 0
     assert capsys.readouterr().out.strip() == "reply evt-9s45 ✓"
     assert written["text"] == "---\nevent: evt-9s45\n---\nthe reply text\n"
@@ -310,7 +310,7 @@ def test_do_reply_inline_body(tmp_path, monkeypatch, capsys):
     _portal_state(outbox)
     monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-reply-*.md"))
 
-    assert main(["do", "--reply", "evt-1", "--body", "hello", "--no-promise"]) == 0
+    assert main(["do", "--reply", "evt-1", "--body", "hello", "--no-follow-up"]) == 0
     assert capsys.readouterr().out.strip() == "reply evt-1 ✓"
 
 
@@ -350,7 +350,7 @@ def test_do_reply_failed_surfaces_the_matching_notice(tmp_path, monkeypatch, cap
     assert not (outbox / ".promises.jsonl").exists()
 
 
-# ── --reply's promise/no-promise contract (evt-…-s0vo, 2026-08-19) ─────
+# ── --reply's promise/follow-up contract (evt-…-s0vo, 2026-08-19) ─────
 
 
 def test_do_reply_without_promise_flag_is_refused_before_staging(
@@ -363,12 +363,12 @@ def test_do_reply_without_promise_flag_is_refused_before_staging(
     assert main(["do", "--reply", "evt-1", "--body", "hi"]) == 1
     err = capsys.readouterr().err
     assert "--promise" in err
-    assert "--no-promise" in err
+    assert "--no-follow-up" in err
     assert "Nothing was staged" in err
     assert not list(outbox.glob("do-*.md"))
 
 
-def test_do_reply_with_both_promise_and_no_promise_is_refused_by_argparse(
+def test_do_reply_with_both_promise_and_no_follow_up_is_refused_by_argparse(
     tmp_path, monkeypatch, capsys,
 ):
     outbox = tmp_path / "outbox"
@@ -378,7 +378,7 @@ def test_do_reply_with_both_promise_and_no_promise_is_refused_by_argparse(
     with pytest.raises(SystemExit):
         main([
             "do", "--reply", "evt-1", "--body", "hi",
-            "--promise", "pr", "--no-promise",
+            "--promise", "pr", "--no-follow-up",
         ])
     err = capsys.readouterr().err
     assert "not allowed with argument" in err
@@ -424,7 +424,7 @@ def test_do_reply_against_non_pending_event_is_refused_before_staging(
     _live_inbox(outbox, [{"id": "evt-1", "status": "delivered"}])
 
     assert main([
-        "do", "--reply", "evt-1", "--body", "hi", "--no-promise",
+        "do", "--reply", "evt-1", "--body", "hi", "--no-follow-up",
     ]) == 1
     err = capsys.readouterr().err
     assert "evt-1" in err
@@ -447,7 +447,7 @@ def test_do_reply_absent_from_live_inbox_is_refused_before_staging(
     _live_inbox(outbox, [])
 
     assert main([
-        "do", "--reply", "evt-9", "--body", "hi", "--no-promise",
+        "do", "--reply", "evt-9", "--body", "hi", "--no-follow-up",
     ]) == 1
     err = capsys.readouterr().err
     assert "evt-9" in err
@@ -472,7 +472,7 @@ def test_do_multi_reply_all_or_nothing_when_one_target_is_not_pending(
         "do",
         "--reply", "evt-1", "--body", "one answer",
         "--reply", "evt-2", "--body", "a different answer",
-        "--no-promise",
+        "--no-follow-up",
     ]) == 1
     err = capsys.readouterr().err
     assert "evt-2" in err
@@ -490,7 +490,7 @@ def test_do_reply_pending_in_live_inbox_still_stages(tmp_path, monkeypatch, caps
     _live_inbox(outbox, [{"id": "evt-1", "status": "pending"}])
     monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-reply-*.md"))
 
-    assert main(["do", "--reply", "evt-1", "--body", "hi", "--no-promise"]) == 0
+    assert main(["do", "--reply", "evt-1", "--body", "hi", "--no-follow-up"]) == 0
     assert capsys.readouterr().out.strip() == "reply evt-1 ✓"
 
 
@@ -504,7 +504,7 @@ def test_do_reply_with_no_live_inbox_file_fails_open(tmp_path, monkeypatch, caps
     _portal_state(outbox)
     monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-reply-*.md"))
 
-    assert main(["do", "--reply", "evt-1", "--body", "hi", "--no-promise"]) == 0
+    assert main(["do", "--reply", "evt-1", "--body", "hi", "--no-follow-up"]) == 0
     assert capsys.readouterr().out.strip() == "reply evt-1 ✓"
 
 
@@ -568,7 +568,21 @@ def test_do_reply_with_unpromisable_kind_writes_nothing(tmp_path, monkeypatch, c
     assert not (outbox / ".promises.jsonl").exists()
 
 
-def test_do_reply_with_no_promise_stages_the_reply_and_writes_nothing(
+def test_do_reply_with_no_follow_up_stages_the_reply_and_writes_nothing(
+    tmp_path, monkeypatch, capsys,
+):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+    monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-reply-*.md"))
+
+    assert main(["do", "--reply", "evt-1", "--body", "hi", "--no-follow-up"]) == 0
+    assert capsys.readouterr().out.strip() == "reply evt-1 ✓"
+    assert not (outbox / ".promises.jsonl").exists()
+
+
+def test_do_reply_no_promise_alias_works_and_points_to_no_follow_up(
     tmp_path, monkeypatch, capsys,
 ):
     outbox = tmp_path / "outbox"
@@ -578,7 +592,11 @@ def test_do_reply_with_no_promise_stages_the_reply_and_writes_nothing(
     monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-reply-*.md"))
 
     assert main(["do", "--reply", "evt-1", "--body", "hi", "--no-promise"]) == 0
-    assert capsys.readouterr().out.strip() == "reply evt-1 ✓"
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "reply evt-1 ✓"
+    assert captured.err.strip() == (
+        "[brnrd do] --no-promise is deprecated; use --no-follow-up"
+    )
     assert not (outbox / ".promises.jsonl").exists()
 
 
@@ -613,7 +631,7 @@ def test_do_item_binds_reply_and_writes_asks_jsonl_row(tmp_path, monkeypatch, ca
     monkeypatch.setattr(time, "sleep", _consume_after_one_sleep(outbox, "do-*-reply-*.md"))
 
     assert main([
-        "do", "--reply", "evt-1", "--item", "w-1", "--body", "hi", "--no-promise",
+        "do", "--reply", "evt-1", "--item", "w-1", "--body", "hi", "--no-follow-up",
     ]) == 0
     out = capsys.readouterr().out.strip()
     assert out == "reply evt-1 ✓ · item w-1 ✓"
@@ -633,7 +651,7 @@ def test_do_item_unknown_item_is_refused_before_staging(tmp_path, monkeypatch, c
     _portal_state(outbox)
 
     assert main([
-        "do", "--reply", "evt-1", "--item", "w-999", "--body", "hi", "--no-promise",
+        "do", "--reply", "evt-1", "--item", "w-999", "--body", "hi", "--no-follow-up",
     ]) == 1
     err = capsys.readouterr().err
     assert "w-999" in err
@@ -663,7 +681,7 @@ def test_do_item_says_no_warp_rather_than_no_item(tmp_path, monkeypatch, capsys)
     monkeypatch.setattr(cli, "_item_context", lambda **_kw: (None, "no warp here"))
 
     assert main([
-        "do", "--reply", "evt-1", "--item", "w-1", "--body", "hi", "--no-promise",
+        "do", "--reply", "evt-1", "--item", "w-1", "--body", "hi", "--no-follow-up",
     ]) == 1
     err = capsys.readouterr().err
     assert "warp" in err
@@ -686,7 +704,7 @@ def test_do_item_repeated_binds_multiple_items_to_one_reply(tmp_path, monkeypatc
 
     assert main([
         "do", "--reply", "evt-1", "--item", "w-1", "--item", "w-2",
-        "--body", "answers both", "--no-promise",
+        "--body", "answers both", "--no-follow-up",
     ]) == 0
     out = capsys.readouterr().out.strip()
     assert out == "reply evt-1 ✓ · item w-1 ✓ · item w-2 ✓"
@@ -760,7 +778,7 @@ def test_do_item_writes_no_row_when_reply_drain_fails(tmp_path, monkeypatch, cap
     )
 
     assert main([
-        "do", "--reply", "evt-1", "--item", "w-1", "--body", "hi", "--no-promise",
+        "do", "--reply", "evt-1", "--item", "w-1", "--body", "hi", "--no-follow-up",
     ]) == 1
     out = capsys.readouterr().out.strip()
     assert "reply evt-1 ✗" in out
@@ -1166,7 +1184,7 @@ def test_do_multiple_verbs_join_one_summary_line(tmp_path, monkeypatch, capsys):
 
     rc = main([
         "do", "--mood", "focused", "--note", "evt-1", "--reply", "evt-2", "--body", "hi",
-        "--no-promise",
+        "--no-follow-up",
     ])
     assert rc == 0
     out = capsys.readouterr().out.strip()
@@ -1215,7 +1233,7 @@ def test_do_rejects_identical_body_for_multiple_event_replies(tmp_path, monkeypa
         "do",
         "--reply", "evt-1", "--body", "same answer",
         "--reply", "evt-2", "--body", "same answer",
-        "--no-promise",
+        "--no-follow-up",
     ]) == 1
 
     err = capsys.readouterr().err
