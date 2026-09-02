@@ -265,3 +265,38 @@ def test_record_briefing_sent_persists_both_ledger_and_clock(tmp_path, monkeypat
     reloaded = json.loads(news_lane.ledger_path(repo).read_text(encoding="utf-8"))
     assert reloaded["announced"] == {"release:pypi": "0.2.0"}
     assert reloaded["last_briefing_at"] == 42.0
+
+
+def test_a_delivered_item_that_cannot_be_recorded_disables_the_chat_lane(monkeypatch, capsys):
+    """The send-then-record ordering has one bad tail, and this closes it.
+
+    Recording *after* a confirmed send is right: recording first would lose the
+    fact whenever a send fails. But `_announce_pending_news` rides the ~10s
+    heartbeat, so a persistently unwritable ledger means a delivered item is
+    never marked delivered — and the user's chat receives the same message
+    every ten seconds, forever. One failure is a message plus a log line; a
+    loop is an incident.
+    """
+    from brr import daemon as daemon_mod
+
+    monkeypatch.setattr(daemon_mod, "_news_announce_disabled", False, raising=False)
+    calls: list[str] = []
+
+    def boom() -> None:
+        calls.append("attempted")
+        raise OSError("read-only file system")
+
+    daemon_mod._news_record_or_disable(boom, "interrupt release:pypi")
+
+    assert calls == ["attempted"], "the record was never attempted"
+    assert daemon_mod._news_announce_disabled is True, (
+        "a delivered-but-unrecorded item must disable the lane, not fall through "
+        "to the next tick"
+    )
+    out = capsys.readouterr().out
+    assert "could not be recorded" in out and "disabled for this process" in out
+
+    # And a successful record leaves the lane alone.
+    monkeypatch.setattr(daemon_mod, "_news_announce_disabled", False, raising=False)
+    daemon_mod._news_record_or_disable(lambda: None, "briefing")
+    assert daemon_mod._news_announce_disabled is False

@@ -53,7 +53,7 @@ import types
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import NamedTuple
+from typing import Callable, NamedTuple
 
 from . import account
 from . import runner_auth_health
@@ -10606,6 +10606,36 @@ def _deliver_out_of_bound(
 
 _news_announce_lock = threading.Lock()
 _news_announce_inflight = False
+# Set when the "already said this" ledger cannot be written. The lane sends
+# first and records after, deliberately — recording first would lose the fact
+# whenever a send fails. But that ordering means a *persistently unwritable*
+# ledger turns a delivered item into an item that is never marked delivered,
+# and this runs on the ~10s heartbeat: the user's chat would receive the same
+# message every ten seconds, forever. One failure is a message plus a log
+# line; a loop is an incident. So the lane disables itself for the life of the
+# process instead, and the dashboard half — which needs no ledger — keeps
+# working.
+_news_announce_disabled = False
+
+
+def _news_record_or_disable(record: Callable[[], None], what: str) -> None:
+    """Persist the "already said this" mark, or shut the chat lane down.
+
+    Never re-raises: the caller is a heartbeat tick, and a ledger write is not
+    worth sinking one over. What it must never do is *return quietly*, because
+    the next tick would resend.
+    """
+    global _news_announce_disabled
+    try:
+        record()
+    except Exception as exc:  # noqa: BLE001 — see the flag's own comment
+        with _news_announce_lock:
+            _news_announce_disabled = True
+        print(
+            f"[brnrd] news-lane: {what} was delivered but could not be recorded "
+            f"({exc}) — chat lane disabled for this process so the send cannot "
+            "repeat every tick; the dashboard half is unaffected."
+        )
 
 
 def _news_lane_send(
@@ -10670,21 +10700,27 @@ def _announce_pending_news(
     (``news_lane.collect``) still carries them regardless of whether chat
     can.
     """
-    global _news_announce_inflight
+    global _news_announce_inflight, _news_announce_disabled
     with _news_announce_lock:
-        if _news_announce_inflight:
+        if _news_announce_inflight or _news_announce_disabled:
             return
         _news_announce_inflight = True
     try:
         for item in news_lane.pending_interrupts(repo_root):
             if _news_lane_send(brr_dir, cfg, account_context, f"news-lane-{item.key}", item.render()):
-                news_lane.record_announced(repo_root, item)
+                _news_record_or_disable(
+                    lambda: news_lane.record_announced(repo_root, item),
+                    f"interrupt {item.key}",
+                )
 
         briefing = news_lane.due_briefing(repo_root)
         if briefing is not None and _news_lane_send(
             brr_dir, cfg, account_context, "news-lane-briefing", briefing.render()
         ):
-            news_lane.record_briefing_sent(repo_root, briefing)
+            _news_record_or_disable(
+                lambda: news_lane.record_briefing_sent(repo_root, briefing),
+                "briefing",
+            )
     finally:
         with _news_announce_lock:
             _news_announce_inflight = False
