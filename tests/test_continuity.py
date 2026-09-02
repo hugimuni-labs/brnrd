@@ -904,7 +904,7 @@ def test_orientation_files_render_as_reach_not_as_a_row() -> None:
     assert "· /repo/AGENTS.md · 4,120B" in kernel
     assert "· /home/kb/subject-envs.md · 9,801B" in kernel
     assert "assignments:" not in kernel
-    assert "↗" not in kernel
+    assert __import__("re").search(r"↗\d+b", kernel) is None  # no escalation windows
     # The retired blocks stay retired.
     assert "next:" not in kernel
     assert "orient:" not in kernel
@@ -920,12 +920,12 @@ def test_kernel_renders_debts_and_reach_not_rows(tmp_path):
     )
     kernel = format_kernel(score)
     assert "×3 standing · self-owned" in kernel
-    assert "answer the person · leave receipts" in kernel
+    assert "op⇐reply owed — answer the person" in kernel
     assert "pending×2" in kernel
-    assert "branch off the default before you edit" in kernel
+    assert "shared checkout: dflt↗branch ⇢ edit" in kernel
     assert "first outward ⇒ .name + .mood" in kernel
     assert "assignments:" not in kernel
-    assert "⇢" not in kernel and "↗" not in kernel
+    assert "discharge each" not in kernel and __import__("re").search(r"↗\d+b", kernel) is None
     assert "discharge each" not in kernel
     assert "next:" not in kernel
     assert "\norient:" not in kernel

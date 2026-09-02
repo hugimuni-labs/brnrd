@@ -791,14 +791,13 @@ def format_kernel(score: BootScore) -> str:
         # resident's own and predates this run; what is new here is only the run, whose
         # ledger of deeds starts empty. Nothing above the seam is a receipt.
         restore.append(
-            "memory: self · <snapshot restored> · Δhere=∅ — yours, predates this "
-            "run; acts *here*: none yet"
+            "memory: self · <snapshot restored> · Δhere=∅ — memory: yours, not "
+            "given, it predates this run, not you; acts *here*: none yet"
         )
 
     host = score.host
     host_bits = [host.kind] + [b for b in (host.environment, host.publication_owner) if b]
     host_line = f"host: {' · '.join(host_bits)}"
-    if (host.environment or "").strip() == "host":
     incarnate.append(host_line)
     if (host.environment or "").strip() == "host":
         incarnate.append(

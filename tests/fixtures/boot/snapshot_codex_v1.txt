@@ -16,7 +16,7 @@ brnrd boot · v2 · depth compact
 
 continuity: ✗ first wake
 
-body requested: codex (codex / gpt-5.6-terra) · T2 hooks ✓
+body: codex/gpt-5.6-terra · T2 hooks ✓
 host: daemon · worktree · resident-owned
 image: untracked · fingerprint∅ (none captured in this process)
   no AGENTS.md, no committed/home kb: this repo hasn't run `brnrd init` yet. Bounded work only: answer, inspect, or run the setup interview; don't invent a kb location to write into, and don't assume an AGENTS.md convention that isn't there.
@@ -27,8 +27,13 @@ attention: evt-fixture-0001
 posture: brr/fixture-branch · week 80% left (resets Sunday) · budget 120m
 
 ×3 standing · self-owned
-answer the person · leave receipts (commit what you mean to keep; branch off the default on a host checkout) · lose no work (`## Now` on .card before any long act; what only you know, written)
-first outward ⇒ .name + .mood ; first produce ⇒ .topics ; ∅then ⇒ daemon→plain fallback ; next-wake→declare
+op⇐reply owed — answer the person
+keep⇒commit ; shared⇒dflt↗branch ; Δ⇒op⇐↑push — leave receipts: commit what you mean to keep
+long-act⇒.card/## Now first ; private-knowledge⇒write — lose no work
+
+first outward ⇒ .name + .mood
+first produce ⇒ .topics
+∅then ⇒ daemon→plain fallback ; next-wake→declare
 
 reference: `brnrd prompts show` ⇒ blocks + cost
 
@@ -319,7 +324,7 @@ hooks:
 source manifest:
     block                                                           owner        authority      bytes  location / freshness
   -------------------------------------------------------------------------------------------------------------------------
-  ✓ Boot kernel (action-first score)                                daemon-live  runtime        1,111  computed
+  ✓ Boot kernel (action-first score)                                daemon-live  runtime        1,114  computed
   ✓ Operational preamble (run.md)                                   product      contract     [bytes]  {PACKAGE_ROOT}/prompts/run.md  [mtime]
   ✓ Working register (weave.md)                                     product      contract     [bytes]  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Working register, worked example (register.md)                  product      contract     [bytes]  {PACKAGE_ROOT}/prompts/register.md  [mtime]
