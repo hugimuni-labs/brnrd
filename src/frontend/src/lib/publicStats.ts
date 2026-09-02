@@ -55,3 +55,37 @@ export async function fetchRepoStats(fetcher: typeof fetch = fetch): Promise<Rep
 		return null;
 	}
 }
+
+// The deployed build's identity (#1734) — `GET /v1/stats/version`, public
+// and unauthenticated same as the two fetchers above (it names a commit
+// already public on the forge and a timestamp, nothing account-scoped).
+// Mirrors `brnrd.version_info.build_info()` byte for byte; every field
+// degrades to `null` rather than guessing (no `build_info.txt` stamped —
+// a local/dev install), same honesty stance carried through to the
+// rendering side in `buildIdentity.ts`.
+export interface BuildVersion {
+	commit: string | null;
+	built_at: string | null;
+	started_at: string | null;
+}
+
+export async function fetchBuildVersion(
+	fetcher: typeof fetch = fetch
+): Promise<BuildVersion | null> {
+	try {
+		const resp = await fetcher('/v1/stats/version');
+		if (!resp.ok) return null;
+		const data = await resp.json();
+		if (typeof data !== 'object' || data === null) return null;
+		return {
+			commit: typeof data.commit === 'string' ? data.commit : null,
+			built_at: typeof data.built_at === 'string' ? data.built_at : null,
+			started_at: typeof data.started_at === 'string' ? data.started_at : null
+		};
+	} catch {
+		// Same stance as the two fetchers above: this line is decoration on
+		// the dashboard header, never a gate — any failure renders as
+		// absence via `buildIdentityView(null, …)`, not as an error state.
+		return null;
+	}
+}
