@@ -18,7 +18,7 @@ from brr import card, hooks, portals
 def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None, produce=None,
             resources=None, budget=None, outbound=None, card=None,
             name=None, current_event="evt-1", current_event_replyable=True,
-            notices=None, schedule=None, delivery=None):
+            notices=None, schedule=None, delivery=None, await_state=None):
     # ``current_event`` mirrors production: the daemon always writes the key,
     # set for an addressed run and None for an unaddressed one (a scheduled
     # wake). Pass ``current_event=None`` to model the unaddressed shape — the
@@ -64,6 +64,8 @@ def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None, produce=N
         payload["schedule"] = schedule
     if delivery is not None:
         payload["delivery"] = delivery
+    if await_state is not None:
+        payload["await"] = await_state
     path = tmp_path / "portal-state.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
@@ -77,6 +79,16 @@ def _env(tmp_path, flavour="claude"):
         "BRR_OUTBOX_DIR": str(tmp_path),
         "BRR_PORTAL_STATE": str(tmp_path / "portal-state.json"),
     }
+
+
+def _score_env(tmp_path):
+    env = _env(tmp_path)
+    env["BRR_BOOT_SCORE"] = str(tmp_path / "boot-score.json")
+    return env
+
+
+def _inject_text(out):
+    return (out.get("hookSpecificOutput") or {}).get("additionalContext") or ""
 
 
 def test_post_tool_touches_flush_and_injects_on_change(tmp_path):
@@ -4074,422 +4086,6 @@ def test_no_mood_means_no_surprise_annotation(tmp_path):
     assert ctx.splitlines()[0].startswith("⌁[·]:")
 
 
-# ── The orientation ledger (#513 Slice 9 → w-69's orient assignment) ─────
-#
-# Fixture discipline (#611): every negative assertion below lives beside a
-# positive twin on the *same* input shape, so an assertion of absence can
-# never be green against an input that could not have produced the segment.
-#
-# Since w-69 the walk's rendered surface is the orient *assignment* row:
-# the `assign k/n` chip counts retired rows, and walk completion (or a
-# declared skip) is the row's discharge. The observation instrument — line
-# ranges, paging, pruning — is unchanged and still pinned via hook state.
-
-
-def _orient_files(tmp_path, names=("a.md", "b.md")):
-    files = []
-    for name in names:
-        path = tmp_path / name
-        path.write_text(f"# {name}\n", encoding="utf-8")
-        files.append(path)
-    return files
-
-
-def _boot_score(tmp_path, files, *, window=6):
-    path = tmp_path / "boot-score.json"
-    path.write_text(json.dumps({
-        "orientation_set": [
-            {"path": str(f), "bytes": f.stat().st_size} for f in files
-        ],
-        "assignments": [{
-            "id": "a-orient", "kind": "orient",
-            "title": f"walk the orientation set ({len(files)} file(s))",
-            "discharge": "Read each, or declare the skip on .card",
-            "window": window, "cadence": 4,
-            "detail": ["unread contract files mean acting on remembered permissions"],
-            "anchor": "orientation",
-        }],
-    }), encoding="utf-8")
-    return path
-
-
-def _orient_env(tmp_path):
-    env = _env(tmp_path)
-    env["BRR_BOOT_SCORE"] = str(tmp_path / "boot-score.json")
-    return env
-
-
-def _read_batch(*paths):
-    return json.dumps({
-        "hook_event_name": "PostToolBatch",
-        "tool_calls": [
-            {"tool_name": "Read", "tool_input": {"file_path": str(p)},
-             "tool_use_id": f"t{i}", "tool_response": "file contents"}
-            for i, p in enumerate(paths)
-        ],
-    })
-
-
-def _sliced_read_batch(path, *, offset=0, limit=90):
-    return json.dumps({
-        "hook_event_name": "PostToolBatch",
-        "tool_calls": [{
-            "tool_name": "Read",
-            "tool_input": {
-                "file_path": str(path),
-                "offset": offset,
-                "limit": limit,
-            },
-            "tool_use_id": f"read-{offset}-{limit}",
-            "tool_response": "file contents",
-        }],
-    })
-
-
-def _inject_text(out):
-    return (out.get("hookSpecificOutput") or {}).get("additionalContext") or ""
-
-
-def test_orient_meters_reads_against_the_set_while_the_walk_is_open(tmp_path):
-    a, _b = _orient_files(tmp_path)
-    _boot_score(tmp_path, _orient_files(tmp_path))
-    _portal(tmp_path, token="t1", pending=1,
-            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
-    out, code = hooks.run_hook(
-        hooks.PHASE_POST_TOOL, _read_batch(a), _orient_env(tmp_path)
-    )
-    assert code == 0
-    # w-69: the walk's standing surface is the orient assignment row —
-    # `assign 0/1` while it stands open; the instrument records the read.
-    assert "assign 0/1" in _inject_text(out).splitlines()[0]
-    state = json.loads(
-        (tmp_path / hooks.HOOK_STATE_NAME).read_text(encoding="utf-8")
-    )
-    assert state[hooks.ORIENTATION_READ_KEY] == [str(a.resolve())]
-
-
-def test_orient_segment_leaves_at_completion(tmp_path):
-    a, b = _orient_files(tmp_path)
-    _boot_score(tmp_path, [a, b])
-    env = _orient_env(tmp_path)
-    _portal(tmp_path, token="t1", pending=1,
-            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
-    first, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, _read_batch(a), env)
-    # The positive twin: this exact setup renders the row while open.
-    assert "assign 0/1" in _inject_text(first)
-    _portal(tmp_path, token="t2", pending=1,
-            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
-    second, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, _read_batch(b), env)
-    text = _inject_text(second)
-    # With seen-only pending events, the bar may stay quiet when nothing
-    # else has news. What matters is that "assign" is not in whatever renders.
-    if text:
-        assert "assign" not in text
-
-
-def test_orient_partial_read_is_not_a_completed_file(tmp_path):
-    """Opening ninety lines of a long page proves touch, not orientation."""
-    page = tmp_path / "long.md"
-    page.write_text(
-        "".join(f"line {number}\n" for number in range(240)),
-        encoding="utf-8",
-    )
-    _boot_score(tmp_path, [page])
-    _portal(tmp_path, token="t1", pending=1,
-            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
-
-    out, _ = hooks.run_hook(
-        hooks.PHASE_POST_TOOL,
-        _sliced_read_batch(page, offset=0, limit=90),
-        _orient_env(tmp_path),
-    )
-
-    assert "assign 0/1" in _inject_text(out)
-    state = json.loads(
-        (tmp_path / hooks.HOOK_STATE_NAME).read_text(encoding="utf-8")
-    )
-    assert state[hooks.ORIENTATION_READ_KEY] == []
-    assert state[hooks.ORIENTATION_READ_RANGES_KEY] == {
-        str(page.resolve()): [[0, 90]]
-    }
-
-
-def test_orient_paged_reads_complete_only_after_covering_the_file(tmp_path):
-    page = tmp_path / "long.md"
-    page.write_text(
-        "".join(f"line {number}\n" for number in range(240)),
-        encoding="utf-8",
-    )
-    _boot_score(tmp_path, [page])
-    env = _orient_env(tmp_path)
-    _portal(tmp_path, token="t1", pending=1,
-            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
-    first, _ = hooks.run_hook(
-        hooks.PHASE_POST_TOOL,
-        _sliced_read_batch(page, offset=0, limit=90),
-        env,
-    )
-    assert "assign 0/1" in _inject_text(first)
-
-    _portal(tmp_path, token="t2", pending=1,
-            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
-    second, _ = hooks.run_hook(
-        hooks.PHASE_POST_TOOL,
-        _sliced_read_batch(page, offset=90, limit=150),
-        env,
-    )
-
-    assert "assign" not in _inject_text(second)
-    state = json.loads(
-        (tmp_path / hooks.HOOK_STATE_NAME).read_text(encoding="utf-8")
-    )
-    assert state[hooks.ORIENTATION_READ_KEY] == [str(page.resolve())]
-    assert state[hooks.ORIENTATION_READ_RANGES_KEY] == {}
-
-
-def test_orient_unbounded_read_respects_the_runner_default_page(tmp_path):
-    page = tmp_path / "too-long-for-one-read.md"
-    page.write_text("line\n" * (hooks._ORIENTATION_READ_DEFAULT_LIMIT + 1),
-                    encoding="utf-8")
-    _boot_score(tmp_path, [page])
-    _portal(tmp_path, token="t1", pending=1,
-            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
-
-    out, _ = hooks.run_hook(
-        hooks.PHASE_POST_TOOL, _read_batch(page), _orient_env(tmp_path)
-    )
-
-    assert "assign 0/1" in _inject_text(out)
-
-
-def test_orient_ignores_reads_outside_the_set(tmp_path):
-    a, b = _orient_files(tmp_path)
-    _boot_score(tmp_path, [a, b])
-    unrelated = tmp_path / "unrelated.md"
-    unrelated.write_text("not in the set\n", encoding="utf-8")
-    _portal(tmp_path, token="t1", pending=1,
-            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
-    out, _ = hooks.run_hook(
-        hooks.PHASE_POST_TOOL, _read_batch(unrelated), _orient_env(tmp_path)
-    )
-    assert "assign 0/1" in _inject_text(out)
-    state = json.loads(
-        (tmp_path / hooks.HOOK_STATE_NAME).read_text(encoding="utf-8")
-    )
-    assert state[hooks.ORIENTATION_READ_KEY] == []
-
-
-def test_orient_skip_on_card_silences_the_meter_but_not_the_ledger(tmp_path):
-    a, b = _orient_files(tmp_path)
-    _boot_score(tmp_path, [a, b])
-    env = _orient_env(tmp_path)
-    _portal(tmp_path, token="t1", pending=1,
-            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
-    open_walk, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    # Positive twin: without the declaration this input renders the row.
-    assert "assign 0/1" in _inject_text(open_walk)
-
-    (tmp_path / hooks.CARD_NAME).write_text(
-        "## Now\nassuming prior knowledge, skipping orientation\n",
-        encoding="utf-8",
-    )
-    _portal(tmp_path, token="t2", pending=1,
-            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
-    skipped, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, _read_batch(a), env)
-    assert "assign" not in _inject_text(skipped)
-    # The observation still lands — skip silences the segment, never the
-    # instrument (Slice 4 reads completeness from this state).
-    state = json.loads(
-        (tmp_path / hooks.HOOK_STATE_NAME).read_text(encoding="utf-8")
-    )
-    assert state[hooks.ORIENTATION_READ_KEY] == [str(a.resolve())]
-
-
-def test_orient_skip_needs_a_declaration_not_a_mention(tmp_path):
-    """Prose about skipping and orientation must not silence the meter.
-
-    The first shape of this guard matched any single line carrying both
-    words. That is line-scoped but not *declaration*-scoped, and the resident
-    holds the pen on `.card` — so a line reporting the ledger's own value, or
-    a line about working on this very ticket, turned the ledger off. The
-    second string below is the sharp one: it contains an explicit **negation**
-    and used to declare a skip.
-    """
-    a, b = _orient_files(tmp_path)
-    _boot_score(tmp_path, [a, b])
-    (tmp_path / hooks.CARD_NAME).write_text(
-        "## Now\n"
-        "skip the flaky test for now\n"            # words on separate lines
-        "orientation files come next\n"
-        "orient 3/5 rendered; nothing skipped\n"   # same line, and a negation
-        "Reviewed Slice 9: skip is a first-class outcome for orientation\n"
-        "the resident declares the skip for orientation on .card\n",
-        encoding="utf-8",
-    )
-    _portal(tmp_path, token="t1", pending=1,
-            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
-    out, _ = hooks.run_hook(
-        hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
-    )
-    assert "assign 0/1" in _inject_text(out)
-
-
-def test_orient_skip_accepts_the_terse_declaration(tmp_path):
-    """`orient: skip` heading a line is the terse form, and must still work.
-
-    Narrowing the guard is only correct if the *intended* declarations still
-    land — otherwise the fix trades a false positive for a dead feature.
-    """
-    a, b = _orient_files(tmp_path)
-    _boot_score(tmp_path, [a, b])
-    (tmp_path / hooks.CARD_NAME).write_text(
-        "## Now\n- orient: skip\n", encoding="utf-8",
-    )
-    _portal(tmp_path, token="t1", pending=1,
-            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
-    out, _ = hooks.run_hook(
-        hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
-    )
-    assert "assign" not in _inject_text(out)
-
-
-def test_orient_skip_accepts_a_field_prefixed_declaration_with_prose_between(
-    tmp_path,
-):
-    """#1266: the real declaration that shipped this fix, verbatim.
-
-    A 145-minute live run wrote this exact line on `.card`, per the boot's
-    own "declare the skip" instruction, and the meter rendered `orient 0/3`
-    at every boundary anyway — the narrowed guard only accepted "skip"
-    immediately after the separator, and natural phrasing put the subject
-    clause in between and used the past tense.
-    """
-    a, b = _orient_files(tmp_path)
-    _boot_score(tmp_path, [a, b])
-    (tmp_path / hooks.CARD_NAME).write_text(
-        "## Now\n"
-        "orientation: AGENTS.md skim skipped — assuming prior knowledge "
-        "(contract carried in playbook + continuity; surface pages "
-        "injected this wake)\n",
-        encoding="utf-8",
-    )
-    _portal(tmp_path, token="t1", pending=1,
-            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
-    out, _ = hooks.run_hook(
-        hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
-    )
-    assert "assign" not in _inject_text(out)
-
-
-def test_orient_skip_field_prefix_still_rejects_a_negated_value(tmp_path):
-    """The widened form must not reopen the reporting-its-own-value trap.
-
-    "orientation: not skipped" is the field-prefixed idiom's own negation —
-    the same class #614 narrowed the original regex against, one clause
-    shape over. It must keep the meter rendering.
-    """
-    a, b = _orient_files(tmp_path)
-    _boot_score(tmp_path, [a, b])
-    (tmp_path / hooks.CARD_NAME).write_text(
-        "## Now\norientation: not skipped, read AGENTS.md and the plan\n",
-        encoding="utf-8",
-    )
-    _portal(tmp_path, token="t1", pending=1,
-            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
-    out, _ = hooks.run_hook(
-        hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
-    )
-    assert "assign 0/1" in _inject_text(out)
-
-
-def test_orient_is_unassertable_without_an_armed_boot_score(tmp_path):
-    a, b = _orient_files(tmp_path)
-    _boot_score(tmp_path, [a, b])  # on disk, but the daemon never armed it
-    _portal(tmp_path, token="t1", pending=1,
-            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
-    unarmed, _ = hooks.run_hook(
-        hooks.PHASE_POST_TOOL, _read_batch(a), _env(tmp_path)
-    )
-    assert "assign" not in _inject_text(unarmed)
-    # Positive twin: the identical input with the env armed does render —
-    # so the absence above is the guard's, not the fixture's.
-    _portal(tmp_path, token="t2", pending=1,
-            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
-    armed, _ = hooks.run_hook(
-        hooks.PHASE_POST_TOOL, _read_batch(a), _orient_env(tmp_path)
-    )
-    assert "assign 0/1" in _inject_text(armed)
-
-
-def test_orient_prunes_state_paths_that_left_the_set(tmp_path):
-    a, b = _orient_files(tmp_path)
-    _boot_score(tmp_path, [a, b])
-    # A stale ledger entry from a path no longer in the set (say, a prior
-    # run's state file surviving into a re-run) must never inflate the count.
-    (tmp_path / hooks.HOOK_STATE_NAME).write_text(
-        json.dumps({hooks.ORIENTATION_READ_KEY: ["/elsewhere/gone.md"]}),
-        encoding="utf-8",
-    )
-    _portal(tmp_path, token="t1", pending=1,
-            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
-    out, _ = hooks.run_hook(
-        hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
-    )
-    assert "assign 0/1" in _inject_text(out)
-    state = json.loads(
-        (tmp_path / hooks.HOOK_STATE_NAME).read_text(encoding="utf-8")
-    )
-    assert state[hooks.ORIENTATION_READ_KEY] == []
-
-
-def _assign_view(total=3, retired=1):
-    from brr import assignments as am
-    rows = [
-        {"id": f"a-{i}", "kind": "claims", "title": f"row {i}",
-         "discharge": "the writes", "window": 6, "cadence": 4, "detail": []}
-        for i in range(total)
-    ]
-    states = {
-        f"a-{i}": {"retired": am.RETIRED_DISCHARGED if i < retired else None,
-                   "overdue_since": None, "level": 0}
-        for i in range(total)
-    }
-    return am.LedgerView(rows=rows, states=states, ordinal=1)
-
-
-def test_assign_bar_position_is_after_quota():
-    rendered = hooks.format_delta(
-        _bar_payload(), mood="smug_", assign_view=_assign_view(5, 3)
-    )
-    glyph = hooks._emote_glyph("smug_")
-    assert rendered.splitlines()[0] == (
-        f"⌁[{glyph}]: ⏱ 16/120m │ q S57·W50·F27 │ assign 3/5 │ ▷1 │ rb3h │ "
-        "⇡2+3 │ ⚒4"
-    )
-
-
-def test_assign_stands_quiet_while_the_ledger_does_not_move():
-    # w-54's rule, inherited by the ledger chip: an unchanged `assign 1/3`
-    # is not news and renders nothing.
-    payload = _bar_payload(
-        budget={"elapsed_seconds": 60, "budget_seconds": 7200},
-        outbound={"replies_current": 0, "replies_other": 0,
-                  "outbound_messages": 0},
-        produce={"known": False, "counts": {}},
-        resources={},
-    )
-    seen: dict[str, str] = {}
-    hooks.format_delta(payload, assign_view=_assign_view(3, 1), rendered_chips=seen)
-    assert hooks.format_delta(
-        payload, assign_view=_assign_view(3, 1), last_chips=seen
-    ) is None
-    # A retirement is a move, and a move is news.
-    moved = hooks.format_delta(
-        payload, assign_view=_assign_view(3, 2), last_chips=seen
-    )
-    assert moved is not None and "assign 2/3" in moved.splitlines()[0]
-
-
 # ── #616: notices segment and spawn_completed closeout rendering ─────────────
 
 
@@ -4561,39 +4157,6 @@ def test_notices_chip_carries_a_discharge_detail_line():
     rendered_plural = hooks.format_delta(_bar_payload(notices=notices_plural))
     detail_plural = "\n".join(rendered_plural.splitlines()[1:])
     assert "2 directives" in detail_plural  # plural at N>1
-
-
-def test_overdue_claims_row_names_its_discharge():
-    """w-69: the claims assignment replaced the `mood?` nudge — an overdue
-    row renders its discharge act and its unlocked escalation lines, on the
-    ledger's own edge only."""
-    from brr import assignments as am
-    rows = [{
-        "id": "a-claims", "kind": "claims",
-        "title": "claim .name · .mood · .topics",
-        "discharge": "one write each (brnrd emotes <feeling> finds a face)",
-        "window": 2, "cadence": 4,
-        "detail": ["one line each: .name, .mood, .topics"],
-    }]
-    states = {"a-claims": {"retired": None, "overdue_since": 3, "level": 1}}
-    view = am.LedgerView(rows=rows, states=states, ordinal=3, edge=True)
-    rendered = hooks.format_delta(
-        _bar_payload(), assign_view=view, assign_edge=True
-    )
-    lines = rendered.splitlines()
-    assert "assign 0/1" in lines[0]
-    detail = "\n".join(lines[1:])
-    assert "assign overdue" in detail
-    assert "brnrd emotes" in detail
-    assert "one line each" in detail
-
-    # Between edges the chip carries the standing fact alone — no rows.
-    seen: dict[str, str] = {}
-    hooks.format_delta(_bar_payload(), assign_view=view, rendered_chips=seen)
-    quiet = hooks.format_delta(
-        _bar_payload(), assign_view=view, last_chips=seen
-    )
-    assert quiet is None or "assign overdue" not in quiet
 
 
 # ── #1002: a notice carries a `kind`, and only `refused`/`dropped` count ─────
@@ -5203,7 +4766,7 @@ def test_census_renders_total_biggest_block_and_oldest_item(tmp_path):
     _portal(tmp_path, token="t1", pending=1,
             events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
     out, code = hooks.run_hook(
-        hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
+        hooks.PHASE_POST_TOOL, "{}", _score_env(tmp_path)
     )
     assert code == 0
     bar = _inject_text(out).splitlines()[0]
@@ -5220,11 +4783,13 @@ def test_census_is_silent_when_the_score_carries_no_contracts(tmp_path):
     renders the segment (asserted above), so this absence is the score's,
     not the boundary's.
     """
-    _boot_score(tmp_path, _orient_files(tmp_path))  # orientation_set only
+    (tmp_path / "boot-score.json").write_text(
+        json.dumps({"orientation_set": []}), encoding="utf-8"
+    )
     _portal(tmp_path, token="t1", pending=1,
             events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
     out, _ = hooks.run_hook(
-        hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
+        hooks.PHASE_POST_TOOL, "{}", _score_env(tmp_path)
     )
     assert "wake " not in _inject_text(out)
 
@@ -5242,7 +4807,7 @@ def test_census_fields_degrade_one_at_a_time(tmp_path):
     _portal(tmp_path, token="t1", pending=1,
             events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
     out, _ = hooks.run_hook(
-        hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
+        hooks.PHASE_POST_TOOL, "{}", _score_env(tmp_path)
     )
     bar = _inject_text(out).splitlines()[0]
     assert "top run-context-bundle 19.3 KB" in bar
@@ -5260,11 +4825,11 @@ def test_census_renders_once_then_never_again(tmp_path):
     _census_score(tmp_path, contracts=_CENSUS_BLOCKS, prompt_bytes=115714)
     _portal(tmp_path, token="t1", pending=0)
     first, _ = hooks.run_hook(
-        hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
+        hooks.PHASE_POST_TOOL, "{}", _score_env(tmp_path)
     )
     assert "wake " in _inject_text(first)
     second, _ = hooks.run_hook(
-        hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
+        hooks.PHASE_POST_TOOL, "{}", _score_env(tmp_path)
     )
     assert "wake " not in _inject_text(second)
 
@@ -5854,27 +5419,23 @@ def test_a_quiet_boundary_drops_even_the_vitals_once_seen():
         produce={"known": False, "counts": {}},
     )
     seen: dict[str, str] = {}
-    view = _assign_view(3, 1)
-    loud = hooks.format_delta(payload, assign_view=view, census="wake 40 KB",
-                              rendered_chips=seen)
+    loud = hooks.format_delta(payload, census="wake 40 KB", rendered_chips=seen)
     assert loud is not None
-    assert "q S80" in loud and "wake 40 KB" in loud and "assign 1/3" in loud
+    assert "q S80" in loud and "wake 40 KB" in loud
 
     # Nothing moved ⇒ nothing at all — vitals included.
-    quiet = hooks.format_delta(payload, assign_view=view, census="wake 40 KB",
-                               last_chips=seen)
+    quiet = hooks.format_delta(payload, census="wake 40 KB", last_chips=seen)
     assert quiet is None
 
     # A vital that moved is news again; the wallpaper stays down.
     payload["resources"] = {
         "quota": {"status": "known", "summary": "session 79% left"},
     }
-    again = hooks.format_delta(payload, assign_view=view, census="wake 40 KB",
-                               last_chips=seen)
+    again = hooks.format_delta(payload, census="wake 40 KB", last_chips=seen)
     assert again is not None
     bar = again.splitlines()[0]
     assert "q S79" in bar
-    assert "wake 40 KB" not in bar and "assign" not in bar
+    assert "wake 40 KB" not in bar
 
 
 # ── The in-process subagent boundary (#1095) ─────────────────────────────
@@ -6636,6 +6197,83 @@ def test_course_stall_fires_at_threshold(tmp_path):
     _portal(tmp_path, token=f"t{threshold + 1}", pending=0)
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
     assert "stalled ×" not in _inject_text(out)
+
+
+def test_course_stall_does_not_count_boundaries_while_await_is_armed(tmp_path):
+    (tmp_path / hooks.CARD_NAME).write_text(
+        "## Now\nwaiting\n\n## Plan\n- [ ] wait for the result\n", encoding="utf-8"
+    )
+    env = _env(tmp_path)
+    for i in range(hooks._COURSE_STALL_THRESHOLD + 1):
+        _portal(
+            tmp_path, token=f"t{i}", pending=0,
+            await_state={"armed": True, "resolved": False},
+        )
+        out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+        assert "stalled ×" not in _inject_text(out)
+
+
+def test_course_stall_does_not_count_boundaries_that_deliver_replies(tmp_path):
+    (tmp_path / hooks.CARD_NAME).write_text(
+        "## Now\ndelivering\n\n## Plan\n- [ ] answer the thread\n", encoding="utf-8"
+    )
+    env = _env(tmp_path)
+    for i in range(hooks._COURSE_STALL_THRESHOLD + 1):
+        _portal(
+            tmp_path, token=f"t{i}", pending=0,
+            outbound={
+                "replies_current": i,
+                "replies_other": 0,
+                "outbound_messages": 0,
+            },
+        )
+        out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+        assert "stalled ×" not in _inject_text(out)
+
+
+def test_course_stall_delivery_boundary_pauses_but_does_not_reset_counter(tmp_path):
+    (tmp_path / hooks.CARD_NAME).write_text(
+        "## Now\nworking\n\n## Plan\n- [ ] do the thing\n", encoding="utf-8"
+    )
+    env = _env(tmp_path)
+    threshold = hooks._COURSE_STALL_THRESHOLD
+    _portal(tmp_path, token="route-edge", pending=0)
+    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    for i in range(threshold // 2):
+        _portal(tmp_path, token=f"idle-before-{i}", pending=0)
+        out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+        assert "stalled ×" not in _inject_text(out)
+    _portal(
+        tmp_path, token="delivery", pending=0,
+        outbound={
+            "replies_current": 1,
+            "replies_other": 0,
+            "outbound_messages": 0,
+        },
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    assert "stalled ×" not in _inject_text(out)
+    for i in range(threshold - threshold // 2 - 1):
+        _portal(
+            tmp_path, token=f"idle-after-{i}", pending=0,
+            outbound={
+                "replies_current": 1,
+                "replies_other": 0,
+                "outbound_messages": 0,
+            },
+        )
+        out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+        assert "stalled ×" not in _inject_text(out)
+    _portal(
+        tmp_path, token="idle-fire", pending=0,
+        outbound={
+            "replies_current": 1,
+            "replies_other": 0,
+            "outbound_messages": 0,
+        },
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    assert f"stalled ×{threshold} boundaries" in _inject_text(out)
 
 
 def test_course_stall_resets_on_route_edit(tmp_path):

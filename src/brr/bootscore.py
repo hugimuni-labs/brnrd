@@ -28,12 +28,6 @@ selling point is *facts* is just a claim.
 
 Slice 2 (2026-07-13) added the two fields whose consumers now exist:
 
-- ``orientation`` — the ordered next-actions rendered by :func:`format_kernel`
-  into the *first* block of every daemon wake.  Deterministically derived from
-  posture; no inferred intent.  (Superseded 2026-08-20 by ``assignments`` —
-  w-69, ``design-the-ignition-assignments.md``: the ``next:`` list and the
-  standalone ``orient:`` meter folded into one typed assignment list, each
-  row carrying its discharge and its escalation window.)
 - ``bytes`` / ``prompt_bytes`` — the cost ledger.  The score named which blocks
   were present but never what they cost, so the compact/worked depth call had
   no evidence to stand on and the resident had to shell out to ``wc -c`` to
@@ -49,7 +43,6 @@ import time
 from dataclasses import asdict, dataclass, field, replace
 
 from . import protocol
-from .assignments import Assignment
 
 # ── Schema version ────────────────────────────────────────────────────────────
 
@@ -555,13 +548,8 @@ class BootHook:
 class OrientationFile:
     """One file in the wake's **orientation set** (#513 Slice 9).
 
-    The orientation *walk*'s unit: a file this wake ought to have *read* —
-    the walk the maintainer's MUD-boot steer asked for — observed by the
-    hooks until the walk completes or the resident declares the skip on
-    ``.card``. Since w-69 the walk's rendered surface is the orient
-    *assignment* row (the set's files render under it in the kernel, and
-    walk completion is the row's discharge); this dataclass stays the
-    metering unit the hooks' instrument counts against.
+    One file the wake did not carry and may need to read. The set's files
+    render under the kernel's ``reach:`` heading.
 
     Every entry is deterministic and provably wrong-able: the file existed at
     derivation time, at this absolute path, at this size.  Nothing here is
@@ -593,18 +581,9 @@ class BootScore:
     continuity: BootContinuity = field(default_factory=BootContinuity)
     attention: BootAttention = field(default_factory=BootAttention)
     posture: BootPosture = field(default_factory=BootPosture)
-    assignments: list[Assignment] = field(default_factory=list)
-    """The ignition assignments (w-69, ``design-the-ignition-assignments.md``):
-    the wake's obligations as one typed, daemon-derived list — the waking
-    event itself first (the signed rider), then every other row the daemon
-    can prove, each carrying its discharge act and its escalation window
-    (priced per wake from the live quota posture; see
-    :func:`brr.assignments.price`).  Persisted with the score to
-    ``boot-score.json``, where the hooks' boundary ledger reads it back.
-    Supersedes the ``orientation`` next-actions list (2026-08-20)."""
     orientation_set: list[OrientationFile] = field(default_factory=list)
     """The orientation *walk*'s file set (#513 Slice 9), rendered under the
-    orient assignment row since w-69; see :class:`OrientationFile`.  Empty
+    kernel's ``reach:`` heading; see :class:`OrientationFile`.  Empty
     when nothing deterministic could be named (no ``AGENTS.md``, no active
     plan, no matched kb hub) — never padded with guesses.  Persisted with
     the score to ``boot-score.json``, where the hook instrument reads it
@@ -691,7 +670,6 @@ def to_dict(score: BootScore) -> dict:
         "continuity": asdict(score.continuity),
         "attention": asdict(score.attention),
         "posture": asdict(score.posture),
-        "assignments": [asdict(a) for a in score.assignments],
         "orientation_set": [asdict(f) for f in score.orientation_set],
         "contracts": [asdict(c) for c in score.contracts],
         "hooks": [asdict(h) for h in score.hooks],
@@ -745,8 +723,7 @@ def format_kernel(score: BootScore) -> str:
     Three properties, copied deliberately:
 
     - **differential** — it says what is true *now*, not what is always true;
-    - **imperative, with a required disposition** — ``assignments:`` is a list
-      of obligations with discharge acts, not a list of facts;
+    - **imperative where action is required** — standing debts name the act;
     - **at the choice point** — first thing read, last thing before the scroll
       it indexes.
 
