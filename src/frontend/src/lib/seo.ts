@@ -10,8 +10,11 @@ const INDEXABLE_EXACT_PATHS = new Set([
 	'/terms',
 	'/privacy',
 	'/legal-notice',
-	'/learn'
+	'/learn',
+	'/log'
 ]);
+
+const INDEXABLE_PREFIXES = ['/learn/', '/log/'];
 
 // Real public pages that are not in the sitemap / not meant for search
 // indexing (an editorial choice — see robots.txt + sitemap.xml, which name
@@ -27,7 +30,10 @@ export function normalizePathname(pathname: string): string {
 
 export function isIndexablePath(pathname: string): boolean {
 	const normalized = normalizePathname(pathname);
-	return INDEXABLE_EXACT_PATHS.has(normalized) || normalized.startsWith('/learn/');
+	return (
+		INDEXABLE_EXACT_PATHS.has(normalized) ||
+		INDEXABLE_PREFIXES.some((prefix) => normalized.startsWith(prefix))
+	);
 }
 
 // Broader than isIndexablePath: every route that owns real per-page SEO
