@@ -185,6 +185,14 @@ class _OrderedAppend(argparse.Action):
         items.append((self.dest, values))
 
 
+class _DeprecatedNoPromise(argparse.Action):
+    """Accept the retired spelling while recording that it needs a pointer."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, True)
+        namespace.used_no_promise_alias = True
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the full argparse tree.
 
@@ -868,7 +876,7 @@ def build_parser() -> argparse.ArgumentParser:
     # present) is cmd_do's own, since argparse has no concept of "required
     # only when a *different* flag repeats." One decision per call, not one
     # per --reply — see cmd_do's docstring for why multiple replies still
-    # share a single promise/no-promise choice.
+    # share a single promise/follow-up choice.
     promise_group = do_p.add_mutually_exclusive_group()
     promise_group.add_argument(
         "--promise", default=None, metavar="WHAT",
@@ -878,9 +886,12 @@ def build_parser() -> argparse.ArgumentParser:
              "promise` would, only once the reply's own drain verdict "
              "comes back ✓")
     promise_group.add_argument(
-        "--no-promise", dest="no_promise", action="store_true",
-        help="with --reply: the explicit zero — this call's reply(ies) "
-             "deliberately create no debt")
+        "--no-follow-up", dest="no_follow_up", action="store_true",
+        help="the correspondent's event carries no follow-up to derive: "
+             "nothing owed beyond this reply")
+    promise_group.add_argument(
+        "--no-promise", dest="no_follow_up", action=_DeprecatedNoPromise,
+        nargs=0, help=argparse.SUPPRESS)
     do_p.add_argument(
         "--promise-count", type=int, default=1, metavar="N",
         help="how many, with --promise (default 1)")
@@ -2944,7 +2955,7 @@ def cmd_do(args):
 
     **The reply-debt contract** (evt-1787161641746642000-s0vo, 2026-08-19).
     A call carrying any ``--reply`` must also carry exactly one of
-    ``--promise``/``--no-promise`` — refused client-side, before anything is
+    ``--promise``/``--no-follow-up`` — refused client-side, before anything is
     staged, when neither is given (argparse itself refuses both at once).
     The decision is per **call**, not per ``--reply``: several replies
     staged together share one promise-or-none choice, so ``--promise`` (when
@@ -3002,6 +3013,12 @@ def cmd_do(args):
     passthrough = getattr(args, "passthrough", None)
     out = sys.stderr if passthrough else sys.stdout
     timeout = args.timeout if args.timeout is not None else do_mod.DEFAULT_TIMEOUT_SECONDS
+
+    if getattr(args, "used_no_promise_alias", False):
+        print(
+            "[brnrd do] --no-promise is deprecated; use --no-follow-up",
+            file=sys.stderr,
+        )
 
     if args.mood_note and not args.mood:
         print("[brnrd do] --mood-note only applies with --mood", file=sys.stderr)
@@ -3072,22 +3089,22 @@ def cmd_do(args):
             return 1
 
     # The reply-debt contract: a call with any --reply must own exactly one
-    # of --promise/--no-promise (argparse's mutually-exclusive group already
+    # of --promise/--no-follow-up (argparse's mutually-exclusive group already
     # refuses both at once — this is the "neither given" half, which
     # argparse has no way to express since it only applies when --reply is
     # also present). Checked before anything is staged, so a refusal here
     # never half-happens.
-    if replies and not (args.promise or args.no_promise):
+    if replies and not (args.promise or args.no_follow_up):
         print(
-            "[brnrd do] --reply needs --promise \"<what>\" or --no-promise "
+            "[brnrd do] --reply needs --promise \"<what>\" or --no-follow-up "
             "— every reply either creates a promise or explicitly creates "
             "none. Nothing was staged.",
             file=sys.stderr,
         )
         return 1
-    if (args.promise or args.no_promise) and not replies:
+    if (args.promise or args.no_follow_up) and not replies:
         print(
-            "[brnrd do] --promise/--no-promise only apply to --reply. "
+            "[brnrd do] --promise/--no-follow-up only apply to --reply. "
             "Nothing was staged.",
             file=sys.stderr,
         )
@@ -3227,7 +3244,7 @@ def cmd_do(args):
             # The promise write: one row for the whole call (never one per
             # --reply — see cmd_do's docstring), and only once every staged
             # reply's own drain verdict is OK. A refused reply must not
-            # leave a debt row for a message nobody got — `--no-promise`
+            # leave a debt row for a message nobody got — `--no-follow-up`
             # writes nothing by design, the explicit zero.
             # `accepted`, not `== OK`: an advisory verdict means the reply
             # *was* delivered, so the debt it promises is real. Asking for OK

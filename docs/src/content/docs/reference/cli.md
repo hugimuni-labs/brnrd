@@ -57,6 +57,7 @@ are not aliases. Use the noun-first commands above.
 | `brnrd kb "<query>" [--limit N]` | Search home and repo knowledge. |
 | `brnrd portal state [--json] [--path PATH]` | Inspect live daemon portal state. |
 | `brnrd portal facets [--json] [--path PATH]` | List the portal facet catalogue and live population. |
+| `brnrd do --reply EVENT-ID (--promise WHAT \| --no-follow-up)` | Reply from a live wake, recording either the derived follow-up or that the correspondent's event carries none. |
 | `brnrd agent inject [--task TEXT]` | Print the wake context a daemon task would receive. |
 | `brnrd ergonomics summary [--days N] [--json]` | Summarize captured agent-ergonomics records. |
 | `brnrd ergonomics list [--issue ID] [--days N] [--limit N] [--json]` | List captured records. |
