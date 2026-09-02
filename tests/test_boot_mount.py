@@ -273,3 +273,48 @@ def test_the_mounted_line_is_derived_from_the_render_not_the_request(repo: Path)
     # contracts — so a wake that mounted nothing must not claim it mounted.
     if not score.body.mounted:
         assert "boot: mounted" not in prompt
+
+
+def test_the_past_self_mounts_as_the_last_seeded_read(repo: Path, tmp_path: Path):
+    """The prior run's node is a real file, so under the mount it is a Read —
+    the whole page, not the prose map — and it is the last perception, where
+    the snapshot seam rides: the resident wakes reading its own last notebook."""
+    from brr import prompts, transcript
+
+    (repo / ".brr").mkdir(exist_ok=True)
+    (repo / ".brr" / "config").write_text(
+        f"repo.label=Gurio/brr\nhome.path={tmp_path / 'home'}\n", encoding="utf-8",
+    )
+    node = tmp_path / "home" / "runs" / "Gurio__brr" / "run-prior"
+    (node / "messages").mkdir(parents=True)
+    (node / "state.md").write_text(
+        "---\nrun_id: run-prior\nstatus: done\nstage: finished\n"
+        "runner_name: claude-opus\npublish_status: pushed\n---\n", encoding="utf-8",
+    )
+    (node / "body.md").write_text(
+        "## Now\n\nLanding the edge writer.\n\n## Vector\n\nA long story.\n", encoding="utf-8",
+    )
+    (node / "messages" / "000003-terminal.md").write_text("done — committed abc1234", encoding="utf-8")
+    (node / "mood").write_text("fo.cus\n", encoding="utf-8")
+
+    prose, score = _wake(repo)
+    assert "A long story." not in prose  # unmounted: the map, not the territory
+
+    sink: dict[str, str] = {}
+    mounted_prose, score_m = _wake(repo, _mount_sink=sink)
+    entry = next(c for c in score_m.contracts if c.block_key == "prior-run")
+    assert entry.location == str(node / "body.md")
+    assert "## Your last run" not in mounted_prose
+    seeded = sink["prior-run"]
+    assert seeded.startswith("## Now")
+    assert "A long story." in seeded            # the territory
+    assert "frame: run-prior · done · finished · claude-opus · pushed" in seeded
+    assert "done — committed abc1234" in seeded  # the last message, as sent
+    assert "mood: fo.cus" in seeded
+    # Offline reconstruction agrees with the live seed.
+    assert prompts.mountable_block_text(entry, repo) == seeded
+
+    t = transcript.build_orientation_transcript(score_m, block_text=sink, cwd=str(repo))
+    last = list(t.perceptions())[-1]
+    assert last.location == str(node / "body.md")
+    assert transcript.SNAPSHOT_SEAM.strip() in last.result

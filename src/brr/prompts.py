@@ -2758,15 +2758,22 @@ def _build_injected_blocks_with_contracts(
     if context:
         keyed.append(("recent-activity", context))
 
-    # 8b. The resident's own last run node (wyrd §5)
+    # 8b. The resident's own last run node (wyrd §5). Its *location* is the
+    # node's own body.md — a real file — so under `boot.mount` the block is
+    # seeded as a Read of that page (the past self's notebook, whole) and,
+    # being the last mounted block, carries the snapshot seam. Unmounted, the
+    # prose keeps the compiled map (`_build_prior_run_block`); mounted, the
+    # territory (`_build_prior_run_mount_text`). The two are one block_key on
+    # purpose: a wake pays for the past self once, in one grammatical position.
     prior_run = _build_prior_run_block(repo_root)
+    prior_node = _prior_run_node(repo_root) if prior_run else None
     contracts.append(ContractEntry(
         block_key="prior-run",
         label="Your last run (node frame + Now + shape)",
         owner=OWNER_RESIDENT,
         authority=AUTHORITY_MEMORY,
         freshness=None,
-        location="computed",
+        location=str(prior_node[1]) if prior_node else "computed",
         present=bool(prior_run),
         bytes=_rendered_bytes(prior_run),
     ))
@@ -3057,8 +3064,62 @@ def _build_portal_verb_grammar_block(repo_root: Path) -> str:
 #: has no other way to learn that, so it consults this registry instead of
 #: reading `entry.location` raw; the alternative is that command handing a
 #: resident 754 lines when the live daemon mount only ever seeded ~120 of them.
+def _build_prior_run_mount_text(repo_root: Path) -> str:
+    """The past self's page, whole — what a seeded ``Read`` of the node carries.
+
+    ``body.md`` byte for byte (a Read that returned a summary would be the
+    lie the mount exists to refuse), then, in brnrd's own bracketed voice —
+    the idiom ``_trim_note`` and the seam already use — the frame line, the
+    run's last message, and the face it wore. A resident waking on this row
+    is reading what it was doing when it stopped, in its own hand.
+    """
+    from . import protocol
+
+    located = _prior_run_node(repo_root)
+    if located is None:
+        return ""
+    state_path, body_path = located
+    try:
+        body = body_path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    fields: dict[str, str] = {}
+    try:
+        fields = protocol.parse_frontmatter(state_path.read_text(encoding="utf-8"))
+    except OSError:
+        pass
+    node = body_path.parent
+    run_id = str(fields.get("run_id") or node.name)
+    frame = [run_id] + [
+        str(fields[key]) for key in _PRIOR_RUN_FRAME_KEYS
+        if str(fields.get(key) or "").strip()
+    ]
+    notes = [f"frame: {' · '.join(frame)}"]
+    for name in ("name", "mood"):
+        try:
+            value = (node / name).read_text(encoding="utf-8").strip().splitlines()
+        except OSError:
+            continue
+        if value:
+            notes.append(f"{name}: {value[0][:120]}")
+    last_message = ""
+    try:
+        terminals = sorted((node / "messages").glob("*-terminal.md"))
+        if terminals:
+            last_message = terminals[-1].read_text(encoding="utf-8").strip()
+    except OSError:
+        last_message = ""
+    if last_message:
+        cap = 1500
+        if len(last_message) > cap:
+            last_message = last_message[:cap].rstrip() + " …"
+        notes.append("last message, as sent:\n" + last_message)
+    return body.rstrip("\n") + "\n\n[brnrd: the node you wrote last wake — " + node.name + "\n" + "\n".join(notes) + "]"
+
+
 _MOUNTABLE_TEXT_BUILDERS: dict[str, Any] = {
     "portal-verb-grammar": _build_portal_verb_grammar_block,
+    "prior-run": _build_prior_run_mount_text,
 }
 
 
@@ -4539,7 +4600,13 @@ def build_daemon_prompt(
     def _take(key: str, text: str) -> str | None:
         if _mount_sink is None or key not in _mountable:
             return text
-        _mount_sink[key] = text
+        # A block whose mounted form is a curated text rather than its
+        # rendered prose (`_MOUNTABLE_TEXT_BUILDERS`) seeds the builder's
+        # text: the prior run's whole notebook page where the prose carried
+        # only its map. The offline path (`mountable_block_text`) consults the
+        # same registry, so the two cannot disagree about what was seeded.
+        builder = _MOUNTABLE_TEXT_BUILDERS.get(key)
+        _mount_sink[key] = builder(repo_root) if builder is not None else text
         return None
 
     preamble = _glue_preamble([
