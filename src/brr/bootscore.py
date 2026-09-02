@@ -924,19 +924,20 @@ def format_kernel(score: BootScore) -> str:
         # reach the resident prices, never a row it owes.
         n = len(score.orientation_set)
         total = sum(f.bytes for f in score.orientation_set)
-        receive.append(
-            f"reach: {n} file(s) · {total:,}B not carried whole by this wake — "
-            "read what the task touches; the surface block above already "
-            "serves the rest"
-        )
+        receive.append(f"reach: files×{n} · {total:,}B ∉ wake")
+        receive.append("  task∩file ⇒ read ; surface↑ already-held")
         for f in score.orientation_set:
-            receive.append(f"  · {f.path} ({f.bytes:,}B)")
+            receive.append(f"  · {f.path} · {f.bytes:,}B")
 
+    # The seam, in the weave: every mark here is a measured fact of the body
+    # (his form, 2026-09-02 #1767 comment) — the world reaches the resident
+    # only at a tool boundary; a call-less think is deaf to follow-ups; the
+    # Shell's own nudges are reflexes of the body, not the thread's voice.
     incarnate.append(
-        "seam: the world reaches you only at tool boundaries — a long call-less "
-        "think is deaf; shell nudges (\"hasn't heard from you\", batching, card "
-        "chips) are the body's reflexes, not the thread's voice"
+        "seam: world→self @ tool-boundary only ; think∖call ⇒ deaf to world, "
+        "incl. follow-ups"
     )
+    incarnate.append("  shell nudge ∈ body-reflex ≠ thread-voice")
 
     lines.append("::restore")
     lines.extend(f"  {l}" for l in restore)
@@ -958,9 +959,8 @@ def format_kernel(score: BootScore) -> str:
             "what only you know, written)"
         )
         lines.append(
-            "telemetry: .name and .mood by your first outward act (reply or "
-            "commit) · .topics by the first produce — absent then, the daemon "
-            "derives a plain fallback and says so next wake"
+            "telemetry: first outward ⇒ .name + .mood ; first produce ⇒ .topics ; "
+            "∅then ⇒ daemon→plain fallback ; next-wake→declare"
         )
     lines.append(
         "below: reference · `brnrd prompts show` names every block and its cost"
