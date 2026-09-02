@@ -3,6 +3,7 @@
 import difflib
 import json
 import re
+import pytest
 from pathlib import Path
 
 from brr import conversations, dominion, prompts
@@ -905,6 +906,66 @@ class TestPromptBuilding:
         # The pack path is explicit and absolute in the shared runtime dir
         # so it survives worktree teardown.
         assert "Review pack path: /repo/.brr/diffense/task-9/pack.json" in prompt
+
+    def test_both_diffense_append_sites_append_the_same_bytes(self, tmp_path):
+        """One block, two renderers, one manifest measurement — all three agree.
+
+        `_join_prompt_parts` (the daemon prompt) and `build_injected_context`
+        (`brnrd agent inject`) each append the diffense block independently,
+        and `_collect_toggle_contracts` measures it a third time for the
+        manifest. #1753 fixed a trailing-newline strip drift at
+        `_join_prompt_parts` alone and left `build_injected_context` raw —
+        whose own comment claimed the two matched.
+
+        Measured as a **length delta** (with the block minus without it)
+        rather than a substring check: the stripped text is a substring of
+        the raw text, so `raw not in prompt` can never fail and would prove
+        nothing. The delta is exactly the appended bytes plus one `"\n\n"`
+        glue, so a single unstripped newline moves it by one.
+        """
+        from brr.prompts import (
+            build_injected_context,
+            _collect_toggle_contracts,
+            read_prompt,
+            effective_prompt_path,
+        )
+
+        if not effective_prompt_path("diffense.md", tmp_path).exists():
+            pytest.skip("no diffense.md template on this install")
+
+        expected = read_prompt("diffense.md", tmp_path).strip()
+        assert expected, "template is empty; this test would prove nothing"
+        want = len(expected) + 2  # the block plus its one "\n\n" glue
+
+        # Path 1 — `brnrd agent inject`, toggled through real config files so
+        # the caller is the production one, not a hand-passed flag. This is
+        # the site #1753 left raw while fixing its sibling.
+        on_root, off_root = tmp_path / "on", tmp_path / "off"
+        for root, value in ((on_root, "true"), (off_root, "false")):
+            (root / ".brr").mkdir(parents=True)
+            (root / ".brr" / "config").write_text(
+                f"diffense.emit_pack={value}\n", encoding="utf-8"
+            )
+        assert (
+            len(build_injected_context(on_root))
+            - len(build_injected_context(off_root))
+        ) == want
+
+        # Path 2 — the daemon prompt appends the same template *plus* a
+        # computed "Review pack path:" line, so its delta is not comparable
+        # byte-for-byte. What is comparable: the stripped template must be
+        # present verbatim, which fails if that site ever stops stripping in
+        # a way that alters the block's own text.
+        with_pack = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            run_id="task-9", runtime_dir="/repo/.brr", diffense=True,
+        )
+        assert expected.split("\n")[0] in with_pack
+
+        # Path 3 — the manifest's own measurement of the same block.
+        entries = _collect_toggle_contracts(tmp_path, has_diffense=True)
+        diffense_entry = next(e for e in entries if e.block_key == "diffense")
+        assert diffense_entry.bytes == len(expected.encode("utf-8"))
 
     def test_daemon_prompt_omits_diffense_pack_when_not_requested(self, tmp_path):
         prompt = build_daemon_prompt(

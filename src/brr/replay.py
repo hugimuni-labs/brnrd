@@ -49,15 +49,34 @@ exactly, or the whole replay refuses with the offset and byte counts that
 disagree — never a silent partial match. See :func:`locate_captured_prompt`.
 
 This caught a real, load-bearing case while building it: **every captured
-run in this repo has ``boot-score.json``'s ``body.mounted: true``**
-(``boot.mount`` is on) — meaning ``prompt.md`` is the short kernel+trailer
-text and the file-backed blocks (``run.md``, ``weave.md``,
+run in this repo (until #1753) had ``boot-score.json``'s ``body.mounted:
+true``** (``boot.mount`` is on) — meaning ``prompt.md`` is the short
+kernel+trailer text and the file-backed blocks (``run.md``, ``weave.md``,
 ``daemon-substrate.md``, the very files this tool exists to let someone
-edit) never enter its bytes at all; they ride a resumed session transcript
-instead (:mod:`brr.transcript`). The self-check above refuses those runs
-outright rather than reporting a zero-byte "no change" that would in fact
-be true only by accident. See the rung-1 report for the sizing of this gap
-and what would close it.
+edit) never entered its bytes at all; they rode a resumed session
+transcript instead (:mod:`brr.transcript`). The self-check above refused
+those runs outright rather than reporting a zero-byte "no change" that
+would in fact be true only by accident — correct, but it meant the tool
+had never successfully replayed a real wake and could not, on any run this
+repo had.
+
+Reconstitution (#1753)
+-----------------------
+``daemon.py`` now persists the mounted-out blocks beside the capture —
+``prompt-mounted.json``, written by :func:`brr.run_context.write_mounted_blocks`
+from the exact ``mount_sink`` dict the wake's own build diverted, never
+re-derived later from whatever the prompt files on disk say today. When a
+captured run's ``boot-score.json`` says ``body.mounted: true``,
+:func:`locate_captured_prompt` requires that sidecar, uses it to reconstitute
+the full assembly — every block back at its manifest-recorded position,
+mounted or not — and *then* runs the same offset walk described above
+against that reconstituted whole. The self-check is unchanged in what it
+demands (exact byte reconciliation or refusal); it now simply receives a
+complete input on a mounted wake instead of one with ~30-45% of its bytes
+missing. A mounted run captured before the sidecar existed still refuses,
+with a message naming that specifically (never the generic mismatch line,
+and never by guessing from the current prompt files) — see the "predates
+the sidecar" branch in :func:`locate_captured_prompt`.
 """
 
 from __future__ import annotations
@@ -107,17 +126,30 @@ class ReplayLocateError(Exception):
 
 @dataclass(frozen=True)
 class BlockSpan:
-    """One manifest block, located as an exact byte range in `prompt.md`."""
+    """One manifest block, located in the reconstituted wake input.
+
+    ``start``/``end`` are a byte range in ``prompt.md`` for an ordinary
+    (prose) block. A block that was mounted out of the prose instead
+    carries its text in ``mounted_text`` and ``start``/``end`` are ``None``
+    — it never occupied any range in ``prompt.md``, so a real offset there
+    would be a lie about where the bytes came from.
+    """
 
     block_key: str
     label: str
     location: str
-    start: int
-    end: int
+    start: int | None
+    end: int | None
+    mounted_text: str | None = None
 
     @property
     def file_backed(self) -> bool:
         return self.location != _COMPUTED_LOCATION
+
+    @property
+    def is_mounted(self) -> bool:
+        """Reconstituted from the mount sidecar rather than sliced from `prompt.md`."""
+        return self.mounted_text is not None
 
 
 @dataclass(frozen=True)
@@ -138,22 +170,30 @@ class LocateResult:
 def _true_render_order(contracts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Reorder captured manifest entries to match the actual render order.
 
-    ``prompts._collect_preamble_contracts`` (the function that builds the
-    manifest rows for the file-backed preamble blocks) lists ``diffense``
+    **Historical compensation, kept for backward compatibility only
+    (#1753).** Every manifest written before the writer-side fix
+    (``prompts._collect_toggle_contracts``, split out of
+    ``_collect_preamble_contracts`` in the same change) listed ``diffense``
     and ``introspection`` right after ``portal-verb-grammar`` — before the
-    inject stack (identity-core, dominion, work-surface, ...). But
-    ``prompts._join_prompt_parts`` — the function that actually joins the
-    rendered text — appends those same two blocks *after* the inject
-    stack, immediately before the trailer (Run Context Bundle). Read both
-    functions side by side and the divergence is exactly these two keys;
-    everything else is already in lockstep (``_collect_preamble_contracts``
-    says as much in its own comment).
+    inject stack (identity-core, dominion, work-surface, ...) — while
+    ``prompts._join_prompt_parts`` actually appends those same two blocks
+    *after* the inject stack, immediately before the trailer (Run Context
+    Bundle). A manifest written by the fixed writer already lists them in
+    render order, so this reorder is a no-op on it (filtering an
+    already-correctly-ordered list into head/tail_special/trailer buckets
+    and concatenating them back reproduces the same order). It cannot be
+    deleted: every run captured before the fix is still on disk with the
+    old order baked into its ``boot-score.json``, and ``replay`` has no way
+    to tell a fixed manifest from an old one except by re-deriving the
+    correct order itself — which is exactly what this function does. So it
+    stays, doing nothing on new captures and the real compensation on old
+    ones, until every pre-fix run ages out of the archive.
 
     On a wake where both toggles are off (the overwhelming common case —
     they render 0 bytes and are absent from the manifest as `present:
-    false`) this reorder is a no-op, since a walk skips zero-byte entries
-    either way. It only matters, and is only tested here, when one or both
-    toggles are on.
+    false`) this reorder is a no-op regardless of writer version, since a
+    walk skips zero-byte entries either way. It only matters, and is only
+    tested here, when one or both toggles are on.
     """
     head = [c for c in contracts if c["block_key"] not in _TAIL_SPECIAL_KEYS and c["block_key"] != _TRAILER_KEY]
     tail_special = [c for c in contracts if c["block_key"] in _TAIL_SPECIAL_KEYS]
@@ -161,22 +201,71 @@ def _true_render_order(contracts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return head + tail_special + trailer
 
 
+#: `boot-score.json` sidecar carrying the mounted-out block text, written by
+#: `run_context.write_mounted_blocks` beside `prompt.md` on any wake where
+#: `body.mounted` is true (#1753). Named once so the writer and this reader
+#: cannot drift on the filename.
+MOUNTED_SIDECAR_NAME = "prompt-mounted.json"
+
+
+def _load_mount_sidecar(run_dir: Path) -> dict[str, str]:
+    """Load `prompt-mounted.json`'s block map, or refuse with a specific reason.
+
+    Called only when `boot-score.json` says `body.mounted: true` — a mounted
+    wake with no sidecar predates #1753 and has no checkable way to
+    reconstitute its mounted blocks; that is a different, more specific
+    fact than "the bytes don't add up", and the constraint this module was
+    built under is that a caller must be told *which* is true, never left to
+    read a generic mismatch and guess.
+    """
+    sidecar_path = run_dir / MOUNTED_SIDECAR_NAME
+    if not sidecar_path.exists():
+        raise ReplayLocateError(
+            f"{run_dir} was captured with `boot.mount` on (boot-score.json's "
+            f"body.mounted=true) but carries no {MOUNTED_SIDECAR_NAME} — this run "
+            "was captured before the sidecar existed (#1753), so the mounted-out "
+            "blocks (run.md, weave.md, daemon-substrate.md, ...) are gone for "
+            "good; replay has no checkable way to reconstitute them, and refuses "
+            "rather than guessing from whatever the prompt files on disk say today."
+        )
+    try:
+        sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ReplayLocateError(f"{MOUNTED_SIDECAR_NAME} in {run_dir} is not valid JSON: {exc}") from exc
+    blocks = sidecar.get("blocks")
+    if not isinstance(blocks, dict):
+        raise ReplayLocateError(
+            f"{MOUNTED_SIDECAR_NAME} in {run_dir} has no dict-shaped 'blocks' key — "
+            "refusing to guess at its shape"
+        )
+    return blocks
+
+
 def locate_captured_prompt(run_dir: Path) -> LocateResult:
-    """Locate every manifest block as an exact byte span in `prompt.md`.
+    """Locate every manifest block in the reconstituted wake input.
+
+    For an unmounted wake this is a byte span in `prompt.md`, same as
+    always. For a mounted wake (`boot-score.json`'s `body.mounted: true`)
+    it also draws on `prompt-mounted.json` (#1753) — the sidecar that
+    persists the exact text `daemon.py` diverted out of the prose at
+    capture time — so a block that never entered `prompt.md` is still
+    located, just from the sidecar instead of an offset.
 
     Raises :class:`ReplayLocateError` — never returns a partial or
     best-guess result — when:
 
     - ``prompt.md`` or ``boot-score.json`` is missing from ``run_dir``;
-    - the recorded ``prompt_bytes`` total disagrees with the file's actual
-      size (the fast top-level check — this alone catches every mounted
-      wake in this repo's own archive, since a mounted wake's manifest
-      still records the *unmounted* size of blocks that never entered the
-      prose at all);
-    - a computed offset boundary does not hold the expected ``"\\n\\n"``
-      glue (a slower, block-precise version of the same check, for the
-      case where the totals happen to agree but a block's position does
-      not — e.g. a hand-edited or truncated capture).
+    - the wake was mounted and ``prompt-mounted.json`` is missing (a capture
+      that predates #1753 — see :func:`_load_mount_sidecar`) or malformed;
+    - the recorded ``prompt_bytes`` total disagrees with the reconstituted
+      total — `prompt.md`'s size plus the sidecar's, when mounted; `prompt.md`'s
+      size alone otherwise (the fast top-level check);
+    - a mounted block's sidecar text doesn't match its manifest-recorded
+      byte length (the sidecar's own precision check);
+    - a computed offset boundary in `prompt.md` does not hold the expected
+      ``"\\n\\n"`` glue (a slower, block-precise version of the fast check,
+      for the case where the totals happen to agree but a block's position
+      does not — e.g. a hand-edited or truncated capture).
     """
     prompt_path = run_dir / "prompt.md"
     score_path = run_dir / "boot-score.json"
@@ -195,24 +284,45 @@ def locate_captured_prompt(run_dir: Path) -> LocateResult:
     except json.JSONDecodeError as exc:
         raise ReplayLocateError(f"boot-score.json in {run_dir} is not valid JSON: {exc}") from exc
 
+    mounted = bool((score.get("body") or {}).get("mounted"))
+    sidecar_blocks: dict[str, str] = _load_mount_sidecar(run_dir) if mounted else {}
+
+    def _is_mounted(block_key: str) -> bool:
+        return mounted and block_key in sidecar_blocks
+
     recorded_total = score.get("prompt_bytes")
-    if recorded_total is not None and recorded_total != len(prompt_bytes):
+    sidecar_total = sum(len(t.encode("utf-8")) for t in sidecar_blocks.values())
+    reconstituted_total = len(prompt_bytes) + sidecar_total
+    if recorded_total is not None and recorded_total != reconstituted_total:
+        detail = (
+            f"prompt.md ({len(prompt_bytes)}B) plus prompt-mounted.json's sidecar "
+            f"blocks ({sidecar_total}B) reconstitute to {reconstituted_total} bytes"
+            if mounted else
+            f"the captured prompt.md is {len(prompt_bytes)} bytes"
+        )
         raise ReplayLocateError(
-            f"boot-score.json records prompt_bytes={recorded_total} but the captured "
-            f"prompt.md is {len(prompt_bytes)} bytes — refusing rather than guessing "
-            "at the mismatch. The most likely cause: this wake was rendered with "
-            "`boot.mount` on, so file-backed blocks (run.md, weave.md, "
-            "daemon-substrate.md, ...) were seeded as a resumed session transcript "
-            "instead of entering prompt.md's own text, and the manifest still "
-            "records their *unmounted* size."
+            f"boot-score.json records prompt_bytes={recorded_total} but {detail} — "
+            "refusing rather than guessing at the mismatch."
+            + ("" if mounted else (
+                " The most likely cause: this wake was rendered with `boot.mount` "
+                "on, so file-backed blocks (run.md, weave.md, daemon-substrate.md, "
+                "...) were seeded as a resumed session transcript instead of "
+                "entering prompt.md's own text, and the manifest still records "
+                "their *unmounted* size."
+            ))
         )
 
     contracts = _true_render_order(score.get("contracts") or [])
     present = [c for c in contracts if c.get("present") and c.get("bytes")]
 
-    spans: list[BlockSpan] = []
+    # Pass 1: walk only the blocks that actually occupy `prompt.md` bytes —
+    # a mounted block contributed none, and (per `_join_prompt_parts`/`_take`)
+    # no separator was emitted in its place either, so it must be invisible
+    # to this walk entirely, not just zero-width within it.
+    in_prompt = [c for c in present if not _is_mounted(c["block_key"])]
+    located_by_key: dict[str, tuple[int, int]] = {}
     offset = 0
-    for idx, c in enumerate(present):
+    for idx, c in enumerate(in_prompt):
         n = int(c["bytes"])
         end = offset + n
         if end > len(prompt_bytes):
@@ -221,15 +331,9 @@ def locate_captured_prompt(run_dir: Path) -> LocateResult:
                 f"the captured prompt's end ({len(prompt_bytes)} bytes) — the recorded "
                 "block layout does not reconcile with this capture; refusing"
             )
-        spans.append(BlockSpan(
-            block_key=c["block_key"],
-            label=c.get("label", c["block_key"]),
-            location=c.get("location", _COMPUTED_LOCATION),
-            start=offset,
-            end=end,
-        ))
+        located_by_key[c["block_key"]] = (offset, end)
         offset = end
-        if idx + 1 < len(present):
+        if idx + 1 < len(in_prompt):
             got = prompt_bytes[offset:offset + len(SEP)]
             if got != SEP:
                 raise ReplayLocateError(
@@ -245,6 +349,34 @@ def locate_captured_prompt(run_dir: Path) -> LocateResult:
             f"prompt.md is {len(prompt_bytes)} bytes — {len(prompt_bytes) - offset} "
             "byte(s) unaccounted for; refusing rather than guessing at the mismatch"
         )
+
+    # Pass 2: emit every present block in true render order — mounted blocks
+    # included, as zero-footprint spans backed by the sidecar text, sitting
+    # exactly where the manifest says they belong relative to their
+    # `prompt.md`-backed neighbours. This is the reconstitution: the full
+    # assembly, not the mount-truncated one.
+    spans: list[BlockSpan] = []
+    for c in present:
+        key = c["block_key"]
+        label = c.get("label", key)
+        location = c.get("location", _COMPUTED_LOCATION)
+        if _is_mounted(key):
+            text = sidecar_blocks[key]
+            declared = int(c["bytes"])
+            actual = len(text.encode("utf-8"))
+            if actual != declared:
+                raise ReplayLocateError(
+                    f"block {key!r}: boot-score.json records {declared} bytes but "
+                    f"{MOUNTED_SIDECAR_NAME}'s sidecar text for it is {actual} bytes — "
+                    "refusing rather than guessing at the mismatch"
+                )
+            spans.append(BlockSpan(
+                block_key=key, label=label, location=location,
+                start=None, end=None, mounted_text=text,
+            ))
+        else:
+            start, end = located_by_key[key]
+            spans.append(BlockSpan(block_key=key, label=label, location=location, start=start, end=end))
 
     return LocateResult(run_id=run_dir.name, prompt_bytes=prompt_bytes, spans=spans)
 
@@ -320,13 +452,22 @@ def plan_replacement(
     total_delta = 0
 
     for span in located.spans:
-        old_text = located.prompt_bytes[span.start:span.end].decode("utf-8", errors="replace")
+        # A mounted span's bytes never lived in `prompt.md` — its baseline is
+        # the sidecar text `locate_captured_prompt` already verified against
+        # the manifest. Every other span slices `prompt.md` exactly as before.
+        old_piece = (
+            span.mounted_text.encode("utf-8") if span.is_mounted
+            else located.prompt_bytes[span.start:span.end]
+        )
+        old_text = old_piece.decode("utf-8", errors="replace")
+        old_len = len(old_piece)
+
         if not span.file_backed:
             deltas.append(BlockDelta(
                 block_key=span.block_key, label=span.label, location=span.location,
-                status="computed", old_bytes=span.end - span.start, new_bytes=None,
+                status="computed", old_bytes=old_len, new_bytes=None,
             ))
-            pieces.append(located.prompt_bytes[span.start:span.end])
+            pieces.append(old_piece)
             continue
 
         name = Path(span.location).name
@@ -335,14 +476,13 @@ def plan_replacement(
         if new_text is None:
             deltas.append(BlockDelta(
                 block_key=span.block_key, label=span.label, location=span.location,
-                status="unchanged", old_bytes=span.end - span.start, new_bytes=None,
+                status="unchanged", old_bytes=old_len, new_bytes=None,
             ))
-            pieces.append(located.prompt_bytes[span.start:span.end])
+            pieces.append(old_piece)
             continue
 
         matched_names.add(name)
         new_bytes_val = new_text.encode("utf-8")
-        old_len = span.end - span.start
         deltas.append(BlockDelta(
             block_key=span.block_key, label=span.label, location=span.location,
             status="substituted", old_bytes=old_len, new_bytes=len(new_bytes_val),
