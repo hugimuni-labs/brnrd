@@ -217,6 +217,9 @@ def _migrate_daemons(conn: Connection) -> None:
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS spawn_max_concurrent INTEGER"))
     # #566 slice 0: daemon-level telemetry face — see models.Daemon.daemon_mood_json.
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS daemon_mood_json TEXT"))
+    # The news lane (the-user-hears-it-first) — see models.Daemon.news_json.
+    conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS news_json TEXT DEFAULT '[]'"))
+    conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS news_updated_at TIMESTAMP"))
     # Runner-catalog snapshot mirror (#328 spool rack) — see models.Daemon.runners_json.
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS runners_json TEXT DEFAULT '[]'"))
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS runners_default VARCHAR(64)"))

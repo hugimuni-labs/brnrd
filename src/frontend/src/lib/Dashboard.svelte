@@ -114,6 +114,8 @@
 		type ConfigChangeRequestItem
 	} from '$lib/configRequests';
 	import ConfigRequests from '$lib/ConfigRequests.svelte';
+	import { NewsAuthError, fetchNews, type NewsItem } from '$lib/news';
+	import NewsLane from '$lib/NewsLane.svelte';
 	import { sectionFrameLit } from '$lib/collapse';
 	import { machineTapVerdict } from '$lib/machineDock';
 	import {
@@ -391,6 +393,9 @@
 
 	let configRequests = $state<ConfigChangeRequestItem[] | null>(null);
 	let configRequestsError = $state<string | null>(null);
+
+	let newsItems = $state<NewsItem[] | null>(null);
+	let newsError = $state<string | null>(null);
 
 	let surfaceData = $state<SurfaceResponse | null>(null);
 	let surfaceError = $state<string | null>(null);
@@ -1352,6 +1357,15 @@
 			}
 		}
 		try {
+			const news = await fetchNews();
+			newsItems = news.items;
+			newsError = null;
+		} catch (e) {
+			if (!(e instanceof NewsAuthError)) {
+				newsError = e instanceof Error ? e.message : 'news fetch failed';
+			}
+		}
+		try {
 			const surface = await fetchSurface();
 			surfaceData = surface;
 			surfaceError = null;
@@ -1994,6 +2008,13 @@
 			     nothing — see ConfigRequests.svelte for why. -->
 			{#if (configRequests && configRequests.length > 0) || configRequestsError}
 				<ConfigRequests requests={configRequests ?? []} error={configRequestsError} {now} />
+			{/if}
+			<!-- The news lane (the-user-hears-it-first): a newer brnrd release
+			     today, and whatever a sibling producer adds later. Same
+			     mount-only-when-there's-something contract as ConfigRequests
+			     above — see NewsLane.svelte. -->
+			{#if (newsItems && newsItems.length > 0) || newsError}
+				<NewsLane items={newsItems ?? []} error={newsError} />
 			{/if}
 			<!-- The graph: unblocked items colorful on top — glance, decide or
 			     do — blocked ones greyed below, live-held ones framed in place. -->

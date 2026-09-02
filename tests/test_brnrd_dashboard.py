@@ -1102,6 +1102,125 @@ def test_dashboard_quota_api_stamps_per_row_report_freshness():
     assert by_shell["codex"]["windows"][0]["percent"] is None
 
 
+def test_dashboard_news_api_requires_login():
+    """Same auth shape as the quota JSON endpoint — a fetch(), not a page."""
+    client = _client()
+    r = client.get("/v1/dashboard/news")
+    assert r.status_code == 401
+
+
+def test_dashboard_news_api_returns_real_items():
+    """JSON twin of `brr.news_lane.collect`, mirrored through the daemon's
+    own `PUT /v1/daemons/news` publish (the-user-hears-it-first)."""
+    import json
+    from datetime import datetime, timezone
+
+    from brnrd.models import Daemon
+
+    client = _client()
+    token = _login(client)
+    pid = _create_repo(client, token)
+
+    with client.app.state.SessionLocal() as db:
+        daemon = Daemon(
+            id="dmn-news-api-1",
+            repo_id=pid,
+            token_id="tok-news-api-1",
+            daemon_name="laptop",
+            news_json=json.dumps(
+                [
+                    {
+                        "kind": "release",
+                        "subject": "pypi",
+                        "prior": "0.6.18",
+                        "current": "0.7.0",
+                        "observed_at": 1.0,
+                        "source": "https://pypi.org/pypi/brnrd/json",
+                        "expires_at": None,
+                    }
+                ]
+            ),
+            news_updated_at=datetime.now(timezone.utc),
+        )
+        db.add(daemon)
+        db.commit()
+
+    r = client.get("/v1/dashboard/news")
+    assert r.status_code == 200
+    body = r.json()
+    assert "generated_at" in body
+    [item] = body["items"]
+    assert item["kind"] == "release"
+    assert item["subject"] == "pypi"
+    assert item["current"] == "0.7.0"
+    assert item["daemon_stale"] is False
+    assert item["daemon_reported_at"] is not None
+
+
+def test_dashboard_news_api_stamps_stale_reports_and_merges_by_identity():
+    """Same freshest-report-wins merge shape as the quota tank above, keyed
+    by `kind:subject` (`brr.news_lane.NewsItem.key`) instead of shell name —
+    a retired daemon's stale report must not shadow a live daemon's fresher
+    one for the same item, and a genuinely retired-only item still renders,
+    marked stale rather than silently dropped."""
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd.models import Daemon
+
+    client = _client()
+    token = _login(client, login="Gurio")
+    repo_id = _create_repo(client, token, repo="Gurio/brr")
+    now = datetime.now(timezone.utc)
+    fresh = now - timedelta(seconds=5)
+    retired = now - timedelta(days=10)
+    with client.app.state.SessionLocal() as db:
+        db.add(
+            Daemon(
+                id="dmn-news-fresh",
+                repo_id=repo_id,
+                token_id="tok-news-fresh",
+                daemon_name="laptop",
+                news_updated_at=fresh,
+                news_json=json.dumps(
+                    [
+                        {
+                            "kind": "release", "subject": "pypi",
+                            "prior": "0.6.18", "current": "0.7.0",
+                            "observed_at": 1.0, "source": "x", "expires_at": None,
+                        }
+                    ]
+                ),
+            )
+        )
+        db.add(
+            Daemon(
+                id="dmn-news-retired",
+                repo_id=repo_id,
+                token_id="tok-news-retired",
+                daemon_name="old-machine",
+                news_updated_at=retired,
+                news_json=json.dumps(
+                    [
+                        {
+                            "kind": "release", "subject": "npm",
+                            "prior": "0.6.0", "current": "0.6.1",
+                            "observed_at": 1.0, "source": "x", "expires_at": None,
+                        }
+                    ]
+                ),
+            )
+        )
+        db.commit()
+
+    body = client.get("/v1/dashboard/news").json()
+    by_key = {f"{row['kind']}:{row['subject']}": row for row in body["items"]}
+
+    assert by_key["release:pypi"]["daemon_stale"] is False
+    assert by_key["release:npm"]["daemon_stale"] is True
+    assert by_key["release:npm"]["current"] == "0.6.1"
+
+
 def test_dashboard_live_runs_api_requires_login():
     """#258, same auth shape as the quota JSON endpoint: fetched by JS, a
     401 not a login-page redirect."""

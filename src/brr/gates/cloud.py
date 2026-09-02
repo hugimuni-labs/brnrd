@@ -102,6 +102,7 @@ _PUBLISHER_COMPAT_NAMES = (
     "_publish_pr_review_queue",
     "_run_ledger_snapshot",
     "_publish_run_ledger",
+    "_publish_news",
     "_CLAUDE_QUOTA_PUBLISH_MAX_AGE_SECONDS",
     "_CODEX_QUOTA_PUBLISH_MAX_AGE_SECONDS",
     "_DASHBOARD_PUBLISH_INTERVAL_S",
