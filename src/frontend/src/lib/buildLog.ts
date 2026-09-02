@@ -46,12 +46,12 @@ export const BUILD_LOG_ENTRIES: BuildLogEntry[] = [
 			"Codex CLI keeps a models_cache.json on disk, refreshed on its own network calls. Each entry carries a visibility flag and, when a model is on its way out, an upgrade block: the replacement model, migration text, and a retirement_at timestamp. brnrd's runner core probe (_models_from_disk, src/brr/runner_cores.py) reads that same file to fill out the live Codex catalog — but it only ever reads slug and visibility. The upgrade block, retirement_at included, is parsed into memory and thrown away.",
 			'gpt-5.4 and gpt-5.4-mini both retired at 2026-08-31T19:00:00Z, with visibility still set to "list" — Codex\'s cache does not stop advertising a model just because it named its own successor. Because the probe never looks at retirement_at, both slugs kept surfacing as ordinary selectable cores (codex-gpt-5.4, codex-gpt-5.4-mini) in the runner catalog on 2026-09-02, a day after the timestamp in the same file said they were gone.',
 			'The lesson is the shape of the bug, not the two model names: a field that gets parsed and then dropped is a worse failure than a field that was never fetched at all. A source that was never read is a known gap — nobody expects an answer from it. A source that was read, and whose relevant field was silently discarded, renders identically to one that has nothing to say. The reader has no way to tell "this file doesn\'t carry retirement data" from "this file carries retirement data nobody wired up." Both look like a clean, current catalog.',
-			'Not fixed here — this entry is the finding, not the patch. The probe would need to read upgrade.retirement_at, compare it against wall-clock time, and either drop the entry or carry the retirement forward as a stale/retired marker the catalog already has a slot for (the "stale" flag freshness_date-based entries get today).'
+			"The fix is in flight as of this entry: read upgrade.retirement_at, compare it against wall-clock time, and carry the retirement forward — a retired model named alongside its successor, using the vendor's own migration text. Deliberately not hidden: hiding it would make a pinned config fail silently, which is the same disease one layer down."
 		],
 		links: [
 			{
 				label: 'src/brr/runner_cores.py — _models_from_disk',
-				url: 'https://github.com/hugimuni-labs/brnrd/blob/brr/the-log-that-is-ours/src/brr/runner_cores.py#L597-L624'
+				url: 'https://github.com/hugimuni-labs/brnrd/blob/09fd5bbc5c61b87b513c28ebf7f1fcbc256c3d3a/src/brr/runner_cores.py#L597-L624'
 			}
 		]
 	}
