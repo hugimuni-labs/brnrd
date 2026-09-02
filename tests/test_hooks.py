@@ -1901,6 +1901,56 @@ def test_install_hook_config_merges_and_preserves_user_keys(tmp_path):
     assert pre_tool[-1]["matcher"] == "Edit|Write"
 
 
+def test_install_hook_config_repeated_installs_keep_one_brr_pre_tool(tmp_path):
+    for _ in range(3):
+        path = hooks.install_hook_config("claude", tmp_path)
+
+    settings = json.loads(path.read_text(encoding="utf-8"))
+    pre_tool = settings["hooks"]["PreToolUse"]
+    assert len(pre_tool) == 1
+    assert pre_tool[0]["hooks"][0]["command"] == "brnrd hook pre-tool"
+
+
+def test_install_hook_config_repeated_installs_preserve_user_pre_tool_first(tmp_path):
+    settings_dir = tmp_path / ".claude"
+    settings_dir.mkdir()
+    user_entry = {
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": "check-my-command"}],
+    }
+    (settings_dir / "settings.local.json").write_text(
+        json.dumps({"hooks": {"PreToolUse": [user_entry]}}), encoding="utf-8"
+    )
+
+    for _ in range(3):
+        path = hooks.install_hook_config("claude", tmp_path)
+
+    pre_tool = json.loads(path.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
+    assert pre_tool[0] == user_entry
+    assert len(pre_tool) == 2
+    assert pre_tool[-1]["hooks"][0]["command"] == "brnrd hook pre-tool"
+
+
+def test_install_hook_config_repairs_stale_brr_pre_tool_copies(tmp_path):
+    settings_dir = tmp_path / ".claude"
+    settings_dir.mkdir()
+    stale_entry = {
+        "matcher": "Edit|Write",
+        "hooks": [
+            {"type": "command", "command": "/old/location/brnrd hook pre-tool"}
+        ],
+    }
+    (settings_dir / "settings.local.json").write_text(
+        json.dumps({"hooks": {"PreToolUse": [stale_entry] * 5}}), encoding="utf-8"
+    )
+
+    path = hooks.install_hook_config("claude", tmp_path)
+
+    pre_tool = json.loads(path.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
+    assert len(pre_tool) == 1
+    assert pre_tool[0]["hooks"][0]["command"] == "brnrd hook pre-tool"
+
+
 def test_install_hook_config_unsupported_flavour_is_noop(tmp_path):
     assert hooks.install_hook_config("codex", tmp_path) is None
     assert not (tmp_path / ".claude").exists()
