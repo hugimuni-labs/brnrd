@@ -5610,8 +5610,27 @@ def install_hook_config(
     # whole-key overwrite every other lifecycle event gets above.
     existing_pre_tool = existing.get("hooks", {}).get("PreToolUse")
     if isinstance(existing_pre_tool, list) and existing_pre_tool:
+        generated_pre_tool = generated["hooks"]["PreToolUse"][0]
+
+        def _is_brr_pre_tool_entry(entry: Any) -> bool:
+            if entry == generated_pre_tool:
+                return True
+            if not isinstance(entry, dict) or not isinstance(entry.get("hooks"), list):
+                return False
+            return any(
+                isinstance(hook, dict)
+                and isinstance(hook.get("command"), str)
+                and hook["command"].strip().endswith(" hook pre-tool")
+                for hook in entry["hooks"]
+            )
+
         merged_hooks["PreToolUse"] = [
-            *existing_pre_tool, *generated["hooks"]["PreToolUse"],
+            *(
+                entry
+                for entry in existing_pre_tool
+                if not _is_brr_pre_tool_entry(entry)
+            ),
+            generated_pre_tool,
         ]
     merged["hooks"] = merged_hooks
     try:
