@@ -704,6 +704,11 @@ def _norm(text: str) -> str:
     return "".join(c for c in text.lower() if c.isalnum())
 
 
+#: Furthest edit distance at which `near_misses` still names a candidate.
+#: `lookup` resolves at ≤ 2 on its own; 3 is "one more slip than that".
+NEAR_MISS_MAX_DISTANCE = 3
+
+
 def _distance(left: str, right: str) -> int:
     """Small Levenshtein distance helper for the resident-sized index."""
     if len(left) > len(right):
@@ -836,6 +841,10 @@ def near_misses(name: str, *, limit: int = 4) -> list[Emote]:
             token = _norm(emote.name)
             ranked.append((_distance(needle, token), token, emote))
     ranked.sort(key=lambda row: (row[0], row[1], row[2].name))
+    # A shortlist is only honest while the candidates are *near*: past this
+    # distance the ranking is noise wearing a face, and the chip must stay
+    # bare (`✗ <word>`) rather than name three strangers.
+    ranked = [row for row in ranked if row[0] <= NEAR_MISS_MAX_DISTANCE]
     unique: list[Emote] = []
     for _score, _token, emote in ranked:
         if emote not in unique:
