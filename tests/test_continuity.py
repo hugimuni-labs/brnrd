@@ -923,13 +923,13 @@ def test_kernel_renders_debts_and_reach_not_rows(tmp_path):
     assert "debts — three, standing, yours: answer the person" in kernel
     assert "2 pending" in kernel
     assert "branch off the default before you edit" in kernel
-    assert "telemetry: .name and .mood by your first outward act" in kernel
+    assert "telemetry: first outward ⇒ .name + .mood" in kernel
     assert "assignments:" not in kernel
     assert "⇢" not in kernel and "↗" not in kernel
     assert "discharge each" not in kernel
     assert "next:" not in kernel
     assert "\norient:" not in kernel
-    assert "reach: 1 file(s)" in kernel
+    assert "reach: files×1" in kernel
     assert str((tmp_path / "AGENTS.md").resolve()) in kernel
 
 
