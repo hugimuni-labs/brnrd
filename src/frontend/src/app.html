@@ -4,16 +4,16 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="text-scale" content="scale" />
-		<!-- No <title> here on purpose (was a bare "brnrd" before this fix) —
-		     see the note by %sveltekit.head% below for why: any tag here that
+		<!-- No title element here on purpose (was a bare "brnrd" before this fix) —
+		     the note by the head placeholder below explains why: any tag here that
 		     a prerendered page's own <svelte:head> also sets becomes a second,
 		     order-dependent instance of that tag rather than a clean fallback,
 		     because this file is the shared template for every route, not just
 		     the ones with nothing more specific to say. The client-only
 		     dashboard routes (`/login`, `/daily`, `/new`, …) already set their
-		     own <title> via their own <svelte:head> (unchanged by this fix);
+		     own titles via their own <svelte:head> (unchanged by this fix);
 		     losing the ~100ms pre-hydration placeholder there is the accepted
-		     cost of not shipping an ambiguous duplicate <title> on every public
+		     cost of not shipping an ambiguous duplicate title on every public
 		     page a crawler actually reads. -->
 		<!-- The product mark is the site's face (his ask, 2026-08-12, #1329):
 		     the power-rune — the engineering glyph cut as a galdrastafur —
@@ -23,15 +23,15 @@
 		<link rel="apple-touch-icon" href="/brr-avatar.png" />
 		<!-- Site/entity signals live in the initial SPA shell so crawlers do not
 		     have to execute JavaScript before they can identify brnrd. This is
-		     the template every prerendered page shares (%sveltekit.head% below
+		     the template every prerendered page shares (the head placeholder below
 		     is substituted per route) — title, description, canonical, robots
 		     and og:url/og:title/og:description/twitter:title/twitter:description
 		     are therefore owned per-route (+layout.svelte / each page's own
 		     <svelte:head>, `/` included — see routes/+page.svelte), never here:
 		     a value hardcoded in this shared shell would apply to every route
-		     and fight the route-specific one once %sveltekit.head% is spliced
+		     and fight the route-specific one once the head placeholder is spliced
 		     in (measured while building the unfurl fix, 2026-09-01 — every
-		     prerendered page briefly carried two conflicting <title>s). -->
+		     prerendered page briefly carried two conflicting titles). -->
 		<meta property="og:site_name" content="brnrd" />
 		<meta property="og:type" content="website" />
 		<!-- Social card: the banner (#1329) — die-floorplan basalt, the rune,
