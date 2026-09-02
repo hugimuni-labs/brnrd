@@ -1472,7 +1472,12 @@ def available_runner_catalog(
     - ``on_path`` (bool) — Shell binary found by :func:`shutil.which`
     - ``available`` (bool) — Shell, configured auth, and observed auth health
     - ``availability`` — ``"available"`` or a concrete unavailable reason
-    - ``stale`` (bool) — freshness_date older than 30 days
+      (``"retired"`` included — the vendor's own retirement date has passed;
+      shown with ``successor``/``retirement_at``, never hidden)
+    - ``stale`` (bool) — re-derived from a measured signal, not a hand-typed
+      date; see :func:`~brr.runner_cores.catalog_freshness`
+    - ``shell_version`` — the installed Shell binary's own ``--version``,
+      cached and cheap (:func:`~brr.runner_cores.shell_version`)
     - ``pin`` — exact model ID when set (overrides alias for ``--model``)
     - ``selected`` — True when this profile matches *selected*
 
@@ -1480,6 +1485,12 @@ def available_runner_catalog(
     can show them rather than silently omitting them.  The selector continues to
     operate only on available profiles; the catalog is the user/resident-facing
     surface, not the invocation path.
+
+    **Auth-variant profiles are excluded entirely**, not merely marked
+    unavailable: ``claude-bare-api-only`` and its generated per-model twins
+    are a billing lane on the same Shell, not a Core (2026-09-01 maintainer
+    steer). :func:`auth_fuel_lines` is the joinable replacement for that
+    data.
 
     Dedupe: when two rows share the same ``(shell, effective_model)`` pair
     (where effective_model = pin or model), the declared profile wins over a
@@ -1548,23 +1559,38 @@ def _catalog_record(
     *,
     repo_root: Path | None = None,
 ) -> dict[str, Any] | None:
-    import datetime
-
     from . import runner_cores as _rc
     from . import runner_auth_health
     from . import runner_select
 
     if not isinstance(profile, dict):
         return None
+    auth_variant = str(profile.get("auth_variant") or "").strip()
+    if auth_variant:
+        # An auth-variant profile (e.g. ``claude-bare-api-only``) is a *fuel
+        # line* — a second way to pay for the same Shell and the same model
+        # list — not a Core, whatever shape it takes: the bare declaration
+        # names no model at all (a catalog row for no core), and its
+        # generated per-model twins (``claude-bare-api-only-sonnet`` etc.)
+        # duplicate the exact model the base Shell already lists under a
+        # second name. Both are noise in the one list a user reads to pick a
+        # body (maintainer, 2026-09-01 steer, evt-1788301736315679000-twmg —
+        # "it does not become a second shell, and it does not become core
+        # rows"). Selection/dispatch is unaffected: this function only feeds
+        # the catalog *listing*; ``_selection_profiles``/``resolve_runner_profile``
+        # still see and can pin these profiles directly. See
+        # :func:`auth_fuel_lines` for the joinable replacement.
+        return None
     runner_profile = runner_select.runner_from_profile(name, profile)
     shell = str(
         profile.get("shell") or profile.get("binary") or runner_profile.profile
     ).strip() or None
 
+    retirement = _rc.retirement_status(profile)
+
     # Availability
     on_path = shutil.which(str(shell or "").strip()) is not None
     auth_env = str(profile.get("auth_env") or "").strip()
-    auth_variant = str(profile.get("auth_variant") or "").strip()
     if not on_path:
         availability = "shell-not-found"
     elif auth_env and not os.environ.get(auth_env):
@@ -1573,28 +1599,33 @@ def _catalog_record(
         availability = "subscription-unavailable"
     elif runner_auth_health.is_auth_failed(repo_root or Path.cwd(), runner_profile):
         availability = "auth-error"
+    elif retirement and retirement.get("retired"):
+        # The vendor's retirement date has passed. Shown, not hidden — a
+        # hidden retired core makes a pinned config fail silently, the same
+        # disease `is_error`/`terminal_reason` fixes one layer down (the
+        # rc-0 fix, this file). Reusing the existing `availability` mark
+        # means every consumer (wake prompt, `runners list`, dashboard) gets
+        # this for free — none of them hardcode the value set.
+        availability = "retired"
     else:
         availability = "available"
     is_available = availability == "available"
 
-    # Staleness: alias-tracked entries are never stale (the Shell resolves the
-    # alias to the latest model at dispatch time; the registry date has no
-    # staleness meaning).  Only pinned entries age by their freshness_date.
-    alias_tracked = _rc.is_alias_tracked(profile)
-    stale = False
+    # Staleness: re-derived from a measured signal, not a hand-typed date —
+    # see `runner_cores.catalog_freshness` for the three-source order (live
+    # codex feed > alias tracking > the hand-authored pinned-date floor).
+    freshness = _rc.catalog_freshness(profile)
+    stale = bool(freshness.get("stale"))
+    alias_tracked = freshness.get("source") == "alias-tracked"
     freshness_date = str(profile.get("freshness_date") or "").strip() or None
-    if freshness_date and not alias_tracked:
-        try:
-            fd = datetime.date.fromisoformat(freshness_date)
-            stale = (datetime.date.today() - fd).days > 30
-        except ValueError:
-            pass
 
     pin = str(profile.get("pin") or "").strip() or None
+    shell_version = _rc.shell_version(shell) if shell else None
 
     record: dict[str, Any] = {
         "name": name,
         "shell": shell,
+        "shell_version": shell_version,
         "model": runner_profile.model,
         "provider": runner_profile.provider,
         "owner": runner_profile.owner,
@@ -1602,7 +1633,6 @@ def _catalog_record(
         "cost_rank": runner_profile.cost_rank,
         "quota_source": runner_profile.quota_source,
         "hooks": runner_profile.hooks,
-        "auth_variant": auth_variant or None,
         "auth_env": auth_env or None,
         "capability_score": runner_profile.capability_score,
         "capability_source": runner_profile.capability_source,
@@ -1614,11 +1644,74 @@ def _catalog_record(
         "stale": stale,
         "alias_tracked": alias_tracked,
         "freshness_date": freshness_date,
+        "freshness_source": freshness.get("source"),
         "selected": name == selected or runner_profile.profile == selected,
     }
     if pin:
         record["pin"] = pin
+    if retirement:
+        record["retired"] = bool(retirement.get("retired"))
+        if retirement.get("retirement_at"):
+            record["retirement_at"] = retirement["retirement_at"]
+        if retirement.get("successor"):
+            record["successor"] = retirement["successor"]
+        if retirement.get("migration_markdown"):
+            record["migration_markdown"] = retirement["migration_markdown"]
     return {key: value for key, value in record.items() if value is not None}
+
+
+def auth_fuel_lines(repo_root: Path | None = None) -> dict[str, list[dict[str, Any]]]:
+    """Alternate billing lanes ("fuel lines") for each Shell, keyed by shell name.
+
+    An auth-variant declared profile (``auth_variant`` set, no ``model`` of
+    its own — e.g. ``claude-bare-api-only``) is not a Core. It is a second
+    way to *pay* for the same Shell with the same model list: same binary,
+    same models, different billing lane (maintainer, 2026-09-01 steer,
+    evt-1788301736315679000-twmg). ``available_runner_catalog`` excludes
+    the whole auth-variant family from the cores list for exactly this
+    reason; this is the joinable replacement so a renderer (dashboard, CLI —
+    neither owned here) can still show the door without brnrd fabricating a
+    parallel ``<shell>-bare-<model>`` core family to hang it on.
+
+    Each row: ``auth_variant``, ``auth_env``, ``available`` (env var
+    present), and ``quota_kind`` — ``"percent"`` for a subscription lane (a
+    plan has a denominator) or ``"dollars"`` for a key-based lane (spend has
+    none). Named explicitly so a downstream renderer does not invent a
+    ``0%`` for a lane with nothing to divide by — the sharpest form of the
+    same bug this whole change targets, one field over.
+
+    Only the alternate lanes are returned, not the shell's default
+    (subscription) lane — that lane's data already rides the shell's own
+    Core rows in ``available_runner_catalog`` (``quota_source`` etc.); this
+    function exists only for what those rows cannot express.
+    """
+    profiles = _selection_profiles(repo_root)
+    out: dict[str, list[dict[str, Any]]] = {}
+    for profile in profiles.values():
+        if not isinstance(profile, dict):
+            continue
+        auth_variant = str(profile.get("auth_variant") or "").strip()
+        if not auth_variant:
+            continue
+        if profile.get("model") or profile.get("generated_core"):
+            # A generated/model-pinned row is a Core *under* this auth
+            # variant, not the fuel-line declaration itself — skip it here
+            # so one lane isn't repeated once per model.
+            continue
+        shell = str(profile.get("shell") or profile.get("binary") or "").strip()
+        if not shell:
+            continue
+        auth_env = str(profile.get("auth_env") or "").strip()
+        lane = {
+            "auth_variant": auth_variant,
+            "auth_env": auth_env or None,
+            "available": bool(auth_env and os.environ.get(auth_env)),
+            "quota_kind": "dollars" if auth_env else "percent",
+        }
+        out.setdefault(shell, []).append(
+            {k: v for k, v in lane.items() if v is not None}
+        )
+    return out
 
 
 def fallback_runner(
@@ -2190,19 +2283,40 @@ def _process_runner_stdout(
     runner_name: str,
     stdout: str,
     env: dict[str, str] | None = None,
-) -> tuple[str, str | None]:
+) -> tuple[str, str | None, bool]:
     """Normalize runner-specific stdout before response capture.
 
     Most runners already print the final reply as plain text. Claude's daemon
     profile opts into ``--output-format json`` so brr can collect spend/context
     accounting; for that Shell, unwrap ``result`` back to the user-facing reply
     and stash the level snapshot for the daemon's final portal refresh.
+
+    The third element is the rc-0 fix: ``claude --model <unknown> -p hi``
+    exits **0** and prints ``[claude-code:unrecognized_model]`` as prose —
+    only the JSON envelope's ``is_error`` / ``terminal_reason: api_error``
+    say otherwise, and nothing previously read them. A pinned-but-nonexistent
+    Core was indistinguishable from a completed run
+    (design-the-core-that-knows-its-shell.md). Checked independently of
+    ``claude_status``'s own parse (that module is outside this change's
+    file set) by re-reading the same JSON envelope here — only for Shells
+    that opted into ``--output-format json`` in the first place
+    (``claude_status.supported``); a plain-text runner has no envelope to
+    read this from, and this never invents one.
     """
     from . import claude_status
 
-    if claude_status.supported(runner_name):
-        return claude_status.capture_stdout_with_model(stdout, env)
-    return stdout, None
+    if not claude_status.supported(runner_name):
+        return stdout, None, False
+    reply, observed_core = claude_status.capture_stdout_with_model(stdout, env)
+    api_error = False
+    try:
+        payload = json.loads(stdout) if stdout.strip() else {}
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, dict):
+        terminal_reason = str(payload.get("terminal_reason") or "").strip().lower()
+        api_error = bool(payload.get("is_error")) or terminal_reason == "api_error"
+    return reply, observed_core, api_error
 
 
 def _copy_artifact_to_trace(
@@ -2459,9 +2573,23 @@ def invoke_runner(
             pass
     _retire_capture_dir(capture_dir, returncode)
 
-    stdout, observed_core = _process_runner_stdout(
+    stdout, observed_core, api_error = _process_runner_stdout(
         selected_name, stdout, invocation.env,
     )
+    if api_error and returncode == 0:
+        # rc-0 blindness (design-the-core-that-knows-its-shell.md): the
+        # Shell itself exited clean while its own JSON envelope says the
+        # turn failed (an unrecognised pinned model, most concretely).
+        # Flip the code so `RunnerResult.success` (== returncode == 0)
+        # stops lying, and record what the envelope actually said — the
+        # unwrapped `stdout` here already *is* that prose (`result_text`
+        # falls back to it precisely because there is no other reply).
+        returncode = 1
+        detail = stdout.strip() or "(no detail in result envelope)"
+        stderr = (stderr.rstrip() + "\n" if stderr.strip() else "") + (
+            "runner reported is_error/terminal_reason=api_error via "
+            f"--output-format json: {detail}"
+        )
     from . import runner_select
 
     mismatch = runner_select.core_mismatch(

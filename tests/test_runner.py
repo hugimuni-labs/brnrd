@@ -740,10 +740,21 @@ def test_available_runner_catalog_marks_selected_generated_core(tmp_path, monkey
     assert "cmd" not in mini
 
 
-def test_available_runner_catalog_marks_unavailable_auth_env_profiles(
+def test_available_runner_catalog_excludes_auth_variant_profiles(
     tmp_path, monkeypatch,
 ):
-    """API-key auth variants without their key appear with available=False, not excluded."""
+    """An auth-variant profile is a fuel line, not a Core — never a catalog row.
+
+    2026-09-01 maintainer steer (evt-1788301736315679000-twmg): a bare-API-key
+    profile is a second way to pay for the same Shell, not a second shell and
+    not a core. It used to appear in ``available_runner_catalog`` marked
+    ``available=False`` — a catalog row naming no model at all
+    (``model: None``) when its own generated per-model twins duplicated the
+    same models the base Shell already lists. Both are noise in the one list
+    a user reads to pick a body; the whole family is excluded now, whatever
+    the auth env's presence — see ``test_auth_fuel_lines_*`` for the
+    joinable replacement.
+    """
     (tmp_path / ".brr").mkdir()
     monkeypatch.setattr(runner_mod.Path, "home", lambda: tmp_path / "empty-home")
     monkeypatch.setattr(
@@ -777,16 +788,53 @@ def test_available_runner_catalog_marks_unavailable_auth_env_profiles(
     by_name = {item["name"]: item for item in runner_mod.available_runner_catalog(tmp_path)}
     assert "claude" in by_name
     assert by_name["claude"]["available"] is True
-    # Profile appears but is marked unavailable (not silently dropped).
-    bare_matches = [v for k, v in by_name.items() if k.startswith("claude-bare-api-only")]
-    assert bare_matches, "claude-bare-api-only should appear in catalog (marked unavailable)"
-    assert bare_matches[0]["available"] is False
-    assert bare_matches[0]["availability"] == "auth-env-missing"
+    # Neither the bare declaration nor any generated per-model twin appears.
+    bare_matches = [k for k in by_name if k.startswith("claude-bare-api-only")]
+    assert bare_matches == [], f"auth-variant rows must not appear in the cores list: {bare_matches}"
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     by_name2 = {item["name"]: item for item in runner_mod.available_runner_catalog(tmp_path)}
-    assert by_name2["claude-bare-api-only"]["available"] is True
-    assert by_name2["claude-bare-api-only"]["availability"] == "available"
+    still_absent = [k for k in by_name2 if k.startswith("claude-bare-api-only")]
+    assert still_absent == [], "an available auth variant is still not a core row"
+
+
+def test_auth_fuel_lines_reports_key_lane_presence(tmp_path, monkeypatch):
+    """`auth_fuel_lines` is the joinable replacement for the excluded rows."""
+    (tmp_path / ".brr").mkdir()
+    monkeypatch.setattr(runner_mod.Path, "home", lambda: tmp_path / "empty-home")
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "claude": {"cmd": "claude --print", "class": "balanced", "cost_rank": 30},
+            "claude-bare-api-only": {
+                "binary": "claude",
+                "shell": "claude",
+                "cmd": "claude --print --bare",
+                "auth_variant": "anthropic-api-key",
+                "auth_env": "ANTHROPIC_API_KEY",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/claude" if name == "claude" else None,
+    )
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    lines = runner_mod.auth_fuel_lines(tmp_path)
+    assert "claude" in lines
+    lane = lines["claude"][0]
+    assert lane["auth_variant"] == "anthropic-api-key"
+    assert lane["available"] is False
+    # A key lane has no plan denominator — named explicitly so a renderer
+    # never invents a 0% for it (the maintainer's own worked example).
+    assert lane["quota_kind"] == "dollars"
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    lines2 = runner_mod.auth_fuel_lines(tmp_path)
+    assert lines2["claude"][0]["available"] is True
 
 
 def test_runner_auth_error_survives_restart_and_clear(tmp_path, monkeypatch):
@@ -3234,3 +3282,59 @@ class TestFallbackRunnerNearestClass:
         )
 
         assert chosen == "claude-opus"
+
+
+def test_process_runner_stdout_reports_api_error_only_when_the_envelope_says_so():
+    """The rc-0 fix's own predicate, both directions.
+
+    `claude --model <unknown> -p hi` exits **0** and prints
+    `[claude-code:unrecognized_model]` as prose; only the JSON envelope's
+    `is_error` / `terminal_reason: api_error` say otherwise. The flip in
+    `invoke_runner` is the highest-blast-radius line in this change — it turns a
+    clean exit into a failure for *every* Claude-shell run — so both directions
+    are pinned here, and the false-positive direction is the one that matters:
+    a successful envelope must never flip.
+    """
+    failed = json.dumps(
+        {
+            "is_error": True,
+            "terminal_reason": "api_error",
+            "result": "There's an issue with the selected model (nope).",
+            "modelUsage": {},
+        }
+    )
+    _, _, api_error = runner_mod._process_runner_stdout("claude-opus", failed, {})
+    assert api_error is True
+
+    # `terminal_reason` alone is enough — an envelope may carry the reason
+    # without the boolean.
+    reason_only = json.dumps({"terminal_reason": "api_error", "result": "boom"})
+    _, _, api_error = runner_mod._process_runner_stdout("claude-opus", reason_only, {})
+    assert api_error is True
+
+    # `is_error` alone is enough too — the predicate is an OR, and pinning
+    # only the `terminal_reason` half would let the boolean's removal pass.
+    flag_only = json.dumps({"is_error": True, "terminal_reason": "completed"})
+    _, _, api_error = runner_mod._process_runner_stdout("claude-opus", flag_only, {})
+    assert api_error is True
+
+    # The direction that must never fire: a real, successful turn.
+    ok = json.dumps(
+        {
+            "is_error": False,
+            "terminal_reason": "completed",
+            "result": "ok",
+            "modelUsage": {"claude-opus-5": {"costUSD": 0.01}},
+        }
+    )
+    _, _, api_error = runner_mod._process_runner_stdout("claude-opus", ok, {})
+    assert api_error is False
+
+    # A non-Claude Shell has no envelope to read; never invent one, whatever
+    # the bytes happen to look like.
+    _, _, api_error = runner_mod._process_runner_stdout("codex-full", failed, {})
+    assert api_error is False
+
+    # Plain prose from a Claude Shell (not JSON at all) is not an error either.
+    _, _, api_error = runner_mod._process_runner_stdout("claude-opus", "just text", {})
+    assert api_error is False
