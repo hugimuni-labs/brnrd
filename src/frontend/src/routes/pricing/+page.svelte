@@ -32,7 +32,17 @@
 		name="description"
 		content="Run the open-source brnrd resident free on your hardware, or add hosted ingress, managed identity, and the brnrd.dev dashboard."
 	/>
-	<link rel="canonical" href="https://brnrd.dev/pricing" />
+	<meta property="og:title" content="pricing · brnrd" />
+	<meta
+		property="og:description"
+		content="Run the open-source brnrd resident free on your hardware, or add hosted ingress, managed identity, and the brnrd.dev dashboard."
+	/>
+	<meta name="twitter:title" content="pricing · brnrd" />
+	<meta
+		name="twitter:description"
+		content="Run the open-source brnrd resident free on your hardware, or add hosted ingress, managed identity, and the brnrd.dev dashboard."
+	/>
+	<!-- canonical + og:url come from +layout.svelte (hasCanonicalMeta) -->
 </svelte:head>
 
 <div class="mx-auto max-w-4xl p-6">

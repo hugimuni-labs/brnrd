@@ -168,3 +168,40 @@ def test_body_messages_pass_through_one_for_one_unbuffered():
     ]
     assert seen[1:] == emitted[1:], "the middleware rewrote or merged a body message"
     assert (HEADER.encode(), b"max-age=31536000") in seen[0]["headers"]
+
+
+def test_every_shipped_html_document_contributes_its_hashes(tmp_path):
+    from brnrd.security_headers import csp_report_only_value, inline_script_hashes
+
+    """Not only ``index.html``.
+
+    Prerendered pages carry their own inline bootstrap. Hashing the shell
+    alone yields a header that is right for ``/`` and wrong for every
+    prerendered route — and since this header is Report-Only, that is
+    invisible as a broken page and visible only as noise in the violation
+    stream whose cleanliness gates the flip to the enforcing header.
+    """
+    build = tmp_path / "build"
+    (build / "learn").mkdir(parents=True)
+    (build / "index.html").write_bytes(b"<script>SHELL</script>")
+    (build / "pricing.html").write_bytes(b"<script>PRICING</script>")
+    (build / "learn" / "slug.html").write_bytes(b"<script>SLUG</script>")
+
+    value = csp_report_only_value(build)
+    assert value is not None
+    for body in (b"SHELL", b"PRICING", b"SLUG"):
+        (expected,) = inline_script_hashes(b"<script>" + body + b"</script>")
+        assert expected in value, body
+
+
+def test_a_build_with_no_prerendered_pages_is_unchanged(tmp_path):
+    from brnrd.security_headers import (
+        build_csp_report_only, csp_report_only_value, inline_script_hashes)
+
+    """The shell-only build must produce exactly what it produced before."""
+    build = tmp_path / "build"
+    build.mkdir()
+    (build / "index.html").write_bytes(b"<script>SHELL</script>")
+
+    assert csp_report_only_value(build) == build_csp_report_only(
+        inline_script_hashes((build / "index.html").read_bytes()))
