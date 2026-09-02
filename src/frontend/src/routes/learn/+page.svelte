@@ -14,6 +14,8 @@
 	<meta property="og:title" content={title} />
 	<meta property="og:description" content={description} />
 	<meta property="og:image" content={SOCIAL_IMAGE} />
+	<meta name="twitter:title" content={title} />
+	<meta name="twitter:description" content={description} />
 </svelte:head>
 
 <div class="mx-auto max-w-4xl p-5 sm:p-6">

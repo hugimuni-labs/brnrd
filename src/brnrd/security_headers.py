@@ -172,7 +172,19 @@ def csp_report_only_value(frontend_dir: Path | None) -> str | None:
     index = frontend_dir / "index.html"
     if not index.is_file():
         return None
-    return build_csp_report_only(inline_script_hashes(index.read_bytes()))
+    # Every HTML document the build ships, not only the shell. Prerendered
+    # pages carry their own inline bootstrap, so hashing ``index.html`` alone
+    # emits a header that is correct for ``/`` and wrong for every
+    # prerendered route — and because this header is Report-Only, "wrong"
+    # does not surface as a broken page. It surfaces as violation noise in
+    # the exact stream whose cleanliness is the condition for flipping to the
+    # enforcing header, which is the reader that would have been quietly
+    # poisoned. Sorted and de-duplicated so the header is stable across
+    # filesystem ordering.
+    hashes: set[str] = set()
+    for page in sorted(frontend_dir.rglob("*.html")):
+        hashes.update(inline_script_hashes(page.read_bytes()))
+    return build_csp_report_only(sorted(hashes))
 
 
 class CSPReportOnlyMiddleware:

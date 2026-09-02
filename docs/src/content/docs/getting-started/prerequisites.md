@@ -54,7 +54,7 @@ installed (on a Mac, `brew install node` does it).
 
 More of a Python person? The install page also offers
 [uv](https://docs.astral.sh/uv/getting-started/installation/) and
-[pipx](https://pipx.pypa.io/stable/installation/) — brnrd itself runs on
+[pipx](https://pipx.pypa.io/stable/) — brnrd itself runs on
 Python 3.10+.
 
 ## 5. A machine that stays awake

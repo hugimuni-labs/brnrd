@@ -61,7 +61,23 @@
 	});
 </script>
 
-<svelte:head><title>brnrd hosted-execution beta terms</title></svelte:head>
+<svelte:head>
+	<title>brnrd hosted-execution beta terms</title>
+	<meta
+		name="description"
+		content="Supplementary terms for brnrd's hosted-execution beta: what applies when HugiMuni SAS operates hosted compute for your account."
+	/>
+	<meta property="og:title" content="brnrd hosted-execution beta terms" />
+	<meta
+		property="og:description"
+		content="Supplementary terms for brnrd's hosted-execution beta: what applies when HugiMuni SAS operates hosted compute for your account."
+	/>
+	<meta name="twitter:title" content="brnrd hosted-execution beta terms" />
+	<meta
+		name="twitter:description"
+		content="Supplementary terms for brnrd's hosted-execution beta: what applies when HugiMuni SAS operates hosted compute for your account."
+	/>
+</svelte:head>
 
 <div class="mx-auto max-w-2xl p-6">
 	<div class="flex items-start justify-between gap-4">
