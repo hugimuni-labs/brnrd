@@ -4,12 +4,13 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { SEARCH_TOPICS } from './searchTopics.ts';
+import { BUILD_LOG_ENTRIES } from './buildLog.ts';
 import { canonicalUrl, hasCanonicalMeta, isIndexablePath, normalizePathname } from './seo.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const staticDir = join(here, '..', '..', 'static');
 
-const publicPaths = ['/', '/pricing', '/terms', '/privacy', '/legal-notice', '/learn'];
+const publicPaths = ['/', '/pricing', '/terms', '/privacy', '/legal-notice', '/learn', '/log'];
 
 test('canonical paths are normalized to the brnrd.dev origin', () => {
 	equal(normalizePathname('/learn//agent-orchestration/'), '/learn/agent-orchestration');
@@ -34,6 +35,9 @@ test('only intentional public surfaces are indexable', () => {
 	}
 	for (const topic of SEARCH_TOPICS) {
 		ok(isIndexablePath(`/learn/${topic.slug}`), `${topic.slug} should be indexable`);
+	}
+	for (const entry of BUILD_LOG_ENTRIES) {
+		ok(isIndexablePath(`/log/${entry.slug}`), `${entry.slug} should be indexable`);
 	}
 });
 
@@ -73,6 +77,12 @@ test('robots advertises the sitemap and the sitemap covers all public search inv
 		ok(
 			sitemap.includes(`<loc>https://brnrd.dev/learn/${topic.slug}</loc>`),
 			`sitemap missing ${topic.slug}`
+		);
+	}
+	for (const entry of BUILD_LOG_ENTRIES) {
+		ok(
+			sitemap.includes(`<loc>https://brnrd.dev/log/${entry.slug}</loc>`),
+			`sitemap missing ${entry.slug}`
 		);
 	}
 });
