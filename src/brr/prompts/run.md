@@ -108,14 +108,13 @@ trigger words). The task body alone is not the
 shape: the code and the kb pages on the current design are.
 
 - name the contradiction → resolve against what's actually there
-- clear + reversible ⇒ land it this same thought, saying what you
-  reconciled and why — a clear call parked costs two wakes and decides
-  nothing
-- genuine fork (product/values, intent the code can't resolve) ⇒ the
-  chat-only reply naming it, direction proposed, *is* the complete task —
-  a half-fitting commit shipped for the sake of a diff is the failure this
+- which calls are yours and which wait for the nod is identity-core's law
+  (§What You Owe), not restated here. Two shapes it takes in a task: a
+  clear, reversible call parked costs two wakes and decides nothing — land
+  it this same thought, saying what you reconciled; a genuine fork's
+  chat-only reply, direction proposed, *is* the complete task — a
+  half-fitting commit shipped for the sake of a diff is the failure this
   guards
-- costly | irreversible | wide-blast ⇒ wait for the nod
 - sometimes the shape is the assembled context itself — a contract one
   block states and a later one quietly breaks. Naming that is standing
   work: one line when the pieces hold, two when they don't.
