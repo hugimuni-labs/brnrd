@@ -31,7 +31,9 @@
 	import { availableQuotaShells } from '$lib/railGauge';
 	import ColdStart from '$lib/ColdStart.svelte';
 	import PublishConsentNotice from '$lib/PublishConsentNotice.svelte';
-	import { DOCS_URL } from '$lib/publicStats';
+	import { DOCS_URL, fetchBuildVersion, type BuildVersion } from '$lib/publicStats';
+	import { buildIdentityView } from '$lib/buildIdentity';
+	import BuildIdentity from '$lib/BuildIdentity.svelte';
 	import WinkWordmark from '$lib/WinkWordmark.svelte';
 	import WithheldNotice from '$lib/WithheldNotice.svelte';
 	import type { WithheldLane } from '$lib/withheld';
@@ -160,6 +162,12 @@
 	// delay is acceptable" bar named directly.
 	const POLL_MS = 2_000;
 	const TICK_MS = 1_000;
+
+	// The deployed build's identity (#1734) — fetched on its own slow clock
+	// (see BUILD_VERSION_POLL_MS below): it changes once per deploy, not
+	// every POLL_MS tick, so refetching it at 2s cadence would be pure
+	// waste for a value that is almost always unchanged between polls.
+	let buildVersion = $state<BuildVersion | null>(null);
 
 	let shells = $state<QuotaShell[] | null>(null);
 	// Three states, not two (#480's tensed-absence family): an anonymous
@@ -1189,6 +1197,18 @@
 		return Date.now() - coldRepoCheckAt >= COLD_REPO_POLL_MS;
 	}
 
+	// The build-identity line's own cadence (#1734) — same throttle shape as
+	// the cold-repo check above, on a slower clock: the deployed commit
+	// changes once per deploy, so polling it at POLL_MS (2s) would be 30
+	// requests a minute for a value that is essentially always the same
+	// answer. `0` means it has never landed, so the first pass fires
+	// immediately.
+	const BUILD_VERSION_POLL_MS = 60_000;
+	let buildVersionCheckAt = 0;
+	function buildVersionRefetchDue(): boolean {
+		return Date.now() - buildVersionCheckAt >= BUILD_VERSION_POLL_MS;
+	}
+
 	// Mirrors ColdStart.svelte's own `daemonEverPaired` — the block (and so
 	// this poll) has to keep watching past "a repo exists" and up to "a
 	// daemon actually registered" (#1084): the old `repos.length === 0` gate
@@ -1245,6 +1265,15 @@
 			// state, not a landing one — render the dashboard with its own
 			// error strings rather than a blank page.
 			authState = 'authed';
+		}
+		// Public and unauthenticated (`/v1/stats/version` carries no
+		// per-account data), so this doesn't need to wait on the quota
+		// fetch's authed branch above — only on its own slow cadence.
+		// Decoration, never a gate: `fetchBuildVersion` already degrades a
+		// failure to `null`, which `BuildIdentity` renders as nothing.
+		if (buildVersionRefetchDue()) {
+			buildVersionCheckAt = Date.now();
+			buildVersion = await fetchBuildVersion();
 		}
 		try {
 			const runners = await fetchRunners();
@@ -1445,6 +1474,11 @@
 			>
 				resident dashboard
 			</h1>
+			<!-- "Is my merge live?" (#1734): the deployed build's short commit
+			     (linked to the forge) and its age, whenever the endpoint has
+			     something honest to say. No drift clause — see
+			     buildIdentity.ts's doc comment. -->
+			<BuildIdentity view={buildIdentityView(buildVersion, now)} />
 		</header>
 
 		<!-- The digest block is gone (2026-08-11, his ask: it was a redirect
