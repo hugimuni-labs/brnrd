@@ -416,7 +416,11 @@ def test_near_misses_is_empty_exactly_when_lookup_succeeds():
     for name in EMOTES:
         assert emotes.near_misses(name) == []
     assert emotes.near_misses("sa.tis"), "the maintainer's invented handle must guide"
-    assert emotes.near_misses("xyzzy-not-a-feeling")
+    # Nothing near ⇒ a bare miss, never three strangers ranked by luck.
+    assert emotes.near_misses("xyzzy-not-a-feeling") == []
+    # A slip past the typo tolerance still gets its shortlist.
+    assert emotes.lookup("curiousity") is None
+    assert emotes.near_misses("curiousity")
 
 
 def test_a_miss_bridges_instead_of_scolding():
