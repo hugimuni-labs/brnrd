@@ -117,6 +117,7 @@ _PUBLISH_TICK_ORDER = (
     "quota",
     "pr_review_queue",
     "run_ledger",
+    "news",
 )
 
 # lane name -> the gated publisher, populated by ``@_publish_lane``.
@@ -1205,6 +1206,59 @@ def _publish_quota(brr_dir: Path, inbox_dir: Path | None, state: dict, responses
             )
         else:
             print(f"[brnrd:cloud] quota publish failed: {e}")
+
+
+# Same "warn once per cause" shape as `_quota_publish_causes_seen` above.
+_news_publish_causes_seen: set[str] = set()
+
+
+def _news_items_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
+    """This daemon's currently-true news items (the-user-hears-it-first).
+
+    Delegates entirely to `news_lane.collect` — the daemon-local read that
+    already does the fail-open, per-producer fan-in; this function only
+    reshapes each `NewsItem` into the wire dict `schemas.NewsItemIn` expects.
+    """
+    from .. import news_lane
+
+    repo_root = brr_dir.parent
+    return [
+        {
+            "kind": item.kind,
+            "subject": item.subject,
+            "prior": item.prior,
+            "current": item.current,
+            "observed_at": item.observed_at,
+            "source": item.source,
+            "expires_at": item.expires_at,
+        }
+        for item in news_lane.collect(repo_root)
+    ]
+
+
+@_publish_lane("news")
+def _publish_news(brr_dir: Path, inbox_dir: Path | None, state: dict, responses_dir: Path) -> None:
+    if not (state.get("token") and state.get("brnrd_url")):
+        return
+    try:
+        _context().request(
+            state["brnrd_url"],
+            "PUT",
+            "/v1/daemons/news",
+            token=state["token"],
+            json={"items": _news_items_snapshot(brr_dir)},
+            timeout=10,
+        )
+    except Exception as e:
+        cause = f"{type(e).__module__}.{type(e).__qualname__}: {e!r}"
+        if cause not in _news_publish_causes_seen:
+            _news_publish_causes_seen.add(cause)
+            print(
+                f"[brnrd:cloud] news publish failed: {e}\n"
+                f"{traceback.format_exc()}"
+            )
+        else:
+            print(f"[brnrd:cloud] news publish failed: {e}")
 
 
 def _runners_snapshot(brr_dir: Path) -> dict[str, Any]:

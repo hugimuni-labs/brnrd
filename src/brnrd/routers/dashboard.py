@@ -475,6 +475,61 @@ def _quota_views(db: Session, repos: list[Repo], runner_stats: list[dict[str, An
     return sorted(out, key=lambda row: row["shell"])[:6]
 
 
+# News refreshes on a ~daily clock (release_availability's own TTL), not a
+# ~10s heartbeat like quota — three missed daily ticks, not three missed
+# ~10s ones, is the honest "nobody's reporting this any more" threshold.
+_NEWS_STALE_SECONDS = 3 * 24 * 60 * 60
+
+
+def _news_views(db: Session, repos: list[Repo]) -> list[dict[str, Any]]:
+    """Real news-lane items from the daemons' own reports (the-user-hears-it-first).
+
+    Same merge shape as `_quota_views`: one row per item identity
+    (`kind:subject`, mirroring `brr.news_lane.NewsItem.key`), freshest
+    daemon report wins across every daemon on the account. This is a pure
+    read — the once-per-value chat dedup lives entirely on the daemon side
+    (`news_lane`'s own ledger); nothing here decides what has been "said".
+    """
+    repo_ids = {repo.id for repo in repos}
+    real: dict[str, dict[str, Any]] = {}
+    now = datetime.now(timezone.utc)
+    if repo_ids:
+        daemons = db.execute(select(Daemon).where(Daemon.repo_id.in_(repo_ids))).scalars()
+        for daemon in daemons:
+            reported_at = _dt(daemon.news_updated_at)
+            if reported_at is None:
+                continue
+            try:
+                items = json.loads(daemon.news_json or "[]")
+            except ValueError:
+                items = []
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                kind = str(item.get("kind") or "").strip()
+                subject = str(item.get("subject") or "").strip()
+                if not kind or not subject:
+                    continue
+                key = f"{kind}:{subject}"
+                existing = real.get(key)
+                if existing is not None and existing["_reported_at"] >= reported_at:
+                    continue
+                real[key] = {
+                    "kind": kind,
+                    "subject": subject,
+                    "prior": item.get("prior"),
+                    "current": item.get("current"),
+                    "source": item.get("source"),
+                    "expires_at": item.get("expires_at"),
+                    "_reported_at": reported_at,
+                }
+    out = list(real.values())
+    _stamp_row_freshness(out, now=now, stale_after_seconds=_NEWS_STALE_SECONDS)
+    return sorted(out, key=lambda row: (row["kind"], row["subject"]))
+
+
 _RUNNERS_STALE_SECONDS = 600
 
 
@@ -1267,6 +1322,31 @@ def dashboard_quota_api(request: Request, db: Session = Depends(get_db)) -> JSON
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "runner_quotas": _quota_views(db, repos, runner_stats),
             **_withheld_lane(repos, "quota"),
+        }
+    )
+
+
+@router.get("/v1/dashboard/news")
+def dashboard_news_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """JSON twin of the news lane (`brr.news_lane`) for the SvelteKit frontend.
+
+    Stateless read, matching the daemon side's own pull model
+    (`news_lane.collect`): whatever the freshest report says is true right
+    now, every poll. The daemon's own chat lane already decided what's been
+    *said*; this endpoint only ever answers what *is*.
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    account = db.get(Account, account_id)
+    if account is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    repos = _repos(db, account.id)
+    return JSONResponse(
+        {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "items": _news_views(db, repos),
+            **_withheld_lane(repos, "news"),
         }
     )
 

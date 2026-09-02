@@ -1528,6 +1528,63 @@ def test_publish_quota_logs_traceback_once_per_distinct_failure_cause(
     assert out.count("Traceback (most recent call last):") == 1
 
 
+def test_publish_news_ships_the_collected_items(tmp_path, monkeypatch):
+    """The news lane's own publish tick (the-user-hears-it-first): reshapes
+    whatever `news_lane.collect` currently observes into the wire dict
+    `schemas.NewsItemIn` expects, nothing more."""
+    from brr import news_lane
+    from brr.gates import cloud_publisher
+
+    item = news_lane.NewsItem(
+        kind="release", subject="pypi", prior="0.6.18", current="0.7.0",
+        observed_at=123.0, source="https://pypi.org/pypi/brnrd/json",
+    )
+    monkeypatch.setattr(news_lane, "collect", lambda _repo_root, **_kw: [item])
+
+    requests = []
+    monkeypatch.setattr(
+        cloud_publisher, "_context", lambda: SimpleNamespace(
+            request=lambda *a, **kw: requests.append(kw["json"]) or {},
+        ),
+    )
+    brr_dir = tmp_path / ".brr"
+
+    cloud_publisher._publish_news(
+        brr_dir, None, {"token": "t", "brnrd_url": "u"},
+        responses_dir=brr_dir / "responses",
+    )
+
+    assert requests == [{"items": [{
+        "kind": "release", "subject": "pypi", "prior": "0.6.18", "current": "0.7.0",
+        "observed_at": 123.0, "source": "https://pypi.org/pypi/brnrd/json",
+        "expires_at": None,
+    }]}]
+
+
+def test_publish_news_logs_traceback_once_per_distinct_failure_cause(
+    tmp_path, monkeypatch, capsys
+):
+    """Same "warn once per cause" contract as `_publish_quota`'s own test above."""
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd.invalid", "token": "tok", "repo_id": "x", "since": 0},
+    )
+
+    def boom(*a, **kw):
+        raise RuntimeError("synthetic news publish failure")
+
+    monkeypatch.setattr(cloud, "_request", boom)
+
+    for _ in range(3):
+        cloud._publish_news(brr_dir, inbox_dir, cloud._load_state(brr_dir))
+
+    out = capsys.readouterr().out
+    assert out.count("news publish failed: synthetic news publish failure") == 3
+    assert out.count("Traceback (most recent call last):") == 1
+
+
 def test_loop_publishes_repo_initialised_facts(tmp_path, monkeypatch):
     """#1268: `agents_md_missing`/`kb_missing` piggyback on the same quota
     tick as `gates` — computed from the repo root the daemon's own `.brr`
@@ -2307,12 +2364,13 @@ def test_loop_publishes_run_ledger_snapshot(tmp_path, monkeypatch):
     assert rows[0]["tokens_input"] is None
 
 
-def test_dashboard_publish_tick_publishes_all_seven_snapshots(tmp_path, monkeypatch):
+def test_dashboard_publish_tick_publishes_all_eight_snapshots(tmp_path, monkeypatch):
     """kb/plan-loom-realtime-build.md slice 0: dashboard snapshots must not
     wait on the inbox long-poll (`_POLL_WAIT_S = 25`) to publish — a single
     ``_dashboard_publish_tick`` call (what the background loop calls every
-    ``_DASHBOARD_PUBLISH_INTERVAL_S``) has to move all seven, the same set
-    ``_loop_once`` publishes, without needing an inbox event at all."""
+    ``_DASHBOARD_PUBLISH_INTERVAL_S``) has to move all eight (the news lane,
+    the-user-hears-it-first, is the eighth), the same set ``_loop_once``
+    publishes, without needing an inbox event at all."""
     from brnrd.models import Daemon as DaemonModel
 
     brr_dir = tmp_path / ".brr"
@@ -2344,6 +2402,7 @@ def test_dashboard_publish_tick_publishes_all_seven_snapshots(tmp_path, monkeypa
         assert daemon.live_runs_updated_at is not None
         assert daemon.pr_review_queue_updated_at is not None
         assert daemon.run_ledger_updated_at is not None
+        assert daemon.news_updated_at is not None
 
 
 def test_runners_snapshot_reads_local_catalog(tmp_path, monkeypatch):
@@ -3947,7 +4006,7 @@ def _capture_publish_requests(monkeypatch):
 
 
 def _publishable_daemon(tmp_path, monkeypatch, cfg=None):
-    """A `.brr` that would publish all seven lanes, with `cfg` written out."""
+    """A `.brr` that would publish every lane, with `cfg` written out."""
     from brr import config as conf
 
     brr_dir = tmp_path / ".brr"
@@ -3990,6 +4049,7 @@ _LANE_NAMES = (
     "quota",
     "pr_review_queue",
     "run_ledger",
+    "news",
 )
 
 _ALL_PUBLISH_PATHS = {
@@ -4000,6 +4060,7 @@ _ALL_PUBLISH_PATHS = {
     "/v1/daemons/quota",
     "/v1/daemons/pr-review-queue",
     "/v1/daemons/run-ledger",
+    "/v1/daemons/news",
 }
 
 
@@ -4027,7 +4088,7 @@ def test_publish_layers_absent_still_publishes_every_lane(tmp_path, monkeypatch)
 
     Guards the fix against over-reach — flipping the mirror to opt-in is a
     product call (#417's own "make it opt-in" half) and is deliberately not
-    taken here. An absent `publish.layers` must keep publishing all seven.
+    taken here. An absent `publish.layers` must keep publishing every lane.
     """
     brr_dir, inbox_dir = _publishable_daemon(tmp_path, monkeypatch, {})
     seen = _capture_publish_requests(monkeypatch)

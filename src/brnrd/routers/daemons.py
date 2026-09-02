@@ -523,6 +523,30 @@ def put_quota(payload: schemas.QuotaReport, principal: Principal = Depends(requi
     )
 
 
+@router.put("/news", response_model=schemas.NewsOut)
+def put_news(payload: schemas.NewsReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+    """Replace this daemon's news-lane snapshot (the-user-hears-it-first).
+
+    Same last-write-wins mirror shape as `put_quota`: the daemon owns the
+    read (`brr.news_lane.collect`, published from `_publish_news` in
+    `gates/cloud_publisher.py`), this endpoint just stores the latest
+    observation so `/dashboard` doesn't need to reach the daemon's own
+    `.brr/` cache directly. Repo-scoped consent, same "quota"-shaped gate.
+    """
+    daemon = _current_daemon(db, principal)
+    if daemon is None:
+        raise HTTPException(status_code=404, detail="no daemon registered for this token")
+    now = datetime.now(timezone.utc)
+    permitted = publish_scope.lane_permitted(db, repo_id=principal.repo_id, lane="news")
+    items = payload.items if permitted else []
+    daemon.news_json = json.dumps([item.model_dump() for item in items], separators=(",", ":"))
+    daemon.news_updated_at = now
+    daemon.online = True
+    daemon.last_seen_at = now
+    db.commit()
+    return schemas.NewsOut(items=items, news_updated_at=now)
+
+
 @router.put("/runners", response_model=schemas.RunnersOut)
 def put_runners(payload: schemas.RunnersReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
     """Replace this daemon's runner-catalog snapshot (#328 spool rack).
