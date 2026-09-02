@@ -900,9 +900,9 @@ def test_orientation_files_render_as_reach_not_as_a_row() -> None:
             OrientationFile(path="/home/kb/subject-envs.md", bytes=9801),
         ],
     )
-    assert "reach: 2 file(s) · 13,921B" in kernel
-    assert "    · /repo/AGENTS.md (4,120B)" in kernel
-    assert "    · /home/kb/subject-envs.md (9,801B)" in kernel
+    assert "reach: files×2 · 13,921B ∉ wake" in kernel
+    assert "    · /repo/AGENTS.md · 4,120B" in kernel
+    assert "    · /home/kb/subject-envs.md · 9,801B" in kernel
     assert "assignments:" not in kernel
     assert "↗" not in kernel
     # The retired blocks stay retired.
@@ -1158,7 +1158,7 @@ def test_rendered_kernel_names_every_file_the_persisted_score_meters(
     for entry in score.orientation_set:
         assert entry.path in prompt, f"kernel never names {entry.path}"
     assert (
-        f"reach: {len(score.orientation_set)} file(s)"
+        f"reach: files×{len(score.orientation_set)}"
         in prompt
     )
 

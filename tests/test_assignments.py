@@ -79,7 +79,7 @@ def test_kernel_renders_debts_and_reach_not_rows(tmp_path):
     assert "debts — three, standing, yours: answer the person" in kernel
     assert "2 pending" in kernel
     assert "branch off the default before you edit" in kernel
-    assert "telemetry: .name and .mood by your first outward act" in kernel
+    assert "telemetry: first outward ⇒ .name + .mood" in kernel
     # The v1 grammar is gone, not renamed.
     assert "assignments:" not in kernel
     assert "⇢" not in kernel and "↗" not in kernel
@@ -88,7 +88,7 @@ def test_kernel_renders_debts_and_reach_not_rows(tmp_path):
     assert "next:" not in kernel
     assert "\norient:" not in kernel
     # The orientation files render under `reach:`.
-    assert "reach: 1 file(s)" in kernel
+    assert "reach: files×1" in kernel
     assert str((tmp_path / "AGENTS.md").resolve()) in kernel
 
 
