@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="media/brnrd-boot.gif" width="720" alt="brnrd boot sequence: underscore, b_d, br_rd, brnrd">
+  <img src="https://raw.githubusercontent.com/hugimuni-labs/brnrd/main/media/brnrd-boot.gif" width="720" alt="brnrd boot sequence: underscore, b_d, br_rd, brnrd">
 </p>
 
 <h1 align="center">brnrd</h1>
@@ -116,8 +116,15 @@ Now send a message from the other side:
 review PR #84 for the auth regression; show me the risky bit before changing it
 ```
 
-> The first end-to-end demo is being recorded against the real product, not
-> mocked into a terminal — follow [#28](https://github.com/hugimuni-labs/brnrd/issues/28).
+<!-- DEMO SLOT — one line, nothing else.
+     Paste the GitHub-hosted asset URL on its own line, directly below this
+     comment, and delete the comment. GitHub renders an uploaded `.mp4` as a
+     native player; a `<video>` tag is stripped by the README renderer and
+     shows nothing, so the URL has to come from a real upload (drag the file
+     into any issue or PR comment and copy what GitHub returns).
+     PyPI and npm render this same file and will not play it — they degrade
+     to a link, which is why the animation above is a GIF on an absolute URL
+     rather than a video. Tracked: #28. -->
 
 <details>
 <summary>The npm package is not a JavaScript port</summary>
