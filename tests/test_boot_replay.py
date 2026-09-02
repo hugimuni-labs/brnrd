@@ -899,7 +899,7 @@ class TestBootScore:
             runner_core="claude-fable-5",
         )
         kernel = prompt.split("\nreference: `brnrd prompts show`", 1)[0]  # the kernel ends on its reference line; its groups are blank-line separated
-        assert "claude / claude-fable-5" in kernel
+        assert "claude/claude-fable-5" in kernel
 
     def test_orientation_is_derived_from_posture_not_boilerplate(self, empty_repo):
         """Steps appear because a fact about *this* wake obliges them.
@@ -915,7 +915,7 @@ class TestBootScore:
         from brr.bootscore import format_kernel
 
         kernel = format_kernel(host)
-        assert "branch off the default before you edit" in kernel
+        assert "shared checkout: dflt↗branch ⇢ edit" in kernel
         assert "pending×3" in kernel
 
         worktree = build_boot_score(
