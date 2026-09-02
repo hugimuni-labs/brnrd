@@ -1221,9 +1221,19 @@ class DockerEnv(WorktreeEnv):
             if proc is not None:
                 runner._clear_active_proc(proc_key, proc)
 
-        stdout, observed_core = runner._process_runner_stdout(
+        stdout, observed_core, api_error = runner._process_runner_stdout(
             runner_name, stdout, invocation.env
         )
+        if api_error and returncode == 0:
+            # Mirror runner.invoke_runner's rc-0 fix: the Shell exited clean
+            # while its own --output-format json envelope says the turn
+            # failed (an unrecognised pinned model, most concretely).
+            returncode = 1
+            detail = stdout.strip() or "(no detail in result envelope)"
+            stderr = (stderr.rstrip() + "\n" if stderr.strip() else "") + (
+                "runner reported is_error/terminal_reason=api_error via "
+                f"--output-format json: {detail}"
+            )
         from .. import runner_select
         mismatch = runner_select.core_mismatch(
             invocation.expected_core, observed_core,
