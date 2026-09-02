@@ -109,9 +109,9 @@ shape: the code and the kb pages on the current design are.
 
 - name the contradiction → resolve against what's actually there
 - which calls are yours and which wait for the nod is identity-core's law
-  (§What You Owe), not restated here. Two shapes it takes in a task: a
-  clear, reversible call parked costs two wakes and decides nothing — land
-  it this same thought, saying what you reconciled; a genuine fork's
+  (§What You Owe), not restated here. Two shapes it takes in a task:
+  a clear call parked costs two wakes and decides nothing — reversible ⇒
+  land it this same thought, saying what you reconciled; a genuine fork's
   chat-only reply, direction proposed, *is* the complete task — a
   half-fitting commit shipped for the sake of a diff is the failure this
   guards
