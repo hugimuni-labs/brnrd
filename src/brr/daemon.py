@@ -4572,6 +4572,25 @@ def _run_worker(
             run_context.write_prompt_file(brr_dir, task, prompt)
             run_context.write_boot_score(brr_dir, task, boot_score)
             run_context.write_wake_manifest(brr_dir, task, boot_score)
+            # A mounted wake's prompt.md is missing exactly the blocks
+            # `boot_score.body.mounted` says left the prose — persist the diverted
+            # text this run actually built (never re-derived later from
+            # current prompt files, which may have changed) so `brnrd prompts
+            # replay` has a complete input to reconstruct (#1753). Gated on
+            # the *final* `boot_score` (not the bare truthiness of
+            # `mount_sink`): the fail-closed rebuild above may have discarded
+            # a stale, populated `mount_sink` in favor of a fresh unmounted
+            # prompt+score, and a sidecar written for that stale dict would
+            # describe a wake nobody had.
+            #
+            # `body.mounted`, not `mounted`: the flag lives on `BootBody`
+            # (`bootscore.py:314`), which is also where `replay` reads it
+            # from (`boot-score.json` -> `body.mounted`). The first version
+            # of this line reached for `boot_score.mounted` and raised
+            # AttributeError on every mounted daemon wake — one fact, two
+            # accessors, and only the reader's was exercised by a test.
+            if boot_score.body.mounted and mount_sink:
+                run_context.write_mounted_blocks(brr_dir, task, mount_sink)
         prompt_mode = "normal"
         fallback_notice = None
 

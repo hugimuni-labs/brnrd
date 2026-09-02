@@ -3053,6 +3053,78 @@ def test_prompts_replay_refuses_a_layout_it_cannot_verify(tmp_path, monkeypatch,
     assert "refusing" in capsys.readouterr().err
 
 
+def _replay_repo_with_mounted_run(tmp_path: Path, run_id: str = "run-cli-mounted-0001") -> Path:
+    """A real git repo with one real captured *mounted* daemon run, sidecar
+    included — the `boot.mount` shape #1753 fixes replay for."""
+    from brr import bootscore
+    from brr.prompts import build_daemon_prompt_with_score
+
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+
+    mount_sink: dict[str, str] = {}
+    prompt, score = build_daemon_prompt_with_score(
+        "Implement a small feature, commit, and push a branch.",
+        "evt-cli-mounted-0001", "/tmp/brr-cli-response.md", repo,
+        _mount_sink=mount_sink,
+        outbox_path="/tmp/brr-cli-outbox", run_id=run_id, source="spawn",
+        environment="worktree", branch_name="brr/cli-test", budget_seconds=7200,
+        hooks_installed=True, runner_name="claude-sonnet", runner_shell="claude",
+        runner_core="claude-sonnet-4-6",
+    )
+    assert score.body.mounted and mount_sink  # fixture must actually mount
+    run_dir = repo / ".brr" / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "prompt.md").write_text(prompt, encoding="utf-8")
+    (run_dir / "boot-score.json").write_text(
+        json.dumps(bootscore.to_dict(score), indent=2, sort_keys=True), encoding="utf-8",
+    )
+    (run_dir / "prompt-mounted.json").write_text(
+        json.dumps(
+            {"schema_version": "1", "run_id": run_id, "blocks": mount_sink},
+            indent=2, sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    return repo
+
+
+def test_prompts_replay_reconstitutes_a_mounted_run_end_to_end(tmp_path, monkeypatch, capsys):
+    """The CLI path for the fix this task exists for (#1753): a `boot.mount`
+    run, replayed through the same `brnrd prompts replay <id> --prompts
+    <dir>` entry point every other replay test here goes through, must
+    substitute a mounted block instead of refusing.
+    """
+    repo = _replay_repo_with_mounted_run(tmp_path)
+    monkeypatch.chdir(repo)
+
+    prompts_dir = tmp_path / "edited"
+    prompts_dir.mkdir()
+    (prompts_dir / "weave.md").write_text("# Edited weave\n", encoding="utf-8")
+
+    code = main(["prompts", "replay", "run-cli-mounted-0001", "--prompts", str(prompts_dir)])
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "~ weave" in out
+    assert "run-preamble" in out  # unchanged mounted block still prints in the roster
+    assert "total delta:" in out
+
+
+def test_prompts_replay_refuses_a_mounted_run_missing_the_sidecar(tmp_path, monkeypatch, capsys):
+    """A mounted run predating #1753's sidecar must refuse with the specific
+    reason, not the generic mismatch line — deleting the sidecar after the
+    fact is the CLI-level equivalent of "captured before it existed"."""
+    repo = _replay_repo_with_mounted_run(tmp_path)
+    monkeypatch.chdir(repo)
+    (repo / ".brr" / "runs" / "run-cli-mounted-0001" / "prompt-mounted.json").unlink()
+
+    code = main(["prompts", "replay", "run-cli-mounted-0001", "--prompts", str(tmp_path)])
+
+    assert code == 1
+    assert "captured before the sidecar existed" in capsys.readouterr().err
+
+
 def test_prompts_replay_rejects_a_missing_prompts_dir(tmp_path, monkeypatch, capsys):
     repo = _replay_repo_with_run(tmp_path)
     monkeypatch.chdir(repo)

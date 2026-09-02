@@ -56,6 +56,46 @@ def write_boot_score(brr_dir: Path, task: Run, score: Any) -> Path | None:
         return None
 
 
+def write_mounted_blocks(brr_dir: Path, task: Run, mount_sink: dict[str, str]) -> Path | None:
+    """Write the wake's mounted-out block text to `.brr/runs/<run-id>/prompt-mounted.json`.
+
+    On a mounted wake (``boot.mount`` on), ``prompt.md`` is the *prose minus
+    the mounted blocks* — ``prompts._take`` diverts them into ``mount_sink``
+    and ``daemon.py`` re-delivers them as a seeded ``Read`` result on a
+    resumed session transcript instead (:mod:`brr.transcript`), so they never
+    enter ``prompt.md``'s own bytes even though ``boot-score.json`` still
+    records their full rendered size. Without this file, that gap is
+    permanent: nothing on disk carries the bytes the manifest names, and
+    ``brnrd prompts replay`` had no honest way to rebuild the wake it claims
+    to inspect (#1753).
+
+    The caller must pass the *exact* dict this run's own build diverted —
+    never a value re-derived from the current prompt files on disk, which
+    may have changed since this wake ran. That is the whole reason this
+    lives beside ``prompt.md``/``boot-score.json`` rather than being
+    reconstructed lazily by a reader: only the run that built the prompt
+    ever had the real bytes.
+
+    Non-fatal on error; the run continues regardless.
+    """
+    import json
+
+    context_dir = brr_dir / "runs" / task.id
+    context_dir.mkdir(parents=True, exist_ok=True)
+    path = context_dir / "prompt-mounted.json"
+    try:
+        path.write_text(
+            json.dumps(
+                {"schema_version": "1", "run_id": task.id, "blocks": mount_sink},
+                indent=2, sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        return path
+    except (OSError, TypeError):
+        return None
+
+
 def write_wake_manifest(brr_dir: Path, task: Run, score: Any) -> Path | None:
     """Write the wake topology to `.brr/runs/<run-id>/wake-manifest.json`.
 

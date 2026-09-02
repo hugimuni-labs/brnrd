@@ -318,8 +318,6 @@ source manifest:
   ✓ Working register, worked example (register.md)                  product      contract     [bytes]  {PACKAGE_ROOT}/prompts/register.md  [mtime]
   ✓ Daemon mechanics (daemon-substrate.md)                          product      substrate    [bytes]  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
   ✓ Portal verb grammar (`brnrd await` / `brnrd do`, docs portals)  product      substrate     11,444  {PACKAGE_ROOT}/docs/portals.md  [mtime]
-  · diffense review-pack prompt                                     product      config             0  {PACKAGE_ROOT}/prompts/diffense.md  [mtime]
-  · Introspection dev-mode invitation                               product      config             0  {PACKAGE_ROOT}/prompts/introspection.md  [mtime]
   ✓ Resident identity core                                          product      identity     [bytes]  {PACKAGE_ROOT}/prompts/identity-core.md  [mtime]
   · Stranded-memory warning (repo moved)                            daemon-live  health             0  computed
   · Dominion digest (self-inject)                                   resident     memory             0  computed
@@ -332,6 +330,8 @@ source manifest:
   · Your last run (node frame + Now + shape)                        resident     memory             0  computed
   · kb health (deterministic preflight)                             daemon-live  health             0  computed
   · notes health (deterministic preflight)                          daemon-live  health             0  computed
+  · diffense review-pack prompt                                     product      config             0  {PACKAGE_ROOT}/prompts/diffense.md  [mtime]
+  · Introspection dev-mode invitation                               product      config             0  {PACKAGE_ROOT}/prompts/introspection.md  [mtime]
   ✓ Run Context Bundle (runtime facts)                              daemon-live  runtime        4,240  computed
 
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
