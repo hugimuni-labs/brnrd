@@ -1356,7 +1356,11 @@
 	onDestroy(() => {
 		if (pollHandle) clearInterval(pollHandle);
 		if (tickHandle) clearInterval(tickHandle);
-		window.removeEventListener('focus', onFocus);
+		// onDestroy fires during SSR too (there was never a mount to undo, but
+		// SvelteKit still runs cleanup) — `window` doesn't exist there. The
+		// listener above is added in onMount, which never runs on the server,
+		// so this guard is just "don't touch window when there wasn't one".
+		if (typeof window !== 'undefined') window.removeEventListener('focus', onFocus);
 	});
 </script>
 

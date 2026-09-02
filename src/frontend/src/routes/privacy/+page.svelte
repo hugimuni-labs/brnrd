@@ -56,7 +56,23 @@
 	const LAST_UPDATED = '2026-08-18';
 </script>
 
-<svelte:head><title>brnrd privacy notice</title></svelte:head>
+<svelte:head>
+	<title>brnrd privacy notice</title>
+	<meta
+		name="description"
+		content="What personal data HugiMuni SAS processes when you use the hosted brnrd service at brnrd.dev, why, and for how long."
+	/>
+	<meta property="og:title" content="brnrd privacy notice" />
+	<meta
+		property="og:description"
+		content="What personal data HugiMuni SAS processes when you use the hosted brnrd service at brnrd.dev, why, and for how long."
+	/>
+	<meta name="twitter:title" content="brnrd privacy notice" />
+	<meta
+		name="twitter:description"
+		content="What personal data HugiMuni SAS processes when you use the hosted brnrd service at brnrd.dev, why, and for how long."
+	/>
+</svelte:head>
 
 <div class="mx-auto max-w-2xl p-6">
 	<div class="flex items-start justify-between gap-4">

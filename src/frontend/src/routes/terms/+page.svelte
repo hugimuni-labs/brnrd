@@ -40,7 +40,23 @@
 	});
 </script>
 
-<svelte:head><title>brnrd.dev — Terms of Service</title></svelte:head>
+<svelte:head>
+	<title>brnrd.dev — Terms of Service</title>
+	<meta
+		name="description"
+		content="The Terms of Service for brnrd.dev: the agreement between you and HugiMuni SAS covering the hosted brnrd service."
+	/>
+	<meta property="og:title" content="brnrd.dev — Terms of Service" />
+	<meta
+		property="og:description"
+		content="The Terms of Service for brnrd.dev: the agreement between you and HugiMuni SAS covering the hosted brnrd service."
+	/>
+	<meta name="twitter:title" content="brnrd.dev — Terms of Service" />
+	<meta
+		name="twitter:description"
+		content="The Terms of Service for brnrd.dev: the agreement between you and HugiMuni SAS covering the hosted brnrd service."
+	/>
+</svelte:head>
 
 <div class="mx-auto max-w-2xl p-6">
 	<div class="flex items-start justify-between gap-4">

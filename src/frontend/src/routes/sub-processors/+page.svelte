@@ -14,7 +14,23 @@
 	const LAST_UPDATED = '2026-07-31';
 </script>
 
-<svelte:head><title>brnrd sub-processors</title></svelte:head>
+<svelte:head>
+	<title>brnrd sub-processors</title>
+	<meta
+		name="description"
+		content="The organisations that process personal data on behalf of brnrd.dev (HugiMuni SAS): who they are, what they handle, and where."
+	/>
+	<meta property="og:title" content="brnrd sub-processors" />
+	<meta
+		property="og:description"
+		content="The organisations that process personal data on behalf of brnrd.dev (HugiMuni SAS): who they are, what they handle, and where."
+	/>
+	<meta name="twitter:title" content="brnrd sub-processors" />
+	<meta
+		name="twitter:description"
+		content="The organisations that process personal data on behalf of brnrd.dev (HugiMuni SAS): who they are, what they handle, and where."
+	/>
+</svelte:head>
 
 <div class="mx-auto max-w-2xl p-6">
 	<div class="flex items-start justify-between gap-4">

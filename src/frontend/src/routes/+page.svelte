@@ -7,6 +7,18 @@
 	// its render is the component's default (`liveView="field"`), which is the
 	// exact shape this file held before the extraction.
 	import Dashboard from '$lib/Dashboard.svelte';
+	import { HOME_DESCRIPTION, HOME_TITLE, SOCIAL_IMAGE } from '$lib/seo';
 </script>
+
+<svelte:head>
+	<title>{HOME_TITLE}</title>
+	<meta name="description" content={HOME_DESCRIPTION} />
+	<meta property="og:title" content={HOME_TITLE} />
+	<meta property="og:description" content={HOME_DESCRIPTION} />
+	<meta property="og:image" content={SOCIAL_IMAGE} />
+	<meta name="twitter:title" content={HOME_TITLE} />
+	<meta name="twitter:description" content={HOME_DESCRIPTION} />
+	<meta name="twitter:image" content={SOCIAL_IMAGE} />
+</svelte:head>
 
 <Dashboard />
