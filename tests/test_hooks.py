@@ -4988,7 +4988,7 @@ def test_classify_act_is_total_across_the_six_labels(tool_name, tool_input, expe
         # exists to answer — did the wake say anything to anyone — falls
         # through to the shell default and reads `probe`.
         ("brnrd do --gate cloud --body-file /tmp/ann.md", "publish"),
-        ("brnrd do --reply evt-x --body hi --no-promise", "publish"),
+        ("brnrd do --reply evt-x --body hi --no-follow-up", "publish"),
         ("brnrd cut /tmp/cut.md", "publish"),
         ("python3 account/x-browser.py post --text x --confirm", "publish"),
         ("gh issue create --title t --body-file /tmp/b.md", "publish"),

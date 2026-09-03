@@ -61,7 +61,7 @@ brnrd do [--outbox DIR] [--timeout SECONDS] \
   [--mood <feeling-or-handle> [--mood-note "…"]] \
   [--note <event-id>]... \
   [--reply <event-id> [--item <item-id>]... --body-file FILE | --body "…"]... \
-  (--promise <what> [--promise-count N] | --no-promise) \
+  (--promise <what> [--promise-count N] | --no-follow-up) \
   [--gate <name> --body-file FILE]... \
   [--card FILE] \
   [-- <command> [args…]]
@@ -85,7 +85,7 @@ brnrd do [--outbox DIR] [--timeout SECONDS] \
   `.mood` row already points at, so a near-miss reports candidates instead
   of writing nothing silently.
 - **Any `--reply` requires exactly one of `--promise <what>` /
-  `--no-promise`** (evt-1787161641746642000-s0vo, 2026-08-19). Neither given
+  `--no-follow-up`** (evt-1787161641746642000-s0vo, 2026-08-19). Neither given
   ⇒ the call is refused client-side, before anything is staged, naming both
   flags. Both given ⇒ argparse itself refuses (a mutually exclusive group),
   same "nothing staged" guarantee. The decision is **per call, not per
@@ -102,11 +102,12 @@ brnrd do [--outbox DIR] [--timeout SECONDS] \
   N` sets the count (default 1). That row is written **only after every
   staged reply's own drain verdict comes back `✓`** — a refused reply must
   not leave a debt row for a message nobody got, so a failed reply renders
-  its own `✗` and no `promise …` segment follows it. `--no-promise` is the
-  explicit zero: the reply(ies) are staged and nothing is appended.
+  its own `✗` and no `promise …` segment follows it. `--no-follow-up` states
+  that the correspondent's event carries no follow-up to derive: nothing is
+  owed beyond this reply, so the reply(ies) are staged and nothing is appended.
   `--note`, `--mood`, `--card`, and a `--reply`-free call (`--gate` alone,
   say) carry no such requirement — a gate handoff's debt is the PR itself,
-  and `--promise`/`--no-promise` given without any `--reply` in the same
+  and `--promise`/`--no-follow-up` given without any `--reply` in the same
   call is refused the same way.
 - **`--item <id>` binds the immediately preceding `--reply` to a warp item**
   (design-the-water-line.md §The asks lane, rung 2 — the join rung 3's rail
@@ -328,7 +329,7 @@ source manifest:
   ✓ Working register (weave.md)                                     product      contract     [bytes]  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Working register, worked example (register.md)                  product      contract     [bytes]  {PACKAGE_ROOT}/prompts/register.md  [mtime]
   ✓ Daemon mechanics (daemon-substrate.md)                          product      substrate    [bytes]  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
-  ✓ Portal verb grammar (`brnrd await` / `brnrd do`, docs portals)  product      substrate     11,444  {PACKAGE_ROOT}/docs/portals.md  [mtime]
+  ✓ Portal verb grammar (`brnrd await` / `brnrd do`, docs portals)  product      substrate     11,540  {PACKAGE_ROOT}/docs/portals.md  [mtime]
   ✓ Resident identity core                                          product      identity     [bytes]  {PACKAGE_ROOT}/prompts/identity-core.md  [mtime]
   · Stranded-memory warning (repo moved)                            daemon-live  health             0  computed
   · Dominion digest (self-inject)                                   resident     memory             0  computed
