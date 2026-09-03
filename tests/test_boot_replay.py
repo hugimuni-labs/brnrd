@@ -728,7 +728,7 @@ class TestBootScore:
                                   runner_core="claude-sonnet-4-6")
         text = format_manifest(score)
         assert "brnrd boot" in text
-        assert "schema v1" in text
+        assert "schema v2" in text
         assert "source manifest:" in text
         assert "owner" in text
         assert "authority" in text
@@ -898,8 +898,8 @@ class TestBootScore:
             runner_name="claude-fable", runner_shell="claude",
             runner_core="claude-fable-5",
         )
-        kernel = prompt.split("\n\n", 1)[0]
-        assert "claude / claude-fable-5" in kernel
+        kernel = prompt.split("\nreference: `brnrd prompts show`", 1)[0]  # the kernel ends on its reference line; its groups are blank-line separated
+        assert "claude/claude-fable-5" in kernel
 
     def test_orientation_is_derived_from_posture_not_boilerplate(self, empty_repo):
         """Steps appear because a fact about *this* wake obliges them.
@@ -912,24 +912,26 @@ class TestBootScore:
         host = build_boot_score(
             empty_repo, environment="host", pending_count=3, has_event_body=True
         )
-        titles = [a.title for a in host.assignments]
-        assert "branch before you edit" in titles
-        assert "answer 3 queued events" in titles
+        from brr.bootscore import format_kernel
+
+        kernel = format_kernel(host)
+        assert "shared checkout: dflt↗branch ⇢ edit" in kernel
+        assert "pending×3" in kernel
 
         worktree = build_boot_score(
             empty_repo, environment="worktree", pending_count=0, has_event_body=True
         )
-        titles = [a.title for a in worktree.assignments]
-        assert "branch before you edit" not in titles   # the daemon publishes it
-        assert not any(t.startswith("answer 3") for t in titles)  # nothing queued
+        worktree_kernel = format_kernel(worktree)
+        assert "branch off the default before you edit" not in worktree_kernel
+        assert "pending" not in worktree_kernel
 
     def test_worker_kernel_omits_resident_only_steps(self, empty_repo):
         """A worker never writes a card — ``strand.md`` does not grant it one."""
         from brr.prompts import build_boot_score
 
         score = build_boot_score(empty_repo, is_strand=True, has_event_body=True)
-        titles = [a.title for a in score.assignments]
-        assert not any("card" in t for t in titles)
+        from brr.bootscore import format_kernel
+        assert ".card" not in format_kernel(score)
 
     def test_cost_ledger_measures_the_wake_not_the_disk(self, empty_repo):
         """Bytes are what entered the prompt, and they add up to the whole bill.
