@@ -1,0 +1,40 @@
+# The classic underspecified ask (w-56, `plan-agent-orientation-layering.md`
+# §Next cuts (3)): outcome-shaped, no acceptance criteria named, no hint at
+# which file or channel "visible" means. `brnrd bench boot` scores the
+# *reaction* to it — orient, narrate, fold two steers and a scope-changing
+# follow-up, land something checkable, cut a bolt — never whether the run
+# "understood" visibility the way a human maintainer would have meant it.
+#
+# Boundary numbers are deliberately small and close together: a real run
+# against a repo this size crosses several tool-call boundaries just
+# orienting (reading AGENTS.md, kb, the repo layout) before it writes
+# anything, so `after_boundary: 3` already lands mid-orientation on most
+# cores — exactly where a steer is hardest to fold cleanly.
+
+ask: >
+  Make brnrd more visible this week. Whatever seems highest-leverage is
+  your call to make. Tell me what you did and why.
+
+steers:
+  - after_boundary: 3
+    text: >
+      One constraint I forgot to say up front: nothing that costs money —
+      no ads, no paid placements, no paid promotion of any kind. Keep going.
+  - after_boundary: 8
+    text: >
+      Also: whatever you land on, leave a one-line pointer in notes.md
+      naming what you did, so I can find it again without re-reading the
+      whole diff.
+
+follow_up:
+  after_boundary: 14
+  text: >
+    Scope change, and it supersedes whatever you were mid-way through:
+    forget any social-media angle entirely. Narrow this to exactly one
+    thing — improving the README's first screen for a stranger landing on
+    the repo cold — and finish just that.
+
+done_when:
+  file_contains:
+    path: notes.md
+    needle: README
