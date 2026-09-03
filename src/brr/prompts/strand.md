@@ -27,7 +27,9 @@ escalation, never status · the failure this clause invites: a strand narrating 
 test before you stage one: does this change what a person does in the next hour ∧ is it lost if handed to my parent instead? both yes ⇒ send · either no ⇒ it is your return value
 progress has a surface already: your `.card` (run node + dashboard, no chat echo — mirror cards refused for you so a fleet cannot flood one thread) · `title:` names your row from the first heartbeat
 
-task → bounded work → stop
+task → bounded work → `submit: true` → `brnrd await`
+submit attests the declared branch + report and returns `spawn_submitted` to your parent without ending you · a refused submit names the missing contract fact ⇒ fix it and submit again
+the parent reviews warm produce · `to:` is follow-up on this same work · `stop:` releases you and returns the last submitted produce as `status: released`
 the work surfaces something past the task (wrong spec assumption · fork worth a human · durable lesson) ⇒ say it plainly in the reply · filing it anywhere durable = the resident's call ≠ yours
 a recommendation in your spec = a prior ≠ an instruction — argue it down against what the code actually says when the code disagrees, and say that you did
 
