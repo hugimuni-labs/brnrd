@@ -19,6 +19,7 @@ import pytest
 
 from brr import do as do_mod
 from brr import cli
+from brr import emotes
 from brr.cli import main
 
 
@@ -202,7 +203,7 @@ def test_do_mood_resolves_and_writes_the_control_file(tmp_path, monkeypatch, cap
     assert lines[1] == "deep in it"
 
 
-def test_do_mood_unresolved_writes_nothing_and_names_near_misses(
+def test_do_mood_unknown_writes_nearest_and_preserves_residents_word(
     tmp_path, monkeypatch, capsys,
 ):
     outbox = tmp_path / "outbox"
@@ -210,9 +211,24 @@ def test_do_mood_unresolved_writes_nothing_and_names_near_misses(
     _do_env(monkeypatch, outbox)
     _portal_state(outbox)
 
-    assert main(["do", "--mood", "zzzznotarealface"]) == 1
+    assert main(["do", "--mood", "zzzznotarealface"]) == 0
     out = capsys.readouterr().out
-    assert "✗ no match" in out
+    assert "~ nearest:" in out
+    lines = (outbox / ".mood").read_text(encoding="utf-8").splitlines()
+    assert lines[0] in emotes.EMOTES
+    assert lines[1] == "zzzznotarealface"
+
+
+def test_do_mood_strict_refuses_unknown_and_writes_nothing(
+    tmp_path, monkeypatch, capsys,
+):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _do_env(monkeypatch, outbox)
+    _portal_state(outbox)
+
+    assert main(["do", "--mood", "zzzznotarealface", "--strict"]) == 1
+    assert "✗ no match" in capsys.readouterr().out
     assert not (outbox / ".mood").exists()
 
 
@@ -224,6 +240,12 @@ def test_do_mood_note_without_mood_is_rejected(tmp_path, monkeypatch, capsys):
 
     assert main(["do", "--mood-note", "x"]) == 1
     assert "--mood-note only applies with --mood" in capsys.readouterr().err
+
+
+def test_do_mood_strict_without_mood_is_rejected(tmp_path, monkeypatch, capsys):
+    _do_env(monkeypatch, tmp_path)
+    assert main(["do", "--strict"]) == 1
+    assert "--strict only applies with --mood" in capsys.readouterr().err
 
 
 # ── --note / --reply / --gate: the verdict-observation contract ────────

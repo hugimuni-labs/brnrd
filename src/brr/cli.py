@@ -833,6 +833,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--mood-note", default=None, metavar="TEXT",
         help="narration after the resolved mood handle (only with --mood)")
     do_p.add_argument(
+        "--strict", action="store_true",
+        help="refuse an unresolved --mood instead of wearing its nearest face")
+    do_p.add_argument(
         "--note", dest="note", action="append", default=None,
         metavar="EVENT-ID",
         help="retire a pending event deliberately, no message goes out "
@@ -1871,17 +1874,11 @@ def cmd_emotes(args):
                 print(f"    {line}")
         return 1
 
+    print("feeling → face handle  (write the handle; punctuation is part of its name)")
     for e in rows:
-        cycles = " / ".join(" ".join(seq) for seq in e.sequences)
-        rest = "" if e.rest is None else f"  rest {e.rest}"
-        # The family is printed because it is the word the *next* search
-        # should use: a resident that found `fine_` by typing "satisfied"
-        # learns the handle, and one that found it by typing "clean diff"
-        # learns the family it belongs to. Handles are marks; families are
-        # the way back in.
-        family = f"  {e.family}" if e.family else ""
-        print(f"{e.name:<10} {cycles}{rest}  pitch {e.pitch:.2f}  [{e.kind}]{family}")
-        print(f"           {e.trigger}")
+        family = e.family or e.kind
+        print(f"{family:<17} → {e.resting_frame} {e.name}")
+        print(f"                    {e.trigger}")
     if not args.all and len(rows) >= 12:
         print("[brnrd emotes] top matches only — narrow the query, or --all")
     return 0
@@ -1975,13 +1972,10 @@ def cmd_mood(args):
     it in the same boundary instead of trusting a write it cannot see
     confirmed.
 
-    **No match writes nothing.** Same honesty bar `emotes.lookup` already
-    keeps: a family word (`satisfied` is four faces) or an invented handle
-    is a real miss, and guessing between candidates would be a face the
-    resident didn't mean. `emotes.near_misses` names the nearest faces —
-    the same line `brnrd emotes`'s own no-match case prints — so the
-    resident can retry with the actual handle instead of staring at
-    silence.
+    This older standalone verb accepts handles, feelings, synonyms, and
+    small typos. Unlike ``brnrd do --mood``, a completely unknown word still
+    writes nothing; the run-oriented porcelain owns the explicit nearest
+    fallback and ``--strict`` switch.
 
     `--outbox` overrides the environment for anything driving this outside
     a live wake's own process (a script, a test); environment resolution
@@ -2824,15 +2818,22 @@ def _do_render(verb: str, label: str, status: str, detail: str) -> tuple[str, bo
     return f"{verb} {label} ✗ {detail}", False
 
 
-def _do_mood(do_mod, emo, outbox_dir: Path, feeling: str, note: str | None) -> tuple[str, bool]:
+def _do_mood(
+    do_mod, emo, outbox_dir: Path, feeling: str, note: str | None,
+    *, strict: bool = False,
+) -> tuple[str, bool]:
     resolved = emo.lookup(feeling)
     if resolved is None:
         misses = emo.near_misses(feeling)
-        tail = (
-            " — try: " + ", ".join(e.name for e in misses)
-            if misses else ""
-        )
-        return f"mood {feeling} ✗ no match{tail}", False
+        if strict:
+            tail = " — try: " + ", ".join(e.name for e in misses) if misses else ""
+            return f"mood {feeling} ✗ no match{tail}", False
+        resolved = emo.resolve_nearest(feeling)
+        if resolved is None:
+            return f"mood {feeling} ✗ no match", False
+        preserved_note = feeling if not note else f"{feeling} — {note}"
+        do_mod.write_mood(outbox_dir, resolved.name, preserved_note)
+        return f"mood {feeling} ~ nearest: {resolved.name} ✓", True
     do_mod.write_mood(outbox_dir, resolved.name, note)
     glyph = resolved.frames[0] if resolved.frames else resolved.name
     return f"mood {glyph} {resolved.name} ✓", True
@@ -3023,6 +3024,9 @@ def cmd_do(args):
     if args.mood_note and not args.mood:
         print("[brnrd do] --mood-note only applies with --mood", file=sys.stderr)
         return 1
+    if args.strict and not args.mood:
+        print("[brnrd do] --strict only applies with --mood", file=sys.stderr)
+        return 1
 
     ordered_ops = getattr(args, "_do_ops", None) or []
     replies, gates, pairing_error = _reconstruct_do_ops(ordered_ops)
@@ -3189,7 +3193,10 @@ def cmd_do(args):
         any_failed = False
 
         if args.mood:
-            seg, ok = _do_mood(do_mod, emo, outbox_dir, args.mood, args.mood_note)
+            seg, ok = _do_mood(
+                do_mod, emo, outbox_dir, args.mood, args.mood_note,
+                strict=args.strict,
+            )
             segments.append(seg)
             any_failed = any_failed or not ok
 
