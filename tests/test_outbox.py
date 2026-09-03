@@ -2073,7 +2073,6 @@ def test_live_portal_state_file_summarizes_run_attention(tmp_path):
             "name": "claude-opus",
             "class": "strong",
         },
-        budget_seconds=3600,
         card_state={"last": "working"},
         output_stats={"current": 1, "other": 2, "outbound": 3},
         start_monotonic=daemon.time.monotonic() - 5,

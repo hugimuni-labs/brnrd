@@ -2208,14 +2208,15 @@ def test_pre_tool_allows_write_to_card_in_outbox_dir(tmp_path):
 
 
 def test_pre_tool_allows_write_to_control_files_in_outbox_dir(tmp_path):
-    # All control files (.card, .mood, .keepalive, .name) are allowed.
+    # All control files (.card, .mood, .name) are allowed; `.keepalive` is
+    # gone with the clock family (w-74) and is no longer a control file.
     host, work_tree = _rooted_layout(tmp_path)
     outbox = host / ".brr" / "outbox" / "run-1"
     outbox.mkdir(parents=True)
     env = _rooted_env(tmp_path, host_root=host, work_tree=work_tree)
     env["BRR_OUTBOX_DIR"] = str(outbox)
 
-    for control_file in [".mood", ".keepalive", ".name"]:
+    for control_file in [".mood", ".name"]:
         out, code = hooks.run_hook(
             hooks.PHASE_PRE_TOOL,
             _pre_tool_stdin("Write", str(outbox / control_file)),
@@ -3500,7 +3501,7 @@ def test_post_tool_bar_renders_every_segment_when_laden():
     glyph = hooks._emote_glyph("smug_")
     assert glyph  # the fixture is a real handle, or this pins nothing
     assert bar == (
-        f"⌁[{glyph}]: ⏱ 16/120m │ q S57·W50·F27 │ ▷1 │ rb3h │ ⇡2+3 │ ⚒4"
+        f"⌁[{glyph}]: ⏱ 16/120m │ q S57·W50·F27 │ ▷1 │ ⇡2+3 │ ⚒4"
     )
 
 
@@ -4959,7 +4960,6 @@ def test_boundary_act_classification_stores_detail_not_raw_input(tmp_path):
         ("Bash", {"command": "git push origin HEAD"}, "publish"),
         ("spawn_agent", {"task": "inspect"}, "dispatch"),
         ("Bash", {"command": "brnrd await --timeout 5m"}, "wait"),
-        ("Write", {"file_path": "/tmp/outbox/evt/.keepalive", "content": "+30m"}, "wait"),
         ("Write", {"file_path": "/tmp/outbox/evt/reply.md", "content": "hello"}, "publish"),
         ("Write", {"file_path": "/tmp/outbox/evt/spawn.md", "content": "spawn: true"}, "dispatch"),
         ("FutureTool", {"opaque": True}, "probe"),
@@ -5746,17 +5746,6 @@ def test_notices_detail_compresses_on_the_third_consecutive_boundary():
     assert "- !1 · seen ×3 — portal-state.json → notices" in compact
 
 
-def test_running_long_detail_compresses_on_the_third_consecutive_boundary():
-    payload = _bar_payload(
-        budget={"elapsed_seconds": 4000, "budget_seconds": 3600,
-                "long_running": True},
-    )
-    full = hooks.format_delta(payload, repeat_streaks={"running_long": 2})
-    compact = hooks.format_delta(payload, repeat_streaks={"running_long": 4})
-    assert "extend via .keepalive if the work needs it" in full
-    assert "extend via .keepalive if the work needs it" not in compact
-    assert "- running long · seen ×4 — .keepalive" in compact
-
 
 def test_name_nudge_detail_is_retired():
     # w-69: the `.name?` detail line and its streak retired into the claims
@@ -5821,38 +5810,22 @@ def test_repeat_streaks_are_tracked_independently_per_key():
     assert result == {"notices": 3, "card_stale": 2}
 
 
-def test_long_running_alone_reaches_the_resident_end_to_end(tmp_path):
-    """One integration pin, combined with a pending event so the boundary
-    actually opens (a bare `long_running` with nothing else pending/
-    delivered/notice-worthy does not by itself open `_render_bar`'s own
-    ladenness gate — a pre-existing, unrelated gap between that gate and
-    `_has_post_tool_obligations`, out of this change's scope). Confirms the
-    wiring from `compute_neutral` through to the rendered detail line."""
-    env = _env(tmp_path)
-    ev = {"id": "evt-2001", "source": "telegram", "summary": "hi"}
-    budget_on = {"elapsed_seconds": 4000, "budget_seconds": 3600,
-                 "long_running": True}
-    _portal(tmp_path, token="t1", pending=1, events=[ev], budget=budget_on)
-    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "running long: past the 3600s soft budget" in ctx
-
 
 def test_stop_phase_is_exempt_from_compression(tmp_path):
     """The closeout channel is exempt from dedupe by law (hooks.py test at
-    #963's pin) — running long must render in full at Stop even after many
-    post-tool boundaries already compressed it."""
+    #963's pin) — a notice must render in full at Stop even after many
+    post-tool boundaries already compressed it. (Pinned on `notices` since
+    w-74 retired the running-long detail with the clock family.)"""
     env = _env(tmp_path)
-    budget_on = {"elapsed_seconds": 4000, "budget_seconds": 3600,
-                 "long_running": True}
+    notices = [{"at": "2026-07-24T03:36:00Z", "text": "reply NOT delivered"}]
     for i in range(4):
-        _portal(tmp_path, token=f"t{i}", pending=0, budget=budget_on)
+        _portal(tmp_path, token=f"t{i}", pending=0, notices=notices)
         hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
 
-    _portal(tmp_path, token="tstop", pending=0, budget=budget_on)
+    _portal(tmp_path, token="tstop", pending=0, notices=notices)
     stop, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
     ctx = stop["hookSpecificOutput"]["additionalContext"]
-    assert "running long: past the 3600s soft budget" in ctx
+    assert "reply NOT delivered" in ctx
     assert "seen ×" not in ctx
 
 
