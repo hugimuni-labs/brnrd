@@ -3839,15 +3839,15 @@ def test_seed_and_stop_render_mood_as_a_plain_prose_line(tmp_path):
 def test_seed_says_so_when_the_mood_handle_did_not_resolve(tmp_path):
     """The boundary that can still fix it is the boundary that says so.
 
-    ``curious`` is the word; ``hmn_``/``ooh_``/``peek_`` are the faces. A
+    ``curiousity`` is a slip past the typo tolerance (``curious`` itself now resolves to its family's face); ``hmn_``/``itch_``/``ooh_`` are the faces it was reaching for. A
     resident writing the word believed it wore one for the whole run, and
     the dashboard published the word as an id. Now the seed answers back.
     """
     _portal(tmp_path, token="t1", pending=0)
-    (tmp_path / hooks.MOOD_NAME).write_text("curious", encoding="utf-8")
+    (tmp_path / hooks.MOOD_NAME).write_text("curiousity", encoding="utf-8")
     out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "- mood: ✗ curious → " in ctx
+    assert "- mood: ✗ curiousity → " in ctx
 
 
 def test_mood_malformed_file_is_read_defensively(tmp_path):
@@ -3912,30 +3912,16 @@ def test_emote_glyph_degrades_to_none_for_an_unresolvable_name():
     assert hooks._mood_chip(name) == f"✗ {name}"
 
 
-def test_a_missed_handle_names_what_it_was_reaching_for():
-    """The silence, not the miss, was the defect.
-
-    ``satisfied`` is a family word — four faces — so ``lookup`` declines to
-    guess and always will; that part is the honesty bar working. What was
-    broken is that declining looked *exactly* like succeeding: four ``null``s
-    on the wire, a bare word in the chip, and a run that believed it was
-    wearing a face until a human looked at brnrd.dev and said otherwise.
-
-    So the chip names the candidates. The run can fix it at the next
-    boundary, which is the only moment fixing it is cheap.
-    """
+def test_a_family_word_renders_its_default_face():
+    """A family is wearable via its stable palette-order default."""
     from brr import emotes
 
     name = "satisfied"
-    assert emotes.lookup(name) is None, "a family word must not resolve to one face"
-
+    resolved = emotes.lookup(name)
+    assert resolved is not None
+    assert resolved.family == name
     chip = hooks._mood_chip(name)
-    assert chip.startswith("✗ satisfied → "), chip
-    named = chip.split(" → ", 1)[1].split(" · ")
-    assert named, chip
-    for handle in named:
-        assert emotes.lookup(handle) is not None, f"{handle!r} must be a real handle"
-        assert emotes.EMOTES[handle].family == "satisfied", handle
+    assert chip == f"{resolved.resting_frame} satisfied"
 
 
 def test_the_word_for_the_feeling_renders_the_same_chip_as_the_handle():
@@ -5970,10 +5956,10 @@ def test_ticker_renders_elapsed_alone_when_no_limit_is_configured():
 def test_unresolved_mood_keeps_its_near_miss_chip():
     # The steady face moved to the preamble, but the unresolved-handle
     # honesty stays a chip: a face that resolves to no emote is actionable.
-    rendered = hooks.format_delta(_bar_payload(), mood="satisfied")
+    rendered = hooks.format_delta(_bar_payload(), mood="zzzz-not-a-feeling")
     bar = rendered.splitlines()[0]
     assert bar.startswith("⌁[✗]:")
-    assert "mood ✗ satisfied" in bar
+    assert "mood ✗ zzzz-not-a-feeli…" in bar
 
 
 def test_course_drift_resurfaces_the_route_after_three_work_deltas(tmp_path):

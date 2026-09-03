@@ -373,39 +373,19 @@ def test_lookup_reads_the_word_for_the_feeling_not_only_the_mark():
         assert emotes.lookup(name) is emote, name
 
 
-def test_lookup_resolves_names_and_never_families():
-    """Tolerance is not a licence to invent, and the line is *the name*.
-
-    ``lookup`` reads handles, forgivingly. It does not read families, ever —
-    ``satisfied`` names four faces and choosing one would be the lie the
-    honesty bar exists to prevent. The rule is stated as a property rather
-    than a list of words: whatever comes back must be a face whose own name
-    is the query, once the register's punctuation is stripped off both. So
-    ``focused`` → ``fo.cus`` is legal (it *is* that handle, spelled by a
-    human) and ``satisfied`` → ``fine_`` never can be.
-
-    Written after the first draft of this test asserted the sloppier thing —
-    "a crowded family resolves to nothing" — and went red on ``focused``,
-    which is both a five-face family *and* the plain spelling of one handle.
-    The looser claim would have banned the fix's whole point.
-    """
-    norm = emotes._norm
-
+def test_lookup_resolves_handle_feeling_synonym_and_small_typo():
+    """Every public vocabulary layer reaches a stable existing face."""
     for e in EMOTES.values():
         if not e.family:
             continue
         hit = emotes.lookup(e.family)
-        if hit is None:
-            assert emotes.near_misses(e.family), e.family
-            continue
-        a, b = norm(hit.name), norm(e.family)
-        assert a.startswith(b) or b.startswith(a), (e.family, hit.name)
+        assert hit is not None, e.family
+        assert hit.family == e.family
 
-    # The families with no handle-shaped spelling stay unresolvable, named
-    # here because they are the ones a resident actually types.
-    for word in ("satisfied", "curious", "triumphant", "annoyed", "puzzled"):
-        assert emotes.lookup(word) is None, word
-        assert emotes.near_misses(word), word
+    assert emotes.lookup("fo.cus") is EMOTES["fo.cus"]
+    assert emotes.lookup("curious").family == "curious"
+    assert emotes.lookup("attentive") is EMOTES["fo.cus"]
+    assert emotes.lookup("attentiv") is EMOTES["fo.cus"]
 
 
 def test_one_handle_resolver_serves_every_public_reader():
@@ -436,7 +416,11 @@ def test_near_misses_is_empty_exactly_when_lookup_succeeds():
     for name in EMOTES:
         assert emotes.near_misses(name) == []
     assert emotes.near_misses("sa.tis"), "the maintainer's invented handle must guide"
+    # Nothing near ⇒ a bare miss, never three strangers ranked by luck.
     assert emotes.near_misses("xyzzy-not-a-feeling") == []
+    # A slip past the typo tolerance still gets its shortlist.
+    assert emotes.lookup("curiousity") is None
+    assert emotes.near_misses("curiousity")
 
 
 def test_a_miss_bridges_instead_of_scolding():
@@ -462,16 +446,10 @@ def test_a_miss_bridges_instead_of_scolding():
     assert len(emotes.families()) >= 30
 
 
-def test_near_misses_falls_through_to_the_typo_pass():
-    """`daemon-substrate.md` promises "the chip names near misses", and
-    `search` has neither a thesaurus nor a spell-check — so a handle
-    written from memory returned nothing and the contract was aspirational.
-    """
-    # `lookup` is already tolerant of separators and suffixes, so the
-    # fixture has to be a real misspelling rather than a variant spelling —
-    # `focussed` resolves outright, which is the tolerance working.
-    assert emotes.lookup("wearry") is None
+def test_lookup_accepts_a_typo_within_two_edits():
+    """A small misspelling resolves before the ranked-shortlist path."""
+    assert emotes.lookup("wearry").name == "weary_"
     assert emotes.search("wearry") == [], "search has no spell-check"
-    assert [e.name for e in emotes.near_misses("wearry")][:1] == ["weary_"]
+    assert emotes.near_misses("wearry") == []
     # A handle that *does* resolve still has no near misses to name.
     assert emotes.near_misses("fo.cus") == []
