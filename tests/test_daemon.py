@@ -8746,6 +8746,99 @@ def test_portal_state_await_capped_at_hard_budget_ceiling_with_advisory(tmp_path
     assert len(daemon._read_outbox_notices(outbox_dir)) == 1
 
 
+def test_portal_state_await_open_ended_never_times_out_without_a_hard_cap(tmp_path):
+    """"the seat that stays open" — ``timeout_seconds=None`` (an explicit
+    ``timeout: none``) is a wait with no clock of its own: it stays
+    unresolved indefinitely absent a pending event or a configured hard-cap
+    deadline, and the projection carries ``timeout_seconds`` / ``deadline``
+    as ``null`` rather than a fabricated number.
+    """
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-1"
+    inbox_dir = tmp_path / ".brr" / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    task.meta["await"] = _armed(timeout_seconds=None, armed_at=time.time() - 10_000)
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["await"]["resolved"] is False
+    assert payload["await"]["timeout_seconds"] is None
+    assert payload["await"]["deadline"] is None
+
+
+def test_portal_state_await_open_ended_skips_the_keepalive_extension(tmp_path):
+    """No effective deadline ⇒ nothing for the keepalive to outlast — see
+    ``_budget_exceeded``'s own ``if budget_seconds is not None`` guard
+    (daemon.py): a run with no configured ``runner.timeout_seconds`` never
+    reaches that check, so extending ``.keepalive`` here would be a write
+    with nothing reading it.
+    """
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-1"
+    inbox_dir = tmp_path / ".brr" / "inbox"
+    inbox_dir.mkdir(parents=True)
+    outbox_dir.mkdir(parents=True)
+    keepalive_path = outbox_dir / ".keepalive"
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    task.meta["await"] = _armed(timeout_seconds=None)
+
+    daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        keepalive_path=keepalive_path,
+    )
+
+    assert not keepalive_path.exists()
+
+
+def test_portal_state_await_open_ended_still_resolves_on_a_pending_event(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True)
+    protocol.create_event(inbox_dir, "telegram", "a follow-up question")
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    task.meta["await"] = _armed(timeout_seconds=None)
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["await"]["resolved"] is True
+    assert payload["await"]["outcome"] == "event"
+
+
+def test_portal_state_await_open_ended_is_capped_by_a_hard_budget(tmp_path):
+    """A configured hard cap still bounds an open-ended wait — "no ceiling
+    of its own" is not "unbounded no matter what."""
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True)
+    outbox_dir.mkdir(parents=True)
+    keepalive_path = outbox_dir / ".keepalive"
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    task.meta["await"] = _armed(timeout_seconds=None)
+    start_monotonic = time.monotonic() - 10
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        keepalive_path=keepalive_path,
+        hard_cap_seconds=60.0,
+        start_monotonic=start_monotonic,
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["await"]["capped"] is True
+    assert payload["await"]["deadline"] is not None
+    until = daemon.portals.keepalive_until(keepalive_path)
+    assert until is not None
+
+    notices = daemon._read_outbox_notices(outbox_dir)
+    assert len(notices) == 1
+    assert "no ceiling" in notices[0]["text"]
+
+
 def test_portal_state_await_resolved_state_is_sticky_across_ticks(tmp_path):
     """Once resolved, later ticks reflect the frozen outcome rather than
     re-evaluating — the world moves on, and the first resolution is the one
@@ -12623,6 +12716,23 @@ def test_drain_outbox_arms_await_with_the_optional_file_trigger(tmp_path):
 
     assert promoted == 1
     assert task.meta["await"]["file"] == "/tmp/gate.log"
+
+
+def test_drain_outbox_arms_an_open_ended_await(tmp_path):
+    """"the seat that stays open" end to end: a staged ``timeout: none``
+    arms with ``timeout_seconds`` recorded as ``None``, not a fabricated
+    number."""
+    stats: dict[str, int] = {}
+    promoted, task, outbox = _drain_await(
+        tmp_path, "---\nawait: true\ntimeout: none\n---\n", stats=stats,
+    )
+
+    assert promoted == 1
+    assert stats == {"await": 1}
+    armed = task.meta["await"]
+    assert armed["timeout_seconds"] is None
+    assert armed["resolved"] is False
+    assert not list(outbox.glob("await*.md"))
 
 
 def test_drain_outbox_await_missing_timeout_is_dropped_with_a_notice(tmp_path):

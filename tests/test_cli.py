@@ -980,6 +980,37 @@ def test_await_falls_back_to_budget_when_no_vigil_is_standing(
         assert _staged_timeout_seconds(body) == 540, state
 
 
+def test_await_defaults_to_no_ceiling_without_a_budget(tmp_path, monkeypatch):
+    """"the seat that stays open" — no ``runner.timeout_seconds`` configured
+    (no ``budget`` block at all in ``portal-state.json``) means there is
+    nothing to derive a default ceiling from, so the wait arms open-ended
+    rather than falling back to a fixed 30-minute timeout.
+    """
+    outbox = _await_outbox(tmp_path)
+
+    body = _drive_await(outbox, monkeypatch)
+    assert "timeout: none" in body
+    assert "await: true" in body
+
+
+def test_await_recall_continues_a_standing_open_ended_wait(tmp_path, monkeypatch):
+    """A standing, unresolved open-ended wait (a prior ``timeout: none``)
+    continues open on a bare re-call rather than having a budget-derived
+    ceiling silently put back on it.
+    """
+    outbox = _await_outbox(
+        tmp_path,
+        budget={"budget_seconds": 600, "elapsed_seconds": 60},
+        await_state={
+            "armed": True, "generation": "111", "resolved": False,
+            "deadline": None, "capped": False, "timeout_seconds": None,
+        },
+    )
+
+    body = _drive_await(outbox, monkeypatch)
+    assert "timeout: none" in body
+
+
 def test_await_file_flag_rides_along_as_an_extra_trigger(
     tmp_path, capsys, monkeypatch,
 ):

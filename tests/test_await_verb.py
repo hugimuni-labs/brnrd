@@ -48,6 +48,52 @@ def test_parse_await_accepts_an_empty_marker():
     assert (file_path, timeout, error) == (None, 300.0, None)
 
 
+def test_parse_await_accepts_no_ceiling():
+    """"the seat that stays open" — ``timeout: none`` arms an open-ended
+    wait: no clock of its own, resolved only by a pending event or (at the
+    daemon) a configured hard-cap deadline."""
+    file_path, timeout, error = await_verb.parse_await(
+        {"await": "true", "timeout": "none"}
+    )
+    assert error is None
+    assert timeout is None
+    assert file_path is None
+
+
+def test_parse_await_no_ceiling_is_case_insensitive_and_takes_null_too():
+    for raw in ("None", "NONE", "null", "Null"):
+        _file, timeout, error = await_verb.parse_await(
+            {"await": "true", "timeout": raw}
+        )
+        assert error is None, raw
+        assert timeout is None, raw
+
+
+def test_parse_await_no_ceiling_still_composes_with_a_file_trigger():
+    file_path, timeout, error = await_verb.parse_await(
+        {"await": "true", "timeout": "none", "file": "/tmp/gate.log"}
+    )
+    assert error is None
+    assert timeout is None
+    assert file_path == "/tmp/gate.log"
+
+
+def test_parse_await_no_ceiling_still_refuses_a_condition_prefixed_file():
+    _file, _timeout, error = await_verb.parse_await(
+        {"await": "true", "timeout": "none", "file": "file:/tmp/x"}
+    )
+    assert "brnrd await" in error
+
+
+def test_parse_await_missing_timeout_key_stays_refused():
+    """Only the explicit ``none`` opens the wait; an omission is not a
+    decision."""
+    _file, timeout, error = await_verb.parse_await({"await": "true", "timeout": ""})
+    assert timeout is None
+    assert "timeout" in error
+    assert "none" in error
+
+
 def test_parse_await_takes_an_optional_file_trigger():
     file_path, timeout, error = await_verb.parse_await(
         {"await": "true", "timeout": "5m", "file": "/tmp/gate.log"}

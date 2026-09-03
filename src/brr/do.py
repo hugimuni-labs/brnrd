@@ -249,7 +249,7 @@ def stage_gate(
 def stage_await(
     outbox_dir: Path,
     *,
-    timeout_seconds: float,
+    timeout_seconds: float | None,
     file_path: str | None = None,
     index: int = 0,
 ) -> Path:
@@ -262,10 +262,16 @@ def stage_await(
 
     The frontmatter is deliberately the smallest thing the daemon can act
     on: ``await: true`` is a marker with no grammar, ``timeout:`` is the
-    ceiling the CLI already defaulted from the run's own budget, and
-    ``file:`` rides along only when the caller named one.
+    ceiling the CLI already defaulted from the run's own budget — or
+    ``none`` when there is no budget to default from, meaning the seat
+    stays open — and ``file:`` rides along only when the caller named one.
     """
-    meta = {"await": "true", "timeout": f"{int(max(1, round(timeout_seconds)))}s"}
+    timeout_text = (
+        "none"
+        if timeout_seconds is None
+        else f"{int(max(1, round(timeout_seconds)))}s"
+    )
+    meta = {"await": "true", "timeout": timeout_text}
     if file_path:
         meta["file"] = file_path
     return stage_message(
