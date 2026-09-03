@@ -2292,8 +2292,8 @@ def test_kb_link_contract_uses_portal_url_with_basename_fallback():
     run_prompt = _read_bundled_run_prompt()
     substrate = _read_bundled_daemon_substrate()
 
-    assert _says(run_prompt, "the kb URL when the portal provides one")
-    assert _says(run_prompt, "otherwise name the file by basename only")
+    assert "kb-url if portal grants" in run_prompt
+    assert "else basename" in run_prompt
     assert _says(substrate, "link a kb page with the kb URL the portal provides")
     assert _says(substrate, "when none is available, use its basename only")
 
@@ -3222,30 +3222,30 @@ class TestRevisitSignalGuardrails:
 
     def test_run_prompt_mentions_revisit_signals(self):
         prompt = _read_bundled_run_prompt()
-        # Section header that gates the guidance.
-        assert "When the task asks you to reconsider" in prompt
+        # Section coordinate that gates the guidance.
+        assert "reconsider:" in prompt
         # The trigger is ownership intent, not a brittle keyword list:
         # the stance lives in the resident playbook and AGENTS.md →
         # Stewardship, which this section leans on instead of
         # re-enumerating trigger phrases.
-        assert "judgement on the substance" in prompt
-        assert _says(prompt, "trust the intent, not trigger words")
+        assert "ask→judge-substance ⇒ judgement is deliverable" in prompt
+        assert "intent>trigger-words" in prompt
 
     def test_run_prompt_biases_to_resolve_and_act(self):
         prompt = _read_bundled_run_prompt()
         # The default on a clear, reversible reconsider is to resolve it
         # in-thread, not to park it for a second "go do that" event.
-        assert "this same thought" in prompt
-        assert "a clear call parked costs two wakes" in prompt
-        assert "Stewardship" in prompt
+        assert "clear ∧ reversible ⇒ land same thought" in prompt
+        assert "clear-call→park = +2 wakes" in prompt
+        assert "authority-map←identity-core §What You Owe" in prompt
 
     def test_run_prompt_authorizes_no_commit_for_genuine_fork(self):
         prompt = _read_bundled_run_prompt()
         # The chat-only-reply outcome must stay named for the genuine-fork
         # case so the diff-as-receipt rule doesn't force a half-fitting
         # commit when there is no clear edit yet.
-        assert "chat-only reply" in prompt
-        assert "the complete task" in prompt
+        assert "op⇐chat-only{fork, proposed-direction} = complete task" in prompt
+        assert "half-fit commit for diff's sake = failure" in prompt
 
     def test_agents_md_self_review_contains_contradiction_check(self):
         agents = _read_bundled_agents_md()
@@ -3271,22 +3271,19 @@ class TestDaemonModeGuardrails:
         # wake whose context had no AGENTS.md block. The old "injected in
         # most daemon wakes" wording taught residents to skip the contract
         # they never received.
-        assert "Shell-dependent" in prompt
-        assert "never guaranteed" in prompt
-        assert "open it before touching" in prompt
+        assert "shell may inject ∅" in prompt
+        assert "absent ∧ task∩shared ⇒ read≺touch*" in prompt
         assert "Read the `AGENTS.md` playbook at the repo root" not in prompt
         # The bundle is the authoritative "where am I?" (its Mode block).
-        assert "mode, run metadata" in prompt
+        assert "Run Context Bundle = now{mode, run, delivery, event, thread}" in prompt
         # Injected Recent Activity counts toward the kb/log.md step so
         # daemon runs don't re-read the log when the prompt already
         # carries an extract. `_says` ignores wrapping, so a reflow of the
         # paragraph can never read as a deleted rule.
-        assert _says(prompt, "Recent Activity (from kb/log.md)")
-        assert _says(prompt, "the log startup read")
-        assert _says(prompt, "only for older history")
+        assert "Recent Activity + bundle/recent-turns = startup-log" in prompt
+        assert "older⇒`kb/log.md`" in prompt
         # The run context file is recovery detail, not routine reading.
-        assert _says(prompt, "runtime-recovery context file")
-        assert _says(prompt, "only for what the")
+        assert "recovery-context⇒read only bundle-omissions" in prompt
 
 
 class TestIntrospectionMode:
