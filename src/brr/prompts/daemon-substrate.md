@@ -1,3 +1,5 @@
+⇐ the daemon, to the resident — the world's voice; "you" is honest here
+
 ## How the daemon drives you
 
 host for this thought = brnrd's daemon · the playbook above is host-agnostic · this page = this host's machinery, as pins — acted on without stopping to think
