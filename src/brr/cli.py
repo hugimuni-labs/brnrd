@@ -1129,6 +1129,26 @@ def build_parser() -> argparse.ArgumentParser:
                         "--config boot.mount=true")
     p.set_defaults(func=cmd_bench_run)
 
+    p = bench_sub.add_parser(
+        "boot",
+        help="score a real ad-hoc run of THIS repo against a scripted "
+             "scenario, per (runner x prompts-dir) pair (spends real "
+             "runner quota)")
+    p.add_argument("--runner", action="append", required=True, dest="runners",
+                   metavar="PROFILE",
+                   help="runner profile to dispatch, e.g. claude-haiku (repeatable)")
+    p.add_argument("--prompts", action="append", required=True, dest="prompts_dirs",
+                   metavar="DIR",
+                   help="a prompts directory staged as .brr/prompts/ for the "
+                        "dispatched run (repeatable)")
+    p.add_argument("--scenario", required=True, metavar="FILE",
+                   help="path to a YAML boot scenario (see bench/scenarios/)")
+    p.add_argument("--out", required=True, metavar="DIR",
+                   help="output directory for per-pair row JSON + summary.md")
+    p.add_argument("--timeout", type=int, default=900,
+                   help="hard per-run timeout in seconds (default 900)")
+    p.set_defaults(func=cmd_bench_boot)
+
     p = sub.add_parser(
         "completions",
         help="print a shell completion script (bash, zsh, fish)")
@@ -4420,6 +4440,48 @@ def cmd_bench_run(args):
     print(f"[brnrd] bench: report → {root / 'report.md'}")
     print(f"[brnrd] bench: transcript → {root / 'transcript.md'}")
     return 0 if passed == len(results) else 1
+
+
+def cmd_bench_boot(args):
+    from . import bench
+
+    scenario_path = Path(args.scenario).expanduser().resolve()
+    try:
+        scenario = bench.load_boot_scenario(scenario_path)
+    except (ValueError, OSError) as exc:
+        print(f"[brnrd] bench boot: bad scenario {scenario_path}: {exc}")
+        return 2
+
+    prompts_dirs = [Path(p).expanduser().resolve() for p in args.prompts_dirs]
+    for pd in prompts_dirs:
+        if not pd.is_dir():
+            print(f"[brnrd] bench boot: --prompts {pd} is not a directory")
+            return 2
+
+    out_dir = Path(args.out).expanduser().resolve()
+    repo_root = _repo_root()
+
+    print(
+        f"[brnrd] bench boot: {scenario.name} x {len(args.runners)} runner(s) "
+        f"x {len(prompts_dirs)} prompt set(s) → {out_dir}"
+    )
+    print("[brnrd] bench boot: dispatching real ad-hoc runs (spends real runner quota)…")
+    rows = bench.run_boot_matrix(
+        scenario, args.runners, prompts_dirs, out_dir, repo_root,
+        timeout_seconds=args.timeout,
+    )
+    all_passed = True
+    for row in rows:
+        mark = "✓" if row["first_divergence"] is None else "✗"
+        print(
+            f"  {mark} {row['runner']} x {row['prompts']}: "
+            f"{row['passed']}/{row['total']} "
+            f"(first divergence: {row['first_divergence'] or 'none'})"
+        )
+        if row["first_divergence"] is not None:
+            all_passed = False
+    print(f"[brnrd] bench boot: summary → {out_dir / 'summary.md'}")
+    return 0 if all_passed else 1
 
 
 def cmd_portal_state(args):
