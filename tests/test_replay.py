@@ -327,9 +327,18 @@ def test_locate_refuses_a_mounted_block_whose_sidecar_text_disagrees_with_the_ma
         repo_root, run_dir, run_id="run-test-mount-badlen",
     )
     tampered = dict(mount_sink)
-    pad = " extra text that was never rendered"
+    # Shrink identity-core by whole characters until its UTF-8 length has
+    # dropped by at least the pad's, then pad weave by exactly that many
+    # ASCII bytes — the check is in *bytes*, and a prompt file may end in
+    # multi-byte marks (it does, since the prompts went into the weave).
+    original = tampered["identity-core"]
+    shrunk = original
+    while len(original.encode("utf-8")) - len(shrunk.encode("utf-8")) < 35:
+        shrunk = shrunk[:-1]
+    delta = len(original.encode("utf-8")) - len(shrunk.encode("utf-8"))
+    pad = ("x" * delta)  # never rendered; same byte total once both edits land
     tampered["weave"] = tampered["weave"] + pad
-    tampered["identity-core"] = tampered["identity-core"][:-len(pad)]  # same total length
+    tampered["identity-core"] = shrunk  # same total length, in bytes
     _write_mount_sidecar(run_dir, tampered)  # overwrite with the tampered version
 
     with pytest.raises(replay.ReplayLocateError, match=r"block 'weave'.*bytes"):
