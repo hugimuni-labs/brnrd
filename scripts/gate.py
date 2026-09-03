@@ -206,13 +206,14 @@ def write_receipt(
 #
 # The contention #1195 measured was never memory — it was CPU/IO: five
 # strands, five full pytest suites plus five `npm ci`/`svelte-check`/`eslint`
-# runs, concurrently, on one developer machine. `spawn.max_concurrent` admits
-# N *runs*; nothing admits N *gates*, and a run is cheap while its gate is
-# not. The fix accepted here (rec 1) is the cheap one: serialize the gate
-# itself, machine-wide, and make a queued run say so instead of silently
-# burning its window (rec 4). Rec 2 (skip unaffected legs) and rec 3
-# (reprice the spawn pool by gate cost) are explicitly out of scope — see
-# the issue's own ranking.
+# runs, concurrently, on one developer machine. Spawn admission admits
+# *runs* — by quota floor since 2026-09-03, by a configured width before
+# that; either way nothing admits N *gates*, and a run is cheap while its
+# gate is not. The fix accepted here (rec 1) is the cheap one: serialize the
+# gate itself, machine-wide, and make a queued run say so instead of silently
+# burning its window (rec 4). Rec 2 (skip unaffected legs) was explicitly out
+# of scope; rec 3 (reprice the spawn pool by gate cost) was overtaken — the
+# pool it proposed repricing no longer exists.
 
 #: The lock file's name, in the *shared* `.brr` dir — see `gate_lock_path`.
 GATE_LOCK_NAME = "gate.lock"
