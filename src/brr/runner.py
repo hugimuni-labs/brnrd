@@ -72,8 +72,8 @@ def _claude_subscription_unavailable(
         return False
 
 # Live runner subprocesses, keyed by invocation label. The daemon runs the
-# resident's thought *and* up to ``spawn.max_concurrent`` strand children in
-# one process, each invoking its own runner subprocess concurrently — a
+# resident's thought *and* however many strand children quota admission
+# lets in, in one process, each invoking its own runner subprocess — a
 # single module-global handle (the pre-2026-07-18 shape) meant a budget kill
 # for one run could terminate a *different* run's process, and a finishing
 # spawn nulled the handle out from under a still-live sibling. Labels are

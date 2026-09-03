@@ -6704,10 +6704,22 @@ def _write_live_portal_state(
             )
         # Spawn admission is quota-shaped. The old numeric headroom projection
         # invited callers to make a second admission decision from a stale cap.
+        #
+        # ``spawn_quota_queued`` is a *once* guard, not a state: it is stamped
+        # the tick a low floor defers a spawn and deliberately never cleared,
+        # so a spawn that waits three ticks still emits exactly one
+        # ``spawn_queued`` event. That makes it useless on its own here —
+        # ``list_pending`` returns ``processing`` events too (a still-running
+        # spawn survives its own ``set_status(..., "processing")`` write), so
+        # counting the flag alone reports a child that queued once and has
+        # been *running* for an hour as still waiting. Status is what answers
+        # "is it still waiting"; the flag only answers "did it ever wait".
         coexisting_facet = payload["resources"]["coexisting_runs"]
         queued_spawns = sum(
             1 for ev in protocol.list_pending(inbox_dir)
-            if ev.get("spawn_immediate") and ev.get("spawn_quota_queued")
+            if ev.get("spawn_immediate")
+            and ev.get("spawn_quota_queued")
+            and ev.get("status") == "pending"
         ) if inbox_dir is not None else 0
         coexisting_facet["spawn_pool"] = {
             "floor": pacing_status.get("floor") if pacing_status else None,
@@ -16096,11 +16108,13 @@ def start(
 
             # Quiescent reload: only re-exec between thoughts, so a
             # running run can't have its process replaced underneath it.
-            # A resident slot is quiescent only when its strand-stack is too.
-            # ``pool.shutdown(wait=True)`` joins every worker, so re-execing
-            # while spawned children remain would turn their whole runtime
-            # into latency for a new correspondent despite the executor's
-            # deliberately reserved resident thread.
+            # A resident slot is quiescent only when its strand-stack is too:
+            # ``not active_spawns`` is the load-bearing half of this guard.
+            # Each strand now runs on its own single-worker executor rather
+            # than on shared slots of ``pool``, so ``pool.shutdown(wait=True)``
+            # below no longer joins them — this condition, not that call, is
+            # what keeps ``reexec()`` from replacing the process image out
+            # from under a live child.
             if reload_requested and current is None and not active_spawns:
                 # Emit a deliberate breadcrumb *before* exec so an operator
                 # watching the terminal can tell this restart was intentional
@@ -16200,13 +16214,18 @@ def start(
             # marked event is never a resident-lead candidate and vice
             # versa, so splitting one pass avoids a second full inbox scan
             # (and a second round of ``list_pending`` I/O) every tick.
-            # Scanning is gated on an open slot existing at all, not on
-            # ``reload_requested`` — a pending package-file reload no
-            # longer holds the spawn slot shut (see below).  Active spawn
-            # strands also keep the reserved resident thread admissible for
-            # a fresh correspondent, until the process can re-exec safely.
-            scanned: list[_DispatchTarget] | None = None
-            scanned = _dispatchable_targets(account_context, repo_root, cfg)
+            # Scanning is unconditional now that admission is a quota-floor
+            # decision rather than a pool-width one: there is no cheap
+            # "is there an open slot" predicate left to gate it on, and the
+            # floor can only be read per candidate event (it depends on that
+            # event's own ``shell:``/``core:``). Not gated on
+            # ``reload_requested`` either — a pending package-file reload no
+            # longer holds the spawn slot shut (see below). Active spawn
+            # strands keep the reserved resident thread admissible for a
+            # fresh correspondent, until the process can re-exec safely.
+            scanned: list[_DispatchTarget] = _dispatchable_targets(
+                account_context, repo_root, cfg,
+            )
 
             # Concurrent strand-stack children dispatch independently of the resident's
             # `current` slot — that's the entire point, a spawn runs
@@ -16278,31 +16297,30 @@ def start(
             # "Finding 2/3") — and that cost is real whatever the
             # staleness risk turns out to be, which is why the fix is to
             # *report* the risk rather than to re-close the slot.
-            # Re-exec itself is still safe: ``pool.shutdown(wait=True)``
-            # below blocks on any in-flight spawn future exactly as it does
-            # on ``current``, so a reload never kills a spawn mid-flight,
-            # only defers replacing the process image until every active
-            # spawn (and the resident thought) is done.
+            # Re-exec itself is still safe: the reload branch above requires
+            # ``not active_spawns`` as well as ``current is None``, so a
+            # reload never kills a spawn mid-flight — it only defers
+            # replacing the process image until every active spawn (and the
+            # resident thought) is done.
             # Dedup against events already claimed this tick or a prior
             # one: `list_dispatchable`/`list_pending` deliberately keep
             # returning "processing" events too (so a still-running
-                # resident event stays visible for follow-up-folding), but
-                # that means a spawn-marked event survives its own
-                # `set_status(..., "processing")` write and reappears as a
-                # "candidate" on every subsequent tick. The resident
-                # dispatch path (above) is guarded by `current is None`
-                # in-memory, which incidentally also blocks this
-                # re-selection; the spawn pool has no equivalent single
-                # in-flight flag to check once `max_spawns` > 1, so nothing
-                # stopped the same event from filling every remaining open
-                # slot in one tick, or across ticks before the pool filled.
-                # Root-caused live 2026-07-08 (run-260708-2010-5sor): a
-                # single `spawn:` outbox dispatch produced 4 concurrent
-                # duplicate children (run-260708-2017-{zzc1,tgvx,a2kn,i8x6}),
-                # each its own worktree, all working the same event —
-                # exactly bounded by `max_spawns`, which is what gave the
-                # bug away. Filter by event id against both the active pool
-                # and events already selected earlier in this same tick.
+            # resident event stays visible for follow-up-folding), but
+            # that means a spawn-marked event survives its own
+            # `set_status(..., "processing")` write and reappears as a
+            # "candidate" on every subsequent tick. The resident
+            # dispatch path (above) is guarded by `current is None`
+            # in-memory, which incidentally also blocks this
+            # re-selection; the spawn path has no equivalent single
+            # in-flight flag, so nothing stopped the same event from
+            # dispatching twice in one tick, or across ticks.
+            # Root-caused live 2026-07-08 (run-260708-2010-5sor): a
+            # single `spawn:` outbox dispatch produced 4 concurrent
+            # duplicate children (run-260708-2017-{zzc1,tgvx,a2kn,i8x6}),
+            # each its own worktree, all working the same event —
+            # exactly bounded by the pool width of the day, which is what
+            # gave the bug away. Filter by event id against both the
+            # active set and events already selected earlier in this tick.
             active_spawn_ids = {
                 spawn["event"].get("id") for spawn in active_spawns
             }
@@ -16479,5 +16497,14 @@ def start(
         if runner.kill_active():
             print("[brnrd] shutdown: terminated in-flight runner(s)")
         pool.shutdown(wait=True, cancel_futures=False)
+        # Strands live on their own executors (quota admission has no fixed
+        # width to size a shared pool with), so draining ``pool`` no longer
+        # drains them. Join them here explicitly: `concurrent.futures`' atexit
+        # hook would eventually do it, but silently and *after* this function
+        # has already printed "daemon stopped" and cleared the pid file.
+        for spawn in active_spawns:
+            spawn_executor = spawn.get("executor")
+            if spawn_executor is not None:
+                spawn_executor.shutdown(wait=True, cancel_futures=False)
         _clear_pid(brr_dir)
         print("[brnrd] daemon stopped")

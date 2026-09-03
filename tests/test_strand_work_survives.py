@@ -491,3 +491,79 @@ def test_a_bolt_ignores_a_stopped_child_control():
         parent, cut_verb.CutDeclaration(),
         pending_events=[], repo_root=None, outbox_dir=None,
     ) == []
+
+
+# ── half 6: a *submitted* strand is still live (the submit/linger slice) ──
+#
+# `submit: true` gives a strand a way to hand its produce to its parent
+# without ending: the daemon emits `spawn_submitted`, marks the control
+# `submitted`, and leaves the child alive on `brnrd await` so a `to:` can
+# still steer it. That is exactly the state a reader is most tempted to
+# misfile as "finished" — the parent has the branch, the report and a
+# completion-shaped event in hand, and nothing on the surface says the child
+# is still holding a worktree. These two pin the reading the decision names:
+# submitted is *unreleased*, and unreleased is live.
+
+
+def _register_submitted_child(event_id, parent_run_id, *, child_run_id):
+    _register_live_child(event_id, parent_run_id, child_run_id=child_run_id)
+    with daemon._run_controls_lock:
+        control = daemon._run_controls[event_id]
+        control["submitted"] = True
+        control["submit_generation"] = 1
+        control["submitted_produce"] = {
+            "spawn_status": "submitted",
+            "spawn_published_branch": "brr/submitted-work",
+            "spawn_report_path": "/tmp/brr-reports/submitted.md",
+            "spawn_report_found": True,
+            "spawn_submit_generation": 1,
+        }
+
+
+def test_a_bolt_bounces_on_a_submitted_but_unreleased_strand():
+    """The parent holds the produce and the child is still burning a
+    worktree. `stop:` is what releases it; a bolt that mentions neither
+    leaves a live strand behind, so the #1197 check must still fire —
+    `submitted` is a review state on a *running* child, not a terminal one."""
+    parent = Run(id="run-submit-parent", event_id="evt-p", body="", env="host")
+    _register_submitted_child(
+        "evt-submit-child", parent.id, child_run_id="run-submit-child",
+    )
+    rows = daemon._owned_child_controls(parent.id)
+    assert [row.get("status") for row in rows] == ["submitted"], (
+        "a submitted child must still project as an owned live child, "
+        "labelled — or this test would pass vacuously"
+    )
+
+    found = daemon._cut_mismatches(
+        parent, cut_verb.CutDeclaration(),
+        pending_events=[], repo_root=None, outbox_dir=None,
+    )
+
+    assert any(
+        "run-submit-child" in m and "undispositioned" in m for m in found
+    )
+
+
+def test_a_bolt_accepts_a_declared_disposition_for_a_submitted_strand():
+    """The check forces the declaration, not the release — same rule the live
+    half already lives by. A parent that says "reviewed, releasing next wake"
+    has named the handoff, which is all the bolt ever asks for; holding the
+    cut hostage to a `stop:` would be a stricter rule than #1147 allows."""
+    parent = Run(id="run-submit-parent", event_id="evt-p", body="", env="host")
+    _register_submitted_child(
+        "evt-submit-child", parent.id, child_run_id="run-submit-child",
+    )
+
+    declared = cut_verb.CutDeclaration(
+        strands=(
+            cut_verb.StrandDisposition(
+                run="run-submit-child",
+                disposition="submitted — produce read, released next wake",
+            ),
+        ),
+    )
+
+    assert daemon._cut_mismatches(
+        parent, declared, pending_events=[], repo_root=None, outbox_dir=None,
+    ) == []

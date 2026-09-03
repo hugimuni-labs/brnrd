@@ -6978,79 +6978,85 @@ def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
     assert watcher.calls >= 2
 
 
-def test_max_concurrent_spawns_config_parsing():
-    """``spawn.max_concurrent`` generalizes the old spawn cap-of-1 to a
-    small configurable pool (kb/design-multi-workstream-concurrency.md
-    'Ranked moves' #1; maintainer call 2026-07-08: 'set the concurrency to
-    4 or something already'). Default 4; clamped to at least 1 so a
-    misconfigured 0/negative value can't silently wedge every `spawn:`
-    request back into the sequential queue; a non-numeric value falls back
-    to the default rather than crashing the daemon loop.
-    """
-    assert not hasattr(daemon, "_max_concurrent_spawns")
-
-
-# ── #1195 rec 3: a cpu-informed default, opt-in behind `spawn.max_concurrent_auto` ──
+# ── the numeric spawn pool, retired (decision 2026-09-03) ────────────────────
 #
-# The flat default above (4) is pinned by `test_max_concurrent_spawns_config_parsing`
-# as machine-independent — asserted with no `os.cpu_count()` dependency at all. #1195
-# rec 3 asks whether the *default* should instead scale with the box (measured: 5
-# concurrent strands each running a full gate drove a 16-core box to a 15-minute load
-# average of 14.97). Swapping the unset-default itself would break that pinned test on
-# any host whose core count isn't 16 — most CI runners included — so the computed
-# default is wired in as an *opt-in* (`spawn.max_concurrent_auto`), never as a silent
-# change to what `{}` resolves to. See the #1195 rec 3 report section for why this
-# reconciliation was made instead of wiring the formula in as the unconditional
-# default, and the formula itself flagged there as a recommendation, not a decision.
+# `spawn.max_concurrent` (and its #1195 rec 3 companions `_cpu_scaled_max_
+# concurrent_spawns` / `spawn.max_concurrent_auto`) admitted N *runs* without
+# regard to what a run costs. The number was always a proxy for the thing that
+# actually binds — quota — and it was a bad one in both directions: four cheap
+# strands against a full week's budget were refused, one expensive strand
+# against an exhausted one was admitted. Admission now reads the binding quota
+# floor per dispatch (`_spawn_admission_floor`), so there is no width left to
+# configure, and the five tests that used to pin the arithmetic here are gone
+# with the arithmetic — replaced by the one fact that outlives it: the config
+# key is a *logged no-op*, not a silent one, for the release after it stopped
+# meaning anything.
 
 
-def test_cpu_scaled_max_concurrent_spawns_follows_the_recommended_formula(monkeypatch):
-    """`max(2, cpu_count() // 4)` — the formula #1195 rec 3 names as a starting
-    point. Pinned here as what the mechanism computes today; the report leaves
-    the formula itself as a recommendation for the maintainer to confirm."""
+def test_retired_spawn_width_config_is_a_logged_no_op(tmp_path, monkeypatch, capsys):
+    """A `.brr/config` in the wild still carries `spawn.max_concurrent`. It has
+    to stop mattering, but it must not stop *appearing to matter* silently — an
+    operator who set it to 2 deserves to learn from the daemon's own startup
+    line that the number is no longer read, rather than from a strand fleet
+    that ignored it."""
+    assert not hasattr(daemon, "_max_concurrent_spawns")
     assert not hasattr(daemon, "_cpu_scaled_max_concurrent_spawns")
-
-
-def test_cpu_scaled_max_concurrent_spawns_falls_back_when_cpu_count_is_unknown(
-    monkeypatch,
-):
-    """`os.cpu_count()` is documented to return `None` when the count can't be
-    determined (containers with a restricted `/proc`, some sandboxes) — the
-    computed path degrades to the flat constant rather than crashing on
-    `None // 4`."""
     assert not hasattr(daemon, "_MAX_CONCURRENT_SPAWNS_DEFAULT")
+    # And it can no longer be *raised* through the config-change lane either:
+    # proposing a new ceiling for a key nothing reads is a parked decision
+    # about nothing.
+    assert "spawn.max_concurrent" not in daemon._CONFIG_CHANGE_ALLOWED_KEYS
+
+    write_repo_scaffold(tmp_path)
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
+    monkeypatch.setattr(
+        daemon.conf, "load_config", lambda _root: {"spawn.max_concurrent": 2},
+    )
+    monkeypatch.setattr(
+        daemon, "_fire_due_schedules",
+        lambda *_a, **_k: (_ for _ in ()).throw(StopIteration),
+    )
+    monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.01)
+
+    with pytest.raises(StopIteration):
+        daemon.start(tmp_path)
+
+    out = capsys.readouterr().out
+    assert "spawn.max_concurrent is deprecated and ignored" in out
 
 
-def test_max_concurrent_spawns_auto_opt_in_uses_the_cpu_scaled_default(monkeypatch):
-    """Unset + the opt-in flag ⇒ the computed default, not the flat constant —
-    the mechanism rec 3 asks for, reachable without disturbing what `{}}` alone
-    (no opt-in) resolves to."""
-    assert not hasattr(daemon, "_max_concurrent_spawns")
+def test_absent_spawn_width_config_says_nothing(tmp_path, monkeypatch, capsys):
+    """The deprecation line is a fact about *this operator's* config, so a
+    config that never carried the key must not be told it is being ignored."""
+    write_repo_scaffold(tmp_path)
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
+    monkeypatch.setattr(daemon.conf, "load_config", lambda _root: {})
+    monkeypatch.setattr(
+        daemon, "_fire_due_schedules",
+        lambda *_a, **_k: (_ for _ in ()).throw(StopIteration),
+    )
+    monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.01)
 
+    with pytest.raises(StopIteration):
+        daemon.start(tmp_path)
 
-def test_max_concurrent_spawns_explicit_value_always_wins_over_auto(monkeypatch):
-    """"Never overriding an explicit config value" — rec 3's own wording — holds
-    even with the opt-in flag set."""
-    assert not hasattr(daemon, "_max_concurrent_spawns")
-
-
-def test_max_concurrent_spawns_invalid_explicit_value_with_auto_falls_back_to_computed(
-    monkeypatch,
-):
-    """A non-numeric or boolean explicit value is not a deliberate choice —
-    with the opt-in flag set, it degrades to the *computed* default, the same
-    way it degrades to the flat one without the flag."""
-    assert not hasattr(daemon, "_max_concurrent_spawns")
+    assert "spawn.max_concurrent" not in capsys.readouterr().out
 
 
 def test_concurrent_spawn_admission_ignores_legacy_numeric_width(tmp_path, monkeypatch):
-    """Multiple `spawn:` events dispatch up to `spawn.max_concurrent` at
-    once — the old shape allowed exactly one concurrent spawn no matter how
-    many `spawn:` requests were pending; this exercises the generalized
-    pool (kb/design-multi-workstream-concurrency.md 'slice 1') with three
-    candidates against a configured width of 2, asserting the third waits
-    for a slot rather than either queuing sequentially (old behavior) or
-    all three running at once (an unbounded pool).
+    """A clear quota floor admits every pending `spawn:`, whatever the retired
+    `spawn.max_concurrent` says. Ten candidates against a config that still
+    carries a width of 2: all ten run at once. The *count* is the measurement —
+    a cap of 2 and a quota-clear floor are indistinguishable at two candidates,
+    so a half-wired retirement would have passed a smaller version of this test.
     """
     write_repo_scaffold(tmp_path)
 
@@ -7063,7 +7069,7 @@ def test_concurrent_spawn_admission_ignores_legacy_numeric_width(tmp_path, monke
         eid = event["id"]
         with lock:
             running_ids.add(eid)
-            if len(running_ids) >= 3:
+            if len(running_ids) >= 10:
                 started_two.set()
         release.wait(timeout=5)
         with lock:
@@ -7084,8 +7090,8 @@ def test_concurrent_spawn_admission_ignores_legacy_numeric_width(tmp_path, monke
             time.sleep(0.05)
             with lock:
                 snapshot = set(running_ids)
-            assert len(snapshot) == 3, (
-                f"expected all spawns despite legacy width 2, got {snapshot}"
+            assert len(snapshot) == 10, (
+                f"expected all 10 spawns despite legacy width 2, got {snapshot}"
             )
             release.set()
             # Let the freed slots pick up the third candidate and finish
@@ -7107,7 +7113,7 @@ def test_concurrent_spawn_admission_ignores_legacy_numeric_width(tmp_path, monke
     monkeypatch.setattr(daemon, "_fire_due_schedules", fake_fire_due_schedules)
     monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
 
-    for i in range(3):
+    for i in range(10):
         protocol.create_event(
             tmp_path / ".brr" / "inbox", "spawn", f"spawned work {i}",
             spawn_immediate=True, strand=True, environment="worktree",
@@ -7119,14 +7125,164 @@ def test_concurrent_spawn_admission_ignores_legacy_numeric_width(tmp_path, monke
     assert checked.is_set()
 
 
+def _quota_admission_loop(tmp_path, monkeypatch, floors, *, events=1, ticks=6):
+    """Run the daemon loop for a bounded number of ticks with the spawn
+    admission floor driven from *floors* (a list consumed one entry per tick,
+    last entry repeating). Returns the ids of the events a worker actually
+    started, in order.
+
+    Driving the *floor* rather than the quota readings behind it is deliberate:
+    `_spawn_admission_floor`'s own translation of levels → floor is unit-tested
+    above (`test_spawn_admission_uses_binding_quota_floor`); what these tests
+    are about is what the dispatch loop *does* with the answer, and stubbing a
+    whole quota stack to reach that is a mock of the thing under test wearing a
+    fixture's clothes.
+    """
+    write_repo_scaffold(tmp_path)
+    started: list[str] = []
+    tick = {"n": 0}
+
+    def fake_run_worker(event, *_args, **_kwargs):
+        eid = event["id"]
+        # Only the strand dispatches count. The notification events this path
+        # emits (`spawn_queued`) land in the same inbox and are dispatched to
+        # the *parent* as ordinary wakes — real behaviour, not noise, but a
+        # different question from "was the strand admitted".
+        if event.get("spawn_immediate"):
+            started.append(eid)
+        return Run(
+            id=f"task-{eid}", event_id=eid, body="spawned",
+            status="done", meta={"strand": True},
+        )
+
+    def fake_floor(_cfg, _event, _brr_dir, _repo_root):
+        idx = min(tick["n"], len(floors) - 1)
+        return floors[idx]
+
+    def fake_fire_due_schedules(*_a, **_k):
+        tick["n"] += 1
+        if tick["n"] >= ticks:
+            raise StopIteration
+
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
+    monkeypatch.setattr(daemon.conf, "load_config", lambda _root: {})
+    monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
+    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
+    monkeypatch.setattr(daemon, "_notify_spawn_parent", lambda *_a, **_k: None)
+    monkeypatch.setattr(daemon, "_spawn_admission_floor", fake_floor)
+    monkeypatch.setattr(daemon, "_fire_due_schedules", fake_fire_due_schedules)
+
+    inbox = tmp_path / ".brr" / "inbox"
+    for i in range(events):
+        protocol.create_event(
+            inbox, "spawn", f"spawned work {i}",
+            spawn_immediate=True, strand=True, environment="worktree",
+            spawn_parent_run_id="run-parent",
+            spawn_parent_conversation_key="cloud:1:",
+        )
+
+    with pytest.raises(StopIteration):
+        daemon.start(tmp_path)
+    return started, inbox
+
+
+def test_critical_quota_floor_refuses_the_spawn_and_tells_the_parent(
+    tmp_path, monkeypatch,
+):
+    """`critical` is a refusal, not a delay: the child never starts, its event
+    is cancelled so no later tick resurrects it, and the parent gets a
+    `refused` notice on its own outbox. Silence here would be the worst arm —
+    a parent that dispatched a strand and heard nothing reads the empty
+    presence row as "still starting" for as long as it cares to wait."""
+    parent_outbox = tmp_path / ".brr" / "outbox" / "evt-parent"
+    parent_outbox.mkdir(parents=True)
+
+    def fake_from_file(_path):
+        return Run(
+            id="run-parent", event_id="evt-parent", body="",
+            meta={"outbox_path": str(parent_outbox)},
+        )
+
+    monkeypatch.setattr(daemon.Run, "from_file", staticmethod(fake_from_file))
+    started, inbox = _quota_admission_loop(
+        tmp_path, monkeypatch, ["critical"], ticks=4,
+    )
+
+    assert started == []
+    notices = daemon._read_outbox_notices(parent_outbox)
+    assert any(
+        n["kind"] == "refused" and "quota floor is critical" in n["text"]
+        for n in notices
+    ), notices
+    assert not [
+        ev for ev in protocol.list_pending(inbox) if ev.get("spawn_immediate")
+    ], "a refused spawn must not stay dispatchable"
+
+
+def test_low_quota_floor_queues_once_then_starts_when_the_floor_clears(
+    tmp_path, monkeypatch,
+):
+    """`low` is FIFO backpressure, not a refusal. The event stays pending, one
+    `spawn_queued` event tells the parent why nothing is happening, and the
+    *next* tick that reads a clear floor starts the child — no re-dispatch by
+    the parent, no second announcement. Re-announcing every tick is the
+    failure mode this shape invites: a strand queued behind a week-long quota
+    dip would otherwise post a queue notice every ten seconds."""
+    started, inbox = _quota_admission_loop(
+        tmp_path, monkeypatch, ["low", "low", None], ticks=6,
+    )
+
+    assert len(started) == 1, "the child must start once the floor clears"
+    # Read every event on disk, not `list_pending`: a `spawn_queued` event is
+    # a wake for the parent, so the loop dispatches and *completes* it in the
+    # same run — filtering by pending status would count zero and pass this
+    # test for the wrong reason if the notice stopped being emitted at all.
+    queued = [
+        ev for ev in (protocol._read_event(f) for f in sorted(inbox.glob("*.md")))
+        if ev and ev.get("source") == "spawn_queued"
+    ]
+    assert len(queued) == 1, f"expected exactly one queue notice, got {queued}"
+    assert queued[0]["spawn_parent_run_id"] == "run-parent"
+
+
+def test_a_submitted_child_never_enters_the_admission_decision(
+    tmp_path, monkeypatch,
+):
+    """A submitted strand is alive and holding a worktree, but it is *done
+    asking for anything* — it is parked on `brnrd await` waiting for its
+    parent. Under the retired numeric pool it still consumed a slot, so a
+    parent reviewing three submitted children could not dispatch a fourth.
+    Admission reads the quota floor and nothing about live children at all,
+    which is what makes that true; this pins it against a future that
+    reintroduces a headcount."""
+    daemon._register_run_control(
+        "evt-submitted", "run-parent", parent_conversation_key="cloud:1:",
+    )
+    daemon._bind_run_control("evt-submitted", "run-submitted")
+    with daemon._run_controls_lock:
+        daemon._run_controls["evt-submitted"]["submitted"] = True
+
+    started, _inbox = _quota_admission_loop(
+        tmp_path, monkeypatch, [None], events=3, ticks=4,
+    )
+
+    assert len(started) == 3
+
+
 def test_concurrent_spawn_reap_surfaces_notify_crash(tmp_path, monkeypatch):
-    """#880 §1 guard: reaping a finished spawn calls ``_notify_spawn_parent``
-    outside any try/except of its own — a real crash there (a bad inbox
-    write, a permissions error) must still release the accepted-spawn slot,
-    or that slot is gone for the rest of the daemon process's life, no
-    restart required to lose it, just one unlucky notify. The exception
-    still propagates (unchanged behavior, out of this task's scope to
-    harden) — only the accounting must not leak."""
+    """Reaping a finished spawn calls ``_notify_spawn_parent`` outside any
+    try/except of its own, and a real crash there (a bad inbox write, a
+    permissions error) propagates out of the daemon loop. Pinned as
+    *unchanged* behaviour across the admission rewrite: #880 §1 grew this test
+    to prove the accepted-spawn slot released anyway, and that accounting is
+    gone with the pool it counted — but the propagation it was written around
+    is not, and a reap path that quietly started swallowing exceptions is a
+    regression nothing else in this file would catch."""
     write_repo_scaffold(tmp_path)
 
     def fake_run_worker(event, *_args, **_kwargs):
@@ -8879,14 +9035,11 @@ def test_write_live_portal_state_coexisting_runs_reflects_presence(tmp_path, mon
 
 
 def test_write_live_portal_state_spawn_pool_counts_quota_queued(tmp_path, monkeypatch):
-    """#880 §1, the regression: a child ``_loop`` has accepted onto the pool
-    (``_spawn_pool_accept``, the same call the submission site makes the
-    instant ``pool.submit`` returns) counts as active *before* it has ever
-    registered presence — the exact dispatch→start window the ticket
-    reports as ~2-3 minutes wide on a saturated pool. Fails on pre-#880
-    code, which derived ``spawn_pool`` from
-    ``presence.list_active(...).is_subspawn`` and therefore read a
-    queued-but-not-started child as zero."""
+    """``queued`` is what a resident reads to learn "my dispatch is real, it
+    is waiting on quota" — the one fact the numeric-headroom projection this
+    replaced could never carry, because a queued spawn was indistinguishable
+    from a slot nobody had claimed. Two spawns deferred by a low floor, both
+    still pending, neither started."""
     brr_dir = tmp_path / ".brr"
     outbox_dir = brr_dir / "outbox" / "evt-1"
     inbox_dir = brr_dir / "inbox"
@@ -8912,8 +9065,7 @@ def test_write_live_portal_state_spawn_pool_counts_quota_queued(tmp_path, monkey
     spawn_pool = payload["resources"]["coexisting_runs"]["spawn_pool"]
     assert spawn_pool == {"floor": None, "queued": 2}
 
-    # Release one (the reap path) — the count drops immediately, still with
-    # no presence entry ever having existed for either child.
+    # One of them finishes — the count drops immediately.
     protocol.set_status({"id": first.stem, "_path": first}, "done")
     daemon._write_live_portal_state(
         outbox_dir, inbox_dir, "evt-1", task, phase="running",
@@ -8926,13 +9078,69 @@ def test_write_live_portal_state_spawn_pool_counts_quota_queued(tmp_path, monkey
     assert spawn_pool == {"floor": None, "queued": 1}
 
 
+def test_write_live_portal_state_spawn_pool_queued_excludes_a_started_spawn(tmp_path):
+    """The regression the projection invited. ``spawn_quota_queued`` is a
+    *once* guard — stamped the tick a low floor defers a spawn, deliberately
+    never cleared, so a spawn that waits three ticks still emits exactly one
+    ``spawn_queued`` event. That makes it useless as a state: ``list_pending``
+    returns ``processing`` events too (a running spawn survives its own
+    ``set_status(..., "processing")`` write), so counting the flag alone
+    reported a child that queued once and has been *running* for an hour as
+    still waiting — and a resident reading ``queued: 1`` while its strand is
+    three commits deep has been told the opposite of what is true.
+
+    Status answers "is it still waiting"; the flag only answers "did it ever
+    wait". Both events below carry the flag; only the pending one is queued."""
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+    task = Run(id="run-self", event_id="evt-1", body="", source="telegram")
+
+    still_waiting = protocol.create_event(
+        inbox_dir, "spawn", "waiting", spawn_immediate=True,
+        spawn_quota_queued=True,
+    )
+    started = protocol.create_event(
+        inbox_dir, "spawn", "running now", spawn_immediate=True,
+        spawn_quota_queued=True,
+    )
+    protocol.set_status({"id": started.stem, "_path": started}, "processing")
+
+    daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running", brr_dir=brr_dir,
+    )
+    payload = json.loads(
+        (outbox_dir / "portal-state.json").read_text(encoding="utf-8")
+    )
+    assert payload["resources"]["coexisting_runs"]["spawn_pool"]["queued"] == 1
+
+    # The once-guard survives on the started event — which is exactly why the
+    # status filter has to exist rather than the flag being cleared on admit.
+    running = protocol._read_event(started)
+    assert running["spawn_quota_queued"] is True
+    assert running["status"] == "processing"
+
+    # The last waiter starting takes the count to zero, not to one.
+    protocol.set_status(
+        {"id": still_waiting.stem, "_path": still_waiting}, "processing",
+    )
+    daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running", brr_dir=brr_dir,
+    )
+    payload = json.loads(
+        (outbox_dir / "portal-state.json").read_text(encoding="utf-8")
+    )
+    assert payload["resources"]["coexisting_runs"]["spawn_pool"]["queued"] == 0
+
+
 def test_write_live_portal_state_spawn_pool_floor_unknown_without_quota(tmp_path, monkeypatch):
-    """An accounting-source failure must render ``active: null`` /
-    ``available: null`` — never a silent zero. Zero and unknown are both
-    live possibilities from a resident's seat (a genuinely idle pool vs. a
-    pool this call site can't assert about), and collapsing "unknown" into
-    "0 active / full headroom" is the same optimistic-direction lie #880
-    reports for the presence-derived read, just moved to a new source."""
+    """No quota measurement ⇒ ``floor: null`` — the absent reading, not a
+    cheerful "clear". Absent and clear are different facts from a resident's
+    seat (nobody has measured yet vs. measured and fine) and both are live on
+    a fresh daemon. Rendering the first as the second is the same
+    optimistic-direction lie the numeric projection told when it reported
+    full headroom off a registry it could not read."""
     brr_dir = tmp_path / ".brr"
     outbox_dir = brr_dir / "outbox" / "evt-1"
     inbox_dir = brr_dir / "inbox"
