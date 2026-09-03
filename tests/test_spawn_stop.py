@@ -272,6 +272,91 @@ class TestStopVerb:
         assert "spawn_adopted" in packet_types
         assert "spawn_stop_requested" in packet_types
 
+
+class TestSubmitVerb:
+    def _drain(self, tmp_path, monkeypatch, *, report=True):
+        brr_dir = tmp_path / ".brr"
+        inbox = brr_dir / "inbox"
+        outbox = brr_dir / "outbox" / "evt-child"
+        inbox.mkdir(parents=True)
+        outbox.mkdir(parents=True)
+        report_path = tmp_path / "report.md"
+        if report:
+            report_path.write_text("receipt\n")
+        (outbox / "submit.md").write_text("---\nsubmit: true\n---\nready\n")
+        daemon._register_run_control(
+            "evt-child", "run-parent", parent_conversation_key="cloud:1:",
+        )
+        daemon._bind_run_control("evt-child", "run-child")
+        monkeypatch.setattr(daemon.gitops, "rev_parse", lambda *_a: "abc123")
+        monkeypatch.setattr(
+            daemon.gitops, "branch_upstream", lambda *_a: "origin/brr/delivered",
+        )
+        monkeypatch.setattr(daemon, "_commits_between", lambda *_a: [])
+        monkeypatch.setattr(daemon.updates, "emit", lambda *_a: None)
+        task = types.SimpleNamespace(
+            id="run-child", event_id="evt-child", conversation_key="cloud:1:",
+            meta={
+                "strand": True,
+                "spawn_parent_run_id": "run-parent",
+                "spawn_parent_conversation_key": "cloud:1:",
+                "spawn_contract_branch": "brr/delivered",
+                "spawn_contract_report": str(report_path),
+            },
+        )
+        emit = daemon._WorkerEmit(brr_dir, "cloud:1:", "evt-child")
+        stats = {}
+        count = daemon._drain_outbox(
+            emit, task, brr_dir / "responses", "evt-child", outbox, inbox,
+            repo_root=tmp_path, stats=stats,
+        )
+        return count, task, inbox, outbox, stats
+
+    def test_submit_attests_produce_and_leaves_child_live(self, tmp_path, monkeypatch):
+        count, task, inbox, _outbox, stats = self._drain(tmp_path, monkeypatch)
+
+        assert count == 1
+        assert stats == {"submit": 1}
+        control = daemon._find_run_control("run-child")
+        assert control["submitted"] is True
+        assert control["stopped"] is False
+        [event] = [
+            ev for ev in protocol.list_pending(inbox)
+            if ev.get("source") == "spawn_submitted"
+        ]
+        assert event["spawn_status"] == "submitted"
+        assert event["spawn_published_branch"] == "brr/delivered"
+        assert event["spawn_report_found"] is True
+        assert event["spawn_submit_generation"] == 1
+
+    def test_missing_report_refuses_without_parent_event(self, tmp_path, monkeypatch):
+        count, _task, inbox, outbox, stats = self._drain(
+            tmp_path, monkeypatch, report=False,
+        )
+
+        assert count == 0
+        assert stats == {}
+        assert not any(
+            ev.get("source") == "spawn_submitted"
+            for ev in protocol.list_pending(inbox)
+        )
+        assert "missing report" in daemon._read_outbox_notices(outbox)[0]["text"]
+
+    def test_resubmit_emits_a_new_generation(self, tmp_path, monkeypatch):
+        _count, task, inbox, outbox, stats = self._drain(tmp_path, monkeypatch)
+        (outbox / "again.md").write_text("---\nsubmit: true\n---\nupdated\n")
+        emit = daemon._WorkerEmit(tmp_path / ".brr", "cloud:1:", "evt-child")
+
+        assert daemon._drain_outbox(
+            emit, task, tmp_path / ".brr" / "responses", "evt-child",
+            outbox, inbox, repo_root=tmp_path, stats=stats,
+        ) == 1
+        submitted = [
+            ev for ev in protocol.list_pending(inbox)
+            if ev.get("source") == "spawn_submitted"
+        ]
+        assert [ev["spawn_submit_generation"] for ev in submitted] == [1, 2]
+
     def test_stop_without_target_is_dropped(self, tmp_path, monkeypatch):
         # Unreachable via the drain (the branch requires a non-empty value);
         # the direct-call guard still refuses cleanly.

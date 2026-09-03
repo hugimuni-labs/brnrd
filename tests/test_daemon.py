@@ -176,6 +176,39 @@ def test_quota_pacing_status_stays_absent_without_measurement():
     assert daemon._quota_pacing_status({}, None) is None
 
 
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [(None, None), ({"floor": None}, None), ({"floor": "low"}, "low"),
+     ({"floor": "critical"}, "critical")],
+)
+def test_spawn_admission_uses_binding_quota_floor(
+    tmp_path, monkeypatch, status, expected,
+):
+    monkeypatch.setattr(daemon, "_collect_levels", lambda *_a, **_k: ({}, True))
+    monkeypatch.setattr(daemon, "_quota_pacing_status", lambda *_a, **_k: status)
+
+    assert daemon._spawn_admission_floor(
+        {}, {"shell": "codex", "core": "gpt"}, tmp_path / ".brr", tmp_path,
+    ) == expected
+
+
+def test_low_quota_emits_spawn_queued_once(tmp_path):
+    inbox = tmp_path / "inbox"
+    event_path = protocol.create_event(
+        inbox, "spawn", "work", spawn_immediate=True,
+        spawn_parent_run_id="run-parent",
+        spawn_parent_conversation_key="cloud:1:",
+    )
+    event = next(ev for ev in protocol.list_pending(inbox) if ev["id"] == event_path.stem)
+
+    daemon._notify_spawn_queued(inbox, event)
+    daemon._notify_spawn_queued(inbox, event)
+
+    queued = [ev for ev in protocol.list_pending(inbox) if ev["source"] == "spawn_queued"]
+    assert len(queued) == 1
+    assert queued[0]["spawn_parent_run_id"] == "run-parent"
+
+
 def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-1")
@@ -6954,12 +6987,7 @@ def test_max_concurrent_spawns_config_parsing():
     request back into the sequential queue; a non-numeric value falls back
     to the default rather than crashing the daemon loop.
     """
-    assert daemon._max_concurrent_spawns({}) == 4
-    assert daemon._max_concurrent_spawns({"spawn.max_concurrent": 2}) == 2
-    assert daemon._max_concurrent_spawns({"spawn.max_concurrent": 0}) == 1
-    assert daemon._max_concurrent_spawns({"spawn.max_concurrent": -3}) == 1
-    assert daemon._max_concurrent_spawns({"spawn.max_concurrent": "bogus"}) == 4
-    assert daemon._max_concurrent_spawns({"spawn.max_concurrent": True}) == 4
+    assert not hasattr(daemon, "_max_concurrent_spawns")
 
 
 # ── #1195 rec 3: a cpu-informed default, opt-in behind `spawn.max_concurrent_auto` ──
@@ -6980,14 +7008,7 @@ def test_cpu_scaled_max_concurrent_spawns_follows_the_recommended_formula(monkey
     """`max(2, cpu_count() // 4)` — the formula #1195 rec 3 names as a starting
     point. Pinned here as what the mechanism computes today; the report leaves
     the formula itself as a recommendation for the maintainer to confirm."""
-    monkeypatch.setattr(daemon.os, "cpu_count", lambda: 16)
-    assert daemon._cpu_scaled_max_concurrent_spawns() == 4
-    monkeypatch.setattr(daemon.os, "cpu_count", lambda: 8)
-    assert daemon._cpu_scaled_max_concurrent_spawns() == 2
-    monkeypatch.setattr(daemon.os, "cpu_count", lambda: 4)
-    assert daemon._cpu_scaled_max_concurrent_spawns() == 2  # floor, not 1
-    monkeypatch.setattr(daemon.os, "cpu_count", lambda: 1)
-    assert daemon._cpu_scaled_max_concurrent_spawns() == 2  # floor, not 0
+    assert not hasattr(daemon, "_cpu_scaled_max_concurrent_spawns")
 
 
 def test_cpu_scaled_max_concurrent_spawns_falls_back_when_cpu_count_is_unknown(
@@ -6997,31 +7018,20 @@ def test_cpu_scaled_max_concurrent_spawns_falls_back_when_cpu_count_is_unknown(
     determined (containers with a restricted `/proc`, some sandboxes) — the
     computed path degrades to the flat constant rather than crashing on
     `None // 4`."""
-    monkeypatch.setattr(daemon.os, "cpu_count", lambda: None)
-    assert daemon._cpu_scaled_max_concurrent_spawns() == daemon._MAX_CONCURRENT_SPAWNS_DEFAULT
+    assert not hasattr(daemon, "_MAX_CONCURRENT_SPAWNS_DEFAULT")
 
 
 def test_max_concurrent_spawns_auto_opt_in_uses_the_cpu_scaled_default(monkeypatch):
     """Unset + the opt-in flag ⇒ the computed default, not the flat constant —
     the mechanism rec 3 asks for, reachable without disturbing what `{}}` alone
     (no opt-in) resolves to."""
-    monkeypatch.setattr(daemon.os, "cpu_count", lambda: 8)
-    assert daemon._max_concurrent_spawns({"spawn.max_concurrent_auto": True}) == 2
-    # The flag alone changes nothing when absent or false — same flat default
-    # `test_max_concurrent_spawns_config_parsing` already pins for `{}`.
-    assert daemon._max_concurrent_spawns({"spawn.max_concurrent_auto": False}) == 4
+    assert not hasattr(daemon, "_max_concurrent_spawns")
 
 
 def test_max_concurrent_spawns_explicit_value_always_wins_over_auto(monkeypatch):
     """"Never overriding an explicit config value" — rec 3's own wording — holds
     even with the opt-in flag set."""
-    monkeypatch.setattr(daemon.os, "cpu_count", lambda: 8)
-    assert (
-        daemon._max_concurrent_spawns(
-            {"spawn.max_concurrent": 6, "spawn.max_concurrent_auto": True}
-        )
-        == 6
-    )
+    assert not hasattr(daemon, "_max_concurrent_spawns")
 
 
 def test_max_concurrent_spawns_invalid_explicit_value_with_auto_falls_back_to_computed(
@@ -7030,16 +7040,10 @@ def test_max_concurrent_spawns_invalid_explicit_value_with_auto_falls_back_to_co
     """A non-numeric or boolean explicit value is not a deliberate choice —
     with the opt-in flag set, it degrades to the *computed* default, the same
     way it degrades to the flat one without the flag."""
-    monkeypatch.setattr(daemon.os, "cpu_count", lambda: 8)
-    assert (
-        daemon._max_concurrent_spawns(
-            {"spawn.max_concurrent": "bogus", "spawn.max_concurrent_auto": True}
-        )
-        == 2
-    )
+    assert not hasattr(daemon, "_max_concurrent_spawns")
 
 
-def test_concurrent_spawn_pool_respects_configured_width(tmp_path, monkeypatch):
+def test_concurrent_spawn_admission_ignores_legacy_numeric_width(tmp_path, monkeypatch):
     """Multiple `spawn:` events dispatch up to `spawn.max_concurrent` at
     once — the old shape allowed exactly one concurrent spawn no matter how
     many `spawn:` requests were pending; this exercises the generalized
@@ -7059,7 +7063,7 @@ def test_concurrent_spawn_pool_respects_configured_width(tmp_path, monkeypatch):
         eid = event["id"]
         with lock:
             running_ids.add(eid)
-            if len(running_ids) >= 2:
+            if len(running_ids) >= 3:
                 started_two.set()
         release.wait(timeout=5)
         with lock:
@@ -7080,8 +7084,8 @@ def test_concurrent_spawn_pool_respects_configured_width(tmp_path, monkeypatch):
             time.sleep(0.05)
             with lock:
                 snapshot = set(running_ids)
-            assert len(snapshot) == 2, (
-                f"expected exactly 2 concurrent at pool width 2, got {snapshot}"
+            assert len(snapshot) == 3, (
+                f"expected all spawns despite legacy width 2, got {snapshot}"
             )
             release.set()
             # Let the freed slots pick up the third candidate and finish
@@ -7115,7 +7119,7 @@ def test_concurrent_spawn_pool_respects_configured_width(tmp_path, monkeypatch):
     assert checked.is_set()
 
 
-def test_concurrent_spawn_pool_releases_slot_when_reap_notify_crashes(tmp_path, monkeypatch):
+def test_concurrent_spawn_reap_surfaces_notify_crash(tmp_path, monkeypatch):
     """#880 §1 guard: reaping a finished spawn calls ``_notify_spawn_parent``
     outside any try/except of its own — a real crash there (a bad inbox
     write, a permissions error) must still release the accepted-spawn slot,
@@ -7124,7 +7128,6 @@ def test_concurrent_spawn_pool_releases_slot_when_reap_notify_crashes(tmp_path, 
     still propagates (unchanged behavior, out of this task's scope to
     harden) — only the accounting must not leak."""
     write_repo_scaffold(tmp_path)
-    monkeypatch.setattr(daemon, "_spawn_pool_accepted", set())
 
     def fake_run_worker(event, *_args, **_kwargs):
         eid = event["id"]
@@ -7157,7 +7160,6 @@ def test_concurrent_spawn_pool_releases_slot_when_reap_notify_crashes(tmp_path, 
     with pytest.raises(RuntimeError, match="notify blew up"):
         daemon.start(tmp_path)
 
-    assert daemon._spawn_pool_accepted_count() == 0
 
 
 def test_concurrent_spawn_does_not_duplicate_dispatch_of_same_event(
@@ -8827,7 +8829,6 @@ def test_write_live_portal_state_coexisting_runs_reflects_presence(tmp_path, mon
     point of the decoupling, covered on its own registry-driven terms by
     ``test_write_live_portal_state_spawn_pool_counts_accepted_not_registered``
     below. Isolated from other tests' registry state via a fresh empty set."""
-    monkeypatch.setattr(daemon, "_spawn_pool_accepted", set())
     brr_dir = tmp_path / ".brr"
     outbox_dir = brr_dir / "outbox" / "evt-1"
     inbox_dir = brr_dir / "inbox"
@@ -8848,9 +8849,7 @@ def test_write_live_portal_state_coexisting_runs_reflects_presence(tmp_path, mon
         outbox_dir, inbox_dir, "evt-1", task, phase="running",
     )
     assert _read_facet()["status"] == "unimplemented"
-    assert _read_facet()["spawn_pool"] == {
-        "max_concurrent": 4, "active": 0, "available": 4,
-    }
+    assert _read_facet()["spawn_pool"] == {"floor": None, "queued": 0}
 
     # brr_dir given, nobody else present → affirmative-absent; spawn_pool
     # unchanged (still nothing accepted).
@@ -8859,9 +8858,7 @@ def test_write_live_portal_state_coexisting_runs_reflects_presence(tmp_path, mon
         brr_dir=brr_dir,
     )
     assert _read_facet()["status"] == "absent"
-    assert _read_facet()["spawn_pool"] == {
-        "max_concurrent": 4, "active": 0, "available": 4,
-    }
+    assert _read_facet()["spawn_pool"] == {"floor": None, "queued": 0}
 
     # A sibling registers itself (a concurrent spawn, an ad-hoc session) →
     # the sibling-list facet goes known, self excluded by run_id — but
@@ -8878,12 +8875,10 @@ def test_write_live_portal_state_coexisting_runs_reflects_presence(tmp_path, mon
     facet = _read_facet()
     assert facet["status"] == "known"
     assert "fix the frontend build" in facet["summary"]
-    assert facet["spawn_pool"] == {
-        "max_concurrent": 4, "active": 0, "available": 4,
-    }
+    assert facet["spawn_pool"] == {"floor": None, "queued": 0}
 
 
-def test_write_live_portal_state_spawn_pool_counts_accepted_not_registered(tmp_path, monkeypatch):
+def test_write_live_portal_state_spawn_pool_counts_quota_queued(tmp_path, monkeypatch):
     """#880 §1, the regression: a child ``_loop`` has accepted onto the pool
     (``_spawn_pool_accept``, the same call the submission site makes the
     instant ``pool.submit`` returns) counts as active *before* it has ever
@@ -8892,18 +8887,20 @@ def test_write_live_portal_state_spawn_pool_counts_accepted_not_registered(tmp_p
     code, which derived ``spawn_pool`` from
     ``presence.list_active(...).is_subspawn`` and therefore read a
     queued-but-not-started child as zero."""
-    monkeypatch.setattr(daemon, "_spawn_pool_accepted", set())
     brr_dir = tmp_path / ".brr"
     outbox_dir = brr_dir / "outbox" / "evt-1"
     inbox_dir = brr_dir / "inbox"
     inbox_dir.mkdir(parents=True, exist_ok=True)
     task = Run(id="run-self", event_id="evt-1", body="", source="telegram")
 
-    # Two children accepted onto the pool — neither has registered presence
-    # (no presence.register call for either), which is exactly the window
-    # between _loop's pool.submit and the child's own _run_worker starting.
-    daemon._spawn_pool_accept("evt-child-1")
-    daemon._spawn_pool_accept("evt-child-2")
+    first = protocol.create_event(
+        inbox_dir, "spawn", "one", spawn_immediate=True,
+        spawn_quota_queued=True,
+    )
+    protocol.create_event(
+        inbox_dir, "spawn", "two", spawn_immediate=True,
+        spawn_quota_queued=True,
+    )
 
     daemon._write_live_portal_state(
         outbox_dir, inbox_dir, "evt-1", task, phase="running",
@@ -8913,11 +8910,11 @@ def test_write_live_portal_state_spawn_pool_counts_accepted_not_registered(tmp_p
         (outbox_dir / "portal-state.json").read_text(encoding="utf-8")
     )
     spawn_pool = payload["resources"]["coexisting_runs"]["spawn_pool"]
-    assert spawn_pool == {"max_concurrent": 4, "active": 2, "available": 2}
+    assert spawn_pool == {"floor": None, "queued": 2}
 
     # Release one (the reap path) — the count drops immediately, still with
     # no presence entry ever having existed for either child.
-    daemon._spawn_pool_release("evt-child-1")
+    protocol.set_status({"id": first.stem, "_path": first}, "done")
     daemon._write_live_portal_state(
         outbox_dir, inbox_dir, "evt-1", task, phase="running",
         brr_dir=brr_dir,
@@ -8926,20 +8923,16 @@ def test_write_live_portal_state_spawn_pool_counts_accepted_not_registered(tmp_p
         (outbox_dir / "portal-state.json").read_text(encoding="utf-8")
     )
     spawn_pool = payload["resources"]["coexisting_runs"]["spawn_pool"]
-    assert spawn_pool == {"max_concurrent": 4, "active": 1, "available": 3}
+    assert spawn_pool == {"floor": None, "queued": 1}
 
 
-def test_write_live_portal_state_spawn_pool_active_unknown_when_registry_unreadable(tmp_path, monkeypatch):
+def test_write_live_portal_state_spawn_pool_floor_unknown_without_quota(tmp_path, monkeypatch):
     """An accounting-source failure must render ``active: null`` /
     ``available: null`` — never a silent zero. Zero and unknown are both
     live possibilities from a resident's seat (a genuinely idle pool vs. a
     pool this call site can't assert about), and collapsing "unknown" into
     "0 active / full headroom" is the same optimistic-direction lie #880
     reports for the presence-derived read, just moved to a new source."""
-    def _boom():
-        raise RuntimeError("registry unreadable")
-
-    monkeypatch.setattr(daemon, "_spawn_pool_accepted_count", _boom)
     brr_dir = tmp_path / ".brr"
     outbox_dir = brr_dir / "outbox" / "evt-1"
     inbox_dir = brr_dir / "inbox"
@@ -8954,7 +8947,7 @@ def test_write_live_portal_state_spawn_pool_active_unknown_when_registry_unreada
         (outbox_dir / "portal-state.json").read_text(encoding="utf-8")
     )
     spawn_pool = payload["resources"]["coexisting_runs"]["spawn_pool"]
-    assert spawn_pool == {"max_concurrent": 4, "active": None, "available": None}
+    assert spawn_pool == {"floor": None, "queued": 0}
 
 
 def test_write_live_portal_state_projects_owned_children_from_run_controls(tmp_path):
