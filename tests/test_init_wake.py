@@ -1438,6 +1438,38 @@ class TestDirectiveGrammar:
         assert state["await"]["resolved"] is True
         assert state["await"]["outcome"] == "event"
 
+    def test_await_with_no_ceiling_arms_and_never_times_out_on_its_own(
+        self, tmp_path,
+    ):
+        """"the seat that stays open": ``timeout: none`` shares
+        ``await_verb.parse_await`` with the daemon's drain, so it now
+        returns ``timeout_seconds=None`` here too.
+
+        Regression: ``_await_projection`` used to do
+        ``float(armed["timeout_seconds"])`` unconditionally, which raised
+        ``TypeError`` the instant a real reader (the daemon's ``brnrd
+        await``) staged this value — the crash a widened shared contract
+        can introduce in a caller nobody touched.
+        """
+        repo = _repo(tmp_path)
+        session = _session(repo, writer=lambda _t: None, reader=lambda: "")
+
+        _write_outbox(
+            session.outbox_dir, "01.md", "---\nawait: true\ntimeout: none\n---\n",
+        )
+        session.drain_once()
+        session.refresh_portals("interview")  # must not raise
+        state = _portal(session.outbox_dir)
+        assert state["await"]["armed"] is True
+        assert state["await"]["resolved"] is False
+        assert state["await"]["timeout_seconds"] is None
+
+        session.post_event("a reply landed", reply_to=session.event_id)
+        session.refresh_portals("interview")
+        state = _portal(session.outbox_dir)
+        assert state["await"]["resolved"] is True
+        assert state["await"]["outcome"] == "event"
+
     def test_await_without_a_timeout_is_dropped_with_a_notice(self, tmp_path):
         repo = _repo(tmp_path)
         session = _session(repo, writer=lambda _t: None, reader=lambda: "")

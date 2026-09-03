@@ -34,14 +34,17 @@ So the grammar collapsed to what cannot be got wrong:
 The asymmetry is the whole design: **omitting the file gives you the correct
 default**, where omitting a ``spawn:`` id used to give you a broken wait.
 
-Everything a caller supplies is now optional except the ceiling, and
-``brnrd await`` fills that in from the run's own remaining budget. The
-daemon still evaluates on its own heartbeat tick (every
-``daemon._HEARTBEAT_INTERVAL`` seconds, independent of whether the resident
-calls anything at all) — that is what makes this a *listening* wait rather
-than a *sleeping* one — and never ends the run to service one: it holds the
-slot, extending ``.keepalive``, and surfaces the outcome in
-``portal-state.json`` for ``brnrd await``'s own poll.
+Everything a caller supplies is optional, ceiling included: a run with no
+configured budget defaults to ``timeout: none`` — the seat stays open until
+the daemon has something, with no clock of its own. A run with a budget
+still defaults its ceiling from that remaining budget, and an explicit
+``--timeout`` always wins either way. The daemon evaluates on its own
+heartbeat tick (every ``daemon._HEARTBEAT_INTERVAL`` seconds, independent of
+whether the resident calls anything at all) — that is what makes this a
+*listening* wait rather than a *sleeping* one — and never ends the run to
+service one: it holds the slot, extending ``.keepalive`` when there is a
+deadline to outlast, and surfaces the outcome in ``portal-state.json`` for
+``brnrd await``'s own poll.
 """
 
 from __future__ import annotations
@@ -68,6 +71,16 @@ CONDITIONS_RETIRED = (
 )
 
 
+#: Values of the ``timeout:`` key that mean "no ceiling — the seat stays
+#: open until the next pending event (or a configured hard-cap deadline)."
+#: Only an explicit ``none`` opens this; a *missing* key stays refused below
+#: — an omission is not a decision, and the earlier sentence here ("a wait
+#: with no ceiling is a hang") was only ever true of an unreachable one. This
+#: wait resolves on any pending event on every heartbeat, and a configured
+#: hard cap still bounds it when one exists.
+_NO_CEILING_VALUES = {"none", "null"}
+
+
 def parse_await(
     fm: dict[str, Any],
 ) -> tuple[str | None, float | None, str | None]:
@@ -75,9 +88,12 @@ def parse_await(
 
     Returns ``(file_path, timeout_seconds, error)``. On any refusal *error*
     is a one-line reason meant for a notice and the first two values are
-    ``None``. On success *error* is ``None``, *timeout_seconds* is positive,
-    and *file_path* is the optional composing trigger (``None`` when the
-    caller named none — the ordinary case, and the one the prose teaches).
+    ``None``. On success *error* is ``None``, *file_path* is the optional
+    composing trigger (``None`` when the caller named none — the ordinary
+    case, and the one the prose teaches), and *timeout_seconds* is either a
+    positive ceiling or ``None`` — an explicit ``timeout: none``, meaning the
+    seat stays open: this wait resolves only on a pending event or a
+    configured hard-cap deadline, never on a clock of its own.
     """
     marker = str(fm.get("await") or "").strip()
     if marker.lower() not in _MARKER_VALUES:
@@ -85,7 +101,12 @@ def parse_await(
 
     raw_timeout = str(fm.get("timeout") or "").strip()
     if not raw_timeout:
-        return None, None, "timeout: is required — a wait with no ceiling is a hang"
+        return None, None, "timeout: is required — write `timeout: none` for no ceiling"
+    if raw_timeout.lower() in _NO_CEILING_VALUES:
+        raw_file = str(fm.get("file") or "").strip()
+        if raw_file.startswith("file:"):
+            return None, None, CONDITIONS_RETIRED
+        return (raw_file or None), None, None
     timeout_seconds = schedule_mod.parse_duration(raw_timeout)
     if timeout_seconds is None:
         return None, None, f"timeout: {raw_timeout!r} is not a parseable duration"

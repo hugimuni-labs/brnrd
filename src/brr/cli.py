@@ -908,7 +908,9 @@ def build_parser() -> argparse.ArgumentParser:
     await_p.add_argument(
         "--timeout", default=None, metavar="DURATION",
         help="ceiling on the wait (30m, 1h30m, or seconds); default: this "
-             "run's own remaining budget")
+             "run's own remaining budget, or no ceiling at all when no "
+             "budget is configured — the seat stays open until the next "
+             "reply")
     await_p.add_argument(
         "--file", default=None, metavar="PATH",
         help="also resolve when this path appears — an extra trigger for "
@@ -4575,24 +4577,27 @@ _AWAIT_SLICE_CEILING_SECONDS = 480.0
 #: round trip.
 _AWAIT_POLL_INTERVAL_SECONDS = 1.0
 
-#: The ceiling used when the run's remaining budget can't be read at all
-#: (an ad-hoc ``--outbox`` caller, a portal-state file without a budget
-#: block). Deliberately finite: a wait with no ceiling is a hang.
-_AWAIT_FALLBACK_TIMEOUT_SECONDS = 1800.0
-
 #: Floor for the budget-derived default, so a run in its last seconds still
 #: arms something the daemon can evaluate at least once.
 _AWAIT_MIN_TIMEOUT_SECONDS = 30.0
 
 
-def _await_default_timeout(payload: dict) -> float:
-    """The run's own remaining budget, as the default ceiling.
+def _await_default_timeout(payload: dict) -> float | None:
+    """The run's own remaining budget, as the default ceiling — or ``None``.
 
     The daemon already knows how long this run has left; asking the resident
     to restate it is the same mistake ``spawn:<id>`` was — enumerating what
     the daemon already tracks. The daemon caps the arming again on its side
     against the hard budget ceiling (and says so via an ``advisory`` notice),
     so this is a default, not a promise.
+
+    No readable budget (an ad-hoc ``--outbox`` caller, a portal-state file
+    without a budget block, or simply a run with no configured
+    ``runner.timeout_seconds`` — this account's own case) used to fall back
+    to a fixed 30-minute ceiling on the theory that "a wait with no ceiling
+    is a hang." It isn't: this wait resolves on any pending event on every
+    heartbeat, and a configured hard cap still bounds it when one exists.
+    No budget to default from ⇒ no ceiling — the seat stays open.
     """
     budget = payload.get("budget") if isinstance(payload.get("budget"), dict) else {}
     total = budget.get("budget_seconds")
@@ -4600,12 +4605,12 @@ def _await_default_timeout(payload: dict) -> float:
     try:
         remaining = float(total) - float(elapsed)
     except (TypeError, ValueError):
-        return _AWAIT_FALLBACK_TIMEOUT_SECONDS
+        return None
     return max(_AWAIT_MIN_TIMEOUT_SECONDS, remaining)
 
 
 def _await_continued_timeout(previous: dict) -> float | None:
-    """Seconds left on a *standing* arming, or ``None`` when there isn't one.
+    """Seconds left on a *standing* arming — or ``None``.
 
     ``pending`` is this **call's** ceiling, never the wait's: the daemon's
     arming is still up, with its own deadline, and *call again* continues the
@@ -4620,6 +4625,21 @@ def _await_continued_timeout(previous: dict) -> float | None:
     tracked — it is in ``portal-state.json`` before this process starts. An
     explicit ``--timeout`` still wins: that is the caller deliberately
     re-arming, which is a different act from continuing.
+
+    ``None`` here means "nothing to continue" — no standing arming, an
+    already-resolved one, or a deadline that has quietly expired without
+    the daemon marking it resolved yet — and the caller's own ``or``
+    fallback to the budget-derived default is correct for all three: there
+    is genuinely nothing standing worth continuing.
+
+    A standing arming with an **explicit no-deadline** (a prior
+    ``timeout: none``) is a fourth case, and it is *not* handled here:
+    ``cmd_await`` intercepts it before ever calling this function, because
+    only the call site has enough context (the standing-arming check itself)
+    to tell "no deadline because open-ended" apart from "no deadline because
+    nothing is standing" — the two things this function's own ``None``
+    cannot distinguish. Falling through to the default for an open-ended
+    wait would silently put a ceiling back on it every re-call.
     """
     if not previous.get("armed") or previous.get("resolved"):
         return None
@@ -4725,9 +4745,24 @@ def cmd_await(args):
                 file=sys.stderr,
             )
             return 1
+    elif (
+        previous.get("armed")
+        and not previous.get("resolved")
+        and previous.get("deadline") is None
+    ):
+        # A standing, unresolved arming with an explicit *no* deadline (a
+        # prior `timeout: none`) — continues open. Checked before the
+        # `_await_continued_timeout` fallback below because that function's
+        # own `None` is ambiguous (no standing arming at all vs. one with no
+        # deadline); only *this* call site holds enough context — the
+        # standing-arming check itself — to tell the two apart, so it must
+        # decide here rather than falling through to a budget re-derivation
+        # that would silently put a ceiling back on an open-ended wait.
+        timeout_seconds = None
     else:
         # A bare re-call *continues* the standing vigil at its own deadline;
-        # only a first call falls through to the budget-derived default.
+        # nothing standing (or nothing left of it — resolved, absent, or an
+        # expired deadline) falls through to the budget-derived default.
         timeout_seconds = (
             _await_continued_timeout(previous) or _await_default_timeout(payload)
         )

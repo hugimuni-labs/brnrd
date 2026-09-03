@@ -144,7 +144,7 @@ brnrd await [--timeout <duration>] [--file <path>] [--json]
 no positional arguments · no condition flags · `brnrd await`, bare, is the whole shape: hold this run until the daemon has something for me
 a message · a dispatched child finishing · a schedule firing — all reach a run as pending events ⇒ all resolve the wait without being named
 
-`--timeout` = the ceiling · default = this run's own remaining budget (the daemon knows it; restating it is the mistake `spawn:<id>` was) · the daemon caps the arming against the hard budget ceiling and says so as an `advisory` notice
+`--timeout` = the ceiling · default = this run's own remaining budget (the daemon knows it; restating it is the mistake `spawn:<id>` was) · **no configured budget ⇒ no ceiling: the seat stays open**, resolved only by a pending event · a configured hard cap still bounds it, named in an `advisory` notice · wire form `timeout: none`; a missing `timeout:` stays refused
 `--file <path>` = also resolve when that path appears · a footnote for the one thing the daemon cannot observe (an external CI run · a human dropping a file) · adds a trigger · never narrows the wait to only that file
 `--json` = the outcome as JSON
 
@@ -163,15 +163,15 @@ outcome ⇒ `portal-state.json` → `await`:
 `resolved` flips true on exactly one of three — never silence
 `"event"` the daemon has something pending for you
 `"condition"` the optional `--file` path appeared · `which` names it · pending events outrank it deliberately — when both would fire, the correspondent is the answer
-`"timeout"` the deadline passed with nothing else firing
+`"timeout"` the deadline passed with nothing else firing — an open-ended wait has no deadline unless a hard cap gives it one
 
 a call reaching its own ceiling first ⇒ `{"outcome": "pending"}` · call again is the entire instruction · that ceiling ≠ a brnrd contract ≠ a number to reason about — what bounds one call is the Shell's per-tool-call cap (claude's Bash ends at 10 minutes; codex differs) and the CLI sits under it · the old 15s bound is gone with the argument that justified it — the only things that would want to interrupt this run are the very things that resolve the wait ⇒ a blocking call returns the moment one arrives
 
-`.keepalive` is extended for you, to the timeout deadline (never shortened below one you wrote yourself) — no separate keepalive write on top of the wait
+`.keepalive` is extended for you, to the timeout deadline (never shortened below one you wrote yourself) — no separate keepalive write on top of the wait · no deadline ⇒ nothing to extend
 
 strands arm this too · the old refusal reasoned about the wrong slot: a strand does not spend the resident's single-flight slot — it occupies one in the spawn pool (`spawn.max_concurrent`) and already holds it by existing · refusing left a strand blocked on a subprocess with nothing but a shell sleep loop — the exact boundary-free stretch this verb ends, forced by rule onto the runs least able to recover from it
 
-under the porcelain = one outbox directive (`await: true` + `timeout:` · optional `file:`) · `brnrd await` stages it for you
+under the porcelain = one outbox directive (`await: true` + `timeout:` — a duration or `none` · optional `file:`) · `brnrd await` stages it for you
 a directive still carrying v1's conditions ⇒ refused with a notice naming `brnrd await` — never silently, never by ignoring the extra terms · malformed input (no `timeout:`) ⇒ `notices`, same as any other verb
 `await:` never ends the run to service a wait — it holds the slot, the way `.keepalive` always has
 

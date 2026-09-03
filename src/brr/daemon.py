@@ -6313,26 +6313,42 @@ def _resolve_await_state(
         }
 
     now = time.time()
-    requested_deadline = float(armed["armed_at"]) + float(armed["timeout_seconds"])
+    raw_timeout = armed.get("timeout_seconds")
+    # `None` = an explicit `timeout: none` — the seat stays open: no clock
+    # of its own, resolved only by a pending event or (below) a configured
+    # hard-cap deadline.
+    requested_deadline = (
+        None if raw_timeout is None
+        else float(armed["armed_at"]) + float(raw_timeout)
+    )
     effective_deadline = requested_deadline
     if hard_cap_seconds is not None and start_monotonic is not None:
         remaining_hard = (start_monotonic + hard_cap_seconds) - time.monotonic()
         max_deadline = now + max(remaining_hard, 0.0)
-        if requested_deadline > max_deadline:
+        if requested_deadline is None or requested_deadline > max_deadline:
             effective_deadline = max_deadline
             if not armed.get("capped"):
                 armed["capped"] = True
+                requested_text = (
+                    "no ceiling" if requested_deadline is None
+                    else _iso_utc(requested_deadline)
+                )
                 _record_outbox_notice(
                     outbox_dir,
                     "await capped: the requested timeout would outlive this "
                     f"run's remaining budget ceiling — armed until "
                     f"{_iso_utc(effective_deadline)} instead of "
-                    f"{_iso_utc(requested_deadline)}.",
+                    f"{requested_text}.",
                     kind="advisory",
                     lifetime="run",
                 )
 
-    _extend_keepalive(keepalive_path, effective_deadline)
+    # No effective deadline ⇒ no budget this wait could outlive — see
+    # `_budget_exceeded`'s own `if budget_seconds is not None` guard: a run
+    # with no configured `runner.timeout_seconds` never reaches that check
+    # at all, so there is nothing here for the keepalive to extend against.
+    if effective_deadline is not None:
+        _extend_keepalive(keepalive_path, effective_deadline)
 
     # #1327: exclude whatever was already pending at arm time (the
     # snapshot `_drain_outbox` took when this wait was staged) — a
@@ -6347,7 +6363,7 @@ def _resolve_await_state(
         if armed_pending_ids else pending_events
     )
     outcome, which = await_verb.evaluate(armed.get("file"), fresh_events)
-    if outcome is None and now >= effective_deadline:
+    if outcome is None and effective_deadline is not None and now >= effective_deadline:
         outcome = "timeout"
         which = None
 
@@ -6357,7 +6373,7 @@ def _resolve_await_state(
         "armed_at": _iso_utc(float(armed["armed_at"])),
         "generation": armed.get("generation"),
         "timeout_seconds": armed.get("timeout_seconds"),
-        "deadline": _iso_utc(effective_deadline),
+        "deadline": _iso_utc(effective_deadline) if effective_deadline is not None else None,
         "capped": bool(armed.get("capped")),
         "resolved": outcome is not None,
     }
