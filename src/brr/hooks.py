@@ -3797,9 +3797,10 @@ def _linger_closeout_clause(ctx: "HookContext") -> str | None:
     )
     return (
         f"{state}. A cloud conversation lingers by default: deliver first, "
-        "run `brnrd await --timeout 30m`, and close only after that horizon "
-        "resolves quiet. If stopping now is deliberate, write the reason as "
-        f"the first line of `{portals.LINGER_OPT_OUT_NAME}`"
+        "run `brnrd await` — hold until the next reply; close only when a "
+        "wait resolves quiet at a configured horizon or the correspondent "
+        "ends the conversation. If stopping now is deliberate, write the "
+        f"reason as the first line of `{portals.LINGER_OPT_OUT_NAME}`"
     )
 
 
