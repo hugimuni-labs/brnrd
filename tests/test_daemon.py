@@ -13,6 +13,7 @@ import pytest
 from brr import daemon, envs, news_lane, presence, promises, protocol, release_availability
 from brr import runner_failures
 from brr import schedule as schedule_mod
+from brr import worktree
 from brr.run import Run
 from brr.runner import RunnerResult
 
@@ -13357,6 +13358,59 @@ def test_drain_outbox_cut_produce_survives_mid_run_branch_rename(tmp_path):
         tmp_path, "---\ncut: true\nproduce: attested\n---\nDone.\n",
         meta=meta,
         repo_root=repo_root,
+    )
+
+    assert promoted == 1
+    assert daemon._read_outbox_notices(outbox) == []
+
+
+def test_drain_outbox_cut_produce_scoped_to_clone_strands_own_branch(tmp_path):
+    """#1776: a strand isolated into its own ``create_clone`` (own ``.git``,
+    ``worktree_kind: "clone"``) must have its produce attested against its
+    own clone, not whatever branch the shared host checkout happens to be
+    on. Before the fix, the bolt's produce check (``_cut_mismatches`` →
+    ``relics.collection_scope(task.meta, repo_root)``) probed *repo_root*'s
+    own HEAD and silently substituted the host's unrelated current branch
+    for the clone's real one — the bench strand (run-260903-1057-pusm) hit
+    exactly this and worked around it by omitting ``produce:`` entirely.
+    Companion to ``test_drain_outbox_cut_produce_survives_mid_run_branch_
+    rename`` above (#1293, the linked-worktree shape); this one is the
+    ``create_clone`` shape (#746)."""
+    host = tmp_path / "host"
+    init_git_repo(host)
+    commit_files(host, {"a.txt": "1"}, message="seed")
+
+    clone, _placeholder_branch = worktree.create_clone(
+        host, "run-clone-strand", base_ref="main",
+    )
+    subprocess.run(
+        ["git", "checkout", "-b", "brr/the-work"], cwd=clone, check=True,
+    )
+    commit_files(clone, {"b.txt": "2"}, message="the strand's work")
+
+    # The shared host checkout this strand never touched moves to an
+    # unrelated branch meanwhile — daemon housekeeping, a concurrent run,
+    # a human. Reading *its* HEAD must never stand in for the clone's own.
+    subprocess.run(
+        ["git", "checkout", "-b", "boot-lobotomy"], cwd=host, check=True,
+    )
+
+    meta = {
+        "branch_name": "brr/the-work",
+        "seed_ref": "main",
+        "worktree_path": str(clone),
+        "worktree_kind": "clone",
+    }
+
+    # Sanity: the old call shape (probing repo_root directly) really does
+    # get the wrong branch — pins the defect this test guards against.
+    stale_branch, _stale_seed = daemon.relics.collection_scope(meta, host)
+    assert stale_branch == "boot-lobotomy"
+
+    promoted, task, outbox, _inbox, _responses, _event_id = _drain_cut(
+        tmp_path, "---\ncut: true\nproduce: attested\n---\nDone.\n",
+        meta=meta,
+        repo_root=host,
     )
 
     assert promoted == 1

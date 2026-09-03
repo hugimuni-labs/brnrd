@@ -658,6 +658,89 @@ def test_collection_scope_without_work_dir_is_meta_only():
     assert relics.collection_scope({}, None) == (None, None)
 
 
+# ── scope_roots: the repo_root vs. the run's own tree (#1776) ──────────
+
+
+def _clone_shared(repo_root: Path, dest: Path, *, base_ref: str = "main") -> None:
+    """A minimal stand-in for ``worktree.create_clone`` — own ``.git``, no
+    checked-out branch namespace shared with *repo_root* — without pulling
+    the ``worktree`` module (and its ``.brr/worktrees`` side effects) into
+    this unit test. ``daemon.py``'s own machinery is exercised end to end
+    by ``test_drain_outbox_cut_produce_scoped_to_clone_strands_own_branch``
+    in ``test_daemon.py``; this file stays focused on :mod:`relics` alone.
+    """
+    subprocess.run(
+        ["git", "clone", "-q", "--shared", "-b", base_ref, str(repo_root), str(dest)],
+        check=True, capture_output=True,
+    )
+
+
+def test_scope_roots_clone_strand_reads_its_own_tree_while_it_exists(tmp_path: Path):
+    """#1776: a create_clone strand's own tree, while it still exists (the
+    shape every mid-run/bolt check sees — teardown happens only at
+    ``WorktreeEnv.finalize``, well after), is what collection_scope must
+    probe — never the shared host checkout, whose HEAD has nothing to do
+    with this run."""
+    host = tmp_path / "host"
+    init_git_repo(host)
+    commit_files(host, {"a.txt": "1"}, message="seed")
+    clone = tmp_path / "clone"
+    _clone_shared(host, clone)
+    subprocess.run(["git", "checkout", "-b", "brr/the-work"], cwd=clone, check=True)
+    commit_files(clone, {"b.txt": "2"}, message="clone work")
+    # The host checkout drifts to an unrelated branch meanwhile.
+    subprocess.run(["git", "checkout", "-b", "boot-lobotomy"], cwd=host, check=True)
+
+    meta = {
+        "branch_name": "brr/the-work", "seed_ref": "main",
+        "worktree_path": str(clone),
+    }
+    probe_root, collect_root = relics.scope_roots(meta, host)
+    assert probe_root == clone
+    assert collect_root == clone
+
+    branch, seed = relics.collection_scope(meta, probe_root)
+    assert (branch, seed) == ("brr/the-work", "main")
+    records = relics.collect(collect_root, branch=branch, seed_ref=seed, outbox_dir=None)
+    assert [r["subject"] for r in records if r["kind"] == "commit"] == ["clone work"]
+
+
+def test_scope_roots_torn_down_clone_trusts_settled_branch_name(tmp_path: Path):
+    """Once ``WorktreeEnv.finalize`` has torn the clone down (the common
+    closeout shape — ``worktree.remove_clone``, after landing the publish
+    branch into repo_root as a local ref), there is nothing left to probe:
+    scope_roots must not fall back to reading repo_root's own HEAD (#1776),
+    only to collecting against it once the branch name is known."""
+    host = tmp_path / "host"
+    init_git_repo(host)
+    commit_files(host, {"a.txt": "1"}, message="seed")
+    # The clone existed once; its directory is gone by the time this runs.
+    meta = {
+        "branch_name": "brr/the-work", "seed_ref": "main",
+        "worktree_path": str(tmp_path / "clone-already-removed"),
+    }
+    probe_root, collect_root = relics.scope_roots(meta, host)
+    assert probe_root is None
+    assert collect_root == host
+
+    # No live probe fires — meta's already-settled branch_name passes
+    # through untouched, regardless of what branch the host is on.
+    subprocess.run(["git", "checkout", "-b", "boot-lobotomy"], cwd=host, check=True)
+    branch, seed = relics.collection_scope(meta, probe_root)
+    assert (branch, seed) == ("brr/the-work", "main")
+
+
+def test_scope_roots_host_run_is_unchanged(tmp_path: Path):
+    """A host run has no isolated tree of its own — both roots stay
+    *repo_root*, exactly today's behaviour."""
+    assert relics.scope_roots({}, tmp_path) == (tmp_path, tmp_path)
+    assert relics.scope_roots({"seed_ref": "main"}, tmp_path) == (tmp_path, tmp_path)
+
+
+def test_scope_roots_no_repo_root_is_meta_only():
+    assert relics.scope_roots({"worktree_path": "/x"}, None) == (None, None)
+
+
 # ── run-identity filtering of the shared-checkout window (#575) ────────
 
 
