@@ -1,0 +1,25 @@
+# Trivial smoke scenario: a haiku run finishes this in well under 5
+# minutes against the default sandbox scaffold. Exercises the same row
+# set as `make-brnrd-visible.yaml` (reply, face, one steer, one
+# follow-up/fold, ask completion, bolt) at the smallest scale that still
+# forces every seam to fire at least once — used by the CLI-wiring tests
+# (never dispatched for real there; see tests/test_bench_boot.py).
+
+ask: >
+  Create a file called hello.md with exactly one line: "hello from the
+  boot bench". Commit it.
+
+steers:
+  - after_boundary: 1
+    text: >
+      Also add a second line to hello.md: "steer received".
+
+follow_up:
+  after_boundary: 2
+  text: >
+    One more line: "follow-up received". Then commit again and cut a bolt.
+
+done_when:
+  file_contains:
+    path: hello.md
+    needle: "hello from the boot bench"
