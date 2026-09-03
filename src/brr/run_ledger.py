@@ -240,10 +240,22 @@ def build_closed_run_row(
     # needs a run-identity filter (#575) — a worktree run's own isolated
     # branch (``branch_name`` set) needs none, since no sibling can land a
     # commit there.
-    relic_branch, relic_seed = relics.collection_scope(task.meta, work_dir)
+    #
+    # ``work_dir`` here is the *repo_root* anchor, not necessarily the tree
+    # to read: an isolated run (strand worktree or ``create_clone``) has its
+    # own tree, and reading *repo_root*'s live branch instead silently
+    # substitutes whatever the shared checkout happens to be on (#1776).
+    # relics.scope_roots resolves the pair this closeout actually needs —
+    # the run's own tree while it's still there, *repo_root* once
+    # ``WorktreeEnv.finalize`` has torn it down (a clone's branch is landed
+    # into *repo_root* as a local ref before that happens, so reading it
+    # there afterward is still faithful; only the *live* branch probe,
+    # inside collection_scope, must never fall back to *repo_root*).
+    probe_root, collect_root = relics.scope_roots(task.meta, work_dir)
+    relic_branch, relic_seed = relics.collection_scope(task.meta, probe_root)
     commit_run_id = task.id if not task.meta.get("branch_name") else None
     collected_relics = relics.collect(
-        work_dir,
+        collect_root,
         branch=relic_branch,
         seed_ref=relic_seed,
         outbox_dir=outbox_dir,

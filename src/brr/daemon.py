@@ -8992,11 +8992,12 @@ def _cut_mismatches(
 
     # ── produce, and the shipped counts owed needs too ──────────────
     relics_list: list[dict[str, Any]] | None = None
-    if repo_root is not None:
-        live_branch, live_seed = relics.collection_scope(task.meta, Path(repo_root))
+    probe_root, collect_root = relics.scope_roots(task.meta, repo_root)
+    if collect_root is not None:
+        live_branch, live_seed = relics.collection_scope(task.meta, probe_root)
         commit_run_id = task.id if not task.meta.get("branch_name") else None
         relics_list = relics.collect(
-            Path(repo_root), branch=live_branch, seed_ref=live_seed,
+            collect_root, branch=live_branch, seed_ref=live_seed,
             outbox_dir=outbox_dir, commit_run_id=commit_run_id,
         )
         if declaration.produce == "none" and relics_list:
@@ -12782,24 +12783,30 @@ def _weld_capture(
 
     The relic list is collected with exactly the ledger row's scope
     (``collection_scope`` + the #575 host-run identity gate) so the refs
-    landed here and the row's ``external_refs`` are one accounting. The
-    layer-file edit is working-tree only: ``_capture_dominion`` commits the
-    account home right after this in the same finalize, so the surface
-    change rides the existing capture net.
+    landed here and the row's ``external_refs`` are one accounting.
+    ``work_dir`` — despite the name, kept for caller symmetry with the
+    ledger call this mirrors — is the *repo_root* anchor
+    :func:`relics.scope_roots` resolves from (#1776), not the tree read
+    directly: an isolated run's own worktree/clone while it's still there,
+    the shared checkout otherwise. The layer-file edit is working-tree
+    only: ``_capture_dominion`` commits the account home right after this
+    in the same finalize, so the surface change rides the existing capture
+    net.
     """
     layers_root = weld.warp_dir(account_context)
     if layers_root is None:
         return
-    branch, seed = relics.collection_scope(task.meta, work_dir)
+    probe_root, collect_root = relics.scope_roots(task.meta, work_dir)
+    branch, seed = relics.collection_scope(task.meta, probe_root)
     commit_run_id = task.id if not task.meta.get("branch_name") else None
     records = relics.collect(
-        work_dir,
+        collect_root,
         branch=branch,
         seed_ref=seed,
         outbox_dir=outbox_dir,
         commit_run_id=commit_run_id,
     )
-    origin = relics.forge_links(work_dir).repo_path if work_dir else None
+    origin = relics.forge_links(collect_root).repo_path if collect_root else None
     welded = weld.capture_refs(
         layers_root, records=records, origin_repo=origin,
     )
@@ -13196,13 +13203,17 @@ def _run_state_produce_changed(
     if work_dir is None:
         return False
     try:
-        branch, seed = relics.collection_scope(task.meta, Path(work_dir))
+        # #1776: work_dir is the repo_root anchor, not necessarily the tree
+        # to read — relics.scope_roots resolves which is which (see
+        # run_ledger.build_closed_run_row, the same call this mirrors).
+        probe_root, collect_root = relics.scope_roots(task.meta, Path(work_dir))
+        branch, seed = relics.collection_scope(task.meta, probe_root)
         # See run_ledger.build_closed_run_row: the shared-checkout fallback
         # scope needs a run-identity filter so a sibling's commit never
         # counts as "this node's produce changed" (#575).
         commit_run_id = task.id if not task.meta.get("branch_name") else None
         records = relics.collect(
-            Path(work_dir),
+            collect_root,
             branch=branch,
             seed_ref=seed,
             outbox_dir=outbox_dir,
@@ -13261,10 +13272,13 @@ def _run_state_produce_lines(
     if work_dir is None:
         return _existing_produce_lines(path)
     try:
-        branch, seed = relics.collection_scope(task.meta, Path(work_dir))
+        # #1776: same repo_root-vs-tree-to-read split as
+        # _run_state_produce_changed above.
+        probe_root, collect_root = relics.scope_roots(task.meta, Path(work_dir))
+        branch, seed = relics.collection_scope(task.meta, probe_root)
         commit_run_id = task.id if not task.meta.get("branch_name") else None
         records = relics.collect(
-            Path(work_dir),
+            collect_root,
             branch=branch,
             seed_ref=seed,
             outbox_dir=outbox_dir,
@@ -15380,6 +15394,12 @@ def _run_worker_and_finalize(
             outbox_dir=outbox_path,
             terminal_reply=task.terminal_reply,
         )
+        # #1776: relics.scope_roots (called inside append_closed_run /
+        # _weld_capture / _persist_run_state_doc below) resolves the tree
+        # each actually reads — this run's own worktree/clone while it's
+        # still there, the shared *repo_root* passed here otherwise. Passing
+        # *repo_root* itself stays correct: it's the anchor those callees
+        # resolve from, not (as it used to be) the tree read directly.
         try:
             run_ledger.append_closed_run(
                 repo_root,
