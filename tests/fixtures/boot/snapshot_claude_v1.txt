@@ -1,4 +1,4 @@
-# Boot snapshot — runner: claude — prompt schema v1
+# Boot snapshot — runner: claude — prompt schema v2
 # Captured by the boot replay harness; regenerate with:
 #   BOOT_UPDATE_SNAPSHOTS=1 pytest tests/test_boot_replay.py -v
 # DO NOT EDIT BY HAND — regeneration is the only sanctioned path.
@@ -12,19 +12,30 @@
 # [bytes] / [pct] — figures that are a pure function of that elided prose.
 #   The ledger's arithmetic is pinned by the unit tests, not by here.
 
-brnrd boot · score v1 · depth compact
-body requested: claude-sonnet (claude / claude-sonnet-4-6) · Tier 2 hooks installed · requested from the dashboard spool rack
-host: daemon · worktree · resident-owned
-daemon image: not tracked · no fingerprint captured in this process
-  no AGENTS.md, no committed/home kb: this repo hasn't run `brnrd init` yet. Bounded work only: answer, inspect, or run the setup interview; don't invent a kb location to write into, and don't assume an AGENTS.md convention that isn't there.
+brnrd boot · v2 · depth compact
+
 continuity: ✗ first wake
+
+body: claude/claude-sonnet-4-6 · T2 hooks ✓ · req-origin←dashboard spool rack
+host: daemon · worktree · resident-owned
+image: untracked · fingerprint∅ (none captured in this process)
+  no AGENTS.md, no committed/home kb: this repo hasn't run `brnrd init` yet. Bounded work only: answer, inspect, or run the setup interview; don't invent a kb location to write into, and don't assume an AGENTS.md convention that isn't there.
+seam: world→self @ tool-boundary only ; think∖call ⇒ deaf to world, incl. follow-ups
+shell nudge ∈ body-reflex ≠ thread-voice
+
 attention: evt-fixture-0001
 posture: brr/fixture-branch · session 72% left (resets 10:30pm); week 57% left · budget 120m
-assignments: 3 — discharge each (⇢ names the act; ↗Nb = escalation starts after N boundaries), adopt them as your .card ## Plan (`- [ ]` rows), or defer with a named reason on the card
-  1. answer the waking event ⇢ the reply — final stdout at close, or an `event:` outbox file; the substance, not a receipt
-  2. write .card with a ## Plan ⇢ the write — these rows as `- [ ]` checkboxes are the offered scaffold; adopt, edit, or replace it ↗4b
-  3. claim .name · .mood · .topics ⇢ one write each (brnrd emotes <feeling> finds a face) ↗10b
-below: reference · `brnrd prompts show` names every block and its cost
+
+×3 standing · self-owned
+op⇐reply owed — answer the person
+keep⇒commit ; shared⇒dflt↗branch ; Δ⇒op⇐↑push — leave receipts: commit what you mean to keep
+long-act⇒.card/## Now first ; private-knowledge⇒write — lose no work
+
+first outward ⇒ .name + .mood
+first produce ⇒ .topics
+∅then ⇒ daemon→plain fallback ; next-wake→declare
+
+reference: `brnrd prompts show` ⇒ blocks + cost
 
 {{BODY verbatim: prompts/run.md}}
 
@@ -297,7 +308,7 @@ Implement a small feature, commit, and push a branch.
 
 --- phase: manifest ---
 
-brnrd boot · schema v1 · depth compact
+brnrd boot · schema v2 · depth compact
 
   body: claude-sonnet (claude / claude-sonnet-4-6) · Tier 2 hooks installed
   host: daemon · worktree · resident-owned
@@ -313,7 +324,7 @@ hooks:
 source manifest:
     block                                                           owner        authority      bytes  location / freshness
   -------------------------------------------------------------------------------------------------------------------------
-  ✓ Boot kernel (action-first score)                                daemon-live  runtime        1,304  computed
+  ✓ Boot kernel (action-first score)                                daemon-live  runtime        1,175  computed
   ✓ Operational preamble (run.md)                                   product      contract     [bytes]  {PACKAGE_ROOT}/prompts/run.md  [mtime]
   ✓ Working register (weave.md)                                     product      contract     [bytes]  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Working register, worked example (register.md)                  product      contract     [bytes]  {PACKAGE_ROOT}/prompts/register.md  [mtime]
