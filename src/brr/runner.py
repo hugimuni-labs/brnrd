@@ -701,10 +701,8 @@ class RunnerInvocation:
     cwd: Path | None = None
     response_path: str | None = None
     required_artifacts: list[RunnerArtifactSpec] = field(default_factory=list)
-    # Wall-clock backstop for ``proc.communicate``. ``None`` falls back to
-    # ``runner_timeout(cfg)``. The daemon passes a generous hard cap here
-    # and enforces the real (extensible) budget from its heartbeat — see
-    # ``daemon._invoke_with_heartbeat`` and ``kill_matching``.
+    # Explicit wall-clock backstop for bounded auxiliary invocations. Daemon
+    # runs leave this unset: a user stop, not an elapsed clock, ends them.
     timeout_seconds: int | None = None
     # Extra environment variables for the runner subprocess. Daemon runs
     # use this to expose live portal paths (BRR_PORTAL_STATE,
@@ -2502,7 +2500,7 @@ def invoke_runner(
     # (not the substituted argv) is what decides, so a prompt that itself
     # contains "{prompt}" can never flip the decision.
     prompt_stdin = _prompt_stdin(cfg, invocation.prompt, cmd_template)
-    timeout = invocation.timeout_seconds or runner_timeout(cfg)
+    timeout = invocation.timeout_seconds
     # Always start from a cleaned base env so a parent agent session's
     # safe-mode / identity vars never leak into the runner (and silently
     # disable its hooks); layer the run's own env on top.

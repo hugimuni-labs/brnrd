@@ -1328,7 +1328,7 @@ def test_long_running_surfaced_when_over_soft_budget(tmp_path):
     )
     out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "running long" in ctx
+    assert "running long" not in ctx
 
 
 def test_long_running_quiet_within_budget(tmp_path):
@@ -3105,7 +3105,14 @@ def _armed_vigil(tmp_path, *, resources=None, **portal_kw):
 
 
 def _keepalive(tmp_path, text):
-    (tmp_path / portals.KEEPALIVE_NAME).write_text(text, encoding="utf-8")
+    (tmp_path / ".keepalive").write_text(text, encoding="utf-8")
+
+
+def _portal_await(tmp_path, *, resolved):
+    path = tmp_path / portals.LIVE_PORTAL_STATE_NAME
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["await"] = {"armed": True, "resolved": resolved}
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 _HOLDING = "Merged #948 and #950.\n\nHolding for the integration gate."
@@ -3128,17 +3135,16 @@ def test_vigil_block_names_which_arming_was_missing(tmp_path):
     env = _armed_vigil(tmp_path)
     out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_CONTINUING), env)
     reason = out["reason"]
-    assert portals.KEEPALIVE_NAME in reason
+    assert "portal `await`" in reason
     assert "spawn:" in reason
     assert "background shell command is not a continuation" in reason
 
 
-def test_vigil_accepts_a_live_keepalive(tmp_path):
-    """Arming #1. The in-thought vigil the substrate documents."""
+def test_vigil_ignores_a_live_keepalive(tmp_path):
     env = _armed_vigil(tmp_path)
     _keepalive(tmp_path, "+30m\n")
     out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_CONTINUING), env)
-    assert out.get("decision") != "block"
+    assert out["decision"] == "block"
 
 
 def test_linger_blocks_cloud_closeout_without_a_horizon(tmp_path):
@@ -3153,16 +3159,16 @@ def test_linger_blocks_cloud_closeout_without_a_horizon(tmp_path):
 def test_linger_blocks_exit_while_the_horizon_is_still_live(tmp_path):
     env = _armed_vigil(tmp_path)
     env["BRR_CLOSEOUT_OBLIGATIONS"] = "linger"
-    _keepalive(tmp_path, "+30m\n")
+    _portal_await(tmp_path, resolved=False)
     out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
     assert out["decision"] == "block"
-    assert "still live" in out["reason"]
+    assert "no completed portal wait" in out["reason"]
 
 
 def test_linger_accepts_an_elapsed_horizon(tmp_path):
     env = _armed_vigil(tmp_path)
     env["BRR_CLOSEOUT_OBLIGATIONS"] = "linger"
-    _keepalive(tmp_path, "2020-01-01T00:00:00Z")
+    _portal_await(tmp_path, resolved=True)
     out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
     assert out.get("decision") != "block"
 
@@ -3185,19 +3191,16 @@ def test_linger_rejects_an_empty_opt_out(tmp_path):
     assert out["decision"] == "block"
 
 
-def test_vigil_accepts_an_iso_keepalive_deadline(tmp_path):
+def test_vigil_accepts_an_unresolved_portal_wait(tmp_path):
     env = _armed_vigil(tmp_path)
-    later = datetime.datetime.now(
-        tz=datetime.timezone.utc
-    ) + datetime.timedelta(minutes=20)
-    _keepalive(tmp_path, later.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    _portal_await(tmp_path, resolved=False)
     out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_CONTINUING), env)
     assert out.get("decision") != "block"
 
 
 def test_vigil_refuses_a_lapsed_keepalive(tmp_path):
     """Present is not armed. A deadline that has passed is a vigil the daemon
-    itself has stopped honouring — `_keepalive_state` calls it `expired`."""
+    itself no longer reads."""
     env = _armed_vigil(tmp_path)
     _keepalive(tmp_path, "2020-01-01T00:00:00Z")
     out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_CONTINUING), env)

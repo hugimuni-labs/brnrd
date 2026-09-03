@@ -1997,7 +1997,6 @@ def test_live_portal_state_file_summarizes_run_attention(tmp_path):
     )
     (outbox / "draft.md").write_text("queued reply\n", encoding="utf-8")
     (outbox / ".card").write_text("working\n", encoding="utf-8")
-    (outbox / ".keepalive").write_text("+30m\n", encoding="utf-8")
     task = Run(
         id="run-1",
         event_id=current["id"],
@@ -2024,9 +2023,6 @@ def test_live_portal_state_file_summarizes_run_attention(tmp_path):
             "name": "claude-opus",
             "class": "strong",
         },
-        budget_seconds=3600,
-        hard_cap_seconds=7200,
-        keepalive_path=outbox / ".keepalive",
         card_state={"last": "working"},
         output_stats={"current": 1, "other": 2, "outbound": 3},
         start_monotonic=daemon.time.monotonic() - 1,
@@ -2058,7 +2054,7 @@ def test_live_portal_state_file_summarizes_run_attention(tmp_path):
     assert payload["resources"]["runner"]["quality_escalation"]["name"] == (
         "claude-opus"
     )
-    assert payload["budget"]["keepalive"]["status"] == "active"
+    assert set(payload["budget"]) == {"elapsed_seconds"}
     assert payload["budget"]["elapsed_seconds"] >= 0
     assert payload["change_token"]
     assert "_path" not in payload["inbound"]["events"][0]
@@ -2078,8 +2074,6 @@ def test_live_portal_state_file_summarizes_run_attention(tmp_path):
             "class": "strong",
         },
         budget_seconds=3600,
-        hard_cap_seconds=7200,
-        keepalive_path=outbox / ".keepalive",
         card_state={"last": "working"},
         output_stats={"current": 1, "other": 2, "outbound": 3},
         start_monotonic=daemon.time.monotonic() - 5,

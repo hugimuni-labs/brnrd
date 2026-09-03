@@ -4214,10 +4214,7 @@ def _format_portal_state(payload: dict) -> str:
         f"outbound={outbound.get('outbound_messages', 0)}"
         + ("" if outbound.get("any_sent") else "  ⚠ nothing sent yet"),
         "budget: "
-        f"elapsed={_fmt_duration(budget.get('elapsed_seconds'))} "
-        f"limit={_fmt_duration(budget.get('budget_seconds'), none_label='no limit')} "
-        f"keepalive={(budget.get('keepalive') or {}).get('status', '-')}"
-        + ("  ⚠ running long" if budget.get("long_running") else ""),
+        f"elapsed={_fmt_duration(budget.get('elapsed_seconds'), none_label='-')}",
     ]
     if resources:
         # Three-state honesty: a 'known' facet shows its value; an 'absent' or
@@ -4801,7 +4798,6 @@ def cmd_await(args):
             "outcome": outcome,
             "which": state.get("which"),
             "deadline": state.get("deadline"),
-            "capped": bool(state.get("capped")),
         }
         if args.json:
             print(json.dumps(result))

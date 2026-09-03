@@ -2132,12 +2132,10 @@ class TestTimeoutConfig:
         assert runner_timeout({"runner.timeout_seconds": 0}) == DEFAULT_RUNNER_TIMEOUT
         assert runner_timeout({"runner.timeout_seconds": -5}) == DEFAULT_RUNNER_TIMEOUT
 
-    def test_invoke_runner_passes_configured_timeout_to_wait(
+    def test_invoke_runner_ignores_configured_timeout_for_daemon_style_invocation(
         self, tmp_path, monkeypatch,
     ):
-        """The configured timeout must flow into ``proc.wait`` so long-reasoning
-        models can finish; the historical hardcoded 600s was killing live work
-        mid-run."""
+        """The compatibility config key no longer turns elapsed time into a kill."""
         captured: dict[str, object] = {}
 
         def _fake_popen(*_args, **kwargs):
@@ -2165,7 +2163,7 @@ class TestTimeoutConfig:
         )
 
         assert result.ok
-        assert captured["timeout"] == 2400
+        assert captured["timeout"] is None
         # The invariant the muted fd was always protecting: stdin must never be an
         # *open-but-silent* fd inherited from the daemon's terminal, or codex's
         # "Reading prompt from stdin..." path hangs forever waiting for an EOF that
@@ -2205,12 +2203,10 @@ class TestTimeoutConfig:
         assert result.ok
         assert captured["timeout"] is None
 
-    def test_invoke_runner_timeout_message_uses_configured_value(
+    def test_explicit_invocation_timeout_still_bounds_auxiliary_work(
         self, tmp_path, monkeypatch,
     ):
-        """The appended stderr line must report the actual configured
-        ceiling — operators reading the failed packet need to know what
-        the budget was, not a stale hardcoded number."""
+        """Callers may still explicitly bound non-runner auxiliary work."""
         def _fake_popen(*_args, **kwargs):
             # The child got a word out before the timeout guillotine — and now that
             # brr captures to disk rather than to a pipe drained at exit, that word
@@ -2234,9 +2230,10 @@ class TestTimeoutConfig:
             prompt="hi",
             cwd=tmp_path,
             repo_root=tmp_path,
+            timeout_seconds=42,
         )
         result = invoke_runner(
-            "mock", invocation, cfg={"runner.timeout_seconds": 42},
+            "mock", invocation, cfg={"runner.timeout_seconds": 999},
         )
         assert result.returncode == 124
         assert "runner timed out after 42s" in result.stderr

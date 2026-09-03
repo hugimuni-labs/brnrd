@@ -118,7 +118,7 @@ Richer branch-keyed PR desired state remains future portal work.
 The same outbox directory also carries daemon-owned `portal-state.json`
 and `inbox.json` control files refreshed on each heartbeat. The state
 portal is the broad live view (pending events, card/delivery posture,
-budget/keepalive, change token); `inbox.json` is the focused pending-event
+elapsed runtime, change token); `inbox.json` is the focused pending-event
 list. The running agent checks them at plan boundaries and once more
 before terminal closeout to decide whether to fold waiting work in or
 leave it queued.

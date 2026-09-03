@@ -25,14 +25,10 @@ from pathlib import Path
 from typing import Any
 
 from . import protocol
-from . import schedule as schedule_mod
 
 LIVE_INBOX_NAME = "inbox.json"
 LIVE_PORTAL_STATE_NAME = "portal-state.json"
 LIVE_MENU_NAME = "menu.json"
-#: The agent-written liveness extension. A dotfile, so the drain never sees
-#: it as a message and it needs no entry in :data:`CONTROL_NAMES`.
-KEEPALIVE_NAME = ".keepalive"
 #: A conscious close of a live conversation without the default linger.
 #: First non-empty line is the reason; an empty marker is not an opt-out.
 LINGER_OPT_OUT_NAME = ".linger-opt-out"
@@ -41,42 +37,6 @@ LINGER_OPT_OUT_NAME = ".linger-opt-out"
 CONTROL_NAMES = frozenset(
     {LIVE_INBOX_NAME, LIVE_PORTAL_STATE_NAME, LIVE_MENU_NAME}
 )
-
-
-def keepalive_until(keepalive_path: Path | None) -> float | None:
-    """Read an agent-written keepalive into an absolute epoch deadline.
-
-    The file is a control dotfile in the run outbox carrying one line: an
-    ISO-8601 timestamp ("busy until T"), or ``+<duration>`` (e.g. ``+30m``)
-    interpreted from the file's mtime ("busy for N from when I wrote this", so
-    re-reads don't slide). Returns epoch seconds, or ``None`` when the file is
-    absent, empty, or unparseable.
-
-    Lives here rather than in ``daemon`` because two readers now need it and
-    they must never disagree: the daemon extends the run budget from it, and
-    ``hooks`` asks the same file whether a claimed vigil is actually armed
-    (#947). Two implementations of one rule is the shape where the copies agree
-    and are wrong together (#722), so the daemon delegates to this one.
-    """
-    if keepalive_path is None or not keepalive_path.exists():
-        return None
-    try:
-        raw = keepalive_path.read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    if not raw:
-        return None
-    first = raw.splitlines()[0].strip()
-    if first.startswith("+"):
-        secs = schedule_mod.parse_duration(first[1:].strip())
-        if secs is None:
-            return None
-        try:
-            mtime = keepalive_path.stat().st_mtime
-        except OSError:
-            return None
-        return mtime + secs
-    return schedule_mod.parse_iso(first)
 
 
 def is_staging_name(name: str | Path) -> bool:
