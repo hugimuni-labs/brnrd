@@ -804,7 +804,15 @@ class _Session:
         outcome, which = await_verb.evaluate(
             armed.get("file"), self._pending_for_wake(),
         )
-        if outcome is None:
+        # `timeout_seconds` is `None` on an explicit `timeout: none` — "the
+        # seat that stays open" (#1187's follow-up): this directive has no
+        # deadline of its own. Init has no separate hard-cap concept to fold
+        # in the way `daemon._resolve_await_state` does; the outer session
+        # budget (`run`'s own `deadline` check against `self.timeout_seconds`)
+        # already ends the whole process regardless, so there is nothing to
+        # compute here — an open-ended wait simply never times out on its
+        # own tick.
+        if outcome is None and armed.get("timeout_seconds") is not None:
             deadline = float(armed["armed_at"]) + float(armed["timeout_seconds"])
             if time.time() >= deadline:
                 outcome, which = "timeout", None

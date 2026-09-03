@@ -821,6 +821,26 @@ def test_stage_note_writes_a_body_less_directive(tmp_path):
     assert text == "---\nnote: evt-1\n---\n"
 
 
+def test_stage_await_writes_none_for_an_open_ended_ceiling(tmp_path):
+    """"the seat that stays open" — ``timeout_seconds=None`` means no
+    budget to default a ceiling from, and the staged directive says so
+    literally rather than falling back to a fixed number of seconds."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    path = do_mod.stage_await(outbox, timeout_seconds=None)
+    text = path.read_text(encoding="utf-8")
+    assert "await: true" in text
+    assert "timeout: none" in text
+
+
+def test_stage_await_still_writes_a_concrete_ceiling(tmp_path):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    path = do_mod.stage_await(outbox, timeout_seconds=90.4)
+    text = path.read_text(encoding="utf-8")
+    assert "timeout: 90s" in text
+
+
 def test_reply_target_status_matches_exact_id():
     payload = {"events": [{"id": "evt-1788159733748722000-9ha9", "status": "pending"}]}
     assert do_mod.reply_target_status(payload, "evt-1788159733748722000-9ha9") == "pending"
