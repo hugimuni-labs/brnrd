@@ -3899,7 +3899,6 @@ def test_a_runs_mood_reaches_the_wire_as_richly_as_the_daemons_own(tmp_path):
     import os
 
     from brr import emotes, presence
-    from brr.gates import cloud
 
     brr_dir = tmp_path / ".brr"
     brr_dir.mkdir()
@@ -5049,3 +5048,72 @@ def test_existing_home_remotes_reads_both_slots_or_nothing(tmp_path, monkeypatch
     assert home_link.existing_home_remotes(tmp_path, {}) is None, (
         "wired but never pushed must not read as backed up"
     )
+
+def test_silence_notice_fires_once_per_boundary_and_rearms(tmp_path, monkeypatch):
+    source = tmp_path / ".brr"
+    run_dir = source / "runs" / "run-1"
+    run_dir.mkdir(parents=True)
+    boundaries = run_dir / "boundaries.jsonl"
+    boundaries.write_text("{}\n", encoding="utf-8")
+    old = time.time() - 3 * 60 * 60
+    os.utime(boundaries, (old, old))
+    monkeypatch.setattr(cloud.presence, "account_dirs", lambda _brr: [source])
+    monkeypatch.setattr(
+        cloud.presence, "list_active",
+        lambda _source: [{"stream": "cloud:telegram:1:", "run_id": "run-1"}],
+    )
+    from brr import config
+    monkeypatch.setattr(config, "load_config", lambda _root: {})
+    event = {"conversation_key": "cloud:telegram:1:"}
+    state = {"brnrd_url": "https://brnrd.test"}
+
+    first = cloud._silence_notice_for_event(source, state, event)
+    assert "silent since" in first
+    assert "https://brnrd.test/" in first
+    assert cloud._silence_notice_for_event(source, state, event) is None
+
+    boundaries.write_text("{}\n{}\n", encoding="utf-8")
+    newer_old = time.time() - 3 * 60 * 60
+    os.utime(boundaries, (newer_old, newer_old))
+    assert cloud._silence_notice_for_event(source, state, event) is not None
+
+
+def test_silence_notice_stays_quiet_for_a_run_holding_an_await(tmp_path, monkeypatch):
+    """A run in `brnrd await` is listening, not silent (#1779, w-74): the
+    message that would trigger the notice is the very thing that resolves
+    its wait, so no notice — and no marker — for a run whose portal state
+    shows an armed, unresolved await. A resolved one counts as silence again."""
+    source = tmp_path / ".brr"
+    run_dir = source / "runs" / "run-1"
+    run_dir.mkdir(parents=True)
+    boundaries = run_dir / "boundaries.jsonl"
+    boundaries.write_text("{}\n", encoding="utf-8")
+    old = time.time() - 3 * 60 * 60
+    os.utime(boundaries, (old, old))
+    outbox = source / "outbox" / "evt-1"
+    outbox.mkdir(parents=True)
+    monkeypatch.setattr(cloud.presence, "account_dirs", lambda _brr: [source])
+    monkeypatch.setattr(
+        cloud.presence, "list_active",
+        lambda _source: [{"stream": "cloud:telegram:1:", "run_id": "run-1"}],
+    )
+    from brr import config, daemon
+    monkeypatch.setattr(config, "load_config", lambda _root: {})
+    monkeypatch.setattr(
+        daemon, "_find_run_control",
+        lambda target: {"event_id": "evt-1", "run_id": "run-1"} if target == "run-1" else None,
+    )
+    event = {"conversation_key": "cloud:telegram:1:"}
+    state = {"brnrd_url": "https://brnrd.test"}
+
+    (outbox / "portal-state.json").write_text(
+        json.dumps({"await": {"armed": True, "resolved": False}}), encoding="utf-8"
+    )
+    assert cloud._silence_notice_for_event(source, state, event) is None
+    assert not (run_dir / ".silence-notice-boundary").exists()
+
+    (outbox / "portal-state.json").write_text(
+        json.dumps({"await": {"armed": True, "resolved": True, "outcome": "event"}}),
+        encoding="utf-8",
+    )
+    assert "silent since" in cloud._silence_notice_for_event(source, state, event)

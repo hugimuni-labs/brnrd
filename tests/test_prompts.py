@@ -1367,7 +1367,7 @@ class TestPromptBuilding:
         # bullet the bundle renders only when a path exists.
         assert "- outbox:" not in prompt
 
-    def test_daemon_prompt_states_budget_and_keepalive(self, tmp_path):
+    def test_daemon_prompt_ignores_configured_reaping_budget(self, tmp_path):
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
             outbox_path="/repo/.brr/outbox/evt-1",
@@ -1375,9 +1375,8 @@ class TestPromptBuilding:
             run_id="task-9",
         )
         assert "Budget:" in prompt
-        assert "60m" in prompt
-        # The extension how-to is anchored on the agent's outbox path.
-        assert "/repo/.brr/outbox/evt-1/.keepalive" in prompt
+        assert "no time limit" in prompt
+        assert ".keepalive" not in prompt
 
     def test_daemon_prompt_states_no_time_limit_without_value(self, tmp_path):
         """2026-08-19 maintainer decision: unset ``runner.timeout_seconds``
@@ -1390,10 +1389,8 @@ class TestPromptBuilding:
             run_id="task-9",
         )
         assert "Budget: no time limit" in prompt
-        assert "will not kill this thought on a clock" in prompt
-        # `.keepalive` still matters without a runner budget — it's how an
-        # `await:` wait is extended — so the path still renders.
-        assert "/repo/.brr/outbox/evt-1/.keepalive" in prompt
+        assert "does not kill a thought on an elapsed clock" in prompt
+        assert ".keepalive" not in prompt
 
     def test_daemon_prompt_includes_driver_manual(self, tmp_path):
         """The daemon path injects brr's driver's manual — the daemon-only

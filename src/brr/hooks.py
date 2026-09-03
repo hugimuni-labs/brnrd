@@ -119,8 +119,6 @@ def classify_act(tool_name: object, tool_input: object) -> str:
                 break
 
     if any(part in compact_name for part in ("write", "edit", "patch")):
-        if input_path.endswith("/.keepalive"):
-            return "wait"
         if "/outbox/" in input_path:
             if re.search(r"(?:spawn|respawn|to|stop):\s*", input_body):
                 return "dispatch"
@@ -129,7 +127,7 @@ def classify_act(tool_name: object, tool_input: object) -> str:
         return "mutate"
     if any(part in compact_name for part in ("spawn", "dispatch", "steer", "stop_agent")):
         return "dispatch"
-    if any(part in compact_name for part in ("await", "sleep", "keepalive")):
+    if any(part in compact_name for part in ("await", "sleep")):
         return "wait"
     if any(part in compact_name for part in ("publish", "push", "send_message", "create_pr")):
         return "publish"
@@ -151,7 +149,7 @@ def classify_act(tool_name: object, tool_input: object) -> str:
         command = command.strip().lower()
         if re.search(r"(?:^|[;&|]\s*)(?:brnrd\s+)?await(?:\s|$)", command) or re.search(
             r"(?:^|[;&|]\s*)sleep(?:\s|$)", command
-        ) or ".keepalive" in command:
+        ):
             return "wait"
         if re.search(r"(?:spawn|respawn|to|stop):\s*", command):
             return "dispatch"
@@ -1287,13 +1285,6 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         klass=VITAL,
     ),
     _BarSegment(
-        "keepalive", "rb",
-        "keepalive extension remaining, the slot held past budget (`rb3h`). "
-        "Renders only while `.keepalive` is active.",
-        # a state the resident already set.
-        klass=AMBIENT,
-    ),
-    _BarSegment(
         "delivery", "⇡",
         "delivery this run — current-thread replies + everything else "
         "(other threads, outbound messages) (`⇡2+3`). Renders only once "
@@ -1526,33 +1517,11 @@ def _siblings_chip(resources: dict[str, Any]) -> str | None:
     return f"▷{n}" if n else None
 
 
-def _keepalive_remaining_seconds(until_iso: Any) -> float | None:
-    if not isinstance(until_iso, str) or not until_iso.strip():
-        return None
-    try:
-        dt = datetime.datetime.strptime(until_iso.strip(), "%Y-%m-%dT%H:%M:%SZ")
-    except ValueError:
-        return None
-    dt = dt.replace(tzinfo=datetime.timezone.utc)
-    remaining = (dt - datetime.datetime.now(tz=datetime.timezone.utc)).total_seconds()
-    return remaining if remaining > 0 else None
-
-
 def _fmt_short_duration(seconds: float) -> str:
     seconds = max(0.0, seconds)
     if seconds >= 3600:
         return f"{max(1, round(seconds / 3600))}h"
     return f"{max(1, round(seconds / 60))}m"
-
-
-def _keepalive_chip(budget: dict[str, Any]) -> str | None:
-    keepalive = budget.get("keepalive") if isinstance(budget.get("keepalive"), dict) else {}
-    if keepalive.get("status") != "active":
-        return None
-    remaining = _keepalive_remaining_seconds(keepalive.get("until"))
-    if remaining is None:
-        return None
-    return f"rb{_fmt_short_duration(remaining)}"
 
 
 def _delivery_chip(outbound: dict[str, Any]) -> str | None:
@@ -2566,9 +2535,6 @@ def _render_bar(
     siblings_chip = _siblings_chip(resources)
     if siblings_chip:
         segments.append(("siblings", siblings_chip))
-    keepalive_chip = _keepalive_chip(budget)
-    if keepalive_chip:
-        segments.append(("keepalive", keepalive_chip))
     delivery_chip = _delivery_chip(outbound)
     if delivery_chip:
         segments.append(("delivery", delivery_chip))
@@ -2741,17 +2707,6 @@ def _render_bar(
                 " check a row or redraw"
             )
     streaks = repeat_streaks_in
-    if budget.get("long_running"):
-        limit = budget.get("budget_seconds")
-        if streaks.get("running_long", 0) >= _REPEAT_COMPRESS_THRESHOLD:
-            details.append(
-                f"- running long · seen ×{streaks['running_long']} — .keepalive"
-            )
-        else:
-            details.append(
-                f"- running long: past the {limit}s soft budget — extend via "
-                ".keepalive if the work needs it, else wind down."
-            )
     if card_stale:
         age = card.get("age_seconds")
         age_txt = f"{age}s" if age is not None else "a while"
@@ -3107,19 +3062,6 @@ def format_delta(
     if live_children:
         lines.append(live_children)
     lines.extend(_render_armed_rows(armed))
-    elapsed = budget.get("elapsed_seconds")
-    limit = budget.get("budget_seconds")
-    if elapsed is not None and limit is not None:
-        lines.append(f"- budget: {elapsed}s of {limit}s used.")
-        # "Running so long" is a missing-data signal worth surfacing the
-        # moment it is true (evt-go5z): a run past its soft budget is either
-        # legitimately deep or quietly stuck, and the resident should see the
-        # fact rather than have to compute it from two numbers.
-        if budget.get("long_running"):
-            lines.append(
-                f"- running long: past the {limit}s soft budget — extend via "
-                ".keepalive if the work needs it, else wind down."
-            )
     replied_current = outbound.get("replies_current")
     any_delivery = (
         replied_current
@@ -3751,25 +3693,6 @@ def vigil_claim(reply: str) -> str | None:
     return phrase.group(1).lower() if phrase else None
 
 
-def _keepalive_armed(ctx: "HookContext") -> bool:
-    """True when a **live** ``.keepalive`` sits in this run's outbox.
-
-    Read fresh from disk at Stop, not from the heartbeat portal snapshot: the
-    keepalive that arms a vigil is written in the run's final actions, which is
-    exactly the window the snapshot cannot see (the same reason
-    :func:`_closeout_artifact_written` reads files rather than the portal).
-
-    Present is not enough — a keepalive whose deadline has passed is a lapsed
-    vigil, and the daemon already stops honouring it (``_keepalive_state``
-    calls that ``expired``). Same parse as the budget extension, from the one
-    shared reader, so the guard can never accept a file the daemon would not.
-    """
-    if ctx.outbox_dir is None:
-        return False
-    until = portals.keepalive_until(ctx.outbox_dir / portals.KEEPALIVE_NAME)
-    return until is not None and until > time.time()
-
-
 def _linger_opted_out(ctx: "HookContext") -> bool:
     """Whether this run consciously declined the live-chat linger."""
     if ctx.outbox_dir is None:
@@ -3787,16 +3710,13 @@ def _linger_closeout_clause(ctx: "HookContext") -> str | None:
     """Require a completed linger, or an explicit reason for skipping it."""
     if ctx.outbox_dir is None or _linger_opted_out(ctx):
         return None
-    until = portals.keepalive_until(ctx.outbox_dir / portals.KEEPALIVE_NAME)
-    if until is not None and until <= time.time():
+    portal = _read_json(ctx.portal_state_path)
+    await_state = portal.get("await") if isinstance(portal.get("await"), dict) else {}
+    if await_state.get("armed") and await_state.get("resolved"):
         return None
-    state = (
-        "no parseable `.keepalive` was armed"
-        if until is None
-        else "the `.keepalive` horizon is still live — exiting now would not linger"
-    )
     return (
-        f"{state}. A cloud conversation lingers by default: deliver first, "
+        "no completed portal wait records the linger. A cloud conversation "
+        "lingers by default: deliver first, "
         "run `brnrd await` — hold until the next reply; close only when a "
         "wait resolves quiet at a configured horizon or the correspondent "
         "ends the conversation. If stopping now is deliberate, write the "
@@ -3920,23 +3840,19 @@ def _vigil_closeout_clause(
     claim = vigil_claim(reply)
     if claim is None:
         return None
-    if _keepalive_armed(ctx):
+    portal_await = portal.get("await") if isinstance(portal.get("await"), dict) else {}
+    if portal_await.get("armed") and not portal_await.get("resolved"):
         return None
     spawned = _spawn_child_armed(portal, ctx.run_id)
     if spawned is None or spawned:
         return None
-    where = (
-        f"`{ctx.outbox_dir / portals.KEEPALIVE_NAME}`" if ctx.outbox_dir
-        else f"`{portals.KEEPALIVE_NAME}`"
-    )
     return (
         f"your last line claims an ongoing state ({claim!r}) and nothing is "
-        f"armed to keep it — no live {where} (absent, or its deadline already "
-        f"passed) and no running `spawn:` child of this run. A background shell "
+        "armed to keep it — no unresolved portal `await` and no running "
+        "`spawn:` child of this run. A background shell "
         f"command is not a continuation: its completion cannot re-enter a run "
-        f"that has already emitted its terminal stream. So either arm one now "
-        f"(write the keepalive — one line, `+30m` or an ISO deadline — and "
-        f"spend the wait in-thought) or end on a state that is true as you "
+        "that has already emitted its terminal stream. So either arm one now "
+        "with `brnrd await` or end on a state that is true as you "
         f"exit: `done — <receipt>` or `blocked — <whose move + what's needed>`"
     )
 

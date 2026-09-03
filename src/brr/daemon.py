@@ -24,13 +24,10 @@ leaves judgement to the agent it wakes. It:
 There is no general command layer: every event either wakes the agent or
 waits for the living agent, except for the narrow daemon-owned approval
 grammar that applies runner-policy proposals.
-Liveness is enforced from the heartbeat: each tick checks an
-agent-extensible budget (``runner.timeout_seconds``, pushed out by a
-keepalive the agent writes) and kills a runner that outlives it via
-``runner.kill_matching``; the runner's own ``communicate`` timeout is the
-final backstop if the heartbeat path wedges. ``brnrd down`` / SIGTERM flip
-the loop flag and kill the in-flight runner, so the single-flight slot is
-reclaimed promptly rather than waiting out a long budget.
+No elapsed clock reaps a run (w-74): a thought ends when it ends, or when
+the user stops it from the dashboard (``_apply_run_stop``). ``brnrd down`` /
+SIGTERM flip the loop flag and kill the in-flight runner, so the
+single-flight slot is reclaimed promptly on shutdown.
 """
 
 from __future__ import annotations
@@ -3960,17 +3957,14 @@ def _run_worker(
     # text in front of a reader — see the increment site in ``_drain_outbox``.
     output_stats = {"current": 0, "other": 0, "outbound": 0, "delivered": 0}
     prompt_diffense = prompts.diffense_emit_enabled(cfg)
-    # Liveness budget: the heartbeat enforces this soft, agent-extensible
-    # deadline; the runner's communicate() backstops at the hard cap. The
-    # agent extends it by writing the keepalive control dotfile in its
-    # outbox (skipped by the drain — see _drain_outbox).
-    budget_seconds = runner.runner_timeout(cfg)
-    hard_cap_seconds = (
-        None
-        if budget_seconds is None
-        else max(budget_seconds * 4, budget_seconds + 3600)
-    )
-    keepalive_path = outbox_dir / ".keepalive"
+    # Compatibility window: the key remains readable, but elapsed clocks no
+    # longer reap a run. The dashboard stop lane is the sole live-process kill.
+    configured_timeout = runner.runner_timeout(cfg)
+    if configured_timeout is not None:
+        print(
+            "[brnrd] runner.timeout_seconds no longer reaps; "
+            "the user cancels from the dashboard"
+        )
     card_path = outbox_dir / _CARD_CONTROL_NAME
     menu_path = outbox_dir / _LIVE_MENU_NAME
     # Runner boundary back-channel flush signal: a stream driver or native
@@ -4315,9 +4309,6 @@ def _run_worker(
         runner_meta=runner_meta,
         runner_catalog=runner_catalog,
         quality_escalation=quality_escalation,
-        budget_seconds=budget_seconds,
-        hard_cap_seconds=hard_cap_seconds,
-        keepalive_path=keepalive_path,
         card_state=card_state,
         output_stats=output_stats,
         start_monotonic=run_started_monotonic,
@@ -4474,7 +4465,6 @@ def _run_worker(
             event_created=event.get("created"),
             event_retry_of=event.get("retry_of"),
             event_retry_failure_kind=event.get("retry_failure_kind"),
-            budget_seconds=budget_seconds,
             runner_medium=(
                 f"{runner_name} ({runner_wake_note})"
                 if runner_wake_note
@@ -4599,9 +4589,6 @@ def _run_worker(
             runner_meta=runner_meta,
             runner_catalog=runner_catalog,
             quality_escalation=quality_escalation,
-            budget_seconds=budget_seconds,
-            hard_cap_seconds=hard_cap_seconds,
-            keepalive_path=keepalive_path,
             card_state=card_state,
             output_stats=output_stats,
             start_monotonic=run_started_monotonic,
@@ -4677,9 +4664,6 @@ def _run_worker(
                 runner_meta=runner_meta,
                 runner_catalog=runner_catalog,
                 quality_escalation=quality_escalation,
-                budget_seconds=budget_seconds,
-                hard_cap_seconds=hard_cap_seconds,
-                keepalive_path=keepalive_path,
                 card_state=card_state,
                 output_stats=output_stats,
                 start_monotonic=run_started_monotonic,
@@ -4752,9 +4736,6 @@ def _run_worker(
                 runner_meta=runner_meta,
                 runner_catalog=runner_catalog,
                 quality_escalation=quality_escalation,
-                budget_seconds=budget_seconds,
-                hard_cap_seconds=hard_cap_seconds,
-                keepalive_path=keepalive_path,
                 card_state=card_state,
                 output_stats=output_stats,
                 start_monotonic=run_started_monotonic,
@@ -4780,7 +4761,6 @@ def _run_worker(
                 publishing_brr_dir=repo_root / ".brr",
                 repo_full_name=repo_label,
                 response_path=str(env_ctx.response_path_host),
-                timeout_seconds=hard_cap_seconds,
                 env=runner_env,
                 extra_runner_args=extra_runner_args,
                 expected_core=runner_choice.model,
@@ -4792,9 +4772,6 @@ def _run_worker(
             on_heartbeat=_emit_heartbeat,
             on_flush=_emit_flush,
             flush_path=flush_path,
-            budget_seconds=budget_seconds,
-            hard_cap_seconds=hard_cap_seconds,
-            keepalive_path=keepalive_path,
             # Every dispatched run is stoppable since #476, not just a
             # spawned child: the user-side affordance exists precisely for
             # the resident thought no parent run can reach.
@@ -4862,9 +4839,6 @@ def _run_worker(
             runner_meta=runner_meta,
             runner_catalog=runner_catalog,
             quality_escalation=quality_escalation,
-            budget_seconds=budget_seconds,
-            hard_cap_seconds=hard_cap_seconds,
-            keepalive_path=keepalive_path,
             card_state=card_state,
             output_stats=output_stats,
             start_monotonic=run_started_monotonic,
@@ -5338,35 +5312,6 @@ def _run_worker(
     return task
 
 
-def _keepalive_until(keepalive_path: Path | None) -> float | None:
-    """The run's keepalive deadline — see :func:`portals.keepalive_until`.
-
-    Delegates rather than keeps a copy: ``hooks`` reads the same file at Stop
-    to decide whether a claimed vigil is armed (#947), and a budget extension
-    the daemon honours must be the same fact the guard accepts.
-    """
-    return portals.keepalive_until(keepalive_path)
-
-
-def _budget_exceeded(
-    start_mono: float,
-    budget_seconds: float,
-    hard_cap_seconds: float | None,
-    keepalive_path: Path | None,
-) -> bool:
-    """True when the runner has outlived its extensible, capped budget."""
-    now_mono = time.monotonic()
-    deadline = start_mono + budget_seconds
-    until = _keepalive_until(keepalive_path)
-    if until is not None:
-        # Translate the wall-clock extension into the monotonic clock the
-        # loop measures against.
-        deadline = max(deadline, now_mono + (until - time.time()))
-    if hard_cap_seconds is not None:
-        deadline = min(deadline, start_mono + hard_cap_seconds)
-    return now_mono >= deadline
-
-
 def _refresh_codex_thread_id(task: Run, events_path: Path) -> str | None:
     """Publish the thread id from an in-flight Codex JSONL stream.
 
@@ -5400,13 +5345,10 @@ def _invoke_with_heartbeat(
     on_flush=None,
     flush_path: Path | None = None,
     flush_interval: float = _FLUSH_POLL_INTERVAL,
-    budget_seconds: float | None = None,
-    hard_cap_seconds: float | None = None,
-    keepalive_path: Path | None = None,
     should_abort=None,
 ) -> "runner.RunnerResult":
     """Run *env_backend.invoke* in a thread, ticking *on_heartbeat* every
-    *interval* seconds while it's alive, and enforce the liveness budget.
+    *interval* seconds while it's alive.
 
     *should_abort* (optional callable → bool) is polled at the same flush
     cadence: when it turns true the invocation's own subprocess is killed
@@ -5422,13 +5364,6 @@ def _invoke_with_heartbeat(
     stack that called here), not on the runner's inner thread, so a
     misbehaving callback can't corrupt the in-flight runner.
 
-    When *budget_seconds* is set, the same tick is the liveness authority:
-    past ``start + budget`` the runner is killed via
-    :func:`runner.kill_matching` to reclaim the single-flight slot — unless
-    the agent extended its deadline by writing *keepalive_path*.
-    Extensions are capped at *hard_cap_seconds* so a forgotten keepalive
-    can't pin the daemon forever, and the runner's own ``communicate``
-    timeout (set to the hard cap) is the final backstop.
     """
     import threading
 
@@ -5457,7 +5392,6 @@ def _invoke_with_heartbeat(
     poll = min(interval, flush_interval) if flush_path is not None else interval
     if should_abort is not None:
         poll = min(poll, flush_interval)
-    deadline_killed = False
     while worker.is_alive():
         worker.join(timeout=poll)
         if not worker.is_alive():
@@ -5507,26 +5441,10 @@ def _invoke_with_heartbeat(
         except Exception:
             # Heartbeat is best-effort; never let it break a real run.
             pass
-        if budget_seconds is not None and _budget_exceeded(
-            start, budget_seconds, hard_cap_seconds, keepalive_path,
-        ):
-            # Kill only *this* invocation's subprocess (exact-label match) —
-            # with concurrent spawns live, the old kill-whatever-registered-
-            # last shape could terminate a sibling run's process instead.
-            if runner.kill_matching(invocation.label):
-                deadline_killed = True
-                worker.join()  # let the killed proc surface its result
-            break
 
     outcome = holder[0]
     if isinstance(outcome, BaseException):
         raise outcome
-    if deadline_killed and isinstance(outcome, runner.RunnerResult):
-        # Present a budget kill like the wall-clock timeout (124) so the
-        # retry/finalize path and the operator read it the same way.
-        outcome.returncode = 124
-        note = f"runner exceeded its {int(budget_seconds)}s liveness budget"
-        outcome.stderr = (outcome.stderr + "\n" if outcome.stderr else "") + note
     return outcome
 
 
@@ -5899,17 +5817,6 @@ def _outbox_message_files(outbox_dir: Path | None) -> list[str]:
     return names
 
 
-def _keepalive_state(keepalive_path: Path | None) -> dict[str, object]:
-    exists = bool(keepalive_path and keepalive_path.exists())
-    until = _keepalive_until(keepalive_path)
-    status = "absent"
-    if exists and until is None:
-        status = "unparseable"
-    elif until is not None:
-        status = "active" if until > time.time() else "expired"
-    return {"status": status, "until": _iso_utc(until)}
-
-
 def _merge_level_snapshots(
     *snapshots: dict[str, object] | None,
 ) -> dict[str, object] | None:
@@ -6247,35 +6154,11 @@ def _change_token(payload: dict[str, object]) -> str:
     return hashlib.sha256(encoded).hexdigest()[:16]
 
 
-def _extend_keepalive(keepalive_path: Path | None, deadline_epoch: float) -> None:
-    """Arm/extend ``.keepalive`` to at least *deadline_epoch* (#959).
-
-    An ``await:`` that outlives the run's budget must extend the slot, not
-    silently truncate — a resident that armed a 20-minute wait and got killed
-    at minute 12 with no explanation is worse than one that was warned. This
-    never *shortens* an existing keepalive an agent wrote for its own
-    reasons; it only pushes the deadline out when the await needs longer.
-    Best-effort, like every other control-file write on this path.
-    """
-    if keepalive_path is None:
-        return
-    existing = portals.keepalive_until(keepalive_path)
-    if existing is not None and existing >= deadline_epoch:
-        return
-    try:
-        _write_text_atomic(keepalive_path, _iso_utc(deadline_epoch) + "\n")
-    except OSError:
-        pass
-
-
 def _resolve_await_state(
     task: Run,
     pending_events: list[dict[str, object]],
     *,
     outbox_dir: Path | None,
-    keepalive_path: Path | None,
-    hard_cap_seconds: float | None,
-    start_monotonic: float | None,
 ) -> dict[str, object]:
     """Evaluate an armed ``await:`` against this tick's pending events.
 
@@ -6306,7 +6189,6 @@ def _resolve_await_state(
             "armed_at": _iso_utc(float(armed["armed_at"])),
             "generation": armed.get("generation"),
             "timeout_seconds": armed.get("timeout_seconds"),
-            "capped": bool(armed.get("capped")),
             "resolved": True,
             "outcome": armed.get("outcome"),
             "which": armed.get("which"),
@@ -6315,40 +6197,12 @@ def _resolve_await_state(
     now = time.time()
     raw_timeout = armed.get("timeout_seconds")
     # `None` = an explicit `timeout: none` — the seat stays open: no clock
-    # of its own, resolved only by a pending event or (below) a configured
-    # hard-cap deadline.
+    # of its own, resolved only by a pending event. Nothing caps it: no
+    # elapsed clock reaps a run (w-74); the user stops it from the dashboard.
     requested_deadline = (
         None if raw_timeout is None
         else float(armed["armed_at"]) + float(raw_timeout)
     )
-    effective_deadline = requested_deadline
-    if hard_cap_seconds is not None and start_monotonic is not None:
-        remaining_hard = (start_monotonic + hard_cap_seconds) - time.monotonic()
-        max_deadline = now + max(remaining_hard, 0.0)
-        if requested_deadline is None or requested_deadline > max_deadline:
-            effective_deadline = max_deadline
-            if not armed.get("capped"):
-                armed["capped"] = True
-                requested_text = (
-                    "no ceiling" if requested_deadline is None
-                    else _iso_utc(requested_deadline)
-                )
-                _record_outbox_notice(
-                    outbox_dir,
-                    "await capped: the requested timeout would outlive this "
-                    f"run's remaining budget ceiling — armed until "
-                    f"{_iso_utc(effective_deadline)} instead of "
-                    f"{requested_text}.",
-                    kind="advisory",
-                    lifetime="run",
-                )
-
-    # No effective deadline ⇒ no budget this wait could outlive — see
-    # `_budget_exceeded`'s own `if budget_seconds is not None` guard: a run
-    # with no configured `runner.timeout_seconds` never reaches that check
-    # at all, so there is nothing here for the keepalive to extend against.
-    if effective_deadline is not None:
-        _extend_keepalive(keepalive_path, effective_deadline)
 
     # #1327: exclude whatever was already pending at arm time (the
     # snapshot `_drain_outbox` took when this wait was staged) — a
@@ -6363,7 +6217,7 @@ def _resolve_await_state(
         if armed_pending_ids else pending_events
     )
     outcome, which = await_verb.evaluate(armed.get("file"), fresh_events)
-    if outcome is None and effective_deadline is not None and now >= effective_deadline:
+    if outcome is None and requested_deadline is not None and now >= requested_deadline:
         outcome = "timeout"
         which = None
 
@@ -6373,8 +6227,7 @@ def _resolve_await_state(
         "armed_at": _iso_utc(float(armed["armed_at"])),
         "generation": armed.get("generation"),
         "timeout_seconds": armed.get("timeout_seconds"),
-        "deadline": _iso_utc(effective_deadline) if effective_deadline is not None else None,
-        "capped": bool(armed.get("capped")),
+        "deadline": _iso_utc(requested_deadline) if requested_deadline is not None else None,
         "resolved": outcome is not None,
     }
     if outcome is not None:
@@ -6535,9 +6388,6 @@ def _write_live_portal_state(
     runner_catalog: "list[dict[str, object]] | None" = None,
     quality_escalation: "dict[str, object] | None" = None,
     relay_consent: "dict[str, object] | None" = None,
-    budget_seconds: float | None = None,
-    hard_cap_seconds: float | None = None,
-    keepalive_path: Path | None = None,
     card_state: dict[str, object] | None = None,
     output_stats: dict[str, int] | None = None,
     start_monotonic: float | None = None,
@@ -6587,9 +6437,6 @@ def _write_live_portal_state(
         await_state = _resolve_await_state(
             task, events,
             outbox_dir=outbox_dir,
-            keepalive_path=keepalive_path,
-            hard_cap_seconds=hard_cap_seconds,
-            start_monotonic=start_monotonic,
         )
         # The bolt (design-the-bolt.md): absent until a `cut:` is accepted
         # this run — sibling work reads exactly this shape, so the key
@@ -6792,17 +6639,7 @@ def _write_live_portal_state(
                     if state_moved_monotonic is not None else None
                 ),
             },
-            "budget": {
-                "elapsed_seconds": elapsed,
-                "budget_seconds": budget_seconds,
-                "hard_cap_seconds": hard_cap_seconds,
-                "long_running": bool(
-                    elapsed is not None
-                    and budget_seconds is not None
-                    and elapsed > budget_seconds
-                ),
-                "keepalive": _keepalive_state(keepalive_path),
-            },
+            "budget": {"elapsed_seconds": elapsed},
             "await": await_state,
             "scm": scm_facet,
             "produce": produce_facet,
@@ -9472,7 +9309,6 @@ def _drain_outbox(
                     # call's sticky-resolved outcome as this call's answer.
                     "generation": str(time.time_ns()),
                     "resolved": False,
-                    "capped": False,
                     "armed_pending_ids": sorted(
                         {
                             str(ev["id"])
@@ -13778,9 +13614,6 @@ _MAX_PRESERVED_BYTES = 1_000_000
 
 
 NOT_PRESERVED: dict[str, str] = {
-    portals.KEEPALIVE_NAME: (
-        "transient slot control, meaningless after the run"
-    ),
     portals.LINGER_OPT_OUT_NAME: (
         "transient closeout control, meaningless after the run"
     ),

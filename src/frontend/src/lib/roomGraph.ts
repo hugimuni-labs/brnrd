@@ -63,7 +63,7 @@ export interface Place {
 // place rather than an exotic one.
 const FORGE_RE = /\bgh (pr|issue|api|run|release|repo)\b|\bgit push\b|\bgit fetch\b|\bgit pull\b/;
 const CONTROL_FILE_RE =
-	/\.card\b|\.promises\b|\.name\b|\.topics\b|\.mood\b|\.keepalive\b|menu\.json/;
+	/\.card\b|\.promises\b|\.name\b|\.topics\b|\.mood\b|menu\.json/;
 const DESK_RE = /inbox\.json|portal-state\.json|\bbrnrd (do|await)\b|\boutbox\b/;
 const KB_RE = /\bkb\/|\.brnrd-kb\/|knowledge\//;
 

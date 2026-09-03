@@ -929,7 +929,7 @@ def test_await_recall_continues_the_standing_deadline(tmp_path, monkeypatch):
         budget={"budget_seconds": 7200, "elapsed_seconds": 900},
         await_state={
             "armed": True, "generation": "111", "resolved": False,
-            "deadline": _in(300), "capped": False,
+            "deadline": _in(300),
         },
     )
 
@@ -948,7 +948,7 @@ def test_await_explicit_timeout_still_beats_a_standing_deadline(
         budget={"budget_seconds": 7200, "elapsed_seconds": 900},
         await_state={
             "armed": True, "generation": "111", "resolved": False,
-            "deadline": _in(300), "capped": False,
+            "deadline": _in(300),
         },
     )
 
@@ -1053,7 +1053,7 @@ def test_await_reports_the_daemons_resolution(tmp_path, capsys, monkeypatch):
                 "await": {
                     "armed": True, "generation": "222", "resolved": True,
                     "outcome": "event", "which": None,
-                    "deadline": "2026-08-07T12:00:00Z", "capped": False,
+                    "deadline": "2026-08-07T12:00:00Z",
                 },
             }),
             encoding="utf-8",
@@ -1171,7 +1171,7 @@ def test_await_never_reports_a_previous_calls_resolution(
     """
     outbox = _await_outbox(tmp_path, await_state={
         "armed": True, "generation": "111", "resolved": True,
-        "outcome": "timeout", "which": None, "capped": False,
+        "outcome": "timeout", "which": None,
     })
 
     def drain():
