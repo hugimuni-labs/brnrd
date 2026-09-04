@@ -712,8 +712,7 @@ def test_format_portal_state_surfaces_missing_data():
         "attention": {"pending_event_count": 0, "pending_outbox_file_count": 0},
         "outbound": {"replies_current": 0, "replies_other": 0,
                      "outbound_messages": 0, "any_sent": False},
-        "budget": {"elapsed_seconds": 4000, "budget_seconds": 3600,
-                   "long_running": True, "keepalive": {"status": "-"}},
+        "budget": {"elapsed_seconds": 4000},
         "resources": {
             "quota": {"status": "absent", "note": "no snapshot for this medium"},
             "spend": {"status": "unimplemented", "note": "not metered yet"},
@@ -725,29 +724,12 @@ def test_format_portal_state_surfaces_missing_data():
         },
     })
     assert "nothing sent yet" in out
-    assert "running long" in out
+    assert "budget: elapsed=" in out
+    assert "limit=" not in out and "keepalive=" not in out
     assert "spend=unimplemented (not metered yet)" in out
     assert "remote-scm=absent (no PR recorded for this branch yet)" in out
     assert "unavailable" not in out
 
-
-def test_format_portal_state_renders_no_limit_for_null_budget():
-    """2026-08-19: an unset ``runner.timeout_seconds`` sends
-    ``budget_seconds: null`` through portal-state — the compact status
-    line must say "no limit", not the bare "-" a plain duration formatter
-    would render for None."""
-    from brr.cli import _format_portal_state
-
-    out = _format_portal_state({
-        "run": {"id": "run-1", "event_id": "evt-1", "phase": "running"},
-        "attention": {"pending_event_count": 0, "pending_outbox_file_count": 0},
-        "outbound": {"replies_current": 0, "replies_other": 0,
-                     "outbound_messages": 0, "any_sent": True},
-        "budget": {"elapsed_seconds": 90, "budget_seconds": None,
-                   "long_running": False, "keepalive": {"status": "-"}},
-    })
-    assert "limit=no limit" in out
-    assert "running long" not in out
 
 
 def test_portal_state_errors_without_file(capsys, monkeypatch):
@@ -929,7 +911,7 @@ def test_await_recall_continues_the_standing_deadline(tmp_path, monkeypatch):
         budget={"budget_seconds": 7200, "elapsed_seconds": 900},
         await_state={
             "armed": True, "generation": "111", "resolved": False,
-            "deadline": _in(300), "capped": False,
+            "deadline": _in(300),
         },
     )
 
@@ -948,7 +930,7 @@ def test_await_explicit_timeout_still_beats_a_standing_deadline(
         budget={"budget_seconds": 7200, "elapsed_seconds": 900},
         await_state={
             "armed": True, "generation": "111", "resolved": False,
-            "deadline": _in(300), "capped": False,
+            "deadline": _in(300),
         },
     )
 
@@ -1053,7 +1035,7 @@ def test_await_reports_the_daemons_resolution(tmp_path, capsys, monkeypatch):
                 "await": {
                     "armed": True, "generation": "222", "resolved": True,
                     "outcome": "event", "which": None,
-                    "deadline": "2026-08-07T12:00:00Z", "capped": False,
+                    "deadline": "2026-08-07T12:00:00Z",
                 },
             }),
             encoding="utf-8",
@@ -1171,7 +1153,7 @@ def test_await_never_reports_a_previous_calls_resolution(
     """
     outbox = _await_outbox(tmp_path, await_state={
         "armed": True, "generation": "111", "resolved": True,
-        "outcome": "timeout", "which": None, "capped": False,
+        "outcome": "timeout", "which": None,
     })
 
     def drain():

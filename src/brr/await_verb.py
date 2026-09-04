@@ -3,7 +3,7 @@
 The measured failure #959 closed: a resident waiting on a dispatched strand
 or a background gate wrote ``until <condition>; do sleep 25; done`` as one
 shell call. By the letter of the older liveness contract that "survives the
-closeout" — ``.keepalive`` was armed, the thought never ended — but it
+closeout" — the thought never ended — but it
 emitted zero tool boundaries for the whole span, and the daemon only ever
 reaches a resident *at* a tool boundary (``daemon-substrate.md`` §boundary
 tempo). Three of the maintainer's messages queued behind a wait that was
@@ -42,9 +42,8 @@ still defaults its ceiling from that remaining budget, and an explicit
 heartbeat tick (every ``daemon._HEARTBEAT_INTERVAL`` seconds, independent of
 whether the resident calls anything at all) — that is what makes this a
 *listening* wait rather than a *sleeping* one — and never ends the run to
-service one: it holds the slot, extending ``.keepalive`` when there is a
-deadline to outlast, and surfaces the outcome in ``portal-state.json`` for
-``brnrd await``'s own poll.
+service one: it holds the slot and surfaces the outcome in
+``portal-state.json`` for ``brnrd await``'s own poll.
 """
 
 from __future__ import annotations

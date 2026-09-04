@@ -748,7 +748,11 @@ def test_docker_invoke_uses_default_timeout(tmp_path, monkeypatch):
     assert captured["timeout"] is None
 
 
-def test_docker_invoke_honours_configured_timeout(tmp_path, monkeypatch):
+def test_docker_invoke_ignores_configured_timeout(tmp_path, monkeypatch):
+    """w-74 (no reaper): ``runner.timeout_seconds`` no longer flows into the
+    docker wait — a daemon run has no elapsed clock; the user stops it. The
+    key may still be configured (deprecated, logged once); the subprocess
+    wait must see ``None``."""
     _isolate_docker_creds(monkeypatch, tmp_path)
     _stub_worktree(monkeypatch, tmp_path)
     monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
@@ -781,15 +785,17 @@ def test_docker_invoke_honours_configured_timeout(tmp_path, monkeypatch):
         {**cfg, "runner_cmd": ["mock", "{prompt}"]},
     )
 
-    assert captured["timeout"] == 1200
+    assert captured["timeout"] is None
 
 
 def test_docker_invoke_timeout_message_uses_configured_value(
     tmp_path, monkeypatch,
 ):
-    """When the docker subprocess times out, the appended stderr line
-    must report the actual configured ceiling so operators reading the
-    failed packet can tell what the budget was."""
+    """When a *bounded* docker invocation (an explicit
+    ``RunnerInvocation.timeout_seconds`` — auxiliary work, never a daemon
+    run since w-74) times out, the appended stderr line must report the
+    actual ceiling so operators reading the failed packet can tell what
+    the budget was."""
     _isolate_docker_creds(monkeypatch, tmp_path)
     _stub_worktree(monkeypatch, tmp_path)
     monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
@@ -843,6 +849,7 @@ def test_docker_invoke_timeout_message_uses_configured_value(
         cwd=ctx.cwd,
         repo_root=tmp_path,
         response_path=str(response_path),
+        timeout_seconds=42,
     )
     result = envs.get_env("docker").invoke(
         ctx, "mock-runner", invocation,

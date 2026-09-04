@@ -105,15 +105,14 @@ EMPTY_READ_HUMAN_FLOOR = 0.15
 
 _POLL_INTERVAL = 1.0
 _CARD_NAME = ".card"
-_KEEPALIVE_NAME = ".keepalive"
 _NAME_NAME = ".name"
 # Resident-authored mood glyph/name (#566 layer 2) — same control-dotfile
-# idiom as `.card`/`.keepalive`/`.name`, registered here for the same reason:
+# idiom as `.card`/`.name`, registered here for the same reason:
 # never chat, never delivered. See `hooks.MOOD_NAME`.
 _MOOD_NAME = ".mood"
 
 #: Outbox dotfiles that are control surfaces, never chat.
-_CONTROL_FILES = frozenset({_CARD_NAME, _KEEPALIVE_NAME, _NAME_NAME, _MOOD_NAME})
+_CONTROL_FILES = frozenset({_CARD_NAME, _NAME_NAME, _MOOD_NAME})
 
 
 @dataclass
@@ -356,30 +355,6 @@ def _retire(path: Path) -> None:
         path.replace(target)
     except OSError:
         pass
-
-
-def _keepalive_deadline(outbox_dir: Path, default_deadline: float) -> float:
-    """Honour ``.keepalive`` as a timeout extension, exactly as a run does."""
-    path = outbox_dir / _KEEPALIVE_NAME
-    try:
-        raw = path.read_text(encoding="utf-8").strip()
-    except OSError:
-        return default_deadline
-    if not raw:
-        return default_deadline
-    from . import schedule as schedule_mod
-
-    first = raw.splitlines()[0].strip()
-    if first.startswith("+"):
-        secs = schedule_mod.parse_duration(first[1:].strip())
-        if secs is None:
-            return default_deadline
-        try:
-            return max(default_deadline, path.stat().st_mtime + secs)
-        except OSError:
-            return default_deadline
-    until = schedule_mod.parse_iso(first)
-    return max(default_deadline, until) if until else default_deadline
 
 
 class _Session:
@@ -1165,12 +1140,6 @@ class _Session:
                         # still what keeps every *other* tick honest about
                         # what the budget measures.
                         continue
-                    # Recomputed each tick rather than carried:
-                    # ``.keepalive`` is wall-clock and can be rewritten
-                    # mid-wake, so the extension is translated into this
-                    # loop's monotonic clock every time instead of being
-                    # frozen at one reading.
-                    #
                     # Rec 1 (#1036): the deadline is pushed out by however
                     # long this wake has spent with a human holding the
                     # floor (``self._awaiting_elapsed``, accrued in
@@ -1179,12 +1148,6 @@ class _Session:
                     deadline = (
                         start + self.timeout_seconds + self._awaiting_elapsed
                     )
-                    extended = _keepalive_deadline(self.outbox_dir, 0.0)
-                    if extended:
-                        deadline = max(
-                            deadline,
-                            time.monotonic() + (extended - time.time()),
-                        )
                     if time.monotonic() >= deadline:
                         self.result.error = (
                             f"the init wake outlived its "
