@@ -5230,23 +5230,23 @@ def test_drain_outbox_parks_config_change_proposal(tmp_path, monkeypatch):
     path = protocol.create_event(
         inbox,
         "telegram",
-        "please raise the spawn pool",
+        "please raise the dominion injection budget",
         status="processing",
         conversation_key="telegram:42:",
     )
     event_id = path.stem
     (outbox / "config.md").write_text(
         "---\n"
-        "config_change: spawn.max_concurrent\n"
-        "value: 8\n"
+        "config_change: dominion.inject_budget_bytes\n"
+        "value: 20000\n"
         "---\n"
-        "Need headroom for a four-way fan-out.\n",
+        "Need room for a larger working-memory injection.\n",
         encoding="utf-8",
     )
     task = Run(
         id="run-cfg",
         event_id=event_id,
-        body="please raise the spawn pool",
+        body="please raise the dominion injection budget",
         source="telegram",
         conversation_key="telegram:42:",
         meta={"repo_label": "Gurio/brr"},
@@ -5271,9 +5271,11 @@ def test_drain_outbox_parks_config_change_proposal(tmp_path, monkeypatch):
     assert len(proposals) == 1
     text = proposals[0].read_text(encoding="utf-8")
     assert "status: pending" in text
-    assert "config_key: spawn.max_concurrent" in text
-    assert "requested_value: 8" in text
-    assert protocol.frontmatter_body(text).strip() == "Need headroom for a four-way fan-out."
+    assert "config_key: dominion.inject_budget_bytes" in text
+    assert "requested_value: 20000" in text
+    assert protocol.frontmatter_body(text).strip() == (
+        "Need room for a larger working-memory injection."
+    )
     partial = protocol.list_partials(responses, event_id)[0].read_text(encoding="utf-8")
     assert "https://brnrd.example/config-approve/cfgreq_x" in partial
     assert proposals[0].stem in partial
@@ -5450,9 +5452,9 @@ def _write_config_change_proposal(
     proposal_id,
     *,
     conversation_key="telegram:42:",
-    key="spawn.max_concurrent",
-    current="4",
-    requested="8",
+    key="dominion.inject_budget_bytes",
+    current="16000",
+    requested="20000",
 ):
     proposal = daemon.account.config_change_proposals_path(ctx) / f"{proposal_id}.md"
     proposal.parent.mkdir(parents=True)
@@ -5467,7 +5469,7 @@ def _write_config_change_proposal(
         f"conversation_key: {conversation_key}\n"
         "created: 2026-07-08T00:00:00Z\n"
         "---\n"
-        "Need headroom.\n",
+        "Need room for a larger working-memory injection.\n",
         encoding="utf-8",
     )
     return proposal
@@ -5483,7 +5485,7 @@ def test_config_change_approval_applies_to_brr_config(tmp_path):
 
     assert handled is True
     cfg = daemon.conf.load_config(target.repo_root)
-    assert cfg["spawn.max_concurrent"] == 8
+    assert cfg["dominion.inject_budget_bytes"] == 20000
     updated = proposal.read_text(encoding="utf-8")
     assert "status: applied" in updated
     assert protocol.list_pending(target.inbox_dir) == []
@@ -5800,7 +5802,7 @@ def test_owner_config_change_still_applies(tmp_path):
     handled = daemon._handle_config_change_control_event(target, ctx)
 
     assert handled is True
-    assert daemon.conf.load_config(target.repo_root)["spawn.max_concurrent"] == 8
+    assert daemon.conf.load_config(target.repo_root)["dominion.inject_budget_bytes"] == 20000
 
 
 def test_control_verb_existence_oracle_closed(tmp_path):
