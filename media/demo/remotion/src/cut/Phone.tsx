@@ -1,5 +1,5 @@
 import React from "react";
-import { AbsoluteFill, Easing, OffthreadVideo, Sequence, interpolate, staticFile, useCurrentFrame, useVideoConfig } from "remotion";
+import { AbsoluteFill, Easing, Img, OffthreadVideo, Sequence, interpolate, staticFile, useCurrentFrame, useVideoConfig } from "remotion";
 import { CamKey, Scene, VIDEO_H, VIDEO_W, fps, sceneFrames, segFrames } from "./scenes";
 
 // The phone footage fitted to the frame height; the camera is a scale about
@@ -24,7 +24,11 @@ const Footage: React.FC<{ scene: Scene; blur?: boolean }> = ({ scene, blur }) =>
     <>
       {scene.segs.map((seg, i) => {
         const n = segFrames(seg);
-        const el = (
+        const el = seg.still ? (
+          <Sequence key={i} from={start} durationInFrames={n} layout="none">
+            <Img src={staticFile(`stills/${seg.clip}`)} style={{ width: VIDEO_W, height: VIDEO_H, display: "block", filter: blur ? "blur(28px) brightness(0.32) saturate(0.7)" : undefined }} />
+          </Sequence>
+        ) : (
           <Sequence key={i} from={start} durationInFrames={n} layout="none">
             <OffthreadVideo
               src={staticFile(`clips/${seg.clip}`)}
@@ -41,6 +45,15 @@ const Footage: React.FC<{ scene: Scene; blur?: boolean }> = ({ scene, blur }) =>
       })}
     </>
   );
+};
+
+export type CameraFrame = { z: number; tx: number; ty: number };
+export const cameraFrame = (scene: Scene, frame: number, width: number, height: number): CameraFrame => {
+  const total = sceneFrames(scene);
+  const t = Math.min(1, Math.max(0, frame / Math.max(1, total - 1)));
+  const cam = camAt(scene.cam, t);
+  const z = fitScale(height) * cam.z;
+  return { z, tx: width / 2 - cam.cx * VIDEO_W * z, ty: height / 2 - cam.cy * VIDEO_H * z };
 };
 
 export const Phone: React.FC<{ scene: Scene }> = ({ scene }) => {
@@ -74,7 +87,7 @@ export const sourceTimeAt = (scene: Scene, frame: number): number => {
   let start = 0;
   for (const seg of scene.segs) {
     const n = segFrames(seg);
-    if (frame < start + n) return seg.clipStart + seg.from + ((frame - start) / fps) * seg.rate;
+    if (frame < start + n) return seg.still ? seg.clipStart : seg.clipStart + seg.from + ((frame - start) / fps) * seg.rate;
     start += n;
   }
   const last = scene.segs[scene.segs.length - 1];

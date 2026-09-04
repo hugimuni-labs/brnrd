@@ -10,7 +10,7 @@ export const RECORDING_START_UTC = Date.UTC(2026, 8, 1, 13, 6, 56); // 13:06:56Z
 export const VIDEO_W = 720;
 export const VIDEO_H = 1560;
 
-export type Seg = { clip: string; clipStart: number; from: number; to: number; rate: number };
+export type Seg = { clip: string; clipStart: number; from: number; to: number; rate: number; still?: boolean };
 export type CamKey = { at: number; z: number; cx: number; cy: number };
 export type Label = { text: string; from: number; to: number; pos?: "tl" | "tr" | "bl"; amber?: boolean };
 export type Scene = { id: string; segs: Seg[]; cam: CamKey[]; labels?: Label[] };

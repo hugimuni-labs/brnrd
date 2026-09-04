@@ -5,6 +5,8 @@ import { Glitch } from "../components/Glitch";
 import { OUTRO_FRAMES, Scene, scenes, sceneFrames, totalFrames, scenesShort, totalFramesShort } from "./scenes";
 import { Phone } from "./Phone";
 import { Bar, Labels } from "./Overlay";
+import { Hud } from "./Hud";
+import { SceneV5, scenesV5, totalFramesV5 } from "./v5";
 
 const cutFramesOf = (list: Scene[]) => {
   const out: number[] = [];
@@ -46,6 +48,7 @@ export const CutBody: React.FC<{ list: Scene[]; total: number }> = ({ list, tota
               <Sequence key={sc.id} from={start} durationInFrames={n} layout="none">
                 <Phone scene={sc} />
                 <Labels labels={sc.labels} />
+                <Hud scene={sc as SceneV5} />
                 <Bar scene={sc} sceneIndex={i} sceneCount={list.length} />
               </Sequence>
             );
@@ -69,3 +72,4 @@ export const CutBody: React.FC<{ list: Scene[]; total: number }> = ({ list, tota
 
 export const Cut: React.FC = () => <CutBody list={scenes} total={totalFrames} />;
 export const CutShort: React.FC = () => <CutBody list={scenesShort} total={totalFramesShort} />;
+export const CutV5: React.FC = () => <CutBody list={scenesV5} total={totalFramesV5} />;
