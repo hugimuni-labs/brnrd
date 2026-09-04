@@ -2279,26 +2279,27 @@ def _daemon_mood_payload(brr_dir: Path) -> dict[str, Any] | None:
     }
 
 
-def _spawn_pool_width(brr_dir: Path) -> int:
-    """Configured ``spawn:`` pool width (``spawn.max_concurrent``), for the
-    loom-envelope Phase 1 limits panel (`kb/design-multi-workstream-
-    concurrency.md` §"Loom envelope").
-
-    Piggybacked on the live-runs publish tick rather than a new endpoint —
-    the *active* count is already derivable from ``is_subspawn`` entries in
-    ``_live_runs_snapshot`` above, this is the one number that publish
-    doesn't already carry. Reuses ``daemon._max_concurrent_spawns``'s own
-    clamped-default parsing via a deferred import rather than duplicating
-    it: ``daemon.py`` already does a deferred ``from .gates import cloud``
-    (see its own comment there), so importing the other direction here has
-    to stay deferred too, executed at runtime after both modules are
-    fully loaded, not at import time.
-    """
-    from .. import config as _config
-    from ..daemon import _max_concurrent_spawns
-
-    cfg = _config.load_config(brr_dir.parent)
-    return _max_concurrent_spawns(cfg)
+# ── the loom envelope's limits panel, unfed (2026-09-03) ─────────────────
+#
+# ``_spawn_pool_width`` published ``spawn.max_concurrent`` for the
+# loom-envelope Phase 1 limits panel (`kb/design-multi-workstream-
+# concurrency.md` §"Loom envelope"). Spawn admission is a quota-floor
+# decision now, made fresh per dispatch — there is no configured width left
+# to read, and ``daemon._max_concurrent_spawns`` is gone, so the deferred
+# import this function did was a live ``ImportError`` on every live-runs
+# publish tick.
+#
+# Deleted rather than made to publish the raw key anyway: a limits panel
+# rendering a number nothing consults is worse than a blank one, and it is
+# the *same* defect the numeric ``spawn_pool`` projection was retired for —
+# a reader making an admission judgement from a cap that no longer binds.
+# The field stays in the wire schema (``spawn_max_concurrent: int | None``,
+# already nullable and documented as "None when the daemon hasn't reported
+# yet"), so an older server reads a daemon that stopped sending it exactly
+# the way it reads one that has not published yet. Republishing the panel
+# on the fact that *did* replace it — ``{floor, queued}``, the same pair
+# ``portal-state.json`` carries — needs a server-side column, schema and
+# panel of its own, and is a slice this branch does not own.
 
 
 def _dispatch_run_stops(
@@ -2398,14 +2399,14 @@ def _publish_live_runs(brr_dir: Path, inbox_dir: Path | None, state: dict, respo
             token=state["token"],
             json={
                 "runs": _live_runs_snapshot(brr_dir),
-                "spawn_max_concurrent": _spawn_pool_width(brr_dir),
                 # #566 slice 0: the daemon-level telemetry face for the
                 # board at rest — the NOW seam and wordmark need a face
                 # precisely when no run exists to carry one. First caller
                 # of `emotes.for_telemetry` (the layer shipped in #601 and
-                # never wired). Same piggyback economics as
-                # `spawn_max_concurrent` above: one field on a publish that
-                # already happens.
+                # never wired). Piggyback economics: one field on a publish
+                # that already happens. (`spawn_max_concurrent` rode here on
+                # the same terms until the pool it measured was retired —
+                # see the block above `_dispatch_run_stops`.)
                 "daemon_mood": _daemon_mood_payload(brr_dir),
                 "consumed_run_stop_request_ids": acked,
             },

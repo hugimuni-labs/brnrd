@@ -1607,8 +1607,8 @@ def config_change_proposals_path(ctx: AccountContext) -> Path:
     """Return the daemon-owned pending config-change proposal directory.
 
     A resident can propose a change to an allowlisted ``.brr/config`` key
-    (today: ``spawn.max_concurrent``) that it wants moved past the ceiling
-    the operator set. Unlike runner-policy proposals above, this one is
+    (today: the ``dominion.*_inject_budget_bytes`` ceilings) that it wants
+    moved past the ceiling the operator set. Unlike runner-policy proposals above, this one is
     never applied on a chat-typed reply — the daemon mints a brnrd.dev
     approve/confirm URL (``gates/cloud.propose_config_change``) and only
     applies the change once that request comes back approved over the

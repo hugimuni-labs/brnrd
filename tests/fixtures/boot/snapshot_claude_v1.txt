@@ -125,7 +125,7 @@ outcome ⇒ `portal-state.json` → `await`:
 
 a call reaching its own ceiling first ⇒ `{"outcome": "pending"}` · call again is the entire instruction · that ceiling ≠ a brnrd contract ≠ a number to reason about — what bounds one call is the Shell's per-tool-call cap (claude's Bash ends at 10 minutes; codex differs) and the CLI sits under it · the old 15s bound is gone with the argument that justified it — the only things that would want to interrupt this run are the very things that resolve the wait ⇒ a blocking call returns the moment one arrives
 
-strands arm this too · the old refusal reasoned about the wrong slot: a strand does not spend the resident's single-flight slot — it occupies one in the spawn pool (`spawn.max_concurrent`) and already holds it by existing · refusing left a strand blocked on a subprocess with nothing but a shell sleep loop — the exact boundary-free stretch this verb ends, forced by rule onto the runs least able to recover from it
+strands arm this too · a strand does not spend the resident's single-flight slot — it already occupies its own worker by existing · refusing left a strand blocked on a subprocess with nothing but a shell sleep loop — the exact boundary-free stretch this verb ends
 
 under the porcelain = one outbox directive (`await: true` + `timeout:` — a duration or `none` · optional `file:`) · `brnrd await` stages it for you
 a directive still carrying v1's conditions ⇒ refused with a notice naming `brnrd await` — never silently, never by ignoring the extra terms · malformed input (no `timeout:`) ⇒ `notices`, same as any other verb
@@ -219,7 +219,7 @@ source manifest:
   ✓ Working register (weave.md)                                     product      contract     [bytes]  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Working register, worked example (register.md)                  product      contract     [bytes]  {PACKAGE_ROOT}/prompts/register.md  [mtime]
   ✓ Daemon mechanics (daemon-substrate.md)                          product      substrate    [bytes]  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
-  ✓ Portal verb grammar (`brnrd await` / `brnrd do`, docs portals)  product      substrate      9,461  {PACKAGE_ROOT}/docs/portals.md  [mtime]
+  ✓ Portal verb grammar (`brnrd await` / `brnrd do`, docs portals)  product      substrate      9,309  {PACKAGE_ROOT}/docs/portals.md  [mtime]
   ✓ Resident identity core                                          product      identity     [bytes]  {PACKAGE_ROOT}/prompts/identity-core.md  [mtime]
   · Stranded-memory warning (repo moved)                            daemon-live  health             0  computed
   · Dominion digest (self-inject)                                   resident     memory             0  computed

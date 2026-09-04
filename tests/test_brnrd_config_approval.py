@@ -64,10 +64,10 @@ def _repo_and_daemon(client: TestClient) -> tuple[str, dict[str, str], dict[str,
 def _mint(client: TestClient, daemon_headers: dict[str, str], **overrides) -> dict:
     payload = {
         "proposal_id": "cfgchg-260708-000000-abcd1234",
-        "config_key": "spawn.max_concurrent",
-        "current_value": "4",
-        "requested_value": "8",
-        "reason": "need headroom for a four-way fan-out",
+        "config_key": "dominion.inject_budget_bytes",
+        "current_value": "16000",
+        "requested_value": "20000",
+        "reason": "need room for a larger working-memory injection",
     }
     payload.update(overrides)
     return client.post("/v1/daemons/config-requests", json=payload, headers=daemon_headers).json()
@@ -81,10 +81,10 @@ def test_daemon_can_mint_config_change_request():
         "/v1/daemons/config-requests",
         json={
             "proposal_id": "cfgchg-260708-000000-abcd1234",
-            "config_key": "spawn.max_concurrent",
-            "current_value": "4",
-            "requested_value": "8",
-            "reason": "need headroom",
+            "config_key": "dominion.inject_budget_bytes",
+            "current_value": "16000",
+            "requested_value": "20000",
+            "reason": "need room for a larger working-memory injection",
         },
         headers=daemon_headers,
     )
@@ -97,7 +97,7 @@ def test_daemon_can_mint_config_change_request():
         row = db.get(ConfigChangeRequest, body["request_id"])
         assert row is not None
         assert row.repo_id == repo_id
-        assert row.config_key == "spawn.max_concurrent"
+        assert row.config_key == "dominion.inject_budget_bytes"
         assert row.status == ConfigChangeRequest.STATUS_PENDING
 
 
@@ -155,8 +155,8 @@ def test_config_approve_context_shows_account_owned_details():
     r = client.get(f"/v1/config-approve/{minted['request_id']}")
 
     assert r.status_code == 200
-    assert r.json()["config_key"] == "spawn.max_concurrent"
-    assert r.json()["reason"] == "need headroom for a four-way fan-out"
+    assert r.json()["config_key"] == "dominion.inject_budget_bytes"
+    assert r.json()["reason"] == "need room for a larger working-memory injection"
     assert r.json()["status"] == ConfigChangeRequest.STATUS_PENDING
 
 

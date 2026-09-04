@@ -2155,9 +2155,14 @@ def test_loop_publishes_live_runs_snapshot(tmp_path, monkeypatch):
         repo_label="Gurio/brr", pid=os.getpid(), entry_id="spawn-entry",
         parent_run_id="run-live-test", is_subspawn=True,
     )
-    # Loom envelope Phase 1 (kb/design-multi-workstream-concurrency.md
-    # §"Loom envelope"): the configured spawn pool width piggybacks on this
-    # same publish tick.
+    # The loom envelope's Phase 1 limits panel used to be fed from here: the
+    # configured `spawn.max_concurrent` piggybacked on this same publish
+    # tick. Spawn admission is a quota-floor decision since 2026-09-03 and
+    # there is no width to publish, so a config that still carries the key
+    # publishes nothing — the panel goes blank rather than rendering a
+    # number nothing consults. Pinned with the key *present* deliberately:
+    # the failure this guards is a stale reader wired back up to a live
+    # config value.
     (brr_dir / "config").write_text("spawn.max_concurrent=6\n")
 
     cloud._dashboard_publish_tick(brr_dir, inbox_dir)
@@ -2165,7 +2170,7 @@ def test_loop_publishes_live_runs_snapshot(tmp_path, monkeypatch):
     with client.app.state.SessionLocal() as db:
         daemon = db.query(DaemonModel).filter(DaemonModel.repo_id == pid).one()
         assert daemon.live_runs_updated_at is not None
-        assert daemon.spawn_max_concurrent == 6
+        assert daemon.spawn_max_concurrent is None
         runs = json_mod.loads(daemon.live_runs_json)
     assert len(runs) == 2
     by_run_id = {row["run_id"]: row for row in runs}

@@ -92,7 +92,6 @@ _PUBLISHER_COMPAT_NAMES = (
     "_live_runs_snapshot",
     "_mood_payload",
     "_daemon_mood_payload",
-    "_spawn_pool_width",
     "_dispatch_run_stops",
     "_report_live_runs_losses",
     "_publish_live_runs",

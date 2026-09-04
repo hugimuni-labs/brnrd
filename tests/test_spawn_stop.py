@@ -17,6 +17,7 @@ import types
 import pytest
 
 from brr import daemon, protocol, run_progress, runner, updates
+from brr.run import Run
 
 
 @pytest.fixture(autouse=True)
@@ -271,6 +272,131 @@ class TestStopVerb:
         packet_types = [p.type for p in emitted]
         assert "spawn_adopted" in packet_types
         assert "spawn_stop_requested" in packet_types
+
+
+class TestSubmitVerb:
+    def _drain(
+        self, tmp_path, monkeypatch, *,
+        report=True, strand=True, unpublished=False,
+    ):
+        brr_dir = tmp_path / ".brr"
+        inbox = brr_dir / "inbox"
+        outbox = brr_dir / "outbox" / "evt-child"
+        inbox.mkdir(parents=True)
+        outbox.mkdir(parents=True)
+        report_path = tmp_path / "report.md"
+        if report:
+            report_path.write_text("receipt\n")
+        (outbox / "submit.md").write_text("---\nsubmit: true\n---\nready\n")
+        daemon._register_run_control(
+            "evt-child", "run-parent", parent_conversation_key="cloud:1:",
+        )
+        daemon._bind_run_control("evt-child", "run-child")
+        monkeypatch.setattr(daemon.gitops, "rev_parse", lambda *_a: "abc123")
+        monkeypatch.setattr(
+            daemon.gitops, "branch_upstream",
+            lambda *_a: None if unpublished else "origin/brr/delivered",
+        )
+        monkeypatch.setattr(daemon.gitops, "default_remote", lambda *_a: "origin")
+        if not unpublished:
+            monkeypatch.setattr(daemon, "_commits_between", lambda *_a: [])
+        monkeypatch.setattr(daemon.updates, "emit", lambda *_a: None)
+        task = types.SimpleNamespace(
+            id="run-child", event_id="evt-child", conversation_key="cloud:1:",
+            meta={
+                "strand": strand,
+                "spawn_parent_run_id": "run-parent",
+                "spawn_parent_conversation_key": "cloud:1:",
+                "spawn_contract_branch": "brr/delivered",
+                "spawn_contract_report": str(report_path),
+            },
+        )
+        emit = daemon._WorkerEmit(brr_dir, "cloud:1:", "evt-child")
+        stats = {}
+        count = daemon._drain_outbox(
+            emit, task, brr_dir / "responses", "evt-child", outbox, inbox,
+            repo_root=tmp_path, stats=stats,
+        )
+        return count, task, inbox, outbox, stats
+
+    def test_submit_attests_produce_and_leaves_child_live(self, tmp_path, monkeypatch):
+        count, task, inbox, _outbox, stats = self._drain(tmp_path, monkeypatch)
+
+        assert count == 1
+        assert stats == {"submit": 1}
+        control = daemon._find_run_control("run-child")
+        assert control["submitted"] is True
+        assert control["stopped"] is False
+        [event] = [
+            ev for ev in protocol.list_pending(inbox)
+            if ev.get("source") == "spawn_submitted"
+        ]
+        assert event["spawn_status"] == "submitted"
+        assert event["spawn_published_branch"] == "brr/delivered"
+        assert event["spawn_report_found"] is True
+        assert event["spawn_submit_generation"] == 1
+
+    def test_missing_report_refuses_without_parent_event(self, tmp_path, monkeypatch):
+        count, _task, inbox, outbox, stats = self._drain(
+            tmp_path, monkeypatch, report=False,
+        )
+
+        assert count == 0
+        assert stats == {}
+        assert not any(
+            ev.get("source") == "spawn_submitted"
+            for ev in protocol.list_pending(inbox)
+        )
+        assert "missing report" in daemon._read_outbox_notices(outbox)[0]["text"]
+
+    def test_resubmit_emits_a_new_generation(self, tmp_path, monkeypatch):
+        _count, task, inbox, outbox, stats = self._drain(tmp_path, monkeypatch)
+        (outbox / "again.md").write_text("---\nsubmit: true\n---\nupdated\n")
+        emit = daemon._WorkerEmit(tmp_path / ".brr", "cloud:1:", "evt-child")
+
+        assert daemon._drain_outbox(
+            emit, task, tmp_path / ".brr" / "responses", "evt-child",
+            outbox, inbox, repo_root=tmp_path, stats=stats,
+        ) == 1
+        submitted = [
+            ev for ev in protocol.list_pending(inbox)
+            if ev.get("source") == "spawn_submitted"
+        ]
+        assert [ev["spawn_submit_generation"] for ev in submitted] == [1, 2]
+
+    def test_submit_refused_for_a_non_strand(self, tmp_path, monkeypatch):
+        """The verb is a strand's, not a resident's: a resident that staged it
+        would be attesting produce to a parent it does not have."""
+        _count, _task, inbox, outbox, _stats = self._drain(
+            tmp_path, monkeypatch, strand=False,
+        )
+
+        assert not any(
+            ev.get("source") == "spawn_submitted"
+            for ev in protocol.list_pending(inbox)
+        )
+        assert "only a spawned strand" in daemon._read_outbox_notices(outbox)[0]["text"]
+
+    def test_unpublished_branch_refuses_naming_the_branch(
+        self, tmp_path, monkeypatch,
+    ):
+        """A head carrying commits its remote-tracking ref does not is *not*
+        published: the parent reviewing a submit reads the branch out of its
+        own checkout through the lane the daemon owns, and unpushed commits are
+        invisible there. The refusal names the branch, so a strand that has
+        merely forgotten to push knows which fact is missing rather than
+        reading a generic "contract failed"."""
+        monkeypatch.setattr(daemon, "_commits_between", lambda *_a: ["abc123"])
+        _count, _task, inbox, outbox, stats = self._drain(
+            tmp_path, monkeypatch, unpublished=True,
+        )
+
+        assert stats == {}
+        assert not any(
+            ev.get("source") == "spawn_submitted"
+            for ev in protocol.list_pending(inbox)
+        )
+        assert "brr/delivered" in daemon._read_outbox_notices(outbox)[0]["text"]
 
     def test_stop_without_target_is_dropped(self, tmp_path, monkeypatch):
         # Unreachable via the drain (the branch requires a non-empty value);
@@ -555,3 +681,166 @@ class TestWorkerViewIsolation:
             if ev.get("source") == "dispatch_message"
         ]
         assert remaining == [other.stem]
+
+
+# ── release: `stop:` on a submitted child, and the legacy path it must not ──
+# ── disturb (decision 2026-09-03, items 3 and 6) ─────────────────────────────
+
+
+class TestReleaseAndLegacyCompletion:
+    """The two ends of a strand's life, pinned against each other.
+
+    A submitted strand has already attested its produce; killing it must not
+    re-derive that produce from the corpse. The runner process is gone, the
+    worktree is about to be torn down, and `publish()` on a killed run reports
+    whatever the salvage path managed — which is precisely the reading the
+    submit exists to replace. So the release path *replays* the last accepted
+    submit and says `released`.
+
+    A strand that never submitted has no attestation to replay, and nothing
+    about it may change: `spawn_completed`, `status: stopped`, produce read the
+    ordinary way. That half is the legacy pin.
+    """
+
+    def _finalize(self, tmp_path, monkeypatch, control, *, salvaged=("", 0)):
+        brr_dir = tmp_path / ".brr"
+        runs_dir = brr_dir / "runs"
+        runs_dir.mkdir(parents=True)
+        inbox = brr_dir / "inbox"
+        inbox.mkdir(parents=True)
+        event_path = inbox / "evt-child.md"
+        event_path.write_text(
+            "---\nid: evt-child\nstatus: processing\n---\nwork\n", encoding="utf-8",
+        )
+        event = protocol._read_event(event_path)
+        task = Run(
+            id="run-child", event_id="evt-child", body="work", status="running",
+            meta={
+                "strand": True,
+                "spawn_parent_run_id": "run-parent",
+                "spawn_parent_conversation_key": "cloud:1:",
+                "spawn_contract_branch": "brr/submitted-work",
+            },
+        )
+        task.save(runs_dir)
+
+        class FakeEnvBackend:
+            def finalize(self, _ctx, task, _runs_dir):
+                # The salvage path on a killed run: whatever it managed, which
+                # for a released child must lose to the submitted attestation.
+                task.meta["publish_branch"] = salvaged[0]
+                task.meta["publish_commits"] = salvaged[1]
+                return task
+
+        monkeypatch.setattr(daemon, "_capture_worktree", lambda *_a, **_k: None)
+        monkeypatch.setattr(daemon, "_emit_preserved_containers", lambda *_a: None)
+        emit = daemon._WorkerEmit(brr_dir, "cloud:1:", "evt-child")
+        result = daemon._finalize_stopped_run(
+            emit, task, event, "evt-child", runs_dir, FakeEnvBackend(), object(),
+            types.SimpleNamespace(target_branch="brr/submitted-work"), {},
+            control, 1, [],
+        )
+        return result, inbox
+
+    @staticmethod
+    def _submitted_control(stopped_by):
+        return {
+            "stopped_by": stopped_by,
+            "submitted": True,
+            "submit_generation": 2,
+            "submitted_produce": {
+                "spawn_status": "submitted",
+                "spawn_published_branch": "brr/submitted-work",
+                "spawn_report_path": "/tmp/brr-reports/submitted.md",
+                "spawn_report_found": True,
+                "spawn_submit_generation": 2,
+                "spawn_commits": 4,
+            },
+        }
+
+    def test_stop_on_a_submitted_child_releases_with_the_last_attestation(
+        self, tmp_path, monkeypatch,
+    ):
+        result, _inbox = self._finalize(
+            tmp_path, monkeypatch, self._submitted_control("run-parent"),
+        )
+
+        assert result.status == "released"
+        # The env backend's post-kill salvage reading ("" / 0) is overwritten
+        # by the submit's — this is the whole point of the release path.
+        assert result.meta["publish_branch"] == "brr/submitted-work"
+        assert result.meta["publish_commits"] == 4
+        assert result.meta["submitted"] is True
+        assert result.meta["stopped_by"] == "run-parent"
+
+    def test_a_dashboard_stop_releases_the_same_way_and_names_the_user(
+        self, tmp_path, monkeypatch,
+    ):
+        """#476's owner-initiated stop reaches the same function with a
+        different `stopped_by`. The release is identical; only the attribution
+        differs, and it has to reach the parent's event or a reviewing wake
+        reads an owner's deliberate stop as a sibling run's."""
+        result, inbox = self._finalize(
+            tmp_path, monkeypatch, self._submitted_control("user"),
+        )
+        assert result.status == "released"
+        assert result.meta["stopped_by"] == "user"
+
+        monkeypatch.setattr(daemon.gitops, "shared_brr_dir", lambda _r: tmp_path / ".brr")
+        daemon._notify_spawn_parent(inbox, result)
+        [note] = [
+            ev for ev in protocol.list_pending(inbox)
+            if ev.get("source") == "spawn_completed"
+        ]
+        assert note["spawn_status"] == "released"
+        assert note["spawn_stopped_by"] == "user"
+        assert note["spawn_published_branch"] == "brr/submitted-work"
+        assert note["spawn_commits"] == 4
+
+    def test_a_strand_that_never_submitted_still_stops_the_legacy_way(
+        self, tmp_path, monkeypatch,
+    ):
+        """The legacy pin. No `submitted_produce` on the control ⇒ nothing in
+        this slice may touch the run: it ends `stopped`, keeps whatever the
+        salvage path attested, and returns `spawn_completed` with no
+        submit-shaped keys anywhere on it."""
+        result, inbox = self._finalize(
+            tmp_path, monkeypatch, {"stopped_by": "run-parent"},
+            salvaged=("brr/submitted-work", 2),
+        )
+
+        assert result.status == "stopped"
+        # Salvage attested it, so salvage is what the parent reads.
+        assert result.meta["publish_branch"] == "brr/submitted-work"
+        assert result.meta["publish_commits"] == 2
+        assert "submitted" not in result.meta
+        assert "submitted_produce" not in result.meta
+
+        monkeypatch.setattr(daemon.gitops, "shared_brr_dir", lambda _r: tmp_path / ".brr")
+        daemon._notify_spawn_parent(inbox, result)
+        [note] = [
+            ev for ev in protocol.list_pending(inbox)
+            if ev.get("source") == "spawn_completed"
+        ]
+        assert note["spawn_status"] == "stopped"
+        assert note["spawn_commits"] == 2
+        assert "spawn_submit_generation" not in note
+        assert "spawn_report_found" not in note
+
+    def test_an_unsubmitted_strand_that_published_nothing_keeps_its_own_verdict(
+        self, tmp_path, monkeypatch,
+    ):
+        """The other legacy arm, pinned so the release path cannot quietly
+        annex it: a killed strand that declared a branch and published nothing
+        is `nothing-published` — the honest pre-existing reading, not
+        `released`, and not `stopped` either."""
+        result, inbox = self._finalize(
+            tmp_path, monkeypatch, {"stopped_by": "run-parent"},
+        )
+        monkeypatch.setattr(daemon.gitops, "shared_brr_dir", lambda _r: tmp_path / ".brr")
+        daemon._notify_spawn_parent(inbox, result)
+        [note] = [
+            ev for ev in protocol.list_pending(inbox)
+            if ev.get("source") == "spawn_completed"
+        ]
+        assert note["spawn_status"] == "nothing-published"
