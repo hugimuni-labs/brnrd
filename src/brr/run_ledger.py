@@ -260,6 +260,14 @@ def build_closed_run_row(
         seed_ref=relic_seed,
         outbox_dir=outbox_dir,
         commit_run_id=commit_run_id,
+        # #1788: only meaningful for an isolated run's own tree — a host
+        # run already measures from host_start_oid (collection_scope's
+        # branchless fallback above), and the plan's recorded seed_oid can
+        # predate that baseline. `commit_run_id is None` is exactly "not a
+        # host run" (mirrors the identity-filter guard just above).
+        seed_oid=(
+            relics.seed_oid_of(task.meta) if commit_run_id is None else None
+        ),
     )
     row = {
         "run_id": task.id,
