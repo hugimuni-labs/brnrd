@@ -32,7 +32,8 @@ export const RELIC_ICONS: Record<string, string> = {
 	file: '📄',
 	message: '✉️',
 	reply: '🗣️',
-	item: '🧵'
+	item: '🧵',
+	note: '⚠️'
 };
 
 export function relicIcon(kind: string): string {

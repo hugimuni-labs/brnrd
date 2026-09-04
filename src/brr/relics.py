@@ -112,6 +112,7 @@ _ICONS: dict[str, str] = {
     "message": "✉️",
     "reply": "🗣️",
     "item": "🧵",
+    "note": "⚠️",
 }
 
 
@@ -321,6 +322,23 @@ def collection_scope(
     return branch, seed
 
 
+def seed_oid_of(meta: dict[str, Any]) -> str | None:
+    """The recorded seed oid for *meta*, or ``None`` (#1788).
+
+    A companion read to :func:`collection_scope`'s ``seed_ref``, not a
+    replacement — ``collect``/``derive_auto``/:func:`_commits_since_seed`
+    want both: the oid as the resolvable, portable candidate a
+    ``create_clone`` strand's own tree can always answer for (see
+    :func:`_commits_since_seed`'s docstring), the ref name as the
+    human-readable fallback and the ``origin/<name>`` source. Stamped by
+    ``branching.PublishPlan.meta_items()`` onto ``task.meta["seed_oid"]``
+    when the plan resolved one; absent on older run meta or a plan that
+    could not resolve it, and every caller degrades the same way this
+    already does for a missing ``seed_ref``.
+    """
+    return str(meta.get("seed_oid") or "") or None
+
+
 def scope_roots(
     meta: dict[str, Any], repo_root: Path | None,
 ) -> tuple[Path | None, Path | None]:
@@ -382,14 +400,46 @@ def _commits_since_seed(
     branch: str,
     seed_ref: str | None,
     *,
+    seed_oid: str | None = None,
     run_id: str | None = None,
-) -> list[tuple[str, str, int, str]]:
-    """Return ``[(short_sha, subject, parent_count, committer_email), ...]``
-    for commits on *branch* not on the seed ref, newest first (``git log``'s
-    own default order — matches ``daemon.py``'s existing ``_commits_between``).
-    Parent count and committer identify merges (see :func:`derive_auto`).
-    Read-only ``git`` calls; any failure (no repo, unknown ref, timeout)
-    degrades to ``[]``.
+) -> tuple[list[tuple[str, str, int, str]], str | None]:
+    """Return ``([(short_sha, subject, parent_count, committer_email), ...],
+    note)`` for commits on *branch* not on the seed, newest first (``git
+    log``'s own default order — matches ``daemon.py``'s existing
+    ``_commits_between``). Parent count and committer identify merges (see
+    :func:`derive_auto`). Read-only ``git`` calls; any failure (no repo,
+    timeout) degrades to ``([], ...)``.
+
+    **Seed resolution (#1788).** A ref *name* is not portable into an
+    isolated run's own tree: a ``create_clone`` strand (#746) is a ``git
+    clone --shared`` whose local heads are only whatever branch
+    ``repo_root`` had checked out at clone time — every other branch,
+    ``seed_ref`` included when it names something else (typically the
+    repo's default branch), is only a ``refs/remotes/origin/*`` name there.
+    ``git merge-base main <branch>`` then fails outright ("Not a valid
+    object name"), and the old code's fallback (retry the plain ``git log``
+    with the same unresolvable name) failed the same way — every relic
+    deriving from the seed comparison silently vanished even though the
+    branch had real commits (the bolt's own produce check bounced on
+    "attested declared but the manifest is empty").
+
+    *seed_oid* — the commit *seed_ref* pointed at when the run's publish
+    plan was resolved (``PublishPlan.seed_oid`` / ``meta["seed_oid"]``) — is
+    tried first: an oid always resolves in a clone (the object store is
+    shared) and cannot drift under a running child. ``seed_ref`` is tried
+    next, then ``origin/<seed_ref>`` for an unqualified name, covering a
+    caller that has a ref name but no recorded oid (or an older run whose
+    meta predates this field). The first candidate whose ``git merge-base``
+    succeeds is used as the comparison base.
+
+    **Visible degrade.** When no candidate resolves, this still returns
+    ``[]`` — a broken git must never block a closeout — but *note* names it
+    (``"seed unresolvable at '<label>'"``) instead of silence, so the
+    manifest reads as "could not measure" rather than "produced nothing"
+    (:func:`derive_auto` folds the note into a ``kind: "note"`` relic). A
+    transient failure *after* the base resolved (the subsequent ``git log``
+    call itself fails) keeps the old bare-``[]`` degrade with no note —
+    the comparison base was fine, this one probe just didn't answer.
 
     ``run_id``, when given, gates every commit on its ``Brnrd-Run-Id``
     trailer (:data:`gitops.RUN_ID_TRAILER`) matching exactly — the guard a
@@ -409,17 +459,31 @@ def _commits_since_seed(
     made for kb pages (#565).
     """
     if not branch:
-        return []
-    seed = seed_ref or gitops.default_branch(repo_root) or "HEAD"
+        return [], None
+    seed_label = seed_ref or seed_oid or gitops.default_branch(repo_root) or "HEAD"
+    candidates = [c for c in (seed_oid, seed_ref) if c]
+    if seed_ref and "/" not in seed_ref:
+        candidates.append(f"origin/{seed_ref}")
+    if not candidates:
+        candidates = [seed_label]
     identity = (run_id or "").strip() or None
     if run_id is not None and identity is None:
-        return []
+        return [], None
+    unresolvable_note = f"seed unresolvable at {seed_label!r}"
+    base_ref: str | None = None
+    resolved = False
     try:
-        merge_base = subprocess.run(
-            ["git", "merge-base", seed, branch],
-            cwd=repo_root, capture_output=True, text=True, timeout=10,
-        )
-        base_ref = merge_base.stdout.strip() if merge_base.returncode == 0 else seed
+        for candidate in candidates:
+            merge_base = subprocess.run(
+                ["git", "merge-base", candidate, branch],
+                cwd=repo_root, capture_output=True, text=True, timeout=10,
+            )
+            if merge_base.returncode == 0:
+                base_ref = merge_base.stdout.strip()
+                resolved = True
+                break
+        if base_ref is None:
+            base_ref = candidates[0]
         log_format = "%h\x1f%P\x1f%ce\x1f%s"
         if identity is not None:
             log_format += f"\x1f%(trailers:key={gitops.RUN_ID_TRAILER},valueonly,separator=%x2C)"
@@ -431,9 +495,9 @@ def _commits_since_seed(
             cwd=repo_root, capture_output=True, text=True, timeout=10,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return []
+        return [], unresolvable_note
     if result.returncode != 0:
-        return []
+        return [], (None if resolved else unresolvable_note)
     expect_parts = 5 if identity is not None else 4
     out: list[tuple[str, str, int, str]] = []
     for row in result.stdout.splitlines():
@@ -450,7 +514,7 @@ def _commits_since_seed(
             sha, parents, committer, subject = parts
         if sha:
             out.append((sha, subject, len(parents.split()), committer.strip()))
-    return out
+    return out, None
 
 
 class _ForgeLinks:
@@ -714,6 +778,7 @@ def derive_auto(
     outbox_dir: Path | None,
     links: _ForgeLinks | None = None,
     commit_run_id: str | None = None,
+    seed_oid: str | None = None,
 ) -> list[dict[str, Any]]:
     """Zero-resident-effort relics: commits, merges, the pushed branch, and
     the PR.
@@ -750,6 +815,14 @@ def derive_auto(
     as the ``Brnrd-Run-Id`` identity gate (#575) — pass it exactly when
     *branch* came from ``collection_scope``'s shared-checkout fallback, never
     for a worktree run's own isolated branch (see that function's docstring).
+
+    ``seed_oid``, when given, is forwarded to :func:`_commits_since_seed` as
+    its preferred seed-resolution candidate (#1788, see that function's
+    docstring for why a ref name alone strands a ``create_clone`` strand).
+    When resolution still fails against every candidate, the returned note
+    becomes a ``kind: "note"`` relic rather than being swallowed — a
+    manifest that came back empty because git couldn't answer must not
+    render identically to one that came back empty because nothing happened.
     """
     if repo_root is None:
         return []
@@ -759,9 +832,11 @@ def derive_auto(
     _pr_url = links.pull_request
 
     if branch:
-        commits = _commits_since_seed(
-            repo_root, branch, seed_ref, run_id=commit_run_id,
+        commits, seed_note = _commits_since_seed(
+            repo_root, branch, seed_ref, seed_oid=seed_oid, run_id=commit_run_id,
         )
+        if seed_note:
+            out.append({"kind": "note", "text": seed_note})
         for sha, subject, parent_count, committer in commits[:_MAX_RECORDS]:
             commit_url = links.commit(sha)
             merge: dict[str, Any] | None = None
@@ -1104,6 +1179,7 @@ def collect(
     seed_ref: str | None,
     outbox_dir: Path | None,
     commit_run_id: str | None = None,
+    seed_oid: str | None = None,
 ) -> list[dict[str, Any]]:
     """The full relic list for one run: summary first, then produce.
 
@@ -1116,6 +1192,10 @@ def collect(
     concurrent sibling's commits in the same window are never counted as
     this run's produce (#575); a worktree run's isolated branch needs no
     filter and passes ``None``.
+
+    ``seed_oid`` forwards to :func:`derive_auto` — a run's recorded
+    ``meta["seed_oid"]`` (:func:`seed_oid_of`), the resolvable candidate an
+    isolated (``create_clone``) run's seed comparison needs (#1788).
     """
     reported_raw = read_reported(outbox_dir)
     for record in reported_raw:
@@ -1155,7 +1235,7 @@ def collect(
         link_reported(rest_reported, links, branch=branch)
     auto = derive_auto(
         repo_root, branch=branch, seed_ref=seed_ref, outbox_dir=outbox_dir,
-        links=links, commit_run_id=commit_run_id,
+        links=links, commit_run_id=commit_run_id, seed_oid=seed_oid,
     )
     return dedupe(summary + auto + rest_reported, links.repo_path)
 
@@ -1476,6 +1556,7 @@ def live_summary(
     seed_ref: str | None,
     outbox_dir: Path | None,
     commit_run_id: str | None = None,
+    seed_oid: str | None = None,
 ) -> dict[str, Any]:
     """Compile the run's attested produce for its live portal facet.
 
@@ -1488,6 +1569,11 @@ def live_summary(
     host run's shared-checkout scope so the live facet cannot flash a
     sibling's mid-run commits as this run's produce, only to have them
     disappear at closeout once identity is applied (#575).
+
+    ``seed_oid`` — see :func:`collect`: the run's recorded seed oid, so an
+    isolated run's live facet resolves the seed the same way closeout does
+    (#1788) instead of flashing an empty produce count mid-run only for the
+    manifest to fill in retroactively at closeout.
     """
     try:
         root = Path(repo_root)
@@ -1497,7 +1583,7 @@ def live_summary(
         records = dedupe(
             derive_auto(
                 root, branch=branch, seed_ref=seed_ref, outbox_dir=outbox_dir,
-                links=links, commit_run_id=commit_run_id,
+                links=links, commit_run_id=commit_run_id, seed_oid=seed_oid,
             )
             + link_reported(read_reported(outbox_dir), links),
             links.repo_path,

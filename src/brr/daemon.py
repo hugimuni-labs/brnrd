@@ -6516,6 +6516,17 @@ def _write_live_portal_state(
                 seed_ref=live_seed,
                 outbox_dir=outbox_dir,
                 commit_run_id=live_commit_run_id,
+                # #1788: only meaningful for an isolated run's own tree — a
+                # host run already measures from `host_start_oid`
+                # (collection_scope's branchless fallback, `live_commit_run_id
+                # is not None` here), and the plan's recorded seed_oid can
+                # predate that baseline, widening the window this filter
+                # exists to bound. `live_commit_run_id is None` is exactly
+                # "not a host run" (mirrors the guard above).
+                seed_oid=(
+                    relics.seed_oid_of(task.meta)
+                    if live_commit_run_id is None else None
+                ),
             )
             if work_dir else {"known": False}
         )
@@ -8852,6 +8863,13 @@ def _cut_mismatches(
         relics_list = relics.collect(
             collect_root, branch=live_branch, seed_ref=live_seed,
             outbox_dir=outbox_dir, commit_run_id=commit_run_id,
+            # #1788: skip for a host run — collection_scope already measures
+            # it from host_start_oid (the branchless fallback), and the
+            # plan's recorded seed_oid can predate that baseline.
+            # `commit_run_id is None` is exactly "not a host run".
+            seed_oid=(
+                relics.seed_oid_of(task.meta) if commit_run_id is None else None
+            ),
         )
         if declaration.produce == "none" and relics_list:
             counts = relics.counts_by_kind(relics_list)
@@ -12657,6 +12675,10 @@ def _weld_capture(
         seed_ref=seed,
         outbox_dir=outbox_dir,
         commit_run_id=commit_run_id,
+        # #1788: skip for a host run — see the produce-check call above.
+        seed_oid=(
+            relics.seed_oid_of(task.meta) if commit_run_id is None else None
+        ),
     )
     origin = relics.forge_links(collect_root).repo_path if collect_root else None
     welded = weld.capture_refs(
@@ -13222,6 +13244,10 @@ def _run_state_produce_changed(
             seed_ref=seed,
             outbox_dir=outbox_dir,
             commit_run_id=commit_run_id,
+            # #1788: skip for a host run — see the produce-check call above.
+            seed_oid=(
+                relics.seed_oid_of(task.meta) if commit_run_id is None else None
+            ),
         )
     except Exception:
         return False
@@ -13287,6 +13313,10 @@ def _run_state_produce_lines(
             seed_ref=seed,
             outbox_dir=outbox_dir,
             commit_run_id=commit_run_id,
+            # #1788: skip for a host run — see the produce-check call above.
+            seed_oid=(
+                relics.seed_oid_of(task.meta) if commit_run_id is None else None
+            ),
         )
     except Exception:
         return _existing_produce_lines(path)
