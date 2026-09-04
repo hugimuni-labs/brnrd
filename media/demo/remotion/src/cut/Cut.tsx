@@ -6,6 +6,7 @@ import { OUTRO_FRAMES, Scene, scenes, sceneFrames, totalFrames, scenesShort, tot
 import { Phone, sourceTimeAt } from "./Phone";
 import { Bar, Labels } from "./Overlay";
 import { Hud } from "./Hud";
+import { Boot } from "./Boot";
 import { SceneV5, scenesV5, totalFramesV5 } from "./v5";
 
 const cutFramesOf = (list: Scene[]) => {
@@ -57,10 +58,7 @@ export const CutBody: React.FC<{ list: Scene[]; total: number }> = ({ list, tota
             return el;
           })}
           <Sequence from={outroStart} durationInFrames={OUTRO_FRAMES} layout="none">
-            <AbsoluteFill style={{ background: "#07090B", opacity: outroIn * outroOut, alignItems: "center", justifyContent: "center", gap: 28 }}>
-              <Img src={staticFile("mark-screen.svg")} style={{ width: 260, filter: "drop-shadow(0 0 40px rgba(124,255,155,0.35))" }} />
-              <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 44, color: "#7CFF9B", textShadow: "0 0 18px rgba(124,255,155,0.6)", letterSpacing: 2 }}>brnrd.dev</div>
-            </AbsoluteFill>
+            <Boot fps={60} total={OUTRO_FRAMES} />
           </Sequence>
         </AbsoluteFill>
       </Glitch>

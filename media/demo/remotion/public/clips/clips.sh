@@ -9,3 +9,5 @@ cut c08a_merge 2744 27; cut c08b_ci 2808 109; cut c09_gone 2925 17
 # freeze-stills (public/stills/), offsets = seconds from the recording start
 still(){ ffmpeg -hide_banner -loglevel error -y -ss $2 -i "$F" -frames:v 1 -vf "scale=720:-2" ../stills/$1.png; }
 still s_block 33; still s_notify 263.7; still s_folded 428.6; still s_prup 2677.6; still s_gone 2932; still s_ci 2915.5
+cut c05d_strand 383 12
+still s_sent 335.1

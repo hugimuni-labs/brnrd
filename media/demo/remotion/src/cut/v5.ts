@@ -20,6 +20,7 @@ const c03 = S("c03_wait.mp4", 117);
 const c04b = S("c04b_notify.mp4", 262);
 const c05 = S("c05_reply.mp4", 290);
 const c05c = S("c05c_folded.mp4", 425);
+const c05d = S("c05d_strand.mp4", 383);
 const c06 = S("c06_push.mp4", 2496);
 const c07 = S("c07_prup.mp4", 2672);
 const c08a = S("c08a_merge.mp4", 2744);
@@ -52,25 +53,31 @@ export const scenesV5: SceneV5[] = [
     ],
     callouts: [
       { text: "the ask, from the couch · WhatsApp · 13:08Z", px: 0.5, py: 0.6, side: "right", from: 0.2, to: 3.6 },
-      { text: "sent. the resident is already awake, mid-task — it folds this in.", px: 0.5, py: 0.5, side: "right", from: 4.9, to: 6.9, amber: true },
+      { text: "sent. it folds the ask into the run that's already live.", px: 0.5, py: 0.5, side: "right", from: 4.9, to: 6.9, amber: true },
     ],
   },
   {
     id: "reply",
     // 4:23 the reply notification lands (freeze, zoom on the banner) · 4:24 switch · scroll up to 5:00 (narrated) · typing · send 5:45 · hold
-    segs: [F("s_notify.png", 263.7, 2.8), c04b(1.6, 3.4, 1), c04b(3.4, 28, 18), c05(0, 10, 8), c05(10, 50, 32), c05(50, 55.6, 2.4), c05(55.6, 57.2, 1)],
+    segs: [F("s_notify.png", 263.7, 2.8), c04b(1.6, 3.4, 1), c04b(3.4, 28, 18), c05(0, 10, 8), c05(10, 44.7, 20), F("s_sent.png", 335.1, 1.8)],
     cam: [
       { at: 0, z: 1.2, cx: 0.5, cy: 0.4 }, { at: 0.05, z: 2.2, cx: 0.5, cy: 0.07 }, { at: 0.16, z: 2.2, cx: 0.5, cy: 0.07 },
       { at: 0.24, z: 1, cx: 0.5, cy: 0.5 }, { at: 0.5, z: 1, cx: 0.5, cy: 0.5 },
-      { at: 0.6, z: 1.9, cx: 0.5, cy: 0.6 }, { at: 0.86, z: 1.9, cx: 0.5, cy: 0.6 },
-      { at: 0.94, z: 1.7, cx: 0.5, cy: 0.66 }, { at: 1, z: 1.7, cx: 0.5, cy: 0.66 },
+      { at: 0.62, z: 1.9, cx: 0.5, cy: 0.6 }, { at: 0.83, z: 1.9, cx: 0.5, cy: 0.6 },
+      { at: 0.88, z: 1.9, cx: 0.5, cy: 0.5 }, { at: 1, z: 1.9, cx: 0.5, cy: 0.5 },
     ],
     callouts: [
       { text: "3 minutes later: the reply lands · 13:11Z", px: 0.5, py: 0.07, side: "right", from: 0.3, to: 2.7, amber: true },
       { text: "it argues back before it deletes — \"one thing I had it decide rather than delete silently\"", px: 0.5, py: 0.45, side: "right", from: 4.8, to: 7.0 },
-      { text: "the steer · \"keep the approvals, rename the block\"", px: 0.5, py: 0.6, side: "right", from: 7.4, to: 10.4 },
-      { text: "sent · 13:12Z", px: 0.5, py: 0.66, side: "right", from: 10.9, to: 12.3, amber: true },
+      { text: "the steer · \"keep the approvals, rename the block\"", px: 0.5, py: 0.6, side: "right", from: 7.3, to: 8.9 },
+      { text: "sent · 13:12Z", px: 0.5, py: 0.47, side: "right", from: 9.1, to: 10.7, amber: true },
     ],
+  },
+  {
+    id: "strand",
+    segs: [c05d(0, 2.5, 1.2), c05d(2.5, 6, 1)],
+    cam: [FULL, { at: 0.25, z: 1, cx: 0.5, cy: 0.5 }, { at: 0.45, z: 2.0, cx: 0.5, cy: 0.5 }, { at: 1, z: 2.0, cx: 0.5, cy: 0.5 }],
+    callouts: [{ text: "the strand it spawned for the job, at work · sonnet", px: 0.5, py: 0.5, side: "right", from: 2.4, to: 5.5, amber: true }],
   },
   {
     id: "folded",

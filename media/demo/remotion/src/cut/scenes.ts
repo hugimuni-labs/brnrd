@@ -119,7 +119,7 @@ export const scenes: Scene[] = [
 
 export const segFrames = (s: Seg) => Math.round(((s.to - s.from) / s.rate) * fps);
 export const sceneFrames = (sc: Scene) => sc.segs.reduce((n, s) => n + segFrames(s), 0);
-export const OUTRO_FRAMES = Math.round(1.8 * fps);
+export const OUTRO_FRAMES = Math.round(3.2 * fps);
 export const totalFrames = scenes.reduce((n, sc) => n + sceneFrames(sc), 0) + OUTRO_FRAMES;
 
 
