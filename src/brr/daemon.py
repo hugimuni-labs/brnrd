@@ -258,7 +258,6 @@ _CONFIG_CHANGE_REPLY_RE = re.compile(
 # be a shared import; a mismatch just means one side rejects a proposal
 # the other would have allowed, never an unapproved config write.
 _CONFIG_CHANGE_ALLOWED_KEYS = {
-    "spawn.max_concurrent",
     # Wake-context budget knobs (2026-07-11 context-shape audit): the
     # resident tuning the standing cost of its own injected blocks is
     # exactly the resident-proposes / operator-approves shape this path
@@ -422,7 +421,9 @@ _PUBLISH_TREE_MISMATCH = "publish-tree-mismatch"
 #: wherever a reader must distinguish "this run produced nothing" from "this
 #: run has not produced it *yet*" — the completion note's produce handles, and
 #: the bolt's stranded-strand check (#1298).
-_TERMINAL_RUN_STATUSES = frozenset({"done", "error", "conflict", "stopped"})
+_TERMINAL_RUN_STATUSES = frozenset(
+    {"done", "error", "conflict", "stopped", "released"}
+)
 
 
 def _publish_tree_mismatch(repo_root: Path) -> dict | None:
@@ -6701,32 +6702,28 @@ def _write_live_portal_state(
                     "note": "account-home runs have no forge lane",
                 }
             )
-        # Spawn ownership is only actionable when the resident can see pool
-        # headroom. #880 §1: that count comes from dispatch ownership — the
-        # accepted-spawn registry (`_spawn_pool_accepted_count`) — not from
-        # presence. A child `_queue_spawn_request` queued and `_loop`
-        # accepted onto the pool has no presence entry until it starts
-        # (measured: up to the full dispatch→start latency on a saturated
-        # pool, not merely while it's empty), so a presence-derived count
-        # read a queued-but-not-started child as zero — understating load in
-        # exactly the window a resident reads this field to decide whether
-        # it has headroom to dispatch more. Presence stays the source for
-        # *which* siblings are live (the `coexisting` snapshot above);
-        # only *how many the pool has accepted* moves off it.
+        # Spawn admission is quota-shaped. The old numeric headroom projection
+        # invited callers to make a second admission decision from a stale cap.
+        #
+        # ``spawn_quota_queued`` is a *once* guard, not a state: it is stamped
+        # the tick a low floor defers a spawn and deliberately never cleared,
+        # so a spawn that waits three ticks still emits exactly one
+        # ``spawn_queued`` event. That makes it useless on its own here —
+        # ``list_pending`` returns ``processing`` events too (a still-running
+        # spawn survives its own ``set_status(..., "processing")`` write), so
+        # counting the flag alone reports a child that queued once and has
+        # been *running* for an hour as still waiting. Status is what answers
+        # "is it still waiting"; the flag only answers "did it ever wait".
         coexisting_facet = payload["resources"]["coexisting_runs"]
-        spawn_limit = _max_concurrent_spawns(cfg or {})
-        try:
-            spawn_active = _spawn_pool_accepted_count()
-        except Exception:  # noqa: BLE001 - unknown, never a silent zero
-            spawn_active = None
-        spawn_available = (
-            max(0, spawn_limit - spawn_active)
-            if spawn_active is not None else None
-        )
+        queued_spawns = sum(
+            1 for ev in protocol.list_pending(inbox_dir)
+            if ev.get("spawn_immediate")
+            and ev.get("spawn_quota_queued")
+            and ev.get("status") == "pending"
+        ) if inbox_dir is not None else 0
         coexisting_facet["spawn_pool"] = {
-            "max_concurrent": spawn_limit,
-            "active": spawn_active,
-            "available": spawn_available,
+            "floor": pacing_status.get("floor") if pacing_status else None,
+            "queued": queued_spawns,
         }
         coexisting_facet["owned_children"] = _owned_child_controls(task.id)
         payload["change_token"] = _change_token(payload)
@@ -7627,6 +7624,9 @@ def _register_run_control(
             "repo_label": repo_label,
             "run_id": None,
             "stopped": False,
+            "submitted": False,
+            "submit_generation": 0,
+            "submitted_produce": None,
         }
 
 
@@ -7698,12 +7698,105 @@ def _owned_child_controls(run_id: str) -> list[dict[str, str]]:
                 "event_id": event_id,
                 "run_id": child_run_id,
             }
+            if control.get("submitted"):
+                row["status"] = "submitted"
             adopted_from = str(control.get("adopted_from_run_id") or "").strip()
             if adopted_from:
                 row["adopted_from_run_id"] = adopted_from
             rows.append(row)
     rows.sort(key=lambda row: (row.get("run_id") or "", row.get("event_id") or ""))
     return rows
+
+
+def _queue_submit_request(
+    task: Run,
+    inbox_dir: Path | None,
+    body: str,
+    outbox_dir: Path | None,
+    repo_root: Path | None,
+) -> bool:
+    """Attest a strand's current deliverable without ending the strand."""
+    if not _is_strand(task.meta):
+        _record_outbox_notice(
+            outbox_dir, "submit refused: only a spawned strand can submit",
+            kind="refused", lifetime="run",
+        )
+        return False
+    control = _find_run_control(str(task.event_id or task.id))
+    if control is None or inbox_dir is None or repo_root is None:
+        _record_outbox_notice(
+            outbox_dir, "submit refused: live child control or inbox is missing",
+            kind="refused", lifetime="run",
+        )
+        return False
+    branch = str(task.meta.get("spawn_contract_branch") or "").strip()
+    report = str(task.meta.get("spawn_contract_report") or "").strip()
+    missing: list[str] = []
+    if not branch:
+        missing.append("declared branch")
+    elif not gitops.rev_parse(repo_root, branch):
+        missing.append(f"published branch {branch!r}")
+    else:
+        upstream = gitops.branch_upstream(repo_root, branch)
+        remote = gitops.default_remote(repo_root)
+        remote_ref = upstream or (f"{remote}/{branch}" if remote else "")
+        if (
+            not remote_ref
+            or not gitops.rev_parse(repo_root, remote_ref)
+            or _commits_between(repo_root, remote_ref, branch)
+        ):
+            missing.append(f"published branch {branch!r}")
+    if not report or not Path(report).is_file():
+        missing.append(f"report {report!r}" if report else "declared report")
+    if missing:
+        _record_outbox_notice(
+            outbox_dir, "submit refused: missing " + " and ".join(missing),
+            kind="refused", lifetime="run",
+        )
+        return False
+    parent_run_id, conv = _child_owner_route(
+        str(task.event_id or ""),
+        fallback_parent_run_id=str(task.meta.get("spawn_parent_run_id") or ""),
+        fallback_conversation_key=str(
+            task.meta.get("spawn_parent_conversation_key") or ""
+        ),
+    )
+    if not parent_run_id:
+        _record_outbox_notice(
+            outbox_dir, "submit refused: spawning parent is missing",
+            kind="refused", lifetime="run",
+        )
+        return False
+    seed = str(task.meta.get("seed_ref") or task.meta.get("base_branch") or "")
+    commits = len(_commits_between(repo_root, seed, branch)) if seed else None
+    generation = int(control.get("submit_generation") or 0) + 1
+    produce = {
+        "spawn_status": "submitted",
+        "spawn_published_branch": branch,
+        "spawn_report_path": report,
+        "spawn_report_found": True,
+        "spawn_submit_generation": generation,
+    }
+    if commits is not None:
+        produce["spawn_commits"] = commits
+    child_repo = str(task.meta.get("repo_label") or "").strip()
+    if child_repo:
+        produce["spawn_repo"] = child_repo
+    protocol.create_event(
+        inbox_dir, "spawn_submitted",
+        f"concurrent spawn {task.id} submitted generation {generation}: "
+        f"branch {branch}; report {report}" + (f"\n\n{body}" if body.strip() else ""),
+        conversation_key=conv, spawned_by_run=task.id,
+        spawned_by_event=str(task.event_id or ""),
+        spawn_parent_run_id=parent_run_id, **produce,
+    )
+    with _run_controls_lock:
+        control["submitted"] = True
+        control["submit_generation"] = generation
+        control["submitted_produce"] = dict(produce)
+    task.meta["submitted"] = True
+    task.meta["submitted_produce"] = dict(produce)
+    return True
 
 
 def _authorize_child_control(task: Run, control: dict) -> dict[str, object]:
@@ -8354,8 +8447,8 @@ def _queue_spawn_request(
     difference: a respawn only ever starts once *this* run ends (queued
     into the ordinary inbox, dispatched by the next idle tick); a spawn is
     picked up by the main loop's *second* dispatch slot immediately,
-    alongside this still-running thought (see ``active_spawns`` and
-    ``_max_concurrent_spawns`` in the daemon loop). Always ``strand: true`` — never the
+    alongside this still-running thought (see ``active_spawns`` and quota
+    admission in the daemon loop). Always ``strand: true`` — never the
     resident stack — a concurrent child does not get dominion write, kb
     governance, or scheduling authority any more than a sequential
     strand-stack respawn does (`kb/design-director-loop.md` §"Concurrent
@@ -9171,6 +9264,24 @@ def _drain_outbox(
                         stats["spawn"] = stats.get("spawn", 0) + 1
                 _retire_outbox_staging(fpath)
             continue
+        if _truthy(fm.get("submit")):
+            with _OutboxEntryGuard(outbox_dir, fpath):
+                handled = _queue_submit_request(
+                    task, inbox_dir, body, outbox_dir, repo_root,
+                )
+                if handled:
+                    promoted += 1
+                    if stats is not None:
+                        stats["submit"] = stats.get("submit", 0) + 1
+                    emit(
+                        "spawn_submitted", run_id=task.id,
+                        event_id=event_id,
+                        generation=int(
+                            task.meta["submitted_produce"]["spawn_submit_generation"]
+                        ),
+                    )
+                _retire_outbox_staging(fpath)
+            continue
         if str(fm.get("to") or "").strip():
             with _OutboxEntryGuard(outbox_dir, fpath):
                 handled = _queue_child_message(
@@ -9249,8 +9360,8 @@ def _drain_outbox(
             # them was simply wrong. It called the hold "a resident-level
             # cost decision" — but a strand does not spend the resident's
             # single-flight slot; it occupies a slot in the *spawn pool*
-            # (`spawn.max_concurrent`), and it already holds that slot by
-            # existing. Awaiting costs nothing the strand is not already
+            # machinery), and it already occupies its worker by existing.
+            # Awaiting costs nothing the strand is not already
             # paying, while refusing it left the runs least able to recover —
             # a strand blocked on a subprocess — with only a shell sleep
             # loop, which is the exact boundary-free stretch #959 exists to
@@ -12226,6 +12337,8 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
     # into a misleading completion fact.
     if terminal:
         produce_kwargs["spawn_status"] = status_label
+    if task.meta.get("stopped_by"):
+        produce_kwargs["spawn_stopped_by"] = task.meta["stopped_by"]
     if published_branch:
         produce_kwargs["spawn_published_branch"] = published_branch
         if child_repo:
@@ -12410,9 +12523,18 @@ def _finalize_stopped_run(
     if trace_dirs:
         task.meta["trace_dirs"] = ", ".join(trace_dirs)
     task.meta["stopped_by"] = stopped_by
+    submitted_produce = control.get("submitted_produce")
+    if isinstance(submitted_produce, dict):
+        task.meta["submitted"] = True
+        task.meta["submitted_produce"] = dict(submitted_produce)
+        task.meta["publish_branch"] = submitted_produce.get(
+            "spawn_published_branch"
+        )
+        if "spawn_commits" in submitted_produce:
+            task.meta["publish_commits"] = submitted_produce["spawn_commits"]
     if control.get("stop_reason"):
         task.meta["stop_reason"] = str(control["stop_reason"])
-    task.update_status("stopped", runs_dir)
+    task.update_status("released" if submitted_produce else "stopped", runs_dir)
     # Was `_set_event_status_if_present(event, "cancelled")` — a bespoke
     # letter-flavored word for the run's "stopped" outcome, and one the
     # general finalize path below used to clobber back to the raw
@@ -12424,6 +12546,14 @@ def _finalize_stopped_run(
     emit("finalizing", run_id=task.id, stage="stopped")
     with _branch_lock(branch_plan.target_branch):
         task = env_backend.finalize(env_ctx, task, runs_dir)
+    if isinstance(submitted_produce, dict):
+        task.status = "released"
+        task.meta["publish_branch"] = submitted_produce.get(
+            "spawn_published_branch"
+        )
+        if "spawn_commits" in submitted_produce:
+            task.meta["publish_commits"] = submitted_produce["spawn_commits"]
+        task.save(runs_dir)
     _emit_preserved_containers(emit, task)
     emit(
         "stopped",
@@ -12487,7 +12617,7 @@ def _capture_knowledge(
     """Commit + push knowledge edits; replies now belong to the home run store."""
     if not bool(cfg.get("knowledge.capture", True)):
         return
-    if task.status == "stopped":
+    if task.status in ("stopped", "released"):
         # The account-knowledge checkout is shared by every concurrent run,
         # live or stopped. A stopped run has no trustworthy ownership
         # boundary left in it: the dirty-tree sweep below would commit a
@@ -14842,125 +14972,6 @@ def _seconds_config(
     return default
 
 
-_MAX_CONCURRENT_SPAWNS_DEFAULT = 4
-
-
-# ── #1195 rec 3: a cpu-informed default, opt-in behind `spawn.max_concurrent_auto` ──
-#
-# The flat default above admits N *runs* without regard to what a run's own gate
-# costs — measured live in #1195: 5 concurrent strands, each running the full
-# `scripts/gate.py` suite, drove a 16-core box to a 15-minute load average of
-# 14.97 (CPU/IO bound, not memory) and the same suite took 3-4x its solo wall-clock.
-# A pool sized by core count is the natural fix, but the *right* divisor/floor is a
-# judgment call about how many full gates one core can carry, not a derivation this
-# file can settle on its own — see the report this shipped with for the formula
-# named explicitly as a recommendation, not a decision.
-#
-# It is **not** wired in as the literal default `_max_concurrent_spawns({})`
-# resolves to, because that path is pinned by
-# `test_max_concurrent_spawns_config_parsing` to a flat, machine-independent 4
-# (`assert _max_concurrent_spawns({}) == 4`) — swapping the default would make
-# that assertion fail on any host whose core count isn't 16, which is most CI
-# runners. Rewriting that test to fit this change is exactly what this task's own
-# constraints forbid, so the mechanism is reachable instead through an explicit
-# opt-in (`spawn.max_concurrent_auto=true` in `.brr/config`): nothing changes for
-# a config that doesn't ask for it, and `spawn.max_concurrent` itself — set —
-# still always wins, auto or not.
-
-
-def _cpu_scaled_max_concurrent_spawns() -> int:
-    """The computed default `spawn.max_concurrent_auto` opts into.
-
-    ``max(2, cpu_count() // 4)`` — the formula #1195 rec 3 names as a starting
-    point ("something like"), not a settled constant. Falls back to the flat
-    constant when ``os.cpu_count()`` can't determine a count at all (some
-    containers/sandboxes return ``None`` here, per the stdlib's own docs),
-    rather than raising on ``None // 4``.
-    """
-    cpu = os.cpu_count()
-    if not cpu:
-        return _MAX_CONCURRENT_SPAWNS_DEFAULT
-    return max(2, cpu // 4)
-
-
-def _max_concurrent_spawns(cfg: dict) -> int:
-    """Configured strand-stack ``spawn:`` pool width.
-
-    Slice 1 (kb/design-director-loop.md §"Concurrent sub-spawns") shipped
-    this hardcoded at a cap of 1. Generalized to a small configurable pool
-    per kb/design-multi-workstream-concurrency.md "Ranked moves" #1 and the
-    maintainer's 2026-07-08 call ("set the concurrency to 4 or something
-    already"). ``spawn.max_concurrent`` in ``.brr/config``; clamped to at
-    least 1 so a misconfigured 0/negative value can't silently wedge every
-    ``spawn:`` request back into the ordinary sequential queue.
-
-    Unset (or an invalid explicit value) resolves to the flat
-    ``_MAX_CONCURRENT_SPAWNS_DEFAULT`` unless ``spawn.max_concurrent_auto`` is
-    also set, in which case it resolves to ``_cpu_scaled_max_concurrent_spawns()``
-    instead (#1195 rec 3) — see that function and the block above it for why
-    this is opt-in rather than the unconditional default the issue itself
-    proposed. A set ``spawn.max_concurrent`` always wins over both defaults.
-    """
-    if cfg.get("spawn.max_concurrent_auto"):
-        fallback = _cpu_scaled_max_concurrent_spawns()
-    else:
-        fallback = _MAX_CONCURRENT_SPAWNS_DEFAULT
-    raw = cfg.get("spawn.max_concurrent", fallback)
-    if isinstance(raw, bool):
-        return fallback
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        return fallback
-    return max(1, value)
-
-
-# Accepted-but-not-yet-finalized strand-stack children (#880 §1). ``_loop``'s
-# local ``active_spawns`` list is the real source of truth for *which*
-# children are live, but it's a stack-local variable on the main loop
-# thread — unreachable from ``_write_live_portal_state``, which runs on each
-# thought's own worker thread. This registry mirrors just the *count*,
-# keyed by event id so accept/release are naturally idempotent:
-# ``_spawn_pool_accept`` is called the same tick ``_loop`` appends to
-# ``active_spawns`` (pool.submit's return), ``_spawn_pool_release`` in the
-# same reap block that already runs when a spawn's future completes —
-# wrapped in ``finally`` there so a crash while notifying the parent (or any
-# other exception mid-reap) can never leak a slot the pool believes is still
-# occupied. Presence is unaffected: it still answers "who" (the
-# ``coexisting_runs`` siblings list); this answers "how many the pool has
-# accepted and not yet finalized" — the window presence cannot see, because
-# a child that is queued and accepted but hasn't started yet has no
-# presence entry (up to the full dispatch→start latency on a saturated
-# pool, not merely while it's empty).
-_spawn_pool_lock = threading.Lock()
-_spawn_pool_accepted: set[str] = set()
-
-
-def _spawn_pool_accept(event_id: str) -> None:
-    """Record a spawn as accepted onto the pool. Idempotent."""
-    with _spawn_pool_lock:
-        _spawn_pool_accepted.add(event_id)
-
-
-def _spawn_pool_release(event_id: str) -> None:
-    """Release a spawn's accounted slot at reap. Idempotent."""
-    with _spawn_pool_lock:
-        _spawn_pool_accepted.discard(event_id)
-
-
-def _spawn_pool_accepted_count() -> int:
-    """Live count of accepted-and-not-yet-finalized strand-stack children.
-
-    In-process, main-loop-owned bookkeeping — not a cross-process or
-    filesystem read, so this never legitimately raises today. Callers still
-    wrap it in ``try/except`` (matching the presence-read shape it replaces
-    for capacity) so a future change to this function fails the same
-    honest way: unknown, never a silent zero.
-    """
-    with _spawn_pool_lock:
-        return len(_spawn_pool_accepted)
-
-
 def _quota_low_floor_pct(cfg: dict) -> float:
     """Below this remaining-percent, `every:` entries stretch their interval."""
     return _seconds_config(
@@ -15029,6 +15040,60 @@ def _quota_pacing_status(
     if thin:
         status["excluded_thin"] = thin
     return status
+
+
+def _spawn_admission_floor(
+    cfg: dict, event: dict, brr_dir: Path, repo_root: Path,
+) -> str | None:
+    """Return the binding quota floor for a spawn dispatch decision."""
+    runner_name = str(
+        event.get("shell") or event.get("runner") or cfg.get("shell")
+        or cfg.get("runner") or ""
+    ).strip() or None
+    levels, _ = _collect_levels(
+        runner_name, None, repo_root, refresh=False, shared_dir=brr_dir,
+    )
+    status = _quota_pacing_status(
+        cfg, levels, model=str(event.get("core") or "").strip() or None,
+    )
+    return str(status.get("floor") or "") or None if status else None
+
+
+def _notify_spawn_queued(inbox_dir: Path, event: dict) -> None:
+    """Emit the once-per-queue admission fact to the spawning parent."""
+    if event.get("spawn_quota_queued"):
+        return
+    parent = str(event.get("spawn_parent_run_id") or "").strip()
+    if not parent:
+        return
+    conv = str(event.get("spawn_parent_conversation_key") or "").strip()
+    protocol.create_event(
+        inbox_dir, "spawn_queued",
+        f"concurrent spawn {event.get('id')} queued: quota floor is low",
+        conversation_key=conv or f"run:{parent}",
+        spawned_by_event=str(event.get("id") or ""),
+        spawn_parent_run_id=parent,
+    )
+    protocol.update_event_meta(event, spawn_quota_queued=True)
+    event["spawn_quota_queued"] = True
+
+
+def _refuse_spawn_for_quota(
+    event: dict, inbox_dir: Path, runs_dir: Path,
+) -> None:
+    """Refuse a critical-floor spawn and put the notice on its parent run."""
+    protocol.set_status(event, "cancelled")
+    parent_id = str(event.get("spawn_parent_run_id") or "").strip()
+    parent = Run.from_file(run_manifest_path(runs_dir, parent_id)) if parent_id else None
+    parent_outbox = (
+        Path(str(parent.meta.get("outbox_path")))
+        if parent is not None and parent.meta.get("outbox_path") else None
+    )
+    _record_outbox_notice(
+        parent_outbox,
+        f"spawn refused: {event.get('id')} — binding quota floor is critical",
+        kind="refused", lifetime="run",
+    )
 
 
 def _failure_reason(
@@ -15904,6 +15969,11 @@ def start(
     if reload_watcher is not None:
         print("[brnrd] developer reload enabled")
     print(f"[brnrd] daemon started (pid {os.getpid()}, single-flight)")
+    if "spawn.max_concurrent" in cfg:
+        print(
+            "[brnrd] spawn.max_concurrent is deprecated and ignored; "
+            "spawn admission now follows the binding quota floor"
+        )
 
     # Single-flight: one thought off the main thread at a time. A
     # one-slot executor keeps the clean future lifecycle (done / result /
@@ -15915,15 +15985,14 @@ def start(
     # generalized past cap-of-1 in kb/design-multi-workstream-concurrency.md
     # "slice 1"): `current` remains the one resident-stack thought
     # single-flight protects (dominion write, kb governance, scheduling).
-    # `active_spawns` holds up to `_max_concurrent_spawns(cfg)` *strand-
-    # stack-only* concurrent children a running thought can dispatch via
-    # `spawn:` outbox frontmatter — none of them touch the surface
+    # `active_spawns` holds strand-stack-only concurrent children a running
+    # thought can dispatch via `spawn:` outbox frontmatter. Admission is a
+    # live quota-floor decision, not a configured numeric width; none touch
+    # the surface
     # single-flight exists to protect, so they share a pool of their own
     # rather than waiting behind the resident's slot.
-    max_spawns = _max_concurrent_spawns(cfg)
     pool = concurrent.futures.ThreadPoolExecutor(
-        max_workers=1 + max_spawns,
-        thread_name_prefix="brr-thought",
+        max_workers=1, thread_name_prefix="brr-thought",
     )
     current: concurrent.futures.Future | None = None
     # The event id backing `current`, held so the run's stop control can be
@@ -16032,21 +16101,20 @@ def start(
                             _retire_run_control(spawn_eid)
                             _retire_child_messages(spawn["inbox_dir"], spawn_eid)
                     finally:
-                        # #880 §1: the accounted slot releases regardless of
-                        # how reap went — a crash while notifying the parent
-                        # (or anything else in this block) must never leak a
-                        # slot the pool believes is still occupied.
-                        if spawn_eid:
-                            _spawn_pool_release(spawn_eid)
+                        spawn_executor = spawn.get("executor")
+                        if spawn_executor is not None:
+                            spawn_executor.shutdown(wait=False)
                 active_spawns = still_running
 
             # Quiescent reload: only re-exec between thoughts, so a
             # running run can't have its process replaced underneath it.
-            # A resident slot is quiescent only when its strand-stack is too.
-            # ``pool.shutdown(wait=True)`` joins every worker, so re-execing
-            # while spawned children remain would turn their whole runtime
-            # into latency for a new correspondent despite the executor's
-            # deliberately reserved resident thread.
+            # A resident slot is quiescent only when its strand-stack is too:
+            # ``not active_spawns`` is the load-bearing half of this guard.
+            # Each strand now runs on its own single-worker executor rather
+            # than on shared slots of ``pool``, so ``pool.shutdown(wait=True)``
+            # below no longer joins them — this condition, not that call, is
+            # what keeps ``reexec()`` from replacing the process image out
+            # from under a live child.
             if reload_requested and current is None and not active_spawns:
                 # Emit a deliberate breadcrumb *before* exec so an operator
                 # watching the terminal can tell this restart was intentional
@@ -16146,24 +16214,25 @@ def start(
             # marked event is never a resident-lead candidate and vice
             # versa, so splitting one pass avoids a second full inbox scan
             # (and a second round of ``list_pending`` I/O) every tick.
-            # Scanning is gated on an open slot existing at all, not on
-            # ``reload_requested`` — a pending package-file reload no
-            # longer holds the spawn slot shut (see below).  Active spawn
-            # strands also keep the reserved resident thread admissible for
-            # a fresh correspondent, until the process can re-exec safely.
-            scanned: list[_DispatchTarget] | None = None
-            if len(active_spawns) < max_spawns or (
-                current is None and (not reload_requested or active_spawns)
-            ):
-                scanned = _dispatchable_targets(account_context, repo_root, cfg)
+            # Scanning is unconditional now that admission is a quota-floor
+            # decision rather than a pool-width one: there is no cheap
+            # "is there an open slot" predicate left to gate it on, and the
+            # floor can only be read per candidate event (it depends on that
+            # event's own ``shell:``/``core:``). Not gated on
+            # ``reload_requested`` either — a pending package-file reload no
+            # longer holds the spawn slot shut (see below). Active spawn
+            # strands keep the reserved resident thread admissible for a
+            # fresh correspondent, until the process can re-exec safely.
+            scanned: list[_DispatchTarget] = _dispatchable_targets(
+                account_context, repo_root, cfg,
+            )
 
-            # Concurrent strand-stack children (slice 1, generalized past
-            # cap-of-1): dispatched independently of the resident's own
+            # Concurrent strand-stack children dispatch independently of the resident's
             # `current` slot — that's the entire point, a spawn runs
             # *alongside* the still-live parent thought rather than after it
-            # ends. Capped at `max_spawns` (`len(active_spawns) <
-            # max_spawns`), scanned every tick regardless of whether the
-            # resident slot is busy. No burst-settling here —
+            # ends. Admission follows the current quota floor and is checked
+            # every tick regardless of whether the resident slot is busy.
+            # No burst-settling here —
             # unlike a fresh external message, a `spawn:` request is
             # already one deliberate, already-complete dispatch decision
             # the parent made; nothing to debounce it against.
@@ -16228,75 +16297,77 @@ def start(
             # "Finding 2/3") — and that cost is real whatever the
             # staleness risk turns out to be, which is why the fix is to
             # *report* the risk rather than to re-close the slot.
-            # Re-exec itself is still safe: ``pool.shutdown(wait=True)``
-            # below blocks on any in-flight spawn future exactly as it does
-            # on ``current``, so a reload never kills a spawn mid-flight,
-            # only defers replacing the process image until every active
-            # spawn (and the resident thought) is done.
-            open_spawn_slots = max_spawns - len(active_spawns)
-            if open_spawn_slots > 0:
-                # Dedup against events already claimed this tick or a prior
-                # one: `list_dispatchable`/`list_pending` deliberately keep
-                # returning "processing" events too (so a still-running
-                # resident event stays visible for follow-up-folding), but
-                # that means a spawn-marked event survives its own
-                # `set_status(..., "processing")` write and reappears as a
-                # "candidate" on every subsequent tick. The resident
-                # dispatch path (above) is guarded by `current is None`
-                # in-memory, which incidentally also blocks this
-                # re-selection; the spawn pool has no equivalent single
-                # in-flight flag to check once `max_spawns` > 1, so nothing
-                # stopped the same event from filling every remaining open
-                # slot in one tick, or across ticks before the pool filled.
-                # Root-caused live 2026-07-08 (run-260708-2010-5sor): a
-                # single `spawn:` outbox dispatch produced 4 concurrent
-                # duplicate children (run-260708-2017-{zzc1,tgvx,a2kn,i8x6}),
-                # each its own worktree, all working the same event —
-                # exactly bounded by `max_spawns`, which is what gave the
-                # bug away. Filter by event id against both the active pool
-                # and events already selected earlier in this same tick.
-                active_spawn_ids = {
-                    spawn["event"].get("id") for spawn in active_spawns
-                }
-                spawn_candidates: list[_DispatchTarget] = []
-                for t in (scanned or []):
-                    if not t.event.get("spawn_immediate"):
-                        continue
-                    eid = t.event.get("id")
-                    if eid in active_spawn_ids:
-                        continue
-                    active_spawn_ids.add(eid)
-                    spawn_candidates.append(t)
-                    if len(spawn_candidates) >= open_spawn_slots:
-                        break
-                for target in spawn_candidates:
-                    event = target.event
-                    eid = event["id"]
-                    print(f"[brnrd] processing (concurrent spawn): {eid}")
-                    protocol.set_status(event, "processing")
-                    future = pool.submit(
-                        _run_worker_and_finalize,
-                        event,
-                        target.repo_root,
-                        target.responses_dir,
-                        cfg,
-                        max_retries,
-                        account_context=account_context,
-                        inbox_dir=target.inbox_dir,
-                    )
-                    # #880 §1: accepted onto the pool *now* — this is the
-                    # moment a queued spawn becomes a child the pool is
-                    # committed to, well before it registers presence (which
-                    # only happens once its own `_run_worker` starts
-                    # executing, on this same future).
-                    _spawn_pool_accept(str(eid))
-                    active_spawns.append(
-                        {
-                            "future": future,
-                            "inbox_dir": target.inbox_dir,
-                            "event": event,
-                        }
-                    )
+            # Re-exec itself is still safe: the reload branch above requires
+            # ``not active_spawns`` as well as ``current is None``, so a
+            # reload never kills a spawn mid-flight — it only defers
+            # replacing the process image until every active spawn (and the
+            # resident thought) is done.
+            # Dedup against events already claimed this tick or a prior
+            # one: `list_dispatchable`/`list_pending` deliberately keep
+            # returning "processing" events too (so a still-running
+            # resident event stays visible for follow-up-folding), but
+            # that means a spawn-marked event survives its own
+            # `set_status(..., "processing")` write and reappears as a
+            # "candidate" on every subsequent tick. The resident
+            # dispatch path (above) is guarded by `current is None`
+            # in-memory, which incidentally also blocks this
+            # re-selection; the spawn path has no equivalent single
+            # in-flight flag, so nothing stopped the same event from
+            # dispatching twice in one tick, or across ticks.
+            # Root-caused live 2026-07-08 (run-260708-2010-5sor): a
+            # single `spawn:` outbox dispatch produced 4 concurrent
+            # duplicate children (run-260708-2017-{zzc1,tgvx,a2kn,i8x6}),
+            # each its own worktree, all working the same event —
+            # exactly bounded by the pool width of the day, which is what
+            # gave the bug away. Filter by event id against both the
+            # active set and events already selected earlier in this tick.
+            active_spawn_ids = {
+                spawn["event"].get("id") for spawn in active_spawns
+            }
+            spawn_candidates: list[_DispatchTarget] = []
+            for t in (scanned or []):
+                if not t.event.get("spawn_immediate"):
+                    continue
+                eid = t.event.get("id")
+                if eid in active_spawn_ids:
+                    continue
+                floor = _spawn_admission_floor(
+                    cfg, t.event, brr_dir, t.repo_root,
+                )
+                if floor == "critical":
+                    _refuse_spawn_for_quota(t.event, t.inbox_dir, brr_dir / "runs")
+                    continue
+                if floor == "low":
+                    _notify_spawn_queued(t.inbox_dir, t.event)
+                    continue
+                active_spawn_ids.add(eid)
+                spawn_candidates.append(t)
+            for target in spawn_candidates:
+                event = target.event
+                eid = event["id"]
+                print(f"[brnrd] processing (concurrent spawn): {eid}")
+                protocol.set_status(event, "processing")
+                spawn_executor = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix=f"brr-strand-{eid}",
+                )
+                future = spawn_executor.submit(
+                    _run_worker_and_finalize,
+                    event,
+                    target.repo_root,
+                    target.responses_dir,
+                    cfg,
+                    max_retries,
+                    account_context=account_context,
+                    inbox_dir=target.inbox_dir,
+                )
+                active_spawns.append(
+                    {
+                        "future": future,
+                        "inbox_dir": target.inbox_dir,
+                        "event": event,
+                        "executor": spawn_executor,
+                    }
+                )
 
             # Spawn one thought when idle and work is pending. Events that
             # arrive while a thought runs stay pending — the living agent
@@ -16426,5 +16497,14 @@ def start(
         if runner.kill_active():
             print("[brnrd] shutdown: terminated in-flight runner(s)")
         pool.shutdown(wait=True, cancel_futures=False)
+        # Strands live on their own executors (quota admission has no fixed
+        # width to size a shared pool with), so draining ``pool`` no longer
+        # drains them. Join them here explicitly: `concurrent.futures`' atexit
+        # hook would eventually do it, but silently and *after* this function
+        # has already printed "daemon stopped" and cleared the pid file.
+        for spawn in active_spawns:
+            spawn_executor = spawn.get("executor")
+            if spawn_executor is not None:
+                spawn_executor.shutdown(wait=True, cancel_futures=False)
         _clear_pid(brr_dir)
         print("[brnrd] daemon stopped")

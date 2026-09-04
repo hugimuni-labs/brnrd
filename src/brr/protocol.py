@@ -77,7 +77,7 @@ def frontmatter_body(text: str) -> str:
 # only to gate the lenient (missing-opening-fence) parse below — see
 # ``parse_outbox_message``.
 _OUTBOX_ROUTING_KEYS = (
-    "event", "gate", "respawn", "spawn", "stop", "to", "runner_policy",
+    "event", "gate", "respawn", "spawn", "submit", "stop", "to", "runner_policy",
     "config_change", "note", "await", "cut",
 )
 
@@ -397,6 +397,8 @@ INTERNAL_SOURCES: frozenset[str] = frozenset({
     "schedule",
     "spawn",
     "spawn_completed",
+    "spawn_queued",
+    "spawn_submitted",
 })
 
 
