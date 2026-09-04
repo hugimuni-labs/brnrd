@@ -2,3 +2,4 @@ node_modules/
 out/
 .remotion/
 *.log
+public/clips/*.mp4
