@@ -8564,6 +8564,7 @@ def test_write_live_portal_state_wires_produce_inputs(tmp_path, monkeypatch):
         "seed_ref": "main",
         "outbox_dir": outbox_dir,
         "commit_run_id": None,
+        "seed_oid": None,
     }
 
 
@@ -13632,6 +13633,72 @@ def test_drain_outbox_cut_produce_scoped_to_clone_strands_own_branch(tmp_path):
     # get the wrong branch — pins the defect this test guards against.
     stale_branch, _stale_seed = daemon.relics.collection_scope(meta, host)
     assert stale_branch == "boot-lobotomy"
+
+    promoted, task, outbox, _inbox, _responses, _event_id = _drain_cut(
+        tmp_path, "---\ncut: true\nproduce: attested\n---\nDone.\n",
+        meta=meta,
+        repo_root=host,
+    )
+
+    assert promoted == 1
+    assert daemon._read_outbox_notices(outbox) == []
+
+
+def test_drain_outbox_cut_produce_clone_with_no_local_main_accepts_via_seed_oid(
+    tmp_path,
+):
+    """#1788: a ``create_clone`` strand has no local ``main`` when the host
+    checkout was on some other branch at clone time — exactly what
+    ``worktree.create_clone``'s own docstring says ("only the branch
+    checked out in repo_root at clone time becomes a local branch there").
+    The #1780 strand hit this at its own closeout: ``brnrd cut`` bounced
+    twice on "produce: attested declared but the manifest is empty" though
+    the commit and the published branch both existed, because
+    ``relics._commits_since_seed`` ran ``git merge-base main <branch>``
+    against a tree where ``main`` is only ``refs/remotes/origin/main``.
+    The fix threads the run's recorded ``meta["seed_oid"]`` through so the
+    comparison resolves regardless of what the clone's local branch
+    namespace happens to contain — the acceptance test this issue asks for:
+    a real ``create_clone`` worktree, first ``cut:`` try, no bounce."""
+    host = tmp_path / "host"
+    init_git_repo(host)
+    seed_oid = commit_files(host, {"a.txt": "1"}, message="seed")
+    # The host was on an unrelated branch at clone time — the condition
+    # that leaves the clone with no local `main` at all (only
+    # `refs/remotes/origin/main`), reproduced directly through the real
+    # `worktree.create_clone` path rather than a hand-rolled stand-in.
+    subprocess.run(
+        ["git", "checkout", "-b", "boot-lobotomy"], cwd=host, check=True,
+    )
+
+    clone, branch = worktree.create_clone(host, "run-1788-strand", base_ref="main")
+    assert subprocess.run(
+        ["git", "branch", "--list", "main"],
+        cwd=clone, capture_output=True, text=True,
+    ).stdout.strip() == ""
+    commit_files(clone, {"b.txt": "2"}, message="the strand's work")
+
+    meta = {
+        "branch_name": branch,
+        "seed_ref": "main",
+        "seed_oid": seed_oid,
+        "worktree_path": str(clone),
+        "worktree_kind": "clone",
+    }
+
+    # Sanity: the manifest really does carry the strand's commit through the
+    # exact call shape the bolt's produce check uses (`relics.seed_oid_of`
+    # bare, per `test_commits_since_seed_resolves_via_recorded_seed_oid`
+    # pinning the ``seed_oid`` leg on its own — this asserts the wiring
+    # reaches it, not the resolution itself).
+    branch_name, seed = daemon.relics.collection_scope(meta, clone)
+    records = daemon.relics.collect(
+        clone, branch=branch_name, seed_ref=seed, outbox_dir=None,
+        seed_oid=daemon.relics.seed_oid_of(meta),
+    )
+    assert [r["subject"] for r in records if r["kind"] == "commit"] == [
+        "the strand's work",
+    ]
 
     promoted, task, outbox, _inbox, _responses, _event_id = _drain_cut(
         tmp_path, "---\ncut: true\nproduce: attested\n---\nDone.\n",

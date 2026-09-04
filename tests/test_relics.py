@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from brr import relics
+from brr import relics, worktree
 
 from _helpers import commit_files, init_git_repo
 
@@ -768,21 +768,114 @@ def test_commits_since_seed_filters_by_run_id_trailer(tmp_path: Path):
         cwd=repo, check=True, capture_output=True,
     )
 
-    unfiltered = relics._commits_since_seed(repo, "main", seed_oid)
+    unfiltered, note = relics._commits_since_seed(repo, "main", seed_oid)
+    assert note is None
     assert [s for _, s, _, _ in unfiltered] == [
         "no trailer at all", "run B's commit", "run A's commit",
     ]
 
-    only_a = relics._commits_since_seed(repo, "main", seed_oid, run_id="run-A")
+    only_a, note_a = relics._commits_since_seed(repo, "main", seed_oid, run_id="run-A")
+    assert note_a is None
     assert [s for _, s, _, _ in only_a] == ["run A's commit"]
 
-    only_b = relics._commits_since_seed(repo, "main", seed_oid, run_id="run-B")
+    only_b, note_b = relics._commits_since_seed(repo, "main", seed_oid, run_id="run-B")
+    assert note_b is None
     assert [s for _, s, _, _ in only_b] == ["run B's commit"]
 
     # No run_id at all also degrades to empty rather than falling back to
     # the unfiltered window — a caller that means to filter but forgets to
     # pass an id must not silently get everyone's commits.
-    assert relics._commits_since_seed(repo, "main", seed_oid, run_id="") == []
+    assert relics._commits_since_seed(repo, "main", seed_oid, run_id="") == ([], None)
+
+
+# ── seed resolution in a create_clone strand's own tree (#1788) ────────
+
+
+def test_commits_since_seed_seed_ref_alone_recovers_via_origin_fallback(tmp_path: Path):
+    """A ``create_clone`` strand (#746) is a ``git clone --shared`` whose
+    local heads are only whatever branch the host had checked out at clone
+    time — every other branch, including the run's seed, is only a
+    ``refs/remotes/origin/*`` name there. Before the fix, ``git merge-base
+    main <branch>`` failed outright ("Not a valid object name main") and
+    the comparison never ran at all. One leg of the fix (``origin/<seed>``
+    for an unqualified name) recovers this case even with no recorded
+    ``seed_oid`` — the ordinary shape, since a clone still carries
+    ``origin/main`` as a remote-tracking ref."""
+    host = tmp_path / "host"
+    init_git_repo(host)
+    commit_files(host, {"a.txt": "1"}, message="seed")
+    # The host was on an unrelated branch at clone time — what leaves the
+    # clone with no local `main` at all.
+    subprocess.run(["git", "checkout", "-b", "unrelated"], cwd=host, check=True)
+
+    clone, branch = worktree.create_clone(host, "run-1788a", base_ref="main")
+    assert subprocess.run(
+        ["git", "branch", "--list", "main"],
+        cwd=clone, capture_output=True, text=True,
+    ).stdout.strip() == ""
+    commit_files(clone, {"b.txt": "2"}, message="the strand's work")
+
+    commits, note = relics._commits_since_seed(clone, branch, "main")
+    assert note is None
+    assert [s for _, s, _, _ in commits] == ["the strand's work"]
+
+
+def test_commits_since_seed_resolves_via_recorded_seed_oid(tmp_path: Path):
+    """The deterministic leg: an oid always resolves in a clone (the
+    object store is shared via ``--shared``) regardless of what the local
+    branch namespace or the ``origin`` remote happen to carry — unlike the
+    ``origin/<seed>`` fallback, which depends on the remote still naming
+    the same ref. Proven here by stripping the remote entirely."""
+    host = tmp_path / "host"
+    init_git_repo(host)
+    seed_oid = commit_files(host, {"a.txt": "1"}, message="seed")
+    subprocess.run(["git", "checkout", "-b", "unrelated"], cwd=host, check=True)
+
+    clone, branch = worktree.create_clone(host, "run-1788b", base_ref="main")
+    commit_files(clone, {"b.txt": "2"}, message="the strand's work")
+    subprocess.run(["git", "remote", "remove", "origin"], cwd=clone, check=True)
+
+    # Without the recorded oid, nothing resolves: no local `main`, no
+    # `origin/main` either now that the remote is gone.
+    commits, note = relics._commits_since_seed(clone, branch, "main")
+    assert commits == []
+    assert note == "seed unresolvable at 'main'"
+
+    # With it, the comparison succeeds regardless.
+    commits, note = relics._commits_since_seed(
+        clone, branch, "main", seed_oid=seed_oid,
+    )
+    assert note is None
+    assert [s for _, s, _, _ in commits] == ["the strand's work"]
+
+
+def test_derive_auto_folds_an_unresolvable_seed_into_a_note_relic(tmp_path: Path):
+    """The visible-degrade half of #1788: when no candidate resolves, the
+    manifest must not read identically to "this run made nothing" — a
+    ``note`` relic says so instead of a silently empty list."""
+    host = tmp_path / "host"
+    init_git_repo(host)
+    seed_oid = commit_files(host, {"a.txt": "1"}, message="seed")
+    subprocess.run(["git", "checkout", "-b", "unrelated"], cwd=host, check=True)
+    clone, branch = worktree.create_clone(host, "run-1788c", base_ref="main")
+    commit_files(clone, {"b.txt": "2"}, message="the strand's work")
+    subprocess.run(["git", "remote", "remove", "origin"], cwd=clone, check=True)
+
+    records = relics.collect(clone, branch=branch, seed_ref="main", outbox_dir=None)
+    assert [r for r in records if r["kind"] == "commit"] == []
+    notes = [r for r in records if r["kind"] == "note"]
+    assert notes == [{"kind": "note", "text": "seed unresolvable at 'main'"}]
+
+    # The fix, end to end through the same entrypoint the bolt's produce
+    # check and the ledger row call.
+    records = relics.collect(
+        clone, branch=branch, seed_ref="main", outbox_dir=None,
+        seed_oid=relics.seed_oid_of({"seed_oid": seed_oid}),
+    )
+    assert [r["subject"] for r in records if r["kind"] == "commit"] == [
+        "the strand's work",
+    ]
+    assert not any(r["kind"] == "note" for r in records)
 
 
 def test_collection_scope_shared_window_credits_only_this_runs_commits(
