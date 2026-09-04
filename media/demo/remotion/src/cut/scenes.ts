@@ -120,3 +120,17 @@ export const segFrames = (s: Seg) => Math.round(((s.to - s.from) / s.rate) * fps
 export const sceneFrames = (sc: Scene) => sc.segs.reduce((n, s) => n + segFrames(s), 0);
 export const OUTRO_FRAMES = Math.round(1.8 * fps);
 export const totalFrames = scenes.reduce((n, sc) => n + sceneFrames(sc), 0) + OUTRO_FRAMES;
+
+
+// The strict README trim: merge + CI dropped, the reply and gone holds tightened.
+const tighten: Record<string, Seg[]> = {
+  reply: [c04(0, 2.2, 1), c04(2.2, 6.5, 6)],
+  gone: [c09(1, 5, 2.2), c09(5, 11, 3.2)],
+  wait: [c03(0, 143, 100)],
+  ask: [c02(0, 4, 4), c02(4, 5.5, 1), c02(5.5, 77.5, 110), c02(77.5, 81, 2.2)],
+  push: [c06(0, 6, 7), c06(6, 7.5, 1), c06(7.5, 57, 95), c06(57, 62, 2.6)],
+};
+export const scenesShort: Scene[] = scenes
+  .filter((sc) => sc.id !== "merge" && sc.id !== "ci")
+  .map((sc) => (tighten[sc.id] ? { ...sc, segs: tighten[sc.id] } : sc));
+export const totalFramesShort = scenesShort.reduce((n, sc) => n + sceneFrames(sc), 0) + OUTRO_FRAMES;

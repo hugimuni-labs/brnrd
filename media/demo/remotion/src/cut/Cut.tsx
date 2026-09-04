@@ -2,16 +2,16 @@ import React from "react";
 import { AbsoluteFill, Img, Sequence, interpolate, staticFile, useCurrentFrame } from "remotion";
 import { Crt } from "../components/Crt";
 import { Glitch } from "../components/Glitch";
-import { OUTRO_FRAMES, scenes, sceneFrames, totalFrames } from "./scenes";
+import { OUTRO_FRAMES, Scene, scenes, sceneFrames, totalFrames, scenesShort, totalFramesShort } from "./scenes";
 import { Phone } from "./Phone";
 import { Bar, Labels } from "./Overlay";
 
-const cutFrames = (() => {
+const cutFramesOf = (list: Scene[]) => {
   const out: number[] = [];
   let s = 0;
-  for (const sc of scenes) { s += sceneFrames(sc); out.push(s); }
+  for (const sc of list) { s += sceneFrames(sc); out.push(s); }
   return out;
-})();
+};
 
 const triangle = (frame: number, c: number, w: number) =>
   interpolate(frame, [c - w, c, c + w], [0, 1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
@@ -27,25 +27,26 @@ const Tear: React.FC<{ intensity: number }> = ({ intensity }) => {
   );
 };
 
-export const Cut: React.FC = () => {
+export const CutBody: React.FC<{ list: Scene[]; total: number }> = ({ list, total }) => {
   const frame = useCurrentFrame();
+  const cutFrames = cutFramesOf(list);
   const spike = Math.max(0, ...cutFrames.map((c) => triangle(frame, c, 4)));
   const intro = interpolate(frame, [0, 18], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
-  const outroStart = totalFrames - OUTRO_FRAMES;
+  const outroStart = total - OUTRO_FRAMES;
   const outroIn = interpolate(frame, [outroStart, outroStart + 24], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
-  const outroOut = interpolate(frame, [totalFrames - 30, totalFrames - 1], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+  const outroOut = interpolate(frame, [total - 30, total - 1], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
   let start = 0;
   return (
     <AbsoluteFill style={{ background: "#07090B" }}>
       <Glitch intensity={Math.max(intro, spike)} seed={3} grain={frame < 20}>
         <AbsoluteFill>
-          {scenes.map((sc, i) => {
+          {list.map((sc, i) => {
             const n = sceneFrames(sc);
             const el = (
               <Sequence key={sc.id} from={start} durationInFrames={n} layout="none">
                 <Phone scene={sc} />
                 <Labels labels={sc.labels} />
-                <Bar scene={sc} sceneIndex={i} sceneCount={scenes.length} />
+                <Bar scene={sc} sceneIndex={i} sceneCount={list.length} />
               </Sequence>
             );
             start += n;
@@ -65,3 +66,6 @@ export const Cut: React.FC = () => {
     </AbsoluteFill>
   );
 };
+
+export const Cut: React.FC = () => <CutBody list={scenes} total={totalFrames} />;
+export const CutShort: React.FC = () => <CutBody list={scenesShort} total={totalFramesShort} />;
