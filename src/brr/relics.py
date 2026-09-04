@@ -321,6 +321,62 @@ def collection_scope(
     return branch, seed
 
 
+def scope_roots(
+    meta: dict[str, Any], repo_root: Path | None,
+) -> tuple[Path | None, Path | None]:
+    """``(probe_root, collect_root)`` for a run's own produce (#1776).
+
+    *probe_root* is what :func:`collection_scope` should read its own live
+    "what branch is this really on right now" check against (the #1293
+    mid-run-rename detector, driven by ``gitops.current_branch``).
+    *collect_root* is what :func:`collect` should then run ``git
+    log``/etc. against once the branch/seed pair is known. They can
+    differ, and conflating them is the bug #1776 named: every caller
+    before this passed the same value to both, always *repo_root* (brr's
+    daemon, ``daemon.py``: the one shared host checkout) for an isolated
+    run — a strand-stack run gets its own tree stamped as
+    ``meta["worktree_path"]`` by ``envs.WorktreeEnv.prepare``, covering
+    both a linked worktree (#746) and a strand's ``create_clone`` (own
+    ``.git``) alike, and *repo_root* is not that tree.
+
+    Wrong for both isolation shapes, but each fails differently: probing
+    *repo_root*'s HEAD returns whatever branch the host happens to be
+    checked out to, silently overwriting the already-correct
+    ``branch_name`` :func:`collection_scope` was handed — reproducible for
+    a plain worktree strand too, not only a ``create_clone`` one (#1776's
+    own report tested only the clone shape). And ``git log`` against
+    *repo_root* plainly cannot see a clone's branch at all.
+
+    So this reads the run's own tree first — but ``envs.WorktreeEnv.
+    finalize`` tears a *successful* run's tree down once it is no longer
+    needed (daemon.py's ``_run_worker``, always before any closeout code
+    that reaches this), landing a clone's publish branch into *repo_root*
+    as a local ref first (``worktree.land_clone_branch``: a plain ``git
+    fetch`` + fast-forward that never touches *repo_root*'s own HEAD) —
+    which is exactly why a linked worktree's shared refs and a landed
+    clone's fetched ref both make *repo_root* a fine *collect_root* once
+    the tree is gone, and why the live *probe* must not run against it
+    even then: nothing at *repo_root* was ever this run's HEAD. A
+    torn-down isolated run therefore gets no live probe at all
+    (``probe_root=None`` — :func:`collection_scope`'s own early-return
+    path, trusting the ``branch_name`` finalize already settled) rather
+    than a probe against the wrong tree.
+
+    A host run has no tree of its own (``worktree_path`` unset): both
+    roots stay *repo_root*, unchanged — the fallback :func:`collection_scope`
+    exists for, reading the one checkout there is.
+    """
+    if repo_root is None:
+        return None, None
+    worktree_path = str(meta.get("worktree_path") or "").strip()
+    if not worktree_path:
+        return repo_root, repo_root
+    own_root = Path(worktree_path)
+    if own_root.is_dir():
+        return own_root, own_root
+    return None, repo_root
+
+
 def _commits_since_seed(
     repo_root: Path,
     branch: str,
