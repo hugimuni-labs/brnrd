@@ -29,15 +29,16 @@ const CalloutBox: React.FC<{ c: Callout; scene: SceneV5 }> = ({ c, scene }) => {
   const phoneLeft = cam.tx, phoneRight = cam.tx + VIDEO_W * cam.z;
   const boxW = 440, pad = 18;
   const color = c.amber ? AM : PH;
-  const gap = 28;
-  const bx = c.side === "left" ? Math.max(24, phoneLeft - gap - boxW) : Math.min(width - 24 - boxW, phoneRight + gap);
-  const by = Math.min(height - 200, Math.max(40, sy - 40));
-  const anchorX = c.side === "left" ? bx + boxW : bx;
+  // every callout sits on the right, overlapping the phone's right edge a little,
+  // pulled toward the centre — the reader's eye is on the phone, not the void
+  const bx = Math.min(width - 24 - boxW, Math.max(phoneLeft + 40, phoneRight - 40));
+  const by = Math.min(height - 220, Math.max(40, sy - 40));
+  const anchorX = bx;
   const grow = interpolate(frame, [f0, f0 + 12], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
   const lx = anchorX + (sx - anchorX) * grow;
   const ly = by + 40 + (sy - (by + 40)) * grow;
-  const bracket = (x: number, y: number, dx: number, dy: number) => (
-    <path d={`M ${x + dx * 16} ${y} L ${x} ${y} L ${x} ${y + dy * 16}`} stroke={color} strokeWidth={2.5} fill="none" />
+  const corner = (pos: React.CSSProperties, bt: boolean, bl: boolean) => (
+    <div style={{ position: "absolute", width: 16, height: 16, ...pos, borderTop: bt ? `2.5px solid ${color}` : undefined, borderBottom: !bt ? `2.5px solid ${color}` : undefined, borderLeft: bl ? `2.5px solid ${color}` : undefined, borderRight: !bl ? `2.5px solid ${color}` : undefined }} />
   );
   return (
     <AbsoluteFill style={{ pointerEvents: "none", opacity: o }}>
@@ -46,15 +47,13 @@ const CalloutBox: React.FC<{ c: Callout; scene: SceneV5 }> = ({ c, scene }) => {
         <circle cx={lx} cy={ly} r={5} fill={color} />
         <circle cx={lx} cy={ly} r={11} fill="none" stroke={color} strokeWidth={1.5} opacity={0.7} />
       </svg>
-      <div style={{ position: "absolute", left: bx, top: by, width: boxW, padding: pad, fontFamily: mono, fontSize: 30, lineHeight: 1.3, color, background: "rgba(7,9,11,0.78)", textShadow: `0 0 12px ${color}88`, letterSpacing: 0.3 }}>
+      <div style={{ position: "absolute", left: bx, top: by, width: boxW, padding: pad, fontFamily: mono, fontSize: 30, lineHeight: 1.3, color, background: "rgba(7,9,11,0.82)", textShadow: `0 0 12px ${color}88`, letterSpacing: 0.3, boxShadow: "0 0 30px rgba(0,0,0,0.5)" }}>
         {c.text}
+        {corner({ left: -7, top: -7 }, true, true)}
+        {corner({ right: -7, top: -7 }, true, false)}
+        {corner({ left: -7, bottom: -7 }, false, true)}
+        {corner({ right: -7, bottom: -7 }, false, false)}
       </div>
-      <svg width={width} height={height} style={{ position: "absolute", left: 0, top: 0 }}>
-        {bracket(bx - 6, by - 6, 1, 1)}
-        {bracket(bx + boxW + 6, by - 6, -1, 1)}
-        {bracket(bx - 6, by + 40 + 26 * Math.ceil(c.text.length / 22) + 6, 1, -1)}
-        {bracket(bx + boxW + 6, by + 40 + 26 * Math.ceil(c.text.length / 22) + 6, -1, -1)}
-      </svg>
     </AbsoluteFill>
   );
 };
