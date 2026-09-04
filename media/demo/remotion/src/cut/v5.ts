@@ -52,7 +52,7 @@ export const scenesV5: SceneV5[] = [
     ],
     callouts: [
       { text: "the ask, from the couch · WhatsApp · 13:08Z", px: 0.5, py: 0.6, side: "right", from: 0.2, to: 3.6 },
-      { text: "sent. the resident wakes on the other end.", px: 0.5, py: 0.5, side: "right", from: 4.9, to: 6.8, amber: true },
+      { text: "sent. the resident is already awake, mid-task — it folds this in.", px: 0.5, py: 0.5, side: "right", from: 4.9, to: 6.9, amber: true },
     ],
   },
   {
