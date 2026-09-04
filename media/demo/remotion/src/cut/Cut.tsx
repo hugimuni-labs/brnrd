@@ -3,7 +3,7 @@ import { AbsoluteFill, Img, Sequence, interpolate, staticFile, useCurrentFrame }
 import { Crt } from "../components/Crt";
 import { Glitch } from "../components/Glitch";
 import { OUTRO_FRAMES, Scene, scenes, sceneFrames, totalFrames, scenesShort, totalFramesShort } from "./scenes";
-import { Phone } from "./Phone";
+import { Phone, sourceTimeAt } from "./Phone";
 import { Bar, Labels } from "./Overlay";
 import { Hud } from "./Hud";
 import { SceneV5, scenesV5, totalFramesV5 } from "./v5";
@@ -44,12 +44,13 @@ export const CutBody: React.FC<{ list: Scene[]; total: number }> = ({ list, tota
         <AbsoluteFill>
           {list.map((sc, i) => {
             const n = sceneFrames(sc);
+            const prevEnd = i > 0 ? sourceTimeAt(list[i - 1], sceneFrames(list[i - 1]) - 1) : undefined;
             const el = (
               <Sequence key={sc.id} from={start} durationInFrames={n} layout="none">
                 <Phone scene={sc} />
                 <Labels labels={sc.labels} />
                 <Hud scene={sc as SceneV5} />
-                <Bar scene={sc} sceneIndex={i} sceneCount={list.length} />
+                <Bar scene={sc} sceneIndex={i} sceneCount={list.length} prevEnd={prevEnd} />
               </Sequence>
             );
             start += n;
@@ -59,13 +60,13 @@ export const CutBody: React.FC<{ list: Scene[]; total: number }> = ({ list, tota
             <AbsoluteFill style={{ background: "#07090B", opacity: outroIn * outroOut, alignItems: "center", justifyContent: "center", gap: 28 }}>
               <Img src={staticFile("mark-screen.svg")} style={{ width: 260, filter: "drop-shadow(0 0 40px rgba(124,255,155,0.35))" }} />
               <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 44, color: "#7CFF9B", textShadow: "0 0 18px rgba(124,255,155,0.6)", letterSpacing: 2 }}>brnrd.dev</div>
-              <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 26, color: "#FFB347", opacity: 0.9 }}>the work lives on your machine · the seat stays open</div>
             </AbsoluteFill>
           </Sequence>
         </AbsoluteFill>
       </Glitch>
       <Tear intensity={spike} />
       <Crt />
+      <AbsoluteFill style={{ background: "#000", opacity: interpolate(frame, [0, 18], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }), pointerEvents: "none" }} />
     </AbsoluteFill>
   );
 };

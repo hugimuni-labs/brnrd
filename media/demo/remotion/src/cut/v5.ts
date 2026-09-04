@@ -45,7 +45,7 @@ export const scenesV5: SceneV5[] = [
   },
   {
     id: "ask",
-    segs: [c02(4, 6, 1), c02(6, 77, 90), c02(77, 81, 2), c03(0, 2.2, 1)],
+    segs: [c02(4, 6, 1), c02(6, 77, 45), c02(77, 81, 2), c03(0, 2.2, 1)],
     cam: [
       { at: 0, z: 2.0, cx: 0.5, cy: 0.62 }, { at: 0.55, z: 2.0, cx: 0.5, cy: 0.62 },
       { at: 0.7, z: 1.7, cx: 0.5, cy: 0.5 }, { at: 1, z: 1.7, cx: 0.5, cy: 0.5 },
@@ -95,7 +95,8 @@ export const scenesV5: SceneV5[] = [
       { at: 0.9, z: 1.5, cx: 0.5, cy: 0.62 }, { at: 1, z: 1.5, cx: 0.5, cy: 0.62 },
     ],
     callouts: [
-      { text: "40 minutes later · the pressure, on Telegram · 13:49Z", px: 0.5, py: 0.56, side: "right", from: 2.2, to: 4.4, amber: true },
+      { text: "40 minutes later · Telegram · 13:48Z", px: 0.5, py: 0.5, side: "right", from: 0.15, to: 1.9, amber: true },
+      { text: "the pressure", px: 0.5, py: 0.56, side: "right", from: 2.3, to: 4.3 },
       { text: "sent. 76 seconds start now.", px: 0.5, py: 0.44, side: "right", from: 5.7, to: 8.3, amber: true },
     ],
   },
@@ -117,9 +118,9 @@ export const scenesV5: SceneV5[] = [
   },
   {
     id: "ci",
-    segs: [c08b(0, 109, 72)],
-    cam: [FULL, { at: 1, z: 1, cx: 0.5, cy: 0.5 }],
-    callouts: [{ text: "Publish backend container #603 · Success in 2m26s", px: 0.5, py: 0.3, side: "right", from: 0.3, to: 1.4 }],
+    segs: [F("s_ci.png", 2915.5, 1.4)],
+    cam: [{ at: 0, z: 1.6, cx: 0.5, cy: 0.42 }, { at: 1, z: 1.7, cx: 0.5, cy: 0.42 }],
+    callouts: [{ text: "CI: Publish backend container #603 · Success in 2m26s", px: 0.5, py: 0.5, side: "right", from: 0.15, to: 1.3 }],
   },
   {
     id: "gone",

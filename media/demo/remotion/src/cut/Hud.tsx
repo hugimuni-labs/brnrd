@@ -78,9 +78,9 @@ const MarkerLayer: React.FC<{ m: Marker; scene: SceneV5 }> = ({ m, scene }) => {
     return (
       <AbsoluteFill style={{ pointerEvents: "none", opacity: o * pulse }}>
         <svg width={width} height={height} style={{ position: "absolute", left: 0, top: 0 }}>
-          <path d={tri} stroke={RED} strokeWidth={5} fill="rgba(255,59,48,0.06)" strokeDasharray={len} strokeDashoffset={len * (1 - draw)} style={{ filter: `drop-shadow(0 0 10px ${RED})` }} />
-          <line x1={x0} y1={y0} x2={x1} y2={y1} stroke={RED} strokeWidth={5} opacity={draw} style={{ filter: `drop-shadow(0 0 8px ${RED})` }} />
-          <line x1={x1} y1={y0} x2={x0} y2={y1} stroke={RED} strokeWidth={5} opacity={draw} style={{ filter: `drop-shadow(0 0 8px ${RED})` }} />
+          <path d={tri} stroke={RED} strokeWidth={3} fill="rgba(255,59,48,0.06)" strokeDasharray={len} strokeDashoffset={len * (1 - draw)} style={{ filter: `drop-shadow(0 0 10px ${RED})` }} />
+          <line x1={x0} y1={y0} x2={x1} y2={y1} stroke={RED} strokeWidth={3} opacity={draw} style={{ filter: `drop-shadow(0 0 8px ${RED})` }} />
+          <line x1={x1} y1={y0} x2={x0} y2={y1} stroke={RED} strokeWidth={3} opacity={draw} style={{ filter: `drop-shadow(0 0 8px ${RED})` }} />
         </svg>
       </AbsoluteFill>
     );

@@ -13,9 +13,13 @@ export const clockText = (secs: number) => {
   return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}Z`;
 };
 
-export const Bar: React.FC<{ scene: Scene; sceneIndex: number; sceneCount: number }> = ({ scene, sceneIndex, sceneCount }) => {
+export const Bar: React.FC<{ scene: Scene; sceneIndex: number; sceneCount: number; prevEnd?: number }> = ({ scene, sceneIndex, sceneCount, prevEnd }) => {
   const frame = useCurrentFrame();
-  const secs = sourceTimeAt(scene, frame);
+  const here = sourceTimeAt(scene, frame);
+  // a cut jumps the tape's clock by minutes; roll the digits across the first
+  // 14 frames so the jump reads as a jump, not a glitch
+  const roll = prevEnd !== undefined && frame < 14 ? interpolate(frame, [0, 14], [prevEnd, here], { extrapolateRight: "clamp" }) : here;
+  const secs = roll;
   const tick = Math.floor(secs * 2) % 2 === 0 ? "⌁" : "·";
   return (
     <div

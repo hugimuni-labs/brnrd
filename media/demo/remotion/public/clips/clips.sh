@@ -6,3 +6,6 @@ cut(){ ffmpeg -hide_banner -loglevel error -y -ss $2 -i "$F" -t $3 -vf "scale=72
 cut c01_block 29 7; cut c02_ask 36 81; cut c03_wait 117 143; cut c04_reply 260 20
 cut c05a_steer 295 43; cut c05b_folded 428 8; cut c06_push 2496 66; cut c07_prup 2672 7
 cut c08a_merge 2744 27; cut c08b_ci 2808 109; cut c09_gone 2925 17
+# freeze-stills (public/stills/), offsets = seconds from the recording start
+still(){ ffmpeg -hide_banner -loglevel error -y -ss $2 -i "$F" -frames:v 1 -vf "scale=720:-2" ../stills/$1.png; }
+still s_block 33; still s_notify 263.7; still s_folded 428.6; still s_prup 2677.6; still s_gone 2932; still s_ci 2915.5
