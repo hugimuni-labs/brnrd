@@ -147,3 +147,19 @@ export const scenesV5: SceneV5[] = [
 
 export const totalFramesV5 = scenesV5.reduce((n, sc) => n + sceneFrames(sc), 0) + OUTRO_FRAMES;
 export { fps };
+
+
+// The strict README trim on the v6 grammar: merge, CI and the strand beat out; the
+// folded scroll shortened; the ask and push ramps tightened. Same captions.
+const shortSegs: Record<string, Seg[]> = {
+  ask: [c02(4, 5.6, 1), c02(5.6, 77, 90), c02(77, 81, 2.2), c03(0, 1.6, 1)],
+  reply: [F("s_notify.png", 263.7, 2.0), c04b(1.6, 3.4, 1), c04b(3.4, 28, 26), c05(0, 10, 12), c05(10, 44.7, 30), F("s_sent.png", 335.1, 1.4)],
+  folded: [F("s_folded.png", 428.6, 1.4), c05c(3.6, 5.2, 1.2), c05c(5.2, 8.2, 1.2)],
+  push: [c06(0, 6, 4), c06(6, 8, 1), c06(8, 57, 110), c06(57, 60, 2), c06(60, 61.5, 1)],
+  prup: [c07(1.5, 5.3, 1.8), F("s_prup.png", 2677.6, 1.8)],
+  gone: [c09(1, 5, 2.2), c09(5, 10, 3.5), F("s_gone.png", 2932, 3.0)],
+};
+export const scenesShortV6: SceneV5[] = scenesV5
+  .filter((sc) => !["merge", "ci", "strand"].includes(sc.id))
+  .map((sc) => (shortSegs[sc.id] ? { ...sc, segs: shortSegs[sc.id] } : sc));
+export const totalFramesShortV6 = scenesShortV6.reduce((n, sc) => n + sceneFrames(sc), 0) + OUTRO_FRAMES;

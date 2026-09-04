@@ -7,7 +7,7 @@ import { Phone, sourceTimeAt } from "./Phone";
 import { Bar, Labels } from "./Overlay";
 import { Hud } from "./Hud";
 import { Boot } from "./Boot";
-import { SceneV5, scenesV5, totalFramesV5 } from "./v5";
+import { SceneV5, scenesV5, totalFramesV5, scenesShortV6, totalFramesShortV6 } from "./v5";
 
 const cutFramesOf = (list: Scene[]) => {
   const out: number[] = [];
@@ -72,3 +72,4 @@ export const CutBody: React.FC<{ list: Scene[]; total: number }> = ({ list, tota
 export const Cut: React.FC = () => <CutBody list={scenes} total={totalFrames} />;
 export const CutShort: React.FC = () => <CutBody list={scenesShort} total={totalFramesShort} />;
 export const CutV5: React.FC = () => <CutBody list={scenesV5} total={totalFramesV5} />;
+export const CutShortV6: React.FC = () => <CutBody list={scenesShortV6} total={totalFramesShortV6} />;
