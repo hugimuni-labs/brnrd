@@ -39,7 +39,6 @@ router = APIRouter(prefix="/v1/daemons/config-requests", tags=["config-approval"
 # key present on one side only means every mint for it 422s here while the
 # daemon happily parks proposals that can never grow an approve link).
 ALLOWED_CONFIG_KEYS = {
-    "spawn.max_concurrent",
     # Wake-context budget knobs (2026-07-11 audit, PR #349 — daemon half
     # landed there; this server half was missed and caught by the first
     # live dominion-key proposal minting a 422).
