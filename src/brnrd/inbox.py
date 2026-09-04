@@ -429,7 +429,20 @@ def _merge_into_open_media_group(
             .values(event_id=existing.event_id)
         )
         db.commit()
-        db.refresh(replacement)
+        # #1763 — no `db.refresh(replacement)` here, the same shape as the
+        # bare-insert path in `enqueue` below (see its comment for the full
+        # mechanism): the moment this commits, `replacement` is itself a
+        # legitimate merge target for a *third* concurrent racer's CAS,
+        # which can delete-and-replace this exact row (matched by `seq`)
+        # before a refresh's SELECT-by-primary-key would run — raising
+        # `Could not refresh instance` on a merge that itself succeeded and
+        # lost nothing. The only column the raw `UPDATE` above changed
+        # that this ORM object doesn't already reflect is `event_id`
+        # (renamed from the placeholder); mirror it in Python instead of
+        # reloading from the database — `seq` was already fixed by the
+        # `db.flush()` above, and `expire_on_commit=False` (db.py) keeps
+        # every other attribute exactly as this object last wrote it.
+        replacement.event_id = existing.event_id
         return replacement
     return None
 
@@ -481,7 +494,25 @@ def enqueue(
     )
     db.add(event)
     db.commit()
-    db.refresh(event)
+    # #1763 — no `db.refresh(event)` here, and that is load-bearing, not an
+    # omission. When `media_group_id` is set, this row is a legitimate
+    # merge target the moment it commits: any concurrently-running album
+    # item can now find it via `_find_open_media_group` and fold into it
+    # through `_merge_into_open_media_group`'s CAS, which *deletes this
+    # exact row* (matched by `seq`) and reinserts a replacement under a
+    # fresh seq, renamed to carry the same `event_id`. A `db.refresh()`
+    # landing in that window reloads by primary key and finds it gone —
+    # `sqlalchemy.exc.InvalidRequestError: Could not refresh instance` —
+    # even though the merge that raced us is correct and lost nothing.
+    # The session factory sets `expire_on_commit=False` (db.py), so every
+    # attribute on `event` is already populated from the flush that ran
+    # inside `commit()` above (the autoincrement `seq` included — SQLite
+    # hands it back at INSERT time, not on a later reload) and no caller
+    # of `enqueue` reads state a concurrent merge could have changed: the
+    # one call site that passes `media_group_id` (the Telegram webhook)
+    # discards this return value entirely. Nothing here needs a reload,
+    # and a reload is the one thing that can turn a correct concurrent
+    # merge into a spurious 500.
     return event
 
 
