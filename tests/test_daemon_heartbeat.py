@@ -229,26 +229,8 @@ def _real_sleep_invoke(seconds: int = 30):
     return invoke
 
 
-def test_budget_kills_runner_and_reports_124():
-    """Past its budget the runner is killed via kill_active and the result
-    is presented like the wall-clock timeout (124)."""
-    backend = SimpleNamespace(invoke=_real_sleep_invoke(30))
-    result = daemon._invoke_with_heartbeat(
-        backend, None, "codex", _invocation(),
-        cfg={}, trace=False, on_heartbeat=lambda: None,
-        interval=0.05, budget_seconds=0.1, hard_cap_seconds=5,
-        keepalive_path=None,
-    )
-    assert result.returncode == 124
-    assert "budget" in result.stderr
-
-
-def test_keepalive_extends_budget(tmp_path):
-    """An agent keepalive pushes the deadline out, so a tiny budget no
-    longer kills a run that finishes within the extension."""
-    ka = tmp_path / ".keepalive"
-    ka.write_text("+1h\n")
-
+def test_elapsed_clock_never_reaps_runner():
+    """A simulated stretch completes normally; only user stop may kill it."""
     def slow_invoke(_ctx, _runner, invocation, cfg, *, trace=False):
         time.sleep(0.2)
         return _ok_result(invocation)
@@ -257,66 +239,6 @@ def test_keepalive_extends_budget(tmp_path):
     result = daemon._invoke_with_heartbeat(
         backend, None, "codex", _invocation(),
         cfg={}, trace=False, on_heartbeat=lambda: None,
-        interval=0.05, budget_seconds=0.05, hard_cap_seconds=3600,
-        keepalive_path=ka,
+        interval=0.05,
     )
     assert result.returncode == 0
-
-
-def test_keepalive_capped_by_hard_cap(tmp_path):
-    """A wildly generous keepalive can't pin the slot past the hard cap."""
-    ka = tmp_path / ".keepalive"
-    ka.write_text("+10h\n")
-    backend = SimpleNamespace(invoke=_real_sleep_invoke(30))
-    result = daemon._invoke_with_heartbeat(
-        backend, None, "codex", _invocation(),
-        cfg={}, trace=False, on_heartbeat=lambda: None,
-        interval=0.05, budget_seconds=0.05, hard_cap_seconds=0.2,
-        keepalive_path=ka,
-    )
-    assert result.returncode == 124
-
-
-class TestBudgetHelpers:
-    def test_keepalive_until_parses_iso_and_duration(self, tmp_path):
-        ka = tmp_path / ".keepalive"
-        ka.write_text("2099-01-01T00:00:00Z")
-        assert daemon._keepalive_until(ka) > time.time()
-
-        ka.write_text("+30m")
-        now = time.time()
-        os.utime(ka, (now, now))
-        val = daemon._keepalive_until(ka)
-        assert abs(val - (now + 1800)) < 5
-
-    def test_keepalive_until_none_for_missing_empty_garbage(self, tmp_path):
-        assert daemon._keepalive_until(None) is None
-        assert daemon._keepalive_until(tmp_path / "nope") is None
-        empty = tmp_path / "empty"
-        empty.write_text("   \n")
-        assert daemon._keepalive_until(empty) is None
-        junk = tmp_path / "junk"
-        junk.write_text("not a time")
-        assert daemon._keepalive_until(junk) is None
-
-    def test_budget_exceeded_basic(self):
-        now = time.monotonic()
-        assert not daemon._budget_exceeded(now, 100, None, None)
-        assert daemon._budget_exceeded(now - 200, 100, None, None)
-
-    def test_budget_keepalive_within_cap_prevents_kill(self, tmp_path):
-        ka = tmp_path / ".keepalive"
-        ka.write_text("+1h")
-        now = time.time()
-        os.utime(ka, (now, now))
-        # 10s elapsed, base budget 5s (passed), but a +1h keepalive under a
-        # generous cap moves the deadline far out.
-        assert not daemon._budget_exceeded(time.monotonic() - 10, 5, 3600, ka)
-
-    def test_budget_hard_cap_overrides_keepalive(self, tmp_path):
-        ka = tmp_path / ".keepalive"
-        ka.write_text("+10h")
-        now = time.time()
-        os.utime(ka, (now, now))
-        # The cap (100s from start) bites before the +10h keepalive.
-        assert daemon._budget_exceeded(time.monotonic() - 200, 100, 100, ka)

@@ -4516,7 +4516,7 @@ def build_daemon_prompt(
 
     The daemon path also injects ``daemon-substrate.md`` — brr's driver's
     manual for the daemon-specific machinery (single-flight, capture net,
-    self-scheduled wakes, the outbox/keepalive contract) that the
+    self-scheduled wakes, the outbox contract) that the
     host-agnostic playbook deliberately leaves out. ``brnrd run`` skips it:
     a one-shot has no daemon to fire schedules or drain an outbox.
 
@@ -4949,22 +4949,11 @@ def _build_run_context_bundle(
         "- Delivery: situational outputs captured by brr "
         "(see Delivery contract below)"
     )
-    if budget_seconds:
-        sections.append(
-            f"- Budget: ~{budget_seconds // 60}m of wall-clock runtime before "
-            "brr kills this thought to reclaim the single-flight slot. Bound "
-            "uncertain long-running commands yourself (own timeout, or "
-            "background + poll); extend the deadline if you genuinely need "
-            "longer (see Delivery contract)."
-        )
-    else:
-        sections.append(
-            "- Budget: no time limit — nothing configured "
-            "`runner.timeout_seconds`, so brr will not kill this thought on "
-            "a clock. Still bound uncertain long-running commands yourself "
-            "(own timeout, or background + poll); a hung shell now holds "
-            "the single-flight slot until stopped by hand."
-        )
+    sections.append(
+        "- Budget: no time limit — brr does not kill a thought on an elapsed "
+        "clock. Still bound uncertain long-running commands yourself; a hung "
+        "shell holds the slot until the user stops the run from the dashboard."
+    )
     if context_path:
         sections.append(
             f"- Runtime recovery: {context_path} "
@@ -5080,12 +5069,6 @@ def _build_run_context_bundle(
                 "goes through `.card` / outbox / `gate:`; stdout stays the "
                 "plain current-thread fallback"
             )
-        sections.append(
-            f"- keepalive: `{outbox_path}/.keepalive` — first line "
-            "ISO-8601 or `+<duration>` (`+30m`); rewrite to extend"
-            + ("" if budget_seconds else " an `await:` wait (no runtime "
-               "budget is configured, so there is no deadline to outlast)")
-        )
         sections.append(
             f"- card/run body: `{outbox_path}/.card` — resident-owned Markdown "
             "write-head; keep `## Now` current for the live projection, preserve "

@@ -1164,7 +1164,7 @@ class DockerEnv(WorktreeEnv):
             *inner_cmd,
         ]
 
-        timeout = runner.runner_timeout(cfg)
+        timeout = invocation.timeout_seconds
         stdout = ""
         stderr = ""
         returncode = 0

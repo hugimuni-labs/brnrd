@@ -107,6 +107,96 @@ _PUBLISHER_COMPAT_NAMES = (
     "_CODEX_QUOTA_PUBLISH_MAX_AGE_SECONDS",
     "_DASHBOARD_PUBLISH_INTERVAL_S",
 )
+
+_DEFAULT_SILENCE_NOTICE_SECONDS = 2 * 60 * 60
+
+
+def _await_armed_for_run(source: Path, run_id: str) -> bool:
+    """True when *run_id* holds an armed, unresolved ``await:`` right now.
+
+    Read from the run's own ``portal-state.json`` — the daemon projects the
+    await there every heartbeat — located through the run-control registry
+    (event id → outbox dir). Any failure to read answers ``False``: the
+    notice is then merely sent when it might not have been, which is the
+    cheaper wrong answer.
+    """
+    try:
+        from .. import daemon as daemon_mod
+        control = daemon_mod._find_run_control(run_id)
+    except Exception:
+        control = None
+    event_id = str((control or {}).get("event_id") or "")
+    if not event_id:
+        return False
+    try:
+        payload = json.loads(
+            (source / "outbox" / event_id / "portal-state.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    except (OSError, ValueError):
+        return False
+    armed = payload.get("await") if isinstance(payload.get("await"), dict) else {}
+    return bool(armed.get("armed")) and not bool(armed.get("resolved"))
+
+
+def _silence_notice_for_event(brr_dir: Path, state: dict, event: dict) -> str | None:
+    """Return the one notice owed for a message landing in a silent live run.
+
+    The latest hook boundary is the reset token. Persisting that token beside
+    the run means any number of messages in one silence produces one notice;
+    the next boundary changes the token and re-arms the notice naturally.
+    """
+    conv = conversations.conversation_key_for_event(event)
+    if not conv:
+        return None
+    for source in presence.account_dirs(brr_dir):
+        for live in presence.list_active(source):
+            if str(live.get("stream") or "") != conv:
+                continue
+            run_id = str(live.get("run_id") or "")
+            if not run_id:
+                continue
+            if _await_armed_for_run(source, run_id):
+                # A run holding a `brnrd await` is listening, not silent: this
+                # very message resolves its wait on the next heartbeat. The
+                # notice exists for a run stuck in one call with no boundary
+                # in sight — never for the seat that stays open (#1779).
+                continue
+            boundaries = source / "runs" / run_id / "boundaries.jsonl"
+            try:
+                last_boundary = boundaries.stat().st_mtime
+            except OSError:
+                continue
+            from .. import config as conf
+            cfg = conf.load_config(source.parent)
+            try:
+                threshold = float(cfg.get(
+                    "runner.silence_notice_seconds",
+                    _DEFAULT_SILENCE_NOTICE_SECONDS,
+                ))
+            except (TypeError, ValueError):
+                threshold = _DEFAULT_SILENCE_NOTICE_SECONDS
+            if time.time() - last_boundary <= threshold:
+                continue
+            marker = source / "runs" / run_id / ".silence-notice-boundary"
+            token = str(boundaries.stat().st_mtime_ns)
+            try:
+                if marker.read_text(encoding="utf-8").strip() == token:
+                    return None
+            except OSError:
+                pass
+            try:
+                marker.write_text(token + "\n", encoding="utf-8")
+            except OSError:
+                return None
+            since = time.strftime("%H:%MZ", time.gmtime(last_boundary))
+            live_url = state["brnrd_url"].rstrip("/") + "/"
+            return (
+                f"the run has been silent since {since}; stop it from the "
+                f"dashboard: {live_url}"
+            )
+    return None
 for _compat_name in (*_CREDENTIAL_COMPAT_NAMES, *_PUBLISHER_COMPAT_NAMES):
     _compat_module = (
         _credentials
@@ -1182,6 +1272,7 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
                     f"[brnrd:cloud] event {ev.get('event_id')} announced attachments "
                     f"this daemon could not read — {unrecognised}"
                 )
+            origin = _origin_meta(ev.get("reply_to") or {})
             protocol.create_event(
                 inbox_dir,
                 source="cloud",
@@ -1189,8 +1280,24 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
                 attachment_files=attachment_files or None,
                 cloud_event_id=ev["event_id"],
                 repo_label=ev.get("repo_label") or "",
-                **_origin_meta(ev.get("reply_to") or {}),
+                **origin,
             )
+            notice = _silence_notice_for_event(
+                brr_dir, state, {"source": "cloud", **origin}
+            )
+            if notice:
+                try:
+                    _request(
+                        state["brnrd_url"], "POST", "/v1/daemons/responses",
+                        token=state["token"],
+                        json={
+                            "event_id": ev["event_id"],
+                            "body_markdown": notice,
+                            "status": "processing",
+                        },
+                    )
+                except Exception as exc:  # best-effort notice, never ingestion
+                    print(f"[brnrd:cloud] silence notice failed: {exc}")
     if replayed:
         # Loud, not silent: a dropped replay means the cursor and the server
         # disagree about history, and that is worth an operator seeing once

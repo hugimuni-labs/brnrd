@@ -54,7 +54,6 @@ other so they don't drift.
 | `<name>.md` with `config_change: <key>` frontmatter | parked ⏸ policy approval | Propose raising an allowlisted, user-tunable config ceiling in `.brr/config` instead of editing it directly — today `spawn.max_concurrent`, `dominion.inject_budget_bytes`, `dominion.plan_inject_budget_bytes`, `dominion.ledger_inject_budget_bytes` (all integer-valued; off-allowlist keys are dropped with an explanation). Required `value:` frontmatter carries the requested value; the body is the reason recorded on the proposal. Optional `repo:` / `repo_label:` overrides which repo the proposal is scoped to (default: this run's). Needs an account context (cross-repo dominion) to park at all — without one, or a missing/invalid `value:`, the proposal is dropped instead of queued. The daemon parks the proposal and, when cloud-connected, mints a brnrd.dev approve/reject link; no config changes until the account owner decides there. The resolving `approve config-change <id>` / `reject config-change <id>` reply is normally synthesized by that click, not typed by hand — unlike `runner_policy:` above, this one isn't meant to be answered from chat — and is owner-tier gated either way. |
 | `brnrd await` (stages `await: true` + `timeout:`) | inbound ◂ armed hold | **A select, not a sleep** (#959). No arguments: hold until the daemon has something. It evaluates on its own heartbeat, not on your say-so. See §`brnrd await` below. |
 | `brnrd cut FILE` (stages `cut: true` + the file's own frontmatter/body) | outbound ▸ the run's completion | **The bolt** — a run's completion, declared and checked against what the daemon already attests (pending events, produce, the blueprint). Bounded like the closeout latch: bounce with a named diff, cap 3, then accept anyway, annotated. See §`brnrd cut` below. |
-| `.keepalive` | slot control | **Hold the single-flight slot** past your budget. First line is an ISO-8601 time ("busy until T") or `+<duration>` like `+30m`. Rewrite to extend. A control file, never delivered. (Not world-facing — it steers the slot, not a surface.) |
 | `.card` | outbound ▸ desired-state | **Maintain the run body** — resident-owned Markdown, reconciled in place. Keep `## Now` current; only that section projects onto the compact live card. Preserve the arc, findings, and decisions in later sections. At closeout the daemon copies the full write-head to `runs/<repo>/<run>/body.md` beside its separately attested `state.md`; empty/delete leaves a frame-only run. |
 | `menu.json` | outbound ▸ desired-state | **Maintain the thread's one live menu.** Write one JSON object atomically with `menu_id`, `thread`, and `options` (`handle`, `label`, optional `detail`, optional `rec: true`); `expires_at` is optional. The daemon validates and archives the generation, supersedes the prior one, and renders the same stored menu at gates and at the next resident boundary. Malformed menus land in `portal-state.json` → `notices`. A strand child has no v1 menu transport; its parent composes. |
 | `.mood` | slot control | **Your own resident-authored mood** — an almost-free meta-channel from resident to user (#566 layer 2). First line only: an emote name or a free glyph string. `brnrd do --mood <word>` always resolves a face (keeping an unknown word as its note); add `--strict` to refuse the nearest fallback. The hook boundary re-reads it fresh and folds it into the live delta every boundary — a bar segment mid-run, a plain line at seed/stop. It **displays** every boundary and **asks** only on an edge: when a tool in the batch just came back wrong, the chip renders as `mood fo.cus ← Bash ✗`, setting the face you claimed beside the thing that broke. Transition-stamped, so a run debugging a red test is asked once, not at every pass. A control file, never delivered. |
@@ -62,7 +61,7 @@ other so they don't drift.
 | `.relics.jsonl` | slot control | This run's **produce manifest** — one JSON object per line, append-only. See §The produce manifest below. A control file, never delivered. |
 | `.promises.jsonl` | slot control | This run's **blueprint** — the produce manifest in the opposite tense: what you said you would make. Written through `brnrd promise <what>`; see §The blueprint below. Drives the `owed N` boundary chip and the closeout's plan-vs-progress line. A control file, never delivered. |
 | `inbox.json` | inbound ◂ | **Daemon-owned**, refreshed each heartbeat: the live list of other pending events. Read it at plan/todo boundaries and once more before terminal closeout; every event gets an inline, spawn, or explicit-defer disposition. Never edit or remove it. |
-| `portal-state.json` | inbound ◂ | **Daemon-owned**, refreshed each heartbeat: the broader live daemon-state capsule for this run. It includes pending events, delivered/drained reply counts, pending outbox files, current card text, budget/keepalive posture, strand headroom (`resources.coexisting_runs.spawn_pool`), attested live produce (`produce`: counts plus the latest commit, branch, and PR), a stable `change_token` for attention-relevant changes, and **`notices`** — see below. The runner also receives `BRR_PORTAL_STATE` pointing at it. Inspect with `brnrd portal state`; never edit or remove it. |
+| `portal-state.json` | inbound ◂ | **Daemon-owned**, refreshed each heartbeat: the broader live daemon-state capsule for this run. It includes pending events, delivered/drained reply counts, pending outbox files, current card text, elapsed runtime, strand headroom (`resources.coexisting_runs.spawn_pool`), attested live produce (`produce`: counts plus the latest commit, branch, and PR), a stable `change_token` for attention-relevant changes, and **`notices`** — see below. The runner also receives `BRR_PORTAL_STATE` pointing at it. Inspect with `brnrd portal state`; never edit or remove it. |
 
 **The table above is prose; `brnrd notes` is the same facts as data.** Every
 control file here is one row of the durable-surface registry (`brr/notes.py`),
@@ -134,7 +133,7 @@ one correlation gap, named ≠ patched around: a notice records its verb and tar
 
 ### `brnrd await` — the wait with nothing to forget (#959, #1187)
 
-the measurement this closes: a resident waiting on a strand or a background gate wrote `until <condition>; do sleep 25; done` as one shell call · `.keepalive` armed, the thought never ended — and zero tool boundaries for the whole span · the daemon reaches a resident only at a boundary ⇒ three of the maintainer's messages queued behind a wait doing exactly what it was told
+the measurement this closes: a resident waiting on a strand or a background gate wrote `until <condition>; do sleep 25; done` as one shell call · the thought never ended and emitted zero tool boundaries for the whole span · the daemon reaches a resident only at a boundary ⇒ three of the maintainer's messages queued behind a wait doing exactly what it was told
 a wait a correspondent cannot interrupt ≠ a wait — a gap
 
 ```
@@ -144,7 +143,7 @@ brnrd await [--timeout <duration>] [--file <path>] [--json]
 no positional arguments · no condition flags · `brnrd await`, bare, is the whole shape: hold this run until the daemon has something for me
 a message · a dispatched child finishing · a schedule firing — all reach a run as pending events ⇒ all resolve the wait without being named
 
-`--timeout` = the ceiling · default = this run's own remaining budget (the daemon knows it; restating it is the mistake `spawn:<id>` was) · **no configured budget ⇒ no ceiling: the seat stays open**, resolved only by a pending event · a configured hard cap still bounds it, named in an `advisory` notice · wire form `timeout: none`; a missing `timeout:` stays refused
+`--timeout` = the ceiling · default = this run's own remaining budget (the daemon knows it; restating it is the mistake `spawn:<id>` was) · **no configured budget ⇒ no ceiling: the seat stays open**, resolved only by a pending event · wire form `timeout: none`; a missing `timeout:` stays refused
 `--file <path>` = also resolve when that path appears · a footnote for the one thing the daemon cannot observe (an external CI run · a human dropping a file) · adds a trigger · never narrows the wait to only that file
 `--json` = the outcome as JSON
 
@@ -156,24 +155,22 @@ outcome ⇒ `portal-state.json` → `await`:
 
 ```jsonc
 {"armed": true, "file": "/tmp/gate.log", "generation": "…",
- "timeout_seconds": 1200, "deadline": "…", "capped": false,
+ "timeout_seconds": 1200, "deadline": "…",
  "resolved": true, "outcome": "event", "which": null}
 ```
 
 `resolved` flips true on exactly one of three — never silence
 `"event"` the daemon has something pending for you
 `"condition"` the optional `--file` path appeared · `which` names it · pending events outrank it deliberately — when both would fire, the correspondent is the answer
-`"timeout"` the deadline passed with nothing else firing — an open-ended wait has no deadline unless a hard cap gives it one
+`"timeout"` the deadline passed with nothing else firing — an open-ended wait has none
 
 a call reaching its own ceiling first ⇒ `{"outcome": "pending"}` · call again is the entire instruction · that ceiling ≠ a brnrd contract ≠ a number to reason about — what bounds one call is the Shell's per-tool-call cap (claude's Bash ends at 10 minutes; codex differs) and the CLI sits under it · the old 15s bound is gone with the argument that justified it — the only things that would want to interrupt this run are the very things that resolve the wait ⇒ a blocking call returns the moment one arrives
-
-`.keepalive` is extended for you, to the timeout deadline (never shortened below one you wrote yourself) — no separate keepalive write on top of the wait · no deadline ⇒ nothing to extend
 
 strands arm this too · the old refusal reasoned about the wrong slot: a strand does not spend the resident's single-flight slot — it occupies one in the spawn pool (`spawn.max_concurrent`) and already holds it by existing · refusing left a strand blocked on a subprocess with nothing but a shell sleep loop — the exact boundary-free stretch this verb ends, forced by rule onto the runs least able to recover from it
 
 under the porcelain = one outbox directive (`await: true` + `timeout:` — a duration or `none` · optional `file:`) · `brnrd await` stages it for you
 a directive still carrying v1's conditions ⇒ refused with a notice naming `brnrd await` — never silently, never by ignoring the extra terms · malformed input (no `timeout:`) ⇒ `notices`, same as any other verb
-`await:` never ends the run to service a wait — it holds the slot, the way `.keepalive` always has
+`await:` never ends the run to service a wait — it holds the slot
 
 ### `brnrd cut` — the bolt (kb `design-the-bolt.md`)
 
@@ -622,7 +619,7 @@ Runner-owned linger is a named contract, not an improvised while-loop:
    it is the satisfying signal, so the eventual final stdout can stay
    empty (an empty closeout after an outbox delivery is correct, not a
    failure).
-2. **Hold the slot honestly.** Write `.keepalive` for the linger horizon
+2. **Hold the slot honestly.** Run `brnrd await` for the linger horizon
    and set `.card` to say you're lingering (e.g. "lingering for
    follow-ups; next check in ~2m").
 3. **Back off exponentially.** Start around 30s, double per quiet poll,
@@ -750,7 +747,7 @@ it is rare and true.
    a disposition: fold small/related work here; spawn bounded independent
    work when capacity and quota are healthy; defer only with an explicit
    resource, priority, dependency, or authority reason. Bound long commands; write
-   `.keepalive` if the work will outlast your budget.
+   `brnrd await` when the work is waiting on an external event.
 
 5. **Deliver.** Leave a satisfying operational signal for this situation.
    If the signal is meant to communicate, send it through stdout or an
