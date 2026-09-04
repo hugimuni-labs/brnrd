@@ -12763,6 +12763,158 @@ def _capture_dominion(
             print(f"[brnrd] dominion: captured working memory after {task.id}")
 
 
+# Default cadence for _push_ahead_repos_if_due below (#1780):
+# ``capture.push_interval_seconds`` overrides it, read fresh on every call
+# rather than cached at boot, so an operator's config edit takes effect on
+# the next tick.
+_ACCOUNT_PUSH_INTERVAL_DEFAULT_SECONDS = 60.0
+
+# Per-repo last-attempt clock for the ahead-push net, and a guard against
+# starting a second push for a repo whose previous one hasn't returned yet
+# (a wedged network call must not stack threads every time the interval
+# rolls over). Process-lifetime, module-level — the same shape as
+# ``forge_pr_cache``'s ``_refreshing`` latch, one entry per repo instead of
+# a single flag.
+_ahead_push_lock = threading.Lock()
+_ahead_push_inflight: set[str] = set()
+_ahead_push_last_attempt: dict[str, float] = {}
+
+
+def _push_repo_if_ahead(
+    label: str,
+    repo_path: Path,
+    marker_dir: Path,
+    mark_needs_sync,
+    clear_needs_sync,
+) -> bool:
+    """Push *repo_path*'s checked-out branch when it is ahead of its upstream.
+
+    The single-repo half of :func:`_push_ahead_repos_if_due`. Never commits —
+    it only moves commits that already exist onto the remote they already
+    have a tracking relationship with. A remote-less repo is left alone (no
+    push call, no marker — that repo's own capture net already owns
+    ``never_linked``). Failure lands on the same classified ``needs_sync``
+    marker the closeout capture uses (:func:`gitops.format_push_failure`),
+    so a resident sees one failure surface regardless of which of the two
+    pushers hit it; success clears it. Returns whether a push was actually
+    attempted (network-touching), for callers that gate a background thread
+    on it.
+    """
+    remote = gitops.default_remote(repo_path)
+    if not remote:
+        return False
+    try:
+        branch = gitops.current_branch(repo_path)
+    except gitops.CurrentBranchUnresolvable:
+        return False
+    if not branch or branch == "HEAD":
+        return False
+    # Cheap and local: no fetch, so a repo nobody touched costs one
+    # subprocess per interval, never a network round trip. A push-refspec
+    # comparison that can't resolve (never pushed before) counts as ahead —
+    # exactly the case that most needs this push.
+    count = gitops.ahead_count(repo_path, "@{upstream}", "HEAD")
+    if count == 0:
+        return False
+    push_result = gitops.push_branch(repo_path, remote, branch, set_upstream=False)
+    if push_result:
+        clear_needs_sync(marker_dir)
+    else:
+        mark_needs_sync(
+            marker_dir,
+            gitops.format_push_failure(
+                push_result, branch=branch, remote=remote,
+                remote_label=f"the {label} remote", repo_path=repo_path,
+            ),
+            status=push_result.status.value,
+        )
+    return True
+
+
+def _push_ahead_repos_if_due(
+    brr_dir: Path,
+    account_context: "account.AccountContext",
+    cfg: dict,
+    *,
+    now: float | None = None,
+) -> list[str]:
+    """Best-effort push of the account home + knowledge repos when ahead (#1780).
+
+    Runs off the daemon's normal scan tick, independent of any thought's own
+    closeout. Until this existed, ``_capture_dominion`` / ``_capture_knowledge``
+    were the *only* pushers for either repo, both wired to a thought's finalize
+    — so a page a resident committed directly mid-thought (the knowledge
+    checkout's own documented workflow) sat ahead of its remote for as long as
+    the thought stayed open, and since #1779 a cloud thought can hold its seat
+    open indefinitely. This closes the gap the other direction: on every tick,
+    ask each repo (cheaply, locally) whether it is ahead, and push if so.
+
+    Rate-limited per repo by ``capture.push_interval_seconds`` (default 60s)
+    so a 3s scan tick doesn't turn into a push attempt every 3s — the interval
+    is read fresh from *cfg* on every call, never cached at boot. Each repo's
+    own push runs on a daemon thread so a slow or wedged remote never stalls
+    dispatch; a repo whose previous attempt hasn't returned yet is skipped
+    this tick rather than stacking a second thread on it.
+
+    Never commits — a dirty working tree is not this function's concern, only
+    commits that already exist. Silent when disabled, remote-less, or not
+    yet due; every failure is swallowed to a marker, never raised, matching
+    the rest of the capture net. Returns the labels actually dispatched this
+    call (test seam — the async wrapper below discards it).
+    """
+    if not account_context.enabled:
+        return []
+    interval = float(cfg.get(
+        "capture.push_interval_seconds", _ACCOUNT_PUSH_INTERVAL_DEFAULT_SECONDS,
+    ))
+    now = now if now is not None else time.monotonic()
+
+    targets: list[tuple[str, Path, Path, Any, Any]] = []
+    dominion_repo = account_context.dominion_repo
+    if (dominion_repo / ".git").exists():
+        targets.append((
+            "account home", dominion_repo, dominion_repo.parent,
+            dominion.mark_needs_sync, dominion.clear_needs_sync,
+        ))
+    knowledge_repo = account.knowledge_path(account_context)
+    if (knowledge_repo / ".git").exists():
+        targets.append((
+            "knowledge", knowledge_repo, brr_dir,
+            knowledge.mark_needs_sync, knowledge.clear_needs_sync,
+        ))
+
+    dispatched: list[str] = []
+    for label, repo_path, marker_dir, mark_ns, clear_ns in targets:
+        key = str(repo_path)
+        with _ahead_push_lock:
+            if key in _ahead_push_inflight:
+                continue
+            if now - _ahead_push_last_attempt.get(key, 0.0) < interval:
+                continue
+            _ahead_push_last_attempt[key] = now
+            _ahead_push_inflight.add(key)
+
+        def _work(
+            label=label, repo_path=repo_path, marker_dir=marker_dir,
+            mark_ns=mark_ns, clear_ns=clear_ns, key=key,
+        ) -> None:
+            try:
+                _push_repo_if_ahead(label, repo_path, marker_dir, mark_ns, clear_ns)
+            except Exception as exc:  # noqa: BLE001 - this net must never break the loop
+                print(f"[brnrd] {label} ahead-push skipped this tick: {exc}")
+            finally:
+                with _ahead_push_lock:
+                    _ahead_push_inflight.discard(key)
+
+        threading.Thread(
+            target=_work,
+            name=f"brr-ahead-push-{label.replace(' ', '-')}",
+            daemon=True,
+        ).start()
+        dispatched.append(label)
+    return dispatched
+
+
 def _capture_worktree(
     task: Run,
     ctx,
@@ -15976,6 +16128,19 @@ def start(
                 _announce_pending_news(repo_root, cfg, brr_dir, account_context)
             except Exception as exc:  # noqa: BLE001 — a chat ping must never sink the loop
                 print(f"[brnrd] news-lane announce skipped this tick: {exc}")
+
+            # Best-effort push of the account home + knowledge repos when
+            # ahead of their own remote (#1780). The rest of the capture net
+            # (``_capture_dominion`` / ``_capture_knowledge``) only reaches
+            # a remote at a thought's own closeout, and since #1779 a cloud
+            # thought can hold its seat open indefinitely — this is what
+            # keeps a directly-committed page from sitting ahead for hours
+            # in the meantime. Internally rate-limited and threaded off the
+            # loop; this call itself is cheap on every tick it isn't due.
+            try:
+                _push_ahead_repos_if_due(brr_dir, account_context, cfg)
+            except Exception as exc:  # noqa: BLE001 — this net must never sink the loop
+                print(f"[brnrd] ahead-push net skipped this tick: {exc}")
 
             # One scan feeds both dispatch decisions below — a spawn-
             # marked event is never a resident-lead candidate and vice
