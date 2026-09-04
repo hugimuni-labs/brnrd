@@ -58,32 +58,32 @@ export const scenesV5: SceneV5[] = [
   {
     id: "reply",
     // 4:23 the reply notification lands (freeze, zoom on the banner) · 4:24 switch · scroll up to 5:00 (narrated) · typing · send 5:45 · hold
-    segs: [F("s_notify.png", 264.2, 2.8), c04b(1.6, 3.4, 1), c04b(3.4, 28, 18), c05(0, 10, 8), c05(10, 50, 32), c05(50, 55.6, 2.4), c05(55.6, 57.2, 1)],
+    segs: [F("s_notify.png", 263.7, 2.8), c04b(1.6, 3.4, 1), c04b(3.4, 28, 18), c05(0, 10, 8), c05(10, 50, 32), c05(50, 55.6, 2.4), c05(55.6, 57.2, 1)],
     cam: [
       { at: 0, z: 1.2, cx: 0.5, cy: 0.4 }, { at: 0.05, z: 2.2, cx: 0.5, cy: 0.07 }, { at: 0.16, z: 2.2, cx: 0.5, cy: 0.07 },
       { at: 0.24, z: 1, cx: 0.5, cy: 0.5 }, { at: 0.5, z: 1, cx: 0.5, cy: 0.5 },
       { at: 0.6, z: 1.9, cx: 0.5, cy: 0.6 }, { at: 0.86, z: 1.9, cx: 0.5, cy: 0.6 },
-      { at: 0.94, z: 1.7, cx: 0.5, cy: 0.5 }, { at: 1, z: 1.7, cx: 0.5, cy: 0.5 },
+      { at: 0.94, z: 1.7, cx: 0.5, cy: 0.66 }, { at: 1, z: 1.7, cx: 0.5, cy: 0.66 },
     ],
     callouts: [
       { text: "3 minutes later: the reply lands · 13:11Z", px: 0.5, py: 0.07, side: "right", from: 0.3, to: 2.7, amber: true },
-      { text: "it argues back before it deletes — \"one thing I had it decide rather than delete silently\"", px: 0.5, py: 0.45, side: "right", from: 4.7, to: 7.1 },
+      { text: "it argues back before it deletes — \"one thing I had it decide rather than delete silently\"", px: 0.5, py: 0.45, side: "right", from: 4.8, to: 7.0 },
       { text: "the steer · \"keep the approvals, rename the block\"", px: 0.5, py: 0.6, side: "right", from: 7.4, to: 10.4 },
-      { text: "sent · 13:12Z", px: 0.5, py: 0.5, side: "right", from: 11.1, to: 12.9, amber: true },
+      { text: "sent · 13:12Z", px: 0.5, py: 0.66, side: "right", from: 10.9, to: 12.3, amber: true },
     ],
   },
   {
     id: "folded",
     // 7:07 the notification · 7:10 switch · scroll to 7:27 · hold on the message
-    segs: [F("s_folded.png", 428.6, 1.8), c05c(3.6, 5.2, 1), c05c(5.2, 22, 9), c05c(22, 24, 1)],
+    segs: [F("s_folded.png", 428.6, 1.8), c05c(3.6, 5.2, 1), c05c(5.2, 8.2, 1), c05c(8.2, 22, 12)],
     cam: [
       { at: 0, z: 1.2, cx: 0.5, cy: 0.4 }, { at: 0.06, z: 2.2, cx: 0.5, cy: 0.07 }, { at: 0.22, z: 2.2, cx: 0.5, cy: 0.07 },
-      { at: 0.32, z: 1, cx: 0.5, cy: 0.5 }, { at: 0.7, z: 1, cx: 0.5, cy: 0.5 },
-      { at: 0.82, z: 2.0, cx: 0.5, cy: 0.42 }, { at: 1, z: 2.0, cx: 0.5, cy: 0.42 },
+      { at: 0.32, z: 1, cx: 0.5, cy: 0.5 }, { at: 0.5, z: 1, cx: 0.5, cy: 0.5 },
+      { at: 0.58, z: 2.0, cx: 0.5, cy: 0.5 }, { at: 0.86, z: 2.0, cx: 0.5, cy: 0.5 }, { at: 1, z: 1, cx: 0.5, cy: 0.5 },
     ],
     callouts: [
-      { text: "4 s after the steer: folded into the running strand. nothing restarts.", px: 0.5, py: 0.07, side: "right", from: 0.2, to: 3.2, amber: true },
-      { text: "\"steered mid-flight, folded into its contract rather than re-dispatched\"", px: 0.5, py: 0.42, side: "right", from: 5.4, to: 8.0 },
+      { text: "4 s after the steer: folded into the running strand. nothing restarts.", px: 0.5, py: 0.07, side: "right", from: 0.3, to: 1.7, amber: true },
+      { text: "\"steered mid-flight, folded into its contract rather than re-dispatched\"", px: 0.5, py: 0.5, side: "right", from: 3.6, to: 6.3 },
     ],
   },
   {
@@ -95,8 +95,8 @@ export const scenesV5: SceneV5[] = [
       { at: 0.9, z: 1.5, cx: 0.5, cy: 0.62 }, { at: 1, z: 1.5, cx: 0.5, cy: 0.62 },
     ],
     callouts: [
-      { text: "40 minutes later · the pressure, on Telegram · 13:49Z", px: 0.5, py: 0.62, side: "right", from: 2.2, to: 4.6, amber: true },
-      { text: "sent. 76 seconds start now.", px: 0.5, py: 0.55, side: "right", from: 6.6, to: 8.6, amber: true },
+      { text: "40 minutes later · the pressure, on Telegram · 13:49Z", px: 0.5, py: 0.56, side: "right", from: 2.2, to: 4.4, amber: true },
+      { text: "sent. 76 seconds start now.", px: 0.5, py: 0.44, side: "right", from: 5.7, to: 8.3, amber: true },
     ],
   },
   {
@@ -112,7 +112,7 @@ export const scenesV5: SceneV5[] = [
     callouts: [
       { text: "76 seconds later: the PR is up.", px: 0.5, py: 0.07, side: "right", from: 2.7, to: 4.7, amber: true },
       { text: "reviewed on the phone — the strand's own gates re-run: npm test 1029/1029 · svelte-check 0 errors", px: 0.5, py: 0.45, side: "right", from: 5.0, to: 7.4 },
-      { text: "merged · 13:52Z", px: 0.5, py: 0.5, side: "right", from: 7.2, to: 9.6, amber: true },
+      { text: "merged · 13:52Z", px: 0.5, py: 0.5, side: "right", from: 8.0, to: 10.0, amber: true },
     ],
   },
   {
