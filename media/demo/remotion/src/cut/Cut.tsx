@@ -38,7 +38,7 @@ export const CutBody: React.FC<{ list: Scene[]; total: number }> = ({ list, tota
   let start = 0;
   return (
     <AbsoluteFill style={{ background: "#07090B" }}>
-      <Glitch intensity={Math.max(intro, spike)} seed={3} grain={frame < 20}>
+      <Glitch intensity={Math.max(intro * 0.6, spike)} seed={3} grain={false}>
         <AbsoluteFill>
           {list.map((sc, i) => {
             const n = sceneFrames(sc);

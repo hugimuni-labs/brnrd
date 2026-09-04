@@ -40,13 +40,14 @@ export const Labels: React.FC<{ labels?: Label[] }> = ({ labels }) => {
       {labels.map((l, i) => {
         const f0 = Math.round(l.from * fps), f1 = Math.round(l.to * fps);
         if (frame < f0 || frame > f1) return null;
-        const o = interpolate(frame, [f0, f0 + 8, f1 - 8, f1], [0, 1, 1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
-        const slide = interpolate(frame, [f0, f0 + 10], [14, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+        const o = interpolate(frame, [f0, f0 + 10, f1 - 10, f1], [0, 1, 1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+        const slide = interpolate(frame, [f0, f0 + 14], [18, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
         const color = l.amber ? AM : PH;
+        // the empty side panel is the caption's home: big, plated, left of the phone
         const pos: React.CSSProperties =
-          l.pos === "tr" ? { right: 60, top: 54 } : l.pos === "bl" ? { left: 60, bottom: 120 } : { left: 60, top: 54 };
+          l.pos === "tr" ? { right: 60, top: 120, width: 520 } : l.pos === "bl" ? { left: 60, bottom: 150, width: 520 } : { left: 60, top: 120, width: 520 };
         return (
-          <div key={i} style={{ position: "absolute", ...pos, opacity: o, transform: `translateY(${slide}px)`, fontFamily: mono, fontSize: 38, color, textShadow: `0 0 14px ${color}88`, background: "rgba(7,9,11,0.72)", padding: "10px 18px", border: `1px solid ${color}44` }}>
+          <div key={i} style={{ position: "absolute", ...pos, opacity: o, transform: `translateY(${slide}px)`, fontFamily: mono, fontSize: 46, lineHeight: 1.25, color, textShadow: `0 0 18px ${color}99`, background: "rgba(7,9,11,0.86)", padding: "22px 28px", borderLeft: `6px solid ${color}`, boxShadow: "0 0 40px rgba(0,0,0,0.6)" }}>
             {l.text}
           </div>
         );
