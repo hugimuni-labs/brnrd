@@ -725,6 +725,16 @@ class RunnerInvocation:
     # The heartbeat reads only ``thread.started`` from it while the child is
     # alive, then :func:`invoke_runner` removes it after capturing the result.
     codex_events_path: Path | None = None
+    # A native session id to resume into rather than starting a fresh
+    # conversation — design-the-allowance.md's resource hold: a held run's
+    # own preserved ``codex_thread_id``, carried forward by the daemon's
+    # dispatch-time resume stamp onto the triggering event
+    # (``daemon.py``'s ``_apply_resource_hold_resume``). Only meaningful
+    # alongside a codex Shell (``_uses_codex_shell``); ignored otherwise —
+    # see the ``codex_correlation`` block in ``invoke_runner`` for where
+    # this becomes ``codex exec resume <id> ...`` instead of
+    # ``codex exec ...``.
+    resume_native_session_id: str | None = None
 
     @property
     def trace_root(self) -> Path:
@@ -2313,6 +2323,38 @@ def _extract_codex_task_error(stdout: str) -> dict[str, str] | None:
     return None
 
 
+def _insert_codex_resume(cmd_template: list[str], thread_id: str) -> list[str]:
+    """``codex exec ...`` → ``codex exec resume <thread_id> ...``.
+
+    A resource hold's whole value is a *native* resume (design-the-
+    allowance.md: "a resume can be a real codex exec resume <id>, not a
+    cold restart wearing the same clothes") — ``codex exec resume
+    [OPTIONS] [SESSION_ID] [PROMPT]`` accepts the identical ``--json``/
+    ``-o``/``-c``/``-m`` flag set ``exec`` does (confirmed against
+    ``codex exec resume --help``, codex-cli 0.144+), so inserting
+    ``"resume", thread_id`` immediately after the literal ``"exec"``
+    token — before every other flag and before the ``{prompt}``
+    placeholder, wherever the template puts it — reorders nothing else.
+    ``runner_cores.py``'s own codex-shell detection already relies on
+    ``parts[1] == "exec"`` being that exact position, so this is an
+    established assumption about the profile's cmd shape, not a new one.
+
+    Returns *cmd_template* unchanged when no literal ``"exec"`` token is
+    found — a pinned/customised codex profile that doesn't shell out to
+    plain ``exec`` degrades to an honest no-op (a fresh conversation)
+    rather than inserting ``resume`` at a guessed position.
+    """
+    try:
+        exec_index = cmd_template.index("exec")
+    except ValueError:
+        return cmd_template
+    return [
+        *cmd_template[: exec_index + 1],
+        "resume", thread_id,
+        *cmd_template[exec_index + 1 :],
+    ]
+
+
 def _retire_capture_dir(capture_dir: Path, returncode: int) -> None:
     """Delete the capture on a clean run; *keep it* when something went wrong.
 
@@ -2557,6 +2599,10 @@ def invoke_runner(
     )
     codex_last_message_path: Path | None = None
     if codex_correlation:
+        if invocation.resume_native_session_id:
+            cmd_template = _insert_codex_resume(
+                cmd_template, invocation.resume_native_session_id,
+            )
         codex_last_message_path = capture_dir / "last-message.txt"
         cmd_template = [*cmd_template, "--json", "-o", str(codex_last_message_path)]
         if invocation.codex_events_path is not None:
