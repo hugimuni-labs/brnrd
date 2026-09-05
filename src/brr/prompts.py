@@ -594,11 +594,15 @@ _AGE_GATE_KEEP = 2
 # `## This session, 09-04 …` — never matched by `_HEADING_DATE_RE` (no
 # `YYYY-`), which is exactly why `_page_is_chronological` reads a page built
 # entirely of these as *structural* and trims it from the head, not the tail:
-# the newest ticks are the ones actually at risk of being cut. This regex
-# only has to recognize the shape; document order (see
-# `_age_gate_dated_sections`) is what decides which are newest.
+# the newest ticks are the ones actually at risk of being cut. Captures
+# month/day so :func:`_dated_section_sort_key` can rank these by date
+# instead of assuming a fixed accretion direction — this account's own
+# `surface/plans/<repo>/active.md` prepends its newest tick at the *top*,
+# the opposite of the chronological-log pages the rest of this module
+# assumes, and an earlier version of this gate that kept "the last N in the
+# file" kept the two *oldest* ticks on that exact page.
 _DATED_SECTION_HEADING_RE = re.compile(
-    r"^##\s+(?:This tick|This session),\s*\d{2}-\d{2}\b", re.IGNORECASE
+    r"^##\s+(?:This tick|This session),\s*(\d{2})-(\d{2})\b", re.IGNORECASE
 )
 
 
@@ -618,6 +622,35 @@ def _is_dated_section(entry: str) -> bool:
         _DATED_SECTION_HEADING_RE.match(heading) is not None
         or _heading_date(entry) is not None
     )
+
+
+def _dated_section_sort_key(entry: str) -> tuple[int, int, int]:
+    """``(year, month, day)`` for a dated ``## `` section, newest-sortable.
+
+    A full ISO heading (:func:`_heading_date`) carries a real year. The two
+    bare ``MM-DD`` shapes (``This tick,`` / ``This session,`` —
+    :data:`_DATED_SECTION_HEADING_RE`) carry none — this account's own
+    convention, not something this age gate can invent — so they key on
+    ``(0, month, day)``: comparable to each other in month/day order, and
+    never mistaken for outranking a real ISO year.
+
+    Called only on an entry :func:`_is_dated_section` already matched, so
+    one of the two patterns always parses in practice; ``(0, 0, 0)`` is the
+    unreachable defensive fallback for a future drift between the two
+    predicates, and it deliberately ranks as the *oldest* possible key —
+    the safe failure direction for a gate whose whole job is not dropping
+    the current tick. Ranking an unparseable entry as newest instead would
+    risk keeping it over a real, younger date.
+    """
+    heading = entry.split("\n", 1)[0]
+    iso = _heading_date(entry)
+    if iso is not None:
+        year, month, day = (int(part) for part in iso.split("-"))
+        return (year, month, day)
+    match = _DATED_SECTION_HEADING_RE.match(heading)
+    if match is not None:
+        return (0, int(match.group(1)), int(match.group(2)))
+    return (0, 0, 0)
 
 
 def _age_gate_marker(dropped_titles: list[str], source_hint: str) -> str:
@@ -653,23 +686,29 @@ def _age_gate_dated_sections(content: str) -> tuple[str, list[str]]:
     live for pages this doesn't shrink enough, or that grow one surviving
     section past the budget on its own) never has to make this call.
 
-    "Newest" is document order, not a parsed calendar date — this account's
-    own accretion convention is append-to-bottom, never reorder (the same
-    convention the rest of this module leans on for a fully-ISO-dated
-    page), so the last :data:`_AGE_GATE_KEEP` dated sections *in the file*
-    are the newest :data:`_AGE_GATE_KEEP`, independent of which of
-    :func:`_is_dated_section`'s shapes each one uses — including the two
-    bare ``MM-DD`` shapes, which carry no year to compare in the first
-    place. Undated sections are never counted against the keep limit and
-    never move from their original position.
+    "Newest" is the parsed date (:func:`_dated_section_sort_key`), **not**
+    document order — this gate does not get to assume a fixed accretion
+    direction. The motivating page, this account's own
+    ``surface/plans/hugimuni-labs__brnrd/active.md``, *prepends* its newest
+    tick at the top (newest-first: ``09-05``, ``09-03``, ``09-02``, …,
+    ``08-24`` at the bottom) — the opposite of the append-to-bottom
+    convention the rest of this module assumes for a fully-ISO-dated
+    chronological page. An earlier version of this gate kept "the last
+    :data:`_AGE_GATE_KEEP` in the file," which on that exact page kept the
+    two *oldest* surviving ticks and dropped the current one — caught
+    before it shipped by a second read against the live page. Ranking by
+    parsed date is correct regardless of which direction a given page
+    accretes in. Undated sections are never counted against the keep limit
+    and never move from their original position; the surviving dated
+    sections also keep their original relative order — this gate filters,
+    it does not reorder.
 
     Returns ``(content, [])`` — unchanged, not even re-encoded — when there
     are :data:`_AGE_GATE_KEEP` or fewer dated sections: nothing to gate, and
     a caller comparing for a byte-identical "whole" injection can trust the
     identity. Otherwise returns the page with the older dated sections
-    removed (every other section keeps its original relative order) and the
-    dropped sections' own heading titles, for the caller to report via
-    :func:`_age_gate_marker`.
+    removed and the dropped sections' own heading titles, for the caller to
+    report via :func:`_age_gate_marker`.
     """
     entries = _split_h2_entries(content)
     if not entries:
@@ -677,8 +716,15 @@ def _age_gate_dated_sections(content: str) -> tuple[str, list[str]]:
     dated_positions = [i for i, e in enumerate(entries) if _is_dated_section(e)]
     if len(dated_positions) <= _AGE_GATE_KEEP:
         return content, []
-    drop_positions = set(dated_positions[:-_AGE_GATE_KEEP])
-    dropped_titles = [_heading_title(entries[i]) for i in sorted(drop_positions)]
+    keep_positions = set(
+        sorted(
+            dated_positions,
+            key=lambda i: _dated_section_sort_key(entries[i]),
+            reverse=True,
+        )[:_AGE_GATE_KEEP]
+    )
+    drop_positions = [i for i in dated_positions if i not in keep_positions]
+    dropped_titles = [_heading_title(entries[i]) for i in drop_positions]
     kept_entries = [e for i, e in enumerate(entries) if i not in drop_positions]
     match = _H2_RE.search(content)
     preamble = content[: match.start()].strip()
@@ -803,10 +849,20 @@ def _trim_sectioned_page(content: str, max_bytes: int, source_hint: str) -> Trim
     if _page_is_chronological(content):
         return _trim_sectioned_page_body(content, max_bytes, source_hint)
     gated_content, age_dropped = _age_gate_dated_sections(content)
-    result = _trim_sectioned_page_body(gated_content, max_bytes, source_hint)
     if not age_dropped:
-        return result
+        return _trim_sectioned_page_body(gated_content, max_bytes, source_hint)
+    # The marker is known before the byte-budget walk runs (age-gating
+    # already happened), so its bytes are reserved out of *its* budget
+    # rather than appended on top afterward — the earlier shape computed
+    # the walk against the full max_bytes and only then added the marker,
+    # which could carry the total past max_bytes by exactly the marker's
+    # own length. `_trim_sectioned_page_body`'s one documented way to still
+    # exceed its budget (the mandatory one-entry floor) is unaffected by
+    # this reservation — that floor was never this function's to fix.
     marker = _age_gate_marker(age_dropped, source_hint)
+    reserved = len(marker.encode("utf-8")) + 2  # the "\n\n" joiner below
+    body_budget = max(0, max_bytes - reserved)
+    result = _trim_sectioned_page_body(gated_content, body_budget, source_hint)
     return TrimResult(
         text=f"{result.text}\n\n{marker}",
         newest_item=result.newest_item,
