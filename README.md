@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <strong>2,442 commits on main · 1,640 by the resident · 1,109 merged PRs · since March 2026.</strong><br>
+  <strong>1,941 commits on main · 1,360 by the resident · 1,115 merged PRs · since March 2026 · as of 2026-09-06.</strong><br>
   This repo is built with brnrd, by brnrd. The git log is the demo.
 </p>
 
@@ -230,7 +230,7 @@ guide doesn't unpack:
 ## ✦ Current posture
 
 brnrd is **alpha software, already used to build itself** (the numbers at the top
-are `git log` on this repo — re-measured at every release). The resident loop, local
+are `git log` on this repo — re-measured daily by `scripts/receipt_line.py`). The resident loop, local
 daemon, managed Telegram path, live dashboard, runner switching, worktree/Docker
 execution, and git handoff are real. The public docs, multi-project proving, managed
 billing/failover, and some operational polish are still release work.
