@@ -2812,6 +2812,166 @@ class TestCodexThreadCorrelation:
         assert result.stdout == "plain reply\n"
 
 
+class TestCodexTaskCompleteError:
+    """A died-in-flight turn's ``task_complete.error`` must survive the
+    stdout swap and raw-events cleanup that follow it in ``invoke_runner``
+    (the 2026-09-05 usage_limit_exceeded incident: the structured cause
+    was captured on stdout, then overwritten with ``""`` and the file it
+    lived in deleted, before anything downstream ever read it)."""
+
+    def setup_method(self):
+        from brr import runner_select
+
+        self._CODEX = runner_select.RunnerProfile(
+            name="codex", profile="codex", shell="codex",
+        )
+
+    @staticmethod
+    def _last_message_path(cmd: list[str]) -> str:
+        return cmd[cmd.index("-o") + 1]
+
+    def test_usage_limit_exceeded_survives_swap_and_reaches_stderr(
+        self, tmp_path, monkeypatch,
+    ):
+        def _fake_popen(cmd, **kwargs):
+            # No last-message file: codex never writes one for a failed
+            # turn — matching test_missing_last_message_file_yields_empty_
+            # stdout_not_jsonl above.
+            jsonl = "\n".join([
+                '{"type":"thread.started","thread_id":"held-thread-1"}',
+                '{"type":"task_complete","error":'
+                '{"codex_error_info":"usage_limit_exceeded",'
+                '"message":"You have hit your usage limit."}}',
+            ])
+            return _fake_proc(kwargs, out=jsonl, code=1)
+
+        monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
+        invocation = RunnerInvocation(
+            kind="daemon-run", label="codex-quota", prompt="hi",
+            cwd=tmp_path, repo_root=tmp_path, selected_runner=self._CODEX,
+        )
+
+        result = invoke_runner(self._CODEX, invocation, cfg={})
+
+        # The raw JSONL is gone from stdout (same swap-to-empty contract as
+        # any other failed codex turn) ...
+        assert result.stdout == ""
+        assert "task_complete" not in result.stdout
+        # ... but the structured cause rides the result unmangled ...
+        assert result.codex_task_error == {
+            "kind": "usage_limit_exceeded",
+            "message": "You have hit your usage limit.",
+        }
+        # ... and reaches the generic text-based classifier too, which is
+        # what makes this a QUOTA_EXHAUSTED failure without needing every
+        # caller to special-case the structured field.
+        assert "usage limit exceeded" in result.stderr
+        from brr import runner_failures
+
+        assert (
+            runner_failures.classify_failure(detail=result.error_detail())
+            == runner_failures.QUOTA_EXHAUSTED
+        )
+
+    def test_unrelated_task_complete_error_is_not_quota(
+        self, tmp_path, monkeypatch,
+    ):
+        """'unrelated error retains failure' — an unrecognised
+        ``task_complete.error`` must not be silently reclassified as a
+        quota hold candidate."""
+        def _fake_popen(cmd, **kwargs):
+            jsonl = "\n".join([
+                '{"type":"thread.started","thread_id":"held-thread-2"}',
+                '{"type":"task_complete","error":'
+                '{"codex_error_info":"sandbox_denied",'
+                '"message":"command blocked by sandbox policy"}}',
+            ])
+            return _fake_proc(kwargs, out=jsonl, code=1)
+
+        monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
+        invocation = RunnerInvocation(
+            kind="daemon-run", label="codex-sandbox", prompt="hi",
+            cwd=tmp_path, repo_root=tmp_path, selected_runner=self._CODEX,
+        )
+
+        result = invoke_runner(self._CODEX, invocation, cfg={})
+
+        assert result.codex_task_error == {
+            "kind": "sandbox_denied",
+            "message": "command blocked by sandbox policy",
+        }
+        from brr import runner_failures
+
+        assert (
+            runner_failures.classify_failure(detail=result.error_detail())
+            != runner_failures.QUOTA_EXHAUSTED
+        )
+
+    def test_completed_turn_carries_no_task_error(self, tmp_path, monkeypatch):
+        def _fake_popen(cmd, **kwargs):
+            last_message_path = self._last_message_path(cmd)
+            open(last_message_path, "w", encoding="utf-8").write("all good")
+            jsonl = "\n".join([
+                '{"type":"thread.started","thread_id":"clean-thread"}',
+                '{"type":"task_complete"}',
+            ])
+            return _fake_proc(kwargs, out=jsonl)
+
+        monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
+        invocation = RunnerInvocation(
+            kind="daemon-run", label="codex-clean", prompt="hi",
+            cwd=tmp_path, repo_root=tmp_path, selected_runner=self._CODEX,
+        )
+
+        result = invoke_runner(self._CODEX, invocation, cfg={})
+
+        assert result.codex_task_error is None
+        assert result.stdout == "all good\n"
+
+
+class TestExtractCodexTaskError:
+    def test_string_error(self):
+        from brr.runner import _extract_codex_task_error
+
+        stdout = '{"type":"task_complete","error":"usage_limit_exceeded"}'
+        assert _extract_codex_task_error(stdout) == {
+            "kind": "usage_limit_exceeded",
+            "message": "usage_limit_exceeded",
+        }
+
+    def test_dict_error_prefers_codex_error_info(self):
+        from brr.runner import _extract_codex_task_error
+
+        stdout = (
+            '{"type":"task_complete","error":{"codex_error_info":'
+            '"usage_limit_exceeded","message":"quota gone","kind":"other"}}'
+        )
+        assert _extract_codex_task_error(stdout) == {
+            "kind": "usage_limit_exceeded",
+            "message": "quota gone",
+        }
+
+    def test_dict_error_with_no_known_key_falls_back_to_json(self):
+        from brr.runner import _extract_codex_task_error
+
+        stdout = '{"type":"task_complete","error":{"weird_field":"nope"}}'
+        result = _extract_codex_task_error(stdout)
+        assert result["kind"] == "codex_task_error"
+        assert "weird_field" in result["message"]
+
+    def test_no_error_key_is_none(self):
+        from brr.runner import _extract_codex_task_error
+
+        assert _extract_codex_task_error('{"type":"task_complete"}') is None
+
+    def test_empty_or_malformed_is_none(self):
+        from brr.runner import _extract_codex_task_error
+
+        assert _extract_codex_task_error("") is None
+        assert _extract_codex_task_error("not json at all") is None
+        assert _extract_codex_task_error('{"type":"turn.started"}') is None
+
+
 class TestExtractCodexThreadId:
     def test_finds_thread_id_amid_other_events(self):
         from brr.runner import _extract_codex_thread_id
