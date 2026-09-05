@@ -78,7 +78,7 @@ def frontmatter_body(text: str) -> str:
 # ``parse_outbox_message``.
 _OUTBOX_ROUTING_KEYS = (
     "event", "gate", "respawn", "spawn", "submit", "stop", "to", "runner_policy",
-    "config_change", "note", "await", "cut",
+    "config_change", "note", "await", "cut", "ask",
 )
 
 
@@ -396,6 +396,7 @@ INTERNAL_SOURCES: frozenset[str] = frozenset({
     "respawn",
     "schedule",
     "spawn",
+    "spawn_allowance_requested",
     "spawn_completed",
     "spawn_queued",
     "spawn_submitted",
