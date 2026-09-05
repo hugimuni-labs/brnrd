@@ -705,6 +705,8 @@ def test_seed_surfaces_resources_with_known_quota_and_gaps(tmp_path):
             "remote_scm": {"status": "absent", "pr_state": "none",
                            "branch": "brr/x",
                            "note": "no PR recorded for this branch yet"},
+            "allowance": {"status": "unimplemented",
+                          "note": "not a strand-stack run"},
         },
     )
     out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
@@ -715,6 +717,7 @@ def test_seed_surfaces_resources_with_known_quota_and_gaps(tmp_path):
     assert "spend=unimplemented (no spend collector for this medium yet)" in ctx
     assert "coexisting-runs=unimplemented" in ctx
     assert "remote-scm=absent (no PR recorded for this branch yet)" in ctx
+    assert "allowance=unimplemented (not a strand-stack run)" in ctx
     assert "unavailable" not in ctx
 
 
@@ -3969,6 +3972,104 @@ def test_a_real_emote_handle_renders_its_face_in_the_chip():
 
     assert hooks._emote_glyph(name) == expected
     assert hooks._mood_chip(name) == f"{expected} {name}"
+
+
+def _portal_payload(*, resources=None, pending=0):
+    """A minimal in-memory portal-state payload for a direct `format_delta` call.
+
+    Sibling to `_portal` (which writes one to disk for the hook-boundary
+    path) — the allowance chip/directive tests below call `format_delta`
+    directly and need the dict, not a file.
+    """
+    return {
+        "run": {"id": "run-1", "event_id": "evt-1", "phase": "running"},
+        "attention": {"pending_event_count": pending, "pending_outbox_file_count": 0},
+        "inbound": {
+            "current_event": "evt-1", "current_event_replyable": True, "events": [],
+        },
+        "outbound": {
+            "replies_current": 0, "replies_other": 0, "outbound_messages": 0,
+        },
+        "budget": {"elapsed_seconds": 10, "budget_seconds": 3600},
+        "change_token": "t1",
+        "resources": resources or {},
+    }
+
+
+def test_allowance_chip_replaces_quota_chip_for_a_strand():
+    """design-the-allowance.md §2: a strand's own metered allowance renders
+    `spend 38k/120k` on the bar instead of the shared `q S…` chip; a run
+    with no allowance facet (the resident, slice 1) keeps the quota chip."""
+    resources = {
+        "quota": {"status": "known", "summary": "session 57% left"},
+        "allowance": {
+            "status": "known", "tokens": 120_000, "spent": 38_000, "pct": 31.7,
+        },
+    }
+    payload = _portal_payload(resources=resources)
+    rendered: dict[str, str] = {}
+    line = hooks.format_delta(payload, rendered_chips=rendered)
+    assert line is not None
+    assert "spend 38k/120k" in line
+    assert "q S57" not in line
+
+
+def test_quota_chip_still_renders_without_an_allowance_facet():
+    resources = {
+        "quota": {"status": "known", "summary": "session 57% left"},
+        "allowance": {"status": "unimplemented"},
+    }
+    payload = _portal_payload(resources=resources)
+    line = hooks.format_delta(payload, rendered_chips={})
+    assert line is not None
+    assert "q S57" in line
+
+
+def test_allowance_directive_fires_once_at_100pct_then_goes_quiet():
+    resources = {
+        "allowance": {
+            "status": "known", "tokens": 120_000, "spent": 125_000, "pct": 104.2,
+        },
+    }
+    payload = _portal_payload(resources=resources)
+    seen: dict[str, str] = {}
+    first = hooks.format_delta(payload, rendered_chips=seen)
+    assert first is not None
+    assert "allowance spent (125k/120k)" in first
+    assert "park" in first and "ask: allowance +<tokens>" in first
+    # Unchanged spend ⇒ silent on the next boundary.
+    assert hooks.format_delta(payload, last_chips=seen) is None
+
+
+def test_allowance_directive_refires_after_the_number_moves():
+    resources_first = {
+        "allowance": {
+            "status": "known", "tokens": 120_000, "spent": 121_000, "pct": 100.8,
+        },
+    }
+    seen: dict[str, str] = {}
+    hooks.format_delta(_portal_payload(resources=resources_first), rendered_chips=seen)
+    resources_second = {
+        "allowance": {
+            "status": "known", "tokens": 120_000, "spent": 140_000, "pct": 116.7,
+        },
+    }
+    again = hooks.format_delta(
+        _portal_payload(resources=resources_second), last_chips=seen,
+    )
+    assert again is not None
+    assert "140k/120k" in again
+
+
+def test_allowance_directive_silent_under_100pct():
+    resources = {
+        "allowance": {
+            "status": "known", "tokens": 120_000, "spent": 90_000, "pct": 75.0,
+        },
+    }
+    payload = _portal_payload(resources=resources)
+    line = hooks.format_delta(payload, rendered_chips={})
+    assert line is None or "allowance spent" not in line
 
 
 def test_quota_chip_disambiguates_a_repeated_first_letter():

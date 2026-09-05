@@ -3030,6 +3030,232 @@ def test_queue_spawn_request_report_collision_does_not_clobber(tmp_path):
     assert str(report_path) in notices[0]["text"]
 
 
+def test_queue_spawn_request_allowance_parses_suffix(tmp_path):
+    """design-the-allowance.md §2: ``allowance: 120k`` parses to 120000 and
+    is stamped on the child's own meta and its ``spawn_requested`` event."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "original task", status="processing")
+    event_id = path.stem
+    task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
+
+    accepted = daemon._queue_spawn_request(
+        daemon._WorkerEmit(brr_dir, "", event_id), task, inbox, event_id,
+        {"spawn": True, "allowance": "120k"},
+        "bounded side task", outbox,
+    )
+    assert accepted is True
+    spawned = [p for p in inbox.glob("*.md") if p.stem != event_id]
+    child = protocol._read_event(spawned[0])
+    assert child["spawn_allowance_tokens"] == 120_000
+
+
+def test_queue_spawn_request_allowance_unset_falls_back_to_config_default(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "original task", status="processing")
+    event_id = path.stem
+    task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
+
+    accepted = daemon._queue_spawn_request(
+        daemon._WorkerEmit(brr_dir, "", event_id),
+        task, inbox, event_id, {"spawn": True}, "bounded side task", outbox,
+    )
+    assert accepted is True
+    spawned = [p for p in inbox.glob("*.md") if p.stem != event_id]
+    child = protocol._read_event(spawned[0])
+    assert child["spawn_allowance_tokens"] == daemon.allowance.DEFAULT_ALLOWANCE_TOKENS
+
+
+def test_queue_spawn_request_allowance_config_default_overridable(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "original task", status="processing")
+    event_id = path.stem
+    task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
+
+    monkeypatch.setattr(
+        daemon.conf, "load_config",
+        lambda *a, **k: {"spawn.allowance_tokens": "75k"},
+    )
+    accepted = daemon._queue_spawn_request(
+        daemon._WorkerEmit(brr_dir, "", event_id),
+        task, inbox, event_id, {"spawn": True}, "bounded side task", outbox,
+    )
+    assert accepted is True
+    spawned = [p for p in inbox.glob("*.md") if p.stem != event_id]
+    child = protocol._read_event(spawned[0])
+    assert child["spawn_allowance_tokens"] == 75_000
+
+
+def test_queue_spawn_request_allowance_invalid_refused(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "original task", status="processing")
+    event_id = path.stem
+    task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
+
+    accepted = daemon._queue_spawn_request(
+        daemon._WorkerEmit(brr_dir, "", event_id),
+        task, inbox, event_id,
+        {"spawn": True, "allowance": "not-a-number"},
+        "bounded side task", outbox,
+    )
+    assert accepted is False
+    notices = daemon._read_outbox_notices(outbox)
+    assert notices and notices[0]["kind"] == "refused"
+    assert "allowance" in notices[0]["text"]
+
+
+def _strand_control(run_id="run-child", event_id="evt-child", allowance_tokens=120_000):
+    daemon._register_run_control(
+        event_id, "run-parent",
+        parent_conversation_key="telegram:42:",
+        allowance_tokens=allowance_tokens,
+    )
+    daemon._bind_run_control(event_id, run_id)
+    return event_id
+
+
+def test_ask_allowance_refused_from_a_non_strand(tmp_path):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir(parents=True)
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    ok = daemon._queue_allowance_ask(
+        task, tmp_path / "inbox", "one line why", "allowance +50k", outbox,
+    )
+    assert ok is False
+    notices = daemon._read_outbox_notices(outbox)
+    assert notices and notices[0]["kind"] == "refused"
+
+
+def test_ask_allowance_lands_a_pending_event_on_the_parent(tmp_path):
+    inbox = tmp_path / ".brr" / "inbox"
+    outbox = tmp_path / "outbox"
+    outbox.mkdir(parents=True)
+    event_id = _strand_control()
+    task = Run(
+        id="run-child", event_id=event_id, body="", source="spawn", status="processing",
+        meta={
+            "strand": True,
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "spawn_allowance_tokens": 120_000,
+            "spawn_allowance_spent": 130_000,
+        },
+    )
+    ok = daemon._queue_allowance_ask(
+        task, inbox, "need more room for the gate rerun", "allowance +50k", outbox,
+    )
+    assert ok is True
+    events = protocol.list_pending(inbox)
+    assert len(events) == 1
+    assert events[0]["source"] == "spawn_allowance_requested"
+    assert events[0]["spawn_allowance_request_tokens"] == 50_000
+    assert events[0]["spawn_parent_run_id"] == "run-parent"
+    assert "need more room" in events[0]["body"]
+
+
+def test_ask_allowance_requires_a_positive_delta(tmp_path):
+    inbox = tmp_path / ".brr" / "inbox"
+    outbox = tmp_path / "outbox"
+    outbox.mkdir(parents=True)
+    event_id = _strand_control()
+    task = Run(
+        id="run-child", event_id=event_id, body="", source="spawn",
+        meta={"strand": True, "spawn_parent_run_id": "run-parent"},
+    )
+    ok = daemon._queue_allowance_ask(
+        task, inbox, "why", "allowance banana", outbox,
+    )
+    assert ok is False
+    notices = daemon._read_outbox_notices(outbox)
+    assert notices and notices[0]["kind"] == "refused"
+
+
+def test_apply_allowance_grant_adds_a_signed_delta():
+    daemon._register_run_control("evt-x", "run-parent", allowance_tokens=100_000)
+    control = daemon._find_run_control("evt-x")
+    new_total = daemon._apply_allowance_grant(control, "allowance: +50k\n")
+    assert new_total == 150_000
+    assert control["allowance_tokens"] == 150_000
+    assert control["allowance_asked"] is False
+
+
+def test_apply_allowance_grant_sets_an_unsigned_ceiling():
+    daemon._register_run_control("evt-y", "run-parent", allowance_tokens=100_000)
+    control = daemon._find_run_control("evt-y")
+    new_total = daemon._apply_allowance_grant(control, "allowance: 300k")
+    assert new_total == 300_000
+
+
+def test_apply_allowance_grant_ignores_an_ordinary_steer():
+    daemon._register_run_control("evt-z", "run-parent", allowance_tokens=100_000)
+    control = daemon._find_run_control("evt-z")
+    assert daemon._apply_allowance_grant(control, "keep going, looks good") is None
+    assert control["allowance_tokens"] == 100_000
+
+
+def test_cut_mismatches_names_an_unasked_allowance_overrun():
+    task = Run(
+        id="run-child", event_id="evt-overrun", body="", source="spawn",
+        meta={
+            "strand": True,
+            "spawn_allowance_tokens": 100_000,
+            "spawn_allowance_spent": 115_000,
+        },
+    )
+    declaration, _ = daemon.cut_verb.parse_cut({})
+    mismatches = daemon._cut_mismatches(
+        task, declaration, pending_events=[], repo_root=None, outbox_dir=None,
+    )
+    assert any("allowance" in m for m in mismatches)
+
+
+def test_cut_mismatches_exempts_an_overrun_that_asked():
+    daemon._register_run_control("evt-asked", "run-parent", allowance_tokens=100_000)
+    control = daemon._find_run_control("evt-asked")
+    control["allowance_asked"] = True
+    task = Run(
+        id="run-child", event_id="evt-asked", body="", source="spawn",
+        meta={
+            "strand": True,
+            "spawn_allowance_tokens": 100_000,
+            "spawn_allowance_spent": 115_000,
+        },
+    )
+    declaration, _ = daemon.cut_verb.parse_cut({})
+    mismatches = daemon._cut_mismatches(
+        task, declaration, pending_events=[], repo_root=None, outbox_dir=None,
+    )
+    assert not any("allowance" in m for m in mismatches)
+
+
+def test_cut_mismatches_tolerates_a_small_overrun():
+    """Within 10% over is the honest final-turn overshoot, not a violation."""
+    task = Run(
+        id="run-child", event_id="evt-small", body="", source="spawn",
+        meta={
+            "strand": True,
+            "spawn_allowance_tokens": 100_000,
+            "spawn_allowance_spent": 105_000,
+        },
+    )
+    declaration, _ = daemon.cut_verb.parse_cut({})
+    mismatches = daemon._cut_mismatches(
+        task, declaration, pending_events=[], repo_root=None, outbox_dir=None,
+    )
+    assert not any("allowance" in m for m in mismatches)
+
+
 def test_notify_spawn_parent_declared_contract_beats_sibling_prose(tmp_path):
     """#640a: a spec whose prose responsibly names a *sibling* worker's
     branch ahead of its own (the worktree-discipline "don't collide with

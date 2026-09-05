@@ -46,6 +46,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from . import allowance as allowance_metering
+
 # Three-state status values for a facet record.
 KNOWN = "known"
 ABSENT = "absent"
@@ -103,6 +105,12 @@ FACETS: tuple[FacetSpec, ...] = (
         "remote_scm", "remote-scm", STATE, True,
         "PR posture for the run branch — pushed?, PR open / not yet created — "
         "derived network-free from run metadata; absent = no PR recorded yet",
+    ),
+    FacetSpec(
+        "allowance", "allowance", LEVEL, False,
+        "a strand's own token budget — live spend vs its `spawn:`-declared "
+        "ceiling (design-the-allowance.md, slice 1); unimplemented outside a "
+        "strand-stack run",
     ),
 )
 
@@ -286,6 +294,7 @@ def build(
     pacing_status: "dict[str, object] | None" = None,
     coexisting: "list[dict[str, object]] | None" = None,
     wake_request: "dict[str, object] | None" = None,
+    allowance: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Build the live ``resources`` facet dict from the collected inputs.
 
@@ -346,6 +355,13 @@ def build(
       dashboard spool-rack tap was in play for this wake; attached under
       ``resources.runner.wake_request`` when present, absent otherwise. See
       ``_runner_block`` for the shape.
+    - ``allowance`` (design-the-allowance.md, slice 1) — ``{"tokens": N,
+      "spent": M}`` for a strand-stack run, or ``None`` for every other
+      call site (the resident's own standing allowance is slice 2). ``spent``
+      may itself be ``None`` (metering found nothing yet) while ``tokens``
+      is known — that reads ``absent``, not ``unimplemented``: a strand
+      collector *is* wired, it just has nothing to report on its first
+      boundary.
     """
     levels = levels or {}
     if isinstance(levels_collector, bool):
@@ -419,6 +435,38 @@ def build(
         "note": None if pr_recorded else "no PR recorded for this branch yet",
     }
 
+    spec_allow = FACETS_BY_KEY["allowance"]
+    if allowance is None:
+        allowance_facet: dict[str, object] = {
+            "status": UNIMPLEMENTED, "kind": spec_allow.kind,
+            "required": spec_allow.required, "summary": None,
+            "note": "not a strand-stack run",
+        }
+    else:
+        tokens = allowance.get("tokens")
+        spent = allowance.get("spent")
+        if spent is None:
+            allowance_facet = {
+                "status": ABSENT, "kind": spec_allow.kind,
+                "required": spec_allow.required, "summary": None,
+                "note": "no usage reading from this Shell yet",
+                "tokens": tokens, "spent": None, "pct": None,
+            }
+        else:
+            pct = allowance_metering.spend_pct(spent, tokens)
+            summary = (
+                f"spend {allowance_metering.format_tokens(spent)}/"
+                f"{allowance_metering.format_tokens(tokens)}"
+            )
+            if pct is not None:
+                summary += f" · {pct:.0f}%"
+            allowance_facet = {
+                "status": KNOWN, "kind": spec_allow.kind,
+                "required": spec_allow.required,
+                "summary": summary, "note": None,
+                "tokens": tokens, "spent": spent, "pct": pct,
+            }
+
     return {
         "runner": _runner_block(
             runner_name,
@@ -434,6 +482,7 @@ def build(
         "context_window": context_facet,
         "coexisting_runs": coexisting_facet,
         "remote_scm": remote_scm,
+        "allowance": allowance_facet,
     }
 
 

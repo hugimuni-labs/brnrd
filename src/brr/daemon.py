@@ -53,6 +53,7 @@ from pathlib import Path
 from typing import Callable, NamedTuple
 
 from . import account
+from . import allowance
 from . import runner_auth_health
 from . import await_verb
 from . import branching
@@ -5949,6 +5950,42 @@ def _collect_levels(
     return None, False
 
 
+def _collect_allowance_facet(
+    task: Run, runner_name: str | None, work_dir: Path | None,
+) -> dict[str, object] | None:
+    """A strand's live ``{"tokens": N, "spent": M}``, or ``None`` off a strand.
+
+    Called every heartbeat/boundary this run's portal-state is rebuilt
+    (design-the-allowance.md §2, slice 1) — cheap: a bounded transcript/
+    rollout tail-read, not a fresh Shell probe. The current ceiling is read
+    from the live run-control record first (a parent's ``to:`` grant lands
+    there — :func:`_apply_allowance_grant`), falling back to the dispatch-
+    time stamp on ``task.meta`` when no control entry exists (a test caller,
+    or a control retired out from under a still-finishing heartbeat).
+
+    Both the ceiling and the freshly-metered spend are written back onto
+    ``task.meta`` so the cut-time overrun check (:func:`_cut_mismatches`)
+    and the completion notice (:func:`_notify_spawn_parent`) read a recent
+    value without re-metering.
+    """
+    if not hasattr(task, "meta") or not _is_strand(task.meta):
+        return None
+    control = _find_run_control(str(getattr(task, "event_id", "") or task.id))
+    tokens = (
+        (control or {}).get("allowance_tokens")
+        or task.meta.get("spawn_allowance_tokens")
+        or allowance.DEFAULT_ALLOWANCE_TOKENS
+    )
+    tokens = int(tokens)
+    spent = allowance.collect_spent(
+        runner_name, work_dir,
+        codex_thread_id=task.meta.get("codex_thread_id"),
+    )
+    task.meta["spawn_allowance_tokens"] = tokens
+    task.meta["spawn_allowance_spent"] = spent
+    return {"tokens": tokens, "spent": spent}
+
+
 def _resources_facet(
     quota_summary: str | None,
     *,
@@ -5964,6 +6001,7 @@ def _resources_facet(
     pacing_status: "dict[str, object] | None" = None,
     coexisting: "list[dict[str, object]] | None" = None,
     wake_request: "dict[str, object] | None" = None,
+    allowance: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Operator-facing 'work status' the running resident can read.
 
@@ -5999,6 +6037,7 @@ def _resources_facet(
         pacing_status=pacing_status,
         coexisting=coexisting,
         wake_request=wake_request,
+        allowance=allowance,
     )
 
 
@@ -6556,6 +6595,9 @@ def _write_live_portal_state(
                 if hasattr(task, "meta") else None
             ),
         )
+        allowance_facet_input = _collect_allowance_facet(
+            task, runner_name, work_dir,
+        )
         # The run boundary knows its own Core (the resolved profile's
         # `model`, e.g. "opus"/"fable") — pass it so a thin week_models
         # bucket for a *different* Core doesn't bind this run's pacing (#561).
@@ -6697,6 +6739,7 @@ def _write_live_portal_state(
                 pacing_status=pacing_status,
                 coexisting=coexisting_snapshot,
                 wake_request=task.meta.get("wake_request"),
+                allowance=allowance_facet_input,
             ),
         }
         if bolt_state is not None:
@@ -7626,6 +7669,7 @@ def _register_run_control(
     *,
     parent_conversation_key: str = "",
     repo_label: str = "",
+    allowance_tokens: int | None = None,
 ) -> None:
     with _run_controls_lock:
         _run_controls[spawn_event_id] = {
@@ -7638,6 +7682,13 @@ def _register_run_control(
             "submitted": False,
             "submit_generation": 0,
             "submitted_produce": None,
+            # design-the-allowance.md slice 1: the live ceiling, mutable by a
+            # parent's `to:` grant (`_apply_allowance_grant`) while the
+            # child keeps running — `allowance_asked` tracks whether an
+            # `ask:` is on record, so an over-run that asked never earns the
+            # cut-time dissent row even if the parent never answers.
+            "allowance_tokens": allowance_tokens,
+            "allowance_asked": False,
         }
 
 
@@ -7719,6 +7770,103 @@ def _owned_child_controls(run_id: str) -> list[dict[str, str]]:
     return rows
 
 
+_ALLOWANCE_ASK_RE = re.compile(
+    r"^allowance\s+([+-]?[0-9][0-9.]*[km]?)\b(.*)$", re.IGNORECASE,
+)
+
+
+def _allowance_ask_spec(fm: dict) -> str | None:
+    """The raw ``ask:`` value when it names an allowance request, else ``None``."""
+    raw = str(fm.get("ask") or "").strip()
+    if raw and raw.lower().startswith("allowance"):
+        return raw
+    return None
+
+
+def _queue_allowance_ask(
+    task: Run,
+    inbox_dir: Path | None,
+    body: str,
+    spec: str,
+    outbox_dir: Path | None = None,
+) -> bool:
+    """Handle ``ask: allowance +<tokens>`` (design-the-allowance.md §2, slice 1).
+
+    A strand at (or past) its `spawn:`-declared allowance parks
+    (``submit:`` then ``brnrd await``) or asks the parent for more — this is
+    the ask half. Lands a ``spawn_allowance_requested`` pending event on the
+    parent naming the strand, its last-metered spend/allowance, and the
+    one-line why (the body); the parent answers with ``to: <id>`` carrying
+    ``allowance: +N`` (:func:`_apply_allowance_grant`) or ``stop:``
+    (release, keeping the last ``submit:``).
+    """
+    if not _is_strand(task.meta):
+        _record_outbox_notice(
+            outbox_dir, "ask refused: allowance asks are a strand's own verb",
+            kind="refused", lifetime="run",
+        )
+        return False
+    match = _ALLOWANCE_ASK_RE.match(spec)
+    delta = allowance.parse_signed_tokens(match.group(1)) if match else None
+    if delta is None or delta <= 0:
+        _record_outbox_notice(
+            outbox_dir,
+            f"ask refused: {spec!r} does not name a positive token delta "
+            "(e.g. `ask: allowance +50k`)",
+            kind="refused", lifetime="run",
+        )
+        return False
+    reason = body.strip()
+    if not reason:
+        _record_outbox_notice(
+            outbox_dir,
+            "ask refused: `ask: allowance +N` needs a one-line why in the body",
+            kind="refused", lifetime="run",
+        )
+        return False
+    control = _find_run_control(str(task.event_id or task.id))
+    if control is None or inbox_dir is None:
+        _record_outbox_notice(
+            outbox_dir, "ask refused: live child control or inbox is missing",
+            kind="refused", lifetime="run",
+        )
+        return False
+    parent_run_id, conv = _child_owner_route(
+        str(task.event_id or ""),
+        fallback_parent_run_id=str(task.meta.get("spawn_parent_run_id") or ""),
+        fallback_conversation_key=str(
+            task.meta.get("spawn_parent_conversation_key") or ""
+        ),
+    )
+    if not parent_run_id:
+        _record_outbox_notice(
+            outbox_dir, "ask refused: spawning parent is missing",
+            kind="refused", lifetime="run",
+        )
+        return False
+    current_allowance = int(
+        control.get("allowance_tokens")
+        or task.meta.get("spawn_allowance_tokens")
+        or allowance.DEFAULT_ALLOWANCE_TOKENS
+    )
+    spent = task.meta.get("spawn_allowance_spent")
+    protocol.create_event(
+        inbox_dir, "spawn_allowance_requested",
+        f"{task.id} asks +{allowance.format_tokens(delta)} allowance "
+        f"(spent {allowance.format_tokens(spent)}/"
+        f"{allowance.format_tokens(current_allowance)}): {reason}",
+        conversation_key=conv, spawned_by_run=task.id,
+        spawned_by_event=str(task.event_id or ""),
+        spawn_parent_run_id=parent_run_id,
+        spawn_allowance_request_tokens=delta,
+        spawn_allowance_tokens=current_allowance,
+        spawn_allowance_spent=spent,
+    )
+    with _run_controls_lock:
+        control["allowance_asked"] = True
+    return True
+
+
 def _queue_submit_request(
     task: Run,
     inbox_dir: Path | None,
@@ -7790,6 +7938,8 @@ def _queue_submit_request(
     }
     if commits is not None:
         produce["spawn_commits"] = commits
+    if task.meta.get("spawn_allowance_spent") is not None:
+        produce["spawn_tokens_spent"] = task.meta["spawn_allowance_spent"]
     child_repo = str(task.meta.get("repo_label") or "").strip()
     if child_repo:
         produce["spawn_repo"] = child_repo
@@ -7915,6 +8065,40 @@ def _emit_child_adoption(
     )
 
 
+_ALLOWANCE_GRANT_RE = re.compile(r"^allowance:\s*([+-]?[0-9][0-9.]*[km]?)\s*$", re.IGNORECASE)
+
+
+def _apply_allowance_grant(control: dict, body: str) -> int | None:
+    """Parse a `to:`'s body first line for ``allowance: +N`` / ``allowance: N``.
+
+    design-the-allowance.md §2: the parent's grant reply. A signed value
+    (``+50k``) adds to the live ceiling; unsigned (``120k``) sets it
+    outright. Returns the new ceiling when a grant was found and applied,
+    else ``None`` — the ordinary `to:` steer delivery proceeds either way
+    (the grant is additional bookkeeping, not a replacement for the
+    message).
+    """
+    first_line = body.strip().splitlines()[0] if body.strip() else ""
+    match = _ALLOWANCE_GRANT_RE.match(first_line.strip())
+    if not match:
+        return None
+    raw = match.group(1).strip()
+    delta = allowance.parse_signed_tokens(raw)
+    if delta is None:
+        return None
+    with _run_controls_lock:
+        if raw[0] in "+-":
+            current = int(
+                control.get("allowance_tokens") or allowance.DEFAULT_ALLOWANCE_TOKENS
+            )
+            new_total = max(0, current + delta)
+        else:
+            new_total = max(0, delta)
+        control["allowance_tokens"] = new_total
+        control["allowance_asked"] = False
+    return new_total
+
+
 def _queue_child_message(
     emit: _WorkerEmit,
     task: Run,
@@ -7997,6 +8181,12 @@ def _queue_child_message(
             lifetime="run",
         )
         return False
+    # design-the-allowance.md §2: a `to:` whose body's first line grants an
+    # allowance is *also* a mechanical ceiling change, applied here on the
+    # live run-control record so the child's very next boundary reads it —
+    # the ordinary steer delivery below still carries the same body, so the
+    # child sees in prose what just happened to its own budget.
+    _apply_allowance_grant(control, body)
     if inbox_dir is None:
         _record_outbox_notice(
             outbox_dir, "message dropped: no inbox to queue into", kind="dropped",
@@ -8504,6 +8694,35 @@ def _queue_spawn_request(
     # it — this run's own setup-assist spawn vanished that way.
     proposed = str(fm.get("shell") or fm.get("runner") or "").strip()
     core = str(fm.get("core") or "").strip()
+    # design-the-allowance.md §2, slice 1: a strand's own token budget.
+    # `allowance:` is the dispatcher's explicit ceiling (an integer, or a
+    # `k`/`m` suffix); unset falls back to `spawn.allowance_tokens` from
+    # config, read fresh at dispatch (never cached) so an operator's edit
+    # applies to the very next spawn. An `allowance:` present but unparsable
+    # refuses the whole spawn rather than silently substituting the
+    # default — the same posture `report:`'s path-shape check above takes.
+    allowance_raw = str(fm.get("allowance") or "").strip()
+    allowance_tokens: int | None = None
+    if allowance_raw:
+        allowance_tokens = allowance.parse_tokens(allowance_raw)
+        if allowance_tokens is None:
+            _record_outbox_notice(
+                outbox_dir,
+                f"spawn refused: allowance: {allowance_raw!r} is not a valid "
+                "token count (an integer, or a k/m suffix like `120k`/`1.2m`)",
+                kind="refused",
+                lifetime="run",
+            )
+            return False
+    if allowance_tokens is None:
+        try:
+            spawn_cfg = conf.load_config(emit.brr_dir.parent)
+        except Exception:  # noqa: BLE001 - config read is best-effort here
+            spawn_cfg = {}
+        allowance_tokens = (
+            allowance.parse_tokens(spawn_cfg.get("spawn.allowance_tokens"))
+            or allowance.DEFAULT_ALLOWANCE_TOKENS
+        )
     # #640: optional declared contract. When the dispatcher states the
     # branch/report the child is committed to, that is the contract — no
     # scan of the spec prose needed, and no risk of a sibling-branch
@@ -8638,6 +8857,7 @@ def _queue_spawn_request(
         meta["shell"] = proposed
     if core:
         meta["core"] = core
+    meta["spawn_allowance_tokens"] = allowance_tokens
     if contract_branch:
         meta["spawn_contract_branch"] = contract_branch
     if contract_report:
@@ -8694,6 +8914,7 @@ def _queue_spawn_request(
         task.id,
         parent_conversation_key=task.conversation_key or "",
         repo_label=str(task.meta.get("repo_label") or ""),
+        allowance_tokens=allowance_tokens,
     )
     print(f"[brnrd] outbox: queued concurrent spawn ({new_path.stem})")
     # A schedule entry can opt in (`reset_on: spawn`) to treat this dispatch
@@ -8719,6 +8940,7 @@ def _queue_spawn_request(
         proposed_runner=proposed or None,
         core=core or None,
         reason=reason or None,
+        spawn_allowance_tokens=allowance_tokens,
     )
     return True
 
@@ -9067,6 +9289,30 @@ def _cut_mismatches(
         if child_id not in declared_strands:
             mismatches.append(f"strands: {child_id} is live and undispositioned")
 
+    # ── allowance overrun (design-the-allowance.md §2, slice 1) ──────────
+    # A strand that spent past its `spawn:`-declared ceiling without ever
+    # asking (`ask: allowance`) earns one dissent row here — never a block,
+    # same bounce/dissent shape as every other row above. Asking exempts the
+    # run regardless of whether the parent ever granted: the ask is the
+    # honest act, not the outcome. >10% headroom before this fires, so a
+    # normal final-turn overshoot never trips it.
+    if hasattr(task, "meta") and _is_strand(task.meta):
+        tokens = task.meta.get("spawn_allowance_tokens")
+        spent = task.meta.get("spawn_allowance_spent")
+        if (
+            isinstance(tokens, (int, float)) and not isinstance(tokens, bool)
+            and isinstance(spent, (int, float)) and not isinstance(spent, bool)
+            and tokens > 0
+            and spent > tokens * 1.10
+        ):
+            control = _find_run_control(str(task.event_id or task.id))
+            if not (control or {}).get("allowance_asked"):
+                mismatches.append(
+                    f"allowance: spent {allowance.format_tokens(spent)} against "
+                    f"a {allowance.format_tokens(tokens)} allowance (>10% over) "
+                    "with no `ask: allowance` on record"
+                )
+
     return mismatches
 
 
@@ -9280,6 +9526,18 @@ def _drain_outbox(
                         )
                     if stats is not None:
                         stats["spawn"] = stats.get("spawn", 0) + 1
+                _retire_outbox_staging(fpath)
+            continue
+        _allowance_ask = _allowance_ask_spec(fm)
+        if _allowance_ask is not None:
+            with _OutboxEntryGuard(outbox_dir, fpath):
+                dispatched = _queue_allowance_ask(
+                    task, inbox_dir, body, _allowance_ask, outbox_dir,
+                )
+                if dispatched:
+                    promoted += 1
+                    if stats is not None:
+                        stats["ask"] = stats.get("ask", 0) + 1
                 _retire_outbox_staging(fpath)
             continue
         if _truthy(fm.get("submit")):
@@ -12392,6 +12650,14 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
         produce_kwargs["spawn_report_path"] = contract["spec_report"]
         if contract.get("report_found") is not None:
             produce_kwargs["spawn_report_found"] = bool(contract["report_found"])
+    # design-the-allowance.md §2: the child's last-metered allowance
+    # ceiling/spend, stamped on `task.meta` by every heartbeat's
+    # `_collect_allowance_facet` — absent for a non-strand or a strand that
+    # never reached a single heartbeat.
+    if task.meta.get("spawn_allowance_tokens") is not None:
+        produce_kwargs["spawn_allowance_tokens"] = task.meta["spawn_allowance_tokens"]
+    if task.meta.get("spawn_allowance_spent") is not None:
+        produce_kwargs["spawn_tokens_spent"] = task.meta["spawn_allowance_spent"]
     try:
         completion = protocol.create_event(
             inbox_dir,
