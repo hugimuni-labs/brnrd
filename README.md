@@ -1,13 +1,20 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/hugimuni-labs/brnrd/main/media/brnrd-boot.gif" width="720" alt="brnrd boot sequence: underscore, b_d, br_rd, brnrd">
+  <img src="https://raw.githubusercontent.com/hugimuni-labs/brnrd/main/media/brnrd-boot.gif" width="420" alt="brnrd boot sequence: underscore, b_d, br_rd, brnrd">
 </p>
 
 <h1 align="center">brnrd</h1>
 
 <p align="center">
-  <strong>Local agents go brr. From anywhere.</strong><br>
-  Claude Code and Codex on your machine — reachable from Telegram, WhatsApp, Signal, Slack, GitHub, and the web.
+  <strong>A resident behind your coding agent — works while you're away, reachable from anywhere.</strong><br>
+  Claude Code and Codex on your machine, with memory that outlives the model and a door you can reach from Telegram, WhatsApp, Signal, Slack, GitHub, and the web.
 </p>
+
+<p align="center">
+  <strong>2,442 commits on main · 1,640 by the resident · 1,109 merged PRs · since March 2026.</strong><br>
+  This repo is built with brnrd, by brnrd. The git log is the demo.
+</p>
+
+https://github.com/user-attachments/assets/2357758c-fa35-47ba-92b1-f02d51c338e3
 
 <p align="center">
   <img src="https://img.shields.io/badge/status-alpha-f59e0b" alt="alpha">
@@ -31,6 +38,13 @@ brnrd is **not another coding agent.** It runs the CLI agents you already chose 
 locally, under your rules — and turns them into a repo-knowing coworker you can
 reach when you are away from the terminal.
 
+**How is this different from Claude Code's remote control or Codex cloud?** Those
+give you a session you can reach. brnrd gives the repo a *resident*: one identity
+per project, with working memory, a playbook, and a standing agenda that outlive
+any single run — and any single model. When Codex hit its quota wall mid-conversation
+on 2026-09-05, the seat continued on Claude with the same memory and the same open
+work. The vendors are the medium; the resident is the thing that persists.
+
 ## ✦ What you get
 
 | | Capability | What it actually means |
@@ -39,15 +53,15 @@ reach when you are away from the terminal.
 | 🧠 | **A resident, not a reset** | Each repo gets a coworker with working memory, project knowledge, and a playbook. A new run is the same mind's next thought — not an amnesiac subprocess wearing yesterday's name tag. |
 | 💬 | **Interrupt-free interaction** | Follow the live plan and progress card. Add a fact or change direction at runner boundaries, without killing the thought in flight. |
 | 🔀 | **The model is a medium** | Pin Claude or Codex. Escalate a core for a hard pass, downshift for grunt work, and see quota posture before it becomes a surprise. |
-| 🏠 | **Local means local** | Your checkout, `.git`, and run execution stay on your machine; with `brnrd account connect`, dashboard publishing continuously mirrors derived project knowledge—including any code quoted there—to brnrd.dev, but it does not read your source tree. |
+| 🏠 | **Local means local** | Your checkout, `.git`, and run execution stay on your machine. The one caveat — what the managed dashboard mirrors — is spelled out under [Trust & privacy](#-trust--privacy). |
 | 🧾 | **Git-native receipts** | Every run ends somewhere durable: a branch, a PR, or an answer in the thread. The diff is the proof. |
 | 📁 | **The seams are files** | Gates and live controls speak a small file protocol. A new transport is not a new religion for the daemon. |
 
 ## ✦ The loop
 
 ```text
-      you, from anywhere
-Telegram · Slack · GitHub · web
+            you, from anywhere
+Telegram · WhatsApp · Signal · Slack · GitHub · web
                │
                ▼
   brnrd daemon · your machine
@@ -82,10 +96,20 @@ Then pick your door.
 
 <table>
 <tr>
-<th>Managed — one account across repos</th>
 <th>Self-hosted — bring your own gate</th>
+<th>Managed — one account across repos</th>
 </tr>
 <tr>
+<td>
+
+```bash
+brnrd gate setup telegram   # auth + bind the current repo
+brnrd daemon install
+```
+
+Nothing leaves your machine but the messages you route.
+
+</td>
 <td>
 
 ```bash
@@ -99,14 +123,6 @@ Use `--local-memory` only when you explicitly want those Git repositories to
 remain on this machine.
 
 </td>
-<td>
-
-```bash
-brnrd gate setup telegram   # auth + bind the current repo
-brnrd daemon install
-```
-
-</td>
 </tr>
 </table>
 
@@ -115,8 +131,6 @@ Now send a message from the other side:
 ```text
 review PR #84 for the auth regression; show me the risky bit before changing it
 ```
-
-https://github.com/user-attachments/assets/2357758c-fa35-47ba-92b1-f02d51c338e3
 
 <details>
 <summary>The npm package is not a JavaScript port</summary>
@@ -215,7 +229,8 @@ guide doesn't unpack:
 
 ## ✦ Current posture
 
-brnrd is **alpha software, already used to build itself.** The resident loop, local
+brnrd is **alpha software, already used to build itself** (the numbers at the top
+are `git log` on this repo — re-measured at every release). The resident loop, local
 daemon, managed Telegram path, live dashboard, runner switching, worktree/Docker
 execution, and git handoff are real. The public docs, multi-project proving, managed
 billing/failover, and some operational polish are still release work.
