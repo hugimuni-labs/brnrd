@@ -3495,16 +3495,22 @@ def _bar_payload(**overrides):
     return payload
 
 
-def test_post_tool_bar_renders_every_segment_when_laden():
+def test_post_tool_bar_renders_every_segment_when_laden(monkeypatch):
     # w-54 grammar: the static `⌁[<face>]:` preamble (a resolved mood lives
     # there, not in a chip), then only laden chips — no run id, no `card ok`.
+    # The quota resets are prose relative to *now*; pin the remaining time.
+    monkeypatch.setattr(
+        hooks, "_relative_reset",
+        lambda when, now=None: {"8:30pm (Europe/Berlin)": "31m",
+                                "Jul 24, 12am (Europe/Berlin)": "3d3h"}.get(when),
+    )
     rendered = hooks.format_delta(_bar_payload(), mood="smug_")
     bar = rendered.splitlines()[0]
 
     glyph = hooks._emote_glyph("smug_")
     assert glyph  # the fixture is a real handle, or this pins nothing
     assert bar == (
-        f"⌁[{glyph}]: ⏱ 16/120m │ q S57·W50·F27 │ ▷1 │ ⇡2+3 │ ⚒4"
+        f"⌁[{glyph}]: ⏱ 16/120m │ q S57↻31m·W50↻3d3h·F27 │ ▷1 │ ⇡2+3 │ ⚒4"
     )
 
 
@@ -6387,3 +6393,45 @@ def test_boundary_detail_redacts_file_tool_pattern():
     capped = _tool_detail("Grep", {"pattern": long_pattern})
     assert capped is not None
     assert len(capped) <= 210  # _DETAIL_OTHER_MAX + ellipsis
+
+
+def test_quota_chip_carries_every_reset_as_time_remaining(monkeypatch):
+    # 2026-09-05: a budget flag at "S21" was written 40 minutes before the
+    # session window rolled, because the stripe showed the percent and not
+    # the clock. Every bucket that states a reset carries it, as remaining
+    # time — his correction: "S57↻in31m", never "S57↻8:30pm".
+    import time as _time
+
+    monkeypatch.setattr(_time, "time", lambda: 0.0)
+    monkeypatch.setattr(
+        hooks, "_relative_reset",
+        lambda when, now=None: {"11pm (Europe/Paris)": "31m",
+                                "Sep 12 at 1:59pm (Europe/Paris)": "3d3h"}.get(when),
+    )
+    resources = {
+        "quota": {
+            "status": "known",
+            "summary": (
+                "session 21% left (resets 11pm (Europe/Paris)); "
+                "week 92% left (resets Sep 12 at 1:59pm (Europe/Paris)); "
+                "Fable week 12% left"
+            ),
+        },
+    }
+    payload = _portal_payload(resources=resources)
+    line = hooks.format_delta(payload, rendered_chips={})
+    assert line is not None
+    assert "q S21↻31m·W92↻3d3h·F12" in line
+
+
+def test_relative_reset_formats_from_the_usage_parser(monkeypatch):
+    from brr import claude_usage
+
+    monkeypatch.setattr(claude_usage, "_reset_epoch", lambda when: 1000.0 + 31 * 60)
+    assert hooks._relative_reset("x", now=1000.0) == "31m"
+    monkeypatch.setattr(claude_usage, "_reset_epoch", lambda when: 1000.0 + 3 * 86400 + 3 * 3600 + 44 * 60)
+    assert hooks._relative_reset("x", now=1000.0) == "3d3h"
+    monkeypatch.setattr(claude_usage, "_reset_epoch", lambda when: 1000.0 + 2 * 3600 + 5 * 60)
+    assert hooks._relative_reset("x", now=1000.0) == "2h05m"
+    monkeypatch.setattr(claude_usage, "_reset_epoch", lambda when: None)
+    assert hooks._relative_reset("x", now=1000.0) is None
