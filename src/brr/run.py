@@ -21,7 +21,16 @@ from pathlib import Path
 from typing import Any
 
 
-STATUSES = ("pending", "running", "done", "error", "conflict")
+#: ``"held"`` (design-the-allowance.md's resource hold) is deliberately
+#: *not* one of ``_UNFINISHED_RUN_STATUSES`` in ``daemon.py`` — a run
+#: parked on a provider resource (quota exhaustion, an explicit resident
+#: request) has a process that has genuinely exited, on purpose, and every
+#: boot-time janitor that reaps an unfinished run must leave it alone
+#: rather than reap it as an orphan or a zombie. It is also not a terminal
+#: outcome the way ``done``/``error``/``conflict`` are: a held run resumes
+#: (an explicit operator message, or a measured provider reset) rather
+#: than ending.
+STATUSES = ("pending", "running", "done", "error", "conflict", "held")
 _ENV_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _EVENT_META_FIELDS = {
     "id", "body", "source", "status", "_path", "created", "branch", "env",
@@ -31,6 +40,64 @@ _RUN_FIELDS = {
     "id", "event_id", "branch", "env", "environment", "status", "source",
     "conversation_key",
 }
+
+
+def _format_run_meta_value(value: Any) -> str:
+    """A run-manifest meta value as one frontmatter-safe line's worth of text.
+
+    Every existing scalar meta value keeps its exact prior rendering
+    (``str(value)``, unguarded, matching this method's behaviour before
+    this function existed — a broad reformat here would be its own
+    regression risk across every reader of an existing run manifest). A
+    ``dict``/``list`` value — first needed by ``resource_hold.py``'s
+    ``Run.meta["resource_hold"]``, a structured record that must survive a
+    daemon restart and a *different* process's ``Run.from_file`` — is
+    JSON-encoded on one line (no ``indent=``, so it cannot introduce a
+    newline the flat frontmatter format would misread as a second field).
+    """
+    if isinstance(value, (dict, list)):
+        import json
+
+        return json.dumps(value, sort_keys=True)
+    return str(value)
+
+
+#: Meta keys :func:`_decode_run_meta_value` will ever decode back to a
+#: dict/list. An allowlist, not "every JSON-shaped string" — daemon.py
+#: already has at least one field (``run_state_digest``,
+#: ``_run_state_digest`` in daemon.py) that is *deliberately* a JSON string
+#: compared by ``!=`` against a freshly dumped one on every call; decoding
+#: it into a dict on reload would make every reload compare unequal to
+#: itself and read as permanent movement — the exact stale-card bug this
+#: digest exists to prevent, reintroduced one layer down. Only a key that
+#: actually needs cross-process dict fidelity belongs here.
+_JSON_META_KEYS = frozenset({"resource_hold"})
+
+
+def _decode_run_meta_value(key: str, value: Any) -> Any:
+    """Inverse of :func:`_format_run_meta_value` for an allowlisted key.
+
+    ``protocol.parse_frontmatter`` hands every meta value back as whatever
+    its own ``_coerce`` produced — a plain string for anything that isn't
+    ``true``/``false``/``null``/a quoted literal/an int, which is exactly
+    what a JSON object or array serializes to on this one-line format.
+    Decoding is gated on *both* ``key in _JSON_META_KEYS`` and the value
+    actually parsing to a ``dict``/``list`` — a key outside the allowlist
+    (everything else a run manifest carries today) round-trips exactly as
+    it always has, never silently changing type underneath an existing
+    reader. Malformed JSON degrades to the raw string, never a crash — a
+    hand-edited or truncated manifest must still load.
+    """
+    if key in _JSON_META_KEYS and isinstance(value, str) and value[:1] in ("{", "["):
+        import json
+
+        try:
+            decoded = json.loads(value)
+        except (TypeError, ValueError):
+            return value
+        if isinstance(decoded, (dict, list)):
+            return decoded
+    return value
 
 
 def _generate_run_id() -> str:
@@ -95,7 +162,10 @@ class Run:
         env:              Execution environment backend — ``host``,
                           ``worktree``, ``docker``, or a future built-in.
         status:           Lifecycle state — pending → running →
-                          done / error / conflict.
+                          done / error / conflict, or → held (a resource
+                          hold — quota exhaustion or an explicit resident
+                          request — parked pending an explicit resume,
+                          not a terminal outcome; see STATUSES above).
         source:           The gate that produced the originating event.
         conversation_key: Stable gate-thread fingerprint, when known.
         terminal_reply:   Ephemeral copy of the terminal response. The gate
@@ -177,7 +247,7 @@ class Run:
         if self.conversation_key:
             lines.append(f"conversation_key: {self.conversation_key}")
         for k, v in self.meta.items():
-            lines.append(f"{k}: {v}")
+            lines.append(f"{k}: {_format_run_meta_value(v)}")
         lines.append("---")
         lines.append(self.body)
         return "\n".join(lines) + "\n"
@@ -195,7 +265,10 @@ class Run:
         if not fm.get("id"):
             return None
         body = protocol.frontmatter_body(text).strip()
-        meta = {k: v for k, v in fm.items() if k not in _RUN_FIELDS}
+        meta = {
+            k: _decode_run_meta_value(k, v)
+            for k, v in fm.items() if k not in _RUN_FIELDS
+        }
         return cls(
             id=fm["id"],
             event_id=fm.get("event_id", ""),

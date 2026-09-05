@@ -90,6 +90,76 @@ class TestPersistence:
         assert loaded.source == "telegram"
         assert loaded.meta["chat_id"] == 42
 
+    def test_save_and_load_round_trips_a_nested_dict_meta_value(self, tmp_path):
+        """A structured meta value (design-the-allowance.md's
+        ``resource_hold`` — reason/provider/generation/a nested list of
+        accumulated event ids) must survive Run.save → Run.from_file as
+        the same dict, not degrade to its str() repr. Caught live: every
+        resource-hold daemon test failed with `AttributeError: 'str'
+        object has no attribute 'get'` the first time this was exercised
+        through a real save/reload, because ``to_frontmatter`` used to
+        write ``f"{k}: {v}"`` unconditionally."""
+        run = Run(
+            id="run-nested", event_id="evt-nested", body="x",
+            meta={
+                "resource_hold": {
+                    "reason": "quota_exhausted",
+                    "provider": "codex",
+                    "detail": None,
+                    "generation": 1,
+                    "released": False,
+                    "accumulated_event_ids": ["evt-a", "evt-b"],
+                },
+                "plain_string": "unchanged",
+                "plain_int": 7,
+                "plain_bool": True,
+            },
+        )
+        run.save(tmp_path)
+
+        loaded = Run.from_file(tmp_path / "run-nested" / "run.md")
+
+        assert loaded is not None
+        assert loaded.meta["resource_hold"] == run.meta["resource_hold"]
+        assert loaded.meta["plain_string"] == "unchanged"
+        assert loaded.meta["plain_int"] == 7
+        assert loaded.meta["plain_bool"] is True
+
+    def test_non_allowlisted_json_shaped_meta_value_stays_a_string(self, tmp_path):
+        """daemon.py's ``run_state_digest`` is *deliberately* a JSON string,
+        compared by ``!=`` against a freshly dumped one on every call
+        (design-the-stale-card-timer). Decoding it into a dict on reload
+        would make every reload compare unequal to itself and read as
+        permanent movement — the exact bug that digest exists to prevent,
+        reintroduced one layer down. Only keys in ``_JSON_META_KEYS``
+        (``resource_hold``) may decode; everything else round-trips as the
+        plain string it always was, JSON-shaped or not."""
+        run = Run(
+            id="run-digest", event_id="evt-digest", body="x",
+            meta={"run_state_digest": '{"scm": null, "produce": null}'},
+        )
+        run.save(tmp_path)
+
+        loaded = Run.from_file(tmp_path / "run-digest" / "run.md")
+
+        assert loaded is not None
+        assert loaded.meta["run_state_digest"] == '{"scm": null, "produce": null}'
+        assert isinstance(loaded.meta["run_state_digest"], str)
+
+    def test_malformed_json_looking_meta_value_degrades_to_the_raw_string(
+        self, tmp_path,
+    ):
+        path = tmp_path / "run-bad" / "run.md"
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            "---\nid: run-bad\nevent_id: evt-bad\nstatus: pending\n"
+            'weird: {"not": "closed"\n---\nbody\n',
+            encoding="utf-8",
+        )
+        loaded = Run.from_file(path)
+        assert loaded is not None
+        assert loaded.meta["weird"] == '{"not": "closed"'
+
     def test_update_status(self, tmp_path):
         run = Run(id="run-1", event_id="evt-1", body="x")
         run.save(tmp_path)
