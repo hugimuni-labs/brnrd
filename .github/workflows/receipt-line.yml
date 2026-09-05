@@ -2,14 +2,17 @@ name: Receipt line
 
 # The README's numbers under the title ("N commits on main · N by the
 # resident · N merged PRs") are a claim that goes stale at the next merge.
-# This re-measures them daily and rewrites the one line, committing as the
-# bot only when a number moved — so the counter ticks in the git log, which
-# is the thing the line is about. Not part of ci.yml on purpose: it needs
+# This re-measures them on every release and on the first of the month and
+# rewrites the one line, committing as the bot only when a number moved. Not
+# daily: a vanity commit a day is noise in the one log we tell people to
+# read; the "as of" date on the line declares the staleness instead. Not part of ci.yml on purpose: it needs
 # the GitHub search API and a push, neither of which belongs in the gate.
 
 on:
   schedule:
-    - cron: "17 6 * * *"
+    - cron: "17 6 1 * *"
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:

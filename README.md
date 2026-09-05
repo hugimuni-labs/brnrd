@@ -230,7 +230,7 @@ guide doesn't unpack:
 ## ✦ Current posture
 
 brnrd is **alpha software, already used to build itself** (the numbers at the top
-are `git log` on this repo — re-measured daily by `scripts/receipt_line.py`). The resident loop, local
+are `git log` on this repo — re-measured at each release by `scripts/receipt_line.py`). The resident loop, local
 daemon, managed Telegram path, live dashboard, runner switching, worktree/Docker
 execution, and git handoff are real. The public docs, multi-project proving, managed
 billing/failover, and some operational polish are still release work.
