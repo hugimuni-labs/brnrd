@@ -52,9 +52,17 @@ than reusing either existing collector:
   ``token_count`` event, via the same exact ``thread_id`` correlation
   :func:`brr.codex_status.load_levels` already uses.
 
-Raw tokens (input + output + cache-read), unweighted — slice 1's own scope;
-the provider-weighted learned exchange rate is slice 3
-(design-the-allowance.md, fork 1 and §Slice order).
+**The unit is cost-weighted tokens** (input-equivalent), not the raw sum.
+Measured at review on a real strand transcript (run-260904-2331-9e3x, 521
+assistant turns): raw sum 146,204,793 of which 144,941,516 were cache
+*re-reads* of the same context — a raw count is ~100x the bill and would
+fire the ≥100% directive on a strand's third boundary against any sane
+ceiling. Weighted with the providers' own published price ratios
+(:data:`TOKEN_WEIGHTS`: cache-read 0.1, cache-write 1.25, output 5, fresh
+input 1) that strand reads ~17.4m — the number a ceiling can be set against.
+The per-provider *quota* exchange rate (percent per weighted token) is still
+slice 3's learned rate; this weighting only makes the unit proportional to
+cost across turns so that rate can exist.
 """
 
 from __future__ import annotations
@@ -68,7 +76,31 @@ from . import claude_status, codex_status
 
 #: ``spawn.allowance_tokens`` config default (design-the-allowance.md §2)
 #: when a ``spawn:`` directive names no ``allowance:`` of its own.
-DEFAULT_ALLOWANCE_TOKENS = 150_000
+DEFAULT_ALLOWANCE_TOKENS = 20_000_000
+
+#: Cost weights per token class, in fresh-input-token equivalents — the
+#: providers' own price ratios (Anthropic: cache read 0.1x, cache write 1.25x,
+#: output 5x; OpenAI: cached input 0.1x, output ~8x — the same table is used
+#: for both, slice 3's learned rate absorbs the residual per-provider scale).
+TOKEN_WEIGHTS: dict[str, float] = {
+    "input": 1.0,
+    "output": 5.0,
+    "cache_read": 0.1,
+    "cache_creation": 1.25,
+}
+
+
+def weighted_tokens(
+    *, input: "int | float" = 0, output: "int | float" = 0,
+    cache_read: "int | float" = 0, cache_creation: "int | float" = 0,
+) -> int:
+    """Fold one usage record into cost-weighted tokens (:data:`TOKEN_WEIGHTS`)."""
+    w = TOKEN_WEIGHTS
+    return int(round(
+        float(input) * w["input"] + float(output) * w["output"]
+        + float(cache_read) * w["cache_read"]
+        + float(cache_creation) * w["cache_creation"]
+    ))
 
 _TOKENS_RE = re.compile(r"^\s*([0-9]*\.?[0-9]+)\s*([km]?)\s*$", re.IGNORECASE)
 _SUFFIX_MULTIPLIER = {"": 1, "k": 1_000, "m": 1_000_000}
@@ -146,7 +178,8 @@ def _camel_or_snake(data: dict[str, Any], camel: str, snake: str) -> Any:
 
 
 def claude_transcript_tokens(path: "Path | str | None") -> "int | None":
-    """Sum every assistant turn's usage in a Claude session transcript.
+    """Sum every assistant turn's usage in a Claude session transcript,
+    cost-weighted (:func:`weighted_tokens`).
 
     ``None`` when *path* is falsy, unreadable, or carries no assistant
     ``usage`` row at all — "no reading yet", never a fabricated zero.
@@ -173,17 +206,20 @@ def claude_transcript_tokens(path: "Path | str | None") -> "int | None":
                 usage = message.get("usage")
                 if not isinstance(usage, dict):
                     continue
-                for camel, snake in (
-                    ("inputTokens", "input_tokens"),
-                    ("outputTokens", "output_tokens"),
-                    ("cacheReadInputTokens", "cache_read_input_tokens"),
-                    ("cacheCreationInputTokens", "cache_creation_input_tokens"),
+                parts: dict[str, float] = {}
+                for name, camel, snake in (
+                    ("input", "inputTokens", "input_tokens"),
+                    ("output", "outputTokens", "output_tokens"),
+                    ("cache_read", "cacheReadInputTokens", "cache_read_input_tokens"),
+                    ("cache_creation", "cacheCreationInputTokens",
+                     "cache_creation_input_tokens"),
                 ):
                     value = _camel_or_snake(usage, camel, snake)
                     if isinstance(value, bool) or not isinstance(value, (int, float)):
                         continue
-                    total += int(value)
+                    parts[name] = float(value)
                     found = True
+                total += weighted_tokens(**parts)
     except OSError:
         return None
     return total if found else None
