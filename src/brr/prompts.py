@@ -583,6 +583,109 @@ def _trim_marker(
 _MAX_NAMED_CUT_SECTIONS = 6
 
 
+# How many of a page's own "dated tick" sections survive the age gate below,
+# regardless of the byte budget. Two, not one: a reader mid-tick usually wants
+# to see the immediately preceding tick's own open threads alongside the
+# current one, and one survivor reads like the page just started.
+_AGE_GATE_KEEP = 2
+
+# The two bare, year-less heading shapes a resident's own running-plan pages
+# accrete a section under every tick/session — `## This tick, 09-04`,
+# `## This session, 09-04 …` — never matched by `_HEADING_DATE_RE` (no
+# `YYYY-`), which is exactly why `_page_is_chronological` reads a page built
+# entirely of these as *structural* and trims it from the head, not the tail:
+# the newest ticks are the ones actually at risk of being cut. This regex
+# only has to recognize the shape; document order (see
+# `_age_gate_dated_sections`) is what decides which are newest.
+_DATED_SECTION_HEADING_RE = re.compile(
+    r"^##\s+(?:This tick|This session),\s*\d{2}-\d{2}\b", re.IGNORECASE
+)
+
+
+def _is_dated_section(entry: str) -> bool:
+    """Does this ``## `` section's heading carry a date the age gate acts on?
+
+    Three shapes, matching the task this check exists for: ``This tick,
+    MM-DD``, ``This session, MM-DD`` (:data:`_DATED_SECTION_HEADING_RE`),
+    or a full ISO date anywhere on the heading line (:func:`_heading_date`
+    — the same rule :func:`_entry_key` uses elsewhere in this file, so an
+    ISO-dated section is recognized identically by both). Anything else —
+    including a heading that merely *mentions* a date in its body — is
+    undated and is never touched by :func:`_age_gate_dated_sections`.
+    """
+    heading = entry.split("\n", 1)[0]
+    return (
+        _DATED_SECTION_HEADING_RE.match(heading) is not None
+        or _heading_date(entry) is not None
+    )
+
+
+def _age_gate_marker(dropped_titles: list[str], source_hint: str) -> str:
+    """The notice for sections :func:`_age_gate_dated_sections` dropped.
+
+    Same shape as :func:`_structural_trim_marker` (named titles, capped at
+    :data:`_MAX_NAMED_CUT_SECTIONS`, "and N more") but names a different
+    cause on purpose — age, never the wake budget — so a page that hits
+    both this gate and the byte-budget walk in the same wake carries two
+    markers a reader can tell apart, not one that misattributes either cut.
+    """
+    noun = "section" if len(dropped_titles) == 1 else "sections"
+    named = dropped_titles[:_MAX_NAMED_CUT_SECTIONS]
+    listed = " · ".join(named)
+    if len(dropped_titles) > len(named):
+        listed += f" · … and {len(dropped_titles) - len(named)} more"
+    return (
+        f"_({len(dropped_titles)} older dated {noun} age-gated out, keeping "
+        f"the newest {_AGE_GATE_KEEP}: {listed} · full page: {source_hint})_"
+    )
+
+
+def _age_gate_dated_sections(content: str) -> tuple[str, list[str]]:
+    """Drop all but the newest :data:`_AGE_GATE_KEEP` dated ``## `` sections.
+
+    The motivating page, ``surface/plans/<repo>/active.md``, accretes a
+    ``## This tick, <date>`` section every tick forever; its own first line
+    says "this page is the live edge only," but the byte-budget walk alone
+    is not enough to keep it that way — with 19 stale ticks still on the
+    page one wake still spent ~48 KB of the shared surface budget on it.
+    This runs *before* :func:`_trim_sectioned_page`'s byte-budget walk, so
+    the page is small on its own terms first and the budget walk (still
+    live for pages this doesn't shrink enough, or that grow one surviving
+    section past the budget on its own) never has to make this call.
+
+    "Newest" is document order, not a parsed calendar date — this account's
+    own accretion convention is append-to-bottom, never reorder (the same
+    convention the rest of this module leans on for a fully-ISO-dated
+    page), so the last :data:`_AGE_GATE_KEEP` dated sections *in the file*
+    are the newest :data:`_AGE_GATE_KEEP`, independent of which of
+    :func:`_is_dated_section`'s shapes each one uses — including the two
+    bare ``MM-DD`` shapes, which carry no year to compare in the first
+    place. Undated sections are never counted against the keep limit and
+    never move from their original position.
+
+    Returns ``(content, [])`` — unchanged, not even re-encoded — when there
+    are :data:`_AGE_GATE_KEEP` or fewer dated sections: nothing to gate, and
+    a caller comparing for a byte-identical "whole" injection can trust the
+    identity. Otherwise returns the page with the older dated sections
+    removed (every other section keeps its original relative order) and the
+    dropped sections' own heading titles, for the caller to report via
+    :func:`_age_gate_marker`.
+    """
+    entries = _split_h2_entries(content)
+    if not entries:
+        return content, []
+    dated_positions = [i for i, e in enumerate(entries) if _is_dated_section(e)]
+    if len(dated_positions) <= _AGE_GATE_KEEP:
+        return content, []
+    drop_positions = set(dated_positions[:-_AGE_GATE_KEEP])
+    dropped_titles = [_heading_title(entries[i]) for i in sorted(drop_positions)]
+    kept_entries = [e for i, e in enumerate(entries) if i not in drop_positions]
+    match = _H2_RE.search(content)
+    preamble = content[: match.start()].strip()
+    body = "".join(kept_entries).strip()
+    return "\n\n".join(p for p in (preamble, body) if p), dropped_titles
+
+
 def _head_cut_at_line_boundary(text: str, limit: int) -> str:
     """*text* truncated to at most *limit* UTF-8 bytes, preferring a line break.
 
@@ -672,6 +775,51 @@ def _handles_only_marker(dropped_bytes: int, source_hint: str) -> str:
 
 
 def _trim_sectioned_page(content: str, max_bytes: int, source_hint: str) -> TrimResult:
+    """Age-gate, then byte-budget-trim, a ``## ``-sectioned page.
+
+    Thin wrapper around :func:`_trim_sectioned_page_body`: runs
+    :func:`_age_gate_dated_sections` first so a page's own stale "tick"
+    sections are gone *before* the byte-budget walk below ever sees them,
+    then appends :func:`_age_gate_marker` to whatever the byte-budget walk
+    (still live for what the age gate doesn't shrink enough) produces.
+    Every other fact this function returns — the four attestation fields,
+    the "unchanged when it already fits" identity — is untouched when
+    nothing ages out; see :func:`_trim_sectioned_page_body` for that
+    contract.
+
+    Gated on :func:`_page_is_chronological` returning **False** — a genuine
+    accreting log (``ledger/decisions.md``, ``kb/log.md``'s shape: every
+    heading carries a full ``YYYY-MM-DD``) already gets the right treatment
+    from the byte-budget walk below, which keeps as many dated entries as
+    the budget allows and attests exactly what it cut; capping it at
+    :data:`_AGE_GATE_KEEP` regardless of budget would be a regression, not a
+    fix. The page this gate exists for (``plans/<repo>/active.md``) is
+    structural under that same predicate for the reason its own docstring
+    gives — its ``This tick`` / ``This session`` headings carry no year, so
+    none of them satisfy ``_entry_key`` — which is exactly what makes it
+    provably safe to key this gate off the same classification the rest of
+    this function already computes.
+    """
+    if _page_is_chronological(content):
+        return _trim_sectioned_page_body(content, max_bytes, source_hint)
+    gated_content, age_dropped = _age_gate_dated_sections(content)
+    result = _trim_sectioned_page_body(gated_content, max_bytes, source_hint)
+    if not age_dropped:
+        return result
+    marker = _age_gate_marker(age_dropped, source_hint)
+    return TrimResult(
+        text=f"{result.text}\n\n{marker}",
+        newest_item=result.newest_item,
+        oldest_item=result.oldest_item,
+        dropped=result.dropped,
+        source_newest=result.source_newest,
+        stale=result.stale,
+        precise=result.precise,
+        floor_overflow_section=result.floor_overflow_section,
+    )
+
+
+def _trim_sectioned_page_body(content: str, max_bytes: int, source_hint: str) -> TrimResult:
     """Trim a ``## ``-sectioned page to fit *max_bytes*, keeping the right half.
 
     **Which half is right is derived, never declared** (#688). The page's

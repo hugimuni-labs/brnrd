@@ -772,6 +772,95 @@ class TestBlockAttestation:
         assert result.dropped is None
 
 
+def _tick_section(date: str, body: str = "content.") -> str:
+    """One ``## This tick, <MM-DD>``-style dated section, the age gate's
+    motivating shape (`surface/plans/<repo>/active.md`'s own convention)."""
+    return f"## This tick, {date}\n\n{body}\n"
+
+
+def _undated_section(title: str, body: str = "content.") -> str:
+    return f"## {title}\n\n{body}\n"
+
+
+class TestAgeGateDatedSections:
+    """`_trim_sectioned_page` age-gates a page's dated tick sections down to
+    the newest 2 *before* its byte-budget walk runs — the fix for
+    `plans/<repo>/active.md` accreting a `## This tick, <date>` section
+    every tick forever and still spending tens of KB even after 19 of them
+    got cut by the byte budget alone (the byte walk keeps this kind of page
+    from the *head*, since bare `MM-DD` headings carry no year and so never
+    register as dated to `_page_is_chronological`)."""
+
+    def test_six_dated_two_undated_keeps_newest_two_dated_and_all_undated(self):
+        sections = [
+            _tick_section("09-01"), _tick_section("09-02"),
+            _undated_section("Backlog"),
+            _tick_section("09-03"), _tick_section("09-04"),
+            _undated_section("Ideas"),
+            _tick_section("09-05"), _tick_section("09-06"),
+        ]
+        content = "\n".join(sections)
+
+        result = _trim_sectioned_page(content, max_bytes=100_000, source_hint="`surface/plans/x/active.md`")
+        body, _, marker = result.text.partition("\n\n_(")
+
+        assert body.count("## This tick,") == 2
+        assert "This tick, 09-05" in body
+        assert "This tick, 09-06" in body
+        for stale in ("09-01", "09-02", "09-03", "09-04"):
+            assert f"This tick, {stale}" not in body
+        assert "## Backlog" in body
+        assert "## Ideas" in body
+        assert marker  # the age-gate marker was appended
+        assert "4 older dated sections age-gated out" in marker
+        assert "keeping the newest 2" in marker
+        assert "surface/plans/x/active.md" in marker
+        # And it names exactly what it cut.
+        for stale in ("09-01", "09-02", "09-03", "09-04"):
+            assert f"This tick, {stale}" in marker
+
+    def test_iso_dated_and_this_session_shapes_both_recognized(self):
+        content = "\n".join([
+            "## [2026-08-01] note",
+            "",
+            "old.",
+            "",
+            "## This session, 08-15",
+            "",
+            "mid.",
+            "",
+            "## This session, 08-20",
+            "",
+            "new.",
+            "",
+        ])
+        result = _trim_sectioned_page(content, max_bytes=100_000, source_hint="`x`")
+        body, _, marker = result.text.partition("\n\n_(")
+        assert "2026-08-01" not in body
+        assert "This session, 08-15" in body
+        assert "This session, 08-20" in body
+        assert "1 older dated section age-gated out" in marker
+        assert "2026-08-01" in marker  # names what it cut
+
+    def test_two_or_fewer_dated_sections_is_untouched(self):
+        content = "\n".join([
+            _tick_section("09-05"), _tick_section("09-06"), _undated_section("Ideas"),
+        ])
+        result = _trim_sectioned_page(content, max_bytes=100_000, source_hint="`x`")
+        assert result.text == content
+        assert "age-gated out" not in result.text
+
+    def test_undated_only_page_past_budget_still_goes_through_the_old_path(self):
+        """No dated sections at all ⇒ the age gate is a pure no-op and the
+        pre-existing structural byte-cut owns the whole result, unchanged."""
+        content = "## A\n\n" + ("x" * 500) + "\n\n## B\n\n" + ("y" * 500) + "\n"
+
+        result = _trim_sectioned_page(content, max_bytes=300, source_hint="`x`")
+
+        assert "age-gated out" not in result.text
+        assert result.dropped == 1  # the ordinary structural cut still ran
+
+
 class TestPromptBuilding:
     def test_run_prompt_includes_identity_core_before_dominion_and_task(
         self, tmp_path,
