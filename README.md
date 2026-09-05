@@ -116,15 +116,7 @@ Now send a message from the other side:
 review PR #84 for the auth regression; show me the risky bit before changing it
 ```
 
-<!-- DEMO SLOT — one line, nothing else.
-     Paste the GitHub-hosted asset URL on its own line, directly below this
-     comment, and delete the comment. GitHub renders an uploaded `.mp4` as a
-     native player; a `<video>` tag is stripped by the README renderer and
-     shows nothing, so the URL has to come from a real upload (drag the file
-     into any issue or PR comment and copy what GitHub returns).
-     PyPI and npm render this same file and will not play it — they degrade
-     to a link, which is why the animation above is a GIF on an absolute URL
-     rather than a video. Tracked: #28. -->
+https://github.com/user-attachments/assets/2357758c-fa35-47ba-92b1-f02d51c338e3
 
 <details>
 <summary>The npm package is not a JavaScript port</summary>
