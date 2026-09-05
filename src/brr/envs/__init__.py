@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, Any
 
-from .. import __version__, branching, gitops, runner, worktree
+from .. import __version__, branching, gitops, runner, transcript, worktree
 from ..run import Run
 
 
@@ -98,9 +98,29 @@ class EnvBackend(Protocol):
     ) -> Run:
         ...
 
+    def session_seed_home(self, ctx: RunContext) -> Path | None:
+        ...
+
 
 class HostEnv:
     name = "host"
+
+    def session_seed_home(self, ctx: RunContext) -> Path | None:
+        """Where ``transcript.mount_claude_session`` should forge a session.
+
+        ``None`` ⇒ the daemon's own default (the real ``$HOME``). Every
+        backend but ``sandbox`` can already see a session forged there:
+        host/worktree run on it directly; ``docker`` bind-mounts it into the
+        container's ``$HOME`` (``_DOCKER_DEFAULT_CRED_PATHS`` includes
+        ``.claude``); ``solitary``'s ``ro``/``copy`` credential modes do the
+        same (`copy` snapshots ``~/.claude`` in ``invoke()``, *after* this
+        module forges the session, so the copy includes it) — only
+        ``solitary.credentials=none`` sees no ``.claude`` at all, which is
+        that mode's own explicit choice, not a gap. Overridden by
+        :class:`SandboxEnv`, the one backend whose runner never sees the
+        host's HOME at all.
+        """
+        return None
 
     def prepare(
         self,
@@ -1352,10 +1372,38 @@ def _sbx_run(command: list[str], *, timeout: int = 120) -> subprocess.CompletedP
     return result
 
 
+def _extract_resume_session_id(extra_args: list[str] | None) -> str | None:
+    """Pull the session id out of ``transcript.resume_argv``'s ``--resume <id>``.
+
+    ``extra_runner_args`` is an opaque argv list to every other env — only
+    ``SandboxEnv`` needs to know one of its shapes, to relocate the forged
+    session file the id names. Absent (prose boot, no mount, non-claude
+    Shell) ⇒ ``None``, and the caller skips relocation entirely.
+    """
+    if not extra_args:
+        return None
+    for flag, value in zip(extra_args, extra_args[1:]):
+        if flag == "--resume" and value:
+            return value
+    return None
+
+
 class SandboxEnv(WorktreeEnv):
     """A worktree run executed inside a reusable Docker Sandbox microVM."""
 
     name = "sandbox"
+
+    def session_seed_home(self, ctx: RunContext) -> Path | None:
+        """Stage a forged session where the VM can actually reach it.
+
+        ``sbx create`` mounts the run's *repo checkout* into the VM at the
+        same absolute path; it never mounts the account home the default
+        ``session_seed_home`` (``None`` ⇒ real ``$HOME``) would forge into,
+        and the VM's own ``$HOME`` is a private volume with nothing mounted
+        back to the host. Staging under the shared, passthrough ``.brr`` is
+        what makes the ``invoke``-time relocation below possible at all.
+        """
+        return ctx.runtime_dir / "sandbox-session-seed"
 
     def prepare(
         self,
@@ -1413,6 +1461,59 @@ class SandboxEnv(WorktreeEnv):
         task.meta["environment"] = self.name
         return ctx
 
+    def _staged_session_path(
+        self, ctx: RunContext, cwd: str, extra_args: list[str] | None,
+    ) -> Path | None:
+        session_id = _extract_resume_session_id(extra_args)
+        if not session_id:
+            return None
+        return transcript.claude_session_path(
+            cwd, session_id, home=self.session_seed_home(ctx),
+        )
+
+    def _session_relocate_script(
+        self, ctx: RunContext, cwd: str, extra_args: list[str] | None,
+    ) -> str:
+        """Shell prefix copying a forged session into the VM's real ``$HOME``.
+
+        Empty string when nothing was mounted — the common case, must add
+        nothing then. Invariant: ``"$HOME"`` is the only unquoted expansion;
+        every other segment (cwd slug, session id) is ``shlex.quote``d and
+        concatenated as an adjacent literal, never interpolated into
+        double-quoted text — a checkout path containing ``$``, backticks, or
+        quotes must not be interpretable by ``sh``.
+        """
+        staged = self._staged_session_path(ctx, cwd, extra_args)
+        if staged is None or not staged.exists():
+            return ""
+        rel = transcript.claude_session_relpath(cwd, _extract_resume_session_id(extra_args) or "")
+
+        def home_rel(p: Path) -> str:
+            return '"$HOME"' + shlex.quote("/" + str(p))
+
+        return (
+            f"mkdir -p {home_rel(rel.parent)} && "
+            f"cp {shlex.quote(str(staged))} {home_rel(rel)} && "
+        )
+
+    def _cleanup_staged_session(
+        self, ctx: RunContext, cwd: str, extra_args: list[str] | None,
+    ) -> None:
+        """Best-effort: drop the host-side staging copy once it has been read.
+
+        The staging root lives under the repo's shared, non-ephemeral
+        ``.brr`` — without this, every sandboxed run's forged session
+        accumulates there forever. The copy inside the VM (the one ``claude
+        --resume`` actually reads) is untouched.
+        """
+        staged = self._staged_session_path(ctx, cwd, extra_args)
+        if staged is None:
+            return
+        try:
+            staged.unlink(missing_ok=True)
+        except OSError:
+            pass
+
     def invoke(
         self,
         ctx: RunContext,
@@ -1431,9 +1532,11 @@ class SandboxEnv(WorktreeEnv):
         inner_cmd = runner._fill_prompt(inner_template, invocation.prompt, cfg)
         prompt_stdin = runner._prompt_stdin(cfg, invocation.prompt, inner_template)
         cwd = invocation.cwd or ctx.cwd
+        relocate = self._session_relocate_script(ctx, str(cwd), invocation.extra_runner_args)
         script = (
             f"cd {shlex.quote(str(cwd))} && "
             "export PATH=$HOME/.local/bin:$PATH && "
+            f"{relocate}"
             f"exec {shlex.join(inner_cmd)}"
         )
         command = ["sbx", "exec", "-i"]
@@ -1482,6 +1585,7 @@ class SandboxEnv(WorktreeEnv):
         finally:
             if proc is not None:
                 runner._clear_active_proc(proc_key, proc)
+        self._cleanup_staged_session(ctx, str(cwd), invocation.extra_runner_args)
 
         stdout, observed_core, api_error = runner._process_runner_stdout(
             str(shell), stdout, invocation.env,

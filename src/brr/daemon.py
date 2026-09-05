@@ -4526,6 +4526,10 @@ def _run_worker(
                     cwd=str(run_root),
                     git_branch=branch_name or "",
                     model=str(task.meta.get("runner_core") or ""),
+                    # None for every backend but sandbox (see
+                    # `EnvBackend.session_seed_home`); `SandboxEnv` relocates
+                    # the seed into the VM's real HOME at invoke time.
+                    home=env_backend.session_seed_home(env_ctx),
                 )
                 extra_runner_args = [
                     *transcript.resume_argv(session_id),
