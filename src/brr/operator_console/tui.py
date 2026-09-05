@@ -353,8 +353,28 @@ def _edge_body(edge: Boundary, *, command_width: int = 70) -> str:
 _BYTES_PER_TOKEN = 4
 
 
+def _wake_chip(block: dict[str, Any]) -> str:
+    """``owner/authority`` for one block, e.g. ``resident/memory`` — the same
+    pairing ``brnrd prompts show`` prints per row, condensed to one token so
+    it fits a table column.  ``?`` for a pre-upgrade manifest that predates
+    these two fields (#1753's own precedent: an older file is a gap, not a
+    crash).
+    """
+    owner = str(block.get("owner") or "?")
+    authority = str(block.get("authority") or "?")
+    return f"{owner}/{authority}"
+
+
 def _wake_topology_table(blocks: list[dict[str, Any]]) -> str:
     """Render wake-manifest.json blocks as a compact topology table.
+
+    Grouped by authority — the same grouping ``bootscore._cost_ledger``
+    prints for ``brnrd prompts show``'s cost ledger — so a reader sees "what
+    layer is this wake actually spending its bytes on" before "what is any
+    one block". Each block row still carries its own ``owner/authority``
+    chip because two blocks in one authority group (e.g. ``memory``) can
+    have different owners (resident-authored dominion vs. a project's
+    committed pitfalls file).
 
     The ``≈tok`` column is ``bytes // 4`` — a stated heuristic so the
     operator can price a block (tokens × their core's input rate) without
@@ -363,40 +383,50 @@ def _wake_topology_table(blocks: list[dict[str, Any]]) -> str:
     header = (
         "TOPOLOGY  (from wake-manifest.json)\n"
         "────────────────────────────────────────────────────────────────\n"
-        f"{'store':<18}  {'name':<32}  {'kept':>8}  {'≈tok':>7}  {'cut':>8}  trim\n"
-        f"{'─'*18}  {'─'*32}  {'─'*8}  {'─'*7}  {'─'*8}  {'─'*4}"
+        f"{'owner/authority':<20}  {'name':<28}  {'kept':>8}  {'≈tok':>7}  {'cut':>8}  trim\n"
+        f"{'─'*20}  {'─'*28}  {'─'*8}  {'─'*7}  {'─'*8}  {'─'*4}"
     )
-    rows: list[str] = []
-    total_kept = 0
-    for block in blocks:
-        if not block.get("present"):
-            continue
-        sources = block.get("sources") or []
-        if sources and sources[0].get("synthesized"):
-            store = "synthesized"
-        else:
-            store = (sources[0].get("store") or "?") if sources else "?"
-        name = str(block.get("name") or "?")
-        kept = block.get("bytes_kept")
-        cut = block.get("bytes_cut")
-        trim = str(block.get("trim_kind") or "")
-        kept_str = f"{kept:,}" if isinstance(kept, int) else "—"
-        tok_str = f"{kept // _BYTES_PER_TOKEN:,}" if isinstance(kept, int) else "—"
-        cut_str = f"{cut:,}" if isinstance(cut, int) else "—"
-        if isinstance(kept, int):
-            total_kept += kept
-        rows.append(
-            f"{store[:18]:<18}  {name[:32]:<32}  {kept_str:>8}  {tok_str:>7}  {cut_str:>8}  {trim}"
-        )
-    if not rows:
+    present = [b for b in blocks if b.get("present")]
+    if not present:
         return header + "\n(no present blocks)"
+
+    total_kept = sum(
+        block["bytes_kept"] for block in present if isinstance(block.get("bytes_kept"), int)
+    )
+
+    by_authority: dict[str, list[dict[str, Any]]] = {}
+    group_bytes: dict[str, int] = {}
+    for block in present:
+        authority = str(block.get("authority") or "?")
+        by_authority.setdefault(authority, []).append(block)
+        kept = block.get("bytes_kept")
+        if isinstance(kept, int):
+            group_bytes[authority] = group_bytes.get(authority, 0) + kept
+
+    lines: list[str] = []
+    for authority in sorted(by_authority, key=lambda a: -group_bytes.get(a, 0)):
+        group_total = group_bytes.get(authority, 0)
+        share = f"{100 * group_total / total_kept:4.1f}%" if total_kept else "   ?"
+        lines.append(f"── {authority} · {group_total:,} B · {share} " + "─" * 20)
+        for block in by_authority[authority]:
+            name = str(block.get("name") or "?")
+            kept = block.get("bytes_kept")
+            cut = block.get("bytes_cut")
+            trim = str(block.get("trim_kind") or "")
+            kept_str = f"{kept:,}" if isinstance(kept, int) else "—"
+            tok_str = f"{kept // _BYTES_PER_TOKEN:,}" if isinstance(kept, int) else "—"
+            cut_str = f"{cut:,}" if isinstance(cut, int) else "—"
+            lines.append(
+                f"{_wake_chip(block)[:20]:<20}  {name[:28]:<28}  {kept_str:>8}  "
+                f"{tok_str:>7}  {cut_str:>8}  {trim}"
+            )
     footer = (
-        f"{'─'*18}  {'─'*32}  {'─'*8}  {'─'*7}  {'─'*8}  {'─'*4}\n"
-        f"{'Σ kept':<18}  {'':<32}  {total_kept:>8,}  {total_kept // _BYTES_PER_TOKEN:>7,}\n"
+        f"{'─'*20}  {'─'*28}  {'─'*8}  {'─'*7}  {'─'*8}  {'─'*4}\n"
+        f"{'Σ kept':<20}  {'':<28}  {total_kept:>8,}  {total_kept // _BYTES_PER_TOKEN:>7,}\n"
         f"≈tok = bytes/{_BYTES_PER_TOKEN} (heuristic) · price ≈ tok × the core's input rate · "
         "cached prefixes re-bill far cheaper"
     )
-    return header + "\n" + "\n".join(rows) + "\n" + footer
+    return header + "\n" + "\n".join(lines) + "\n" + footer
 
 
 def _wake_header(run: RunView) -> str:
@@ -409,21 +439,118 @@ def _wake_header(run: RunView) -> str:
 
 
 def _wake_block_title(block: dict[str, Any]) -> str:
-    """Collapsed-view header for one manifest block: name + byte size."""
+    """Collapsed-view header for one manifest block: owner/authority chip,
+    name, byte size — the chip answers "core static prompt vs. self-inject
+    vs. daemon-computed" without opening the row.
+    """
     name = escape(str(block.get("name") or "?"))
+    chip = escape(_wake_chip(block))
     if not block.get("present"):
-        return f"{name}  ·  absent"
+        return f"[{chip}] {name}  ·  absent"
     kept = block.get("bytes_kept")
     kept_str = f"{kept:,} B" if isinstance(kept, int) else "— B"
-    return f"{name}  ·  {kept_str}"
+    return f"[{chip}] {name}  ·  {kept_str}"
 
 
-def _wake_block_detail(block: dict[str, Any]) -> str:
-    """Expanded content for one manifest block: everything the manifest knows about it.
+#: Ceiling on how much of one block's exact text a Collapsible renders.  A
+#: dominion digest or a knowledge slice can run to tens of KB; the console is
+#: an inspector; a block a reader wants in full has `--boot`/`brnrd prompts
+#: wake` and the file path this same row already prints.
+_BLOCK_TEXT_PREVIEW_MAX = 20_000
 
-    No per-block raw prompt text exists to show — `wake-manifest.json` records
-    accounting (bytes/source/trim), not a byte range into `prompt.md` — so the
-    expanded view is that accounting, not archaeology the manifest can't back.
+
+def _wake_block_text(
+    block: dict[str, Any],
+    *,
+    repo_root: Path | None,
+    mounted_blocks: dict[str, str],
+) -> str:
+    """The exact bytes this block rendered into the wake, or why there are none.
+
+    Three cases, in priority order:
+
+    1. **Mounted** (`boot.mount` diverted this block's text into
+       `prompt-mounted.json` instead of `prompt.md` — #1753) — that sidecar
+       *is* the exact rendered bytes; nothing to reconstruct.
+    2. **File-backed and present** — re-read straight from the source path
+       the manifest already names, via the same `prompts.mountable_block_text`
+       the offline `brnrd prompts transcript`/`replay` paths use, so this
+       view and those two cannot disagree about what a block_key means. When
+       the block was trimmed at wake time (`trim_kind` set), the file on disk
+       and the bytes actually kept differ — said plainly rather than passed
+       off as identical.
+    3. **Synthesized / computed** — no source file exists; the manifest's own
+       "computed" label is the honest answer, not silence.
+
+    Every branch that reads real file content passes it through
+    `hooks.redact_detail` before returning — the one secret-masking pass this
+    codebase has (already relied on for every boundary detail and `.card`
+    line the dashboard mirrors unredacted); this reuses it rather than
+    inventing a second one for prompt text.
+    """
+    name = str(block.get("name") or "")
+    sources = block.get("sources") or []
+    synthesized = bool(sources and sources[0].get("synthesized"))
+
+    from ..hooks import redact_detail
+
+    if name in mounted_blocks:
+        text = redact_detail(mounted_blocks[name])
+        note = "mounted — exact bytes seeded via prompt-mounted.json (#1753)"
+    elif not block.get("present"):
+        return (
+            "absent — in scope for this wake but did not render (missing "
+            "source, empty content, or a config toggle off)."
+        )
+    elif synthesized:
+        return "computed — no source file; generated fresh each wake, not read from disk."
+    else:
+        path_str = str(sources[0].get("path") or "") if sources else ""
+        if not path_str or repo_root is None:
+            return "computed — no source path recorded for this block."
+        try:
+            from .. import bootscore, prompts
+
+            entry = bootscore.ContractEntry(
+                block_key=name,
+                label=str(block.get("label") or ""),
+                owner=str(block.get("owner") or ""),
+                authority=str(block.get("authority") or ""),
+                freshness=block.get("freshness"),
+                location=path_str,
+                present=True,
+            )
+            text = redact_detail(prompts.mountable_block_text(entry, repo_root))
+        except OSError as exc:
+            return f"(could not read {path_str}: {exc})"
+        trim = block.get("trim_kind")
+        note = (
+            f"full source file — wake-time trim ({trim}) means the bytes actually "
+            "kept differ from this; see `cut`/`kept` above"
+            if trim
+            else "full source file, as read from disk just now"
+        )
+
+    raw = text.encode("utf-8")
+    if len(raw) > _BLOCK_TEXT_PREVIEW_MAX:
+        text = raw[:_BLOCK_TEXT_PREVIEW_MAX].decode("utf-8", errors="replace")
+        note += f" · truncated to {_BLOCK_TEXT_PREVIEW_MAX:,} of {len(raw):,} B"
+    return f"[{note}]\n\n{text}"
+
+
+def _wake_block_detail(
+    block: dict[str, Any],
+    *,
+    repo_root: Path | None = None,
+    mounted_blocks: dict[str, str] | None = None,
+) -> str:
+    """Expanded content for one manifest block: accounting, then the text itself.
+
+    The accounting half (store/source/kept/cut/budget/trim) always renders —
+    it is what `wake-manifest.json` measured, independent of whether the
+    bytes are still recoverable. The text half is best-effort: mounted blocks
+    are exact, file-backed blocks are a live re-read (labelled when a
+    wake-time trim makes it inexact), synthesized blocks say so.
     """
     sources = block.get("sources") or []
     if sources and sources[0].get("synthesized"):
@@ -437,15 +564,21 @@ def _wake_block_detail(block: dict[str, Any]) -> str:
     cut = block.get("bytes_cut")
     budget = block.get("budget_bytes")
     trim = block.get("trim_kind")
+    freshness = block.get("freshness")
     lines = [str(block.get("label") or "")] if block.get("label") else []
     lines += [
-        f"store   {store}",
-        f"source  {source_line}",
-        f"kept    {kept:,} B" if isinstance(kept, int) else "kept    —",
-        f"≈tok    {kept // _BYTES_PER_TOKEN:,}" if isinstance(kept, int) else "≈tok    —",
-        f"cut     {cut:,} B" if isinstance(cut, int) else "cut     —",
-        f"budget  {budget:,} B" if isinstance(budget, int) else "budget  —",
-        f"trim    {trim or '—'}",
+        f"owner       {block.get('owner') or '?'}",
+        f"authority   {block.get('authority') or '?'}",
+        f"store       {store}",
+        f"source      {source_line}",
+        f"freshness   {freshness}" if freshness else "freshness   —",
+        f"kept        {kept:,} B" if isinstance(kept, int) else "kept        —",
+        f"≈tok        {kept // _BYTES_PER_TOKEN:,}" if isinstance(kept, int) else "≈tok        —",
+        f"cut         {cut:,} B" if isinstance(cut, int) else "cut         —",
+        f"budget      {budget:,} B" if isinstance(budget, int) else "budget      —",
+        f"trim        {trim or '—'}",
+        "",
+        _wake_block_text(block, repo_root=repo_root, mounted_blocks=mounted_blocks or {}),
     ]
     return "\n".join(lines)
 
@@ -996,7 +1129,14 @@ def build_console_app() -> type:
                     for block in run.wake_manifest:
                         name = str(block.get("name") or "?")
                         node = Collapsible(
-                            Static(_wake_block_detail(block), markup=False),
+                            Static(
+                                _wake_block_detail(
+                                    block,
+                                    repo_root=self.repo_root,
+                                    mounted_blocks=run.mounted_blocks,
+                                ),
+                                markup=False,
+                            ),
                             title=_wake_block_title(block),
                             collapsed=name not in expanded,
                             classes="" if block.get("present") else "wake-absent",

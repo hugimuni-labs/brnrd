@@ -114,15 +114,26 @@ def write_wake_manifest(brr_dir: Path, task: Run, score: Any) -> Path | None:
             {
               "name": "<block_key>",
               "label": "<human label>",
+              "owner": "product",       # ContractEntry.owner — OWNER_* constant
+              "authority": "contract",  # ContractEntry.authority — AUTHORITY_* constant
               "present": true,
               "sources": [{"path": "…", "store": "product-prompt"} | {"synthesized": true}],
               "bytes_kept": 12345,   # ContractEntry.bytes; null when unrendered
               "bytes_cut": 3456,     # file size − bytes_kept; null for synthesized
               "budget_bytes": null,  # not yet tracked per-block — see report
-              "trim_kind": null      # "cut" | "cut-stale" | "stale" | null
+              "trim_kind": null,     # "cut" | "cut-stale" | "stale" | null
+              "freshness": null      # ContractEntry.freshness — ISO mtime/revision, or null
             }
           ]
         }
+
+    ``owner``/``authority``/``freshness`` are copied straight off the same
+    :class:`~brr.bootscore.ContractEntry` this function already reads for
+    everything else — ``boot-score.json`` has always carried them (it
+    serializes the whole entry), but a reader wanting "who owns this block"
+    had to open a second file and re-match rows by ``block_key``. This is the
+    one manifest a wake-topology reader (the operator console's WAKE tab)
+    already opens, so it carries its own answer.
 
     Non-fatal on error; returns the path written or ``None``.
     """
@@ -182,12 +193,15 @@ def write_wake_manifest(brr_dir: Path, task: Run, score: Any) -> Path | None:
         {
             "name": entry.block_key,
             "label": entry.label,
+            "owner": entry.owner,
+            "authority": entry.authority,
             "present": bool(entry.present),
             "sources": _sources(entry),
             "bytes_kept": entry.bytes,
             "bytes_cut": _bytes_cut(entry),
             "budget_bytes": None,
             "trim_kind": _trim_kind(entry),
+            "freshness": entry.freshness,
         }
         for entry in score.contracts
     ]
