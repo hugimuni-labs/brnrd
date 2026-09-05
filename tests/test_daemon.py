@@ -2131,7 +2131,8 @@ def test_drain_outbox_queues_spawn_request(tmp_path):
     assert schedule_mod.load_signals(brr_dir).get("spawn") is not None
 
 
-def test_drain_outbox_spawn_env_optdown_and_host_refusal(tmp_path):
+@pytest.mark.parametrize("requested_env", ["sandbox", "docker", "solitary"])
+def test_drain_outbox_spawn_env_optdown_and_host_refusal(tmp_path, requested_env):
     """`environment:` in spawn frontmatter may opt down, never up (#515).
 
     `solitary`/`docker` are WorktreeEnv subclasses — the child keeps its
@@ -2151,7 +2152,7 @@ def test_drain_outbox_spawn_env_optdown_and_host_refusal(tmp_path):
     )
 
     (outbox / "spawn-solitary.md").write_text(
-        "---\nspawn: true\nshell: claude\nenvironment: solitary\n---\n"
+        f"---\nspawn: true\nshell: claude\nenvironment: {requested_env}\n---\n"
         "isolated probe child\n",
         encoding="utf-8",
     )
@@ -2165,7 +2166,7 @@ def test_drain_outbox_spawn_env_optdown_and_host_refusal(tmp_path):
         if ev.get("spawn_parent_run_id") == "run-parent"
     ]
     assert len(spawned) == 1
-    assert spawned[0]["environment"] == "solitary"
+    assert spawned[0]["environment"] == requested_env
     assert spawned[0]["strand"] is True
 
     # `host` — an opt *up* — is refused, leaves a notice, queues nothing.

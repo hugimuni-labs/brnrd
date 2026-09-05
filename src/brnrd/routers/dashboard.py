@@ -63,7 +63,7 @@ _SCHEDULED_STATUSES = {"scheduled", "deferred", "sleeping"}
 _FAILED_STATUSES = {"failed", "error", "errored", "cancelled", "canceled"}
 _COMPLETED_STATUSES = {"complete", "completed", "done", "responded", "success", "succeeded"}
 _PARKED_STATUSES = {"parked", "respawn", "respawned"}
-_DISPATCH_ENVIRONMENTS = {"worktree", "docker", "solitary"}
+_DISPATCH_ENVIRONMENTS = {"worktree", "sandbox", "docker", "solitary"}
 
 
 def _withheld_lane(repos: list[Repo], lane: str) -> dict[str, Any]:

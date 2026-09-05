@@ -25,6 +25,99 @@ def test_get_env_returns_real_builtins():
     assert envs.get_env("host").name == "host"
     assert envs.get_env("worktree").name == "worktree"
     assert envs.get_env("docker").name == "docker"
+    assert envs.get_env("sandbox").name == "sandbox"
+
+
+class _SbxRecorder:
+    def __init__(self, *, listed: bool, version_match: bool):
+        self.listed = listed
+        self.version_match = version_match
+        self.commands: list[list[str]] = []
+
+    def __call__(self, command, **_kwargs):
+        command = list(command)
+        self.commands.append(command)
+        stdout = ""
+        if command == ["sbx", "ls"] and self.listed:
+            stdout = "NAME STATUS\nbrr-codex running\n"
+        elif command[-3:] == ["sh", "-c", "~/.local/bin/brnrd --version"]:
+            if self.version_match:
+                stdout = f"brnrd {envs.__version__}\n"
+                return envs.subprocess.CompletedProcess(command, 0, stdout, "")
+            return envs.subprocess.CompletedProcess(command, 127, "", "not found")
+        return envs.subprocess.CompletedProcess(command, 0, stdout, "")
+
+
+def _sandbox_prepare(tmp_path, monkeypatch, recorder):
+    monkeypatch.setattr(envs.shutil, "which", lambda name: "/usr/bin/sbx" if name == "sbx" else None)
+    monkeypatch.setattr(envs.subprocess, "run", recorder)
+    _stub_worktree(monkeypatch, tmp_path)
+    task = Run(
+        id="task-sbx", event_id="evt-sbx", body="sandbox run",
+        meta={"runner_shell": "codex"},
+    )
+    response_path = tmp_path / ".brr" / "responses" / "evt-sbx.md"
+    return envs.get_env("sandbox").prepare(
+        task, tmp_path, {}, branch_plan=_plan(), response_path=response_path,
+    )
+
+
+def test_sandbox_prepare_creates_and_installs_when_missing(tmp_path, monkeypatch):
+    recorder = _SbxRecorder(listed=False, version_match=False)
+    ctx = _sandbox_prepare(tmp_path, monkeypatch, recorder)
+
+    assert ctx.name == "sandbox"
+    assert ctx.env_state["sandbox_name"] == "brr-codex"
+    assert ["sbx", "create", "--name", "brr-codex", "codex", str(tmp_path)] in recorder.commands
+    install = next(c for c in recorder.commands if "pip install" in " ".join(c))
+    assert "--user --break-system-packages --quiet" in install[-1]
+
+
+def test_sandbox_prepare_reuses_matching_install(tmp_path, monkeypatch):
+    recorder = _SbxRecorder(listed=True, version_match=True)
+    _sandbox_prepare(tmp_path, monkeypatch, recorder)
+
+    assert not any(c[:2] == ["sbx", "create"] for c in recorder.commands)
+    assert not any("pip install" in " ".join(c) for c in recorder.commands)
+
+
+def test_sandbox_prepare_requires_sbx(tmp_path, monkeypatch):
+    monkeypatch.setattr(envs.shutil, "which", lambda _name: None)
+    task = Run(
+        id="task-sbx", event_id="evt-sbx", body="sandbox run",
+        meta={"runner_shell": "codex"},
+    )
+    with pytest.raises(RuntimeError, match="sbx CLI on PATH"):
+        envs.get_env("sandbox").prepare(
+            task, tmp_path, {}, branch_plan=_plan(), response_path=tmp_path / "response",
+        )
+
+
+def test_sandbox_invoke_wraps_runner_and_pipes_prompt(tmp_path, monkeypatch):
+    captured = {}
+    _stub_docker_runner(monkeypatch, captured=captured)
+    ctx = envs.RunContext(
+        name="sandbox", cwd=tmp_path / "worktree", repo_root=tmp_path,
+        runtime_dir=tmp_path / ".brr", response_path_host=tmp_path / "response",
+        response_path_env=tmp_path / "response",
+        env_state={"sandbox_name": "brr-codex"},
+    )
+    invocation = RunnerInvocation(
+        kind="daemon-run", label="evt-sbx-attempt-1", prompt="hello sandbox",
+        cwd=ctx.cwd, repo_root=tmp_path,
+        env={"BRR_RUN_ID": "run-sbx", "BRR_OUTBOX_DIR": "/tmp/outbox"},
+    )
+
+    result = envs.get_env("sandbox").invoke(ctx, "codex", invocation, {})
+
+    assert captured["input"] == "hello sandbox"
+    assert captured["stdin"] is envs.subprocess.PIPE
+    assert result.returncode == 0
+    assert result.stdout == "agent reply\n"
+    assert captured["command"][:3] == ["sbx", "exec", "-i"]
+    assert captured["command"][3:7] == ["-e", "BRR_OUTBOX_DIR=/tmp/outbox", "-e", "BRR_RUN_ID=run-sbx"]
+    assert captured["command"][7:11] == ["brr-codex", "--", "sh", "-c"]
+    assert captured["command"][-1].startswith(f"cd {ctx.cwd} && export PATH=")
 
 
 def test_get_env_rejects_unknown_backend():

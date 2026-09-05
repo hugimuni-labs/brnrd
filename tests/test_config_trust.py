@@ -50,6 +50,8 @@ def _no_env_home(monkeypatch):
         "trust.untrusted",
         "docker.image",
         "docker_image",
+        "sandbox.stop_after_run",
+        "sandbox_stop_after_run",
         "solitary.image",
         "solitary_image",
         "environment",
