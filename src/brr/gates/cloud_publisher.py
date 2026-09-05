@@ -1301,6 +1301,11 @@ def _runners_snapshot(brr_dir: Path) -> dict[str, Any]:
         docker_reason = "Docker CLI is not on PATH"
     environments = [
         {"name": "worktree", "available": True},
+        {
+            "name": "sandbox",
+            "available": shutil.which("sbx") is not None,
+            "reason": None if shutil.which("sbx") is not None else "sbx CLI is not on PATH",
+        },
         {"name": "docker", "available": docker_reason is None, "reason": docker_reason},
         {"name": "solitary", "available": docker_reason is None, "reason": docker_reason},
     ]

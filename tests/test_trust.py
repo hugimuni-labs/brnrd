@@ -216,6 +216,16 @@ def test_untrusted_env_override_to_worktree_is_honoured():
     assert d.env == "worktree"
 
 
+def test_untrusted_env_override_accepts_sandbox_without_docker_image():
+    d = trust.resolve_decision(
+        {"source": "telegram", "trust_tier": "untrusted"},
+        {"trust.untrusted_env": "sandbox"},
+    )
+    assert not d.refused
+    assert d.env_policy == "sandbox"
+    assert d.env == "sandbox"
+
+
 def test_trust_underscore_config_form_is_accepted():
     d = trust.resolve_decision(
         {"source": "telegram", "trust_tier": "untrusted"},

@@ -2433,7 +2433,7 @@ def test_runners_snapshot_reads_local_catalog(tmp_path, monkeypatch):
     assert snapshot["default"] == "claude-fable"
     assert snapshot["environment_default"] == "worktree"
     assert [row["name"] for row in snapshot["environments"]] == [
-        "worktree", "docker", "solitary",
+        "worktree", "sandbox", "docker", "solitary",
     ]
 
     def _boom(root, overrides=None):
