@@ -3504,7 +3504,7 @@ def test_post_tool_bar_renders_every_segment_when_laden():
     glyph = hooks._emote_glyph("smug_")
     assert glyph  # the fixture is a real handle, or this pins nothing
     assert bar == (
-        f"⌁[{glyph}]: ⏱ 16/120m │ q S57·W50·F27 │ ▷1 │ ⇡2+3 │ ⚒4"
+        f"⌁[{glyph}]: ⏱ 16/120m │ q S57↻8:30pm·W50·F27 │ ▷1 │ ⇡2+3 │ ⚒4"
     )
 
 
@@ -6387,3 +6387,25 @@ def test_boundary_detail_redacts_file_tool_pattern():
     capped = _tool_detail("Grep", {"pattern": long_pattern})
     assert capped is not None
     assert len(capped) <= 210  # _DETAIL_OTHER_MAX + ellipsis
+
+
+def test_quota_chip_carries_the_session_reset_clock_and_low_week_dates():
+    # 2026-09-05: a budget flag at "S21" was written 40 minutes before the
+    # session window rolled, because the stripe showed the percent and not
+    # the clock. The session bucket always carries its reset; a week-scale
+    # bucket only once it is under the low floor, where the date is the plan.
+    resources = {
+        "quota": {
+            "status": "known",
+            "pacing": {"low_floor_pct": 20.0},
+            "summary": (
+                "session 21% left (resets 11pm (Europe/Paris)); "
+                "week 92% left (resets Sep 12 at 1:59pm (Europe/Paris)); "
+                "Fable week 12% left (resets Sep 9, 3pm (Europe/Paris))"
+            ),
+        },
+    }
+    payload = _portal_payload(resources=resources)
+    line = hooks.format_delta(payload, rendered_chips={})
+    assert line is not None
+    assert "q S21↻11pm·W92·F12↻Sep 9, 3pm" in line
