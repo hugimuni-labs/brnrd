@@ -1,4 +1,5 @@
 import os
+import shlex
 import subprocess
 import threading
 
@@ -215,7 +216,7 @@ def test_sandbox_invoke_relocates_the_forged_session_and_tidies_up(tmp_path, mon
     vm_home = tmp_path / "vm-home"
     vm_home.mkdir()
     fragment = backend._session_relocate_script(ctx, str(ctx.cwd), tx.resume_argv(session_id))
-    assert fragment.startswith('mkdir -p "$HOME/')
+    assert fragment.startswith('mkdir -p "$HOME"')
     result = subprocess.run(
         ["sh", "-c", fragment + "true"],
         env={**os.environ, "HOME": str(vm_home)},
@@ -236,11 +237,50 @@ def test_sandbox_invoke_relocates_the_forged_session_and_tidies_up(tmp_path, mon
     backend.invoke(ctx, "claude", invocation, {})
 
     script = captured["command"][-1]
-    assert f'mkdir -p "$HOME/.claude/projects/' in script
-    assert f"cp {staged} " in script
+    assert 'mkdir -p "$HOME"/.claude/projects/' in script
+    assert f"cp {shlex.quote(str(staged))} " in script
     # Best-effort tidy: the host-side staging waypoint is gone once read —
     # only the copy inside the VM (verified above) is what claude reads.
     assert not staged.exists()
+
+
+def test_sandbox_relocate_script_is_safe_against_shell_metacharacters_in_cwd(
+    tmp_path,
+):
+    """Code review (evt-…-l0e1): the cwd slug and session id must never be
+    interpolated *inside* the double-quoted `"$HOME"` text — only
+    ``shlex.quote``d and concatenated as adjacent literals. Proven by
+    actually running the generated fragment with a metacharacter-laden cwd
+    and confirming nothing it names gets executed."""
+    ctx = _session_ctx(tmp_path)
+    backend = envs.get_env("sandbox")
+
+    sentinel_dir = tmp_path / "sentinel"
+    sentinel_dir.mkdir()
+    weird_cwd = str(sentinel_dir) + "/proj $(touch INJECTED) `touch INJECTED2` 'q\" x"
+
+    tell = tmp_path / "k.md"
+    tell.write_text("x\n", encoding="utf-8")
+    score = BootScore(contracts=[_boot_entry("k", str(tell), size=2)])
+    session_id = tx.mount_claude_session(
+        score, block_text={"k": "x\n"}, cwd=weird_cwd,
+        home=backend.session_seed_home(ctx),
+    )
+    fragment = backend._session_relocate_script(ctx, weird_cwd, tx.resume_argv(session_id))
+    assert fragment, "sanity: a session really was staged for this cwd"
+
+    vm_home = tmp_path / "vm-home"
+    vm_home.mkdir()
+    result = subprocess.run(
+        ["sh", "-c", fragment + "true"],
+        cwd=sentinel_dir, env={**os.environ, "HOME": str(vm_home)},
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert not (sentinel_dir / "INJECTED").exists()
+    assert not (sentinel_dir / "INJECTED2").exists()
+    resumed = tx.claude_session_path(weird_cwd, session_id, home=vm_home)
+    assert resumed.exists(), "the relocation must still have worked, injection or not"
 
 
 def test_get_env_rejects_unknown_backend():

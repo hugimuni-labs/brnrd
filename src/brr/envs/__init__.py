@@ -109,12 +109,16 @@ class HostEnv:
         """Where ``transcript.mount_claude_session`` should forge a session.
 
         ``None`` ⇒ the daemon's own default (the real ``$HOME``). Every
-        backend but ``sandbox`` can already see that directory — host and
-        worktree runs share it outright, and ``docker``/``solitary`` bind-mount
-        it verbatim into the container's ``$HOME`` (``_DOCKER_DEFAULT_CRED_PATHS``
-        includes ``.claude``) — so a session forged there is already in view
-        without this hook doing anything. Overridden by :class:`SandboxEnv`,
-        the one backend whose runner never sees the host's HOME at all.
+        backend but ``sandbox`` can already see a session forged there:
+        host/worktree run on it directly; ``docker`` bind-mounts it into the
+        container's ``$HOME`` (``_DOCKER_DEFAULT_CRED_PATHS`` includes
+        ``.claude``); ``solitary``'s ``ro``/``copy`` credential modes do the
+        same (`copy` snapshots ``~/.claude`` in ``invoke()``, *after* this
+        module forges the session, so the copy includes it) — only
+        ``solitary.credentials=none`` sees no ``.claude`` at all, which is
+        that mode's own explicit choice, not a gap. Overridden by
+        :class:`SandboxEnv`, the one backend whose runner never sees the
+        host's HOME at all.
         """
         return None
 
@@ -1393,16 +1397,11 @@ class SandboxEnv(WorktreeEnv):
         """Stage a forged session where the VM can actually reach it.
 
         ``sbx create`` mounts the run's *repo checkout* into the VM at the
-        same absolute path (confirmed: a file written under ``repo_root``
-        appears there unchanged) — it never mounts the account home the
-        daemon's default ``session_seed_home`` (``None`` ⇒ real ``$HOME``)
-        would forge into. The VM's own ``$HOME`` (``/home/agent`` on the
-        image this was verified against) is a private volume with nothing
-        bind-mounted back to the host, so a session written to the host's
-        ``~/.claude`` is invisible inside — the exact failure this closes
-        (missing-session, #the-sandbox-can-find-its-session). Staging under
-        the shared ``.brr`` (passthrough, per above) is what makes the
-        ``invoke``-time relocation below possible at all.
+        same absolute path; it never mounts the account home the default
+        ``session_seed_home`` (``None`` ⇒ real ``$HOME``) would forge into,
+        and the VM's own ``$HOME`` is a private volume with nothing mounted
+        back to the host. Staging under the shared, passthrough ``.brr`` is
+        what makes the ``invoke``-time relocation below possible at all.
         """
         return ctx.runtime_dir / "sandbox-session-seed"
 
@@ -1477,19 +1476,24 @@ class SandboxEnv(WorktreeEnv):
     ) -> str:
         """Shell prefix copying a forged session into the VM's real ``$HOME``.
 
-        ``mount_claude_session`` (via :meth:`session_seed_home`) wrote it under
-        the passthrough ``.brr``, reachable from the host but not where the
-        VM's ``claude --resume`` looks. Empty string when nothing was mounted
-        (prose boot, non-claude Shell) — the common case, and it must add
-        nothing to the script then.
+        Empty string when nothing was mounted — the common case, must add
+        nothing then. Invariant: ``"$HOME"`` is the only unquoted expansion;
+        every other segment (cwd slug, session id) is ``shlex.quote``d and
+        concatenated as an adjacent literal, never interpolated into
+        double-quoted text — a checkout path containing ``$``, backticks, or
+        quotes must not be interpretable by ``sh``.
         """
         staged = self._staged_session_path(ctx, cwd, extra_args)
         if staged is None or not staged.exists():
             return ""
         rel = transcript.claude_session_relpath(cwd, _extract_resume_session_id(extra_args) or "")
+
+        def home_rel(p: Path) -> str:
+            return '"$HOME"' + shlex.quote("/" + str(p))
+
         return (
-            f'mkdir -p "$HOME/{rel.parent}" && '
-            f"cp {shlex.quote(str(staged))} \"$HOME/{rel}\" && "
+            f"mkdir -p {home_rel(rel.parent)} && "
+            f"cp {shlex.quote(str(staged))} {home_rel(rel)} && "
         )
 
     def _cleanup_staged_session(
@@ -1497,12 +1501,10 @@ class SandboxEnv(WorktreeEnv):
     ) -> None:
         """Best-effort: drop the host-side staging copy once it has been read.
 
-        The sandbox is a *reusable* VM (class docstring) reused across many
-        runs, each with its own worktree-derived slug — nothing to collide
-        with — but the staging root lives under the repo's shared ``.brr``,
-        so leaving every run's forged session there accumulates on the host
-        forever. The copy inside the VM (the one ``claude --resume`` actually
-        reads) is untouched; this only tidies the passthrough waypoint.
+        The staging root lives under the repo's shared, non-ephemeral
+        ``.brr`` — without this, every sandboxed run's forged session
+        accumulates there forever. The copy inside the VM (the one ``claude
+        --resume`` actually reads) is untouched.
         """
         staged = self._staged_session_path(ctx, cwd, extra_args)
         if staged is None:
