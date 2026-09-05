@@ -112,6 +112,7 @@ _SECURITY_EXACT_KEYS = frozenset({"runner_cmd", "environment", "env", "default_e
 _SECURITY_PREFIXES = (
     "trust.", "trust_",
     "docker.", "docker_",
+    "sandbox.", "sandbox_",
     "solitary.", "solitary_",
 )
 
