@@ -205,6 +205,7 @@ def _runner_block(
     attestation = (
         "mismatch" if mismatch is True else
         "matched" if mismatch is False else
+        "observed" if observed else
         "pending" if requested and requested != "default" else
         "unverifiable"
     )

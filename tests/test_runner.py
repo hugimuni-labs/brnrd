@@ -2655,6 +2655,33 @@ class TestCodexThreadCorrelation:
     def _last_message_path(cmd: list[str]) -> str:
         return cmd[cmd.index("-o") + 1]
 
+    def test_completed_codex_core_comes_from_its_own_rollout(self, tmp_path, monkeypatch):
+        thread = "a0d0f1e9-8aeb-4f27-8e3c-f72822288984"
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        (sessions / f"rollout-2026-09-05T17-45-34-{thread}.jsonl").write_text(
+            '{"type":"turn_context","payload":{"model":"gpt-test-observed"}}\n'
+        )
+
+        def fake_popen(cmd, **kwargs):
+            with open(self._last_message_path(cmd), "w") as handle:
+                handle.write("reply")
+            return _fake_proc(
+                kwargs, out=json.dumps({"type": "thread.started", "thread_id": thread}),
+            )
+
+        monkeypatch.setattr(runner_mod.subprocess, "Popen", fake_popen)
+        result = invoke_runner(self._CODEX, RunnerInvocation(
+            kind="daemon-run", label="core-proof", prompt="hi",
+            cwd=tmp_path, repo_root=tmp_path, selected_runner=self._CODEX,
+            env={"CODEX_HOME": str(tmp_path)}, expected_core="gpt-test-requested",
+        ), cfg={})
+
+        assert result.observed_core == "gpt-test-observed"
+        assert result.core_mismatch is True
+        assert result.stdout == "reply\n"
+        assert "Core attestation failed" in result.stderr
+
     def test_codex_invocation_gains_json_and_output_last_message_flags(
         self, tmp_path, monkeypatch,
     ):

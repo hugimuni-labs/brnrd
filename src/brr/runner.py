@@ -2611,6 +2611,12 @@ def invoke_runner(
     stdout, observed_core, api_error = _process_runner_stdout(
         selected_name, stdout, invocation.env,
     )
+    if codex_thread_id:
+        from . import codex_status
+
+        observed_core = codex_status.load_model(
+            invocation.env, thread_id=codex_thread_id,
+        )
     if api_error and returncode == 0:
         # rc-0 blindness (design-the-core-that-knows-its-shell.md): the
         # Shell itself exited clean while its own JSON envelope says the
