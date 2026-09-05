@@ -1122,7 +1122,7 @@ def _fmt_kb(size: int) -> str:
 
 
 def _wake_census(ctx: HookContext) -> str | None:
-    """`wake 115.7 KB · top work-surface 24.7 KB · oldest 2026-07-25`.
+    """`wake 115.7 KB · top work-surface 24.7 KB · surface 50.0 KB · health 27.8 KB · oldest 2026-07-25`.
 
     ``None`` on any absence — no score armed, unreadable file, a score with
     no `contracts` (an older daemon), or nothing measured. Same three-state
@@ -1134,6 +1134,20 @@ def _wake_census(ctx: HookContext) -> str | None:
     `oldest_item` renders the first two. The alternative — one absent field
     silencing the line — would hide the census exactly when the score is
     partial, which is when it is most worth reading.
+
+    The two ledger-category segments (`surface 50.0 KB`, `health 27.8 KB`)
+    are :func:`brr.bootscore.top_ledger_categories` off this same
+    `contracts` list — the identical grouping `brnrd prompts show`'s own
+    "cost ledger:" table prints, read here rather than re-measured, so this
+    line never disagrees with what that command would say about the same
+    file. Absent when no entry carries a usable `authority`.
+
+    Past :data:`brr.bootscore.WAKE_WARN_BYTES`, the line ends with
+    `⚠ <label>` naming the same block `top` already did — a wake this big
+    is worth a name to point at even though the number was already on the
+    line. Same constant the run-card's own boot line (`prompts.py`'s
+    `_prior_run_boot_line`) checks, so the two faces never disagree about
+    whether a given wake counts as big.
     """
     score = _read_json(ctx.boot_score_path)
     contracts = score.get("contracts")
@@ -1161,6 +1175,11 @@ def _wake_census(ctx: HookContext) -> str | None:
     label = str(top.get("block_key") or top.get("label") or "?").strip() or "?"
     parts.append(f"top {label} {_fmt_kb(top['bytes'])}")
 
+    from . import bootscore
+
+    for authority, size in bootscore.top_ledger_categories(contracts, n=2):
+        parts.append(f"{authority} {_fmt_kb(size)}")
+
     # ISO-shaped strings, so lexical order is chronological order.
     oldest = min(
         (
@@ -1173,7 +1192,11 @@ def _wake_census(ctx: HookContext) -> str | None:
     )
     if oldest:
         parts.append(f"oldest {oldest[:10]}")
-    return " · ".join(parts)
+
+    line = " · ".join(parts)
+    if isinstance(total, int) and total > bootscore.WAKE_WARN_BYTES:
+        line += f" ⚠ {label}"
+    return line
 
 
 # ── Injection rendering (portal-state → compact delta) ───────────────────
