@@ -6,6 +6,7 @@ import {
 	type QuotaWindow
 } from './quota.ts';
 import { liveSticky, type RunnerProfile, type RunnerSticky, type WakeRequest } from './runners.ts';
+import type { LiveRun } from './liveRuns.ts';
 
 export type RunnerBlockKind = 'requested' | 'sticky' | 'default';
 
@@ -62,8 +63,9 @@ export const DIAL_WEDGE_RADIUS = 2.75;
 const DIAL_CIRCUMFERENCE = 2 * Math.PI * DIAL_WEDGE_RADIUS;
 
 export interface SlotChip {
-	/** `1/4 slots` — active over configured ceiling; `1/? slots` when the
-	 *  daemon published no ceiling (a fact worth a character, not a guess). */
+	/** `1/4 slots` when a daemon still publishes a ceiling; `3 strands` (no
+	 *  ratio at all) once it doesn't — a fact worth a different shape, not a
+	 *  `?` standing in for a number that no longer exists. */
 	label: string;
 	/** Quota-level word for the headroom left, or null while the reading is
 	 *  merely a configured ceiling (utilization < 80%) — neutral chrome, the
@@ -75,12 +77,32 @@ export interface SlotChip {
 /** The spawn-slot capacity chip (#972 machine round: LIMITS stops being a
  * section). Same reading the section made — headroom, contention at ≥80%
  * utilization — compressed to a chip beside fuel; the raw config key demotes
- * from caption to tooltip. */
+ * from caption to tooltip.
+ *
+ * `spawn.max_concurrent` is gone (#1786 — admission is a quota-floor decision
+ * made fresh per dispatch now, never a configured width). Every *current*
+ * daemon's publish (`cloud_publisher.py`'s note above `_dispatch_run_stops`)
+ * stopped sending this key at all, so `maxSpawns` is `null` on every live
+ * report from here on — not an occasional gap. Rendering `N/? slots` against
+ * a ceiling that can never arrive again was a permanent unanswered question
+ * sitting where a reading used to be; the only real fact left is how many
+ * strands are actually running, so that's what renders below.
+ *
+ * The `maxSpawns`-present branch stays, but only for an old, pre-#1786 daemon
+ * binary still emitting a real number from local config — **backward**
+ * compatibility, not a step toward anything upcoming. A future `{floor,
+ * queued}` server slice is a different shape (a quota-level word plus a
+ * queued count, not a ratio) and would need its own field and its own shape
+ * here, never this one repurposed. */
 export function slotChip(activeSpawns: number, maxSpawns: number | null): SlotChip {
-	const title = 'spawn slots — concurrent strand-stack children (spawn.max_concurrent)';
 	if (maxSpawns === null || maxSpawns <= 0) {
-		return { label: `${activeSpawns}/? slots`, level: null, title };
+		return {
+			label: `${activeSpawns} strand${activeSpawns === 1 ? '' : 's'}`,
+			level: null,
+			title: 'concurrent strand-stack children — no configured ceiling to measure against'
+		};
 	}
+	const title = 'spawn slots — concurrent strand-stack children (spawn.max_concurrent)';
 	const headroomPct = Math.max(0, ((maxSpawns - activeSpawns) / maxSpawns) * 100);
 	const contention = activeSpawns / maxSpawns >= 0.8;
 	return {
@@ -195,6 +217,38 @@ export function stickyCountdown(
 	const expires = Date.parse(sticky.expires_at);
 	if (Number.isNaN(expires)) return null;
 	return shortDelta((expires - nowMs) / 1000);
+}
+
+/**
+ * What a sticky's own live run is actually running, next to what its pin
+ * merely requested. The sticky record (`#932`) only ever names a
+ * *requested* profile — a tapped claim, resolved before any run using it
+ * has necessarily started — so "riding this thread" and "and it's running
+ * Astra" were never the same fact on this client. Joins by conversation
+ * key (`LiveRun.stream` — the same conversation the sticky's own
+ * `conversation_key`/`correspondent_key` names) rather than by profile
+ * name, because the observed model is a fact about *the live run*, not
+ * about the catalog row it happened to be dispatched from.
+ *
+ * Never a guess: absent whenever no matching live run has reported one yet
+ * (`LiveRunRunner.model_observed` unset), same as every other observed
+ * field on this client.
+ */
+export function stickyObservedModel(
+	liveRuns: LiveRun[] | null | undefined,
+	sticky: RunnerSticky | null | undefined
+): string | null {
+	const key = sticky?.conversation_key || sticky?.correspondent_key;
+	if (!liveRuns || !key) return null;
+	const matches = liveRuns.filter(
+		(run) => run.stream === key && Boolean(run.runner?.model_observed)
+	);
+	if (matches.length === 0) return null;
+	// Several live entries can share one stream only transiently (a
+	// closeout overlapping the next wake); the most recently seen one is
+	// the live truth.
+	matches.sort((a, b) => (b.last_seen ?? '').localeCompare(a.last_seen ?? ''));
+	return matches[0].runner.model_observed ?? null;
 }
 
 function compactWindowName(window: QuotaWindow): { owner: string | null; window: string } {

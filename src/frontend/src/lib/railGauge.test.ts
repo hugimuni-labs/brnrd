@@ -9,10 +9,12 @@ import {
 	quotaWindowCountLabel,
 	runnerBlocks,
 	slotChip,
-	stickyCountdown
+	stickyCountdown,
+	stickyObservedModel
 } from './railGauge.ts';
 import type { QuotaShell } from './quota.ts';
 import type { RunnerProfile, RunnerSticky, WakeRequest } from './runners.ts';
+import type { LiveRun } from './liveRuns.ts';
 
 const profiles: RunnerProfile[] = [
 	{ name: 'codex', shell: 'codex', model: 'default', selected: true },
@@ -113,6 +115,76 @@ test('stickyCountdown speaks the fuel dial reset grammar', () => {
 	assert.equal(stickyCountdown(sticky, duringSticky), '47m');
 	assert.equal(stickyCountdown(sticky, Date.parse('2026-07-18T12:10:00Z')), '1h50m');
 	assert.equal(stickyCountdown({ ...sticky, expires_at: null }, duringSticky), null);
+});
+
+// ── stickyObservedModel — requested (the sticky's pin) vs observed (what a
+// live run's own telemetry actually reports), joined by conversation key ──
+
+function liveRun(over: Partial<LiveRun>): LiveRun {
+	return {
+		id: 'p1',
+		kind: 'daemon',
+		stream: 'telegram:user-id:1',
+		label: '',
+		name: 'a run',
+		run_id: 'run-1',
+		repo_label: 'org/repo',
+		started_at: '2026-07-18T12:00:00Z',
+		last_seen: '2026-07-18T13:00:00Z',
+		parent_run_id: null,
+		is_subspawn: false,
+		runner: {},
+		phase: 'running',
+		card_text: null,
+		card_updated_at: null,
+		...over
+	};
+}
+
+test('stickyObservedModel joins by conversation key, not by profile name', () => {
+	const runs = [
+		liveRun({ stream: sticky.correspondent_key!, runner: { model_observed: 'astra' } })
+	];
+	assert.equal(stickyObservedModel(runs, sticky), 'astra');
+});
+
+test('stickyObservedModel is null, never guessed, when nothing has been observed yet', () => {
+	assert.equal(stickyObservedModel(null, sticky), null);
+	assert.equal(stickyObservedModel([], sticky), null);
+	assert.equal(stickyObservedModel([liveRun({ stream: sticky.correspondent_key! })], sticky), null);
+	assert.equal(
+		stickyObservedModel(
+			[liveRun({ stream: 'telegram:someone-else:9', runner: { model_observed: 'astra' } })],
+			sticky
+		),
+		null,
+		'a live run on a different stream never lends its observed model to this sticky'
+	);
+	assert.equal(
+		stickyObservedModel(
+			[liveRun({ stream: sticky.correspondent_key!, runner: { model_observed: 'astra' } })],
+			null
+		),
+		null
+	);
+});
+
+test('stickyObservedModel prefers the most recently seen match', () => {
+	const runs = [
+		liveRun({
+			id: 'older',
+			stream: sticky.correspondent_key!,
+			last_seen: '2026-07-18T12:30:00Z',
+			runner: { model_observed: 'stale-echo' }
+		}),
+		liveRun({
+			id: 'newer',
+			stream: sticky.correspondent_key!,
+			last_seen: '2026-07-18T13:00:00Z',
+			runner: { model_observed: 'astra' }
+		})
+	];
+	assert.equal(stickyObservedModel(runs, sticky), 'astra');
 });
 
 test('fuel rows derive compact shell and model labels from every reported window', () => {
@@ -395,10 +467,17 @@ test('slotChip speaks the quota vocabulary at contention', () => {
 	assert.equal(slotChip(3, 4).level, null);
 });
 
-test('slotChip renders an unpublished ceiling as a question, not a guess', () => {
-	assert.equal(slotChip(2, null).label, '2/? slots');
+test('slotChip drops the ratio entirely once no ceiling is published — #1786 removed it for good', () => {
+	// `spawn.max_concurrent` is gone; `maxSpawns` is `null` on every live
+	// report now, not occasionally. Rendering `2/? slots` forever would be a
+	// permanent unanswered question standing in for a reading — the real
+	// fact left is the plain count.
+	assert.equal(slotChip(2, null).label, '2 strands');
 	assert.equal(slotChip(2, null).level, null);
-	assert.equal(slotChip(2, 0).label, '2/? slots');
+	assert.doesNotMatch(slotChip(2, null).title, /spawn\.max_concurrent/);
+	assert.equal(slotChip(2, 0).label, '2 strands');
+	assert.equal(slotChip(1, null).label, '1 strand', 'singular, not "1 strands"');
+	assert.equal(slotChip(0, null).label, '0 strands');
 });
 
 // THE PICKER YOU CANNOT REACH (2026-08-02) and `railIsSlim`, its fix, are
