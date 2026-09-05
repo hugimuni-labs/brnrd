@@ -742,6 +742,61 @@ def test_available_runner_catalog_marks_selected_generated_core(tmp_path, monkey
     assert "cmd" not in mini
 
 
+def test_available_runner_catalog_sees_a_disk_feed_rewrite_without_cache_clear(
+    tmp_path, monkeypatch
+):
+    """The public caller (not just ``probe_shell_models``) reflects a codex
+    feed rewrite live, with the subprocess probe still cached.
+
+    Regression for the same bug as
+    ``test_probe_shell_models_sees_a_disk_feed_rewrite_without_cache_clear``
+    in ``test_runner_cores.py``, but exercised through
+    ``available_runner_catalog`` — the actual entry point the daemon's
+    catalog projection calls, one merge layer past ``probe_shell_models``.
+    """
+    import json as _json
+
+    from brr import runner_cores
+
+    (tmp_path / ".brr").mkdir()
+    cache_path = tmp_path / "models_cache.json"
+    cache_path.write_text(_json.dumps({"models": [{"slug": "gpt-9.9-nova"}]}))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        runner_mod, "_profiles_cache", {"codex": {"cmd": "codex exec", "hooks": "codex"}}
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil, "which", lambda name: "/usr/bin/codex" if name == "codex" else None
+    )
+    monkeypatch.setattr(
+        runner_cores.shutil, "which", lambda name: "/usr/bin/codex" if name == "codex" else None
+    )
+    calls = {"n": 0}
+
+    class _Proc:
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(
+        runner_cores.subprocess, "run", lambda *a, **k: (calls.__setitem__("n", calls["n"] + 1), _Proc())[1]
+    )
+    runner_cores.probe_shell_models.cache_clear()
+
+    before = runner_mod.available_runner_catalog(tmp_path)
+    before_models = {row.get("model") for row in before if row.get("shell") == "codex"}
+    assert "gpt-9.9-astra" not in before_models
+    calls_after_before = calls["n"]
+
+    cache_path.write_text(
+        _json.dumps({"models": [{"slug": "gpt-9.9-nova"}, {"slug": "gpt-9.9-astra"}]})
+    )
+
+    after = runner_mod.available_runner_catalog(tmp_path)
+    after_models = {row.get("model") for row in after if row.get("shell") == "codex"}
+    assert "gpt-9.9-astra" in after_models
+    assert calls["n"] == calls_after_before
+
+
 def test_available_runner_catalog_excludes_auth_variant_profiles(
     tmp_path, monkeypatch,
 ):
