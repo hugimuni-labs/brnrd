@@ -125,6 +125,27 @@ class TestPersistence:
         assert loaded.meta["plain_int"] == 7
         assert loaded.meta["plain_bool"] is True
 
+    def test_non_allowlisted_json_shaped_meta_value_stays_a_string(self, tmp_path):
+        """daemon.py's ``run_state_digest`` is *deliberately* a JSON string,
+        compared by ``!=`` against a freshly dumped one on every call
+        (design-the-stale-card-timer). Decoding it into a dict on reload
+        would make every reload compare unequal to itself and read as
+        permanent movement — the exact bug that digest exists to prevent,
+        reintroduced one layer down. Only keys in ``_JSON_META_KEYS``
+        (``resource_hold``) may decode; everything else round-trips as the
+        plain string it always was, JSON-shaped or not."""
+        run = Run(
+            id="run-digest", event_id="evt-digest", body="x",
+            meta={"run_state_digest": '{"scm": null, "produce": null}'},
+        )
+        run.save(tmp_path)
+
+        loaded = Run.from_file(tmp_path / "run-digest" / "run.md")
+
+        assert loaded is not None
+        assert loaded.meta["run_state_digest"] == '{"scm": null, "produce": null}'
+        assert isinstance(loaded.meta["run_state_digest"], str)
+
     def test_malformed_json_looking_meta_value_degrades_to_the_raw_string(
         self, tmp_path,
     ):

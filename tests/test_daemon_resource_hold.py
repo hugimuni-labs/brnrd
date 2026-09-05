@@ -144,6 +144,137 @@ class TestArmOnConfidentUsageLimitError:
         assert persisted.status == "held"
         assert persisted.meta["resource_hold"]["reason"] == resource_hold.REASON_QUOTA_EXHAUSTED
 
+    def test_siblings_pending_at_arm_time_are_accumulated_not_lost(
+        self, tmp_path, monkeypatch,
+    ):
+        """Parent review, defect A (severe): a sibling event already
+        pending when the hold arms is deferred by
+        `_defer_pending_siblings_after_failure`, but until this fix its id
+        never reached `accumulated_event_ids` — only events arriving
+        *after* arming flowed through `_handle_resource_held_events`'s own
+        accumulation. In the real incident three events were pending when
+        the seat died; on resume they would have stayed deferred for the
+        full five-year horizon. Drives the real `_run_worker_and_finalize`
+        with two siblings already pending, then a real resume through
+        `_handle_resource_held_events`, and asserts both come all the way
+        back to ordinary pending eligibility."""
+        write_repo_scaffold(tmp_path)
+        event = make_event(tmp_path, eid="evt-quota-lead")
+        sibling_1 = make_event(tmp_path, eid="evt-sibling-1", body="already pending 1")
+        sibling_2 = make_event(tmp_path, eid="evt-sibling-2", body="already pending 2")
+        _stub_env_isolated(monkeypatch, tmp_path)
+        _wire_common(monkeypatch)
+        base_env = envs.get_env("worktree")
+
+        def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+            return _usage_limit_result(invocation, runner_name)
+
+        monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+        task = daemon._run_worker_and_finalize(
+            event, tmp_path, tmp_path / ".brr" / "responses", {}, 3,
+        )
+        assert task.status == resource_hold.RUN_STATUS
+
+        inbox_dir = tmp_path / ".brr" / "inbox"
+        persisted = Run.from_file(tmp_path / ".brr" / "runs" / task.id / "run.md")
+        accumulated = persisted.meta["resource_hold"]["accumulated_event_ids"]
+        assert set(accumulated) == {"evt-sibling-1", "evt-sibling-2"}
+        for sib_id in ("evt-sibling-1", "evt-sibling-2"):
+            reread = protocol._read_event(inbox_dir / f"{sib_id}.md")
+            assert reread.get("defer_reason") == "resource_hold"
+            assert reread.get("defer_until") is not None
+
+        # A correspondent message now resumes the hold — both siblings
+        # must come all the way back to ordinary pending eligibility, not
+        # stay parked for the remaining ~5 years.
+        resume_event = make_event(tmp_path, eid="evt-resume", source="telegram")
+        resume_target = daemon._DispatchTarget(
+            event=resume_event, repo_root=tmp_path, inbox_dir=inbox_dir,
+            responses_dir=tmp_path / ".brr" / "responses", repo_label="home",
+        )
+        daemon._handle_resource_held_events([resume_target], None)
+
+        for sib_id in ("evt-sibling-1", "evt-sibling-2"):
+            reread = protocol._read_event(inbox_dir / f"{sib_id}.md")
+            assert reread.get("defer_until") is None
+            assert reread.get("defer_reason") is None
+            assert reread.get("resume_native_session_id") is None  # no native session here
+
+    def test_resume_only_releases_a_matching_conversation_key(
+        self, tmp_path, monkeypatch,
+    ):
+        """Parent review, defect B (medium): a correspondent event from a
+        *different* conversation than the one the hold belongs to must not
+        release it or steal its native-resume stamp — "the slot is free,
+        the quota is theirs to risk"."""
+        write_repo_scaffold(tmp_path)
+        event = make_event(
+            tmp_path, eid="evt-quota-conv", conversation_key="telegram:1:",
+        )
+        # Run.from_event copies conversation_key from the event dict.
+        event_path = tmp_path / ".brr" / "inbox" / "evt-quota-conv.md"
+        event_path.write_text(
+            "---\nid: evt-quota-conv\nstatus: pending\nsource: telegram\n"
+            "trust_tier: owner\nconversation_key: telegram:1:\n---\nraw event body\n",
+            encoding="utf-8",
+        )
+        event = protocol._read_event(event_path)
+        _stub_env_isolated(monkeypatch, tmp_path)
+        _wire_common(monkeypatch)
+        base_env = envs.get_env("worktree")
+
+        def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+            return _usage_limit_result(invocation, runner_name)
+
+        monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+        task = daemon._run_worker_and_finalize(
+            event, tmp_path, tmp_path / ".brr" / "responses", {}, 3,
+        )
+        assert task.status == resource_hold.RUN_STATUS
+        assert task.conversation_key == "telegram:1:"
+
+        inbox_dir = tmp_path / ".brr" / "inbox"
+        unrelated_event = make_event(
+            tmp_path, eid="evt-github-unrelated", source="github",
+            conversation_key="github:issue:42:",
+        )
+        unrelated_path = inbox_dir / "evt-github-unrelated.md"
+        unrelated_path.write_text(
+            "---\nid: evt-github-unrelated\nstatus: pending\nsource: github\n"
+            "conversation_key: github:issue:42:\n---\nunrelated\n",
+            encoding="utf-8",
+        )
+        unrelated_event = protocol._read_event(unrelated_path)
+        target = daemon._DispatchTarget(
+            event=unrelated_event, repo_root=tmp_path, inbox_dir=inbox_dir,
+            responses_dir=tmp_path / ".brr" / "responses", repo_label="home",
+        )
+
+        survivors = daemon._handle_resource_held_events([target], None)
+
+        assert len(survivors) == 1
+        assert "resume_native_session_id" not in survivors[0].event
+        persisted = Run.from_file(tmp_path / ".brr" / "runs" / task.id / "run.md")
+        assert persisted.meta["resource_hold"]["released"] is False
+
+        # Now the matching-conversation message: this one does release it.
+        matching_path = inbox_dir / "evt-telegram-followup.md"
+        matching_path.write_text(
+            "---\nid: evt-telegram-followup\nstatus: pending\nsource: telegram\n"
+            "conversation_key: telegram:1:\n---\nfollow up\n",
+            encoding="utf-8",
+        )
+        matching_event = protocol._read_event(matching_path)
+        matching_target = daemon._DispatchTarget(
+            event=matching_event, repo_root=tmp_path, inbox_dir=inbox_dir,
+            responses_dir=tmp_path / ".brr" / "responses", repo_label="home",
+        )
+        daemon._handle_resource_held_events([matching_target], None)
+        persisted = Run.from_file(tmp_path / ".brr" / "runs" / task.id / "run.md")
+        assert persisted.meta["resource_hold"]["released"] is True
+
     def test_strand_run_falls_through_to_ordinary_failure(self, tmp_path, monkeypatch):
         """A strand's own allowance/ask-park contract owns its lifecycle —
         the automatic hold detection must never fire for one."""
