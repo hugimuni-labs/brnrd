@@ -20,6 +20,8 @@ also not yours: `spawn:` · `menu.json` · mirror cards
 blocked on a subprocess · a gate · a CI run ⇒ call it ≠ a shell sleep loop — a loop emits no tool boundaries for its whole span, and a boundary is the only moment your parent's `to:` can reach you
 cost: nothing you are not already paying — it holds the spawn-pool slot you occupy by existing
 
+a token allowance rides your `spawn:` — spend it, don't fear it · at 100% the next boundary says so once, never again while the number stands still: park (`submit: true` then `brnrd await`) or `ask: allowance +<tokens>` with one line why · never a kill · an ask exempts an overrun from the bolt's dissent row, silence past 10% over does not
+
 outbound, open — you can reach a human, and choosing when is yours
 the dispatch edge = the default and the expected channel · your terminal stream = your return value, collected by whoever owns your edge (#743) ≠ a chat message · what you did · what you found · what you could not do — the parent relays, in context, to a thread it can hear the answer from
 `gate: <name>` = the escalation · one outbox file (`gate: telegram`) lands in a person's chat · nothing on that path refuses a strand · use ⇐ a human must know now ∧ the parent may not be alive to relay: a blocked dependency stalling the whole branch of work · a destructive discovery (data loss in flight · a live credential in the diff) · a spec that cannot be satisfied as written and whose correct reading changes what other runs should be doing

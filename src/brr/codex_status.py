@@ -520,6 +520,51 @@ def load_levels(
     return levels
 
 
+def total_tokens_used(
+    env: dict[str, str] | None = None, *, thread_id: str | None = None,
+) -> int | None:
+    """The rollout's own cumulative token counter for one Codex thread.
+
+    Sibling to :func:`load_levels`, same rollout resolution (exact
+    *thread_id* correlation when given and safe, else the newest-mtime
+    fallback) — but reads ``info.total_token_usage.total_tokens`` from the
+    last ``token_count`` event instead of ``last_token_usage``. That field is
+    the *last request's* size (right for context-window occupancy, wrong for
+    a running spend total); ``total_token_usage`` is genuinely cumulative for
+    the whole thread and was simply never read before this (see
+    :mod:`brr.allowance`, design-the-allowance.md slice 1).
+
+    ``None`` on no rollout, no ``token_count`` event, or a payload carrying
+    no ``total_token_usage`` — never raises, never a fabricated zero.
+    """
+    root = sessions_root(env)
+    if not root.is_dir():
+        return None
+    if thread_id is None:
+        rollout = _latest_rollout_fallback(root)
+    else:
+        safe_id = _safe_thread_id(thread_id)
+        if safe_id is None:
+            return None
+        rollout = _rollout_for_thread(root, safe_id)
+    if rollout is None:
+        return None
+    found = _last_token_count(rollout)
+    if found is None:
+        return None
+    payload, _timestamp = found
+    info = payload.get("info")
+    if not isinstance(info, dict):
+        return None
+    total = info.get("total_token_usage")
+    if not isinstance(total, dict):
+        return None
+    value = total.get("total_tokens")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return int(value)
+
+
 def collected_slots(runner_name: str | None) -> Iterable[str]:
     """Which level slots this Shell has a wired collector for (per-slot honesty)."""
     return COLLECTED_SLOTS if supported(runner_name) else frozenset()
