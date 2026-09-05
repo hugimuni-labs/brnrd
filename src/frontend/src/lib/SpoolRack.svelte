@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { SvelteSet } from 'svelte/reactivity';
 	import { liveSticky, type RunnerProfile, type RunnerSticky, type WakeRequest } from './runners';
-	import { stickyCountdown } from './railGauge';
+	import { stickyCountdown, stickyObservedModel } from './railGauge';
 	import { deadShellReason, isTappable, offReasonOf, groupByShell } from './spoolRack';
 	import { quotaLevel } from './quota';
 	import type { FuelMeter } from './fuelProviders';
+	import type { LiveRun } from './liveRuns';
 	import { STATUS_BURNING, STATUS_COOLING, STATUS_SPENT, STATUS_UNKNOWN } from './statusPalette';
 	import {
 		IDLE_ROW,
@@ -73,6 +74,12 @@
 		 *  place the number changes a decision: it constrains that core, not
 		 *  the shell, so it never belonged on the shell's own fuel bar. */
 		coreAllowances?: Map<string, FuelMeter>;
+		/** The account's live runs, for the sticky row's observed-vs-requested
+		 *  line — see `stickyObservedModel`'s own doc for the join. `null`
+		 *  (loading, or the caller doesn't have it yet) renders the sticky
+		 *  badge exactly as before, no observed text; never a guess in its
+		 *  place. */
+		liveRuns?: LiveRun[] | null;
 	}
 
 	let {
@@ -85,7 +92,8 @@
 		onTap,
 		onReleaseSticky,
 		shell,
-		coreAllowances = new Map<string, FuelMeter>()
+		coreAllowances = new Map<string, FuelMeter>(),
+		liveRuns = null
 	}: Props = $props();
 
 	const LEVEL_COLOR: Record<string, string> = {
@@ -104,6 +112,7 @@
 	}
 
 	let stickyLive = $derived(liveSticky(sticky, now));
+	let observedModel = $derived(stickyObservedModel(liveRuns, stickyLive));
 	let groups = $derived(groupByShell(profiles));
 
 	function isPinned(profile: RunnerProfile): boolean {
@@ -273,7 +282,9 @@
 								>
 							{/if}
 						</button>
-						<div class="flex items-baseline gap-3 px-2 py-1.5 font-mono text-[11px]">
+						<div
+							class="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-2 py-1.5 font-mono text-[11px]"
+						>
 							{#if isSticky(profile)}
 								<!-- #932: the claimed tap riding its conversation — a live state,
 									     not a selection, so it wears its own recipe rather than the
@@ -289,6 +300,18 @@
 									riding {stickyThreadLabel()}
 									{#if stickyCountdown(stickyLive, now)}
 										· {stickyCountdown(stickyLive, now)}
+									{/if}
+									{#if observedModel}
+										<!-- The one place THIS session's actual model differs from
+										     the row's own declared class/pin — a live run's own
+										     telemetry, not a guess (`stickyObservedModel`'s doc).
+										     Inline on the badge that already means "current session",
+										     never a new panel. -->
+										<span
+											class="text-stone-100 normal-case"
+											title={`this session's own telemetry actually reports ${observedModel} — the row above names what was requested, not necessarily what's running`}
+											>· observed {observedModel}</span
+										>
 									{/if}
 									{#if onReleaseSticky}
 										<span
@@ -325,6 +348,14 @@
 								>
 							{:else if !tappable}
 								<span class="text-ink-mute normal-case">{reason?.text}</span>
+							{:else}
+								<!-- THIS session vs NEXT wake, on screen — not only in a
+								     hover `title`. A badged row (default/requested/sticky)
+								     already says what it is; a plain idle row said nothing
+								     until hovered, and a touch screen never hovers. A tap
+								     here only ever parks a one-shot next wake — it never
+								     touches whatever is running right now. -->
+								<span class="text-ink-quiet normal-case">tap → next wake</span>
 							{/if}
 							{#if profile.class || profile.cost_rank !== null || profile.quota_source || profile.capability_score !== null}
 								<button

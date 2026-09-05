@@ -1715,6 +1715,7 @@
 				group={openProviderGroup}
 				runners={runnersData}
 				{now}
+				{liveRuns}
 				onTap={tapOpenProviderRunner}
 				onReleaseSticky={releaseStickyRunner}
 			/>

@@ -4786,6 +4786,21 @@ def _run_worker(
                 "model_observed": result.observed_core,
                 "core_mismatch": result.core_mismatch,
             }
+            # Presence only ever heard the *requested* core, at registration
+            # time (before the runner ran, let alone reported what it
+            # actually used). This is the one point where the observed fact
+            # exists and the entry is (usually) still live — best-effort,
+            # same as registration: a dashboard reading presence mid-run
+            # should be able to tell "riding this thread" apart from "and
+            # it's actually running X", not just repeat the pin.
+            if presence_id:
+                try:
+                    presence.heartbeat(
+                        brr_dir, presence_id,
+                        runner_model_observed=result.observed_core,
+                    )
+                except OSError:
+                    pass
         if result.codex_thread_id:
             # Per-run state, not a global (issue #195 multi-run safety): this
             # attempt's proven thread id, stashed on the task so the

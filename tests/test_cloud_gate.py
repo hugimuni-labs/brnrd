@@ -1986,6 +1986,42 @@ def test_live_runs_snapshot_carries_selected_shell_and_core(tmp_path):
     assert rows["run-without-runner"]["runner"] == {}
 
 
+def test_live_runs_snapshot_carries_observed_core_separately_from_requested(tmp_path):
+    """Requested vs observed is a real gap, not a facet-only concern: a live
+    run's `runner` dict must carry both, through the actual publish path —
+    `presence.register` (requested, at dispatch) then `presence.heartbeat`
+    (observed, once the runner invocation reports it), then
+    `cloud._live_runs_snapshot` — because a fixture that only exercises
+    `_runner_payload()` or `facets.py` in isolation cannot catch a merge that
+    drops the field between the two (the exact shape of defect this pass
+    was asked to guard against)."""
+    from brr import presence
+
+    brr_dir = tmp_path / ".brr"
+    entry = presence.register(
+        brr_dir, kind="daemon", stream="telegram:1:", run_id="run-riding",
+        repo_label="Gurio/brr", pid=os.getpid(),
+        runner_name="codex", runner_shell="codex",
+        runner_core="default", runner_class="balanced",
+    )
+    # Before the runner has reported anything observed, the field is simply
+    # absent — never a guessed value standing in for "unknown yet".
+    before = {row["run_id"]: row for row in cloud._live_runs_snapshot(brr_dir)}
+    assert "model_observed" not in before["run-riding"]["runner"]
+
+    assert presence.heartbeat(
+        brr_dir, entry["id"], runner_model_observed="astra",
+    ) is True
+    after = {row["run_id"]: row for row in cloud._live_runs_snapshot(brr_dir)}
+    assert after["run-riding"]["runner"] == {
+        "name": "codex", "shell": "codex", "core": "default",
+        "class": "balanced", "model_observed": "astra",
+    }
+    # Requested identity survives untouched alongside it — observing a
+    # different model never overwrites what was actually asked for.
+    assert after["run-riding"]["runner"]["core"] == "default"
+
+
 def test_live_runs_snapshot_joins_presence_from_every_account_repo(tmp_path, monkeypatch):
     """A cross-repo strand occupies one account pool and must share one wire."""
     from brr import account, presence
