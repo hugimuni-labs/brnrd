@@ -2812,6 +2812,84 @@ class TestCodexThreadCorrelation:
         assert result.stdout == "plain reply\n"
 
 
+class TestInsertCodexResume:
+    def test_inserts_resume_and_thread_id_right_after_exec(self):
+        from brr.runner import _insert_codex_resume
+
+        template = ["codex", "exec", "-c", "hooks.foo=true", "{prompt}"]
+        assert _insert_codex_resume(template, "thread-abc") == [
+            "codex", "exec", "resume", "thread-abc",
+            "-c", "hooks.foo=true", "{prompt}",
+        ]
+
+    def test_no_exec_token_is_an_honest_no_op(self):
+        from brr.runner import _insert_codex_resume
+
+        template = ["some-custom-wrapper", "{prompt}"]
+        assert _insert_codex_resume(template, "thread-abc") == template
+
+
+class TestCodexResumeInvocation:
+    """A held conversation's resumed dispatch must become
+    ``codex exec resume <thread_id> ...`` — the entire point of preserving
+    a native session id rather than a cold restart wearing the same
+    clothes (design-the-allowance.md)."""
+
+    def setup_method(self):
+        from brr import runner_select
+
+        # An explicit `cmd` matching the real bundled codex profile's shape
+        # ("codex exec {prompt}") — the bare fixture used by the sibling
+        # correlation tests above never puts a literal "exec" token in the
+        # template at all (it falls back to just `["codex"]`), which is
+        # fine for those tests (they only assert `--json`/`-o` presence)
+        # but would make `_insert_codex_resume` a documented no-op here.
+        self._CODEX = runner_select.RunnerProfile(
+            name="codex", profile="codex", shell="codex",
+            cmd="codex exec {prompt}",
+        )
+
+    def test_resume_native_session_id_reorders_argv(self, tmp_path, monkeypatch):
+        captured = {}
+
+        def _fake_popen(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return _fake_proc(kwargs, out='{"type":"thread.started","thread_id":"new-thread"}\n')
+
+        monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
+        invocation = RunnerInvocation(
+            kind="daemon-run", label="codex-resume", prompt="hi",
+            cwd=tmp_path, repo_root=tmp_path, selected_runner=self._CODEX,
+            resume_native_session_id="old-held-thread",
+        )
+
+        invoke_runner(self._CODEX, invocation, cfg={})
+
+        cmd = captured["cmd"]
+        assert cmd[0] == "codex"
+        assert cmd[1] == "exec"
+        assert cmd[2] == "resume"
+        assert cmd[3] == "old-held-thread"
+        assert "--json" in cmd
+
+    def test_no_resume_id_is_a_plain_exec(self, tmp_path, monkeypatch):
+        captured = {}
+
+        def _fake_popen(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return _fake_proc(kwargs, out='{"type":"thread.started","thread_id":"t"}\n')
+
+        monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
+        invocation = RunnerInvocation(
+            kind="daemon-run", label="codex-fresh", prompt="hi",
+            cwd=tmp_path, repo_root=tmp_path, selected_runner=self._CODEX,
+        )
+
+        invoke_runner(self._CODEX, invocation, cfg={})
+
+        assert "resume" not in captured["cmd"]
+
+
 class TestCodexTaskCompleteError:
     """A died-in-flight turn's ``task_complete.error`` must survive the
     stdout swap and raw-events cleanup that follow it in ``invoke_runner``
