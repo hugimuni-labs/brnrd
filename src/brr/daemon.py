@@ -4524,6 +4524,13 @@ def _run_worker(
                     cwd=str(run_root),
                     git_branch=branch_name or "",
                     model=str(task.meta.get("runner_core") or ""),
+                    # Almost always None (the daemon's own $HOME — every
+                    # backend but sandbox already sees it, directly or via
+                    # bind mount). `SandboxEnv` overrides this to a
+                    # passthrough staging root because its VM has no such
+                    # mount, and relocates the seed into the VM's real HOME
+                    # itself at invoke time (envs.py `SandboxEnv.invoke`).
+                    home=env_backend.session_seed_home(env_ctx),
                 )
                 extra_runner_args = [
                     *transcript.resume_argv(session_id),

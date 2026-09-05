@@ -557,12 +557,29 @@ def resume_argv(session_id: str) -> list[str]:
     return ["--resume", session_id, "--fork-session"]
 
 
-def claude_session_path(cwd: str, session_id: str, home: Path | None = None) -> Path:
-    """Where ``claude`` looks for a resumable session.
+def claude_session_relpath(cwd: str, session_id: str) -> Path:
+    """Where a resumable session lives, **relative to whichever ``$HOME`` reads it**.
 
-    ``~/.claude/projects/<slug>/<session-id>.jsonl``, where the slug is the cwd
-    with path separators and dots flattened to dashes.
+    ``.claude/projects/<slug>/<session-id>.jsonl``, where the slug is the cwd
+    with path separators and dots flattened to dashes. Split out of
+    :func:`claude_session_path` for callers that must *relocate* a forged
+    session across a HOME boundary the writer does not control — a sandbox VM
+    (:class:`brr.envs.SandboxEnv`) mounts a run's repo checkout, never the
+    daemon's account home, so a session forged under the host's ``$HOME`` is
+    invisible to the VM's own ``claude``. The relative path is the one thing
+    both sides can agree on without either naming the other's HOME.
     """
-    root = (home or Path.home()) / ".claude" / "projects"
     slug = cwd.replace("/", "-").replace(".", "-")
-    return root / slug / f"{session_id}.jsonl"
+    return Path(".claude") / "projects" / slug / f"{session_id}.jsonl"
+
+
+def claude_session_path(cwd: str, session_id: str, home: Path | None = None) -> Path:
+    """Where ``claude`` looks for a resumable session, under *home*.
+
+    ``home`` defaults to the caller's own ``$HOME`` — right for every backend
+    that either runs on the host directly or bind-mounts that exact directory
+    into a container (``docker``/``solitary``). A backend that cannot see the
+    host's HOME at all (``sandbox``) passes its own staging root here and
+    relocates the result itself; see :func:`claude_session_relpath`.
+    """
+    return (home or Path.home()) / claude_session_relpath(cwd, session_id)

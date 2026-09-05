@@ -5,10 +5,19 @@ import threading
 import pytest
 
 from brr import branching, envs
+from brr import transcript as tx
+from brr.bootscore import BootScore, ContractEntry
 from brr.runner import DEFAULT_RUNNER_TIMEOUT, RunnerInvocation
 from brr.run import Run
 
 from _helpers import commit_files, init_git_repo
+
+
+def _boot_entry(key: str, location: str, *, present: bool = True, size: int | None = None):
+    return ContractEntry(
+        block_key=key, label=key, owner="product", authority="contract",
+        freshness=None, location=location, present=present, bytes=size,
+    )
 
 
 def _plan(seed: str = "main", target: str | None = "main") -> branching.PublishPlan:
@@ -118,6 +127,120 @@ def test_sandbox_invoke_wraps_runner_and_pipes_prompt(tmp_path, monkeypatch):
     assert captured["command"][3:7] == ["-e", "BRR_OUTBOX_DIR=/tmp/outbox", "-e", "BRR_RUN_ID=run-sbx"]
     assert captured["command"][7:11] == ["brr-codex", "--", "sh", "-c"]
     assert captured["command"][-1].startswith(f"cd {ctx.cwd} && export PATH=")
+
+
+# ── The sandbox VM cannot see the host's forged Claude session (#the-sandbox-can-find-its-session) ──
+#
+# Regression: `SandboxEnv` reuses `WorktreeEnv`'s prose-or-mounted boot, but its
+# runner is a `sbx exec`'d microVM whose account HOME is never bind-mounted (unlike
+# `docker`/`solitary`, which mount the host's `~/.claude` straight into the
+# container's HOME). `transcript.mount_claude_session` forged the resumable
+# session into the daemon's own host HOME by default; a claude sandbox strand's
+# `--resume <id>` then failed with "No conversation found with session ID: <id>" —
+# the first real sandbox+claude strand (run-260905-1750-qo6u) hit this before doing
+# any work. `session_seed_home` + the relocation prefix below are the fix.
+
+
+def _session_ctx(tmp_path, *, sandbox_name="brr-claude"):
+    repo_root = tmp_path / "repo"
+    worktree = repo_root / ".brr" / "worktrees" / "run-1"
+    worktree.mkdir(parents=True)
+    return envs.RunContext(
+        name="sandbox", cwd=worktree, repo_root=repo_root,
+        runtime_dir=repo_root / ".brr",
+        response_path_host=tmp_path / "response", response_path_env=tmp_path / "response",
+        env_state={"sandbox_name": sandbox_name},
+    )
+
+
+def test_sandbox_session_seed_home_stages_under_the_passthrough_brr_dir(tmp_path):
+    """Not the host's real HOME (`sbx create` never mounts it) — the repo's
+    shared ``.brr``, which ``sbx create --name … shell repo_root`` *does* mount
+    into the VM at this same absolute path (verified live against `brr-claude`,
+    SBX v0.39.0: a file written under the host's `<repo>/.brr` is readable at the
+    identical path inside the VM)."""
+    ctx = _session_ctx(tmp_path)
+    home = envs.get_env("sandbox").session_seed_home(ctx)
+    assert home == ctx.runtime_dir / "sandbox-session-seed"
+
+
+def test_other_backends_default_session_seed_home_to_the_real_home(tmp_path):
+    """host/worktree/docker/solitary need no relocation: docker-family backends
+    already bind-mount the host's real HOME into the container (`_DOCKER_DEFAULT_CRED_PATHS`
+    includes ``.claude``), and host/worktree run on the host HOME directly."""
+    ctx = _session_ctx(tmp_path)
+    for name in ("host", "worktree", "docker", "solitary"):
+        assert envs.get_env(name).session_seed_home(ctx) is None
+
+
+def test_sandbox_invoke_prepends_no_relocation_when_nothing_was_mounted(tmp_path, monkeypatch):
+    """A prose boot (no `--resume` in `extra_runner_args`) must add nothing —
+    the common case, and the one the pre-existing wrap-and-pipe test already
+    covers byte-for-byte via its `startswith` assertion."""
+    captured = {}
+    _stub_docker_runner(monkeypatch, captured=captured)
+    ctx = _session_ctx(tmp_path)
+    invocation = RunnerInvocation(
+        kind="daemon-run", label="evt-sbx-attempt-1", prompt="hi",
+        cwd=ctx.cwd, repo_root=ctx.repo_root, env={},
+    )
+    envs.get_env("sandbox").invoke(ctx, "claude", invocation, {})
+    assert " && mkdir -p " not in captured["command"][-1]
+
+
+def test_sandbox_invoke_relocates_the_forged_session_and_tidies_up(tmp_path, monkeypatch):
+    """Drives the actual production callers — `mount_claude_session` seeded at
+    `SandboxEnv.session_seed_home`, then `SandboxEnv.invoke` — and proves the
+    generated shell fragment really places the seed at the path a *different*
+    `$HOME` (standing in for the VM's own, unrelated to the staging root) would
+    resolve `claude --resume <id>` to, by executing that fragment for real."""
+    ctx = _session_ctx(tmp_path)
+    backend = envs.get_env("sandbox")
+
+    agents = ctx.cwd / "AGENTS.md"
+    agents.write_text("contract\n", encoding="utf-8")
+    score = BootScore(contracts=[_boot_entry("agents", str(agents), size=len("contract\n"))])
+    session_id = tx.mount_claude_session(
+        score, block_text={"agents": "contract\n"}, cwd=str(ctx.cwd),
+        home=backend.session_seed_home(ctx),
+    )
+    staged = tx.claude_session_path(str(ctx.cwd), session_id, home=backend.session_seed_home(ctx))
+    assert staged.exists(), "sanity: the seed landed at the staging path"
+    seed_bytes = staged.read_bytes()
+
+    # Run the relocation fragment for real, under a throwaway HOME standing in
+    # for the VM's own — before `_stub_docker_runner` patches `subprocess.Popen`
+    # process-wide (it would otherwise catch this `subprocess.run` too) and
+    # before `invoke()` (below) tidies the staging copy up.
+    vm_home = tmp_path / "vm-home"
+    vm_home.mkdir()
+    fragment = backend._session_relocate_script(ctx, str(ctx.cwd), tx.resume_argv(session_id))
+    assert fragment.startswith('mkdir -p "$HOME/')
+    result = subprocess.run(
+        ["sh", "-c", fragment + "true"],
+        env={**os.environ, "HOME": str(vm_home)},
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    resumed = tx.claude_session_path(str(ctx.cwd), session_id, home=vm_home)
+    assert resumed.exists(), "the VM's own claude --resume must find this file"
+    assert resumed.read_bytes() == seed_bytes
+
+    captured = {}
+    _stub_docker_runner(monkeypatch, captured=captured)
+    invocation = RunnerInvocation(
+        kind="daemon-run", label="evt-sbx-attempt-1", prompt="hi",
+        cwd=ctx.cwd, repo_root=ctx.repo_root, env={},
+        extra_runner_args=tx.resume_argv(session_id),
+    )
+    backend.invoke(ctx, "claude", invocation, {})
+
+    script = captured["command"][-1]
+    assert f'mkdir -p "$HOME/.claude/projects/' in script
+    assert f"cp {staged} " in script
+    # Best-effort tidy: the host-side staging waypoint is gone once read —
+    # only the copy inside the VM (verified above) is what claude reads.
+    assert not staged.exists()
 
 
 def test_get_env_rejects_unknown_backend():
