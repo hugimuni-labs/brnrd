@@ -11,6 +11,13 @@ export interface LiveRunRunner {
 	shell?: string;
 	core?: string;
 	class?: string;
+	/** What a live run's own telemetry actually confirmed
+	 *  (`cloud_publisher._runner_payload`'s `model_observed`, sourced from
+	 *  `presence.heartbeat`'s `runner_model_observed`) — distinct from
+	 *  `core` above, which is what was *requested* and known before the
+	 *  runner ever started. Absent whenever nothing has been observed yet;
+	 *  never derived from `core`/`class` on this client. */
+	model_observed?: string;
 }
 
 export interface LiveRun {

@@ -114,12 +114,15 @@ export interface ShellGroup {
  * steer: "add a separate shell selector which renders available cores for
  * it below" — a small, stable set of shells, then the chosen one's cores,
  * instead of every `shell-core` compound flattened into one list that grows
- * multiplicatively). Preserves the incoming order both across shells and
- * within one: the catalog already arrives cost_rank-ascending
- * (economy → strong), so grouping by shell over that order keeps each group
- * internally economy-first for free. Available shells sort first; shells
- * with nothing live sort after, in their own first-seen order — still
- * selectable, per "unavailable is legitimate and stays", just last.
+ * multiplicatively). Preserves the incoming cost_rank-ascending order within
+ * each of two buckets — usable (available or unverified) first, verified
+ * `unavailable` last — rather than across the whole group: a retired core
+ * sitting between two runnable ones at its old cost rank read as a live
+ * choice with a dashed border, not as *retired*, because "off" wasn't a
+ * position, only a style. Available shells sort first; shells with nothing
+ * live sort after, in their own first-seen order — the same "unavailable is
+ * legitimate and stays, just last" rule, now applied consistently one level
+ * down too.
  */
 export function groupByShell(profiles: RunnerProfile[]): ShellGroup[] {
 	const order: string[] = [];
@@ -134,10 +137,11 @@ export function groupByShell(profiles: RunnerProfile[]): ShellGroup[] {
 	}
 	const groups = order.map((shell) => {
 		const rows = byShell.get(shell) ?? [];
-		const allUnavailable =
-			rows.length > 0 && rows.every((row) => availabilityOf(row) === 'unavailable');
+		const usable = rows.filter((row) => availabilityOf(row) !== 'unavailable');
+		const dead = rows.filter((row) => availabilityOf(row) === 'unavailable');
+		const allUnavailable = rows.length > 0 && dead.length === rows.length;
 		const reason = rows.find((row) => row.availability)?.availability ?? null;
-		return { shell, profiles: rows, allUnavailable, reason };
+		return { shell, profiles: [...usable, ...dead], allUnavailable, reason };
 	});
 	const live = groups.filter((group) => !group.allUnavailable);
 	const dead = groups.filter((group) => group.allUnavailable);

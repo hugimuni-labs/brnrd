@@ -163,9 +163,21 @@ def heartbeat(
     name: str | None = None,
     mood: str | None = None,
     topics: list[str] | None = None,
+    runner_model_observed: str | None = None,
     now: float | None = None,
 ) -> bool:
-    """Refresh a participant's ``last_seen``. Returns False if it's gone."""
+    """Refresh a participant's ``last_seen``. Returns False if it's gone.
+
+    *runner_model_observed* names the model a live run's own telemetry has
+    actually confirmed (`daemon.py`'s ``result.observed_core``, known only
+    once the runner invocation returns — never available at `register()`
+    time, which is why this rides the heartbeat instead). Distinct from the
+    `register()`-time `runner_core` kwargs, which name what was *requested*:
+    a profile pin or an unpinned shell default, resolved before the run
+    ever started. Presence keeps both because they answer different
+    questions — which the live-runs publish (`cloud_publisher._runner_payload`)
+    then surfaces as separate fields, never collapsed into one.
+    """
     path = _presence_dir(brr_dir) / f"{entry_id}.json"
     entry = _read(path)
     if entry is None:
@@ -177,6 +189,8 @@ def heartbeat(
         entry["mood"] = mood
     if topics is not None:
         entry["topics"] = list(topics)
+    if runner_model_observed is not None:
+        entry["runner_model_observed"] = runner_model_observed
     try:
         _atomic_write(path, json.dumps(entry))
     except OSError:

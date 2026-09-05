@@ -4345,6 +4345,19 @@ def _run_worker(
         # would make every running heartbeat report the old thread until the
         # replacement process returned and overwrote it.
         task.meta.pop("codex_thread_id", None)
+        # Same reasoning as the thread id above, for the model a previous
+        # attempt observed: a retry that escalates to a different runner
+        # must not leave attempt 1's `model_observed` reading in place, on
+        # either surface that carries it — a stale value here would show as
+        # attempt 2 running attempt 1's model, in both task.meta-derived
+        # payloads and the live presence entry.
+        task.meta.pop("core_observed", None)
+        runner_meta = {k: v for k, v in runner_meta.items() if k not in ("model_observed", "core_mismatch")}
+        if presence_id:
+            try:
+                presence.heartbeat(brr_dir, presence_id, runner_model_observed="")
+            except OSError:
+                pass
         try:
             codex_events_path.unlink()
         except FileNotFoundError:
@@ -4805,6 +4818,21 @@ def _run_worker(
                 "model_observed": result.observed_core,
                 "core_mismatch": result.core_mismatch,
             }
+            # Presence only ever heard the *requested* core, at registration
+            # time (before the runner ran, let alone reported what it
+            # actually used). This is the one point where the observed fact
+            # exists and the entry is (usually) still live — best-effort,
+            # same as registration: a dashboard reading presence mid-run
+            # should be able to tell "riding this thread" apart from "and
+            # it's actually running X", not just repeat the pin.
+            if presence_id:
+                try:
+                    presence.heartbeat(
+                        brr_dir, presence_id,
+                        runner_model_observed=result.observed_core,
+                    )
+                except OSError:
+                    pass
         if result.codex_thread_id:
             # Per-run state, not a global (issue #195 multi-run safety): this
             # attempt's proven thread id, stashed on the task so the
