@@ -1454,6 +1454,11 @@ _QUOTA_BUCKET_RE = re.compile(
     r"(?P<label>[A-Za-z][\w]*(?:\s+[A-Za-z][\w]*)*?)\s+"
     r"(?P<pct>\d+(?:\.\d+)?)\s*%\s*left",
 )
+# The reset clause that follows a bucket's percentage — "(resets 8:30pm
+# (Europe/Berlin))" / "(resets Jul 24, 12am (Europe/Berlin))". The trailing
+# "(<tz>)" is dropped from the chip: the clock reads in the maintainer's own
+# zone, and the zone name is the one part he never needs on every boundary.
+_QUOTA_RESET_RE = re.compile(r"\(resets\s+(?P<when>[^()]+?)\s*(?:\([^)]*\))?\s*\)")
 _QUOTA_MODEL_WEEK_RE = re.compile(r"^(?P<model>.+?)\s+week$")
 
 
@@ -1497,6 +1502,11 @@ def _quota_chip(resources: dict[str, Any]) -> str | None:
     summary = str(facet.get("summary") or "").strip()
     if not summary:
         return None
+    pacing = facet.get("pacing") if isinstance(facet.get("pacing"), dict) else {}
+    try:
+        low_floor = float(pacing.get("low_floor_pct") or 20.0)
+    except (TypeError, ValueError):
+        low_floor = 20.0
     taken: set[str] = set()
     chips: list[str] = []
     for part in summary.split(";"):
@@ -1504,7 +1514,17 @@ def _quota_chip(resources: dict[str, Any]) -> str | None:
         if not match:
             continue
         pct = match.group("pct").split(".")[0]
-        chips.append(f"{_quota_bucket_letter(match.group('label'), taken)}{pct}")
+        label = match.group("label")
+        chip = f"{_quota_bucket_letter(label, taken)}{pct}"
+        # The clock rides the chip: always for the session window (it rolls
+        # within hours, and a budget flag written without it asks for a
+        # reset the timer was about to give — 2026-09-05, "did you not see
+        # the timer?"), and for any other bucket only once it is under the
+        # low floor, where the reset date becomes the plan.
+        reset = _QUOTA_RESET_RE.search(part)
+        if reset and (label.strip().lower() == "session" or float(pct) <= low_floor):
+            chip += f"↻{reset.group('when').strip()}"
+        chips.append(chip)
     return "q " + "·".join(chips) if chips else None
 
 
