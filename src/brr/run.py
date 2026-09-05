@@ -62,20 +62,33 @@ def _format_run_meta_value(value: Any) -> str:
     return str(value)
 
 
-def _decode_run_meta_value(value: Any) -> Any:
-    """Inverse of :func:`_format_run_meta_value` for a JSON-shaped string.
+#: Meta keys :func:`_decode_run_meta_value` will ever decode back to a
+#: dict/list. An allowlist, not "every JSON-shaped string" — daemon.py
+#: already has at least one field (``run_state_digest``,
+#: ``_run_state_digest`` in daemon.py) that is *deliberately* a JSON string
+#: compared by ``!=`` against a freshly dumped one on every call; decoding
+#: it into a dict on reload would make every reload compare unequal to
+#: itself and read as permanent movement — the exact stale-card bug this
+#: digest exists to prevent, reintroduced one layer down. Only a key that
+#: actually needs cross-process dict fidelity belongs here.
+_JSON_META_KEYS = frozenset({"resource_hold"})
+
+
+def _decode_run_meta_value(key: str, value: Any) -> Any:
+    """Inverse of :func:`_format_run_meta_value` for an allowlisted key.
 
     ``protocol.parse_frontmatter`` hands every meta value back as whatever
     its own ``_coerce`` produced — a plain string for anything that isn't
     ``true``/``false``/``null``/a quoted literal/an int, which is exactly
     what a JSON object or array serializes to on this one-line format.
-    Decoded only when it parses *and* comes back as a ``dict``/``list`` —
-    an int-looking or otherwise-JSON-valid scalar string must round-trip
-    exactly as it always has, never silently change type underneath an
-    existing reader. Malformed JSON degrades to the raw string, never a
-    crash — a hand-edited or truncated manifest must still load.
+    Decoding is gated on *both* ``key in _JSON_META_KEYS`` and the value
+    actually parsing to a ``dict``/``list`` — a key outside the allowlist
+    (everything else a run manifest carries today) round-trips exactly as
+    it always has, never silently changing type underneath an existing
+    reader. Malformed JSON degrades to the raw string, never a crash — a
+    hand-edited or truncated manifest must still load.
     """
-    if isinstance(value, str) and value[:1] in ("{", "["):
+    if key in _JSON_META_KEYS and isinstance(value, str) and value[:1] in ("{", "["):
         import json
 
         try:
@@ -253,7 +266,7 @@ class Run:
             return None
         body = protocol.frontmatter_body(text).strip()
         meta = {
-            k: _decode_run_meta_value(v)
+            k: _decode_run_meta_value(k, v)
             for k, v in fm.items() if k not in _RUN_FIELDS
         }
         return cls(

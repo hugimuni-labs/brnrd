@@ -15681,7 +15681,7 @@ def _defer_pending_siblings_after_failure(
     run_id: str,
     seconds: float,
     reason: str = "operational_failure",
-) -> int:
+) -> list[str]:
     """Brake sibling events after a terminal run failure.
 
     The current lead event receives the explicit failure note. Other
@@ -15705,19 +15705,28 @@ def _defer_pending_siblings_after_failure(
     ``"resource_hold"``) — a resume needs to tell "parked because of this
     hold" apart from "parked because of an unrelated failure", and both
     write the identical ``defer_until``/``deferred_by_run`` shape.
+
+    Returns the ids actually stamped — a resource hold accumulates these
+    onto its own record (``resource_hold.accumulate_event``) so a later
+    resume can find and un-defer them; an already-pending sibling stamped
+    *here*, at arm time, would otherwise never reach
+    ``accumulated_event_ids`` at all (only events arriving *after* arming
+    flow through ``_handle_resource_held_events``'s own accumulation),
+    and stay deferred for the full ``_HOLD_DEFER_SECONDS`` horizon with no
+    resume ever reaching them.
     """
     if seconds <= 0:
-        return 0
+        return []
     siblings = [
         pending
         for pending in protocol.list_pending(inbox_dir)
         if pending.get("id") != lead_event_id and pending.get("status") == "pending"
     ]
     if not siblings:
-        return 0
+        return []
     now = time.time()
     step = min(2.0, 1800.0 / max(1, len(siblings) - 1))
-    changed = 0
+    stamped: list[str] = []
     for index, pending in enumerate(siblings):
         defer_until = _format_utc_after(seconds + index * step, now=now)
         try:
@@ -15729,8 +15738,10 @@ def _defer_pending_siblings_after_failure(
             )
         except OSError:
             continue
-        changed += 1
-    return changed
+        eid = str(pending.get("id") or "")
+        if eid:
+            stamped.append(eid)
+    return stamped
 
 
 # ── Resource hold (design-the-allowance.md) ─────────────────────────
@@ -15959,6 +15970,14 @@ def _finalize_resource_hold(
     but status lands on ``resource_hold.RUN_STATUS`` instead of ``"error"``,
     no retry is attempted, and sibling events are deferred under
     ``defer_reason="resource_hold"`` rather than ``"operational_failure"``.
+
+    A sibling already pending *at arm time* is deferred here, not by
+    ``_handle_resource_held_events`` (that filter only ever sees events
+    arriving *after* this run's own dispatch already claimed the lead) —
+    so it must be folded into ``accumulated_event_ids`` here too, or a
+    resume/reset release would never find it to un-defer: it would sit
+    parked for the full ``_HOLD_DEFER_SECONDS`` horizon regardless of how
+    many correspondent messages arrive afterward.
     """
     meta = _arm_resource_hold(
         task, runs_dir, conversation_key=conversation_key, **hold_fields,
@@ -15968,13 +15987,18 @@ def _finalize_resource_hold(
         f"({meta['provider']}/{meta['reason']}, resume={meta['resume_condition']})"
     )
     _write_terminal_hold_response(emit, task, event, responses_dir, resp_path, meta)
-    _defer_pending_siblings_after_failure(
+    deferred_ids = _defer_pending_siblings_after_failure(
         inbox_dir,
         lead_event_id=eid,
         run_id=task.id,
         seconds=_HOLD_DEFER_SECONDS,
         reason="resource_hold",
     )
+    if deferred_ids:
+        for deferred_id in deferred_ids:
+            meta = resource_hold.accumulate_event(meta, deferred_id)
+        task.meta["resource_hold"] = meta
+        task.save(runs_dir)
     _capture_worktree(task, env_ctx, branch_plan, cfg, runs_dir)
     emit("finalizing", run_id=task.id, stage="held")
     with _branch_lock(branch_plan.target_branch):
@@ -16190,6 +16214,21 @@ def _handle_resource_held_events(
                 _accumulate_held_event(
                     runs_dir, held, str(target.event.get("id") or ""),
                 )
+                continue
+            held_conv_key = str(
+                (held.meta.get("resource_hold") or {}).get("conversation_key") or ""
+            )
+            event_conv_key = str(target.event.get("conversation_key") or "")
+            if held_conv_key and event_conv_key != held_conv_key:
+                # A different conversation entirely (a GitHub issue
+                # comment on the same repo while a Telegram seat is
+                # held, say) — this event is not this hold's concern.
+                # Pass it through untouched: no release, no resume
+                # stamp. The resident slot is free (the held run's
+                # process already exited); whichever conversation
+                # dispatches here spends its own quota, not the held
+                # one's.
+                survivors.append(target)
                 continue
             _apply_resource_hold_resume(
                 runs_dir, target.inbox_dir, held, target.event,
