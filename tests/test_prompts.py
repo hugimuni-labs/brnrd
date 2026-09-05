@@ -792,13 +792,35 @@ class TestAgeGateDatedSections:
     from the *head*, since bare `MM-DD` headings carry no year and so never
     register as dated to `_page_is_chronological`)."""
 
+    def test_prepend_to_top_page_keeps_the_two_newest_by_date_not_position(self):
+        """The real shape, pinned literally: `active.md` prepends its newest
+        tick at the top, newest-first in the file. Ranking by document
+        position (an earlier version of this gate did exactly that) keeps
+        the two *oldest* survivors and drops the current tick — the
+        opposite of the intent. Ranking by parsed date gets it right
+        regardless of which direction a page accretes in."""
+        content = "\n".join([
+            _tick_section("09-05"), _tick_section("09-03"),
+            _tick_section("09-02"), _tick_section("08-31"),
+        ])
+
+        result = _trim_sectioned_page(content, max_bytes=100_000, source_hint="`x`")
+        body, _, marker = result.text.partition("\n\n_(")
+
+        assert "This tick, 09-05" in body
+        assert "This tick, 09-03" in body
+        assert "This tick, 09-02" not in body
+        assert "This tick, 08-31" not in body
+        assert "This tick, 09-02" in marker
+        assert "This tick, 08-31" in marker
+
     def test_six_dated_two_undated_keeps_newest_two_dated_and_all_undated(self):
         sections = [
-            _tick_section("09-01"), _tick_section("09-02"),
+            _tick_section("09-06"), _tick_section("09-05"),
             _undated_section("Backlog"),
-            _tick_section("09-03"), _tick_section("09-04"),
+            _tick_section("09-04"), _tick_section("09-03"),
             _undated_section("Ideas"),
-            _tick_section("09-05"), _tick_section("09-06"),
+            _tick_section("09-02"), _tick_section("09-01"),
         ]
         content = "\n".join(sections)
 
@@ -806,8 +828,8 @@ class TestAgeGateDatedSections:
         body, _, marker = result.text.partition("\n\n_(")
 
         assert body.count("## This tick,") == 2
-        assert "This tick, 09-05" in body
         assert "This tick, 09-06" in body
+        assert "This tick, 09-05" in body
         for stale in ("09-01", "09-02", "09-03", "09-04"):
             assert f"This tick, {stale}" not in body
         assert "## Backlog" in body
@@ -820,28 +842,52 @@ class TestAgeGateDatedSections:
         for stale in ("09-01", "09-02", "09-03", "09-04"):
             assert f"This tick, {stale}" in marker
 
-    def test_iso_dated_and_this_session_shapes_both_recognized(self):
+    def test_this_session_shape_ranks_by_month_day_alone(self):
         content = "\n".join([
-            "## [2026-08-01] note",
+            "## This session, 08-15",
             "",
             "old.",
             "",
-            "## This session, 08-15",
+            "## This session, 08-20",
             "",
             "mid.",
             "",
-            "## This session, 08-20",
+            "## This session, 09-01",
             "",
             "new.",
             "",
         ])
         result = _trim_sectioned_page(content, max_bytes=100_000, source_hint="`x`")
         body, _, marker = result.text.partition("\n\n_(")
-        assert "2026-08-01" not in body
-        assert "This session, 08-15" in body
+        assert "This session, 08-15" not in body
         assert "This session, 08-20" in body
+        assert "This session, 09-01" in body
         assert "1 older dated section age-gated out" in marker
-        assert "2026-08-01" in marker  # names what it cut
+        assert "This session, 08-15" in marker  # names what it cut
+
+    def test_a_real_iso_year_outranks_any_bare_mm_dd_section(self):
+        """A bare `This tick`/`This session` heading carries no year — it
+        keys on `(0, month, day)` — so a genuine ISO-dated section (a real
+        year) always outranks it. This isn't a shape this gate expects a
+        page to mix in practice, but the rule has to be *some* well-defined
+        total order, and "a dated year beats no year" is the honest one."""
+        content = "\n".join([
+            "## [2026-08-01] note",
+            "",
+            "iso, has a real year.",
+            "",
+            "## This session, 08-20",
+            "",
+            "newer by month/day, but no year.",
+            "",
+        ])
+        result = _trim_sectioned_page(content, max_bytes=100_000, source_hint="`x`")
+        body, _, marker = result.text.partition("\n\n_(")
+        # Only 2 dated sections total ⇒ at-or-under the keep floor: nothing
+        # to gate at all, regardless of ranking.
+        assert marker == ""
+        assert "2026-08-01" in body
+        assert "This session, 08-20" in body
 
     def test_two_or_fewer_dated_sections_is_untouched(self):
         content = "\n".join([
@@ -860,6 +906,30 @@ class TestAgeGateDatedSections:
 
         assert "age-gated out" not in result.text
         assert result.dropped == 1  # the ordinary structural cut still ran
+
+    def test_the_age_gate_marker_bytes_are_reserved_from_the_budget(self):
+        """The marker is computed before the byte-budget walk runs and its
+        own bytes are reserved out of that walk's budget — appending it
+        *after* an unreserved walk could carry the whole result past
+        max_bytes by exactly the marker's own length.
+
+        Budget chosen so the two age-gate survivors fit whole once the
+        marker is reserved (125 B of survivors + 180 B reserved marker
+        room ≈ 305 B): this isolates the reservation fix from
+        `_trim_sectioned_page_body`'s own separate, pre-existing
+        mandatory-entry-floor behaviour (out of scope here — see that
+        function's own docstring for why it, alone, may still exceed its
+        given budget)."""
+        sections = [_tick_section(f"08-{d:02d}", "x" * 40) for d in range(1, 8)]
+        content = "\n".join(sections)
+        budget = 400
+
+        result = _trim_sectioned_page(content, max_bytes=budget, source_hint="`x`")
+
+        assert "age-gated out" in result.text
+        assert "This tick, 08-07" in result.text
+        assert "This tick, 08-06" in result.text
+        assert len(result.text.encode("utf-8")) <= budget
 
 
 def _write_run_boot_score(repo_root, run_id, *, contracts, prompt_bytes=None):
