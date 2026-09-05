@@ -1111,3 +1111,48 @@ def _cost_ledger(score: BootScore) -> list[str]:
         lines.append(f"  {'unattributed':<12}{total - accounted:>9,} B")
         lines.append(f"  {'wake total':<12}{total:>9,} B")
     return lines
+
+
+#: Above this total wake size, a reader of the ledger (the post-tool hook
+#: stripe, a run card's own boot line) names a specific offender rather than
+#: just totals — a wake this big is worth pointing at something. Chosen off
+#: this account's own live wakes at the time this shipped: comfortably above
+#: an ordinary session's total (mid-double-digit KB) and comfortably below
+#: where a wake actually crowds the model's own context, so it fires on
+#: genuine bloat rather than every session carrying a full dominion. One
+#: constant, read by both faces, so "is this wake big" never disagrees with
+#: itself between the stripe and the card.
+WAKE_WARN_BYTES = 120_000
+
+
+def top_ledger_categories(contracts: list, n: int = 2) -> list[tuple[str, int]]:
+    """The *n* biggest authority-layer totals, by bytes — the same grouping
+    :func:`_cost_ledger` renders as the full ``cost ledger:`` table.
+
+    Unlike :func:`_cost_ledger`, this takes a raw ``contracts`` list — plain
+    dicts, the shape every reader off ``boot-score.json`` actually has
+    (a mid-run hook reading its own run's file, a wake rendering a *different*
+    run's archived one) rather than the typed :class:`BootScore` /
+    :class:`ContractEntry` objects only a live in-process render holds. A
+    caller that already parsed the JSON should not have to reconstruct
+    dataclasses just to ask "what are the two biggest categories" — and this
+    is exactly the fact both the post-tool hook stripe and a run card's own
+    boot line want, off the ledger already computed, never re-measured.
+
+    Same filter as :func:`_cost_ledger`'s ``measured``: only blocks that
+    actually rendered (``present`` and a positive ``bytes``) count, and any
+    entry without a usable ``authority`` string is skipped — a partial or
+    older-shaped record degrades to "not counted," never a crash.
+    """
+    by_authority: dict[str, int] = {}
+    for entry in contracts:
+        if not isinstance(entry, dict) or not entry.get("present"):
+            continue
+        size = entry.get("bytes")
+        if not isinstance(size, int) or size <= 0:
+            continue
+        authority = entry.get("authority")
+        if not isinstance(authority, str) or not authority.strip():
+            continue
+        by_authority[authority] = by_authority.get(authority, 0) + size
+    return sorted(by_authority.items(), key=lambda kv: -kv[1])[:n]

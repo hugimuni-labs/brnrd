@@ -4931,6 +4931,70 @@ def test_census_renders_once_then_never_again(tmp_path):
     assert "wake " not in _inject_text(second)
 
 
+_CENSUS_BLOCKS_WITH_AUTHORITY = [
+    {"block_key": "work-surface", "label": "Discovered work surface",
+     "bytes": 51_200, "present": True, "authority": "surface"},
+    {"block_key": "notes-health", "label": "notes health",
+     "bytes": 28_672, "present": True, "authority": "health"},
+    {"block_key": "kb-health", "label": "kb health",
+     "bytes": 1_024, "present": True, "authority": "health"},
+    {"block_key": "identity-core", "label": "Resident identity core",
+     "bytes": 6_079, "present": True, "authority": "identity"},
+]
+
+
+def test_census_names_the_top_two_ledger_categories(tmp_path):
+    """Same grouping `brnrd prompts show`'s cost ledger prints (bytes by
+    `authority`), read off the same score — not re-measured, and the two
+    `health` entries collapse into one category total (28,672 + 1,024 =
+    29,696 B), ranking above `identity`'s lone 6,079 B."""
+    _census_score(tmp_path, contracts=_CENSUS_BLOCKS_WITH_AUTHORITY, prompt_bytes=87_000)
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _score_env(tmp_path))
+    bar = _inject_text(out).splitlines()[0]
+    assert "surface 50.0 KB" in bar
+    assert "health 29.0 KB" in bar
+    assert "identity" not in bar  # only the top two ride the line
+
+
+def test_census_omits_ledger_categories_when_no_entry_carries_authority(tmp_path):
+    """Positive twin: the same shape with no `authority` field (an older
+    daemon's score) renders the pre-existing fields and nothing more."""
+    _census_score(tmp_path, contracts=_CENSUS_BLOCKS, prompt_bytes=115714)
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _score_env(tmp_path))
+    bar = _inject_text(out).splitlines()[0]
+    assert "wake 113.0 KB · top work-surface 24.1 KB · oldest 2026-07-25" in bar
+
+
+def test_census_flags_the_top_offender_past_the_warn_threshold(tmp_path):
+    big_blocks = [
+        {"block_key": "work-surface", "label": "Discovered work surface",
+         "bytes": 130_000, "present": True, "authority": "surface"},
+        {"block_key": "identity-core", "label": "Resident identity core",
+         "bytes": 6_079, "present": True, "authority": "identity"},
+    ]
+    _census_score(tmp_path, contracts=big_blocks, prompt_bytes=136_079)
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _score_env(tmp_path))
+    bar = _inject_text(out).splitlines()[0]
+    assert "identity 5.9 KB ⚠ work-surface" in bar
+
+
+def test_census_stays_unflagged_under_the_warn_threshold(tmp_path):
+    """Positive twin: the identical shape, smaller, never gets the flag —
+    proves the flag is threshold-gated, not unconditional."""
+    _census_score(tmp_path, contracts=_CENSUS_BLOCKS_WITH_AUTHORITY, prompt_bytes=87_000)
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _score_env(tmp_path))
+    bar = _inject_text(out).splitlines()[0]
+    assert "⚠" not in bar
+
+
 # ── Boundary transcript ──────────────────────────────────────────────────
 #
 # The wake capture (`prompt.md`) has always been written and the boundaries

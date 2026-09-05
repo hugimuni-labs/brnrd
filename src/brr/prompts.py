@@ -583,6 +583,155 @@ def _trim_marker(
 _MAX_NAMED_CUT_SECTIONS = 6
 
 
+# How many of a page's own "dated tick" sections survive the age gate below,
+# regardless of the byte budget. Two, not one: a reader mid-tick usually wants
+# to see the immediately preceding tick's own open threads alongside the
+# current one, and one survivor reads like the page just started.
+_AGE_GATE_KEEP = 2
+
+# The two bare, year-less heading shapes a resident's own running-plan pages
+# accrete a section under every tick/session — `## This tick, 09-04`,
+# `## This session, 09-04 …` — never matched by `_HEADING_DATE_RE` (no
+# `YYYY-`), which is exactly why `_page_is_chronological` reads a page built
+# entirely of these as *structural* and trims it from the head, not the tail:
+# the newest ticks are the ones actually at risk of being cut. Captures
+# month/day so :func:`_dated_section_sort_key` can rank these by date
+# instead of assuming a fixed accretion direction — this account's own
+# `surface/plans/<repo>/active.md` prepends its newest tick at the *top*,
+# the opposite of the chronological-log pages the rest of this module
+# assumes, and an earlier version of this gate that kept "the last N in the
+# file" kept the two *oldest* ticks on that exact page.
+_DATED_SECTION_HEADING_RE = re.compile(
+    r"^##\s+(?:This tick|This session),\s*(\d{2})-(\d{2})\b", re.IGNORECASE
+)
+
+
+def _is_dated_section(entry: str) -> bool:
+    """Does this ``## `` section's heading carry a date the age gate acts on?
+
+    Three shapes, matching the task this check exists for: ``This tick,
+    MM-DD``, ``This session, MM-DD`` (:data:`_DATED_SECTION_HEADING_RE`),
+    or a full ISO date anywhere on the heading line (:func:`_heading_date`
+    — the same rule :func:`_entry_key` uses elsewhere in this file, so an
+    ISO-dated section is recognized identically by both). Anything else —
+    including a heading that merely *mentions* a date in its body — is
+    undated and is never touched by :func:`_age_gate_dated_sections`.
+    """
+    heading = entry.split("\n", 1)[0]
+    return (
+        _DATED_SECTION_HEADING_RE.match(heading) is not None
+        or _heading_date(entry) is not None
+    )
+
+
+def _dated_section_sort_key(entry: str) -> tuple[int, int, int]:
+    """``(year, month, day)`` for a dated ``## `` section, newest-sortable.
+
+    A full ISO heading (:func:`_heading_date`) carries a real year. The two
+    bare ``MM-DD`` shapes (``This tick,`` / ``This session,`` —
+    :data:`_DATED_SECTION_HEADING_RE`) carry none — this account's own
+    convention, not something this age gate can invent — so they key on
+    ``(0, month, day)``: comparable to each other in month/day order, and
+    never mistaken for outranking a real ISO year.
+
+    Called only on an entry :func:`_is_dated_section` already matched, so
+    one of the two patterns always parses in practice; ``(0, 0, 0)`` is the
+    unreachable defensive fallback for a future drift between the two
+    predicates, and it deliberately ranks as the *oldest* possible key —
+    the safe failure direction for a gate whose whole job is not dropping
+    the current tick. Ranking an unparseable entry as newest instead would
+    risk keeping it over a real, younger date.
+    """
+    heading = entry.split("\n", 1)[0]
+    iso = _heading_date(entry)
+    if iso is not None:
+        year, month, day = (int(part) for part in iso.split("-"))
+        return (year, month, day)
+    match = _DATED_SECTION_HEADING_RE.match(heading)
+    if match is not None:
+        return (0, int(match.group(1)), int(match.group(2)))
+    return (0, 0, 0)
+
+
+def _age_gate_marker(dropped_titles: list[str], source_hint: str) -> str:
+    """The notice for sections :func:`_age_gate_dated_sections` dropped.
+
+    Same shape as :func:`_structural_trim_marker` (named titles, capped at
+    :data:`_MAX_NAMED_CUT_SECTIONS`, "and N more") but names a different
+    cause on purpose — age, never the wake budget — so a page that hits
+    both this gate and the byte-budget walk in the same wake carries two
+    markers a reader can tell apart, not one that misattributes either cut.
+    """
+    noun = "section" if len(dropped_titles) == 1 else "sections"
+    named = dropped_titles[:_MAX_NAMED_CUT_SECTIONS]
+    listed = " · ".join(named)
+    if len(dropped_titles) > len(named):
+        listed += f" · … and {len(dropped_titles) - len(named)} more"
+    return (
+        f"_({len(dropped_titles)} older dated {noun} age-gated out, keeping "
+        f"the newest {_AGE_GATE_KEEP}: {listed} · full page: {source_hint})_"
+    )
+
+
+def _age_gate_dated_sections(content: str) -> tuple[str, list[str]]:
+    """Drop all but the newest :data:`_AGE_GATE_KEEP` dated ``## `` sections.
+
+    The motivating page, ``surface/plans/<repo>/active.md``, accretes a
+    ``## This tick, <date>`` section every tick forever; its own first line
+    says "this page is the live edge only," but the byte-budget walk alone
+    is not enough to keep it that way — with 19 stale ticks still on the
+    page one wake still spent ~48 KB of the shared surface budget on it.
+    This runs *before* :func:`_trim_sectioned_page`'s byte-budget walk, so
+    the page is small on its own terms first and the budget walk (still
+    live for pages this doesn't shrink enough, or that grow one surviving
+    section past the budget on its own) never has to make this call.
+
+    "Newest" is the parsed date (:func:`_dated_section_sort_key`), **not**
+    document order — this gate does not get to assume a fixed accretion
+    direction. The motivating page, this account's own
+    ``surface/plans/hugimuni-labs__brnrd/active.md``, *prepends* its newest
+    tick at the top (newest-first: ``09-05``, ``09-03``, ``09-02``, …,
+    ``08-24`` at the bottom) — the opposite of the append-to-bottom
+    convention the rest of this module assumes for a fully-ISO-dated
+    chronological page. An earlier version of this gate kept "the last
+    :data:`_AGE_GATE_KEEP` in the file," which on that exact page kept the
+    two *oldest* surviving ticks and dropped the current one — caught
+    before it shipped by a second read against the live page. Ranking by
+    parsed date is correct regardless of which direction a given page
+    accretes in. Undated sections are never counted against the keep limit
+    and never move from their original position; the surviving dated
+    sections also keep their original relative order — this gate filters,
+    it does not reorder.
+
+    Returns ``(content, [])`` — unchanged, not even re-encoded — when there
+    are :data:`_AGE_GATE_KEEP` or fewer dated sections: nothing to gate, and
+    a caller comparing for a byte-identical "whole" injection can trust the
+    identity. Otherwise returns the page with the older dated sections
+    removed and the dropped sections' own heading titles, for the caller to
+    report via :func:`_age_gate_marker`.
+    """
+    entries = _split_h2_entries(content)
+    if not entries:
+        return content, []
+    dated_positions = [i for i, e in enumerate(entries) if _is_dated_section(e)]
+    if len(dated_positions) <= _AGE_GATE_KEEP:
+        return content, []
+    keep_positions = set(
+        sorted(
+            dated_positions,
+            key=lambda i: _dated_section_sort_key(entries[i]),
+            reverse=True,
+        )[:_AGE_GATE_KEEP]
+    )
+    drop_positions = [i for i in dated_positions if i not in keep_positions]
+    dropped_titles = [_heading_title(entries[i]) for i in drop_positions]
+    kept_entries = [e for i, e in enumerate(entries) if i not in drop_positions]
+    match = _H2_RE.search(content)
+    preamble = content[: match.start()].strip()
+    body = "".join(kept_entries).strip()
+    return "\n\n".join(p for p in (preamble, body) if p), dropped_titles
+
+
 def _head_cut_at_line_boundary(text: str, limit: int) -> str:
     """*text* truncated to at most *limit* UTF-8 bytes, preferring a line break.
 
@@ -672,6 +821,61 @@ def _handles_only_marker(dropped_bytes: int, source_hint: str) -> str:
 
 
 def _trim_sectioned_page(content: str, max_bytes: int, source_hint: str) -> TrimResult:
+    """Age-gate, then byte-budget-trim, a ``## ``-sectioned page.
+
+    Thin wrapper around :func:`_trim_sectioned_page_body`: runs
+    :func:`_age_gate_dated_sections` first so a page's own stale "tick"
+    sections are gone *before* the byte-budget walk below ever sees them,
+    then appends :func:`_age_gate_marker` to whatever the byte-budget walk
+    (still live for what the age gate doesn't shrink enough) produces.
+    Every other fact this function returns — the four attestation fields,
+    the "unchanged when it already fits" identity — is untouched when
+    nothing ages out; see :func:`_trim_sectioned_page_body` for that
+    contract.
+
+    Gated on :func:`_page_is_chronological` returning **False** — a genuine
+    accreting log (``ledger/decisions.md``, ``kb/log.md``'s shape: every
+    heading carries a full ``YYYY-MM-DD``) already gets the right treatment
+    from the byte-budget walk below, which keeps as many dated entries as
+    the budget allows and attests exactly what it cut; capping it at
+    :data:`_AGE_GATE_KEEP` regardless of budget would be a regression, not a
+    fix. The page this gate exists for (``plans/<repo>/active.md``) is
+    structural under that same predicate for the reason its own docstring
+    gives — its ``This tick`` / ``This session`` headings carry no year, so
+    none of them satisfy ``_entry_key`` — which is exactly what makes it
+    provably safe to key this gate off the same classification the rest of
+    this function already computes.
+    """
+    if _page_is_chronological(content):
+        return _trim_sectioned_page_body(content, max_bytes, source_hint)
+    gated_content, age_dropped = _age_gate_dated_sections(content)
+    if not age_dropped:
+        return _trim_sectioned_page_body(gated_content, max_bytes, source_hint)
+    # The marker is known before the byte-budget walk runs (age-gating
+    # already happened), so its bytes are reserved out of *its* budget
+    # rather than appended on top afterward — the earlier shape computed
+    # the walk against the full max_bytes and only then added the marker,
+    # which could carry the total past max_bytes by exactly the marker's
+    # own length. `_trim_sectioned_page_body`'s one documented way to still
+    # exceed its budget (the mandatory one-entry floor) is unaffected by
+    # this reservation — that floor was never this function's to fix.
+    marker = _age_gate_marker(age_dropped, source_hint)
+    reserved = len(marker.encode("utf-8")) + 2  # the "\n\n" joiner below
+    body_budget = max(0, max_bytes - reserved)
+    result = _trim_sectioned_page_body(gated_content, body_budget, source_hint)
+    return TrimResult(
+        text=f"{result.text}\n\n{marker}",
+        newest_item=result.newest_item,
+        oldest_item=result.oldest_item,
+        dropped=result.dropped,
+        source_newest=result.source_newest,
+        stale=result.stale,
+        precise=result.precise,
+        floor_overflow_section=result.floor_overflow_section,
+    )
+
+
+def _trim_sectioned_page_body(content: str, max_bytes: int, source_hint: str) -> TrimResult:
     """Trim a ``## ``-sectioned page to fit *max_bytes*, keeping the right half.
 
     **Which half is right is derived, never declared** (#688). The page's
@@ -3064,14 +3268,55 @@ def _build_portal_verb_grammar_block(repo_root: Path) -> str:
 #: has no other way to learn that, so it consults this registry instead of
 #: reading `entry.location` raw; the alternative is that command handing a
 #: resident 754 lines when the live daemon mount only ever seeded ~120 of them.
+def _prior_run_boot_line(repo_root: Path, run_id: str) -> str:
+    """``boot: 156.9 KB (surface 48.6 KB · health 27.8 KB)`` for *run_id*'s
+    own wake, or ``""``.
+
+    Reads that run's own ``.brr/runs/<run_id>/boot-score.json`` — the
+    repo-local scratch copy :func:`brr.run_context.write_boot_score`
+    persists specifically so a run directory "stays inspectable after the
+    fact" (its own docstring). Same discipline as every other note this
+    function's caller assembles: best-effort, never a re-measurement — the
+    two ledger categories are :func:`brr.bootscore.top_ledger_categories`
+    off the numbers that run's own daemon already computed, and an absent
+    or unreadable file (the scratch copy has been cleaned up, or this is a
+    different host) renders nothing rather than a stale or invented claim.
+    """
+    import json
+
+    from . import bootscore
+
+    path = repo_root / ".brr" / "runs" / run_id / "boot-score.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    contracts = payload.get("contracts")
+    if not isinstance(contracts, list):
+        return ""
+    top_two = bootscore.top_ledger_categories(contracts, n=2)
+    if not top_two:
+        return ""
+    cats = " · ".join(f"{authority} {size / 1024:.1f} KB" for authority, size in top_two)
+    total = payload.get("prompt_bytes")
+    if isinstance(total, int) and total > 0:
+        return f"boot: {total / 1024:.1f} KB ({cats})"
+    return f"boot: {cats}"
+
+
 def _build_prior_run_mount_text(repo_root: Path) -> str:
     """The past self's page, whole — what a seeded ``Read`` of the node carries.
 
     ``body.md`` byte for byte (a Read that returned a summary would be the
     lie the mount exists to refuse), then, in brnrd's own bracketed voice —
-    the idiom ``_trim_note`` and the seam already use — the frame line, the
-    run's last message, and the face it wore. A resident waking on this row
-    is reading what it was doing when it stopped, in its own hand.
+    the idiom ``_trim_note`` and the seam already use — the frame line, an
+    optional ``boot: …`` line (:func:`_prior_run_boot_line` — that run's own
+    wake-size gauge, when its scratch ``boot-score.json`` is still around to
+    read), the run's last message, and the face it wore. A resident waking
+    on this row is reading what it was doing when it stopped, in its own
+    hand.
     """
     from . import protocol
 
@@ -3095,6 +3340,9 @@ def _build_prior_run_mount_text(repo_root: Path) -> str:
         if str(fields.get(key) or "").strip()
     ]
     notes = [f"frame: {' · '.join(frame)}"]
+    boot_line = _prior_run_boot_line(repo_root, run_id)
+    if boot_line:
+        notes.append(boot_line)
     for name in ("name", "mood"):
         try:
             value = (node / name).read_text(encoding="utf-8").strip().splitlines()
