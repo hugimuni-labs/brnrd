@@ -303,13 +303,10 @@ def probe_shell_models(
     working machine).
 
     Disk discovery (:func:`_models_from_disk`) is merged *here*, live, on
-    every call — never inside the memoized half. It used to sit inside
-    :func:`_probe_shell_models_cached`, which meant a cache key that never
-    changes just because ``models_cache.json`` changed on disk froze the
-    disk read too: codex rewrites that file from its own network calls on a
-    schedule this process doesn't control, so a model appearing there went
-    invisible until ``cache_clear()`` or a restart — the #1519 disease one
-    layer up, staleness through a feed refresh instead of a PATH flip.
+    every call — the cache below memoizes only the subprocess spawn. Codex
+    rewrites ``models_cache.json`` on its own schedule, so no key this cache
+    could carry would make caching that read safe; it has to sit outside
+    the boundary entirely.
     """
     shell = shell_name.strip()
     if not shell:
@@ -331,9 +328,8 @@ def _probe_shell_models_cached(
 ) -> tuple[str, ...]:
     """The memoized half of :func:`probe_shell_models`: the subprocess spawn only.
 
-    Disk discovery no longer lives here (see :func:`probe_shell_models`) —
-    only the actual ``subprocess.run`` call, the genuinely expensive and
-    slow-changing part, is worth memoizing.
+    Disk discovery lives one level up (see :func:`probe_shell_models`) —
+    only the expensive, slow-changing subprocess call belongs behind a cache.
 
     Keyed on ``on_path`` (in addition to ``shell_name``/``timeout``) so a
     PATH flip is a cache *miss*, not a stale hit — the fix is the key, not a

@@ -294,17 +294,9 @@ def test_probe_shell_models_sees_a_disk_feed_rewrite_without_cache_clear(
 ):
     """A model appearing in ``models_cache.json`` mid-process is picked up on
     the very next call — no ``cache_clear()``, no subprocess re-probe, no
-    restart.
-
-    Before the fix, ``_models_from_disk`` was read *inside*
-    ``_probe_shell_models_cached``, so the whole disk-plus-subprocess result
-    froze behind one ``lru_cache`` keyed on ``(shell_name, on_path,
-    timeout)`` — a key that never changes just because the feed file on disk
-    did. Codex rewrites that file from its own network calls on a schedule
-    this process doesn't control, so a model added there stayed invisible for
-    the rest of the process's life. Same disease as #1519 (a stale PATH
-    negative), one layer up: staleness through a feed refresh instead of a
-    PATH flip.
+    restart. Regression for the bug fixed by moving ``_models_from_disk`` out
+    of ``_probe_shell_models_cached``'s ``lru_cache`` (see that function's
+    docstring); same shape as #1519, one layer up.
     """
     import json as _json
 
