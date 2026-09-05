@@ -238,6 +238,14 @@ export function stickyObservedModel(
 	liveRuns: LiveRun[] | null | undefined,
 	sticky: RunnerSticky | null | undefined
 ): string | null {
+	// `conversation_key` first, inverting this file's usual precedence
+	// (`stickyThreadLabel()` in SpoolRack.svelte reads `correspondent_key`
+	// first, for a human-facing platform label). Deliberate here:
+	// `LiveRun.stream` is always a conversation key on the wire
+	// (`cloud_publisher.py`'s own doc), never a correspondent key, so
+	// matching against it first is matching the field this join actually
+	// keys on — `correspondent_key` is the fallback for an older sticky
+	// record that only ever carried that name.
 	const key = sticky?.conversation_key || sticky?.correspondent_key;
 	if (!liveRuns || !key) return null;
 	const matches = liveRuns.filter(

@@ -4343,6 +4343,19 @@ def _run_worker(
         # would make every running heartbeat report the old thread until the
         # replacement process returned and overwrote it.
         task.meta.pop("codex_thread_id", None)
+        # Same reasoning as the thread id above, for the model a previous
+        # attempt observed: a retry that escalates to a different runner
+        # must not leave attempt 1's `model_observed` reading in place, on
+        # either surface that carries it — a stale value here would show as
+        # attempt 2 running attempt 1's model, in both task.meta-derived
+        # payloads and the live presence entry.
+        task.meta.pop("core_observed", None)
+        runner_meta = {k: v for k, v in runner_meta.items() if k not in ("model_observed", "core_mismatch")}
+        if presence_id:
+            try:
+                presence.heartbeat(brr_dir, presence_id, runner_model_observed="")
+            except OSError:
+                pass
         try:
             codex_events_path.unlink()
         except FileNotFoundError:
