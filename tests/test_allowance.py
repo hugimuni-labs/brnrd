@@ -65,8 +65,23 @@ def test_claude_transcript_tokens_sums_every_assistant_turn(tmp_path):
         {"input_tokens": 20, "output_tokens": 30, "cache_read_input_tokens": 300,
          "cache_creation_input_tokens": 0},
     )
-    # 100+50+0+200 + 20+30+300+0 = 700
-    assert allowance.claude_transcript_tokens(path) == 700
+    # cost-weighted (TOKEN_WEIGHTS): turn 1 = 100 + 50*5 + 0 + 200*1.25 = 600;
+    # turn 2 = 20 + 30*5 + 300*0.1 + 0 = 200  → 800
+    assert allowance.claude_transcript_tokens(path) == 800
+
+
+def test_weighted_tokens_uses_the_providers_price_ratios():
+    # A cache re-read of the same context is a tenth of a fresh read; output
+    # is five reads. The measured strand (146m raw, 145m of it re-reads)
+    # lands near 17m weighted — the whole reason the unit is weighted.
+    assert allowance.weighted_tokens(input=100) == 100
+    assert allowance.weighted_tokens(cache_read=1000) == 100
+    assert allowance.weighted_tokens(output=10) == 50
+    assert allowance.weighted_tokens(cache_creation=100) == 125
+    assert allowance.weighted_tokens(
+        input=1_032, output=342_527, cache_read=144_941_516,
+        cache_creation=919_718,
+    ) == 17_357_466
 
 
 def test_claude_transcript_tokens_ignores_non_assistant_rows(tmp_path):
@@ -121,7 +136,11 @@ def test_codex_total_tokens_used_reads_total_token_usage(tmp_path):
                 "type": "token_count",
                 "info": {
                     "model_context_window": 200000,
-                    "total_token_usage": {"total_tokens": 123456},
+                    "total_token_usage": {
+                        "input_tokens": 10_000, "cached_input_tokens": 9_000,
+                        "cache_write_input_tokens": 0, "output_tokens": 100,
+                        "reasoning_output_tokens": 20, "total_tokens": 10_100,
+                    },
                     "last_token_usage": {"input_tokens": 1000, "total_tokens": 1200},
                 },
             },
@@ -129,12 +148,33 @@ def test_codex_total_tokens_used_reads_total_token_usage(tmp_path):
         encoding="utf-8",
     )
     env = {"CODEX_HOME": str(tmp_path)}
-    assert codex_status.total_tokens_used(env, thread_id=thread_id) == 123456
+    # fresh 1,000 + cached 9,000*0.1 + output 100*5 = 2,400 (input_tokens
+    # includes the cached share — measured on a real rollout).
+    assert codex_status.total_tokens_used(env, thread_id=thread_id) == 2_400
     # Metering dispatch picks codex over claude when the runner is codex.
     assert allowance.collect_spent("codex", None, codex_thread_id=thread_id) is None
     # (no CODEX_HOME wired through env for the dispatch path — this asserts
     # only that collect_spent doesn't crash and defers to the real env; the
     # per-Shell reader itself is covered directly above.)
+
+
+def test_codex_total_tokens_used_falls_back_to_the_raw_total(tmp_path):
+    root = tmp_path / "sessions" / "2026" / "09" / "05"
+    root.mkdir(parents=True)
+    thread_id = "22222222-2222-2222-2222-222222222222"
+    rollout = root / f"rollout-2026-09-05T00-00-00-{thread_id}.jsonl"
+    rollout.write_text(
+        json.dumps({
+            "timestamp": "2026-09-05T00:00:00Z",
+            "payload": {
+                "type": "token_count",
+                "info": {"total_token_usage": {"total_tokens": 123456}},
+            },
+        }) + "\n",
+        encoding="utf-8",
+    )
+    env = {"CODEX_HOME": str(tmp_path)}
+    assert codex_status.total_tokens_used(env, thread_id=thread_id) == 123456
 
 
 def test_codex_total_tokens_used_none_without_a_rollout(tmp_path):
