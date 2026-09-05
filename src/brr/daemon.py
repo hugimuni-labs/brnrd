@@ -76,6 +76,7 @@ from . import gate_receipt
 from . import claude_status
 from . import claude_usage
 from . import gitops
+from . import hold_verb
 from . import hooks as hooks_mod
 from . import knowledge
 from . import message_store
@@ -105,6 +106,7 @@ from . import trust
 from . import updates
 from . import news_lane
 from . import release_availability
+from . import resource_hold
 from . import usage_samples
 from . import weld
 from . import worktree
@@ -4768,6 +4770,19 @@ def _run_worker(
                 expected_core=runner_choice.model,
                 selected_runner=runner_choice,
                 codex_events_path=codex_events_path,
+                # design-the-allowance.md's resource hold: a fresh dispatch
+                # resuming a held conversation carries the preserved
+                # native session id (stamped onto the triggering event by
+                # `_apply_resource_hold_resume`, copied onto `task.meta`
+                # by `Run.from_event` for free). First attempt only — a
+                # retry of *this same* dispatch must not re-resume the
+                # native session a second time with the same prompt, which
+                # `codex exec resume` would read as a genuinely new turn
+                # rather than a retry.
+                resume_native_session_id=(
+                    task.meta.get("resume_native_session_id")
+                    if attempt == 1 else None
+                ),
             ),
             cfg=cfg,
             trace=True,
@@ -4897,6 +4912,14 @@ def _run_worker(
                     # runner error in the terminal note.
                     transport=result.transport_failure,
                 ),
+                # The structured cause codex itself named for a died-in-
+                # flight turn (runner.py's ``_extract_codex_task_error``),
+                # or ``None`` for every other Shell/outcome. Carried
+                # alongside the regex-derived ``failure_kind`` above rather
+                # than folded into it: a resource hold needs the *exact*
+                # kind codex stated, not "this text also matched a quota
+                # pattern" — see ``_maybe_arm_resource_hold_on_failure``.
+                "codex_task_error": result.codex_task_error,
             }
             attempt_failure_kind = str(last_failure["failure_kind"])
         else:
@@ -4911,6 +4934,7 @@ def _run_worker(
                             exit_code=result.returncode,
                             detail=detail,
                         ),
+                        "codex_task_error": result.codex_task_error,
                     }
                     attempt_failure_kind = str(last_failure["failure_kind"])
         _record_runner_auth_health(repo_root, runner_choice, attempt_failure_kind)
@@ -5069,6 +5093,23 @@ def _run_worker(
             # carrier now stays on disk too, but synthetic/older gates can
             # still race the transition during deploy skew.
             terminal_reply = protocol.read_response(responses_dir, eid)
+            pending_hold = task.meta.pop("pending_resource_hold", None)
+            if pending_hold is not None:
+                # The resident's own `hold:` directive (outbox parse above)
+                # — a clean turn that chose to park rather than one that
+                # failed to. Whatever it said this turn was already staged
+                # into `resp_path` by the ordinary success-path delivery
+                # just above; `_finalize_resource_hold`'s own terminal-body
+                # write is purely a fallback for a `hold:` with no
+                # accompanying reply. Routed to the same hold-shaped
+                # finalize the automatic-detection path uses instead of
+                # the ordinary "done" sequence below — no double-finalize,
+                # no double-publish.
+                return _finalize_resource_hold(
+                    emit, task, event, eid, runs_dir, env_backend, env_ctx,
+                    branch_plan, cfg, inbox_dir, responses_dir, resp_path,
+                    pending_hold, conversation_key=task.conversation_key,
+                )
             task.update_status("done", runs_dir)
             _set_event_status_if_present(event, "done")
             emit("finalizing", run_id=task.id, stage="done")
@@ -5117,6 +5158,19 @@ def _run_worker(
             )
             return task
 
+        hold_spec = _maybe_arm_resource_hold_on_failure(last_failure, task=task)
+        if hold_spec is not None:
+            # A confident, structured quota exhaustion pre-empts the
+            # ordinary retry/fallback/give-up decision below entirely —
+            # design-the-allowance.md: "no automatic provider switch" for
+            # exactly this evidence. A regex-only QUOTA_EXHAUSTED guess
+            # (no structured codex_task_error) still falls through
+            # unchanged to AUTO_FALLBACK_FAILURES further down.
+            return _finalize_resource_hold(
+                emit, task, event, eid, runs_dir, env_backend, env_ctx,
+                branch_plan, cfg, inbox_dir, responses_dir, resp_path,
+                hold_spec, conversation_key=task.conversation_key,
+            )
         retry_reason = result.retry_reason()
         will_retry = bool(retry_reason and retries_used < max_retries)
         fallback_runner_name: str | None = None
@@ -6695,6 +6749,13 @@ def _write_live_portal_state(
             },
             "budget": {"elapsed_seconds": elapsed},
             "await": await_state,
+            # design-the-allowance.md's resource hold: published only once
+            # armed (``None`` renders as absent, same as `scm`/`produce`
+            # below) — "the UI shows why the seat is waiting and the one
+            # action that would release it" (design-the-continuous-seat.md).
+            "resource_hold": resource_hold.portal_projection(
+                task.meta.get("resource_hold")
+            ),
             "scm": scm_facet,
             "produce": produce_facet,
             # #904's armed dated-letters projection: the still-armed `at:`
@@ -9717,6 +9778,76 @@ def _drain_outbox(
                     event_id=event_id,
                     file=file_path,
                     timeout_seconds=timeout_seconds,
+                )
+                _retire_outbox_staging(fpath)
+            continue
+        if "hold" in fm:
+            # design-the-continuous-seat.md / design-the-allowance.md: the
+            # resident's own proactive resource hold (the "notify near
+            # 1-2% quota, await a manual reset" case) — distinct from
+            # ``await:`` in the one way that matters: this ends the run's
+            # process (see resource_hold.py's module docstring for why
+            # keeping it alive is precisely the bug) rather than blocking
+            # inside it, so it is handled outside the normal outbox/reply
+            # flow — arming here just validates and stages the spec; the
+            # actual status transition happens once this attempt's worker
+            # loop unwinds (mirroring how `cut:`'s bolt is recorded here
+            # but its run-completion effect lands at the worker tail).
+            with _OutboxEntryGuard(outbox_dir, fpath):
+                hold_spec, hold_error = hold_verb.parse_hold(fm)
+                if hold_error:
+                    _record_outbox_notice(
+                        outbox_dir, f"hold dropped: {hold_error}",
+                        kind="dropped", lifetime="run", source_file=fpath.name,
+                    )
+                    _retire_outbox_staging(fpath)
+                    continue
+                native_session_id = task.meta.get("codex_thread_id")
+                provider = (
+                    hold_spec["provider"]
+                    or _resource_hold_provider_for_runner(
+                        task.meta.get("runner_shell") or task.meta.get("runner_name")
+                    )
+                )
+                resume_condition = hold_spec["resume_condition"]
+                reset_deadline = hold_spec["reset_deadline_hint"]
+                if resume_condition == resource_hold.RESUME_RESET and reset_deadline is None:
+                    reset_deadline = _codex_reset_deadline(None, native_session_id)
+                if resume_condition == resource_hold.RESUME_RESET and reset_deadline is None:
+                    # Explicit, concrete boundary rather than a silent
+                    # downgrade nobody is told about — "Unknown or
+                    # unsupported native resume capability must be
+                    # explicit" applies just as much to an unmeasurable
+                    # reset condition.
+                    resume_condition = resource_hold.RESUME_OPERATOR
+                    _record_outbox_notice(
+                        outbox_dir,
+                        "hold: resume: reset requested but no measured "
+                        "provider reset deadline is available — armed as "
+                        "resume: operator instead",
+                        kind="advisory", lifetime="run", source_file=fpath.name,
+                    )
+                task.meta["pending_resource_hold"] = {
+                    "reason": hold_spec["reason"],
+                    "provider": provider,
+                    "detail": body or None,
+                    "native_session_id": native_session_id,
+                    "resume_kind": (
+                        resource_hold.RESUME_NATIVE if native_session_id
+                        else resource_hold.RESUME_UNSUPPORTED
+                    ),
+                    "resume_condition": resume_condition,
+                    "reset_deadline": reset_deadline,
+                }
+                promoted += 1
+                if stats is not None:
+                    stats["hold"] = stats.get("hold", 0) + 1
+                emit(
+                    "hold_requested",
+                    run_id=task.id,
+                    event_id=event_id,
+                    reason=hold_spec["reason"],
+                    resume_condition=resume_condition,
                 )
                 _retire_outbox_staging(fpath)
             continue
@@ -15549,7 +15680,8 @@ def _defer_pending_siblings_after_failure(
     lead_event_id: str,
     run_id: str,
     seconds: float,
-) -> int:
+    reason: str = "operational_failure",
+) -> list[str]:
     """Brake sibling events after a terminal run failure.
 
     The current lead event receives the explicit failure note. Other
@@ -15567,19 +15699,34 @@ def _defer_pending_siblings_after_failure(
     regression for the common 1-3 event case), and each later one is pushed
     ``step`` seconds further out, where ``step`` shrinks as the pile grows
     so the total added spread never exceeds 30 minutes.
+
+    ``reason`` distinguishes an ordinary operational give-up (the default)
+    from a resource hold (``_finalize_resource_hold`` passes
+    ``"resource_hold"``) — a resume needs to tell "parked because of this
+    hold" apart from "parked because of an unrelated failure", and both
+    write the identical ``defer_until``/``deferred_by_run`` shape.
+
+    Returns the ids actually stamped — a resource hold accumulates these
+    onto its own record (``resource_hold.accumulate_event``) so a later
+    resume can find and un-defer them; an already-pending sibling stamped
+    *here*, at arm time, would otherwise never reach
+    ``accumulated_event_ids`` at all (only events arriving *after* arming
+    flow through ``_handle_resource_held_events``'s own accumulation),
+    and stay deferred for the full ``_HOLD_DEFER_SECONDS`` horizon with no
+    resume ever reaching them.
     """
     if seconds <= 0:
-        return 0
+        return []
     siblings = [
         pending
         for pending in protocol.list_pending(inbox_dir)
         if pending.get("id") != lead_event_id and pending.get("status") == "pending"
     ]
     if not siblings:
-        return 0
+        return []
     now = time.time()
     step = min(2.0, 1800.0 / max(1, len(siblings) - 1))
-    changed = 0
+    stamped: list[str] = []
     for index, pending in enumerate(siblings):
         defer_until = _format_utc_after(seconds + index * step, now=now)
         try:
@@ -15587,12 +15734,507 @@ def _defer_pending_siblings_after_failure(
                 pending,
                 defer_until=defer_until,
                 deferred_by_run=run_id,
-                defer_reason="operational_failure",
+                defer_reason=reason,
             )
         except OSError:
             continue
-        changed += 1
-    return changed
+        eid = str(pending.get("id") or "")
+        if eid:
+            stamped.append(eid)
+    return stamped
+
+
+# ── Resource hold (design-the-allowance.md) ─────────────────────────
+
+#: Sources a resource hold must accumulate rather than treat as a resume
+#: trigger — routine daemon-internal bookkeeping, never a person.
+#: "must not be released by child completion or recurring schedule; those
+#: accumulate" (the acceptance bar this set exists to meet). Deliberately
+#: an explicit allowlist, not "everything internal": ``dispatch_message``
+#: (a `to:` steer) and ``cli``/``respawn`` are internally-minted too
+#: (``protocol.INTERNAL_SOURCES``) but represent a deliberate address to
+#: *this* conversation, which is exactly what a resume should react to.
+_HOLD_ACCUMULATE_ONLY_SOURCES = frozenset({
+    "schedule",
+    "spawn_completed",
+    "spawn_queued",
+    "spawn_allowance_requested",
+    "spawn_submitted",
+})
+
+#: The sibling-defer horizon a resource hold stamps on events already
+#: pending at arm time (``_finalize_resource_hold``) and on routine events
+#: arriving afterward (``_handle_resource_held_events``). Not "forever" —
+#: nothing here is — but long enough that the *real* release mechanism is
+#: always the explicit one (an addressed reply, or a measured reset
+#: deadline), never this timer quietly expiring on its own; see
+#: ``resource_hold.py``'s module docstring.
+_HOLD_DEFER_SECONDS = 60.0 * 60.0 * 24.0 * 365.0 * 5.0
+
+
+def _resource_hold_provider_for_runner(runner_name: str | None) -> str:
+    """Best-effort provider label for a hold record from a runner/Shell name."""
+    name = str(runner_name or "").strip().lower()
+    if name.startswith("codex"):
+        return "codex"
+    if name.startswith("claude"):
+        return "claude"
+    return name or "unknown"
+
+
+def _codex_reset_deadline(
+    env: dict[str, str] | None, native_session_id: str | None,
+) -> float | None:
+    """The nearer of codex's own two rate-limit windows' stated reset epoch.
+
+    A single, best-effort, *one-time* local file read (``codex_status.
+    load_levels`` re-reads the held thread's own rollout — no subprocess,
+    no model call, no live poll) of the provider's own ``resets_at``
+    fields — never a guessed conversion, never a repeated check. ``None``
+    when the id is missing, the rollout can't be read, or neither window
+    carries a reset timestamp: an honest "unknown", never a fabricated
+    deadline (a ``resume: reset`` hold with no deadline simply never
+    releases on its own — see ``resource_hold.reset_condition_met``).
+    """
+    if not native_session_id:
+        return None
+    try:
+        levels = codex_status.load_levels(env, thread_id=native_session_id)
+    except Exception:  # noqa: BLE001 — a hold-arming read must never crash the worker
+        return None
+    quota = (levels or {}).get("quota") if isinstance(levels, dict) else None
+    if not isinstance(quota, dict):
+        return None
+    candidates = [
+        quota.get("primary_resets_at"), quota.get("secondary_resets_at"),
+    ]
+    numeric = [float(c) for c in candidates if isinstance(c, (int, float))]
+    return min(numeric) if numeric else None
+
+
+def _maybe_arm_resource_hold_on_failure(
+    last_failure: dict | None,
+    *,
+    task: Run,
+) -> dict[str, object] | None:
+    """A confident, structured quota exhaustion → a hold spec, or ``None``.
+
+    Deliberately narrow — see ``resource_hold.py``'s module docstring and
+    design-the-allowance.md's acceptance bar, "known usage_limit error
+    takes resource path, unrelated error retains failure": only the exact
+    structured cause codex itself named
+    (``codex_task_error.kind == "usage_limit_exceeded"``, from
+    ``runner.py``'s ``_extract_codex_task_error``), never the broader
+    regex-derived ``QUOTA_EXHAUSTED`` alone — a text match on "rate limit"
+    or "resets" still falls through unchanged to the existing
+    ``AUTO_FALLBACK_FAILURES`` path. Also never fires for a strand
+    (``task.meta["spawn_parent_run_id"]`` present) — a strand's own
+    allowance/ask-park contract (design-the-allowance.md slice 1,
+    ``allowance.py``) already owns that lifecycle, and widening this would
+    just be a second, competing quota policy for the same run.
+
+    Automatic detection never selects ``RESUME_RESET`` on its own —
+    "silence is neither permission nor a reset" — only an explicit
+    resident ``hold:`` directive can opt into a measured-reset release
+    (the ``if "hold" in fm:`` branch in ``_drain_outbox``, via
+    ``hold_verb.parse_hold``).
+    """
+    if not last_failure or task.meta.get("spawn_parent_run_id"):
+        return None
+    codex_task_error = last_failure.get("codex_task_error")
+    if not isinstance(codex_task_error, dict):
+        return None
+    if codex_task_error.get("kind") != "usage_limit_exceeded":
+        return None
+    native_session_id = task.meta.get("codex_thread_id")
+    return {
+        "reason": resource_hold.REASON_QUOTA_EXHAUSTED,
+        "provider": "codex",
+        "detail": codex_task_error.get("message") or codex_task_error.get("kind"),
+        "native_session_id": native_session_id,
+        "resume_kind": (
+            resource_hold.RESUME_NATIVE if native_session_id
+            else resource_hold.RESUME_UNSUPPORTED
+        ),
+        "resume_condition": resource_hold.RESUME_OPERATOR,
+        "reset_deadline": None,
+    }
+
+
+def _arm_resource_hold(
+    task: Run,
+    runs_dir: Path,
+    *,
+    conversation_key: str,
+    **hold_fields: object,
+) -> dict[str, object]:
+    """Park *task*: persist the hold record and move its status to "held".
+
+    ``task.meta["resource_hold"]`` rides ``Run.save``'s existing
+    frontmatter round-trip for free — no new persistence mechanism, and
+    the record survives a daemon restart exactly as any other run-manifest
+    field does. ``"held"`` is deliberately excluded from
+    ``_UNFINISHED_RUN_STATUSES``, so every boot-time janitor
+    (``_mark_interrupted_runs``, the zombie sweepers,
+    ``_reconcile_orphaned_spawn_dispatches``) leaves this run alone without
+    needing to know this function exists.
+    """
+    previous = task.meta.get("resource_hold") or {}
+    generation = int(previous.get("generation") or 0) + 1
+    meta = resource_hold.build(
+        conversation_key=conversation_key,
+        generation=generation,
+        **hold_fields,
+    )
+    task.meta["resource_hold"] = meta
+    task.update_status(resource_hold.RUN_STATUS, runs_dir)
+    return meta
+
+
+def _hold_body(meta: dict[str, object]) -> str:
+    """The correspondent-facing notice a fresh hold writes as its reply."""
+    provider = str(meta.get("provider") or "the provider")
+    reason = str(meta.get("reason") or "a resource limit").replace("_", " ")
+    lines = [f"Parking this conversation — {provider} hit {reason}."]
+    detail = meta.get("detail")
+    if detail:
+        lines.append(str(detail))
+    if (
+        meta.get("resume_condition") == resource_hold.RESUME_RESET
+        and meta.get("reset_deadline") is not None
+    ):
+        when = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(meta["reset_deadline"])),
+        )
+        lines.append(
+            f"Resuming automatically once the measured window resets "
+            f"({when}) — or send a message any time to resume sooner."
+        )
+    else:
+        lines.append(
+            "Nothing else will wake this seat while it's parked — send a "
+            "message when ready to resume."
+        )
+    return "\n\n".join(lines)
+
+
+def _write_terminal_hold_response(
+    emit: _WorkerEmit,
+    task: Run,
+    event: dict,
+    responses_dir: Path,
+    response_path: Path,
+    meta: dict[str, object],
+) -> bool:
+    """Sibling of ``_write_terminal_failure_response`` for a resource hold.
+
+    Same addressed-delivery guards (a run nobody is waiting to hear from,
+    or one that already wrote a response this attempt, gets no duplicate
+    note) and the same ``run_outcome`` provenance stamp — just hold-shaped
+    body text instead of failure prose.
+    """
+    if not _event_requires_thread_delivery(event) and not _crash_requires_notice(event):
+        return False
+    if _response_has_body(response_path):
+        return False
+    body = _hold_body(meta)
+    task.terminal_reply = body
+    protocol.write_response(responses_dir, event["id"], body)
+    _record_response_artifact(emit, task, response_path)
+    _set_event_run_outcome(event, task.status)
+    return True
+
+
+def _finalize_resource_hold(
+    emit: _WorkerEmit,
+    task: Run,
+    event: dict,
+    eid: str,
+    runs_dir: Path,
+    env_backend,
+    env_ctx,
+    branch_plan,
+    cfg: dict,
+    inbox_dir: Path,
+    responses_dir: Path,
+    resp_path: Path,
+    hold_fields: dict[str, object],
+    *,
+    conversation_key: str,
+) -> Run:
+    """Park *task* on a resource hold instead of retry / fallback / give-up.
+
+    Mirrors the ordinary give-up tail's worktree-preservation sequence
+    (``_capture_worktree`` + ``env_backend.finalize``) exactly — a held
+    run's in-flight edits must survive precisely as a failed run's do —
+    but status lands on ``resource_hold.RUN_STATUS`` instead of ``"error"``,
+    no retry is attempted, and sibling events are deferred under
+    ``defer_reason="resource_hold"`` rather than ``"operational_failure"``.
+
+    A sibling already pending *at arm time* is deferred here, not by
+    ``_handle_resource_held_events`` (that filter only ever sees events
+    arriving *after* this run's own dispatch already claimed the lead) —
+    so it must be folded into ``accumulated_event_ids`` here too, or a
+    resume/reset release would never find it to un-defer: it would sit
+    parked for the full ``_HOLD_DEFER_SECONDS`` horizon regardless of how
+    many correspondent messages arrive afterward.
+    """
+    meta = _arm_resource_hold(
+        task, runs_dir, conversation_key=conversation_key, **hold_fields,
+    )
+    print(
+        f"[brnrd] worker {eid}: resource hold armed "
+        f"({meta['provider']}/{meta['reason']}, resume={meta['resume_condition']})"
+    )
+    _write_terminal_hold_response(emit, task, event, responses_dir, resp_path, meta)
+    deferred_ids = _defer_pending_siblings_after_failure(
+        inbox_dir,
+        lead_event_id=eid,
+        run_id=task.id,
+        seconds=_HOLD_DEFER_SECONDS,
+        reason="resource_hold",
+    )
+    if deferred_ids:
+        for deferred_id in deferred_ids:
+            meta = resource_hold.accumulate_event(meta, deferred_id)
+        task.meta["resource_hold"] = meta
+        task.save(runs_dir)
+    _capture_worktree(task, env_ctx, branch_plan, cfg, runs_dir)
+    emit("finalizing", run_id=task.id, stage="held")
+    with _branch_lock(branch_plan.target_branch):
+        task = env_backend.finalize(env_ctx, task, runs_dir)
+    _emit_preserved_containers(emit, task)
+    emit(
+        "held",
+        run_id=task.id,
+        event_id=eid,
+        reason=meta["reason"],
+        provider=meta["provider"],
+        resume_condition=meta["resume_condition"],
+        resume_kind=meta["resume_kind"],
+    )
+    return task
+
+
+def _held_runs_for_repo(runs_dir: Path) -> list[Run]:
+    """Active (unreleased) resource holds recorded under *runs_dir*.
+
+    Newest-armed first — a repo should only ever have one live hold at a
+    time (the single-flight resident slot means only one resident thought
+    runs per repo), but if a stale record ever survives beside a fresher
+    one, the fresher one is the honest answer to "is this repo held".
+    """
+    held = [
+        r for r in list_runs(runs_dir, status=resource_hold.RUN_STATUS)
+        if resource_hold.is_active(r.meta.get("resource_hold"))
+    ]
+    held.sort(
+        key=lambda r: str((r.meta.get("resource_hold") or {}).get("armed_at") or ""),
+        reverse=True,
+    )
+    return held
+
+
+def _accumulate_held_event(runs_dir: Path, held: Run, event_id: str) -> None:
+    """Record *event_id* as folded into *held* rather than dispatched."""
+    if not event_id:
+        return
+    held.meta["resource_hold"] = resource_hold.accumulate_event(
+        held.meta.get("resource_hold") or {}, event_id,
+    )
+    held.save(runs_dir)
+
+
+def _undefer_held_event(
+    inbox_dir: Path,
+    event_id: str,
+    *,
+    resume_native_session_id: str | None = None,
+    resume_native_provider: str | None = None,
+) -> None:
+    """Release one accumulated event back to ordinary pending eligibility.
+
+    Reads the event fresh off disk by id (the same ``inbox_dir /
+    f"{id}.md"`` lookup ``daemon.py`` already uses elsewhere) rather than
+    trusting any cached copy — the accumulated id is the receipt
+    ``resource_hold.accumulate_event`` recorded; the event's *current*
+    on-disk state (still present, not yet delivered/noted by some other
+    path) is what actually decides whether there's anything left to
+    un-defer. When a native resume is available, it is stamped onto
+    *every* un-deferred sibling, not just whichever event actually
+    triggered the release — an accumulated event could sort ahead of the
+    trigger and become the fresh dispatch lead instead.
+    """
+    if not event_id:
+        return
+    ev = protocol._read_event(inbox_dir / f"{event_id}.md")
+    if not ev:
+        return
+    updates: dict[str, object] = {
+        "defer_until": None, "deferred_by_run": None, "defer_reason": None,
+    }
+    if resume_native_session_id:
+        updates["resume_native_session_id"] = resume_native_session_id
+    if resume_native_provider:
+        updates["resume_native_provider"] = resume_native_provider
+    try:
+        protocol.update_event_meta(ev, **updates)
+    except OSError:
+        pass
+
+
+def _apply_resource_hold_resume(runs_dir: Path, inbox_dir: Path, held: Run, event: dict) -> None:
+    """Release *held* and enrich *event* so its fresh dispatch can resume natively.
+
+    Consumes the hold exactly once — a second correspondent message
+    arriving before this dispatch actually runs reads ``is_active`` already
+    ``False`` (``_held_runs_for_repo`` won't offer it again) rather than
+    double-releasing. Every event this hold had accumulated is un-deferred
+    here too: they were never lost (``resource_hold.accumulated_event_ids``
+    is the receipt), and folding them back to ordinary pending status lets
+    the resumed run's own boundary-time inbox read pick them up like any
+    other burst of mail — no bespoke folding logic needed.
+    """
+    meta = held.meta.get("resource_hold") or {}
+    if not resource_hold.is_active(meta):
+        return
+    released = resource_hold.mark_released(meta, by="operator")
+    held.meta["resource_hold"] = released
+    held.save(runs_dir)
+    if (
+        released.get("native_session_id")
+        and released.get("resume_kind") == resource_hold.RESUME_NATIVE
+    ):
+        event["resume_native_session_id"] = released["native_session_id"]
+        event["resume_native_provider"] = released.get("provider")
+    for accumulated_id in released.get("accumulated_event_ids") or []:
+        _undefer_held_event(
+            inbox_dir, accumulated_id,
+            resume_native_session_id=event.get("resume_native_session_id"),
+            resume_native_provider=event.get("resume_native_provider"),
+        )
+
+
+def _release_reset_holds_due(
+    account_context: account.AccountContext | None,
+    repo_root: Path,
+) -> int:
+    """Release every ``resume: reset`` hold whose measured deadline passed.
+
+    Rides the existing zombie-sweep cadence
+    (``_ZOMBIE_SWEEP_INTERVAL_SECONDS``) deliberately — another repair on
+    an existing slow clock, not a new scheduler. An ``operator``-condition
+    hold is never a candidate here at all
+    (``resource_hold.reset_condition_met`` returns ``False`` for one by
+    construction); only a hold that itself chose ``resume: reset`` can be
+    released this way, and only by the *measured* deadline captured once
+    at arm time — never a fresh poll.
+    """
+    released = 0
+    roots: dict[Path, Path] = {}
+    for candidate in [repo_root] + [
+        registered.root for registered in (
+            account_context.repos.values() if account_context else []
+        )
+    ]:
+        try:
+            key = candidate.resolve()
+        except OSError:
+            key = candidate
+        roots.setdefault(key, candidate)
+    for root in roots.values():
+        brr_dir = gitops.shared_brr_dir(root)
+        runs_dir = brr_dir / "runs"
+        if not runs_dir.is_dir():
+            continue
+        inbox_dir = _repo_inbox(root)
+        for held in _held_runs_for_repo(runs_dir):
+            meta = held.meta.get("resource_hold") or {}
+            if not resource_hold.reset_condition_met(meta):
+                continue
+            released_meta = resource_hold.mark_released(meta, by="reset")
+            held.meta["resource_hold"] = released_meta
+            held.save(runs_dir)
+            for accumulated_id in released_meta.get("accumulated_event_ids") or []:
+                _undefer_held_event(
+                    inbox_dir, accumulated_id,
+                    resume_native_session_id=released_meta.get("native_session_id"),
+                    resume_native_provider=released_meta.get("provider"),
+                )
+            released += 1
+            print(
+                f"[brnrd] resource hold released by measured reset: "
+                f"{held.id} ({released_meta.get('provider')})"
+            )
+    return released
+
+
+def _handle_resource_held_events(
+    pending: list["_DispatchTarget"],
+    account_context: account.AccountContext | None,
+) -> list["_DispatchTarget"]:
+    """Divert dispatch candidates for a repo currently parked on a hold.
+
+    A resource hold's entire point is that nothing wakes the model while
+    armed except an explicit resume, so a routine system event for a held
+    conversation must accumulate for free rather than spin up a fresh
+    resident dispatch the way an idle repo ordinarily would — "no
+    scheduled or child event defeats a quota hold"
+    (design-the-allowance.md). A genuine correspondent message is the
+    resume trigger instead: it passes through unchanged (enriched with
+    resume metadata by ``_apply_resource_hold_resume``) and continues down
+    the ordinary pipeline exactly as it would for an idle repo.
+    """
+    if not pending:
+        return pending
+    by_repo: dict[Path, list["_DispatchTarget"]] = {}
+    for target in pending:
+        by_repo.setdefault(target.repo_root, []).append(target)
+    survivors: list["_DispatchTarget"] = []
+    for repo_root, targets in by_repo.items():
+        runs_dir = gitops.shared_brr_dir(repo_root) / "runs"
+        held_runs = _held_runs_for_repo(runs_dir)
+        if not held_runs:
+            survivors.extend(targets)
+            continue
+        held = held_runs[0]
+        for target in targets:
+            source = str(target.event.get("source") or "")
+            if source in _HOLD_ACCUMULATE_ONLY_SOURCES:
+                try:
+                    protocol.update_event_meta(
+                        target.event,
+                        defer_until=_format_utc_after(_HOLD_DEFER_SECONDS),
+                        deferred_by_run=held.id,
+                        defer_reason="resource_hold",
+                    )
+                except OSError:
+                    survivors.append(target)
+                    continue
+                _accumulate_held_event(
+                    runs_dir, held, str(target.event.get("id") or ""),
+                )
+                continue
+            held_conv_key = str(
+                (held.meta.get("resource_hold") or {}).get("conversation_key") or ""
+            )
+            event_conv_key = str(target.event.get("conversation_key") or "")
+            if held_conv_key and event_conv_key != held_conv_key:
+                # A different conversation entirely (a GitHub issue
+                # comment on the same repo while a Telegram seat is
+                # held, say) — this event is not this hold's concern.
+                # Pass it through untouched: no release, no resume
+                # stamp. The resident slot is free (the held run's
+                # process already exited); whichever conversation
+                # dispatches here spends its own quota, not the held
+                # one's.
+                survivors.append(target)
+                continue
+            _apply_resource_hold_resume(
+                runs_dir, target.inbox_dir, held, target.event,
+            )
+            survivors.append(target)
+    return survivors
 
 
 def _set_event_status_if_present(event: dict, status: str) -> bool:
@@ -16327,6 +16969,10 @@ def start(
             if time.monotonic() >= next_zombie_sweep:
                 next_zombie_sweep = time.monotonic() + _ZOMBIE_SWEEP_INTERVAL_SECONDS
                 _sweep_zombie_runs(account_context)
+                try:
+                    _release_reset_holds_due(account_context, repo_root)
+                except Exception as exc:  # noqa: BLE001 — a janitor must never sink the loop
+                    print(f"[brnrd] resource-hold reset sweep skipped: {exc}")
             if time.monotonic() >= next_retention_sweep:
                 interval_s = _retention_sweep(repo_root, account_context)
                 next_retention_sweep = time.monotonic() + max(
@@ -16693,6 +17339,20 @@ def start(
                     pending = _handle_daemon_control_events(
                         pending,
                         account_context,
+                    )
+                if pending:
+                    # design-the-allowance.md's resident resource hold: a
+                    # repo currently parked on one must not have a routine
+                    # system event (a schedule firing, a strand's own
+                    # completion note) spin up a fresh resident dispatch —
+                    # that would be exactly the "no scheduled or child
+                    # event defeats a quota hold" bar this exists to meet.
+                    # A genuine correspondent message passes through
+                    # unchanged (enriched with resume metadata) and
+                    # continues down the ordinary pipeline below, becoming
+                    # the resume.
+                    pending = _handle_resource_held_events(
+                        pending, account_context,
                     )
                 if pending:
                     # brnrd#1388: retire anything already past the staleness

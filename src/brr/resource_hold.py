@@ -1,0 +1,182 @@
+"""Resource hold — daemon-owned parking for a provider resource limit.
+
+design-the-continuous-seat.md / design-the-allowance.md: a resident that
+hits a hard provider limit (measured 2026-09-05: a Codex thread's own
+``task_complete.error.codex_error_info == "usage_limit_exceeded"``) needs a
+durable *pause*, not a retry, an automatic provider switch, or an opaque
+failed run. The incident this closes was never the limit itself — it was
+what the daemon did about it: kept a Shell subprocess alive spinning on
+``brnrd await``'s own call-again loop, which for a Shell whose per-call
+ceiling is short means *the model itself* gets re-invoked just to restate
+the same wait, at full context cost, until the very quota it is waiting out
+is exhausted a second time (measured: ~1.6m weighted tokens spent *after*
+the resident had already said it was parking).
+
+The fix this module encodes: don't keep anything alive. A resource hold
+ends the run's process (same as any other terminal outcome) and records the
+one fact set a resume needs — reason, provider, the native session id
+(so a resume can be a real ``codex exec resume <id>``, not a cold restart
+wearing the same clothes), and which of two resume conditions the resident
+or the automatic-detection path chose:
+
+- ``RESUME_OPERATOR`` — released only by an explicit addressed reply
+  (an ordinary correspondent message reaching the held conversation; see
+  ``daemon.py``'s dispatch-time interception). The default, and the only
+  condition an *automatic* detection ever selects on its own — "silence is
+  neither permission nor a reset" (design-the-continuous-seat.md): nothing
+  here guesses that quota has recovered.
+- ``RESUME_RESET`` — additionally released once a *measured* provider
+  reset deadline passes (a plain clock comparison against a timestamp the
+  provider itself stated, captured once at arm time — never a guessed
+  rate or a repeated poll). Only reachable through an explicit resident
+  choice (the ``hold:`` outbox verb's own ``resume: reset`` field).
+
+Every function here is pure: no filesystem, no daemon state, no clock
+side-effects beyond an injectable ``now``. ``daemon.py`` owns persistence
+(``Run.meta["resource_hold"]``, which rides the existing ``run.md``
+frontmatter round-trip for free) and every daemon-facing effect (ending the
+process, deferring sibling events, publishing portal-state).
+"""
+
+from __future__ import annotations
+
+import time
+from typing import Any
+
+#: The run status this hold rides on (``run.py``'s ``STATUSES``) —
+#: deliberately excluded from ``daemon.py``'s ``_UNFINISHED_RUN_STATUSES``,
+#: so every boot-time janitor leaves a held run alone without needing to
+#: know this module exists.
+RUN_STATUS = "held"
+
+REASON_QUOTA_EXHAUSTED = "quota_exhausted"
+REASON_RESIDENT_REQUESTED = "resident_requested"
+
+RESUME_OPERATOR = "operator"
+RESUME_RESET = "reset"
+RESUME_CONDITIONS = frozenset({RESUME_OPERATOR, RESUME_RESET})
+
+#: Whether a resume can be a real native-session continuation
+#: (``codex exec resume <thread-id>``) or must be an honestly-labelled cold
+#: restart — "Unknown or unsupported native resume capability must be
+#: explicit, with a concrete boundary rather than a silent cold boot."
+RESUME_NATIVE = "native"
+RESUME_UNSUPPORTED = "unsupported"
+
+
+def _stamp(now: float | None = None) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() if now is None else now))
+
+
+def build(
+    *,
+    reason: str,
+    provider: str,
+    detail: str | None = None,
+    native_session_id: str | None = None,
+    resume_kind: str = RESUME_UNSUPPORTED,
+    resume_condition: str = RESUME_OPERATOR,
+    reset_deadline: float | None = None,
+    conversation_key: str = "",
+    generation: int = 1,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """A fresh ``resource_hold`` record for ``Run.meta``.
+
+    ``resume_condition`` outside :data:`RESUME_CONDITIONS` is folded to
+    :data:`RESUME_OPERATOR` — an unrecognised condition must degrade to the
+    conservative, always-safe choice, never silently accept a typo as
+    "release on anything."
+    """
+    if resume_condition not in RESUME_CONDITIONS:
+        resume_condition = RESUME_OPERATOR
+    if resume_condition != RESUME_RESET:
+        reset_deadline = None
+    return {
+        "reason": reason,
+        "provider": provider,
+        "detail": detail,
+        "native_session_id": native_session_id,
+        "resume_kind": resume_kind if native_session_id else RESUME_UNSUPPORTED,
+        "resume_condition": resume_condition,
+        "reset_deadline": reset_deadline,
+        "conversation_key": conversation_key,
+        "armed_at": _stamp(now),
+        "generation": int(generation),
+        "released": False,
+        "released_at": None,
+        "released_by": None,
+        "accumulated_event_ids": [],
+    }
+
+
+def is_active(meta: dict[str, Any] | None) -> bool:
+    """Whether *meta* names a hold still awaiting its resume."""
+    return bool(meta) and not meta.get("released")
+
+
+def mark_released(meta: dict[str, Any], *, by: str, now: float | None = None) -> dict[str, Any]:
+    """Return a copy of *meta* stamped as released — never mutates in place.
+
+    Idempotent by construction: a caller that races a second release sees
+    ``released`` already ``True`` and ``is_active`` already ``False``, so
+    "explicit resume consumes the hold once" is a property of the read, not
+    of this function needing a lock.
+    """
+    updated = dict(meta)
+    updated["released"] = True
+    updated["released_by"] = by
+    updated["released_at"] = _stamp(now)
+    return updated
+
+
+def accumulate_event(meta: dict[str, Any], event_id: str) -> dict[str, Any]:
+    """Record *event_id* as folded into this hold rather than dispatched.
+
+    Append-only, de-duplicated — a re-deferred event (the main loop revisits
+    an already-deferred candidate on a later tick) must not grow the list
+    once per tick.
+    """
+    updated = dict(meta)
+    ids = list(updated.get("accumulated_event_ids") or [])
+    if event_id not in ids:
+        ids.append(event_id)
+    updated["accumulated_event_ids"] = ids
+    return updated
+
+
+def reset_condition_met(meta: dict[str, Any] | None, *, now: float | None = None) -> bool:
+    """Whether a measured provider reset has passed for a ``reset``-condition hold.
+
+    Always ``False`` for an ``operator``-condition hold, and for a
+    ``reset``-condition hold with no captured deadline (an explicit,
+    honest "cannot self-release" rather than treating an absent number as
+    zero, which would release immediately).
+    """
+    if not is_active(meta):
+        return False
+    if (meta or {}).get("resume_condition") != RESUME_RESET:
+        return False
+    deadline = (meta or {}).get("reset_deadline")
+    if deadline is None:
+        return False
+    try:
+        deadline = float(deadline)
+    except (TypeError, ValueError):
+        return False
+    timestamp = time.time() if now is None else now
+    return timestamp >= deadline
+
+
+def portal_projection(meta: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The subset of a hold record safe/useful to publish on portal-state.
+
+    A thin passthrough today — every field here is already meant for the
+    correspondent's eyes (design-the-continuous-seat.md: "the UI shows why
+    the seat is waiting and the one action that would release it") — kept
+    as its own function so a future redaction need has one call site to
+    change rather than every ``_write_live_portal_state`` caller.
+    """
+    if not meta:
+        return None
+    return dict(meta)
