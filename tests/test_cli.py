@@ -700,7 +700,8 @@ def test_portal_facets_json(capsys, monkeypatch):
     assert main(["portal", "facets", "--json"]) == 0
     rows = json.loads(capsys.readouterr().out)
     assert {r["key"] for r in rows} == {
-        "quota", "spend", "context_window", "coexisting_runs", "remote_scm"
+        "quota", "spend", "context_window", "coexisting_runs", "remote_scm",
+        "allowance",
     }
 
 
@@ -721,6 +722,8 @@ def test_format_portal_state_surfaces_missing_data():
             "coexisting_runs": {"status": "unimplemented"},
             "remote_scm": {"status": "absent",
                            "note": "no PR recorded for this branch yet"},
+            "allowance": {"status": "unimplemented",
+                          "note": "not a strand-stack run"},
         },
     })
     assert "nothing sent yet" in out
@@ -728,6 +731,7 @@ def test_format_portal_state_surfaces_missing_data():
     assert "limit=" not in out and "keepalive=" not in out
     assert "spend=unimplemented (not metered yet)" in out
     assert "remote-scm=absent (no PR recorded for this branch yet)" in out
+    assert "allowance=unimplemented (not a strand-stack run)" in out
     assert "unavailable" not in out
 
 

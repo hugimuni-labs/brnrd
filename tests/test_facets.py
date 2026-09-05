@@ -6,7 +6,8 @@ from brr import facets, presence
 def test_schema_is_wall_derived_and_ordered():
     keys = [f.key for f in facets.FACETS]
     assert keys == [
-        "quota", "spend", "context_window", "coexisting_runs", "remote_scm"
+        "quota", "spend", "context_window", "coexisting_runs", "remote_scm",
+        "allowance",
     ]
     # Level facets are the walls; state facets are actionable posture.
     by_key = facets.FACETS_BY_KEY
@@ -15,9 +16,13 @@ def test_schema_is_wall_derived_and_ordered():
     assert by_key["context_window"].kind == facets.LEVEL
     assert by_key["coexisting_runs"].kind == facets.STATE
     assert by_key["remote_scm"].kind == facets.STATE
-    # coexisting_runs is the only optional facet (single-flight someday-nicety).
-    assert by_key["coexisting_runs"].required is False
-    assert all(s.required for s in facets.FACETS if s.key != "coexisting_runs")
+    assert by_key["allowance"].kind == facets.LEVEL
+    # coexisting_runs (single-flight someday-nicety) and allowance (a
+    # strand-only wall, design-the-allowance.md slice 1) are the two
+    # optional facets — everything else is required of every renderer.
+    optional = {"coexisting_runs", "allowance"}
+    assert {s.key for s in facets.FACETS if not s.required} == optional
+    assert all(s.required for s in facets.FACETS if s.key not in optional)
 
 
 def test_build_three_state_honesty_without_collector():

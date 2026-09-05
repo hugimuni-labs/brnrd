@@ -43,6 +43,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import allowance
 from . import card as card_rule
 from . import course
 from . import facets
@@ -1507,6 +1508,46 @@ def _quota_chip(resources: dict[str, Any]) -> str | None:
     return "q " + "·".join(chips) if chips else None
 
 
+def _allowance_chip(resources: dict[str, Any]) -> str | None:
+    """A strand's own ``spend 38k/120k`` chip (design-the-allowance.md §2).
+
+    Renders only once metering has something to show (``known`` — tokens
+    *and* a spend reading both present); a strand with a ceiling but no
+    reading yet, or any non-strand run (``allowance`` stays
+    ``unimplemented``), renders nothing here and the ordinary quota chip
+    takes over (see the caller in :func:`format_delta`).
+    """
+    facet = resources.get("allowance") if isinstance(resources, dict) else None
+    facet = facet if isinstance(facet, dict) else {}
+    if facet.get("status") != "known":
+        return None
+    tokens, spent = facet.get("tokens"), facet.get("spent")
+    if tokens is None or spent is None:
+        return None
+    return f"spend {allowance.format_tokens(spent)}/{allowance.format_tokens(tokens)}"
+
+
+def _allowance_directive(resources: dict[str, Any]) -> tuple[str | None, str]:
+    """The one-shot ≥100% park-or-ask line, plus its own change-gate key.
+
+    Returns ``(line_or_None, gate_text)``. *gate_text* is always returned
+    (even when *line* is ``None``) so the caller can persist it into
+    *rendered_chips* — a run that drops back under 100% (a grant landed)
+    resets the gate, so the line can fire again on a *later* overrun rather
+    than staying permanently silenced by an old high-water mark.
+    """
+    facet = resources.get("allowance") if isinstance(resources, dict) else None
+    facet = facet if isinstance(facet, dict) else {}
+    if facet.get("status") != "known":
+        return None, ""
+    pct = facet.get("pct")
+    spent = facet.get("spent")
+    if pct is None or spent is None or pct < 100:
+        return None, ""
+    gate_text = str(spent)
+    return allowance.directive_line(spent, facet.get("tokens")), gate_text
+
+
 def _siblings_chip(resources: dict[str, Any]) -> str | None:
     facet = resources.get("coexisting_runs") if isinstance(resources, dict) else None
     facet = facet if isinstance(facet, dict) else {}
@@ -2523,9 +2564,18 @@ def _render_bar(
     budget_chip = _budget_chip(budget)
     if budget_chip:
         segments.append(("budget", budget_chip))
-    quota_chip = _quota_chip(resources)
-    if quota_chip:
-        segments.append(("quota", quota_chip))
+    # A strand's own metered allowance replaces the shared, lagging quota
+    # chip on its bar (design-the-allowance.md §2) — the resident's bar is
+    # untouched (its own `allowance` facet stays unimplemented until slice
+    # 2, so `_allowance_chip` returns None and the quota chip renders as
+    # ever).
+    allowance_chip = _allowance_chip(resources)
+    if allowance_chip:
+        segments.append(("allowance", allowance_chip))
+    else:
+        quota_chip = _quota_chip(resources)
+        if quota_chip:
+            segments.append(("quota", quota_chip))
     if census:
         # Sits beside `orient` because both describe the *wake*, not the run:
         # what the boot cost, and how much of it has been walked. Never in the
@@ -2706,6 +2756,19 @@ def _render_bar(
                 " — open rows exist but the plan hasn't moved:"
                 " check a row or redraw"
             )
+    # The allowance boundary directive (design-the-allowance.md §2, step 3):
+    # fires once at ≥100%, never a kill, never a repeat while the spend
+    # number stands unchanged. Gated the same way a bar chip is — against
+    # *last_chips*, under a key ("allowance_directive") that never appears
+    # in *segments* itself, so it never renders as a bar chip and never
+    # competes with the ordinary chip due-filter below.
+    allowance_line, allowance_gate_text = _allowance_directive(resources)
+    if allowance_line and (
+        last_chips is None
+        or last_chips.get("allowance_directive") != allowance_gate_text
+    ):
+        details.append(allowance_line)
+
     streaks = repeat_streaks_in
     if card_stale:
         age = card.get("age_seconds")
@@ -2746,6 +2809,10 @@ def _render_bar(
     if rendered_chips is not None:
         rendered_chips.clear()
         rendered_chips.update(chips_now)
+        # Not a bar chip — never in *segments* — so it rides outside the
+        # clear/update pair above rather than through it; persisted here so
+        # next boundary's *last_chips* carries the gate forward.
+        rendered_chips["allowance_directive"] = allowance_gate_text
     edge_due = {
         # An unknown obligation count must never go quiet.
         "pending_unknown": True,
