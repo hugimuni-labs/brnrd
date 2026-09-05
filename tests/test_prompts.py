@@ -29,6 +29,7 @@ from brr.prompts import (
     _MAX_ACCRETING_BLOCK_BYTES,
     _SURFACE_RESERVE_PAGE_BYTES,
     _page_is_chronological,
+    _prior_run_boot_line,
     _trim_sectioned_page,
     _worst_trim,
     build_daemon_prompt,
@@ -770,6 +771,205 @@ class TestBlockAttestation:
         result = _worst_trim([untouched])
         assert result.text == ""
         assert result.dropped is None
+
+
+def _tick_section(date: str, body: str = "content.") -> str:
+    """One ``## This tick, <MM-DD>``-style dated section, the age gate's
+    motivating shape (`surface/plans/<repo>/active.md`'s own convention)."""
+    return f"## This tick, {date}\n\n{body}\n"
+
+
+def _undated_section(title: str, body: str = "content.") -> str:
+    return f"## {title}\n\n{body}\n"
+
+
+class TestAgeGateDatedSections:
+    """`_trim_sectioned_page` age-gates a page's dated tick sections down to
+    the newest 2 *before* its byte-budget walk runs — the fix for
+    `plans/<repo>/active.md` accreting a `## This tick, <date>` section
+    every tick forever and still spending tens of KB even after 19 of them
+    got cut by the byte budget alone (the byte walk keeps this kind of page
+    from the *head*, since bare `MM-DD` headings carry no year and so never
+    register as dated to `_page_is_chronological`)."""
+
+    def test_prepend_to_top_page_keeps_the_two_newest_by_date_not_position(self):
+        """The real shape, pinned literally: `active.md` prepends its newest
+        tick at the top, newest-first in the file. Ranking by document
+        position (an earlier version of this gate did exactly that) keeps
+        the two *oldest* survivors and drops the current tick — the
+        opposite of the intent. Ranking by parsed date gets it right
+        regardless of which direction a page accretes in."""
+        content = "\n".join([
+            _tick_section("09-05"), _tick_section("09-03"),
+            _tick_section("09-02"), _tick_section("08-31"),
+        ])
+
+        result = _trim_sectioned_page(content, max_bytes=100_000, source_hint="`x`")
+        body, _, marker = result.text.partition("\n\n_(")
+
+        assert "This tick, 09-05" in body
+        assert "This tick, 09-03" in body
+        assert "This tick, 09-02" not in body
+        assert "This tick, 08-31" not in body
+        assert "This tick, 09-02" in marker
+        assert "This tick, 08-31" in marker
+
+    def test_six_dated_two_undated_keeps_newest_two_dated_and_all_undated(self):
+        sections = [
+            _tick_section("09-06"), _tick_section("09-05"),
+            _undated_section("Backlog"),
+            _tick_section("09-04"), _tick_section("09-03"),
+            _undated_section("Ideas"),
+            _tick_section("09-02"), _tick_section("09-01"),
+        ]
+        content = "\n".join(sections)
+
+        result = _trim_sectioned_page(content, max_bytes=100_000, source_hint="`surface/plans/x/active.md`")
+        body, _, marker = result.text.partition("\n\n_(")
+
+        assert body.count("## This tick,") == 2
+        assert "This tick, 09-06" in body
+        assert "This tick, 09-05" in body
+        for stale in ("09-01", "09-02", "09-03", "09-04"):
+            assert f"This tick, {stale}" not in body
+        assert "## Backlog" in body
+        assert "## Ideas" in body
+        assert marker  # the age-gate marker was appended
+        assert "4 older dated sections age-gated out" in marker
+        assert "keeping the newest 2" in marker
+        assert "surface/plans/x/active.md" in marker
+        # And it names exactly what it cut.
+        for stale in ("09-01", "09-02", "09-03", "09-04"):
+            assert f"This tick, {stale}" in marker
+
+    def test_this_session_shape_ranks_by_month_day_alone(self):
+        content = "\n".join([
+            "## This session, 08-15",
+            "",
+            "old.",
+            "",
+            "## This session, 08-20",
+            "",
+            "mid.",
+            "",
+            "## This session, 09-01",
+            "",
+            "new.",
+            "",
+        ])
+        result = _trim_sectioned_page(content, max_bytes=100_000, source_hint="`x`")
+        body, _, marker = result.text.partition("\n\n_(")
+        assert "This session, 08-15" not in body
+        assert "This session, 08-20" in body
+        assert "This session, 09-01" in body
+        assert "1 older dated section age-gated out" in marker
+        assert "This session, 08-15" in marker  # names what it cut
+
+    def test_a_real_iso_year_outranks_any_bare_mm_dd_section(self):
+        """A bare `This tick`/`This session` heading carries no year — it
+        keys on `(0, month, day)` — so a genuine ISO-dated section (a real
+        year) always outranks it. This isn't a shape this gate expects a
+        page to mix in practice, but the rule has to be *some* well-defined
+        total order, and "a dated year beats no year" is the honest one."""
+        content = "\n".join([
+            "## [2026-08-01] note",
+            "",
+            "iso, has a real year.",
+            "",
+            "## This session, 08-20",
+            "",
+            "newer by month/day, but no year.",
+            "",
+        ])
+        result = _trim_sectioned_page(content, max_bytes=100_000, source_hint="`x`")
+        body, _, marker = result.text.partition("\n\n_(")
+        # Only 2 dated sections total ⇒ at-or-under the keep floor: nothing
+        # to gate at all, regardless of ranking.
+        assert marker == ""
+        assert "2026-08-01" in body
+        assert "This session, 08-20" in body
+
+    def test_two_or_fewer_dated_sections_is_untouched(self):
+        content = "\n".join([
+            _tick_section("09-05"), _tick_section("09-06"), _undated_section("Ideas"),
+        ])
+        result = _trim_sectioned_page(content, max_bytes=100_000, source_hint="`x`")
+        assert result.text == content
+        assert "age-gated out" not in result.text
+
+    def test_undated_only_page_past_budget_still_goes_through_the_old_path(self):
+        """No dated sections at all ⇒ the age gate is a pure no-op and the
+        pre-existing structural byte-cut owns the whole result, unchanged."""
+        content = "## A\n\n" + ("x" * 500) + "\n\n## B\n\n" + ("y" * 500) + "\n"
+
+        result = _trim_sectioned_page(content, max_bytes=300, source_hint="`x`")
+
+        assert "age-gated out" not in result.text
+        assert result.dropped == 1  # the ordinary structural cut still ran
+
+    def test_the_age_gate_marker_bytes_are_reserved_from_the_budget(self):
+        """The marker is computed before the byte-budget walk runs and its
+        own bytes are reserved out of that walk's budget — appending it
+        *after* an unreserved walk could carry the whole result past
+        max_bytes by exactly the marker's own length.
+
+        Budget chosen so the two age-gate survivors fit whole once the
+        marker is reserved (125 B of survivors + 180 B reserved marker
+        room ≈ 305 B): this isolates the reservation fix from
+        `_trim_sectioned_page_body`'s own separate, pre-existing
+        mandatory-entry-floor behaviour (out of scope here — see that
+        function's own docstring for why it, alone, may still exceed its
+        given budget)."""
+        sections = [_tick_section(f"08-{d:02d}", "x" * 40) for d in range(1, 8)]
+        content = "\n".join(sections)
+        budget = 400
+
+        result = _trim_sectioned_page(content, max_bytes=budget, source_hint="`x`")
+
+        assert "age-gated out" in result.text
+        assert "This tick, 08-07" in result.text
+        assert "This tick, 08-06" in result.text
+        assert len(result.text.encode("utf-8")) <= budget
+
+
+def _write_run_boot_score(repo_root, run_id, *, contracts, prompt_bytes=None):
+    run_dir = repo_root / ".brr" / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    payload = {"contracts": contracts}
+    if prompt_bytes is not None:
+        payload["prompt_bytes"] = prompt_bytes
+    (run_dir / "boot-score.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+class TestPriorRunBootLine:
+    """`_prior_run_boot_line` — the run card's own gauge (move 3's second
+    face), read off that run's own `.brr/runs/<run_id>/boot-score.json`
+    (`run_context.write_boot_score`'s own persisted copy), never
+    re-measured. Same `bootscore.top_ledger_categories` grouping the
+    post-tool hook stripe uses, so the two faces cannot disagree."""
+
+    def test_renders_total_and_top_two_categories(self, tmp_path):
+        contracts = [
+            {"block_key": "work-surface", "bytes": 51_200, "present": True, "authority": "surface"},
+            {"block_key": "notes-health", "bytes": 28_672, "present": True, "authority": "health"},
+            {"block_key": "identity-core", "bytes": 6_079, "present": True, "authority": "identity"},
+        ]
+        _write_run_boot_score(tmp_path, "run-1", contracts=contracts, prompt_bytes=87_000)
+
+        line = _prior_run_boot_line(tmp_path, "run-1")
+
+        assert line == "boot: 85.0 KB (surface 50.0 KB · health 28.0 KB)"
+
+    def test_missing_scratch_file_renders_nothing(self, tmp_path):
+        assert _prior_run_boot_line(tmp_path, "run-does-not-exist") == ""
+
+    def test_no_authority_field_renders_nothing(self, tmp_path):
+        """An older daemon's score (no `authority` on any entry) degrades to
+        silence rather than an empty, misleading `boot: ()`."""
+        contracts = [{"block_key": "work-surface", "bytes": 51_200, "present": True}]
+        _write_run_boot_score(tmp_path, "run-1", contracts=contracts, prompt_bytes=51_200)
+
+        assert _prior_run_boot_line(tmp_path, "run-1") == ""
 
 
 class TestPromptBuilding:
