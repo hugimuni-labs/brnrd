@@ -130,7 +130,7 @@ def test_sandbox_invoke_wraps_runner_and_pipes_prompt(tmp_path, monkeypatch):
     assert captured["command"][-1].startswith(f"cd {ctx.cwd} && export PATH=")
 
 
-# ── The sandbox VM cannot see the host's forged Claude session (#the-sandbox-can-find-its-session) ──
+# ── The sandbox VM cannot see the host's forged Claude session ──
 #
 # Regression: `SandboxEnv` reuses `WorktreeEnv`'s prose-or-mounted boot, but its
 # runner is a `sbx exec`'d microVM whose account HOME is never bind-mounted (unlike
