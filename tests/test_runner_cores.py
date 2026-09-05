@@ -289,6 +289,61 @@ def test_probe_shell_models_self_heals_on_path_flip_without_cache_clear(monkeypa
     assert runner_cores.probe_shell_models("codex") == ("gpt-5-codex", "gpt-5.4-mini")
 
 
+def test_probe_shell_models_sees_a_disk_feed_rewrite_without_cache_clear(
+    tmp_path, monkeypatch
+):
+    """A model appearing in ``models_cache.json`` mid-process is picked up on
+    the very next call — no ``cache_clear()``, no subprocess re-probe, no
+    restart.
+
+    Before the fix, ``_models_from_disk`` was read *inside*
+    ``_probe_shell_models_cached``, so the whole disk-plus-subprocess result
+    froze behind one ``lru_cache`` keyed on ``(shell_name, on_path,
+    timeout)`` — a key that never changes just because the feed file on disk
+    did. Codex rewrites that file from its own network calls on a schedule
+    this process doesn't control, so a model added there stayed invisible for
+    the rest of the process's life. Same disease as #1519 (a stale PATH
+    negative), one layer up: staleness through a feed refresh instead of a
+    PATH flip.
+    """
+    import json as _json
+
+    cache_path = tmp_path / "models_cache.json"
+    cache_path.write_text(_json.dumps({"models": [{"slug": "gpt-9.9-nova"}]}))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.setattr(runner_cores.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    calls = {"n": 0}
+
+    class _Proc:
+        stdout = ""
+        stderr = ""
+
+    def _counting_run(*a, **k):
+        calls["n"] += 1
+        return _Proc()
+
+    monkeypatch.setattr(runner_cores.subprocess, "run", _counting_run)
+    runner_cores.probe_shell_models.cache_clear()
+
+    assert runner_cores.probe_shell_models("codex") == ("gpt-9.9-nova",)
+    calls_after_first = calls["n"]
+
+    # Rewrite the feed with a previously-unseen model, same process, no
+    # cache_clear() — the regression this test pins.
+    cache_path.write_text(
+        _json.dumps({"models": [{"slug": "gpt-9.9-nova"}, {"slug": "gpt-9.9-astra"}]})
+    )
+
+    assert runner_cores.probe_shell_models("codex") == (
+        "gpt-9.9-nova",
+        "gpt-9.9-astra",
+    )
+    # The expensive half (the subprocess spawn) must stay memoized — only the
+    # cheap disk read is live.
+    assert calls["n"] == calls_after_first
+
+
 def test_generated_profile_entries_derive_class_when_missing(monkeypatch):
     monkeypatch.setattr(
         runner_cores,
