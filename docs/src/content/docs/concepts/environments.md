@@ -7,13 +7,14 @@ The daemon assembles the current repo context, chooses the configured execution
 environment, starts a CLI runner, keeps the conversation live, and preserves
 the outcome in git or the reply thread.
 
-Every project chooses one of three shipped environments. These modes isolate
+Every project chooses one of four shipped environments. These modes isolate
 different kinds of friction; none is a cage for a hostile agent.
 
 | Mode | What it isolates | Use it when |
 |---|---|---|
 | `host` | Nothing beyond your shell. Changes hit the working tree immediately. | You trust the agent and want minimum friction. |
 | `worktree` | A separate worktree and branch. It still shares `.git`, credentials, network, and the host filesystem. | You want code runs kept off the main working tree. |
+| `sandbox` | The host behind a Docker Sandbox microVM; the repo workspace remains mounted at its host path, while credentials are injected by the sandbox proxy. | You want the VM boundary and have `sbx`; set its `github` secret to the bot token before forge work. |
 | `docker` | Dependencies and network; host-file visibility is narrowed to the repo and mounted credential paths. The repo is read-write, credentials cross in, and network is on by default. | You want a clean toolchain or network control as defense in depth. |
 
 Select the mode in `security.config` (the daemon-owned file in the brnrd

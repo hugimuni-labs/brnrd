@@ -8621,13 +8621,13 @@ def _queue_spawn_request(
     # docker.image) must never be quietly downgraded — the env backend
     # fails that run loudly instead (`docker env requires docker.image`).
     requested_env = str(fm.get("environment") or fm.get("env") or "").strip().casefold()
-    if requested_env in ("docker", "solitary"):
+    if requested_env in ("sandbox", "docker", "solitary"):
         meta["environment"] = requested_env
     elif requested_env and requested_env != "worktree":
         _record_outbox_notice(
             outbox_dir,
             f"spawn refused: environment {requested_env!r} is not spawnable — "
-            "worktree is the floor; opt-down to docker/solitary only.",
+            "worktree is the floor; opt-down to sandbox/docker/solitary only.",
             kind="refused",
             lifetime="run",
         )

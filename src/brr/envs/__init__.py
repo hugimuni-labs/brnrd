@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, Any
 
-from .. import branching, gitops, runner, worktree
+from .. import __version__, branching, gitops, runner, worktree
 from ..run import Run
 
 
@@ -1308,6 +1308,219 @@ class DockerEnv(WorktreeEnv):
         return task
 
 
+def _sandbox_bool(cfg: dict[str, Any], key: str, default: bool = False) -> bool:
+    raw = cfg.get(f"sandbox.{key}", cfg.get(f"sandbox_{key}", default))
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, int):
+        return bool(raw)
+    if isinstance(raw, str):
+        normalized = raw.strip().casefold()
+        if normalized in ("true", "1", "yes", "on"):
+            return True
+        if normalized in ("false", "0", "no", "off", ""):
+            return False
+    return default
+
+
+def _sandbox_name(shell: str) -> str:
+    agent = shell.strip().casefold()
+    if agent not in ("codex", "claude"):
+        raise RuntimeError(
+            f"sandbox env requires a codex or claude shell (got {shell!r})"
+        )
+    return f"brr-{agent}"
+
+
+def _sbx_run(command: list[str], *, timeout: int = 120) -> subprocess.CompletedProcess:
+    try:
+        result = subprocess.run(
+            command, capture_output=True, text=True, timeout=timeout, check=False,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("sandbox env requires the sbx CLI on PATH") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"sbx command timed out: {shlex.join(command)}") from exc
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "unknown error"
+        daemon_hint = (
+            " Run `sbx daemon start`."
+            if any(word in detail.casefold() for word in ("daemon", "connect", "socket"))
+            else ""
+        )
+        raise RuntimeError(f"sbx command failed: {detail}.{daemon_hint}".rstrip("."))
+    return result
+
+
+class SandboxEnv(WorktreeEnv):
+    """A worktree run executed inside a reusable Docker Sandbox microVM."""
+
+    name = "sandbox"
+
+    def prepare(
+        self,
+        task: Run,
+        repo_root: Path,
+        cfg: dict[str, Any],
+        *,
+        branch_plan: branching.PublishPlan,
+        response_path: Path,
+        outbox_path: Path | None = None,
+    ) -> RunContext:
+        if shutil.which("sbx") is None:
+            raise RuntimeError("sandbox env requires the sbx CLI on PATH")
+        shell = str(task.meta.get("runner_shell") or task.meta.get("shell") or "")
+        sandbox_name = _sandbox_name(shell)
+        ctx = super().prepare(
+            task, repo_root, cfg, branch_plan=branch_plan,
+            response_path=response_path, outbox_path=outbox_path,
+        )
+        ctx.name = self.name
+
+        listing = _sbx_run(["sbx", "ls"], timeout=30).stdout
+        present = any(
+            sandbox_name == field
+            for line in listing.splitlines()
+            for field in re.split(r"\s+", line.strip())
+        )
+        if not present:
+            _sbx_run([
+                "sbx", "create", "--name", sandbox_name, shell, str(repo_root),
+            ], timeout=300)
+
+        version_cmd = [
+            "sbx", "exec", sandbox_name, "--", "sh", "-c",
+            "~/.local/bin/brnrd --version",
+        ]
+        installed = subprocess.run(
+            version_cmd, capture_output=True, text=True, timeout=30, check=False,
+        )
+        if installed.returncode != 0 or installed.stdout.strip() != f"brnrd {__version__}":
+            install = (
+                "python3 -m pip install --user --break-system-packages --quiet "
+                f"{shlex.quote(str(repo_root))} && ~/.local/bin/brnrd --version"
+            )
+            _sbx_run(
+                ["sbx", "exec", sandbox_name, "--", "sh", "-c", install],
+                timeout=300,
+            )
+
+        ctx.env_state.update({
+            "sandbox_name": sandbox_name,
+            "sandbox_stop_after_run": _sandbox_bool(cfg, "stop_after_run"),
+        })
+        task.meta["sandbox_name"] = sandbox_name
+        task.meta["environment"] = self.name
+        return ctx
+
+    def invoke(
+        self,
+        ctx: RunContext,
+        runner_name: str,
+        invocation: runner.RunnerInvocation,
+        cfg: dict[str, Any],
+        *,
+        trace: bool = False,
+    ) -> runner.RunnerResult:
+        selected = invocation.selected_runner or runner_name
+        shell = getattr(selected, "shell", None) or runner_name
+        sandbox_name = str(ctx.env_state["sandbox_name"])
+        inner_template = runner._cmd_template(
+            selected, cfg, extra_args=invocation.extra_runner_args,
+        )
+        inner_cmd = runner._fill_prompt(inner_template, invocation.prompt, cfg)
+        prompt_stdin = runner._prompt_stdin(cfg, invocation.prompt, inner_template)
+        cwd = invocation.cwd or ctx.cwd
+        script = (
+            f"cd {shlex.quote(str(cwd))} && "
+            "export PATH=$HOME/.local/bin:$PATH && "
+            f"exec {shlex.join(inner_cmd)}"
+        )
+        command = ["sbx", "exec", "-i"]
+        for key, value in sorted(invocation.env.items()):
+            command.extend(["-e", f"{key}={value}"])
+        command.extend([sandbox_name, "--", "sh", "-c", script])
+
+        def _kill_sandbox_process() -> None:
+            try:
+                subprocess.run(
+                    ["sbx", "exec", sandbox_name, "--", "pkill", "-f", invocation.label],
+                    capture_output=True, text=True, timeout=10, check=False,
+                )
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                pass
+
+        stdout = stderr = ""
+        returncode = 0
+        proc: subprocess.Popen | None = None
+        proc_key = ""
+        try:
+            proc_key, proc = runner.start_registered_process(
+                command, invocation.label or f"sandbox-{id(invocation)}",
+                on_kill=_kill_sandbox_process,
+                stdin=subprocess.PIPE if prompt_stdin is not None else subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            stdout, stderr = proc.communicate(
+                input=prompt_stdin, timeout=invocation.timeout_seconds,
+            )
+            returncode = proc.returncode
+        except FileNotFoundError:
+            stderr = "executable 'sbx' not found on PATH"
+            returncode = 127
+        except subprocess.TimeoutExpired as exc:
+            if proc is not None:
+                runner._kill_procs([proc])
+                stdout, stderr = proc.communicate()
+            else:
+                stdout = _subprocess_text(exc.stdout)
+                stderr = _subprocess_text(exc.stderr)
+            stderr = (stderr + "\n" if stderr else "") + (
+                f"runner timed out after {invocation.timeout_seconds}s"
+            )
+            returncode = 124
+        finally:
+            if proc is not None:
+                runner._clear_active_proc(proc_key, proc)
+
+        stdout, observed_core, api_error = runner._process_runner_stdout(
+            str(shell), stdout, invocation.env,
+        )
+        if api_error and returncode == 0:
+            returncode = 1
+            detail = stdout.strip() or "(no detail in result envelope)"
+            stderr = (stderr.rstrip() + "\n" if stderr.strip() else "") + (
+                "runner reported is_error/terminal_reason=api_error via "
+                f"--output-format json: {detail}"
+            )
+        from .. import runner_select
+        mismatch = runner_select.core_mismatch(invocation.expected_core, observed_core)
+        if mismatch:
+            stderr = (stderr.rstrip() + "\n" if stderr.strip() else "") + (
+                "Core attestation failed: requested "
+                f"{invocation.expected_core!r}, Shell observed {observed_core!r}"
+            )
+        if invocation.response_path and returncode == 0 and stdout.strip():
+            runner._write_response_file(invocation.response_path, stdout)
+        result = runner.RunnerResult(
+            invocation=invocation, runner_name=str(shell), command=command,
+            stdout=stdout, stderr=stderr, returncode=returncode,
+            trace_dir=None, artifacts=[], observed_core=observed_core,
+            core_mismatch=mismatch,
+        )
+        if trace:
+            result.trace_dir = runner._write_trace(result)
+        else:
+            result.artifacts = _artifact_records(invocation.required_artifacts)
+        return result
+
+    def finalize(self, ctx: RunContext, task: Run, runs_dir: Path) -> Run:
+        task = super().finalize(ctx, task, runs_dir)
+        if ctx.env_state.get("sandbox_stop_after_run"):
+            _sbx_run(["sbx", "stop", str(ctx.env_state["sandbox_name"])], timeout=60)
+        return task
+
+
 def _solitary_cfg(cfg: dict[str, Any], key: str, default: str = "") -> str:
     value = cfg.get(f"solitary.{key}", cfg.get(f"solitary_{key}", default))
     return str(value).strip() if value is not None else ""
@@ -1752,6 +1965,7 @@ class SolitaryEnv(DockerEnv):
 _BUILTINS: dict[str, type[EnvBackend]] = {
     "docker": DockerEnv,
     "host": HostEnv,
+    "sandbox": SandboxEnv,
     "solitary": SolitaryEnv,
     "worktree": WorktreeEnv,
 }
