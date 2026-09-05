@@ -29,6 +29,7 @@ from brr.prompts import (
     _MAX_ACCRETING_BLOCK_BYTES,
     _SURFACE_RESERVE_PAGE_BYTES,
     _page_is_chronological,
+    _prior_run_boot_line,
     _trim_sectioned_page,
     _worst_trim,
     build_daemon_prompt,
@@ -859,6 +860,46 @@ class TestAgeGateDatedSections:
 
         assert "age-gated out" not in result.text
         assert result.dropped == 1  # the ordinary structural cut still ran
+
+
+def _write_run_boot_score(repo_root, run_id, *, contracts, prompt_bytes=None):
+    run_dir = repo_root / ".brr" / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    payload = {"contracts": contracts}
+    if prompt_bytes is not None:
+        payload["prompt_bytes"] = prompt_bytes
+    (run_dir / "boot-score.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+class TestPriorRunBootLine:
+    """`_prior_run_boot_line` — the run card's own gauge (move 3's second
+    face), read off that run's own `.brr/runs/<run_id>/boot-score.json`
+    (`run_context.write_boot_score`'s own persisted copy), never
+    re-measured. Same `bootscore.top_ledger_categories` grouping the
+    post-tool hook stripe uses, so the two faces cannot disagree."""
+
+    def test_renders_total_and_top_two_categories(self, tmp_path):
+        contracts = [
+            {"block_key": "work-surface", "bytes": 51_200, "present": True, "authority": "surface"},
+            {"block_key": "notes-health", "bytes": 28_672, "present": True, "authority": "health"},
+            {"block_key": "identity-core", "bytes": 6_079, "present": True, "authority": "identity"},
+        ]
+        _write_run_boot_score(tmp_path, "run-1", contracts=contracts, prompt_bytes=87_000)
+
+        line = _prior_run_boot_line(tmp_path, "run-1")
+
+        assert line == "boot: 85.0 KB (surface 50.0 KB · health 28.0 KB)"
+
+    def test_missing_scratch_file_renders_nothing(self, tmp_path):
+        assert _prior_run_boot_line(tmp_path, "run-does-not-exist") == ""
+
+    def test_no_authority_field_renders_nothing(self, tmp_path):
+        """An older daemon's score (no `authority` on any entry) degrades to
+        silence rather than an empty, misleading `boot: ()`."""
+        contracts = [{"block_key": "work-surface", "bytes": 51_200, "present": True}]
+        _write_run_boot_score(tmp_path, "run-1", contracts=contracts, prompt_bytes=51_200)
+
+        assert _prior_run_boot_line(tmp_path, "run-1") == ""
 
 
 class TestPromptBuilding:

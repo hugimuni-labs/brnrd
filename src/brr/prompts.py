@@ -3212,14 +3212,55 @@ def _build_portal_verb_grammar_block(repo_root: Path) -> str:
 #: has no other way to learn that, so it consults this registry instead of
 #: reading `entry.location` raw; the alternative is that command handing a
 #: resident 754 lines when the live daemon mount only ever seeded ~120 of them.
+def _prior_run_boot_line(repo_root: Path, run_id: str) -> str:
+    """``boot: 156.9 KB (surface 48.6 KB · health 27.8 KB)`` for *run_id*'s
+    own wake, or ``""``.
+
+    Reads that run's own ``.brr/runs/<run_id>/boot-score.json`` — the
+    repo-local scratch copy :func:`brr.run_context.write_boot_score`
+    persists specifically so a run directory "stays inspectable after the
+    fact" (its own docstring). Same discipline as every other note this
+    function's caller assembles: best-effort, never a re-measurement — the
+    two ledger categories are :func:`brr.bootscore.top_ledger_categories`
+    off the numbers that run's own daemon already computed, and an absent
+    or unreadable file (the scratch copy has been cleaned up, or this is a
+    different host) renders nothing rather than a stale or invented claim.
+    """
+    import json
+
+    from . import bootscore
+
+    path = repo_root / ".brr" / "runs" / run_id / "boot-score.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    contracts = payload.get("contracts")
+    if not isinstance(contracts, list):
+        return ""
+    top_two = bootscore.top_ledger_categories(contracts, n=2)
+    if not top_two:
+        return ""
+    cats = " · ".join(f"{authority} {size / 1024:.1f} KB" for authority, size in top_two)
+    total = payload.get("prompt_bytes")
+    if isinstance(total, int) and total > 0:
+        return f"boot: {total / 1024:.1f} KB ({cats})"
+    return f"boot: {cats}"
+
+
 def _build_prior_run_mount_text(repo_root: Path) -> str:
     """The past self's page, whole — what a seeded ``Read`` of the node carries.
 
     ``body.md`` byte for byte (a Read that returned a summary would be the
     lie the mount exists to refuse), then, in brnrd's own bracketed voice —
-    the idiom ``_trim_note`` and the seam already use — the frame line, the
-    run's last message, and the face it wore. A resident waking on this row
-    is reading what it was doing when it stopped, in its own hand.
+    the idiom ``_trim_note`` and the seam already use — the frame line, an
+    optional ``boot: …`` line (:func:`_prior_run_boot_line` — that run's own
+    wake-size gauge, when its scratch ``boot-score.json`` is still around to
+    read), the run's last message, and the face it wore. A resident waking
+    on this row is reading what it was doing when it stopped, in its own
+    hand.
     """
     from . import protocol
 
@@ -3243,6 +3284,9 @@ def _build_prior_run_mount_text(repo_root: Path) -> str:
         if str(fields.get(key) or "").strip()
     ]
     notes = [f"frame: {' · '.join(frame)}"]
+    boot_line = _prior_run_boot_line(repo_root, run_id)
+    if boot_line:
+        notes.append(boot_line)
     for name in ("name", "mood"):
         try:
             value = (node / name).read_text(encoding="utf-8").strip().splitlines()
