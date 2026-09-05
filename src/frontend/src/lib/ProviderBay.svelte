@@ -5,6 +5,7 @@
 	import type { FuelMeter, FuelProviderGroup } from './fuelProviders';
 	import { STATUS_BURNING, STATUS_COOLING, STATUS_SPENT, STATUS_UNKNOWN } from './statusPalette';
 	import type { RunnersResponse } from './runners';
+	import type { LiveRun } from './liveRuns';
 
 	// THE PRESSED PROVIDER. One provider's readings and one provider's cores,
 	// as a single object, opened by pressing that provider's fuel row —
@@ -27,11 +28,22 @@
 		group: FuelProviderGroup;
 		runners: RunnersResponse;
 		now?: number;
+		/** For the sticky/riding row's observed-vs-requested line — see
+		 *  `SpoolRack.svelte`'s own doc. `null`/absent renders nothing extra;
+		 *  never invented locally when the daemon hasn't reported it. */
+		liveRuns?: LiveRun[] | null;
 		onTap?: (profileName: string) => void;
 		onReleaseSticky?: () => void;
 	}
 
-	let { group, runners, now = Date.now(), onTap, onReleaseSticky }: Props = $props();
+	let {
+		group,
+		runners,
+		now = Date.now(),
+		liveRuns = null,
+		onTap,
+		onReleaseSticky
+	}: Props = $props();
 
 	const LEVEL_COLOR: Record<string, string> = {
 		burning: STATUS_BURNING,
@@ -120,6 +132,7 @@
 			wakeRequest={runners.wake_request ?? null}
 			sticky={runners.sticky ?? null}
 			{now}
+			{liveRuns}
 			{onTap}
 			{onReleaseSticky}
 			shell={group.provider}

@@ -91,6 +91,25 @@ def test_heartbeat_missing_entry_is_false(tmp_path):
     assert presence.heartbeat(brr, "nope") is False
 
 
+def test_heartbeat_carries_the_observed_core_separately_from_requested(tmp_path):
+    """`runner_core` at `register()` time names what was *requested*, known
+    before the runner ever ran. The observed fact (what a live run's own
+    telemetry actually confirmed) is only known later — this is the one
+    presence-side path that can carry it, on the still-live entry, distinct
+    from the requested field it never overwrites."""
+    brr = tmp_path / ".brr"
+    entry = presence.register(
+        brr, kind="daemon", run_id="t1",
+        runner_name="codex", runner_shell="codex",
+        runner_core="default", runner_class="balanced",
+    )
+    assert "runner_model_observed" not in entry
+    assert presence.heartbeat(brr, entry["id"], runner_model_observed="astra") is True
+    live = presence.list_active(brr)[0]
+    assert live["runner_model_observed"] == "astra"
+    assert live["runner_core"] == "default", "observing a model never rewrites what was requested"
+
+
 def test_heartbeat_refreshes_resident_authored_name(tmp_path):
     brr = tmp_path / ".brr"
     entry = presence.register(brr, kind="daemon", run_id="t1")

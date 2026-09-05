@@ -306,6 +306,15 @@ def _runner_payload(meta: dict[str, Any]) -> dict[str, str]:
     shell = str(meta.get("runner_shell") or meta.get("shell") or "").strip()
     core = str(meta.get("runner_core") or meta.get("core") or "").strip()
     klass = str(meta.get("runner_class") or "").strip()
+    # Requested vs observed, kept as two fields, never merged into one: `core`
+    # is what was asked for (a pin, or an unpinned shell default) and is
+    # known before the runner ever starts; `model_observed` is what a live
+    # run's own telemetry actually confirmed (`presence.heartbeat`'s
+    # `runner_model_observed`, or `task.meta`'s `model_observed` — the same
+    # fact, two source shapes this function is already called against).
+    # Absent whenever nothing has been observed yet — never guessed from
+    # `core`, `class`, or anything else on this dict.
+    observed = str(meta.get("runner_model_observed") or meta.get("model_observed") or "").strip()
     if name:
         out["name"] = name
     if shell:
@@ -316,6 +325,8 @@ def _runner_payload(meta: dict[str, Any]) -> dict[str, str]:
         out["core"] = core
     if klass:
         out["class"] = klass
+    if observed:
+        out["model_observed"] = observed
     return out
 
 

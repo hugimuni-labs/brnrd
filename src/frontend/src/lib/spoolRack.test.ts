@@ -122,6 +122,36 @@ test('grouping preserves cost-rank order within a shell and puts available shell
 	);
 });
 
+test('a verified-unavailable core sorts to the end of its own shell, not its old cost-rank slot', () => {
+	// Live shape from the account this shipped against: `codex-gpt-5.4-mini`
+	// (retired, cost_rank 23) used to render between `codex-mini` (20) and
+	// `codex` (25) — a dashed-border row sitting inline with runnable ones,
+	// distinguished only by style, not position.
+	const profiles: RunnerProfile[] = [
+		{ name: 'codex-mini', shell: 'codex', available: true, cost_rank: 20 },
+		{
+			name: 'codex-gpt-5.4-mini',
+			shell: 'codex',
+			available: false,
+			availability: 'retired',
+			cost_rank: 23
+		},
+		{ name: 'codex', shell: 'codex', available: true, cost_rank: 25 },
+		{ name: 'codex-full', shell: 'codex', available: true, cost_rank: 45 }
+	];
+	const [group] = groupByShell(profiles);
+	assert.deepEqual(
+		group.profiles.map((p) => p.name),
+		['codex-mini', 'codex', 'codex-full', 'codex-gpt-5.4-mini'],
+		'the retired core moves after every usable one, cost-rank order preserved within each bucket'
+	);
+	assert.equal(
+		group.allUnavailable,
+		false,
+		'three of four cores are usable — the shell stays live'
+	);
+});
+
 test('a shell with even one unverified row does not collapse — unverified is not the same claim as dead', () => {
 	const profiles: RunnerProfile[] = [
 		{ name: 'codex', shell: 'codex' }, // unverified: no `available` field at all
