@@ -1458,7 +1458,35 @@ _QUOTA_BUCKET_RE = re.compile(
 # (Europe/Berlin))" / "(resets Jul 24, 12am (Europe/Berlin))". The trailing
 # "(<tz>)" is dropped from the chip: the clock reads in the maintainer's own
 # zone, and the zone name is the one part he never needs on every boundary.
-_QUOTA_RESET_RE = re.compile(r"\(resets\s+(?P<when>[^()]+?)\s*(?:\([^)]*\))?\s*\)")
+_QUOTA_RESET_RE = re.compile(r"\(resets\s+(?P<when>[^()]+?(?:\s*\([^)]*\))?)\s*\)")
+
+
+def _relative_reset(when: str, *, now: float | None = None) -> str | None:
+    """``"8:30pm (Europe/Berlin)"`` → ``"31m"`` / ``"3d3h"`` — or ``None``.
+
+    A wall-clock reset is a fact about the provider's zone; what a resident
+    plans against is *how long* — the maintainer's own correction
+    (2026-09-05, "why S57↻8:30pm instead of S57↻in31m"). Reuses
+    ``claude_usage._reset_epoch``'s prose parser rather than a second one;
+    a string it cannot place yields ``None`` and the chip falls back to the
+    prose it was given, never a guessed duration.
+    """
+    from . import claude_usage
+
+    epoch = claude_usage._reset_epoch(when)
+    if epoch is None:
+        return None
+    remaining = int(epoch - (time.time() if now is None else now))
+    if remaining <= 0:
+        return "0m"
+    days, rest = divmod(remaining, 86400)
+    hours, rest = divmod(rest, 3600)
+    minutes = rest // 60
+    if days:
+        return f"{days}d{hours}h"
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    return f"{max(minutes, 1)}m"
 _QUOTA_MODEL_WEEK_RE = re.compile(r"^(?P<model>.+?)\s+week$")
 
 
@@ -1502,11 +1530,6 @@ def _quota_chip(resources: dict[str, Any]) -> str | None:
     summary = str(facet.get("summary") or "").strip()
     if not summary:
         return None
-    pacing = facet.get("pacing") if isinstance(facet.get("pacing"), dict) else {}
-    try:
-        low_floor = float(pacing.get("low_floor_pct") or 20.0)
-    except (TypeError, ValueError):
-        low_floor = 20.0
     taken: set[str] = set()
     chips: list[str] = []
     for part in summary.split(";"):
@@ -1516,14 +1539,15 @@ def _quota_chip(resources: dict[str, Any]) -> str | None:
         pct = match.group("pct").split(".")[0]
         label = match.group("label")
         chip = f"{_quota_bucket_letter(label, taken)}{pct}"
-        # The clock rides the chip: always for the session window (it rolls
-        # within hours, and a budget flag written without it asks for a
-        # reset the timer was about to give — 2026-09-05, "did you not see
-        # the timer?"), and for any other bucket only once it is under the
-        # low floor, where the reset date becomes the plan.
+        # The clock rides every bucket that states one, as time remaining
+        # (2026-09-05, "did you not see the timer?" — a budget flag written
+        # against a percent alone asked for a reset the timer was about to
+        # give). Relative beats wall-clock: the plan is "how long", never
+        # "what time in which zone".
         reset = _QUOTA_RESET_RE.search(part)
-        if reset and (label.strip().lower() == "session" or float(pct) <= low_floor):
-            chip += f"↻{reset.group('when').strip()}"
+        if reset:
+            when = reset.group("when").strip()
+            chip += f"↻{_relative_reset(when) or when}"
         chips.append(chip)
     return "q " + "·".join(chips) if chips else None
 
