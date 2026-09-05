@@ -328,7 +328,7 @@ def test_failure_defers_pending_siblings_without_hiding_them(tmp_path):
         seconds=60,
     )
 
-    assert changed == 2
+    assert len(changed) == 2
     pending = protocol.list_pending(inbox)
     assert [ev["id"] for ev in pending] == ["evt-b", "evt-c"]
     assert all(ev["deferred_by_run"] == "run-x" for ev in pending)
@@ -374,7 +374,7 @@ def test_failure_defers_siblings_with_staggered_release(tmp_path):
         run_id="run-x",
         seconds=60,
     )
-    assert changed == n
+    assert len(changed) == n
 
     pending = protocol.list_pending(inbox)
     assert [ev["id"] for ev in pending] == [f"evt-s{i:02d}" for i in range(n)]
@@ -404,6 +404,6 @@ def test_failure_defer_single_sibling_unchanged(tmp_path):
         run_id="run-x",
         seconds=60,
     )
-    assert changed == 1
+    assert len(changed) == 1
     pending = protocol.list_pending(inbox)
     assert abs(_defer_stamp(pending[0]) - (before + 60)) <= 1
