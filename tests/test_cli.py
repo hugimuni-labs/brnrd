@@ -1204,7 +1204,7 @@ def test_await_slice_returns_pending_at_its_own_ceiling(
 
 
 def test_await_slice_ceiling_extends_under_claude(tmp_path, capsys, monkeypatch):
-    """A claude wake gets the Shell's own room: 9m40s, not the generic 8m.
+    """A claude wake gets the Shell's own room: 9m20s, not the generic 8m.
 
     Claude's Bash tool caps one call at 10 minutes; 480s left two full
     minutes of that budget unused every single slice. ``BRR_RUNNER=claude``
@@ -1247,11 +1247,11 @@ def test_await_slice_ceiling_by_shell_lookup(monkeypatch):
     assert cli._await_slice_ceiling_seconds("some-future-shell") == (
         cli._AWAIT_SLICE_CEILING_SECONDS
     )
-    assert cli._await_slice_ceiling_seconds("claude") == 580.0
-    assert cli._await_slice_ceiling_seconds("CLAUDE") == 580.0
+    assert cli._await_slice_ceiling_seconds("claude") == 560.0
+    assert cli._await_slice_ceiling_seconds("CLAUDE") == 560.0
 
     monkeypatch.setenv("BRR_RUNNER", "claude")
-    assert cli._await_slice_ceiling_seconds() == 580.0
+    assert cli._await_slice_ceiling_seconds() == 560.0
     assert cli._await_slice_ceiling_seconds("codex") == cli._AWAIT_SLICE_CEILING_SECONDS
 
 
