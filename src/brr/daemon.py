@@ -4447,6 +4447,12 @@ def _run_worker(
         mount_sink: dict[str, str] | None = (
             {} if boot_mount and mount_shell in transcript.MOUNTED_SHELLS else None
         )
+        # Every present block's exact rendered text, mounted or not — a
+        # strict superset of `mount_sink` (#1830). Unconditional (unlike
+        # `mount_sink`, gated on the mount toggle actually applying): a
+        # prose-only wake still has home-originated blocks with no other
+        # honest record of their bytes. See `run_context.write_wake_blocks`.
+        block_text_sink: dict[str, str] = {}
 
         # Built once, so the fail-closed rebuild below cannot drift from the
         # prompt it is replacing.
@@ -4528,6 +4534,7 @@ def _run_worker(
             str(env_ctx.response_path_env),
             run_root,
             _mount_sink=mount_sink,
+            _block_text_sink=block_text_sink,
             **_prompt_kwargs,
         )
 
@@ -4556,11 +4563,18 @@ def _run_worker(
                 # boot*. Rebuild the prose prompt. A boot that cannot mount must
                 # degrade to the boot that always worked, out loud.
                 print(f"[brnrd] boot transcript mount failed ({exc}) — prose boot")
+                # Same `block_text_sink` object, deliberately: this rebuild
+                # re-runs every `_take` call with `_mount_sink=None`, so every
+                # key it touches overwrites the first pass's mounted-text
+                # entry with the fresh prose that actually shipped — the
+                # sink ends up describing this final `boot_score`, never the
+                # discarded mounted one, with no separate reconciliation step.
                 prompt, boot_score = prompts.build_daemon_prompt_with_score(
                     prompt_instruction,
                     eid,
                     str(env_ctx.response_path_env),
                     run_root,
+                    _block_text_sink=block_text_sink,
                     **_prompt_kwargs,
                 )
 
@@ -4572,7 +4586,14 @@ def _run_worker(
             # entered, who owns them, which were silent.
             run_context.write_prompt_file(brr_dir, task, prompt)
             run_context.write_boot_score(brr_dir, task, boot_score)
-            run_context.write_wake_manifest(brr_dir, task, boot_score)
+            run_context.write_wake_manifest(brr_dir, task, boot_score, wake_blocks=block_text_sink)
+            # Every present block's exact rendered text (#1830) — a home-
+            # originated block (dominion self-inject, work surface, pitfalls,
+            # knowledge slices, the plan page) has no file on disk that ever
+            # carried its bytes, mounted or not, so this is the only durable
+            # record of "what did this wake actually read here?" for those
+            # blocks. Unconditional, unlike the mounted-only sidecar below.
+            run_context.write_wake_blocks(brr_dir, task, block_text_sink)
             # A mounted wake's prompt.md is missing exactly the blocks
             # `boot_score.body.mounted` says left the prose — persist the diverted
             # text this run actually built (never re-derived later from

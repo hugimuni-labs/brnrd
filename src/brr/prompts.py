@@ -4090,6 +4090,12 @@ def build_daemon_prompt_with_score(
     ``hooks_installed`` (keyword) is the run's own hook-config decision; the
     daemon knows it because it installed the config, and the score should not
     re-guess it from a process that is not the runner.
+
+    ``_block_text_sink`` (keyword, popped like ``_mount_sink``): a caller-owned
+    dict this call fills with every present block's exact rendered text,
+    keyed the same as ``wake-manifest.json``'s ``name`` field — see
+    :func:`build_daemon_prompt`'s own docstring for what it captures and why
+    (#1830). Persisted by :func:`brr.run_context.write_wake_blocks`.
     """
     # Resolved runner facts. Read, not popped: since Slice 2 the *prompt* needs
     # them too — the kernel names the body the wake is running in, where the
@@ -4137,6 +4143,7 @@ def build_daemon_prompt_with_score(
     has_diff = diffense
 
     mount_sink: dict[str, str] | None = kwargs.pop("_mount_sink", None)
+    block_text_sink: dict[str, str] | None = kwargs.pop("_block_text_sink", None)
 
     if strand:
         # #1185: a strand is single-shot — it cannot learn from its own
@@ -4211,6 +4218,7 @@ def build_daemon_prompt_with_score(
         _size_sink=sizes,
         _mountable=mountable,
         _mount_sink=mount_sink,
+        _block_text_sink=block_text_sink,
     )
 
     # Stamp the two blocks only the renderer could weigh (the kernel it built
@@ -4755,6 +4763,7 @@ def build_daemon_prompt(
     _mount_sink: dict[str, str] | None = None,
     _prepared_introspection_block: str | None = None,
     _size_sink: dict[str, int] | None = None,
+    _block_text_sink: dict[str, str] | None = None,
 ) -> str:
     """Build the prompt for daemon-originated runs.
 
@@ -4781,6 +4790,20 @@ def build_daemon_prompt(
     failure-memory lookup — matched fresh against this run's own task text
     — is handed over same as a resident wake, and nothing else. Default
     ``False`` is byte-identical to the prior behavior.
+
+    ``_block_text_sink`` (optional), when supplied, receives the *exact*
+    text every block routed through ``_take`` actually delivered to this
+    wake — the prose text when it stayed in the prompt, the mounted text
+    when it left for a seeded ``Read`` instead — plus the kernel and the
+    trailer (Run Context Bundle), captured directly below. This is what
+    :func:`brr.run_context.write_wake_blocks` persists (#1830): before it, a
+    home-originated block (dominion self-inject, work surface, pitfalls,
+    knowledge slices, the plan page) had ``location == "computed"`` and no
+    file on disk ever carried its rendered bytes, mounted or not — the
+    operator console's WAKE tab had nothing to show for one but "computed —
+    no source file". A superset of ``_mount_sink``: every key the mount sink
+    gets, this sink gets the same value for, plus every other present block
+    besides.
     """
     # A mounted block leaves the prose. It is not dropped — it arrives as a seeded
     # `Read` and its result (`transcript.py`), so the wake receives the same bytes
@@ -4789,6 +4812,8 @@ def build_daemon_prompt(
     # both arms would carry the prose.
     def _take(key: str, text: str) -> str | None:
         if _mount_sink is None or key not in _mountable:
+            if _block_text_sink is not None:
+                _block_text_sink[key] = text
             return text
         # A block whose mounted form is a curated text rather than its
         # rendered prose (`_MOUNTABLE_TEXT_BUILDERS`) seeds the builder's
@@ -4796,7 +4821,13 @@ def build_daemon_prompt(
         # only its map. The offline path (`mountable_block_text`) consults the
         # same registry, so the two cannot disagree about what was seeded.
         builder = _MOUNTABLE_TEXT_BUILDERS.get(key)
-        _mount_sink[key] = builder(repo_root) if builder is not None else text
+        mounted_text = builder(repo_root) if builder is not None else text
+        _mount_sink[key] = mounted_text
+        if _block_text_sink is not None:
+            # The bytes this wake actually received for `key` are the mounted
+            # text, not the raw prose `_take` was handed — recording the
+            # latter here would silently describe a wake nobody had.
+            _block_text_sink[key] = mounted_text
         return None
 
     preamble = _glue_preamble([
@@ -4842,6 +4873,11 @@ def build_daemon_prompt(
     trailer = bundle.rstrip()
     if (event_body or "").strip() != task.strip():
         trailer = f"{trailer}\nRun instruction: {task}"
+    if _block_text_sink is not None:
+        # "run-context-bundle" matches `_TRAILER_KEY` in `replay.py` and the
+        # `block_key` the caller's `runtime_entries` filters on
+        # (`build_daemon_prompt_with_score`) — one name, every reader.
+        _block_text_sink["run-context-bundle"] = trailer
 
     # #1137: same forge-state join as `build_daemon_prompt_with_score` — see
     # that function's own comment. This bare-`build_daemon_prompt` path
@@ -4922,6 +4958,11 @@ def build_daemon_prompt(
         # and the kernel silently tells the truth again.
         mounted=bool(_mountable),
     ))
+    if _block_text_sink is not None:
+        # "boot-kernel" matches `kernel_entry.block_key` in
+        # `build_daemon_prompt_with_score` — the kernel is always present,
+        # never mounted (it has no file to seed as a `Read`).
+        _block_text_sink["boot-kernel"] = kernel
 
     prepared_blocks = (
         None

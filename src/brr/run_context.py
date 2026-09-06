@@ -96,7 +96,63 @@ def write_mounted_blocks(brr_dir: Path, task: Run, mount_sink: dict[str, str]) -
         return None
 
 
-def write_wake_manifest(brr_dir: Path, task: Run, score: Any) -> Path | None:
+def write_wake_blocks(brr_dir: Path, task: Run, block_text: dict[str, str]) -> Path | None:
+    """Write every present block's exact rendered text to
+    `.brr/runs/<run-id>/wake-blocks.json`.
+
+    Fixes the gap #1809 left open: that change gave exact bytes only to
+    *mounted* blocks (``prompt-mounted.json``, #1753) and file-backed blocks
+    (re-read from their source path, imprecise once a wake-time trim runs).
+    A home-originated block — dominion self-inject, the work surface,
+    pitfalls, knowledge slices, the plan page with its age gate — has
+    ``location == "computed"``: it is assembled and trimmed at wake time from
+    no single file, so no on-disk source could ever answer "what did the
+    resident actually read here?" Prior to this sidecar, the operator console
+    had nothing to show for these blocks but a bare "computed — no source
+    file" (:func:`brr.operator_console.tui._wake_block_text`).
+
+    The caller must pass the *exact* dict this run's own build populated —
+    same discipline as :func:`write_mounted_blocks`, and for the same reason:
+    only the run that built the prompt ever had the real bytes, and a value
+    re-derived later from whatever the source data says today would describe
+    a wake nobody had.
+
+    Deliberately a **new** file rather than an extension of
+    ``prompt-mounted.json``'s ``blocks`` map, even though the shape is
+    identical (``{block_key: text}``): :mod:`brr.replay` treats that map's
+    keys as *exactly* the blocks ``_take`` diverted out of ``prompt.md``, and
+    reconciles ``prompt_bytes`` as ``len(prompt.md) + sum(sidecar values)``
+    (``locate_captured_prompt``). Folding every block — mounted and
+    prose-resident alike — into that same map would double-count every
+    prose block's bytes in that arithmetic and break replay on every future
+    capture. This sidecar carries every present block regardless of mount
+    status (a strict superset of ``prompt-mounted.json`` on any wake this
+    build ran); readers that only care about "exact bytes, whatever the
+    provenance" want this file, not that one.
+
+    Non-fatal on error; the run continues regardless.
+    """
+    import json
+
+    context_dir = brr_dir / "runs" / task.id
+    context_dir.mkdir(parents=True, exist_ok=True)
+    path = context_dir / "wake-blocks.json"
+    try:
+        path.write_text(
+            json.dumps(
+                {"schema_version": "1", "run_id": task.id, "blocks": block_text},
+                indent=2, sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        return path
+    except (OSError, TypeError):
+        return None
+
+
+def write_wake_manifest(
+    brr_dir: Path, task: Run, score: Any, *, wake_blocks: dict[str, str] | None = None,
+) -> Path | None:
     """Write the wake topology to `.brr/runs/<run-id>/wake-manifest.json`.
 
     Emits an ordered list of blocks derived from the BootScore's contract
@@ -122,7 +178,8 @@ def write_wake_manifest(brr_dir: Path, task: Run, score: Any) -> Path | None:
               "bytes_cut": 3456,     # file size − bytes_kept; null for synthesized
               "budget_bytes": null,  # not yet tracked per-block — see report
               "trim_kind": null,     # "cut" | "cut-stale" | "stale" | null
-              "freshness": null      # ContractEntry.freshness — ISO mtime/revision, or null
+              "freshness": null,     # ContractEntry.freshness — ISO mtime/revision, or null
+              "rendered_bytes": null # exact size of this run's own wake-blocks.json entry, or null
             }
           ]
         }
@@ -134,6 +191,16 @@ def write_wake_manifest(brr_dir: Path, task: Run, score: Any) -> Path | None:
     had to open a second file and re-match rows by ``block_key``. This is the
     one manifest a wake-topology reader (the operator console's WAKE tab)
     already opens, so it carries its own answer.
+
+    ``wake_blocks`` (optional) is this same run's own :func:`write_wake_blocks`
+    sink — passing it stamps ``rendered_bytes`` from the *exact* text kept
+    beside ``bytes_kept`` (measured at render time from
+    :class:`~brr.bootscore.ContractEntry.bytes`, a separate accounting path).
+    The two should always agree for a block the sidecar captured; a reader
+    that finds them disagreeing has found a real bug in one of the two
+    counters, not a stale sidecar — this manifest and the text it names come
+    from the same wake, never re-derived later. Omitted (``None``) ⇒ every
+    row's ``rendered_bytes`` is ``null``, same as before this field existed.
 
     Non-fatal on error; returns the path written or ``None``.
     """
@@ -189,6 +256,12 @@ def write_wake_manifest(brr_dir: Path, task: Run, score: Any) -> Path | None:
             return "stale"
         return None
 
+    def _rendered_bytes(block_key: str) -> int | None:
+        if wake_blocks is None:
+            return None
+        text = wake_blocks.get(block_key)
+        return None if text is None else len(text.encode("utf-8"))
+
     blocks = [
         {
             "name": entry.block_key,
@@ -202,6 +275,7 @@ def write_wake_manifest(brr_dir: Path, task: Run, score: Any) -> Path | None:
             "budget_bytes": None,
             "trim_kind": _trim_kind(entry),
             "freshness": entry.freshness,
+            "rendered_bytes": _rendered_bytes(entry.block_key),
         }
         for entry in score.contracts
     ]
