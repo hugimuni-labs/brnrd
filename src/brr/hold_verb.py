@@ -15,11 +15,13 @@ Grammar, everything but the marker optional:
 
     hold: true
     reason: quota running low        # free text; default "resident_requested"
-    resume: operator | reset | strands   # default "operator"; strands =
+    resume: operator | reset | strands | any   # default "operator"; strands =
                                       # wake when one of this run's own
                                       # children submits/completes/asks
                                       # (a correspondent message wakes any
-                                      # hold); refused when no strand is live
+                                      # hold); refused when no strand is live;
+                                      # any = the seat's resting state: a
+                                      # message, an own strand, or a tick
     reset: 2026-09-12T00:00:00Z      # only meaningful with resume: reset —
                                       # an explicit deadline the resident
                                       # already has reason to believe (told
@@ -53,6 +55,8 @@ _RESUME_ALIASES = {
     "strands": resource_hold.RESUME_STRANDS,
     "children": resource_hold.RESUME_STRANDS,
     "spawn": resource_hold.RESUME_STRANDS,
+    "any": resource_hold.RESUME_ANY,
+    "anything": resource_hold.RESUME_ANY,
 }
 
 
@@ -80,7 +84,7 @@ def parse_hold(fm: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
     else:
         return None, (
             f"resume: {raw_resume!r} is not recognised — use "
-            "`resume: operator`, `resume: reset`, or `resume: strands`"
+            "`resume: operator`, `resume: reset`, `resume: strands`, or `resume: any`"
         )
     reset_deadline_hint: float | None = None
     raw_reset = str(fm.get("reset") or "").strip()

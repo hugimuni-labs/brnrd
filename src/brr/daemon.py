@@ -5126,6 +5126,8 @@ def _run_worker(
             # still race the transition during deploy skew.
             terminal_reply = protocol.read_response(responses_dir, eid)
             pending_hold = task.meta.pop("pending_resource_hold", None)
+            if pending_hold is None:
+                pending_hold = _park_seat_on_turn_end(task, cfg)
             if pending_hold is not None:
                 # The resident's own `hold:` directive (outbox parse above)
                 # — a clean turn that chose to park rather than one that
@@ -9407,6 +9409,45 @@ def _cut_mismatches(
                 )
 
     return mismatches
+
+
+#: Config key: when truthy, a user-woken seat whose turn ends cleanly with
+#: nothing armed is **parked** (``held``, ``resume: any``) instead of closed
+#: (design-the-seat-that-never-quits.md §The machinery, slice 1). Off by
+#: default until the maintainer signs the direction; the flag is the switch.
+SEAT_PARK_ON_TURN_END_KEY = "seat.park_on_turn_end"
+
+
+def _park_seat_on_turn_end(task: Run, cfg: "dict | None") -> dict[str, object] | None:
+    """The daemon's own park: a clean turn end becomes ``held`` on ``resume: any``.
+
+    Only for a seat — never a strand (a strand is a thought; the seat is a
+    life) — and only when ``seat.park_on_turn_end`` is on. Returns the
+    ``pending_resource_hold`` shape the worker tail already routes through
+    :func:`_finalize_resource_hold`, or ``None`` for the ordinary ``done``.
+    The user's release stays the user's: a dashboard stop never reaches
+    this branch (it lands on the ``stopped`` path), so nothing here can
+    override a person who said *enough*.
+    """
+    if not hasattr(task, "meta") or _is_strand(task.meta):
+        return None
+    if not _truthy((cfg or {}).get(SEAT_PARK_ON_TURN_END_KEY)):
+        return None
+    native_session_id = task.meta.get("codex_thread_id")
+    return {
+        "reason": resource_hold.REASON_TURN_ENDED,
+        "provider": _resource_hold_provider_for_runner(
+            task.meta.get("runner_shell") or task.meta.get("runner_name")
+        ),
+        "detail": "turn ended with nothing armed — the seat parks; anything addressed to it resumes it",
+        "native_session_id": native_session_id,
+        "resume_kind": (
+            resource_hold.RESUME_NATIVE if native_session_id
+            else resource_hold.RESUME_UNSUPPORTED
+        ),
+        "resume_condition": resource_hold.RESUME_ANY,
+        "reset_deadline": None,
+    }
 
 
 def _park_bolt_on_live_strands(
@@ -16024,6 +16065,8 @@ def _hold_body(meta: dict[str, object]) -> str:
     reason = str(meta.get("reason") or "a resource limit").replace("_", " ")
     if meta.get("resume_condition") == resource_hold.RESUME_STRANDS:
         lines = ["Parking this seat on its strands — nothing spends while they work."]
+    elif meta.get("resume_condition") == resource_hold.RESUME_ANY:
+        lines = ["Parked — the seat is yours; nothing spends until something reaches it."]
     else:
         lines = [f"Parking this conversation — {provider} hit {reason}."]
     detail = meta.get("detail")
@@ -16033,6 +16076,10 @@ def _hold_body(meta: dict[str, object]) -> str:
         lines.append(
             "The first strand to report back resumes this conversation — "
             "or send a message any time to resume sooner."
+        )
+    elif meta.get("resume_condition") == resource_hold.RESUME_ANY:
+        lines.append(
+            "A message, a strand reporting back, or a scheduled wake resumes it."
         )
     elif (
         meta.get("resume_condition") == resource_hold.RESUME_RESET
@@ -16128,10 +16175,13 @@ def _finalize_resource_hold(
         run_id=task.id,
         seconds=_HOLD_DEFER_SECONDS,
         reason="resource_hold",
-        keep_pending=lambda pending: resource_hold.strand_event_releases(
-            meta, pending,
-            held_run_id=task.id,
-            child_run_ids=task.meta.get("child_run_ids") or (),
+        keep_pending=lambda pending: (
+            resource_hold.schedule_event_releases(meta, pending)
+            or resource_hold.strand_event_releases(
+                meta, pending,
+                held_run_id=task.id,
+                child_run_ids=task.meta.get("child_run_ids") or (),
+            )
         ),
     )
     if deferred_ids:
@@ -16354,6 +16404,16 @@ def _handle_resource_held_events(
                 survivors.append(target)
                 continue
             source = str(target.event.get("source") or "")
+            if resource_hold.schedule_event_releases(hold_meta, target.event):
+                _apply_resource_hold_resume(
+                    runs_dir, target.inbox_dir, held, target.event, by="schedule",
+                )
+                print(
+                    f"[brnrd] parked seat resumed by schedule "
+                    f"{target.event.get('id')}: {held.id}"
+                )
+                survivors.append(target)
+                continue
             if resource_hold.strand_event_releases(
                 hold_meta, target.event,
                 held_run_id=held.id,
