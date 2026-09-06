@@ -3956,6 +3956,32 @@ def _seat_parks_on_turn_end(portal: dict[str, Any] | None) -> bool:
     return bool(isinstance(seat, dict) and seat.get("parks_on_turn_end"))
 
 
+def _strand_hold_clause(payload: dict[str, Any], portal: dict[str, Any]) -> str | None:
+    """A strand ending its turn with neither a submit nor a bolt is waiting by returning.
+
+    Three strands on 2026-09-06 ended a turn with a text-only "still
+    holding — will act on the next signal" while their gate queued; each
+    run closed under it (a strand is never parked at turn end — only the
+    seat is). Reads the daemon's own facts off portal-state (`strand`,
+    `bolt`) — never the reply's wording — and blocks once; the Shell's
+    `stop_hook_active` loop-breaker lets a second, deliberate stop through.
+    """
+    strand = portal.get("strand") if isinstance(portal.get("strand"), dict) else {}
+    if not strand.get("is_strand"):
+        return None
+    if strand.get("submitted"):
+        return None
+    bolt = payload.get("bolt") if isinstance(payload.get("bolt"), dict) else {}
+    if bolt.get("accepted"):
+        return None
+    return (
+        "a strand that ends its turn has ended its run — nothing parks it. "
+        "waiting on a gate, a subprocess, a file ⇒ `brnrd await --file <path>` "
+        "(the wait that keeps you); finished ⇒ `submit: true` then `brnrd await`, "
+        "or `brnrd cut`"
+    )
+
+
 def _linger_closeout_clause(ctx: "HookContext") -> str | None:
     """Require a completed linger, or an explicit reason for skipping it."""
     if ctx.outbox_dir is None or _linger_opted_out(ctx):
@@ -4535,6 +4561,11 @@ def _armed_closeout_block(
         linger_clause = _linger_closeout_clause(ctx)
         if linger_clause:
             unmet.append(linger_clause)
+
+    if "hold" in ctx.closeout_obligations:
+        hold_clause = _strand_hold_clause(payload, portal or {})
+        if hold_clause:
+            unmet.append(hold_clause)
 
     for name in _CLOSEOUT_ARTIFACT_ORDER:
         if name in ctx.closeout_obligations:
