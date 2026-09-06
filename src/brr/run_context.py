@@ -179,7 +179,9 @@ def write_wake_manifest(
               "budget_bytes": null,  # not yet tracked per-block — see report
               "trim_kind": null,     # "cut" | "cut-stale" | "stale" | null
               "freshness": null,     # ContractEntry.freshness — ISO mtime/revision, or null
-              "rendered_bytes": null # exact size of this run's own wake-blocks.json entry, or null
+              "rendered_bytes": null, # exact size of this run's own wake-blocks.json entry, or null
+              "lens": null           # ContractEntry.lens — which wake profile shaped
+                                     # this row, e.g. "profile:strand · skipped", or null
             }
           ]
         }
@@ -276,6 +278,7 @@ def write_wake_manifest(
             "trim_kind": _trim_kind(entry),
             "freshness": entry.freshness,
             "rendered_bytes": _rendered_bytes(entry.block_key),
+            "lens": entry.lens,
         }
         for entry in score.contracts
     ]

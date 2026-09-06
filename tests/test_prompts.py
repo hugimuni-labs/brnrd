@@ -1184,17 +1184,16 @@ class TestPromptBuilding:
 
         assert "- update available: 0.1.0 → 0.2.0" in prompt
 
-    def test_daemon_prompt_worker_excludes_resident_stack_but_admits_pitfalls(
+    def test_daemon_prompt_worker_light_profile_keeps_orienting_blocks(
         self, tmp_path
     ):
-        # #1185: a strand is single-shot — it cannot learn from its own
-        # patterns the way a resident's later wake would — so the pitfalls
-        # block (the account's failure-memory lookup, matched fresh against
-        # this run's own task text) is the one exception to "no inject
-        # stack for strands". Confirm the worker path admits *only* that
-        # one block: everything else in the inject stack (identity core,
-        # dominion, work surface, knowledge sources, recent activity) stays
-        # gone, even though the fixture below seeds a pitfall that matches.
+        # The strand wake profile (default `light`): a strand keeps identity,
+        # the kb map, a trimmed recent-activity tail, and pitfalls (#1185's
+        # own exception) — everything else in the resident's inject stack
+        # (dominion, work surface, hearth, runner policy, kb/notes health)
+        # stays gone. Seed an account home so "Work surface" would render if
+        # the drop weren't real, not just "nothing was there to begin with".
+        _seed_account_home(tmp_path)
         _seed_pitfalls(
             tmp_path,
             "## Blind retry\ntrigger: docker\n"
@@ -1206,7 +1205,7 @@ class TestPromptBuilding:
             run_id="task-9",
             strand=True,
         )
-        assert "Resident Identity Core" not in prompt
+        assert "Resident Identity Core" in prompt
         assert "Pitfalls that match this task" in prompt
         assert "Blind retry" in prompt
         assert "Rebuild the image before you trust the cache." in prompt
@@ -1214,13 +1213,36 @@ class TestPromptBuilding:
         assert _says(prompt, "the turn frame in `weave.md` §The turn")
         # Mechanics still ride — a worker wake is still under the daemon.
         assert "single-flight" in prompt
+        # The seat's own standing state stays gone.
+        assert "Work surface" not in prompt
+
+    def test_daemon_prompt_worker_full_profile_restores_the_resident_stack(
+        self, tmp_path
+    ):
+        # `strand.wake_profile=full` is the escape hatch: give a strand the
+        # same inject stack a resident gets, one config line, no code change.
+        _seed_account_home(tmp_path)
+        config_path = tmp_path / ".brr" / "config"
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8") + "strand.wake_profile=full\n",
+            encoding="utf-8",
+        )
+        prompt = build_daemon_prompt(
+            "rebuild the docker image and ship", "evt-1", "/tmp/resp.md",
+            tmp_path,
+            run_id="task-9",
+            strand=True,
+        )
+        assert "Resident Identity Core" in prompt
+        assert "Work surface" in prompt
 
     def test_daemon_prompt_worker_omits_pitfalls_when_nothing_matches(
         self, tmp_path
     ):
         # Same worker path, no matching trigger this time — the pitfalls
-        # slot renders empty/absent, same as it would for a resident wake,
-        # and the rest of the inject stack stays gone.
+        # slot renders empty/absent, same as it would for a resident wake;
+        # identity and the kb map still ride (the light profile's own kept
+        # set), and the rest of the inject stack stays gone.
         _seed_pitfalls(
             tmp_path,
             "## Blind retry\ntrigger: docker\nRebuild first.\n",
@@ -1232,8 +1254,19 @@ class TestPromptBuilding:
             strand=True,
         )
         assert "Pitfalls that match this task" not in prompt
-        assert "Resident Identity Core" not in prompt
         assert "Blind retry" not in prompt
+        assert "Resident Identity Core" in prompt
+
+    def test_daemon_prompt_worker_still_sees_web_capability(self, tmp_path):
+        # Workers skip the resident inject stack but still get the bundle —
+        # the capability declaration must survive that path.
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            run_id="task-9",
+            strand=True,
+            runner_shell="codex",
+        )
+        assert "- Web research: native via web.run" in prompt
 
     def test_daemon_prompt_default_keeps_resident_stack(self, tmp_path):
         prompt = build_daemon_prompt(
@@ -1291,17 +1324,6 @@ class TestPromptBuilding:
             run_id="task-9",
         )
         assert "- Web research: not declared for this Shell" in prompt
-
-    def test_daemon_prompt_worker_still_sees_web_capability(self, tmp_path):
-        # Workers skip the resident inject stack but still get the bundle —
-        # the capability declaration must survive that path.
-        prompt = build_daemon_prompt(
-            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
-            run_id="task-9",
-            strand=True,
-            runner_shell="codex",
-        )
-        assert "- Web research: native via web.run" in prompt
 
     def test_daemon_prompt_omits_runner_medium_when_absent(self, tmp_path):
         prompt = build_daemon_prompt(
@@ -5938,3 +5960,83 @@ class TestWakeBlocksSidecar:
         legacy_path = run_context.write_wake_manifest(brr_dir, run, score)
         legacy_manifest = _json.loads(legacy_path.read_text(encoding="utf-8"))
         assert all(b["rendered_bytes"] is None for b in legacy_manifest["blocks"])
+
+    def test_write_wake_manifest_strand_light_profile_names_dropped_blocks(
+        self, tmp_path
+    ):
+        """A strand's light profile drops most of the resident inject stack —
+        the manifest must say so, not just leave the row out.
+
+        Every dropped block (dominion, hearth, work surface, runner policy,
+        prior-run, kb/notes health) still appears with ``present: false`` and
+        ``lens: "profile:strand · skipped"`` (#<the-strand-that-wakes-light>);
+        the blocks the light profile keeps (identity core, knowledge sources,
+        pitfalls) carry ``"profile:strand · kept"``, and the trimmed one
+        (recent activity) carries ``"profile:strand · trimmed"``.
+        """
+        import json
+
+        from brr.prompts import build_daemon_prompt_with_score
+        from brr.run import Run
+        from brr import run_context
+
+        _, score = build_daemon_prompt_with_score(
+            "check the thing", "evt-mfst-3", "/tmp/resp.md", tmp_path,
+            run_id="run-mfst-3",
+            strand=True,
+        )
+        run = Run(
+            id="run-mfst-3", event_id="evt-mfst-3", body="",
+            source="test", status="running",
+        )
+        brr_dir = tmp_path / ".brr"
+        brr_dir.mkdir(exist_ok=True)
+        path = run_context.write_wake_manifest(brr_dir, run, score)
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        by_name = {b["name"]: b for b in manifest["blocks"]}
+
+        for dropped in (
+            "dominion", "hearth", "work-surface", "runner-policy",
+            "prior-run", "kb-health", "notes-health", "relabelled-repo",
+        ):
+            assert by_name[dropped]["present"] is False
+            assert by_name[dropped]["lens"] == "profile:strand · skipped"
+
+        assert by_name["identity-core"]["present"] is True
+        assert by_name["identity-core"]["lens"] == "profile:strand · kept"
+        assert by_name["knowledge-sources"]["lens"] == "profile:strand · kept"
+        assert by_name["pitfalls"]["lens"] == "profile:strand · kept"
+        assert by_name["recent-activity"]["lens"] == "profile:strand · trimmed"
+
+        # Non-strand blocks (preamble, bundle) carry no profile lens at all.
+        assert by_name["strand-preamble"]["lens"] is None
+
+    def test_write_wake_manifest_strand_full_profile_carries_no_lens(
+        self, tmp_path
+    ):
+        """`strand.wake_profile=full` is byte-identical to a resident's own
+        inject stack, so nothing in it is profile-narrowed — no block should
+        carry a `lens` value."""
+        import json
+
+        from brr.prompts import build_daemon_prompt_with_score
+        from brr.run import Run
+        from brr import run_context
+
+        (tmp_path / ".brr").mkdir(parents=True, exist_ok=True)
+        (tmp_path / ".brr" / "config").write_text(
+            "strand.wake_profile=full\n", encoding="utf-8"
+        )
+        _, score = build_daemon_prompt_with_score(
+            "check the thing", "evt-mfst-4", "/tmp/resp.md", tmp_path,
+            run_id="run-mfst-4",
+            strand=True,
+        )
+        run = Run(
+            id="run-mfst-4", event_id="evt-mfst-4", body="",
+            source="test", status="running",
+        )
+        brr_dir = tmp_path / ".brr"
+        path = run_context.write_wake_manifest(brr_dir, run, score)
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        assert all(b["lens"] is None for b in manifest["blocks"])
