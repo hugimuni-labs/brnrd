@@ -86,7 +86,7 @@ only deliberately.
   instrument is genuinely the better artifact. Tell: the cheap direct answer
   never shipped at all. Ship the description first; propose the recorder
   after, as its own move.
-- Plan boundaries + pre-closeout → glance at live inbox / portal state. Own
+- Plan boundaries + pre-phase-commit → glance at live inbox / portal state. Own
   every pending event: fold in | `spawn:` it (capacity + quota healthy) |
   defer with a named resource / priority / dependency / authority reason.
 - Folding an event's *content* clears nothing — only an `event:`-addressed
@@ -212,7 +212,7 @@ left off, a respawn is a full resident continuation — the shape
   creep.
 - `spawn:` = concurrent pool. Headroom from portal-state
   (`resources.coexisting_runs.spawn_pool`), never a remembered cap. Default:
-  linger, review inline, fold before closeout; the scheduled-wake fallback is
+  linger, review inline, fold before the phase commit; the scheduled-wake fallback is
   for a dying budget, not the default path.
 - **Spec the task, never the room.** The daemon attests the strand's
   environment (worktree floor, publish lane already attached); your own

@@ -33,6 +33,11 @@ or the automatic-detection path chose:
   bolt arms this itself when a live strand is dispositioned ``handoff``
   (``daemon.py``'s cut path) — a run with children still running lands
   ``held``, never ``done``.
+- ``RESUME_ANY`` — the seat's resting state: released by a correspondent
+  message, one of its own strands, or a ``schedule`` firing. Chosen by the
+  daemon itself when a user-woken seat's turn ends with nothing armed
+  (``seat.park_on_turn_end``, design-the-seat-that-never-quits.md), or by
+  the resident with ``resume: any``.
 - ``RESUME_RESET`` — additionally released once a *measured* provider
   reset deadline passes (a plain clock comparison against a timestamp the
   provider itself stated, captured once at arm time — never a guessed
@@ -69,9 +74,16 @@ RESUME_RESET = "reset"
 #: are living strands that the run should be waiting on"). A correspondent
 #: message releases this one too — the operator always outranks the wait.
 RESUME_STRANDS = "strands"
-RESUME_CONDITIONS = frozenset({RESUME_OPERATOR, RESUME_RESET, RESUME_STRANDS})
+#: The seat's resting state (design-the-seat-that-never-quits.md): released
+#: by *anything addressed to this seat* — a correspondent message, one of
+#: its own strands, a schedule firing. The daemon parks a seat here on its
+#: own when a turn ends with nothing armed (``seat.park_on_turn_end``), so
+#: "the run ended" stops being a thing that happens to a user-woken seat.
+RESUME_ANY = "any"
+RESUME_CONDITIONS = frozenset({RESUME_OPERATOR, RESUME_RESET, RESUME_STRANDS, RESUME_ANY})
 
 REASON_WAITING_ON_STRANDS = "waiting_on_strands"
+REASON_TURN_ENDED = "turn_ended"
 
 #: The child-event sources that release a ``strands``-condition hold. Not
 #: ``spawn_queued`` (admission, nothing to read yet) and never
@@ -194,6 +206,18 @@ def reset_condition_met(meta: dict[str, Any] | None, *, now: float | None = None
     return timestamp >= deadline
 
 
+def schedule_event_releases(meta: dict[str, Any] | None, event: dict[str, Any] | None) -> bool:
+    """Whether a ``schedule`` firing wakes this hold — only on the ``any`` condition.
+
+    A tick is a reason to wake a parked seat (design-the-seat-that-never-quits.md:
+    "a tick is a reason to wake, not a new life"); under every other
+    condition it accumulates as before.
+    """
+    if not is_active(meta) or (meta or {}).get("resume_condition") != RESUME_ANY:
+        return False
+    return bool(event) and str(event.get("source") or "") == "schedule"
+
+
 def strand_event_releases(
     meta: dict[str, Any] | None,
     event: dict[str, Any] | None,
@@ -211,7 +235,7 @@ def strand_event_releases(
     then from the run's own ``child_run_ids`` (``spawned_by_run``), so an
     adopted or re-parented child still counts.
     """
-    if not is_active(meta) or (meta or {}).get("resume_condition") != RESUME_STRANDS:
+    if not is_active(meta) or (meta or {}).get("resume_condition") not in (RESUME_STRANDS, RESUME_ANY):
         return False
     if not event:
         return False

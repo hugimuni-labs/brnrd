@@ -1865,7 +1865,7 @@ def test_install_hook_config_writes_wellformed_claude_settings(tmp_path):
     # #1184: unlike the other three (unconditional), the rooted-write guard
     # is matcher-scoped to the two tools that take a raw file path — every
     # other tool call never reaches ``brnrd hook pre-tool`` at all.
-    assert hook_block["PreToolUse"][0]["matcher"] == "Edit|Write"
+    assert hook_block["PreToolUse"][0]["matcher"] == "Edit|Write|Monitor"
     for name in ("PostToolBatch", "Stop", "SessionStart"):
         assert "matcher" not in hook_block[name][0]
     # statusLine is a TUI footer and does not fire under daemon --print runs,
@@ -1913,7 +1913,7 @@ def test_install_hook_config_merges_and_preserves_user_keys(tmp_path):
     pre_tool = settings["hooks"]["PreToolUse"]
     assert pre_tool[0] == {"hooks": []}
     assert pre_tool[-1]["hooks"][0]["command"] == "brnrd hook pre-tool"
-    assert pre_tool[-1]["matcher"] == "Edit|Write"
+    assert pre_tool[-1]["matcher"] == "Edit|Write|Monitor"
 
 
 def test_install_hook_config_repeated_installs_keep_one_brr_pre_tool(tmp_path):
@@ -1950,7 +1950,7 @@ def test_install_hook_config_repairs_stale_brr_pre_tool_copies(tmp_path):
     settings_dir = tmp_path / ".claude"
     settings_dir.mkdir()
     stale_entry = {
-        "matcher": "Edit|Write",
+        "matcher": "Edit|Write|Monitor",
         "hooks": [
             {"type": "command", "command": "/old/location/brnrd hook pre-tool"}
         ],
@@ -6499,3 +6499,73 @@ def test_relative_reset_formats_from_the_usage_parser(monkeypatch):
     assert hooks._relative_reset("x", now=1000.0) == "2h05m"
     monkeypatch.setattr(claude_usage, "_reset_epoch", lambda when: None)
     assert hooks._relative_reset("x", now=1000.0) is None
+
+
+# ── the wait-by-returning trap (design-the-seat-that-never-quits.md §The tool trap) ──
+
+
+def test_pre_tool_refuses_monitor_in_a_daemon_hosted_run(tmp_path):
+    # `_env` carries BRR_OUTBOX_DIR — the daemon's portal — so this is a
+    # daemon-hosted run: Monitor would end the turn, and the turn is the run.
+    out, code = hooks.run_hook(
+        hooks.PHASE_PRE_TOOL,
+        json.dumps({"tool_name": "Monitor", "tool_input": {"command": "until …"}}),
+        _env(tmp_path),
+    )
+    assert code == 0
+    deny = out["hookSpecificOutput"]
+    assert deny["permissionDecision"] == "deny"
+    assert "brnrd await" in deny["permissionDecisionReason"]
+
+
+def test_pre_tool_lets_monitor_through_without_a_portal(tmp_path):
+    env = _env(tmp_path)
+    env.pop("BRR_OUTBOX_DIR")
+    env.pop("BRR_PORTAL_STATE")  # the portal path is what names the outbox
+    out, code = hooks.run_hook(
+        hooks.PHASE_PRE_TOOL,
+        json.dumps({"tool_name": "Monitor", "tool_input": {"command": "until …"}}),
+        env,
+    )
+    assert code == 0
+    assert out == {}
+
+
+# ── the seat that never quits: a turn end is a park, not a close ──────────
+
+
+def _portal_seat_parks(tmp_path):
+    path = tmp_path / portals.LIVE_PORTAL_STATE_NAME
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["seat"] = {"parks_on_turn_end": True}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_linger_has_nothing_to_ask_when_the_seat_parks(tmp_path):
+    env = _armed_vigil(tmp_path)
+    env["BRR_CLOSEOUT_OBLIGATIONS"] = "linger"
+    _portal_seat_parks(tmp_path)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out.get("decision") != "block", out
+
+
+def test_vigil_has_nothing_to_ask_when_the_seat_parks(tmp_path):
+    env = _armed_vigil(tmp_path)
+    _portal_seat_parks(tmp_path)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_CONTINUING), env)
+    assert out.get("decision") != "block", out
+
+
+def test_stop_delta_names_the_phase_commit_when_the_seat_parks():
+    payload = {"seat": {"parks_on_turn_end": True}, "attention": {}, "inbound": {"events": []}}
+    rendered = hooks.format_delta(payload, stop=True)
+    assert "phase commit" in rendered
+    assert "declare this run's completion" not in rendered
+    assert "brnrd portal closeout" not in rendered
+
+
+def test_stop_delta_keeps_the_closeout_wording_when_the_seat_closes():
+    payload = {"seat": {"parks_on_turn_end": False}, "attention": {}, "inbound": {"events": []}}
+    rendered = hooks.format_delta(payload, stop=True)
+    assert "declare this run's completion" in rendered
+    assert "phase commit" not in rendered

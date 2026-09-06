@@ -314,3 +314,68 @@ class TestBoltParksOnLiveStrands:
         body = daemon._hold_body(meta)
         assert "strands" in body and "run-kid" in body
         assert "resumes this conversation" in body
+
+
+# ── the seat's resting state: resume: any (design-the-seat-that-never-quits.md) ──
+
+
+class TestResumeAny:
+    def test_verb_alias(self):
+        spec, error = hold_verb.parse_hold({"hold": "true", "resume": "any"})
+        assert error is None
+        assert spec["resume_condition"] == resource_hold.RESUME_ANY
+
+    def test_schedule_releases_only_under_any(self):
+        meta_any = resource_hold.build(reason="x", provider="claude", resume_condition=resource_hold.RESUME_ANY)
+        meta_str = resource_hold.build(reason="x", provider="claude", resume_condition=resource_hold.RESUME_STRANDS)
+        tick = {"source": "schedule"}
+        assert resource_hold.schedule_event_releases(meta_any, tick)
+        assert not resource_hold.schedule_event_releases(meta_str, tick)
+        assert not resource_hold.schedule_event_releases(meta_any, {"source": "spawn_queued"})
+
+    def test_own_strand_releases_under_any(self):
+        meta = resource_hold.build(reason="x", provider="claude", resume_condition=resource_hold.RESUME_ANY)
+        ev = {"source": "spawn_completed", "spawn_parent_run_id": "run-parent"}
+        assert resource_hold.strand_event_releases(meta, ev, held_run_id="run-parent")
+        assert not resource_hold.strand_event_releases(
+            meta, {"source": "spawn_completed", "spawn_parent_run_id": "run-other"}, held_run_id="run-parent",
+        )
+
+    def test_daemon_resumes_a_parked_seat_on_a_tick(self, tmp_path):
+        runs_dir = tmp_path / ".brr" / "runs"; runs_dir.mkdir(parents=True)
+        task = Run(id="run-seat", event_id="evt-lead", body="", status=resource_hold.RUN_STATUS)
+        task.meta["resource_hold"] = resource_hold.build(
+            reason=resource_hold.REASON_TURN_ENDED, provider="claude",
+            resume_condition=resource_hold.RESUME_ANY, conversation_key="cloud:telegram:1:",
+        )
+        task.save(runs_dir)
+        helper = TestHeldEventsOnStrands()
+        tick = helper._target(tmp_path, source="schedule", eid="evt-tick")
+
+        assert daemon._handle_resource_held_events([tick], None) == [tick]
+        hold = Run.from_file(runs_dir / "run-seat" / "run.md").meta["resource_hold"]
+        assert hold["released"] is True and hold["released_by"] == "schedule"
+
+    def test_park_on_turn_end_is_off_by_default(self):
+        seat = Run(id="run-seat", event_id="evt-p", body="", source="cloud")
+        assert daemon._park_seat_on_turn_end(seat, {}) is None
+        assert daemon._park_seat_on_turn_end(seat, None) is None
+
+    def test_park_on_turn_end_parks_a_seat_when_on(self):
+        seat = Run(id="run-seat", event_id="evt-p", body="", source="cloud")
+        seat.meta["runner_shell"] = "claude"
+        hold = daemon._park_seat_on_turn_end(seat, {daemon.SEAT_PARK_ON_TURN_END_KEY: "true"})
+        assert hold is not None
+        assert hold["resume_condition"] == resource_hold.RESUME_ANY
+        assert hold["reason"] == resource_hold.REASON_TURN_ENDED
+
+    def test_park_on_turn_end_never_parks_a_strand(self):
+        strand = Run(id="run-kid", event_id="evt-k", body="", source="spawn")
+        strand.meta["strand"] = True
+        assert daemon._is_strand(strand.meta)
+        assert daemon._park_seat_on_turn_end(strand, {daemon.SEAT_PARK_ON_TURN_END_KEY: True}) is None
+
+    def test_hold_body_for_any(self):
+        meta = resource_hold.build(reason=resource_hold.REASON_TURN_ENDED, provider="claude", resume_condition=resource_hold.RESUME_ANY)
+        body = daemon._hold_body(meta)
+        assert "Parked" in body and "scheduled wake" in body
