@@ -780,6 +780,17 @@ def _portals(run: RunView | None, *, show_raw: bool = False) -> str:
                 f"{pool.get('max_concurrent', '?')} max · "
                 f"{pool.get('available', '?')} available"
             )
+        # A live occupancy reading (Claude: token count until the final
+        # envelope proves a real window size; Codex: a real percentage the
+        # whole run — daemon._record_context_window / codex_status). The
+        # facet's own summary prose, verbatim — an operator console reads
+        # the sentence fine; the compact `ctx 62%` chip is the hook line's
+        # own compression, not owed here too.
+        context_window = resources.get("context_window")
+        if isinstance(context_window, dict) and context_window.get("status") == "known":
+            summary = context_window.get("summary")
+            if summary:
+                lines.append(f"context    {summary}")
 
     if attention:
         lines.extend(["", "ATTENTION"])

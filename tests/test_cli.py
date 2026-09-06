@@ -1178,9 +1178,15 @@ def test_await_slice_returns_pending_at_its_own_ceiling(
 ):
     """The call ends by answering, never by being killed mid-wait: it returns
     ``pending`` at its own ceiling, which sits under the tightest Shell
-    per-tool-call cap. "Call again" is then the whole instruction."""
+    per-tool-call cap. "Call again" is then the whole instruction.
+
+    No ``BRR_RUNNER`` here ⇒ the unrecognized-Shell fallback, so this pins
+    the ceiling at the prior one-size-fits-all default regardless of which
+    per-Shell numbers get added to the table later.
+    """
     from brr import cli
 
+    monkeypatch.delenv("BRR_RUNNER", raising=False)
     outbox = _await_outbox(tmp_path)
 
     def drain():
@@ -1195,6 +1201,58 @@ def test_await_slice_returns_pending_at_its_own_ceiling(
     payload = json.loads(capsys.readouterr().out)
     assert payload["outcome"] == "pending"
     assert clock.now >= cli._AWAIT_SLICE_CEILING_SECONDS
+
+
+def test_await_slice_ceiling_extends_under_claude(tmp_path, capsys, monkeypatch):
+    """A claude wake gets the Shell's own room: 9m40s, not the generic 8m.
+
+    Claude's Bash tool caps one call at 10 minutes; 480s left two full
+    minutes of that budget unused every single slice. ``BRR_RUNNER=claude``
+    (the flavour the daemon stamps into every wake's environment) is what
+    ``cmd_await`` reads to find this — no flag, nothing for the caller to
+    restate.
+    """
+    from brr import cli
+
+    monkeypatch.setenv("BRR_RUNNER", "claude")
+    outbox = _await_outbox(tmp_path)
+
+    def drain():
+        for path in _staged_await(outbox):
+            path.unlink()
+
+    clock = _FakeClock(on_sleep=drain)
+    monkeypatch.setattr(time, "sleep", clock.sleep)
+    monkeypatch.setattr(time, "monotonic", clock.monotonic)
+
+    assert main(["await", "--outbox", str(outbox), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["outcome"] == "pending"
+    assert clock.now >= cli._AWAIT_SLICE_CEILING_BY_SHELL["claude"]
+    assert cli._AWAIT_SLICE_CEILING_BY_SHELL["claude"] > cli._AWAIT_SLICE_CEILING_SECONDS
+
+
+def test_await_slice_ceiling_by_shell_lookup(monkeypatch):
+    """The lookup itself: unit-level, no full await drive needed.
+
+    Unset/unrecognized/codex all fall back to the prior generic default —
+    codex's own per-call cap is unmeasured, so this table does not guess a
+    number for it. An explicit *shell* argument wins over the environment.
+    """
+    from brr import cli
+
+    monkeypatch.delenv("BRR_RUNNER", raising=False)
+    assert cli._await_slice_ceiling_seconds() == cli._AWAIT_SLICE_CEILING_SECONDS
+    assert cli._await_slice_ceiling_seconds("codex") == cli._AWAIT_SLICE_CEILING_SECONDS
+    assert cli._await_slice_ceiling_seconds("some-future-shell") == (
+        cli._AWAIT_SLICE_CEILING_SECONDS
+    )
+    assert cli._await_slice_ceiling_seconds("claude") == 580.0
+    assert cli._await_slice_ceiling_seconds("CLAUDE") == 580.0
+
+    monkeypatch.setenv("BRR_RUNNER", "claude")
+    assert cli._await_slice_ceiling_seconds() == 580.0
+    assert cli._await_slice_ceiling_seconds("codex") == cli._AWAIT_SLICE_CEILING_SECONDS
 
 
 def test_run_requires_instruction():

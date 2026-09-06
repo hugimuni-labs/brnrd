@@ -3436,6 +3436,77 @@ def test_record_boot_cost_leaves_no_trace_before_a_transcript_reading_exists(
     assert not outbox_dir.exists()
 
 
+# ── brnrd#1810: live context_window reading, fed every heartbeat ─────────
+
+
+def test_record_context_window_writes_a_token_reading_beside_boot(
+    tmp_path, monkeypatch,
+):
+    from brr import claude_status
+
+    transcript = tmp_path / "session.jsonl"
+    _write_claude_transcript(
+        transcript,
+        {"input_tokens": 100, "output_tokens": 999,
+         "cache_read_input_tokens": 8_000, "cache_creation_input_tokens": 200},
+    )
+    monkeypatch.setattr(
+        daemon.allowance, "latest_claude_transcript", lambda *a, **k: transcript,
+    )
+    outbox_dir = tmp_path / "outbox"
+    # A boot-cost reading already on file must survive untouched — this
+    # writes a sibling key, never overwrites it.
+    claude_status.write_snapshot(outbox_dir, {"boot": {"weighted": 350, "at": "x"}})
+
+    daemon._record_context_window("claude", tmp_path / "work", outbox_dir)
+
+    snap = claude_status.load_snapshot(outbox_dir)
+    assert snap["boot"] == {"weighted": 350, "at": "x"}
+    assert snap["context_window"]["tokens_used"] == 8_300
+    assert "8.3k" in snap["context_window"]["summary"]
+    assert "updated_at" in snap["context_window"]
+
+
+def test_record_context_window_never_regresses_a_known_percentage(tmp_path, monkeypatch):
+    """The final envelope already produced the honest ``contextWindow``-
+    derived percentage (this run's own, or the cross-run fallback) — a
+    later heartbeat's coarser token-only reading must not clobber it."""
+    from brr import claude_status
+
+    transcript = tmp_path / "session.jsonl"
+    _write_claude_transcript(
+        transcript, {"input_tokens": 100, "cache_creation_input_tokens": 200},
+    )
+    monkeypatch.setattr(
+        daemon.allowance, "latest_claude_transcript", lambda *a, **k: transcript,
+    )
+    outbox_dir = tmp_path / "outbox"
+    claude_status.write_snapshot(outbox_dir, {
+        "context_window": {
+            "summary": "62% context left (est)", "remaining_percentage": 62.0,
+        },
+    })
+
+    daemon._record_context_window("claude", tmp_path / "work", outbox_dir)
+
+    snap = claude_status.load_snapshot(outbox_dir)
+    assert snap["context_window"]["remaining_percentage"] == 62.0
+    assert "tokens_used" not in snap["context_window"]
+
+
+def test_record_context_window_skips_non_claude_runners(tmp_path):
+    daemon._record_context_window("codex", tmp_path / "work", tmp_path / "outbox")
+    assert not (tmp_path / "outbox").exists()
+
+
+def test_record_context_window_leaves_no_trace_before_a_transcript_reading_exists(
+    tmp_path,
+):
+    outbox_dir = tmp_path / "outbox"
+    daemon._record_context_window("claude", tmp_path / "nope", outbox_dir)
+    assert not outbox_dir.exists()
+
+
 def test_notify_spawn_parent_declared_contract_beats_sibling_prose(tmp_path):
     """#640a: a spec whose prose responsibly names a *sibling* worker's
     branch ahead of its own (the worktree-discipline "don't collide with
