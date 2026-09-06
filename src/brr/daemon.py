@@ -6085,38 +6085,168 @@ def _collect_levels(
 
 def _collect_allowance_facet(
     task: Run, runner_name: str | None, work_dir: Path | None,
+    *, cfg: "dict | None" = None, levels: "dict[str, object] | None" = None,
 ) -> dict[str, object] | None:
-    """A strand's live ``{"tokens": N, "spent": M}``, or ``None`` off a strand.
+    """A strand's or the resident seat's live ``{"tokens": N, "spent": M}``.
 
     Called every heartbeat/boundary this run's portal-state is rebuilt
-    (design-the-allowance.md §2, slice 1) — cheap: a bounded transcript/
-    rollout tail-read, not a fresh Shell probe. The current ceiling is read
-    from the live run-control record first (a parent's ``to:`` grant lands
-    there — :func:`_apply_allowance_grant`), falling back to the dispatch-
-    time stamp on ``task.meta`` when no control entry exists (a test caller,
-    or a control retired out from under a still-finishing heartbeat).
+    (design-the-allowance.md §2) — cheap: a bounded transcript/rollout
+    tail-read, not a fresh Shell probe. Two branches, one meter
+    (:func:`allowance.collect_spent`) — never a second accounting:
+
+    - a **strand**: the current ceiling is read from the live run-control
+      record first (a parent's ``to:`` grant lands there —
+      :func:`_apply_allowance_grant`), falling back to the dispatch-time
+      stamp on ``task.meta`` when no control entry exists (a test caller,
+      or a control retired out from under a still-finishing heartbeat).
+    - the **resident seat** (slice 2, every other run): the ceiling is
+      config-owned (:func:`allowance.resident_ceiling_tokens`) and the
+      window it resets against comes from *levels*' binding quota reset
+      instant (:func:`runner_quota.binding_quota_reset_epoch`) — see
+      :func:`allowance.resident_allowance_state` for why this stops short
+      of a quota-percent-to-token conversion.
 
     Both the ceiling and the freshly-metered spend are written back onto
     ``task.meta`` so the cut-time overrun check (:func:`_cut_mismatches`)
     and the completion notice (:func:`_notify_spawn_parent`) read a recent
     value without re-metering.
     """
-    if not hasattr(task, "meta") or not _is_strand(task.meta):
+    if not hasattr(task, "meta"):
         return None
-    control = _find_run_control(str(getattr(task, "event_id", "") or task.id))
-    tokens = (
-        (control or {}).get("allowance_tokens")
-        or task.meta.get("spawn_allowance_tokens")
-        or allowance.DEFAULT_ALLOWANCE_TOKENS
-    )
-    tokens = int(tokens)
-    spent = allowance.collect_spent(
+    if _is_strand(task.meta):
+        control = _find_run_control(str(getattr(task, "event_id", "") or task.id))
+        tokens = (
+            (control or {}).get("allowance_tokens")
+            or task.meta.get("spawn_allowance_tokens")
+            or allowance.DEFAULT_ALLOWANCE_TOKENS
+        )
+        tokens = int(tokens)
+        spent = allowance.collect_spent(
+            runner_name, work_dir,
+            codex_thread_id=task.meta.get("codex_thread_id"),
+        )
+        task.meta["spawn_allowance_tokens"] = tokens
+        task.meta["spawn_allowance_spent"] = spent
+        # Also onto the shared, cross-thread `_run_controls` record — the
+        # only place the *parent's* own heartbeat (a different thread, no
+        # handle on this child's `task`) can read it from, for the draw-
+        # attribution facet (brnrd#1810, `_owned_child_controls`). Never a
+        # second meter: the same `spent` this call already computed.
+        if control is not None:
+            with _run_controls_lock:
+                control["allowance_spent"] = spent
+        return {"tokens": tokens, "spent": spent, "scope": "strand"}
+    live_spent = allowance.collect_spent(
         runner_name, work_dir,
         codex_thread_id=task.meta.get("codex_thread_id"),
     )
-    task.meta["spawn_allowance_tokens"] = tokens
-    task.meta["spawn_allowance_spent"] = spent
-    return {"tokens": tokens, "spent": spent}
+    reset_epoch = runner_quota.binding_quota_reset_epoch(levels)
+    return allowance.resident_allowance_state(
+        task.meta, cfg=cfg, reset_epoch=reset_epoch, live_spent=live_spent,
+    )
+
+
+def _collect_quota_draws(
+    task: Run, allowance_facet_input: "dict[str, object] | None",
+) -> "dict[str, object] | None":
+    """Who is drawing on the *shared* quota gauge this boundary, attributed.
+
+    brnrd#1810 (design-the-seat-that-never-quits.md §"The measurement"): a
+    prior seat priced a close from S34→S8 in 30 minutes, attributing the
+    whole drop to itself, when three sonnet strands sharing the same
+    provider gauge did almost all of it. This is the fix — not a new
+    meter, a projection of the two the daemon already keeps:
+
+    - **self** — this run's own live-metered weighted spend, straight off
+      *allowance_facet_input* (:func:`_collect_allowance_facet`'s already-
+      computed ``spent``, whatever this run's own scope — resident or
+      strand). ``None`` when that facet hasn't got a reading yet.
+    - **strands** — every strand this run still owns
+      (:func:`_owned_child_controls`), each with the same ``allowance_spent``
+      its own heartbeat already wrote onto the shared control record (see
+      :func:`_collect_allowance_facet`'s strand branch) — never re-metered
+      here. ``weighted`` is ``None`` for a strand whose first boundary
+      hasn't landed a reading yet; it still counts toward the row, just not
+      toward any summed total a renderer builds from it.
+
+    ``None`` only when there is nothing at all to report (no self reading
+    and no owned strands) — an empty ``draws`` block would just be noise on
+    every quiet, unspawned run.
+    """
+    if not hasattr(task, "meta"):
+        return None
+    self_spent: "int | None" = None
+    if isinstance(allowance_facet_input, dict):
+        raw = allowance_facet_input.get("spent")
+        if raw is not None:
+            self_spent = int(raw)
+    strands = [
+        {
+            "run_id": row.get("run_id") or None,
+            "title": row.get("title") or None,
+            "weighted": row.get("weighted"),
+        }
+        for row in _owned_child_controls(task.id)
+    ]
+    if self_spent is None and not strands:
+        return None
+    return {"self": self_spent, "strands": strands}
+
+
+def _record_boot_cost(
+    task: Run,
+    runner_name: str | None,
+    work_dir: Path | None,
+    outbox_dir: Path | None,
+) -> None:
+    """Stamp this run's boot cost onto its own ``spend.json`` control file, once.
+
+    design-the-seat-that-never-quits.md §"The measurement": slice 3 (not
+    this one) needs a number to compare a held seat's per-boundary hold
+    cost against — this only records it. ``boot`` = the first assistant
+    turn's cache-creation + fresh-input tokens, cost-weighted
+    (:func:`allowance.claude_first_turn_boot_tokens`) — what it took to
+    *establish* context (the wake bundle, the system prompt, the dominion
+    files) before any work happened, read live off the growing session
+    transcript rather than waiting for the final ``--output-format json``
+    envelope :mod:`brr.claude_status` otherwise depends on (which may be
+    hours away on a long-held seat).
+
+    Claude-only for now — Codex's analogous first-request cost is a gap
+    this leaves open, named rather than guessed at (no ``TOKEN_WEIGHTS``-
+    style price table has been validated against Codex's own accounting
+    yet).
+
+    Retried every heartbeat until the transcript actually has a first
+    ``usage`` row to read (``task.meta["boot_cost_recorded"]`` only flips
+    once a real number lands, never on a merely-absent one — the same
+    absent-vs-unknown discipline every other facet here keeps), then never
+    again for this run: a stamped boot cost doesn't move, and
+    :func:`brr.claude_status.write_snapshot` preserves it across every
+    later overwrite of the same control file.
+    """
+    if not hasattr(task, "meta") or task.meta.get("boot_cost_recorded"):
+        return
+    if not claude_status.supported(runner_name):
+        return
+    tokens = allowance.claude_first_turn_boot_tokens(
+        allowance.latest_claude_transcript(work_dir)
+    )
+    if tokens is None:
+        return
+    # Merge onto whatever this control file already holds — usually
+    # nothing yet (boot is the *first* thing recorded here in the common
+    # case), but never assume it: overwriting wholesale would erase a
+    # levels snapshot that happened to land first on an unlucky ordering.
+    existing = claude_status.load_snapshot(outbox_dir)
+    payload = dict(existing) if isinstance(existing, dict) else {}
+    payload["boot"] = {
+        "weighted": tokens,
+        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    written = claude_status.write_snapshot(outbox_dir, payload)
+    if written is not None:
+        task.meta["boot_cost_recorded"] = True
 
 
 def _resources_facet(
@@ -6135,6 +6265,7 @@ def _resources_facet(
     coexisting: "list[dict[str, object]] | None" = None,
     wake_request: "dict[str, object] | None" = None,
     allowance: "dict[str, object] | None" = None,
+    draws: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Operator-facing 'work status' the running resident can read.
 
@@ -6171,6 +6302,7 @@ def _resources_facet(
         coexisting=coexisting,
         wake_request=wake_request,
         allowance=allowance,
+        draws=draws,
     )
 
 
@@ -6729,8 +6861,10 @@ def _write_live_portal_state(
             ),
         )
         allowance_facet_input = _collect_allowance_facet(
-            task, runner_name, work_dir,
+            task, runner_name, work_dir, cfg=cfg, levels=run_levels,
         )
+        draws_facet_input = _collect_quota_draws(task, allowance_facet_input)
+        _record_boot_cost(task, runner_name, work_dir, outbox_dir)
         # The run boundary knows its own Core (the resolved profile's
         # `model`, e.g. "opus"/"fable") — pass it so a thin week_models
         # bucket for a *different* Core doesn't bind this run's pacing (#561).
@@ -6891,6 +7025,7 @@ def _write_live_portal_state(
                 coexisting=coexisting_snapshot,
                 wake_request=task.meta.get("wake_request"),
                 allowance=allowance_facet_input,
+                draws=draws_facet_input,
             ),
         }
         if bolt_state is not None:
@@ -7905,6 +8040,7 @@ def _register_run_control(
     parent_conversation_key: str = "",
     repo_label: str = "",
     allowance_tokens: int | None = None,
+    title: str = "",
 ) -> None:
     with _run_controls_lock:
         _run_controls[spawn_event_id] = {
@@ -7924,6 +8060,16 @@ def _register_run_control(
             # cut-time dissent row even if the parent never answers.
             "allowance_tokens": allowance_tokens,
             "allowance_asked": False,
+            # The dispatcher's own `title:` (#880 §1b), carried here too so
+            # the parent's own draw-attribution read (brnrd#1810,
+            # `_owned_child_controls`) can name a strand without a second
+            # lookup — the child's `meta["title"]` lives on a different
+            # process/thread's `Run` object this parent has no handle to.
+            "title": title,
+            # The strand's own live-metered weighted spend, written by its
+            # own heartbeat (`_collect_allowance_facet`'s strand branch) —
+            # `None` until that child's first boundary reads something.
+            "allowance_spent": None,
         }
 
 
@@ -8000,6 +8146,12 @@ def _owned_child_controls(run_id: str) -> list[dict[str, str]]:
             adopted_from = str(control.get("adopted_from_run_id") or "").strip()
             if adopted_from:
                 row["adopted_from_run_id"] = adopted_from
+            title = str(control.get("title") or "").strip()
+            if title:
+                row["title"] = title
+            spent = control.get("allowance_spent")
+            if spent is not None:
+                row["weighted"] = int(spent)
             rows.append(row)
     rows.sort(key=lambda row: (row.get("run_id") or "", row.get("event_id") or ""))
     return rows
@@ -9150,6 +9302,7 @@ def _queue_spawn_request(
         parent_conversation_key=task.conversation_key or "",
         repo_label=str(task.meta.get("repo_label") or ""),
         allowance_tokens=allowance_tokens,
+        title=title,
     )
     print(f"[brnrd] outbox: queued concurrent spawn ({new_path.stem})")
     # A schedule entry can opt in (`reset_on: spawn`) to treat this dispatch

@@ -573,6 +573,16 @@ def parse_usage_text(raw: bytes | str) -> dict[str, Any]:
         levels["quota"] = {"summary": "; ".join(parts)}
         if buckets:
             levels["quota"]["buckets"] = buckets
+        # Folded in here, not just left at the top level, because
+        # `daemon._merge_level_snapshots` only carries the `quota` /
+        # `spend` / `context_window` / `plan_type` keys through — a reset
+        # epoch left at `levels["session_resets_at"]` alone is silently
+        # dropped before `runner_quota.binding_quota_reset_epoch`
+        # (design-the-allowance.md §2, slice 2) ever sees it.
+        if session:
+            levels["quota"]["session_resets_at"] = levels.get("session_resets_at")
+        if week:
+            levels["quota"]["week_resets_at"] = levels.get("week_resets_at")
     if usage_credits:
         levels["usage_credits"] = usage_credits
     return levels

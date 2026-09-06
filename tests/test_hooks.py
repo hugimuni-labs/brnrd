@@ -4078,6 +4078,129 @@ def test_allowance_directive_silent_under_100pct():
     assert line is None or "allowance spent" not in line
 
 
+# ── the resident seat's own standing allowance (design-the-allowance.md
+# §2, slice 2): same facet shape, `scope: "resident"` changes the render ──
+
+
+def test_allowance_chip_sits_beside_quota_chip_for_the_resident():
+    """Unlike a strand (whose shared quota reading is not worth a second
+    chip), design-the-continuous-seat.md's "Boundaries" section and design-
+    the-allowance.md both insist provider headroom and allocated work stay
+    separate, simultaneously visible facts for the seat itself — so both
+    chips render."""
+    resources = {
+        "quota": {"status": "known", "summary": "session 57% left"},
+        "allowance": {
+            "status": "known", "tokens": 20_000_000, "spent": 500_000,
+            "pct": 2.5, "scope": "resident",
+        },
+    }
+    payload = _portal_payload(resources=resources)
+    line = hooks.format_delta(payload, rendered_chips={})
+    assert line is not None
+    assert "spend 500k/20m" in line
+    assert "q S57" in line
+
+
+def test_allowance_directive_silent_for_resident_scope_even_past_100pct():
+    """The strand-only park/ask directive (`submit: true`, `ask: allowance
+    +<tokens>`) names verbs the daemon refuses off a strand — see
+    `_allowance_directive`'s docstring. The resident's own overrun must not
+    fire it; the chip alone stays the visible signal."""
+    resources = {
+        "allowance": {
+            "status": "known", "tokens": 120_000, "spent": 140_000,
+            "pct": 116.7, "scope": "resident",
+        },
+    }
+    payload = _portal_payload(resources=resources)
+    line = hooks.format_delta(payload, rendered_chips={})
+    assert line is None or "allowance spent" not in line
+    assert line is None or "submit: true" not in line
+
+
+# ── draws — attribution of the shared quota gauge (brnrd#1810, design-
+# the-seat-that-never-quits.md §"The measurement") ────────────────────────
+
+
+def test_draws_chip_renders_self_and_strands():
+    resources = {
+        "quota": {
+            "status": "known", "summary": "session 83% left",
+            "draws": {
+                "self": 1_200_000,
+                "strands": [
+                    {"run_id": "run-a", "title": "t1", "weighted": 2_000_000},
+                    {"run_id": "run-b", "title": "t2", "weighted": 1_400_000},
+                ],
+            },
+        },
+    }
+    assert hooks._draws_chip(resources) == "me 1.2m · ▷2 3.4m"
+
+
+def test_draws_chip_self_only_when_no_strands():
+    resources = {"quota": {"draws": {"self": 500_000, "strands": []}}}
+    assert hooks._draws_chip(resources) == "me 500k"
+
+
+def test_draws_chip_strands_only_when_self_unknown():
+    resources = {
+        "quota": {
+            "draws": {
+                "self": None,
+                "strands": [{"run_id": "run-a", "title": None, "weighted": 900_000}],
+            },
+        },
+    }
+    assert hooks._draws_chip(resources) == "▷1 900k"
+
+
+def test_draws_chip_never_fabricates_a_zero_for_an_absent_self():
+    resources = {"quota": {"draws": {"self": None, "strands": []}}}
+    assert hooks._draws_chip(resources) is None
+
+
+def test_draws_chip_renders_a_bare_count_when_no_strand_has_a_reading_yet():
+    """A strand still counts toward `N` before its own first heartbeat has
+    metered anything — but the sum is absent, not a fabricated 0."""
+    resources = {
+        "quota": {
+            "draws": {
+                "self": None,
+                "strands": [
+                    {"run_id": "run-a", "title": None, "weighted": None},
+                    {"run_id": "run-b", "title": None, "weighted": None},
+                ],
+            },
+        },
+    }
+    assert hooks._draws_chip(resources) == "▷2"
+
+
+def test_draws_chip_none_without_a_draws_facet():
+    assert hooks._draws_chip({"quota": {"status": "known"}}) is None
+    assert hooks._draws_chip({}) is None
+
+
+def test_render_bar_renders_the_draws_chip_beside_quota():
+    resources = {
+        "quota": {
+            "status": "known", "summary": "session 83% left",
+            "draws": {
+                "self": 1_200_000,
+                "strands": [{"run_id": "run-a", "title": "t", "weighted": 3_400_000}],
+            },
+        },
+        "allowance": {"status": "unimplemented"},
+    }
+    payload = _portal_payload(resources=resources)
+    line = hooks.format_delta(payload, rendered_chips={})
+    assert line is not None
+    assert "q S83" in line
+    assert "me 1.2m · ▷1 3.4m" in line
+
+
 def test_quota_chip_disambiguates_a_repeated_first_letter():
     # Two per-model week buckets that would otherwise both abbreviate to the
     # same letter must not collapse into one chip.

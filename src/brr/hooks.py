@@ -1289,6 +1289,17 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         klass=VITAL,
     ),
     _BarSegment(
+        "draws", "me/▷",
+        "attribution of the `q` chip just above (brnrd#1810): this run's "
+        "own weighted spend against the shared quota gauge, plus every "
+        "owned strand's, summed (`me 1.2m · ▷2 3.4m`). Renders only the "
+        "half(s) with a reading; absent when neither this run nor any "
+        "owned strand has one.",
+        # a meter; this run cannot act on the shared pool by watching it,
+        # only by choosing whether to spawn more onto it.
+        klass=VITAL,
+    ),
+    _BarSegment(
         "census", "wake",
         "the wake census (#739, #683): total wake bytes, the biggest single "
         "block, and the oldest item any block still carries "
@@ -1576,13 +1587,16 @@ def _quota_chip(resources: dict[str, Any]) -> str | None:
 
 
 def _allowance_chip(resources: dict[str, Any]) -> str | None:
-    """A strand's own ``spend 38k/120k`` chip (design-the-allowance.md §2).
+    """The own-allowance ``spend 38k/120k`` chip — a strand's ``spawn:``
+    ceiling, or the resident seat's own standing allowance (design-the-
+    allowance.md §2, slices 1-2). One renderer for both: the facet shape is
+    identical, only where the ceiling number came from differs.
 
     Renders only once metering has something to show (``known`` — tokens
-    *and* a spend reading both present); a strand with a ceiling but no
-    reading yet, or any non-strand run (``allowance`` stays
-    ``unimplemented``), renders nothing here and the ordinary quota chip
-    takes over (see the caller in :func:`format_delta`).
+    *and* a spend reading both present); a ceiling with no reading yet, or
+    a call site with no allowance collector wired at all (``allowance``
+    stays ``unimplemented``), renders nothing here and the ordinary quota
+    chip takes over (see the caller in :func:`format_delta`).
     """
     facet = resources.get("allowance") if isinstance(resources, dict) else None
     facet = facet if isinstance(facet, dict) else {}
@@ -1594,8 +1608,33 @@ def _allowance_chip(resources: dict[str, Any]) -> str | None:
     return f"spend {allowance.format_tokens(spent)}/{allowance.format_tokens(tokens)}"
 
 
+def _allowance_scope(resources: dict[str, Any]) -> str:
+    """``"strand"`` or ``"resident"`` — see :func:`brr.facets.build`'s
+    ``allowance`` docstring. Defaults to ``"strand"`` (its pre-slice-2
+    meaning) for any facet that doesn't carry the key, matching
+    :func:`brr.facets.build`'s own default.
+    """
+    facet = resources.get("allowance") if isinstance(resources, dict) else None
+    facet = facet if isinstance(facet, dict) else {}
+    scope = str(facet.get("scope") or "strand").strip()
+    return scope if scope in ("strand", "resident") else "strand"
+
+
 def _allowance_directive(resources: dict[str, Any]) -> tuple[str | None, str]:
     """The one-shot ≥100% park-or-ask line, plus its own change-gate key.
+
+    Strand-only: its wording (``submit: true`` then ``brnrd await``, or
+    ``ask: allowance +<tokens>``) names verbs the daemon refuses from
+    anything but a strand (``ask: allowance`` is explicitly "a strand's own
+    verb" — ``daemon._queue_allowance_ask``). Firing it at the resident
+    seat's own standing-allowance overrun (``scope: "resident"``) would
+    hand it two directives it cannot follow — see :func:`_allowance_scope`.
+    The resident's own overrun stays visible on the chip alone
+    (:func:`_allowance_chip`) until a resident-appropriate directive is
+    specified; design-the-continuous-seat.md's "Pursuit without rewarding
+    waste" section, in any case, treats unspent/overrun headroom as
+    something to weigh at a planning boundary, not something a mechanical
+    nag should force.
 
     Returns ``(line_or_None, gate_text)``. *gate_text* is always returned
     (even when *line* is ``None``) so the caller can persist it into
@@ -1612,7 +1651,47 @@ def _allowance_directive(resources: dict[str, Any]) -> tuple[str | None, str]:
     if pct is None or spent is None or pct < 100:
         return None, ""
     gate_text = str(spent)
+    if _allowance_scope(resources) != "strand":
+        return None, gate_text
     return allowance.directive_line(spent, facet.get("tokens")), gate_text
+
+
+def _draws_chip(resources: dict[str, Any]) -> str | None:
+    """Who is drawing on the shared quota gauge this boundary (brnrd#1810,
+    design-the-seat-that-never-quits.md §"The measurement") — this run's
+    own weighted spend (``me 1.2m``) plus every owned strand's, summed
+    (``▷2 3.4m``), beside the ordinary ``q S83`` chip. Reads
+    ``resources.quota.draws`` (:func:`brr.facets.build`'s ``draws`` param) —
+    the daemon writes it off the same allowance meter every heartbeat
+    already runs; nothing here re-meters anything.
+
+    Each half renders independently and drops out when it has nothing:
+    ``self`` absent (no reading yet) means no ``me`` segment at all — never
+    a fabricated ``me 0``. A strand still counts toward ``▷N`` even before
+    its own first heartbeat has a spend reading, but an all-unknown set of
+    strands renders the bare count with no summed number tacked on, for the
+    same reason. ``None`` when there is nothing to show on either half.
+    """
+    quota = resources.get("quota") if isinstance(resources, dict) else None
+    quota = quota if isinstance(quota, dict) else {}
+    draws = quota.get("draws")
+    draws = draws if isinstance(draws, dict) else {}
+    parts: list[str] = []
+    self_spent = draws.get("self")
+    if self_spent is not None:
+        parts.append(f"me {allowance.format_tokens(int(self_spent))}")
+    strands = draws.get("strands")
+    strands = strands if isinstance(strands, list) else []
+    if strands:
+        known = [
+            int(row.get("weighted")) for row in strands
+            if isinstance(row, dict) and row.get("weighted") is not None
+        ]
+        if known:
+            parts.append(f"▷{len(strands)} {allowance.format_tokens(sum(known))}")
+        else:
+            parts.append(f"▷{len(strands)}")
+    return " · ".join(parts) if parts else None
 
 
 def _siblings_chip(resources: dict[str, Any]) -> str | None:
@@ -2632,17 +2711,30 @@ def _render_bar(
     if budget_chip:
         segments.append(("budget", budget_chip))
     # A strand's own metered allowance replaces the shared, lagging quota
-    # chip on its bar (design-the-allowance.md §2) — the resident's bar is
-    # untouched (its own `allowance` facet stays unimplemented until slice
-    # 2, so `_allowance_chip` returns None and the quota chip renders as
-    # ever).
+    # chip on its bar (design-the-allowance.md §2, slice 1) — a strand has
+    # a poor view of shared provider quota anyway ("the percentage doesn't
+    # mean anything and is hard to derive" from inside a concurrent
+    # child). The resident seat's own standing allowance (slice 2) is the
+    # opposite case: design-the-continuous-seat.md's "Boundaries" section
+    # and design-the-allowance.md both insist provider headroom and
+    # allocated work stay *separate, simultaneously visible* facts — so
+    # the resident's bar shows both chips rather than one replacing the
+    # other.
     allowance_chip = _allowance_chip(resources)
     if allowance_chip:
         segments.append(("allowance", allowance_chip))
-    else:
+    if not allowance_chip or _allowance_scope(resources) == "resident":
         quota_chip = _quota_chip(resources)
         if quota_chip:
             segments.append(("quota", quota_chip))
+    # Attribution of the chip just above (brnrd#1810): who is drawing on
+    # that shared gauge this boundary — this run's own weighted spend plus
+    # every owned strand's, summed. Independent of whether the quota chip
+    # itself rendered this boundary (a strand with its own allowance chip
+    # can still own further children in principle), so it is its own gate.
+    draws_chip = _draws_chip(resources)
+    if draws_chip:
+        segments.append(("draws", draws_chip))
     if census:
         # Sits beside `orient` because both describe the *wake*, not the run:
         # what the boot cost, and how much of it has been walked. Never in the

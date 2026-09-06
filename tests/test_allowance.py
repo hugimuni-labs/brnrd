@@ -96,6 +96,51 @@ def test_claude_transcript_tokens_none_when_path_missing(tmp_path):
     assert allowance.claude_transcript_tokens(None) is None
 
 
+# ── claude: the first turn's own boot cost (brnrd#1810, design-the-seat-
+# that-never-quits.md §"The measurement") ────────────────────────────────
+
+
+def test_claude_first_turn_boot_tokens_reads_only_the_first_turn(tmp_path):
+    path = tmp_path / "session.jsonl"
+    _write_transcript(
+        path,
+        {"input_tokens": 100, "output_tokens": 999, "cache_read_input_tokens": 0,
+         "cache_creation_input_tokens": 200},
+        # A second turn with a much larger usage must never move the
+        # reading — boot cost is turn one, once, forever.
+        {"input_tokens": 9_000, "output_tokens": 9_000,
+         "cache_read_input_tokens": 9_000, "cache_creation_input_tokens": 9_000},
+    )
+    # output and cache_read are excluded even on the first turn — only
+    # input (1x) + cache_creation (1.25x): 100 + 200*1.25 = 350.
+    assert allowance.claude_first_turn_boot_tokens(path) == 350
+
+
+def test_claude_first_turn_boot_tokens_excludes_output_and_cache_read(tmp_path):
+    path = tmp_path / "session.jsonl"
+    _write_transcript(
+        path, {"output_tokens": 500, "cache_read_input_tokens": 500},
+    )
+    assert allowance.claude_first_turn_boot_tokens(path) is None
+
+
+def test_claude_first_turn_boot_tokens_ignores_non_assistant_rows(tmp_path):
+    path = tmp_path / "session.jsonl"
+    with path.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps({"type": "user", "message": {"content": "hi"}}) + "\n")
+        handle.write(json.dumps({
+            "type": "assistant",
+            "message": {"model": "claude-sonnet-4-6",
+                        "usage": {"input_tokens": 42}},
+        }) + "\n")
+    assert allowance.claude_first_turn_boot_tokens(path) == 42
+
+
+def test_claude_first_turn_boot_tokens_none_when_path_missing(tmp_path):
+    assert allowance.claude_first_turn_boot_tokens(tmp_path / "nope.jsonl") is None
+    assert allowance.claude_first_turn_boot_tokens(None) is None
+
+
 def test_latest_claude_transcript_finds_the_newest_under_the_cwd_slug(tmp_path):
     root = tmp_path / "projects"
     cwd = "/Users/x/worktrees/run-1"
@@ -189,3 +234,110 @@ def test_directive_line_names_park_and_ask():
     assert "submit: true" in line
     assert "brnrd await" in line
     assert "ask: allowance +<tokens>" in line
+
+
+# ── the resident seat's own standing allowance (design-the-allowance.md
+# §2, slice 2) — config-owned ceiling, window keyed off the reset clock,
+# never a quota-percent-to-token conversion ──────────────────────────────
+
+
+def test_resident_ceiling_tokens_config_first_then_default():
+    assert allowance.resident_ceiling_tokens(None) == (
+        allowance.DEFAULT_RESIDENT_ALLOWANCE_TOKENS
+    )
+    assert allowance.resident_ceiling_tokens({}) == (
+        allowance.DEFAULT_RESIDENT_ALLOWANCE_TOKENS
+    )
+    assert allowance.resident_ceiling_tokens(
+        {"resident.allowance_tokens": "2m"}
+    ) == 2_000_000
+    # Unparsable config value degrades to the default, never a crash.
+    assert allowance.resident_ceiling_tokens(
+        {"resident.allowance_tokens": "not-a-number"}
+    ) == allowance.DEFAULT_RESIDENT_ALLOWANCE_TOKENS
+
+
+def test_resident_window_key_stable_until_the_reset_instant_moves():
+    assert allowance.resident_window_key(None) is None
+    assert allowance.resident_window_key(1_700_000_000.4) == "1700000000"
+    assert allowance.resident_window_key(1_700_000_000.9) == "1700000000"
+    assert allowance.resident_window_key(1_700_003_600.0) != (
+        allowance.resident_window_key(1_700_000_000.0)
+    )
+
+
+def test_resident_allowance_state_reports_the_ceiling_before_any_reading():
+    meta: dict = {}
+    facet = allowance.resident_allowance_state(
+        meta, cfg=None, reset_epoch=None, live_spent=None,
+    )
+    assert facet == {
+        "tokens": allowance.DEFAULT_RESIDENT_ALLOWANCE_TOKENS,
+        "spent": None, "scope": "resident",
+    }
+    assert meta["resident_allowance_spent"] is None
+
+
+def test_resident_allowance_state_baselines_on_first_reading():
+    meta: dict = {}
+    facet = allowance.resident_allowance_state(
+        meta, cfg=None, reset_epoch=1000.0, live_spent=500_000,
+    )
+    # A continuous seat's transcript is cumulative from long before this
+    # ceiling existed — the first reading in a window baselines to zero
+    # spend, never a fabricated 500k already "spent" against a fresh grant.
+    assert facet["spent"] == 0
+    assert meta["resident_allowance_window"] == "1000"
+    assert meta["resident_allowance_baseline"] == 500_000
+
+
+def test_resident_allowance_state_accrues_within_the_same_window():
+    meta = {
+        "resident_allowance_window": "1000",
+        "resident_allowance_baseline": 500_000,
+    }
+    facet = allowance.resident_allowance_state(
+        meta, cfg=None, reset_epoch=1000.0, live_spent=540_000,
+    )
+    assert facet["spent"] == 40_000
+    assert meta["resident_allowance_baseline"] == 500_000  # unmoved
+
+
+def test_resident_allowance_state_rebaselines_on_a_window_roll():
+    meta = {
+        "resident_allowance_window": "1000",
+        "resident_allowance_baseline": 500_000,
+    }
+    facet = allowance.resident_allowance_state(
+        meta, cfg=None, reset_epoch=2000.0, live_spent=560_000,
+    )
+    assert facet["spent"] == 0
+    assert meta["resident_allowance_window"] == "2000"
+    assert meta["resident_allowance_baseline"] == 560_000
+
+
+def test_resident_allowance_state_keeps_the_window_when_reset_is_unknown():
+    """A heartbeat with no quota reading this tick must not look like a
+    window roll — it keeps whatever window/baseline is already stamped."""
+    meta = {
+        "resident_allowance_window": "1000",
+        "resident_allowance_baseline": 500_000,
+    }
+    facet = allowance.resident_allowance_state(
+        meta, cfg=None, reset_epoch=None, live_spent=530_000,
+    )
+    assert facet["spent"] == 30_000
+    assert meta["resident_allowance_window"] == "1000"
+
+
+def test_resident_allowance_state_never_reports_negative_spend():
+    """A meter reading that regresses (a rare cross-run/clock artifact)
+    must clamp to zero, never a negative "spend"."""
+    meta = {
+        "resident_allowance_window": "1000",
+        "resident_allowance_baseline": 500_000,
+    }
+    facet = allowance.resident_allowance_state(
+        meta, cfg=None, reset_epoch=1000.0, live_spent=480_000,
+    )
+    assert facet["spent"] == 0
