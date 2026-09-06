@@ -1155,7 +1155,9 @@ def _home_knowledge_log_path(repo_root: Path) -> Path | None:
         return None
 
 
-def _build_context_block_scored(repo_root: Path) -> TrimResult:
+def _build_context_block_scored(
+    repo_root: Path, *, max_entries: int = _MAX_LOG_ENTRIES,
+) -> TrimResult:
     """The scored implementation behind ``_build_context_block``.
 
     Same split as ``_build_work_surface_block`` / ``..._scored``: the plain
@@ -1166,8 +1168,13 @@ def _build_context_block_scored(repo_root: Path) -> TrimResult:
     ``recent-activity`` ``ContractEntry``. No extra trimming happens at this
     layer — the attestation is ``_read_recent_log``'s, passed straight
     through.
+
+    ``max_entries`` defaults to the resident's own cap (:data:`_MAX_LOG_ENTRIES`);
+    the strand light wake profile (:func:`_build_strand_light_stack`) passes a
+    smaller one — a bounded task orients on what just happened, not the
+    seat's full continuity tail.
     """
-    recent = _read_recent_log(repo_root)
+    recent = _read_recent_log(repo_root, max_entries=max_entries)
     if not recent.text:
         return TrimResult(text="")
     text = (
@@ -1482,6 +1489,253 @@ def _build_strand_pitfalls_contract(
     )
     keyed = [("pitfalls", pitfalls_block)] if pitfalls_block else []
     return keyed, contract
+
+
+# ── Strand wake profile ──────────────────────────────────────────────
+#
+# #1185 cut the whole resident inject stack for a strand down to pitfalls
+# alone — the right instinct (a bounded, single-purpose thought should not
+# pay for the seat's own standing state), but it also cut the handful of
+# blocks that orient rather than accumulate: identity, "where is the kb",
+# "what just happened here". A strand wake measured after that cut is
+# already ~30-45 KB (preamble + daemon-substrate + portal grammar + bundle),
+# nowhere near a resident's full wake — but it is also silent about who it
+# is and where the kb lives, which a one-shot dispatch with no dominion of
+# its own cannot re-derive.
+#
+# This profile restores exactly those three, trims one more (recent
+# activity, to the newest two entries rather than the resident's ten), and
+# leaves the rest of the inject stack (dominion, hearth, work surface,
+# runner policy, kb/notes health, the prior-run frame, the relabelled-repo
+# warning) dropped — but *named* in the manifest as dropped, with a `lens`
+# saying which profile did it and why, so `wake-manifest.json` (the
+# operator console's WAKE tab reads it) can say what a strand did not get
+# instead of simply not mentioning it.
+
+#: `strand.wake_profile` in `.brr/config`. `light` (default) is this
+#: module's trimmed stack; `full` is the escape hatch — give a strand the
+#: same inject stack a resident gets, unabridged, one config line, no code
+#: change. Any other value falls back to `light`.
+_STRAND_WAKE_PROFILES = ("light", "full")
+
+_STRAND_LENS_KEPT = "profile:strand · kept"
+_STRAND_LENS_TRIMMED = "profile:strand · trimmed"
+_STRAND_LENS_SKIPPED = "profile:strand · skipped"
+
+#: How many `kb/log.md` entries a light-profile strand wake gets, against
+#: the resident's `_MAX_LOG_ENTRIES` (10). A bounded task orients on what
+#: just happened; it does not need the seat's whole continuity tail to do
+#: one thing.
+_STRAND_RECENT_ACTIVITY_MAX_ENTRIES = 2
+
+
+def _strand_wake_profile(cfg: dict[str, Any]) -> str:
+    """Resolve the strand wake profile from repo config.
+
+    ``light`` unless ``strand.wake_profile=full`` says otherwise; an
+    unrecognised value is treated as ``light`` rather than raising — a typo'd
+    config line should narrow a strand's wake, never break it.
+    """
+    raw = str(cfg.get("strand.wake_profile", "light") or "light").strip().lower()
+    return raw if raw in _STRAND_WAKE_PROFILES else "light"
+
+
+def _build_strand_light_stack(
+    repo_root: Path, task_text: str | None
+) -> "tuple[list[tuple[str, str]], list[ContractEntry]]":
+    """The default (``light``) strand wake profile.
+
+    Keeps: identity-core (the strand is the same resident, narrowed to one
+    topic — ``strand.md``'s own framing — not someone else), the knowledge
+    sources block (the kb map: home→repo→docs, the same compact slice a
+    resident gets), recent activity trimmed to the newest
+    :data:`_STRAND_RECENT_ACTIVITY_MAX_ENTRIES` entries, and pitfalls
+    (unchanged from #1185 — trigger-gated on ``task_text``, already the one
+    exception that survived that cut).
+
+    Drops everything else in the resident's inject stack — the seat's own
+    standing state: the relabelled-repo warning, the dominion digest, the
+    hearth, the work surface, runner policy, the prior-run frame, kb/notes
+    health. Each still gets a :class:`ContractEntry` (``present=False``,
+    ``bytes=None`` — never weighed, not confirmed empty, same three-state
+    discipline as the rest of this module) carrying
+    :data:`_STRAND_LENS_SKIPPED`, in the same relative position a resident
+    wake's manifest would show it, so a reader of ``wake-manifest.json``
+    sees one consistent slate with some rows filled and some marked why not,
+    rather than the drop set simply missing from the list.
+
+    Returns the keyed blocks (prompt order) and the full contracts list,
+    kept and dropped alike — mirrors
+    :func:`_build_injected_blocks_with_contracts`'s return shape minus the
+    ``injected_whole`` set (a light-profile strand never hands over a whole
+    work-surface page, so that set is always empty; see
+    :func:`_build_strand_wake_stack`, which adds it back for uniformity).
+    """
+    from .bootscore import (
+        ContractEntry,
+        OWNER_PRODUCT, OWNER_RESIDENT, OWNER_PROJECT, OWNER_DAEMON_LIVE,
+        AUTHORITY_IDENTITY, AUTHORITY_MEMORY, AUTHORITY_SURFACE, AUTHORITY_POLICY,
+        AUTHORITY_KNOWLEDGE, AUTHORITY_ACTIVITY, AUTHORITY_HEALTH, AUTHORITY_HEARTH,
+    )
+
+    keyed: list[tuple[str, str]] = []
+    contracts: list[ContractEntry] = []
+
+    def _dropped(block_key: str, label: str, owner: str, authority: str) -> None:
+        contracts.append(ContractEntry(
+            block_key=block_key,
+            label=label,
+            owner=owner,
+            authority=authority,
+            freshness=None,
+            location="computed",
+            present=False,
+            bytes=None,
+            lens=_STRAND_LENS_SKIPPED,
+        ))
+
+    # 1. Resident identity core — kept.
+    ic_path = effective_prompt_path("identity-core.md", repo_root)
+    identity_core = _build_identity_core_block(repo_root)
+    contracts.append(ContractEntry(
+        block_key="identity-core",
+        label="Resident identity core",
+        owner=OWNER_PRODUCT,
+        authority=AUTHORITY_IDENTITY,
+        freshness=_mtime_iso(ic_path),
+        location=str(ic_path),
+        present=bool(identity_core),
+        bytes=_rendered_bytes(identity_core),
+        lens=_STRAND_LENS_KEPT,
+    ))
+    if identity_core:
+        keyed.append(("identity-core", identity_core))
+
+    # 1b-4. Standing seat state — dropped, named in the slot a resident
+    # wake's manifest would show it.
+    _dropped(
+        "relabelled-repo", "Stranded-memory warning (repo moved)",
+        OWNER_DAEMON_LIVE, AUTHORITY_HEALTH,
+    )
+    _dropped(
+        "dominion", "Dominion digest (self-inject)",
+        OWNER_RESIDENT, AUTHORITY_MEMORY,
+    )
+    _dropped(
+        "hearth", "The hearth (personal space, index-shaped)",
+        OWNER_RESIDENT, AUTHORITY_HEARTH,
+    )
+    _dropped(
+        "work-surface", "Discovered work surface",
+        OWNER_RESIDENT, AUTHORITY_SURFACE,
+    )
+    _dropped(
+        "runner-policy", "Stored runner policy (CS6)",
+        OWNER_RESIDENT, AUTHORITY_POLICY,
+    )
+
+    # 5. Pitfalls — unchanged from #1185, the one block already trigger-gated
+    # on the task text. `lens` names the profile's *disposition* (this block
+    # is in scope, same as a resident's), not the per-run outcome — a strand
+    # whose task text matches nothing is the same silent-and-healthy
+    # `present=False` a resident wake shows for a non-matching task, never
+    # "skipped by the profile".
+    pitfalls_keyed, pitfalls_contract = _build_strand_pitfalls_contract(repo_root, task_text)
+    from dataclasses import replace as _dc_replace
+    contracts.append(_dc_replace(pitfalls_contract, lens=_STRAND_LENS_KEPT))
+    keyed.extend(pitfalls_keyed)
+
+    # 7. Knowledge sources — kept: the kb map (home→repo→docs), the same
+    # compact slice a resident gets. A strand with no dominion of its own
+    # still needs to know the kb exists and where, even if it never reads
+    # the health scan.
+    knowledge_block = _build_knowledge_sources_block(repo_root)
+    contracts.append(ContractEntry(
+        block_key="knowledge-sources",
+        label="Knowledge sources (home+repo+docs)",
+        owner=OWNER_PROJECT,
+        authority=AUTHORITY_KNOWLEDGE,
+        freshness=None,
+        location="computed",
+        present=bool(knowledge_block),
+        bytes=_rendered_bytes(knowledge_block),
+        lens=_STRAND_LENS_KEPT,
+    ))
+    if knowledge_block:
+        keyed.append(("knowledge-sources", knowledge_block))
+
+    # 8. Recent activity — trimmed to the newest two entries rather than the
+    # resident's ten; enough to orient on what just happened, not the seat's
+    # full continuity tail.
+    context_trim = _build_context_block_scored(
+        repo_root, max_entries=_STRAND_RECENT_ACTIVITY_MAX_ENTRIES,
+    )
+    context = context_trim.text
+    contracts.append(ContractEntry(
+        block_key="recent-activity",
+        label="Recent activity (kb/log.md tail, strand-trimmed)",
+        owner=OWNER_DAEMON_LIVE,
+        authority=AUTHORITY_ACTIVITY,
+        freshness=None,
+        location="computed",
+        present=bool(context),
+        bytes=_rendered_bytes(context),
+        newest_item=context_trim.newest_item,
+        oldest_item=context_trim.oldest_item,
+        dropped=context_trim.dropped,
+        source_newest=context_trim.source_newest,
+        stale=context_trim.stale,
+        lens=_STRAND_LENS_TRIMMED,
+    ))
+    if context:
+        keyed.append(("recent-activity", context))
+
+    # 8b-9b. The rest of the standing seat state — dropped.
+    _dropped(
+        "prior-run", "Your last run (node frame + Now + shape)",
+        OWNER_RESIDENT, AUTHORITY_MEMORY,
+    )
+    _dropped(
+        "kb-health", "kb health (deterministic preflight)",
+        OWNER_DAEMON_LIVE, AUTHORITY_HEALTH,
+    )
+    _dropped(
+        "notes-health", "notes health (deterministic preflight)",
+        OWNER_DAEMON_LIVE, AUTHORITY_HEALTH,
+    )
+
+    return keyed, contracts
+
+
+def _build_strand_wake_stack(
+    repo_root: Path,
+    task_text: str | None,
+    *,
+    resolved_prs: dict[int, str] | None = None,
+) -> "tuple[list[tuple[str, str]], list[ContractEntry], frozenset[Path]]":
+    """A strand's inject stack, profile-gated.
+
+    ``strand.wake_profile`` (``.brr/config``) picks between the light,
+    orienting-only default (:func:`_build_strand_light_stack`) and ``full``
+    — the same, unabridged stack a resident wake gets
+    (:func:`_build_injected_blocks_with_contracts`), for a deployment that
+    wants the pre-profile shape back without a code change.
+
+    The one shared entry point for all three callers that used to build a
+    strand's inject stack independently (``build_boot_score``,
+    ``build_daemon_prompt_with_score``, ``_join_prompt_parts``'s
+    no-prepared-blocks fallback) — see git history before this function
+    existed for what it cost when the three could drift.
+    """
+    from . import config as conf
+
+    cfg = conf.load_config(repo_root)
+    if _strand_wake_profile(cfg) == "full":
+        return _build_injected_blocks_with_contracts(
+            repo_root, task_text=task_text, resolved_prs=resolved_prs,
+        )
+    keyed, contracts = _build_strand_light_stack(repo_root, task_text)
+    return keyed, contracts, frozenset()
 
 
 class _ReserveFloor(NamedTuple):
@@ -3119,20 +3373,19 @@ def _join_prompt_parts(
 
     ``strand=True`` *narrows* ``inject_blocks`` rather than defeating it —
     that's the B4 strand trim: a bounded strand wake gets its task and
-    files, not the standing resident context, with one exception (#1185).
-    Pitfalls are the account's failure-memory lookup, matched fresh against
-    each run's own task text, and a strand is single-shot — the one run
-    shape that cannot learn from its own patterns and so benefits most per
-    byte from being handed this list. The fallback build (used when no
-    scored variant pre-built the blocks — ``prepared_injected_blocks`` is
-    ``None``) picks the pitfalls-only slice for a strand and the full stack
-    otherwise; ``prepared_injected_blocks``, when supplied, is honored
-    as-is (the caller — :func:`build_daemon_prompt_with_score` — already
-    scoped it the same way). The introspection dev-mode invitation stays
-    resident-only regardless: it invites a look at "the whole shape ... just
-    read", a shape a strand was never given. The ``diffense`` review-pack
-    step is independent of the trim (a strand wake asking for diffense is
-    out of scope for now; whatever the caller passes is honored as-is).
+    files, not the standing resident context, minus the handful of blocks
+    the strand wake profile still keeps (identity, the kb map, a slice of
+    recent activity, pitfalls — see :func:`_build_strand_wake_stack` and
+    ``strand.wake_profile`` in ``.brr/config``). The fallback build (used
+    when no scored variant pre-built the blocks — ``prepared_injected_blocks``
+    is ``None``) resolves the same profile a strand's scored path would;
+    ``prepared_injected_blocks``, when supplied, is honored as-is (the
+    caller — :func:`build_daemon_prompt_with_score` — already scoped it the
+    same way). The introspection dev-mode invitation stays resident-only
+    regardless: it invites a look at "the whole shape ... just read", a
+    shape a strand was never given. The ``diffense`` review-pack step is
+    independent of the trim (a strand wake asking for diffense is out of
+    scope for now; whatever the caller passes is honored as-is).
     """
     # The kernel leads.  Everything after it is reference the wake may consult;
     # the kernel is the wake's own first move (``bootscore.format_kernel``).
@@ -3158,7 +3411,7 @@ def _join_prompt_parts(
         if prepared_injected_blocks is not None:
             parts.extend(prepared_injected_blocks)
         elif strand:
-            strand_keyed, _ = _build_strand_pitfalls_contract(repo_root, task_text)
+            strand_keyed, _, _ = _build_strand_wake_stack(repo_root, task_text)
             parts.extend(text for _, text in strand_keyed)
         else:
             parts.extend(
@@ -3933,17 +4186,16 @@ def build_boot_score(
             is_daemon=is_daemon,
         )
 
-        # Inject-stack blocks (skipped for strands, except pitfalls — #1185)
+        # Inject-stack blocks — the resident's full stack, or a strand's own
+        # profile-gated one (light by default; see _build_strand_wake_stack).
         if not is_strand:
             _, inject_contracts, block_whole = _build_injected_blocks_with_contracts(
                 effective_root, task_text=task_text
             )
         else:
-            _, pitfalls_contract = _build_strand_pitfalls_contract(
+            _, inject_contracts, block_whole = _build_strand_wake_stack(
                 effective_root, task_text
             )
-            inject_contracts = [pitfalls_contract]
-            block_whole = frozenset()
 
         if injected_whole is None:
             injected_whole = block_whole
@@ -4146,14 +4398,13 @@ def build_daemon_prompt_with_score(
     block_text_sink: dict[str, str] | None = kwargs.pop("_block_text_sink", None)
 
     if strand:
-        # #1185: a strand is single-shot — it cannot learn from its own
-        # patterns the way a resident's later wake would — so the pitfalls
-        # block is the one exception to "no inject stack for strands".
-        injected_keyed, pitfalls_contract = _build_strand_pitfalls_contract(
-            repo_root, pitfall_text
+        # The strand wake profile (light by default; `strand.wake_profile=full`
+        # opts out) — see _build_strand_wake_stack. Introspection stays
+        # resident-only regardless of profile: it invites a look at "the
+        # whole shape ... just read", a shape a strand was never given.
+        injected_keyed, inject_contracts, injected_whole = _build_strand_wake_stack(
+            repo_root, pitfall_text or None, resolved_prs=resolved_prs,
         )
-        inject_contracts = [pitfalls_contract]
-        injected_whole: frozenset[Path] = frozenset()
         introspection_block = ""
     else:
         injected_keyed, inject_contracts, injected_whole = _build_injected_blocks_with_contracts(
@@ -4779,17 +5030,22 @@ def build_daemon_prompt(
 
     ``strand=True`` (B4, ``kb/design-director-loop.md`` §orchestrator/worker)
     swaps in the slim child stack: ``strand.md`` + ``weave.md`` instead of
-    the resident's ``run.md``, and the resident-only injected blocks
-    (identity core, dominion digest, work surface, runner policy,
-    knowledge sources, kb health, introspection) are skipped entirely — a
-    strand wake still gets ``daemon-substrate.md`` (it still runs under the
-    daemon and needs the delivery/portal mechanics) and the full Run
-    Context Bundle (its actual task). Pitfalls are the one exception
-    (#1185): a strand is single-shot and cannot learn from its own
+    the resident's ``run.md``, plus the strand wake profile
+    (:func:`_build_strand_wake_stack`, ``strand.wake_profile`` in
+    ``.brr/config``) in place of the resident's full inject stack. The
+    default (``light``) profile keeps identity core, the knowledge-sources
+    map, a two-entry recent-activity tail, and pitfalls (#1185's own
+    exception — a strand is single-shot and cannot learn from its own
     patterns the way a resident's later wake would, so the account's
-    failure-memory lookup — matched fresh against this run's own task text
-    — is handed over same as a resident wake, and nothing else. Default
-    ``False`` is byte-identical to the prior behavior.
+    failure-memory lookup, matched fresh against this run's own task text,
+    is handed over same as a resident wake); dominion digest, work surface,
+    the hearth, runner policy, kb/notes health, and introspection are
+    dropped — the seat's own standing state, not this task's.
+    ``strand.wake_profile=full`` restores the resident's complete stack for
+    a strand with one config line. A strand wake still gets
+    ``daemon-substrate.md`` (it still runs under the daemon and needs the
+    delivery/portal mechanics) and the full Run Context Bundle (its actual
+    task). Default ``False`` is byte-identical to the prior behavior.
 
     ``_block_text_sink`` (optional), when supplied, receives the *exact*
     text every block routed through ``_take`` actually delivered to this

@@ -289,6 +289,24 @@ class ContractEntry:
     it never looked at.
     """
 
+    lens: str | None = None
+    """Which wake profile shaped this row, and what it did to the block —
+    e.g. ``"profile:strand · kept"`` / ``"profile:strand · trimmed"`` /
+    ``"profile:strand · skipped"``.  ``None`` means no profile narrowed this
+    block from what a plain read of its source would produce (the ordinary
+    resident/seat wake).
+
+    Added for the strand wake profile (a bounded strand gets a deliberately
+    smaller inject stack than the resident that dispatched it — see
+    ``prompts/strand.md`` and ``prompts._build_strand_light_stack``). Before
+    this field, a block a profile dropped simply never appeared in
+    ``contracts`` at all, so ``wake-manifest.json`` — the one file the
+    operator console's WAKE tab reads to answer "what did this wake see?" —
+    had no row to explain *why* dominion, work surface, or kb health were
+    absent from a strand's wake. A caller outside a profiled wake never sets
+    this, so every existing manifest row is unaffected.
+    """
+
 
 @dataclass(frozen=True)
 class BootBody:
