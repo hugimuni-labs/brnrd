@@ -1610,7 +1610,10 @@ _CONTEXT_TOKENS_RE = re.compile(r"^(?P<value>[\d.]+[kKmM]?)\s+tok\b")
 
 def _context_window_chip(resources: dict[str, Any]) -> str | None:
     """``ctx 62%`` once a real window-size denominator is known, or
-    ``ctx 148k tok`` from a live transcript-tail reading before then.
+    ``ctx 148k tok`` from a live transcript-tail reading before then —
+    ``ctx 148k tok · floor 160k`` while an ``await:`` sits armed and the
+    context-rebirth park (design-the-seat-that-never-quits.md §machinery
+    slice 4) has a floor to compare against.
 
     Claude only learns its real ``contextWindow`` size from the *final*
     result envelope (:mod:`brr.claude_status`); until then
@@ -1624,18 +1627,28 @@ def _context_window_chip(resources: dict[str, Any]) -> str | None:
     (same convention as :func:`_quota_chip`) rather than a raw field,
     because :func:`brr.facets._level_record` keeps only ``summary`` —
     every other field a collector computed is intentionally dropped there.
+    The floor suffix is the one exception: :func:`brr.facets.build`'s
+    ``context_floor`` param is attached directly onto this facet
+    (``daemon._context_rebirth_facet``, only while armed), so it reads a raw
+    field rather than parsing prose.
     """
     facet = resources.get("context_window") if isinstance(resources, dict) else None
     facet = facet if isinstance(facet, dict) else {}
+    floor = facet.get("floor") if isinstance(facet.get("floor"), dict) else None
+    floor_suffix = ""
+    if floor is not None:
+        floor_tokens = floor.get("floor_tokens")
+        if floor_tokens is not None:
+            floor_suffix = f" · floor {allowance.format_tokens(floor_tokens)}"
     if facet.get("status") != "known":
         return None
     summary = str(facet.get("summary") or "").strip()
     match = _CONTEXT_PCT_RE.match(summary)
     if match:
-        return f"ctx {match.group('value')}%"
+        return f"ctx {match.group('value')}%{floor_suffix}"
     match = _CONTEXT_TOKENS_RE.match(summary)
     if match:
-        return f"ctx {match.group('value')} tok"
+        return f"ctx {match.group('value')} tok{floor_suffix}"
     return None
 
 

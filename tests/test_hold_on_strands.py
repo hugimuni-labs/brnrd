@@ -389,6 +389,167 @@ class TestResumeAny:
         assert "Parked" in body and "scheduled wake" in body
 
 
+# ── context rebirth (design-the-seat-that-never-quits.md §machinery #4/#4b) ──
+
+
+def _write_context_snapshot(outbox_dir, **context_window):
+    from brr import claude_status
+
+    outbox_dir.mkdir(parents=True, exist_ok=True)
+    claude_status.write_snapshot(outbox_dir, {"context_window": context_window})
+
+
+class TestContextRebirth:
+    def _seat(self):
+        seat = Run(id="run-seat", event_id="evt-p", body="", source="cloud")
+        seat.meta["runner_shell"] = "claude"
+        return seat
+
+    def test_no_facet_when_not_armed(self, tmp_path):
+        seat = self._seat()
+        state, facet = daemon._context_rebirth_facet(
+            seat, {"armed": False}, {}, tmp_path,
+            runner_name="claude", work_dir=None,
+        )
+        assert state == {"armed": False}
+        assert facet is None
+
+    def test_no_facet_for_a_strand(self, tmp_path):
+        strand = Run(id="run-kid", event_id="evt-k", body="", source="spawn")
+        strand.meta["strand"] = True
+        state, facet = daemon._context_rebirth_facet(
+            strand, {"armed": True, "resolved": False}, {}, tmp_path,
+            runner_name="claude", work_dir=None,
+        )
+        assert state == {"armed": True, "resolved": False}
+        assert facet is None
+
+    def test_known_false_with_no_reading_yet(self, tmp_path):
+        seat = self._seat()
+        state, facet = daemon._context_rebirth_facet(
+            seat, {"armed": True, "resolved": False}, {}, tmp_path,
+            runner_name="claude", work_dir=None,
+        )
+        assert facet == {"floor_tokens": 150_000, "tokens_used": None}
+        assert state.get("resolved") is not True
+
+    def test_passes_through_a_tick_already_resolved_by_something_else(self, tmp_path):
+        seat = self._seat()
+        _write_context_snapshot(tmp_path, tokens_used=999_999)
+        armed = {"armed": True, "resolved": True, "outcome": "event"}
+        state, facet = daemon._context_rebirth_facet(
+            seat, armed, {}, tmp_path, runner_name="claude", work_dir=None,
+        )
+        assert state is armed
+        assert facet == {"floor_tokens": 150_000, "tokens_used": None}
+        assert "pending_resource_hold" not in seat.meta
+
+    def test_percentage_already_known_never_guesses_a_token_count(self, tmp_path):
+        """A final envelope already landed this run (rare mid-run) — no raw
+        token count to compare against the floor, so this must not act."""
+        seat = self._seat()
+        _write_context_snapshot(tmp_path, remaining_percentage=40.0)
+        state, facet = daemon._context_rebirth_facet(
+            seat, {"armed": True, "resolved": False}, {}, tmp_path,
+            runner_name="claude", work_dir=None,
+        )
+        assert facet["tokens_used"] is None
+        assert state.get("outcome") != "rebirth"
+
+    def test_floor_triggers_a_rebirth(self, tmp_path):
+        seat = self._seat()
+        _write_context_snapshot(tmp_path, tokens_used=200_000)
+        state, facet = daemon._context_rebirth_facet(
+            seat, {"armed": True, "resolved": False}, {}, tmp_path,
+            runner_name="claude", work_dir=None,
+        )
+        assert state["resolved"] is True
+        assert state["outcome"] == "rebirth"
+        assert state["which"] == resource_hold.REASON_CONTEXT_FLOOR
+        assert state["tokens"] == 200_000
+        assert state["floor"] == 150_000
+        assert facet == {"floor_tokens": 150_000, "tokens_used": 200_000}
+        hold = seat.meta["pending_resource_hold"]
+        assert hold["reason"] == resource_hold.REASON_CONTEXT_FLOOR
+        assert hold["resume_condition"] == resource_hold.RESUME_ANY
+        assert "200k" in hold["detail"] and "150k" in hold["detail"]
+
+    def test_floor_config_key_overrides_the_default(self, tmp_path):
+        seat = self._seat()
+        _write_context_snapshot(tmp_path, tokens_used=2_000)
+        state, _facet = daemon._context_rebirth_facet(
+            seat, {"armed": True, "resolved": False},
+            {daemon.SEAT_CONTEXT_FLOOR_TOKENS_KEY: 1_000},
+            tmp_path, runner_name="claude", work_dir=None,
+        )
+        assert state["outcome"] == "rebirth"
+        assert state["floor"] == 1_000
+
+    def test_refuses_within_the_live_window(self, tmp_path):
+        import time as time_mod
+
+        seat = self._seat()
+        seat.meta["hold_correspondent_at"] = time_mod.time()
+        _write_context_snapshot(tmp_path, tokens_used=200_000)
+        state, facet = daemon._context_rebirth_facet(
+            seat, {"armed": True, "resolved": False}, {}, tmp_path,
+            runner_name="claude", work_dir=None,
+        )
+        assert state.get("outcome") != "rebirth"
+        assert "pending_resource_hold" not in seat.meta
+        assert facet["tokens_used"] == 200_000
+
+    def test_a_stale_correspondent_timestamp_does_not_refuse(self, tmp_path):
+        import time as time_mod
+
+        seat = self._seat()
+        seat.meta["hold_correspondent_at"] = time_mod.time() - 3600
+        _write_context_snapshot(tmp_path, tokens_used=200_000)
+        state, _facet = daemon._context_rebirth_facet(
+            seat, {"armed": True, "resolved": False}, {}, tmp_path,
+            runner_name="claude", work_dir=None,
+        )
+        assert state["outcome"] == "rebirth"
+
+    def test_refuses_while_a_live_strand_is_owned(self, tmp_path, monkeypatch):
+        seat = self._seat()
+        _write_context_snapshot(tmp_path, tokens_used=200_000)
+        monkeypatch.setattr(
+            daemon, "_owned_child_controls", lambda _run_id: [{"run_id": "run-kid"}],
+        )
+        state, _facet = daemon._context_rebirth_facet(
+            seat, {"armed": True, "resolved": False}, {}, tmp_path,
+            runner_name="claude", work_dir=None,
+        )
+        assert state.get("outcome") != "rebirth"
+        assert "pending_resource_hold" not in seat.meta
+
+    def test_measured_compaction_triggers_a_rebirth(self, tmp_path, monkeypatch):
+        seat = self._seat()
+        monkeypatch.setattr(daemon.allowance, "claude_transcript_compacted", lambda _p: True)
+        state, _facet = daemon._context_rebirth_facet(
+            seat, {"armed": True, "resolved": False}, {}, tmp_path,
+            runner_name="claude", work_dir=Path("/does-not-matter"),
+        )
+        assert state["outcome"] == "rebirth"
+        assert state["which"] == resource_hold.REASON_COMPACTED
+        hold = seat.meta["pending_resource_hold"]
+        assert hold["reason"] == resource_hold.REASON_COMPACTED
+        assert "compacted" in hold["detail"] and "lobotomy" in hold["detail"]
+
+    def test_codex_is_not_scoped_in(self, tmp_path):
+        """Claude-only, same scoping as ``_record_context_window`` — Codex
+        already carries a live percentage and has no token count wired here."""
+        seat = self._seat()
+        _write_context_snapshot(tmp_path, tokens_used=999_999)
+        state, facet = daemon._context_rebirth_facet(
+            seat, {"armed": True, "resolved": False}, {}, tmp_path,
+            runner_name="codex", work_dir=None,
+        )
+        assert state.get("outcome") != "rebirth"
+        assert facet == {"floor_tokens": 150_000, "tokens_used": None}
+
+
 # ── the default, end to end: a clean turn end parks the seat ─────────────
 
 

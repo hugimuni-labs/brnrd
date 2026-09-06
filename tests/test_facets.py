@@ -102,6 +102,29 @@ def test_build_omits_draws_key_when_absent():
     assert "draws" not in res_none["quota"]
 
 
+# ── context_floor (design-the-seat-that-never-quits.md §machinery #4) —
+# attribution of the context_window facet, same attach pattern as ``draws``
+# above ────────────────────────────────────────────────────────────────────
+
+
+def test_build_attaches_context_floor_to_context_window_facet_when_present():
+    res = facets.build(
+        levels={"context_window": {"summary": "148k tok occupied (no window size yet)"}},
+        levels_collector=True,
+        context_floor={"floor_tokens": 150_000, "tokens_used": 148_000},
+    )
+    assert res["context_window"]["floor"] == {
+        "floor_tokens": 150_000, "tokens_used": 148_000,
+    }
+
+
+def test_build_omits_context_floor_key_when_absent():
+    res = facets.build(quota_summary="session 83% left")
+    assert "floor" not in res["context_window"]
+    res_none = facets.build(quota_summary="session 83% left", context_floor=None)
+    assert "floor" not in res_none["context_window"]
+
+
 # ── coexisting_runs (live presence-registry read) ────────────────────────────
 
 

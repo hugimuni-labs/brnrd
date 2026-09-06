@@ -4827,8 +4827,34 @@ def cmd_await(args):
             "which": state.get("which"),
             "deadline": state.get("deadline"),
         }
+        if outcome == "rebirth":
+            # design-the-seat-that-never-quits.md §machinery slice 4 (+4b):
+            # the daemon resolved this wait with its own outcome — context
+            # grew past `seat.context_floor_tokens`, or the Shell's own
+            # transcript recorded a compaction. `which` names the trigger
+            # (`context_floor` / `compacted`); `tokens`/`floor` ride along
+            # for the floor case only (``daemon._context_rebirth_facet``
+            # stamps them onto the await projection precisely so this print
+            # never has to reach into a second file for them).
+            result["tokens"] = state.get("tokens")
+            result["floor"] = state.get("floor")
         if args.json:
             print(json.dumps(result))
+        elif outcome == "rebirth":
+            if result["which"] == "compacted":
+                print(
+                    "[brnrd await] rebirth — the Shell compacted the scroll; "
+                    "end the turn: the seat parks and wakes from its node"
+                )
+            else:
+                from . import allowance as allowance_mod
+
+                tokens_text = allowance_mod.format_tokens(result["tokens"]) + " tok"
+                print(
+                    f"[brnrd await] rebirth — context at {tokens_text}, past "
+                    "the floor; end the turn: the seat parks and wakes from "
+                    "its node"
+                )
         else:
             tail = f" ({result['which']})" if result["which"] else ""
             note = " — call again" if outcome == "pending" else ""

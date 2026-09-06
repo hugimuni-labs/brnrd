@@ -161,10 +161,11 @@ outcome ⇒ `portal-state.json` → `await`:
  "resolved": true, "outcome": "event", "which": null}
 ```
 
-`resolved` flips true on exactly one of three — never silence
+`resolved` flips true on exactly one of four — never silence
 `"event"` the daemon has something pending for you
 `"condition"` the optional `--file` path appeared · `which` names it · pending events outrank it deliberately — when both would fire, the correspondent is the answer
 `"timeout"` the deadline passed with nothing else firing — an open-ended wait has none
+`"rebirth"` (design-the-seat-that-never-quits.md §machinery slice 4/4b, seat runs only) the daemon parked this seat itself — `resources.context_window`'s live token reading passed `seat.context_floor_tokens` (default 150,000; `which: "context_floor"`, `tokens`/`floor` ride along) or the Shell's own transcript recorded a compaction (`which: "compacted"`) — refused while a correspondent reached this seat within `seat.live_window_minutes` (default 30) or while it owns a live strand, never for a strand run. `brnrd await` prints the instruction to end the turn; the daemon's own worker tail parks the seat (`held`, `resume: any`) once it does, and re-incarnates it from its own node at the next event
 
 a call reaching its own ceiling first ⇒ `{"outcome": "pending"}` · call again is the entire instruction · that ceiling ≠ a brnrd contract ≠ a number to reason about — what bounds one call is the Shell's per-tool-call cap (claude's Bash ends at 10 minutes; codex differs) and the CLI sits under it · the old 15s bound is gone with the argument that justified it — the only things that would want to interrupt this run are the very things that resolve the wait ⇒ a blocking call returns the moment one arrives
 

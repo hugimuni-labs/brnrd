@@ -1055,6 +1055,73 @@ def test_await_reports_the_daemons_resolution(tmp_path, capsys, monkeypatch):
     assert payload["deadline"] == "2026-08-07T12:00:00Z"
 
 
+def test_await_reports_a_context_floor_rebirth(tmp_path, capsys, monkeypatch):
+    """design-the-seat-that-never-quits.md §machinery slice 4: the daemon's
+    own outcome when context grew past the floor — printed plainly, not left
+    to a caller that only knows event/condition/timeout."""
+    outbox = _await_outbox(tmp_path, await_state={"armed": False})
+    state = outbox / "portal-state.json"
+
+    def drain():
+        if not _staged_await(outbox):
+            return
+        for path in _staged_await(outbox):
+            path.unlink()
+        state.write_text(
+            json.dumps({
+                "version": 1,
+                "await": {
+                    "armed": True, "generation": "222", "resolved": True,
+                    "outcome": "rebirth", "which": "context_floor",
+                    "tokens": 152000, "floor": 150000,
+                },
+            }),
+            encoding="utf-8",
+        )
+
+    clock = _FakeClock(on_sleep=drain)
+    monkeypatch.setattr(time, "sleep", clock.sleep)
+    monkeypatch.setattr(time, "monotonic", clock.monotonic)
+
+    assert main(["await", "--outbox", str(outbox)]) == 0
+    out = capsys.readouterr().out
+    assert "rebirth" in out
+    assert "152k tok" in out
+    assert "end the turn" in out
+    assert "wakes from its node" in out
+
+
+def test_await_reports_a_compaction_rebirth_as_json(tmp_path, capsys, monkeypatch):
+    outbox = _await_outbox(tmp_path, await_state={"armed": False})
+    state = outbox / "portal-state.json"
+
+    def drain():
+        if not _staged_await(outbox):
+            return
+        for path in _staged_await(outbox):
+            path.unlink()
+        state.write_text(
+            json.dumps({
+                "version": 1,
+                "await": {
+                    "armed": True, "generation": "222", "resolved": True,
+                    "outcome": "rebirth", "which": "compacted",
+                    "tokens": None, "floor": 150000,
+                },
+            }),
+            encoding="utf-8",
+        )
+
+    clock = _FakeClock(on_sleep=drain)
+    monkeypatch.setattr(time, "sleep", clock.sleep)
+    monkeypatch.setattr(time, "monotonic", clock.monotonic)
+
+    assert main(["await", "--outbox", str(outbox), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["outcome"] == "rebirth"
+    assert payload["which"] == "compacted"
+
+
 def test_await_reports_its_own_arming_verdict(tmp_path, capsys, monkeypatch):
     """#1187, killed by construction: a directive that fails to arm says so
     *in the call that armed it*, instead of leaving the previous wait's

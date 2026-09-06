@@ -298,6 +298,7 @@ def build(
     wake_request: "dict[str, object] | None" = None,
     allowance: "dict[str, object] | None" = None,
     draws: "dict[str, object] | None" = None,
+    context_floor: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Build the live ``resources`` facet dict from the collected inputs.
 
@@ -380,6 +381,13 @@ def build(
       spend off the same meter :func:`build`'s ``allowance`` param already
       reads — never a second accounting. ``None`` when neither this run
       nor any owned strand has anything to report.
+    - ``context_floor`` (design-the-seat-that-never-quits.md §"The
+      machinery, in slices" #4) — ``{"floor_tokens": N, "tokens_used": M |
+      None}``, attached onto the ``context_window`` facet (mirrors ``hold``
+      on ``quota``): the token floor the daemon acts on and the live
+      occupancy reading, visible only while an ``await:`` sits armed — the
+      one moment the daemon might actually act on it. ``None`` (the key
+      omitted) the rest of a run's life.
     """
     levels = levels or {}
     if isinstance(levels_collector, bool):
@@ -413,6 +421,8 @@ def build(
         FACETS_BY_KEY["context_window"], _level_summary("context_window"),
         has_collector="context_window" in wired_slots,
     )
+    if context_floor is not None:
+        context_facet["floor"] = context_floor
 
     spec_co = FACETS_BY_KEY["coexisting_runs"]
     if coexisting is None:

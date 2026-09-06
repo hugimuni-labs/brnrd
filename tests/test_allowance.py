@@ -186,6 +186,57 @@ def test_claude_last_turn_context_tokens_none_when_path_missing(tmp_path):
     assert allowance.claude_last_turn_context_tokens(None) is None
 
 
+# ── claude: the measured compaction-boundary row (design-the-seat-that-
+# never-quits.md §slice 4b) ────────────────────────────────────────────────
+
+
+def test_claude_transcript_compacted_true_on_a_real_compaction_row(tmp_path):
+    """The measured shape (2026-09-06, three real compactions on this
+    account's own transcripts): a top-level ``isCompactSummary: true`` on a
+    ``type: "user"`` row, with the CLI's own continuation preamble as its
+    message content."""
+    path = tmp_path / "session.jsonl"
+    with path.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps({
+            "type": "assistant",
+            "message": {"model": "claude-sonnet-4-6", "usage": {"input_tokens": 42}},
+        }) + "\n")
+        handle.write(json.dumps({
+            "type": "user",
+            "isCompactSummary": True,
+            "isVisibleInTranscriptOnly": True,
+            "message": {
+                "role": "user",
+                "content": "This session is being continued from a previous "
+                "conversation that ran out of context. The summary below "
+                "covers the earlier portion of the conversation.\n\nSummary:\n1. ...",
+            },
+        }) + "\n")
+    assert allowance.claude_transcript_compacted(path) is True
+
+
+def test_claude_transcript_compacted_false_without_the_marker(tmp_path):
+    path = tmp_path / "session.jsonl"
+    _write_transcript(path, {"input_tokens": 42})
+    assert allowance.claude_transcript_compacted(path) is False
+
+
+def test_claude_transcript_compacted_false_when_the_key_reads_falsy(tmp_path):
+    """The marker string can appear without the boolean actually being
+    ``True`` — a stray mention must not read as a real compaction."""
+    path = tmp_path / "session.jsonl"
+    with path.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps({
+            "type": "user", "isCompactSummary": False, "message": {"content": "hi"},
+        }) + "\n")
+    assert allowance.claude_transcript_compacted(path) is False
+
+
+def test_claude_transcript_compacted_false_when_path_missing(tmp_path):
+    assert allowance.claude_transcript_compacted(tmp_path / "nope.jsonl") is False
+    assert allowance.claude_transcript_compacted(None) is False
+
+
 def test_latest_claude_transcript_finds_the_newest_under_the_cwd_slug(tmp_path):
     root = tmp_path / "projects"
     cwd = "/Users/x/worktrees/run-1"

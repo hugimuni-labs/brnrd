@@ -6622,6 +6622,27 @@ def _format_turn(prefix: str, body: str) -> str:
 _PRIOR_RUN_FRAME_KEYS = ("status", "stage", "runner_name", "publish_status", "branch_name")
 
 
+def _node_is_strand(state_path: Path) -> bool:
+    """True when the node at *state_path* belongs to a ``spawn:``-dispatched strand.
+
+    ``_persist_run_state_doc`` writes ``parent_run_id:`` into a node's
+    frontmatter only when ``task.meta["spawn_parent_run_id"]`` is set — which
+    happens only for a strand (the resident's own seat is never itself a
+    spawned child). A read failure degrades to "not a strand" — the same
+    conservative default :mod:`brr.continuity`'s sibling guard
+    (``_dispatched_as_strand``) uses, and for the same reason: an unreadable
+    node must not be silently skipped, only one this function can actually
+    prove is a strand's.
+    """
+    from . import protocol
+
+    try:
+        fields = protocol.parse_frontmatter(state_path.read_text(encoding="utf-8"))
+    except OSError:
+        return False
+    return bool(str(fields.get("parent_run_id") or "").strip())
+
+
 def _prior_run_node(repo_root: Path) -> tuple[Path, Path] | None:
     """Locate the newest run node that actually wrote a body, or ``None``.
 
@@ -6630,6 +6651,19 @@ def _prior_run_node(repo_root: Path) -> tuple[Path, Path] | None:
     daemon writes it at dispatch) but its body cannot — the body is mirrored
     from a card the resident has not written yet. The selection rule is the
     exclusion rule, with no run id to thread through.
+
+    **A strand's own node is excluded too** (design-the-seat-that-never-
+    quits.md §machinery slice 4's own verification: "a `held` seat resuming
+    on `resume: any` gets its own node, not an older one"). The live
+    per-card-edit mirror (``daemon._drain_card_control``) keeps a *running*
+    strand's ``body.md`` mtime moving the whole time it works — including the
+    whole stretch after its parent seat has already parked on it
+    (``resume: strands``/``resume: any``). Newest-mtime with no exclusion
+    would then hand the resumed parent seat its own strand's last card as
+    "your last run" instead of the parked seat's own — the exact #987 shape
+    :func:`brr.continuity.find_prior_wake`'s ``_dispatched_as_strand`` guard
+    already exists to prevent for the older continuity mount, applied here to
+    this newer one.
     """
     from . import account as account_mod
     from . import config as conf
@@ -6653,17 +6687,20 @@ def _prior_run_node(repo_root: Path) -> tuple[Path, Path] | None:
     root = ctx.runs_dir / account_mod.slug_repo_label(label)
     if not root.is_dir():
         return None
-    newest: tuple[float, Path] | None = None
+    candidates: list[tuple[float, Path]] = []
     for body in root.glob("*/body.md"):
         try:
             stamp = body.stat().st_mtime
         except OSError:
             continue
-        if newest is None or stamp > newest[0]:
-            newest = (stamp, body)
-    if newest is None:
-        return None
-    return newest[1].parent / "state.md", newest[1]
+        candidates.append((stamp, body))
+    candidates.sort(key=lambda pair: pair[0], reverse=True)
+    for _, body in candidates:
+        state_path = body.parent / "state.md"
+        if _node_is_strand(state_path):
+            continue
+        return state_path, body
+    return None
 
 
 def _build_prior_run_block(repo_root: Path) -> str:

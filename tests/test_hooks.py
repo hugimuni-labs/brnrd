@@ -4250,6 +4250,40 @@ def test_context_window_chip_silent_when_not_known():
     ) is None
 
 
+def test_context_window_chip_appends_the_floor_while_armed():
+    """design-the-seat-that-never-quits.md §machinery slice 4: the floor
+    rides the chip only while an ``await:`` is armed — daemon._context_
+    rebirth_facet attaches it directly, never parsed from prose."""
+    resources = {
+        "context_window": {
+            "status": "known",
+            "summary": "148k tok occupied (no window size yet)",
+            "floor": {"floor_tokens": 150_000, "tokens_used": 148_000},
+        },
+    }
+    assert hooks._context_window_chip(resources) == "ctx 148k tok · floor 150k"
+
+
+def test_context_window_chip_floor_also_suffixes_a_percentage_reading():
+    resources = {
+        "context_window": {
+            "status": "known", "summary": "62% context left (est)",
+            "floor": {"floor_tokens": 150_000, "tokens_used": None},
+        },
+    }
+    assert hooks._context_window_chip(resources) == "ctx 62% · floor 150k"
+
+
+def test_context_window_chip_no_floor_suffix_when_unarmed():
+    resources = {
+        "context_window": {
+            "status": "known",
+            "summary": "8.3k tok occupied (no window size yet)",
+        },
+    }
+    assert hooks._context_window_chip(resources) == "ctx 8.3k tok"
+
+
 def test_post_tool_bar_carries_the_context_window_chip():
     resources = {
         "context_window": {

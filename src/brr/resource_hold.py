@@ -64,6 +64,22 @@ RUN_STATUS = "held"
 
 REASON_QUOTA_EXHAUSTED = "quota_exhausted"
 REASON_RESIDENT_REQUESTED = "resident_requested"
+#: design-the-seat-that-never-quits.md §"The machinery, in slices" #4: an
+#: idling ``await:`` whose live context reading (``resources.context_window``,
+#: fed every heartbeat by ``daemon._record_context_window``, #1822) has grown
+#: past ``seat.context_floor_tokens``. Distinct from `REASON_TURN_ENDED` — an
+#: ordinary clean turn end with nothing else to say — this one is the daemon
+#: choosing to end a turn *early* because the scroll has grown too large to
+#: keep paying for, and re-incarnating from the node instead of racing the
+#: Shell's own silent compaction.
+REASON_CONTEXT_FLOOR = "context_floor"
+#: §4b: the Shell's own transcript recorded a compaction boundary
+#: (``allowance.claude_transcript_compacted`` — a measured
+#: ``isCompactSummary: true`` row, Claude Code's own summary-and-continue
+#: shape) during this run. The inner safety net firing is not itself a
+#: failure, but a silent one is a lobotomy nobody was told about — this
+#: reason exists so the resume says so.
+REASON_COMPACTED = "compacted"
 
 RESUME_OPERATOR = "operator"
 RESUME_RESET = "reset"

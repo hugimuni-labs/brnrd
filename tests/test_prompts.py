@@ -4920,6 +4920,72 @@ def test_prior_run_block_stays_inside_this_repo(tmp_path):
     assert prompts._build_prior_run_block(repo) == ""
 
 
+def test_prior_run_block_skips_a_strands_own_node_even_when_newer(tmp_path):
+    """design-the-seat-that-never-quits.md §machinery slice 4's own
+    verification: a seat resuming from a park must get its own node, not a
+    strand's. The live per-card-edit mirror keeps a *running* strand's
+    ``body.md`` mtime moving the whole stretch after its parent seat has
+    already parked on it — newest-mtime with no exclusion would hand the
+    resumed seat its own strand's last card instead of its own (#987's shape,
+    on this newer mount)."""
+    import os
+
+    from brr import prompts
+
+    repo = tmp_path / "repo"
+    (repo / ".brr").mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (repo / ".brr" / "config").write_text(
+        f"repo.label=Gurio/brr\nhome.path={tmp_path / 'home'}\n", encoding="utf-8",
+    )
+    runs = tmp_path / "home" / "runs" / "Gurio__brr"
+
+    parked = runs / "run-parked"
+    parked.mkdir(parents=True)
+    (parked / "state.md").write_text(
+        "---\nrun_id: run-parked\nstatus: held\n---\n", encoding="utf-8",
+    )
+    (parked / "body.md").write_text("## Now\n\nParked on its own strand.\n", encoding="utf-8")
+
+    strand = runs / "run-strand"
+    strand.mkdir(parents=True)
+    (strand / "state.md").write_text(
+        "---\nrun_id: run-strand\nstatus: running\nparent_run_id: run-parked\n---\n",
+        encoding="utf-8",
+    )
+    (strand / "body.md").write_text("## Now\n\nStill working, long after the parent parked.\n", encoding="utf-8")
+
+    # The strand kept writing after the parent parked — its body.md is
+    # genuinely newer on disk, the exact condition that used to win.
+    now = tmp_path.stat().st_mtime
+    os.utime(parked / "body.md", (now - 100, now - 100))
+    os.utime(strand / "body.md", (now, now))
+
+    block = prompts._build_prior_run_block(repo)
+    assert "Parked on its own strand." in block
+    assert "Still working" not in block
+
+
+def test_prior_run_node_falls_through_when_only_strand_nodes_exist(tmp_path):
+    from brr import prompts
+
+    repo = tmp_path / "repo"
+    (repo / ".brr").mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (repo / ".brr" / "config").write_text(
+        f"repo.label=Gurio/brr\nhome.path={tmp_path / 'home'}\n", encoding="utf-8",
+    )
+    strand = tmp_path / "home" / "runs" / "Gurio__brr" / "run-strand"
+    strand.mkdir(parents=True)
+    (strand / "state.md").write_text(
+        "---\nrun_id: run-strand\nparent_run_id: run-parent\n---\n", encoding="utf-8",
+    )
+    (strand / "body.md").write_text("## Now\n\nA strand's own work.\n", encoding="utf-8")
+
+    assert prompts._prior_run_node(repo) is None
+    assert prompts._build_prior_run_block(repo) == ""
+
+
 # ── _kb_ownership_signal — orphan naming (#649) ───────────────────────────────
 
 
