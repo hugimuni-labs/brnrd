@@ -26,6 +26,34 @@ GATE_HEALTH_DEGRADED_AFTER_S = 300
 _PRIVATE_STATE_MODE = 0o600
 
 
+# ── Interactive prompts ───────────────────────────────────────────────
+
+
+def prompt(message: str) -> str:
+    """``input()`` that degrades instead of crashing without a TTY.
+
+    Piped/redirected stdin (a cold install measured non-interactively, a
+    CI job, a script that forgot to answer) hits ``EOFError`` on the
+    first prompt; bare ``input()`` then surfaces as a raw Python
+    traceback instead of the same "nothing provided" branch every
+    ``gate setup`` caller already has for an empty answer. Treating it
+    as an empty string routes it through that existing branch for free.
+    Ctrl-C mid-prompt gets the same clean treatment instead of a bare
+    stack.
+    """
+    try:
+        return input(message)
+    except EOFError:
+        print(
+            "\n[brnrd] no input available (not an interactive terminal) — "
+            "run this from a terminal you can type into."
+        )
+        return ""
+    except KeyboardInterrupt:
+        print("\n[brnrd] cancelled.")
+        return ""
+
+
 # ── Gate state file (.brr/gates/<gate>.json) ─────────────────────────
 
 
