@@ -1289,6 +1289,17 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         klass=VITAL,
     ),
     _BarSegment(
+        "draws", "me/▷",
+        "attribution of the `q` chip just above (brnrd#1810): this run's "
+        "own weighted spend against the shared quota gauge, plus every "
+        "owned strand's, summed (`me 1.2m · ▷2 3.4m`). Renders only the "
+        "half(s) with a reading; absent when neither this run nor any "
+        "owned strand has one.",
+        # a meter; this run cannot act on the shared pool by watching it,
+        # only by choosing whether to spawn more onto it.
+        klass=VITAL,
+    ),
+    _BarSegment(
         "census", "wake",
         "the wake census (#739, #683): total wake bytes, the biggest single "
         "block, and the oldest item any block still carries "
@@ -1643,6 +1654,44 @@ def _allowance_directive(resources: dict[str, Any]) -> tuple[str | None, str]:
     if _allowance_scope(resources) != "strand":
         return None, gate_text
     return allowance.directive_line(spent, facet.get("tokens")), gate_text
+
+
+def _draws_chip(resources: dict[str, Any]) -> str | None:
+    """Who is drawing on the shared quota gauge this boundary (brnrd#1810,
+    design-the-seat-that-never-quits.md §"The measurement") — this run's
+    own weighted spend (``me 1.2m``) plus every owned strand's, summed
+    (``▷2 3.4m``), beside the ordinary ``q S83`` chip. Reads
+    ``resources.quota.draws`` (:func:`brr.facets.build`'s ``draws`` param) —
+    the daemon writes it off the same allowance meter every heartbeat
+    already runs; nothing here re-meters anything.
+
+    Each half renders independently and drops out when it has nothing:
+    ``self`` absent (no reading yet) means no ``me`` segment at all — never
+    a fabricated ``me 0``. A strand still counts toward ``▷N`` even before
+    its own first heartbeat has a spend reading, but an all-unknown set of
+    strands renders the bare count with no summed number tacked on, for the
+    same reason. ``None`` when there is nothing to show on either half.
+    """
+    quota = resources.get("quota") if isinstance(resources, dict) else None
+    quota = quota if isinstance(quota, dict) else {}
+    draws = quota.get("draws")
+    draws = draws if isinstance(draws, dict) else {}
+    parts: list[str] = []
+    self_spent = draws.get("self")
+    if self_spent is not None:
+        parts.append(f"me {allowance.format_tokens(int(self_spent))}")
+    strands = draws.get("strands")
+    strands = strands if isinstance(strands, list) else []
+    if strands:
+        known = [
+            int(row.get("weighted")) for row in strands
+            if isinstance(row, dict) and row.get("weighted") is not None
+        ]
+        if known:
+            parts.append(f"▷{len(strands)} {allowance.format_tokens(sum(known))}")
+        else:
+            parts.append(f"▷{len(strands)}")
+    return " · ".join(parts) if parts else None
 
 
 def _siblings_chip(resources: dict[str, Any]) -> str | None:
@@ -2678,6 +2727,14 @@ def _render_bar(
         quota_chip = _quota_chip(resources)
         if quota_chip:
             segments.append(("quota", quota_chip))
+    # Attribution of the chip just above (brnrd#1810): who is drawing on
+    # that shared gauge this boundary — this run's own weighted spend plus
+    # every owned strand's, summed. Independent of whether the quota chip
+    # itself rendered this boundary (a strand with its own allowance chip
+    # can still own further children in principle), so it is its own gate.
+    draws_chip = _draws_chip(resources)
+    if draws_chip:
+        segments.append(("draws", draws_chip))
     if census:
         # Sits beside `orient` because both describe the *wake*, not the run:
         # what the boot cost, and how much of it has been walked. Never in the

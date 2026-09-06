@@ -235,6 +235,65 @@ def claude_transcript_tokens(path: "Path | str | None") -> "int | None":
     return total if found else None
 
 
+def claude_first_turn_boot_tokens(path: "Path | str | None") -> "int | None":
+    """The first assistant turn's own boot cost, cost-weighted.
+
+    "Boot cost" (design-the-seat-that-never-quits.md §"The measurement" —
+    brnrd#1810's slice 3 needs a number to compare a held seat's per-
+    boundary cost against) is what it took to *establish* context — the
+    wake bundle, the system prompt, the dominion files — before any work
+    happened: the first turn's own ``cache_creation`` + fresh ``input``
+    tokens, deliberately excluding ``output`` (that turn's own reply is
+    work, not setup) and ``cache_read`` (there is nothing to re-read yet on
+    turn one). Same weights as :func:`weighted_tokens`, same transcript
+    format as :func:`claude_transcript_tokens` — this just stops at the
+    first matching row instead of summing every one.
+
+    ``None`` when *path* is falsy, unreadable, or the transcript's first
+    assistant row carries neither field — "no reading yet", never a
+    fabricated zero.
+    """
+    if not path:
+        return None
+    try:
+        with Path(path).open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line or '"usage"' not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(row, dict) or row.get("type") != "assistant":
+                    continue
+                message = row.get("message")
+                if not isinstance(message, dict):
+                    continue
+                usage = message.get("usage")
+                if not isinstance(usage, dict):
+                    continue
+                input_tokens = _camel_or_snake(usage, "inputTokens", "input_tokens")
+                cache_creation = _camel_or_snake(
+                    usage, "cacheCreationInputTokens", "cache_creation_input_tokens"
+                )
+                parts: dict[str, float] = {}
+                if isinstance(input_tokens, (int, float)) and not isinstance(
+                    input_tokens, bool
+                ):
+                    parts["input"] = float(input_tokens)
+                if isinstance(cache_creation, (int, float)) and not isinstance(
+                    cache_creation, bool
+                ):
+                    parts["cache_creation"] = float(cache_creation)
+                if not parts:
+                    return None
+                return weighted_tokens(**parts)
+    except OSError:
+        return None
+    return None
+
+
 def latest_claude_transcript(
     cwd: "str | Path | None", projects_root: "str | Path | None" = None,
 ) -> "Path | None":
