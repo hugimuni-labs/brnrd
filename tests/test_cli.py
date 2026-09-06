@@ -1055,6 +1055,43 @@ def test_await_reports_the_daemons_resolution(tmp_path, capsys, monkeypatch):
     assert payload["deadline"] == "2026-08-07T12:00:00Z"
 
 
+def test_await_reports_a_park_outcome_with_the_ratio(tmp_path, capsys, monkeypatch):
+    """design-the-seat-that-never-quits.md §machinery slice 3: holding cost
+    more than a boot, so the daemon resolved the wait with its own outcome
+    (``"park"``) rather than the caller's ``event``/``condition``/
+    ``timeout``. The ratio rides the same ``await`` projection
+    (``daemon._hold_ratio_facet`` stamps it there) so this print never has
+    to reach into a second file."""
+    outbox = _await_outbox(tmp_path, await_state={"armed": False})
+    state = outbox / "portal-state.json"
+
+    def drain():
+        if not _staged_await(outbox):
+            return
+        for path in _staged_await(outbox):
+            path.unlink()
+        state.write_text(
+            json.dumps({
+                "version": 1,
+                "await": {
+                    "armed": True, "generation": "333", "resolved": True,
+                    "outcome": "park", "which": None, "ratio": 1.4,
+                    "deadline": None,
+                },
+            }),
+            encoding="utf-8",
+        )
+
+    clock = _FakeClock(on_sleep=drain)
+    monkeypatch.setattr(time, "sleep", clock.sleep)
+    monkeypatch.setattr(time, "monotonic", clock.monotonic)
+
+    assert main(["await", "--outbox", str(outbox)]) == 0
+    out = capsys.readouterr().out
+    assert "parking — holding has cost 1.4·boot" in out
+    assert "end the turn and the seat parks" in out
+
+
 def test_await_reports_its_own_arming_verdict(tmp_path, capsys, monkeypatch):
     """#1187, killed by construction: a directive that fails to arm says so
     *in the call that armed it*, instead of leaving the previous wait's
