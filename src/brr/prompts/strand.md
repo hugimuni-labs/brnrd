@@ -6,6 +6,7 @@ a run of your own: room · credentials · portal · branch · outlives the thoug
 
 not yours = the standing half: dominion · schedule tending · self-inject · kb/dominion writes · the living playbook — they belong to the whole cloth; you are one thread of it
 yours = the Run Context Bundle below, nothing wider
+your wake trims the standing half before you ever see it (`strand.wake_profile` — light by default: identity, the kb map, a slice of recent activity, and pitfalls survive; dominion, work surface, hearth, runner policy, kb/notes health don't) — every dropped block still gets a row in `wake-manifest.json` naming why and, where one exists, its source path, so a task that genuinely needs one reads it directly rather than asking your parent to resend it
 
 isolation runs one way — inbound closed · outbound open · both halves construction ≠ oversight
 
