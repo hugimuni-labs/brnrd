@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { WithheldLane } from '$lib/withheld';
 	import type { Snippet } from 'svelte';
 	import { resolve } from '$app/paths';
 	import {
@@ -24,12 +25,14 @@
 		loading: boolean;
 		error: string | null;
 		stale: boolean;
+		withheld: WithheldLane | null;
 		now: number;
 		map: boolean;
+		sceneVisible: boolean;
 		onSection: (section: DeckSection) => void;
 		onRun: (id: string) => void;
 		onPage: (path: string) => void;
-		onMap: () => void;
+		onMap: (runId: string | null) => void;
 		onInstruments: () => void;
 		setup: Snippet;
 		attention: Snippet;
@@ -43,8 +46,10 @@
 		loading,
 		error,
 		stale,
+		withheld,
 		now,
 		map,
+		sceneVisible,
 		onSection,
 		onRun,
 		onPage,
@@ -64,7 +69,7 @@
 			onSection(action.section);
 			commandReply = `Opened ${command.trim()}.`;
 		} else if (action.kind === 'map') {
-			onMap();
+			onMap(mission?.run_id ?? null);
 			commandReply = 'Map expanded. Escape returns to the bridge.';
 		} else if (action.kind === 'inspect') {
 			if (mission) {
@@ -95,6 +100,7 @@
 	function shortcut(event: KeyboardEvent) {
 		if (
 			event.key !== '/' ||
+			document.querySelector('[role="dialog"]') ||
 			event.ctrlKey ||
 			event.metaKey ||
 			event.altKey ||
@@ -157,7 +163,7 @@
 		</header>
 		{@render setup()}
 		{#if error}<p class="deck-error" role="status">
-				{error} · showing the last available report.
+				{error} · report unavailable; any retained values may be outdated.
 			</p>{/if}
 		{#if stale}<p class="deck-error" role="status">
 				Live report is stale. Inspect the timestamp before acting.
@@ -185,10 +191,14 @@
 						<div class="panel-top">
 							<span class="overline">01 / LIVE MISSION</span><span class="live-status"
 								>{runs === null
-									? 'CONNECTING'
+									? error
+										? 'UNAVAILABLE'
+										: 'CONNECTING'
 									: mission
 										? (mission.lifecycle ?? mission.phase ?? 'reported').toUpperCase()
-										: 'BETWEEN MISSIONS'}</span
+										: withheld
+											? 'WITHHELD'
+											: 'BETWEEN MISSIONS'}</span
 							>
 						</div>
 						{#if mission}
@@ -214,12 +224,22 @@
 							</div>
 						{:else}
 							<h2 id="mission-heading">
-								{runs === null ? 'Reaching your resident…' : 'A quiet bridge. A ready repo.'}
+								{withheld
+									? 'The live view is withheld.'
+									: error
+										? 'The live report is unavailable.'
+										: runs === null
+											? 'Reaching your resident…'
+											: 'A quiet bridge. A ready repo.'}
 							</h2>
 							<p class="mission-intent">
-								{runs === null
-									? 'Waiting for the live report.'
-									: 'Send the next objective through your connected chat. Your resident picks up the project context.'}
+								{withheld
+									? 'Review the publish scope in your repo settings to see what can be shared here.'
+									: error
+										? 'The next successful report will restore the view.'
+										: runs === null
+											? 'Waiting for the live report.'
+											: 'Send the next objective through your connected chat. Your resident picks up the project context.'}
 							</p>
 							<a class="primary" href={resolve('/repos')}>Open chat connections ↗</a>
 						{/if}
@@ -228,10 +248,17 @@
 					<section class="world-panel" aria-label="Live workspace scene">
 						<div class="panel-top">
 							<span class="overline">THE FIELD / {map ? 'MAP' : 'CREW VIEW'}</span><button
-								onclick={onMap}>Expand map ⤢</button
+								onclick={() => onMap(mission?.run_id ?? null)}>Expand map ⤢</button
 							>
 						</div>
-						{#if map}<AsciiField compact rows={18} header={false} legendDefault={false} />
+						{#if !sceneVisible}<p class="empty-copy">The field is open in the expanded view.</p>
+						{:else if map}<AsciiField
+								focusRunId={mission?.run_id ?? null}
+								compact
+								rows={18}
+								header={false}
+								legendDefault={false}
+							/>
 						{:else if runs && runs.length > 0}<ResidentField
 								{runs}
 								{stale}
@@ -277,7 +304,13 @@
 								>
 							</button>
 						{:else}<p class="empty-copy">
-								{runs === null ? 'Loading crew…' : 'No active runs reported.'}
+								{withheld
+									? 'Live crew data is withheld.'
+									: error
+										? 'Crew report unavailable.'
+										: runs === null
+											? 'Loading crew…'
+											: 'No active runs reported.'}
 							</p>{/each}
 					</section>
 					<section class="goal-panel" aria-labelledby="goal-heading">
