@@ -70,13 +70,23 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from . import claude_status, codex_status
 
 #: ``spawn.allowance_tokens`` config default (design-the-allowance.md §2)
 #: when a ``spawn:`` directive names no ``allowance:`` of its own.
 DEFAULT_ALLOWANCE_TOKENS = 20_000_000
+
+#: ``resident.allowance_tokens`` config default (design-the-allowance.md §2,
+#: slice 2) for the seat's own standing allowance. Same magnitude as the
+#: strand default above — until real usage data justifies a different
+#: number, inventing a second constant would be a guess dressed as a
+#: measurement (the 2026-09-05 review's objection to a borrowed exchange
+#: rate applies just as well to a borrowed *ceiling*). A config override
+#: exists precisely so an operator, not this module, can size the seat's
+#: window once evidence exists.
+DEFAULT_RESIDENT_ALLOWANCE_TOKENS = DEFAULT_ALLOWANCE_TOKENS
 
 #: Cost weights per token class, in fresh-input-token equivalents — the
 #: providers' own price ratios (Anthropic: cache read 0.1x, cache write 1.25x,
@@ -291,3 +301,97 @@ def directive_line(spent: "int | None", tokens: "int | None") -> str:
         "park — `submit: true` then `brnrd await` — or ask: "
         "`ask: allowance +<tokens>` with one line why."
     )
+
+
+def resident_ceiling_tokens(cfg: "Mapping[str, Any] | None") -> int:
+    """The resident seat's own standing-allowance ceiling, config-first.
+
+    Reads ``resident.allowance_tokens`` (same ``k``/``m`` parsing as a
+    ``spawn:`` directive's ``allowance:``); unset or unparsable falls back
+    to :data:`DEFAULT_RESIDENT_ALLOWANCE_TOKENS`. Deliberately a *separate*
+    config key from the strand's ``spawn.allowance_tokens`` — the seat's
+    window is a continuous conversation, not one dispatched thought, and an
+    operator may need to size them apart — but the same parser and the same
+    magnitude until its own evidence says otherwise.
+    """
+    cfg = cfg or {}
+    raw = cfg.get("resident.allowance_tokens")
+    tokens = parse_tokens(raw) if raw is not None else None
+    return tokens if tokens is not None else DEFAULT_RESIDENT_ALLOWANCE_TOKENS
+
+
+def resident_window_key(reset_epoch: "float | int | None") -> str | None:
+    """A stable identity for the binding quota window, from its reset instant.
+
+    While a window is open, the provider's own stated reset instant does not
+    move; once it passes, the next reading names a new, later instant — so
+    the reset epoch itself is a window's identity, cheaply, with no clock of
+    our own to keep in sync. ``None`` when no reset reading exists this
+    heartbeat (an absent quota facet, or a Shell with no reset field) — the
+    caller must read that as "unknown," never as "the window rolled."
+    """
+    if reset_epoch is None:
+        return None
+    try:
+        return str(int(float(reset_epoch)))
+    except (TypeError, ValueError):
+        return None
+
+
+def resident_allowance_state(
+    meta: "dict[str, Any]",
+    *,
+    cfg: "Mapping[str, Any] | None",
+    reset_epoch: "float | int | None",
+    live_spent: "int | None",
+) -> "dict[str, object]":
+    """The resident seat's own standing allowance for this heartbeat.
+
+    Mirrors the strand bookkeeping in ``daemon._collect_allowance_facet``
+    (write the freshly-metered numbers back onto *meta* so the boundary
+    directive and cut-time checks read a recent value without re-metering),
+    but the ceiling is **config-owned** (:func:`resident_ceiling_tokens`),
+    never a quota-percent conversion: design-the-allowance.md's 2026-09-05
+    review and design-the-continuous-seat.md's "Boundaries" section both
+    reject presenting a token budget derived from a guessed quota rate
+    before that rate has its own evidence (slice 3's job, not this one's).
+
+    What the reset clock *does* decide is the **window**: this-window spend
+    is the live cumulative meter reading minus a baseline captured when the
+    window was first seen (at dispatch, or the first heartbeat that can see
+    a quota reading), so a continuous seat's multi-day transcript is not
+    charged for tokens it spent in a prior window. A heartbeat with no known
+    reset (*reset_epoch* is ``None`` — no quota reading yet) keeps whatever
+    window/baseline is already stamped rather than rolling on a merely
+    missing reading.
+
+    The ceiling is always derivable from config alone, so it is reported
+    even on a heartbeat with no meter reading yet (*live_spent* is
+    ``None`` — the very first boundary before the Shell has written
+    anything readable, or a Shell with no collector wired): ``{"tokens":
+    N, "spent": None}``, never a fabricated zero spend. This mirrors the
+    strand branch in ``daemon._collect_allowance_facet``, and lets
+    :func:`brr.facets.build` render the honest ``absent`` state (a
+    collector *is* wired, it just has nothing yet) rather than
+    ``unimplemented``.
+    """
+    tokens = resident_ceiling_tokens(cfg)
+    if live_spent is None:
+        meta["resident_allowance_tokens"] = tokens
+        meta["resident_allowance_spent"] = None
+        return {"tokens": tokens, "spent": None, "scope": "resident"}
+    window_key = resident_window_key(reset_epoch)
+    stored_window = meta.get("resident_allowance_window")
+    stored_baseline = meta.get("resident_allowance_baseline")
+    if stored_baseline is None or (
+        window_key is not None and window_key != stored_window
+    ):
+        baseline = int(live_spent)
+        meta["resident_allowance_window"] = window_key
+        meta["resident_allowance_baseline"] = baseline
+    else:
+        baseline = int(stored_baseline)
+    spent = max(0, int(live_spent) - baseline)
+    meta["resident_allowance_tokens"] = tokens
+    meta["resident_allowance_spent"] = spent
+    return {"tokens": tokens, "spent": spent, "scope": "resident"}

@@ -6038,38 +6038,57 @@ def _collect_levels(
 
 def _collect_allowance_facet(
     task: Run, runner_name: str | None, work_dir: Path | None,
+    *, cfg: "dict | None" = None, levels: "dict[str, object] | None" = None,
 ) -> dict[str, object] | None:
-    """A strand's live ``{"tokens": N, "spent": M}``, or ``None`` off a strand.
+    """A strand's or the resident seat's live ``{"tokens": N, "spent": M}``.
 
     Called every heartbeat/boundary this run's portal-state is rebuilt
-    (design-the-allowance.md §2, slice 1) — cheap: a bounded transcript/
-    rollout tail-read, not a fresh Shell probe. The current ceiling is read
-    from the live run-control record first (a parent's ``to:`` grant lands
-    there — :func:`_apply_allowance_grant`), falling back to the dispatch-
-    time stamp on ``task.meta`` when no control entry exists (a test caller,
-    or a control retired out from under a still-finishing heartbeat).
+    (design-the-allowance.md §2) — cheap: a bounded transcript/rollout
+    tail-read, not a fresh Shell probe. Two branches, one meter
+    (:func:`allowance.collect_spent`) — never a second accounting:
+
+    - a **strand**: the current ceiling is read from the live run-control
+      record first (a parent's ``to:`` grant lands there —
+      :func:`_apply_allowance_grant`), falling back to the dispatch-time
+      stamp on ``task.meta`` when no control entry exists (a test caller,
+      or a control retired out from under a still-finishing heartbeat).
+    - the **resident seat** (slice 2, every other run): the ceiling is
+      config-owned (:func:`allowance.resident_ceiling_tokens`) and the
+      window it resets against comes from *levels*' binding quota reset
+      instant (:func:`runner_quota.binding_quota_reset_epoch`) — see
+      :func:`allowance.resident_allowance_state` for why this stops short
+      of a quota-percent-to-token conversion.
 
     Both the ceiling and the freshly-metered spend are written back onto
     ``task.meta`` so the cut-time overrun check (:func:`_cut_mismatches`)
     and the completion notice (:func:`_notify_spawn_parent`) read a recent
     value without re-metering.
     """
-    if not hasattr(task, "meta") or not _is_strand(task.meta):
+    if not hasattr(task, "meta"):
         return None
-    control = _find_run_control(str(getattr(task, "event_id", "") or task.id))
-    tokens = (
-        (control or {}).get("allowance_tokens")
-        or task.meta.get("spawn_allowance_tokens")
-        or allowance.DEFAULT_ALLOWANCE_TOKENS
-    )
-    tokens = int(tokens)
-    spent = allowance.collect_spent(
+    if _is_strand(task.meta):
+        control = _find_run_control(str(getattr(task, "event_id", "") or task.id))
+        tokens = (
+            (control or {}).get("allowance_tokens")
+            or task.meta.get("spawn_allowance_tokens")
+            or allowance.DEFAULT_ALLOWANCE_TOKENS
+        )
+        tokens = int(tokens)
+        spent = allowance.collect_spent(
+            runner_name, work_dir,
+            codex_thread_id=task.meta.get("codex_thread_id"),
+        )
+        task.meta["spawn_allowance_tokens"] = tokens
+        task.meta["spawn_allowance_spent"] = spent
+        return {"tokens": tokens, "spent": spent, "scope": "strand"}
+    live_spent = allowance.collect_spent(
         runner_name, work_dir,
         codex_thread_id=task.meta.get("codex_thread_id"),
     )
-    task.meta["spawn_allowance_tokens"] = tokens
-    task.meta["spawn_allowance_spent"] = spent
-    return {"tokens": tokens, "spent": spent}
+    reset_epoch = runner_quota.binding_quota_reset_epoch(levels)
+    return allowance.resident_allowance_state(
+        task.meta, cfg=cfg, reset_epoch=reset_epoch, live_spent=live_spent,
+    )
 
 
 def _resources_facet(
@@ -6682,7 +6701,7 @@ def _write_live_portal_state(
             ),
         )
         allowance_facet_input = _collect_allowance_facet(
-            task, runner_name, work_dir,
+            task, runner_name, work_dir, cfg=cfg, levels=run_levels,
         )
         # The run boundary knows its own Core (the resolved profile's
         # `model`, e.g. "opus"/"fable") — pass it so a thin week_models

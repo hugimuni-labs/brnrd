@@ -1576,13 +1576,16 @@ def _quota_chip(resources: dict[str, Any]) -> str | None:
 
 
 def _allowance_chip(resources: dict[str, Any]) -> str | None:
-    """A strand's own ``spend 38k/120k`` chip (design-the-allowance.md §2).
+    """The own-allowance ``spend 38k/120k`` chip — a strand's ``spawn:``
+    ceiling, or the resident seat's own standing allowance (design-the-
+    allowance.md §2, slices 1-2). One renderer for both: the facet shape is
+    identical, only where the ceiling number came from differs.
 
     Renders only once metering has something to show (``known`` — tokens
-    *and* a spend reading both present); a strand with a ceiling but no
-    reading yet, or any non-strand run (``allowance`` stays
-    ``unimplemented``), renders nothing here and the ordinary quota chip
-    takes over (see the caller in :func:`format_delta`).
+    *and* a spend reading both present); a ceiling with no reading yet, or
+    a call site with no allowance collector wired at all (``allowance``
+    stays ``unimplemented``), renders nothing here and the ordinary quota
+    chip takes over (see the caller in :func:`format_delta`).
     """
     facet = resources.get("allowance") if isinstance(resources, dict) else None
     facet = facet if isinstance(facet, dict) else {}
@@ -1594,8 +1597,33 @@ def _allowance_chip(resources: dict[str, Any]) -> str | None:
     return f"spend {allowance.format_tokens(spent)}/{allowance.format_tokens(tokens)}"
 
 
+def _allowance_scope(resources: dict[str, Any]) -> str:
+    """``"strand"`` or ``"resident"`` — see :func:`brr.facets.build`'s
+    ``allowance`` docstring. Defaults to ``"strand"`` (its pre-slice-2
+    meaning) for any facet that doesn't carry the key, matching
+    :func:`brr.facets.build`'s own default.
+    """
+    facet = resources.get("allowance") if isinstance(resources, dict) else None
+    facet = facet if isinstance(facet, dict) else {}
+    scope = str(facet.get("scope") or "strand").strip()
+    return scope if scope in ("strand", "resident") else "strand"
+
+
 def _allowance_directive(resources: dict[str, Any]) -> tuple[str | None, str]:
     """The one-shot ≥100% park-or-ask line, plus its own change-gate key.
+
+    Strand-only: its wording (``submit: true`` then ``brnrd await``, or
+    ``ask: allowance +<tokens>``) names verbs the daemon refuses from
+    anything but a strand (``ask: allowance`` is explicitly "a strand's own
+    verb" — ``daemon._queue_allowance_ask``). Firing it at the resident
+    seat's own standing-allowance overrun (``scope: "resident"``) would
+    hand it two directives it cannot follow — see :func:`_allowance_scope`.
+    The resident's own overrun stays visible on the chip alone
+    (:func:`_allowance_chip`) until a resident-appropriate directive is
+    specified; design-the-continuous-seat.md's "Pursuit without rewarding
+    waste" section, in any case, treats unspent/overrun headroom as
+    something to weigh at a planning boundary, not something a mechanical
+    nag should force.
 
     Returns ``(line_or_None, gate_text)``. *gate_text* is always returned
     (even when *line* is ``None``) so the caller can persist it into
@@ -1612,6 +1640,8 @@ def _allowance_directive(resources: dict[str, Any]) -> tuple[str | None, str]:
     if pct is None or spent is None or pct < 100:
         return None, ""
     gate_text = str(spent)
+    if _allowance_scope(resources) != "strand":
+        return None, gate_text
     return allowance.directive_line(spent, facet.get("tokens")), gate_text
 
 
@@ -2632,14 +2662,19 @@ def _render_bar(
     if budget_chip:
         segments.append(("budget", budget_chip))
     # A strand's own metered allowance replaces the shared, lagging quota
-    # chip on its bar (design-the-allowance.md §2) — the resident's bar is
-    # untouched (its own `allowance` facet stays unimplemented until slice
-    # 2, so `_allowance_chip` returns None and the quota chip renders as
-    # ever).
+    # chip on its bar (design-the-allowance.md §2, slice 1) — a strand has
+    # a poor view of shared provider quota anyway ("the percentage doesn't
+    # mean anything and is hard to derive" from inside a concurrent
+    # child). The resident seat's own standing allowance (slice 2) is the
+    # opposite case: design-the-continuous-seat.md's "Boundaries" section
+    # and design-the-allowance.md both insist provider headroom and
+    # allocated work stay *separate, simultaneously visible* facts — so
+    # the resident's bar shows both chips rather than one replacing the
+    # other.
     allowance_chip = _allowance_chip(resources)
     if allowance_chip:
         segments.append(("allowance", allowance_chip))
-    else:
+    if not allowance_chip or _allowance_scope(resources) == "resident":
         quota_chip = _quota_chip(resources)
         if quota_chip:
             segments.append(("quota", quota_chip))

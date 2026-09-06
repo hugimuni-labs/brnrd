@@ -18,8 +18,9 @@ def test_schema_is_wall_derived_and_ordered():
     assert by_key["remote_scm"].kind == facets.STATE
     assert by_key["allowance"].kind == facets.LEVEL
     # coexisting_runs (single-flight someday-nicety) and allowance (a
-    # strand-only wall, design-the-allowance.md slice 1) are the two
-    # optional facets — everything else is required of every renderer.
+    # strand's `spawn:` ceiling, or the resident seat's own standing
+    # allowance — design-the-allowance.md slices 1-2) are the two optional
+    # facets — everything else is required of every renderer.
     optional = {"coexisting_runs", "allowance"}
     assert {s.key for s in facets.FACETS if not s.required} == optional
     assert all(s.required for s in facets.FACETS if s.key not in optional)
@@ -434,6 +435,33 @@ def test_build_runner_block_omits_wake_request_key_when_absent():
     never touched the dashboard tap must not look like a miss."""
     res = facets.build(runner_name="codex")
     assert "wake_request" not in res["runner"]
+
+
+def test_build_allowance_scope_defaults_to_strand():
+    """A caller that doesn't pass `scope` (every slice-1 call site) must
+    render exactly as before slice 2 introduced the key."""
+    res = facets.build(allowance={"tokens": 120_000, "spent": 38_000})
+    assert res["allowance"]["status"] == "known"
+    assert res["allowance"]["scope"] == "strand"
+
+
+def test_build_allowance_scope_passes_through_resident():
+    res = facets.build(allowance={"tokens": 20_000_000, "spent": 5_000_000, "scope": "resident"})
+    assert res["allowance"]["scope"] == "resident"
+    assert res["allowance"]["status"] == "known"
+
+
+def test_build_allowance_absent_still_carries_scope():
+    """`spent is None` (no meter reading yet) reads `absent`, not
+    `unimplemented` — and still names which seat it belongs to."""
+    res = facets.build(allowance={"tokens": 20_000_000, "spent": None, "scope": "resident"})
+    assert res["allowance"]["status"] == "absent"
+    assert res["allowance"]["scope"] == "resident"
+
+
+def test_build_allowance_rejects_an_unrecognised_scope():
+    res = facets.build(allowance={"tokens": 1_000, "spent": 10, "scope": "bogus"})
+    assert res["allowance"]["scope"] == "strand"
 
 
 def test_render_line_does_not_include_runner_block():

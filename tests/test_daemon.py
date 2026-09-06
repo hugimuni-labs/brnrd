@@ -8866,6 +8866,94 @@ def test_write_live_portal_state_armed_letters_empty_without_brr_dir(tmp_path):
     assert payload["schedule"]["armed"] == []
 
 
+# ── the resident seat's own standing allowance (design-the-allowance.md
+# §2, slice 2) — through the real caller chain: dispatch (a plain,
+# non-strand ``Run``) → run meta → heartbeat meter → portal-state ────────
+
+
+def test_write_live_portal_state_resident_standing_allowance(tmp_path, monkeypatch):
+    """A non-strand run gets its own standing allowance facet off the same
+    meter and renderer a strand already uses (design-the-allowance.md §2)
+    — never a second accounting. The ceiling is config-owned; the window
+    comes from the binding quota's reset instant, not a guessed rate."""
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+
+    monkeypatch.setattr(
+        daemon, "_collect_levels",
+        lambda *a, **k: (
+            {"quota": {"summary": "session 90% left",
+                       "session_resets_at": 1000.0}},
+            frozenset(),
+        ),
+    )
+    monkeypatch.setattr(daemon.allowance, "collect_spent", lambda *a, **k: 500_000)
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        cfg={"resident.allowance_tokens": "2m"},
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    facet = payload["resources"]["allowance"]
+    assert facet["status"] == "known"
+    assert facet["scope"] == "resident"
+    assert facet["tokens"] == 2_000_000
+    # First reading in a fresh window baselines to zero spend.
+    assert facet["spent"] == 0
+    assert task.meta["resident_allowance_window"] == "1000"
+    assert task.meta["resident_allowance_baseline"] == 500_000
+    # A strand's own facet is untouched by this: the same call site's
+    # strand branch still requires `meta["strand"]` and a `spawn:` ceiling.
+    assert not daemon._is_strand(task.meta)
+
+
+def test_resident_standing_allowance_accrues_then_rolls_with_the_window(
+    tmp_path, monkeypatch,
+):
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+
+    state = {"reset": 1000.0, "spent": 500_000}
+    monkeypatch.setattr(
+        daemon, "_collect_levels",
+        lambda *a, **k: (
+            {"quota": {"session_resets_at": state["reset"]}}, frozenset(),
+        ),
+    )
+    monkeypatch.setattr(
+        daemon.allowance, "collect_spent", lambda *a, **k: state["spent"],
+    )
+
+    def _run():
+        path = daemon._write_live_portal_state(
+            outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        )
+        return json.loads(path.read_text(encoding="utf-8"))["resources"]["allowance"]
+
+    first = _run()
+    assert first["spent"] == 0
+
+    # Same window, more spend accrues — the baseline does not move.
+    state["spent"] = 540_000
+    second = _run()
+    assert second["spent"] == 40_000
+
+    # The provider's reset clock advances: a new window rebaselines, this-
+    # window spend goes back to zero even though cumulative spend is up.
+    state["reset"] = 2000.0
+    state["spent"] = 560_000
+    third = _run()
+    assert third["spent"] == 0
+    assert task.meta["resident_allowance_window"] == "2000"
+
+
 # ── await: — the hold path (#959, collapsed by #1187) ─────────────────
 
 

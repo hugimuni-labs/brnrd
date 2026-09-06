@@ -108,9 +108,11 @@ FACETS: tuple[FacetSpec, ...] = (
     ),
     FacetSpec(
         "allowance", "allowance", LEVEL, False,
-        "a strand's own token budget — live spend vs its `spawn:`-declared "
-        "ceiling (design-the-allowance.md, slice 1); unimplemented outside a "
-        "strand-stack run",
+        "a strand's own token budget (its `spawn:`-declared ceiling) or the "
+        "resident seat's own standing allowance (a config-owned ceiling, "
+        "windowed off the binding quota's reset clock) — live spend vs "
+        "whichever applies (design-the-allowance.md, slices 1-2); "
+        "unimplemented only where no allowance collector is wired at all",
     ),
 )
 
@@ -355,13 +357,19 @@ def build(
       dashboard spool-rack tap was in play for this wake; attached under
       ``resources.runner.wake_request`` when present, absent otherwise. See
       ``_runner_block`` for the shape.
-    - ``allowance`` (design-the-allowance.md, slice 1) — ``{"tokens": N,
-      "spent": M}`` for a strand-stack run, or ``None`` for every other
-      call site (the resident's own standing allowance is slice 2). ``spent``
-      may itself be ``None`` (metering found nothing yet) while ``tokens``
-      is known — that reads ``absent``, not ``unimplemented``: a strand
-      collector *is* wired, it just has nothing to report on its first
-      boundary.
+    - ``allowance`` (design-the-allowance.md, slices 1-2) — ``{"tokens": N,
+      "spent": M, "scope": "strand" | "resident"}`` for a strand-stack run
+      (its `spawn:`-declared ceiling) or the resident seat's own run (a
+      config-owned standing ceiling, windowed off the binding quota's
+      reset clock — see ``allowance.resident_allowance_state``), or
+      ``None`` only at a call site with no allowance collector wired at
+      all. ``spent`` may itself be ``None`` (metering found nothing yet)
+      while ``tokens`` is known — that reads ``absent``, not
+      ``unimplemented``: a collector *is* wired, it just has nothing to
+      report on its first boundary. ``scope`` (missing/unrecognised
+      defaults to ``"strand"``) is what a renderer uses to decide whether
+      this facet *replaces* the quota chip or sits beside it — see
+      :func:`brr.hooks._allowance_chip`.
     """
     levels = levels or {}
     if isinstance(levels_collector, bool):
@@ -440,17 +448,29 @@ def build(
         allowance_facet: dict[str, object] = {
             "status": UNIMPLEMENTED, "kind": spec_allow.kind,
             "required": spec_allow.required, "summary": None,
-            "note": "not a strand-stack run",
+            "note": "no allowance collector wired at this call site",
         }
     else:
         tokens = allowance.get("tokens")
         spent = allowance.get("spent")
+        # "strand" (a `spawn:`-declared ceiling) vs "resident" (the seat's
+        # own standing allowance, slice 2) — carried through so a renderer
+        # can decide whether this facet *replaces* the quota chip (a
+        # strand's shared, lagging quota is not worth a second chip) or
+        # sits *beside* it (the resident's own quota reading is the fact
+        # design-the-continuous-seat.md says must stay separately visible).
+        # Missing/unrecognised defaults to "strand" — every allowance input
+        # before slice 2 was a strand's, so this preserves that rendering
+        # exactly for any caller that doesn't pass the new key yet.
+        scope = str(allowance.get("scope") or "strand").strip() or "strand"
+        if scope not in ("strand", "resident"):
+            scope = "strand"
         if spent is None:
             allowance_facet = {
                 "status": ABSENT, "kind": spec_allow.kind,
                 "required": spec_allow.required, "summary": None,
                 "note": "no usage reading from this Shell yet",
-                "tokens": tokens, "spent": None, "pct": None,
+                "tokens": tokens, "spent": None, "pct": None, "scope": scope,
             }
         else:
             pct = allowance_metering.spend_pct(spent, tokens)
@@ -464,7 +484,7 @@ def build(
                 "status": KNOWN, "kind": spec_allow.kind,
                 "required": spec_allow.required,
                 "summary": summary, "note": None,
-                "tokens": tokens, "spent": spent, "pct": pct,
+                "tokens": tokens, "spent": spent, "pct": pct, "scope": scope,
             }
 
     return {
