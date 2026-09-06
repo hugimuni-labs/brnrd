@@ -777,6 +777,14 @@ def build(inputs: HUDInputs) -> HUD:
     await_state, hold_facet_input = daemon._hold_ratio_facet(
         task, await_state, cfg, outbox_dir, allowance_facet_input,
     )
+    # design-the-seat-that-never-quits.md §machinery slice 4 (+4b): needs the
+    # live token reading `_record_context_window` wrote above — may resolve
+    # `await_state` with a "rebirth" outcome and stamp
+    # `pending_resource_hold` for the same worker tail.
+    await_state, context_floor_facet_input = daemon._context_rebirth_facet(
+        task, await_state, cfg, outbox_dir,
+        runner_name=runner_name, work_dir=work_dir,
+    )
     # The run boundary knows its own Core (the resolved profile's
     # `model`, e.g. "opus"/"fable") — pass it so a thin week_models
     # bucket for a *different* Core doesn't bind this run's pacing (#561).
@@ -1000,6 +1008,7 @@ def build(inputs: HUDInputs) -> HUD:
             draws=draws_facet_input,
             hold=hold_facet_input,
             correspondent=correspondent_facet_input,
+            context_floor=context_floor_facet_input,
         ),
         heddles=[
             dict(h) for h in ((card_state or {}).get("heddles") or [])

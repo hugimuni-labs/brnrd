@@ -358,6 +358,51 @@ def claude_last_turn_context_tokens(path: "Path | str | None") -> "int | None":
     return last_total
 
 
+#: Claude Code's own compaction-boundary row: a ``type: "user"`` transcript
+#: line carrying a top-level ``isCompactSummary: true`` flag, whose
+#: ``message.content`` opens with the CLI's own continuation preamble. Real
+#: shape, not the documented-but-unmeasured guess the task named as the
+#: fallback — measured 2026-09-06 against three genuine compactions on this
+#: account's own transcripts (e.g.
+#: ``run-260823-1520-rmry/56fdbcf3-....jsonl``): every hit carried exactly
+#: this key, `True`, on a `"user"` row, nothing else. The substring pre-filter
+#: mirrors :func:`claude_last_turn_context_tokens`'s ``'"usage"' not in
+#: line`` guard — cheap enough to run over a whole growing transcript every
+#: heartbeat without parsing every line as JSON.
+_COMPACT_SUMMARY_MARKER = '"isCompactSummary"'
+
+
+def claude_transcript_compacted(path: "Path | str | None") -> bool:
+    """Whether *path* records at least one Claude Code compaction boundary.
+
+    design-the-seat-that-never-quits.md §slice 4b: "the Shell's transcript
+    carries a compact-boundary record when it compacts" — this is that
+    record, read the same growing-file-tolerant way
+    :func:`claude_last_turn_context_tokens` reads occupancy: no assumption
+    that the process has exited, no denominator needed, just "did this
+    happen at all in this run's own transcript".
+
+    ``False`` (never a guess) when *path* is falsy, unreadable, or carries no
+    such row — the overwhelming majority of runs, which never compact.
+    """
+    if not path:
+        return False
+    try:
+        with Path(path).open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if _COMPACT_SUMMARY_MARKER not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(row, dict) and row.get("isCompactSummary") is True:
+                    return True
+    except OSError:
+        return False
+    return False
+
+
 def latest_claude_transcript(
     cwd: "str | Path | None", projects_root: "str | Path | None" = None,
 ) -> "Path | None":
