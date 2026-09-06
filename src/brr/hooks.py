@@ -1312,6 +1312,17 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         klass=VITAL,
     ),
     _BarSegment(
+        "hold", "hold",
+        "design-the-seat-that-never-quits.md §machinery slice 3: the "
+        "hold-cost-vs-boot-cost ratio the daemon acts on while `brnrd "
+        "await` sits armed and idle (`hold 0.8·boot`). Renders only while "
+        "an await is armed; `hold ?·boot` when armed but no boot cost has "
+        "landed yet — never a guessed ratio.",
+        # a meter — this run cannot act on it beyond ending the turn, but
+        # it is exactly the number the daemon's own park decision reads.
+        klass=VITAL,
+    ),
+    _BarSegment(
         "census", "wake",
         "the wake census (#739, #683): total wake bytes, the biggest single "
         "block, and the oldest item any block still carries "
@@ -1745,6 +1756,30 @@ def _draws_chip(resources: dict[str, Any]) -> str | None:
         else:
             parts.append(f"▷{len(strands)}")
     return " · ".join(parts) if parts else None
+
+
+def _hold_chip(resources: dict[str, Any]) -> str | None:
+    """The ``hold N·boot`` chip (design-the-seat-that-never-quits.md
+    §"The machinery, in slices" #3) — the ratio the daemon acts on while an
+    ``await:`` sits armed and idle, read straight off ``resources.quota.hold``
+    (:func:`brr.facets.build`'s ``hold`` param, attached by
+    ``daemon._hold_ratio_facet`` every heartbeat an await is armed).
+
+    ``None`` (no chip at all) when no await is armed this boundary — the
+    common case for most of a run. ``hold ?·boot`` while armed but no boot
+    cost has landed yet (Codex, or a Claude transcript with no usage row) —
+    never a guessed ratio, exactly what the resident sees before the daemon
+    would act on one.
+    """
+    quota = resources.get("quota") if isinstance(resources, dict) else None
+    quota = quota if isinstance(quota, dict) else {}
+    hold = quota.get("hold")
+    if not isinstance(hold, dict):
+        return None
+    ratio = hold.get("ratio")
+    if ratio is None:
+        return "hold ?·boot"
+    return f"hold {ratio:.1f}·boot"
 
 
 def _siblings_chip(resources: dict[str, Any]) -> str | None:
@@ -2862,6 +2897,12 @@ def _render_bar(
     draws_chip = _draws_chip(resources)
     if draws_chip:
         segments.append(("draws", draws_chip))
+    # The ratio the daemon acts on while `brnrd await` sits armed and idle
+    # (design-the-seat-that-never-quits.md §machinery slice 3) — visible
+    # before it acts, same as `draws` above.
+    hold_chip = _hold_chip(resources)
+    if hold_chip:
+        segments.append(("hold", hold_chip))
     if census:
         # Sits beside `orient` because both describe the *wake*, not the run:
         # what the boot cost, and how much of it has been walked. Never in the
