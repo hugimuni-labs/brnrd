@@ -96,6 +96,51 @@ def test_claude_transcript_tokens_none_when_path_missing(tmp_path):
     assert allowance.claude_transcript_tokens(None) is None
 
 
+# ── claude: the first turn's own boot cost (brnrd#1810, design-the-seat-
+# that-never-quits.md §"The measurement") ────────────────────────────────
+
+
+def test_claude_first_turn_boot_tokens_reads_only_the_first_turn(tmp_path):
+    path = tmp_path / "session.jsonl"
+    _write_transcript(
+        path,
+        {"input_tokens": 100, "output_tokens": 999, "cache_read_input_tokens": 0,
+         "cache_creation_input_tokens": 200},
+        # A second turn with a much larger usage must never move the
+        # reading — boot cost is turn one, once, forever.
+        {"input_tokens": 9_000, "output_tokens": 9_000,
+         "cache_read_input_tokens": 9_000, "cache_creation_input_tokens": 9_000},
+    )
+    # output and cache_read are excluded even on the first turn — only
+    # input (1x) + cache_creation (1.25x): 100 + 200*1.25 = 350.
+    assert allowance.claude_first_turn_boot_tokens(path) == 350
+
+
+def test_claude_first_turn_boot_tokens_excludes_output_and_cache_read(tmp_path):
+    path = tmp_path / "session.jsonl"
+    _write_transcript(
+        path, {"output_tokens": 500, "cache_read_input_tokens": 500},
+    )
+    assert allowance.claude_first_turn_boot_tokens(path) is None
+
+
+def test_claude_first_turn_boot_tokens_ignores_non_assistant_rows(tmp_path):
+    path = tmp_path / "session.jsonl"
+    with path.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps({"type": "user", "message": {"content": "hi"}}) + "\n")
+        handle.write(json.dumps({
+            "type": "assistant",
+            "message": {"model": "claude-sonnet-4-6",
+                        "usage": {"input_tokens": 42, "cache_creation_input_tokens": 8}},
+        }) + "\n")
+    assert allowance.claude_first_turn_boot_tokens(path) == 42
+
+
+def test_claude_first_turn_boot_tokens_none_when_path_missing(tmp_path):
+    assert allowance.claude_first_turn_boot_tokens(tmp_path / "nope.jsonl") is None
+    assert allowance.claude_first_turn_boot_tokens(None) is None
+
+
 def test_latest_claude_transcript_finds_the_newest_under_the_cwd_slug(tmp_path):
     root = tmp_path / "projects"
     cwd = "/Users/x/worktrees/run-1"

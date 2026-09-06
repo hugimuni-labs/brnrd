@@ -4119,6 +4119,88 @@ def test_allowance_directive_silent_for_resident_scope_even_past_100pct():
     assert line is None or "submit: true" not in line
 
 
+# ── draws — attribution of the shared quota gauge (brnrd#1810, design-
+# the-seat-that-never-quits.md §"The measurement") ────────────────────────
+
+
+def test_draws_chip_renders_self_and_strands():
+    resources = {
+        "quota": {
+            "status": "known", "summary": "session 83% left",
+            "draws": {
+                "self": 1_200_000,
+                "strands": [
+                    {"run_id": "run-a", "title": "t1", "weighted": 2_000_000},
+                    {"run_id": "run-b", "title": "t2", "weighted": 1_400_000},
+                ],
+            },
+        },
+    }
+    assert hooks._draws_chip(resources) == "me 1.2m · ▷2 3.4m"
+
+
+def test_draws_chip_self_only_when_no_strands():
+    resources = {"quota": {"draws": {"self": 500_000, "strands": []}}}
+    assert hooks._draws_chip(resources) == "me 500k"
+
+
+def test_draws_chip_strands_only_when_self_unknown():
+    resources = {
+        "quota": {
+            "draws": {
+                "self": None,
+                "strands": [{"run_id": "run-a", "title": None, "weighted": 900_000}],
+            },
+        },
+    }
+    assert hooks._draws_chip(resources) == "▷1 900k"
+
+
+def test_draws_chip_never_fabricates_a_zero_for_an_absent_self():
+    resources = {"quota": {"draws": {"self": None, "strands": []}}}
+    assert hooks._draws_chip(resources) is None
+
+
+def test_draws_chip_renders_a_bare_count_when_no_strand_has_a_reading_yet():
+    """A strand still counts toward `N` before its own first heartbeat has
+    metered anything — but the sum is absent, not a fabricated 0."""
+    resources = {
+        "quota": {
+            "draws": {
+                "self": None,
+                "strands": [
+                    {"run_id": "run-a", "title": None, "weighted": None},
+                    {"run_id": "run-b", "title": None, "weighted": None},
+                ],
+            },
+        },
+    }
+    assert hooks._draws_chip(resources) == "▷2"
+
+
+def test_draws_chip_none_without_a_draws_facet():
+    assert hooks._draws_chip({"quota": {"status": "known"}}) is None
+    assert hooks._draws_chip({}) is None
+
+
+def test_render_bar_renders_the_draws_chip_beside_quota():
+    resources = {
+        "quota": {
+            "status": "known", "summary": "session 83% left",
+            "draws": {
+                "self": 1_200_000,
+                "strands": [{"run_id": "run-a", "title": "t", "weighted": 3_400_000}],
+            },
+        },
+        "allowance": {"status": "unimplemented"},
+    }
+    payload = _portal_payload(resources=resources)
+    line = hooks.format_delta(payload, rendered_chips={})
+    assert line is not None
+    assert "q S83" in line
+    assert "me 1.2m · ▷1 3.4m" in line
+
+
 def test_quota_chip_disambiguates_a_repeated_first_letter():
     # Two per-model week buckets that would otherwise both abbreviate to the
     # same letter must not collapse into one chip.
