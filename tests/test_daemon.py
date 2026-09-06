@@ -6329,6 +6329,7 @@ class TestNotifyGateFallback:
         self, tmp_path, monkeypatch, *, cfg_extra=None, configured_gates=(),
         eid="evt-tick", body="director tick note\n", duplicate=False,
         event_conversation_key=None, seed_conversations=None,
+        source="schedule", extra_meta=None,
     ):
         # A real git repo, not just ``write_repo_scaffold``'s directory
         # shape: an account-attached run stays on the ``worktree`` env
@@ -6345,11 +6346,11 @@ class TestNotifyGateFallback:
             **(cfg_extra or {}),
         }
         ctx = daemon.account.resolve_context(tmp_path, cfg)
-        event_kwargs = {}
+        event_kwargs = dict(extra_meta or {})
         if event_conversation_key is not None:
             event_kwargs["conversation_key"] = event_conversation_key
         event = make_event(
-            tmp_path, eid=eid, source="schedule", body="tick", **event_kwargs,
+            tmp_path, eid=eid, source=source, body="tick", **event_kwargs,
         )
         # Seed prior conversation activity so the recent-activity tiebreak has
         # something to read: (key, seconds_ago) — smaller seconds_ago is more
@@ -6625,6 +6626,97 @@ class TestNotifyGateFallback:
         assert task.meta["terminal_route"] == "duplicate"
         # notify.gate was never even consulted: no fallback event landed.
         assert protocol.list_done(inbox_dir, "telegram") == []
+
+    def test_strand_reply_to_steer_is_labelled_and_fanned_to_parent(
+        self, tmp_path, monkeypatch,
+    ):
+        # brnrd#1798: a `dispatch_message` event (a parent's `to:` steer,
+        # `daemon.py`'s `_queue_child_message`) only ever carries
+        # spawn_message_for_event/for_run/from_run — never
+        # spawn_parent_run_id — so `_terminal_reply_lands` reads the
+        # strand's reply to its own dispatcher as `unowned` and it falls
+        # through the very notify.gate net this class otherwise exercises
+        # for a schedule wake. Measured live: the reply reached the
+        # correspondent raw, indistinguishable from the seat's own voice
+        # (one incident read as the seat quitting mid-conversation).
+        # Required shape (maintainer's steer on the issue): still deliver,
+        # but label it as the strand's own note and fan a copy to the
+        # steering run.
+        task, ctx, event, inbox_dir, responses_dir = self._run(
+            tmp_path, monkeypatch, configured_gates=("telegram",),
+            source="dispatch_message",
+            body="Nothing further pending — bolt accepted. This run is done.\n",
+            extra_meta={
+                "spawn_message_for_event": "evt-child-spawn",
+                "spawn_message_for_run": "run-child-1",
+                "spawn_message_from_run": "run-parent-1",
+            },
+        )
+
+        assert task.meta["terminal_route"] == "gate-fallback"
+
+        [fallback] = protocol.list_done(inbox_dir, "telegram")
+        fallback_body = protocol.read_response(responses_dir, fallback["id"])
+        # Labelled — a leading line naming the strand and the word
+        # "strand", never in the seat's voice — ahead of the strand's own
+        # text. No `.name`/`title:` is on record here, so the label falls
+        # back to the bare run id (the fallback chain's last rung).
+        assert fallback_body.startswith(
+            "[run-child-1 — a strand's technical note, not the seat]\n\n"
+        )
+        assert "Nothing further pending" in fallback_body
+
+        # Fanned out — the steering run gets a copy as a plain pending
+        # event (the same shape spawn_completed/spawn_submitted already
+        # use to reach a parent's own wake), not edge-targeted at the
+        # strand's own waking event.
+        copies = [
+            ev for ev in protocol.list_pending(inbox_dir)
+            if ev.get("source") == "spawn_message_delivered"
+        ]
+        assert len(copies) == 1
+        copy = copies[0]
+        assert copy["spawn_parent_run_id"] == "run-parent-1"
+        assert copy["spawned_by_run"] == "run-child-1"
+        assert copy.get("spawn_message_for_event") is None
+        assert "run-child-1" in copy["body"]
+        assert "Nothing further pending" in copy["body"]
+
+    def test_strand_reply_label_prefers_the_spawn_contracts_title(
+        self, tmp_path, monkeypatch,
+    ):
+        # Same shape as above, but the strand's own run manifest carries
+        # the dispatcher's `title:` (`_queue_spawn_request`'s #880 §1b
+        # label) — the fallback chain's middle rung, preferred over the
+        # bare run id whenever it resolves.
+        runs_dir = tmp_path / ".brr" / "runs"
+        Run(
+            id="run-child-1", event_id="evt-child-spawn", body="",
+            source="spawn", meta={"title": "the sandbox strand"},
+        ).save(runs_dir)
+
+        task, ctx, event, inbox_dir, responses_dir = self._run(
+            tmp_path, monkeypatch, configured_gates=("telegram",),
+            source="dispatch_message",
+            body="closing out\n",
+            extra_meta={
+                "spawn_message_for_event": "evt-child-spawn",
+                "spawn_message_for_run": "run-child-1",
+                "spawn_message_from_run": "run-parent-1",
+            },
+        )
+
+        [fallback] = protocol.list_done(inbox_dir, "telegram")
+        fallback_body = protocol.read_response(responses_dir, fallback["id"])
+        assert fallback_body.startswith(
+            "[the sandbox strand — a strand's technical note, not the seat]\n\n"
+        )
+
+        [copy] = [
+            ev for ev in protocol.list_pending(inbox_dir)
+            if ev.get("source") == "spawn_message_delivered"
+        ]
+        assert "the sandbox strand" in copy["body"]
 
 
 # ── #1444: the account-scoped routing rule has exactly one home ────────────
