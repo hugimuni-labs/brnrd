@@ -6249,6 +6249,62 @@ def _record_boot_cost(
         task.meta["boot_cost_recorded"] = True
 
 
+def _record_context_window(
+    runner_name: str | None,
+    work_dir: Path | None,
+    outbox_dir: Path | None,
+) -> None:
+    """Feed a live, transcript-derived ``context_window`` reading every
+    heartbeat, instead of leaving the facet ``absent`` for a run's entire
+    life (design-the-seat-that-never-quits.md §"The machinery" slice 4,
+    "context rebirth", needs this number to park-and-reincarnate on drift).
+
+    ``resources.context_window`` used to read nothing until the *final*
+    ``--output-format json`` envelope, because that is the only place
+    :mod:`brr.claude_status` ever had a real ``contextWindow`` size to
+    divide by (#1178's own fix chose an honest absence over a wrong number
+    for exactly this reason). That envelope may be hours away on a held
+    seat. What the transcript *does* carry live, every turn, is occupancy —
+    :func:`allowance.claude_last_turn_context_tokens` — with no denominator.
+    Rather than manufacture one (a static per-model context-size table this
+    codebase has never carried, and would silently drift the day a model's
+    real window changes), this writes the honest partial: a token count,
+    no percentage, under the exact ``context_window`` key
+    :func:`_merge_level_snapshots`/:func:`_collect_levels` already read —
+    the same "the plumbing exists, it was just never fed mid-run" move
+    :func:`_record_boot_cost` makes for ``boot``.
+
+    Never overwrites a ``remaining_percentage`` already on file: once the
+    final envelope (this run's own, or — on the cross-run fallback path —
+    the last run's) has produced the honest percentage, a later heartbeat's
+    coarser token-only reading must not regress it back to a bare count.
+
+    Claude-only, like :func:`_record_boot_cost` — Codex's collector
+    (:mod:`brr.codex_status`) is already live with a real percentage the
+    whole run, so this closes only the Claude-side gap (named, not
+    silently left, per the maintainer's own framing of this slice).
+    """
+    if not claude_status.supported(runner_name):
+        return
+    tokens = allowance.claude_last_turn_context_tokens(
+        allowance.latest_claude_transcript(work_dir)
+    )
+    if tokens is None:
+        return
+    existing = claude_status.load_snapshot(outbox_dir)
+    payload = dict(existing) if isinstance(existing, dict) else {}
+    current = payload.get("context_window")
+    if isinstance(current, dict) and current.get("remaining_percentage") is not None:
+        return
+    payload["context_window"] = {
+        "summary": f"{allowance.format_tokens(tokens)} tok occupied "
+        "(no window size yet)",
+        "tokens_used": tokens,
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    claude_status.write_snapshot(outbox_dir, payload)
+
+
 def _resources_facet(
     quota_summary: str | None,
     *,
@@ -6865,6 +6921,7 @@ def _write_live_portal_state(
         )
         draws_facet_input = _collect_quota_draws(task, allowance_facet_input)
         _record_boot_cost(task, runner_name, work_dir, outbox_dir)
+        _record_context_window(runner_name, work_dir, outbox_dir)
         # The run boundary knows its own Core (the resolved profile's
         # `model`, e.g. "opus"/"fable") — pass it so a thin week_models
         # bucket for a *different* Core doesn't bind this run's pacing (#561).
