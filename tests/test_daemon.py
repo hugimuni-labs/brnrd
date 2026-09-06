@@ -36,6 +36,22 @@ def _clean_run_controls():
         daemon._run_controls.clear()
 
 
+@pytest.fixture(autouse=True)
+def _seat_closes_in_this_module(monkeypatch):
+    """These tests drive the worker to its *close* — the ``done`` tail.
+
+    Since #1817 a user-woken seat parks at turn end by default
+    (``daemon.SEAT_PARK_ON_TURN_END_DEFAULT``, design-the-seat-that-never-
+    quits.md), so a bare worker drive lands ``held``, and eighteen tests
+    here that assert ``done`` incidentally — they are about prompts, hooks,
+    quota threading, salvage — went red for a behaviour none of them is
+    about. Pin the close path here, explicitly; the park path has its own
+    end-to-end drive in ``tests/test_hold_on_strands.py``
+    (``test_a_clean_turn_end_parks_the_seat_by_default``).
+    """
+    monkeypatch.setattr(daemon, "SEAT_PARK_ON_TURN_END_DEFAULT", False)
+
+
 def _stub_env_isolated(monkeypatch, tmp_path):
     """Replace env backends with stand-ins that don't touch git/docker."""
     worktree_path = tmp_path / ".brr" / "worktrees" / "stub"
