@@ -398,6 +398,7 @@ INTERNAL_SOURCES: frozenset[str] = frozenset({
     "spawn",
     "spawn_allowance_requested",
     "spawn_completed",
+    "spawn_message_delivered",
     "spawn_queued",
     "spawn_submitted",
 })

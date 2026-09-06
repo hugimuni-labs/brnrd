@@ -5045,9 +5045,42 @@ def _run_worker(
                     if unowned and not terminal_duplicate
                     else ""
                 )
+                # brnrd#1798: a dispatch_message-sourced reply is "unowned"
+                # here whenever the steer that woke this strand stamped no
+                # spawn_parent_run_id (the steer event only ever carries
+                # spawn_message_from_run/for_run/for_event —
+                # _terminal_reply_lands has nothing else to land on) — so
+                # the notify.gate net meant for a genuinely orphaned
+                # schedule wake was catching a strand's reply to its own
+                # dispatcher instead, and shipping it to the correspondent
+                # raw, reading as if the seat itself had spoken. Required
+                # shape (the maintainer's steer on the issue): still
+                # deliver — never reroute away from the correspondent —
+                # but label it as the strand's own note, and fan a copy to
+                # the steering run so the seat knows what just went out.
+                relay_label = ""
+                relay_parent_run_id = ""
+                relay_strand_run_id = ""
+                if source == "dispatch_message":
+                    relay_strand_run_id = str(
+                        task.meta.get("spawn_message_for_run") or ""
+                    )
+                    relay_parent_run_id, _relay_conv = _child_owner_route(
+                        str(task.meta.get("spawn_message_for_event") or ""),
+                        fallback_parent_run_id=str(
+                            task.meta.get("spawn_message_from_run") or ""
+                        ),
+                    )
+                    relay_label = _strand_reply_label(
+                        emit.brr_dir, runs_dir, relay_strand_run_id or task.id,
+                    )
                 gate_fallback_delivered = False
                 if notify_gate:
                     fallback_body = protocol.read_response(responses_dir, eid) or ""
+                    if source == "dispatch_message":
+                        fallback_body = _label_strand_relay_body(
+                            relay_label, fallback_body,
+                        )
                     gate_fallback_delivered = _deliver_out_of_bound(
                         emit, task, responses_dir, inbox_dir, eid,
                         notify_gate, {}, fallback_body, outbox_dir=outbox_dir,
@@ -5056,6 +5089,18 @@ def _run_worker(
                     if gate_fallback_delivered:
                         output_stats["outbound"] = output_stats.get("outbound", 0) + 1
                         output_stats["delivered"] = output_stats.get("delivered", 0) + 1
+                        if source == "dispatch_message" and relay_parent_run_id:
+                            _notify_parent_of_relayed_strand_message(
+                                inbox_dir,
+                                parent_run_id=relay_parent_run_id,
+                                strand_run_id=relay_strand_run_id or task.id,
+                                strand_event_id=str(
+                                    task.meta.get("spawn_message_for_event") or ""
+                                ),
+                                label=relay_label,
+                                gate=notify_gate,
+                                body=fallback_body,
+                            )
                 undeliverable = (
                     unowned and not terminal_duplicate and not gate_fallback_delivered
                 )
@@ -7711,6 +7756,90 @@ def _stage_terminal_response(
     if suppressed_reason:
         protocol.update_event_meta(event, terminal_suppressed=True)
     return path
+
+
+def _strand_reply_label(
+    brr_dir: Path, runs_dir: Path | None, strand_run_id: str,
+) -> str:
+    """Best-effort human label for *strand_run_id*'s chat-bound note.
+
+    daemon-substrate.md's own fallback chain, read from whichever half is
+    still reachable: the presence registry's self-authored ``name`` (a
+    live process, refreshed every heartbeat) first, the persisted run
+    manifest's ``title`` meta second — the dispatcher's ``title:`` on the
+    original ``spawn:`` request (:func:`_queue_spawn_request`) — and the
+    bare run id last. The strand answering a ``to:`` steer may already be
+    a corpse by the time its reply is relayed (it was woken solely to
+    answer the steer), so ``.name`` is a best effort, not a given; ``title``
+    survives on disk regardless.
+    """
+    if not strand_run_id:
+        return ""
+    for entry in presence.list_active(brr_dir):
+        if entry.get("run_id") != strand_run_id:
+            continue
+        label = str(entry.get("name") or entry.get("label") or "").strip()
+        if label:
+            return label
+        break
+    if runs_dir is not None:
+        manifest = Run.from_file(run_manifest_path(runs_dir, strand_run_id))
+        if manifest is not None:
+            title = str(manifest.meta.get("title") or "").strip()
+            if title:
+                return title
+    return strand_run_id
+
+
+def _label_strand_relay_body(label: str, body: str) -> str:
+    """Prefix *body* as a strand's own technical note, never the seat's voice.
+
+    brnrd#1798: an adopted strand's reply to a parent's ``to:`` steer used
+    to reach the correspondent's chat unlabelled — indistinguishable from
+    the seat itself speaking (one incident read as the seat quitting mid-
+    conversation). The maintainer's required shape keeps the delivery —
+    strands may still reach a human — but marks its authorship plainly: a
+    leading line naming the strand and the word "strand" itself.
+    """
+    name = label.strip() if label else "a strand"
+    return f"[{name} — a strand's technical note, not the seat]\n\n{body}"
+
+
+def _notify_parent_of_relayed_strand_message(
+    inbox_dir: Path | None,
+    *,
+    parent_run_id: str,
+    strand_run_id: str,
+    strand_event_id: str,
+    label: str,
+    gate: str,
+    body: str,
+) -> None:
+    """Fan a copy of a strand's chat-relayed reply back to the steering run.
+
+    brnrd#1798 fork 2: labelling (above) answers "does the correspondent
+    know who's talking"; this answers "does the seat know what the
+    correspondent just saw" — a plain pending event, the same shape
+    ``spawn_completed``/``spawn_submitted``/``spawn_allowance_requested``
+    already use to reach a parent's own wake. Deliberately carries no
+    ``spawn_message_for_event`` — that key is the edge-traffic marker
+    :func:`_pending_events_for_agent` hides from every view but the one
+    whose ``current_event_id`` matches it, and this notice is for the
+    *parent's* wake, not the strand's.
+    """
+    if not inbox_dir or not parent_run_id:
+        return
+    who = label or strand_run_id or "a strand"
+    protocol.create_event(
+        inbox_dir,
+        "spawn_message_delivered",
+        f"{who} (strand) had no dispatch edge to report your steer through, "
+        f"so its reply went straight to the correspondent via {gate} — "
+        f"labelled as its own note, not yours. What it sent:\n\n{body}",
+        spawn_parent_run_id=parent_run_id,
+        spawned_by_run=strand_run_id,
+        spawned_by_event=strand_event_id,
+    )
 
 
 def _read_outbox_notices(outbox_dir: Path | None) -> list[dict[str, str]]:
