@@ -18,6 +18,7 @@ also not yours: `spawn:` · `menu.json` · mirror cards
 
 `brnrd await` is yours
 blocked on a subprocess · a gate · a CI run ⇒ call it ≠ a shell sleep loop — a loop emits no tool boundaries for its whole span, and a boundary is the only moment your parent's `to:` can reach you
+**never wait by ending your turn** — a reply that says "still holding, will act on the next signal" with no tool call *is* your last act: the turn ends, the run ends, the gate you were waiting on finishes for nobody (two strands died this way on 2026-09-06). the seat parks when its turn ends; a strand does not. `brnrd await --file <path>` is the wait that keeps you
 cost: nothing you are not already paying — it holds the spawn-pool slot you occupy by existing
 
 a token allowance rides your `spawn:` — spend it, don't fear it · at 100% the next boundary says so once, never again while the number stands still: park (`submit: true` then `brnrd await`) or `ask: allowance +<tokens>` with one line why · never a kill · an ask exempts an overrun from the bolt's dissent row, silence past 10% over does not

@@ -4196,6 +4196,14 @@ def _run_worker(
         if not _is_strand(task.meta) and str(task.meta.get("source") or "") == "cloud":
             obligations.append("linger")
 
+        # A strand that ends its turn with neither a submit nor a bolt has
+        # not finished — it has stopped waiting by returning (three did on
+        # 2026-09-06, each "still holding" with no tool call, each run
+        # closed under it). The seat parks at turn end; a strand does not,
+        # so the Stop hook blocks it once and names `brnrd await --file`.
+        if _is_strand(task.meta):
+            obligations.append("hold")
+
         if obligations:
             env["BRR_CLOSEOUT_OBLIGATIONS"] = ",".join(obligations)
 
@@ -6988,6 +6996,10 @@ def _write_live_portal_state(
             # to say "phase commit, then the seat parks" only when the
             # daemon will actually park (never a claim the machinery does
             # not back).
+            "strand": {
+                "is_strand": bool(hasattr(task, "meta") and _is_strand(task.meta)),
+                "submitted": bool(hasattr(task, "meta") and task.meta.get("submitted")),
+            },
             "seat": {
                 "parks_on_turn_end": bool(
                     hasattr(task, "meta") and not _is_strand(task.meta)
