@@ -15,14 +15,11 @@ from brr.prompts import (
     _annotate_stale_refs,
     _backchannel_handles_only,
     _build_context_block,
-    _build_context_block_scored,
     _build_hearth_block,
     _build_identity_core_block,
     _build_injected_blocks_with_contracts,
     _build_runner_policy_block,
-    _build_strand_light_stack,
     _build_strand_pitfalls_contract,
-    _build_strand_wake_stack,
     _build_work_surface_block,
     _build_work_surface_block_scored,
     _entry_key,
@@ -33,7 +30,6 @@ from brr.prompts import (
     _SURFACE_RESERVE_PAGE_BYTES,
     _page_is_chronological,
     _prior_run_boot_line,
-    _strand_wake_profile,
     _trim_sectioned_page,
     _worst_trim,
     build_daemon_prompt,
@@ -1261,6 +1257,17 @@ class TestPromptBuilding:
         assert "Blind retry" not in prompt
         assert "Resident Identity Core" in prompt
 
+    def test_daemon_prompt_worker_still_sees_web_capability(self, tmp_path):
+        # Workers skip the resident inject stack but still get the bundle —
+        # the capability declaration must survive that path.
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            run_id="task-9",
+            strand=True,
+            runner_shell="codex",
+        )
+        assert "- Web research: native via web.run" in prompt
+
     def test_daemon_prompt_default_keeps_resident_stack(self, tmp_path):
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
@@ -1317,17 +1324,6 @@ class TestPromptBuilding:
             run_id="task-9",
         )
         assert "- Web research: not declared for this Shell" in prompt
-
-    def test_daemon_prompt_worker_still_sees_web_capability(self, tmp_path):
-        # Workers skip the resident inject stack but still get the bundle —
-        # the capability declaration must survive that path.
-        prompt = build_daemon_prompt(
-            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
-            run_id="task-9",
-            strand=True,
-            runner_shell="codex",
-        )
-        assert "- Web research: native via web.run" in prompt
 
     def test_daemon_prompt_omits_runner_medium_when_absent(self, tmp_path):
         prompt = build_daemon_prompt(
@@ -5929,20 +5925,6 @@ class TestWakeBlocksSidecar:
 
     def test_write_wake_blocks_and_manifest_rendered_bytes_agree(self, tmp_path):
         import json as _json
-    def test_write_wake_manifest_strand_light_profile_names_dropped_blocks(
-        self, tmp_path
-    ):
-        """A strand's light profile drops most of the resident inject stack —
-        the manifest must say so, not just leave the row out.
-
-        Every dropped block (dominion, hearth, work surface, runner policy,
-        prior-run, kb/notes health) still appears with ``present: false`` and
-        ``lens: "profile:strand · skipped"`` (#<the-strand-that-wakes-light>);
-        the blocks the light profile keeps (identity core, knowledge sources,
-        pitfalls) carry ``"profile:strand · kept"``, and the trimmed one
-        (recent activity) carries ``"profile:strand · trimmed"``.
-        """
-        import json
 
         from brr.prompts import build_daemon_prompt_with_score
         from brr.run import Run
@@ -5978,6 +5960,26 @@ class TestWakeBlocksSidecar:
         legacy_path = run_context.write_wake_manifest(brr_dir, run, score)
         legacy_manifest = _json.loads(legacy_path.read_text(encoding="utf-8"))
         assert all(b["rendered_bytes"] is None for b in legacy_manifest["blocks"])
+
+    def test_write_wake_manifest_strand_light_profile_names_dropped_blocks(
+        self, tmp_path
+    ):
+        """A strand's light profile drops most of the resident inject stack —
+        the manifest must say so, not just leave the row out.
+
+        Every dropped block (dominion, hearth, work surface, runner policy,
+        prior-run, kb/notes health) still appears with ``present: false`` and
+        ``lens: "profile:strand · skipped"`` (#<the-strand-that-wakes-light>);
+        the blocks the light profile keeps (identity core, knowledge sources,
+        pitfalls) carry ``"profile:strand · kept"``, and the trimmed one
+        (recent activity) carries ``"profile:strand · trimmed"``.
+        """
+        import json
+
+        from brr.prompts import build_daemon_prompt_with_score
+        from brr.run import Run
+        from brr import run_context
+
         _, score = build_daemon_prompt_with_score(
             "check the thing", "evt-mfst-3", "/tmp/resp.md", tmp_path,
             run_id="run-mfst-3",
