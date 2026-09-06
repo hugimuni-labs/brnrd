@@ -297,6 +297,7 @@ def build(
     coexisting: "list[dict[str, object]] | None" = None,
     wake_request: "dict[str, object] | None" = None,
     allowance: "dict[str, object] | None" = None,
+    draws: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Build the live ``resources`` facet dict from the collected inputs.
 
@@ -370,6 +371,15 @@ def build(
       defaults to ``"strand"``) is what a renderer uses to decide whether
       this facet *replaces* the quota chip or sits beside it — see
       :func:`brr.hooks._allowance_chip`.
+    - ``draws`` (brnrd#1810, design-the-seat-that-never-quits.md
+      §"The measurement") — ``{"self": N | None, "strands": [{"run_id",
+      "title", "weighted": N | None}, ...]}``, attached onto the ``quota``
+      facet (mirrors ``pacing_status`` below) rather than carried as its
+      own top-level facet: it is an attribution *of* the shared quota
+      gauge, not a new wall of its own. ``self`` is this run's own weighted
+      spend off the same meter :func:`build`'s ``allowance`` param already
+      reads — never a second accounting. ``None`` when neither this run
+      nor any owned strand has anything to report.
     """
     levels = levels or {}
     if isinstance(levels_collector, bool):
@@ -393,6 +403,8 @@ def build(
     )
     if pacing_status:
         quota_facet["pacing"] = pacing_status
+    if draws is not None:
+        quota_facet["draws"] = draws
     spend_facet = _level_record(
         FACETS_BY_KEY["spend"], _level_summary("spend"),
         has_collector="spend" in wired_slots,
