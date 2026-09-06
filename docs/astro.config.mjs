@@ -57,6 +57,7 @@ export default defineConfig({
           label: 'Guides',
           items: [
             { label: 'Models & quota', slug: 'guides/models' },
+            { label: 'No always-on machine? Use a VPS', slug: 'guides/vps-install' },
             { label: 'Troubleshooting', slug: 'guides/troubleshooting' },
           ],
         },

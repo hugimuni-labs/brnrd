@@ -121,8 +121,17 @@
 				{HERO_HEADLINE}
 			</h1>
 			<p class="mt-5 max-w-2xl text-base leading-relaxed text-stone-300 sm:text-lg">
-				brnrd keeps your coding agent working between messages, then returns a commit, a pull
-				request, or a reply you can actually check.
+				A co-maintainer that lives on your machine: survives reboots, remembers who it is, works
+				both your Claude and Codex subscriptions, and leaves receipts — a commit, a pull request,
+				or a reply you can actually check.
+			</p>
+			<p class="mt-2 max-w-2xl text-xs leading-relaxed text-ink-mute">
+				Needs a machine that's on — a laptop that doesn't sleep, a Mac mini, a home server, or a
+				<a
+					class="underline underline-offset-2 hover:text-stone-300"
+					href={`${DOCS_URL}guides/vps-install/`}
+					rel="external">$5 VPS</a
+				> (about ten minutes to set up).
 			</p>
 
 			<div class="mt-6 flex flex-wrap items-center gap-3">
