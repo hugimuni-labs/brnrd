@@ -6783,6 +6783,17 @@ def _write_live_portal_state(
             },
             "budget": {"elapsed_seconds": elapsed},
             "await": await_state,
+            # design-the-seat-that-never-quits.md: what happens when this
+            # turn ends with nothing armed — the hooks' Stop phase reads it
+            # to say "phase commit, then the seat parks" only when the
+            # daemon will actually park (never a claim the machinery does
+            # not back).
+            "seat": {
+                "parks_on_turn_end": bool(
+                    hasattr(task, "meta") and not _is_strand(task.meta)
+                    and _truthy((cfg or {}).get(SEAT_PARK_ON_TURN_END_KEY))
+                ),
+            },
             # design-the-allowance.md's resource hold: published only once
             # armed (``None`` renders as absent, same as `scm`/`produce`
             # below) — "the UI shows why the seat is waiting and the one
