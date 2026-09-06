@@ -4567,7 +4567,7 @@ def cmd_portal_facets(args):
 #: with margin, so the call ends by returning an answer rather than by being
 #: killed mid-wait.
 #:
-#: Measured: claude's Bash tool ends a call at 10 minutes — 9m40s (580s)
+#: Measured: claude's Bash tool ends a call at 10 minutes — 9m20s (560s), counted from the call start
 #: leaves 20s of margin, up from the old one-size-fits-all 480s (8 min),
 #: which was under-using two full minutes of claude's own budget every
 #: single slice. Codex's own per-call cap is unmeasured here — named rather
@@ -4577,7 +4577,7 @@ def cmd_portal_facets(args):
 #: carries no call-cap field yet — when it does, prefer reading it there over
 #: this table so a profile-level override does not require a CLI release.
 _AWAIT_SLICE_CEILING_BY_SHELL: dict[str, float] = {
-    "claude": 580.0,
+    "claude": 560.0,
 }
 _AWAIT_SLICE_CEILING_SECONDS = 480.0
 
@@ -4793,6 +4793,7 @@ def cmd_await(args):
         )
 
     before = do_mod.notices_of(payload)
+    call_started = time.monotonic()
     staged = do_mod.stage_await(
         outbox_dir, timeout_seconds=timeout_seconds, file_path=args.file,
     )
@@ -4851,7 +4852,12 @@ def cmd_await(args):
             print(f"[brnrd await] {outcome}{tail}{note}")
         return 0
 
-    deadline = time.monotonic() + _await_slice_ceiling_seconds()
+    # The ceiling counts from the *call's* start, not from the arm: the
+    # staging + drain-verdict wait above (up to 30s under a busy daemon)
+    # is inside the Shell's per-call cap too. Measured 2026-09-06 20:1xZ:
+    # 580s from the arm + a 30s drain wait = the claude Bash tool killing
+    # the call at 10m instead of it returning `pending`.
+    deadline = call_started + _await_slice_ceiling_seconds()
     while True:
         state = do_mod.read_portal_state(outbox_dir).get("await")
         if not isinstance(state, dict):
