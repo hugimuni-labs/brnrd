@@ -1006,6 +1006,7 @@
 	// given route, so collapsing them into one flag would only make the two
 	// call sites read as if they could collide.
 	let mapStageOpen = $state(false);
+	let mapFocusRunId = $state<string | null>(null);
 
 	function selectFromLoom(kind: 'run' | 'wake', id: string) {
 		const same = loomSelection !== null && loomSelection.kind === kind && loomSelection.id === id;
@@ -1459,15 +1460,20 @@
 		loading={surfaceData === null}
 		error={liveRunsError ?? surfaceError}
 		stale={liveRunsStale}
+		withheld={liveRunsWithheld}
 		{now}
 		map={liveView === 'map'}
+		sceneVisible={!mapStageOpen && !runOverlayOpen}
 		onSection={(section) => (deckSection = section)}
 		onRun={(id) => {
 			loomSelection = { kind: 'run', id };
 			runOverlayOpen = true;
 		}}
 		onPage={openInLibrary}
-		onMap={() => (mapStageOpen = true)}
+		onMap={(id) => {
+			mapFocusRunId = id;
+			mapStageOpen = true;
+		}}
 		onInstruments={() => {
 			window.location.href = resolve('/daily');
 		}}
@@ -1503,7 +1509,7 @@
 					/>{/if}
 			{:else if deckSection === 'history'}
 				{#if runLedgerError}<p class="text-red-400">{runLedgerError}</p>{/if}
-				{#if runLedgerWithheld}{@render ledgerWithheld()}{:else}<Cloth
+				{#if runLedgerRows !== null && runLedgerRows.length === 0 && runLedgerWithheld}{@render ledgerWithheld()}{:else}<Cloth
 						rows={runLedgerRows}
 						{now}
 						windowMs={runLedgerWindowMs}
@@ -2303,7 +2309,7 @@
 			dismissLabel="collapse the map"
 			onClose={() => (mapStageOpen = false)}
 		>
-			<MapStage />
+			<MapStage focusRunId={mapFocusRunId} />
 		</RunOverlay>
 	{/if}
 {/if}

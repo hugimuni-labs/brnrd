@@ -34,6 +34,35 @@
 	});
 
 	let signinHref = $derived(resolveSigninHref(loginContext, resolve('/login')));
+
+	const HERO_HEADLINE = 'assign the work. get back a receipt.';
+
+	interface DeckStep {
+		index: string;
+		verb: string;
+		body: string;
+		readout: string;
+	}
+	const DECK_STEPS: DeckStep[] = [
+		{
+			index: '01',
+			verb: 'assign',
+			body: 'Send a task from your connected chat, a GitHub issue, or the terminal. Keep the conversation beside the work.',
+			readout: 'task → repo → resident'
+		},
+		{
+			index: '02',
+			verb: 'work',
+			body: 'It reads the repo, makes changes, and checks its work. Context carries forward when you come back with the next task.',
+			readout: 'plan → change → test → review'
+		},
+		{
+			index: '03',
+			verb: 'receipt',
+			body: 'Progress and reviewable results return to the thread that asked. Inspect the diff, correct the course, or hand over the next task.',
+			readout: 'out: commit · pull request · reply'
+		}
+	];
 </script>
 
 <div class="mx-auto max-w-4xl p-5 sm:p-6">
@@ -78,24 +107,30 @@
 		</nav>
 	</header>
 
-	<section class="ignite mt-14 sm:mt-16" style="--ignite-delay: 140ms" aria-label="what brnrd is">
+	<section
+		class="ignite mt-14 sm:mt-16"
+		style="--ignite-delay: 140ms"
+		aria-label="what brnrd delivers"
+	>
 		<div class="max-w-3xl">
+			<p class="eyebrow">the resident engine</p>
 			<h1
-				class="font-mono text-2xl font-semibold tracking-tight text-amber-100 sm:text-3xl"
-				use:typeReveal={{ text: 'a resident, not a chatbot', delay: 180 }}
+				class="mt-3 font-mono text-4xl leading-[1.08] font-semibold tracking-tight text-amber-100 sm:text-5xl lg:text-6xl"
+				use:typeReveal={{ text: HERO_HEADLINE, delay: 180 }}
 			>
-				a resident, not a chatbot
+				{HERO_HEADLINE}
 			</h1>
-			<p class="mt-4 max-w-2xl text-base leading-relaxed text-stone-300 sm:text-lg">
-				Your coding agent, persistent between runs and reachable from anywhere.
-			</p>
-			<p class="mt-2 max-w-2xl text-sm leading-relaxed text-ink-quiet">
-				brnrd keeps continuity around the agent CLI you already use: work comes in, context
-				survives, and commits, pull requests, progress, and replies go back to the thread that
-				asked.
+			<p class="mt-5 max-w-2xl text-base leading-relaxed text-stone-300 sm:text-lg">
+				brnrd keeps your coding agent working between messages, then returns a commit, a pull
+				request, or a reply you can actually check.
 			</p>
 
-			<div class="mt-5 flex flex-wrap items-center gap-3">
+			<div class="mt-6 flex flex-wrap items-center gap-3">
+				<a
+					href={resolve('/new?demo')}
+					class="border border-amber-600 bg-amber-500/10 px-4 py-2.5 font-mono text-[12px] font-semibold tracking-wide text-amber-200 uppercase shadow-[0_0_20px_rgba(217,164,65,0.15)] hover:bg-amber-500/20"
+					>▶ explore the demo</a
+				>
 				<a
 					href="#install"
 					class="border border-amber-700 bg-amber-950/40 px-3 py-2 font-mono text-[12px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/70"
@@ -104,17 +139,48 @@
 				<a
 					href={DOCS_URL}
 					rel="external"
-					class="border border-stone-700 px-3 py-2 font-mono text-[12px] tracking-wide text-stone-300 uppercase hover:border-stone-500"
-					>read the docs</a
+					class="font-mono text-[12px] tracking-wide text-ink-quiet uppercase underline decoration-stone-700 underline-offset-4 hover:text-stone-300"
+					>read the docs →</a
 				>
 			</div>
 			<p class="mt-3 font-mono text-[10px] tracking-wide text-ink-mute uppercase">
+				a scripted demo with sample data · sign in to watch your own runs live
+			</p>
+			<p class="mt-2 font-mono text-[10px] tracking-wide text-ink-mute uppercase">
 				open source · local execution · no brnrd account required for the local engine
 			</p>
 		</div>
 
 		<div class="mt-8 max-w-3xl">
 			<HeroExchange />
+		</div>
+	</section>
+
+	<section
+		class="ignite mt-16 sm:mt-20"
+		style="--ignite-delay: 200ms"
+		aria-label="how work moves through brnrd"
+	>
+		<p class="eyebrow">how work moves</p>
+		<div class="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-3">
+			{#each DECK_STEPS as step (step.index)}
+				<div class="panel flex flex-col gap-3 p-4">
+					<div class="flex items-baseline justify-between">
+						<span class="font-mono text-[11px] tracking-[0.2em] text-amber-200/70"
+							>{step.index}</span
+						>
+						<span class="font-mono text-sm font-semibold tracking-wide text-amber-100 uppercase"
+							>{step.verb}</span
+						>
+					</div>
+					<p class="text-xs leading-relaxed text-stone-400">{step.body}</p>
+					<p
+						class="subpanel mt-auto border-l-2 border-l-amber-700/60 px-2.5 py-1.5 font-mono text-[11px] break-words text-stone-300"
+					>
+						{step.readout}
+					</p>
+				</div>
+			{/each}
 		</div>
 	</section>
 
