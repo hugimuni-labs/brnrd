@@ -407,6 +407,42 @@ def test_portals_separates_correspondence_from_finished_strands_and_folds_notice
     assert "armed=True" not in text
 
 
+def test_portals_shows_the_live_context_window_reading_beside_spawn_pool(tmp_path):
+    """brnrd#1810: the context reading lands where the other `resources`
+    facets already render (the same block `spawn` — the pool line — sits
+    in), not only behind the raw-JSON toggle."""
+    run = _make_run_view(
+        tmp_path,
+        portal_state={
+            "resources": {
+                "coexisting_runs": {
+                    "spawn_pool": {"active": 1, "max_concurrent": 4, "available": 3},
+                },
+                "context_window": {
+                    "status": "known",
+                    "summary": "8.3k tok occupied (no window size yet)",
+                },
+            },
+        },
+    )
+    text = _portals(run)
+    assert "spawn      1 active / 4 max · 3 available" in text
+    assert "context    8.3k tok occupied (no window size yet)" in text
+
+
+def test_portals_silent_on_context_window_when_not_known(tmp_path):
+    run = _make_run_view(
+        tmp_path,
+        portal_state={
+            "resources": {
+                "context_window": {"status": "unimplemented", "summary": None},
+            },
+        },
+    )
+    text = _portals(run)
+    assert "context" not in text
+
+
 def test_portals_show_raw_includes_json_dumps(tmp_path):
     """show_raw=True must include both JSON sections."""
     run = _make_run_view(

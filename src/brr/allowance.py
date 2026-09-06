@@ -294,6 +294,70 @@ def claude_first_turn_boot_tokens(path: "Path | str | None") -> "int | None":
     return None
 
 
+def claude_last_turn_context_tokens(path: "Path | str | None") -> "int | None":
+    """The transcript's most recent assistant turn's own context footprint.
+
+    Raw ``input + cache_read + cache_creation`` tokens — unweighted, unlike
+    :func:`claude_transcript_tokens`/:func:`claude_first_turn_boot_tokens`:
+    this is an occupancy reading (design-the-seat-that-never-quits.md
+    §slice 4, brnrd#1810's context-drift park), not a cost estimate, so the
+    provider's cache-discount price ratios (:data:`TOKEN_WEIGHTS`) do not
+    apply — a cached token still occupies a token's worth of window.
+    ``output_tokens`` is excluded deliberately, same reasoning as the boot
+    reading: a reply's own tokens don't occupy the *input* side of the
+    window the next turn pays for.
+
+    Mirrors :func:`brr.claude_status._instantaneous_context_used_percent`'s
+    numerator (the last assistant row's usage — "instantaneous", not the
+    cumulative-per-*resumed*-session total ``modelUsage`` carries, #1178),
+    computed the same file-path-first way :func:`claude_first_turn_boot_tokens`
+    already reads a growing transcript before any final envelope or
+    ``session_id`` exists — the last matching row wins instead of the first.
+
+    ``None`` when *path* is falsy, unreadable, or the transcript carries no
+    assistant ``usage`` row at all — "no reading yet", never a fabricated
+    zero.
+    """
+    if not path:
+        return None
+    last_total: int | None = None
+    try:
+        with Path(path).open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line or '"usage"' not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(row, dict) or row.get("type") != "assistant":
+                    continue
+                message = row.get("message")
+                if not isinstance(message, dict):
+                    continue
+                usage = message.get("usage")
+                if not isinstance(usage, dict):
+                    continue
+                total = 0.0
+                found = False
+                for camel, snake in (
+                    ("inputTokens", "input_tokens"),
+                    ("cacheReadInputTokens", "cache_read_input_tokens"),
+                    ("cacheCreationInputTokens", "cache_creation_input_tokens"),
+                ):
+                    value = _camel_or_snake(usage, camel, snake)
+                    if isinstance(value, bool) or not isinstance(value, (int, float)):
+                        continue
+                    total += float(value)
+                    found = True
+                if found:
+                    last_total = int(round(total))
+    except OSError:
+        return None
+    return last_total
+
+
 def latest_claude_transcript(
     cwd: "str | Path | None", projects_root: "str | Path | None" = None,
 ) -> "Path | None":
