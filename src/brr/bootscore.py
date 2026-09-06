@@ -807,10 +807,21 @@ def format_kernel(score: BootScore) -> str:
     if host.image_stale:
         # Differential, like everything else in the kernel: costs nothing on a
         # healthy wake, and on an unhealthy one it is the first thing read.
+        # The hour matters as much as the flag (2026-09-06): the substrate
+        # lists every verb the *checkout* parses; a daemon captured before a
+        # verb merged drops that verb with "unknown key" and the wake
+        # cannot tell from the flag alone. Naming the capture instant lets
+        # the resident compare it to the merge it is about to rely on.
+        captured = (
+            f" · image captured {host.image_captured_at}"
+            if host.image_captured_at else ""
+        )
         incarnate.append(
             "  stale: ⚠ boot rendered by a daemon image the checkout has "
             "superseded · prompt .md is current, kernel/orientation code is "
-            "NOT · a boot-code change cannot be measured from this wake"
+            "NOT · a boot-code change cannot be measured from this wake · "
+            "a verb merged after the image was captured is not parsed by "
+            f"this daemon{captured}"
         )
     elif host.image_digest is not None:
         # Deliberately UNCONDITIONAL — the one line in this kernel that breaks
