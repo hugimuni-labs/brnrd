@@ -168,6 +168,41 @@ def test_capture_stdout_no_run_id_key_when_caller_names_none(tmp_path):
     assert "run_id" not in claude_status.load_snapshot(tmp_path)
 
 
+# ── write_snapshot preserves an earlier ``boot`` stamp (brnrd#1810,
+# design-the-seat-that-never-quits.md §"The measurement") ────────────────
+
+
+def test_write_snapshot_preserves_an_earlier_boot_stamp(tmp_path):
+    """`daemon._record_boot_cost` writes `boot` early, live off the growing
+    transcript — long before this module's own `capture_stdout_with_model`
+    has a final result envelope. That later, ordinary write must not erase
+    it just because its own `levels` never carries the key."""
+    claude_status.write_snapshot(tmp_path, {"boot": {"weighted": 350, "at": "t0"}})
+
+    claude_status.write_snapshot(tmp_path, {"spend": {"total_cost_usd": 0.01}})
+
+    snap = claude_status.load_snapshot(tmp_path)
+    assert snap["boot"] == {"weighted": 350, "at": "t0"}
+    assert snap["spend"]["total_cost_usd"] == 0.01
+
+
+def test_write_snapshot_a_fresh_boot_key_wins_over_a_stale_one(tmp_path):
+    """The rare case: *levels* itself declares `boot` — its own value stands,
+    never silently replaced by whatever was already on disk."""
+    claude_status.write_snapshot(tmp_path, {"boot": {"weighted": 100, "at": "t0"}})
+
+    claude_status.write_snapshot(tmp_path, {"boot": {"weighted": 999, "at": "t1"}})
+
+    assert claude_status.load_snapshot(tmp_path)["boot"] == {
+        "weighted": 999, "at": "t1",
+    }
+
+
+def test_write_snapshot_no_boot_anywhere_is_unaffected(tmp_path):
+    claude_status.write_snapshot(tmp_path, {"spend": {"total_cost_usd": 0.01}})
+    assert "boot" not in claude_status.load_snapshot(tmp_path)
+
+
 def test_mark_cross_run_attributes_the_carried_reading():
     levels = {
         "run_id": "run-earlier-abcd",

@@ -71,6 +71,12 @@ def test_parse_usage_text_extracts_session_and_week_quota():
     # Computed reset epochs ride alongside the scraped text, additively.
     assert isinstance(levels["session_resets_at"], float)
     assert isinstance(levels["week_resets_at"], float)
+    # ...and are folded into `quota` too (design-the-allowance.md §2, slice
+    # 2), not just left at the top level — `daemon._merge_level_snapshots`
+    # only carries the `quota` key through, so a reader downstream of that
+    # merge (`runner_quota.binding_quota_reset_epoch`) needs them there.
+    assert levels["quota"]["session_resets_at"] == levels["session_resets_at"]
+    assert levels["quota"]["week_resets_at"] == levels["week_resets_at"]
 
 
 def test_reset_epoch_dated_form_uses_named_year():
