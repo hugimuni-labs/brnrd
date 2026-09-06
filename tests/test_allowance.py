@@ -131,7 +131,7 @@ def test_claude_first_turn_boot_tokens_ignores_non_assistant_rows(tmp_path):
         handle.write(json.dumps({
             "type": "assistant",
             "message": {"model": "claude-sonnet-4-6",
-                        "usage": {"input_tokens": 42, "cache_creation_input_tokens": 8}},
+                        "usage": {"input_tokens": 42}},
         }) + "\n")
     assert allowance.claude_first_turn_boot_tokens(path) == 42
 
