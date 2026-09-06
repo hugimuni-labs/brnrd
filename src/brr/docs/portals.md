@@ -174,6 +174,28 @@ under the porcelain = one outbox directive (`await: true` + `timeout:` — a dur
 a directive still carrying v1's conditions ⇒ refused with a notice naming `brnrd await` — never silently, never by ignoring the extra terms · malformed input (no `timeout:`) ⇒ `notices`, same as any other verb
 `await:` never ends the run to service a wait — it holds the slot
 
+### `hold:` — the park that keeps the seat (#1799, and the strands resume of 2026-09-06)
+
+the other half of the wait: `await` keeps the process alive and pays one boundary per Shell-cap cycle; `hold` ends the process, lands the run `held` (a status every boot janitor leaves alone — deliberately outside the unfinished set), and spends nothing until something releases it · the released dispatch is a fresh run on the same conversation, carrying the hold's record and — where the Shell has one — the native session id (`codex exec resume <thread>`; claude resumes cold, the brnrd thread is the continuity)
+
+```
+---
+hold: true
+reason: <free text>            # default resident_requested · waiting_on_strands under resume: strands
+resume: operator | reset | strands
+reset: <iso-timestamp>         # resume: reset only; else the provider's own measured deadline
+---
+one line the correspondent reads
+```
+
+- `resume: operator` — the default: only a correspondent message on the held conversation releases it. routine events (`schedule`, `spawn_*`) accumulate on the hold and un-defer at release. the automatic quota hold (`usage_limit_exceeded`, structured) arms exactly this
+- `resume: reset` — additionally released on the provider's measured reset, read once at arm time; no measurable deadline ⇒ armed as `operator` with an advisory
+- `resume: strands` — additionally released by one of **this run's own** children reporting back (`spawn_submitted` · `spawn_completed` · `spawn_allowance_requested`, matched on `spawn_parent_run_id` / the run's `child_run_ids`); a stranger's strand still accumulates. refused with a notice when the run owns no live strand — a hold nothing can wake is a close wearing a hold's status. the measured reason it exists: 2026-09-06, a seat cut on three live strands because the only park verb slept through their submits
+
+the bolt arms it for you: a `cut:` whose `strands:` rows disposition a *live* child `handoff` lands the run `held` on `resume: strands` instead of `done` (advisory notice names the children) — the declaration stands, the seat stays. `stopped` / `converged` / `abandoned` close as before. a `hold:` you staged yourself the same turn wins unchanged
+
+a hold is invisible to the resident that cannot write it: the verb is parsed by the *running* daemon, the table above is the checkout's — a daemon older than the verb drops the file with `unknown key`. the boot's `stale:` line is the tell
+
 ### `brnrd cut` — the bolt (kb `design-the-bolt.md`)
 
 The closeout guard's machinery is entirely negative: latches that spend,
