@@ -13,8 +13,13 @@ from __future__ import annotations
 
 import pytest
 
-from brr import cut_verb, daemon, hold_verb, protocol, resource_hold
+from pathlib import Path
+
+from brr import cut_verb, daemon, envs, hold_verb, protocol, resource_hold
 from brr.run import Run
+from brr.runner import RunnerResult
+
+from _helpers import make_event, write_repo_scaffold
 
 
 @pytest.fixture(autouse=True)
@@ -382,3 +387,39 @@ class TestResumeAny:
         meta = resource_hold.build(reason=resource_hold.REASON_TURN_ENDED, provider="claude", resume_condition=resource_hold.RESUME_ANY)
         body = daemon._hold_body(meta)
         assert "Parked" in body and "scheduled wake" in body
+
+
+# ── the default, end to end: a clean turn end parks the seat ─────────────
+
+
+def test_a_clean_turn_end_parks_the_seat_by_default(tmp_path, monkeypatch):
+    """Drive the worker the way ``test_daemon_resource_hold`` does for
+    ``hold:`` — no directive at all this time — and watch the seat land
+    ``held`` on ``resume: any`` with nothing in config (#1817's default)."""
+    from test_daemon_resource_hold import _stub_env_isolated, _wire_common
+
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-plain-turn")
+    _stub_env_isolated(monkeypatch, tmp_path)
+    _wire_common(monkeypatch)
+    base_env = envs.get_env("worktree")
+
+    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("done for now.\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="done for now.\n", stderr="", returncode=0,
+            trace_dir=None, artifacts=[],
+        )
+
+    monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+    task = daemon._run_worker_and_finalize(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+
+    assert task.status == resource_hold.RUN_STATUS
+    hold = task.meta["resource_hold"]
+    assert hold["resume_condition"] == resource_hold.RESUME_ANY
+    assert hold["reason"] == resource_hold.REASON_TURN_ENDED
