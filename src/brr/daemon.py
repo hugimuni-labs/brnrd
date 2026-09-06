@@ -6970,7 +6970,7 @@ def _write_live_portal_state(
             "seat": {
                 "parks_on_turn_end": bool(
                     hasattr(task, "meta") and not _is_strand(task.meta)
-                    and _truthy((cfg or {}).get(SEAT_PARK_ON_TURN_END_KEY))
+                    and _seat_park_enabled(cfg)
                 ),
             },
             # design-the-allowance.md's resource hold: published only once
@@ -9704,11 +9704,22 @@ def _cut_mismatches(
     return mismatches
 
 
-#: Config key: when truthy, a user-woken seat whose turn ends cleanly with
-#: nothing armed is **parked** (``held``, ``resume: any``) instead of closed
-#: (design-the-seat-that-never-quits.md §The machinery, slice 1). Off by
-#: default until the maintainer signs the direction; the flag is the switch.
+#: Config key: a user-woken seat whose turn ends cleanly with nothing armed
+#: is **parked** (``held``, ``resume: any``) instead of closed
+#: (design-the-seat-that-never-quits.md §The machinery, slice 1). **On by
+#: default** since the maintainer signed the direction (2026-09-06, evt-…-8ss7:
+#: "why default off?"); ``seat.park_on_turn_end=false`` in ``.brr/config``
+#: restores the close.
 SEAT_PARK_ON_TURN_END_KEY = "seat.park_on_turn_end"
+SEAT_PARK_ON_TURN_END_DEFAULT = True
+
+
+def _seat_park_enabled(cfg: "dict | None") -> bool:
+    """The flag, defaulting on; an explicit falsy value turns it off."""
+    raw = (cfg or {}).get(SEAT_PARK_ON_TURN_END_KEY)
+    if raw is None:
+        return SEAT_PARK_ON_TURN_END_DEFAULT
+    return _truthy(raw)
 
 
 def _park_seat_on_turn_end(task: Run, cfg: "dict | None") -> dict[str, object] | None:
@@ -9724,7 +9735,7 @@ def _park_seat_on_turn_end(task: Run, cfg: "dict | None") -> dict[str, object] |
     """
     if not hasattr(task, "meta") or _is_strand(task.meta):
         return None
-    if not _truthy((cfg or {}).get(SEAT_PARK_ON_TURN_END_KEY)):
+    if not _seat_park_enabled(cfg):
         return None
     native_session_id = task.meta.get("codex_thread_id")
     return {
