@@ -132,6 +132,8 @@
 	import HeddleStrip from '$lib/HeddleStrip.svelte';
 	import LiveMapField from '$lib/LiveMapField.svelte';
 	import MapStage from '$lib/MapStage.svelte';
+	import { shelfEntries } from '$lib/shelfPages';
+	import ShelfPanel from '$lib/ShelfPanel.svelte';
 
 	interface Props {
 		/**
@@ -401,6 +403,11 @@
 	let surfaceError = $state<string | null>(null);
 
 	let surfaceKnownPaths = $derived(new Set((surfaceData?.files ?? []).map((f) => f.path)));
+	// The shelf (`surface/shelf/*.md`): same corpus feed the warp graph and
+	// the library both read below, another reader of the one fetch. `now`
+	// (not a static import-time value) so a page's `keeps:` date crosses into
+	// expired live, without a refetch.
+	let shelfData = $derived(shelfEntries(surfaceData?.files ?? [], now));
 	// The warp as a graph (2026-08-11 round): items under `surface/warp/`,
 	// topics under `surface/topics/`, discovered from the same corpus feed
 	// the corpus browser already reads — no new endpoint, another reader of
@@ -562,6 +569,7 @@
 	// Section headings, bound once each mounts — observed by the same
 	// boundary observer the limb sentinels use (a standard scroll-spy), so
 	// `activeSection` updates at crossings rather than per-frame reads.
+	let shelfHeadingEl = $state<HTMLElement | null>(null);
 	let warpHeadingEl = $state<HTMLElement | null>(null);
 	let clothHeadingEl = $state<HTMLElement | null>(null);
 	let corpusHeadingEl = $state<HTMLElement | null>(null);
@@ -647,9 +655,13 @@
 		const condense = condenseSentinel;
 		const heddleHome = heddleSentinel;
 		const laneHome = machineSentinel;
-		const headings = [warpHeadingEl, clothHeadingEl, corpusHeadingEl, billingHeadingEl].filter(
-			(el): el is HTMLElement => el !== null
-		);
+		const headings = [
+			shelfHeadingEl,
+			warpHeadingEl,
+			clothHeadingEl,
+			corpusHeadingEl,
+			billingHeadingEl
+		].filter((el): el is HTMLElement => el !== null);
 		if (!stack || !release || !condense || !heddleHome || !laneHome) return;
 
 		// Local authority; the reactive `clocks` is assigned only on change
@@ -1933,6 +1945,52 @@
 			>
 				<MapStage />
 			</RunOverlay>
+		{/if}
+
+		<!-- The shelf, given a place on /daily (maintainer, 2026-09-06: "we have
+		     no place for the shelf items on the web UI, no? maybe add one to
+		     /daily"). The pages already ride the authored corpus fetched above
+		     (`surfaceData`) — `surface/shelf/*.md` walks in with everything else
+		     `work_surface_files`/`corpus_files` discover — so this section reads
+		     the same fetch, not a new endpoint. `/daily`-only: `liveView`
+		     already draws that line for the map above; the shelf is a daily
+		     digest of commissioned pages, not a standing nav item every visit
+		     to `/` needs. -->
+		{#if liveView === 'map'}
+			<section
+				class="ignite mt-6 border-l-2 pl-3 transition-colors duration-300 {sectionActive(
+					'shelf-heading'
+				)
+					? 'border-amber-500/40'
+					: 'border-transparent'}"
+				style="--ignite-delay: 320ms"
+				aria-labelledby="shelf-heading"
+			>
+				<div class="flex items-baseline justify-between gap-3">
+					<div>
+						<p class="eyebrow">the shelf</p>
+						<h2
+							bind:this={shelfHeadingEl}
+							id="shelf-heading"
+							class="font-mono text-sm font-semibold text-amber-100"
+						>
+							expires by declaration
+						</h2>
+					</div>
+					<p class="font-mono text-[10px] {surfaceError ? 'text-red-400' : 'text-ink-quiet'}">
+						{surfaceError ?? (surfaceData === null ? 'index loading' : `${shelfData.length} pages`)}
+					</p>
+				</div>
+				<div class="mt-2">
+					{#if surfaceError}
+						<p class="text-sm text-red-400">{surfaceError}</p>
+					{:else if surfaceData === null}
+						<p class="text-sm text-ink-quiet">Loading…</p>
+					{:else}
+						<ShelfPanel entries={shelfData} onOpen={openInLibrary} />
+					{/if}
+				</div>
+			</section>
 		{/if}
 
 		<!-- the warp · intent (#972: the loom is the page). The fall (THE PICK,
