@@ -102,6 +102,24 @@ def test_build_omits_draws_key_when_absent():
     assert "draws" not in res_none["quota"]
 
 
+# ── hold (design-the-seat-that-never-quits.md §"The machinery, in
+# slices" #3) — same attach pattern as ``draws`` above ──────────────────
+
+
+def test_build_attaches_hold_to_quota_facet_when_present():
+    res = facets.build(
+        quota_summary="session 83% left", hold={"ratio": 0.8, "known": True},
+    )
+    assert res["quota"]["hold"] == {"ratio": 0.8, "known": True}
+
+
+def test_build_omits_hold_key_when_absent():
+    res = facets.build(quota_summary="session 83% left")
+    assert "hold" not in res["quota"]
+    res_none = facets.build(quota_summary="session 83% left", hold=None)
+    assert "hold" not in res_none["quota"]
+
+
 # ── coexisting_runs (live presence-registry read) ────────────────────────────
 
 

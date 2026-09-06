@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from brr import daemon, envs, news_lane, presence, promises, protocol, release_availability
+from brr import claude_status, daemon, envs, news_lane, presence, promises, protocol
+from brr import release_availability, resource_hold
 from brr import runner_failures
 from brr import schedule as schedule_mod
 from brr import worktree
@@ -13687,6 +13688,299 @@ def test_drain_outbox_await_arm_snapshot_is_empty_with_nothing_pending(tmp_path)
 
     assert promoted == 1
     assert task.meta["await"]["armed_pending_ids"] == []
+
+
+def test_drain_outbox_await_arm_seeds_the_correspondent_clock(tmp_path):
+    """design-the-seat-that-never-quits.md §machinery slice 3: the hold-cost
+    park's live-window refusal needs a timestamp that survives every re-arm
+    (a fresh ``await:`` directive, fresh generation, on every ``brnrd
+    await`` call). Seeded once, on the first-ever arm, as a proxy for "the
+    resident just replied to whatever woke it"."""
+    before = time.time()
+    promoted, task, _outbox = _drain_await(
+        tmp_path, "---\nawait: true\ntimeout: 20m\n---\n",
+    )
+    assert promoted == 1
+    assert task.meta["hold_correspondent_at"] >= before
+
+    # A second arm (the ordinary re-arm cycle) must not reset it — that
+    # would defeat the whole point: the baseline has to reflect the last
+    # real correspondent contact, not the last CLI call.
+    seeded = task.meta["hold_correspondent_at"]
+    task.meta["hold_correspondent_at"] = seeded - 999
+    daemon._drain_outbox(
+        daemon._WorkerEmit(tmp_path / ".brr", None, task.event_id),
+        task, tmp_path / ".brr" / "responses", task.event_id,
+        _stage_await_file(tmp_path, "---\nawait: true\ntimeout: 20m\n---\n"),
+        tmp_path / ".brr" / "inbox",
+    )
+    assert task.meta["hold_correspondent_at"] == seeded - 999
+
+
+def _stage_await_file(tmp_path, frontmatter):
+    outbox = tmp_path / ".brr" / "outbox" / "evt-current"
+    outbox.mkdir(parents=True, exist_ok=True)
+    (outbox / "await2.md").write_text(frontmatter, encoding="utf-8")
+    return outbox
+
+
+# ── design-the-seat-that-never-quits.md §machinery slice 3: the hold that
+# knows its price — an idling `await:` parks past `seat.park_after_boot_
+# ratio` of this run's own recorded boot cost ────────────────────────────
+
+
+def _armed_state(**over):
+    base = {"armed": True, "resolved": False}
+    base.update(over)
+    return base
+
+
+def _hold_seat(**meta):
+    task = Run(id="run-seat", event_id="evt-1", body="", source="cloud")
+    task.meta.update(meta)
+    return task
+
+
+def _boot_cost_outbox(tmp_path, weighted):
+    outbox = tmp_path / "hold-outbox"
+    claude_status.write_snapshot(
+        outbox, {"boot": {"weighted": weighted, "at": "2026-09-06T00:00:00Z"}},
+    )
+    return outbox
+
+
+def test_hold_boot_ratio_divides_weighted_tokens():
+    assert resource_hold.hold_boot_ratio(1_400_000, 1_000_000) == pytest.approx(1.4)
+
+
+def test_hold_boot_ratio_none_without_hold_so_far():
+    assert resource_hold.hold_boot_ratio(None, 1_000_000) is None
+
+
+def test_hold_boot_ratio_none_without_a_positive_boot_cost():
+    assert resource_hold.hold_boot_ratio(500_000, None) is None
+    assert resource_hold.hold_boot_ratio(500_000, 0) is None
+
+
+class TestHoldRatioFacet:
+    def test_no_await_armed_reports_nothing(self):
+        task = _hold_seat()
+        state, hold = daemon._hold_ratio_facet(
+            task, {"armed": False}, {}, None, None,
+        )
+        assert state == {"armed": False}
+        assert hold is None
+
+    def test_never_for_a_strand(self):
+        task = _hold_seat(strand=True)
+        state, hold = daemon._hold_ratio_facet(
+            task, _armed_state(), {}, None,
+            {"spent": 5_000_000, "scope": "strand"},
+        )
+        assert hold is None
+        assert "hold_idle_baseline_spent" not in task.meta
+
+    def test_already_resolved_this_tick_clears_the_baseline(self):
+        task = _hold_seat(hold_idle_baseline_spent=100)
+        state, hold = daemon._hold_ratio_facet(
+            task, _armed_state(resolved=True, outcome="event"), {}, None, None,
+        )
+        assert state["outcome"] == "event"
+        assert hold == {"ratio": None, "known": False}
+        assert "hold_idle_baseline_spent" not in task.meta
+
+    def test_seeds_the_idle_baseline_on_the_first_idle_tick(self):
+        task = _hold_seat()
+        state, hold = daemon._hold_ratio_facet(
+            task, _armed_state(), {}, None,
+            {"spent": 200_000, "scope": "resident"},
+        )
+        assert task.meta["hold_idle_baseline_spent"] == 200_000
+        assert hold == {"ratio": None, "known": False}
+        assert state["resolved"] is False
+
+    def test_no_spend_reading_yet_reports_unknown(self):
+        task = _hold_seat()
+        state, hold = daemon._hold_ratio_facet(
+            task, _armed_state(), {}, None, {"spent": None, "scope": "resident"},
+        )
+        assert hold == {"ratio": None, "known": False}
+        assert "hold_idle_baseline_spent" not in task.meta
+
+    def test_no_boot_cost_reports_unknown_never_parks(self, tmp_path):
+        task = _hold_seat(hold_idle_baseline_spent=0)
+        state, hold = daemon._hold_ratio_facet(
+            task, _armed_state(), {}, tmp_path / "no-such-outbox",
+            {"spent": 5_000_000, "scope": "resident"},
+        )
+        assert hold == {"ratio": None, "known": False}
+        assert state["resolved"] is False
+
+    def test_below_threshold_reports_the_ratio_without_parking(self, tmp_path):
+        outbox = _boot_cost_outbox(tmp_path, 1_000_000)
+        task = _hold_seat(hold_idle_baseline_spent=0)
+        state, hold = daemon._hold_ratio_facet(
+            task, _armed_state(), {}, outbox,
+            {"spent": 400_000, "scope": "resident"},
+        )
+        assert hold == {"ratio": pytest.approx(0.4), "known": True}
+        assert state["resolved"] is False
+        assert "pending_resource_hold" not in task.meta
+
+    def test_parks_past_the_threshold(self, tmp_path):
+        outbox = _boot_cost_outbox(tmp_path, 1_000_000)
+        task = _hold_seat(hold_idle_baseline_spent=0)
+        task.meta["await"] = {"resolved": False}
+        state, hold = daemon._hold_ratio_facet(
+            task, _armed_state(), {}, outbox,
+            {"spent": 1_400_000, "scope": "resident"},
+        )
+        assert hold == {"ratio": pytest.approx(1.4), "known": True}
+        assert state["resolved"] is True
+        assert state["outcome"] == "park"
+        assert state["ratio"] == pytest.approx(1.4)
+        assert task.meta["await"]["resolved"] is True
+        assert task.meta["await"]["outcome"] == "park"
+        record = task.meta["pending_resource_hold"]
+        assert record["reason"] == resource_hold.REASON_HOLD_COSTLIER_THAN_BOOT
+        assert record["resume_condition"] == resource_hold.RESUME_ANY
+        assert "hold_idle_baseline_spent" not in task.meta
+
+    def test_respects_a_configured_ratio(self, tmp_path):
+        outbox = _boot_cost_outbox(tmp_path, 1_000_000)
+        task = _hold_seat(hold_idle_baseline_spent=0)
+        state, _hold = daemon._hold_ratio_facet(
+            task, _armed_state(),
+            {daemon.SEAT_PARK_AFTER_BOOT_RATIO_KEY: 2.0}, outbox,
+            {"spent": 1_400_000, "scope": "resident"},
+        )
+        assert state["resolved"] is False
+        assert "pending_resource_hold" not in task.meta
+
+    def test_refuses_while_a_correspondent_is_live(self, tmp_path):
+        """"a person at the keyboard is worth every boundary" — the ratio is
+        still reported honestly; only the park itself is refused."""
+        outbox = _boot_cost_outbox(tmp_path, 1_000_000)
+        task = _hold_seat(
+            hold_idle_baseline_spent=0, hold_correspondent_at=time.time() - 60,
+        )
+        state, hold = daemon._hold_ratio_facet(
+            task, _armed_state(), {}, outbox,
+            {"spent": 1_400_000, "scope": "resident"},
+        )
+        assert state["resolved"] is False
+        assert "pending_resource_hold" not in task.meta
+        assert hold["ratio"] == pytest.approx(1.4)
+
+    def test_a_correspondent_outside_the_window_no_longer_refuses(self, tmp_path):
+        outbox = _boot_cost_outbox(tmp_path, 1_000_000)
+        task = _hold_seat(
+            hold_idle_baseline_spent=0,
+            hold_correspondent_at=time.time() - (31 * 60),
+        )
+        state, _hold = daemon._hold_ratio_facet(
+            task, _armed_state(), {}, outbox,
+            {"spent": 1_400_000, "scope": "resident"},
+        )
+        assert state["resolved"] is True
+        assert state["outcome"] == "park"
+
+    def test_respects_a_configured_live_window(self, tmp_path):
+        outbox = _boot_cost_outbox(tmp_path, 1_000_000)
+        task = _hold_seat(
+            hold_idle_baseline_spent=0,
+            hold_correspondent_at=time.time() - (31 * 60),
+        )
+        state, _hold = daemon._hold_ratio_facet(
+            task, _armed_state(),
+            {daemon.SEAT_LIVE_WINDOW_MINUTES_KEY: 60}, outbox,
+            {"spent": 1_400_000, "scope": "resident"},
+        )
+        assert state["resolved"] is False
+
+    def test_refuses_while_the_run_owns_a_live_strand(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(daemon, "_run_controls", {})
+        outbox = _boot_cost_outbox(tmp_path, 1_000_000)
+        task = _hold_seat(hold_idle_baseline_spent=0)
+        daemon._register_run_control("evt-child", task.id)
+        state, _hold = daemon._hold_ratio_facet(
+            task, _armed_state(), {}, outbox,
+            {"spent": 1_400_000, "scope": "resident"},
+        )
+        assert state["resolved"] is False
+        assert "pending_resource_hold" not in task.meta
+
+
+def test_resolve_await_state_refreshes_correspondent_clock_on_a_real_event():
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    task.meta["await"] = _armed(armed_at=time.time() - 100)
+    task.meta["hold_correspondent_at"] = 0.0
+    event = {"id": "evt-2", "source": "telegram", "created": "2026-09-06T12:00:00Z"}
+
+    state = daemon._resolve_await_state(task, [event], outbox_dir=None)
+
+    assert state["outcome"] == "event"
+    assert task.meta["hold_correspondent_at"] > 0.0
+
+
+def test_resolve_await_state_ignores_accumulate_only_sources_for_the_clock():
+    """A `schedule` tick (or another internal-bookkeeping source) still
+    resolves the wait — a tick is a reason to wake — but it is not a
+    correspondent, so it must not refresh the live-window clock the hold
+    park's refusal reads."""
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    task.meta["await"] = _armed(armed_at=time.time() - 100)
+    task.meta["hold_correspondent_at"] = 42.0
+    event = {"id": "evt-2", "source": "schedule", "created": "2026-09-06T12:00:00Z"}
+
+    state = daemon._resolve_await_state(task, [event], outbox_dir=None)
+
+    assert state["outcome"] == "event"
+    assert task.meta["hold_correspondent_at"] == 42.0
+
+
+def test_write_live_portal_state_parks_an_idling_await_past_boot_cost(
+    tmp_path, monkeypatch,
+):
+    """End to end through the real caller chain: heartbeat
+    (`_write_live_portal_state`) -> allowance metering + boot-cost read ->
+    `_hold_ratio_facet` -> await resolution -> portal-state's `await` and
+    `resources.quota.hold`."""
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    task.meta["await"] = _armed(timeout_seconds=None, armed_pending_ids=[])
+    # Long past the default 30-minute live window, so the second heartbeat's
+    # park is not refused by it.
+    task.meta["hold_correspondent_at"] = time.time() - 3600
+
+    claude_status.write_snapshot(
+        outbox_dir, {"boot": {"weighted": 1_000_000, "at": "2026-09-06T00:00:00Z"}},
+    )
+    spent = {"value": 0}
+    monkeypatch.setattr(daemon.allowance, "collect_spent", lambda *a, **k: spent["value"])
+
+    # First heartbeat: the resident allowance window baselines to zero, and
+    # so does the hold's own idle baseline — nothing to park against yet.
+    daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+    assert task.meta.get("hold_idle_baseline_spent") == 0
+    assert task.meta["await"]["resolved"] is False
+
+    # Second heartbeat: 1.4x the boot cost's worth of new spend.
+    spent["value"] = 1_400_000
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["await"]["outcome"] == "park"
+    assert payload["await"]["ratio"] == pytest.approx(1.4)
+    assert payload["resources"]["quota"]["hold"] == {
+        "ratio": pytest.approx(1.4), "known": True,
+    }
 
 
 # ── cut: / the bolt (design-the-bolt.md) ─────────────────────────────
