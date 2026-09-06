@@ -567,20 +567,25 @@ class TestBootScore:
         assert "run-context-bundle" in keys
 
     def test_worker_prompt_skips_inject_blocks(self, empty_repo):
-        """A worker wake omits the inject-stack blocks in its score."""
+        """A worker (strand) wake's light profile keeps a few orienting
+        blocks and drops the seat's own standing state — but every dropped
+        block still names itself in the score, ``present=False``, rather
+        than simply not appearing (so ``wake-manifest.json`` can say why)."""
         from brr.prompts import build_daemon_prompt_with_score
 
         _, score = build_daemon_prompt_with_score(
             "Worker task", "evt-001", "/tmp/r.md", empty_repo,
             strand=True,
         )
-        keys = {c.block_key for c in score.contracts}
+        by_key = {c.block_key: c for c in score.contracts}
         # Worker preamble, not run.md
-        assert "strand-preamble" in keys
-        assert "run-preamble" not in keys
-        # Inject stack absent for workers
-        assert "identity-core" not in keys
-        assert "dominion" not in keys
+        assert "strand-preamble" in by_key
+        assert "run-preamble" not in by_key
+        # The light profile keeps identity...
+        assert by_key["identity-core"].present is True
+        # ...and drops the seat's own standing state, named as absent.
+        assert by_key["dominion"].present is False
+        assert by_key["dominion"].lens == "profile:strand · skipped"
 
     def test_all_contracts_have_required_fields(self, empty_repo):
         """Every ContractEntry has non-empty block_key, label, owner, authority, location."""
