@@ -4184,6 +4184,7 @@ def _resources_facet(
     draws: "dict[str, object] | None" = None,
     hold: "dict[str, object] | None" = None,
     correspondent: "dict[str, object] | None" = None,
+    context_floor: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Operator-facing 'work status' the running resident can read.
 
@@ -4223,6 +4224,7 @@ def _resources_facet(
         draws=draws,
         hold=hold,
         correspondent=correspondent,
+        context_floor=context_floor,
     )
 
 
@@ -7965,6 +7967,39 @@ SEAT_PARK_ON_HOLD_COST_DEFAULT = False
 SEAT_PARK_AFTER_BOOT_RATIO_KEY = "seat.park_after_boot_ratio"
 _SEAT_PARK_AFTER_BOOT_RATIO_DEFAULT = 12.0
 
+#: Config key: the token floor past which an idling ``await:`` parks itself
+#: and re-incarnates from the node (design-the-seat-that-never-quits.md
+#: §"The machinery, in slices" #4). Read against the live, transcript-derived
+#: ``resources.context_window.tokens_used`` reading `_record_context_window`
+#: feeds every heartbeat (#1822) — **tokens, never a percentage**: Claude's
+#: real per-model window size is only known from the *final* result envelope
+#: (`claude_status`), which does not exist yet for a run still in progress,
+#: so a percentage-based floor would have nothing live to divide by for
+#: exactly the runs this floor exists to protect.
+#:
+#: The default, and why: no `spend.json`/final Claude envelope with a
+#: resolved `contextWindow` exists anywhere on this account's own runs or
+#: `~/.claude/projects/` transcripts (checked 2026-09-06 — the field never
+#: appears as real transcript data, only inside pasted source text from past
+#: sessions reading this very module). With nothing measured to derive a
+#: per-model number from, the floor anchors instead on the one concretely
+#: documented, model-agnostic "a long-running conversation gets summarized
+#: around here" number available: the Claude API's own default compaction
+#: trigger threshold, 150,000 tokens (`compact-2026-01-12`'s documented
+#: default — see `claude-api` skill's Compaction quick reference). It is not
+#: a measurement of Claude Code's own internal auto-compaction point — that
+#: is exactly the thing 4b's detector reacts to when it fires, independent
+#: of this floor — but it is a defensible, sourced "where the Shell would
+#: plausibly compact anyway" anchor (Fork 5's own framing) rather than an
+#: invented round number, and it sits comfortably below every current
+#: model's actual window (200k-1M depending on tier), so it parks while
+#: there is still ample headroom for a graceful rebirth rather than racing
+#: an imminent truncation. Meant to be measured and replaced once this
+#: account's own runs accumulate real `spend.json` boot-cost-shaped evidence
+#: for where quality actually degrades.
+SEAT_CONTEXT_FLOOR_TOKENS_KEY = "seat.context_floor_tokens"
+_SEAT_CONTEXT_FLOOR_TOKENS_DEFAULT = 150_000
+
 #: Config key: minutes since a correspondent last reached this seat, below
 #: which the hold-cost park refuses to fire even if the ratio says to — "a
 #: person at the keyboard is worth every boundary". Default 30: long enough
@@ -8320,6 +8355,17 @@ def _seat_park_after_boot_ratio(cfg: "dict | None") -> float:
         return _SEAT_PARK_AFTER_BOOT_RATIO_DEFAULT
 
 
+def _seat_context_floor_tokens(cfg: "dict | None") -> int:
+    try:
+        return int(
+            (cfg or {}).get(
+                SEAT_CONTEXT_FLOOR_TOKENS_KEY, _SEAT_CONTEXT_FLOOR_TOKENS_DEFAULT,
+            )
+        )
+    except (TypeError, ValueError):
+        return _SEAT_CONTEXT_FLOOR_TOKENS_DEFAULT
+
+
 def _seat_live_window_seconds(cfg: "dict | None") -> float:
     try:
         minutes = float(
@@ -8454,6 +8500,133 @@ def _hold_ratio_facet(
     updated["which"] = None
     updated["ratio"] = ratio
     return updated, hold_facet
+
+
+def _context_rebirth_facet(
+    task: Run,
+    await_state: dict[str, object],
+    cfg: "dict | None",
+    outbox_dir: "Path | None",
+    *,
+    runner_name: str | None,
+    work_dir: "Path | None",
+) -> "tuple[dict[str, object], dict[str, object] | None]":
+    """Park an idling await once context has grown past the floor, or the
+    Shell's own transcript recorded a compaction.
+
+    design-the-seat-that-never-quits.md §"The machinery, in slices" #4 (+4b).
+    Called every heartbeat, right after :func:`_record_context_window` has
+    run (``_write_live_portal_state``) — the live token reading this needs is
+    that function's own write. Claude-only, same scoping as
+    :func:`_record_context_window` and :func:`_record_boot_cost`: Codex's
+    collector already carries a real percentage the whole run and has no
+    token-count reading this floor could compare against without guessing a
+    window size, which is exactly what this floor exists to avoid doing.
+
+    Two triggers, either one enough:
+
+    - **the floor** — ``resources.context_window.tokens_used`` (the live,
+      denominator-free occupancy reading #1822 introduced) at or past
+      :func:`_seat_context_floor_tokens`. Silent when only a
+      ``remaining_percentage`` is on file (a final envelope already landed —
+      rare mid-run, and converting a percentage back to a token count would
+      need the very window size this floor was designed to route around
+      needing) — "no reading, no park", never a guess.
+    - **a measured compaction** — :func:`allowance.claude_transcript_compacted`
+      against this run's own live transcript. The Shell's own safety net
+      firing, named rather than left silent.
+
+    Three refusals, all checked only once a trigger has actually fired
+    (cheapest-check-first would save nothing here since both triggers are
+    themselves cheap): never for a strand; never within
+    ``seat.live_window_minutes`` of a correspondent reaching this seat — a
+    rebirth mid-conversation is worse than a big scroll, finish the exchange
+    first; never while this run owns a live strand (``resume: strands``'s
+    own job, never this park's).
+
+    Returns ``(possibly-updated await_state, context_floor_facet | None)``.
+    *context_floor_facet* is ``None`` only when no await is armed at all or
+    this run is a strand; otherwise ``{"floor_tokens": N, "tokens_used": M |
+    None}`` for the chip (:func:`brr.hooks._context_window_chip`).
+    """
+    if not hasattr(task, "meta") or _is_strand(task.meta):
+        return await_state, None
+    if not await_state.get("armed"):
+        return await_state, None
+    floor_tokens = _seat_context_floor_tokens(cfg)
+    if await_state.get("resolved"):
+        # Resolved this tick by something else (event/condition/timeout) —
+        # nothing to park.
+        return await_state, {"floor_tokens": floor_tokens, "tokens_used": None}
+    tokens_used: int | None = None
+    triggered_by: str | None = None
+    if claude_status.supported(runner_name):
+        snapshot = claude_status.load_snapshot(outbox_dir) if outbox_dir else None
+        window = snapshot.get("context_window") if isinstance(snapshot, dict) else None
+        if isinstance(window, dict) and window.get("remaining_percentage") is None:
+            raw = window.get("tokens_used")
+            try:
+                tokens_used = int(raw) if raw is not None else None
+            except (TypeError, ValueError):
+                tokens_used = None
+        if tokens_used is not None and tokens_used >= floor_tokens:
+            triggered_by = resource_hold.REASON_CONTEXT_FLOOR
+        elif allowance.claude_transcript_compacted(
+            allowance.latest_claude_transcript(work_dir)
+        ):
+            triggered_by = resource_hold.REASON_COMPACTED
+    context_floor_facet = {"floor_tokens": floor_tokens, "tokens_used": tokens_used}
+    if triggered_by is None:
+        return await_state, context_floor_facet
+    now = time.time()
+    correspondent_at = task.meta.get("hold_correspondent_at")
+    if correspondent_at is not None:
+        try:
+            if now - float(correspondent_at) < _seat_live_window_seconds(cfg):
+                return await_state, context_floor_facet
+        except (TypeError, ValueError):
+            pass
+    if _owned_child_controls(task.id):
+        # `resume: strands`'s job — a live child's own hold, not this park's.
+        return await_state, context_floor_facet
+    armed = task.meta.get("await")
+    if isinstance(armed, dict):
+        armed["resolved"] = True
+        armed["outcome"] = "rebirth"
+        armed["which"] = triggered_by
+    native_session_id = task.meta.get("codex_thread_id")
+    if triggered_by == resource_hold.REASON_CONTEXT_FLOOR:
+        detail = (
+            f"context grew to {allowance.format_tokens(tokens_used)} tok, past "
+            f"the {allowance.format_tokens(floor_tokens)} tok floor — "
+            "re-incarnating from the node at the next event"
+        )
+    else:
+        detail = (
+            "the Shell compacted the scroll — re-incarnating from the node "
+            "after the summary, not a silent lobotomy"
+        )
+    task.meta["pending_resource_hold"] = {
+        "reason": triggered_by,
+        "provider": _resource_hold_provider_for_runner(
+            task.meta.get("runner_shell") or task.meta.get("runner_name")
+        ),
+        "detail": detail,
+        "native_session_id": native_session_id,
+        "resume_kind": (
+            resource_hold.RESUME_NATIVE if native_session_id
+            else resource_hold.RESUME_UNSUPPORTED
+        ),
+        "resume_condition": resource_hold.RESUME_ANY,
+        "reset_deadline": None,
+    }
+    updated = dict(await_state)
+    updated["resolved"] = True
+    updated["outcome"] = "rebirth"
+    updated["which"] = triggered_by
+    updated["tokens"] = tokens_used
+    updated["floor"] = floor_tokens
+    return updated, context_floor_facet
 
 
 def _resident_hold_refusal(

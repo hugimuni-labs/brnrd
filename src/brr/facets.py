@@ -383,6 +383,7 @@ def build(
     draws: "dict[str, object] | None" = None,
     hold: "dict[str, object] | None" = None,
     correspondent: "dict[str, object] | None" = None,
+    context_floor: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Build the live ``resources`` facet dict from the collected inputs.
 
@@ -480,6 +481,13 @@ def build(
       been measured on it yet" both read ``absent`` with their own note:
       there is no *mode* here to be known independently of a measurement
       (his call, 2026-09-09 — no parsed presence modes anywhere).
+    - ``context_floor`` (design-the-seat-that-never-quits.md §"The
+      machinery, in slices" #4) — ``{"floor_tokens": N, "tokens_used": M |
+      None}``, attached onto the ``context_window`` facet (mirrors ``hold``
+      on ``quota``): the token floor the daemon acts on and the live
+      occupancy reading, visible only while an ``await:`` sits armed — the
+      one moment the daemon might actually act on it. ``None`` (the key
+      omitted) the rest of a run's life.
     """
     levels = levels or {}
     if isinstance(levels_collector, bool):
@@ -515,6 +523,8 @@ def build(
         FACETS_BY_KEY["context_window"], _level_summary("context_window"),
         has_collector="context_window" in wired_slots,
     )
+    if context_floor is not None:
+        context_facet["floor"] = context_floor
 
     spec_co = FACETS_BY_KEY["coexisting_runs"]
     if coexisting is None:

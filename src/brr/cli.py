@@ -5548,6 +5548,17 @@ def cmd_await(args):
             # await projection precisely so this print never has to reach
             # into a second file for it).
             result["ratio"] = state.get("ratio")
+        if outcome == "rebirth":
+            # design-the-seat-that-never-quits.md §machinery slice 4 (+4b):
+            # the daemon resolved this wait with its own outcome — context
+            # grew past `seat.context_floor_tokens`, or the Shell's own
+            # transcript recorded a compaction. `which` names the trigger
+            # (`context_floor` / `compacted`); `tokens`/`floor` ride along
+            # for the floor case only (``daemon._context_rebirth_facet``
+            # stamps them onto the await projection precisely so this print
+            # never has to reach into a second file for them).
+            result["tokens"] = state.get("tokens")
+            result["floor"] = state.get("floor")
         slept = time.monotonic() - lease_started
         result["slept_seconds"] = round(slept, 3)
         # The chip's one-time `slept … · woke: …` segment reads this at the
@@ -5568,6 +5579,21 @@ def cmd_await(args):
                 "end the turn and the seat parks (anything addressed to it "
                 "resumes it)"
             )
+        elif outcome == "rebirth":
+            if result["which"] == "compacted":
+                print(
+                    "[brnrd await] rebirth — the Shell compacted the scroll; "
+                    "end the turn: the seat parks and wakes from its node"
+                )
+            else:
+                from . import allowance as allowance_mod
+
+                tokens_text = allowance_mod.format_tokens(result["tokens"]) + " tok"
+                print(
+                    f"[brnrd await] rebirth — context at {tokens_text}, past "
+                    "the floor; end the turn: the seat parks and wakes from "
+                    "its node"
+                )
         elif outcome == "pending" and returned_on == "ceiling":
             print(
                 "[brnrd await] pending — lease ceiling "
