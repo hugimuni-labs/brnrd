@@ -5,6 +5,7 @@ Kept deliberately small: most tests build their own tmp repos via
 account-scoped store out of the developer's real home.
 """
 
+import os
 import pytest
 
 from brr import gitops
@@ -222,4 +223,47 @@ def _reset_dev_reload_image_fingerprint(monkeypatch):
 
     monkeypatch.setattr(dev_reload, "_IMAGE_FINGERPRINT", dev_reload._IMAGE_FINGERPRINT)
     monkeypatch.setattr(dev_reload, "_IMAGE_CAPTURED_AT", dev_reload._IMAGE_CAPTURED_AT)
+    yield
+
+
+
+@pytest.fixture(autouse=True)
+def _reset_cloud_publishing_state_dir(monkeypatch):
+    """Undo ``cloud.run_loop()``'s process-global ``_publishing_state_dir``.
+
+    ``gates/cloud.py``'s ``run_loop`` sets ``global _publishing_state_dir``
+    for the rest of the *process*; ``cloud_credentials._context()`` then
+    resolves the GitHub credential pointer dir through it. Two
+    ``test_cloud_gate.py`` tests in sequence — one that runs the loop
+    (leaves the global at its tmp ``.brr``), then
+    ``test_managed_publishing_credential_stays_in_memory`` (writes a real
+    ``token``/``hosts.yml`` under whatever the global points at) — make every
+    later no-arg ``runner.clean_runner_environ()`` take the pointer branch,
+    so ``test_runner.py``'s ``…managed_app_token_without_leaking_marker``
+    fails with ``KeyError: 'GH_TOKEN'`` only inside a full run
+    (pytest-randomly shuffles the order; measured 2026-09-06 as the second
+    red on an otherwise green gate). Reproduced with a fixed order:
+    ``pytest tests/test_cloud_gate.py::test_run_loop_starts_dashboard_publish_thread
+    tests/test_cloud_gate.py::test_managed_publishing_credential_stays_in_memory
+    tests/test_runner.py::test_clean_runner_environ_uses_managed_app_token_without_leaking_marker
+    -p no:randomly`` (fails before this fixture; passes after).
+
+    Same mechanism as ``_reset_dev_reload_image_fingerprint`` above: record
+    the pre-test value, restore it at teardown whatever the test wrote. The
+    companion leak — ``cloud_credentials`` writing
+    ``os.environ["BRNRD_MANAGED_GITHUB_TOKEN"]`` directly, which a
+    ``monkeypatch.delenv(raising=False)`` on an absent var never records an
+    undo for — is restored the same way.
+    """
+    from brr.gates import cloud
+
+    monkeypatch.setattr(cloud, "_publishing_state_dir", cloud._publishing_state_dir)
+    if "BRNRD_MANAGED_GITHUB_TOKEN" in os.environ:
+        monkeypatch.setenv("BRNRD_MANAGED_GITHUB_TOKEN", os.environ["BRNRD_MANAGED_GITHUB_TOKEN"])
+    else:
+        monkeypatch.delenv("BRNRD_MANAGED_GITHUB_TOKEN", raising=False)
+        # delenv on an absent var records no undo — snapshot by hand.
+        yield
+        os.environ.pop("BRNRD_MANAGED_GITHUB_TOKEN", None)
+        return
     yield
