@@ -452,11 +452,17 @@ def _wake_block_title(block: dict[str, Any]) -> str:
     return f"[{chip}] {name}  ·  {kept_str}"
 
 
-#: Ceiling on how much of one block's exact text a Collapsible renders.  A
-#: dominion digest or a knowledge slice can run to tens of KB; the console is
-#: an inspector; a block a reader wants in full has `--boot`/`brnrd prompts
-#: wake` and the file path this same row already prints.
-_BLOCK_TEXT_PREVIEW_MAX = 20_000
+#: Ceiling on how much of one block's exact text a Collapsible renders. A
+#: dominion digest or a knowledge slice can run to tens of KB and the
+#: discovered work surface alone renders ~49 KB on a real Tier-2 wake
+#: (measured run-260725-1136-pyck) — comfortably past the old 20,000 B
+#: ceiling, which clipped it mid-block. Raised rather than left as a
+#: guideline nobody enforces: the console is an inspector, and an inspector
+#: that silently truncates the block it exists to show is lying by omission.
+#: A block that still runs past this (rare) has `--boot`/`brnrd prompts
+#: wake` and the file path this same row already prints; the Collapsible
+#: itself may simply scroll.
+_BLOCK_TEXT_PREVIEW_MAX = 200_000
 
 
 def _wake_block_text(
@@ -464,23 +470,38 @@ def _wake_block_text(
     *,
     repo_root: Path | None,
     mounted_blocks: dict[str, str],
+    wake_blocks: dict[str, str] | None = None,
 ) -> str:
     """The exact bytes this block rendered into the wake, or why there are none.
 
-    Three cases, in priority order:
+    Four cases, in priority order:
 
-    1. **Mounted** (`boot.mount` diverted this block's text into
-       `prompt-mounted.json` instead of `prompt.md` — #1753) — that sidecar
-       *is* the exact rendered bytes; nothing to reconstruct.
-    2. **File-backed and present** — re-read straight from the source path
-       the manifest already names, via the same `prompts.mountable_block_text`
-       the offline `brnrd prompts transcript`/`replay` paths use, so this
-       view and those two cannot disagree about what a block_key means. When
-       the block was trimmed at wake time (`trim_kind` set), the file on disk
+    1. **In the wake-blocks sidecar** (`wake-blocks.json`, #1830) — every
+       present block's exact rendered text, mounted or not, captured at the
+       point `prompts._take` handed it to the assembly. This is the answer
+       to "what did this wake actually read here?" for a *home-originated*
+       block (dominion self-inject, work surface, pitfalls, knowledge
+       slices, the plan page) — one with `location == "computed"`, so no
+       file on disk was ever a candidate answer. A run captured before this
+       sidecar existed simply has no file here; case 2 or 4 below still
+       apply.
+    2. **Mounted** (`boot.mount` diverted this block's text into
+       `prompt-mounted.json` instead of `prompt.md` — #1753), when a run
+       predates the wake-blocks sidecar but still has the older, mounted-only
+       one. Case 1 always wins when both exist — the two carry the same
+       value for a mounted block on any wake built after #1830, so this is
+       purely the fallback for an older capture.
+    3. **File-backed and present, with no sidecar entry** — a run captured
+       before #1830. Re-read straight from the source path the manifest
+       already names, via the same `prompts.mountable_block_text` the
+       offline `brnrd prompts transcript`/`replay` paths use, so this view
+       and those two cannot disagree about what a block_key means. When the
+       block was trimmed at wake time (`trim_kind` set), the file on disk
        and the bytes actually kept differ — said plainly rather than passed
-       off as identical.
-    3. **Synthesized / computed** — no source file exists; the manifest's own
-       "computed" label is the honest answer, not silence.
+       off as identical, and named as the fallback it is.
+    4. **Synthesized / computed, with no sidecar entry** — a run captured
+       before #1830 whose block has no source file either; the manifest's
+       own "computed" label is the honest answer available, not silence.
 
     Every branch that reads real file content passes it through
     `hooks.redact_detail` before returning — the one secret-masking pass this
@@ -491,10 +512,14 @@ def _wake_block_text(
     name = str(block.get("name") or "")
     sources = block.get("sources") or []
     synthesized = bool(sources and sources[0].get("synthesized"))
+    wake_blocks = wake_blocks or {}
 
     from ..hooks import redact_detail
 
-    if name in mounted_blocks:
+    if name in wake_blocks:
+        text = redact_detail(wake_blocks[name])
+        note = "as the wake received it — exact bytes (wake-blocks.json, #1830)"
+    elif name in mounted_blocks:
         text = redact_detail(mounted_blocks[name])
         note = "mounted — exact bytes seeded via prompt-mounted.json (#1753)"
     elif not block.get("present"):
@@ -503,7 +528,11 @@ def _wake_block_text(
             "source, empty content, or a config toggle off)."
         )
     elif synthesized:
-        return "computed — no source file; generated fresh each wake, not read from disk."
+        return (
+            "computed — no source file, and this run predates the "
+            "wake-blocks sidecar (#1830) that would otherwise carry its "
+            "exact rendered text."
+        )
     else:
         path_str = str(sources[0].get("path") or "") if sources else ""
         if not path_str or repo_root is None:
@@ -525,10 +554,12 @@ def _wake_block_text(
             return f"(could not read {path_str}: {exc})"
         trim = block.get("trim_kind")
         note = (
-            f"full source file — wake-time trim ({trim}) means the bytes actually "
-            "kept differ from this; see `cut`/`kept` above"
+            f"fallback: full source file, read fresh from disk — this run predates "
+            f"the wake-blocks sidecar (#1830), and a wake-time trim ({trim}) means "
+            "the bytes actually kept differ from this; see `cut`/`kept` above"
             if trim
-            else "full source file, as read from disk just now"
+            else "fallback: full source file, read fresh from disk — this run "
+            "predates the wake-blocks sidecar (#1830)"
         )
 
     raw = text.encode("utf-8")
@@ -543,14 +574,18 @@ def _wake_block_detail(
     *,
     repo_root: Path | None = None,
     mounted_blocks: dict[str, str] | None = None,
+    wake_blocks: dict[str, str] | None = None,
 ) -> str:
     """Expanded content for one manifest block: accounting, then the text itself.
 
-    The accounting half (store/source/kept/cut/budget/trim) always renders —
-    it is what `wake-manifest.json` measured, independent of whether the
-    bytes are still recoverable. The text half is best-effort: mounted blocks
-    are exact, file-backed blocks are a live re-read (labelled when a
-    wake-time trim makes it inexact), synthesized blocks say so.
+    The accounting half (store/source/kept/cut/budget/trim/rendered) always
+    renders — it is what `wake-manifest.json` measured, independent of
+    whether the bytes are still recoverable. The text half is best-effort:
+    a block in the wake-blocks sidecar (#1830) is exact regardless of
+    provenance, an older mounted-only block is exact too, a file-backed
+    block predating the sidecar is a live re-read (labelled when a
+    wake-time trim makes it inexact), and a synthesized block with neither
+    says so.
     """
     sources = block.get("sources") or []
     if sources and sources[0].get("synthesized"):
@@ -565,6 +600,7 @@ def _wake_block_detail(
     budget = block.get("budget_bytes")
     trim = block.get("trim_kind")
     freshness = block.get("freshness")
+    rendered = block.get("rendered_bytes")
     lines = [str(block.get("label") or "")] if block.get("label") else []
     lines += [
         f"owner       {block.get('owner') or '?'}",
@@ -577,8 +613,17 @@ def _wake_block_detail(
         f"cut         {cut:,} B" if isinstance(cut, int) else "cut         —",
         f"budget      {budget:,} B" if isinstance(budget, int) else "budget      —",
         f"trim        {trim or '—'}",
+        # From this run's own wake-blocks.json (#1830) — the exact size of
+        # the text below, when the sidecar has an entry for this block.
+        # `kept` above is a separate, earlier measurement
+        # (`ContractEntry.bytes`); the two should agree, and a reader who
+        # finds them disagreeing has found a real counting bug, not drift.
+        f"rendered    {rendered:,} B" if isinstance(rendered, int) else "rendered    —",
         "",
-        _wake_block_text(block, repo_root=repo_root, mounted_blocks=mounted_blocks or {}),
+        _wake_block_text(
+            block, repo_root=repo_root,
+            mounted_blocks=mounted_blocks or {}, wake_blocks=wake_blocks or {},
+        ),
     ]
     return "\n".join(lines)
 
@@ -1134,6 +1179,7 @@ def build_console_app() -> type:
                                     block,
                                     repo_root=self.repo_root,
                                     mounted_blocks=run.mounted_blocks,
+                                    wake_blocks=run.wake_blocks,
                                 ),
                                 markup=False,
                             ),

@@ -88,8 +88,46 @@ _WAKE_MANIFEST = {
             "trim_kind": None,
             "freshness": None,
         },
+        {
+            # A home-originated block (#1830): `location == "computed"`, no
+            # single source file — assembled and trimmed at wake time from
+            # kb/log.md's tail. Before the wake-blocks sidecar, the console
+            # had nothing to show for this but "computed — no source file",
+            # regardless of how far `kb/log.md` itself had since moved on.
+            "name": "recent-activity",
+            "label": "Recent activity (kb/log.md tail)",
+            "owner": "daemon-live",
+            "authority": "activity",
+            "present": True,
+            "sources": [{"synthesized": True}],
+            "bytes_kept": None,  # filled in below to match the sidecar text
+            "bytes_cut": None,
+            "budget_bytes": None,
+            "trim_kind": "cut",
+            "freshness": None,
+            "rendered_bytes": None,  # filled in below
+        },
     ],
 }
+
+# The full `kb/log.md` this run's `recent-activity` block was trimmed from —
+# never referenced by the manifest (a synthesized block names no source
+# path) and never read by `_wake_block_text`. It exists in this fixture only
+# to make the "differs from its source" scenario concrete: the assertion in
+# `_drive` checks the transcript carries the trimmed entry below, not this
+# older one, proving the tab shows the wake-blocks sidecar's rendered text
+# rather than (impossibly, since there is no source path to re-read) the
+# full log.
+_FULL_LOG_TEXT = (
+    "## [2026-06-01] implement | early scaffolding\n\n"
+    "Long since superseded; dropped by the wake-time trim.\n\n"
+    "## [2026-09-05] fix | the wake kept byte-for-byte\n\n"
+    "Home-originated blocks now carry exact rendered bytes (#1830)."
+)
+_TRIMMED_LOG_TEXT = (
+    "## [2026-09-05] fix | the wake kept byte-for-byte\n\n"
+    "Home-originated blocks now carry exact rendered bytes (#1830)."
+)
 
 
 def _write_fixture(repo: Path) -> None:
@@ -107,6 +145,10 @@ def _write_fixture(repo: Path) -> None:
     manifest["blocks"][1]["sources"][0]["path"] = str(identity_path)
     manifest["blocks"][1]["bytes_kept"] = identity_path.stat().st_size
     manifest["blocks"][2]["sources"][0]["path"] = str(run_dir / "portals-source.md")
+    recent_activity_bytes = len(_TRIMMED_LOG_TEXT.encode("utf-8"))
+    manifest["blocks"][4]["bytes_kept"] = recent_activity_bytes
+    manifest["blocks"][4]["bytes_cut"] = len(_FULL_LOG_TEXT.encode("utf-8")) - recent_activity_bytes
+    manifest["blocks"][4]["rendered_bytes"] = recent_activity_bytes
 
     (run_dir / "portals-source.md").write_text(
         "gate: <name>  respawn: true  spawn: true\n", encoding="utf-8"
@@ -125,6 +167,23 @@ def _write_fixture(repo: Path) -> None:
                 "schema_version": "1",
                 "run_id": "run-repro",
                 "blocks": {"portal-verb-grammar": "gate: <name>  (curated slice, exact bytes)"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    # #1830: every present block's exact rendered text, mounted or not — here
+    # standing in for a real wake's `recent-activity` block, trimmed to its
+    # last entry. Deliberately does *not* also carry `portal-verb-grammar`:
+    # this fixture keeps prompt-mounted.json-only coverage for a run that
+    # predates this sidecar (case 2 in `_wake_block_text`'s docstring), and
+    # wake-blocks.json coverage for a run built with it (case 1) — one fixture,
+    # both branches.
+    (run_dir / "wake-blocks.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "run_id": "run-repro",
+                "blocks": {"recent-activity": _TRIMMED_LOG_TEXT},
             }
         ),
         encoding="utf-8",
@@ -184,7 +243,8 @@ async def _drive(repo: Path, out_dir: Path) -> None:
                 transcript_lines.append(f"=== DETAIL: {block.get('name')} ===")
                 transcript_lines.append(
                     _wake_block_detail(
-                        block, repo_root=app.repo_root, mounted_blocks=run.mounted_blocks
+                        block, repo_root=app.repo_root,
+                        mounted_blocks=run.mounted_blocks, wake_blocks=run.wake_blocks,
                     )
                 )
                 transcript_lines.append("")
@@ -192,15 +252,41 @@ async def _drive(repo: Path, out_dir: Path) -> None:
         out_dir.mkdir(parents=True, exist_ok=True)
         screenshot_path = out_dir / "wake-tab-console.svg"
         app.save_screenshot(str(screenshot_path))
-        (out_dir / "wake-tab-console.txt").write_text(
-            "\n".join(transcript_lines), encoding="utf-8"
-        )
+        transcript = "\n".join(transcript_lines)
+        (out_dir / "wake-tab-console.txt").write_text(transcript, encoding="utf-8")
         print(f"screenshot: {screenshot_path}")
         print(f"transcript: {out_dir / 'wake-tab-console.txt'}")
-        assert "GITHUB_TOKEN=<redacted>" in "\n".join(transcript_lines) or (
-            "ghp_1234567890abcdefEXTRA" not in "\n".join(transcript_lines)
+        assert "GITHUB_TOKEN=<redacted>" in transcript or (
+            "ghp_1234567890abcdefEXTRA" not in transcript
         ), "secret leaked into the inspectable block text"
         print("redaction check: pass — no raw secret in the rendered transcript")
+
+        # #1830: the home-originated `recent-activity` block's rendered text
+        # (trimmed, sidecar-carried) must appear — the whole point of the
+        # sidecar — and the dropped-earlier-entry text from its notional
+        # "source" (never actually re-readable — a synthesized block names
+        # no source path) must not, proving the tab shows the trimmed,
+        # actually-kept bytes rather than something wider.
+        detail_start = transcript.index("=== DETAIL: recent-activity ===")
+        next_detail = transcript.find("=== DETAIL:", detail_start + 1)
+        recent_activity_detail = transcript[
+            detail_start : next_detail if next_detail != -1 else len(transcript)
+        ]
+        assert _TRIMMED_LOG_TEXT in recent_activity_detail, (
+            "wake-blocks.json's exact text for a home-originated block did not "
+            "reach the tab"
+        )
+        assert "Long since superseded" not in recent_activity_detail, (
+            "the tab rendered more than the wake-time trim actually kept"
+        )
+        assert "as the wake received it — exact bytes" in recent_activity_detail, (
+            "the wake-blocks sidecar note did not render"
+        )
+        assert "computed — no source file" not in recent_activity_detail, (
+            "a block with a wake-blocks sidecar entry still fell through to "
+            "the pre-#1830 opaque placeholder"
+        )
+        print("wake-blocks sidecar check: pass — trimmed home-originated text, not the fallback")
 
 
 def main() -> int:
