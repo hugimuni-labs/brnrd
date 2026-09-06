@@ -4186,6 +4186,44 @@ def test_draws_chip_none_without_a_draws_facet():
     assert hooks._draws_chip({}) is None
 
 
+# ── hold (design-the-seat-that-never-quits.md §"The machinery, in
+# slices" #3) ────────────────────────────────────────────────────────────
+
+
+def test_hold_chip_renders_the_ratio():
+    resources = {"quota": {"hold": {"ratio": 0.8, "known": True}}}
+    assert hooks._hold_chip(resources) == "hold 0.8·boot"
+
+
+def test_hold_chip_unknown_ratio_never_guesses():
+    """No boot cost recorded yet (Codex, or a transcript with no usage
+    row) — armed, but nothing to compare against. `?`, never a fabricated
+    number."""
+    resources = {"quota": {"hold": {"ratio": None, "known": False}}}
+    assert hooks._hold_chip(resources) == "hold ?·boot"
+
+
+def test_hold_chip_none_without_a_hold_facet():
+    """No `await:` armed this boundary — the common case — renders nothing
+    at all, not even the `?` form."""
+    assert hooks._hold_chip({"quota": {"status": "known"}}) is None
+    assert hooks._hold_chip({}) is None
+
+
+def test_render_bar_renders_the_hold_chip_beside_quota():
+    resources = {
+        "quota": {
+            "status": "known", "summary": "session 83% left",
+            "hold": {"ratio": 1.4, "known": True},
+        },
+        "allowance": {"status": "unimplemented"},
+    }
+    payload = _portal_payload(resources=resources)
+    line = hooks.format_delta(payload, rendered_chips={})
+    assert line is not None
+    assert "hold 1.4·boot" in line
+
+
 def test_render_bar_renders_the_draws_chip_beside_quota():
     resources = {
         "quota": {

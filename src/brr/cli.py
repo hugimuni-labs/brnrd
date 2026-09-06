@@ -4827,8 +4827,24 @@ def cmd_await(args):
             "which": state.get("which"),
             "deadline": state.get("deadline"),
         }
+        if outcome == "park":
+            # design-the-seat-that-never-quits.md §machinery slice 3:
+            # holding has cost more than a boot — the daemon resolved this
+            # wait with its own outcome rather than the caller's. The ratio
+            # rides `state` (``daemon._hold_ratio_facet`` stamps it onto the
+            # await projection precisely so this print never has to reach
+            # into a second file for it).
+            result["ratio"] = state.get("ratio")
         if args.json:
             print(json.dumps(result))
+        elif outcome == "park":
+            ratio = result["ratio"]
+            ratio_text = f"{ratio:.1f}" if isinstance(ratio, (int, float)) else "?"
+            print(
+                f"[brnrd await] parking — holding has cost {ratio_text}·boot; "
+                "end the turn and the seat parks (anything addressed to it "
+                "resumes it)"
+            )
         else:
             tail = f" ({result['which']})" if result["which"] else ""
             note = " — call again" if outcome == "pending" else ""

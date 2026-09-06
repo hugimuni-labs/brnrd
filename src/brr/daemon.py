@@ -6351,6 +6351,7 @@ def _resources_facet(
     wake_request: "dict[str, object] | None" = None,
     allowance: "dict[str, object] | None" = None,
     draws: "dict[str, object] | None" = None,
+    hold: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Operator-facing 'work status' the running resident can read.
 
@@ -6388,6 +6389,7 @@ def _resources_facet(
         wake_request=wake_request,
         allowance=allowance,
         draws=draws,
+        hold=hold,
     )
 
 
@@ -6606,6 +6608,22 @@ def _resolve_await_state(
         [ev for ev in pending_events if str(ev.get("id") or "") not in armed_pending_ids]
         if armed_pending_ids else pending_events
     )
+    # design-the-seat-that-never-quits.md §machinery slice 3: the hold-cost
+    # park's "a correspondent typed within the last N minutes" refusal needs
+    # a timestamp that survives every re-arm (`brnrd await` stages a fresh
+    # `await:` directive, with a fresh `generation`, on every call — nothing
+    # keyed to *this* record could accumulate across an idle stretch). A
+    # genuinely fresh correspondent-sourced event — never one of the
+    # internal-bookkeeping sources a resource hold already knows to
+    # accumulate rather than react to — moves that clock forward here, the
+    # one place both the pending set and `task.meta` are already in hand.
+    if hasattr(task, "meta"):
+        for ev in fresh_events:
+            if str(ev.get("source") or "") in _HOLD_ACCUMULATE_ONLY_SOURCES:
+                continue
+            seen_at = _event_created_epoch(ev) or now
+            if seen_at > float(task.meta.get("hold_correspondent_at") or 0):
+                task.meta["hold_correspondent_at"] = seen_at
     outcome, which = await_verb.evaluate(armed.get("file"), fresh_events)
     if outcome is None and requested_deadline is not None and now >= requested_deadline:
         outcome = "timeout"
@@ -6951,6 +6969,15 @@ def _write_live_portal_state(
         draws_facet_input = _collect_quota_draws(task, allowance_facet_input)
         _record_boot_cost(task, runner_name, work_dir, outbox_dir)
         _record_context_window(runner_name, work_dir, outbox_dir)
+        # design-the-seat-that-never-quits.md §machinery slice 3: needs both
+        # numbers `_record_boot_cost` and `_collect_allowance_facet` just
+        # computed, so it runs after both — may resolve `await_state` with a
+        # new "park" outcome and stamp `pending_resource_hold` for the
+        # ordinary worker-tail routing (`_finalize_resource_hold`) to pick up
+        # once this turn actually ends.
+        await_state, hold_facet_input = _hold_ratio_facet(
+            task, await_state, cfg, outbox_dir, allowance_facet_input,
+        )
         # The run boundary knows its own Core (the resolved profile's
         # `model`, e.g. "opus"/"fable") — pass it so a thin week_models
         # bucket for a *different* Core doesn't bind this run's pacing (#561).
@@ -7116,6 +7143,7 @@ def _write_live_portal_state(
                 wake_request=task.meta.get("wake_request"),
                 allowance=allowance_facet_input,
                 draws=draws_facet_input,
+                hold=hold_facet_input,
             ),
         }
         if bolt_state is not None:
@@ -9844,6 +9872,163 @@ def _park_seat_on_turn_end(task: Run, cfg: "dict | None") -> dict[str, object] |
     }
 
 
+#: Config key: the ratio of hold-so-far to this run's own recorded boot cost
+#: (both weighted tokens) past which an idling ``await:`` parks itself
+#: (design-the-seat-that-never-quits.md §"The machinery, in slices" #3 — "a
+#: seat idling on `brnrd await` parks itself once holding has cost more than
+#: a boot"). ``1.0`` = holding has cost exactly one boot; the measured
+#: baseline (§"The measurement": ≤0.1 session points per idle boundary) says
+#: this is a rare, late trigger, not a nervous one.
+SEAT_PARK_AFTER_BOOT_RATIO_KEY = "seat.park_after_boot_ratio"
+_SEAT_PARK_AFTER_BOOT_RATIO_DEFAULT = 1.0
+
+#: Config key: minutes since a correspondent last reached this seat, below
+#: which the hold-cost park refuses to fire even if the ratio says to — "a
+#: person at the keyboard is worth every boundary". Default 30: long enough
+#: that a person mid-conversation is not bounced by an idle await armed
+#: moments after their last message, short enough that it never becomes the
+#: reason a genuinely abandoned seat keeps burning.
+SEAT_LIVE_WINDOW_MINUTES_KEY = "seat.live_window_minutes"
+_SEAT_LIVE_WINDOW_MINUTES_DEFAULT = 30.0
+
+
+def _seat_park_after_boot_ratio(cfg: "dict | None") -> float:
+    try:
+        return float(
+            (cfg or {}).get(
+                SEAT_PARK_AFTER_BOOT_RATIO_KEY, _SEAT_PARK_AFTER_BOOT_RATIO_DEFAULT,
+            )
+        )
+    except (TypeError, ValueError):
+        return _SEAT_PARK_AFTER_BOOT_RATIO_DEFAULT
+
+
+def _seat_live_window_seconds(cfg: "dict | None") -> float:
+    try:
+        minutes = float(
+            (cfg or {}).get(
+                SEAT_LIVE_WINDOW_MINUTES_KEY, _SEAT_LIVE_WINDOW_MINUTES_DEFAULT,
+            )
+        )
+    except (TypeError, ValueError):
+        minutes = _SEAT_LIVE_WINDOW_MINUTES_DEFAULT
+    return max(0.0, minutes) * 60.0
+
+
+def _hold_ratio_facet(
+    task: Run,
+    await_state: dict[str, object],
+    cfg: "dict | None",
+    outbox_dir: "Path | None",
+    allowance_facet_input: "dict[str, object] | None",
+) -> "tuple[dict[str, object], dict[str, object] | None]":
+    """Compare an idling await's hold cost to this run's own boot cost.
+
+    design-the-seat-that-never-quits.md §"The machinery, in slices" #3.
+    Called every heartbeat right after :func:`_collect_allowance_facet` and
+    :func:`_record_boot_cost` have run (``_write_live_portal_state``) — both
+    numbers this needs are theirs, never re-metered here:
+
+    - **hold_so_far** — this run's own live-metered weighted spend
+      (*allowance_facet_input*'s ``spent``), measured against a baseline
+      stamped onto ``task.meta["hold_idle_baseline_spent"]`` the first tick
+      an armed await finds nothing pending. That baseline persists across
+      every re-arm (``brnrd await`` stages a brand-new ``await:`` directive,
+      with a fresh ``generation``, on every call — see ``cli.cmd_await`` —
+      so anything keyed to the *await* record itself resets every ~8
+      minutes and could never accumulate a multi-hour idle stretch) and is
+      cleared the moment the wait resolves for any other reason, so the next
+      idle stretch starts its own baseline.
+    - **boot_cost** — ``spend.json``'s ``boot.weighted``
+      (:func:`_record_boot_cost`, brnrd#1816). ``None`` until a Claude
+      transcript's first assistant turn lands (never on Codex yet) — an
+      absent boot cost means no ratio and no park, not a guessed one.
+
+    Three refusals, all checked *after* the ratio clears the threshold —
+    cheapest-check-first would save nothing here and this order is the one
+    the design doc lists: a pending event already means ``await_state`` is
+    ``resolved`` before this function is even called (the caller only
+    invokes it while still armed and unresolved); a live correspondent
+    (``seat.live_window_minutes``); an owned live strand (``resume:
+    strands``'s own job, never this ratio's). Never for a strand run.
+
+    Returns ``(possibly-updated await_state, hold_facet | None)``.
+    *hold_facet* is ``None`` only when no await is armed at all; otherwise
+    ``{"ratio": float | None, "known": bool}`` for the chip
+    (:func:`brr.hooks._hold_chip`), ``ratio`` staying ``None`` (never a
+    guess) until a boot cost has actually landed.
+    """
+    if not hasattr(task, "meta") or _is_strand(task.meta):
+        return await_state, None
+    if not await_state.get("armed"):
+        return await_state, None
+    if await_state.get("resolved"):
+        # Resolved this tick by something else (event/condition/timeout) —
+        # nothing to park, and the next arm starts a fresh idle stretch.
+        task.meta.pop("hold_idle_baseline_spent", None)
+        return await_state, {"ratio": None, "known": False}
+    self_spent = (
+        allowance_facet_input.get("spent")
+        if isinstance(allowance_facet_input, dict) else None
+    )
+    if self_spent is None:
+        return await_state, {"ratio": None, "known": False}
+    baseline = task.meta.get("hold_idle_baseline_spent")
+    if baseline is None:
+        task.meta["hold_idle_baseline_spent"] = int(self_spent)
+        return await_state, {"ratio": None, "known": False}
+    hold_so_far = max(0, int(self_spent) - int(baseline))
+    boot_snapshot = claude_status.load_snapshot(outbox_dir) if outbox_dir else None
+    boot = (boot_snapshot or {}).get("boot") if isinstance(boot_snapshot, dict) else None
+    boot_cost = boot.get("weighted") if isinstance(boot, dict) else None
+    ratio = resource_hold.hold_boot_ratio(hold_so_far, boot_cost)
+    hold_facet = {"ratio": ratio, "known": ratio is not None}
+    if ratio is None or ratio < _seat_park_after_boot_ratio(cfg):
+        return await_state, hold_facet
+    now = time.time()
+    correspondent_at = task.meta.get("hold_correspondent_at")
+    if correspondent_at is not None:
+        try:
+            if now - float(correspondent_at) < _seat_live_window_seconds(cfg):
+                return await_state, hold_facet
+        except (TypeError, ValueError):
+            pass
+    if _owned_child_controls(task.id):
+        # `resume: strands`'s job — nothing spends while a live child works,
+        # and that hold cost is the strand's, not this seat's idle one.
+        return await_state, hold_facet
+    armed = task.meta.get("await")
+    if isinstance(armed, dict):
+        armed["resolved"] = True
+        armed["outcome"] = "park"
+        armed["which"] = None
+    native_session_id = task.meta.get("codex_thread_id")
+    task.meta["pending_resource_hold"] = {
+        "reason": resource_hold.REASON_HOLD_COSTLIER_THAN_BOOT,
+        "provider": _resource_hold_provider_for_runner(
+            task.meta.get("runner_shell") or task.meta.get("runner_name")
+        ),
+        "detail": (
+            f"holding cost {ratio:.1f}x this run's own boot — parking; "
+            "anything addressed to it resumes it"
+        ),
+        "native_session_id": native_session_id,
+        "resume_kind": (
+            resource_hold.RESUME_NATIVE if native_session_id
+            else resource_hold.RESUME_UNSUPPORTED
+        ),
+        "resume_condition": resource_hold.RESUME_ANY,
+        "reset_deadline": None,
+    }
+    task.meta.pop("hold_idle_baseline_spent", None)
+    updated = dict(await_state)
+    updated["resolved"] = True
+    updated["outcome"] = "park"
+    updated["which"] = None
+    updated["ratio"] = ratio
+    return updated, hold_facet
+
+
 def _park_bolt_on_live_strands(
     task: Run,
     declaration: "cut_verb.CutDeclaration",
@@ -10301,6 +10486,16 @@ def _drain_outbox(
                         }
                     ),
                 }
+                # design-the-seat-that-never-quits.md §machinery slice 3: a
+                # proxy for "a correspondent just reached this seat" — the
+                # first-ever arm is, ordinarily, the resident replying to
+                # whatever woke it and immediately going quiet. Seeded once
+                # (``setdefault``, never overwritten by a later bare re-arm)
+                # so the hold-cost park's live-window refusal has a baseline
+                # even before any fresh event ever refines it
+                # (``_resolve_await_state``'s own update, keyed off the
+                # event's real timestamp).
+                task.meta.setdefault("hold_correspondent_at", time.time())
                 promoted += 1
                 if stats is not None:
                     stats["await"] = stats.get("await", 0) + 1
