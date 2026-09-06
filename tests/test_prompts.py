@@ -5845,3 +5845,96 @@ class TestWakeManifest:
                 f"absent block {b.get('name')!r} bytes_kept should be int or null, "
                 f"got {kept!r}"
             )
+
+
+class TestWakeBlocksSidecar:
+    """`_block_text_sink` / `write_wake_blocks` — #1830.
+
+    Before this, a home-originated block (dominion self-inject, work
+    surface, pitfalls, knowledge slices, the plan page — `location ==
+    "computed"`) had no file on disk carrying its exact rendered text,
+    mounted or not. These pin the write side: every present block
+    (including the kernel and the trailer, which never pass through
+    `_take`) lands in the sink, a mounted block's sink entry matches
+    `mount_sink` exactly (not the raw prose it was built from), and
+    `write_wake_manifest`'s `rendered_bytes` agrees with the sidecar.
+    """
+
+    def test_sink_covers_kernel_and_trailer_when_unmounted(self, tmp_path):
+        from brr.prompts import build_daemon_prompt_with_score
+
+        sink: dict[str, str] = {}
+        prompt, score = build_daemon_prompt_with_score(
+            "check the thing", "evt-wb-1", "/tmp/resp.md", tmp_path,
+            run_id="run-wb-1", _block_text_sink=sink,
+        )
+        assert "boot-kernel" in sink and sink["boot-kernel"] in prompt
+        assert "run-context-bundle" in sink and sink["run-context-bundle"] in prompt
+        # Every block the manifest says is present and prose (not mounted —
+        # nothing is, this call passed no `_mount_sink`) must have an exact
+        # entry, keyed the same as the manifest names it.
+        for entry in score.contracts:
+            if entry.present and entry.bytes:
+                assert entry.block_key in sink, (
+                    f"present block {entry.block_key!r} missing from the sink"
+                )
+
+    def test_sink_entry_matches_mount_sink_for_a_mounted_block(self, tmp_path):
+        """A mounted block's sink text is the *mounted* text, never the raw
+        prose `_take` was handed — the two can differ (a curated extract vs.
+        the whole file), and only the mounted value is what this wake
+        actually received."""
+        from brr.prompts import build_daemon_prompt_with_score
+
+        mount_sink: dict[str, str] = {}
+        block_sink: dict[str, str] = {}
+        prompt, score = build_daemon_prompt_with_score(
+            "check the thing", "evt-wb-2", "/tmp/resp.md", tmp_path,
+            run_id="run-wb-2", _mount_sink=mount_sink, _block_text_sink=block_sink,
+        )
+        assert mount_sink, "expected at least one file-backed block to mount on a real checkout"
+        for key, mounted_text in mount_sink.items():
+            assert block_sink.get(key) == mounted_text, (
+                f"{key!r}: block_text_sink drifted from mount_sink"
+            )
+            # A mounted block leaves the prose entirely (`_take` returns
+            # `None` for it) — its text must not also sit in `prompt`.
+            assert mounted_text not in prompt
+
+    def test_write_wake_blocks_and_manifest_rendered_bytes_agree(self, tmp_path):
+        import json as _json
+
+        from brr.prompts import build_daemon_prompt_with_score
+        from brr.run import Run
+        from brr import run_context
+
+        sink: dict[str, str] = {}
+        _, score = build_daemon_prompt_with_score(
+            "check the thing", "evt-wb-3", "/tmp/resp.md", tmp_path,
+            run_id="run-wb-3", _block_text_sink=sink,
+        )
+        run = Run(
+            id="run-wb-3", event_id="evt-wb-3", body="", source="test", status="running",
+        )
+        brr_dir = tmp_path / ".brr"
+        brr_dir.mkdir(exist_ok=True)
+
+        blocks_path = run_context.write_wake_blocks(brr_dir, run, sink)
+        assert blocks_path is not None and blocks_path.exists()
+        blocks_data = _json.loads(blocks_path.read_text(encoding="utf-8"))
+        assert blocks_data["schema_version"] == "1"
+        assert blocks_data["run_id"] == "run-wb-3"
+        assert blocks_data["blocks"] == sink
+        assert "boot-kernel" in blocks_data["blocks"]
+
+        manifest_path = run_context.write_wake_manifest(brr_dir, run, score, wake_blocks=sink)
+        manifest = _json.loads(manifest_path.read_text(encoding="utf-8"))
+        kernel_row = next(b for b in manifest["blocks"] if b["name"] == "boot-kernel")
+        assert kernel_row["rendered_bytes"] == len(sink["boot-kernel"].encode("utf-8"))
+        assert kernel_row["rendered_bytes"] == kernel_row["bytes_kept"]
+
+        # Omitting `wake_blocks` (the pre-#1830 call shape) must still work
+        # and null every row, never raise.
+        legacy_path = run_context.write_wake_manifest(brr_dir, run, score)
+        legacy_manifest = _json.loads(legacy_path.read_text(encoding="utf-8"))
+        assert all(b["rendered_bytes"] is None for b in legacy_manifest["blocks"])
