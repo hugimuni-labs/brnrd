@@ -9409,6 +9409,71 @@ def _cut_mismatches(
     return mismatches
 
 
+def _park_bolt_on_live_strands(
+    task: Run,
+    declaration: "cut_verb.CutDeclaration",
+    *,
+    outbox_dir: Path,
+    source_file: str | None = None,
+) -> list[str]:
+    """Turn a bolt that hands off *live* strands into a hold on them.
+
+    2026-09-06: a seat cut with three children still running, each
+    dispositioned ``handoff`` — legal, accepted, and wrong: the successor
+    that woke on their submits was a stranger, and the maintainer's read
+    was the rule — *there is no reason to stop the run when there are
+    living strands it should be waiting on*. The bolt still stands as the
+    run's declaration; what changes is where the run lands. Any
+    ``handoff`` row naming a child ``_owned_child_controls`` still lists
+    as live arms ``pending_resource_hold`` with
+    ``resume: strands`` — the worker tail then finalises the run as
+    ``held`` (``_finalize_resource_hold``), never ``done``, and the first
+    child to report back resumes the seat. Costs nothing while parked:
+    the process ends exactly as a close would have.
+
+    Returns the child ids the seat parks on (empty ⇒ ordinary close).
+    A ``hold:`` the resident already staged this turn wins unchanged.
+    """
+    if not hasattr(task, "meta") or task.meta.get("pending_resource_hold"):
+        return []
+    live = {
+        str(entry.get("run_id") or entry.get("event_id") or "").strip()
+        for entry in _owned_child_controls(task.id)
+    }
+    live.discard("")
+    parked = [
+        row.run for row in declaration.strands
+        if row.run in live and row.disposition.strip().lower().startswith("handoff")
+    ]
+    if not parked:
+        return []
+    native_session_id = task.meta.get("codex_thread_id")
+    task.meta["pending_resource_hold"] = {
+        "reason": resource_hold.REASON_WAITING_ON_STRANDS,
+        "provider": _resource_hold_provider_for_runner(
+            task.meta.get("runner_shell") or task.meta.get("runner_name")
+        ),
+        "detail": "bolt dispositioned live strands handoff: " + ", ".join(parked),
+        "native_session_id": native_session_id,
+        "resume_kind": (
+            resource_hold.RESUME_NATIVE if native_session_id
+            else resource_hold.RESUME_UNSUPPORTED
+        ),
+        "resume_condition": resource_hold.RESUME_STRANDS,
+        "reset_deadline": None,
+    }
+    _record_outbox_notice(
+        outbox_dir,
+        "cut: " + ", ".join(parked) + (
+            " is live and dispositioned handoff — the seat parks on it "
+            "(held, resume: strands) instead of closing; its next event "
+            "resumes this conversation"
+        ),
+        kind="advisory", lifetime="run", source_file=source_file,
+    )
+    return parked
+
+
 def _cut_bounce_kinds(mismatches: list[str]) -> list[str]:
     """Collapse daemon-authored cut diffs to stable telemetry categories."""
     kinds: list[str] = []
@@ -9843,6 +9908,24 @@ def _drain_outbox(
                 )
                 resume_condition = hold_spec["resume_condition"]
                 reset_deadline = hold_spec["reset_deadline_hint"]
+                if (
+                    resume_condition == resource_hold.RESUME_STRANDS
+                    and not _owned_child_controls(task.id)
+                ):
+                    # A hold on strands that do not exist would be a close
+                    # wearing a hold's status — nothing but the operator
+                    # could ever release it. Refuse, name the two verbs
+                    # that fit.
+                    _record_outbox_notice(
+                        outbox_dir,
+                        "hold dropped: resume: strands but this run owns no "
+                        "live strand — nothing would wake it. Waiting on a "
+                        "person ⇒ `brnrd await` (live) or `resume: operator`; "
+                        "finished ⇒ `cut:`",
+                        kind="dropped", lifetime="run", source_file=fpath.name,
+                    )
+                    _retire_outbox_staging(fpath)
+                    continue
                 if resume_condition == resource_hold.RESUME_RESET and reset_deadline is None:
                     reset_deadline = _codex_reset_deadline(None, native_session_id)
                 if resume_condition == resource_hold.RESUME_RESET and reset_deadline is None:
@@ -9983,6 +10066,11 @@ def _drain_outbox(
                     }
                 if stats is not None:
                     stats["cut"] = stats.get("cut", 0) + 1
+                parked = _park_bolt_on_live_strands(
+                    task, declaration, outbox_dir=outbox_dir, source_file=fpath.name,
+                )
+                if parked and stats is not None:
+                    stats["hold"] = stats.get("hold", 0) + 1
                 emit(
                     "cut_accepted",
                     run_id=task.id,
@@ -15713,8 +15801,14 @@ def _defer_pending_siblings_after_failure(
     run_id: str,
     seconds: float,
     reason: str = "operational_failure",
+    keep_pending: Callable[[dict], bool] | None = None,
 ) -> list[str]:
     """Brake sibling events after a terminal run failure.
+
+    ``keep_pending`` names siblings that must *not* be braked — a
+    ``resume: strands`` hold arming while one of its own children has
+    already reported back leaves that event pending, so the next dispatch
+    tick releases the hold on it instead of parking it for the horizon.
 
     The current lead event receives the explicit failure note. Other
     pending events stay pending and visible to future wakes, but they are
@@ -15753,6 +15847,7 @@ def _defer_pending_siblings_after_failure(
         pending
         for pending in protocol.list_pending(inbox_dir)
         if pending.get("id") != lead_event_id and pending.get("status") == "pending"
+        and not (keep_pending is not None and keep_pending(pending))
     ]
     if not siblings:
         return []
@@ -15927,11 +16022,19 @@ def _hold_body(meta: dict[str, object]) -> str:
     """The correspondent-facing notice a fresh hold writes as its reply."""
     provider = str(meta.get("provider") or "the provider")
     reason = str(meta.get("reason") or "a resource limit").replace("_", " ")
-    lines = [f"Parking this conversation — {provider} hit {reason}."]
+    if meta.get("resume_condition") == resource_hold.RESUME_STRANDS:
+        lines = ["Parking this seat on its strands — nothing spends while they work."]
+    else:
+        lines = [f"Parking this conversation — {provider} hit {reason}."]
     detail = meta.get("detail")
     if detail:
         lines.append(str(detail))
-    if (
+    if meta.get("resume_condition") == resource_hold.RESUME_STRANDS:
+        lines.append(
+            "The first strand to report back resumes this conversation — "
+            "or send a message any time to resume sooner."
+        )
+    elif (
         meta.get("resume_condition") == resource_hold.RESUME_RESET
         and meta.get("reset_deadline") is not None
     ):
@@ -16025,6 +16128,11 @@ def _finalize_resource_hold(
         run_id=task.id,
         seconds=_HOLD_DEFER_SECONDS,
         reason="resource_hold",
+        keep_pending=lambda pending: resource_hold.strand_event_releases(
+            meta, pending,
+            held_run_id=task.id,
+            child_run_ids=task.meta.get("child_run_ids") or (),
+        ),
     )
     if deferred_ids:
         for deferred_id in deferred_ids:
@@ -16115,8 +16223,14 @@ def _undefer_held_event(
         pass
 
 
-def _apply_resource_hold_resume(runs_dir: Path, inbox_dir: Path, held: Run, event: dict) -> None:
+def _apply_resource_hold_resume(
+    runs_dir: Path, inbox_dir: Path, held: Run, event: dict, *, by: str = "operator",
+) -> None:
     """Release *held* and enrich *event* so its fresh dispatch can resume natively.
+
+    ``by`` names the releaser on the record: ``"operator"`` for a
+    correspondent message, ``"strand"`` for one of the held run's own
+    children reporting back (``resource_hold.RESUME_STRANDS``).
 
     Consumes the hold exactly once — a second correspondent message
     arriving before this dispatch actually runs reads ``is_active`` already
@@ -16130,7 +16244,7 @@ def _apply_resource_hold_resume(runs_dir: Path, inbox_dir: Path, held: Run, even
     meta = held.meta.get("resource_hold") or {}
     if not resource_hold.is_active(meta):
         return
-    released = resource_hold.mark_released(meta, by="operator")
+    released = resource_hold.mark_released(meta, by=by)
     held.meta["resource_hold"] = released
     held.save(runs_dir)
     if (
@@ -16231,7 +16345,32 @@ def _handle_resource_held_events(
             continue
         held = held_runs[0]
         for target in targets:
+            hold_meta = held.meta.get("resource_hold") or {}
+            if not resource_hold.is_active(hold_meta):
+                # Released earlier in this same batch (a correspondent
+                # message or a strand event sorted ahead of this one) —
+                # the seat is resuming; deferring its siblings now would
+                # hide them from the very dispatch that resumes.
+                survivors.append(target)
+                continue
             source = str(target.event.get("source") or "")
+            if resource_hold.strand_event_releases(
+                hold_meta, target.event,
+                held_run_id=held.id,
+                child_run_ids=held.meta.get("child_run_ids") or (),
+            ):
+                # One of this run's own strands reporting back is exactly
+                # what a `resume: strands` hold waits for — the child's
+                # event becomes the resuming dispatch's lead.
+                _apply_resource_hold_resume(
+                    runs_dir, target.inbox_dir, held, target.event, by="strand",
+                )
+                print(
+                    f"[brnrd] resource hold released by strand event "
+                    f"{target.event.get('id')} ({source}): {held.id}"
+                )
+                survivors.append(target)
+                continue
             if source in _HOLD_ACCUMULATE_ONLY_SOURCES:
                 try:
                     protocol.update_event_meta(
