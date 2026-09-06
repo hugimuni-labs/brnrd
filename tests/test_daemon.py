@@ -3257,6 +3257,169 @@ def test_cut_mismatches_tolerates_a_small_overrun():
     assert not any("allowance" in m for m in mismatches)
 
 
+# ── brnrd#1810: the parent's own draw-attribution read needs a strand's
+# title + live spend on the shared `_run_controls` record, not just its
+# own `task.meta` (a different thread's `Run` object the parent has no
+# handle to) ──────────────────────────────────────────────────────────────
+
+
+def test_register_run_control_stores_the_dispatcher_declared_title():
+    daemon._register_run_control(
+        "evt-titled", "run-parent", allowance_tokens=100_000, title="the gauge run",
+    )
+    control = daemon._find_run_control("evt-titled")
+    assert control["title"] == "the gauge run"
+    assert control["allowance_spent"] is None
+
+
+def test_owned_child_controls_carries_title_and_weighted_when_present():
+    daemon._register_run_control(
+        "evt-child", "run-parent", allowance_tokens=100_000, title="side task",
+    )
+    daemon._bind_run_control("evt-child", "run-child")
+    control = daemon._find_run_control("evt-child")
+    control["allowance_spent"] = 42_000
+
+    rows = daemon._owned_child_controls("run-parent")
+    assert rows == [{
+        "parent_run_id": "run-parent",
+        "event_id": "evt-child",
+        "run_id": "run-child",
+        "title": "side task",
+        "weighted": 42_000,
+    }]
+
+
+def test_owned_child_controls_omits_title_and_weighted_when_absent():
+    """No dispatcher-declared title, no metered spend yet — the exact fixture
+    an earlier regression test already pins the bare-keys shape against."""
+    daemon._register_run_control("evt-plain", "run-parent")
+    rows = daemon._owned_child_controls("run-parent")
+    assert rows == [{
+        "parent_run_id": "run-parent", "event_id": "evt-plain", "run_id": "",
+    }]
+
+
+def test_collect_allowance_facet_strand_branch_writes_spend_onto_the_control(
+    monkeypatch,
+):
+    """Never a second meter: the same `spent` `_collect_allowance_facet`
+    already computes for `task.meta` also lands on the shared control
+    record — the only place the *parent's* own heartbeat (a different
+    thread) can read a strand's live spend from."""
+    event_id = _strand_control(run_id="run-child", allowance_tokens=120_000)
+    task = Run(
+        id="run-child", event_id=event_id, body="", source="spawn",
+        meta={"strand": True, "spawn_allowance_tokens": 120_000},
+    )
+    monkeypatch.setattr(daemon.allowance, "collect_spent", lambda *a, **k: 38_000)
+
+    facet = daemon._collect_allowance_facet(task, "claude", None)
+
+    assert facet == {"tokens": 120_000, "spent": 38_000, "scope": "strand"}
+    control = daemon._find_run_control(event_id)
+    assert control["allowance_spent"] == 38_000
+
+
+def test_collect_quota_draws_none_with_nothing_to_report():
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    assert daemon._collect_quota_draws(task, None) is None
+    assert daemon._collect_quota_draws(task, {"tokens": 20_000_000, "spent": None}) is None
+
+
+def test_collect_quota_draws_self_and_owned_strands():
+    task = Run(id="run-parent", event_id="evt-1", body="", source="telegram")
+    daemon._register_run_control(
+        "evt-child-a", "run-parent", title="alpha",
+    )
+    daemon._bind_run_control("evt-child-a", "run-child-a")
+    daemon._find_run_control("evt-child-a")["allowance_spent"] = 2_000_000
+    daemon._register_run_control("evt-child-b", "run-parent", title="beta")
+    daemon._bind_run_control("evt-child-b", "run-child-b")
+    daemon._find_run_control("evt-child-b")["allowance_spent"] = 1_400_000
+
+    draws = daemon._collect_quota_draws(
+        task, {"tokens": 20_000_000, "spent": 1_200_000, "scope": "resident"},
+    )
+
+    assert draws["self"] == 1_200_000
+    assert sorted(draws["strands"], key=lambda r: r["run_id"]) == [
+        {"run_id": "run-child-a", "title": "alpha", "weighted": 2_000_000},
+        {"run_id": "run-child-b", "title": "beta", "weighted": 1_400_000},
+    ]
+
+
+def test_collect_quota_draws_strand_with_no_reading_yet_is_still_listed():
+    task = Run(id="run-parent", event_id="evt-1", body="", source="telegram")
+    daemon._register_run_control("evt-child", "run-parent", title="fresh")
+    daemon._bind_run_control("evt-child", "run-child")
+
+    draws = daemon._collect_quota_draws(task, None)
+
+    assert draws == {
+        "self": None,
+        "strands": [{"run_id": "run-child", "title": "fresh", "weighted": None}],
+    }
+
+
+# ── brnrd#1810: boot cost, recorded once per run onto `spend.json` ───────
+
+
+def _write_claude_transcript(path, *usages):
+    with path.open("w", encoding="utf-8") as handle:
+        for usage in usages:
+            handle.write(json.dumps({
+                "type": "assistant",
+                "message": {"model": "claude-sonnet-4-6", "usage": usage},
+            }) + "\n")
+
+
+def test_record_boot_cost_stamps_spend_json_once(tmp_path, monkeypatch):
+    from brr import claude_status
+
+    transcript = tmp_path / "session.jsonl"
+    _write_claude_transcript(
+        transcript,
+        {"input_tokens": 100, "output_tokens": 999, "cache_creation_input_tokens": 200},
+    )
+    monkeypatch.setattr(
+        daemon.allowance, "latest_claude_transcript", lambda *a, **k: transcript,
+    )
+    outbox_dir = tmp_path / "outbox"
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram", meta={})
+
+    daemon._record_boot_cost(task, "claude", tmp_path / "work", outbox_dir)
+
+    assert task.meta["boot_cost_recorded"] is True
+    snap = claude_status.load_snapshot(outbox_dir)
+    assert snap["boot"]["weighted"] == 350
+    assert "at" in snap["boot"]
+
+    # Retried on a later heartbeat would be a no-op: the flag short-circuits
+    # before the transcript is even read again.
+    monkeypatch.setattr(
+        daemon.allowance, "claude_first_turn_boot_tokens",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("re-metered")),
+    )
+    daemon._record_boot_cost(task, "claude", tmp_path / "work", outbox_dir)
+
+
+def test_record_boot_cost_skips_non_claude_runners():
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram", meta={})
+    daemon._record_boot_cost(task, "codex", None, None)
+    assert "boot_cost_recorded" not in task.meta
+
+
+def test_record_boot_cost_leaves_no_trace_before_a_transcript_reading_exists(
+    tmp_path,
+):
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram", meta={})
+    outbox_dir = tmp_path / "outbox"
+    daemon._record_boot_cost(task, "claude", tmp_path / "nope", outbox_dir)
+    assert "boot_cost_recorded" not in task.meta
+    assert not outbox_dir.exists()
+
+
 def test_notify_spawn_parent_declared_contract_beats_sibling_prose(tmp_path):
     """#640a: a spec whose prose responsibly names a *sibling* worker's
     branch ahead of its own (the worktree-discipline "don't collide with
@@ -8952,6 +9115,60 @@ def test_resident_standing_allowance_accrues_then_rolls_with_the_window(
     third = _run()
     assert third["spent"] == 0
     assert task.meta["resident_allowance_window"] == "2000"
+
+
+# ── brnrd#1810: the resident seat's own end-to-end draw-attribution read —
+# `resources.quota.draws`, through the same real caller chain ────────────
+
+
+def test_write_live_portal_state_reports_quota_draws(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-parent", event_id="evt-1", body="", source="telegram")
+
+    daemon._register_run_control(
+        "evt-child", "run-parent", title="side task",
+    )
+    daemon._bind_run_control("evt-child", "run-child")
+    daemon._find_run_control("evt-child")["allowance_spent"] = 3_400_000
+
+    monkeypatch.setattr(
+        daemon, "_collect_levels",
+        lambda *a, **k: (
+            {"quota": {"summary": "session 83% left",
+                       "session_resets_at": 1000.0}},
+            frozenset(),
+        ),
+    )
+    monkeypatch.setattr(daemon.allowance, "collect_spent", lambda *a, **k: 1_200_000)
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    draws = payload["resources"]["quota"]["draws"]
+    assert draws["self"] == 0  # first reading in a fresh window baselines to zero
+    assert draws["strands"] == [
+        {"run_id": "run-child", "title": "side task", "weighted": 3_400_000},
+    ]
+
+
+def test_write_live_portal_state_omits_quota_draws_with_nothing_to_report(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert "draws" not in payload["resources"]["quota"]
 
 
 # ── await: — the hold path (#959, collapsed by #1187) ─────────────────

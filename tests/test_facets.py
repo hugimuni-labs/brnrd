@@ -76,6 +76,32 @@ def test_build_omits_pacing_key_when_quota_pacing_unknown():
     assert "pacing" not in res_none["quota"]
 
 
+# ── draws (brnrd#1810, design-the-seat-that-never-quits.md §"The
+# measurement") — attribution of the quota facet, same attach pattern as
+# ``pacing`` above ──────────────────────────────────────────────────────
+
+
+def test_build_attaches_draws_to_quota_facet_when_present():
+    res = facets.build(
+        quota_summary="session 83% left",
+        draws={
+            "self": 1_200_000,
+            "strands": [{"run_id": "run-a", "title": "t", "weighted": 3_400_000}],
+        },
+    )
+    assert res["quota"]["draws"] == {
+        "self": 1_200_000,
+        "strands": [{"run_id": "run-a", "title": "t", "weighted": 3_400_000}],
+    }
+
+
+def test_build_omits_draws_key_when_absent():
+    res = facets.build(quota_summary="session 83% left")
+    assert "draws" not in res["quota"]
+    res_none = facets.build(quota_summary="session 83% left", draws=None)
+    assert "draws" not in res_none["quota"]
+
+
 # ── coexisting_runs (live presence-registry read) ────────────────────────────
 
 
