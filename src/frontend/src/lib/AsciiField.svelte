@@ -67,6 +67,8 @@
 	interface Props {
 		/** board height in character rows */
 		rows?: number;
+		/** Embed a map with optional telemetry, without removing the detailed view. */
+		compact?: boolean;
 		/** render the field's own header line (the /ascii chrome) */
 		header?: boolean;
 		/** legend visible initially */
@@ -78,6 +80,7 @@
 	}
 	let {
 		rows = 26,
+		compact = false,
 		header = true,
 		legendDefault = true,
 		legendToggle = true,
@@ -145,6 +148,7 @@
 	let frameNote = $state('');
 	// svelte-ignore state_referenced_locally
 	let showLegend = $state(legendDefault);
+	let showTelemetry = $state(false);
 	// The camera is the reader's (his steer, 2026-08-27), refined to
 	// follow-when-idle (his sign-off, 2026-08-28): it follows the lead actor
 	// until the reader's hand moves it — drag, arrows — and the hand always
@@ -406,6 +410,7 @@
 		// rode runs that ended days ago.
 		liveRunIds = new Set(graph.actors.map((a) => a.runId));
 		const bare = renderWorld(topo, layout, graph, cam, {
+			telemetry: !compact || showTelemetry,
 			highlightRoute: lastRoute,
 			pages: pagerFeed(pager, liveRunIds),
 			terminal: terminalRunId ? terminalFeed(terminal, terminalRunId, liveRunIds) : null
@@ -426,6 +431,7 @@
 		const cam: Camera = { center: camCenter, cols, rows, level };
 		lines = renderWorld(scene.topo, scene.layout, scene.graph, cam, {
 			now: lastNow,
+			telemetry: !compact || showTelemetry,
 			highlightRoute: lastRoute,
 			actorPositions: walkPositions(walks),
 			pages: pagerFeed(pager, liveRunIds),
@@ -470,27 +476,42 @@
 		if (moved) paint();
 	}
 
+	function panCamera(dx: number, dy: number) {
+		follow = false;
+		camCenter = { x: camCenter.x + dx, y: camCenter.y + dy };
+		camTarget = camCenter;
+		paint();
+	}
+	function toggleFollow() {
+		follow = !follow;
+		paint();
+	}
+	function toggleScale() {
+		levelForced = true;
+		level = level === 'island' ? 'atlas' : 'island';
+		paint();
+	}
 	function onKey(e: KeyboardEvent) {
-		if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-		const pan = (dx: number, dy: number) => {
-			follow = false;
-			camCenter = { x: camCenter.x + dx, y: camCenter.y + dy };
-			camTarget = camCenter;
-			paint();
-			e.preventDefault();
+		if (
+			e.ctrlKey ||
+			e.metaKey ||
+			e.altKey ||
+			(e.target instanceof HTMLElement &&
+				(e.target.isContentEditable ||
+					e.target.closest('input, textarea, select, button, a, [role="dialog"]')))
+		)
+			return;
+		const directions: Record<string, [number, number]> = {
+			ArrowLeft: [-PAN_STEP, 0],
+			ArrowRight: [PAN_STEP, 0],
+			ArrowUp: [0, -PAN_STEP],
+			ArrowDown: [0, PAN_STEP]
 		};
-		if (e.key === 'ArrowLeft') pan(-PAN_STEP, 0);
-		else if (e.key === 'ArrowRight') pan(PAN_STEP, 0);
-		else if (e.key === 'ArrowUp') pan(0, -PAN_STEP);
-		else if (e.key === 'ArrowDown') pan(0, PAN_STEP);
-		else if (e.key === 'f' && isCameraHotkey(e)) {
-			follow = !follow;
-			paint();
-		} else if (e.key === 'a' && isCameraHotkey(e)) {
-			levelForced = true;
-			level = level === 'island' ? 'atlas' : 'island';
-			paint();
-		}
+		if (Object.hasOwn(directions, e.key)) {
+			panCamera(...directions[e.key]);
+			e.preventDefault();
+		} else if (e.key === 'f' && isCameraHotkey(e)) toggleFollow();
+		else if (e.key === 'a' && isCameraHotkey(e)) toggleScale();
 	}
 
 	// drag = the primary camera verb: px deltas convert through the measured
@@ -624,6 +645,7 @@
 	{#if header}
 		<header>
 			<span class="mark">b·_·d</span>
+			<a class="title" href={resolve('/bridge')}>← bridge</a>
 			<span class="title">the room, in characters</span>
 			<span class="hint">drag / ←↑↓→ move camera · f follow on/off · a atlas</span>
 			<span class="status">
@@ -636,6 +658,24 @@
 	{/if}
 
 	{#if !signedOut}
+		<div class="camera-controls" aria-label="Map camera controls">
+			<span>CAMERA</span>
+			<button aria-label="Move camera north" onclick={() => panCamera(0, -PAN_STEP)}>↑</button>
+			<button aria-label="Move camera west" onclick={() => panCamera(-PAN_STEP, 0)}>←</button>
+			<button aria-label="Move camera south" onclick={() => panCamera(0, PAN_STEP)}>↓</button>
+			<button aria-label="Move camera east" onclick={() => panCamera(PAN_STEP, 0)}>→</button>
+			<button aria-pressed={follow} onclick={toggleFollow}
+				>{follow ? 'Following' : 'Follow crew'}</button
+			>
+			<button onclick={toggleScale}>{level === 'island' ? 'Zoom out' : 'Zoom in'}</button>
+			{#if compact}<button
+					aria-expanded={showTelemetry}
+					onclick={() => {
+						showTelemetry = !showTelemetry;
+						paint();
+					}}>{showTelemetry ? 'Hide telemetry' : 'Show telemetry'}</button
+				>{/if}
+		</div>
 		<pre
 			bind:this={boardEl}
 			class="board"
@@ -660,6 +700,37 @@
 </div>
 
 <style>
+	.camera-controls {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 5px;
+		margin-bottom: 12px;
+		font-size: 10px;
+	}
+	.camera-controls > span {
+		color: #c2ae79;
+		font-size: 9px;
+		letter-spacing: 0.1em;
+		margin-right: 6px;
+	}
+	.camera-controls button {
+		min-width: 32px;
+		min-height: 34px;
+		border: 1px solid #5e4e2c;
+		padding: 5px 9px;
+		cursor: pointer;
+		color: #e0c67e;
+	}
+	.camera-controls button:hover,
+	.camera-controls button[aria-pressed='true'] {
+		background: #b78a272b;
+	}
+	.camera-controls button:focus-visible {
+		outline: 2px solid #efcb76;
+		outline-offset: 2px;
+	}
+
 	/* Amber phosphor pass (2026-08-30): this route was the last green
 	   surface on the dashboard — `/` and everything else already wear the
 	   warm amber/gold register `layout.css` binds (`#f3e8d8` text on

@@ -34,6 +34,8 @@ export interface Camera {
 }
 
 export interface WorldRenderOpts {
+	/** The embedded bridge keeps telemetry behind its own disclosure. */
+	telemetry?: boolean;
 	/** Wall clock for elapsed labels; omit ⇒ no elapsed labels (the
 	 *  clock-free render the flash diff runs on). */
 	now?: number;
@@ -1053,6 +1055,7 @@ export function renderWorld(
 
 	canvas.sea();
 	const out = [...skyBand(graph, opts, cam.cols, now, cam.level), ...canvas.toLines()];
+	if (opts.telemetry === false) return out.join('\n');
 	out.push('');
 
 	// 7 · the pager field — boundary-injection status, in two tenses,
