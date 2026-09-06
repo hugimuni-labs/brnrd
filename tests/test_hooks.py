@@ -6692,3 +6692,38 @@ def test_stop_delta_keeps_the_closeout_wording_when_the_seat_closes():
     rendered = hooks.format_delta(payload, stop=True)
     assert "declare this run's completion" in rendered
     assert "phase commit" not in rendered
+
+
+
+# ── a strand never waits by returning (2026-09-06, three deaths) ───────────
+
+
+def _portal_strand(tmp_path, *, submitted):
+    path = tmp_path / portals.LIVE_PORTAL_STATE_NAME
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["strand"] = {"is_strand": True, "submitted": submitted}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_strand_stop_without_submit_or_bolt_is_blocked_once(tmp_path):
+    env = _armed_vigil(tmp_path)
+    env["BRR_CLOSEOUT_OBLIGATIONS"] = "hold"
+    _portal_strand(tmp_path, submitted=False)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin("still queued — holding."), env)
+    assert out["decision"] == "block"
+    assert "brnrd await --file" in out["reason"]
+
+
+def test_strand_stop_after_submit_passes(tmp_path):
+    env = _armed_vigil(tmp_path)
+    env["BRR_CLOSEOUT_OBLIGATIONS"] = "hold"
+    _portal_strand(tmp_path, submitted=True)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin("submitted; holding for review."), env)
+    assert out.get("decision") != "block", out
+
+
+def test_hold_obligation_is_inert_for_a_seat(tmp_path):
+    env = _armed_vigil(tmp_path)
+    env["BRR_CLOSEOUT_OBLIGATIONS"] = "hold"
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out.get("decision") != "block", out
