@@ -141,6 +141,51 @@ def test_claude_first_turn_boot_tokens_none_when_path_missing(tmp_path):
     assert allowance.claude_first_turn_boot_tokens(None) is None
 
 
+# ── claude: the last turn's own context occupancy (design-the-seat-that-
+# never-quits.md §slice 4, "context rebirth") ─────────────────────────────
+
+
+def test_claude_last_turn_context_tokens_reads_only_the_last_turn(tmp_path):
+    path = tmp_path / "session.jsonl"
+    _write_transcript(
+        path,
+        # A first turn with a much smaller usage must never move the
+        # reading — occupancy is the *last* turn, always, not turn one.
+        {"input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 1,
+         "cache_creation_input_tokens": 1},
+        {"input_tokens": 100, "output_tokens": 999,
+         "cache_read_input_tokens": 8_000, "cache_creation_input_tokens": 200},
+    )
+    # output is excluded even on the last turn — only input + cache_read +
+    # cache_creation, unweighted (occupancy, not cost): 100 + 8000 + 200.
+    assert allowance.claude_last_turn_context_tokens(path) == 8_300
+
+
+def test_claude_last_turn_context_tokens_excludes_output_only(tmp_path):
+    path = tmp_path / "session.jsonl"
+    _write_transcript(path, {"output_tokens": 500})
+    assert allowance.claude_last_turn_context_tokens(path) is None
+
+
+def test_claude_last_turn_context_tokens_ignores_non_assistant_rows(tmp_path):
+    path = tmp_path / "session.jsonl"
+    with path.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps({
+            "type": "assistant",
+            "message": {"model": "claude-sonnet-4-6",
+                        "usage": {"input_tokens": 42}},
+        }) + "\n")
+        handle.write(json.dumps({"type": "user", "message": {"content": "hi"}}) + "\n")
+    # The trailing user row carries no usage — the last *assistant* row
+    # still wins, not a bare "last line in the file" reading.
+    assert allowance.claude_last_turn_context_tokens(path) == 42
+
+
+def test_claude_last_turn_context_tokens_none_when_path_missing(tmp_path):
+    assert allowance.claude_last_turn_context_tokens(tmp_path / "nope.jsonl") is None
+    assert allowance.claude_last_turn_context_tokens(None) is None
+
+
 def test_latest_claude_transcript_finds_the_newest_under_the_cwd_slug(tmp_path):
     root = tmp_path / "projects"
     cwd = "/Users/x/worktrees/run-1"

@@ -663,17 +663,20 @@ def test_unwritten_run_name_no_longer_nags_without_a_ledger(tmp_path):
 
 def test_post_tool_surfaces_stale_card(tmp_path):
     # 2026-07-05: the card is the one live surface a watching user sees
-    # between replies; unlike SCM, a stale note is a mid-run failure, so it
-    # must render at post-tool, not just at closeout.
+    # between replies; unlike SCM, a card behind the run is a mid-run
+    # failure, so it must render at post-tool, not just at closeout.
+    # 2026-09-06: reshaped to one state line naming what moved — no more
+    # "no change in Ns — rewrite .card" instruction.
     _portal(
         tmp_path, token="t1", pending=0,
+        produce={"known": True, "counts": {"pr": 1}},
         card={"active": True, "text": "old note", "age_seconds": 400,
-              "stale": True},
+              "state_moved_seconds": 100, "stale": True},
     )
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "no change in 400s" in ctx
-    assert "rewrite .card" in ctx
+    assert "card: Now is 1 act behind (1 PR)" in ctx
+    assert "rewrite .card" not in ctx
 
 
 def test_post_tool_says_nothing_about_a_fresh_card(tmp_path):
@@ -4217,6 +4220,49 @@ def test_quota_chip_disambiguates_a_repeated_first_letter():
     assert letters[0] != letters[1]
 
 
+# ── context_window: live before the final envelope, per-Shell (brnrd#1810,
+# design-the-seat-that-never-quits.md §slice 4) ──────────────────────────
+
+
+def test_context_window_chip_renders_a_percentage_once_known():
+    resources = {
+        "context_window": {
+            "status": "known", "summary": "62% context left (est)",
+        },
+    }
+    assert hooks._context_window_chip(resources) == "ctx 62%"
+
+
+def test_context_window_chip_renders_bare_tokens_before_a_window_size_exists():
+    resources = {
+        "context_window": {
+            "status": "known",
+            "summary": "8.3k tok occupied (no window size yet)",
+        },
+    }
+    assert hooks._context_window_chip(resources) == "ctx 8.3k tok"
+
+
+def test_context_window_chip_silent_when_not_known():
+    assert hooks._context_window_chip({}) is None
+    assert hooks._context_window_chip(
+        {"context_window": {"status": "unimplemented", "summary": None}}
+    ) is None
+
+
+def test_post_tool_bar_carries_the_context_window_chip():
+    resources = {
+        "context_window": {
+            "status": "known",
+            "summary": "8.3k tok occupied (no window size yet)",
+        },
+    }
+    payload = _portal_payload(resources=resources)
+    line = hooks.format_delta(payload, rendered_chips={})
+    assert line is not None
+    assert "ctx 8.3k tok" in line
+
+
 # ── Mood asks on the edge, not on the tick (2026-07-23) ──────────────────
 
 
@@ -6055,16 +6101,61 @@ def test_name_nudge_detail_is_retired():
         assert rendered is None or ".name" not in rendered
 
 
-def test_card_stale_detail_compresses_on_the_third_consecutive_boundary():
+def test_card_nudge_names_acts_and_a_bare_streak_number():
+    """Reshaped 2026-09-06 (his call: "the current shape of the nudge is
+    wrong"): no more streak-compressed alternate wording at N>=3 — one line,
+    always, naming what moved past the card's last write; ``seen ×N`` is a
+    bare number riding the same line, not a threshold-gated compression."""
     payload = _bar_payload(
         card={"active": True, "stale": True, "age_seconds": 900,
               "state_moved_seconds": 500},
     )
-    full = hooks.format_delta(payload, repeat_streaks={"card_stale": 2})
-    compact = hooks.format_delta(payload, repeat_streaks={"card_stale": 3})
-    assert "hasn't been rewritten" in full
-    assert "hasn't been rewritten" not in compact
-    assert "- card stale (900s) · seen ×3 — rewrite .card" in compact
+    early = hooks.format_delta(payload, repeat_streaks={"card_stale": 1})
+    later = hooks.format_delta(payload, repeat_streaks={"card_stale": 3})
+    unseen = hooks.format_delta(payload, repeat_streaks={"card_stale": 0})
+    receipt = "- card: Now is 9 acts behind (3 commits, 1 kb page, 5 replies)"
+    assert f"{receipt} · seen ×1" in early
+    assert f"{receipt} · seen ×3" in later
+    assert receipt in unseen
+    assert "seen ×" not in unseen
+
+
+def test_card_nudge_silent_while_a_wait_is_armed():
+    """Silence #1: an armed, unresolved ``brnrd await`` is idle by
+    definition — nothing to report — so the nudge does not restate itself
+    on every poll of the same wait, however behind the card is."""
+    payload = _bar_payload(
+        card={"active": True, "stale": True, "age_seconds": 900,
+              "state_moved_seconds": 500},
+        **{"await": {"armed": True, "resolved": False}},
+    )
+    rendered = hooks.format_delta(payload, repeat_streaks={"card_stale": 3})
+    assert rendered is None or "card:" not in rendered
+
+    # A *resolved* wait (the daemon has something for this run) is not idle
+    # — the nudge speaks again.
+    payload["await"] = {"armed": True, "resolved": True, "outcome": "event"}
+    rendered = hooks.format_delta(payload, repeat_streaks={"card_stale": 3})
+    assert "card: Now is 9 acts behind" in rendered
+
+
+def test_card_nudge_silent_when_nothing_moved_since_the_last_write():
+    """Silence #2: no produce/pending/delivery counter moved since the
+    card's last write ⇒ silence — no "no change, rewrite anyway" nag."""
+    payload = _bar_payload(
+        outbound={"replies_current": 0, "replies_other": 0, "outbound_messages": 0},
+        produce={"known": True, "counts": {}},
+        card={"active": True, "stale": False, "age_seconds": 900},
+    )
+    rendered = hooks.format_delta(payload, repeat_streaks={"card_stale": 3})
+    assert rendered is None or "card:" not in rendered
+
+    # A card the run has never written at all is the same silence — nothing
+    # to be "behind" relative to, and the compact `card blank` bar chip
+    # already carries that fact.
+    payload["card"] = {"active": False}
+    rendered = hooks.format_delta(payload, repeat_streaks={"card_stale": 3})
+    assert rendered is None or "card: Now is" not in rendered
 
 
 def test_repeat_streak_resets_when_the_obligation_clears():

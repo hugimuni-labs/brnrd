@@ -1289,6 +1289,18 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         klass=VITAL,
     ),
     _BarSegment(
+        "context_window", "ctx",
+        "the `context_window` facet: `ctx 62%` once a real window-size "
+        "denominator is known, `ctx 148k tok` before then — Claude only "
+        "learns the real `contextWindow` size from its *final* result "
+        "envelope, so a live run reads a growing occupancy token count off "
+        "the session transcript in the meantime (design-the-seat-that-"
+        "never-quits.md §slice 4 reads this). Codex's own collector is "
+        "live with a percentage the whole run. Renders only when `known`.",
+        # a meter.
+        klass=VITAL,
+    ),
+    _BarSegment(
         "draws", "me/▷",
         "attribution of the `q` chip just above (brnrd#1810): this run's "
         "own weighted spend against the shared quota gauge, plus every "
@@ -1586,6 +1598,47 @@ def _quota_chip(resources: dict[str, Any]) -> str | None:
     return "q " + "·".join(chips) if chips else None
 
 
+#: Matches ``claude_status.parse_result``'s existing summary shape
+#: (``"62% context left (est)"``) and ``codex_status``'s
+#: (``"N% context left"``, no ``(est)``) — the ``(?:...)?`` tail is
+#: optional so one pattern covers both Shells.
+_CONTEXT_PCT_RE = re.compile(r"^(?P<value>\d+(?:\.\d+)?)%\s+context left(?:\s+\(est\))?")
+#: Matches the live-tail summary :func:`brr.daemon._record_context_window`
+#: writes before a real window size is known — token count, no percentage.
+_CONTEXT_TOKENS_RE = re.compile(r"^(?P<value>[\d.]+[kKmM]?)\s+tok\b")
+
+
+def _context_window_chip(resources: dict[str, Any]) -> str | None:
+    """``ctx 62%`` once a real window-size denominator is known, or
+    ``ctx 148k tok`` from a live transcript-tail reading before then.
+
+    Claude only learns its real ``contextWindow`` size from the *final*
+    result envelope (:mod:`brr.claude_status`); until then
+    :func:`brr.daemon._record_context_window` feeds this facet a bare
+    occupancy token count off the growing session transcript, the same
+    "read live rather than wait for the process to exit" move
+    :func:`brr.daemon._record_boot_cost` already makes for boot cost.
+    Codex's own collector (:mod:`brr.codex_status`) is live with a real
+    percentage the whole run, so this chip only ever hits the token-only
+    branch on a Claude Shell. Parses the facet's own ``summary`` prose
+    (same convention as :func:`_quota_chip`) rather than a raw field,
+    because :func:`brr.facets._level_record` keeps only ``summary`` —
+    every other field a collector computed is intentionally dropped there.
+    """
+    facet = resources.get("context_window") if isinstance(resources, dict) else None
+    facet = facet if isinstance(facet, dict) else {}
+    if facet.get("status") != "known":
+        return None
+    summary = str(facet.get("summary") or "").strip()
+    match = _CONTEXT_PCT_RE.match(summary)
+    if match:
+        return f"ctx {match.group('value')}%"
+    match = _CONTEXT_TOKENS_RE.match(summary)
+    if match:
+        return f"ctx {match.group('value')} tok"
+    return None
+
+
 def _allowance_chip(resources: dict[str, Any]) -> str | None:
     """The own-allowance ``spend 38k/120k`` chip — a strand's ``spawn:``
     ceiling, or the resident seat's own standing allowance (design-the-
@@ -1773,6 +1826,76 @@ def _card_chip(card: dict[str, Any], card_stale: bool) -> str | None:
     # Healthy (or an older capsule shape with no body to measure — absence
     # of evidence of trouble is the quiet state, not a verdict to invent).
     return None
+
+
+def _card_is_behind(card: dict[str, Any]) -> bool:
+    """Has the run's observable state moved since ``.card`` was last written?
+
+    Same reading :func:`_card_chip`'s ``card behind`` segment uses — no
+    elapsed-time grace, because a movement that happened but hasn't aged
+    240s yet is still a movement the card doesn't reflect. ``False`` for a
+    card that was never written at all (``moved`` has no baseline to be
+    "since") or for a run with nothing to report yet.
+    """
+    if not card.get("active"):
+        return False
+    moved = card.get("state_moved_seconds")
+    age = card.get("age_seconds")
+    if (
+        not isinstance(moved, (int, float)) or isinstance(moved, bool)
+        or not isinstance(age, (int, float)) or isinstance(age, bool)
+    ):
+        return False
+    return moved < age
+
+
+# Kind → singular label, in the order the receipt names them (PRs/merges
+# lead — the artifacts a reader most wants to know exist — commits and
+# branches next, the rest after). Mirrors ``_LIVE_KINDS`` (relics.py) minus
+# ``summary``/``pending``, which are not relic kinds.
+_CARD_ACT_ORDER = (
+    "pr", "merge", "commit", "branch", "kb", "issue", "comment", "message",
+    "file", "item",
+)
+_CARD_ACT_LABELS: dict[str, str] = {"kb": "kb page", "pr": "PR"}
+_CARD_ACT_PLURALS: dict[str, str] = {"branch": "branches"}
+
+
+def _card_acts_behind(
+    produce: dict[str, Any], outbound: dict[str, Any], pending: int,
+) -> tuple[int, str]:
+    """What moved past the card's last write — a total, and a short receipt.
+
+    Same universe :func:`_card_is_behind` already tests (produce, delivery,
+    pending events); this names it instead of a bare "Ns ago" timestamp, so
+    the nudge says what the card is missing rather than only when it went
+    stale. Every count here is the run's current total (the codebase tracks
+    no "since the card's last write" baseline for produce/delivery — see
+    :func:`_produce_total` / :func:`_delivery_chip`, the same convention),
+    consistent with how the rest of the bar already reports these facts.
+    """
+    parts: list[str] = []
+    total = 0
+    counts = produce.get("counts") if isinstance(produce.get("counts"), dict) else {}
+    for kind in _CARD_ACT_ORDER:
+        n = counts.get(kind)
+        if not isinstance(n, (int, float)) or isinstance(n, bool) or not n:
+            continue
+        n = int(n)
+        total += n
+        label = _CARD_ACT_LABELS.get(kind, kind)
+        plural = _CARD_ACT_PLURALS.get(kind, label + "s")
+        parts.append(f"1 {label}" if n == 1 else f"{n} {plural}")
+    replies = int(outbound.get("replies_current", 0) or 0) + int(
+        outbound.get("replies_other", 0) or 0
+    )
+    if replies:
+        total += replies
+        parts.append("1 reply" if replies == 1 else f"{replies} replies")
+    if pending > 0:
+        total += pending
+        parts.append("1 pending" if pending == 1 else f"{pending} pending")
+    return total, ", ".join(parts)
 
 
 # #1002: a notice carries a ``kind`` since daemon.py:5765 — ``refused`` |
@@ -2657,6 +2780,7 @@ def _render_bar(
     route_drift: bool = False,
     route_stall: bool = False,
     mood_drift: bool = False,
+    wait_idle: bool = False,
 ) -> str | None:
     """The mid-run (``post-tool``) status bar: preamble + changed chips + details.
 
@@ -2727,6 +2851,9 @@ def _render_bar(
         quota_chip = _quota_chip(resources)
         if quota_chip:
             segments.append(("quota", quota_chip))
+    context_chip = _context_window_chip(resources)
+    if context_chip:
+        segments.append(("context_window", context_chip))
     # Attribution of the chip just above (brnrd#1810): who is drawing on
     # that shared gauge this boundary — this run's own weighted spend plus
     # every owned strand's, summed. Independent of whether the quota chip
@@ -2929,27 +3056,33 @@ def _render_bar(
         details.append(allowance_line)
 
     streaks = repeat_streaks_in
-    if card_stale:
-        age = card.get("age_seconds")
-        age_txt = f"{age}s" if age is not None else "a while"
-        moved = card.get("state_moved_seconds")
-        if streaks.get("card_stale", 0) >= _REPEAT_COMPRESS_THRESHOLD:
-            details.append(
-                f"- card stale ({age_txt}) · seen ×{streaks['card_stale']} "
-                "— rewrite .card"
-            )
-        elif card.get("active") and moved is not None:
-            details.append(
-                f"- card: the run moved {moved}s ago (produce, branch, "
-                "delivery, or pending events) and .card hasn't been rewritten "
-                f"since — it's {age_txt} old and now describes a different run."
-            )
-        else:
-            details.append(
-                f"- card: no change in {age_txt} — rewrite .card (even one "
-                "line) so the surface the user is watching isn't sitting blank "
-                "or stale."
-            )
+    # The card nudge, reshaped (his call, 2026-09-06: "the card is an
+    # indicator; almost useless in chat, still a gauge on the web UI — the
+    # current shape of the nudge is wrong"). Two silences, one line:
+    #
+    # - a live wait *is* idle with nothing to report — nagging every poll of
+    #   an armed ``brnrd await`` was the exact repeating-paragraph failure
+    #   this replaces, so an unresolved arming vetoes the whole block
+    #   regardless of staleness.
+    # - nothing the card would report has moved since it was last written
+    #   (:func:`_card_is_behind` — no elapsed-time grace: card_stale's old
+    #   240s clock is gone from this line, since a movement that just
+    #   happened is still a movement to report, not a countdown to wait
+    #   out) ⇒ silence. The compact ``card stale``/``card blank``/``card
+    #   behind`` bar chip still carries the fact on its own gate; this
+    #   paragraph is not the only surface for it.
+    #
+    # When it does speak: one line of state, no instruction — what moved,
+    # not "rewrite .card". The old three-way split (streak-compressed /
+    # named-movement / "no change, rewrite anyway") collapses to this one
+    # shape; ``seen ×N`` survives only as the bare number.
+    if not wait_idle and _card_is_behind(card):
+        acts, breakdown = _card_acts_behind(produce, outbound, pending)
+        streak = streaks.get("card_stale", 0)
+        seen = f" · seen ×{streak}" if streak else ""
+        noun = "act" if acts == 1 else "acts"
+        what = f" ({breakdown})" if breakdown else ""
+        details.append(f"- card: Now is {acts} {noun} behind{what}{seen}")
 
     # ── The due-filter (w-54): change-gating replaces the laden gate. ──
     #
@@ -3222,6 +3355,16 @@ def format_delta(
     if not seed and not stop:
         card_stale = bool(card.get("stale"))
         run_name = payload.get("name") if isinstance(payload.get("name"), dict) else {}
+        # A wait that's armed and not yet resolved is idle by definition —
+        # nothing to report, so the card nudge (however behind the card is)
+        # stays quiet rather than restating itself on every poll of the
+        # same `brnrd await`.
+        portal_await = (
+            payload.get("await") if isinstance(payload.get("await"), dict) else {}
+        )
+        wait_idle = bool(portal_await.get("armed")) and not portal_await.get(
+            "resolved"
+        )
         return _render_bar(
             run=run, pending=action_pending, pending_known=pending_known,
             pending_files=pending_files,
@@ -3241,6 +3384,7 @@ def format_delta(
             pending_set_changed=pending_set_changed,
             last_chips=last_chips, rendered_chips=rendered_chips,
             route_drift=route_drift, route_stall=route_stall, mood_drift=mood_drift,
+            wait_idle=wait_idle,
         )
 
     lines: list[str] = []
