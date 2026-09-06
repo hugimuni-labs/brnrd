@@ -134,6 +134,8 @@
 	import MapStage from '$lib/MapStage.svelte';
 	import { shelfEntries } from '$lib/shelfPages';
 	import ShelfPanel from '$lib/ShelfPanel.svelte';
+	import CommandDeck from '$lib/CommandDeck.svelte';
+	import type { DeckSection } from '$lib/commandDeck';
 
 	interface Props {
 		/**
@@ -149,9 +151,11 @@
 		 *   about the live-runs *view*, not about every press on the page.
 		 */
 		liveView?: 'field' | 'map';
+		commandDeck?: boolean;
 	}
 
-	let { liveView = 'field' }: Props = $props();
+	let { liveView = 'field', commandDeck = false }: Props = $props();
+	let deckSection = $state<DeckSection>('overview');
 
 	// Slice 2 (kb/design-dashboard-live-surface.md): the window-track
 	// live-quota view. Polls the same daemon-published data the Jinja
@@ -967,6 +971,7 @@
 	let libraryRequest = $state<{ path: string; token: number }>({ path: '', token: 0 });
 	function openInLibrary(path: string) {
 		libraryRequest = { path, token: libraryRequest.token + 1 };
+		if (commandDeck) deckSection = 'library';
 		document.getElementById('corpus-heading')?.scrollIntoView({ behavior: 'smooth' });
 	}
 
@@ -1419,6 +1424,17 @@
 	});
 </script>
 
+{#snippet onboarding()}
+	<ColdStart
+		repos={connectedRepos}
+		{installations}
+		pairCommand={pairingCommand}
+		{machines}
+		{messengerDoors}
+	/>
+	<PublishConsentNotice repos={connectedRepos} />
+{/snippet}
+
 {#if authState === 'unknown'}
 	<!-- The gate is still deciding (auth fetch in flight, bounded by
 	     QUOTA_GATE_TIMEOUT_MS). Rendering *nothing* here was the 2026-07-21
@@ -1433,6 +1449,84 @@
 	     readers never see it; anonymous ones never see the dashboard
 	     scaffolding it replaces. -->
 	<Landing />
+{:else if commandDeck}
+	<CommandDeck
+		setup={onboarding}
+		section={deckSection}
+		runs={liveRuns}
+		graph={warpGraphData}
+		{shells}
+		loading={surfaceData === null}
+		error={liveRunsError ?? surfaceError}
+		stale={liveRunsStale}
+		{now}
+		map={liveView === 'map'}
+		onSection={(section) => (deckSection = section)}
+		onRun={(id) => {
+			loomSelection = { kind: 'run', id };
+			runOverlayOpen = true;
+		}}
+		onPage={openInLibrary}
+		onMap={() => (mapStageOpen = true)}
+		onInstruments={() => {
+			window.location.href = resolve('/daily');
+		}}
+	>
+		{#snippet attention()}
+			{#if (configRequests?.length ?? 0) > 0 || configRequestsError}<ConfigRequests
+					requests={configRequests ?? []}
+					error={configRequestsError}
+					{now}
+				/>{/if}
+			{#if (newsItems?.length ?? 0) > 0 || newsError}<NewsLane
+					items={newsItems ?? []}
+					error={newsError}
+				/>{/if}
+		{/snippet}
+		{#snippet content()}
+			{#if deckSection === 'objectives'}
+				<HeddleRail
+					threads={topicThreadList}
+					counts={topicCountsMap}
+					selected={heddleSelection}
+					weaving={weavingCallSigns}
+					onToggle={toggleHeddle}
+					onAll={allHeddles}
+				/>
+				<ConfigRequests requests={configRequests ?? []} error={configRequestsError} {now} />
+				{#if surfaceData === null}<p>Reading objectives…</p>{:else}<WarpGraphView
+						graph={warpGraphData}
+						selected={heddleSelection}
+						{liveRunIds}
+						knownPaths={surfaceKnownPaths}
+						onOpenPage={openInLibrary}
+					/>{/if}
+			{:else if deckSection === 'history'}
+				{#if runLedgerError}<p class="text-red-400">{runLedgerError}</p>{/if}
+				{#if runLedgerWithheld}{@render ledgerWithheld()}{:else}<Cloth
+						rows={runLedgerRows}
+						{now}
+						windowMs={runLedgerWindowMs}
+						stale={runLedgerStale}
+						surface={surfaceData}
+						{crossingIndex}
+						topicFaces={topicFaceMap}
+						newSince={lastLookedAnchor(lastLookedAt, now)}
+						onCaughtUp={markCaughtUp}
+					/>{/if}
+			{:else if deckSection === 'library'}
+				{#if surfaceData === null}<p>Reading knowledge…</p>{:else}<WorkSurface
+						data={surfaceData}
+						openRequest={libraryRequest}
+					/>{/if}
+			{:else if deckSection === 'shelf'}
+				{#if surfaceData === null}<p>Reading artifacts…</p>{:else}<ShelfPanel
+						entries={shelfData}
+						onOpen={openInLibrary}
+					/>{/if}
+			{/if}
+		{/snippet}
+	</CommandDeck>
 {:else}
 	<div
 		class="mx-auto flex max-w-2xl flex-col p-6"
@@ -1452,7 +1546,8 @@
 			     session short of clearing cookies by hand. Small on purpose
 			     ("a small one somewhere") — a plain link, not a nav bar this
 			     single-page dashboard doesn't otherwise have. -->
-				<div class="flex items-center gap-4">
+				<div class="flex flex-wrap items-center gap-4">
+					<a href={resolve('/bridge')} class="font-mono text-[11px] text-amber-200">bridge ↗</a>
 					<!-- /activity retired 2026-07-19. Its honest content — open runs,
 				     queued wakes, parked respawns — is the loom's NOW seam and
 				     the rack's future shelf, and its one real affordance over
@@ -1520,15 +1615,7 @@
 		     consent notice read, never a second notion of "empty" — and
 		     leaves by itself once a daemon registers, not the moment a repo
 		     is merely enabled (#1084). -->
-		<ColdStart
-			repos={connectedRepos}
-			{installations}
-			pairCommand={pairingCommand}
-			{machines}
-			{messengerDoors}
-		/>
-
-		<PublishConsentNotice repos={connectedRepos} />
+		{@render onboarding()}
 
 		<!-- THE BENCH, above the fuel (his 2026-08-28 read: "we need a
 		     bench/settings whatever block, collapsed, on the very top of the
@@ -1887,66 +1974,6 @@
 			{/if}
 		</section>
 
-		<!-- The overlay stage: the SAME node panel the lane unfolds, rendered
-		     over the page when a run's compact card is pressed (maintainer,
-		     2026-08-25: "when you press it, the overlay renders them, and you
-		     can close it"). One run, one panel — this is a placement, not a
-		     fourth rendering; closing it keeps the selection in the lane. -->
-		{#if runOverlayOpen && (loomSelection?.kind === 'run' || focusRunId !== null)}
-			<RunOverlay
-				label={selectedIdentity?.name ?? 'run detail'}
-				onClose={() => (runOverlayOpen = false)}
-			>
-				{#if selectedNode && selectedNodeAnswers}
-					<RunNodeInline
-						data={surfaceData}
-						repoSlug={selectedNode.repoSlug}
-						runId={selectedNode.runId}
-						href={selectedNode.href}
-						vitals={selectedVitals}
-						liveLevel={selectedLiveLevel}
-						identity={selectedIdentity}
-						{crossingIndex}
-						topicFaces={topicFaceMap}
-						liveRun={selectedLiveRun}
-						warpItems={selectedWarpItems}
-					/>
-				{:else if selectedLiveRuns.length > 0}
-					<LiveRuns
-						runs={selectedLiveRuns}
-						stale={liveRunsStale}
-						{now}
-						withheld={liveRunsWithheld}
-					/>
-				{:else if selectedLedgerRows.length > 0}
-					<RunLedgerReceipt rows={selectedLedgerRows} stale={runLedgerStale} />
-				{:else}
-					<p class="panel p-3 text-sm text-ink-quiet">
-						no receipt rows for that run in the current window.
-					</p>
-				{/if}
-			</RunOverlay>
-		{/if}
-
-		<!-- The map's stage (`/daily`): the same overlay, full-bleed, holding
-		     the ascii field at viewport height. `↙ collapse` rather than
-		     `✕ close` because this overlay is an *expansion* of something still
-		     on the page — the maintainer asked for the button in those words
-		     ("a button to collapse and go back"), and the way back is the same
-		     compact bars-over-map the press came from. Escape and a tap on the
-		     backdrop collapse it too; `RunOverlay` has always carried both. -->
-		{#if mapStageOpen}
-			<RunOverlay
-				label="the room, in characters"
-				size="full"
-				closeLabel="↙ collapse"
-				dismissLabel="collapse the map"
-				onClose={() => (mapStageOpen = false)}
-			>
-				<MapStage />
-			</RunOverlay>
-		{/if}
-
 		<!-- The shelf, given a place on /daily (maintainer, 2026-09-06: "we have
 		     no place for the shelf items on the web UI, no? maybe add one to
 		     /daily"). The pages already ride the authored corpus fetched above
@@ -2128,7 +2155,7 @@
 			</div>
 			<div class="mt-2">
 				{#if runLedgerRows !== null && runLedgerRows.length === 0 && runLedgerWithheld}
-					<WithheldNotice withheld={runLedgerWithheld} />
+					{@render ledgerWithheld()}
 				{:else}
 					<Cloth
 						rows={runLedgerRows}
@@ -2223,3 +2250,64 @@
 		</section>
 	</div>
 {/if}
+
+{#if authState === 'authed'}
+	<!-- The overlay stage: the SAME node panel the lane unfolds, rendered
+		     over the page when a run's compact card is pressed (maintainer,
+		     2026-08-25: "when you press it, the overlay renders them, and you
+		     can close it"). One run, one panel — this is a placement, not a
+		     fourth rendering; closing it keeps the selection in the lane. -->
+	{#if runOverlayOpen && (loomSelection?.kind === 'run' || focusRunId !== null)}
+		<RunOverlay
+			label={selectedIdentity?.name ?? 'run detail'}
+			onClose={() => (runOverlayOpen = false)}
+		>
+			{#if selectedNode && selectedNodeAnswers}
+				<RunNodeInline
+					data={surfaceData}
+					repoSlug={selectedNode.repoSlug}
+					runId={selectedNode.runId}
+					href={selectedNode.href}
+					vitals={selectedVitals}
+					liveLevel={selectedLiveLevel}
+					identity={selectedIdentity}
+					{crossingIndex}
+					topicFaces={topicFaceMap}
+					liveRun={selectedLiveRun}
+					warpItems={selectedWarpItems}
+				/>
+			{:else if selectedLiveRuns.length > 0}
+				<LiveRuns runs={selectedLiveRuns} stale={liveRunsStale} {now} withheld={liveRunsWithheld} />
+			{:else if selectedLedgerRows.length > 0}
+				<RunLedgerReceipt rows={selectedLedgerRows} stale={runLedgerStale} />
+			{:else}
+				<p class="panel p-3 text-sm text-ink-quiet">
+					no receipt rows for that run in the current window.
+				</p>
+			{/if}
+		</RunOverlay>
+	{/if}
+
+	<!-- The map's stage (`/daily`): the same overlay, full-bleed, holding
+		     the ascii field at viewport height. `↙ collapse` rather than
+		     `✕ close` because this overlay is an *expansion* of something still
+		     on the page — the maintainer asked for the button in those words
+		     ("a button to collapse and go back"), and the way back is the same
+		     compact bars-over-map the press came from. Escape and a tap on the
+		     backdrop collapse it too; `RunOverlay` has always carried both. -->
+	{#if mapStageOpen}
+		<RunOverlay
+			label="the room, in characters"
+			size="full"
+			closeLabel="↙ collapse"
+			dismissLabel="collapse the map"
+			onClose={() => (mapStageOpen = false)}
+		>
+			<MapStage />
+		</RunOverlay>
+	{/if}
+{/if}
+
+{#snippet ledgerWithheld()}
+	{#if runLedgerWithheld}<WithheldNotice withheld={runLedgerWithheld} />{/if}
+{/snippet}
