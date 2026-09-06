@@ -298,6 +298,7 @@ def build(
     wake_request: "dict[str, object] | None" = None,
     allowance: "dict[str, object] | None" = None,
     draws: "dict[str, object] | None" = None,
+    hold: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Build the live ``resources`` facet dict from the collected inputs.
 
@@ -380,6 +381,14 @@ def build(
       spend off the same meter :func:`build`'s ``allowance`` param already
       reads — never a second accounting. ``None`` when neither this run
       nor any owned strand has anything to report.
+    - ``hold`` (design-the-seat-that-never-quits.md §"The machinery, in
+      slices" #3) — ``{"ratio": float | None, "known": bool}``, the
+      hold-cost-vs-boot-cost ratio the daemon acts on while an ``await:``
+      sits armed and idle. Attached onto the ``quota`` facet like ``draws``
+      (an attribution of the same gauge, not a wall of its own). ``None``
+      (the whole key omitted) when no await is armed at all — nothing to
+      show; ``{"ratio": None, "known": False}`` while armed but no boot
+      cost has landed yet (never a guessed ratio).
     """
     levels = levels or {}
     if isinstance(levels_collector, bool):
@@ -405,6 +414,8 @@ def build(
         quota_facet["pacing"] = pacing_status
     if draws is not None:
         quota_facet["draws"] = draws
+    if hold is not None:
+        quota_facet["hold"] = hold
     spend_facet = _level_record(
         FACETS_BY_KEY["spend"], _level_summary("spend"),
         has_collector="spend" in wired_slots,

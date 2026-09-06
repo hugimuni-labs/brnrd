@@ -64,6 +64,13 @@ RUN_STATUS = "held"
 
 REASON_QUOTA_EXHAUSTED = "quota_exhausted"
 REASON_RESIDENT_REQUESTED = "resident_requested"
+#: design-the-seat-that-never-quits.md §"The machinery, in slices" #3: an
+#: `await:` idling with nothing pending, past `seat.park_after_boot_ratio`
+#: (default 1.0) of this run's own recorded boot cost. Distinct from
+#: `REASON_TURN_ENDED` — that one fires on an *ordinary* clean turn end with
+#: nothing armed; this one fires while an await is still armed, the moment
+#: the daemon's own heartbeat measures holding as the dearer of the two.
+REASON_HOLD_COSTLIER_THAN_BOOT = "hold_costlier_than_boot"
 
 RESUME_OPERATOR = "operator"
 RESUME_RESET = "reset"
@@ -254,6 +261,28 @@ def strand_event_releases(
     else:
         known = {str(part).strip() for part in (child_run_ids or ())}
     return child in known
+
+
+def hold_boot_ratio(
+    hold_so_far: "int | float | None", boot_cost: "int | float | None",
+) -> "float | None":
+    """``hold_so_far / boot_cost``, or ``None`` when either side is unknown.
+
+    The rule this closes (design-the-seat-that-never-quits.md §"The
+    machinery, in slices" #3): a seat idling on ``brnrd await`` parks itself
+    once holding has cost more than a boot. Both terms are weighted tokens —
+    *hold_so_far* is this run's own live-metered spend accrued since the
+    wait last had nothing pending (the caller's baseline bookkeeping, not
+    this function's job); *boot_cost* is ``spend.json``'s recorded
+    ``boot.weighted`` (brnrd#1816, ``daemon._record_boot_cost``).
+
+    ``None`` on either missing input — never a fabricated ratio. A caller
+    with no boot cost yet (Codex, or a Claude transcript with no usage row)
+    must read that as "no ratio, no park", not as zero cost.
+    """
+    if hold_so_far is None or boot_cost is None or boot_cost <= 0:
+        return None
+    return float(hold_so_far) / float(boot_cost)
 
 
 def portal_projection(meta: dict[str, Any] | None) -> dict[str, Any] | None:
