@@ -5278,8 +5278,8 @@ def _build_run_context_bundle(
         "`brnrd docs portals`."
     )
     sections.append(
-        f"- stdout capture: {response_path} (brnrd-written; final stdout = the "
-        "one plain current-thread reply)"
+        f"- stdout capture: {response_path} (brnrd-written; this turn's stdout = "
+        "the one plain reply for the waking event)"
     )
     if outbox_path:
         sections.append(

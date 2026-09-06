@@ -3155,7 +3155,11 @@ def format_delta(
     # Only seed/stop reach this point — post-tool returned via `_render_bar`
     # above — so this is always one of the two verbose-prose headers.
     #
-    header = "brnrd portal seed" if seed else "brnrd portal closeout"
+    header = (
+        "brnrd portal seed" if seed
+        else "brnrd portal phase commit" if _seat_parks_on_turn_end(payload)
+        else "brnrd portal closeout"
+    )
     # Framing, not just data: a bare count reads as ambient telemetry and
     # habituates fast — a maintainer caught this live (2026-07-05) when two
     # follow-ups sat unacknowledged on the outward-facing card for 8 minutes
@@ -3248,6 +3252,13 @@ def format_delta(
                 if not annotated_n else
                 f"- bolt: accepted, annotated — {annotated_n} check(s) "
                 "unresolved rode the delivered body."
+            )
+        elif _seat_parks_on_turn_end(payload):
+            lines.append(
+                "- phase commit: `brnrd cut` files what this stretch produced — "
+                "asks dispositioned, produce attested (none is fine, declared), "
+                "promises accounted — then the seat parks; anything addressed "
+                "to it resumes it. A commit of work, never an exit."
             )
         else:
             lines.append(
@@ -3840,11 +3851,27 @@ def _linger_opted_out(ctx: "HookContext") -> bool:
     return any(line.strip() for line in text.splitlines())
 
 
+def _seat_parks_on_turn_end(portal: dict[str, Any] | None) -> bool:
+    """Whether the daemon will park this seat when the turn ends (portal `seat`).
+
+    design-the-seat-that-never-quits.md: with ``seat.park_on_turn_end`` on,
+    a turn end is a park, not a close — so every Stop-phase clause whose
+    only purpose was "do not leave" has nothing to ask for. Read from
+    portal-state, never inferred: the hook says the seat parks only when
+    the daemon published that it will.
+    """
+    seat = portal.get("seat") if isinstance(portal, dict) else None
+    return bool(isinstance(seat, dict) and seat.get("parks_on_turn_end"))
+
+
 def _linger_closeout_clause(ctx: "HookContext") -> str | None:
     """Require a completed linger, or an explicit reason for skipping it."""
     if ctx.outbox_dir is None or _linger_opted_out(ctx):
         return None
     portal = _read_json(ctx.portal_state_path)
+    if _seat_parks_on_turn_end(portal):
+        # A parked seat *is* the continuation — nothing to justify.
+        return None
     await_state = portal.get("await") if isinstance(portal.get("await"), dict) else {}
     if await_state.get("armed") and await_state.get("resolved"):
         return None
@@ -4405,7 +4432,9 @@ def _armed_closeout_block(
     # Second, and beside it deliberately: next-move asks whether the reply ends
     # on a state at all, this asks whether the state it ends on is *true*. Both
     # read the same artifact, so they belong in the same breath.
-    if "vigil" in ctx.closeout_obligations:
+    if "vigil" in ctx.closeout_obligations and not _seat_parks_on_turn_end(portal):
+        # With the daemon parking on turn end, "continuing" with nothing
+        # armed is true by construction (design-the-seat-that-never-quits.md).
         vigil_clause = _vigil_closeout_clause(ctx, payload, portal or {})
         if vigil_clause:
             unmet.append(vigil_clause)
@@ -5167,7 +5196,7 @@ def _claude_hook_settings(brr_bin: str) -> dict[str, Any]:
             # on every keystroke. See ``install_hook_config`` for why this
             # one key merges *additively* with a repo's own ``PreToolUse``
             # rather than replacing it the way the other three do.
-            "PreToolUse": [_matched_entry(PHASE_PRE_TOOL, "Edit|Write")],
+            "PreToolUse": [_matched_entry(PHASE_PRE_TOOL, "Edit|Write|Monitor")],
         },
     }
 
@@ -5534,6 +5563,40 @@ def subagent_neutral(
 # this predicate unblocked, same as any tool this list doesn't name.
 _ROOTED_WRITE_TOOLS = frozenset({"Edit", "Write"})
 
+#: Tools that wait by *returning* — the Shell ends the model's turn to sit on
+#: the condition. Fine at a keyboard; in a daemon-hosted ``-p`` run a turn
+#: that ends is a run that ends (design-the-seat-that-never-quits.md §The tool
+#: trap: the console strand died on it 2026-09-06 00:54Z, "still holding —
+#: waiting on the Monitor", status ``done``). The only wait that keeps the
+#: seat is ``brnrd await``.
+_WAIT_BY_RETURNING_TOOLS = frozenset({"Monitor"})
+
+
+def _wait_by_returning_neutral(
+    ctx: "HookContext", payload: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Refuse a wait-by-returning tool in a daemon-hosted run; ``None`` otherwise.
+
+    Armed only when the run has an outbox (``ctx.outbox_dir`` — the daemon's
+    portal; an ad-hoc editor session has none and may Monitor freely). The
+    refusal names the verb that waits without leaving: ``brnrd await``
+    (``--file <path>`` is the trigger a Monitor-style condition wants).
+    """
+    if ctx.outbox_dir is None:
+        return None
+    if payload.get("tool_name") not in _WAIT_BY_RETURNING_TOOLS:
+        return None
+    return {
+        "inject": None,
+        "block": True,
+        "block_reason": (
+            "Monitor waits by ending the turn — in a daemon-hosted run that "
+            "ends the run (design-the-seat-that-never-quits.md §The tool "
+            "trap). Wait without leaving: `brnrd await` (add `--file <path>` "
+            "for a file-shaped condition), or a bounded foreground command."
+        ),
+    }
+
 # Control files a strand is legitimately entitled to write to in the shared
 # outbox directory ($BRR_OUTBOX_DIR). The bundle names these explicitly as
 # where the run's control data lives — see daemon-substrate.md →
@@ -5754,7 +5817,7 @@ def run_hook(
         # *correspondence*: a child owes no reply to the parent's
         # correspondents. A stray write into the shared host checkout is a
         # hazard either limb can cause, so neither is exempted here).
-        neutral = _rooted_write_neutral(ctx, payload)
+        neutral = _wait_by_returning_neutral(ctx, payload) or _rooted_write_neutral(ctx, payload)
         record_boundary(ctx, phase, neutral, payload)
         return render_native(ctx.flavour, phase, neutral)
     # An in-process subagent shares every env handle with the resident, so the
