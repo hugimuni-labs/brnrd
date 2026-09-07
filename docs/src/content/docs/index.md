@@ -3,11 +3,12 @@ title: brnrd
 description: Local coding agents, reachable from anywhere, with continuity across runs.
 ---
 
-**A co-maintainer that lives on your machine.**
+**Local agents go brr. From anywhere.**
 
-Survives reboots, remembers who it is, works both your Claude and Codex
-subscriptions, and leaves receipts — commits, pull requests, a card you can
-read. Not a session you reopen: a resident with continuity across runs.
+A co-maintainer that lives on your machine: survives reboots, remembers who it
+is, works both your Claude and Codex subscriptions, and leaves receipts —
+commits, pull requests, a card you can read. Not a session you reopen: a
+resident with continuity across runs.
 
 Needs a machine that's on: a laptop that doesn't sleep, a Mac mini, a home
 server, or [a $5 VPS](./guides/vps-install/) (about ten minutes to set up).
