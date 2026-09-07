@@ -1,0 +1,13 @@
+[brnrd] running: What did we decide about JSON and secrets, and what's still open from yesterday?
+[brnrd] runner: claude-sonnet
+**Decision: JSON output is snake_case, and secrets structurally can't reach it — enforced twice, not just promised.**
+
+- **`632a3b5`** (session 1) — `--json` added to `list`/`send`. Both route through `formatter.py`'s `format_json`/`format_send_result_json`, built off `dataclasses.asdict(Message)` — only `to`/`subject`/`body`/`template` (+`status` for send). `Config`'s `smtp_password`/`api_key` never touch that path. Verified live: ran `--json send` with both env secrets set, neither string appeared in stdout (`test_cli_send_json_omits_secrets`).
+- **`05f4006`** (session 2) — `export` command reuses that same `format_json`, not a new formatter. Belt-and-suspenders: `Message` itself carries no secret fields, so export can't leak them structurally even if someone bypassed the shared formatter later.
+
+Both landed with green tests (9/9 currently, confirmed just now) and clean commits on `main` — this is a local fixture repo, no remote to push to.
+
+**Open from yesterday: nothing.** Checked session-2's own summary, git log, working tree (clean save for caches), and grepped for TODO/FIXME — no thread was left dangling. Session 3's transcript is empty, i.e. this wake starts fresh rather than resuming unfinished work.
+
+done — nothing queued; say the word if there's a next command to add.
+
