@@ -5,8 +5,8 @@
 <h1 align="center">brnrd</h1>
 
 <p align="center">
-  <strong>A co-maintainer that lives on your machine.</strong><br>
-  Survives reboots, remembers who it is, works both your Claude and Codex subscriptions, and leaves receipts — commits, PRs, a card you can read.
+  <strong>Local agents go brr. From anywhere.</strong><br>
+  A co-maintainer that lives on your machine: survives reboots, remembers who it is, works both your Claude and Codex subscriptions, and leaves receipts — commits, PRs, a card you can read.
 </p>
 
 <p align="center">
