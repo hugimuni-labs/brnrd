@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from brr import branching, envs
+from brr import branching, envs, runner_select
 from brr import transcript as tx
 from brr.bootscore import BootScore, ContractEntry
 from brr.runner import DEFAULT_RUNNER_TIMEOUT, RunnerInvocation
@@ -39,28 +39,57 @@ def test_get_env_returns_real_builtins():
 
 
 class _SbxRecorder:
-    def __init__(self, *, listed: bool, version_match: bool):
-        self.listed = listed
-        self.version_match = version_match
-        self.commands: list[list[str]] = []
+    """Fake ``subprocess.run`` for the sbx CLI: ``ls``, the version probe,
+    the per-Shell login probe. ``logged_in`` is what the VM answers to
+    `codex login status` / `claude auth status`; ``listed`` names which VMs
+    `sbx ls` already shows."""
 
-    def __call__(self, command, **_kwargs):
+    def __init__(self, *, listed, version_match: bool, logged_in: bool = True):
+        self.listed = ["brr-codex"] if listed is True else (list(listed) if listed else [])
+        self.version_match = version_match
+        self.logged_in = logged_in
+        self.commands: list[list[str]] = []
+        self.inputs: dict[int, bytes] = {}
+
+    def __call__(self, command, **kwargs):
         command = list(command)
         self.commands.append(command)
+        if kwargs.get("input") is not None:
+            self.inputs[len(self.commands) - 1] = kwargs["input"]
         stdout = ""
         if command == ["sbx", "ls"] and self.listed:
-            stdout = "NAME STATUS\nbrr-codex running\n"
+            stdout = "NAME STATUS\n" + "".join(f"{n} running\n" for n in self.listed)
         elif command[-3:] == ["sh", "-c", "~/.local/bin/brnrd --version"]:
             if self.version_match:
                 stdout = f"brnrd {envs.__version__}\n"
                 return envs.subprocess.CompletedProcess(command, 0, stdout, "")
             return envs.subprocess.CompletedProcess(command, 127, "", "not found")
+        elif command[-1].endswith("codex login status"):
+            stdout = "Logged in using ChatGPT\n" if self.logged_in else "Not logged in\n"
+            return envs.subprocess.CompletedProcess(command, 0 if self.logged_in else 1, stdout, "")
+        elif command[-1].endswith("claude auth status"):
+            stdout = '{"loggedIn": %s}\n' % ("true" if self.logged_in else "false")
         return envs.subprocess.CompletedProcess(command, 0, stdout, "")
 
+    def seeds(self):
+        """``(command, payload)`` for every login-seeding exec."""
+        return [
+            (self.commands[i], payload)
+            for i, payload in self.inputs.items()
+            if "cat > " in self.commands[i][-1]
+        ]
 
-def _sandbox_prepare(tmp_path, monkeypatch, recorder):
+
+def _sandbox_prepare(tmp_path, monkeypatch, recorder, *, host_login: bytes | None = None):
     monkeypatch.setattr(envs.shutil, "which", lambda name: "/usr/bin/sbx" if name == "sbx" else None)
     monkeypatch.setattr(envs.subprocess, "run", recorder)
+    # Never read the developer's real ~/.codex/auth.json from a test.
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setattr(envs.Path, "home", staticmethod(lambda: home))
+    if host_login is not None:
+        (home / ".codex").mkdir()
+        (home / ".codex" / "auth.json").write_bytes(host_login)
     _stub_worktree(monkeypatch, tmp_path)
     task = Run(
         id="task-sbx", event_id="evt-sbx", body="sandbox run",
@@ -89,6 +118,120 @@ def test_sandbox_prepare_reuses_matching_install(tmp_path, monkeypatch):
 
     assert not any(c[:2] == ["sbx", "create"] for c in recorder.commands)
     assert not any("pip install" in " ".join(c) for c in recorder.commands)
+
+
+# ── A fresh VM has no login; the host's is seeded in ──
+#
+# run-260907-1436-xkmn: `brr-codex` was created at 14:37Z with a private
+# $HOME and no ~/.codex/auth.json (the Docker credential proxy is off:
+# SBX_CRED_OPENAI_MODE=none). codex answered `401 Missing bearer`, the daemon
+# marked the codex auth domain failed, and the mark — cleared only by a
+# successful codex attempt — hid every codex row and its fuel bar.
+
+
+def test_sandbox_prepare_seeds_codex_login_from_host(tmp_path, monkeypatch, capsys):
+    recorder = _SbxRecorder(listed=False, version_match=True, logged_in=False)
+    _sandbox_prepare(tmp_path, monkeypatch, recorder, host_login=b'{"tokens": 1}')
+
+    (command, payload), = recorder.seeds()
+    assert command[:4] == ["sbx", "exec", "-i", "brr-codex"]
+    assert command[-1] == (
+        'umask 077 && mkdir -p "$HOME"/.codex && cat > "$HOME"/.codex/auth.json'
+    )
+    assert payload == b'{"tokens": 1}'
+    assert "seeded from host ~/.codex/auth.json" in capsys.readouterr().out
+
+
+def test_sandbox_prepare_leaves_a_logged_in_vm_alone(tmp_path, monkeypatch):
+    recorder = _SbxRecorder(listed=True, version_match=True, logged_in=True)
+    _sandbox_prepare(tmp_path, monkeypatch, recorder, host_login=b'{"tokens": 1}')
+
+    assert recorder.seeds() == []
+
+
+def test_sandbox_seeds_claude_login_from_the_macos_keychain(tmp_path, monkeypatch):
+    """No ~/.claude/.credentials.json on a macOS host — the Keychain holds it."""
+    recorder = _SbxRecorder(listed=["brr-claude"], version_match=True, logged_in=False)
+
+    def _run(command, **kwargs):
+        if command[:3] == ["security", "find-generic-password", "-s"]:
+            assert command[3] == "Claude Code-credentials"
+            return envs.subprocess.CompletedProcess(command, 0, b'{"claudeAiOauth": {}}\n', b"")
+        return recorder(command, **kwargs)
+
+    monkeypatch.setattr(envs.subprocess, "run", _run)
+    monkeypatch.setattr(envs.Path, "home", staticmethod(lambda: tmp_path / "home"))
+
+    receipt = envs._seed_sandbox_login("brr-claude", "claude")
+
+    (command, payload), = recorder.seeds()
+    assert command[-1].endswith('cat > "$HOME"/.claude/.credentials.json')
+    assert payload == b'{"claudeAiOauth": {}}'
+    assert "seeded from host" in receipt
+
+
+def test_sandbox_prepare_names_the_manual_login_when_host_has_none(tmp_path, monkeypatch, capsys):
+    recorder = _SbxRecorder(listed=True, version_match=True, logged_in=False)
+    _sandbox_prepare(tmp_path, monkeypatch, recorder)  # no host file
+
+    assert recorder.seeds() == []
+    out = capsys.readouterr().out
+    assert "codex is not logged in" in out
+    assert "sbx run --name brr-codex" in out
+
+
+# ── The sandbox follows the Shell actually invoked ──
+#
+# Same run, attempt 2: the daemon fell back from codex-full to claude-opus
+# without re-preparing the env, so `invoke` exec'd `claude` inside
+# `brr-codex` — `sh: 1: exec: claude: not found`. The VM is a property of the
+# Shell being run, not of the plan.
+
+
+def test_sandbox_invoke_switches_vm_when_fallback_runner_wears_another_shell(tmp_path, monkeypatch):
+    captured = {}
+    _stub_docker_runner(monkeypatch, captured=captured)
+    recorder = _SbxRecorder(listed=["brr-codex"], version_match=True, logged_in=True)
+    monkeypatch.setattr(envs.subprocess, "run", recorder)
+    monkeypatch.setattr(envs.Path, "home", staticmethod(lambda: tmp_path / "home"))
+    ctx = envs.RunContext(
+        name="sandbox", cwd=tmp_path / "worktree", repo_root=tmp_path,
+        runtime_dir=tmp_path / ".brr", response_path_host=tmp_path / "response",
+        response_path_env=tmp_path / "response",
+        env_state={"sandbox_name": "brr-codex", "sandbox_names": ["brr-codex"]},
+    )
+    fallback = runner_select.RunnerProfile(name="claude-opus", profile="claude", shell="claude", model="opus")
+    invocation = RunnerInvocation(
+        kind="daemon-run", label="evt-sbx-attempt-2", prompt="hello",
+        cwd=ctx.cwd, repo_root=tmp_path, env={}, selected_runner=fallback,
+    )
+
+    envs.get_env("sandbox").invoke(ctx, "claude-opus", invocation, {})
+
+    assert ["sbx", "create", "--name", "brr-claude", "claude", str(tmp_path)] in recorder.commands
+    assert captured["command"][3:7] == ["brr-claude", "--", "sh", "-c"]
+    assert ctx.env_state["sandbox_names"] == ["brr-codex", "brr-claude"]
+
+
+def test_sandbox_finalize_stops_every_vm_the_run_used(tmp_path, monkeypatch):
+    recorder = _SbxRecorder(listed=True, version_match=True)
+    monkeypatch.setattr(envs.subprocess, "run", recorder)
+    monkeypatch.setattr(envs.WorktreeEnv, "finalize", lambda self, ctx, task, runs_dir: task)
+    ctx = envs.RunContext(
+        name="sandbox", cwd=tmp_path, repo_root=tmp_path, runtime_dir=tmp_path / ".brr",
+        response_path_host=tmp_path / "r", response_path_env=tmp_path / "r",
+        env_state={
+            "sandbox_name": "brr-codex",
+            "sandbox_names": ["brr-codex", "brr-claude"],
+            "sandbox_stop_after_run": True,
+        },
+    )
+    task = Run(id="task-sbx", event_id="evt-sbx", body="x")
+
+    envs.get_env("sandbox").finalize(ctx, task, tmp_path / "runs")
+
+    assert ["sbx", "stop", "brr-codex"] in recorder.commands
+    assert ["sbx", "stop", "brr-claude"] in recorder.commands
 
 
 def test_sandbox_prepare_requires_sbx(tmp_path, monkeypatch):
