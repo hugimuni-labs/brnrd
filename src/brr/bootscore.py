@@ -289,6 +289,24 @@ class ContractEntry:
     it never looked at.
     """
 
+    lens: str | None = None
+    """Which wake profile shaped this row, and what it did to the block —
+    e.g. ``"profile:strand · kept"`` / ``"profile:strand · trimmed"`` /
+    ``"profile:strand · skipped"``.  ``None`` means no profile narrowed this
+    block from what a plain read of its source would produce (the ordinary
+    resident/seat wake).
+
+    Added for the strand wake profile (a bounded strand gets a deliberately
+    smaller inject stack than the resident that dispatched it — see
+    ``prompts/strand.md`` and ``prompts._build_strand_light_stack``). Before
+    this field, a block a profile dropped simply never appeared in
+    ``contracts`` at all, so ``wake-manifest.json`` — the one file the
+    operator console's WAKE tab reads to answer "what did this wake see?" —
+    had no row to explain *why* dominion, work surface, or kb health were
+    absent from a strand's wake. A caller outside a profiled wake never sets
+    this, so every existing manifest row is unaffected.
+    """
+
 
 @dataclass(frozen=True)
 class BootBody:
@@ -807,10 +825,21 @@ def format_kernel(score: BootScore) -> str:
     if host.image_stale:
         # Differential, like everything else in the kernel: costs nothing on a
         # healthy wake, and on an unhealthy one it is the first thing read.
+        # The hour matters as much as the flag (2026-09-06): the substrate
+        # lists every verb the *checkout* parses; a daemon captured before a
+        # verb merged drops that verb with "unknown key" and the wake
+        # cannot tell from the flag alone. Naming the capture instant lets
+        # the resident compare it to the merge it is about to rely on.
+        captured = (
+            f" · image captured {host.image_captured_at}"
+            if host.image_captured_at else ""
+        )
         incarnate.append(
             "  stale: ⚠ boot rendered by a daemon image the checkout has "
             "superseded · prompt .md is current, kernel/orientation code is "
-            "NOT · a boot-code change cannot be measured from this wake"
+            "NOT · a boot-code change cannot be measured from this wake · "
+            "a verb merged after the image was captured is not parsed by "
+            f"this daemon{captured}"
         )
     elif host.image_digest is not None:
         # Deliberately UNCONDITIONAL — the one line in this kernel that breaks
@@ -1111,3 +1140,48 @@ def _cost_ledger(score: BootScore) -> list[str]:
         lines.append(f"  {'unattributed':<12}{total - accounted:>9,} B")
         lines.append(f"  {'wake total':<12}{total:>9,} B")
     return lines
+
+
+#: Above this total wake size, a reader of the ledger (the post-tool hook
+#: stripe, a run card's own boot line) names a specific offender rather than
+#: just totals — a wake this big is worth pointing at something. Chosen off
+#: this account's own live wakes at the time this shipped: comfortably above
+#: an ordinary session's total (mid-double-digit KB) and comfortably below
+#: where a wake actually crowds the model's own context, so it fires on
+#: genuine bloat rather than every session carrying a full dominion. One
+#: constant, read by both faces, so "is this wake big" never disagrees with
+#: itself between the stripe and the card.
+WAKE_WARN_BYTES = 120_000
+
+
+def top_ledger_categories(contracts: list, n: int = 2) -> list[tuple[str, int]]:
+    """The *n* biggest authority-layer totals, by bytes — the same grouping
+    :func:`_cost_ledger` renders as the full ``cost ledger:`` table.
+
+    Unlike :func:`_cost_ledger`, this takes a raw ``contracts`` list — plain
+    dicts, the shape every reader off ``boot-score.json`` actually has
+    (a mid-run hook reading its own run's file, a wake rendering a *different*
+    run's archived one) rather than the typed :class:`BootScore` /
+    :class:`ContractEntry` objects only a live in-process render holds. A
+    caller that already parsed the JSON should not have to reconstruct
+    dataclasses just to ask "what are the two biggest categories" — and this
+    is exactly the fact both the post-tool hook stripe and a run card's own
+    boot line want, off the ledger already computed, never re-measured.
+
+    Same filter as :func:`_cost_ledger`'s ``measured``: only blocks that
+    actually rendered (``present`` and a positive ``bytes``) count, and any
+    entry without a usable ``authority`` string is skipped — a partial or
+    older-shaped record degrades to "not counted," never a crash.
+    """
+    by_authority: dict[str, int] = {}
+    for entry in contracts:
+        if not isinstance(entry, dict) or not entry.get("present"):
+            continue
+        size = entry.get("bytes")
+        if not isinstance(size, int) or size <= 0:
+            continue
+        authority = entry.get("authority")
+        if not isinstance(authority, str) or not authority.strip():
+            continue
+        by_authority[authority] = by_authority.get(authority, 0) + size
+    return sorted(by_authority.items(), key=lambda kv: -kv[1])[:n]

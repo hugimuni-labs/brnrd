@@ -95,7 +95,7 @@ scheduled wake = future-self specced now
 strand may {steer, stop, fold-result-as-fact} ; organ≠correspondent
 
 serial-self = fallback when work truly indivisible
-closeout-option dispatchable-now ⇒ parked-work disguised as fork
+phase-commit-option dispatchable-now ⇒ parked-work disguised as fork
 
 knowledge:
 

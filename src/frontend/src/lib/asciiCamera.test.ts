@@ -1036,3 +1036,15 @@ test('a row painted by a bearings/header strip does not carry a leftover from an
 		`a truncation mark must end the row (or trail into whitespace), never sit mid-fusion: ${JSON.stringify(bearingsRow)}`
 	);
 });
+
+test('embedded field preserves the complete camera while telemetry is disclosed separately', () => {
+	const runs = referenceFrames()[1];
+	const { graph, topo, layout } = pipeline(runs, {}, emptyAtlas());
+	const cam: Camera = { center: { x: 6, y: 0 }, cols: 76, rows: 20, level: 'island' };
+	const full = renderWorld(topo, layout, graph, cam);
+	const field = renderWorld(topo, layout, graph, cam, { telemetry: false });
+	assert.ok(full.startsWith(field + '\n'));
+	assert.ok(field.includes('THE SEA'));
+	assert.ok(!field.includes('PAGER'));
+	assert.ok(full.includes('PAGER'));
+});

@@ -73,6 +73,8 @@ class RunView:
     manifest: dict[str, Any] = field(default_factory=dict)
     boot: dict[str, Any] = field(default_factory=dict)
     wake_manifest: list[dict[str, Any]] = field(default_factory=list)
+    mounted_blocks: dict[str, str] = field(default_factory=dict)
+    wake_blocks: dict[str, str] = field(default_factory=dict)
     boundaries: tuple[Boundary, ...] = ()
     portal_state: dict[str, Any] = field(default_factory=dict)
     inbox_state: Any = field(default_factory=list)
@@ -165,6 +167,52 @@ def _read_wake_manifest(path: Path) -> list[dict[str, Any]]:
     if not isinstance(blocks, list):
         return []
     return [b for b in blocks if isinstance(b, dict)]
+
+
+def _read_mounted_blocks(path: Path) -> dict[str, str]:
+    """Read prompt-mounted.json's ``blocks`` map, or ``{}`` on any error.
+
+    Only present for a ``boot.mount`` run (#1753) — a mounted block's exact
+    rendered text was diverted out of ``prompt.md`` at wake time and never
+    entered its bytes, so this sidecar is the *only* place that text still
+    exists. Absent file, absent key, or a non-string value all fall back to
+    ``{}``/skip rather than raising — the same "never worse than empty"
+    contract every other reader in this module holds.
+    """
+    raw = _read_json(path, {})
+    if not isinstance(raw, dict):
+        return {}
+    blocks = raw.get("blocks")
+    if not isinstance(blocks, dict):
+        return {}
+    return {
+        str(key): value
+        for key, value in blocks.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+
+
+def _read_wake_blocks(path: Path) -> dict[str, str]:
+    """Read wake-blocks.json's ``blocks`` map, or ``{}`` on any error.
+
+    Written by :func:`brr.run_context.write_wake_blocks` (#1830) — every
+    present block's exact rendered text for this run, mounted or not. A
+    strict superset of what ``prompt-mounted.json`` carries (see that
+    function's own docstring for why the two files stay separate); the run
+    directory of any wake captured before #1830 shipped simply has no such
+    file, same "never worse than empty" fallback as ``_read_mounted_blocks``.
+    """
+    raw = _read_json(path, {})
+    if not isinstance(raw, dict):
+        return {}
+    blocks = raw.get("blocks")
+    if not isinstance(blocks, dict):
+        return {}
+    return {
+        str(key): value
+        for key, value in blocks.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
 
 
 def _phase_key(value: str) -> str:
@@ -314,6 +362,8 @@ def _run_from_presence(
             entry=entry,
         ),
         wake_manifest=_read_wake_manifest(run_dir / "wake-manifest.json"),
+        mounted_blocks=_read_mounted_blocks(run_dir / "prompt-mounted.json"),
+        wake_blocks=_read_wake_blocks(run_dir / "wake-blocks.json"),
         boundaries=boundaries,
         portal_state=(
             _read_json(outbox_dir / "portal-state.json", {})

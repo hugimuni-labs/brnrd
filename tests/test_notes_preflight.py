@@ -257,3 +257,73 @@ def test_cited_issue_numbers_unions_issue_and_ambiguous_kinds(tmp_path):
         "https://github.com/o/r/pull/9.\n",
     )
     assert notes_preflight.cited_issue_numbers(dom) == {1298, 42}
+
+
+# ── format_findings: same-type grouping ─────────────────────────────
+
+
+def test_format_findings_prints_the_rule_once_for_a_repeated_type(tmp_path):
+    """The motivating case: 40 pitfall entries each citing their own
+    closed issue used to render the identical "closed ticket is not
+    proof…" paragraph 40 times. Grouped, the rule text appears once and
+    every entry's own handle still appears."""
+    repo = _repo(tmp_path)
+    dom = tmp_path / "dominion"
+    n = 40
+    text = "".join(
+        f"## Entry {i}\ntrigger: x{i}\nFixed by #{1000 + i}.\n\n"
+        for i in range(n)
+    )
+    _seed(dom, text)
+    _write_issue_cache(repo, {
+        str(1000 + i): {
+            "number": 1000 + i,
+            "state": "CLOSED",
+            "closed_at": "2026-08-05T00:00:00Z",
+        }
+        for i in range(n)
+    })
+
+    findings = notes_preflight.check_pitfall_issue_refs(dom, repo)
+    assert len(findings) == n
+
+    block = notes_preflight.format_findings(findings)
+
+    assert block.count("retire the entry.") == 1
+    for i in range(n):
+        assert f"Entry {i}`" in block
+        assert f"#{1000 + i}" in block
+
+
+def test_format_findings_keeps_every_type_in_a_mixed_set(tmp_path):
+    """A mixed set of finding types must not lose a type to the grouping
+    pass — each type either groups (rule once) or, with a single member,
+    renders exactly as `Finding.render()` would."""
+    repo = _repo(tmp_path)
+    dom = tmp_path / "dominion"
+    text = (
+        "## No trigger one\nFixed by #1.\n\n"
+        "## No trigger two\nFixed by #2.\n\n"
+        "## No trigger three\nFixed by #3.\n\n"
+        "## Cites something\ntrigger: x\nFixed by #1298.\n"
+    )
+    _seed(dom, text)
+    _write_issue_cache(repo, {
+        "1298": {"number": 1298, "state": "CLOSED", "closed_at": "2026-08-05T00:00:00Z"},
+    })
+
+    store_findings = notes_preflight.check_pitfall_store(dom)
+    issue_findings = notes_preflight.check_pitfall_issue_refs(dom, repo)
+    types = {f.type for f in store_findings + issue_findings}
+    assert types == {"inert-pitfall", "pitfall-cites-closed-issue"}
+
+    block = notes_preflight.format_findings(store_findings + issue_findings)
+
+    assert "**inert-pitfall**" in block
+    assert "**pitfall-cites-closed-issue**" in block
+    assert "No trigger one" in block
+    assert "No trigger two" in block
+    assert "No trigger three" in block
+    assert "Cites something" in block
+    # The inert-pitfall rule text (shared by all three) prints once.
+    assert block.count("Add a `trigger:") == 1

@@ -1387,9 +1387,74 @@ def _git_location(path: Path) -> tuple[Path | None, str | None]:
         return None, None
 
 
+def _common_trailing_segments(descriptions: list[str]) -> list[str]:
+    """Segments shared by the tail of every description in *descriptions*.
+
+    Each description is split on ``" — "`` — the clause separator this
+    module's own descriptions are written with (see the checks above:
+    ``"<instance fact> — <general rule>"``). When several findings of the
+    same type restate the same trailing clause(s) verbatim (the rule text),
+    this returns those shared segments, in order; ``[]`` when nothing at
+    the tail is shared (nothing to factor out).
+    """
+    segmented = [d.split(" — ") for d in descriptions]
+    shortest = min(len(s) for s in segmented)
+    shared = 0
+    for i in range(1, shortest + 1):
+        candidate = segmented[0][-i]
+        if all(s[-i] == candidate for s in segmented):
+            shared = i
+        else:
+            break
+    return segmented[0][-shared:] if shared else []
+
+
 def format_findings(findings: list[Finding]) -> str:
-    """Render *findings* as the wake block's findings list, or ``""``."""
+    """Render *findings* as the wake block's findings list, or ``""``.
+
+    Findings sharing a ``type`` often restate the same rule-text clause in
+    every instance's description — ``pitfall-cites-closed-issue`` is the
+    motivating case: one wake with 40 stale citations rendered the
+    identical "closed ticket is not proof…" paragraph 40 times. Group by
+    ``type``; when the group's descriptions share a common trailing clause
+    (see :func:`_common_trailing_segments`), print that clause once as the
+    type's rule line and reduce each instance to `` `target` [severity] —
+    <the part that differs>``. A type with only one finding, or whose
+    descriptions share nothing at the tail, renders exactly as
+    :meth:`Finding.render` would — no information lost, just not
+    reformatted for a gain that isn't there.
+    """
     if not findings:
         return ""
-    bullets = "\n".join(f.render() for f in findings)
+
+    groups: dict[str, list[Finding]] = {}
+    order: list[str] = []
+    for f in findings:
+        if f.type not in groups:
+            groups[f.type] = []
+            order.append(f.type)
+        groups[f.type].append(f)
+
+    blocks: list[str] = []
+    for ftype in order:
+        group = groups[ftype]
+        rule_segments = (
+            _common_trailing_segments([f.description for f in group])
+            if len(group) > 1
+            else []
+        )
+        if not rule_segments:
+            blocks.extend(f.render() for f in group)
+            continue
+
+        rule = " — ".join(rule_segments)
+        lines = [f"- **{ftype}** — {rule}"]
+        for f in group:
+            sev = "" if f.severity == "error" else f" [{f.severity}]"
+            remainder = f.description.rsplit(rule, 1)[0].rstrip(" —")
+            fact = f" — {remainder}" if remainder else ""
+            lines.append(f"  - `{f.target}`{sev}{fact}")
+        blocks.append("\n".join(lines))
+
+    bullets = "\n".join(blocks)
     return f"## Findings (deterministic preflight)\n\n{bullets}\n"

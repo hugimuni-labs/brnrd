@@ -120,13 +120,13 @@ def _save_state(brr_dir: Path, state: dict) -> None:
 
 def auth(brr_dir: Path) -> None:
     state = _load_state(brr_dir)
-    api_url = input(
+    api_url = runtime.prompt(
         "signal-cli-rest-api URL (e.g. http://127.0.0.1:8080): "
     ).strip().rstrip("/")
     if not api_url:
         print("[brnrd] No API URL provided.")
         return
-    number = input(
+    number = runtime.prompt(
         "This gate's Signal number, E.164 (e.g. +15551234567): "
     ).strip()
     if not number:
@@ -155,7 +155,7 @@ def bind(brr_dir: Path) -> None:
     if "api_url" not in state or "number" not in state:
         print("[brnrd] Run `brnrd gate auth signal` first.")
         return
-    sender = input(
+    sender = runtime.prompt(
         "Your Signal number, to authorize as the paired principal "
         "(required, E.164 — messages from anyone else are rejected): "
     ).strip()

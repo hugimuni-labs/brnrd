@@ -1122,7 +1122,7 @@ def _fmt_kb(size: int) -> str:
 
 
 def _wake_census(ctx: HookContext) -> str | None:
-    """`wake 115.7 KB · top work-surface 24.7 KB · oldest 2026-07-25`.
+    """`wake 115.7 KB · top work-surface 24.7 KB · surface 50.0 KB · health 27.8 KB · oldest 2026-07-25`.
 
     ``None`` on any absence — no score armed, unreadable file, a score with
     no `contracts` (an older daemon), or nothing measured. Same three-state
@@ -1134,6 +1134,20 @@ def _wake_census(ctx: HookContext) -> str | None:
     `oldest_item` renders the first two. The alternative — one absent field
     silencing the line — would hide the census exactly when the score is
     partial, which is when it is most worth reading.
+
+    The two ledger-category segments (`surface 50.0 KB`, `health 27.8 KB`)
+    are :func:`brr.bootscore.top_ledger_categories` off this same
+    `contracts` list — the identical grouping `brnrd prompts show`'s own
+    "cost ledger:" table prints, read here rather than re-measured, so this
+    line never disagrees with what that command would say about the same
+    file. Absent when no entry carries a usable `authority`.
+
+    Past :data:`brr.bootscore.WAKE_WARN_BYTES`, the line ends with
+    `⚠ <label>` naming the same block `top` already did — a wake this big
+    is worth a name to point at even though the number was already on the
+    line. Same constant the run-card's own boot line (`prompts.py`'s
+    `_prior_run_boot_line`) checks, so the two faces never disagree about
+    whether a given wake counts as big.
     """
     score = _read_json(ctx.boot_score_path)
     contracts = score.get("contracts")
@@ -1161,6 +1175,11 @@ def _wake_census(ctx: HookContext) -> str | None:
     label = str(top.get("block_key") or top.get("label") or "?").strip() or "?"
     parts.append(f"top {label} {_fmt_kb(top['bytes'])}")
 
+    from . import bootscore
+
+    for authority, size in bootscore.top_ledger_categories(contracts, n=2):
+        parts.append(f"{authority} {_fmt_kb(size)}")
+
     # ISO-shaped strings, so lexical order is chronological order.
     oldest = min(
         (
@@ -1173,7 +1192,11 @@ def _wake_census(ctx: HookContext) -> str | None:
     )
     if oldest:
         parts.append(f"oldest {oldest[:10]}")
-    return " · ".join(parts)
+
+    line = " · ".join(parts)
+    if isinstance(total, int) and total > bootscore.WAKE_WARN_BYTES:
+        line += f" ⚠ {label}"
+    return line
 
 
 # ── Injection rendering (portal-state → compact delta) ───────────────────
@@ -1263,6 +1286,40 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         "(`S57·W50·F27` = session 57%, week 50%, a named per-model bucket "
         "27%). Renders only when quota is `known`.",
         # a meter.
+        klass=VITAL,
+    ),
+    _BarSegment(
+        "context_window", "ctx",
+        "the `context_window` facet: `ctx 62%` once a real window-size "
+        "denominator is known, `ctx 148k tok` before then — Claude only "
+        "learns the real `contextWindow` size from its *final* result "
+        "envelope, so a live run reads a growing occupancy token count off "
+        "the session transcript in the meantime (design-the-seat-that-"
+        "never-quits.md §slice 4 reads this). Codex's own collector is "
+        "live with a percentage the whole run. Renders only when `known`.",
+        # a meter.
+        klass=VITAL,
+    ),
+    _BarSegment(
+        "draws", "me/▷",
+        "attribution of the `q` chip just above (brnrd#1810): this run's "
+        "own weighted spend against the shared quota gauge, plus every "
+        "owned strand's, summed (`me 1.2m · ▷2 3.4m`). Renders only the "
+        "half(s) with a reading; absent when neither this run nor any "
+        "owned strand has one.",
+        # a meter; this run cannot act on the shared pool by watching it,
+        # only by choosing whether to spawn more onto it.
+        klass=VITAL,
+    ),
+    _BarSegment(
+        "hold", "hold",
+        "design-the-seat-that-never-quits.md §machinery slice 3: the "
+        "hold-cost-vs-boot-cost ratio the daemon acts on while `brnrd "
+        "await` sits armed and idle (`hold 0.8·boot`). Renders only while "
+        "an await is armed; `hold ?·boot` when armed but no boot cost has "
+        "landed yet — never a guessed ratio.",
+        # a meter — this run cannot act on it beyond ending the turn, but
+        # it is exactly the number the daemon's own park decision reads.
         klass=VITAL,
     ),
     _BarSegment(
@@ -1552,14 +1609,58 @@ def _quota_chip(resources: dict[str, Any]) -> str | None:
     return "q " + "·".join(chips) if chips else None
 
 
+#: Matches ``claude_status.parse_result``'s existing summary shape
+#: (``"62% context left (est)"``) and ``codex_status``'s
+#: (``"N% context left"``, no ``(est)``) — the ``(?:...)?`` tail is
+#: optional so one pattern covers both Shells.
+_CONTEXT_PCT_RE = re.compile(r"^(?P<value>\d+(?:\.\d+)?)%\s+context left(?:\s+\(est\))?")
+#: Matches the live-tail summary :func:`brr.daemon._record_context_window`
+#: writes before a real window size is known — token count, no percentage.
+_CONTEXT_TOKENS_RE = re.compile(r"^(?P<value>[\d.]+[kKmM]?)\s+tok\b")
+
+
+def _context_window_chip(resources: dict[str, Any]) -> str | None:
+    """``ctx 62%`` once a real window-size denominator is known, or
+    ``ctx 148k tok`` from a live transcript-tail reading before then.
+
+    Claude only learns its real ``contextWindow`` size from the *final*
+    result envelope (:mod:`brr.claude_status`); until then
+    :func:`brr.daemon._record_context_window` feeds this facet a bare
+    occupancy token count off the growing session transcript, the same
+    "read live rather than wait for the process to exit" move
+    :func:`brr.daemon._record_boot_cost` already makes for boot cost.
+    Codex's own collector (:mod:`brr.codex_status`) is live with a real
+    percentage the whole run, so this chip only ever hits the token-only
+    branch on a Claude Shell. Parses the facet's own ``summary`` prose
+    (same convention as :func:`_quota_chip`) rather than a raw field,
+    because :func:`brr.facets._level_record` keeps only ``summary`` —
+    every other field a collector computed is intentionally dropped there.
+    """
+    facet = resources.get("context_window") if isinstance(resources, dict) else None
+    facet = facet if isinstance(facet, dict) else {}
+    if facet.get("status") != "known":
+        return None
+    summary = str(facet.get("summary") or "").strip()
+    match = _CONTEXT_PCT_RE.match(summary)
+    if match:
+        return f"ctx {match.group('value')}%"
+    match = _CONTEXT_TOKENS_RE.match(summary)
+    if match:
+        return f"ctx {match.group('value')} tok"
+    return None
+
+
 def _allowance_chip(resources: dict[str, Any]) -> str | None:
-    """A strand's own ``spend 38k/120k`` chip (design-the-allowance.md §2).
+    """The own-allowance ``spend 38k/120k`` chip — a strand's ``spawn:``
+    ceiling, or the resident seat's own standing allowance (design-the-
+    allowance.md §2, slices 1-2). One renderer for both: the facet shape is
+    identical, only where the ceiling number came from differs.
 
     Renders only once metering has something to show (``known`` — tokens
-    *and* a spend reading both present); a strand with a ceiling but no
-    reading yet, or any non-strand run (``allowance`` stays
-    ``unimplemented``), renders nothing here and the ordinary quota chip
-    takes over (see the caller in :func:`format_delta`).
+    *and* a spend reading both present); a ceiling with no reading yet, or
+    a call site with no allowance collector wired at all (``allowance``
+    stays ``unimplemented``), renders nothing here and the ordinary quota
+    chip takes over (see the caller in :func:`format_delta`).
     """
     facet = resources.get("allowance") if isinstance(resources, dict) else None
     facet = facet if isinstance(facet, dict) else {}
@@ -1571,8 +1672,33 @@ def _allowance_chip(resources: dict[str, Any]) -> str | None:
     return f"spend {allowance.format_tokens(spent)}/{allowance.format_tokens(tokens)}"
 
 
+def _allowance_scope(resources: dict[str, Any]) -> str:
+    """``"strand"`` or ``"resident"`` — see :func:`brr.facets.build`'s
+    ``allowance`` docstring. Defaults to ``"strand"`` (its pre-slice-2
+    meaning) for any facet that doesn't carry the key, matching
+    :func:`brr.facets.build`'s own default.
+    """
+    facet = resources.get("allowance") if isinstance(resources, dict) else None
+    facet = facet if isinstance(facet, dict) else {}
+    scope = str(facet.get("scope") or "strand").strip()
+    return scope if scope in ("strand", "resident") else "strand"
+
+
 def _allowance_directive(resources: dict[str, Any]) -> tuple[str | None, str]:
     """The one-shot ≥100% park-or-ask line, plus its own change-gate key.
+
+    Strand-only: its wording (``submit: true`` then ``brnrd await``, or
+    ``ask: allowance +<tokens>``) names verbs the daemon refuses from
+    anything but a strand (``ask: allowance`` is explicitly "a strand's own
+    verb" — ``daemon._queue_allowance_ask``). Firing it at the resident
+    seat's own standing-allowance overrun (``scope: "resident"``) would
+    hand it two directives it cannot follow — see :func:`_allowance_scope`.
+    The resident's own overrun stays visible on the chip alone
+    (:func:`_allowance_chip`) until a resident-appropriate directive is
+    specified; design-the-continuous-seat.md's "Pursuit without rewarding
+    waste" section, in any case, treats unspent/overrun headroom as
+    something to weigh at a planning boundary, not something a mechanical
+    nag should force.
 
     Returns ``(line_or_None, gate_text)``. *gate_text* is always returned
     (even when *line* is ``None``) so the caller can persist it into
@@ -1589,7 +1715,71 @@ def _allowance_directive(resources: dict[str, Any]) -> tuple[str | None, str]:
     if pct is None or spent is None or pct < 100:
         return None, ""
     gate_text = str(spent)
+    if _allowance_scope(resources) != "strand":
+        return None, gate_text
     return allowance.directive_line(spent, facet.get("tokens")), gate_text
+
+
+def _draws_chip(resources: dict[str, Any]) -> str | None:
+    """Who is drawing on the shared quota gauge this boundary (brnrd#1810,
+    design-the-seat-that-never-quits.md §"The measurement") — this run's
+    own weighted spend (``me 1.2m``) plus every owned strand's, summed
+    (``▷2 3.4m``), beside the ordinary ``q S83`` chip. Reads
+    ``resources.quota.draws`` (:func:`brr.facets.build`'s ``draws`` param) —
+    the daemon writes it off the same allowance meter every heartbeat
+    already runs; nothing here re-meters anything.
+
+    Each half renders independently and drops out when it has nothing:
+    ``self`` absent (no reading yet) means no ``me`` segment at all — never
+    a fabricated ``me 0``. A strand still counts toward ``▷N`` even before
+    its own first heartbeat has a spend reading, but an all-unknown set of
+    strands renders the bare count with no summed number tacked on, for the
+    same reason. ``None`` when there is nothing to show on either half.
+    """
+    quota = resources.get("quota") if isinstance(resources, dict) else None
+    quota = quota if isinstance(quota, dict) else {}
+    draws = quota.get("draws")
+    draws = draws if isinstance(draws, dict) else {}
+    parts: list[str] = []
+    self_spent = draws.get("self")
+    if self_spent is not None:
+        parts.append(f"me {allowance.format_tokens(int(self_spent))}")
+    strands = draws.get("strands")
+    strands = strands if isinstance(strands, list) else []
+    if strands:
+        known = [
+            int(row.get("weighted")) for row in strands
+            if isinstance(row, dict) and row.get("weighted") is not None
+        ]
+        if known:
+            parts.append(f"▷{len(strands)} {allowance.format_tokens(sum(known))}")
+        else:
+            parts.append(f"▷{len(strands)}")
+    return " · ".join(parts) if parts else None
+
+
+def _hold_chip(resources: dict[str, Any]) -> str | None:
+    """The ``hold N·boot`` chip (design-the-seat-that-never-quits.md
+    §"The machinery, in slices" #3) — the ratio the daemon acts on while an
+    ``await:`` sits armed and idle, read straight off ``resources.quota.hold``
+    (:func:`brr.facets.build`'s ``hold`` param, attached by
+    ``daemon._hold_ratio_facet`` every heartbeat an await is armed).
+
+    ``None`` (no chip at all) when no await is armed this boundary — the
+    common case for most of a run. ``hold ?·boot`` while armed but no boot
+    cost has landed yet (Codex, or a Claude transcript with no usage row) —
+    never a guessed ratio, exactly what the resident sees before the daemon
+    would act on one.
+    """
+    quota = resources.get("quota") if isinstance(resources, dict) else None
+    quota = quota if isinstance(quota, dict) else {}
+    hold = quota.get("hold")
+    if not isinstance(hold, dict):
+        return None
+    ratio = hold.get("ratio")
+    if ratio is None:
+        return "hold ?·boot"
+    return f"hold {ratio:.1f}·boot"
 
 
 def _siblings_chip(resources: dict[str, Any]) -> str | None:
@@ -1671,6 +1861,76 @@ def _card_chip(card: dict[str, Any], card_stale: bool) -> str | None:
     # Healthy (or an older capsule shape with no body to measure — absence
     # of evidence of trouble is the quiet state, not a verdict to invent).
     return None
+
+
+def _card_is_behind(card: dict[str, Any]) -> bool:
+    """Has the run's observable state moved since ``.card`` was last written?
+
+    Same reading :func:`_card_chip`'s ``card behind`` segment uses — no
+    elapsed-time grace, because a movement that happened but hasn't aged
+    240s yet is still a movement the card doesn't reflect. ``False`` for a
+    card that was never written at all (``moved`` has no baseline to be
+    "since") or for a run with nothing to report yet.
+    """
+    if not card.get("active"):
+        return False
+    moved = card.get("state_moved_seconds")
+    age = card.get("age_seconds")
+    if (
+        not isinstance(moved, (int, float)) or isinstance(moved, bool)
+        or not isinstance(age, (int, float)) or isinstance(age, bool)
+    ):
+        return False
+    return moved < age
+
+
+# Kind → singular label, in the order the receipt names them (PRs/merges
+# lead — the artifacts a reader most wants to know exist — commits and
+# branches next, the rest after). Mirrors ``_LIVE_KINDS`` (relics.py) minus
+# ``summary``/``pending``, which are not relic kinds.
+_CARD_ACT_ORDER = (
+    "pr", "merge", "commit", "branch", "kb", "issue", "comment", "message",
+    "file", "item",
+)
+_CARD_ACT_LABELS: dict[str, str] = {"kb": "kb page", "pr": "PR"}
+_CARD_ACT_PLURALS: dict[str, str] = {"branch": "branches"}
+
+
+def _card_acts_behind(
+    produce: dict[str, Any], outbound: dict[str, Any], pending: int,
+) -> tuple[int, str]:
+    """What moved past the card's last write — a total, and a short receipt.
+
+    Same universe :func:`_card_is_behind` already tests (produce, delivery,
+    pending events); this names it instead of a bare "Ns ago" timestamp, so
+    the nudge says what the card is missing rather than only when it went
+    stale. Every count here is the run's current total (the codebase tracks
+    no "since the card's last write" baseline for produce/delivery — see
+    :func:`_produce_total` / :func:`_delivery_chip`, the same convention),
+    consistent with how the rest of the bar already reports these facts.
+    """
+    parts: list[str] = []
+    total = 0
+    counts = produce.get("counts") if isinstance(produce.get("counts"), dict) else {}
+    for kind in _CARD_ACT_ORDER:
+        n = counts.get(kind)
+        if not isinstance(n, (int, float)) or isinstance(n, bool) or not n:
+            continue
+        n = int(n)
+        total += n
+        label = _CARD_ACT_LABELS.get(kind, kind)
+        plural = _CARD_ACT_PLURALS.get(kind, label + "s")
+        parts.append(f"1 {label}" if n == 1 else f"{n} {plural}")
+    replies = int(outbound.get("replies_current", 0) or 0) + int(
+        outbound.get("replies_other", 0) or 0
+    )
+    if replies:
+        total += replies
+        parts.append("1 reply" if replies == 1 else f"{replies} replies")
+    if pending > 0:
+        total += pending
+        parts.append("1 pending" if pending == 1 else f"{pending} pending")
+    return total, ", ".join(parts)
 
 
 # #1002: a notice carries a ``kind`` since daemon.py:5765 — ``refused`` |
@@ -2555,6 +2815,7 @@ def _render_bar(
     route_drift: bool = False,
     route_stall: bool = False,
     mood_drift: bool = False,
+    wait_idle: bool = False,
 ) -> str | None:
     """The mid-run (``post-tool``) status bar: preamble + changed chips + details.
 
@@ -2609,17 +2870,39 @@ def _render_bar(
     if budget_chip:
         segments.append(("budget", budget_chip))
     # A strand's own metered allowance replaces the shared, lagging quota
-    # chip on its bar (design-the-allowance.md §2) — the resident's bar is
-    # untouched (its own `allowance` facet stays unimplemented until slice
-    # 2, so `_allowance_chip` returns None and the quota chip renders as
-    # ever).
+    # chip on its bar (design-the-allowance.md §2, slice 1) — a strand has
+    # a poor view of shared provider quota anyway ("the percentage doesn't
+    # mean anything and is hard to derive" from inside a concurrent
+    # child). The resident seat's own standing allowance (slice 2) is the
+    # opposite case: design-the-continuous-seat.md's "Boundaries" section
+    # and design-the-allowance.md both insist provider headroom and
+    # allocated work stay *separate, simultaneously visible* facts — so
+    # the resident's bar shows both chips rather than one replacing the
+    # other.
     allowance_chip = _allowance_chip(resources)
     if allowance_chip:
         segments.append(("allowance", allowance_chip))
-    else:
+    if not allowance_chip or _allowance_scope(resources) == "resident":
         quota_chip = _quota_chip(resources)
         if quota_chip:
             segments.append(("quota", quota_chip))
+    context_chip = _context_window_chip(resources)
+    if context_chip:
+        segments.append(("context_window", context_chip))
+    # Attribution of the chip just above (brnrd#1810): who is drawing on
+    # that shared gauge this boundary — this run's own weighted spend plus
+    # every owned strand's, summed. Independent of whether the quota chip
+    # itself rendered this boundary (a strand with its own allowance chip
+    # can still own further children in principle), so it is its own gate.
+    draws_chip = _draws_chip(resources)
+    if draws_chip:
+        segments.append(("draws", draws_chip))
+    # The ratio the daemon acts on while `brnrd await` sits armed and idle
+    # (design-the-seat-that-never-quits.md §machinery slice 3) — visible
+    # before it acts, same as `draws` above.
+    hold_chip = _hold_chip(resources)
+    if hold_chip:
+        segments.append(("hold", hold_chip))
     if census:
         # Sits beside `orient` because both describe the *wake*, not the run:
         # what the boot cost, and how much of it has been walked. Never in the
@@ -2814,27 +3097,33 @@ def _render_bar(
         details.append(allowance_line)
 
     streaks = repeat_streaks_in
-    if card_stale:
-        age = card.get("age_seconds")
-        age_txt = f"{age}s" if age is not None else "a while"
-        moved = card.get("state_moved_seconds")
-        if streaks.get("card_stale", 0) >= _REPEAT_COMPRESS_THRESHOLD:
-            details.append(
-                f"- card stale ({age_txt}) · seen ×{streaks['card_stale']} "
-                "— rewrite .card"
-            )
-        elif card.get("active") and moved is not None:
-            details.append(
-                f"- card: the run moved {moved}s ago (produce, branch, "
-                "delivery, or pending events) and .card hasn't been rewritten "
-                f"since — it's {age_txt} old and now describes a different run."
-            )
-        else:
-            details.append(
-                f"- card: no change in {age_txt} — rewrite .card (even one "
-                "line) so the surface the user is watching isn't sitting blank "
-                "or stale."
-            )
+    # The card nudge, reshaped (his call, 2026-09-06: "the card is an
+    # indicator; almost useless in chat, still a gauge on the web UI — the
+    # current shape of the nudge is wrong"). Two silences, one line:
+    #
+    # - a live wait *is* idle with nothing to report — nagging every poll of
+    #   an armed ``brnrd await`` was the exact repeating-paragraph failure
+    #   this replaces, so an unresolved arming vetoes the whole block
+    #   regardless of staleness.
+    # - nothing the card would report has moved since it was last written
+    #   (:func:`_card_is_behind` — no elapsed-time grace: card_stale's old
+    #   240s clock is gone from this line, since a movement that just
+    #   happened is still a movement to report, not a countdown to wait
+    #   out) ⇒ silence. The compact ``card stale``/``card blank``/``card
+    #   behind`` bar chip still carries the fact on its own gate; this
+    #   paragraph is not the only surface for it.
+    #
+    # When it does speak: one line of state, no instruction — what moved,
+    # not "rewrite .card". The old three-way split (streak-compressed /
+    # named-movement / "no change, rewrite anyway") collapses to this one
+    # shape; ``seen ×N`` survives only as the bare number.
+    if not wait_idle and _card_is_behind(card):
+        acts, breakdown = _card_acts_behind(produce, outbound, pending)
+        streak = streaks.get("card_stale", 0)
+        seen = f" · seen ×{streak}" if streak else ""
+        noun = "act" if acts == 1 else "acts"
+        what = f" ({breakdown})" if breakdown else ""
+        details.append(f"- card: Now is {acts} {noun} behind{what}{seen}")
 
     # ── The due-filter (w-54): change-gating replaces the laden gate. ──
     #
@@ -3107,6 +3396,16 @@ def format_delta(
     if not seed and not stop:
         card_stale = bool(card.get("stale"))
         run_name = payload.get("name") if isinstance(payload.get("name"), dict) else {}
+        # A wait that's armed and not yet resolved is idle by definition —
+        # nothing to report, so the card nudge (however behind the card is)
+        # stays quiet rather than restating itself on every poll of the
+        # same `brnrd await`.
+        portal_await = (
+            payload.get("await") if isinstance(payload.get("await"), dict) else {}
+        )
+        wait_idle = bool(portal_await.get("armed")) and not portal_await.get(
+            "resolved"
+        )
         return _render_bar(
             run=run, pending=action_pending, pending_known=pending_known,
             pending_files=pending_files,
@@ -3126,13 +3425,18 @@ def format_delta(
             pending_set_changed=pending_set_changed,
             last_chips=last_chips, rendered_chips=rendered_chips,
             route_drift=route_drift, route_stall=route_stall, mood_drift=mood_drift,
+            wait_idle=wait_idle,
         )
 
     lines: list[str] = []
     # Only seed/stop reach this point — post-tool returned via `_render_bar`
     # above — so this is always one of the two verbose-prose headers.
     #
-    header = "brnrd portal seed" if seed else "brnrd portal closeout"
+    header = (
+        "brnrd portal seed" if seed
+        else "brnrd portal phase commit" if _seat_parks_on_turn_end(payload)
+        else "brnrd portal closeout"
+    )
     # Framing, not just data: a bare count reads as ambient telemetry and
     # habituates fast — a maintainer caught this live (2026-07-05) when two
     # follow-ups sat unacknowledged on the outward-facing card for 8 minutes
@@ -3225,6 +3529,13 @@ def format_delta(
                 if not annotated_n else
                 f"- bolt: accepted, annotated — {annotated_n} check(s) "
                 "unresolved rode the delivered body."
+            )
+        elif _seat_parks_on_turn_end(payload):
+            lines.append(
+                "- phase commit: `brnrd cut` files what this stretch produced — "
+                "asks dispositioned, produce attested (none is fine, declared), "
+                "promises accounted — then the seat parks; anything addressed "
+                "to it resumes it. A commit of work, never an exit."
             )
         else:
             lines.append(
@@ -3817,11 +4128,53 @@ def _linger_opted_out(ctx: "HookContext") -> bool:
     return any(line.strip() for line in text.splitlines())
 
 
+def _seat_parks_on_turn_end(portal: dict[str, Any] | None) -> bool:
+    """Whether the daemon will park this seat when the turn ends (portal `seat`).
+
+    design-the-seat-that-never-quits.md: with ``seat.park_on_turn_end`` on,
+    a turn end is a park, not a close — so every Stop-phase clause whose
+    only purpose was "do not leave" has nothing to ask for. Read from
+    portal-state, never inferred: the hook says the seat parks only when
+    the daemon published that it will.
+    """
+    seat = portal.get("seat") if isinstance(portal, dict) else None
+    return bool(isinstance(seat, dict) and seat.get("parks_on_turn_end"))
+
+
+def _strand_hold_clause(payload: dict[str, Any], portal: dict[str, Any]) -> str | None:
+    """A strand ending its turn with neither a submit nor a bolt is waiting by returning.
+
+    Three strands on 2026-09-06 ended a turn with a text-only "still
+    holding — will act on the next signal" while their gate queued; each
+    run closed under it (a strand is never parked at turn end — only the
+    seat is). Reads the daemon's own facts off portal-state (`strand`,
+    `bolt`) — never the reply's wording — and blocks once; the Shell's
+    `stop_hook_active` loop-breaker lets a second, deliberate stop through.
+    """
+    strand = portal.get("strand") if isinstance(portal.get("strand"), dict) else {}
+    if not strand.get("is_strand"):
+        return None
+    if strand.get("submitted"):
+        return None
+    bolt = payload.get("bolt") if isinstance(payload.get("bolt"), dict) else {}
+    if bolt.get("accepted"):
+        return None
+    return (
+        "a strand that ends its turn has ended its run — nothing parks it. "
+        "waiting on a gate, a subprocess, a file ⇒ `brnrd await --file <path>` "
+        "(the wait that keeps you); finished ⇒ `submit: true` then `brnrd await`, "
+        "or `brnrd cut`"
+    )
+
+
 def _linger_closeout_clause(ctx: "HookContext") -> str | None:
     """Require a completed linger, or an explicit reason for skipping it."""
     if ctx.outbox_dir is None or _linger_opted_out(ctx):
         return None
     portal = _read_json(ctx.portal_state_path)
+    if _seat_parks_on_turn_end(portal):
+        # A parked seat *is* the continuation — nothing to justify.
+        return None
     await_state = portal.get("await") if isinstance(portal.get("await"), dict) else {}
     if await_state.get("armed") and await_state.get("resolved"):
         return None
@@ -4382,7 +4735,9 @@ def _armed_closeout_block(
     # Second, and beside it deliberately: next-move asks whether the reply ends
     # on a state at all, this asks whether the state it ends on is *true*. Both
     # read the same artifact, so they belong in the same breath.
-    if "vigil" in ctx.closeout_obligations:
+    if "vigil" in ctx.closeout_obligations and not _seat_parks_on_turn_end(portal):
+        # With the daemon parking on turn end, "continuing" with nothing
+        # armed is true by construction (design-the-seat-that-never-quits.md).
         vigil_clause = _vigil_closeout_clause(ctx, payload, portal or {})
         if vigil_clause:
             unmet.append(vigil_clause)
@@ -4391,6 +4746,11 @@ def _armed_closeout_block(
         linger_clause = _linger_closeout_clause(ctx)
         if linger_clause:
             unmet.append(linger_clause)
+
+    if "hold" in ctx.closeout_obligations:
+        hold_clause = _strand_hold_clause(payload, portal or {})
+        if hold_clause:
+            unmet.append(hold_clause)
 
     for name in _CLOSEOUT_ARTIFACT_ORDER:
         if name in ctx.closeout_obligations:
@@ -5144,7 +5504,7 @@ def _claude_hook_settings(brr_bin: str) -> dict[str, Any]:
             # on every keystroke. See ``install_hook_config`` for why this
             # one key merges *additively* with a repo's own ``PreToolUse``
             # rather than replacing it the way the other three do.
-            "PreToolUse": [_matched_entry(PHASE_PRE_TOOL, "Edit|Write")],
+            "PreToolUse": [_matched_entry(PHASE_PRE_TOOL, "Edit|Write|Monitor")],
         },
     }
 
@@ -5511,6 +5871,40 @@ def subagent_neutral(
 # this predicate unblocked, same as any tool this list doesn't name.
 _ROOTED_WRITE_TOOLS = frozenset({"Edit", "Write"})
 
+#: Tools that wait by *returning* — the Shell ends the model's turn to sit on
+#: the condition. Fine at a keyboard; in a daemon-hosted ``-p`` run a turn
+#: that ends is a run that ends (design-the-seat-that-never-quits.md §The tool
+#: trap: the console strand died on it 2026-09-06 00:54Z, "still holding —
+#: waiting on the Monitor", status ``done``). The only wait that keeps the
+#: seat is ``brnrd await``.
+_WAIT_BY_RETURNING_TOOLS = frozenset({"Monitor"})
+
+
+def _wait_by_returning_neutral(
+    ctx: "HookContext", payload: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Refuse a wait-by-returning tool in a daemon-hosted run; ``None`` otherwise.
+
+    Armed only when the run has an outbox (``ctx.outbox_dir`` — the daemon's
+    portal; an ad-hoc editor session has none and may Monitor freely). The
+    refusal names the verb that waits without leaving: ``brnrd await``
+    (``--file <path>`` is the trigger a Monitor-style condition wants).
+    """
+    if ctx.outbox_dir is None:
+        return None
+    if payload.get("tool_name") not in _WAIT_BY_RETURNING_TOOLS:
+        return None
+    return {
+        "inject": None,
+        "block": True,
+        "block_reason": (
+            "Monitor waits by ending the turn — in a daemon-hosted run that "
+            "ends the run (design-the-seat-that-never-quits.md §The tool "
+            "trap). Wait without leaving: `brnrd await` (add `--file <path>` "
+            "for a file-shaped condition), or a bounded foreground command."
+        ),
+    }
+
 # Control files a strand is legitimately entitled to write to in the shared
 # outbox directory ($BRR_OUTBOX_DIR). The bundle names these explicitly as
 # where the run's control data lives — see daemon-substrate.md →
@@ -5731,7 +6125,7 @@ def run_hook(
         # *correspondence*: a child owes no reply to the parent's
         # correspondents. A stray write into the shared host checkout is a
         # hazard either limb can cause, so neither is exempted here).
-        neutral = _rooted_write_neutral(ctx, payload)
+        neutral = _wait_by_returning_neutral(ctx, payload) or _rooted_write_neutral(ctx, payload)
         record_boundary(ctx, phase, neutral, payload)
         return render_native(ctx.flavour, phase, neutral)
     # An in-process subagent shares every env handle with the resident, so the

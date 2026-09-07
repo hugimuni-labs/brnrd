@@ -118,10 +118,11 @@ outcome ⇒ `portal-state.json` → `await`:
  "resolved": true, "outcome": "event", "which": null}
 ```
 
-`resolved` flips true on exactly one of three — never silence
+`resolved` flips true on exactly one of four — never silence
 `"event"` the daemon has something pending for you
 `"condition"` the optional `--file` path appeared · `which` names it · pending events outrank it deliberately — when both would fire, the correspondent is the answer
 `"timeout"` the deadline passed with nothing else firing — an open-ended wait has none
+`"park"` holding has cost more than a boot (design-the-seat-that-never-quits.md §machinery slice 3) — `hold_so_far` (this run's own weighted spend since the wait last had nothing pending) ÷ `spend.json → boot.weighted` ≥ `seat.park_after_boot_ratio` (config, default `1.0`); rides its own `ratio` field. refused while a pending event exists (caught by `"event"` first), while a correspondent reached the seat within `seat.live_window_minutes` (config, default `30`), or while the run owns a live strand (`resume: strands`'s job) — never for a strand. `brnrd await` prints `parking — holding has cost N·boot; end the turn and the seat parks (anything addressed to it resumes it)`; ending the turn lands the park the daemon already does for `resume: any` (`_finalize_resource_hold`, unchanged since #1815/#1817). the ratio also rides the woven bar while armed: `hold N·boot`, or `hold ?·boot` before a boot cost has landed — never a guess
 
 a call reaching its own ceiling first ⇒ `{"outcome": "pending"}` · call again is the entire instruction · that ceiling ≠ a brnrd contract ≠ a number to reason about — what bounds one call is the Shell's per-tool-call cap (claude's Bash ends at 10 minutes; codex differs) and the CLI sits under it · the old 15s bound is gone with the argument that justified it — the only things that would want to interrupt this run are the very things that resolve the wait ⇒ a blocking call returns the moment one arrives
 
@@ -179,7 +180,7 @@ Selectable local Shell+Core profiles from the same catalog brr uses for cost-awa
 
 ### Delivery contract
 Live values for this run's portals. Standing rules: §How the daemon drives you → delivery portals; full choreography: `brnrd docs portals`.
-- stdout capture: /tmp/brr-fixture-response.md (brnrd-written; final stdout = the one plain current-thread reply)
+- stdout capture: /tmp/brr-fixture-response.md (brnrd-written; this turn's stdout = the one plain reply for the waking event)
 - outbox: `/tmp/brr-fixture-outbox/` — one file = one mid-thought chat message; frontmatter routes (`event:` / `gate:` / `respawn:` / `spawn:`)
 - inbox: `/tmp/brr-fixture-outbox/inbox.json` — re-read at plan / todo boundaries, and immediately before a terminal closeout
 - portal state: `/tmp/brr-fixture-outbox/portal-state.json` (env `BRR_PORTAL_STATE`) — pending events, posture, `change_token`
@@ -220,7 +221,7 @@ source manifest:
   ✓ Working register (weave.md)                                     product      contract     [bytes]  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Working register, worked example (register.md)                  product      contract     [bytes]  {PACKAGE_ROOT}/prompts/register.md  [mtime]
   ✓ Daemon mechanics (daemon-substrate.md)                          product      substrate    [bytes]  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
-  ✓ Portal verb grammar (`brnrd await` / `brnrd do`, docs portals)  product      substrate      9,309  {PACKAGE_ROOT}/docs/portals.md  [mtime]
+  ✓ Portal verb grammar (`brnrd await` / `brnrd do`, docs portals)  product      substrate     10,262  {PACKAGE_ROOT}/docs/portals.md  [mtime]
   ✓ Resident identity core                                          product      identity     [bytes]  {PACKAGE_ROOT}/prompts/identity-core.md  [mtime]
   · Stranded-memory warning (repo moved)                            daemon-live  health             0  computed
   · Dominion digest (self-inject)                                   resident     memory             0  computed
@@ -235,7 +236,7 @@ source manifest:
   · notes health (deterministic preflight)                          daemon-live  health             0  computed
   · diffense review-pack prompt                                     product      config             0  {PACKAGE_ROOT}/prompts/diffense.md  [mtime]
   · Introspection dev-mode invitation                               product      config             0  {PACKAGE_ROOT}/prompts/introspection.md  [mtime]
-  ✓ Run Context Bundle (runtime facts)                              daemon-live  runtime        4,188  computed
+  ✓ Run Context Bundle (runtime facts)                              daemon-live  runtime        4,200  computed
 
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
 

@@ -17,32 +17,41 @@ _SAMPLE_WAKE_MANIFEST = {
         {
             "name": "boot-kernel",
             "label": "Boot kernel (action-first score)",
+            "owner": "daemon-live",
+            "authority": "runtime",
             "present": True,
             "sources": [{"synthesized": True}],
             "bytes_kept": 512,
             "bytes_cut": None,
             "budget_bytes": None,
             "trim_kind": None,
+            "freshness": None,
         },
         {
             "name": "identity-core",
             "label": "Resident Identity Core",
+            "owner": "product",
+            "authority": "identity",
             "present": True,
             "sources": [{"path": "/repo/src/brr/prompts/identity-core.md", "store": "product-prompt"}],
             "bytes_kept": 8192,
             "bytes_cut": 2048,
             "budget_bytes": None,
             "trim_kind": None,
+            "freshness": None,
         },
         {
             "name": "dominion-digest",
             "label": "Dominion digest",
+            "owner": "resident",
+            "authority": "memory",
             "present": False,
             "sources": [{"path": "/home/.brr/dominion/playbook.md", "store": "dominion"}],
             "bytes_kept": None,
             "bytes_cut": None,
             "budget_bytes": None,
             "trim_kind": None,
+            "freshness": None,
         },
     ],
 }
@@ -108,6 +117,14 @@ def test_snapshot_projects_existing_runtime_surfaces(tmp_path):
         prompt="assembled wake",
         session_start=True,
         wake_manifest=_SAMPLE_WAKE_MANIFEST,
+    )
+    (brr / "runs" / "run-parent" / "wake-blocks.json").write_text(
+        json.dumps({
+            "schema_version": "1",
+            "run_id": "run-parent",
+            "blocks": {"boot-kernel": "the exact kernel text this run rendered"},
+        }),
+        encoding="utf-8",
     )
     outbox = brr / "outbox" / "evt-parent"
     outbox.mkdir(parents=True)
@@ -204,6 +221,9 @@ def test_snapshot_projects_existing_runtime_surfaces(tmp_path):
     assert snapshot.selected.portal_state["await"]["outcome"] == "event"
     assert snapshot.selected.inbox_state[0]["id"] == "evt-followup"
     assert "Tracing the steer" in snapshot.selected.card
+    assert snapshot.selected.wake_blocks == {
+        "boot-kernel": "the exact kernel text this run rendered"
+    }
     assert [row["kind"] for row in snapshot.selected.thread] == ["event", "artifact"]
     assert snapshot.console_key == "console:hugimuni-labs_brnrd"
 
@@ -385,6 +405,42 @@ def test_portals_separates_correspondence_from_finished_strands_and_folds_notice
     assert "note body ignored; use event: to reply ×2" in text
     assert "await      resolved by event" in text
     assert "armed=True" not in text
+
+
+def test_portals_shows_the_live_context_window_reading_beside_spawn_pool(tmp_path):
+    """brnrd#1810: the context reading lands where the other `resources`
+    facets already render (the same block `spawn` — the pool line — sits
+    in), not only behind the raw-JSON toggle."""
+    run = _make_run_view(
+        tmp_path,
+        portal_state={
+            "resources": {
+                "coexisting_runs": {
+                    "spawn_pool": {"active": 1, "max_concurrent": 4, "available": 3},
+                },
+                "context_window": {
+                    "status": "known",
+                    "summary": "8.3k tok occupied (no window size yet)",
+                },
+            },
+        },
+    )
+    text = _portals(run)
+    assert "spawn      1 active / 4 max · 3 available" in text
+    assert "context    8.3k tok occupied (no window size yet)" in text
+
+
+def test_portals_silent_on_context_window_when_not_known(tmp_path):
+    run = _make_run_view(
+        tmp_path,
+        portal_state={
+            "resources": {
+                "context_window": {"status": "unimplemented", "summary": None},
+            },
+        },
+    )
+    text = _portals(run)
+    assert "context" not in text
 
 
 def test_portals_show_raw_includes_json_dumps(tmp_path):
@@ -623,6 +679,196 @@ def test_wake_topology_table_tokens_and_total():
     assert "Σ kept" in table
     assert "8,704" in table  # 512 + 8192 present bytes
     assert "heuristic" in table  # the tok column names its own basis
+
+
+def test_wake_topology_table_groups_by_authority_with_byte_share():
+    """Same grouping the cost ledger uses (`bootscore._cost_ledger`): rows
+    bucketed under their authority header, largest byte share first, each
+    row still carrying its own owner/authority chip."""
+    from brr.operator_console.tui import _wake_topology_table
+
+    table = _wake_topology_table(_SAMPLE_WAKE_MANIFEST["blocks"])
+    # identity-core (8192 B) outweighs boot-kernel (512 B); its authority
+    # group heads the table.
+    assert table.index("identity") < table.index("runtime")
+    assert "daemon-live/runtime" in table
+    assert "product/identity" in table
+    # 8192 / 8704 present bytes.
+    assert "94" in table  # share percentage, rounded
+
+
+def test_wake_block_title_carries_owner_authority_chip():
+    from brr.operator_console.tui import _wake_block_title
+
+    block = _SAMPLE_WAKE_MANIFEST["blocks"][1]  # identity-core
+    assert _wake_block_title(block) == "[product/identity] identity-core  ·  8,192 B"
+
+
+def test_wake_block_detail_synthesized_says_computed():
+    from brr.operator_console.tui import _wake_block_detail
+
+    block = _SAMPLE_WAKE_MANIFEST["blocks"][0]  # boot-kernel, synthesized
+    detail = _wake_block_detail(block, repo_root=None, mounted_blocks={})
+    assert "owner       daemon-live" in detail
+    assert "authority   runtime" in detail
+    assert "computed — no source file" in detail
+
+
+def test_wake_block_detail_absent_says_absent_not_computed():
+    """An absent-but-file-backed block (dominion empty this run) must not
+    read as "computed" — it has a source, it just did not render (#1804
+    follow-up: the two silences look identical unless named apart)."""
+    from brr.operator_console.tui import _wake_block_detail
+
+    block = _SAMPLE_WAKE_MANIFEST["blocks"][2]  # dominion-digest, present=False
+    detail = _wake_block_detail(block, repo_root=None, mounted_blocks={})
+    assert "absent" in detail
+    assert "computed" not in detail
+
+
+def test_wake_block_detail_shows_rendered_bytes_from_sidecar():
+    """#1830: `wake-manifest.json`'s `rendered_bytes` (this run's own
+    wake-blocks.json sidecar size) renders as its own accounting row,
+    independent of the text below it."""
+    from brr.operator_console.tui import _wake_block_detail
+
+    block = {
+        "name": "recent-activity",
+        "label": "Recent activity (kb/log.md tail)",
+        "owner": "daemon-live",
+        "authority": "activity",
+        "present": True,
+        "sources": [{"synthesized": True}],
+        "bytes_kept": 40,
+        "trim_kind": "cut",
+        "rendered_bytes": 40,
+    }
+    detail = _wake_block_detail(
+        block, repo_root=None, wake_blocks={"recent-activity": "x" * 40},
+    )
+    assert "rendered    40 B" in detail
+
+
+def test_wake_block_detail_rendered_bytes_absent_is_dash():
+    from brr.operator_console.tui import _wake_block_detail
+
+    block = _SAMPLE_WAKE_MANIFEST["blocks"][0]  # boot-kernel, no rendered_bytes key
+    detail = _wake_block_detail(block, repo_root=None, mounted_blocks={})
+    assert "rendered    —" in detail
+
+
+def test_block_text_preview_max_covers_a_real_work_surface_block():
+    """#1830: the ceiling used to clip a real-sized work-surface block
+    (~49 KB, measured run-260725-1136-pyck) mid-render; it must not."""
+    from brr.operator_console.tui import _BLOCK_TEXT_PREVIEW_MAX
+
+    assert _BLOCK_TEXT_PREVIEW_MAX >= 49_000
+
+
+def test_wake_block_text_reads_source_file_and_redacts_secrets(tmp_path):
+    """Inspecting a file-backed block reads the real file and masks anything
+    that looks like a credential, via the same `hooks.redact_detail` every
+    boundary detail and `.card` line already goes through — not a second
+    redaction path."""
+    from brr.operator_console.tui import _wake_block_text
+
+    source = tmp_path / "identity-core.md"
+    source.write_text(
+        "You are the resident.\nexport GITHUB_TOKEN=ghp_1234567890abcdefEXTRA\n",
+        encoding="utf-8",
+    )
+    block = {
+        "name": "identity-core",
+        "label": "Resident Identity Core",
+        "owner": "product",
+        "authority": "identity",
+        "present": True,
+        "sources": [{"path": str(source), "store": "product-prompt"}],
+        "bytes_kept": source.stat().st_size,
+        "trim_kind": None,
+    }
+    text = _wake_block_text(block, repo_root=tmp_path, mounted_blocks={})
+    assert "You are the resident." in text
+    assert "ghp_1234567890abcdefEXTRA" not in text
+    assert "<redacted>" in text
+    assert "full source file" in text  # provenance note, no trim
+
+
+def test_wake_block_text_prefers_mounted_exact_bytes():
+    """A mounted block's `prompt-mounted.json` text is exact — it must win
+    over a live file re-read even when the manifest also names a source
+    path, since the two can legitimately differ (a curated slice vs. the
+    whole file)."""
+    from brr.operator_console.tui import _wake_block_text
+
+    block = {
+        "name": "portal-verb-grammar",
+        "present": True,
+        "sources": [{"path": "/somewhere/portals.md", "store": "product-prompt"}],
+    }
+    text = _wake_block_text(
+        block, repo_root=None, mounted_blocks={"portal-verb-grammar": "curated slice only"}
+    )
+    assert "curated slice only" in text
+    assert "mounted" in text
+
+
+def test_wake_block_text_prefers_wake_blocks_sidecar_over_mounted():
+    """#1830: `wake-blocks.json` is the superset — it wins even when the
+    same key also has a (necessarily identical, on any post-#1830 wake)
+    entry in the older mounted-only sidecar, and the note names the newer
+    file rather than the mounted one."""
+    from brr.operator_console.tui import _wake_block_text
+
+    block = {
+        "name": "portal-verb-grammar",
+        "present": True,
+        "sources": [{"path": "/somewhere/portals.md", "store": "product-prompt"}],
+    }
+    text = _wake_block_text(
+        block,
+        repo_root=None,
+        mounted_blocks={"portal-verb-grammar": "curated slice only"},
+        wake_blocks={"portal-verb-grammar": "curated slice only"},
+    )
+    assert "curated slice only" in text
+    assert "wake-blocks.json" in text
+    assert "#1830" in text
+
+
+def test_wake_block_text_sidecar_answers_for_a_synthesized_block():
+    """#1830's whole point: a home-originated block (`location == "computed"`,
+    no source file — dominion, work-surface, pitfalls, knowledge-sources,
+    recent-activity, ...) previously had no exact bytes at all, mounted or
+    not. With a `wake_blocks` entry it now does, and the "computed — no
+    source file" placeholder does not appear."""
+    from brr.operator_console.tui import _wake_block_text
+
+    block = {
+        "name": "recent-activity",
+        "present": True,
+        "sources": [{"synthesized": True}],
+        "trim_kind": "cut",
+    }
+    text = _wake_block_text(
+        block, repo_root=None, mounted_blocks={},
+        wake_blocks={"recent-activity": "## [2026-09-05] fix | only the kept entry"},
+    )
+    assert "only the kept entry" in text
+    assert "as the wake received it — exact bytes" in text
+    assert "computed — no source file" not in text
+
+
+def test_wake_block_text_synthesized_with_no_sidecar_still_says_computed():
+    """A run captured before #1830 has no `wake-blocks.json` at all — the
+    synthesized branch must still degrade to the old placeholder rather than
+    raising or going silent, now naming *why* nothing is available."""
+    from brr.operator_console.tui import _wake_block_text
+
+    block = {"name": "recent-activity", "present": True, "sources": [{"synthesized": True}]}
+    text = _wake_block_text(block, repo_root=None, mounted_blocks={}, wake_blocks={})
+    assert "computed — no source file" in text
+    assert "#1830" in text
 
 
 def test_attention_is_loud_about_await(tmp_path):
@@ -914,9 +1160,9 @@ def test_wake_renders_grouped_collapsible_blocks(tmp_path):
             assert all(n.collapsed for n in wake_nodes), "collapsed by default"
 
             titles = {n.wake_block_name: n.title for n in wake_nodes}
-            assert titles["boot-kernel"] == "boot-kernel  ·  512 B"
-            assert titles["identity-core"] == "identity-core  ·  8,192 B"
-            assert titles["dominion-digest"] == "dominion-digest  ·  absent"
+            assert titles["boot-kernel"] == "[daemon-live/runtime] boot-kernel  ·  512 B"
+            assert titles["identity-core"] == "[product/identity] identity-core  ·  8,192 B"
+            assert titles["dominion-digest"] == "[resident/memory] dominion-digest  ·  absent"
 
             absent_node = next(n for n in wake_nodes if n.wake_block_name == "dominion-digest")
             assert "wake-absent" in absent_node.classes

@@ -275,6 +275,46 @@ def binding_quota_remaining_pct(
     return min(found) if found else None
 
 
+def binding_quota_reset_epoch(levels: Mapping[str, Any] | None) -> float | None:
+    """The soonest reset instant among the buckets a heartbeat can see.
+
+    Companion to :func:`binding_quota_remaining_pct`, for a caller that
+    needs the *window*, not the *headroom* — the resident's own standing
+    allowance (design-the-allowance.md §2, slice 2) keys its window off
+    this instant rather than a wall-clock guess, so a window boundary
+    tracks the provider's actual reset, not a locally-reasoned one.
+
+    Reads the same fields Claude's and Codex's collectors already populate:
+    ``quota.session_resets_at`` / ``quota.week_resets_at`` (Claude, folded
+    into the quota dict alongside its ``buckets``) and
+    ``quota.primary_resets_at`` / ``quota.secondary_resets_at`` (Codex).
+    Per-model ``week_models`` buckets carry no reset field today (only
+    ``remaining_percentage``) and are not consulted here. Returns the
+    *minimum* epoch found — the nearest constraint — or ``None`` when no
+    reset instant is present in this reading; the caller must treat
+    ``None`` as "no evidence a window rolled," never as "roll now."
+    """
+    if not isinstance(levels, Mapping):
+        return None
+    quota = levels.get("quota")
+    if not isinstance(quota, Mapping):
+        return None
+
+    found: list[float] = []
+
+    def _add(value: Any) -> None:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            found.append(float(value))
+
+    for key in (
+        "session_resets_at", "week_resets_at",
+        "primary_resets_at", "secondary_resets_at",
+    ):
+        _add(quota.get(key))
+
+    return min(found) if found else None
+
+
 def excluded_week_model_buckets(
     levels: Mapping[str, Any] | None,
     model: str | None,

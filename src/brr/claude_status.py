@@ -643,11 +643,31 @@ def _shared_dir(env: dict[str, str]) -> Path | None:
 
 
 def write_snapshot(outbox_dir: Path | None, levels: dict[str, Any]) -> Path | None:
+    """Overwrite this control file with *levels* — except ``boot``.
+
+    ``daemon._record_boot_cost`` (brnrd#1810, design-the-seat-that-never-
+    quits.md §"The measurement") stamps a ``boot`` key onto this same file
+    early — read live off the growing transcript, long before this
+    function's own caller (:func:`capture_stdout_with_model`) has a final
+    result envelope to write, since that only exists once the whole
+    headless invocation exits. This function's contract is "replace the
+    whole file with what I was handed," which would otherwise silently
+    erase that earlier stamp the moment the real levels land: a value
+    recorded once per run, gone on the very next write. A ``boot`` already
+    on disk survives any *levels* that doesn't carry its own — carried
+    forward, not merged field-by-field, since boot cost never changes once
+    recorded.
+    """
     if outbox_dir is None:
         return None
     try:
         outbox_dir.mkdir(parents=True, exist_ok=True)
         path = outbox_dir / SNAPSHOT_NAME
+        if "boot" not in levels:
+            existing = load_snapshot(outbox_dir)
+            if isinstance(existing, dict) and "boot" in existing:
+                levels = dict(levels)
+                levels["boot"] = existing["boot"]
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(json.dumps(levels, sort_keys=True), encoding="utf-8")
         tmp.replace(path)

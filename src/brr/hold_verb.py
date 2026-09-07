@@ -15,7 +15,13 @@ Grammar, everything but the marker optional:
 
     hold: true
     reason: quota running low        # free text; default "resident_requested"
-    resume: operator | reset         # default "operator"
+    resume: operator | reset | strands | any   # default "operator"; strands =
+                                      # wake when one of this run's own
+                                      # children submits/completes/asks
+                                      # (a correspondent message wakes any
+                                      # hold); refused when no strand is live;
+                                      # any = the seat's resting state: a
+                                      # message, an own strand, or a tick
     reset: 2026-09-12T00:00:00Z      # only meaningful with resume: reset —
                                       # an explicit deadline the resident
                                       # already has reason to believe (told
@@ -46,6 +52,11 @@ _RESUME_ALIASES = {
     "manual": resource_hold.RESUME_OPERATOR,
     "reset": resource_hold.RESUME_RESET,
     "quota_reset": resource_hold.RESUME_RESET,
+    "strands": resource_hold.RESUME_STRANDS,
+    "children": resource_hold.RESUME_STRANDS,
+    "spawn": resource_hold.RESUME_STRANDS,
+    "any": resource_hold.RESUME_ANY,
+    "anything": resource_hold.RESUME_ANY,
 }
 
 
@@ -73,7 +84,7 @@ def parse_hold(fm: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
     else:
         return None, (
             f"resume: {raw_resume!r} is not recognised — use "
-            "`resume: operator` or `resume: reset`"
+            "`resume: operator`, `resume: reset`, `resume: strands`, or `resume: any`"
         )
     reset_deadline_hint: float | None = None
     raw_reset = str(fm.get("reset") or "").strip()
@@ -83,7 +94,11 @@ def parse_hold(fm: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
         reset_deadline_hint = protocol_mod.parse_iso_epoch(raw_reset)
         if reset_deadline_hint is None:
             return None, f"reset: {raw_reset!r} is not a parseable timestamp"
-    reason = str(fm.get("reason") or "").strip() or resource_hold.REASON_RESIDENT_REQUESTED
+    reason = str(fm.get("reason") or "").strip() or (
+        resource_hold.REASON_WAITING_ON_STRANDS
+        if resume_condition == resource_hold.RESUME_STRANDS
+        else resource_hold.REASON_RESIDENT_REQUESTED
+    )
     provider = str(fm.get("provider") or "").strip() or None
     return (
         {

@@ -663,17 +663,20 @@ def test_unwritten_run_name_no_longer_nags_without_a_ledger(tmp_path):
 
 def test_post_tool_surfaces_stale_card(tmp_path):
     # 2026-07-05: the card is the one live surface a watching user sees
-    # between replies; unlike SCM, a stale note is a mid-run failure, so it
-    # must render at post-tool, not just at closeout.
+    # between replies; unlike SCM, a card behind the run is a mid-run
+    # failure, so it must render at post-tool, not just at closeout.
+    # 2026-09-06: reshaped to one state line naming what moved — no more
+    # "no change in Ns — rewrite .card" instruction.
     _portal(
         tmp_path, token="t1", pending=0,
+        produce={"known": True, "counts": {"pr": 1}},
         card={"active": True, "text": "old note", "age_seconds": 400,
-              "stale": True},
+              "state_moved_seconds": 100, "stale": True},
     )
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "no change in 400s" in ctx
-    assert "rewrite .card" in ctx
+    assert "card: Now is 1 act behind (1 PR)" in ctx
+    assert "rewrite .card" not in ctx
 
 
 def test_post_tool_says_nothing_about_a_fresh_card(tmp_path):
@@ -1865,7 +1868,7 @@ def test_install_hook_config_writes_wellformed_claude_settings(tmp_path):
     # #1184: unlike the other three (unconditional), the rooted-write guard
     # is matcher-scoped to the two tools that take a raw file path — every
     # other tool call never reaches ``brnrd hook pre-tool`` at all.
-    assert hook_block["PreToolUse"][0]["matcher"] == "Edit|Write"
+    assert hook_block["PreToolUse"][0]["matcher"] == "Edit|Write|Monitor"
     for name in ("PostToolBatch", "Stop", "SessionStart"):
         assert "matcher" not in hook_block[name][0]
     # statusLine is a TUI footer and does not fire under daemon --print runs,
@@ -1913,7 +1916,7 @@ def test_install_hook_config_merges_and_preserves_user_keys(tmp_path):
     pre_tool = settings["hooks"]["PreToolUse"]
     assert pre_tool[0] == {"hooks": []}
     assert pre_tool[-1]["hooks"][0]["command"] == "brnrd hook pre-tool"
-    assert pre_tool[-1]["matcher"] == "Edit|Write"
+    assert pre_tool[-1]["matcher"] == "Edit|Write|Monitor"
 
 
 def test_install_hook_config_repeated_installs_keep_one_brr_pre_tool(tmp_path):
@@ -1950,7 +1953,7 @@ def test_install_hook_config_repairs_stale_brr_pre_tool_copies(tmp_path):
     settings_dir = tmp_path / ".claude"
     settings_dir.mkdir()
     stale_entry = {
-        "matcher": "Edit|Write",
+        "matcher": "Edit|Write|Monitor",
         "hooks": [
             {"type": "command", "command": "/old/location/brnrd hook pre-tool"}
         ],
@@ -4078,6 +4081,167 @@ def test_allowance_directive_silent_under_100pct():
     assert line is None or "allowance spent" not in line
 
 
+# ── the resident seat's own standing allowance (design-the-allowance.md
+# §2, slice 2): same facet shape, `scope: "resident"` changes the render ──
+
+
+def test_allowance_chip_sits_beside_quota_chip_for_the_resident():
+    """Unlike a strand (whose shared quota reading is not worth a second
+    chip), design-the-continuous-seat.md's "Boundaries" section and design-
+    the-allowance.md both insist provider headroom and allocated work stay
+    separate, simultaneously visible facts for the seat itself — so both
+    chips render."""
+    resources = {
+        "quota": {"status": "known", "summary": "session 57% left"},
+        "allowance": {
+            "status": "known", "tokens": 20_000_000, "spent": 500_000,
+            "pct": 2.5, "scope": "resident",
+        },
+    }
+    payload = _portal_payload(resources=resources)
+    line = hooks.format_delta(payload, rendered_chips={})
+    assert line is not None
+    assert "spend 500k/20m" in line
+    assert "q S57" in line
+
+
+def test_allowance_directive_silent_for_resident_scope_even_past_100pct():
+    """The strand-only park/ask directive (`submit: true`, `ask: allowance
+    +<tokens>`) names verbs the daemon refuses off a strand — see
+    `_allowance_directive`'s docstring. The resident's own overrun must not
+    fire it; the chip alone stays the visible signal."""
+    resources = {
+        "allowance": {
+            "status": "known", "tokens": 120_000, "spent": 140_000,
+            "pct": 116.7, "scope": "resident",
+        },
+    }
+    payload = _portal_payload(resources=resources)
+    line = hooks.format_delta(payload, rendered_chips={})
+    assert line is None or "allowance spent" not in line
+    assert line is None or "submit: true" not in line
+
+
+# ── draws — attribution of the shared quota gauge (brnrd#1810, design-
+# the-seat-that-never-quits.md §"The measurement") ────────────────────────
+
+
+def test_draws_chip_renders_self_and_strands():
+    resources = {
+        "quota": {
+            "status": "known", "summary": "session 83% left",
+            "draws": {
+                "self": 1_200_000,
+                "strands": [
+                    {"run_id": "run-a", "title": "t1", "weighted": 2_000_000},
+                    {"run_id": "run-b", "title": "t2", "weighted": 1_400_000},
+                ],
+            },
+        },
+    }
+    assert hooks._draws_chip(resources) == "me 1.2m · ▷2 3.4m"
+
+
+def test_draws_chip_self_only_when_no_strands():
+    resources = {"quota": {"draws": {"self": 500_000, "strands": []}}}
+    assert hooks._draws_chip(resources) == "me 500k"
+
+
+def test_draws_chip_strands_only_when_self_unknown():
+    resources = {
+        "quota": {
+            "draws": {
+                "self": None,
+                "strands": [{"run_id": "run-a", "title": None, "weighted": 900_000}],
+            },
+        },
+    }
+    assert hooks._draws_chip(resources) == "▷1 900k"
+
+
+def test_draws_chip_never_fabricates_a_zero_for_an_absent_self():
+    resources = {"quota": {"draws": {"self": None, "strands": []}}}
+    assert hooks._draws_chip(resources) is None
+
+
+def test_draws_chip_renders_a_bare_count_when_no_strand_has_a_reading_yet():
+    """A strand still counts toward `N` before its own first heartbeat has
+    metered anything — but the sum is absent, not a fabricated 0."""
+    resources = {
+        "quota": {
+            "draws": {
+                "self": None,
+                "strands": [
+                    {"run_id": "run-a", "title": None, "weighted": None},
+                    {"run_id": "run-b", "title": None, "weighted": None},
+                ],
+            },
+        },
+    }
+    assert hooks._draws_chip(resources) == "▷2"
+
+
+def test_draws_chip_none_without_a_draws_facet():
+    assert hooks._draws_chip({"quota": {"status": "known"}}) is None
+    assert hooks._draws_chip({}) is None
+
+
+# ── hold (design-the-seat-that-never-quits.md §"The machinery, in
+# slices" #3) ────────────────────────────────────────────────────────────
+
+
+def test_hold_chip_renders_the_ratio():
+    resources = {"quota": {"hold": {"ratio": 0.8, "known": True}}}
+    assert hooks._hold_chip(resources) == "hold 0.8·boot"
+
+
+def test_hold_chip_unknown_ratio_never_guesses():
+    """No boot cost recorded yet (Codex, or a transcript with no usage
+    row) — armed, but nothing to compare against. `?`, never a fabricated
+    number."""
+    resources = {"quota": {"hold": {"ratio": None, "known": False}}}
+    assert hooks._hold_chip(resources) == "hold ?·boot"
+
+
+def test_hold_chip_none_without_a_hold_facet():
+    """No `await:` armed this boundary — the common case — renders nothing
+    at all, not even the `?` form."""
+    assert hooks._hold_chip({"quota": {"status": "known"}}) is None
+    assert hooks._hold_chip({}) is None
+
+
+def test_render_bar_renders_the_hold_chip_beside_quota():
+    resources = {
+        "quota": {
+            "status": "known", "summary": "session 83% left",
+            "hold": {"ratio": 1.4, "known": True},
+        },
+        "allowance": {"status": "unimplemented"},
+    }
+    payload = _portal_payload(resources=resources)
+    line = hooks.format_delta(payload, rendered_chips={})
+    assert line is not None
+    assert "hold 1.4·boot" in line
+
+
+def test_render_bar_renders_the_draws_chip_beside_quota():
+    resources = {
+        "quota": {
+            "status": "known", "summary": "session 83% left",
+            "draws": {
+                "self": 1_200_000,
+                "strands": [{"run_id": "run-a", "title": "t", "weighted": 3_400_000}],
+            },
+        },
+        "allowance": {"status": "unimplemented"},
+    }
+    payload = _portal_payload(resources=resources)
+    line = hooks.format_delta(payload, rendered_chips={})
+    assert line is not None
+    assert "q S83" in line
+    assert "me 1.2m · ▷1 3.4m" in line
+
+
 def test_quota_chip_disambiguates_a_repeated_first_letter():
     # Two per-model week buckets that would otherwise both abbreviate to the
     # same letter must not collapse into one chip.
@@ -4092,6 +4256,49 @@ def test_quota_chip_disambiguates_a_repeated_first_letter():
     letters = chip[len("q "):].split("·")
     assert len(letters) == 2
     assert letters[0] != letters[1]
+
+
+# ── context_window: live before the final envelope, per-Shell (brnrd#1810,
+# design-the-seat-that-never-quits.md §slice 4) ──────────────────────────
+
+
+def test_context_window_chip_renders_a_percentage_once_known():
+    resources = {
+        "context_window": {
+            "status": "known", "summary": "62% context left (est)",
+        },
+    }
+    assert hooks._context_window_chip(resources) == "ctx 62%"
+
+
+def test_context_window_chip_renders_bare_tokens_before_a_window_size_exists():
+    resources = {
+        "context_window": {
+            "status": "known",
+            "summary": "8.3k tok occupied (no window size yet)",
+        },
+    }
+    assert hooks._context_window_chip(resources) == "ctx 8.3k tok"
+
+
+def test_context_window_chip_silent_when_not_known():
+    assert hooks._context_window_chip({}) is None
+    assert hooks._context_window_chip(
+        {"context_window": {"status": "unimplemented", "summary": None}}
+    ) is None
+
+
+def test_post_tool_bar_carries_the_context_window_chip():
+    resources = {
+        "context_window": {
+            "status": "known",
+            "summary": "8.3k tok occupied (no window size yet)",
+        },
+    }
+    payload = _portal_payload(resources=resources)
+    line = hooks.format_delta(payload, rendered_chips={})
+    assert line is not None
+    assert "ctx 8.3k tok" in line
 
 
 # ── Mood asks on the edge, not on the tick (2026-07-23) ──────────────────
@@ -4929,6 +5136,70 @@ def test_census_renders_once_then_never_again(tmp_path):
         hooks.PHASE_POST_TOOL, "{}", _score_env(tmp_path)
     )
     assert "wake " not in _inject_text(second)
+
+
+_CENSUS_BLOCKS_WITH_AUTHORITY = [
+    {"block_key": "work-surface", "label": "Discovered work surface",
+     "bytes": 51_200, "present": True, "authority": "surface"},
+    {"block_key": "notes-health", "label": "notes health",
+     "bytes": 28_672, "present": True, "authority": "health"},
+    {"block_key": "kb-health", "label": "kb health",
+     "bytes": 1_024, "present": True, "authority": "health"},
+    {"block_key": "identity-core", "label": "Resident identity core",
+     "bytes": 6_079, "present": True, "authority": "identity"},
+]
+
+
+def test_census_names_the_top_two_ledger_categories(tmp_path):
+    """Same grouping `brnrd prompts show`'s cost ledger prints (bytes by
+    `authority`), read off the same score — not re-measured, and the two
+    `health` entries collapse into one category total (28,672 + 1,024 =
+    29,696 B), ranking above `identity`'s lone 6,079 B."""
+    _census_score(tmp_path, contracts=_CENSUS_BLOCKS_WITH_AUTHORITY, prompt_bytes=87_000)
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _score_env(tmp_path))
+    bar = _inject_text(out).splitlines()[0]
+    assert "surface 50.0 KB" in bar
+    assert "health 29.0 KB" in bar
+    assert "identity" not in bar  # only the top two ride the line
+
+
+def test_census_omits_ledger_categories_when_no_entry_carries_authority(tmp_path):
+    """Positive twin: the same shape with no `authority` field (an older
+    daemon's score) renders the pre-existing fields and nothing more."""
+    _census_score(tmp_path, contracts=_CENSUS_BLOCKS, prompt_bytes=115714)
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _score_env(tmp_path))
+    bar = _inject_text(out).splitlines()[0]
+    assert "wake 113.0 KB · top work-surface 24.1 KB · oldest 2026-07-25" in bar
+
+
+def test_census_flags_the_top_offender_past_the_warn_threshold(tmp_path):
+    big_blocks = [
+        {"block_key": "work-surface", "label": "Discovered work surface",
+         "bytes": 130_000, "present": True, "authority": "surface"},
+        {"block_key": "identity-core", "label": "Resident identity core",
+         "bytes": 6_079, "present": True, "authority": "identity"},
+    ]
+    _census_score(tmp_path, contracts=big_blocks, prompt_bytes=136_079)
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _score_env(tmp_path))
+    bar = _inject_text(out).splitlines()[0]
+    assert "identity 5.9 KB ⚠ work-surface" in bar
+
+
+def test_census_stays_unflagged_under_the_warn_threshold(tmp_path):
+    """Positive twin: the identical shape, smaller, never gets the flag —
+    proves the flag is threshold-gated, not unconditional."""
+    _census_score(tmp_path, contracts=_CENSUS_BLOCKS_WITH_AUTHORITY, prompt_bytes=87_000)
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _score_env(tmp_path))
+    bar = _inject_text(out).splitlines()[0]
+    assert "⚠" not in bar
 
 
 # ── Boundary transcript ──────────────────────────────────────────────────
@@ -5868,16 +6139,61 @@ def test_name_nudge_detail_is_retired():
         assert rendered is None or ".name" not in rendered
 
 
-def test_card_stale_detail_compresses_on_the_third_consecutive_boundary():
+def test_card_nudge_names_acts_and_a_bare_streak_number():
+    """Reshaped 2026-09-06 (his call: "the current shape of the nudge is
+    wrong"): no more streak-compressed alternate wording at N>=3 — one line,
+    always, naming what moved past the card's last write; ``seen ×N`` is a
+    bare number riding the same line, not a threshold-gated compression."""
     payload = _bar_payload(
         card={"active": True, "stale": True, "age_seconds": 900,
               "state_moved_seconds": 500},
     )
-    full = hooks.format_delta(payload, repeat_streaks={"card_stale": 2})
-    compact = hooks.format_delta(payload, repeat_streaks={"card_stale": 3})
-    assert "hasn't been rewritten" in full
-    assert "hasn't been rewritten" not in compact
-    assert "- card stale (900s) · seen ×3 — rewrite .card" in compact
+    early = hooks.format_delta(payload, repeat_streaks={"card_stale": 1})
+    later = hooks.format_delta(payload, repeat_streaks={"card_stale": 3})
+    unseen = hooks.format_delta(payload, repeat_streaks={"card_stale": 0})
+    receipt = "- card: Now is 9 acts behind (3 commits, 1 kb page, 5 replies)"
+    assert f"{receipt} · seen ×1" in early
+    assert f"{receipt} · seen ×3" in later
+    assert receipt in unseen
+    assert "seen ×" not in unseen
+
+
+def test_card_nudge_silent_while_a_wait_is_armed():
+    """Silence #1: an armed, unresolved ``brnrd await`` is idle by
+    definition — nothing to report — so the nudge does not restate itself
+    on every poll of the same wait, however behind the card is."""
+    payload = _bar_payload(
+        card={"active": True, "stale": True, "age_seconds": 900,
+              "state_moved_seconds": 500},
+        **{"await": {"armed": True, "resolved": False}},
+    )
+    rendered = hooks.format_delta(payload, repeat_streaks={"card_stale": 3})
+    assert rendered is None or "card:" not in rendered
+
+    # A *resolved* wait (the daemon has something for this run) is not idle
+    # — the nudge speaks again.
+    payload["await"] = {"armed": True, "resolved": True, "outcome": "event"}
+    rendered = hooks.format_delta(payload, repeat_streaks={"card_stale": 3})
+    assert "card: Now is 9 acts behind" in rendered
+
+
+def test_card_nudge_silent_when_nothing_moved_since_the_last_write():
+    """Silence #2: no produce/pending/delivery counter moved since the
+    card's last write ⇒ silence — no "no change, rewrite anyway" nag."""
+    payload = _bar_payload(
+        outbound={"replies_current": 0, "replies_other": 0, "outbound_messages": 0},
+        produce={"known": True, "counts": {}},
+        card={"active": True, "stale": False, "age_seconds": 900},
+    )
+    rendered = hooks.format_delta(payload, repeat_streaks={"card_stale": 3})
+    assert rendered is None or "card:" not in rendered
+
+    # A card the run has never written at all is the same silence — nothing
+    # to be "behind" relative to, and the compact `card blank` bar chip
+    # already carries that fact.
+    payload["card"] = {"active": False}
+    rendered = hooks.format_delta(payload, repeat_streaks={"card_stale": 3})
+    assert rendered is None or "card: Now is" not in rendered
 
 
 def test_repeat_streak_resets_when_the_obligation_clears():
@@ -6435,3 +6751,108 @@ def test_relative_reset_formats_from_the_usage_parser(monkeypatch):
     assert hooks._relative_reset("x", now=1000.0) == "2h05m"
     monkeypatch.setattr(claude_usage, "_reset_epoch", lambda when: None)
     assert hooks._relative_reset("x", now=1000.0) is None
+
+
+# ── the wait-by-returning trap (design-the-seat-that-never-quits.md §The tool trap) ──
+
+
+def test_pre_tool_refuses_monitor_in_a_daemon_hosted_run(tmp_path):
+    # `_env` carries BRR_OUTBOX_DIR — the daemon's portal — so this is a
+    # daemon-hosted run: Monitor would end the turn, and the turn is the run.
+    out, code = hooks.run_hook(
+        hooks.PHASE_PRE_TOOL,
+        json.dumps({"tool_name": "Monitor", "tool_input": {"command": "until …"}}),
+        _env(tmp_path),
+    )
+    assert code == 0
+    deny = out["hookSpecificOutput"]
+    assert deny["permissionDecision"] == "deny"
+    assert "brnrd await" in deny["permissionDecisionReason"]
+
+
+def test_pre_tool_lets_monitor_through_without_a_portal(tmp_path):
+    env = _env(tmp_path)
+    env.pop("BRR_OUTBOX_DIR")
+    env.pop("BRR_PORTAL_STATE")  # the portal path is what names the outbox
+    out, code = hooks.run_hook(
+        hooks.PHASE_PRE_TOOL,
+        json.dumps({"tool_name": "Monitor", "tool_input": {"command": "until …"}}),
+        env,
+    )
+    assert code == 0
+    assert out == {}
+
+
+# ── the seat that never quits: a turn end is a park, not a close ──────────
+
+
+def _portal_seat_parks(tmp_path):
+    path = tmp_path / portals.LIVE_PORTAL_STATE_NAME
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["seat"] = {"parks_on_turn_end": True}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_linger_has_nothing_to_ask_when_the_seat_parks(tmp_path):
+    env = _armed_vigil(tmp_path)
+    env["BRR_CLOSEOUT_OBLIGATIONS"] = "linger"
+    _portal_seat_parks(tmp_path)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out.get("decision") != "block", out
+
+
+def test_vigil_has_nothing_to_ask_when_the_seat_parks(tmp_path):
+    env = _armed_vigil(tmp_path)
+    _portal_seat_parks(tmp_path)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_CONTINUING), env)
+    assert out.get("decision") != "block", out
+
+
+def test_stop_delta_names_the_phase_commit_when_the_seat_parks():
+    payload = {"seat": {"parks_on_turn_end": True}, "attention": {}, "inbound": {"events": []}}
+    rendered = hooks.format_delta(payload, stop=True)
+    assert "phase commit" in rendered
+    assert "declare this run's completion" not in rendered
+    assert "brnrd portal closeout" not in rendered
+
+
+def test_stop_delta_keeps_the_closeout_wording_when_the_seat_closes():
+    payload = {"seat": {"parks_on_turn_end": False}, "attention": {}, "inbound": {"events": []}}
+    rendered = hooks.format_delta(payload, stop=True)
+    assert "declare this run's completion" in rendered
+    assert "phase commit" not in rendered
+
+
+
+# ── a strand never waits by returning (2026-09-06, three deaths) ───────────
+
+
+def _portal_strand(tmp_path, *, submitted):
+    path = tmp_path / portals.LIVE_PORTAL_STATE_NAME
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["strand"] = {"is_strand": True, "submitted": submitted}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_strand_stop_without_submit_or_bolt_is_blocked_once(tmp_path):
+    env = _armed_vigil(tmp_path)
+    env["BRR_CLOSEOUT_OBLIGATIONS"] = "hold"
+    _portal_strand(tmp_path, submitted=False)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin("still queued — holding."), env)
+    assert out["decision"] == "block"
+    assert "brnrd await --file" in out["reason"]
+
+
+def test_strand_stop_after_submit_passes(tmp_path):
+    env = _armed_vigil(tmp_path)
+    env["BRR_CLOSEOUT_OBLIGATIONS"] = "hold"
+    _portal_strand(tmp_path, submitted=True)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin("submitted; holding for review."), env)
+    assert out.get("decision") != "block", out
+
+
+def test_hold_obligation_is_inert_for_a_seat(tmp_path):
+    env = _armed_vigil(tmp_path)
+    env["BRR_CLOSEOUT_OBLIGATIONS"] = "hold"
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out.get("decision") != "block", out

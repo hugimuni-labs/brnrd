@@ -208,7 +208,7 @@ def current_line(course: Course | None) -> str | None:
 
 
 def stop_lines(course: Course | None) -> list[str]:
-    """The closeout read-back: every open row, named.
+    """The phase-commit read-back: every open row, named.
 
     Unlatched at Stop for the blueprint's reason — the closeout is the
     moment the surface exists for, and an open row has to be said there
@@ -223,7 +223,8 @@ def stop_lines(course: Course | None) -> list[str]:
     lines = [
         f"- course open: {len(open_rows) + course.overflow} of "
         f"{course.total} rows unchecked — finished ⇒ check them off on "
-        ".card; dropped or superseded ⇒ say so in the reply."
+        ".card; dropped or superseded ⇒ say so in the reply; still open ⇒ "
+        "they survive the park, leave them."
     ]
     for row in shown:
         lines.append(f"  - [ ] {_clip(row.text)}")
