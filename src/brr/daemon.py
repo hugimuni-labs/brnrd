@@ -9876,11 +9876,14 @@ def _park_seat_on_turn_end(task: Run, cfg: "dict | None") -> dict[str, object] |
 #: (both weighted tokens) past which an idling ``await:`` parks itself
 #: (design-the-seat-that-never-quits.md §"The machinery, in slices" #3 — "a
 #: seat idling on `brnrd await` parks itself once holding has cost more than
-#: a boot"). ``1.0`` = holding has cost exactly one boot; the measured
-#: baseline (§"The measurement": ≤0.1 session points per idle boundary) says
-#: this is a rare, late trigger, not a nervous one.
+#: a boot"). ``12.0`` (was ``1.0`` until 2026-09-08): the maintainer's call
+#: that a blocked await is "parking for free" — the harness keeps the
+#: context cached, while a park is a cold boot on the next message. At the
+#: measured idle cost (≤0.3 session points per boundary at ~170 KB) one
+#: boot ≈ 3–4 boundaries ≈ 40 min; twelve boots ≈ a night. The park is the
+#: fallback for a *forced* end, never the resting state.
 SEAT_PARK_AFTER_BOOT_RATIO_KEY = "seat.park_after_boot_ratio"
-_SEAT_PARK_AFTER_BOOT_RATIO_DEFAULT = 1.0
+_SEAT_PARK_AFTER_BOOT_RATIO_DEFAULT = 12.0
 
 #: Config key: minutes since a correspondent last reached this seat, below
 #: which the hold-cost park refuses to fire even if the ratio says to — "a
