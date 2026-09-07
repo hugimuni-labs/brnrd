@@ -6531,7 +6531,15 @@ def _change_token(payload: dict[str, object]) -> str:
         # ordinary editing/committing should not bump the token and trip a
         # post-tool injection. Both ride a delta already rendering for another
         # reason; SCM additionally renders at the seed/stop boundaries.
-        if key not in {"generated_at", "change_token", "scm", "produce"}
+        # ``resources`` (allowance spend, context-window occupancy, quota %)
+        # moves at *every* boundary by construction — folding it in meant a
+        # clean Stop never saw an unchanged token: each re-fire's own reply
+        # grew the context, moved the token, re-rendered the closeout,
+        # re-fired (#282's loop, one layer up; measured 2026-09-08,
+        # run-260907-2223-avku: 25+ Stop re-fires on an accepted bolt and
+        # an accepted `hold:`, ~270k context each). The bar reads
+        # ``resources`` from the payload directly, never through this token.
+        if key not in {"generated_at", "change_token", "scm", "produce", "resources"}
     }
     budget = stable.get("budget")
     if isinstance(budget, dict):
