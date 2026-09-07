@@ -6151,7 +6151,9 @@ def test_card_nudge_names_acts_and_a_bare_streak_number():
     early = hooks.format_delta(payload, repeat_streaks={"card_stale": 1})
     later = hooks.format_delta(payload, repeat_streaks={"card_stale": 3})
     unseen = hooks.format_delta(payload, repeat_streaks={"card_stale": 0})
-    receipt = "- card: Now is 9 acts behind (3 commits, 1 kb page, 5 replies)"
+    # replies no longer count: each delivered reply projects into the card
+    # itself (THE SAID BLOCK, 2026-09-08)
+    receipt = "- card: Now is 4 acts behind (3 commits, 1 kb page)"
     assert f"{receipt} · seen ×1" in early
     assert f"{receipt} · seen ×3" in later
     assert receipt in unseen
@@ -6174,7 +6176,7 @@ def test_card_nudge_silent_while_a_wait_is_armed():
     # — the nudge speaks again.
     payload["await"] = {"armed": True, "resolved": True, "outcome": "event"}
     rendered = hooks.format_delta(payload, repeat_streaks={"card_stale": 3})
-    assert "card: Now is 9 acts behind" in rendered
+    assert "card: Now is 4 acts behind" in rendered
 
 
 def test_card_nudge_silent_when_nothing_moved_since_the_last_write():
