@@ -122,8 +122,8 @@
 			</h1>
 			<p class="mt-5 max-w-2xl text-base leading-relaxed text-stone-300 sm:text-lg">
 				A co-maintainer that lives on your machine: survives reboots, remembers who it is, works
-				both your Claude and Codex subscriptions, and leaves receipts — a commit, a pull request,
-				or a reply you can actually check.
+				both your Claude and Codex subscriptions, and leaves receipts — a commit, a pull request, or
+				a reply you can actually check.
 			</p>
 			<p class="mt-2 max-w-2xl text-xs leading-relaxed text-ink-mute">
 				Needs a machine that's on — a laptop that doesn't sleep, a Mac mini, a home server, or a
