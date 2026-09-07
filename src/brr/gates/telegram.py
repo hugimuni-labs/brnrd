@@ -295,7 +295,7 @@ def _save_progress_for_run(brr_dir: Path, run_id: str, entry: dict) -> None:
 def auth(brr_dir: Path) -> None:
     """Prompt for bot token, validate, save."""
     state = _load_state(brr_dir)
-    token = input("Telegram bot token (from @BotFather): ").strip()
+    token = runtime.prompt("Telegram bot token (from @BotFather): ").strip()
     if not token:
         print("[brnrd] No token provided.")
         return
@@ -326,7 +326,7 @@ def bind(brr_dir: Path) -> None:
         print("[brnrd] Run `brnrd gate auth telegram` first.")
         return
     print("[brnrd] Telegram works with just `brnrd gate auth telegram`.")
-    user_id_raw = input(
+    user_id_raw = runtime.prompt(
         "Your Telegram user ID, to authorize as the paired principal "
         "(required — see e.g. @userinfobot; messages from anyone else "
         "are rejected): "
@@ -339,7 +339,7 @@ def bind(brr_dir: Path) -> None:
     except ValueError:
         print("[brnrd] User ID must be a number.")
         return
-    chat_id = input(
+    chat_id = runtime.prompt(
         "Optional chat ID to restrict to (leave empty to accept all): "
     ).strip()
     if not chat_id:
@@ -353,7 +353,7 @@ def bind(brr_dir: Path) -> None:
     except ValueError:
         print("[brnrd] Chat ID must be a number.")
         return
-    topic_id = input("Topic/thread ID (leave empty for none): ").strip()
+    topic_id = runtime.prompt("Topic/thread ID (leave empty for none): ").strip()
     if topic_id:
         try:
             state["topic_id"] = int(topic_id)
