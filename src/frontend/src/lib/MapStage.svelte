@@ -7,6 +7,7 @@
 	import AsciiField from '$lib/AsciiField.svelte';
 	import { mapRows } from '$lib/daily/daily';
 
+	let { focusRunId = null }: { focusRunId?: string | null } = $props();
 	let viewportHeight = $state(0);
 	let rows = $derived(mapRows('full', viewportHeight));
 </script>
@@ -14,7 +15,7 @@
 <svelte:window bind:innerHeight={viewportHeight} />
 
 <div class="stage">
-	<AsciiField {rows} header={false} legendDefault={false} />
+	<AsciiField {rows} {focusRunId} header={false} legendDefault={false} />
 </div>
 
 <style>
