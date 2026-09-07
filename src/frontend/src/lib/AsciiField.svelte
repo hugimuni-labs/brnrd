@@ -17,7 +17,7 @@
 	// Motion doctrine, ASCII edition: nothing animates. A line that changed
 	// between two polls flashes once (diffed on a clock-free render, so a
 	// minute passing moves nothing); everything else holds still.
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
 	import { resolve } from '$app/paths';
 	import { fetchLiveRuns, LiveRunsAuthError, type LiveRunsResponse } from '$lib/liveRuns';
@@ -69,6 +69,7 @@
 		rows?: number;
 		/** Embed a map with optional telemetry, without removing the detailed view. */
 		compact?: boolean;
+		focusRunId?: string | null;
 		/** render the field's own header line (the /ascii chrome) */
 		header?: boolean;
 		/** legend visible initially */
@@ -81,6 +82,7 @@
 	let {
 		rows = 26,
 		compact = false,
+		focusRunId = null,
 		header = true,
 		legendDefault = true,
 		legendToggle = true,
@@ -374,7 +376,10 @@
 			const walk = walkFor(t, layout);
 			if (walk) walks = [...walks.filter((w) => w.actorRunId !== t.actorRunId), walk];
 		}
-		const lead = graph.actors.find((a) => !a.strand) ?? graph.actors[0];
+		const lead =
+			graph.actors.find((a) => a.runId === focusRunId) ??
+			graph.actors.find((a) => !a.strand) ??
+			graph.actors[0];
 		const leadT = transitions.find((t) => t.actorRunId === lead?.runId);
 		if (leadT && leadT.route.length > 1) lastRoute = leadT.route;
 		const leadPlace = lead ? (topo.actorPlaces[lead.runId] ?? null) : null;
@@ -476,6 +481,18 @@
 		if (moved) paint();
 	}
 
+	let lastFocusRunId: string | null | undefined;
+	$effect(() => {
+		const focus = focusRunId;
+		if (focus === lastFocusRunId) return;
+		lastFocusRunId = focus;
+		untrack(() => {
+			framedOnce = false;
+			follow = true;
+			if (scene) compute(Date.now());
+		});
+	});
+
 	function panCamera(dx: number, dy: number) {
 		follow = false;
 		camCenter = { x: camCenter.x + dx, y: camCenter.y + dy };
@@ -497,8 +514,7 @@
 			e.metaKey ||
 			e.altKey ||
 			(e.target instanceof HTMLElement &&
-				(e.target.isContentEditable ||
-					e.target.closest('input, textarea, select, button, a, [role="dialog"]')))
+				(e.target.isContentEditable || e.target.closest('input, textarea, select, button, a')))
 		)
 			return;
 		const directions: Record<string, [number, number]> = {
