@@ -1,0 +1,26 @@
+$ claude -p Add an export command. --dangerously-skip-permissions --output-format text
+cwd: /private/tmp/continuity-bench/claude-plain
+elapsed: 59.1s
+returncode: 0
+
+--- stdout ---
+Added `export` to `mailtool/cli.py:34`, following the conventions the in-progress `--json` work set up.
+
+**Behavior**
+- `mailtool export --to a@example.com [--to b@…]` — same queued-message selection as `list`; writes to stdout by default.
+- `--output/-o PATH` writes to a file (`-` means stdout); a trailing newline is added.
+- `--json` selects the exported format and is accepted both before and after the subcommand (it reuses the shared `json_flag` parent parser).
+- When writing to a file with `--json`, the stdout confirmation is *also* JSON (`{"status": "exported", "path": …, "count": …}`) so stdout stays machine-parseable — matching the invariant `send --json` set. In text mode it prints `exported N message(s) to PATH`.
+- An unwritable path prints `export failed: …` to stderr and exits 1, leaving stdout empty.
+
+**Other changes**
+- Extracted `queued_messages()` (`mailtool/cli.py:46`) since `list` and `export` build the same queue.
+- Extended the existing secret-leak test to cover `export`, and added five tests for stdout/file, text/JSON, flag placement, and the write-failure path.
+- README command list updated.
+
+Full suite passes: 12 passed.
+
+Two things worth flagging, both pre-existing rather than introduced here: the "queued" messages are synthesized from `--to` rather than read from a real queue, so `export` is only as real as `list` is; and `--json` now has a double meaning for `export` (payload format *and* stdout format), which is coherent but worth a second look if you later add a dedicated `--format` option.
+
+--- stderr ---
+
