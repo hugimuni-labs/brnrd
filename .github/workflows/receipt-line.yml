@@ -1,0 +1,45 @@
+name: Receipt line
+
+# The README's numbers under the title ("N commits on main · N by the
+# resident · N merged PRs") are a claim that goes stale at the next merge.
+# This re-measures them on every release and on the first of the month and
+# rewrites the one line, committing as the bot only when a number moved. Not
+# daily: a vanity commit a day is noise in the one log we tell people to
+# read; the "as of" date on the line declares the staleness instead. Not part of ci.yml on purpose: it needs
+# the GitHub search API and a push, neither of which belongs in the gate.
+
+on:
+  schedule:
+    - cron: "17 6 1 * *"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  receipt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Re-measure and rewrite
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/receipt_line.py
+      - name: Commit if a number moved
+        run: |
+          if git diff --quiet -- README.md; then
+            echo "receipt line current"
+            exit 0
+          fi
+          git config user.name "brnrd-bot"
+          git config user.email "brnrd-bot@users.noreply.github.com"
+          git add README.md
+          git commit -m "receipt: $(python scripts/receipt_line.py --check | sed 's/^current: //; s/<[^>]*>//g')"
+          git push

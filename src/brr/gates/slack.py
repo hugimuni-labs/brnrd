@@ -80,7 +80,7 @@ def _save_progress_for_run(brr_dir: Path, run_id: str, entry: dict) -> None:
 
 def auth(brr_dir: Path) -> None:
     state = _load_state(brr_dir)
-    token = input("Slack bot token (xoxb-...): ").strip()
+    token = runtime.prompt("Slack bot token (xoxb-...): ").strip()
     if not token:
         print("[brnrd] No token provided.")
         return
@@ -104,7 +104,7 @@ def bind(brr_dir: Path) -> None:
     if "token" not in state:
         print("[brnrd] Run `brnrd gate auth slack` first.")
         return
-    channel = input("Slack channel ID (C0...): ").strip()
+    channel = runtime.prompt("Slack channel ID (C0...): ").strip()
     if not channel:
         print("[brnrd] No channel provided.")
         return

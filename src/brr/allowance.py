@@ -70,13 +70,23 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from . import claude_status, codex_status
 
 #: ``spawn.allowance_tokens`` config default (design-the-allowance.md §2)
 #: when a ``spawn:`` directive names no ``allowance:`` of its own.
 DEFAULT_ALLOWANCE_TOKENS = 20_000_000
+
+#: ``resident.allowance_tokens`` config default (design-the-allowance.md §2,
+#: slice 2) for the seat's own standing allowance. Same magnitude as the
+#: strand default above — until real usage data justifies a different
+#: number, inventing a second constant would be a guess dressed as a
+#: measurement (the 2026-09-05 review's objection to a borrowed exchange
+#: rate applies just as well to a borrowed *ceiling*). A config override
+#: exists precisely so an operator, not this module, can size the seat's
+#: window once evidence exists.
+DEFAULT_RESIDENT_ALLOWANCE_TOKENS = DEFAULT_ALLOWANCE_TOKENS
 
 #: Cost weights per token class, in fresh-input-token equivalents — the
 #: providers' own price ratios (Anthropic: cache read 0.1x, cache write 1.25x,
@@ -225,6 +235,129 @@ def claude_transcript_tokens(path: "Path | str | None") -> "int | None":
     return total if found else None
 
 
+def claude_first_turn_boot_tokens(path: "Path | str | None") -> "int | None":
+    """The first assistant turn's own boot cost, cost-weighted.
+
+    "Boot cost" (design-the-seat-that-never-quits.md §"The measurement" —
+    brnrd#1810's slice 3 needs a number to compare a held seat's per-
+    boundary cost against) is what it took to *establish* context — the
+    wake bundle, the system prompt, the dominion files — before any work
+    happened: the first turn's own ``cache_creation`` + fresh ``input``
+    tokens, deliberately excluding ``output`` (that turn's own reply is
+    work, not setup) and ``cache_read`` (there is nothing to re-read yet on
+    turn one). Same weights as :func:`weighted_tokens`, same transcript
+    format as :func:`claude_transcript_tokens` — this just stops at the
+    first matching row instead of summing every one.
+
+    ``None`` when *path* is falsy, unreadable, or the transcript's first
+    assistant row carries neither field — "no reading yet", never a
+    fabricated zero.
+    """
+    if not path:
+        return None
+    try:
+        with Path(path).open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line or '"usage"' not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(row, dict) or row.get("type") != "assistant":
+                    continue
+                message = row.get("message")
+                if not isinstance(message, dict):
+                    continue
+                usage = message.get("usage")
+                if not isinstance(usage, dict):
+                    continue
+                input_tokens = _camel_or_snake(usage, "inputTokens", "input_tokens")
+                cache_creation = _camel_or_snake(
+                    usage, "cacheCreationInputTokens", "cache_creation_input_tokens"
+                )
+                parts: dict[str, float] = {}
+                if isinstance(input_tokens, (int, float)) and not isinstance(
+                    input_tokens, bool
+                ):
+                    parts["input"] = float(input_tokens)
+                if isinstance(cache_creation, (int, float)) and not isinstance(
+                    cache_creation, bool
+                ):
+                    parts["cache_creation"] = float(cache_creation)
+                if not parts:
+                    return None
+                return weighted_tokens(**parts)
+    except OSError:
+        return None
+    return None
+
+
+def claude_last_turn_context_tokens(path: "Path | str | None") -> "int | None":
+    """The transcript's most recent assistant turn's own context footprint.
+
+    Raw ``input + cache_read + cache_creation`` tokens — unweighted, unlike
+    :func:`claude_transcript_tokens`/:func:`claude_first_turn_boot_tokens`:
+    this is an occupancy reading (design-the-seat-that-never-quits.md
+    §slice 4, brnrd#1810's context-drift park), not a cost estimate, so the
+    provider's cache-discount price ratios (:data:`TOKEN_WEIGHTS`) do not
+    apply — a cached token still occupies a token's worth of window.
+    ``output_tokens`` is excluded deliberately, same reasoning as the boot
+    reading: a reply's own tokens don't occupy the *input* side of the
+    window the next turn pays for.
+
+    Mirrors :func:`brr.claude_status._instantaneous_context_used_percent`'s
+    numerator (the last assistant row's usage — "instantaneous", not the
+    cumulative-per-*resumed*-session total ``modelUsage`` carries, #1178),
+    computed the same file-path-first way :func:`claude_first_turn_boot_tokens`
+    already reads a growing transcript before any final envelope or
+    ``session_id`` exists — the last matching row wins instead of the first.
+
+    ``None`` when *path* is falsy, unreadable, or the transcript carries no
+    assistant ``usage`` row at all — "no reading yet", never a fabricated
+    zero.
+    """
+    if not path:
+        return None
+    last_total: int | None = None
+    try:
+        with Path(path).open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line or '"usage"' not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(row, dict) or row.get("type") != "assistant":
+                    continue
+                message = row.get("message")
+                if not isinstance(message, dict):
+                    continue
+                usage = message.get("usage")
+                if not isinstance(usage, dict):
+                    continue
+                total = 0.0
+                found = False
+                for camel, snake in (
+                    ("inputTokens", "input_tokens"),
+                    ("cacheReadInputTokens", "cache_read_input_tokens"),
+                    ("cacheCreationInputTokens", "cache_creation_input_tokens"),
+                ):
+                    value = _camel_or_snake(usage, camel, snake)
+                    if isinstance(value, bool) or not isinstance(value, (int, float)):
+                        continue
+                    total += float(value)
+                    found = True
+                if found:
+                    last_total = int(round(total))
+    except OSError:
+        return None
+    return last_total
+
+
 def latest_claude_transcript(
     cwd: "str | Path | None", projects_root: "str | Path | None" = None,
 ) -> "Path | None":
@@ -291,3 +424,97 @@ def directive_line(spent: "int | None", tokens: "int | None") -> str:
         "park — `submit: true` then `brnrd await` — or ask: "
         "`ask: allowance +<tokens>` with one line why."
     )
+
+
+def resident_ceiling_tokens(cfg: "Mapping[str, Any] | None") -> int:
+    """The resident seat's own standing-allowance ceiling, config-first.
+
+    Reads ``resident.allowance_tokens`` (same ``k``/``m`` parsing as a
+    ``spawn:`` directive's ``allowance:``); unset or unparsable falls back
+    to :data:`DEFAULT_RESIDENT_ALLOWANCE_TOKENS`. Deliberately a *separate*
+    config key from the strand's ``spawn.allowance_tokens`` — the seat's
+    window is a continuous conversation, not one dispatched thought, and an
+    operator may need to size them apart — but the same parser and the same
+    magnitude until its own evidence says otherwise.
+    """
+    cfg = cfg or {}
+    raw = cfg.get("resident.allowance_tokens")
+    tokens = parse_tokens(raw) if raw is not None else None
+    return tokens if tokens is not None else DEFAULT_RESIDENT_ALLOWANCE_TOKENS
+
+
+def resident_window_key(reset_epoch: "float | int | None") -> str | None:
+    """A stable identity for the binding quota window, from its reset instant.
+
+    While a window is open, the provider's own stated reset instant does not
+    move; once it passes, the next reading names a new, later instant — so
+    the reset epoch itself is a window's identity, cheaply, with no clock of
+    our own to keep in sync. ``None`` when no reset reading exists this
+    heartbeat (an absent quota facet, or a Shell with no reset field) — the
+    caller must read that as "unknown," never as "the window rolled."
+    """
+    if reset_epoch is None:
+        return None
+    try:
+        return str(int(float(reset_epoch)))
+    except (TypeError, ValueError):
+        return None
+
+
+def resident_allowance_state(
+    meta: "dict[str, Any]",
+    *,
+    cfg: "Mapping[str, Any] | None",
+    reset_epoch: "float | int | None",
+    live_spent: "int | None",
+) -> "dict[str, object]":
+    """The resident seat's own standing allowance for this heartbeat.
+
+    Mirrors the strand bookkeeping in ``daemon._collect_allowance_facet``
+    (write the freshly-metered numbers back onto *meta* so the boundary
+    directive and cut-time checks read a recent value without re-metering),
+    but the ceiling is **config-owned** (:func:`resident_ceiling_tokens`),
+    never a quota-percent conversion: design-the-allowance.md's 2026-09-05
+    review and design-the-continuous-seat.md's "Boundaries" section both
+    reject presenting a token budget derived from a guessed quota rate
+    before that rate has its own evidence (slice 3's job, not this one's).
+
+    What the reset clock *does* decide is the **window**: this-window spend
+    is the live cumulative meter reading minus a baseline captured when the
+    window was first seen (at dispatch, or the first heartbeat that can see
+    a quota reading), so a continuous seat's multi-day transcript is not
+    charged for tokens it spent in a prior window. A heartbeat with no known
+    reset (*reset_epoch* is ``None`` — no quota reading yet) keeps whatever
+    window/baseline is already stamped rather than rolling on a merely
+    missing reading.
+
+    The ceiling is always derivable from config alone, so it is reported
+    even on a heartbeat with no meter reading yet (*live_spent* is
+    ``None`` — the very first boundary before the Shell has written
+    anything readable, or a Shell with no collector wired): ``{"tokens":
+    N, "spent": None}``, never a fabricated zero spend. This mirrors the
+    strand branch in ``daemon._collect_allowance_facet``, and lets
+    :func:`brr.facets.build` render the honest ``absent`` state (a
+    collector *is* wired, it just has nothing yet) rather than
+    ``unimplemented``.
+    """
+    tokens = resident_ceiling_tokens(cfg)
+    if live_spent is None:
+        meta["resident_allowance_tokens"] = tokens
+        meta["resident_allowance_spent"] = None
+        return {"tokens": tokens, "spent": None, "scope": "resident"}
+    window_key = resident_window_key(reset_epoch)
+    stored_window = meta.get("resident_allowance_window")
+    stored_baseline = meta.get("resident_allowance_baseline")
+    if stored_baseline is None or (
+        window_key is not None and window_key != stored_window
+    ):
+        baseline = int(live_spent)
+        meta["resident_allowance_window"] = window_key
+        meta["resident_allowance_baseline"] = baseline
+    else:
+        baseline = int(stored_baseline)
+    spent = max(0, int(live_spent) - baseline)
+    meta["resident_allowance_tokens"] = tokens
+    meta["resident_allowance_spent"] = spent
+    return {"tokens": tokens, "spent": spent, "scope": "resident"}

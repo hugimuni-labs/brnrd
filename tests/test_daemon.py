@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from brr import daemon, envs, news_lane, presence, promises, protocol, release_availability
+from brr import claude_status, daemon, envs, news_lane, presence, promises, protocol
+from brr import release_availability, resource_hold
 from brr import runner_failures
 from brr import schedule as schedule_mod
 from brr import worktree
@@ -34,6 +35,22 @@ def _clean_run_controls():
     yield
     with daemon._run_controls_lock:
         daemon._run_controls.clear()
+
+
+@pytest.fixture(autouse=True)
+def _seat_closes_in_this_module(monkeypatch):
+    """These tests drive the worker to its *close* — the ``done`` tail.
+
+    Since #1817 a user-woken seat parks at turn end by default
+    (``daemon.SEAT_PARK_ON_TURN_END_DEFAULT``, design-the-seat-that-never-
+    quits.md), so a bare worker drive lands ``held``, and eighteen tests
+    here that assert ``done`` incidentally — they are about prompts, hooks,
+    quota threading, salvage — went red for a behaviour none of them is
+    about. Pin the close path here, explicitly; the park path has its own
+    end-to-end drive in ``tests/test_hold_on_strands.py``
+    (``test_a_clean_turn_end_parks_the_seat_by_default``).
+    """
+    monkeypatch.setattr(daemon, "SEAT_PARK_ON_TURN_END_DEFAULT", False)
 
 
 def _stub_env_isolated(monkeypatch, tmp_path):
@@ -3257,6 +3274,240 @@ def test_cut_mismatches_tolerates_a_small_overrun():
     assert not any("allowance" in m for m in mismatches)
 
 
+# ── brnrd#1810: the parent's own draw-attribution read needs a strand's
+# title + live spend on the shared `_run_controls` record, not just its
+# own `task.meta` (a different thread's `Run` object the parent has no
+# handle to) ──────────────────────────────────────────────────────────────
+
+
+def test_register_run_control_stores_the_dispatcher_declared_title():
+    daemon._register_run_control(
+        "evt-titled", "run-parent", allowance_tokens=100_000, title="the gauge run",
+    )
+    control = daemon._find_run_control("evt-titled")
+    assert control["title"] == "the gauge run"
+    assert control["allowance_spent"] is None
+
+
+def test_owned_child_controls_carries_title_and_weighted_when_present():
+    daemon._register_run_control(
+        "evt-child", "run-parent", allowance_tokens=100_000, title="side task",
+    )
+    daemon._bind_run_control("evt-child", "run-child")
+    control = daemon._find_run_control("evt-child")
+    control["allowance_spent"] = 42_000
+
+    rows = daemon._owned_child_controls("run-parent")
+    assert rows == [{
+        "parent_run_id": "run-parent",
+        "event_id": "evt-child",
+        "run_id": "run-child",
+        "title": "side task",
+        "weighted": 42_000,
+    }]
+
+
+def test_owned_child_controls_omits_title_and_weighted_when_absent():
+    """No dispatcher-declared title, no metered spend yet — the exact fixture
+    an earlier regression test already pins the bare-keys shape against."""
+    daemon._register_run_control("evt-plain", "run-parent")
+    rows = daemon._owned_child_controls("run-parent")
+    assert rows == [{
+        "parent_run_id": "run-parent", "event_id": "evt-plain", "run_id": "",
+    }]
+
+
+def test_collect_allowance_facet_strand_branch_writes_spend_onto_the_control(
+    monkeypatch,
+):
+    """Never a second meter: the same `spent` `_collect_allowance_facet`
+    already computes for `task.meta` also lands on the shared control
+    record — the only place the *parent's* own heartbeat (a different
+    thread) can read a strand's live spend from."""
+    event_id = _strand_control(run_id="run-child", allowance_tokens=120_000)
+    task = Run(
+        id="run-child", event_id=event_id, body="", source="spawn",
+        meta={"strand": True, "spawn_allowance_tokens": 120_000},
+    )
+    monkeypatch.setattr(daemon.allowance, "collect_spent", lambda *a, **k: 38_000)
+
+    facet = daemon._collect_allowance_facet(task, "claude", None)
+
+    assert facet == {"tokens": 120_000, "spent": 38_000, "scope": "strand"}
+    control = daemon._find_run_control(event_id)
+    assert control["allowance_spent"] == 38_000
+
+
+def test_collect_quota_draws_none_with_nothing_to_report():
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    assert daemon._collect_quota_draws(task, None) is None
+    assert daemon._collect_quota_draws(task, {"tokens": 20_000_000, "spent": None}) is None
+
+
+def test_collect_quota_draws_self_and_owned_strands():
+    task = Run(id="run-parent", event_id="evt-1", body="", source="telegram")
+    daemon._register_run_control(
+        "evt-child-a", "run-parent", title="alpha",
+    )
+    daemon._bind_run_control("evt-child-a", "run-child-a")
+    daemon._find_run_control("evt-child-a")["allowance_spent"] = 2_000_000
+    daemon._register_run_control("evt-child-b", "run-parent", title="beta")
+    daemon._bind_run_control("evt-child-b", "run-child-b")
+    daemon._find_run_control("evt-child-b")["allowance_spent"] = 1_400_000
+
+    draws = daemon._collect_quota_draws(
+        task, {"tokens": 20_000_000, "spent": 1_200_000, "scope": "resident"},
+    )
+
+    assert draws["self"] == 1_200_000
+    assert sorted(draws["strands"], key=lambda r: r["run_id"]) == [
+        {"run_id": "run-child-a", "title": "alpha", "weighted": 2_000_000},
+        {"run_id": "run-child-b", "title": "beta", "weighted": 1_400_000},
+    ]
+
+
+def test_collect_quota_draws_strand_with_no_reading_yet_is_still_listed():
+    task = Run(id="run-parent", event_id="evt-1", body="", source="telegram")
+    daemon._register_run_control("evt-child", "run-parent", title="fresh")
+    daemon._bind_run_control("evt-child", "run-child")
+
+    draws = daemon._collect_quota_draws(task, None)
+
+    assert draws == {
+        "self": None,
+        "strands": [{"run_id": "run-child", "title": "fresh", "weighted": None}],
+    }
+
+
+# ── brnrd#1810: boot cost, recorded once per run onto `spend.json` ───────
+
+
+def _write_claude_transcript(path, *usages):
+    with path.open("w", encoding="utf-8") as handle:
+        for usage in usages:
+            handle.write(json.dumps({
+                "type": "assistant",
+                "message": {"model": "claude-sonnet-4-6", "usage": usage},
+            }) + "\n")
+
+
+def test_record_boot_cost_stamps_spend_json_once(tmp_path, monkeypatch):
+    from brr import claude_status
+
+    transcript = tmp_path / "session.jsonl"
+    _write_claude_transcript(
+        transcript,
+        {"input_tokens": 100, "output_tokens": 999, "cache_creation_input_tokens": 200},
+    )
+    monkeypatch.setattr(
+        daemon.allowance, "latest_claude_transcript", lambda *a, **k: transcript,
+    )
+    outbox_dir = tmp_path / "outbox"
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram", meta={})
+
+    daemon._record_boot_cost(task, "claude", tmp_path / "work", outbox_dir)
+
+    assert task.meta["boot_cost_recorded"] is True
+    snap = claude_status.load_snapshot(outbox_dir)
+    assert snap["boot"]["weighted"] == 350
+    assert "at" in snap["boot"]
+
+    # Retried on a later heartbeat would be a no-op: the flag short-circuits
+    # before the transcript is even read again.
+    monkeypatch.setattr(
+        daemon.allowance, "claude_first_turn_boot_tokens",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("re-metered")),
+    )
+    daemon._record_boot_cost(task, "claude", tmp_path / "work", outbox_dir)
+
+
+def test_record_boot_cost_skips_non_claude_runners():
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram", meta={})
+    daemon._record_boot_cost(task, "codex", None, None)
+    assert "boot_cost_recorded" not in task.meta
+
+
+def test_record_boot_cost_leaves_no_trace_before_a_transcript_reading_exists(
+    tmp_path,
+):
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram", meta={})
+    outbox_dir = tmp_path / "outbox"
+    daemon._record_boot_cost(task, "claude", tmp_path / "nope", outbox_dir)
+    assert "boot_cost_recorded" not in task.meta
+    assert not outbox_dir.exists()
+
+
+# ── brnrd#1810: live context_window reading, fed every heartbeat ─────────
+
+
+def test_record_context_window_writes_a_token_reading_beside_boot(
+    tmp_path, monkeypatch,
+):
+    from brr import claude_status
+
+    transcript = tmp_path / "session.jsonl"
+    _write_claude_transcript(
+        transcript,
+        {"input_tokens": 100, "output_tokens": 999,
+         "cache_read_input_tokens": 8_000, "cache_creation_input_tokens": 200},
+    )
+    monkeypatch.setattr(
+        daemon.allowance, "latest_claude_transcript", lambda *a, **k: transcript,
+    )
+    outbox_dir = tmp_path / "outbox"
+    # A boot-cost reading already on file must survive untouched — this
+    # writes a sibling key, never overwrites it.
+    claude_status.write_snapshot(outbox_dir, {"boot": {"weighted": 350, "at": "x"}})
+
+    daemon._record_context_window("claude", tmp_path / "work", outbox_dir)
+
+    snap = claude_status.load_snapshot(outbox_dir)
+    assert snap["boot"] == {"weighted": 350, "at": "x"}
+    assert snap["context_window"]["tokens_used"] == 8_300
+    assert "8.3k" in snap["context_window"]["summary"]
+    assert "updated_at" in snap["context_window"]
+
+
+def test_record_context_window_never_regresses_a_known_percentage(tmp_path, monkeypatch):
+    """The final envelope already produced the honest ``contextWindow``-
+    derived percentage (this run's own, or the cross-run fallback) — a
+    later heartbeat's coarser token-only reading must not clobber it."""
+    from brr import claude_status
+
+    transcript = tmp_path / "session.jsonl"
+    _write_claude_transcript(
+        transcript, {"input_tokens": 100, "cache_creation_input_tokens": 200},
+    )
+    monkeypatch.setattr(
+        daemon.allowance, "latest_claude_transcript", lambda *a, **k: transcript,
+    )
+    outbox_dir = tmp_path / "outbox"
+    claude_status.write_snapshot(outbox_dir, {
+        "context_window": {
+            "summary": "62% context left (est)", "remaining_percentage": 62.0,
+        },
+    })
+
+    daemon._record_context_window("claude", tmp_path / "work", outbox_dir)
+
+    snap = claude_status.load_snapshot(outbox_dir)
+    assert snap["context_window"]["remaining_percentage"] == 62.0
+    assert "tokens_used" not in snap["context_window"]
+
+
+def test_record_context_window_skips_non_claude_runners(tmp_path):
+    daemon._record_context_window("codex", tmp_path / "work", tmp_path / "outbox")
+    assert not (tmp_path / "outbox").exists()
+
+
+def test_record_context_window_leaves_no_trace_before_a_transcript_reading_exists(
+    tmp_path,
+):
+    outbox_dir = tmp_path / "outbox"
+    daemon._record_context_window("claude", tmp_path / "nope", outbox_dir)
+    assert not outbox_dir.exists()
+
+
 def test_notify_spawn_parent_declared_contract_beats_sibling_prose(tmp_path):
     """#640a: a spec whose prose responsibly names a *sibling* worker's
     branch ahead of its own (the worktree-discipline "don't collide with
@@ -6329,6 +6580,7 @@ class TestNotifyGateFallback:
         self, tmp_path, monkeypatch, *, cfg_extra=None, configured_gates=(),
         eid="evt-tick", body="director tick note\n", duplicate=False,
         event_conversation_key=None, seed_conversations=None,
+        source="schedule", extra_meta=None,
     ):
         # A real git repo, not just ``write_repo_scaffold``'s directory
         # shape: an account-attached run stays on the ``worktree`` env
@@ -6345,11 +6597,11 @@ class TestNotifyGateFallback:
             **(cfg_extra or {}),
         }
         ctx = daemon.account.resolve_context(tmp_path, cfg)
-        event_kwargs = {}
+        event_kwargs = dict(extra_meta or {})
         if event_conversation_key is not None:
             event_kwargs["conversation_key"] = event_conversation_key
         event = make_event(
-            tmp_path, eid=eid, source="schedule", body="tick", **event_kwargs,
+            tmp_path, eid=eid, source=source, body="tick", **event_kwargs,
         )
         # Seed prior conversation activity so the recent-activity tiebreak has
         # something to read: (key, seconds_ago) — smaller seconds_ago is more
@@ -6625,6 +6877,97 @@ class TestNotifyGateFallback:
         assert task.meta["terminal_route"] == "duplicate"
         # notify.gate was never even consulted: no fallback event landed.
         assert protocol.list_done(inbox_dir, "telegram") == []
+
+    def test_strand_reply_to_steer_is_labelled_and_fanned_to_parent(
+        self, tmp_path, monkeypatch,
+    ):
+        # brnrd#1798: a `dispatch_message` event (a parent's `to:` steer,
+        # `daemon.py`'s `_queue_child_message`) only ever carries
+        # spawn_message_for_event/for_run/from_run — never
+        # spawn_parent_run_id — so `_terminal_reply_lands` reads the
+        # strand's reply to its own dispatcher as `unowned` and it falls
+        # through the very notify.gate net this class otherwise exercises
+        # for a schedule wake. Measured live: the reply reached the
+        # correspondent raw, indistinguishable from the seat's own voice
+        # (one incident read as the seat quitting mid-conversation).
+        # Required shape (maintainer's steer on the issue): still deliver,
+        # but label it as the strand's own note and fan a copy to the
+        # steering run.
+        task, ctx, event, inbox_dir, responses_dir = self._run(
+            tmp_path, monkeypatch, configured_gates=("telegram",),
+            source="dispatch_message",
+            body="Nothing further pending — bolt accepted. This run is done.\n",
+            extra_meta={
+                "spawn_message_for_event": "evt-child-spawn",
+                "spawn_message_for_run": "run-child-1",
+                "spawn_message_from_run": "run-parent-1",
+            },
+        )
+
+        assert task.meta["terminal_route"] == "gate-fallback"
+
+        [fallback] = protocol.list_done(inbox_dir, "telegram")
+        fallback_body = protocol.read_response(responses_dir, fallback["id"])
+        # Labelled — a leading line naming the strand and the word
+        # "strand", never in the seat's voice — ahead of the strand's own
+        # text. No `.name`/`title:` is on record here, so the label falls
+        # back to the bare run id (the fallback chain's last rung).
+        assert fallback_body.startswith(
+            "[run-child-1 — a strand's technical note, not the seat]\n\n"
+        )
+        assert "Nothing further pending" in fallback_body
+
+        # Fanned out — the steering run gets a copy as a plain pending
+        # event (the same shape spawn_completed/spawn_submitted already
+        # use to reach a parent's own wake), not edge-targeted at the
+        # strand's own waking event.
+        copies = [
+            ev for ev in protocol.list_pending(inbox_dir)
+            if ev.get("source") == "spawn_message_delivered"
+        ]
+        assert len(copies) == 1
+        copy = copies[0]
+        assert copy["spawn_parent_run_id"] == "run-parent-1"
+        assert copy["spawned_by_run"] == "run-child-1"
+        assert copy.get("spawn_message_for_event") is None
+        assert "run-child-1" in copy["body"]
+        assert "Nothing further pending" in copy["body"]
+
+    def test_strand_reply_label_prefers_the_spawn_contracts_title(
+        self, tmp_path, monkeypatch,
+    ):
+        # Same shape as above, but the strand's own run manifest carries
+        # the dispatcher's `title:` (`_queue_spawn_request`'s #880 §1b
+        # label) — the fallback chain's middle rung, preferred over the
+        # bare run id whenever it resolves.
+        runs_dir = tmp_path / ".brr" / "runs"
+        Run(
+            id="run-child-1", event_id="evt-child-spawn", body="",
+            source="spawn", meta={"title": "the sandbox strand"},
+        ).save(runs_dir)
+
+        task, ctx, event, inbox_dir, responses_dir = self._run(
+            tmp_path, monkeypatch, configured_gates=("telegram",),
+            source="dispatch_message",
+            body="closing out\n",
+            extra_meta={
+                "spawn_message_for_event": "evt-child-spawn",
+                "spawn_message_for_run": "run-child-1",
+                "spawn_message_from_run": "run-parent-1",
+            },
+        )
+
+        [fallback] = protocol.list_done(inbox_dir, "telegram")
+        fallback_body = protocol.read_response(responses_dir, fallback["id"])
+        assert fallback_body.startswith(
+            "[the sandbox strand — a strand's technical note, not the seat]\n\n"
+        )
+
+        [copy] = [
+            ev for ev in protocol.list_pending(inbox_dir)
+            if ev.get("source") == "spawn_message_delivered"
+        ]
+        assert "the sandbox strand" in copy["body"]
 
 
 # ── #1444: the account-scoped routing rule has exactly one home ────────────
@@ -8864,6 +9207,148 @@ def test_write_live_portal_state_armed_letters_empty_without_brr_dir(tmp_path):
 
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["schedule"]["armed"] == []
+
+
+# ── the resident seat's own standing allowance (design-the-allowance.md
+# §2, slice 2) — through the real caller chain: dispatch (a plain,
+# non-strand ``Run``) → run meta → heartbeat meter → portal-state ────────
+
+
+def test_write_live_portal_state_resident_standing_allowance(tmp_path, monkeypatch):
+    """A non-strand run gets its own standing allowance facet off the same
+    meter and renderer a strand already uses (design-the-allowance.md §2)
+    — never a second accounting. The ceiling is config-owned; the window
+    comes from the binding quota's reset instant, not a guessed rate."""
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+
+    monkeypatch.setattr(
+        daemon, "_collect_levels",
+        lambda *a, **k: (
+            {"quota": {"summary": "session 90% left",
+                       "session_resets_at": 1000.0}},
+            frozenset(),
+        ),
+    )
+    monkeypatch.setattr(daemon.allowance, "collect_spent", lambda *a, **k: 500_000)
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        cfg={"resident.allowance_tokens": "2m"},
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    facet = payload["resources"]["allowance"]
+    assert facet["status"] == "known"
+    assert facet["scope"] == "resident"
+    assert facet["tokens"] == 2_000_000
+    # First reading in a fresh window baselines to zero spend.
+    assert facet["spent"] == 0
+    assert task.meta["resident_allowance_window"] == "1000"
+    assert task.meta["resident_allowance_baseline"] == 500_000
+    # A strand's own facet is untouched by this: the same call site's
+    # strand branch still requires `meta["strand"]` and a `spawn:` ceiling.
+    assert not daemon._is_strand(task.meta)
+
+
+def test_resident_standing_allowance_accrues_then_rolls_with_the_window(
+    tmp_path, monkeypatch,
+):
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+
+    state = {"reset": 1000.0, "spent": 500_000}
+    monkeypatch.setattr(
+        daemon, "_collect_levels",
+        lambda *a, **k: (
+            {"quota": {"session_resets_at": state["reset"]}}, frozenset(),
+        ),
+    )
+    monkeypatch.setattr(
+        daemon.allowance, "collect_spent", lambda *a, **k: state["spent"],
+    )
+
+    def _run():
+        path = daemon._write_live_portal_state(
+            outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        )
+        return json.loads(path.read_text(encoding="utf-8"))["resources"]["allowance"]
+
+    first = _run()
+    assert first["spent"] == 0
+
+    # Same window, more spend accrues — the baseline does not move.
+    state["spent"] = 540_000
+    second = _run()
+    assert second["spent"] == 40_000
+
+    # The provider's reset clock advances: a new window rebaselines, this-
+    # window spend goes back to zero even though cumulative spend is up.
+    state["reset"] = 2000.0
+    state["spent"] = 560_000
+    third = _run()
+    assert third["spent"] == 0
+    assert task.meta["resident_allowance_window"] == "2000"
+
+
+# ── brnrd#1810: the resident seat's own end-to-end draw-attribution read —
+# `resources.quota.draws`, through the same real caller chain ────────────
+
+
+def test_write_live_portal_state_reports_quota_draws(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-parent", event_id="evt-1", body="", source="telegram")
+
+    daemon._register_run_control(
+        "evt-child", "run-parent", title="side task",
+    )
+    daemon._bind_run_control("evt-child", "run-child")
+    daemon._find_run_control("evt-child")["allowance_spent"] = 3_400_000
+
+    monkeypatch.setattr(
+        daemon, "_collect_levels",
+        lambda *a, **k: (
+            {"quota": {"summary": "session 83% left",
+                       "session_resets_at": 1000.0}},
+            frozenset(),
+        ),
+    )
+    monkeypatch.setattr(daemon.allowance, "collect_spent", lambda *a, **k: 1_200_000)
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    draws = payload["resources"]["quota"]["draws"]
+    assert draws["self"] == 0  # first reading in a fresh window baselines to zero
+    assert draws["strands"] == [
+        {"run_id": "run-child", "title": "side task", "weighted": 3_400_000},
+    ]
+
+
+def test_write_live_portal_state_omits_quota_draws_with_nothing_to_report(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert "draws" not in payload["resources"]["quota"]
 
 
 # ── await: — the hold path (#959, collapsed by #1187) ─────────────────
@@ -13203,6 +13688,299 @@ def test_drain_outbox_await_arm_snapshot_is_empty_with_nothing_pending(tmp_path)
 
     assert promoted == 1
     assert task.meta["await"]["armed_pending_ids"] == []
+
+
+def test_drain_outbox_await_arm_seeds_the_correspondent_clock(tmp_path):
+    """design-the-seat-that-never-quits.md §machinery slice 3: the hold-cost
+    park's live-window refusal needs a timestamp that survives every re-arm
+    (a fresh ``await:`` directive, fresh generation, on every ``brnrd
+    await`` call). Seeded once, on the first-ever arm, as a proxy for "the
+    resident just replied to whatever woke it"."""
+    before = time.time()
+    promoted, task, _outbox = _drain_await(
+        tmp_path, "---\nawait: true\ntimeout: 20m\n---\n",
+    )
+    assert promoted == 1
+    assert task.meta["hold_correspondent_at"] >= before
+
+    # A second arm (the ordinary re-arm cycle) must not reset it — that
+    # would defeat the whole point: the baseline has to reflect the last
+    # real correspondent contact, not the last CLI call.
+    seeded = task.meta["hold_correspondent_at"]
+    task.meta["hold_correspondent_at"] = seeded - 999
+    daemon._drain_outbox(
+        daemon._WorkerEmit(tmp_path / ".brr", None, task.event_id),
+        task, tmp_path / ".brr" / "responses", task.event_id,
+        _stage_await_file(tmp_path, "---\nawait: true\ntimeout: 20m\n---\n"),
+        tmp_path / ".brr" / "inbox",
+    )
+    assert task.meta["hold_correspondent_at"] == seeded - 999
+
+
+def _stage_await_file(tmp_path, frontmatter):
+    outbox = tmp_path / ".brr" / "outbox" / "evt-current"
+    outbox.mkdir(parents=True, exist_ok=True)
+    (outbox / "await2.md").write_text(frontmatter, encoding="utf-8")
+    return outbox
+
+
+# ── design-the-seat-that-never-quits.md §machinery slice 3: the hold that
+# knows its price — an idling `await:` parks past `seat.park_after_boot_
+# ratio` of this run's own recorded boot cost ────────────────────────────
+
+
+def _armed_state(**over):
+    base = {"armed": True, "resolved": False}
+    base.update(over)
+    return base
+
+
+def _hold_seat(**meta):
+    task = Run(id="run-seat", event_id="evt-1", body="", source="cloud")
+    task.meta.update(meta)
+    return task
+
+
+def _boot_cost_outbox(tmp_path, weighted):
+    outbox = tmp_path / "hold-outbox"
+    claude_status.write_snapshot(
+        outbox, {"boot": {"weighted": weighted, "at": "2026-09-06T00:00:00Z"}},
+    )
+    return outbox
+
+
+def test_hold_boot_ratio_divides_weighted_tokens():
+    assert resource_hold.hold_boot_ratio(1_400_000, 1_000_000) == pytest.approx(1.4)
+
+
+def test_hold_boot_ratio_none_without_hold_so_far():
+    assert resource_hold.hold_boot_ratio(None, 1_000_000) is None
+
+
+def test_hold_boot_ratio_none_without_a_positive_boot_cost():
+    assert resource_hold.hold_boot_ratio(500_000, None) is None
+    assert resource_hold.hold_boot_ratio(500_000, 0) is None
+
+
+class TestHoldRatioFacet:
+    def test_no_await_armed_reports_nothing(self):
+        task = _hold_seat()
+        state, hold = daemon._hold_ratio_facet(
+            task, {"armed": False}, {}, None, None,
+        )
+        assert state == {"armed": False}
+        assert hold is None
+
+    def test_never_for_a_strand(self):
+        task = _hold_seat(strand=True)
+        state, hold = daemon._hold_ratio_facet(
+            task, _armed_state(), {}, None,
+            {"spent": 5_000_000, "scope": "strand"},
+        )
+        assert hold is None
+        assert "hold_idle_baseline_spent" not in task.meta
+
+    def test_already_resolved_this_tick_clears_the_baseline(self):
+        task = _hold_seat(hold_idle_baseline_spent=100)
+        state, hold = daemon._hold_ratio_facet(
+            task, _armed_state(resolved=True, outcome="event"), {}, None, None,
+        )
+        assert state["outcome"] == "event"
+        assert hold == {"ratio": None, "known": False}
+        assert "hold_idle_baseline_spent" not in task.meta
+
+    def test_seeds_the_idle_baseline_on_the_first_idle_tick(self):
+        task = _hold_seat()
+        state, hold = daemon._hold_ratio_facet(
+            task, _armed_state(), {}, None,
+            {"spent": 200_000, "scope": "resident"},
+        )
+        assert task.meta["hold_idle_baseline_spent"] == 200_000
+        assert hold == {"ratio": None, "known": False}
+        assert state["resolved"] is False
+
+    def test_no_spend_reading_yet_reports_unknown(self):
+        task = _hold_seat()
+        state, hold = daemon._hold_ratio_facet(
+            task, _armed_state(), {}, None, {"spent": None, "scope": "resident"},
+        )
+        assert hold == {"ratio": None, "known": False}
+        assert "hold_idle_baseline_spent" not in task.meta
+
+    def test_no_boot_cost_reports_unknown_never_parks(self, tmp_path):
+        task = _hold_seat(hold_idle_baseline_spent=0)
+        state, hold = daemon._hold_ratio_facet(
+            task, _armed_state(), {}, tmp_path / "no-such-outbox",
+            {"spent": 5_000_000, "scope": "resident"},
+        )
+        assert hold == {"ratio": None, "known": False}
+        assert state["resolved"] is False
+
+    def test_below_threshold_reports_the_ratio_without_parking(self, tmp_path):
+        outbox = _boot_cost_outbox(tmp_path, 1_000_000)
+        task = _hold_seat(hold_idle_baseline_spent=0)
+        state, hold = daemon._hold_ratio_facet(
+            task, _armed_state(), {}, outbox,
+            {"spent": 400_000, "scope": "resident"},
+        )
+        assert hold == {"ratio": pytest.approx(0.4), "known": True}
+        assert state["resolved"] is False
+        assert "pending_resource_hold" not in task.meta
+
+    def test_parks_past_the_threshold(self, tmp_path):
+        outbox = _boot_cost_outbox(tmp_path, 1_000_000)
+        task = _hold_seat(hold_idle_baseline_spent=0)
+        task.meta["await"] = {"resolved": False}
+        state, hold = daemon._hold_ratio_facet(
+            task, _armed_state(), {}, outbox,
+            {"spent": 1_400_000, "scope": "resident"},
+        )
+        assert hold == {"ratio": pytest.approx(1.4), "known": True}
+        assert state["resolved"] is True
+        assert state["outcome"] == "park"
+        assert state["ratio"] == pytest.approx(1.4)
+        assert task.meta["await"]["resolved"] is True
+        assert task.meta["await"]["outcome"] == "park"
+        record = task.meta["pending_resource_hold"]
+        assert record["reason"] == resource_hold.REASON_HOLD_COSTLIER_THAN_BOOT
+        assert record["resume_condition"] == resource_hold.RESUME_ANY
+        assert "hold_idle_baseline_spent" not in task.meta
+
+    def test_respects_a_configured_ratio(self, tmp_path):
+        outbox = _boot_cost_outbox(tmp_path, 1_000_000)
+        task = _hold_seat(hold_idle_baseline_spent=0)
+        state, _hold = daemon._hold_ratio_facet(
+            task, _armed_state(),
+            {daemon.SEAT_PARK_AFTER_BOOT_RATIO_KEY: 2.0}, outbox,
+            {"spent": 1_400_000, "scope": "resident"},
+        )
+        assert state["resolved"] is False
+        assert "pending_resource_hold" not in task.meta
+
+    def test_refuses_while_a_correspondent_is_live(self, tmp_path):
+        """"a person at the keyboard is worth every boundary" — the ratio is
+        still reported honestly; only the park itself is refused."""
+        outbox = _boot_cost_outbox(tmp_path, 1_000_000)
+        task = _hold_seat(
+            hold_idle_baseline_spent=0, hold_correspondent_at=time.time() - 60,
+        )
+        state, hold = daemon._hold_ratio_facet(
+            task, _armed_state(), {}, outbox,
+            {"spent": 1_400_000, "scope": "resident"},
+        )
+        assert state["resolved"] is False
+        assert "pending_resource_hold" not in task.meta
+        assert hold["ratio"] == pytest.approx(1.4)
+
+    def test_a_correspondent_outside_the_window_no_longer_refuses(self, tmp_path):
+        outbox = _boot_cost_outbox(tmp_path, 1_000_000)
+        task = _hold_seat(
+            hold_idle_baseline_spent=0,
+            hold_correspondent_at=time.time() - (31 * 60),
+        )
+        state, _hold = daemon._hold_ratio_facet(
+            task, _armed_state(), {}, outbox,
+            {"spent": 1_400_000, "scope": "resident"},
+        )
+        assert state["resolved"] is True
+        assert state["outcome"] == "park"
+
+    def test_respects_a_configured_live_window(self, tmp_path):
+        outbox = _boot_cost_outbox(tmp_path, 1_000_000)
+        task = _hold_seat(
+            hold_idle_baseline_spent=0,
+            hold_correspondent_at=time.time() - (31 * 60),
+        )
+        state, _hold = daemon._hold_ratio_facet(
+            task, _armed_state(),
+            {daemon.SEAT_LIVE_WINDOW_MINUTES_KEY: 60}, outbox,
+            {"spent": 1_400_000, "scope": "resident"},
+        )
+        assert state["resolved"] is False
+
+    def test_refuses_while_the_run_owns_a_live_strand(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(daemon, "_run_controls", {})
+        outbox = _boot_cost_outbox(tmp_path, 1_000_000)
+        task = _hold_seat(hold_idle_baseline_spent=0)
+        daemon._register_run_control("evt-child", task.id)
+        state, _hold = daemon._hold_ratio_facet(
+            task, _armed_state(), {}, outbox,
+            {"spent": 1_400_000, "scope": "resident"},
+        )
+        assert state["resolved"] is False
+        assert "pending_resource_hold" not in task.meta
+
+
+def test_resolve_await_state_refreshes_correspondent_clock_on_a_real_event():
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    task.meta["await"] = _armed(armed_at=time.time() - 100)
+    task.meta["hold_correspondent_at"] = 0.0
+    event = {"id": "evt-2", "source": "telegram", "created": "2026-09-06T12:00:00Z"}
+
+    state = daemon._resolve_await_state(task, [event], outbox_dir=None)
+
+    assert state["outcome"] == "event"
+    assert task.meta["hold_correspondent_at"] > 0.0
+
+
+def test_resolve_await_state_ignores_accumulate_only_sources_for_the_clock():
+    """A `schedule` tick (or another internal-bookkeeping source) still
+    resolves the wait — a tick is a reason to wake — but it is not a
+    correspondent, so it must not refresh the live-window clock the hold
+    park's refusal reads."""
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    task.meta["await"] = _armed(armed_at=time.time() - 100)
+    task.meta["hold_correspondent_at"] = 42.0
+    event = {"id": "evt-2", "source": "schedule", "created": "2026-09-06T12:00:00Z"}
+
+    state = daemon._resolve_await_state(task, [event], outbox_dir=None)
+
+    assert state["outcome"] == "event"
+    assert task.meta["hold_correspondent_at"] == 42.0
+
+
+def test_write_live_portal_state_parks_an_idling_await_past_boot_cost(
+    tmp_path, monkeypatch,
+):
+    """End to end through the real caller chain: heartbeat
+    (`_write_live_portal_state`) -> allowance metering + boot-cost read ->
+    `_hold_ratio_facet` -> await resolution -> portal-state's `await` and
+    `resources.quota.hold`."""
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    task.meta["await"] = _armed(timeout_seconds=None, armed_pending_ids=[])
+    # Long past the default 30-minute live window, so the second heartbeat's
+    # park is not refused by it.
+    task.meta["hold_correspondent_at"] = time.time() - 3600
+
+    claude_status.write_snapshot(
+        outbox_dir, {"boot": {"weighted": 1_000_000, "at": "2026-09-06T00:00:00Z"}},
+    )
+    spent = {"value": 0}
+    monkeypatch.setattr(daemon.allowance, "collect_spent", lambda *a, **k: spent["value"])
+
+    # First heartbeat: the resident allowance window baselines to zero, and
+    # so does the hold's own idle baseline — nothing to park against yet.
+    daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+    assert task.meta.get("hold_idle_baseline_spent") == 0
+    assert task.meta["await"]["resolved"] is False
+
+    # Second heartbeat: 1.4x the boot cost's worth of new spend.
+    spent["value"] = 1_400_000
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["await"]["outcome"] == "park"
+    assert payload["await"]["ratio"] == pytest.approx(1.4)
+    assert payload["resources"]["quota"]["hold"] == {
+        "ratio": pytest.approx(1.4), "known": True,
+    }
 
 
 # ── cut: / the bolt (design-the-bolt.md) ─────────────────────────────

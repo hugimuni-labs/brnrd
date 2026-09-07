@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from brr import conversations, daemon
 from brr.runner import RunnerResult
 
@@ -11,6 +13,21 @@ from _helpers import (
     succeed_invoke,
     write_repo_scaffold,
 )
+
+
+@pytest.fixture(autouse=True)
+def _seat_closes_in_this_module(monkeypatch):
+    """These tests drive the worker to its *close* — the ``done`` tail.
+
+    Since #1817 a user-woken seat parks at turn end by default
+    (``daemon.SEAT_PARK_ON_TURN_END_DEFAULT``, design-the-seat-that-never-
+    quits.md), so a bare worker drive lands ``held``. This module's tests are
+    about dedup and conversation threading, not the park default — pin the
+    close path here, same idiom as ``tests/test_daemon.py``; the park path
+    has its own end-to-end drive in
+    ``tests/test_hold_on_strands.py::test_a_clean_turn_end_parks_the_seat_by_default``.
+    """
+    monkeypatch.setattr(daemon, "SEAT_PARK_ON_TURN_END_DEFAULT", False)
 
 
 def _stub_env(monkeypatch):

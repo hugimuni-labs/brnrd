@@ -25,6 +25,19 @@ or the automatic-detection path chose:
   condition an *automatic* detection ever selects on its own — "silence is
   neither permission nor a reset" (design-the-continuous-seat.md): nothing
   here guesses that quota has recovered.
+- ``RESUME_STRANDS`` — additionally released by one of the held run's
+  *own* children reporting back (:data:`STRAND_RELEASE_SOURCES`, matched on
+  the event's ``spawn_parent_run_id`` or the run's recorded
+  ``child_run_ids``). The park a parent takes on live strands: nothing
+  spends while they work, the first one to submit wakes the seat. The
+  bolt arms this itself when a live strand is dispositioned ``handoff``
+  (``daemon.py``'s cut path) — a run with children still running lands
+  ``held``, never ``done``.
+- ``RESUME_ANY`` — the seat's resting state: released by a correspondent
+  message, one of its own strands, or a ``schedule`` firing. Chosen by the
+  daemon itself when a user-woken seat's turn ends with nothing armed
+  (``seat.park_on_turn_end``, design-the-seat-that-never-quits.md), or by
+  the resident with ``resume: any``.
 - ``RESUME_RESET`` — additionally released once a *measured* provider
   reset deadline passes (a plain clock comparison against a timestamp the
   provider itself stated, captured once at arm time — never a guessed
@@ -51,10 +64,42 @@ RUN_STATUS = "held"
 
 REASON_QUOTA_EXHAUSTED = "quota_exhausted"
 REASON_RESIDENT_REQUESTED = "resident_requested"
+#: design-the-seat-that-never-quits.md §"The machinery, in slices" #3: an
+#: `await:` idling with nothing pending, past `seat.park_after_boot_ratio`
+#: (default 1.0) of this run's own recorded boot cost. Distinct from
+#: `REASON_TURN_ENDED` — that one fires on an *ordinary* clean turn end with
+#: nothing armed; this one fires while an await is still armed, the moment
+#: the daemon's own heartbeat measures holding as the dearer of the two.
+REASON_HOLD_COSTLIER_THAN_BOOT = "hold_costlier_than_boot"
 
 RESUME_OPERATOR = "operator"
 RESUME_RESET = "reset"
-RESUME_CONDITIONS = frozenset({RESUME_OPERATOR, RESUME_RESET})
+#: Released by one of this run's own strands reporting back — the hold a
+#: parent takes while its children are still working (2026-09-06: a seat
+#: closed on three live strands because the only park verb slept through
+#: their submits; "there is no reason to stop the run, especially if there
+#: are living strands that the run should be waiting on"). A correspondent
+#: message releases this one too — the operator always outranks the wait.
+RESUME_STRANDS = "strands"
+#: The seat's resting state (design-the-seat-that-never-quits.md): released
+#: by *anything addressed to this seat* — a correspondent message, one of
+#: its own strands, a schedule firing. The daemon parks a seat here on its
+#: own when a turn ends with nothing armed (``seat.park_on_turn_end``), so
+#: "the run ended" stops being a thing that happens to a user-woken seat.
+RESUME_ANY = "any"
+RESUME_CONDITIONS = frozenset({RESUME_OPERATOR, RESUME_RESET, RESUME_STRANDS, RESUME_ANY})
+
+REASON_WAITING_ON_STRANDS = "waiting_on_strands"
+REASON_TURN_ENDED = "turn_ended"
+
+#: The child-event sources that release a ``strands``-condition hold. Not
+#: ``spawn_queued`` (admission, nothing to read yet) and never
+#: ``schedule`` (a recurring tick is not a child reporting back).
+STRAND_RELEASE_SOURCES = frozenset({
+    "spawn_submitted",
+    "spawn_completed",
+    "spawn_allowance_requested",
+})
 
 #: Whether a resume can be a real native-session continuation
 #: (``codex exec resume <thread-id>``) or must be an honestly-labelled cold
@@ -166,6 +211,78 @@ def reset_condition_met(meta: dict[str, Any] | None, *, now: float | None = None
         return False
     timestamp = time.time() if now is None else now
     return timestamp >= deadline
+
+
+def schedule_event_releases(meta: dict[str, Any] | None, event: dict[str, Any] | None) -> bool:
+    """Whether a ``schedule`` firing wakes this hold — only on the ``any`` condition.
+
+    A tick is a reason to wake a parked seat (design-the-seat-that-never-quits.md:
+    "a tick is a reason to wake, not a new life"); under every other
+    condition it accumulates as before.
+    """
+    if not is_active(meta) or (meta or {}).get("resume_condition") != RESUME_ANY:
+        return False
+    return bool(event) and str(event.get("source") or "") == "schedule"
+
+
+def strand_event_releases(
+    meta: dict[str, Any] | None,
+    event: dict[str, Any] | None,
+    *,
+    held_run_id: str,
+    child_run_ids: Any = (),
+) -> bool:
+    """Whether *event* is one of the held run's own strands reporting back.
+
+    ``False`` for any hold not on the ``strands`` condition, for a source
+    outside :data:`STRAND_RELEASE_SOURCES`, and for a child event whose
+    parent is some *other* run — a sibling seat's strand finishing must not
+    wake a seat that never dispatched it. Parentage is read from the event
+    (``spawn_parent_run_id``, the field ``spawn_*`` events carry) first,
+    then from the run's own ``child_run_ids`` (``spawned_by_run``), so an
+    adopted or re-parented child still counts.
+    """
+    if not is_active(meta) or (meta or {}).get("resume_condition") not in (RESUME_STRANDS, RESUME_ANY):
+        return False
+    if not event:
+        return False
+    if str(event.get("source") or "") not in STRAND_RELEASE_SOURCES:
+        return False
+    owner = str(held_run_id or "").strip()
+    if not owner:
+        return False
+    if str(event.get("spawn_parent_run_id") or "").strip() == owner:
+        return True
+    child = str(event.get("spawned_by_run") or event.get("spawn_run_id") or "").strip()
+    if not child:
+        return False
+    if isinstance(child_run_ids, str):
+        known = {part.strip() for part in child_run_ids.split(",")}
+    else:
+        known = {str(part).strip() for part in (child_run_ids or ())}
+    return child in known
+
+
+def hold_boot_ratio(
+    hold_so_far: "int | float | None", boot_cost: "int | float | None",
+) -> "float | None":
+    """``hold_so_far / boot_cost``, or ``None`` when either side is unknown.
+
+    The rule this closes (design-the-seat-that-never-quits.md §"The
+    machinery, in slices" #3): a seat idling on ``brnrd await`` parks itself
+    once holding has cost more than a boot. Both terms are weighted tokens —
+    *hold_so_far* is this run's own live-metered spend accrued since the
+    wait last had nothing pending (the caller's baseline bookkeeping, not
+    this function's job); *boot_cost* is ``spend.json``'s recorded
+    ``boot.weighted`` (brnrd#1816, ``daemon._record_boot_cost``).
+
+    ``None`` on either missing input — never a fabricated ratio. A caller
+    with no boot cost yet (Codex, or a Claude transcript with no usage row)
+    must read that as "no ratio, no park", not as zero cost.
+    """
+    if hold_so_far is None or boot_cost is None or boot_cost <= 0:
+        return None
+    return float(hold_so_far) / float(boot_cost)
 
 
 def portal_projection(meta: dict[str, Any] | None) -> dict[str, Any] | None:

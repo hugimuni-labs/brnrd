@@ -4561,12 +4561,40 @@ def cmd_portal_facets(args):
 #: and that argument dies with the collapsed verb: the only things that
 #: would want to interrupt this run are the very things that *resolve* the
 #: wait, so a blocking call returns the moment one arrives. What actually
-#: bounds a call is the Shell's own per-tool-call cap (claude's Bash tool
-#: ends at 10 minutes; codex differs), which is the CLI's problem, not
-#: something a resident should reason about. This sits under the tightest of
-#: those with margin so the call ends by returning an answer rather than by
-#: being killed mid-wait.
+#: bounds a call is the Shell's own per-tool-call cap, which is the CLI's
+#: problem, not something a resident should reason about — so this keys off
+#: the Shell reported on ``BRR_RUNNER`` and sits under *that* Shell's own cap
+#: with margin, so the call ends by returning an answer rather than by being
+#: killed mid-wait.
+#:
+#: Measured: claude's Bash tool ends a call at 10 minutes — 9m20s (560s), counted from the call start
+#: leaves 20s of margin, up from the old one-size-fits-all 480s (8 min),
+#: which was under-using two full minutes of claude's own budget every
+#: single slice. Codex's own per-call cap is unmeasured here — named rather
+#: than guessed at; key it into the table below the day it is measured.
+#: ``480.0`` stays as the conservative fallback for codex and any Shell name
+#: this CLI has not seen. The runner catalog (``runner_select.RunnerProfile``)
+#: carries no call-cap field yet — when it does, prefer reading it there over
+#: this table so a profile-level override does not require a CLI release.
+_AWAIT_SLICE_CEILING_BY_SHELL: dict[str, float] = {
+    "claude": 560.0,
+}
 _AWAIT_SLICE_CEILING_SECONDS = 480.0
+
+
+def _await_slice_ceiling_seconds(shell: str | None = None) -> float:
+    """This call's own block ceiling, keyed off the Shell running it.
+
+    *shell* defaults to ``BRR_RUNNER`` (the flavour the daemon stamps into
+    every wake's environment, e.g. ``claude`` / ``codex``) so a bare call at
+    a live boundary picks the right number without the caller naming it.
+    An unset or unrecognized shell falls back to the prior one-size-fits-all
+    default rather than guessing a larger number for an unmeasured Shell.
+    """
+    slug = shell if shell is not None else os.environ.get("BRR_RUNNER") or ""
+    return _AWAIT_SLICE_CEILING_BY_SHELL.get(
+        slug.strip().lower(), _AWAIT_SLICE_CEILING_SECONDS
+    )
 
 #: How often the slice re-reads ``portal-state.json``. Cheap: a local file
 #: read. The daemon's own evaluation tick runs independently, so a
@@ -4765,6 +4793,7 @@ def cmd_await(args):
         )
 
     before = do_mod.notices_of(payload)
+    call_started = time.monotonic()
     staged = do_mod.stage_await(
         outbox_dir, timeout_seconds=timeout_seconds, file_path=args.file,
     )
@@ -4799,15 +4828,36 @@ def cmd_await(args):
             "which": state.get("which"),
             "deadline": state.get("deadline"),
         }
+        if outcome == "park":
+            # design-the-seat-that-never-quits.md §machinery slice 3:
+            # holding has cost more than a boot — the daemon resolved this
+            # wait with its own outcome rather than the caller's. The ratio
+            # rides `state` (``daemon._hold_ratio_facet`` stamps it onto the
+            # await projection precisely so this print never has to reach
+            # into a second file for it).
+            result["ratio"] = state.get("ratio")
         if args.json:
             print(json.dumps(result))
+        elif outcome == "park":
+            ratio = result["ratio"]
+            ratio_text = f"{ratio:.1f}" if isinstance(ratio, (int, float)) else "?"
+            print(
+                f"[brnrd await] parking — holding has cost {ratio_text}·boot; "
+                "end the turn and the seat parks (anything addressed to it "
+                "resumes it)"
+            )
         else:
             tail = f" ({result['which']})" if result["which"] else ""
             note = " — call again" if outcome == "pending" else ""
             print(f"[brnrd await] {outcome}{tail}{note}")
         return 0
 
-    deadline = time.monotonic() + _AWAIT_SLICE_CEILING_SECONDS
+    # The ceiling counts from the *call's* start, not from the arm: the
+    # staging + drain-verdict wait above (up to 30s under a busy daemon)
+    # is inside the Shell's per-call cap too. Measured 2026-09-06 20:1xZ:
+    # 580s from the arm + a 30s drain wait = the claude Bash tool killing
+    # the call at 10m instead of it returning `pending`.
+    deadline = call_started + _await_slice_ceiling_seconds()
     while True:
         state = do_mod.read_portal_state(outbox_dir).get("await")
         if not isinstance(state, dict):

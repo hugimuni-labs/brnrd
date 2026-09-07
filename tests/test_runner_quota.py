@@ -293,6 +293,44 @@ def test_binding_quota_remaining_pct_ignores_missing_fields_in_mix():
     assert runner_quota.binding_quota_remaining_pct(levels) == 60.0
 
 
+# ── binding_quota_reset_epoch (design-the-allowance.md §2, slice 2's
+# window-roll clock for the resident's own standing allowance) ──────────
+
+
+def test_binding_quota_reset_epoch_reads_claude_shape():
+    levels = {
+        "quota": {
+            "summary": "session 90% left; week 55% left",
+            "session_resets_at": 2_000.0,
+            "week_resets_at": 500_000.0,
+        }
+    }
+    # The nearest constraint, not the biggest window.
+    assert runner_quota.binding_quota_reset_epoch(levels) == 2_000.0
+
+
+def test_binding_quota_reset_epoch_reads_codex_shape():
+    levels = {
+        "quota": {
+            "summary": "5h 80% left; weekly 30% left",
+            "primary_resets_at": 18_000.0,
+            "secondary_resets_at": 600_000.0,
+        }
+    }
+    assert runner_quota.binding_quota_reset_epoch(levels) == 18_000.0
+
+
+def test_binding_quota_reset_epoch_none_without_signal():
+    assert runner_quota.binding_quota_reset_epoch(None) is None
+    assert runner_quota.binding_quota_reset_epoch({}) is None
+    assert runner_quota.binding_quota_reset_epoch({"quota": {"summary": "x"}}) is None
+    # A None reset field (reset text present but unparsable) never crashes
+    # and never counts as a signal.
+    assert runner_quota.binding_quota_reset_epoch(
+        {"quota": {"session_resets_at": None}}
+    ) is None
+
+
 def test_latest_claude_usage_outbox_dir_picks_freshest(tmp_path):
     """claude_usage caches into a *run's* outbox dir, never brr_dir itself —
     the shared-level readers (schedule pacing, dashboard quota publish) have

@@ -583,6 +583,155 @@ def _trim_marker(
 _MAX_NAMED_CUT_SECTIONS = 6
 
 
+# How many of a page's own "dated tick" sections survive the age gate below,
+# regardless of the byte budget. Two, not one: a reader mid-tick usually wants
+# to see the immediately preceding tick's own open threads alongside the
+# current one, and one survivor reads like the page just started.
+_AGE_GATE_KEEP = 2
+
+# The two bare, year-less heading shapes a resident's own running-plan pages
+# accrete a section under every tick/session — `## This tick, 09-04`,
+# `## This session, 09-04 …` — never matched by `_HEADING_DATE_RE` (no
+# `YYYY-`), which is exactly why `_page_is_chronological` reads a page built
+# entirely of these as *structural* and trims it from the head, not the tail:
+# the newest ticks are the ones actually at risk of being cut. Captures
+# month/day so :func:`_dated_section_sort_key` can rank these by date
+# instead of assuming a fixed accretion direction — this account's own
+# `surface/plans/<repo>/active.md` prepends its newest tick at the *top*,
+# the opposite of the chronological-log pages the rest of this module
+# assumes, and an earlier version of this gate that kept "the last N in the
+# file" kept the two *oldest* ticks on that exact page.
+_DATED_SECTION_HEADING_RE = re.compile(
+    r"^##\s+(?:This tick|This session),\s*(\d{2})-(\d{2})\b", re.IGNORECASE
+)
+
+
+def _is_dated_section(entry: str) -> bool:
+    """Does this ``## `` section's heading carry a date the age gate acts on?
+
+    Three shapes, matching the task this check exists for: ``This tick,
+    MM-DD``, ``This session, MM-DD`` (:data:`_DATED_SECTION_HEADING_RE`),
+    or a full ISO date anywhere on the heading line (:func:`_heading_date`
+    — the same rule :func:`_entry_key` uses elsewhere in this file, so an
+    ISO-dated section is recognized identically by both). Anything else —
+    including a heading that merely *mentions* a date in its body — is
+    undated and is never touched by :func:`_age_gate_dated_sections`.
+    """
+    heading = entry.split("\n", 1)[0]
+    return (
+        _DATED_SECTION_HEADING_RE.match(heading) is not None
+        or _heading_date(entry) is not None
+    )
+
+
+def _dated_section_sort_key(entry: str) -> tuple[int, int, int]:
+    """``(year, month, day)`` for a dated ``## `` section, newest-sortable.
+
+    A full ISO heading (:func:`_heading_date`) carries a real year. The two
+    bare ``MM-DD`` shapes (``This tick,`` / ``This session,`` —
+    :data:`_DATED_SECTION_HEADING_RE`) carry none — this account's own
+    convention, not something this age gate can invent — so they key on
+    ``(0, month, day)``: comparable to each other in month/day order, and
+    never mistaken for outranking a real ISO year.
+
+    Called only on an entry :func:`_is_dated_section` already matched, so
+    one of the two patterns always parses in practice; ``(0, 0, 0)`` is the
+    unreachable defensive fallback for a future drift between the two
+    predicates, and it deliberately ranks as the *oldest* possible key —
+    the safe failure direction for a gate whose whole job is not dropping
+    the current tick. Ranking an unparseable entry as newest instead would
+    risk keeping it over a real, younger date.
+    """
+    heading = entry.split("\n", 1)[0]
+    iso = _heading_date(entry)
+    if iso is not None:
+        year, month, day = (int(part) for part in iso.split("-"))
+        return (year, month, day)
+    match = _DATED_SECTION_HEADING_RE.match(heading)
+    if match is not None:
+        return (0, int(match.group(1)), int(match.group(2)))
+    return (0, 0, 0)
+
+
+def _age_gate_marker(dropped_titles: list[str], source_hint: str) -> str:
+    """The notice for sections :func:`_age_gate_dated_sections` dropped.
+
+    Same shape as :func:`_structural_trim_marker` (named titles, capped at
+    :data:`_MAX_NAMED_CUT_SECTIONS`, "and N more") but names a different
+    cause on purpose — age, never the wake budget — so a page that hits
+    both this gate and the byte-budget walk in the same wake carries two
+    markers a reader can tell apart, not one that misattributes either cut.
+    """
+    noun = "section" if len(dropped_titles) == 1 else "sections"
+    named = dropped_titles[:_MAX_NAMED_CUT_SECTIONS]
+    listed = " · ".join(named)
+    if len(dropped_titles) > len(named):
+        listed += f" · … and {len(dropped_titles) - len(named)} more"
+    return (
+        f"_({len(dropped_titles)} older dated {noun} age-gated out, keeping "
+        f"the newest {_AGE_GATE_KEEP}: {listed} · full page: {source_hint})_"
+    )
+
+
+def _age_gate_dated_sections(content: str) -> tuple[str, list[str]]:
+    """Drop all but the newest :data:`_AGE_GATE_KEEP` dated ``## `` sections.
+
+    The motivating page, ``surface/plans/<repo>/active.md``, accretes a
+    ``## This tick, <date>`` section every tick forever; its own first line
+    says "this page is the live edge only," but the byte-budget walk alone
+    is not enough to keep it that way — with 19 stale ticks still on the
+    page one wake still spent ~48 KB of the shared surface budget on it.
+    This runs *before* :func:`_trim_sectioned_page`'s byte-budget walk, so
+    the page is small on its own terms first and the budget walk (still
+    live for pages this doesn't shrink enough, or that grow one surviving
+    section past the budget on its own) never has to make this call.
+
+    "Newest" is the parsed date (:func:`_dated_section_sort_key`), **not**
+    document order — this gate does not get to assume a fixed accretion
+    direction. The motivating page, this account's own
+    ``surface/plans/hugimuni-labs__brnrd/active.md``, *prepends* its newest
+    tick at the top (newest-first: ``09-05``, ``09-03``, ``09-02``, …,
+    ``08-24`` at the bottom) — the opposite of the append-to-bottom
+    convention the rest of this module assumes for a fully-ISO-dated
+    chronological page. An earlier version of this gate kept "the last
+    :data:`_AGE_GATE_KEEP` in the file," which on that exact page kept the
+    two *oldest* surviving ticks and dropped the current one — caught
+    before it shipped by a second read against the live page. Ranking by
+    parsed date is correct regardless of which direction a given page
+    accretes in. Undated sections are never counted against the keep limit
+    and never move from their original position; the surviving dated
+    sections also keep their original relative order — this gate filters,
+    it does not reorder.
+
+    Returns ``(content, [])`` — unchanged, not even re-encoded — when there
+    are :data:`_AGE_GATE_KEEP` or fewer dated sections: nothing to gate, and
+    a caller comparing for a byte-identical "whole" injection can trust the
+    identity. Otherwise returns the page with the older dated sections
+    removed and the dropped sections' own heading titles, for the caller to
+    report via :func:`_age_gate_marker`.
+    """
+    entries = _split_h2_entries(content)
+    if not entries:
+        return content, []
+    dated_positions = [i for i, e in enumerate(entries) if _is_dated_section(e)]
+    if len(dated_positions) <= _AGE_GATE_KEEP:
+        return content, []
+    keep_positions = set(
+        sorted(
+            dated_positions,
+            key=lambda i: _dated_section_sort_key(entries[i]),
+            reverse=True,
+        )[:_AGE_GATE_KEEP]
+    )
+    drop_positions = [i for i in dated_positions if i not in keep_positions]
+    dropped_titles = [_heading_title(entries[i]) for i in drop_positions]
+    kept_entries = [e for i, e in enumerate(entries) if i not in drop_positions]
+    match = _H2_RE.search(content)
+    preamble = content[: match.start()].strip()
+    body = "".join(kept_entries).strip()
+    return "\n\n".join(p for p in (preamble, body) if p), dropped_titles
+
+
 def _head_cut_at_line_boundary(text: str, limit: int) -> str:
     """*text* truncated to at most *limit* UTF-8 bytes, preferring a line break.
 
@@ -672,6 +821,61 @@ def _handles_only_marker(dropped_bytes: int, source_hint: str) -> str:
 
 
 def _trim_sectioned_page(content: str, max_bytes: int, source_hint: str) -> TrimResult:
+    """Age-gate, then byte-budget-trim, a ``## ``-sectioned page.
+
+    Thin wrapper around :func:`_trim_sectioned_page_body`: runs
+    :func:`_age_gate_dated_sections` first so a page's own stale "tick"
+    sections are gone *before* the byte-budget walk below ever sees them,
+    then appends :func:`_age_gate_marker` to whatever the byte-budget walk
+    (still live for what the age gate doesn't shrink enough) produces.
+    Every other fact this function returns — the four attestation fields,
+    the "unchanged when it already fits" identity — is untouched when
+    nothing ages out; see :func:`_trim_sectioned_page_body` for that
+    contract.
+
+    Gated on :func:`_page_is_chronological` returning **False** — a genuine
+    accreting log (``ledger/decisions.md``, ``kb/log.md``'s shape: every
+    heading carries a full ``YYYY-MM-DD``) already gets the right treatment
+    from the byte-budget walk below, which keeps as many dated entries as
+    the budget allows and attests exactly what it cut; capping it at
+    :data:`_AGE_GATE_KEEP` regardless of budget would be a regression, not a
+    fix. The page this gate exists for (``plans/<repo>/active.md``) is
+    structural under that same predicate for the reason its own docstring
+    gives — its ``This tick`` / ``This session`` headings carry no year, so
+    none of them satisfy ``_entry_key`` — which is exactly what makes it
+    provably safe to key this gate off the same classification the rest of
+    this function already computes.
+    """
+    if _page_is_chronological(content):
+        return _trim_sectioned_page_body(content, max_bytes, source_hint)
+    gated_content, age_dropped = _age_gate_dated_sections(content)
+    if not age_dropped:
+        return _trim_sectioned_page_body(gated_content, max_bytes, source_hint)
+    # The marker is known before the byte-budget walk runs (age-gating
+    # already happened), so its bytes are reserved out of *its* budget
+    # rather than appended on top afterward — the earlier shape computed
+    # the walk against the full max_bytes and only then added the marker,
+    # which could carry the total past max_bytes by exactly the marker's
+    # own length. `_trim_sectioned_page_body`'s one documented way to still
+    # exceed its budget (the mandatory one-entry floor) is unaffected by
+    # this reservation — that floor was never this function's to fix.
+    marker = _age_gate_marker(age_dropped, source_hint)
+    reserved = len(marker.encode("utf-8")) + 2  # the "\n\n" joiner below
+    body_budget = max(0, max_bytes - reserved)
+    result = _trim_sectioned_page_body(gated_content, body_budget, source_hint)
+    return TrimResult(
+        text=f"{result.text}\n\n{marker}",
+        newest_item=result.newest_item,
+        oldest_item=result.oldest_item,
+        dropped=result.dropped,
+        source_newest=result.source_newest,
+        stale=result.stale,
+        precise=result.precise,
+        floor_overflow_section=result.floor_overflow_section,
+    )
+
+
+def _trim_sectioned_page_body(content: str, max_bytes: int, source_hint: str) -> TrimResult:
     """Trim a ``## ``-sectioned page to fit *max_bytes*, keeping the right half.
 
     **Which half is right is derived, never declared** (#688). The page's
@@ -951,7 +1155,9 @@ def _home_knowledge_log_path(repo_root: Path) -> Path | None:
         return None
 
 
-def _build_context_block_scored(repo_root: Path) -> TrimResult:
+def _build_context_block_scored(
+    repo_root: Path, *, max_entries: int = _MAX_LOG_ENTRIES,
+) -> TrimResult:
     """The scored implementation behind ``_build_context_block``.
 
     Same split as ``_build_work_surface_block`` / ``..._scored``: the plain
@@ -962,8 +1168,13 @@ def _build_context_block_scored(repo_root: Path) -> TrimResult:
     ``recent-activity`` ``ContractEntry``. No extra trimming happens at this
     layer — the attestation is ``_read_recent_log``'s, passed straight
     through.
+
+    ``max_entries`` defaults to the resident's own cap (:data:`_MAX_LOG_ENTRIES`);
+    the strand light wake profile (:func:`_build_strand_light_stack`) passes a
+    smaller one — a bounded task orients on what just happened, not the
+    seat's full continuity tail.
     """
-    recent = _read_recent_log(repo_root)
+    recent = _read_recent_log(repo_root, max_entries=max_entries)
     if not recent.text:
         return TrimResult(text="")
     text = (
@@ -1278,6 +1489,253 @@ def _build_strand_pitfalls_contract(
     )
     keyed = [("pitfalls", pitfalls_block)] if pitfalls_block else []
     return keyed, contract
+
+
+# ── Strand wake profile ──────────────────────────────────────────────
+#
+# #1185 cut the whole resident inject stack for a strand down to pitfalls
+# alone — the right instinct (a bounded, single-purpose thought should not
+# pay for the seat's own standing state), but it also cut the handful of
+# blocks that orient rather than accumulate: identity, "where is the kb",
+# "what just happened here". A strand wake measured after that cut is
+# already ~30-45 KB (preamble + daemon-substrate + portal grammar + bundle),
+# nowhere near a resident's full wake — but it is also silent about who it
+# is and where the kb lives, which a one-shot dispatch with no dominion of
+# its own cannot re-derive.
+#
+# This profile restores exactly those three, trims one more (recent
+# activity, to the newest two entries rather than the resident's ten), and
+# leaves the rest of the inject stack (dominion, hearth, work surface,
+# runner policy, kb/notes health, the prior-run frame, the relabelled-repo
+# warning) dropped — but *named* in the manifest as dropped, with a `lens`
+# saying which profile did it and why, so `wake-manifest.json` (the
+# operator console's WAKE tab reads it) can say what a strand did not get
+# instead of simply not mentioning it.
+
+#: `strand.wake_profile` in `.brr/config`. `light` (default) is this
+#: module's trimmed stack; `full` is the escape hatch — give a strand the
+#: same inject stack a resident gets, unabridged, one config line, no code
+#: change. Any other value falls back to `light`.
+_STRAND_WAKE_PROFILES = ("light", "full")
+
+_STRAND_LENS_KEPT = "profile:strand · kept"
+_STRAND_LENS_TRIMMED = "profile:strand · trimmed"
+_STRAND_LENS_SKIPPED = "profile:strand · skipped"
+
+#: How many `kb/log.md` entries a light-profile strand wake gets, against
+#: the resident's `_MAX_LOG_ENTRIES` (10). A bounded task orients on what
+#: just happened; it does not need the seat's whole continuity tail to do
+#: one thing.
+_STRAND_RECENT_ACTIVITY_MAX_ENTRIES = 2
+
+
+def _strand_wake_profile(cfg: dict[str, Any]) -> str:
+    """Resolve the strand wake profile from repo config.
+
+    ``light`` unless ``strand.wake_profile=full`` says otherwise; an
+    unrecognised value is treated as ``light`` rather than raising — a typo'd
+    config line should narrow a strand's wake, never break it.
+    """
+    raw = str(cfg.get("strand.wake_profile", "light") or "light").strip().lower()
+    return raw if raw in _STRAND_WAKE_PROFILES else "light"
+
+
+def _build_strand_light_stack(
+    repo_root: Path, task_text: str | None
+) -> "tuple[list[tuple[str, str]], list[ContractEntry]]":
+    """The default (``light``) strand wake profile.
+
+    Keeps: identity-core (the strand is the same resident, narrowed to one
+    topic — ``strand.md``'s own framing — not someone else), the knowledge
+    sources block (the kb map: home→repo→docs, the same compact slice a
+    resident gets), recent activity trimmed to the newest
+    :data:`_STRAND_RECENT_ACTIVITY_MAX_ENTRIES` entries, and pitfalls
+    (unchanged from #1185 — trigger-gated on ``task_text``, already the one
+    exception that survived that cut).
+
+    Drops everything else in the resident's inject stack — the seat's own
+    standing state: the relabelled-repo warning, the dominion digest, the
+    hearth, the work surface, runner policy, the prior-run frame, kb/notes
+    health. Each still gets a :class:`ContractEntry` (``present=False``,
+    ``bytes=None`` — never weighed, not confirmed empty, same three-state
+    discipline as the rest of this module) carrying
+    :data:`_STRAND_LENS_SKIPPED`, in the same relative position a resident
+    wake's manifest would show it, so a reader of ``wake-manifest.json``
+    sees one consistent slate with some rows filled and some marked why not,
+    rather than the drop set simply missing from the list.
+
+    Returns the keyed blocks (prompt order) and the full contracts list,
+    kept and dropped alike — mirrors
+    :func:`_build_injected_blocks_with_contracts`'s return shape minus the
+    ``injected_whole`` set (a light-profile strand never hands over a whole
+    work-surface page, so that set is always empty; see
+    :func:`_build_strand_wake_stack`, which adds it back for uniformity).
+    """
+    from .bootscore import (
+        ContractEntry,
+        OWNER_PRODUCT, OWNER_RESIDENT, OWNER_PROJECT, OWNER_DAEMON_LIVE,
+        AUTHORITY_IDENTITY, AUTHORITY_MEMORY, AUTHORITY_SURFACE, AUTHORITY_POLICY,
+        AUTHORITY_KNOWLEDGE, AUTHORITY_ACTIVITY, AUTHORITY_HEALTH, AUTHORITY_HEARTH,
+    )
+
+    keyed: list[tuple[str, str]] = []
+    contracts: list[ContractEntry] = []
+
+    def _dropped(block_key: str, label: str, owner: str, authority: str) -> None:
+        contracts.append(ContractEntry(
+            block_key=block_key,
+            label=label,
+            owner=owner,
+            authority=authority,
+            freshness=None,
+            location="computed",
+            present=False,
+            bytes=None,
+            lens=_STRAND_LENS_SKIPPED,
+        ))
+
+    # 1. Resident identity core — kept.
+    ic_path = effective_prompt_path("identity-core.md", repo_root)
+    identity_core = _build_identity_core_block(repo_root)
+    contracts.append(ContractEntry(
+        block_key="identity-core",
+        label="Resident identity core",
+        owner=OWNER_PRODUCT,
+        authority=AUTHORITY_IDENTITY,
+        freshness=_mtime_iso(ic_path),
+        location=str(ic_path),
+        present=bool(identity_core),
+        bytes=_rendered_bytes(identity_core),
+        lens=_STRAND_LENS_KEPT,
+    ))
+    if identity_core:
+        keyed.append(("identity-core", identity_core))
+
+    # 1b-4. Standing seat state — dropped, named in the slot a resident
+    # wake's manifest would show it.
+    _dropped(
+        "relabelled-repo", "Stranded-memory warning (repo moved)",
+        OWNER_DAEMON_LIVE, AUTHORITY_HEALTH,
+    )
+    _dropped(
+        "dominion", "Dominion digest (self-inject)",
+        OWNER_RESIDENT, AUTHORITY_MEMORY,
+    )
+    _dropped(
+        "hearth", "The hearth (personal space, index-shaped)",
+        OWNER_RESIDENT, AUTHORITY_HEARTH,
+    )
+    _dropped(
+        "work-surface", "Discovered work surface",
+        OWNER_RESIDENT, AUTHORITY_SURFACE,
+    )
+    _dropped(
+        "runner-policy", "Stored runner policy (CS6)",
+        OWNER_RESIDENT, AUTHORITY_POLICY,
+    )
+
+    # 5. Pitfalls — unchanged from #1185, the one block already trigger-gated
+    # on the task text. `lens` names the profile's *disposition* (this block
+    # is in scope, same as a resident's), not the per-run outcome — a strand
+    # whose task text matches nothing is the same silent-and-healthy
+    # `present=False` a resident wake shows for a non-matching task, never
+    # "skipped by the profile".
+    pitfalls_keyed, pitfalls_contract = _build_strand_pitfalls_contract(repo_root, task_text)
+    from dataclasses import replace as _dc_replace
+    contracts.append(_dc_replace(pitfalls_contract, lens=_STRAND_LENS_KEPT))
+    keyed.extend(pitfalls_keyed)
+
+    # 7. Knowledge sources — kept: the kb map (home→repo→docs), the same
+    # compact slice a resident gets. A strand with no dominion of its own
+    # still needs to know the kb exists and where, even if it never reads
+    # the health scan.
+    knowledge_block = _build_knowledge_sources_block(repo_root)
+    contracts.append(ContractEntry(
+        block_key="knowledge-sources",
+        label="Knowledge sources (home+repo+docs)",
+        owner=OWNER_PROJECT,
+        authority=AUTHORITY_KNOWLEDGE,
+        freshness=None,
+        location="computed",
+        present=bool(knowledge_block),
+        bytes=_rendered_bytes(knowledge_block),
+        lens=_STRAND_LENS_KEPT,
+    ))
+    if knowledge_block:
+        keyed.append(("knowledge-sources", knowledge_block))
+
+    # 8. Recent activity — trimmed to the newest two entries rather than the
+    # resident's ten; enough to orient on what just happened, not the seat's
+    # full continuity tail.
+    context_trim = _build_context_block_scored(
+        repo_root, max_entries=_STRAND_RECENT_ACTIVITY_MAX_ENTRIES,
+    )
+    context = context_trim.text
+    contracts.append(ContractEntry(
+        block_key="recent-activity",
+        label="Recent activity (kb/log.md tail, strand-trimmed)",
+        owner=OWNER_DAEMON_LIVE,
+        authority=AUTHORITY_ACTIVITY,
+        freshness=None,
+        location="computed",
+        present=bool(context),
+        bytes=_rendered_bytes(context),
+        newest_item=context_trim.newest_item,
+        oldest_item=context_trim.oldest_item,
+        dropped=context_trim.dropped,
+        source_newest=context_trim.source_newest,
+        stale=context_trim.stale,
+        lens=_STRAND_LENS_TRIMMED,
+    ))
+    if context:
+        keyed.append(("recent-activity", context))
+
+    # 8b-9b. The rest of the standing seat state — dropped.
+    _dropped(
+        "prior-run", "Your last run (node frame + Now + shape)",
+        OWNER_RESIDENT, AUTHORITY_MEMORY,
+    )
+    _dropped(
+        "kb-health", "kb health (deterministic preflight)",
+        OWNER_DAEMON_LIVE, AUTHORITY_HEALTH,
+    )
+    _dropped(
+        "notes-health", "notes health (deterministic preflight)",
+        OWNER_DAEMON_LIVE, AUTHORITY_HEALTH,
+    )
+
+    return keyed, contracts
+
+
+def _build_strand_wake_stack(
+    repo_root: Path,
+    task_text: str | None,
+    *,
+    resolved_prs: dict[int, str] | None = None,
+) -> "tuple[list[tuple[str, str]], list[ContractEntry], frozenset[Path]]":
+    """A strand's inject stack, profile-gated.
+
+    ``strand.wake_profile`` (``.brr/config``) picks between the light,
+    orienting-only default (:func:`_build_strand_light_stack`) and ``full``
+    — the same, unabridged stack a resident wake gets
+    (:func:`_build_injected_blocks_with_contracts`), for a deployment that
+    wants the pre-profile shape back without a code change.
+
+    The one shared entry point for all three callers that used to build a
+    strand's inject stack independently (``build_boot_score``,
+    ``build_daemon_prompt_with_score``, ``_join_prompt_parts``'s
+    no-prepared-blocks fallback) — see git history before this function
+    existed for what it cost when the three could drift.
+    """
+    from . import config as conf
+
+    cfg = conf.load_config(repo_root)
+    if _strand_wake_profile(cfg) == "full":
+        return _build_injected_blocks_with_contracts(
+            repo_root, task_text=task_text, resolved_prs=resolved_prs,
+        )
+    keyed, contracts = _build_strand_light_stack(repo_root, task_text)
+    return keyed, contracts, frozenset()
 
 
 class _ReserveFloor(NamedTuple):
@@ -2915,20 +3373,19 @@ def _join_prompt_parts(
 
     ``strand=True`` *narrows* ``inject_blocks`` rather than defeating it —
     that's the B4 strand trim: a bounded strand wake gets its task and
-    files, not the standing resident context, with one exception (#1185).
-    Pitfalls are the account's failure-memory lookup, matched fresh against
-    each run's own task text, and a strand is single-shot — the one run
-    shape that cannot learn from its own patterns and so benefits most per
-    byte from being handed this list. The fallback build (used when no
-    scored variant pre-built the blocks — ``prepared_injected_blocks`` is
-    ``None``) picks the pitfalls-only slice for a strand and the full stack
-    otherwise; ``prepared_injected_blocks``, when supplied, is honored
-    as-is (the caller — :func:`build_daemon_prompt_with_score` — already
-    scoped it the same way). The introspection dev-mode invitation stays
-    resident-only regardless: it invites a look at "the whole shape ... just
-    read", a shape a strand was never given. The ``diffense`` review-pack
-    step is independent of the trim (a strand wake asking for diffense is
-    out of scope for now; whatever the caller passes is honored as-is).
+    files, not the standing resident context, minus the handful of blocks
+    the strand wake profile still keeps (identity, the kb map, a slice of
+    recent activity, pitfalls — see :func:`_build_strand_wake_stack` and
+    ``strand.wake_profile`` in ``.brr/config``). The fallback build (used
+    when no scored variant pre-built the blocks — ``prepared_injected_blocks``
+    is ``None``) resolves the same profile a strand's scored path would;
+    ``prepared_injected_blocks``, when supplied, is honored as-is (the
+    caller — :func:`build_daemon_prompt_with_score` — already scoped it the
+    same way). The introspection dev-mode invitation stays resident-only
+    regardless: it invites a look at "the whole shape ... just read", a
+    shape a strand was never given. The ``diffense`` review-pack step is
+    independent of the trim (a strand wake asking for diffense is out of
+    scope for now; whatever the caller passes is honored as-is).
     """
     # The kernel leads.  Everything after it is reference the wake may consult;
     # the kernel is the wake's own first move (``bootscore.format_kernel``).
@@ -2954,7 +3411,7 @@ def _join_prompt_parts(
         if prepared_injected_blocks is not None:
             parts.extend(prepared_injected_blocks)
         elif strand:
-            strand_keyed, _ = _build_strand_pitfalls_contract(repo_root, task_text)
+            strand_keyed, _, _ = _build_strand_wake_stack(repo_root, task_text)
             parts.extend(text for _, text in strand_keyed)
         else:
             parts.extend(
@@ -3064,14 +3521,55 @@ def _build_portal_verb_grammar_block(repo_root: Path) -> str:
 #: has no other way to learn that, so it consults this registry instead of
 #: reading `entry.location` raw; the alternative is that command handing a
 #: resident 754 lines when the live daemon mount only ever seeded ~120 of them.
+def _prior_run_boot_line(repo_root: Path, run_id: str) -> str:
+    """``boot: 156.9 KB (surface 48.6 KB · health 27.8 KB)`` for *run_id*'s
+    own wake, or ``""``.
+
+    Reads that run's own ``.brr/runs/<run_id>/boot-score.json`` — the
+    repo-local scratch copy :func:`brr.run_context.write_boot_score`
+    persists specifically so a run directory "stays inspectable after the
+    fact" (its own docstring). Same discipline as every other note this
+    function's caller assembles: best-effort, never a re-measurement — the
+    two ledger categories are :func:`brr.bootscore.top_ledger_categories`
+    off the numbers that run's own daemon already computed, and an absent
+    or unreadable file (the scratch copy has been cleaned up, or this is a
+    different host) renders nothing rather than a stale or invented claim.
+    """
+    import json
+
+    from . import bootscore
+
+    path = repo_root / ".brr" / "runs" / run_id / "boot-score.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    contracts = payload.get("contracts")
+    if not isinstance(contracts, list):
+        return ""
+    top_two = bootscore.top_ledger_categories(contracts, n=2)
+    if not top_two:
+        return ""
+    cats = " · ".join(f"{authority} {size / 1024:.1f} KB" for authority, size in top_two)
+    total = payload.get("prompt_bytes")
+    if isinstance(total, int) and total > 0:
+        return f"boot: {total / 1024:.1f} KB ({cats})"
+    return f"boot: {cats}"
+
+
 def _build_prior_run_mount_text(repo_root: Path) -> str:
     """The past self's page, whole — what a seeded ``Read`` of the node carries.
 
     ``body.md`` byte for byte (a Read that returned a summary would be the
     lie the mount exists to refuse), then, in brnrd's own bracketed voice —
-    the idiom ``_trim_note`` and the seam already use — the frame line, the
-    run's last message, and the face it wore. A resident waking on this row
-    is reading what it was doing when it stopped, in its own hand.
+    the idiom ``_trim_note`` and the seam already use — the frame line, an
+    optional ``boot: …`` line (:func:`_prior_run_boot_line` — that run's own
+    wake-size gauge, when its scratch ``boot-score.json`` is still around to
+    read), the run's last message, and the face it wore. A resident waking
+    on this row is reading what it was doing when it stopped, in its own
+    hand.
     """
     from . import protocol
 
@@ -3095,6 +3593,9 @@ def _build_prior_run_mount_text(repo_root: Path) -> str:
         if str(fields.get(key) or "").strip()
     ]
     notes = [f"frame: {' · '.join(frame)}"]
+    boot_line = _prior_run_boot_line(repo_root, run_id)
+    if boot_line:
+        notes.append(boot_line)
     for name in ("name", "mood"):
         try:
             value = (node / name).read_text(encoding="utf-8").strip().splitlines()
@@ -3685,17 +4186,16 @@ def build_boot_score(
             is_daemon=is_daemon,
         )
 
-        # Inject-stack blocks (skipped for strands, except pitfalls — #1185)
+        # Inject-stack blocks — the resident's full stack, or a strand's own
+        # profile-gated one (light by default; see _build_strand_wake_stack).
         if not is_strand:
             _, inject_contracts, block_whole = _build_injected_blocks_with_contracts(
                 effective_root, task_text=task_text
             )
         else:
-            _, pitfalls_contract = _build_strand_pitfalls_contract(
+            _, inject_contracts, block_whole = _build_strand_wake_stack(
                 effective_root, task_text
             )
-            inject_contracts = [pitfalls_contract]
-            block_whole = frozenset()
 
         if injected_whole is None:
             injected_whole = block_whole
@@ -3842,6 +4342,12 @@ def build_daemon_prompt_with_score(
     ``hooks_installed`` (keyword) is the run's own hook-config decision; the
     daemon knows it because it installed the config, and the score should not
     re-guess it from a process that is not the runner.
+
+    ``_block_text_sink`` (keyword, popped like ``_mount_sink``): a caller-owned
+    dict this call fills with every present block's exact rendered text,
+    keyed the same as ``wake-manifest.json``'s ``name`` field — see
+    :func:`build_daemon_prompt`'s own docstring for what it captures and why
+    (#1830). Persisted by :func:`brr.run_context.write_wake_blocks`.
     """
     # Resolved runner facts. Read, not popped: since Slice 2 the *prompt* needs
     # them too — the kernel names the body the wake is running in, where the
@@ -3889,16 +4395,16 @@ def build_daemon_prompt_with_score(
     has_diff = diffense
 
     mount_sink: dict[str, str] | None = kwargs.pop("_mount_sink", None)
+    block_text_sink: dict[str, str] | None = kwargs.pop("_block_text_sink", None)
 
     if strand:
-        # #1185: a strand is single-shot — it cannot learn from its own
-        # patterns the way a resident's later wake would — so the pitfalls
-        # block is the one exception to "no inject stack for strands".
-        injected_keyed, pitfalls_contract = _build_strand_pitfalls_contract(
-            repo_root, pitfall_text
+        # The strand wake profile (light by default; `strand.wake_profile=full`
+        # opts out) — see _build_strand_wake_stack. Introspection stays
+        # resident-only regardless of profile: it invites a look at "the
+        # whole shape ... just read", a shape a strand was never given.
+        injected_keyed, inject_contracts, injected_whole = _build_strand_wake_stack(
+            repo_root, pitfall_text or None, resolved_prs=resolved_prs,
         )
-        inject_contracts = [pitfalls_contract]
-        injected_whole: frozenset[Path] = frozenset()
         introspection_block = ""
     else:
         injected_keyed, inject_contracts, injected_whole = _build_injected_blocks_with_contracts(
@@ -3963,6 +4469,7 @@ def build_daemon_prompt_with_score(
         _size_sink=sizes,
         _mountable=mountable,
         _mount_sink=mount_sink,
+        _block_text_sink=block_text_sink,
     )
 
     # Stamp the two blocks only the renderer could weigh (the kernel it built
@@ -4507,6 +5014,7 @@ def build_daemon_prompt(
     _mount_sink: dict[str, str] | None = None,
     _prepared_introspection_block: str | None = None,
     _size_sink: dict[str, int] | None = None,
+    _block_text_sink: dict[str, str] | None = None,
 ) -> str:
     """Build the prompt for daemon-originated runs.
 
@@ -4522,17 +5030,36 @@ def build_daemon_prompt(
 
     ``strand=True`` (B4, ``kb/design-director-loop.md`` §orchestrator/worker)
     swaps in the slim child stack: ``strand.md`` + ``weave.md`` instead of
-    the resident's ``run.md``, and the resident-only injected blocks
-    (identity core, dominion digest, work surface, runner policy,
-    knowledge sources, kb health, introspection) are skipped entirely — a
-    strand wake still gets ``daemon-substrate.md`` (it still runs under the
-    daemon and needs the delivery/portal mechanics) and the full Run
-    Context Bundle (its actual task). Pitfalls are the one exception
-    (#1185): a strand is single-shot and cannot learn from its own
+    the resident's ``run.md``, plus the strand wake profile
+    (:func:`_build_strand_wake_stack`, ``strand.wake_profile`` in
+    ``.brr/config``) in place of the resident's full inject stack. The
+    default (``light``) profile keeps identity core, the knowledge-sources
+    map, a two-entry recent-activity tail, and pitfalls (#1185's own
+    exception — a strand is single-shot and cannot learn from its own
     patterns the way a resident's later wake would, so the account's
-    failure-memory lookup — matched fresh against this run's own task text
-    — is handed over same as a resident wake, and nothing else. Default
-    ``False`` is byte-identical to the prior behavior.
+    failure-memory lookup, matched fresh against this run's own task text,
+    is handed over same as a resident wake); dominion digest, work surface,
+    the hearth, runner policy, kb/notes health, and introspection are
+    dropped — the seat's own standing state, not this task's.
+    ``strand.wake_profile=full`` restores the resident's complete stack for
+    a strand with one config line. A strand wake still gets
+    ``daemon-substrate.md`` (it still runs under the daemon and needs the
+    delivery/portal mechanics) and the full Run Context Bundle (its actual
+    task). Default ``False`` is byte-identical to the prior behavior.
+
+    ``_block_text_sink`` (optional), when supplied, receives the *exact*
+    text every block routed through ``_take`` actually delivered to this
+    wake — the prose text when it stayed in the prompt, the mounted text
+    when it left for a seeded ``Read`` instead — plus the kernel and the
+    trailer (Run Context Bundle), captured directly below. This is what
+    :func:`brr.run_context.write_wake_blocks` persists (#1830): before it, a
+    home-originated block (dominion self-inject, work surface, pitfalls,
+    knowledge slices, the plan page) had ``location == "computed"`` and no
+    file on disk ever carried its rendered bytes, mounted or not — the
+    operator console's WAKE tab had nothing to show for one but "computed —
+    no source file". A superset of ``_mount_sink``: every key the mount sink
+    gets, this sink gets the same value for, plus every other present block
+    besides.
     """
     # A mounted block leaves the prose. It is not dropped — it arrives as a seeded
     # `Read` and its result (`transcript.py`), so the wake receives the same bytes
@@ -4541,6 +5068,8 @@ def build_daemon_prompt(
     # both arms would carry the prose.
     def _take(key: str, text: str) -> str | None:
         if _mount_sink is None or key not in _mountable:
+            if _block_text_sink is not None:
+                _block_text_sink[key] = text
             return text
         # A block whose mounted form is a curated text rather than its
         # rendered prose (`_MOUNTABLE_TEXT_BUILDERS`) seeds the builder's
@@ -4548,7 +5077,13 @@ def build_daemon_prompt(
         # only its map. The offline path (`mountable_block_text`) consults the
         # same registry, so the two cannot disagree about what was seeded.
         builder = _MOUNTABLE_TEXT_BUILDERS.get(key)
-        _mount_sink[key] = builder(repo_root) if builder is not None else text
+        mounted_text = builder(repo_root) if builder is not None else text
+        _mount_sink[key] = mounted_text
+        if _block_text_sink is not None:
+            # The bytes this wake actually received for `key` are the mounted
+            # text, not the raw prose `_take` was handed — recording the
+            # latter here would silently describe a wake nobody had.
+            _block_text_sink[key] = mounted_text
         return None
 
     preamble = _glue_preamble([
@@ -4594,6 +5129,11 @@ def build_daemon_prompt(
     trailer = bundle.rstrip()
     if (event_body or "").strip() != task.strip():
         trailer = f"{trailer}\nRun instruction: {task}"
+    if _block_text_sink is not None:
+        # "run-context-bundle" matches `_TRAILER_KEY` in `replay.py` and the
+        # `block_key` the caller's `runtime_entries` filters on
+        # (`build_daemon_prompt_with_score`) — one name, every reader.
+        _block_text_sink["run-context-bundle"] = trailer
 
     # #1137: same forge-state join as `build_daemon_prompt_with_score` — see
     # that function's own comment. This bare-`build_daemon_prompt` path
@@ -4674,6 +5214,11 @@ def build_daemon_prompt(
         # and the kernel silently tells the truth again.
         mounted=bool(_mountable),
     ))
+    if _block_text_sink is not None:
+        # "boot-kernel" matches `kernel_entry.block_key` in
+        # `build_daemon_prompt_with_score` — the kernel is always present,
+        # never mounted (it has no file to seed as a `Read`).
+        _block_text_sink["boot-kernel"] = kernel
 
     prepared_blocks = (
         None
@@ -5030,8 +5575,8 @@ def _build_run_context_bundle(
         "`brnrd docs portals`."
     )
     sections.append(
-        f"- stdout capture: {response_path} (brnrd-written; final stdout = the "
-        "one plain current-thread reply)"
+        f"- stdout capture: {response_path} (brnrd-written; this turn's stdout = "
+        "the one plain reply for the waking event)"
     )
     if outbox_path:
         sections.append(

@@ -4196,6 +4196,14 @@ def _run_worker(
         if not _is_strand(task.meta) and str(task.meta.get("source") or "") == "cloud":
             obligations.append("linger")
 
+        # A strand that ends its turn with neither a submit nor a bolt has
+        # not finished — it has stopped waiting by returning (three did on
+        # 2026-09-06, each "still holding" with no tool call, each run
+        # closed under it). The seat parks at turn end; a strand does not,
+        # so the Stop hook blocks it once and names `brnrd await --file`.
+        if _is_strand(task.meta):
+            obligations.append("hold")
+
         if obligations:
             env["BRR_CLOSEOUT_OBLIGATIONS"] = ",".join(obligations)
 
@@ -4447,6 +4455,12 @@ def _run_worker(
         mount_sink: dict[str, str] | None = (
             {} if boot_mount and mount_shell in transcript.MOUNTED_SHELLS else None
         )
+        # Every present block's exact rendered text, mounted or not — a
+        # strict superset of `mount_sink` (#1830). Unconditional (unlike
+        # `mount_sink`, gated on the mount toggle actually applying): a
+        # prose-only wake still has home-originated blocks with no other
+        # honest record of their bytes. See `run_context.write_wake_blocks`.
+        block_text_sink: dict[str, str] = {}
 
         # Built once, so the fail-closed rebuild below cannot drift from the
         # prompt it is replacing.
@@ -4528,6 +4542,7 @@ def _run_worker(
             str(env_ctx.response_path_env),
             run_root,
             _mount_sink=mount_sink,
+            _block_text_sink=block_text_sink,
             **_prompt_kwargs,
         )
 
@@ -4556,11 +4571,18 @@ def _run_worker(
                 # boot*. Rebuild the prose prompt. A boot that cannot mount must
                 # degrade to the boot that always worked, out loud.
                 print(f"[brnrd] boot transcript mount failed ({exc}) — prose boot")
+                # Same `block_text_sink` object, deliberately: this rebuild
+                # re-runs every `_take` call with `_mount_sink=None`, so every
+                # key it touches overwrites the first pass's mounted-text
+                # entry with the fresh prose that actually shipped — the
+                # sink ends up describing this final `boot_score`, never the
+                # discarded mounted one, with no separate reconciliation step.
                 prompt, boot_score = prompts.build_daemon_prompt_with_score(
                     prompt_instruction,
                     eid,
                     str(env_ctx.response_path_env),
                     run_root,
+                    _block_text_sink=block_text_sink,
                     **_prompt_kwargs,
                 )
 
@@ -4572,7 +4594,14 @@ def _run_worker(
             # entered, who owns them, which were silent.
             run_context.write_prompt_file(brr_dir, task, prompt)
             run_context.write_boot_score(brr_dir, task, boot_score)
-            run_context.write_wake_manifest(brr_dir, task, boot_score)
+            run_context.write_wake_manifest(brr_dir, task, boot_score, wake_blocks=block_text_sink)
+            # Every present block's exact rendered text (#1830) — a home-
+            # originated block (dominion self-inject, work surface, pitfalls,
+            # knowledge slices, the plan page) has no file on disk that ever
+            # carried its bytes, mounted or not, so this is the only durable
+            # record of "what did this wake actually read here?" for those
+            # blocks. Unconditional, unlike the mounted-only sidecar below.
+            run_context.write_wake_blocks(brr_dir, task, block_text_sink)
             # A mounted wake's prompt.md is missing exactly the blocks
             # `boot_score.body.mounted` says left the prose — persist the diverted
             # text this run actually built (never re-derived later from
@@ -5045,9 +5074,42 @@ def _run_worker(
                     if unowned and not terminal_duplicate
                     else ""
                 )
+                # brnrd#1798: a dispatch_message-sourced reply is "unowned"
+                # here whenever the steer that woke this strand stamped no
+                # spawn_parent_run_id (the steer event only ever carries
+                # spawn_message_from_run/for_run/for_event —
+                # _terminal_reply_lands has nothing else to land on) — so
+                # the notify.gate net meant for a genuinely orphaned
+                # schedule wake was catching a strand's reply to its own
+                # dispatcher instead, and shipping it to the correspondent
+                # raw, reading as if the seat itself had spoken. Required
+                # shape (the maintainer's steer on the issue): still
+                # deliver — never reroute away from the correspondent —
+                # but label it as the strand's own note, and fan a copy to
+                # the steering run so the seat knows what just went out.
+                relay_label = ""
+                relay_parent_run_id = ""
+                relay_strand_run_id = ""
+                if source == "dispatch_message":
+                    relay_strand_run_id = str(
+                        task.meta.get("spawn_message_for_run") or ""
+                    )
+                    relay_parent_run_id, _relay_conv = _child_owner_route(
+                        str(task.meta.get("spawn_message_for_event") or ""),
+                        fallback_parent_run_id=str(
+                            task.meta.get("spawn_message_from_run") or ""
+                        ),
+                    )
+                    relay_label = _strand_reply_label(
+                        emit.brr_dir, runs_dir, relay_strand_run_id or task.id,
+                    )
                 gate_fallback_delivered = False
                 if notify_gate:
                     fallback_body = protocol.read_response(responses_dir, eid) or ""
+                    if source == "dispatch_message":
+                        fallback_body = _label_strand_relay_body(
+                            relay_label, fallback_body,
+                        )
                     gate_fallback_delivered = _deliver_out_of_bound(
                         emit, task, responses_dir, inbox_dir, eid,
                         notify_gate, {}, fallback_body, outbox_dir=outbox_dir,
@@ -5056,6 +5118,18 @@ def _run_worker(
                     if gate_fallback_delivered:
                         output_stats["outbound"] = output_stats.get("outbound", 0) + 1
                         output_stats["delivered"] = output_stats.get("delivered", 0) + 1
+                        if source == "dispatch_message" and relay_parent_run_id:
+                            _notify_parent_of_relayed_strand_message(
+                                inbox_dir,
+                                parent_run_id=relay_parent_run_id,
+                                strand_run_id=relay_strand_run_id or task.id,
+                                strand_event_id=str(
+                                    task.meta.get("spawn_message_for_event") or ""
+                                ),
+                                label=relay_label,
+                                gate=notify_gate,
+                                body=fallback_body,
+                            )
                 undeliverable = (
                     unowned and not terminal_duplicate and not gate_fallback_delivered
                 )
@@ -5126,6 +5200,8 @@ def _run_worker(
             # still race the transition during deploy skew.
             terminal_reply = protocol.read_response(responses_dir, eid)
             pending_hold = task.meta.pop("pending_resource_hold", None)
+            if pending_hold is None:
+                pending_hold = _park_seat_on_turn_end(task, cfg)
             if pending_hold is not None:
                 # The resident's own `hold:` directive (outbox parse above)
                 # — a clean turn that chose to park rather than one that
@@ -6038,38 +6114,224 @@ def _collect_levels(
 
 def _collect_allowance_facet(
     task: Run, runner_name: str | None, work_dir: Path | None,
+    *, cfg: "dict | None" = None, levels: "dict[str, object] | None" = None,
 ) -> dict[str, object] | None:
-    """A strand's live ``{"tokens": N, "spent": M}``, or ``None`` off a strand.
+    """A strand's or the resident seat's live ``{"tokens": N, "spent": M}``.
 
     Called every heartbeat/boundary this run's portal-state is rebuilt
-    (design-the-allowance.md §2, slice 1) — cheap: a bounded transcript/
-    rollout tail-read, not a fresh Shell probe. The current ceiling is read
-    from the live run-control record first (a parent's ``to:`` grant lands
-    there — :func:`_apply_allowance_grant`), falling back to the dispatch-
-    time stamp on ``task.meta`` when no control entry exists (a test caller,
-    or a control retired out from under a still-finishing heartbeat).
+    (design-the-allowance.md §2) — cheap: a bounded transcript/rollout
+    tail-read, not a fresh Shell probe. Two branches, one meter
+    (:func:`allowance.collect_spent`) — never a second accounting:
+
+    - a **strand**: the current ceiling is read from the live run-control
+      record first (a parent's ``to:`` grant lands there —
+      :func:`_apply_allowance_grant`), falling back to the dispatch-time
+      stamp on ``task.meta`` when no control entry exists (a test caller,
+      or a control retired out from under a still-finishing heartbeat).
+    - the **resident seat** (slice 2, every other run): the ceiling is
+      config-owned (:func:`allowance.resident_ceiling_tokens`) and the
+      window it resets against comes from *levels*' binding quota reset
+      instant (:func:`runner_quota.binding_quota_reset_epoch`) — see
+      :func:`allowance.resident_allowance_state` for why this stops short
+      of a quota-percent-to-token conversion.
 
     Both the ceiling and the freshly-metered spend are written back onto
     ``task.meta`` so the cut-time overrun check (:func:`_cut_mismatches`)
     and the completion notice (:func:`_notify_spawn_parent`) read a recent
     value without re-metering.
     """
-    if not hasattr(task, "meta") or not _is_strand(task.meta):
+    if not hasattr(task, "meta"):
         return None
-    control = _find_run_control(str(getattr(task, "event_id", "") or task.id))
-    tokens = (
-        (control or {}).get("allowance_tokens")
-        or task.meta.get("spawn_allowance_tokens")
-        or allowance.DEFAULT_ALLOWANCE_TOKENS
-    )
-    tokens = int(tokens)
-    spent = allowance.collect_spent(
+    if _is_strand(task.meta):
+        control = _find_run_control(str(getattr(task, "event_id", "") or task.id))
+        tokens = (
+            (control or {}).get("allowance_tokens")
+            or task.meta.get("spawn_allowance_tokens")
+            or allowance.DEFAULT_ALLOWANCE_TOKENS
+        )
+        tokens = int(tokens)
+        spent = allowance.collect_spent(
+            runner_name, work_dir,
+            codex_thread_id=task.meta.get("codex_thread_id"),
+        )
+        task.meta["spawn_allowance_tokens"] = tokens
+        task.meta["spawn_allowance_spent"] = spent
+        # Also onto the shared, cross-thread `_run_controls` record — the
+        # only place the *parent's* own heartbeat (a different thread, no
+        # handle on this child's `task`) can read it from, for the draw-
+        # attribution facet (brnrd#1810, `_owned_child_controls`). Never a
+        # second meter: the same `spent` this call already computed.
+        if control is not None:
+            with _run_controls_lock:
+                control["allowance_spent"] = spent
+        return {"tokens": tokens, "spent": spent, "scope": "strand"}
+    live_spent = allowance.collect_spent(
         runner_name, work_dir,
         codex_thread_id=task.meta.get("codex_thread_id"),
     )
-    task.meta["spawn_allowance_tokens"] = tokens
-    task.meta["spawn_allowance_spent"] = spent
-    return {"tokens": tokens, "spent": spent}
+    reset_epoch = runner_quota.binding_quota_reset_epoch(levels)
+    return allowance.resident_allowance_state(
+        task.meta, cfg=cfg, reset_epoch=reset_epoch, live_spent=live_spent,
+    )
+
+
+def _collect_quota_draws(
+    task: Run, allowance_facet_input: "dict[str, object] | None",
+) -> "dict[str, object] | None":
+    """Who is drawing on the *shared* quota gauge this boundary, attributed.
+
+    brnrd#1810 (design-the-seat-that-never-quits.md §"The measurement"): a
+    prior seat priced a close from S34→S8 in 30 minutes, attributing the
+    whole drop to itself, when three sonnet strands sharing the same
+    provider gauge did almost all of it. This is the fix — not a new
+    meter, a projection of the two the daemon already keeps:
+
+    - **self** — this run's own live-metered weighted spend, straight off
+      *allowance_facet_input* (:func:`_collect_allowance_facet`'s already-
+      computed ``spent``, whatever this run's own scope — resident or
+      strand). ``None`` when that facet hasn't got a reading yet.
+    - **strands** — every strand this run still owns
+      (:func:`_owned_child_controls`), each with the same ``allowance_spent``
+      its own heartbeat already wrote onto the shared control record (see
+      :func:`_collect_allowance_facet`'s strand branch) — never re-metered
+      here. ``weighted`` is ``None`` for a strand whose first boundary
+      hasn't landed a reading yet; it still counts toward the row, just not
+      toward any summed total a renderer builds from it.
+
+    ``None`` only when there is nothing at all to report (no self reading
+    and no owned strands) — an empty ``draws`` block would just be noise on
+    every quiet, unspawned run.
+    """
+    if not hasattr(task, "meta"):
+        return None
+    self_spent: "int | None" = None
+    if isinstance(allowance_facet_input, dict):
+        raw = allowance_facet_input.get("spent")
+        if raw is not None:
+            self_spent = int(raw)
+    strands = [
+        {
+            "run_id": row.get("run_id") or None,
+            "title": row.get("title") or None,
+            "weighted": row.get("weighted"),
+        }
+        for row in _owned_child_controls(task.id)
+    ]
+    if self_spent is None and not strands:
+        return None
+    return {"self": self_spent, "strands": strands}
+
+
+def _record_boot_cost(
+    task: Run,
+    runner_name: str | None,
+    work_dir: Path | None,
+    outbox_dir: Path | None,
+) -> None:
+    """Stamp this run's boot cost onto its own ``spend.json`` control file, once.
+
+    design-the-seat-that-never-quits.md §"The measurement": slice 3 (not
+    this one) needs a number to compare a held seat's per-boundary hold
+    cost against — this only records it. ``boot`` = the first assistant
+    turn's cache-creation + fresh-input tokens, cost-weighted
+    (:func:`allowance.claude_first_turn_boot_tokens`) — what it took to
+    *establish* context (the wake bundle, the system prompt, the dominion
+    files) before any work happened, read live off the growing session
+    transcript rather than waiting for the final ``--output-format json``
+    envelope :mod:`brr.claude_status` otherwise depends on (which may be
+    hours away on a long-held seat).
+
+    Claude-only for now — Codex's analogous first-request cost is a gap
+    this leaves open, named rather than guessed at (no ``TOKEN_WEIGHTS``-
+    style price table has been validated against Codex's own accounting
+    yet).
+
+    Retried every heartbeat until the transcript actually has a first
+    ``usage`` row to read (``task.meta["boot_cost_recorded"]`` only flips
+    once a real number lands, never on a merely-absent one — the same
+    absent-vs-unknown discipline every other facet here keeps), then never
+    again for this run: a stamped boot cost doesn't move, and
+    :func:`brr.claude_status.write_snapshot` preserves it across every
+    later overwrite of the same control file.
+    """
+    if not hasattr(task, "meta") or task.meta.get("boot_cost_recorded"):
+        return
+    if not claude_status.supported(runner_name):
+        return
+    tokens = allowance.claude_first_turn_boot_tokens(
+        allowance.latest_claude_transcript(work_dir)
+    )
+    if tokens is None:
+        return
+    # Merge onto whatever this control file already holds — usually
+    # nothing yet (boot is the *first* thing recorded here in the common
+    # case), but never assume it: overwriting wholesale would erase a
+    # levels snapshot that happened to land first on an unlucky ordering.
+    existing = claude_status.load_snapshot(outbox_dir)
+    payload = dict(existing) if isinstance(existing, dict) else {}
+    payload["boot"] = {
+        "weighted": tokens,
+        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    written = claude_status.write_snapshot(outbox_dir, payload)
+    if written is not None:
+        task.meta["boot_cost_recorded"] = True
+
+
+def _record_context_window(
+    runner_name: str | None,
+    work_dir: Path | None,
+    outbox_dir: Path | None,
+) -> None:
+    """Feed a live, transcript-derived ``context_window`` reading every
+    heartbeat, instead of leaving the facet ``absent`` for a run's entire
+    life (design-the-seat-that-never-quits.md §"The machinery" slice 4,
+    "context rebirth", needs this number to park-and-reincarnate on drift).
+
+    ``resources.context_window`` used to read nothing until the *final*
+    ``--output-format json`` envelope, because that is the only place
+    :mod:`brr.claude_status` ever had a real ``contextWindow`` size to
+    divide by (#1178's own fix chose an honest absence over a wrong number
+    for exactly this reason). That envelope may be hours away on a held
+    seat. What the transcript *does* carry live, every turn, is occupancy —
+    :func:`allowance.claude_last_turn_context_tokens` — with no denominator.
+    Rather than manufacture one (a static per-model context-size table this
+    codebase has never carried, and would silently drift the day a model's
+    real window changes), this writes the honest partial: a token count,
+    no percentage, under the exact ``context_window`` key
+    :func:`_merge_level_snapshots`/:func:`_collect_levels` already read —
+    the same "the plumbing exists, it was just never fed mid-run" move
+    :func:`_record_boot_cost` makes for ``boot``.
+
+    Never overwrites a ``remaining_percentage`` already on file: once the
+    final envelope (this run's own, or — on the cross-run fallback path —
+    the last run's) has produced the honest percentage, a later heartbeat's
+    coarser token-only reading must not regress it back to a bare count.
+
+    Claude-only, like :func:`_record_boot_cost` — Codex's collector
+    (:mod:`brr.codex_status`) is already live with a real percentage the
+    whole run, so this closes only the Claude-side gap (named, not
+    silently left, per the maintainer's own framing of this slice).
+    """
+    if not claude_status.supported(runner_name):
+        return
+    tokens = allowance.claude_last_turn_context_tokens(
+        allowance.latest_claude_transcript(work_dir)
+    )
+    if tokens is None:
+        return
+    existing = claude_status.load_snapshot(outbox_dir)
+    payload = dict(existing) if isinstance(existing, dict) else {}
+    current = payload.get("context_window")
+    if isinstance(current, dict) and current.get("remaining_percentage") is not None:
+        return
+    payload["context_window"] = {
+        "summary": f"{allowance.format_tokens(tokens)} tok occupied "
+        "(no window size yet)",
+        "tokens_used": tokens,
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    claude_status.write_snapshot(outbox_dir, payload)
 
 
 def _resources_facet(
@@ -6088,6 +6350,8 @@ def _resources_facet(
     coexisting: "list[dict[str, object]] | None" = None,
     wake_request: "dict[str, object] | None" = None,
     allowance: "dict[str, object] | None" = None,
+    draws: "dict[str, object] | None" = None,
+    hold: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Operator-facing 'work status' the running resident can read.
 
@@ -6124,6 +6388,8 @@ def _resources_facet(
         coexisting=coexisting,
         wake_request=wake_request,
         allowance=allowance,
+        draws=draws,
+        hold=hold,
     )
 
 
@@ -6342,6 +6608,22 @@ def _resolve_await_state(
         [ev for ev in pending_events if str(ev.get("id") or "") not in armed_pending_ids]
         if armed_pending_ids else pending_events
     )
+    # design-the-seat-that-never-quits.md §machinery slice 3: the hold-cost
+    # park's "a correspondent typed within the last N minutes" refusal needs
+    # a timestamp that survives every re-arm (`brnrd await` stages a fresh
+    # `await:` directive, with a fresh `generation`, on every call — nothing
+    # keyed to *this* record could accumulate across an idle stretch). A
+    # genuinely fresh correspondent-sourced event — never one of the
+    # internal-bookkeeping sources a resource hold already knows to
+    # accumulate rather than react to — moves that clock forward here, the
+    # one place both the pending set and `task.meta` are already in hand.
+    if hasattr(task, "meta"):
+        for ev in fresh_events:
+            if str(ev.get("source") or "") in _HOLD_ACCUMULATE_ONLY_SOURCES:
+                continue
+            seen_at = _event_created_epoch(ev) or now
+            if seen_at > float(task.meta.get("hold_correspondent_at") or 0):
+                task.meta["hold_correspondent_at"] = seen_at
     outcome, which = await_verb.evaluate(armed.get("file"), fresh_events)
     if outcome is None and requested_deadline is not None and now >= requested_deadline:
         outcome = "timeout"
@@ -6682,7 +6964,19 @@ def _write_live_portal_state(
             ),
         )
         allowance_facet_input = _collect_allowance_facet(
-            task, runner_name, work_dir,
+            task, runner_name, work_dir, cfg=cfg, levels=run_levels,
+        )
+        draws_facet_input = _collect_quota_draws(task, allowance_facet_input)
+        _record_boot_cost(task, runner_name, work_dir, outbox_dir)
+        _record_context_window(runner_name, work_dir, outbox_dir)
+        # design-the-seat-that-never-quits.md §machinery slice 3: needs both
+        # numbers `_record_boot_cost` and `_collect_allowance_facet` just
+        # computed, so it runs after both — may resolve `await_state` with a
+        # new "park" outcome and stamp `pending_resource_hold` for the
+        # ordinary worker-tail routing (`_finalize_resource_hold`) to pick up
+        # once this turn actually ends.
+        await_state, hold_facet_input = _hold_ratio_facet(
+            task, await_state, cfg, outbox_dir, allowance_facet_input,
         )
         # The run boundary knows its own Core (the resolved profile's
         # `model`, e.g. "opus"/"fable") — pass it so a thin week_models
@@ -6781,6 +7075,21 @@ def _write_live_portal_state(
             },
             "budget": {"elapsed_seconds": elapsed},
             "await": await_state,
+            # design-the-seat-that-never-quits.md: what happens when this
+            # turn ends with nothing armed — the hooks' Stop phase reads it
+            # to say "phase commit, then the seat parks" only when the
+            # daemon will actually park (never a claim the machinery does
+            # not back).
+            "strand": {
+                "is_strand": bool(hasattr(task, "meta") and _is_strand(task.meta)),
+                "submitted": bool(hasattr(task, "meta") and task.meta.get("submitted")),
+            },
+            "seat": {
+                "parks_on_turn_end": bool(
+                    hasattr(task, "meta") and not _is_strand(task.meta)
+                    and _seat_park_enabled(cfg)
+                ),
+            },
             # design-the-allowance.md's resource hold: published only once
             # armed (``None`` renders as absent, same as `scm`/`produce`
             # below) — "the UI shows why the seat is waiting and the one
@@ -6833,6 +7142,8 @@ def _write_live_portal_state(
                 coexisting=coexisting_snapshot,
                 wake_request=task.meta.get("wake_request"),
                 allowance=allowance_facet_input,
+                draws=draws_facet_input,
+                hold=hold_facet_input,
             ),
         }
         if bolt_state is not None:
@@ -7713,6 +8024,90 @@ def _stage_terminal_response(
     return path
 
 
+def _strand_reply_label(
+    brr_dir: Path, runs_dir: Path | None, strand_run_id: str,
+) -> str:
+    """Best-effort human label for *strand_run_id*'s chat-bound note.
+
+    daemon-substrate.md's own fallback chain, read from whichever half is
+    still reachable: the presence registry's self-authored ``name`` (a
+    live process, refreshed every heartbeat) first, the persisted run
+    manifest's ``title`` meta second — the dispatcher's ``title:`` on the
+    original ``spawn:`` request (:func:`_queue_spawn_request`) — and the
+    bare run id last. The strand answering a ``to:`` steer may already be
+    a corpse by the time its reply is relayed (it was woken solely to
+    answer the steer), so ``.name`` is a best effort, not a given; ``title``
+    survives on disk regardless.
+    """
+    if not strand_run_id:
+        return ""
+    for entry in presence.list_active(brr_dir):
+        if entry.get("run_id") != strand_run_id:
+            continue
+        label = str(entry.get("name") or entry.get("label") or "").strip()
+        if label:
+            return label
+        break
+    if runs_dir is not None:
+        manifest = Run.from_file(run_manifest_path(runs_dir, strand_run_id))
+        if manifest is not None:
+            title = str(manifest.meta.get("title") or "").strip()
+            if title:
+                return title
+    return strand_run_id
+
+
+def _label_strand_relay_body(label: str, body: str) -> str:
+    """Prefix *body* as a strand's own technical note, never the seat's voice.
+
+    brnrd#1798: an adopted strand's reply to a parent's ``to:`` steer used
+    to reach the correspondent's chat unlabelled — indistinguishable from
+    the seat itself speaking (one incident read as the seat quitting mid-
+    conversation). The maintainer's required shape keeps the delivery —
+    strands may still reach a human — but marks its authorship plainly: a
+    leading line naming the strand and the word "strand" itself.
+    """
+    name = label.strip() if label else "a strand"
+    return f"[{name} — a strand's technical note, not the seat]\n\n{body}"
+
+
+def _notify_parent_of_relayed_strand_message(
+    inbox_dir: Path | None,
+    *,
+    parent_run_id: str,
+    strand_run_id: str,
+    strand_event_id: str,
+    label: str,
+    gate: str,
+    body: str,
+) -> None:
+    """Fan a copy of a strand's chat-relayed reply back to the steering run.
+
+    brnrd#1798 fork 2: labelling (above) answers "does the correspondent
+    know who's talking"; this answers "does the seat know what the
+    correspondent just saw" — a plain pending event, the same shape
+    ``spawn_completed``/``spawn_submitted``/``spawn_allowance_requested``
+    already use to reach a parent's own wake. Deliberately carries no
+    ``spawn_message_for_event`` — that key is the edge-traffic marker
+    :func:`_pending_events_for_agent` hides from every view but the one
+    whose ``current_event_id`` matches it, and this notice is for the
+    *parent's* wake, not the strand's.
+    """
+    if not inbox_dir or not parent_run_id:
+        return
+    who = label or strand_run_id or "a strand"
+    protocol.create_event(
+        inbox_dir,
+        "spawn_message_delivered",
+        f"{who} (strand) had no dispatch edge to report your steer through, "
+        f"so its reply went straight to the correspondent via {gate} — "
+        f"labelled as its own note, not yours. What it sent:\n\n{body}",
+        spawn_parent_run_id=parent_run_id,
+        spawned_by_run=strand_run_id,
+        spawned_by_event=strand_event_id,
+    )
+
+
 def _read_outbox_notices(outbox_dir: Path | None) -> list[dict[str, str]]:
     if outbox_dir is None:
         return []
@@ -7763,6 +8158,7 @@ def _register_run_control(
     parent_conversation_key: str = "",
     repo_label: str = "",
     allowance_tokens: int | None = None,
+    title: str = "",
 ) -> None:
     with _run_controls_lock:
         _run_controls[spawn_event_id] = {
@@ -7782,6 +8178,16 @@ def _register_run_control(
             # cut-time dissent row even if the parent never answers.
             "allowance_tokens": allowance_tokens,
             "allowance_asked": False,
+            # The dispatcher's own `title:` (#880 §1b), carried here too so
+            # the parent's own draw-attribution read (brnrd#1810,
+            # `_owned_child_controls`) can name a strand without a second
+            # lookup — the child's `meta["title"]` lives on a different
+            # process/thread's `Run` object this parent has no handle to.
+            "title": title,
+            # The strand's own live-metered weighted spend, written by its
+            # own heartbeat (`_collect_allowance_facet`'s strand branch) —
+            # `None` until that child's first boundary reads something.
+            "allowance_spent": None,
         }
 
 
@@ -7858,6 +8264,12 @@ def _owned_child_controls(run_id: str) -> list[dict[str, str]]:
             adopted_from = str(control.get("adopted_from_run_id") or "").strip()
             if adopted_from:
                 row["adopted_from_run_id"] = adopted_from
+            title = str(control.get("title") or "").strip()
+            if title:
+                row["title"] = title
+            spent = control.get("allowance_spent")
+            if spent is not None:
+                row["weighted"] = int(spent)
             rows.append(row)
     rows.sort(key=lambda row: (row.get("run_id") or "", row.get("event_id") or ""))
     return rows
@@ -9008,6 +9420,7 @@ def _queue_spawn_request(
         parent_conversation_key=task.conversation_key or "",
         repo_label=str(task.meta.get("repo_label") or ""),
         allowance_tokens=allowance_tokens,
+        title=title,
     )
     print(f"[brnrd] outbox: queued concurrent spawn ({new_path.stem})")
     # A schedule entry can opt in (`reset_on: spawn`) to treat this dispatch
@@ -9409,6 +9822,278 @@ def _cut_mismatches(
     return mismatches
 
 
+#: Config key: a user-woken seat whose turn ends cleanly with nothing armed
+#: is **parked** (``held``, ``resume: any``) instead of closed
+#: (design-the-seat-that-never-quits.md §The machinery, slice 1). **On by
+#: default** since the maintainer signed the direction (2026-09-06, evt-…-8ss7:
+#: "why default off?"); ``seat.park_on_turn_end=false`` in ``.brr/config``
+#: restores the close.
+SEAT_PARK_ON_TURN_END_KEY = "seat.park_on_turn_end"
+SEAT_PARK_ON_TURN_END_DEFAULT = True
+
+
+def _seat_park_enabled(cfg: "dict | None") -> bool:
+    """The flag, defaulting on; an explicit falsy value turns it off."""
+    raw = (cfg or {}).get(SEAT_PARK_ON_TURN_END_KEY)
+    if raw is None:
+        return SEAT_PARK_ON_TURN_END_DEFAULT
+    return _truthy(raw)
+
+
+def _park_seat_on_turn_end(task: Run, cfg: "dict | None") -> dict[str, object] | None:
+    """The daemon's own park: a clean turn end becomes ``held`` on ``resume: any``.
+
+    Only for a seat — never a strand (a strand is a thought; the seat is a
+    life) — and only when ``seat.park_on_turn_end`` is on. Returns the
+    ``pending_resource_hold`` shape the worker tail already routes through
+    :func:`_finalize_resource_hold`, or ``None`` for the ordinary ``done``.
+    The user's release stays the user's: a dashboard stop never reaches
+    this branch (it lands on the ``stopped`` path), so nothing here can
+    override a person who said *enough*.
+    """
+    if not hasattr(task, "meta") or _is_strand(task.meta):
+        return None
+    if not _seat_park_enabled(cfg):
+        return None
+    native_session_id = task.meta.get("codex_thread_id")
+    return {
+        "reason": resource_hold.REASON_TURN_ENDED,
+        "provider": _resource_hold_provider_for_runner(
+            task.meta.get("runner_shell") or task.meta.get("runner_name")
+        ),
+        "detail": "turn ended with nothing armed — the seat parks; anything addressed to it resumes it",
+        "native_session_id": native_session_id,
+        "resume_kind": (
+            resource_hold.RESUME_NATIVE if native_session_id
+            else resource_hold.RESUME_UNSUPPORTED
+        ),
+        "resume_condition": resource_hold.RESUME_ANY,
+        "reset_deadline": None,
+    }
+
+
+#: Config key: the ratio of hold-so-far to this run's own recorded boot cost
+#: (both weighted tokens) past which an idling ``await:`` parks itself
+#: (design-the-seat-that-never-quits.md §"The machinery, in slices" #3 — "a
+#: seat idling on `brnrd await` parks itself once holding has cost more than
+#: a boot"). ``1.0`` = holding has cost exactly one boot; the measured
+#: baseline (§"The measurement": ≤0.1 session points per idle boundary) says
+#: this is a rare, late trigger, not a nervous one.
+SEAT_PARK_AFTER_BOOT_RATIO_KEY = "seat.park_after_boot_ratio"
+_SEAT_PARK_AFTER_BOOT_RATIO_DEFAULT = 1.0
+
+#: Config key: minutes since a correspondent last reached this seat, below
+#: which the hold-cost park refuses to fire even if the ratio says to — "a
+#: person at the keyboard is worth every boundary". Default 30: long enough
+#: that a person mid-conversation is not bounced by an idle await armed
+#: moments after their last message, short enough that it never becomes the
+#: reason a genuinely abandoned seat keeps burning.
+SEAT_LIVE_WINDOW_MINUTES_KEY = "seat.live_window_minutes"
+_SEAT_LIVE_WINDOW_MINUTES_DEFAULT = 30.0
+
+
+def _seat_park_after_boot_ratio(cfg: "dict | None") -> float:
+    try:
+        return float(
+            (cfg or {}).get(
+                SEAT_PARK_AFTER_BOOT_RATIO_KEY, _SEAT_PARK_AFTER_BOOT_RATIO_DEFAULT,
+            )
+        )
+    except (TypeError, ValueError):
+        return _SEAT_PARK_AFTER_BOOT_RATIO_DEFAULT
+
+
+def _seat_live_window_seconds(cfg: "dict | None") -> float:
+    try:
+        minutes = float(
+            (cfg or {}).get(
+                SEAT_LIVE_WINDOW_MINUTES_KEY, _SEAT_LIVE_WINDOW_MINUTES_DEFAULT,
+            )
+        )
+    except (TypeError, ValueError):
+        minutes = _SEAT_LIVE_WINDOW_MINUTES_DEFAULT
+    return max(0.0, minutes) * 60.0
+
+
+def _hold_ratio_facet(
+    task: Run,
+    await_state: dict[str, object],
+    cfg: "dict | None",
+    outbox_dir: "Path | None",
+    allowance_facet_input: "dict[str, object] | None",
+) -> "tuple[dict[str, object], dict[str, object] | None]":
+    """Compare an idling await's hold cost to this run's own boot cost.
+
+    design-the-seat-that-never-quits.md §"The machinery, in slices" #3.
+    Called every heartbeat right after :func:`_collect_allowance_facet` and
+    :func:`_record_boot_cost` have run (``_write_live_portal_state``) — both
+    numbers this needs are theirs, never re-metered here:
+
+    - **hold_so_far** — this run's own live-metered weighted spend
+      (*allowance_facet_input*'s ``spent``), measured against a baseline
+      stamped onto ``task.meta["hold_idle_baseline_spent"]`` the first tick
+      an armed await finds nothing pending. That baseline persists across
+      every re-arm (``brnrd await`` stages a brand-new ``await:`` directive,
+      with a fresh ``generation``, on every call — see ``cli.cmd_await`` —
+      so anything keyed to the *await* record itself resets every ~8
+      minutes and could never accumulate a multi-hour idle stretch) and is
+      cleared the moment the wait resolves for any other reason, so the next
+      idle stretch starts its own baseline.
+    - **boot_cost** — ``spend.json``'s ``boot.weighted``
+      (:func:`_record_boot_cost`, brnrd#1816). ``None`` until a Claude
+      transcript's first assistant turn lands (never on Codex yet) — an
+      absent boot cost means no ratio and no park, not a guessed one.
+
+    Three refusals, all checked *after* the ratio clears the threshold —
+    cheapest-check-first would save nothing here and this order is the one
+    the design doc lists: a pending event already means ``await_state`` is
+    ``resolved`` before this function is even called (the caller only
+    invokes it while still armed and unresolved); a live correspondent
+    (``seat.live_window_minutes``); an owned live strand (``resume:
+    strands``'s own job, never this ratio's). Never for a strand run.
+
+    Returns ``(possibly-updated await_state, hold_facet | None)``.
+    *hold_facet* is ``None`` only when no await is armed at all; otherwise
+    ``{"ratio": float | None, "known": bool}`` for the chip
+    (:func:`brr.hooks._hold_chip`), ``ratio`` staying ``None`` (never a
+    guess) until a boot cost has actually landed.
+    """
+    if not hasattr(task, "meta") or _is_strand(task.meta):
+        return await_state, None
+    if not await_state.get("armed"):
+        return await_state, None
+    if await_state.get("resolved"):
+        # Resolved this tick by something else (event/condition/timeout) —
+        # nothing to park, and the next arm starts a fresh idle stretch.
+        task.meta.pop("hold_idle_baseline_spent", None)
+        return await_state, {"ratio": None, "known": False}
+    self_spent = (
+        allowance_facet_input.get("spent")
+        if isinstance(allowance_facet_input, dict) else None
+    )
+    if self_spent is None:
+        return await_state, {"ratio": None, "known": False}
+    baseline = task.meta.get("hold_idle_baseline_spent")
+    if baseline is None:
+        task.meta["hold_idle_baseline_spent"] = int(self_spent)
+        return await_state, {"ratio": None, "known": False}
+    hold_so_far = max(0, int(self_spent) - int(baseline))
+    boot_snapshot = claude_status.load_snapshot(outbox_dir) if outbox_dir else None
+    boot = (boot_snapshot or {}).get("boot") if isinstance(boot_snapshot, dict) else None
+    boot_cost = boot.get("weighted") if isinstance(boot, dict) else None
+    ratio = resource_hold.hold_boot_ratio(hold_so_far, boot_cost)
+    hold_facet = {"ratio": ratio, "known": ratio is not None}
+    if ratio is None or ratio < _seat_park_after_boot_ratio(cfg):
+        return await_state, hold_facet
+    now = time.time()
+    correspondent_at = task.meta.get("hold_correspondent_at")
+    if correspondent_at is not None:
+        try:
+            if now - float(correspondent_at) < _seat_live_window_seconds(cfg):
+                return await_state, hold_facet
+        except (TypeError, ValueError):
+            pass
+    if _owned_child_controls(task.id):
+        # `resume: strands`'s job — nothing spends while a live child works,
+        # and that hold cost is the strand's, not this seat's idle one.
+        return await_state, hold_facet
+    armed = task.meta.get("await")
+    if isinstance(armed, dict):
+        armed["resolved"] = True
+        armed["outcome"] = "park"
+        armed["which"] = None
+    native_session_id = task.meta.get("codex_thread_id")
+    task.meta["pending_resource_hold"] = {
+        "reason": resource_hold.REASON_HOLD_COSTLIER_THAN_BOOT,
+        "provider": _resource_hold_provider_for_runner(
+            task.meta.get("runner_shell") or task.meta.get("runner_name")
+        ),
+        "detail": (
+            f"holding cost {ratio:.1f}x this run's own boot — parking; "
+            "anything addressed to it resumes it"
+        ),
+        "native_session_id": native_session_id,
+        "resume_kind": (
+            resource_hold.RESUME_NATIVE if native_session_id
+            else resource_hold.RESUME_UNSUPPORTED
+        ),
+        "resume_condition": resource_hold.RESUME_ANY,
+        "reset_deadline": None,
+    }
+    task.meta.pop("hold_idle_baseline_spent", None)
+    updated = dict(await_state)
+    updated["resolved"] = True
+    updated["outcome"] = "park"
+    updated["which"] = None
+    updated["ratio"] = ratio
+    return updated, hold_facet
+
+
+def _park_bolt_on_live_strands(
+    task: Run,
+    declaration: "cut_verb.CutDeclaration",
+    *,
+    outbox_dir: Path,
+    source_file: str | None = None,
+) -> list[str]:
+    """Turn a bolt that hands off *live* strands into a hold on them.
+
+    2026-09-06: a seat cut with three children still running, each
+    dispositioned ``handoff`` — legal, accepted, and wrong: the successor
+    that woke on their submits was a stranger, and the maintainer's read
+    was the rule — *there is no reason to stop the run when there are
+    living strands it should be waiting on*. The bolt still stands as the
+    run's declaration; what changes is where the run lands. Any
+    ``handoff`` row naming a child ``_owned_child_controls`` still lists
+    as live arms ``pending_resource_hold`` with
+    ``resume: strands`` — the worker tail then finalises the run as
+    ``held`` (``_finalize_resource_hold``), never ``done``, and the first
+    child to report back resumes the seat. Costs nothing while parked:
+    the process ends exactly as a close would have.
+
+    Returns the child ids the seat parks on (empty ⇒ ordinary close).
+    A ``hold:`` the resident already staged this turn wins unchanged.
+    """
+    if not hasattr(task, "meta") or task.meta.get("pending_resource_hold"):
+        return []
+    live = {
+        str(entry.get("run_id") or entry.get("event_id") or "").strip()
+        for entry in _owned_child_controls(task.id)
+    }
+    live.discard("")
+    parked = [
+        row.run for row in declaration.strands
+        if row.run in live and row.disposition.strip().lower().startswith("handoff")
+    ]
+    if not parked:
+        return []
+    native_session_id = task.meta.get("codex_thread_id")
+    task.meta["pending_resource_hold"] = {
+        "reason": resource_hold.REASON_WAITING_ON_STRANDS,
+        "provider": _resource_hold_provider_for_runner(
+            task.meta.get("runner_shell") or task.meta.get("runner_name")
+        ),
+        "detail": "bolt dispositioned live strands handoff: " + ", ".join(parked),
+        "native_session_id": native_session_id,
+        "resume_kind": (
+            resource_hold.RESUME_NATIVE if native_session_id
+            else resource_hold.RESUME_UNSUPPORTED
+        ),
+        "resume_condition": resource_hold.RESUME_STRANDS,
+        "reset_deadline": None,
+    }
+    _record_outbox_notice(
+        outbox_dir,
+        "cut: " + ", ".join(parked) + (
+            " is live and dispositioned handoff — the seat parks on it "
+            "(held, resume: strands) instead of closing; its next event "
+            "resumes this conversation"
+        ),
+        kind="advisory", lifetime="run", source_file=source_file,
+    )
+    return parked
+
+
 def _cut_bounce_kinds(mismatches: list[str]) -> list[str]:
     """Collapse daemon-authored cut diffs to stable telemetry categories."""
     kinds: list[str] = []
@@ -9801,6 +10486,16 @@ def _drain_outbox(
                         }
                     ),
                 }
+                # design-the-seat-that-never-quits.md §machinery slice 3: a
+                # proxy for "a correspondent just reached this seat" — the
+                # first-ever arm is, ordinarily, the resident replying to
+                # whatever woke it and immediately going quiet. Seeded once
+                # (``setdefault``, never overwritten by a later bare re-arm)
+                # so the hold-cost park's live-window refusal has a baseline
+                # even before any fresh event ever refines it
+                # (``_resolve_await_state``'s own update, keyed off the
+                # event's real timestamp).
+                task.meta.setdefault("hold_correspondent_at", time.time())
                 promoted += 1
                 if stats is not None:
                     stats["await"] = stats.get("await", 0) + 1
@@ -9843,6 +10538,24 @@ def _drain_outbox(
                 )
                 resume_condition = hold_spec["resume_condition"]
                 reset_deadline = hold_spec["reset_deadline_hint"]
+                if (
+                    resume_condition == resource_hold.RESUME_STRANDS
+                    and not _owned_child_controls(task.id)
+                ):
+                    # A hold on strands that do not exist would be a close
+                    # wearing a hold's status — nothing but the operator
+                    # could ever release it. Refuse, name the two verbs
+                    # that fit.
+                    _record_outbox_notice(
+                        outbox_dir,
+                        "hold dropped: resume: strands but this run owns no "
+                        "live strand — nothing would wake it. Waiting on a "
+                        "person ⇒ `brnrd await` (live) or `resume: operator`; "
+                        "finished ⇒ `cut:`",
+                        kind="dropped", lifetime="run", source_file=fpath.name,
+                    )
+                    _retire_outbox_staging(fpath)
+                    continue
                 if resume_condition == resource_hold.RESUME_RESET and reset_deadline is None:
                     reset_deadline = _codex_reset_deadline(None, native_session_id)
                 if resume_condition == resource_hold.RESUME_RESET and reset_deadline is None:
@@ -9983,6 +10696,11 @@ def _drain_outbox(
                     }
                 if stats is not None:
                     stats["cut"] = stats.get("cut", 0) + 1
+                parked = _park_bolt_on_live_strands(
+                    task, declaration, outbox_dir=outbox_dir, source_file=fpath.name,
+                )
+                if parked and stats is not None:
+                    stats["hold"] = stats.get("hold", 0) + 1
                 emit(
                     "cut_accepted",
                     run_id=task.id,
@@ -15713,8 +16431,14 @@ def _defer_pending_siblings_after_failure(
     run_id: str,
     seconds: float,
     reason: str = "operational_failure",
+    keep_pending: Callable[[dict], bool] | None = None,
 ) -> list[str]:
     """Brake sibling events after a terminal run failure.
+
+    ``keep_pending`` names siblings that must *not* be braked — a
+    ``resume: strands`` hold arming while one of its own children has
+    already reported back leaves that event pending, so the next dispatch
+    tick releases the hold on it instead of parking it for the horizon.
 
     The current lead event receives the explicit failure note. Other
     pending events stay pending and visible to future wakes, but they are
@@ -15753,6 +16477,7 @@ def _defer_pending_siblings_after_failure(
         pending
         for pending in protocol.list_pending(inbox_dir)
         if pending.get("id") != lead_event_id and pending.get("status") == "pending"
+        and not (keep_pending is not None and keep_pending(pending))
     ]
     if not siblings:
         return []
@@ -15927,11 +16652,25 @@ def _hold_body(meta: dict[str, object]) -> str:
     """The correspondent-facing notice a fresh hold writes as its reply."""
     provider = str(meta.get("provider") or "the provider")
     reason = str(meta.get("reason") or "a resource limit").replace("_", " ")
-    lines = [f"Parking this conversation — {provider} hit {reason}."]
+    if meta.get("resume_condition") == resource_hold.RESUME_STRANDS:
+        lines = ["Parking this seat on its strands — nothing spends while they work."]
+    elif meta.get("resume_condition") == resource_hold.RESUME_ANY:
+        lines = ["Parked — the seat is yours; nothing spends until something reaches it."]
+    else:
+        lines = [f"Parking this conversation — {provider} hit {reason}."]
     detail = meta.get("detail")
     if detail:
         lines.append(str(detail))
-    if (
+    if meta.get("resume_condition") == resource_hold.RESUME_STRANDS:
+        lines.append(
+            "The first strand to report back resumes this conversation — "
+            "or send a message any time to resume sooner."
+        )
+    elif meta.get("resume_condition") == resource_hold.RESUME_ANY:
+        lines.append(
+            "A message, a strand reporting back, or a scheduled wake resumes it."
+        )
+    elif (
         meta.get("resume_condition") == resource_hold.RESUME_RESET
         and meta.get("reset_deadline") is not None
     ):
@@ -16025,6 +16764,14 @@ def _finalize_resource_hold(
         run_id=task.id,
         seconds=_HOLD_DEFER_SECONDS,
         reason="resource_hold",
+        keep_pending=lambda pending: (
+            resource_hold.schedule_event_releases(meta, pending)
+            or resource_hold.strand_event_releases(
+                meta, pending,
+                held_run_id=task.id,
+                child_run_ids=task.meta.get("child_run_ids") or (),
+            )
+        ),
     )
     if deferred_ids:
         for deferred_id in deferred_ids:
@@ -16115,8 +16862,14 @@ def _undefer_held_event(
         pass
 
 
-def _apply_resource_hold_resume(runs_dir: Path, inbox_dir: Path, held: Run, event: dict) -> None:
+def _apply_resource_hold_resume(
+    runs_dir: Path, inbox_dir: Path, held: Run, event: dict, *, by: str = "operator",
+) -> None:
     """Release *held* and enrich *event* so its fresh dispatch can resume natively.
+
+    ``by`` names the releaser on the record: ``"operator"`` for a
+    correspondent message, ``"strand"`` for one of the held run's own
+    children reporting back (``resource_hold.RESUME_STRANDS``).
 
     Consumes the hold exactly once — a second correspondent message
     arriving before this dispatch actually runs reads ``is_active`` already
@@ -16130,7 +16883,7 @@ def _apply_resource_hold_resume(runs_dir: Path, inbox_dir: Path, held: Run, even
     meta = held.meta.get("resource_hold") or {}
     if not resource_hold.is_active(meta):
         return
-    released = resource_hold.mark_released(meta, by="operator")
+    released = resource_hold.mark_released(meta, by=by)
     held.meta["resource_hold"] = released
     held.save(runs_dir)
     if (
@@ -16231,7 +16984,42 @@ def _handle_resource_held_events(
             continue
         held = held_runs[0]
         for target in targets:
+            hold_meta = held.meta.get("resource_hold") or {}
+            if not resource_hold.is_active(hold_meta):
+                # Released earlier in this same batch (a correspondent
+                # message or a strand event sorted ahead of this one) —
+                # the seat is resuming; deferring its siblings now would
+                # hide them from the very dispatch that resumes.
+                survivors.append(target)
+                continue
             source = str(target.event.get("source") or "")
+            if resource_hold.schedule_event_releases(hold_meta, target.event):
+                _apply_resource_hold_resume(
+                    runs_dir, target.inbox_dir, held, target.event, by="schedule",
+                )
+                print(
+                    f"[brnrd] parked seat resumed by schedule "
+                    f"{target.event.get('id')}: {held.id}"
+                )
+                survivors.append(target)
+                continue
+            if resource_hold.strand_event_releases(
+                hold_meta, target.event,
+                held_run_id=held.id,
+                child_run_ids=held.meta.get("child_run_ids") or (),
+            ):
+                # One of this run's own strands reporting back is exactly
+                # what a `resume: strands` hold waits for — the child's
+                # event becomes the resuming dispatch's lead.
+                _apply_resource_hold_resume(
+                    runs_dir, target.inbox_dir, held, target.event, by="strand",
+                )
+                print(
+                    f"[brnrd] resource hold released by strand event "
+                    f"{target.event.get('id')} ({source}): {held.id}"
+                )
+                survivors.append(target)
+                continue
             if source in _HOLD_ACCUMULATE_ONLY_SOURCES:
                 try:
                     protocol.update_event_meta(

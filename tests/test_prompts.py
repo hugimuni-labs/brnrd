@@ -29,6 +29,7 @@ from brr.prompts import (
     _MAX_ACCRETING_BLOCK_BYTES,
     _SURFACE_RESERVE_PAGE_BYTES,
     _page_is_chronological,
+    _prior_run_boot_line,
     _trim_sectioned_page,
     _worst_trim,
     build_daemon_prompt,
@@ -772,6 +773,205 @@ class TestBlockAttestation:
         assert result.dropped is None
 
 
+def _tick_section(date: str, body: str = "content.") -> str:
+    """One ``## This tick, <MM-DD>``-style dated section, the age gate's
+    motivating shape (`surface/plans/<repo>/active.md`'s own convention)."""
+    return f"## This tick, {date}\n\n{body}\n"
+
+
+def _undated_section(title: str, body: str = "content.") -> str:
+    return f"## {title}\n\n{body}\n"
+
+
+class TestAgeGateDatedSections:
+    """`_trim_sectioned_page` age-gates a page's dated tick sections down to
+    the newest 2 *before* its byte-budget walk runs — the fix for
+    `plans/<repo>/active.md` accreting a `## This tick, <date>` section
+    every tick forever and still spending tens of KB even after 19 of them
+    got cut by the byte budget alone (the byte walk keeps this kind of page
+    from the *head*, since bare `MM-DD` headings carry no year and so never
+    register as dated to `_page_is_chronological`)."""
+
+    def test_prepend_to_top_page_keeps_the_two_newest_by_date_not_position(self):
+        """The real shape, pinned literally: `active.md` prepends its newest
+        tick at the top, newest-first in the file. Ranking by document
+        position (an earlier version of this gate did exactly that) keeps
+        the two *oldest* survivors and drops the current tick — the
+        opposite of the intent. Ranking by parsed date gets it right
+        regardless of which direction a page accretes in."""
+        content = "\n".join([
+            _tick_section("09-05"), _tick_section("09-03"),
+            _tick_section("09-02"), _tick_section("08-31"),
+        ])
+
+        result = _trim_sectioned_page(content, max_bytes=100_000, source_hint="`x`")
+        body, _, marker = result.text.partition("\n\n_(")
+
+        assert "This tick, 09-05" in body
+        assert "This tick, 09-03" in body
+        assert "This tick, 09-02" not in body
+        assert "This tick, 08-31" not in body
+        assert "This tick, 09-02" in marker
+        assert "This tick, 08-31" in marker
+
+    def test_six_dated_two_undated_keeps_newest_two_dated_and_all_undated(self):
+        sections = [
+            _tick_section("09-06"), _tick_section("09-05"),
+            _undated_section("Backlog"),
+            _tick_section("09-04"), _tick_section("09-03"),
+            _undated_section("Ideas"),
+            _tick_section("09-02"), _tick_section("09-01"),
+        ]
+        content = "\n".join(sections)
+
+        result = _trim_sectioned_page(content, max_bytes=100_000, source_hint="`surface/plans/x/active.md`")
+        body, _, marker = result.text.partition("\n\n_(")
+
+        assert body.count("## This tick,") == 2
+        assert "This tick, 09-06" in body
+        assert "This tick, 09-05" in body
+        for stale in ("09-01", "09-02", "09-03", "09-04"):
+            assert f"This tick, {stale}" not in body
+        assert "## Backlog" in body
+        assert "## Ideas" in body
+        assert marker  # the age-gate marker was appended
+        assert "4 older dated sections age-gated out" in marker
+        assert "keeping the newest 2" in marker
+        assert "surface/plans/x/active.md" in marker
+        # And it names exactly what it cut.
+        for stale in ("09-01", "09-02", "09-03", "09-04"):
+            assert f"This tick, {stale}" in marker
+
+    def test_this_session_shape_ranks_by_month_day_alone(self):
+        content = "\n".join([
+            "## This session, 08-15",
+            "",
+            "old.",
+            "",
+            "## This session, 08-20",
+            "",
+            "mid.",
+            "",
+            "## This session, 09-01",
+            "",
+            "new.",
+            "",
+        ])
+        result = _trim_sectioned_page(content, max_bytes=100_000, source_hint="`x`")
+        body, _, marker = result.text.partition("\n\n_(")
+        assert "This session, 08-15" not in body
+        assert "This session, 08-20" in body
+        assert "This session, 09-01" in body
+        assert "1 older dated section age-gated out" in marker
+        assert "This session, 08-15" in marker  # names what it cut
+
+    def test_a_real_iso_year_outranks_any_bare_mm_dd_section(self):
+        """A bare `This tick`/`This session` heading carries no year — it
+        keys on `(0, month, day)` — so a genuine ISO-dated section (a real
+        year) always outranks it. This isn't a shape this gate expects a
+        page to mix in practice, but the rule has to be *some* well-defined
+        total order, and "a dated year beats no year" is the honest one."""
+        content = "\n".join([
+            "## [2026-08-01] note",
+            "",
+            "iso, has a real year.",
+            "",
+            "## This session, 08-20",
+            "",
+            "newer by month/day, but no year.",
+            "",
+        ])
+        result = _trim_sectioned_page(content, max_bytes=100_000, source_hint="`x`")
+        body, _, marker = result.text.partition("\n\n_(")
+        # Only 2 dated sections total ⇒ at-or-under the keep floor: nothing
+        # to gate at all, regardless of ranking.
+        assert marker == ""
+        assert "2026-08-01" in body
+        assert "This session, 08-20" in body
+
+    def test_two_or_fewer_dated_sections_is_untouched(self):
+        content = "\n".join([
+            _tick_section("09-05"), _tick_section("09-06"), _undated_section("Ideas"),
+        ])
+        result = _trim_sectioned_page(content, max_bytes=100_000, source_hint="`x`")
+        assert result.text == content
+        assert "age-gated out" not in result.text
+
+    def test_undated_only_page_past_budget_still_goes_through_the_old_path(self):
+        """No dated sections at all ⇒ the age gate is a pure no-op and the
+        pre-existing structural byte-cut owns the whole result, unchanged."""
+        content = "## A\n\n" + ("x" * 500) + "\n\n## B\n\n" + ("y" * 500) + "\n"
+
+        result = _trim_sectioned_page(content, max_bytes=300, source_hint="`x`")
+
+        assert "age-gated out" not in result.text
+        assert result.dropped == 1  # the ordinary structural cut still ran
+
+    def test_the_age_gate_marker_bytes_are_reserved_from_the_budget(self):
+        """The marker is computed before the byte-budget walk runs and its
+        own bytes are reserved out of that walk's budget — appending it
+        *after* an unreserved walk could carry the whole result past
+        max_bytes by exactly the marker's own length.
+
+        Budget chosen so the two age-gate survivors fit whole once the
+        marker is reserved (125 B of survivors + 180 B reserved marker
+        room ≈ 305 B): this isolates the reservation fix from
+        `_trim_sectioned_page_body`'s own separate, pre-existing
+        mandatory-entry-floor behaviour (out of scope here — see that
+        function's own docstring for why it, alone, may still exceed its
+        given budget)."""
+        sections = [_tick_section(f"08-{d:02d}", "x" * 40) for d in range(1, 8)]
+        content = "\n".join(sections)
+        budget = 400
+
+        result = _trim_sectioned_page(content, max_bytes=budget, source_hint="`x`")
+
+        assert "age-gated out" in result.text
+        assert "This tick, 08-07" in result.text
+        assert "This tick, 08-06" in result.text
+        assert len(result.text.encode("utf-8")) <= budget
+
+
+def _write_run_boot_score(repo_root, run_id, *, contracts, prompt_bytes=None):
+    run_dir = repo_root / ".brr" / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    payload = {"contracts": contracts}
+    if prompt_bytes is not None:
+        payload["prompt_bytes"] = prompt_bytes
+    (run_dir / "boot-score.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+class TestPriorRunBootLine:
+    """`_prior_run_boot_line` — the run card's own gauge (move 3's second
+    face), read off that run's own `.brr/runs/<run_id>/boot-score.json`
+    (`run_context.write_boot_score`'s own persisted copy), never
+    re-measured. Same `bootscore.top_ledger_categories` grouping the
+    post-tool hook stripe uses, so the two faces cannot disagree."""
+
+    def test_renders_total_and_top_two_categories(self, tmp_path):
+        contracts = [
+            {"block_key": "work-surface", "bytes": 51_200, "present": True, "authority": "surface"},
+            {"block_key": "notes-health", "bytes": 28_672, "present": True, "authority": "health"},
+            {"block_key": "identity-core", "bytes": 6_079, "present": True, "authority": "identity"},
+        ]
+        _write_run_boot_score(tmp_path, "run-1", contracts=contracts, prompt_bytes=87_000)
+
+        line = _prior_run_boot_line(tmp_path, "run-1")
+
+        assert line == "boot: 85.0 KB (surface 50.0 KB · health 28.0 KB)"
+
+    def test_missing_scratch_file_renders_nothing(self, tmp_path):
+        assert _prior_run_boot_line(tmp_path, "run-does-not-exist") == ""
+
+    def test_no_authority_field_renders_nothing(self, tmp_path):
+        """An older daemon's score (no `authority` on any entry) degrades to
+        silence rather than an empty, misleading `boot: ()`."""
+        contracts = [{"block_key": "work-surface", "bytes": 51_200, "present": True}]
+        _write_run_boot_score(tmp_path, "run-1", contracts=contracts, prompt_bytes=51_200)
+
+        assert _prior_run_boot_line(tmp_path, "run-1") == ""
+
+
 class TestPromptBuilding:
     def test_run_prompt_includes_identity_core_before_dominion_and_task(
         self, tmp_path,
@@ -984,17 +1184,16 @@ class TestPromptBuilding:
 
         assert "- update available: 0.1.0 → 0.2.0" in prompt
 
-    def test_daemon_prompt_worker_excludes_resident_stack_but_admits_pitfalls(
+    def test_daemon_prompt_worker_light_profile_keeps_orienting_blocks(
         self, tmp_path
     ):
-        # #1185: a strand is single-shot — it cannot learn from its own
-        # patterns the way a resident's later wake would — so the pitfalls
-        # block (the account's failure-memory lookup, matched fresh against
-        # this run's own task text) is the one exception to "no inject
-        # stack for strands". Confirm the worker path admits *only* that
-        # one block: everything else in the inject stack (identity core,
-        # dominion, work surface, knowledge sources, recent activity) stays
-        # gone, even though the fixture below seeds a pitfall that matches.
+        # The strand wake profile (default `light`): a strand keeps identity,
+        # the kb map, a trimmed recent-activity tail, and pitfalls (#1185's
+        # own exception) — everything else in the resident's inject stack
+        # (dominion, work surface, hearth, runner policy, kb/notes health)
+        # stays gone. Seed an account home so "Work surface" would render if
+        # the drop weren't real, not just "nothing was there to begin with".
+        _seed_account_home(tmp_path)
         _seed_pitfalls(
             tmp_path,
             "## Blind retry\ntrigger: docker\n"
@@ -1006,7 +1205,7 @@ class TestPromptBuilding:
             run_id="task-9",
             strand=True,
         )
-        assert "Resident Identity Core" not in prompt
+        assert "Resident Identity Core" in prompt
         assert "Pitfalls that match this task" in prompt
         assert "Blind retry" in prompt
         assert "Rebuild the image before you trust the cache." in prompt
@@ -1014,13 +1213,36 @@ class TestPromptBuilding:
         assert _says(prompt, "the turn frame in `weave.md` §The turn")
         # Mechanics still ride — a worker wake is still under the daemon.
         assert "single-flight" in prompt
+        # The seat's own standing state stays gone.
+        assert "Work surface" not in prompt
+
+    def test_daemon_prompt_worker_full_profile_restores_the_resident_stack(
+        self, tmp_path
+    ):
+        # `strand.wake_profile=full` is the escape hatch: give a strand the
+        # same inject stack a resident gets, one config line, no code change.
+        _seed_account_home(tmp_path)
+        config_path = tmp_path / ".brr" / "config"
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8") + "strand.wake_profile=full\n",
+            encoding="utf-8",
+        )
+        prompt = build_daemon_prompt(
+            "rebuild the docker image and ship", "evt-1", "/tmp/resp.md",
+            tmp_path,
+            run_id="task-9",
+            strand=True,
+        )
+        assert "Resident Identity Core" in prompt
+        assert "Work surface" in prompt
 
     def test_daemon_prompt_worker_omits_pitfalls_when_nothing_matches(
         self, tmp_path
     ):
         # Same worker path, no matching trigger this time — the pitfalls
-        # slot renders empty/absent, same as it would for a resident wake,
-        # and the rest of the inject stack stays gone.
+        # slot renders empty/absent, same as it would for a resident wake;
+        # identity and the kb map still ride (the light profile's own kept
+        # set), and the rest of the inject stack stays gone.
         _seed_pitfalls(
             tmp_path,
             "## Blind retry\ntrigger: docker\nRebuild first.\n",
@@ -1032,8 +1254,19 @@ class TestPromptBuilding:
             strand=True,
         )
         assert "Pitfalls that match this task" not in prompt
-        assert "Resident Identity Core" not in prompt
         assert "Blind retry" not in prompt
+        assert "Resident Identity Core" in prompt
+
+    def test_daemon_prompt_worker_still_sees_web_capability(self, tmp_path):
+        # Workers skip the resident inject stack but still get the bundle —
+        # the capability declaration must survive that path.
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            run_id="task-9",
+            strand=True,
+            runner_shell="codex",
+        )
+        assert "- Web research: native via web.run" in prompt
 
     def test_daemon_prompt_default_keeps_resident_stack(self, tmp_path):
         prompt = build_daemon_prompt(
@@ -1091,17 +1324,6 @@ class TestPromptBuilding:
             run_id="task-9",
         )
         assert "- Web research: not declared for this Shell" in prompt
-
-    def test_daemon_prompt_worker_still_sees_web_capability(self, tmp_path):
-        # Workers skip the resident inject stack but still get the bundle —
-        # the capability declaration must survive that path.
-        prompt = build_daemon_prompt(
-            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
-            run_id="task-9",
-            strand=True,
-            runner_shell="codex",
-        )
-        assert "- Web research: native via web.run" in prompt
 
     def test_daemon_prompt_omits_runner_medium_when_absent(self, tmp_path):
         prompt = build_daemon_prompt(
@@ -5645,3 +5867,176 @@ class TestWakeManifest:
                 f"absent block {b.get('name')!r} bytes_kept should be int or null, "
                 f"got {kept!r}"
             )
+
+
+class TestWakeBlocksSidecar:
+    """`_block_text_sink` / `write_wake_blocks` — #1830.
+
+    Before this, a home-originated block (dominion self-inject, work
+    surface, pitfalls, knowledge slices, the plan page — `location ==
+    "computed"`) had no file on disk carrying its exact rendered text,
+    mounted or not. These pin the write side: every present block
+    (including the kernel and the trailer, which never pass through
+    `_take`) lands in the sink, a mounted block's sink entry matches
+    `mount_sink` exactly (not the raw prose it was built from), and
+    `write_wake_manifest`'s `rendered_bytes` agrees with the sidecar.
+    """
+
+    def test_sink_covers_kernel_and_trailer_when_unmounted(self, tmp_path):
+        from brr.prompts import build_daemon_prompt_with_score
+
+        sink: dict[str, str] = {}
+        prompt, score = build_daemon_prompt_with_score(
+            "check the thing", "evt-wb-1", "/tmp/resp.md", tmp_path,
+            run_id="run-wb-1", _block_text_sink=sink,
+        )
+        assert "boot-kernel" in sink and sink["boot-kernel"] in prompt
+        assert "run-context-bundle" in sink and sink["run-context-bundle"] in prompt
+        # Every block the manifest says is present and prose (not mounted —
+        # nothing is, this call passed no `_mount_sink`) must have an exact
+        # entry, keyed the same as the manifest names it.
+        for entry in score.contracts:
+            if entry.present and entry.bytes:
+                assert entry.block_key in sink, (
+                    f"present block {entry.block_key!r} missing from the sink"
+                )
+
+    def test_sink_entry_matches_mount_sink_for_a_mounted_block(self, tmp_path):
+        """A mounted block's sink text is the *mounted* text, never the raw
+        prose `_take` was handed — the two can differ (a curated extract vs.
+        the whole file), and only the mounted value is what this wake
+        actually received."""
+        from brr.prompts import build_daemon_prompt_with_score
+
+        mount_sink: dict[str, str] = {}
+        block_sink: dict[str, str] = {}
+        prompt, score = build_daemon_prompt_with_score(
+            "check the thing", "evt-wb-2", "/tmp/resp.md", tmp_path,
+            run_id="run-wb-2", _mount_sink=mount_sink, _block_text_sink=block_sink,
+        )
+        assert mount_sink, "expected at least one file-backed block to mount on a real checkout"
+        for key, mounted_text in mount_sink.items():
+            assert block_sink.get(key) == mounted_text, (
+                f"{key!r}: block_text_sink drifted from mount_sink"
+            )
+            # A mounted block leaves the prose entirely (`_take` returns
+            # `None` for it) — its text must not also sit in `prompt`.
+            assert mounted_text not in prompt
+
+    def test_write_wake_blocks_and_manifest_rendered_bytes_agree(self, tmp_path):
+        import json as _json
+
+        from brr.prompts import build_daemon_prompt_with_score
+        from brr.run import Run
+        from brr import run_context
+
+        sink: dict[str, str] = {}
+        _, score = build_daemon_prompt_with_score(
+            "check the thing", "evt-wb-3", "/tmp/resp.md", tmp_path,
+            run_id="run-wb-3", _block_text_sink=sink,
+        )
+        run = Run(
+            id="run-wb-3", event_id="evt-wb-3", body="", source="test", status="running",
+        )
+        brr_dir = tmp_path / ".brr"
+        brr_dir.mkdir(exist_ok=True)
+
+        blocks_path = run_context.write_wake_blocks(brr_dir, run, sink)
+        assert blocks_path is not None and blocks_path.exists()
+        blocks_data = _json.loads(blocks_path.read_text(encoding="utf-8"))
+        assert blocks_data["schema_version"] == "1"
+        assert blocks_data["run_id"] == "run-wb-3"
+        assert blocks_data["blocks"] == sink
+        assert "boot-kernel" in blocks_data["blocks"]
+
+        manifest_path = run_context.write_wake_manifest(brr_dir, run, score, wake_blocks=sink)
+        manifest = _json.loads(manifest_path.read_text(encoding="utf-8"))
+        kernel_row = next(b for b in manifest["blocks"] if b["name"] == "boot-kernel")
+        assert kernel_row["rendered_bytes"] == len(sink["boot-kernel"].encode("utf-8"))
+        assert kernel_row["rendered_bytes"] == kernel_row["bytes_kept"]
+
+        # Omitting `wake_blocks` (the pre-#1830 call shape) must still work
+        # and null every row, never raise.
+        legacy_path = run_context.write_wake_manifest(brr_dir, run, score)
+        legacy_manifest = _json.loads(legacy_path.read_text(encoding="utf-8"))
+        assert all(b["rendered_bytes"] is None for b in legacy_manifest["blocks"])
+
+    def test_write_wake_manifest_strand_light_profile_names_dropped_blocks(
+        self, tmp_path
+    ):
+        """A strand's light profile drops most of the resident inject stack —
+        the manifest must say so, not just leave the row out.
+
+        Every dropped block (dominion, hearth, work surface, runner policy,
+        prior-run, kb/notes health) still appears with ``present: false`` and
+        ``lens: "profile:strand · skipped"`` (#<the-strand-that-wakes-light>);
+        the blocks the light profile keeps (identity core, knowledge sources,
+        pitfalls) carry ``"profile:strand · kept"``, and the trimmed one
+        (recent activity) carries ``"profile:strand · trimmed"``.
+        """
+        import json
+
+        from brr.prompts import build_daemon_prompt_with_score
+        from brr.run import Run
+        from brr import run_context
+
+        _, score = build_daemon_prompt_with_score(
+            "check the thing", "evt-mfst-3", "/tmp/resp.md", tmp_path,
+            run_id="run-mfst-3",
+            strand=True,
+        )
+        run = Run(
+            id="run-mfst-3", event_id="evt-mfst-3", body="",
+            source="test", status="running",
+        )
+        brr_dir = tmp_path / ".brr"
+        brr_dir.mkdir(exist_ok=True)
+        path = run_context.write_wake_manifest(brr_dir, run, score)
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        by_name = {b["name"]: b for b in manifest["blocks"]}
+
+        for dropped in (
+            "dominion", "hearth", "work-surface", "runner-policy",
+            "prior-run", "kb-health", "notes-health", "relabelled-repo",
+        ):
+            assert by_name[dropped]["present"] is False
+            assert by_name[dropped]["lens"] == "profile:strand · skipped"
+
+        assert by_name["identity-core"]["present"] is True
+        assert by_name["identity-core"]["lens"] == "profile:strand · kept"
+        assert by_name["knowledge-sources"]["lens"] == "profile:strand · kept"
+        assert by_name["pitfalls"]["lens"] == "profile:strand · kept"
+        assert by_name["recent-activity"]["lens"] == "profile:strand · trimmed"
+
+        # Non-strand blocks (preamble, bundle) carry no profile lens at all.
+        assert by_name["strand-preamble"]["lens"] is None
+
+    def test_write_wake_manifest_strand_full_profile_carries_no_lens(
+        self, tmp_path
+    ):
+        """`strand.wake_profile=full` is byte-identical to a resident's own
+        inject stack, so nothing in it is profile-narrowed — no block should
+        carry a `lens` value."""
+        import json
+
+        from brr.prompts import build_daemon_prompt_with_score
+        from brr.run import Run
+        from brr import run_context
+
+        (tmp_path / ".brr").mkdir(parents=True, exist_ok=True)
+        (tmp_path / ".brr" / "config").write_text(
+            "strand.wake_profile=full\n", encoding="utf-8"
+        )
+        _, score = build_daemon_prompt_with_score(
+            "check the thing", "evt-mfst-4", "/tmp/resp.md", tmp_path,
+            run_id="run-mfst-4",
+            strand=True,
+        )
+        run = Run(
+            id="run-mfst-4", event_id="evt-mfst-4", body="",
+            source="test", status="running",
+        )
+        brr_dir = tmp_path / ".brr"
+        path = run_context.write_wake_manifest(brr_dir, run, score)
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        assert all(b["lens"] is None for b in manifest["blocks"])
