@@ -488,7 +488,32 @@ def _respawn_activity_records(inbox_dir: Path) -> list[dict[str, Any]]:
     return records
 
 
+#: Server-side string caps on an activity record (`PUT /v1/daemons/activity`
+#: answers 422 `string_too_long` naming the field). One over-long field in one
+#: record rejects the *whole batch* — measured 2026-09-08: a respawn whose
+#: `respawn_reason` was a 70-char sentence became `phase`, and 318 consecutive
+#: activity publishes failed while the dashboard's feed went stale. Bound
+#: here, at the seam, with the same mark the live-run rows use.
+_ACTIVITY_STRING_BOUNDS = {"phase": 64}
+
+
+def _bounded_activity_record(record: dict[str, Any]) -> dict[str, Any]:
+    for field, cap in _ACTIVITY_STRING_BOUNDS.items():
+        value = record.get(field)
+        if isinstance(value, str) and len(value) > cap:
+            keep = max(0, cap - len(_LIVE_RUN_TRUNCATION_MARK))
+            record[field] = value[:keep] + _LIVE_RUN_TRUNCATION_MARK[:cap]
+    return record
+
+
 def _activity_snapshot(brr_dir: Path, inbox_dir: Path) -> list[dict[str, Any]]:
+    return [
+        _bounded_activity_record(record)
+        for record in _unbounded_activity_snapshot(brr_dir, inbox_dir)
+    ]
+
+
+def _unbounded_activity_snapshot(brr_dir: Path, inbox_dir: Path) -> list[dict[str, Any]]:
     return [
         *_run_activity_records(brr_dir),
         *_schedule_activity_records(brr_dir),
