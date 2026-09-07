@@ -17038,7 +17038,16 @@ def _handle_resource_held_events(
             held_conv_key = str(
                 (held.meta.get("resource_hold") or {}).get("conversation_key") or ""
             )
-            event_conv_key = str(target.event.get("conversation_key") or "")
+            # Derive, never read raw: a cloud/Telegram event carries no
+            # `conversation_key` field of its own (its key is a fingerprint
+            # of `cloud_platform` + `cloud_chat_id` + topic), so the raw
+            # read was `""` for every correspondent message and the guard
+            # below waved the resume past as "a different conversation"
+            # — a fresh full-boot dispatch beside a hold still marked
+            # active (measured 2026-09-07, run-260907-2223-avku).
+            event_conv_key = (
+                conversations.conversation_key_for_event(target.event) or ""
+            )
             if held_conv_key and event_conv_key != held_conv_key:
                 # A different conversation entirely (a GitHub issue
                 # comment on the same repo while a Telegram seat is
