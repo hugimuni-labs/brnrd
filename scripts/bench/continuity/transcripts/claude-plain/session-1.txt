@@ -1,0 +1,23 @@
+$ claude -p Add a --json flag to the CLI; we're standardising on snake_case JSON keys and we never print secrets. --dangerously-skip-permissions --output-format text
+cwd: /private/tmp/continuity-bench/claude-plain
+elapsed: 51.3s
+returncode: 0
+
+--- stdout ---
+Done. 7 tests pass, and text output is unchanged.
+
+**What changed**
+
+- `mailtool/formatter.py:14` — `message_to_dict()` serialises a `Message` with snake_case keys; `format_json()` renders any payload (indented, sorted keys).
+- `mailtool/cli.py:11` — `--json` is defined on a shared parent parser so it works both before and after the subcommand (`mailtool --json list` and `mailtool list --json`). `default=argparse.SUPPRESS` is what makes both positions work — otherwise the subparser's default would clobber a top-level flag.
+- `tests/test_cli.py` — coverage for both flag positions, `list`/`send` payload shapes, and two invariants.
+
+**On the two standards**
+
+- *snake_case*: all emitted keys are already single words (`to`, `subject`, `body`, `template`, `status`, `message`, `messages`), but `test_json_keys_are_snake_case` walks the payload recursively and asserts the pattern, so a future camelCase key fails the suite rather than shipping.
+- *no secrets*: `Config` (which holds `smtp_password` and `api_key`) is never passed to the serialiser — the `send` payload is built from the `Message` only. `test_json_output_never_contains_secrets` runs the CLI with secrets set in the env and asserts neither the values nor the key names appear on stdout or stderr.
+
+One judgement call worth flagging: I left `smtp_host`/`smtp_user` out of the `send` payload. They aren't secret, and a caller may reasonably want to know which host a send went to, but the safest default was to keep `Config` entirely out of the serialisation path. Say the word if you want `smtp_host` included.
+
+--- stderr ---
+
