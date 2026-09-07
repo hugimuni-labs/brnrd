@@ -1921,12 +1921,10 @@ def _card_acts_behind(
         label = _CARD_ACT_LABELS.get(kind, kind)
         plural = _CARD_ACT_PLURALS.get(kind, label + "s")
         parts.append(f"1 {label}" if n == 1 else f"{n} {plural}")
-    replies = int(outbound.get("replies_current", 0) or 0) + int(
-        outbound.get("replies_other", 0) or 0
-    )
-    if replies:
-        total += replies
-        parts.append("1 reply" if replies == 1 else f"{replies} replies")
+    # Replies are not something the card is behind on: each delivered reply
+    # projects its own lead line into the card (`daemon._project_said`,
+    # 2026-09-08) — the reply *is* the authored act. Counting them here was
+    # the second round of card-filling the design retired.
     if pending > 0:
         total += pending
         parts.append("1 pending" if pending == 1 else f"{pending} pending")

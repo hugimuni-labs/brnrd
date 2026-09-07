@@ -10124,6 +10124,91 @@ def _cut_bounce_kinds(mismatches: list[str]) -> list[str]:
     return kinds
 
 
+#: THE SAID BLOCK — the interaction updates the card (research-continuity-as-
+#: authored-direction.md §"A friendlier way to keep appointments", 2026-09-07,
+#: his critique: a reply already *is* the authored act; asking for a second
+#: round of card-filling afterwards is the doc in a hoodie). Every reply this
+#: run delivers projects its lead line into `.card` under one heading, newest
+#: first, re-derived from the run's own delivery record each time (so a
+#: resident rewriting the card whole loses nothing — the next delivery puts
+#: it back). Visibly the daemon's hand, never a claim the resident wrote it.
+_SAID_HEADING = "## Said"
+_SAID_LEGEND = (
+    "⇐ projected from delivered replies — the resident's words, the daemon's hand · newest first"
+)
+_SAID_MAX_ROWS = 6
+_SAID_LEAD_CHARS = 200
+
+
+def _said_lead(body: str) -> str:
+    """The first line that says something, stripped of markdown furniture."""
+    for raw in (body or "").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("---") or line.startswith("```"):
+            continue
+        if line.startswith("#") or line.startswith(">") or line.startswith("- "):
+            line = line.lstrip("#>- ").strip()
+        line = line.replace("**", "").strip()
+        if not line:
+            continue
+        line = " ".join(line.split())
+        if len(line) > _SAID_LEAD_CHARS:
+            line = line[: _SAID_LEAD_CHARS - 1].rstrip() + "…"
+        return line
+    return ""
+
+
+def _render_said_section(rows: list[dict[str, str]]) -> str:
+    lines = [_SAID_HEADING, _SAID_LEGEND]
+    for row in rows:
+        at = str(row.get("at") or "")
+        hhmm = at[11:16] + "Z" if len(at) >= 16 else at
+        ev = str(row.get("event") or "")
+        handle = ev[-4:] if len(ev) > 4 else ev
+        lines.append(f"- {hhmm} → {handle}: {row.get('lead') or ''}")
+    return "\n".join(lines)
+
+
+def _splice_said_section(card_text: str, section: str) -> str:
+    """Replace the existing `## Said` section (to the next `## `) or append."""
+    text = card_text or ""
+    start = text.find(_SAID_HEADING)
+    if start == -1 or (start > 0 and text[start - 1] != "\n"):
+        base = text.rstrip("\n")
+        return (base + "\n\n" if base else "") + section + "\n"
+    nxt = text.find("\n## ", start + len(_SAID_HEADING))
+    tail = text[nxt + 1:] if nxt != -1 else ""
+    head = text[:start].rstrip("\n")
+    joined = (head + "\n\n" if head else "") + section + "\n"
+    return joined + ("\n" + tail if tail else "")
+
+
+def _project_said(task: Run, outbox_dir: Path, event_id: str, body: str) -> None:
+    """Project a delivered reply's lead line into this run's `.card`."""
+    lead = _said_lead(body)
+    if not lead:
+        return
+    rows = list(task.meta.get("said_rows") or [])
+    rows.insert(0, {
+        "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "event": str(event_id or ""),
+        "lead": lead,
+    })
+    rows = rows[:_SAID_MAX_ROWS]
+    task.meta["said_rows"] = rows
+    card_path = outbox_dir / ".card"
+    try:
+        current = card_path.read_text(encoding="utf-8") if card_path.exists() else ""
+        updated = _splice_said_section(current, _render_said_section(rows))
+        tmp = card_path.with_name(".card.said.tmp")
+        tmp.write_text(updated, encoding="utf-8")
+        os.replace(tmp, card_path)
+    except OSError:
+        # A projection is a courtesy on top of a delivery that already
+        # happened; never let it fail the drain.
+        return
+
+
 def _drain_outbox(
     emit: _WorkerEmit,
     task: Run,
@@ -10814,6 +10899,7 @@ def _drain_outbox(
                     account_context=account_context,
                 ):
                     promoted += 1
+                    _project_said(task, outbox_dir, f"gate:{gate}", body)
                     if stats is not None:
                         stats["outbound"] = stats.get("outbound", 0) + 1
                         stats["delivered"] = stats.get("delivered", 0) + 1
@@ -11096,6 +11182,7 @@ def _drain_outbox(
             if not ppath:
                 continue
             promoted += 1
+            _project_said(task, outbox_dir, target, body)
             if stats is not None:
                 key = "other" if cross else "current"
                 stats[key] = stats.get(key, 0) + 1
