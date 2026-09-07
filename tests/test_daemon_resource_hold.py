@@ -491,6 +491,61 @@ class TestHandleResourceHeldEvents:
         assert persisted.meta["resource_hold"]["released"] is True
         assert persisted.meta["resource_hold"]["released_by"] == "operator"
 
+    def test_telegram_event_without_raw_key_still_resumes_its_own_hold(self, tmp_path):
+        """A real cloud/Telegram event carries no `conversation_key` field —
+        its key is derived from `cloud_platform` + `cloud_chat_id`. The
+        guard used to read the raw field, saw `""`, and passed every
+        correspondent message through as "a different conversation": a
+        fresh full-boot run beside a hold that stayed active
+        (run-260907-2223-avku, 2026-09-07)."""
+        self._arm_held_run(tmp_path, conversation_key="cloud:telegram:155783668:")
+        inbox_dir = tmp_path / ".brr" / "inbox"
+        inbox_dir.mkdir(parents=True, exist_ok=True)
+        path = inbox_dir / "evt-tg.md"
+        path.write_text(
+            "---\nid: evt-tg\nsource: cloud\nstatus: pending\n"
+            "cloud_platform: telegram\ncloud_chat_id: 155783668\n"
+            "cloud_topic_id: \ncloud_user_id: 155783668\n---\nwhat does parked mean?\n",
+            encoding="utf-8",
+        )
+        event = protocol._read_event(path)
+        assert "conversation_key" not in event  # the production shape
+        target = daemon._DispatchTarget(
+            event=event, repo_root=tmp_path, inbox_dir=inbox_dir,
+            responses_dir=tmp_path / ".brr" / "responses", repo_label="home",
+        )
+
+        survivors = daemon._handle_resource_held_events([target], None)
+
+        assert len(survivors) == 1
+        assert survivors[0].event["resume_native_session_id"] == "held-thread-1"
+        persisted = Run.from_file(tmp_path / ".brr" / "runs" / "run-held-1" / "run.md")
+        assert persisted.meta["resource_hold"]["released"] is True
+        assert persisted.meta["resource_hold"]["released_by"] == "operator"
+
+    def test_other_gate_thread_without_raw_key_does_not_release(self, tmp_path):
+        """The mirror: a GitHub issue comment (also no raw key) on the same
+        repo while a Telegram seat is held must still pass through untouched."""
+        self._arm_held_run(tmp_path, conversation_key="cloud:telegram:155783668:")
+        inbox_dir = tmp_path / ".brr" / "inbox"
+        inbox_dir.mkdir(parents=True, exist_ok=True)
+        path = inbox_dir / "evt-gh.md"
+        path.write_text(
+            "---\nid: evt-gh\nsource: github\nstatus: pending\n"
+            "cloud_platform: telegram\ncloud_chat_id: 999\n---\nunrelated\n",
+            encoding="utf-8",
+        )
+        event = protocol._read_event(path)
+        target = daemon._DispatchTarget(
+            event=event, repo_root=tmp_path, inbox_dir=inbox_dir,
+            responses_dir=tmp_path / ".brr" / "responses", repo_label="home",
+        )
+        survivors = daemon._handle_resource_held_events([target], None)
+        assert len(survivors) == 1
+        assert "resume_native_session_id" not in survivors[0].event
+        persisted = Run.from_file(tmp_path / ".brr" / "runs" / "run-held-1" / "run.md")
+        assert persisted.meta["resource_hold"]["released"] is False
+
     def test_resume_consumes_the_hold_exactly_once(self, tmp_path):
         self._arm_held_run(tmp_path)
         first = self._target(tmp_path, source="telegram", eid="evt-human-1")
