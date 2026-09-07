@@ -768,6 +768,12 @@ class RunnerResult:
     # result rather than any module-global — a concurrent sibling run's id
     # must never be reachable from here (issue #195 multi-run safety).
     codex_thread_id: str | None = None
+    #: Claude Code's ``session_id`` from the ``--output-format json``
+    #: envelope, or ``None`` when the Shell is not claude / printed no
+    #: envelope. The claude half of a native resume: a parked seat keeps
+    #: it and ``claude --resume <id>`` continues the very transcript
+    #: instead of a fresh boot (the codex half is ``codex_thread_id``).
+    claude_session_id: str | None = None
     # A structured ``task_complete.error`` this invocation's own raw JSONL
     # proved (see ``_extract_codex_task_error``) — ``{"kind", "message"}``,
     # or ``None`` when the Shell isn't codex, the turn completed cleanly, or
@@ -2323,6 +2329,44 @@ def _extract_codex_task_error(stdout: str) -> dict[str, str] | None:
     return None
 
 
+def _extract_claude_session_id(runner_name: str, stdout: str) -> str | None:
+    """The ``session_id`` of a claude ``--output-format json`` envelope.
+
+    Read from the *raw* stdout, before ``_process_runner_stdout`` unwraps
+    it to the reply text. Honest absence: not claude, no envelope, or no
+    id ⇒ ``None`` — never a guess, so a hold armed from it is ``native``
+    only when there is really a transcript to resume.
+    """
+    from . import claude_status
+
+    if not claude_status.supported(runner_name) or not stdout.strip():
+        return None
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    sid = payload.get("session_id")
+    return str(sid).strip() if isinstance(sid, str) and sid.strip() else None
+
+
+def _insert_claude_resume(cmd_template: list[str], session_id: str) -> list[str]:
+    """``claude -p ... {prompt}`` → ``claude --resume <id> -p ... {prompt}``.
+
+    Inserted right after the executable token so it lands before every
+    other flag and before the ``{prompt}`` placeholder wherever the profile
+    put it. No ``--fork-session``: a resumed *seat* continues its own
+    transcript — the fork belongs to the boot mount
+    (``transcript.resume_argv``), which a native resume replaces.
+    A template already carrying ``--resume`` is returned unchanged rather
+    than given two.
+    """
+    if not cmd_template or "--resume" in cmd_template:
+        return cmd_template
+    return [cmd_template[0], "--resume", session_id, *cmd_template[1:]]
+
+
 def _insert_codex_resume(cmd_template: list[str], thread_id: str) -> list[str]:
     """``codex exec ...`` → ``codex exec resume <thread_id> ...``.
 
@@ -2608,6 +2652,13 @@ def invoke_runner(
         if invocation.codex_events_path is not None:
             invocation.codex_events_path.parent.mkdir(parents=True, exist_ok=True)
             out_path = invocation.codex_events_path
+    elif invocation.resume_native_session_id and not cfg.get("runner_cmd"):
+        from . import claude_status as _cs
+
+        if _cs.supported(selected_name):
+            cmd_template = _insert_claude_resume(
+                cmd_template, invocation.resume_native_session_id,
+            )
     cmd = _fill_prompt(cmd_template, invocation.prompt, cfg)
     cmd = _spill_oversized_argv(cmd, invocation.repo_root)
     # stdin and argv are mutually exclusive prompt channels; the *template*
@@ -2739,6 +2790,9 @@ def invoke_runner(
             pass
     _retire_capture_dir(capture_dir, returncode)
 
+    # Raw envelope first: `_process_runner_stdout` swaps `stdout` for the
+    # unwrapped reply, and the session id lives only in the envelope.
+    claude_session_id = _extract_claude_session_id(selected_name, stdout)
     stdout, observed_core, api_error = _process_runner_stdout(
         selected_name, stdout, invocation.env,
     )
@@ -2794,6 +2848,7 @@ def invoke_runner(
         trace_stderr=trace_stderr,
         codex_thread_id=codex_thread_id,
         codex_task_error=codex_task_error,
+        claude_session_id=claude_session_id,
     )
     if trace:
         result.trace_dir = _write_trace(result)
