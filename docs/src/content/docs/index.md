@@ -5,9 +5,13 @@ description: Local coding agents, reachable from anywhere, with continuity acros
 
 **Local agents go brr. From anywhere.**
 
-Claude Code and Codex live where the work is: your repo,
-shell, credentials, and test setup. brnrd gives them a doorbell, a memory, and
-a live line back to you.
+A co-maintainer that lives on your machine: survives reboots, remembers who it
+is, works both your Claude and Codex subscriptions, and leaves receipts —
+commits, pull requests, a card you can read. Not a session you reopen: a
+resident with continuity across runs.
+
+Needs a machine that's on: a laptop that doesn't sleep, a Mac mini, a home
+server, or [a $5 VPS](./guides/vps-install/) (about ten minutes to set up).
 
 Send a task from Telegram, Slack, GitHub, or the web. Watch the progress card
 change while the agent works. Correct course at runner boundaries. Get a

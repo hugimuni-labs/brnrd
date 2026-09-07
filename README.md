@@ -5,8 +5,12 @@
 <h1 align="center">brnrd</h1>
 
 <p align="center">
-  <strong>A resident behind your coding agent — works while you're away, reachable from anywhere.</strong><br>
-  Claude Code and Codex on your machine, with memory that outlives the model and a door you can reach from Telegram, WhatsApp, Signal, Slack, GitHub, and the web.
+  <strong>Local agents go brr. From anywhere.</strong><br>
+  A co-maintainer that lives on your machine: survives reboots, remembers who it is, works both your Claude and Codex subscriptions, and leaves receipts — commits, PRs, a card you can read.
+</p>
+
+<p align="center">
+  <sub>Needs a machine that's on: a laptop that doesn't sleep, a Mac mini, a home server, or <a href="https://hugimuni-labs.github.io/brnrd/guides/vps-install/">a $5 VPS</a> (about ten minutes to set up).</sub>
 </p>
 
 <p align="center">
