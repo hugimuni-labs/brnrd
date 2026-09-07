@@ -4353,6 +4353,7 @@ def _run_worker(
         # would make every running heartbeat report the old thread until the
         # replacement process returned and overwrote it.
         task.meta.pop("codex_thread_id", None)
+        task.meta.pop("claude_session_id", None)
         # Same reasoning as the thread id above, for the model a previous
         # attempt observed: a retry that escalates to a different runner
         # must not leave attempt 1's `model_observed` reading in place, on
@@ -4455,6 +4456,13 @@ def _run_worker(
         mount_sink: dict[str, str] | None = (
             {} if boot_mount and mount_shell in transcript.MOUNTED_SHELLS else None
         )
+        if task.meta.get("resume_native_session_id"):
+            # A native resume *is* the transcript: the Shell reopens the
+            # parked session itself (`runner._insert_claude_resume`), so
+            # forging and `--fork-session`-mounting a second one would
+            # hand claude two `--resume`s. Prose wake on top of the live
+            # transcript instead.
+            mount_sink = None
         # Every present block's exact rendered text, mounted or not — a
         # strict superset of `mount_sink` (#1830). Unconditional (unlike
         # `mount_sink`, gated on the mount toggle actually applying): a
@@ -4826,7 +4834,7 @@ def _run_worker(
                 # `codex exec resume` would read as a genuinely new turn
                 # rather than a retry.
                 resume_native_session_id=(
-                    task.meta.get("resume_native_session_id")
+                    _resume_session_for_runner(task, runner_choice)
                     if attempt == 1 else None
                 ),
             ),
@@ -4870,6 +4878,9 @@ def _run_worker(
             # returns — can correlate the rollout exactly instead of
             # guessing newest-mtime across every Codex Shell alive right now.
             task.meta["codex_thread_id"] = result.codex_thread_id
+        if getattr(result, "claude_session_id", None):
+            # The claude half of the same fact, same per-run home.
+            task.meta["claude_session_id"] = result.claude_session_id
         _emit_new_containers(emit, task.id, env_ctx, seen_containers)
         # Tier-2 Stop is a synchronous portal boundary: the runner cannot
         # return until the matching flush token has been accepted. A normal
@@ -9855,7 +9866,7 @@ def _park_seat_on_turn_end(task: Run, cfg: "dict | None") -> dict[str, object] |
         return None
     if not _seat_park_enabled(cfg):
         return None
-    native_session_id = task.meta.get("codex_thread_id")
+    native_session_id = _native_session_id_for(task)
     return {
         "reason": resource_hold.REASON_TURN_ENDED,
         "provider": _resource_hold_provider_for_runner(
@@ -10002,7 +10013,7 @@ def _hold_ratio_facet(
         armed["resolved"] = True
         armed["outcome"] = "park"
         armed["which"] = None
-    native_session_id = task.meta.get("codex_thread_id")
+    native_session_id = _native_session_id_for(task)
     task.meta["pending_resource_hold"] = {
         "reason": resource_hold.REASON_HOLD_COSTLIER_THAN_BOOT,
         "provider": _resource_hold_provider_for_runner(
@@ -10067,7 +10078,7 @@ def _park_bolt_on_live_strands(
     ]
     if not parked:
         return []
-    native_session_id = task.meta.get("codex_thread_id")
+    native_session_id = _native_session_id_for(task)
     task.meta["pending_resource_hold"] = {
         "reason": resource_hold.REASON_WAITING_ON_STRANDS,
         "provider": _resource_hold_provider_for_runner(
@@ -10529,7 +10540,7 @@ def _drain_outbox(
                     )
                     _retire_outbox_staging(fpath)
                     continue
-                native_session_id = task.meta.get("codex_thread_id")
+                native_session_id = _native_session_id_for(task)
                 provider = (
                     hold_spec["provider"]
                     or _resource_hold_provider_for_runner(
@@ -16529,6 +16540,33 @@ _HOLD_ACCUMULATE_ONLY_SOURCES = frozenset({
 _HOLD_DEFER_SECONDS = 60.0 * 60.0 * 24.0 * 365.0 * 5.0
 
 
+def _resume_session_for_runner(task: Run, runner_choice: Any) -> str | None:
+    """The held session this dispatch may hand its Shell — or ``None``.
+
+    A hold records the *provider* that owns its session. A resume that
+    switches Shell (a codex seat parked, the next message routed to
+    claude-fable by a dashboard header or respawn — run-260907-2223-avku,
+    2026-09-07) cannot reopen the other Shell's transcript; handing the id
+    across would put a codex thread id after ``claude --resume``. Provider
+    mismatch ⇒ ``None`` ⇒ an honest cold boot, and the run records
+    ``resume_cold_reason`` so the card can say why the seat did not wake
+    warm.
+    """
+    session_id = task.meta.get("resume_native_session_id")
+    if not session_id:
+        return None
+    provider = str(task.meta.get("resume_native_provider") or "")
+    chosen = _resource_hold_provider_for_runner(
+        getattr(runner_choice, "shell", None) or getattr(runner_choice, "name", None)
+    )
+    if provider and provider != chosen:
+        task.meta["resume_cold_reason"] = (
+            f"Shell changed: held session belongs to {provider}, dispatch runs {chosen}"
+        )
+        return None
+    return str(session_id)
+
+
 def _resource_hold_provider_for_runner(runner_name: str | None) -> str:
     """Best-effort provider label for a hold record from a runner/Shell name."""
     name = str(runner_name or "").strip().lower()
@@ -16603,7 +16641,7 @@ def _maybe_arm_resource_hold_on_failure(
         return None
     if codex_task_error.get("kind") != "usage_limit_exceeded":
         return None
-    native_session_id = task.meta.get("codex_thread_id")
+    native_session_id = _native_session_id_for(task)
     return {
         "reason": resource_hold.REASON_QUOTA_EXHAUSTED,
         "provider": "codex",
@@ -16793,6 +16831,27 @@ def _finalize_resource_hold(
         resume_kind=meta["resume_kind"],
     )
     return task
+
+
+def _native_session_id_for(task: Run) -> str | None:
+    """The Shell-native session a parked *task* can be resumed into, if any.
+
+    codex ⇒ its ``codex_thread_id``; claude ⇒ its ``claude_session_id``,
+    **host env only** — Claude Code keys sessions by the cwd they ran in,
+    and a worktree / sandbox root is gone (or elsewhere) by the time a
+    resume dispatches, so recording one there would arm a ``native`` hold
+    that resumes into nothing. Anything else ⇒ ``None`` and the hold is
+    honestly ``unsupported``.
+    """
+    meta = task.meta if hasattr(task, "meta") else {}
+    shell = str(meta.get("runner_shell") or meta.get("runner_name") or "").lower()
+    if shell.startswith("codex"):
+        return meta.get("codex_thread_id") or None
+    if shell.startswith("claude"):
+        if str(getattr(task, "env", "") or meta.get("env") or "") != "host":
+            return None
+        return meta.get("claude_session_id") or None
+    return None
 
 
 def _held_runs_for_repo(runs_dir: Path) -> list[Run]:
