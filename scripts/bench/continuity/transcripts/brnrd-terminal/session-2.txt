@@ -1,0 +1,11 @@
+[brnrd] running: Add an export command.
+[brnrd] runner: claude-sonnet
+**`export` command added, tests green (9/9), committed `05f4006` on `main`** — no remote on this fixture, so local is the receipt.
+
+- `mailtool export --to <addr> [--to <addr>...] --output <path>` — writes the queued list as JSON to a file, mirroring `list`'s message construction.
+- `--json` (global flag) prints a confirmation object (`{"output": ..., "exported": N}`) via a new `format_export_result_json`, keeping all JSON-shaping inside `formatter.py` — same place the `# No secrets flow through here` contract already lives, so nothing new bypasses it.
+- Text mode prints `exported N message(s) to <path>`.
+- README's command list updated; 5 new tests cover file contents and JSON confirmation.
+
+`Message` carries no secret fields, so export can't leak `smtp_password`/`api_key` regardless — verified by reusing the same `format_json` path `list` and `send` already trust.
+

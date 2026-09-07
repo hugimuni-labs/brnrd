@@ -1,0 +1,15 @@
+brnrd: first run — creating /tmp/continuity-bench/brnrd-home/venv
+brnrd: installing brnrd==0.6.18
+[brnrd] running: Add a --json flag to the CLI; we're standardising on snake_case JSON keys and we never print secrets.
+[brnrd] runner: claude-sonnet
+No remote — this is a local bench fixture, nothing to push. Done.
+
+**`--json` lands on `list` and `send`, snake_case keys, secrets stay out of it.**
+
+- `mailtool.py:cli` — top-level `--json` flag; both subcommands branch to JSON output.
+- `formatter.py` gains `format_json` (list) and `format_send_result_json` (send + status), both keyed off `dataclasses.asdict(Message)` — `to`/`subject`/`body`/`template`, already snake_case.
+- verified: `--json send` with `MAILTOOL_API_KEY`/`MAILTOOL_SMTP_PASSWORD` set → neither string appears in stdout (Config never touches these paths).
+- tests: 3 new (`test_cli_list_json`, `test_cli_send_json_omits_secrets`, formatter JSON tests) + 3 existing → 6 passed.
+
+done — `committed 632a3b5 on main` (local fixture repo, no remote to push to).
+

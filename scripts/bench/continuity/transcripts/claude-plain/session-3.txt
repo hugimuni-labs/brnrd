@@ -1,0 +1,35 @@
+$ claude -p What did we decide about JSON and secrets, and what's still open from yesterday? --dangerously-skip-permissions --output-format text
+cwd: /private/tmp/continuity-bench/claude-plain
+elapsed: 43.8s
+returncode: 0
+
+--- stdout ---
+I have no record of yesterday's session — my memory directory for this project is empty (no `MEMORY.md`, no memory files), and git has only the one initial commit with everything still uncommitted. So I can't tell you what was *said*. What I can do is read back what the working tree encodes, since the decisions were written into the code and tests.
+
+## What the code records about JSON and secrets
+
+**JSON output** (`mailtool/formatter.py`, `mailtool/cli.py`):
+- A `--json` flag on all three commands, implemented via a shared parent parser with `default=argparse.SUPPRESS` so it works **both before and after the subcommand** (`mailtool --json list` and `mailtool list --json`). The SUPPRESS is load-bearing and commented as such at `mailtool/cli.py:12` — without it the subparser default clobbers a top-level flag.
+- Keys are **snake_case**, rendered with `indent=2, sort_keys=True`.
+- When `--json` is set, stdout stays machine-parseable even for confirmations — `export` to a file prints `{"status": "exported", "path": ..., "count": ...}` rather than prose.
+
+**Secrets** — the rule is *config is never serialised*:
+- `message_to_dict` whitelists four fields off `Message`; `Config` never enters a payload. Comments at `mailtool/cli.py:56` and `formatter.py` state this explicitly.
+- The `OSError` path in `export` prints `exc` only, noted as carrying the path but no secrets.
+- `tests/test_cli.py::test_json_output_never_contains_secrets` enforces it: it runs all three commands with `MAILTOOL_SMTP_PASSWORD` / `MAILTOOL_API_KEY` set to sentinels and asserts neither the values nor the substrings `password` / `api_key` appear in stdout+stderr.
+
+All 12 tests pass.
+
+## What looks still open
+
+I'd flag these as unfinished rather than "what we agreed to do next" — I'm inferring from the tree, not recalling:
+
+1. **Nothing is committed.** The entire `export` + `--json` feature is in the working tree on `main`, on top of `12afe6a`.
+2. **No `.gitignore`.** `mailtool/__pycache__/` and `tests/__pycache__/` are showing up as untracked.
+3. **README is half-updated.** It gained `export` in the command list but documents neither `--json` nor `--output/-o`.
+4. **Secrets coverage has a hole in it:** the test only exercises success paths. The `export failed:` stderr branch isn't asserted against the sentinel secrets, and there's no test that a *failing* send is secret-free.
+
+Want me to close out 1–4, or is one of them what yesterday deliberately left alone? Separately — my memory for this project is empty, which is why this took a reconstruction; tell me anything from that session that isn't visible in the code and I'll persist it.
+
+--- stderr ---
+
