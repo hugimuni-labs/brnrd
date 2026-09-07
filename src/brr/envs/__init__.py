@@ -1352,6 +1352,149 @@ def _sandbox_name(shell: str) -> str:
     return f"brr-{agent}"
 
 
+# Per-Shell login seeding. A freshly `sbx create`d VM has a private $HOME and
+# no login: the Docker Sandboxes credential proxy is off for both vendors
+# (`SBX_CRED_OPENAI_MODE=none` / `SBX_CRED_ANTHROPIC_MODE=none`, read inside
+# the VM 2026-09-07), and nothing copies the host's file in. Measured on
+# run-260907-1436-xkmn: `brr-codex` created at 14:37Z, codex answered
+# `401 Missing bearer` at 14:38Z, and the auth-health mark that failure left
+# hid every codex row — and the codex fuel bar — until a codex attempt
+# succeeds, which none could. Each entry: the in-VM status probe, the token
+# proving a login in its output, the host file to seed from (relative to
+# ``$HOME``), and where the VM keeps it (same relative path both sides).
+# Claude on macOS keeps its login in the Keychain, not a file — `keychain`
+# names the service `_host_login_payload` reads it from.
+_SANDBOX_LOGIN: dict[str, dict[str, str]] = {
+    "codex": {
+        "status": "codex login status",
+        "logged_in": "Logged in",
+        "file": ".codex/auth.json",
+    },
+    "claude": {
+        "status": "claude auth status",
+        "logged_in": '"loggedIn": true',
+        "file": ".claude/.credentials.json",
+        "keychain": "Claude Code-credentials",
+    },
+}
+
+
+def _host_login_payload(spec: dict[str, str]) -> bytes | None:
+    """The host's login in the VM's file shape, or ``None`` when there is none.
+
+    The file first. Claude on macOS keeps the same JSON in the Keychain
+    (service ``Claude Code-credentials``) instead — the `security` read is
+    the file's exact byte shape (`{"claudeAiOauth": {...}}`, verified against
+    a VM's own ``.credentials.json`` 2026-09-07), so it seeds the same way.
+    """
+    try:
+        return (Path.home() / spec["file"]).read_bytes()
+    except OSError:
+        pass
+    keychain = spec.get("keychain")
+    if not keychain:
+        return None
+    try:
+        read = subprocess.run(
+            ["security", "find-generic-password", "-s", keychain, "-w"],
+            capture_output=True, timeout=15, check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    payload = read.stdout.strip()
+    return payload or None if read.returncode == 0 else None
+
+
+def _sandbox_login_hint(sandbox_name: str, shell: str) -> str:
+    return (
+        f"sandbox {sandbox_name}: {shell} is not logged in and the host has no "
+        f"~/{_SANDBOX_LOGIN[shell]['file']} (or Keychain entry) to seed from — run "
+        f"`sbx run --name {sandbox_name}` and log in once inside the VM"
+    )
+
+
+def _seed_sandbox_login(sandbox_name: str, shell: str) -> str | None:
+    """Copy the host's login into the VM when the VM has none.
+
+    Returns a one-line receipt for the daemon log (``None`` when the VM was
+    already logged in). Never raises: a VM that stays logged out fails its
+    attempt with the vendor's own 401, which the daemon already classifies
+    and falls back from — a prepare-time exception would skip that path.
+    """
+    spec = _SANDBOX_LOGIN.get(shell.strip().casefold())
+    if spec is None:
+        return None
+    probe = subprocess.run(
+        ["sbx", "exec", sandbox_name, "--", "sh", "-c",
+         f"export PATH=$HOME/.local/bin:$PATH && {spec['status']}"],
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    if probe.returncode == 0 and spec["logged_in"] in (probe.stdout + probe.stderr):
+        return None
+    payload = _host_login_payload(spec)
+    if payload is None:
+        return _sandbox_login_hint(sandbox_name, shell)
+    target = shlex.quote("/" + spec["file"])
+    parent = shlex.quote("/" + str(Path(spec["file"]).parent))
+    script = (
+        'umask 077 && mkdir -p "$HOME"' + parent
+        + ' && cat > "$HOME"' + target
+    )
+    seeded = subprocess.run(
+        ["sbx", "exec", "-i", sandbox_name, "--", "sh", "-c", script],
+        input=payload, capture_output=True, timeout=60, check=False,
+    )
+    if seeded.returncode != 0:
+        detail = seeded.stderr.decode("utf-8", "replace").strip() or "unknown error"
+        return f"sandbox {sandbox_name}: seeding {shell} login failed: {detail}"
+    return (
+        f"sandbox {sandbox_name}: {shell} was not logged in; "
+        f"seeded from host ~/{spec['file']}"
+    )
+
+
+def _ensure_sandbox(sandbox_name: str, shell: str, repo_root: Path) -> None:
+    """Create the VM if absent, match brnrd's version inside it, seed its login.
+
+    Called from ``prepare`` for the planned Shell and again from ``invoke``
+    when the runner actually selected wears a different Shell — the daemon's
+    fallback path swaps the Runner without re-preparing the env, and a claude
+    fallback exec'd into ``brr-codex`` is `sh: exec: claude: not found`
+    (run-260907-1436-xkmn, attempt 2).
+    """
+    listing = _sbx_run(["sbx", "ls"], timeout=30).stdout
+    present = any(
+        sandbox_name == field
+        for line in listing.splitlines()
+        for field in re.split(r"\s+", line.strip())
+    )
+    if not present:
+        _sbx_run([
+            "sbx", "create", "--name", sandbox_name, shell, str(repo_root),
+        ], timeout=300)
+
+    version_cmd = [
+        "sbx", "exec", sandbox_name, "--", "sh", "-c",
+        "~/.local/bin/brnrd --version",
+    ]
+    installed = subprocess.run(
+        version_cmd, capture_output=True, text=True, timeout=30, check=False,
+    )
+    if installed.returncode != 0 or installed.stdout.strip() != f"brnrd {__version__}":
+        install = (
+            "python3 -m pip install --user --break-system-packages --quiet "
+            f"{shlex.quote(str(repo_root))} && ~/.local/bin/brnrd --version"
+        )
+        _sbx_run(
+            ["sbx", "exec", sandbox_name, "--", "sh", "-c", install],
+            timeout=300,
+        )
+
+    receipt = _seed_sandbox_login(sandbox_name, shell)
+    if receipt:
+        print(f"[brnrd] {receipt}")
+
+
 def _sbx_run(command: list[str], *, timeout: int = 120) -> subprocess.CompletedProcess:
     try:
         result = subprocess.run(
@@ -1425,36 +1568,14 @@ class SandboxEnv(WorktreeEnv):
         )
         ctx.name = self.name
 
-        listing = _sbx_run(["sbx", "ls"], timeout=30).stdout
-        present = any(
-            sandbox_name == field
-            for line in listing.splitlines()
-            for field in re.split(r"\s+", line.strip())
-        )
-        if not present:
-            _sbx_run([
-                "sbx", "create", "--name", sandbox_name, shell, str(repo_root),
-            ], timeout=300)
-
-        version_cmd = [
-            "sbx", "exec", sandbox_name, "--", "sh", "-c",
-            "~/.local/bin/brnrd --version",
-        ]
-        installed = subprocess.run(
-            version_cmd, capture_output=True, text=True, timeout=30, check=False,
-        )
-        if installed.returncode != 0 or installed.stdout.strip() != f"brnrd {__version__}":
-            install = (
-                "python3 -m pip install --user --break-system-packages --quiet "
-                f"{shlex.quote(str(repo_root))} && ~/.local/bin/brnrd --version"
-            )
-            _sbx_run(
-                ["sbx", "exec", sandbox_name, "--", "sh", "-c", install],
-                timeout=300,
-            )
+        _ensure_sandbox(sandbox_name, shell, repo_root)
 
         ctx.env_state.update({
             "sandbox_name": sandbox_name,
+            # Every sandbox this run actually executed in — the prepared one
+            # plus any the fallback path switched to — so `finalize` stops
+            # what was started, not only what was planned.
+            "sandbox_names": [sandbox_name],
             "sandbox_stop_after_run": _sandbox_bool(cfg, "stop_after_run"),
         })
         task.meta["sandbox_name"] = sandbox_name
@@ -1525,7 +1646,7 @@ class SandboxEnv(WorktreeEnv):
     ) -> runner.RunnerResult:
         selected = invocation.selected_runner or runner_name
         shell = getattr(selected, "shell", None) or runner_name
-        sandbox_name = str(ctx.env_state["sandbox_name"])
+        sandbox_name = self._sandbox_for(ctx, str(shell))
         inner_template = runner._cmd_template(
             selected, cfg, extra_args=invocation.extra_runner_args,
         )
@@ -1618,10 +1739,39 @@ class SandboxEnv(WorktreeEnv):
             result.artifacts = _artifact_records(invocation.required_artifacts)
         return result
 
+    def _sandbox_for(self, ctx: RunContext, shell: str) -> str:
+        """The VM the Shell being invoked lives in — prepared, or made now.
+
+        The prepared name is the answer whenever the Shell is the one
+        ``prepare`` planned for. A different Shell (the daemon's fallback
+        Runner) gets its own VM, ensured on the spot, and is recorded so
+        ``finalize`` stops it too. A Shell no sandbox exists for keeps the
+        prepared VM: the vendor's own `not found` is a better error than a
+        prepare-shaped exception raised from inside an attempt.
+        """
+        prepared = str(ctx.env_state["sandbox_name"])
+        try:
+            wanted = _sandbox_name(shell)
+        except RuntimeError:
+            return prepared
+        if wanted == prepared:
+            return prepared
+        used = ctx.env_state.setdefault("sandbox_names", [prepared])
+        if wanted not in used:
+            print(
+                f"[brnrd] sandbox: runner wears shell {shell!r}; switching "
+                f"{prepared} → {wanted}"
+            )
+            _ensure_sandbox(wanted, shell, ctx.repo_root)
+            used.append(wanted)
+        return wanted
+
     def finalize(self, ctx: RunContext, task: Run, runs_dir: Path) -> Run:
         task = super().finalize(ctx, task, runs_dir)
         if ctx.env_state.get("sandbox_stop_after_run"):
-            _sbx_run(["sbx", "stop", str(ctx.env_state["sandbox_name"])], timeout=60)
+            names = ctx.env_state.get("sandbox_names") or [ctx.env_state["sandbox_name"]]
+            for name in names:
+                _sbx_run(["sbx", "stop", str(name)], timeout=60)
         return task
 
 
