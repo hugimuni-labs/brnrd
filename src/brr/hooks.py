@@ -396,6 +396,7 @@ BAR_LAST_CHIPS_KEY = "bar_last_chips"
 # — keyed to evidence of divergence, not to a clock or a message.
 COURSE_DRIFT_COUNT_KEY = "course_drift_count"
 WORK_TOKEN_KEY = "work_token"
+CONTEXT_READING_KEY = "context_reading"
 _COURSE_DRIFT_THRESHOLD = 3
 # COURSE_STALL_COUNT_KEY — boundaries elapsed since the course last moved
 # (route_edge=True resets; a new pending event does not). At
@@ -1619,6 +1620,70 @@ _CONTEXT_PCT_RE = re.compile(r"^(?P<value>\d+(?:\.\d+)?)%\s+context left(?:\s+\(
 _CONTEXT_TOKENS_RE = re.compile(r"^(?P<value>[\d.]+[kKmM]?)\s+tok\b")
 
 
+_CTX_SUFFIX = {"k": 1_000, "m": 1_000_000}
+
+
+def _context_reading(resources: dict[str, Any]) -> tuple[float, str] | None:
+    """The context facet as a number and its unit — ``(148000, "tok")`` or
+    ``(62.0, "%")`` — for the boundary-to-boundary delta below; ``None``
+    when the facet is not ``known`` or its summary does not parse."""
+    facet = resources.get("context_window") if isinstance(resources, dict) else None
+    facet = facet if isinstance(facet, dict) else {}
+    if facet.get("status") != "known":
+        return None
+    summary = str(facet.get("summary") or "").strip()
+    match = _CONTEXT_PCT_RE.match(summary)
+    if match:
+        return float(match.group("value")), "%"
+    match = _CONTEXT_TOKENS_RE.match(summary)
+    if match:
+        raw = match.group("value")
+        mult = _CTX_SUFFIX.get(raw[-1].lower(), 1)
+        digits = raw[:-1] if raw[-1].lower() in _CTX_SUFFIX else raw
+        try:
+            return float(digits) * mult, "tok"
+        except ValueError:
+            return None
+    return None
+
+
+def _fmt_tokens(value: float) -> str:
+    if abs(value) >= 1_000_000:
+        return f"{value / 1_000_000:.1f}m"
+    if abs(value) >= 1_000:
+        return f"{value / 1_000:.1f}k"
+    return f"{int(value)}"
+
+
+def _context_delta_chip(
+    resources: dict[str, Any], prior: dict[str, Any] | None,
+) -> str | None:
+    """``Δctx +3.2k`` — what this stretch of the scroll cost *itself*
+    since the last boundary (his ask, 2026-09-08 evt-…-mqjw: "you prepend
+    data to yourself, for a price … the spend is secondary, the extension
+    is drift"). The reading is the same facet as ``ctx``; the delta is
+    against the previous boundary's reading kept in hook state. Silent on
+    the first boundary, on a unit change, and on a shrink (a compaction
+    is the daemon's story, not a negative price)."""
+    now = _context_reading(resources)
+    if now is None or not isinstance(prior, dict):
+        return None
+    try:
+        before = float(prior.get("value"))
+    except (TypeError, ValueError):
+        return None
+    if prior.get("unit") != now[1]:
+        return None
+    # `%` is context *left* (`62% context left`), so growth reads as a
+    # drop there; tokens are occupancy and grow directly.
+    delta = (before - now[0]) if now[1] == "%" else (now[0] - before)
+    if delta <= 0:
+        return None
+    if now[1] == "%":
+        return f"Δctx +{delta:.1f}%"
+    return f"Δctx +{_fmt_tokens(delta)}"
+
+
 def _context_window_chip(resources: dict[str, Any]) -> str | None:
     """``ctx 62%`` once a real window-size denominator is known, or
     ``ctx 148k tok`` from a live transcript-tail reading before then.
@@ -2798,6 +2863,7 @@ def _render_bar(
     inbox_pointer: str | None = None,
     armed: list[Any] | None = None,
     gate_receipt_data: dict[str, Any] | None = None,
+    context_prior: dict[str, Any] | None = None,
     plan: "promises.Blueprint | None" = None,
     plan_edge: bool = False,
     ambient_emit: bool = True,
@@ -2887,6 +2953,9 @@ def _render_bar(
     context_chip = _context_window_chip(resources)
     if context_chip:
         segments.append(("context_window", context_chip))
+        delta_chip = _context_delta_chip(resources, context_prior)
+        if delta_chip:
+            segments.append(("context_delta", delta_chip))
     # Attribution of the chip just above (brnrd#1810): who is drawing on
     # that shared gauge this boundary — this run's own weighted spend plus
     # every owned strand's, summed. Independent of whether the quota chip
@@ -3258,6 +3327,7 @@ def format_delta(
     route_edge: bool = False,
     route_prompt: bool = False,
     bolt_asks_total: int | None = None,
+    context_prior: dict[str, Any] | None = None,
     bolt_edge: bool = False,
     repeat_streaks: dict[str, int] | None = None,
     pending_set_changed: bool = True,
@@ -3410,6 +3480,7 @@ def format_delta(
             events=action_events,
             budget=budget, outbound=outbound, produce=produce, card=card,
             card_stale=card_stale, resources=resources, run_name=run_name,
+            context_prior=context_prior,
             mood=mood, surprise=surprise,
             census=census,
             notices=notices, finished_spawns=finished_spawns,
@@ -5060,11 +5131,22 @@ def compute_neutral(
     bolt_edge = bolt_token != state.get("bolt_token")
     state["bolt_token"] = bolt_token
 
+    # Δctx (evt-…-mqjw): the previous boundary's context reading, so the
+    # bar can price what this stretch prepended to the scroll. Read before
+    # any render, written after every hook regardless of whether a bar
+    # rendered — the delta is against the last *reading*, not the last
+    # *line*, or a quiet boundary would hide its cost in the next one.
+    context_prior = state.get(CONTEXT_READING_KEY)
+    context_prior = context_prior if isinstance(context_prior, dict) else None
+    context_now = _context_reading(portal.get("resources") or {})
+    if context_now is not None:
+        state[CONTEXT_READING_KEY] = {"value": context_now[0], "unit": context_now[1]}
+
     if phase == PHASE_SESSION_START:
         inject = format_delta(
             portal, seed=True, mood=mood,
             event_seen=event_decisions, inbox_pointer=inbox_pointer,
-            plan=plan,
+            plan=plan, context_prior=context_prior,
         )
         state["last_token"] = portal.get("change_token")
     elif phase == PHASE_STOP:
@@ -5111,6 +5193,7 @@ def compute_neutral(
                 plan=plan, route=route,
                 no_reply_streak=no_reply_streak,
                 no_reply_capped=no_reply_capped,
+                context_prior=context_prior,
             )
             # Latch on the render, not on the decision: a Stop whose token
             # did not move injects nothing, and burning the one statement on
@@ -5266,6 +5349,7 @@ def compute_neutral(
                 route=route, route_edge=route_edge, route_prompt=route_prompt,
                 bolt_asks_total=bolt_asks_total, bolt_edge=bolt_edge,
                 repeat_streaks=repeat_streaks,
+                context_prior=context_prior,
                 pending_set_changed=pending_set_changed,
                 last_chips=last_chips, rendered_chips=rendered_chips,
                 route_drift=route_drift, route_stall=route_stall,

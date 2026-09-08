@@ -6867,3 +6867,28 @@ def test_hold_obligation_is_inert_for_a_seat(tmp_path):
     env["BRR_CLOSEOUT_OBLIGATIONS"] = "hold"
     out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
     assert out.get("decision") != "block", out
+
+
+def test_context_delta_chip_prices_what_the_boundary_prepended():
+    """Δctx (evt-…-mqjw): tokens grow directly; `% left` shrinks as the
+    scroll grows; the first boundary, a unit change and a shrink are silent."""
+    tokens = {"context_window": {"status": "known", "summary": "148.2k tok occupied"}}
+    assert hooks._context_delta_chip(tokens, {"value": 145_000.0, "unit": "tok"}) == "Δctx +3.2k"
+    pct = {"context_window": {"status": "known", "summary": "58% context left (est)"}}
+    assert hooks._context_delta_chip(pct, {"value": 62.0, "unit": "%"}) == "Δctx +4.0%"
+    assert hooks._context_delta_chip(tokens, None) is None
+    assert hooks._context_delta_chip(tokens, {"value": 60.0, "unit": "%"}) is None
+    assert hooks._context_delta_chip(tokens, {"value": 150_000.0, "unit": "tok"}) is None
+
+
+def test_post_tool_bar_carries_the_context_delta_beside_ctx():
+    resources = {"context_window": {"status": "known", "summary": "148.2k tok occupied"}}
+    payload = _portal_payload(resources=resources)
+    line = hooks.format_delta(
+        payload, rendered_chips={}, context_prior={"value": 145_000.0, "unit": "tok"},
+    )
+    assert line is not None
+    assert "ctx 148.2k tok" in line
+    assert "Δctx +3.2k" in line
+    quiet = hooks.format_delta(payload, rendered_chips={})
+    assert quiet is not None and "Δctx" not in quiet
