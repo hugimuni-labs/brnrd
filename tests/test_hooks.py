@@ -675,7 +675,7 @@ def test_post_tool_surfaces_stale_card(tmp_path):
     )
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "card: Now is 1 act behind (1 PR)" in ctx
+    assert "card ## Now: last written 1 act ago (1 PR)" in ctx
     assert "rewrite .card" not in ctx
 
 
@@ -6153,7 +6153,7 @@ def test_card_nudge_names_acts_and_a_bare_streak_number():
     unseen = hooks.format_delta(payload, repeat_streaks={"card_stale": 0})
     # replies no longer count: each delivered reply projects into the card
     # itself (THE SAID BLOCK, 2026-09-08)
-    receipt = "- card: Now is 4 acts behind (3 commits, 1 kb page)"
+    receipt = "- card ## Now: last written 4 acts ago (3 commits, 1 kb page)"
     assert f"{receipt} · seen ×1" in early
     assert f"{receipt} · seen ×3" in later
     assert receipt in unseen
@@ -6176,7 +6176,7 @@ def test_card_nudge_silent_while_a_wait_is_armed():
     # — the nudge speaks again.
     payload["await"] = {"armed": True, "resolved": True, "outcome": "event"}
     rendered = hooks.format_delta(payload, repeat_streaks={"card_stale": 3})
-    assert "card: Now is 4 acts behind" in rendered
+    assert "card ## Now: last written 4 acts ago" in rendered
 
 
 def test_card_nudge_silent_when_nothing_moved_since_the_last_write():
@@ -6195,7 +6195,7 @@ def test_card_nudge_silent_when_nothing_moved_since_the_last_write():
     # already carries that fact.
     payload["card"] = {"active": False}
     rendered = hooks.format_delta(payload, repeat_streaks={"card_stale": 3})
-    assert rendered is None or "card: Now is" not in rendered
+    assert rendered is None or "card ## Now:" not in rendered
 
 
 def test_repeat_streak_resets_when_the_obligation_clears():
@@ -6574,16 +6574,16 @@ def test_course_stall_fires_at_threshold(tmp_path):
     for i in range(threshold):
         _portal(tmp_path, token=f"t{i}", pending=0)
         out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-        assert "stalled ×" not in _inject_text(out)
+        assert "course unchanged ×" not in _inject_text(out)
     # The threshold+1th boundary: stall fires.
     _portal(tmp_path, token=f"t{threshold}", pending=0)
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
     text = _inject_text(out)
-    assert f"stalled ×{threshold} boundaries" in text
+    assert f"course unchanged ×{threshold} boundaries" in text
     # Counter re-armed: next boundary alone does not re-fire.
     _portal(tmp_path, token=f"t{threshold + 1}", pending=0)
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    assert "stalled ×" not in _inject_text(out)
+    assert "course unchanged ×" not in _inject_text(out)
 
 
 def test_course_stall_does_not_count_boundaries_while_await_is_armed(tmp_path):
@@ -6597,7 +6597,7 @@ def test_course_stall_does_not_count_boundaries_while_await_is_armed(tmp_path):
             await_state={"armed": True, "resolved": False},
         )
         out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-        assert "stalled ×" not in _inject_text(out)
+        assert "course unchanged ×" not in _inject_text(out)
 
 
 def test_course_stall_does_not_count_boundaries_that_deliver_replies(tmp_path):
@@ -6615,7 +6615,7 @@ def test_course_stall_does_not_count_boundaries_that_deliver_replies(tmp_path):
             },
         )
         out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-        assert "stalled ×" not in _inject_text(out)
+        assert "course unchanged ×" not in _inject_text(out)
 
 
 def test_course_stall_delivery_boundary_pauses_but_does_not_reset_counter(tmp_path):
@@ -6629,7 +6629,7 @@ def test_course_stall_delivery_boundary_pauses_but_does_not_reset_counter(tmp_pa
     for i in range(threshold // 2):
         _portal(tmp_path, token=f"idle-before-{i}", pending=0)
         out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-        assert "stalled ×" not in _inject_text(out)
+        assert "course unchanged ×" not in _inject_text(out)
     _portal(
         tmp_path, token="delivery", pending=0,
         outbound={
@@ -6639,7 +6639,7 @@ def test_course_stall_delivery_boundary_pauses_but_does_not_reset_counter(tmp_pa
         },
     )
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    assert "stalled ×" not in _inject_text(out)
+    assert "course unchanged ×" not in _inject_text(out)
     for i in range(threshold - threshold // 2 - 1):
         _portal(
             tmp_path, token=f"idle-after-{i}", pending=0,
@@ -6650,7 +6650,7 @@ def test_course_stall_delivery_boundary_pauses_but_does_not_reset_counter(tmp_pa
             },
         )
         out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-        assert "stalled ×" not in _inject_text(out)
+        assert "course unchanged ×" not in _inject_text(out)
     _portal(
         tmp_path, token="idle-fire", pending=0,
         outbound={
@@ -6660,7 +6660,7 @@ def test_course_stall_delivery_boundary_pauses_but_does_not_reset_counter(tmp_pa
         },
     )
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    assert f"stalled ×{threshold} boundaries" in _inject_text(out)
+    assert f"course unchanged ×{threshold} boundaries" in _inject_text(out)
 
 
 def test_course_stall_resets_on_route_edit(tmp_path):
@@ -6683,15 +6683,15 @@ def test_course_stall_resets_on_route_edit(tmp_path):
     )
     _portal(tmp_path, token=f"t{threshold}", pending=0)
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    assert "stalled ×" not in _inject_text(out)
+    assert "course unchanged ×" not in _inject_text(out)
     # threshold more non-edge boundaries: stall fires again from new baseline.
     for i in range(threshold - 1):
         _portal(tmp_path, token=f"t{threshold + 1 + i}", pending=0)
         out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-        assert "stalled ×" not in _inject_text(out)
+        assert "course unchanged ×" not in _inject_text(out)
     _portal(tmp_path, token=f"t{2 * threshold + 1}", pending=0)
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    assert f"stalled ×{threshold} boundaries" in _inject_text(out)
+    assert f"course unchanged ×{threshold} boundaries" in _inject_text(out)
 
 
 def test_boundary_detail_redacts_file_tool_pattern():
