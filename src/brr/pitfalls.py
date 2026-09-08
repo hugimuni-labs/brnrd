@@ -190,12 +190,10 @@ def format_block(
     parts = [
         "# Pitfalls that match this task",
         "",
-        "Failure-memory you recorded earlier, surfaced because a trigger in "
-        "this task just hit it. Each match is a handle — title, trigger "
-        "vocabulary, opening rule — not the whole incident report. Full entries "
-        "remain in the resident dominion's `pitfalls.md`; re-run `brnrd agent "
-        "inject --task <topic>` after a topic shift. Slash an entry once a lint, "
-        "test, hook, or baked tool guards it.",
+        "failure-memory, yours · surfaced ⇐ a trigger in this task hit it · match = "
+        "handle{title, trigger vocabulary, opening rule} ≠ the incident · full entries "
+        "⇒ dominion `pitfalls.md` · topic shift ⇒ `brnrd agent inject --task <topic>` · "
+        "a lint/test/hook/tool now guards it ⇒ slash the entry",
     ]
     kept = 0
     for p in matched:

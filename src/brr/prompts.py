@@ -1307,35 +1307,35 @@ def _build_dominion_block(repo_root: Path) -> str:
             )
     if chosen.legacy:
         location = (
-            f"Your dominion is the legacy repo-local working memory at `{path}`. "
-            "This install has not moved that memory into the account dominion "
-            "repo yet."
+            f"dominion = `{path}` (legacy, repo-local · not yet moved into the "
+            "account dominion repo)"
         )
         remote = (
-            "When its git branch has a remote, brr best-effort pushes it after "
-            "a thought; reconciling a diverged remote stays yours."
+            "branch has a remote ⇒ brr pushes best-effort after a thought · "
+            "diverged remote ⇒ yours to reconcile"
         )
     else:
         location = (
-            f"Your dominion is the resident-owned working memory at `{path}` "
-            f"inside the local account dominion repo `{chosen.capture_root}`."
+            f"dominion = `{path}` ⊂ account dominion repo `{chosen.capture_root}`"
         )
         remote = (
-            "The account dominion repo is local-first: it can stay only on this "
-            "machine, or you can opt into durability by adding a git remote. "
-            "When a remote is configured, brr best-effort pushes it after a "
-            "thought; reconciling a diverged remote stays yours."
+            "repo = local-first · remote configured ⇒ brr pushes best-effort after a "
+            "thought · diverged remote ⇒ yours to reconcile"
         )
     return (
         "## Your dominion (working memory)\n\n"
-        f"{location} It is an absolute path, reachable from any working "
-        "directory (your task may run in a worktree or container whose cwd is "
-        "elsewhere). It's your durable memory: write notes, pain records, and "
-        "your `self-inject` index there freely, and **commit what you mean to "
-        f"keep** — the diff is the receipt your next wake reads from. {remote}"
-        f"{sync_note}\n\n"
-        "Self-injected below per your `self-inject` index — yours to "
-        "reshape:\n\n"
+        f"{location}\n"
+        "absolute path ⇒ reachable from any cwd (worktree · container)\n"
+        "memory = self-owned · notes · pain · `self-inject` index · "
+        "**commit what you mean to keep** — the diff = the receipt the next wake reads\n"
+        f"{remote}{sync_note}\n\n"
+        "the notebook = the room that is yours before any duty: `notebook.md` — "
+        "chasing · surprised-by · want-to-try-with-him · the question under the work · "
+        "rewritten, never appended (git = ancestry) · curiosity = a legal reason to act · "
+        "an entry earns its line by changing a next choice ≠ by existing\n"
+        "position.md = where you stand · playbook.md = how you work · pitfalls.md = "
+        "what bit · schedule.md = future-self, specced\n\n"
+        "self-injected ⇐ your `self-inject` index · order = priority · yours to reshape:\n\n"
         f"{digest}"
         f"{_schedule_lint_note(repo_root, path)}"
     )
@@ -2448,18 +2448,18 @@ def _build_work_surface_block_scored(
     if not blocks:
         text = (
             "## Work surface\n\n"
-            "No authored surface yet. Start at `surface/index.md`; pages placed "
-            "under `surface/` are discovered by the next wake and dashboard."
+            "authored surface = ∅ · start at `surface/index.md` · pages under "
+            "`surface/` ⇒ discovered by the next wake + dashboard"
         )
         return TrimResult(text=text), frozenset()
     text = (
         "## Work surface\n\n"
-        "The shared user/resident orientation, discovered from one authored "
-        f"root: `{surface}`. Add, move, or link Markdown there; do not create "
-        "parallel orientation roots elsewhere in home. The dashboard mirrors "
-        "the same discovered set. Cite a page as `path §Heading` — the path "
-        "is each block's own heading below, the heading is one of its own "
-        "`## ` lines. Unlike kb pages, no page URL exists for these.\n\n"
+        f"shared orientation · user ⇄ resident · one authored root: `{surface}`\n"
+        "add · move · link Markdown there ; parallel roots elsewhere in home ✗\n"
+        "dashboard mirrors the same discovered set\n"
+        "cite = `path §Heading` (path = the block's heading below · heading = one of "
+        "its `## ` lines) · page URL = ∅ (≠ kb)\n"
+        "the warp = open items · a page = a purpose it earned · the surface ≠ a form\n\n"
         + "\n\n---\n\n".join(blocks)
     )
     worst = _worst_trim(trims)
