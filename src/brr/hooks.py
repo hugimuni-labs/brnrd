@@ -3001,10 +3001,9 @@ def _render_bar(
             details.append(
                 f"!{notices_count} — {notices_count} directive"
                 + ("s" if notices_count != 1 else "")
-                + " refused/dropped this run. Read `portal-state.json` → "
-                "`notices` for the text; a refused outbox file is deleted "
-                "exactly like an accepted one, so this is the only way to see "
-                "what was lost."
+                + " refused/dropped this run. Text at `portal-state.json` → "
+                "`notices`; a refused outbox file is deleted exactly like an "
+                "accepted one, so this is the only way to see what was lost."
             )
     if pending:
         # Same framing fix as the prose form (2026-07-05): a bare count reads
@@ -3027,8 +3026,7 @@ def _render_bar(
                 details.append(
                     f"{pending} pending event(s), {pending_files} undelivered outbox "
                     "file(s). Address each below with an `event:` reply, or retire it "
-                    "deliberately with `note:`, before your next plan boundary or "
-                    "closeout."
+                    "deliberately with `note:`."
                 )
             details.extend(event_rows)
     if finished_spawns:
@@ -3063,8 +3061,7 @@ def _render_bar(
             if route_drift and not (route_edge or route_prompt):
                 route_line += (
                     " — the run has moved "
-                    f"{_COURSE_DRIFT_THRESHOLD}× since the route did: check "
-                    "a row, or redraw the plan"
+                    f"{_COURSE_DRIFT_THRESHOLD}× since the route did"
                 )
             details.append(route_line)
     # The course stall (2026-08-23): _COURSE_STALL_THRESHOLD boundaries have
@@ -3077,9 +3074,8 @@ def _render_bar(
         stall_chip = course.chip(route)
         if stall_chip:
             details.append(
-                f"- {stall_chip} · stalled ×{_COURSE_STALL_THRESHOLD} boundaries"
-                " — open rows exist but the plan hasn't moved:"
-                " check a row or redraw"
+                f"- {stall_chip} · course unchanged ×{_COURSE_STALL_THRESHOLD} "
+                "boundaries — open rows exist, the plan hasn't moved"
             )
     # The allowance boundary directive (design-the-allowance.md §2, step 3):
     # fires once at ≥100%, never a kill, never a repeat while the spend
@@ -3121,7 +3117,7 @@ def _render_bar(
         seen = f" · seen ×{streak}" if streak else ""
         noun = "act" if acts == 1 else "acts"
         what = f" ({breakdown})" if breakdown else ""
-        details.append(f"- card: Now is {acts} {noun} behind{what}{seen}")
+        details.append(f"- card ## Now: last written {acts} {noun} ago{what}{seen}")
 
     # ── The due-filter (w-54): change-gating replaces the laden gate. ──
     #
@@ -3456,8 +3452,7 @@ def format_delta(
     if action_pending:
         header_line += (
             " Address each below with an `event:` reply, or retire it "
-            "deliberately with `note:`, before your next plan boundary or "
-            "closeout."
+            "deliberately with `note:`."
         )
     lines.append(header_line)
     lines.extend(_render_event_rows(action_events, event_seen, inbox_pointer))
