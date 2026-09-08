@@ -8391,6 +8391,46 @@ def _queue_allowance_ask(
     return True
 
 
+def _strand_probe_root(task: Run, repo_root: Path) -> Path:
+    """The git root where a strand's own branch actually lives.
+
+    A host-env strand works in its own ``git clone --shared``
+    (``worktree_kind: clone``, `envs/__init__.py`): its local branch exists
+    in *that* ``.git``, never in the parent checkout the drain was handed as
+    ``repo_root``. Probing the parent for it answers "absent" for every
+    such strand — 2026-09-08, run-260908-1048-dcwv: branch pushed, PR open,
+    ``submit:`` refused three times as ``missing published branch``. A
+    worktree-kind strand shares refs with the parent, so the parent root
+    is right there; either way the run's own root is the one to ask.
+    """
+    raw = str(task.meta.get("worktree_path") or "").strip()
+    if raw:
+        candidate = Path(raw)
+        if (candidate / ".git").exists():
+            return candidate
+    return repo_root
+
+
+def _strand_branch_is_published(task: Run, repo_root: Path, branch: str) -> bool:
+    """*branch* exists on the remote with nothing local left unpushed.
+
+    Checked in the strand's own git root (:func:`_strand_probe_root`). The
+    remote-tracking ref is the receipt; a local branch that is ahead of it
+    is unpublished work, and a missing local branch beside a present
+    remote ref (a clone that switched away after pushing) still counts —
+    the remote is what the parent can reach.
+    """
+    root = _strand_probe_root(task, repo_root)
+    upstream = gitops.branch_upstream(root, branch) if gitops.rev_parse(root, branch) else None
+    remote = gitops.default_remote(root)
+    remote_ref = upstream or (f"{remote}/{branch}" if remote else "")
+    if not remote_ref or not gitops.rev_parse(root, remote_ref):
+        return False
+    if not gitops.rev_parse(root, branch):
+        return True
+    return not _commits_between(root, remote_ref, branch)
+
+
 def _queue_submit_request(
     task: Run,
     inbox_dir: Path | None,
@@ -8417,18 +8457,8 @@ def _queue_submit_request(
     missing: list[str] = []
     if not branch:
         missing.append("declared branch")
-    elif not gitops.rev_parse(repo_root, branch):
+    elif not _strand_branch_is_published(task, repo_root, branch):
         missing.append(f"published branch {branch!r}")
-    else:
-        upstream = gitops.branch_upstream(repo_root, branch)
-        remote = gitops.default_remote(repo_root)
-        remote_ref = upstream or (f"{remote}/{branch}" if remote else "")
-        if (
-            not remote_ref
-            or not gitops.rev_parse(repo_root, remote_ref)
-            or _commits_between(repo_root, remote_ref, branch)
-        ):
-            missing.append(f"published branch {branch!r}")
     if not report or not Path(report).is_file():
         missing.append(f"report {report!r}" if report else "declared report")
     if missing:
@@ -8451,7 +8481,8 @@ def _queue_submit_request(
         )
         return False
     seed = str(task.meta.get("seed_ref") or task.meta.get("base_branch") or "")
-    commits = len(_commits_between(repo_root, seed, branch)) if seed else None
+    probe_root = _strand_probe_root(task, repo_root)
+    commits = len(_commits_between(probe_root, seed, branch)) if seed else None
     generation = int(control.get("submit_generation") or 0) + 1
     produce = {
         "spawn_status": "submitted",
