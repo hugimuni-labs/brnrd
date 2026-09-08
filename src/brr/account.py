@@ -663,15 +663,63 @@ def _connected_account_id(repo_root: Path) -> str | None:
     # linked worktrees git names *repo_root* itself, so the retry no-ops
     # there; it only does work when `repo_root` is genuinely linked.
     main_root = gitops.main_worktree_root(repo_root)
-    if main_root is None:
+    if main_root is not None:
+        try:
+            resolved_main = main_root.resolve()
+        except OSError:
+            resolved_main = main_root.absolute()
+        if resolved_main != resolved_repo:
+            found = _reverse_lookup_account_id(candidates, resolved_main)
+            if found is not None:
+                return found
+
+    # A `git clone --shared` strand (#746) is its *own* main worktree, so
+    # the retry above names the clone again and no-ops. The clone carries
+    # the host's path in its git dir; ask for that and retry once more.
+    # Without this a strand resolves a `project` home: no account
+    # knowledge (its wake read "no kb is wired up for this repo yet" on a
+    # repo with 200 pages, 2026-09-08), no dominion, and the security
+    # config looked for where nobody writes it — the same fail-open
+    # `test_security_config_resolves_the_same_from_a_linked_worktree`
+    # closed for linked worktrees.
+    host_root = gitops.clone_host_root(repo_root)
+    if host_root is None:
         return None
     try:
-        resolved_main = main_root.resolve()
+        resolved_host = host_root.resolve()
     except OSError:
-        resolved_main = main_root.absolute()
-    if resolved_main == resolved_repo:
+        resolved_host = host_root.absolute()
+    if resolved_host == resolved_repo:
         return None
-    return _reverse_lookup_account_id(candidates, resolved_main)
+    return _reverse_lookup_account_id(candidates, resolved_host)
+
+
+def home_parity(parent_root: Path, child_root: Path) -> str | None:
+    """Does a child checkout resolve the *same* home as its parent?
+
+    ``None`` when it does; otherwise one line naming the divergence. The
+    spawn-time guard for the orphan strand (#1852): every host-env strand
+    once resolved a ``project`` home from its ``git clone --shared`` and
+    booted with no account knowledge, no dominion and the security config
+    fail-open — and nothing said so until the strand itself wrote "told no
+    kb wired" in a report. Measured live, at the seam that makes the
+    child, so the next checkout shape nobody listed fails loud.
+    """
+    from . import config as conf
+
+    try:
+        parent = resolve_context(parent_root, conf.load_config(parent_root), create=False)
+        child = resolve_context(child_root, conf.load_config(child_root), create=False)
+    except Exception as exc:  # noqa: BLE001 — a guard reports, never raises
+        return f"home resolution failed: {exc}"
+    if child.kind != parent.kind:
+        return (
+            f"child resolves a {child.kind!r} home, parent {parent.kind!r} "
+            f"({child.home_root} vs {parent.home_root})"
+        )
+    if child.home_root != parent.home_root:
+        return f"child home {child.home_root} ≠ parent home {parent.home_root}"
+    return None
 
 
 def _reverse_lookup_account_id(candidates: list[Path], target: Path) -> str | None:

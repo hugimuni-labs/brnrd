@@ -1474,3 +1474,98 @@ def test_cli_config_promote_dry_run_leaves_the_profiles_file_alone(
     assert "runners.md" in capsys.readouterr().out
     assert (repo / ".brr" / "runners.md").exists()
     assert not (home / conf.PROFILES_FILENAME).exists()
+
+
+def test_account_resolves_the_same_from_a_shared_clone_strand(tmp_path, monkeypatch):
+    """A ``git clone --shared`` strand must find the *same* account home.
+
+    Sibling of the linked-worktree test above, for the clone shape every
+    host-env strand runs in since #746. A clone is its **own** main
+    worktree, so ``gitops.main_worktree_root``'s retry names the clone
+    again and ``_connected_account_id`` falls through to a ``project``
+    home: no account knowledge (``knowledge.active_kb_dir`` → ``None``,
+    and the strand's wake reads "no kb is wired up for this repo yet" on a
+    repo with two hundred pages — measured 2026-09-08, run-260908-1859-1vd6),
+    and the security config looked for where nobody writes it. The one
+    fact that reaches the host is the marker ``worktree.create_clone``
+    writes into the clone's git dir; ``gitops.clone_host_root`` reads it
+    and the lookup retries against the host. Neuter ``clone_host_root``
+    and every assertion below goes red.
+    """
+    import json
+    import subprocess
+
+    from brr import account, gitops, knowledge
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.delenv("BRNRD_HOME", raising=False)
+
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    (repo / ".brr").mkdir()
+    home = tmp_path / "state" / "brnrd" / "accounts" / "acc_test" / "home"
+    (home / "account").mkdir(parents=True)
+    (home / "account" / "repos.json").write_text(
+        json.dumps({"account_id": "acc_test", "repos": [{"path": str(repo)}]}),
+        encoding="utf-8",
+    )
+    (home / conf.SECURITY_CONFIG_FILENAME).write_text(
+        "docker.image=from-security\n", encoding="utf-8"
+    )
+    conf.write_config(repo, {"docker.image": "from-repo"})
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "--allow-empty", "-m", "seed"],
+        check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "remote", "add", "origin",
+         "https://github.com/acme/widgets.git"],
+        check=True, capture_output=True,
+    )
+    clone = tmp_path / "clone"
+    subprocess.run(
+        ["git", "clone", "--shared", "--quiet", str(repo), str(clone)],
+        check=True, capture_output=True,
+    )
+    # `worktree.create_clone` repoints origin at the host's own remote so the
+    # label derives the same on both sides; mirror that here.
+    subprocess.run(
+        ["git", "-C", str(clone), "remote", "set-url", "origin",
+         "https://github.com/acme/widgets.git"],
+        check=True, capture_output=True,
+    )
+    # The clone is its own main worktree — the #654 retry cannot reach the host.
+    assert gitops.main_worktree_root(clone) == clone
+    assert gitops.clone_host_root(clone) is None
+    (clone / ".git" / gitops._CLONE_HOST_ROOT_MARKER).write_text(
+        str(repo), encoding="utf-8"
+    )
+    assert gitops.clone_host_root(clone) == repo
+    conf._SECURITY_PATH_CACHE.clear()
+
+    host_cfg = conf.load_config(repo)
+    clone_cfg = conf.load_config(clone)
+    host_ctx = account.resolve_context(repo, host_cfg, create=False)
+    clone_ctx = account.resolve_context(clone, clone_cfg, create=False)
+    assert host_ctx.kind == "account"
+    assert clone_ctx.kind == "account"
+    assert clone_ctx.home_root == host_ctx.home_root
+
+    kb_dir = account.repo_knowledge_path(
+        host_ctx, account.repo_label(repo, host_cfg)
+    )
+    kb_dir.mkdir(parents=True)
+    (kb_dir / "index.md").write_text("# kb\n", encoding="utf-8")
+    assert knowledge.active_kb_dir(repo, host_cfg) == kb_dir
+    assert knowledge.active_kb_dir(clone, clone_cfg) == knowledge.active_kb_dir(
+        repo, host_cfg
+    )
+
+    from_repo = conf.security_config_path(
+        repo, conf._read_flat(conf.repo_config_path(repo))
+    )
+    from_clone = conf.security_config_path(
+        clone, conf._read_flat(conf.repo_config_path(clone))
+    )
+    assert from_repo == home / conf.SECURITY_CONFIG_FILENAME
+    assert from_clone == from_repo
