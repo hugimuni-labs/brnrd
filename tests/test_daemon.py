@@ -12,6 +12,7 @@ import pytest
 
 from brr import claude_status, daemon, envs, news_lane, presence, promises, protocol
 from brr import release_availability, resource_hold
+from brr import portals
 from brr import runner_failures
 from brr import schedule as schedule_mod
 from brr import worktree
@@ -15370,3 +15371,156 @@ class TestNewsLaneAnnounce:
         # Unsent means unrecorded too — a future tick, once a gate exists,
         # must still be able to say it.
         assert news_lane._load_ledger(tmp_path) == {}
+
+
+# ── The correspondent's presence (design-the-continuous-seat §Presence) ──
+
+
+def _age_event(path: Path, seconds: int) -> None:
+    """Rewrite one event's ``created:`` line *seconds* into the past."""
+    old = path.read_text(encoding="utf-8")
+    stamp = time.strftime(
+        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - seconds)
+    )
+    lines = [
+        f"created: {stamp}" if line.startswith("created:") else line
+        for line in old.splitlines()
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_correspondent_quiet_seconds_ignores_events_nobody_sent(tmp_path):
+    from brr import correspondent
+
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    spoken = protocol.create_event(
+        inbox, "telegram", "are you there",
+        conversation_key="telegram:42:", chat_id="42",
+        telegram_user_id="7",
+    )
+    _age_event(spoken, 900)
+    # Everything brnrd minted for itself, landing in the same inbox *after*
+    # the person spoke. None of it is the correspondent talking, so none of
+    # it may reset the quiet — that is exactly the reading the seat needs
+    # when it asks "have they stepped away".
+    protocol.create_event(inbox, "schedule", "self-wake")
+    protocol.create_event(inbox, "spawn", "child finished", spawn_status="done")
+    protocol.create_event(inbox, "dispatch_message", "parent steer")
+
+    quiet = correspondent.quiet_seconds(inbox, "telegram:user-id:7")
+    assert quiet is not None
+    assert 880 <= quiet <= 960
+
+
+def test_correspondent_quiet_seconds_absent_when_they_never_spoke(tmp_path):
+    from brr import correspondent
+
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    protocol.create_event(inbox, "schedule", "self-wake")
+    # Not 0. A fresh inbox and "they just spoke" are different facts, and
+    # collapsing them would report a present correspondent who is not there.
+    assert correspondent.quiet_seconds(inbox, "telegram:user-id:7") is None
+
+
+def test_correspondent_quiet_seconds_reads_the_newest_thing_they_said(tmp_path):
+    from brr import correspondent
+
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    _age_event(
+        protocol.create_event(
+            inbox, "telegram", "first", chat_id="42", telegram_user_id="7",
+        ),
+        4000,
+    )
+    _age_event(
+        protocol.create_event(
+            inbox, "telegram", "second", chat_id="42", telegram_user_id="7",
+        ),
+        120,
+    )
+    quiet = correspondent.quiet_seconds(inbox, "telegram:user-id:7")
+    assert 100 <= quiet <= 180
+
+
+def test_correspondent_facet_is_absent_without_a_chat_thread(tmp_path):
+    from brr import correspondent
+
+    assert correspondent.facet_input(
+        tmp_path / "inbox", thread_key=None, correspondent_key=None,
+    ) is None
+
+
+def test_correspondent_facet_input_measures_and_never_infers_a_receipt(tmp_path):
+    from brr import correspondent
+
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    _age_event(
+        protocol.create_event(
+            inbox, "telegram", "ping", chat_id="42", telegram_user_id="7",
+        ),
+        600,
+    )
+    facet = correspondent.facet_input(
+        inbox, thread_key="telegram:42:",
+        correspondent_key="telegram:user-id:7",
+    )
+    assert 580 <= facet["quiet_seconds"] <= 660
+    # A Telegram bot is never given a read receipt. The field exists for
+    # the lanes that have one; it is never inferred.
+    assert facet["read"] is None
+
+
+def test_composing_flips_on_a_staged_draft(tmp_path):
+    from brr.gates import cloud_publisher
+
+    brr_dir = tmp_path / ".brr"
+    outbox = brr_dir / "outbox" / "evt-1"
+    outbox.mkdir(parents=True)
+    manifest = {"event_id": "evt-1"}
+
+    assert cloud_publisher._composing(brr_dir, manifest) is False
+
+    draft = outbox / "note.md.tmp.1234.abcd"
+    draft.write_text("half a sentence", encoding="utf-8")
+    assert cloud_publisher._composing(brr_dir, manifest) is True
+
+
+def test_composing_holds_briefly_after_a_line_is_written(tmp_path):
+    from brr.gates import cloud_publisher
+
+    brr_dir = tmp_path / ".brr"
+    outbox = brr_dir / "outbox" / "evt-1"
+    outbox.mkdir(parents=True)
+    manifest = {"event_id": "evt-1"}
+    sent = outbox / "note.md"
+    sent.write_text("a line", encoding="utf-8")
+
+    assert cloud_publisher._composing(brr_dir, manifest) is True
+    # Past the window, with nothing new staged, the run is no longer
+    # composing — a typing indicator nobody is behind is worse than none.
+    old = time.time() - 120
+    os.utime(sent, (old, old))
+    assert cloud_publisher._composing(brr_dir, manifest) is False
+
+
+def test_composing_ignores_the_daemon_owned_control_files(tmp_path):
+    from brr.gates import cloud_publisher
+
+    brr_dir = tmp_path / ".brr"
+    outbox = brr_dir / "outbox" / "evt-1"
+    outbox.mkdir(parents=True)
+    # The daemon rewrites these every heartbeat. If they counted, every run
+    # would read as composing forever.
+    for name in portals.CONTROL_NAMES:
+        (outbox / name).write_text("{}", encoding="utf-8")
+    assert cloud_publisher._composing(brr_dir, {"event_id": "evt-1"}) is False
+
+
+def test_composing_is_false_for_a_run_with_no_portal(tmp_path):
+    from brr.gates import cloud_publisher
+
+    assert cloud_publisher._composing(tmp_path / ".brr", {}) is False
