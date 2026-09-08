@@ -107,6 +107,15 @@ FACETS: tuple[FacetSpec, ...] = (
         "derived network-free from run metadata; absent = no PR recorded yet",
     ),
     FacetSpec(
+        "correspondent", "correspondent", STATE, False,
+        "the person on the other end of this thread — how long since they "
+        "last spoke (`quiet_seconds`, derived from our own inbox), the "
+        "presence mode they declared (`live`/`afk`/`quiet`/`urgent-only`, "
+        "with `until`), and a read receipt for our last message where the "
+        "platform gives a bot one (Telegram never does); absent on a run "
+        "with no chat thread (design-the-continuous-seat.md §Presence)",
+    ),
+    FacetSpec(
         "allowance", "allowance", LEVEL, False,
         "a strand's own token budget (its `spawn:`-declared ceiling) or the "
         "resident seat's own standing allowance (a config-owned ceiling, "
@@ -281,6 +290,59 @@ def _sibling_handle(entry: dict[str, object]) -> str:
     return collapsed
 
 
+def format_quiet(seconds: float | None) -> str | None:
+    """``quiet 12m`` / ``quiet 3h`` / ``quiet 2d``, or ``None``.
+
+    Coarse on purpose. The reading answers "have they stepped away", and a
+    second-resolution number on a chip that re-renders every boundary is a
+    meter that changes for a non-reason — exactly what the bar's
+    change-gate punishes. Under a minute reads ``just now``: there is no
+    useful sub-minute distinction in "are they at the keyboard".
+    """
+    if seconds is None:
+        return None
+    seconds = max(0.0, float(seconds))
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        return f"quiet {int(seconds // 60)}m"
+    if seconds < 86400:
+        return f"quiet {int(seconds // 3600)}h"
+    return f"quiet {int(seconds // 86400)}d"
+
+
+def correspondent_summary(
+    quiet_seconds: float | None,
+    mode: str,
+    until: object = None,
+    read: object = None,
+) -> str:
+    """The one-line reading: the declared mode, then quiet, then a receipt.
+
+    ``quiet 12m`` · ``afk until 09:00 · urgent-only`` · ``quiet 3h ·
+    read m4 21:58``. Each part drops out when it has nothing to say, and a
+    mode of ``live`` says nothing — it is the *absence* of a declaration,
+    not a declaration of presence, so it never takes a slot from the
+    reading that was actually measured.
+    """
+    parts: list[str] = []
+    mode = str(mode or "live").strip() or "live"
+    if mode in ("afk", "quiet", "urgent-only"):
+        text = mode
+        if until:
+            text += f" until {until}"
+        parts.append(text)
+    quiet = format_quiet(quiet_seconds)
+    if quiet:
+        parts.append(quiet)
+    if isinstance(read, dict):
+        handle = str(read.get("message") or "").strip()
+        at = str(read.get("at") or "").strip()
+        if handle or at:
+            parts.append(" ".join(x for x in ("read", handle, at) if x))
+    return " · ".join(parts) if parts else "live"
+
+
 def build(
     *,
     quota_summary: str | None = None,
@@ -299,6 +361,7 @@ def build(
     allowance: "dict[str, object] | None" = None,
     draws: "dict[str, object] | None" = None,
     hold: "dict[str, object] | None" = None,
+    correspondent: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Build the live ``resources`` facet dict from the collected inputs.
 
@@ -389,6 +452,15 @@ def build(
       (the whole key omitted) when no await is armed at all — nothing to
       show; ``{"ratio": None, "known": False}`` while armed but no boot
       cost has landed yet (never a guessed ratio).
+    - ``correspondent`` (design-the-continuous-seat.md §Presence) —
+      ``{"quiet_seconds": float | None, "mode": str, "until": str | None,
+      "read": dict | None}`` from :func:`brr.correspondent.facet_input`,
+      or ``None`` at a call site with no chat thread, which reads
+      ``absent``: the run genuinely has no correspondent, as opposed to
+      having no collector. ``quiet_seconds`` may itself be ``None`` — the
+      thread exists but nobody has spoken into this inbox yet — and that
+      is still ``known``, because ``mode`` is the fact the delivery rules
+      act on.
     """
     levels = levels or {}
     if isinstance(levels_collector, bool):
@@ -466,6 +538,30 @@ def build(
         "note": None if pr_recorded else "no PR recorded for this branch yet",
     }
 
+    spec_corr = FACETS_BY_KEY["correspondent"]
+    if correspondent is None:
+        correspondent_facet: dict[str, object] = {
+            "status": ABSENT, "kind": spec_corr.kind,
+            "required": spec_corr.required, "summary": None,
+            "note": "no chat thread on this run",
+            "quiet_seconds": None, "mode": "live", "until": None, "read": None,
+        }
+    else:
+        quiet = correspondent.get("quiet_seconds")
+        mode = str(correspondent.get("mode") or "live").strip() or "live"
+        until = correspondent.get("until") or None
+        read = correspondent.get("read") or None
+        correspondent_facet = {
+            "status": KNOWN, "kind": spec_corr.kind,
+            "required": spec_corr.required,
+            "summary": correspondent_summary(quiet, mode, until, read),
+            "note": None,
+            "quiet_seconds": quiet,
+            "mode": mode,
+            "until": until,
+            "read": read,
+        }
+
     spec_allow = FACETS_BY_KEY["allowance"]
     if allowance is None:
         allowance_facet: dict[str, object] = {
@@ -526,6 +622,7 @@ def build(
         "coexisting_runs": coexisting_facet,
         "remote_scm": remote_scm,
         "allowance": allowance_facet,
+        "correspondent": correspondent_facet,
     }
 
 
