@@ -6435,6 +6435,9 @@ def _task_thread_key(task: Run) -> str | None:
     resolution the dispatcher uses applies unchanged. ``None`` for a run
     with no chat thread at all.
     """
+    explicit = str(getattr(task, "conversation_key", "") or "").strip()
+    if explicit:
+        return explicit
     meta = getattr(task, "meta", None)
     if not isinstance(meta, dict):
         return None
@@ -10653,6 +10656,47 @@ def _drain_outbox(
                     if stats is not None:
                         stats["current"] = stats.get("current", 0) + 1
                         stats["config_change"] = stats.get("config_change", 0) + 1
+                _retire_outbox_staging(fpath)
+            continue
+        presence_mode = str(fm.get("presence") or "").strip().lower()
+        if presence_mode:
+            # design-the-continuous-seat.md §Presence, the resident's own
+            # hand on the same dial. The mode is a fact about the *thread*,
+            # not about who declared it: `/afk` from the person and this
+            # control write one record, which the facet then reads back on
+            # the next boundary. Consumed like `note:` — a directive, never
+            # a message.
+            with _OutboxEntryGuard(outbox_dir, fpath):
+                thread_key = _task_thread_key(task)
+                if presence_mode not in correspondent_mod.MODES:
+                    _record_outbox_notice(
+                        outbox_dir,
+                        f"presence refused: {presence_mode!r} is not a mode — "
+                        f"one of {', '.join(correspondent_mod.MODES)}",
+                        kind="refused", lifetime="run", source_file=fpath.name,
+                    )
+                elif not thread_key:
+                    _record_outbox_notice(
+                        outbox_dir,
+                        "presence refused: this run has no chat thread, so "
+                        "there is no correspondent whose presence it could "
+                        "declare",
+                        kind="refused", lifetime="run", source_file=fpath.name,
+                    )
+                else:
+                    until = str(fm.get("until") or "").strip() or None
+                    correspondent_mod.write_record(
+                        emit.brr_dir, thread_key, presence_mode, until,
+                    )
+                    # Effective from this pass, not the next one: a run that
+                    # writes `presence: quiet` and then an interim line in
+                    # the same drain means the second to be held.
+                    correspondent_mode = correspondent_mod.read_record(
+                        emit.brr_dir, thread_key,
+                    )["mode"]
+                    promoted += 1
+                    if stats is not None:
+                        stats["presence"] = stats.get("presence", 0) + 1
                 _retire_outbox_staging(fpath)
             continue
         if _truthy(fm.get("respawn")):
