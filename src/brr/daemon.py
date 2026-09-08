@@ -10073,6 +10073,13 @@ def _starvation_facet(
         return await_state, facet
     if task.meta.get("spawn_parent_run_id") or task.meta.get("pending_resource_hold"):
         return await_state, facet
+    if _truthy(task.meta.get("starvation_forced")):
+        # The user said `force` to a starved seat: this turn runs under the
+        # floor on their word, consequence named in the bounce reply. The
+        # reading still publishes; a Shell that dies of it still parks
+        # (`_maybe_arm_resource_hold_on_failure`) — that is the consequence.
+        facet["forced"] = True
+        return await_state, facet
     reset_deadline = runner_quota.binding_quota_reset_epoch(levels)
     task.meta["pending_resource_hold"] = _starvation_hold_spec(
         task, cfg, pct,
@@ -17088,8 +17095,10 @@ def _refill_terms(meta: dict[str, object]) -> str:
         except (TypeError, ValueError, OverflowError):
             pass
     parts.append(
-        "To not wait: release the seat, or respawn it on another Core, from "
-        "the dashboard."
+        "Reply `wait` (or nothing) to hold; `respawn <core>` for a fresh seat on "
+        "another bucket; `stop` to end this seat; `force` — that exact word — "
+        "to wake it under the floor anyway, on your word: it may die at the "
+        "wall mid-work. The dashboard offers release and respawn too."
     )
     return " ".join(parts)
 
@@ -17631,6 +17640,44 @@ def _handle_resource_held_events(
                     )
                     survivors.append(target)
                     continue
+                verb, arg = _bounce_verb(str(target.event.get("body") or ""))
+                if verb == "force":
+                    _apply_resource_hold_resume(
+                        runs_dir, target.inbox_dir, held, target.event, by="force",
+                    )
+                    try:
+                        protocol.update_event_meta(target.event, starvation_forced=True)
+                    except OSError:
+                        pass
+                    target.event["starvation_forced"] = True
+                    print(
+                        f"[brnrd] starved seat forced awake by the user "
+                        f"({pct if pct is None else f'{pct:.1f}%'}): {held.id}"
+                    )
+                    survivors.append(target)
+                    continue
+                if verb == "stop":
+                    _apply_run_release(runs_dir, target.inbox_dir, held)
+                    _write_control_response(
+                        target,
+                        f"Stopped — seat {held.id} released; your next message "
+                        "mints a new one.",
+                    )
+                    continue
+                if verb == "respawn":
+                    shell, core, note = _resolve_bounce_runner(repo_root, arg)
+                    if note:
+                        _write_control_response(target, note)
+                        continue
+                    _apply_run_respawn(
+                        runs_dir, target.inbox_dir, held, shell=shell, core=core,
+                    )
+                    _write_control_response(
+                        target,
+                        f"Respawning on {' / '.join(p for p in (shell, core) if p)} — "
+                        f"seat {held.id} released; the new seat picks up this thread.",
+                    )
+                    continue
                 _refuse_starved_wake(runs_dir, held, target, pct)
                 continue
             _apply_resource_hold_resume(
@@ -17638,6 +17685,67 @@ def _handle_resource_held_events(
             )
             survivors.append(target)
     return survivors
+
+
+#: The words a person can say to a starved seat (his shape, 2026-09-08,
+#: evt-…-5h7h): `wait` = the no-reaction default and a verb · `stop` ends the
+#: seat · `respawn <core>` = a fresh seat on another bucket · `force` — exact
+#: match only — overrides the bounce, the consequence on the user.
+_BOUNCE_VERBS = ("wait", "stop", "respawn", "force")
+
+
+def _bounce_verb(body: str) -> tuple[str | None, str]:
+    """Parse a correspondent message to a starved seat. ``(verb, argument)``.
+
+    ``force`` must be the whole message — an exact match, never a word
+    inside a sentence. ``respawn`` takes the rest of the line as the runner
+    (a catalog name, or ``shell core``). Anything else is ``wait``-shaped:
+    kept and answered with the reading.
+    """
+    text = " ".join(str(body or "").strip().split())
+    if not text:
+        return None, ""
+    lowered = text.lower()
+    if lowered == "force":
+        return "force", ""
+    head, _, rest = lowered.partition(" ")
+    if head in ("stop", "release") and not rest:
+        return "stop", ""
+    if head == "wait" and not rest:
+        return "wait", ""
+    if head == "respawn":
+        return "respawn", rest.strip()
+    return None, ""
+
+
+def _resolve_bounce_runner(
+    repo_root: Path, requested: str,
+) -> tuple[str, str, str | None]:
+    """Turn a ``respawn …`` argument into ``(shell, core, refusal_note)``.
+
+    Accepts a catalog profile name (``claude-opus``) or a ``shell core``
+    pair (``claude opus``); empty ⇒ the configured default runner (a fresh
+    seat on the same Shell may still be the right move when the starved
+    bucket was a per-Core one). Anything not in the catalog is refused
+    with the names that would have worked — never a silent default.
+    """
+    try:
+        rows = runner.available_runner_catalog(repo_root)
+    except Exception as exc:  # noqa: BLE001 — a catalog read failure is a refusal, not a guess
+        return "", "", f"Could not read the runner catalog ({exc}); nothing respawned."
+    names = [str(row.get("name") or "") for row in rows if row.get("name")]
+    wanted = " ".join(str(requested or "").strip().split()).lower()
+    if not wanted:
+        return "", "", None
+    for row in rows:
+        name = str(row.get("name") or "").lower()
+        shell = str(row.get("shell") or "").lower()
+        core = str(row.get("core") or "").lower()
+        if wanted == name or wanted == f"{shell} {core}" or (wanted == core and core):
+            if str(row.get("availability") or "") == "retired":
+                return "", "", f"{row.get('name')} is retired; nothing respawned. Available: {', '.join(names)}."
+            return str(row.get("shell") or ""), str(row.get("core") or ""), None
+    return "", "", f"No runner named '{requested}'; nothing respawned. Available: {', '.join(names)}."
 
 
 def _held_run_binding_pct(
