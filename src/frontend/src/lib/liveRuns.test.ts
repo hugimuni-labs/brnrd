@@ -6,6 +6,8 @@ import {
 	liveRelicChips,
 	liveRunDisplayName,
 	moodFace,
+	requestRunRelease,
+	requestRunRespawn,
 	requestRunStop,
 	wordmarkMood,
 	type LiveRun
@@ -89,6 +91,86 @@ test('the run id is encoded, not interpolated raw', async () => {
 	}) as unknown as typeof fetch;
 	await requestRunStop('run/../evil', spy);
 	assert.ok(!seen.includes('run/../evil'), 'a slash in a handle must not reshape the path');
+});
+
+// the-parked-seat-has-two-buttons: release / respawn, same shape as stop's
+// own tests above — a parked request, a typed auth error, a named failure,
+// and an encoded run id.
+
+test('a parked release comes back as a pending request', async () => {
+	const row = await requestRunRelease(
+		'run-h',
+		stubFetch(200, {
+			release_request: {
+				request_id: 'relreq-1',
+				run_id: 'run-h',
+				requested_at: null,
+				status: 'pending'
+			}
+		})
+	);
+	assert.equal(row.run_id, 'run-h');
+	assert.equal(row.status, 'pending');
+});
+
+test('release on an expired session is typed, so the cell can say "sign in again"', async () => {
+	await assert.rejects(() => requestRunRelease('run-h', stubFetch(401)), LiveRunsAuthError);
+});
+
+test('release on a run that is not held names the mismatch', async () => {
+	await assert.rejects(() => requestRunRelease('run-h', stubFetch(409)), /not a held seat/);
+});
+
+test('the release run id is encoded, not interpolated raw', async () => {
+	let seen = '';
+	const spy = (async (url: string) => {
+		seen = url;
+		return { ok: true, status: 200, json: async () => ({ release_request: {} }) } as Response;
+	}) as unknown as typeof fetch;
+	await requestRunRelease('run/../evil', spy);
+	assert.ok(!seen.includes('run/../evil'), 'a slash in a handle must not reshape the path');
+});
+
+test('a parked respawn comes back as a pending request, carrying the runner', async () => {
+	const row = await requestRunRespawn(
+		'run-h',
+		{ shell: 'claude', core: 'opus' },
+		stubFetch(200, {
+			respawn_request: {
+				request_id: 'respreq-1',
+				run_id: 'run-h',
+				shell: 'claude',
+				core: 'opus',
+				requested_at: null,
+				status: 'pending'
+			}
+		})
+	);
+	assert.equal(row.run_id, 'run-h');
+	assert.equal(row.shell, 'claude');
+	assert.equal(row.core, 'opus');
+});
+
+test('respawn with no runner asks for the seat’s own current one', async () => {
+	let sentBody = '';
+	const spy = (async (_url: string, init?: RequestInit) => {
+		sentBody = String(init?.body ?? '');
+		return {
+			ok: true,
+			status: 200,
+			json: async () => ({ respawn_request: { request_id: 'r', run_id: 'run-h' } })
+		} as Response;
+	}) as unknown as typeof fetch;
+	await requestRunRespawn('run-h', {}, spy);
+	assert.deepEqual(JSON.parse(sentBody), { shell: '', core: '' });
+});
+
+test('respawn on a runner outside the catalog names the mismatch', async () => {
+	await assert.rejects(() => requestRunRespawn('run-h', {}, stubFetch(422)), /catalog/);
+});
+
+test('respawn on a run that is not held names the mismatch', async () => {
+	await assert.rejects(() => requestRunRespawn('run-h', {}, stubFetch(409)), /not a held seat/);
 });
 
 // ── relics-so-far chips (#342) ──────────────────────────────────────
