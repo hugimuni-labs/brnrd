@@ -7627,26 +7627,22 @@ def _queue_respawn_request(
         meta["repo_label"] = explicit_repo
     elif task.meta.get("repo_label"):
         meta["repo_label"] = task.meta["repo_label"]
-    if proposed:
-        meta["shell"] = proposed
-    if core:
-        meta["core"] = core
     defer_until = _respawn_defer_until(fm)
     if defer_until:
         meta["defer_until"] = defer_until
     if strand:
         meta["strand"] = True
     reason = str(fm.get("reason") or "").strip()
-    meta["respawned_from_event"] = event_id
-    meta["respawned_by_run"] = task.id
     # Source-trust tiering (#517): a respawn continues the parent run's
     # work, so it inherits the parent's tier authoritatively — a respawn
     # can never escalate an untrusted run into a more-trusted env, and an
     # owner continuation is never accidentally demoted to untrusted just
     # because its origin pending event is gone (source alone would fail
     # closed). The parent tier overrides any tier copied from ``current``.
-    if task.meta.get("trust_tier"):
-        meta["trust_tier"] = task.meta["trust_tier"]
+    # ``_respawn_event_meta`` is the shared contract with the dashboard's
+    # held-seat respawn (``_apply_run_respawn``) — both mint an event the
+    # dispatch loop must recognise as a continuation, never a duplicate.
+    meta.update(_respawn_event_meta(task, event_id, shell=proposed, core=core))
     if reason:
         meta["respawn_reason"] = reason
     if quality_target:
@@ -17109,6 +17105,112 @@ def _release_reset_holds_due(
                 f"{held.id} ({released_meta.get('provider')})"
             )
     return released
+
+
+def _find_held_run(runs_dir: Path, run_id: str) -> Run | None:
+    """Locate one active resource hold in *runs_dir* by run id, or ``None``."""
+    run_id = str(run_id or "").strip()
+    if not run_id:
+        return None
+    for held in _held_runs_for_repo(runs_dir):
+        if held.id == run_id:
+            return held
+    return None
+
+
+def _apply_run_release(runs_dir: Path, inbox_dir: Path | None, held: Run) -> None:
+    """User-issued release: end the seat outright (the dashboard "release" tap).
+
+    Distinct from every other release in this module — those all resume the
+    *same* run natively; this one deliberately does not. "Release is the
+    user's word" (design-the-seat-that-never-quits.md §slice 2: the next
+    message mints a new seat) — so the held run itself goes to ``done``, and
+    its accumulated events are undeferred with no resume hint, landing back
+    at ordinary pending eligibility exactly the way a fresh correspondent
+    message would. One of them (or a genuinely new message) triggers an
+    ordinary dispatch into a brand new run; nothing here tries to be that
+    run itself — that would be a resume wearing a release's name.
+    """
+    meta = held.meta.get("resource_hold") or {}
+    if not resource_hold.is_active(meta):
+        return
+    released = resource_hold.mark_released(meta, by="dashboard")
+    held.meta["resource_hold"] = released
+    held.status = "done"
+    held.save(runs_dir)
+    if inbox_dir is not None:
+        for accumulated_id in released.get("accumulated_event_ids") or []:
+            _undefer_held_event(inbox_dir, accumulated_id)
+    print(f"[brnrd] resource hold released by dashboard (ended): {held.id}")
+
+
+def _respawn_event_meta(
+    task: Run, event_id: str, *, shell: str = "", core: str = "",
+) -> dict[str, object]:
+    """Meta fields every respawn-origin event this daemon mints must carry.
+
+    Pulled out of ``_queue_respawn_request`` (the outbox-verb path, below)
+    so the dashboard-triggered held-seat respawn shares the one contract a
+    fresh dispatch reads to know "this is a continuation, not a duplicate"
+    (``is_respawn_origin`` at event-dispatch time, keyed on
+    ``respawned_from_event``/``respawned_by_run``) instead of growing a
+    second, drifting copy of it. Deliberately narrow: the outbox path's
+    quality-escalation, defer-until, and strand-flag handling are specific
+    to a *live resident* choosing its own successor and do not apply to a
+    dashboard tap on an already-ended process.
+    """
+    meta: dict[str, object] = {
+        "respawned_from_event": event_id,
+        "respawned_by_run": task.id,
+    }
+    if shell:
+        meta["shell"] = shell
+    if core:
+        meta["core"] = core
+    if task.meta.get("trust_tier"):
+        meta["trust_tier"] = task.meta["trust_tier"]
+    return meta
+
+
+def _apply_run_respawn(
+    runs_dir: Path, inbox_dir: Path | None, held: Run, *, shell: str = "", core: str = "",
+) -> Path | None:
+    """User-issued respawn: release *held* and mint a fresh event on its thread.
+
+    Unlike the reset/schedule/strand releases above, a dashboard respawn
+    never carries a native session id forward — the user asked for a
+    *different* core, which is definitionally not a resume of the old
+    process (``_apply_resource_hold_resume`` is for "same process, allowed
+    to continue"; this is "new process, same conversation"). The new event
+    carries the held run's own ``conversation_key`` explicitly —
+    ``conversations.conversation_key_for_event`` reads an explicit key
+    before it ever derives one from gate-thread fields — so the fresh
+    dispatch lands on the same thread the parked seat was holding, not a
+    recomputed fingerprint that merely happens to agree today.
+    """
+    if inbox_dir is None:
+        return None
+    meta = held.meta.get("resource_hold") or {}
+    if not resource_hold.is_active(meta):
+        return None
+    released = resource_hold.mark_released(meta, by="respawn")
+    held.meta["resource_hold"] = released
+    held.save(runs_dir)
+    for accumulated_id in released.get("accumulated_event_ids") or []:
+        _undefer_held_event(inbox_dir, accumulated_id)
+    event_meta = _respawn_event_meta(held, held.event_id, shell=shell, core=core)
+    if held.conversation_key:
+        event_meta["conversation_key"] = held.conversation_key
+    if held.meta.get("repo_label"):
+        event_meta["repo_label"] = held.meta["repo_label"]
+    new_path = protocol.create_event(
+        inbox_dir, held.source or "respawn", held.body, **event_meta,
+    )
+    print(
+        f"[brnrd] resource hold released by dashboard (respawn): "
+        f"{held.id} -> {new_path.stem}"
+    )
+    return new_path
 
 
 def _handle_resource_held_events(

@@ -11,7 +11,14 @@ from fastapi.responses import JSONResponse, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from brnrd import github_marker, publish_scope, run_stop_requests, wake_requests
+from brnrd import (
+    github_marker,
+    publish_scope,
+    run_release_requests,
+    run_respawn_requests,
+    run_stop_requests,
+    wake_requests,
+)
 from brnrd.routers.pairing import telegram_pair_core
 from brnrd.activity_records import dedupe_activity_records, fresh_activity_records
 from brnrd.auth import get_db
@@ -1470,11 +1477,22 @@ def dashboard_live_runs_api(request: Request, db: Session = Depends(get_db)) -> 
     # across a reload, and keeps it from claiming a terminal state the
     # system has not reached yet.
     stopping = run_stop_requests.pending_run_ids(db, account_id)
+    releasing = run_release_requests.pending_run_ids(db, account_id)
+    respawning = run_respawn_requests.pending_run_ids(db, account_id)
     runs = [
         {
             **row,
             "stop_requested": bool(
                 stopping & {str(row.get("run_id") or ""), str(row.get("id") or "")}
+            ),
+            # the-parked-seat-has-two-buttons: same "survive a reload"
+            # reasoning as `stop_requested` above, for a held row's two
+            # affordances.
+            "release_requested": bool(
+                releasing & {str(row.get("run_id") or ""), str(row.get("id") or "")}
+            ),
+            "respawn_requested": bool(
+                respawning & {str(row.get("run_id") or ""), str(row.get("id") or "")}
             ),
         }
         for row in view["runs"]
@@ -1527,6 +1545,102 @@ def dashboard_run_stop(run_id: str, request: Request, db: Session = Depends(get_
         return JSONResponse({"detail": "no live run with that id"}, status_code=404)
     row = run_stop_requests.create(db, account_id, run_id)
     return JSONResponse({"stop_request": run_stop_requests.view(row)})
+
+
+def _known_held_run_id(live: list[dict[str, Any]], run_id: str) -> bool:
+    """Whether *run_id* names a row on *live* whose own status is ``held``.
+
+    Release and respawn are deliberately narrower than stop's "any live run
+    the account can see" (`dashboard_run_stop` above): both act on a
+    *parked* seat specifically — there is no process to end and no native
+    resume to decline — so a run that is merely burning, or one the account
+    cannot see at all, is refused the same "no live run with that id" way
+    stop refuses an unknown handle, plus a second, explicit reason when the
+    id is known but not held.
+    """
+    for row in live:
+        if run_id in {str(row.get("run_id") or ""), str(row.get("id") or "")}:
+            return str(row.get("status") or "") == "held"
+    return False
+
+
+@router.post("/v1/dashboard/runs/{run_id}/release")
+def dashboard_run_release(run_id: str, request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """Park a release for a held seat (the-parked-seat-has-two-buttons).
+
+    Authority: same account-scope reasoning as `dashboard_run_stop` — any
+    held seat the account can see on its live-runs view, its owner may
+    release. Scope is narrower than stop's, not looser: only a row whose
+    published `status` is `"held"` qualifies (see `_known_held_run_id`) —
+    release applies to a parked seat only; a run that is still live is
+    refused rather than silently treated as a stop.
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    run_id = str(run_id or "").strip()
+    if not run_id or len(run_id) > 64:
+        return JSONResponse({"detail": "run id required"}, status_code=422)
+    repos = _repos(db, account_id)
+    live = _live_runs_views(db, repos)["runs"]
+    known = {str(row.get("run_id") or "") for row in live} | {
+        str(row.get("id") or "") for row in live
+    }
+    if run_id not in known:
+        return JSONResponse({"detail": "no live run with that id"}, status_code=404)
+    if not _known_held_run_id(live, run_id):
+        return JSONResponse({"detail": "run is not a held seat"}, status_code=409)
+    row = run_release_requests.create(db, account_id, run_id)
+    return JSONResponse({"release_request": run_release_requests.view(row)})
+
+
+@router.post("/v1/dashboard/runs/{run_id}/respawn")
+async def dashboard_run_respawn(run_id: str, request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """Park a respawn-on-another-core for a held seat.
+
+    Body: ``{shell?, core?}`` — either or both omitted asks the daemon to
+    respawn on the seat's own current runner. When given, each is checked
+    against the account's own published runner catalog (`_runners_views`,
+    the same source `SpoolRack.svelte`'s picker reads) by `shell`/`core`
+    field, the same "is this a name the daemon actually offers" posture
+    `dashboard_runners_wake_request` uses for `environment` — an unknown
+    pair is refused rather than parked for a daemon to silently drop.
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    run_id = str(run_id or "").strip()
+    if not run_id or len(run_id) > 64:
+        return JSONResponse({"detail": "run id required"}, status_code=422)
+    try:
+        payload = await request.json()
+    except ValueError:
+        payload = None
+    shell = str((payload or {}).get("shell") or "").strip()
+    core = str((payload or {}).get("core") or "").strip()
+    repos = _repos(db, account_id)
+    if shell or core:
+        profiles = _runners_views(db, repos)["profiles"]
+        matches = any(
+            (not shell or str(p.get("shell") or "") == shell)
+            and (not core or str(p.get("core") or "") == core)
+            for p in profiles
+        )
+        if not matches:
+            return JSONResponse(
+                {"detail": "shell/core not in this account's runner catalog"},
+                status_code=422,
+            )
+    live = _live_runs_views(db, repos)["runs"]
+    known = {str(row.get("run_id") or "") for row in live} | {
+        str(row.get("id") or "") for row in live
+    }
+    if run_id not in known:
+        return JSONResponse({"detail": "no live run with that id"}, status_code=404)
+    if not _known_held_run_id(live, run_id):
+        return JSONResponse({"detail": "run is not a held seat"}, status_code=409)
+    row = run_respawn_requests.create(db, account_id, run_id, shell=shell, core=core)
+    return JSONResponse({"respawn_request": run_respawn_requests.view(row)})
 
 
 @router.get("/v1/dashboard/pr-review-queue")

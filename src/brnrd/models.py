@@ -673,6 +673,60 @@ class RunStopRequest(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime)
 
 
+class RunReleaseRequest(Base):
+    """the-parked-seat-has-two-buttons — "release that held seat", parked by
+    the account owner.
+
+    Close sibling of ``RunStopRequest`` above, aimed at a *parked* seat
+    instead of a burning one: a held run has no process for the daemon to
+    kill, only a ``Run.meta["resource_hold"]`` record to mark released. Same
+    per-run, idempotent-on-a-second-tap, no-``canceled`` shape — see that
+    class's docstring for the reasoning, which applies unchanged here.
+
+    Delivery rides the same ``PUT /v1/daemons/live-runs`` tick as a stop —
+    the endpoint that already reports which runs (now including held ones)
+    exist to be acted on.
+    """
+
+    __tablename__ = "run_release_requests"
+    STATUS_PENDING = "pending"
+    STATUS_CONSUMED = "consumed"
+    STATUS_EXPIRED = "expired"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    run_id: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(16), default=STATUS_PENDING)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class RunRespawnRequest(Base):
+    """the-parked-seat-has-two-buttons — "respawn this held seat on another
+    core", parked by the account owner.
+
+    Same shape as ``RunReleaseRequest`` with one addition: the runner the
+    user picked (``shell``/``core``, both optional — an empty pair asks the
+    daemon to respawn on its current runner). Consumption releases the hold
+    the same way a release does, but mints a fresh event for the same
+    conversation instead of ending it (``daemon.py::_apply_run_respawn``).
+    """
+
+    __tablename__ = "run_respawn_requests"
+    STATUS_PENDING = "pending"
+    STATUS_CONSUMED = "consumed"
+    STATUS_EXPIRED = "expired"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    run_id: Mapped[str] = mapped_column(String(64), index=True)
+    shell: Mapped[str] = mapped_column(String(64), default="")
+    core: Mapped[str] = mapped_column(String(64), default="")
+    status: Mapped[str] = mapped_column(String(16), default=STATUS_PENDING)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+
+
 class Subscription(Base):
     """#53 — local mirror of the account's Stripe subscription.
 
