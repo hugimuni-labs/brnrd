@@ -296,14 +296,15 @@ def format_quiet(seconds: float | None) -> str | None:
     Coarse on purpose. The reading answers "have they stepped away", and a
     second-resolution number on a chip that re-renders every boundary is a
     meter that changes for a non-reason — exactly what the bar's
-    change-gate punishes. Under a minute reads ``just now``: there is no
-    useful sub-minute distinction in "are they at the keyboard".
+    change-gate punishes. Under a minute reads ``None`` — "they answered
+    seconds ago" is the resting state of a live thread and saying it out
+    loud is how a chip becomes wallpaper.
     """
     if seconds is None:
         return None
     seconds = max(0.0, float(seconds))
     if seconds < 60:
-        return "just now"
+        return None
     if seconds < 3600:
         return f"quiet {int(seconds // 60)}m"
     if seconds < 86400:
@@ -328,7 +329,11 @@ def correspondent_summary(
     parts: list[str] = []
     mode = str(mode or "live").strip() or "live"
     if mode in ("afk", "quiet", "urgent-only"):
-        text = mode
+        # `/hush` sets the mode `quiet`, and the *derived* reading beside it
+        # is also called quiet. Two different facts sharing one word on one
+        # line is how a reader learns to read neither, so the declared one
+        # renders as `hushed` — the wire value is untouched.
+        text = "hushed" if mode == "quiet" else mode
         if until:
             text += f" until {until}"
         parts.append(text)
