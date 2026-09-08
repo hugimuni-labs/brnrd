@@ -6272,7 +6272,7 @@ def _format_recent_conversation(
             marker = _attachment_marker(record, brr_dir=brr_dir)
             if marker:
                 summary = f"{summary} {marker}".strip() if summary else marker
-            line = _format_turn(f"{ts} user ({source})", summary)
+            line = _format_turn(f"{ts} {_turn_role(record)} ({source})", summary)
         elif kind == "run":
             tid = record.get("run_id", "")
             status = record.get("status") or "pending"
@@ -6578,6 +6578,26 @@ def _attachment_marker(
     if paths:
         marker += " (local: " + ", ".join(str(p) for p in paths) + ")"
     return marker
+
+
+def _turn_role(record: dict[str, Any]) -> str:
+    """``user`` only when a person spoke; ``world`` for the machine's own
+    events (a schedule firing, a strand's submit/finish, a daemon notice).
+
+    Every ``event`` record used to render as ``user (…)`` — a strand's
+    completion wearing the correspondent's role, so a later reader could
+    mistake a machine's report for the person's nod. The harness marks its
+    own machine turns ``NOT USER INPUT``; this is the same seam, in our
+    record (his ask, 2026-09-09 evt-…-av0o). The rule is the correspondent:
+    a record that names one is a person's turn; one that names none is the
+    world's — the boot's ``⇐`` convention applied where it was missing.
+    """
+    if str(record.get("correspondent_key") or "").strip():
+        return "user"
+    source = str(record.get("source") or "").strip()
+    if source in ("cloud", "telegram", "slack", "signal", "github", "whatsapp"):
+        return "user"
+    return "world"
 
 
 def _conversation_source_label(record: dict[str, Any]) -> str:

@@ -6080,3 +6080,16 @@ class TestWakeBlocksSidecar:
         path = run_context.write_wake_manifest(brr_dir, run, score)
         manifest = json.loads(path.read_text(encoding="utf-8"))
         assert all(b["lens"] is None for b in manifest["blocks"])
+
+
+def test_turn_role_names_the_world_for_machine_events():
+    """A strand's finish or a schedule firing is the world's turn, never the
+    correspondent's (evt-…-av0o): the record's correspondent decides."""
+    from brr.prompts import _turn_role
+
+    assert _turn_role({"source": "cloud", "correspondent_key": "telegram:user-id:1"}) == "user"
+    assert _turn_role({"source": "cloud"}) == "user"
+    assert _turn_role({"source": "spawn_completed"}) == "world"
+    assert _turn_role({"source": "spawn_submitted"}) == "world"
+    assert _turn_role({"source": "schedule"}) == "world"
+    assert _turn_role({}) == "world"
