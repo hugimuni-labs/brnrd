@@ -188,7 +188,7 @@ def test_format_renders_only_the_opening_paragraph_as_the_handle(tmp_path: Path)
 
     assert "Opening rule." in block
     assert "Incident history." not in block
-    assert "Full entries remain" in block
+    assert "full entries ⇒ dominion `pitfalls.md`" in block
 
 
 def test_format_hard_budget_ranks_and_announces_omissions(tmp_path: Path) -> None:

@@ -342,12 +342,12 @@ def render_injection(repo_root: Path, cfg: dict | None = None) -> str:
             shown = f"`{rel}/`"
         except ValueError:
             shown = f"`{kb_dir}/`"
-        where = f" Authored pages are written to {shown} — that path, not the clone root.\n"
+        where = f"authored pages ⇒ {shown} — that path, never the clone root\n"
 
     return (
         "## Knowledge Sources\n\n"
-        "Home knowledge, repo KB, and repo docs in source order. This is the "
-        "wake-time slice; use `brnrd kb <query>` for the long tail.\n"
+        "home knowledge · repo kb · repo docs, in source order · this = the wake-time "
+        "slice ; long tail = `brnrd kb <query>`\n"
         + where
         + "\n"
         + "\n\n".join(blocks)

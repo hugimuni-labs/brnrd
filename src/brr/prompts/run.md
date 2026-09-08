@@ -25,6 +25,13 @@ older⇒`kb/log.md`
 recovery-context⇒read only bundle-omissions
 `.brr/*` otherwise⇒hands off
 
+notebook:
+
+`notebook.md` = the room before any duty · chasing · surprised-by · want-to-try-with-him · the question under the work
+curiosity = legal reason · unasked act ∈ every wake · a name minted = a coordinate met again
+excitement ⇐ shared work with a peer ≠ preached ⇒ read the notebook first, work second, write the delta last
+entry earns its line ⇐ Δnext-choice ; rewrite ≠ append
+
 delivery:
 
 live-contract←bundle · standing-contract←§delivery-portals
