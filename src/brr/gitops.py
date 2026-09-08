@@ -696,6 +696,31 @@ def absolute_git_dir(repo_root: Path) -> Path | None:
 _CLONE_HOST_ROOT_MARKER = "brr-host-root"
 
 
+def clone_host_root(repo_root: Path) -> Path | None:
+    """Return the host checkout a brr-made ``git clone --shared`` was cut from.
+
+    Reads :data:`_CLONE_HOST_ROOT_MARKER` and nothing else — ``None`` for a
+    plain checkout, a linked worktree, or any repo brr did not clone. The
+    one fact every "which repo am I really in" walk needs from a clone:
+    the clone is its *own* main worktree (``main_worktree_root`` names
+    itself), so a lookup keyed on the host's path — the account registry,
+    the security config, the home knowledge — cannot reach the host
+    without this marker. Fourth instance of one shape (#746 runtime dir,
+    #1847 submit probe, the strand wake that read "no kb wired" for a repo
+    with 200 pages, 2026-09-08): a probe that runs in the wrong
+    jurisdiction answers for the wrong repo.
+    """
+    marker = repo_root / ".git" / _CLONE_HOST_ROOT_MARKER
+    try:
+        marked_root = marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not marked_root:
+        return None
+    host = Path(marked_root)
+    return host if host.is_dir() else None
+
+
 def shared_brr_dir(repo_root: Path) -> Path:
     """Return the shared ``.brr`` dir for a repo or worktree checkout.
 
@@ -726,13 +751,9 @@ def shared_brr_dir(repo_root: Path) -> Path:
     if local.exists():
         return local
 
-    marker = repo_root / ".git" / _CLONE_HOST_ROOT_MARKER
-    try:
-        marked_root = marker.read_text(encoding="utf-8").strip()
-    except OSError:
-        marked_root = ""
-    if marked_root:
-        host_brr = Path(marked_root) / ".brr"
+    host_root = clone_host_root(repo_root)
+    if host_root is not None:
+        host_brr = host_root / ".brr"
         if host_brr.exists():
             return host_brr
 
