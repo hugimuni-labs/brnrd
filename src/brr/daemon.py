@@ -59,6 +59,7 @@ from . import await_verb
 from . import branching
 from .cli import brnrd_cmd
 from . import closekeyword
+from . import correspondent as correspondent_mod
 from . import config as conf
 from . import connect_greeting
 from . import conversations
@@ -6384,6 +6385,7 @@ def _resources_facet(
     allowance: "dict[str, object] | None" = None,
     draws: "dict[str, object] | None" = None,
     hold: "dict[str, object] | None" = None,
+    correspondent: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Operator-facing 'work status' the running resident can read.
 
@@ -6422,7 +6424,38 @@ def _resources_facet(
         allowance=allowance,
         draws=draws,
         hold=hold,
+        correspondent=correspondent,
     )
+
+
+def _task_thread_key(task: Run) -> str | None:
+    """This run's gate-thread key — "which thread would a reply go to".
+
+    ``task.meta`` carries the waking event's frontmatter, so the same
+    resolution the dispatcher uses applies unchanged. ``None`` for a run
+    with no chat thread at all.
+    """
+    explicit = str(getattr(task, "conversation_key", "") or "").strip()
+    if explicit:
+        return explicit
+    meta = getattr(task, "meta", None)
+    if not isinstance(meta, dict):
+        return None
+    return conversations.conversation_key_for_event(meta)
+
+
+def _task_correspondent_key(task: Run) -> str | None:
+    """This run's correspondent key — "who is talking".
+
+    Deliberately the *identity* key, not the thread key: it is what tells a
+    person's message apart from a schedule firing or a spawn completion in
+    the same inbox (``correspondent_key_for_event`` answers ``None`` for
+    everything brnrd minted for itself).
+    """
+    meta = getattr(task, "meta", None)
+    if not isinstance(meta, dict):
+        return None
+    return conversations.correspondent_key_for_event(meta)
 
 
 def _scm_facet(
@@ -7015,6 +7048,17 @@ def _write_live_portal_state(
         # new "park" outcome and stamp `pending_resource_hold` for the
         # ordinary worker-tail routing (`_finalize_resource_hold`) to pick up
         # once this turn actually ends.
+
+        # design-the-continuous-seat.md §Presence: how long the person on
+        # the other end has been quiet. Measured off this run's own inbox,
+        # so it costs one directory scan per heartbeat and never a platform
+        # call. A `None` thread key (a schedule-woken run in a repo nobody
+        # has messaged) renders the facet `absent`, not fabricated.
+        correspondent_facet_input = correspondent_mod.facet_input(
+            inbox_dir,
+            thread_key=_task_thread_key(task),
+            correspondent_key=_task_correspondent_key(task),
+        )
         await_state, hold_facet_input = _hold_ratio_facet(
             task, await_state, cfg, outbox_dir, allowance_facet_input,
         )
@@ -7193,6 +7237,7 @@ def _write_live_portal_state(
                 allowance=allowance_facet_input,
                 draws=draws_facet_input,
                 hold=hold_facet_input,
+                correspondent=correspondent_facet_input,
             ),
         }
         if bolt_state is not None:

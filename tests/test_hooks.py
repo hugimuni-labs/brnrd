@@ -708,6 +708,8 @@ def test_seed_surfaces_resources_with_known_quota_and_gaps(tmp_path):
             "remote_scm": {"status": "absent", "pr_state": "none",
                            "branch": "brr/x",
                            "note": "no PR recorded for this branch yet"},
+            "correspondent": {"status": "absent",
+                              "note": "no chat thread on this run"},
             "allowance": {"status": "unimplemented",
                           "note": "not a strand-stack run"},
         },
@@ -720,6 +722,7 @@ def test_seed_surfaces_resources_with_known_quota_and_gaps(tmp_path):
     assert "spend=unimplemented (no spend collector for this medium yet)" in ctx
     assert "coexisting-runs=unimplemented" in ctx
     assert "remote-scm=absent (no PR recorded for this branch yet)" in ctx
+    assert "correspondent=absent (no chat thread on this run)" in ctx
     assert "allowance=unimplemented (not a strand-stack run)" in ctx
     assert "unavailable" not in ctx
 
@@ -6892,6 +6895,68 @@ def test_post_tool_bar_carries_the_context_delta_beside_ctx():
     assert "Δctx +3.2k" in line
     quiet = hooks.format_delta(payload, rendered_chips={})
     assert quiet is not None and "Δctx" not in quiet
+
+
+# ── The correspondent's presence on the bar (design-the-continuous-seat
+# §Presence) ─────────────────────────────────────────────────────────
+
+
+def _correspondent_resources(**fields):
+    """A `resources` dict carrying only the facet under test.
+
+    Built through `facets.build` rather than hand-rolled, so these tests
+    pin the *renderer* against the real facet shape — a chip test that
+    invents its own facet dict passes forever after the producer changes.
+    """
+    from brr import facets
+
+    return facets.build(correspondent=dict(fields) if fields else None)
+
+
+def test_correspondent_chip_renders_the_quiet_reading():
+    assert hooks._correspondent_chip(
+        _correspondent_resources(quiet_seconds=740, read=None)
+    ) == "him: quiet 12m"
+    assert hooks._correspondent_chip(
+        _correspondent_resources(quiet_seconds=11000, read=None)
+    ) == "him: quiet 3h"
+
+
+def test_correspondent_chip_silent_while_the_person_is_simply_here():
+    # Heard from moments ago = nothing to say. The chip must not become a
+    # meter of the boundary interval.
+    assert hooks._correspondent_chip(
+        _correspondent_resources(quiet_seconds=42, read=None)
+    ) is None
+    # No chat thread at all -> the facet is `absent`, and absent is not a
+    # value to render.
+    assert hooks._correspondent_chip(_correspondent_resources()) is None
+    # A thread with nothing measured on it yet is `absent` too — never a
+    # chip with an empty reading after the colon.
+    assert hooks._correspondent_chip(
+        _correspondent_resources(quiet_seconds=None, read=None)
+    ) is None
+
+
+def test_correspondent_chip_carries_a_read_receipt_when_the_platform_gives_one():
+    chip = hooks._correspondent_chip(
+        _correspondent_resources(
+            quiet_seconds=30, read={"message": "m4", "at": "21:58"},
+        )
+    )
+    # Telegram never produces this; WhatsApp does. The renderer is ready
+    # for the lane that has it without inventing one for the lane that
+    # does not — and a read receipt is news on its own, under the quiet
+    # floor.
+    assert chip == "him: read m4 21:58"
+
+
+def test_correspondent_chip_rides_the_bar_beside_the_siblings_count():
+    payload = _bar_payload(
+        resources=_correspondent_resources(quiet_seconds=1500, read=None),
+    )
+    line = hooks.format_delta(payload)
+    assert "him: quiet 25m" in line
 
 
 def test_room_pin_is_echoed_each_boundary_never_parsed(tmp_path):

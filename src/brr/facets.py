@@ -107,6 +107,15 @@ FACETS: tuple[FacetSpec, ...] = (
         "derived network-free from run metadata; absent = no PR recorded yet",
     ),
     FacetSpec(
+        "correspondent", "correspondent", STATE, False,
+        "the person on the other end of this thread: how long since they "
+        "last spoke (`quiet_seconds`, measured off our own inbox — never a "
+        "platform call) and a read receipt for our last message where the "
+        "platform gives a bot one (Telegram never does); absent on a run "
+        "with no chat thread, or with nothing measured yet "
+        "(design-the-continuous-seat.md §Presence)",
+    ),
+    FacetSpec(
         "allowance", "allowance", LEVEL, False,
         "a strand's own token budget (its `spawn:`-declared ceiling) or the "
         "resident seat's own standing allowance (a config-owned ceiling, "
@@ -281,6 +290,50 @@ def _sibling_handle(entry: dict[str, object]) -> str:
     return collapsed
 
 
+def format_quiet(seconds: float | None) -> str | None:
+    """``quiet 12m`` / ``quiet 3h`` / ``quiet 2d``, or ``None``.
+
+    Coarse on purpose. The reading answers "have they stepped away", and a
+    second-resolution number on a chip that re-renders every boundary is a
+    meter that changes for a non-reason — exactly what the bar's
+    change-gate punishes. Under a minute reads ``None`` — "they answered
+    seconds ago" is the resting state of a live thread and saying it out
+    loud is how a chip becomes wallpaper.
+    """
+    if seconds is None:
+        return None
+    seconds = max(0.0, float(seconds))
+    if seconds < 60:
+        return None
+    if seconds < 3600:
+        return f"quiet {int(seconds // 60)}m"
+    if seconds < 86400:
+        return f"quiet {int(seconds // 3600)}h"
+    return f"quiet {int(seconds // 86400)}d"
+
+
+def correspondent_summary(
+    quiet_seconds: float | None, read: object = None
+) -> str:
+    """The one-line reading: how long they have been quiet, and a receipt.
+
+    ``quiet 12m`` · ``quiet 3h · read m4 21:58``. Empty when there is
+    nothing measured — a correspondent heard from seconds ago, on a
+    platform that gives a bot no read status, has produced no reading, and
+    an empty string is what that honestly looks like.
+    """
+    parts: list[str] = []
+    quiet = format_quiet(quiet_seconds)
+    if quiet:
+        parts.append(quiet)
+    if isinstance(read, dict):
+        handle = str(read.get("message") or "").strip()
+        at = str(read.get("at") or "").strip()
+        if handle or at:
+            parts.append(" ".join(x for x in ("read", handle, at) if x))
+    return " · ".join(parts)
+
+
 def build(
     *,
     quota_summary: str | None = None,
@@ -299,6 +352,7 @@ def build(
     allowance: "dict[str, object] | None" = None,
     draws: "dict[str, object] | None" = None,
     hold: "dict[str, object] | None" = None,
+    correspondent: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Build the live ``resources`` facet dict from the collected inputs.
 
@@ -389,6 +443,13 @@ def build(
       (the whole key omitted) when no await is armed at all — nothing to
       show; ``{"ratio": None, "known": False}`` while armed but no boot
       cost has landed yet (never a guessed ratio).
+    - ``correspondent`` (design-the-continuous-seat.md §Presence) —
+      ``{"quiet_seconds": float | None, "read": dict | None}`` from
+      :func:`brr.correspondent.facet_input`, or ``None`` at a call site
+      with no chat thread. ``None`` and "the thread exists but nothing has
+      been measured on it yet" both read ``absent`` with their own note:
+      there is no *mode* here to be known independently of a measurement
+      (his call, 2026-09-09 — no parsed presence modes anywhere).
     """
     levels = levels or {}
     if isinstance(levels_collector, bool):
@@ -466,6 +527,28 @@ def build(
         "note": None if pr_recorded else "no PR recorded for this branch yet",
     }
 
+    spec_corr = FACETS_BY_KEY["correspondent"]
+    if correspondent is None:
+        correspondent_facet: dict[str, object] = {
+            "status": ABSENT, "kind": spec_corr.kind,
+            "required": spec_corr.required, "summary": None,
+            "note": "no chat thread on this run",
+            "quiet_seconds": None, "read": None,
+        }
+    else:
+        quiet = correspondent.get("quiet_seconds")
+        read = correspondent.get("read") or None
+        summary = correspondent_summary(quiet, read)
+        correspondent_facet = {
+            "status": KNOWN if summary else ABSENT,
+            "kind": spec_corr.kind,
+            "required": spec_corr.required,
+            "summary": summary or None,
+            "note": None if summary else "nothing measured on this thread yet",
+            "quiet_seconds": quiet,
+            "read": read,
+        }
+
     spec_allow = FACETS_BY_KEY["allowance"]
     if allowance is None:
         allowance_facet: dict[str, object] = {
@@ -526,6 +609,7 @@ def build(
         "coexisting_runs": coexisting_facet,
         "remote_scm": remote_scm,
         "allowance": allowance_facet,
+        "correspondent": correspondent_facet,
     }
 
 

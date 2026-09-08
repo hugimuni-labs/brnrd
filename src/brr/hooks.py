@@ -1369,6 +1369,20 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         klass=VITAL,
     ),
     _BarSegment(
+        "correspondent", "☏",
+        "the person on the other end (design-the-continuous-seat.md "
+        "§Presence): `him: quiet 12m` — how long since they last spoke, "
+        "measured off this run's own inbox, never a platform call — plus a "
+        "read receipt where the platform gives a bot one (`him: quiet 3h · "
+        "read m4 21:58`; Telegram never does). Silent while they are simply "
+        "here: a quiet only renders past `_CORRESPONDENT_QUIET_FLOOR_S`, "
+        "because \"they answered a minute ago\" is not news. A measurement, "
+        "never a verdict — what to do about a long silence is judgement at "
+        "the seat.",
+        # a reading of someone else; there is no act that turns it off.
+        klass=VITAL,
+    ),
+    _BarSegment(
         "delivery", "⇡",
         "delivery this run — current-thread replies + everything else "
         "(other threads, outbound messages) (`⇡2+3`). Renders only once "
@@ -1870,6 +1884,40 @@ def _hold_chip(resources: dict[str, Any]) -> str | None:
     if ratio is None:
         return "hold ?·boot"
     return f"hold {ratio:.1f}·boot"
+
+
+#: Below this, a quiet reading is not news — the correspondent answered
+#: moments ago and the chip would only be measuring the boundary interval.
+#: A *declared* mode ignores this floor entirely: `/hush` is a fact from the
+#: first second it is true.
+_CORRESPONDENT_QUIET_FLOOR_S = 300.0
+
+
+def _correspondent_chip(resources: dict[str, Any]) -> str | None:
+    """The ``him: quiet 12m`` chip, off ``resources["correspondent"]``.
+
+    ``None`` while the correspondent was heard from recently — the common
+    case for a live thread, and the one where this chip would be a meter of
+    the boundary interval rather than of a person. It speaks once the
+    silence has lasted long enough to mean something, or once a read
+    receipt has landed on a lane that gives a bot one.
+
+    The chip carries a measurement, never a verdict about the person. What
+    a run *does* with a long quiet — keep working, park, escalate — is
+    judgement at the seat, which is exactly why there is no mode here to
+    read (his call, 2026-09-09: no parsed presence modes anywhere).
+    """
+    facet = resources.get("correspondent") if isinstance(resources, dict) else None
+    facet = facet if isinstance(facet, dict) else {}
+    if facet.get("status") != "known":
+        return None
+    quiet = facet.get("quiet_seconds")
+    has_read = isinstance(facet.get("read"), dict) and facet.get("read")
+    long_quiet = quiet is not None and float(quiet) >= _CORRESPONDENT_QUIET_FLOOR_S
+    if not long_quiet and not has_read:
+        return None
+    summary = str(facet.get("summary") or "").strip()
+    return f"him: {summary}" if summary else None
 
 
 def _siblings_chip(resources: dict[str, Any]) -> str | None:
@@ -3009,6 +3057,11 @@ def _render_bar(
     siblings_chip = _siblings_chip(resources)
     if siblings_chip:
         segments.append(("siblings", siblings_chip))
+    # Beside the siblings count, because both answer "who else is in this
+    # room" — one for the runs, one for the person.
+    correspondent_chip = _correspondent_chip(resources)
+    if correspondent_chip:
+        segments.append(("correspondent", correspondent_chip))
     delivery_chip = _delivery_chip(outbound)
     if delivery_chip:
         segments.append(("delivery", delivery_chip))
