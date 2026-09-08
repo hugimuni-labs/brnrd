@@ -15,7 +15,16 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .. import ids, inbox as inbox_service, publish_scope, run_stop_requests, schemas, wake_requests
+from .. import (
+    ids,
+    inbox as inbox_service,
+    publish_scope,
+    run_release_requests,
+    run_respawn_requests,
+    run_stop_requests,
+    schemas,
+    wake_requests,
+)
 from ..activity_records import ACTIVITY_STALE_TTL
 from ..auth import Principal, get_db, require_daemon
 from ..models import Account, ActivityRecord, Daemon, DaemonRepo, Event, GitHubInstallation, GitHubInstalledRepo, Repo
@@ -739,6 +748,16 @@ def put_live_runs(payload: schemas.LiveRunsReport, principal: Principal = Depend
         db, principal.account_id, payload.consumed_run_stop_request_ids,
     )
     pending_stops = run_stop_requests.pending_for_account(db, principal.account_id)
+    # the-parked-seat-has-two-buttons: same ack-then-serve handshake, for a
+    # held seat's release and respawn-on-another-core.
+    run_release_requests.mark_consumed(
+        db, principal.account_id, payload.consumed_run_release_request_ids,
+    )
+    pending_releases = run_release_requests.pending_for_account(db, principal.account_id)
+    run_respawn_requests.mark_consumed(
+        db, principal.account_id, payload.consumed_run_respawn_request_ids,
+    )
+    pending_respawns = run_respawn_requests.pending_for_account(db, principal.account_id)
     return schemas.LiveRunsOut(
         runs=runs,
         live_runs_updated_at=now,
@@ -746,6 +765,14 @@ def put_live_runs(payload: schemas.LiveRunsReport, principal: Principal = Depend
         pending_run_stop_requests=[
             schemas.RunStopRequestOut(**run_stop_requests.view(row))
             for row in pending_stops
+        ],
+        pending_run_release_requests=[
+            schemas.RunReleaseRequestOut(**run_release_requests.view(row))
+            for row in pending_releases
+        ],
+        pending_run_respawn_requests=[
+            schemas.RunRespawnRequestOut(**run_respawn_requests.view(row))
+            for row in pending_respawns
         ],
         # Say what was dropped (#685 ask 2, guard C). A row that silently
         # stops appearing and a daemon with nothing to report look identical

@@ -101,6 +101,23 @@ export interface LiveRun {
 	// it says only that: the run is still running until the daemon's next sync
 	// finalizes it as `stopped`.
 	stop_requested?: boolean;
+	// the-parked-seat-has-two-buttons: a held row's own status — `held` when
+	// this run is a parked resource hold, absent for an ordinary live/ad-hoc
+	// row (never overload `lifecycle`, which only ever describes a *live*
+	// process: starting|weaving|awaiting|closing has no member for "no
+	// process at all").
+	status?: string | null;
+	/** The parked seat's own hold record (`resource_hold.portal_projection`),
+	 *  present only alongside `status === 'held'`. Deliberately loose rather
+	 *  than exhaustively typed: the starvation-hold branch adds fields to
+	 *  this record (`starve_floor_pct`, `refill_floor_pct`,
+	 *  `binding_remaining_pct`) this page should render when present without
+	 *  needing a type change to see them. */
+	resource_hold?: ResourceHold | null;
+	/** Same "survive a reload" reasoning as `stop_requested`, for a held
+	 *  row's two affordances. */
+	release_requested?: boolean;
+	respawn_requested?: boolean;
 	// the-overlay-that-shows-the-room: where the work happens, published by
 	// the daemon (`cloud_publisher._room_payload` / `_edge_payload` /
 	// `_lifecycle_payload`) rather than guessed here. All absent on a
@@ -157,6 +174,28 @@ export interface LiveRun {
 	// `pickLane.ts::pickRows`) must skip a row with this true, or a dead run's
 	// stale data can win the pick forever.
 	daemon_stale?: boolean | null;
+}
+
+/** A parked seat's resource hold, as published (`resource_hold.portal_projection`
+ *  daemon-side — a thin passthrough, so this stays loose on purpose: extra
+ *  fields a newer daemon adds still arrive and can be rendered). */
+export interface ResourceHold {
+	reason: string | null;
+	provider: string | null;
+	detail?: string | null;
+	resume_condition: string | null;
+	reset_deadline?: number | null;
+	armed_at: string | null;
+	released: boolean;
+	released_at?: string | null;
+	released_by?: string | null;
+	// The starvation-hold branch's own fields (design-the-allowance.md's
+	// sibling work, same day) — optional because an ordinary quota-exhaustion
+	// hold never carries them. Render when present; never assume they exist.
+	starve_floor_pct?: number | null;
+	refill_floor_pct?: number | null;
+	binding_remaining_pct?: number | null;
+	[extra: string]: unknown;
 }
 
 /** One kb page a live run has committed. `url` absent when the daemon
@@ -468,6 +507,82 @@ export async function requestRunStop(
 		);
 	}
 	return ((await res.json()) as { stop_request: RunStopRequest }).stop_request;
+}
+
+/** A parked seat release (the-parked-seat-has-two-buttons). Same "not
+ * cancelable, one daemon sync away" shape as `RunStopRequest`. */
+export interface RunReleaseRequest {
+	request_id: string;
+	run_id: string;
+	requested_at: string | null;
+	status: string;
+}
+
+/** A parked seat respawn-on-another-core request. */
+export interface RunRespawnRequest {
+	request_id: string;
+	run_id: string;
+	shell: string | null;
+	core: string | null;
+	requested_at: string | null;
+	status: string;
+}
+
+/** Ask the daemon to release a held seat outright — ends it; the next
+ * message mints a new one. Only legal against a row whose own `status` is
+ * `held` (the server 409s otherwise, same "not a stop" boundary as
+ * `dashboard_run_release`). */
+export async function requestRunRelease(
+	runId: string,
+	fetchImpl: typeof fetch = fetch
+): Promise<RunReleaseRequest> {
+	const res = await fetchImpl(`/v1/dashboard/runs/${encodeURIComponent(runId)}/release`, {
+		method: 'POST',
+		credentials: 'include'
+	});
+	if (res.status === 401) {
+		throw new LiveRunsAuthError('not signed in');
+	}
+	if (!res.ok) {
+		throw new Error(
+			res.status === 404
+				? 'that run is no longer parked'
+				: res.status === 409
+					? 'that run is not a held seat'
+					: `release failed: ${res.status}`
+		);
+	}
+	return ((await res.json()) as { release_request: RunReleaseRequest }).release_request;
+}
+
+/** Ask the daemon to respawn a held seat on another core. `shell`/`core`
+ * omitted (or both blank) asks for the seat's own current runner. */
+export async function requestRunRespawn(
+	runId: string,
+	runner: { shell?: string; core?: string } = {},
+	fetchImpl: typeof fetch = fetch
+): Promise<RunRespawnRequest> {
+	const res = await fetchImpl(`/v1/dashboard/runs/${encodeURIComponent(runId)}/respawn`, {
+		method: 'POST',
+		credentials: 'include',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ shell: runner.shell ?? '', core: runner.core ?? '' })
+	});
+	if (res.status === 401) {
+		throw new LiveRunsAuthError('not signed in');
+	}
+	if (!res.ok) {
+		throw new Error(
+			res.status === 404
+				? 'that run is no longer parked'
+				: res.status === 409
+					? 'that run is not a held seat'
+					: res.status === 422
+						? 'that runner is not in this account’s catalog'
+						: `respawn failed: ${res.status}`
+		);
+	}
+	return ((await res.json()) as { respawn_request: RunRespawnRequest }).respawn_request;
 }
 
 /** Heartbeat freshness → lifecycle temperature. A heartbeat lands roughly

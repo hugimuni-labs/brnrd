@@ -31,9 +31,12 @@ from .. import (
     gitops,
     presence,
     protocol,
+    resource_hold,
     run_ledger,
     run_progress,
     runner_quota,
+    run_release_request,
+    run_respawn_request,
     run_stop_request,
     schedule as schedule_mod,
     usage_samples,
@@ -2234,7 +2237,67 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
                 "portals": _portals_payload(source_brr_dir, manifest) if manifest else None,
                 })
             )
+        # the-parked-seat-has-two-buttons: a held seat has no process, so it
+        # never appears in `presence.list_active` above — it is published
+        # here, one row per active resource hold under this repo, so the
+        # dashboard can offer release/respawn on the same live-runs surface
+        # rather than a held seat simply vanishing the moment its process
+        # ends. Deferred import: `daemon` imports this module's package
+        # (`gates`) for dispatch, so importing it at module scope here would
+        # cycle — the same reason `_dispatch_run_stops` below defers it.
+        from ..daemon import _held_runs_for_repo
+
+        seen_run_ids = {str(row.get("run_id") or row.get("id") or "") for row in out}
+        for held in _held_runs_for_repo(source_brr_dir / "runs"):
+            if held.id in seen_run_ids:
+                continue
+            out.append(_bounded_live_run(_held_run_row(held)))
     return out
+
+
+def _held_run_row(held: Run) -> dict[str, Any]:
+    """One held seat's live-runs row: identity + its resource-hold projection.
+
+    Deliberately sparser than a live row — most of `LiveRunIn`'s fields
+    (`phase`, `card_text`, `edge`, `crossings`, `portals`, …) describe a
+    process that is currently running; a held seat has none. What it does
+    carry: enough identity to render and act on (`id`/`run_id`/`repo_label`,
+    the runner it was on) and `resource_hold` — the one payload this row
+    exists to deliver (see `resource_hold.portal_projection`, a thin
+    passthrough that also carries the starvation-hold's own extra fields
+    when the parallel branch that adds them is in play).
+    """
+    meta = held.meta or {}
+    return {
+        "id": held.id,
+        "kind": "resident",
+        "stream": "",
+        "label": "",
+        "name": str(meta.get("name") or "")[:60],
+        "run_id": held.id,
+        "repo_label": str(meta.get("repo_label") or ""),
+        "started_at": None,
+        "last_seen": None,
+        "parent_run_id": str(meta.get("parent_run_id") or "") or None,
+        "is_subspawn": bool(meta.get("is_subspawn")),
+        "runner": _runner_payload(meta),
+        "phase": None,
+        "card_text": None,
+        "course": None,
+        "card_updated_at": None,
+        "relics_counts": None,
+        "relics_kb_pages": None,
+        **_mood_payload({}),
+        "topics": [],
+        "lifecycle": None,
+        "await_until": None,
+        "room": None,
+        "edge": None,
+        "crossings": [],
+        "portals": None,
+        "status": "held",
+        "resource_hold": resource_hold.portal_projection(meta.get("resource_hold")),
+    }
 
 
 def _mood_payload(entry: Mapping[str, Any]) -> dict[str, Any]:
@@ -2395,6 +2458,73 @@ def _dispatch_run_stops(
         print(f"[brnrd:cloud] stop {run_id} ({stage}) by account owner")
 
 
+def _held_run_in_repos(brr_dir: Path, run_id: str) -> tuple[Path, "Run"] | None:
+    """Find one active held run by id, across every repo this account serves.
+
+    A held seat has no ``_run_controls`` entry (`_find_run_control`'s
+    registry is process-memory, keyed to a live subprocess) — the search
+    has to walk disk. Reuses `presence.account_dirs`, the exact directory
+    set `_live_runs_snapshot` published held rows from in the first place,
+    rather than a second, independently-resolved account context that
+    could disagree with it. Returns ``(runs_dir, held)`` so a caller has
+    both the directory to save back into and the record itself.
+    """
+    from ..daemon import _held_runs_for_repo
+
+    run_id = str(run_id or "").strip()
+    if not run_id:
+        return None
+    for source_brr_dir in presence.account_dirs(brr_dir):
+        runs_dir = source_brr_dir / "runs"
+        for held in _held_runs_for_repo(runs_dir):
+            if held.id == run_id:
+                return runs_dir, held
+    return None
+
+
+def _dispatch_run_releases(brr_dir: Path, inbox_dir: Path | None, requests: list) -> None:
+    """Apply user-issued releases served on the live-runs publish.
+
+    Routing only, same posture as `_dispatch_run_stops` above: locate the
+    held run and hand it to `daemon._apply_run_release`, which owns what
+    "release" actually does (end the seat, undefer what it had
+    accumulated).
+    """
+    from ..daemon import _apply_run_release
+
+    for request in requests:
+        run_id = request["run_id"]
+        found = _held_run_in_repos(brr_dir, run_id)
+        if found is None:
+            run_release_request.record_consumed(brr_dir, request["request_id"])
+            print(f"[brnrd:cloud] release {run_id}: no held run, nothing to release")
+            continue
+        runs_dir, held = found
+        _apply_run_release(runs_dir, inbox_dir, held)
+        run_release_request.record_consumed(brr_dir, request["request_id"])
+        print(f"[brnrd:cloud] release {run_id} by account owner")
+
+
+def _dispatch_run_respawns(brr_dir: Path, inbox_dir: Path | None, requests: list) -> None:
+    """Apply user-issued respawn-on-another-core requests, same routing shape."""
+    from ..daemon import _apply_run_respawn
+
+    for request in requests:
+        run_id = request["run_id"]
+        found = _held_run_in_repos(brr_dir, run_id)
+        if found is None:
+            run_respawn_request.record_consumed(brr_dir, request["request_id"])
+            print(f"[brnrd:cloud] respawn {run_id}: no held run, nothing to respawn")
+            continue
+        runs_dir, held = found
+        _apply_run_respawn(
+            runs_dir, inbox_dir, held,
+            shell=str(request.get("shell") or ""), core=str(request.get("core") or ""),
+        )
+        run_respawn_request.record_consumed(brr_dir, request["request_id"])
+        print(f"[brnrd:cloud] respawn {run_id} by account owner")
+
+
 def _report_live_runs_losses(body: Any) -> None:
     """Print what the live-runs publish lost, if anything (#685 guard C).
 
@@ -2432,6 +2562,10 @@ def _publish_live_runs(brr_dir: Path, inbox_dir: Path | None, state: dict, respo
     # tick, no extra request — the same piggyback economics as #328's
     # wake requests on the catalog publish.
     acked = run_stop_request.consumed_ids(brr_dir)
+    # the-parked-seat-has-two-buttons: same ack-then-serve piggyback, for a
+    # held seat's release / respawn-on-another-core.
+    acked_releases = run_release_request.consumed_ids(brr_dir)
+    acked_respawns = run_respawn_request.consumed_ids(brr_dir)
     try:
         body = _context().request(
             state["brnrd_url"],
@@ -2450,6 +2584,8 @@ def _publish_live_runs(brr_dir: Path, inbox_dir: Path | None, state: dict, respo
                 # see the block above `_dispatch_run_stops`.)
                 "daemon_mood": _daemon_mood_payload(brr_dir),
                 "consumed_run_stop_request_ids": acked,
+                "consumed_run_release_request_ids": acked_releases,
+                "consumed_run_respawn_request_ids": acked_respawns,
             },
             timeout=10,
         )
@@ -2468,6 +2604,20 @@ def _publish_live_runs(brr_dir: Path, inbox_dir: Path | None, state: dict, respo
     )
     if pending:
         _dispatch_run_stops(brr_dir, inbox_dir, pending, responses_dir)
+    run_release_request.clear_consumed(brr_dir, acked_releases)
+    served_releases = body.get("pending_run_release_requests") if isinstance(body, dict) else None
+    pending_releases = run_release_request.unhandled(
+        brr_dir, served_releases if isinstance(served_releases, list) else [],
+    )
+    if pending_releases:
+        _dispatch_run_releases(brr_dir, inbox_dir, pending_releases)
+    run_respawn_request.clear_consumed(brr_dir, acked_respawns)
+    served_respawns = body.get("pending_run_respawn_requests") if isinstance(body, dict) else None
+    pending_respawns = run_respawn_request.unhandled(
+        brr_dir, served_respawns if isinstance(served_respawns, list) else [],
+    )
+    if pending_respawns:
+        _dispatch_run_respawns(brr_dir, inbox_dir, pending_respawns)
 
 
 def _github_repo_label(label: str, repo_root: Path) -> str | None:
