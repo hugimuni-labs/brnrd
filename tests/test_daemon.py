@@ -13395,6 +13395,100 @@ def test_dispatch_auth_health_marks_and_success_clears_same_domain(tmp_path):
     assert not runner_auth_health.is_auth_failed(tmp_path, failed)
 
 
+def test_first_live_boundary_clears_the_auth_mark_before_the_attempt_exits(
+    tmp_path, monkeypatch,
+):
+    """A stale auth-error mark clears on this attempt's first proof of
+    auth (a live tool boundary), not only at the attempt's own exit.
+
+    Driven through the *real* caller the fix lives in, the same way
+    #1379's poison-outbox test is: ``_invoke_with_heartbeat``'s
+    boundary-flush poll firing the real ``_emit_flush`` closure
+    ``_run_worker`` built, which calls the real
+    ``runner_auth_health.clear_success``. Without the fix this domain's
+    mark would still read failed at the snapshot point — it only clears
+    post-return, in ``_record_runner_auth_health``, well after this
+    "runner" has finished "working".
+
+    Pre-marks two domains so the fix's scope is provable both ways: the
+    run's own domain (``codex-local``) clears, and an unrelated sibling
+    domain (``claude-local``) is untouched by it.
+    """
+    from brr import runner_auth_health, runner_select
+
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-first-boundary")
+    _stub_env_isolated(monkeypatch, tmp_path)
+
+    codex_profile = runner_select.RunnerProfile(
+        name="codex", profile="codex", shell="codex", quota_source="codex-local",
+    )
+    claude_profile = runner_select.RunnerProfile(
+        name="claude", profile="claude", shell="claude", quota_source="claude-local",
+    )
+    runner_auth_health.record_auth_error(tmp_path, codex_profile)
+    runner_auth_health.record_auth_error(tmp_path, claude_profile)
+    assert runner_auth_health.is_auth_failed(tmp_path, codex_profile)
+    assert runner_auth_health.is_auth_failed(tmp_path, claude_profile)
+
+    monkeypatch.setattr(
+        daemon.runner, "resolve_runner_profile",
+        lambda _root, _overrides=None: codex_profile,
+    )
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts,
+        "build_daemon_prompt",
+        lambda task, eid, rp, root, **kw: "PROMPT",
+    )
+    base_env = envs.get_env("worktree")
+
+    snapshot: dict = {}
+
+    def fake_invoke(_self, ctx, runner_name, invocation, cfg=None, *, trace=False):
+        outbox_dir = Path(ctx.outbox_host)
+        outbox_dir.mkdir(parents=True, exist_ok=True)
+        (outbox_dir / ".flush").write_text("tok-first-boundary\n", encoding="utf-8")
+        # > 1 `_FLUSH_POLL_INTERVAL` (1.0s) tick, so the real poll loop in
+        # `_invoke_with_heartbeat` observes the flush signal and fires the
+        # real `_emit_flush` while this "runner" is still "alive" — this
+        # attempt has not exited, let alone returned, at the snapshot below.
+        time.sleep(1.3)
+        snapshot["codex_failed_during_run"] = runner_auth_health.is_auth_failed(
+            tmp_path, codex_profile,
+        )
+        snapshot["claude_failed_during_run"] = runner_auth_health.is_auth_failed(
+            tmp_path, claude_profile,
+        )
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("ok\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation,
+            runner_name=runner_name,
+            command=["mock"],
+            stdout="ok\n",
+            stderr="",
+            returncode=0,
+            trace_dir=None,
+            artifacts=[],
+        )
+
+    monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+    task = daemon._run_worker(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+
+    assert task.status == "done"
+    assert snapshot["codex_failed_during_run"] is False, (
+        "the run's own domain must clear on its first live boundary, "
+        "mid-attempt — not only after the attempt returns"
+    )
+    assert snapshot["claude_failed_during_run"] is True, (
+        "a sibling domain this attempt never touched must stay marked"
+    )
+
+
 def _capture_ctx(tmp_path):
     """The scaffold the `_capture_control_files` tests share."""
     repo = tmp_path / "repo"

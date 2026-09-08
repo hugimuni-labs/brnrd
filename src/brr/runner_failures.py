@@ -61,6 +61,14 @@ _AUTH_PATTERNS = (
     r"\bnot authenticated\b",
     r"\blogin required\b",
     r"\bauth(?:entication)? failed\b",
+    # claude CLI's own wording for an expired OAuth session ("Failed to
+    # authenticate: OAuth session expired and could not be refreshed",
+    # run-260908-1929-qzje) — neither phrase matched `auth(?:entication)?
+    # failed\b` (word order is reversed) nor any other pattern here, so a
+    # genuine auth death fell through to RUNNER_ERROR and never marked the
+    # domain.
+    r"\bfailed to authenticate\b",
+    r"\boauth session expired\b",
     r"\binvalid api key\b",
     r"\bapi key\b.*\binvalid\b",
     r"\b401\b",
