@@ -16,6 +16,8 @@ which branch to publish.
 
 from __future__ import annotations
 
+import sys
+
 import json
 import os
 import re
@@ -26,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, Any
 
-from .. import __version__, branching, gitops, runner, transcript, worktree
+from .. import __version__, account, branching, gitops, runner, transcript, worktree
 from ..run import Run
 
 
@@ -214,6 +216,19 @@ class WorktreeEnv(HostEnv):
         else:
             run_root, run_branch_name = worktree.create(
                 repo_root, task.id, base_ref=base,
+            )
+        # The orphan guard (#1852): the checkout just made must resolve the
+        # same home as the checkout it was cut from, or the run boots with
+        # no account knowledge, no dominion and the security config
+        # unresolved — silently, as "no kb is wired up" in its own kernel.
+        # Measured here, at the seam that makes the shape, for every shape.
+        orphan = account.home_parity(repo_root, run_root)
+        if orphan:
+            task.meta["home_parity"] = orphan
+            print(
+                f"[brnrd] WARNING run {task.id} would boot as an orphan of its "
+                f"account — {orphan}",
+                file=sys.stderr,
             )
         # When the event named a target branch, switch the worktree HEAD
         # there before the agent starts so it commits on the right branch

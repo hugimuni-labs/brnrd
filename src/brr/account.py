@@ -694,6 +694,34 @@ def _connected_account_id(repo_root: Path) -> str | None:
     return _reverse_lookup_account_id(candidates, resolved_host)
 
 
+def home_parity(parent_root: Path, child_root: Path) -> str | None:
+    """Does a child checkout resolve the *same* home as its parent?
+
+    ``None`` when it does; otherwise one line naming the divergence. The
+    spawn-time guard for the orphan strand (#1852): every host-env strand
+    once resolved a ``project`` home from its ``git clone --shared`` and
+    booted with no account knowledge, no dominion and the security config
+    fail-open — and nothing said so until the strand itself wrote "told no
+    kb wired" in a report. Measured live, at the seam that makes the
+    child, so the next checkout shape nobody listed fails loud.
+    """
+    from . import config as conf
+
+    try:
+        parent = resolve_context(parent_root, conf.load_config(parent_root), create=False)
+        child = resolve_context(child_root, conf.load_config(child_root), create=False)
+    except Exception as exc:  # noqa: BLE001 — a guard reports, never raises
+        return f"home resolution failed: {exc}"
+    if child.kind != parent.kind:
+        return (
+            f"child resolves a {child.kind!r} home, parent {parent.kind!r} "
+            f"({child.home_root} vs {parent.home_root})"
+        )
+    if child.home_root != parent.home_root:
+        return f"child home {child.home_root} ≠ parent home {parent.home_root}"
+    return None
+
+
 def _reverse_lookup_account_id(candidates: list[Path], target: Path) -> str | None:
     """Return the account id whose registry lists *target* as a repo path."""
 
