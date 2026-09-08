@@ -5277,7 +5277,7 @@ def _run_worker(
             )
             return task
 
-        hold_spec = _maybe_arm_resource_hold_on_failure(last_failure, task=task)
+        hold_spec = _maybe_arm_resource_hold_on_failure(last_failure, task=task, cfg=cfg)
         if hold_spec is not None:
             # A confident, structured quota exhaustion pre-empts the
             # ordinary retry/fallback/give-up decision below entirely —
@@ -7002,6 +7002,15 @@ def _write_live_portal_state(
         # bucket for a *different* Core doesn't bind this run's pacing (#561).
         binding_model = str((runner_meta or {}).get("model") or "").strip() or None
         pacing_status = _quota_pacing_status(cfg or {}, run_levels, model=binding_model)
+        # The starvation park: same reading the pacing facet just proved,
+        # judged against `seat.starve_floor_pct` — stamps the hold the
+        # worker tail finalizes, resolves an idle await with `park`.
+        await_state, starvation_facet_input = _starvation_facet(
+            task, await_state, cfg, pacing_status, run_levels,
+        )
+        if isinstance(pacing_status, dict) and starvation_facet_input is not None:
+            pacing_status = dict(pacing_status)
+            pacing_status["starvation"] = starvation_facet_input
         coexisting_snapshot: list[dict[str, object]] | None = None
         if brr_dir is not None:
             try:
@@ -9959,6 +9968,136 @@ def _seat_park_on_hold_cost_enabled(cfg: "dict | None") -> bool:
     return _truthy(raw)
 
 
+#: Config key: the binding remaining-percent (session, week, or the seat's
+#: own Core bucket — the lowest) below which a *seat* parks for starvation
+#: (2026-09-08, his ask: "a user cannot wake you up when there is <2% of
+#: either quota available"). The hold it arms (`quota_starved`,
+#: `resume: refill`) is the one a correspondent message does not release.
+SEAT_STARVE_FLOOR_PCT_KEY = "seat.starve_floor_pct"
+_SEAT_STARVE_FLOOR_PCT_DEFAULT = 2.0
+#: Config key: the binding remaining-percent at or above which a starved
+#: seat thaws — read live by the daemon (a window reset, or a manual reset
+#: it can see). Hysteresis on purpose: the floor that parks is not the
+#: floor that wakes, or a seat would flap on the edge of a window.
+SEAT_REFILL_FLOOR_PCT_KEY = "seat.refill_floor_pct"
+_SEAT_REFILL_FLOOR_PCT_DEFAULT = 10.0
+
+
+def _seat_starve_floor_pct(cfg: "dict | None") -> float:
+    try:
+        return float(
+            (cfg or {}).get(SEAT_STARVE_FLOOR_PCT_KEY, _SEAT_STARVE_FLOOR_PCT_DEFAULT)
+        )
+    except (TypeError, ValueError):
+        return _SEAT_STARVE_FLOOR_PCT_DEFAULT
+
+
+def _seat_refill_floor_pct(cfg: "dict | None") -> float:
+    try:
+        value = float(
+            (cfg or {}).get(SEAT_REFILL_FLOOR_PCT_KEY, _SEAT_REFILL_FLOOR_PCT_DEFAULT)
+        )
+    except (TypeError, ValueError):
+        value = _SEAT_REFILL_FLOOR_PCT_DEFAULT
+    # The thaw floor never sits below the park floor — that would be a
+    # hold nothing but a manual release could end.
+    return max(value, _seat_starve_floor_pct(cfg))
+
+
+def _starvation_hold_spec(
+    task: Run, cfg: "dict | None", pct: float, *, detail: str,
+    reset_deadline: "float | None" = None,
+) -> dict[str, object]:
+    """The `pending_resource_hold` shape for a starved seat."""
+    native_session_id = _native_session_id_for(task)
+    return {
+        "reason": resource_hold.REASON_QUOTA_STARVED,
+        "provider": _resource_hold_provider_for_runner(
+            task.meta.get("runner_shell") or task.meta.get("runner_name")
+        ),
+        "detail": detail,
+        "native_session_id": native_session_id,
+        "resume_kind": (
+            resource_hold.RESUME_NATIVE if native_session_id
+            else resource_hold.RESUME_UNSUPPORTED
+        ),
+        "resume_condition": resource_hold.RESUME_REFILL,
+        "reset_deadline": reset_deadline,
+        "quota": {
+            "binding_remaining_pct": pct,
+            "starve_floor_pct": _seat_starve_floor_pct(cfg),
+            "refill_floor_pct": _seat_refill_floor_pct(cfg),
+            "runner": str(task.meta.get("runner_name") or ""),
+            "model": str(task.meta.get("runner_core") or ""),
+        },
+    }
+
+
+def _starvation_facet(
+    task: Run,
+    await_state: "dict | None",
+    cfg: "dict | None",
+    pacing_status: "dict[str, object] | None",
+    levels: "dict[str, object] | None",
+) -> tuple["dict | None", "dict[str, object] | None"]:
+    """The starvation park, judged at every boundary from the live reading.
+
+    Seat only (a strand's allowance contract owns its own lifecycle). Below
+    ``seat.starve_floor_pct`` the daemon stamps a ``quota_starved`` /
+    ``resume: refill`` hold for the worker tail to finalize when this turn
+    ends — and resolves an armed ``await`` with outcome ``park`` so an
+    idle seat ends its turn now rather than at the next full boundary.
+    The reading itself is remembered on ``task.meta["quota_binding_pct"]``
+    so a Shell that dies of the same starvation a moment later is
+    recognised (`_maybe_arm_resource_hold_on_failure`) instead of being
+    retried or rerouted.
+
+    Returns ``(possibly-updated await_state, starvation_facet | None)``;
+    the facet is ``None`` only when no reading could be proven.
+    """
+    if not isinstance(pacing_status, dict):
+        return await_state, None
+    pct = pacing_status.get("binding_remaining_pct")
+    if not isinstance(pct, (int, float)):
+        return await_state, None
+    pct = float(pct)
+    task.meta["quota_binding_pct"] = pct
+    floor = _seat_starve_floor_pct(cfg)
+    facet: dict[str, object] = {
+        "binding_remaining_pct": pct,
+        "starve_floor_pct": floor,
+        "refill_floor_pct": _seat_refill_floor_pct(cfg),
+        "starved": pct < floor,
+    }
+    if pct >= floor:
+        return await_state, facet
+    if task.meta.get("spawn_parent_run_id") or task.meta.get("pending_resource_hold"):
+        return await_state, facet
+    reset_deadline = runner_quota.binding_quota_reset_epoch(levels)
+    task.meta["pending_resource_hold"] = _starvation_hold_spec(
+        task, cfg, pct,
+        detail=(
+            f"binding quota at {pct:.1f}% — below the {floor:g}% starvation "
+            f"floor; parking until a measured refill"
+        ),
+        reset_deadline=reset_deadline,
+    )
+    facet["parking"] = True
+    armed = task.meta.get("await")
+    if isinstance(armed, dict):
+        armed["resolved"] = True
+        armed["outcome"] = "park"
+        armed["which"] = None
+    if isinstance(await_state, dict) and await_state.get("armed"):
+        updated = dict(await_state)
+        updated["resolved"] = True
+        updated["outcome"] = "park"
+        updated["which"] = None
+        updated["starved"] = pct
+        return updated, facet
+    return await_state, facet
+
+
 def _seat_park_after_boot_ratio(cfg: "dict | None") -> float:
     try:
         return float(
@@ -10746,6 +10885,23 @@ def _drain_outbox(
                     "resume_condition": resume_condition,
                     "reset_deadline": reset_deadline,
                 }
+                if resume_condition == resource_hold.RESUME_REFILL:
+                    # The resident chose the starvation park itself
+                    # ("for however long you choose, if you choose to
+                    # hibernate because of the starvation"): the record
+                    # carries the floors and the bucket the thaw reads,
+                    # exactly as the daemon-armed one does.
+                    last_pct = task.meta.get("quota_binding_pct")
+                    cfg = conf.load_config(repo_root) if repo_root else {}
+                    task.meta["pending_resource_hold"]["quota"] = {
+                        "binding_remaining_pct": (
+                            float(last_pct) if isinstance(last_pct, (int, float)) else None
+                        ),
+                        "starve_floor_pct": _seat_starve_floor_pct(cfg),
+                        "refill_floor_pct": _seat_refill_floor_pct(cfg),
+                        "runner": str(task.meta.get("runner_name") or ""),
+                        "model": str(task.meta.get("runner_core") or ""),
+                    }
                 promoted += 1
                 if stats is not None:
                     stats["hold"] = stats.get("hold", 0) + 1
@@ -16764,6 +16920,7 @@ def _maybe_arm_resource_hold_on_failure(
     last_failure: dict | None,
     *,
     task: Run,
+    cfg: "dict | None" = None,
 ) -> dict[str, object] | None:
     """A confident, structured quota exhaustion → a hold spec, or ``None``.
 
@@ -16789,6 +16946,34 @@ def _maybe_arm_resource_hold_on_failure(
     """
     if not last_failure or task.meta.get("spawn_parent_run_id"):
         return None
+    # A starvation already judged at a boundary this turn (the Shell died
+    # of it before the turn could end cleanly) — the hold is the one the
+    # heartbeat stamped, not a retry and not a reroute.
+    stamped = task.meta.pop("pending_resource_hold", None)
+    if isinstance(stamped, dict) and (
+        stamped.get("reason") == resource_hold.REASON_QUOTA_STARVED
+    ):
+        return stamped
+    # A quota-shaped failure on a seat whose last proven reading was
+    # already under the starvation floor: the reading is the evidence the
+    # regex alone lacks. Any Shell — the Astra seat of 2026-09-08 died of
+    # a usage limit the runner discarded while the boundary had read the
+    # number an hour earlier.
+    last_pct = task.meta.get("quota_binding_pct")
+    if (
+        isinstance(last_pct, (int, float))
+        and last_failure.get("failure_kind") == runner_failures.QUOTA_EXHAUSTED
+    ):
+        floor = _seat_starve_floor_pct(cfg)
+        if float(last_pct) < floor:
+            return _starvation_hold_spec(
+                task, cfg, float(last_pct),
+                detail=(
+                    f"the Shell failed on a usage limit with the binding "
+                    f"quota last read at {float(last_pct):.1f}% (floor {floor:g}%) "
+                    "— parking until a measured refill"
+                ),
+            )
     codex_task_error = last_failure.get("codex_task_error")
     if not isinstance(codex_task_error, dict):
         return None
@@ -16847,6 +17032,8 @@ def _hold_body(meta: dict[str, object]) -> str:
         lines = ["Parking this seat on its strands — nothing spends while they work."]
     elif meta.get("resume_condition") == resource_hold.RESUME_ANY:
         lines = ["Parked — the seat is yours; nothing spends until something reaches it."]
+    elif meta.get("resume_condition") == resource_hold.RESUME_REFILL:
+        lines = [f"Hibernating — {provider} quota is starved."]
     else:
         lines = [f"Parking this conversation — {provider} hit {reason}."]
     detail = meta.get("detail")
@@ -16861,6 +17048,8 @@ def _hold_body(meta: dict[str, object]) -> str:
         lines.append(
             "A message, a strand reporting back, or a scheduled wake resumes it."
         )
+    elif meta.get("resume_condition") == resource_hold.RESUME_REFILL:
+        lines.append(_refill_terms(meta))
     elif (
         meta.get("resume_condition") == resource_hold.RESUME_RESET
         and meta.get("reset_deadline") is not None
@@ -16878,6 +17067,31 @@ def _hold_body(meta: dict[str, object]) -> str:
             "message when ready to resume."
         )
     return "\n\n".join(lines)
+
+
+def _refill_terms(meta: dict[str, object]) -> str:
+    """The one paragraph a starved seat owes its correspondent: the reading,
+    what thaws it, and the two ways out that do not wait."""
+    quota = meta.get("quota") if isinstance(meta.get("quota"), dict) else {}
+    floor = quota.get("refill_floor_pct")
+    floor_text = f"{float(floor):g}%" if isinstance(floor, (int, float)) else "the refill floor"
+    parts = [
+        "Messages sent now are kept, not answered — this seat wakes only on a "
+        f"measured refill (binding quota back at or above {floor_text}: a window "
+        "reset, or a manual reset the daemon can see)."
+    ]
+    deadline = meta.get("reset_deadline")
+    if deadline is not None:
+        try:
+            when = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(deadline)))
+            parts.append(f"Next measured window reset: {when}.")
+        except (TypeError, ValueError, OverflowError):
+            pass
+    parts.append(
+        "To not wait: release the seat, or respawn it on another Core, from "
+        "the dashboard."
+    )
+    return " ".join(parts)
 
 
 def _write_terminal_hold_response(
@@ -17147,9 +17361,19 @@ def _release_reset_holds_due(
         inbox_dir = _repo_inbox(root)
         for held in _held_runs_for_repo(runs_dir):
             meta = held.meta.get("resource_hold") or {}
-            if not resource_hold.reset_condition_met(meta):
+            released_by = "reset"
+            if resource_hold.refuses_correspondent(meta):
+                # The starvation park thaws on a *measured* refill, read
+                # fresh each sweep — a window reset, or a manual reset
+                # the provider now reports. The arm-time deadline is
+                # informative only; the number decides.
+                pct = _held_run_binding_pct(root, held, refresh=True)
+                if not resource_hold.refill_condition_met(meta, pct):
+                    continue
+                released_by = "refill"
+            elif not resource_hold.reset_condition_met(meta):
                 continue
-            released_meta = resource_hold.mark_released(meta, by="reset")
+            released_meta = resource_hold.mark_released(meta, by=released_by)
             held.meta["resource_hold"] = released_meta
             held.save(runs_dir)
             for accumulated_id in released_meta.get("accumulated_event_ids") or []:
@@ -17160,7 +17384,7 @@ def _release_reset_holds_due(
                 )
             released += 1
             print(
-                f"[brnrd] resource hold released by measured reset: "
+                f"[brnrd] resource hold released by measured {released_by}: "
                 f"{held.id} ({released_meta.get('provider')})"
             )
     return released
@@ -17390,11 +17614,92 @@ def _handle_resource_held_events(
                 # one's.
                 survivors.append(target)
                 continue
+            if resource_hold.refuses_correspondent(hold_meta):
+                # The starvation park: the operator's word does not
+                # outrank an empty bucket. Read the provider again —
+                # a message is the cheapest moment to check for a
+                # refill — and either thaw on the measured number or
+                # keep the message and answer it with the reading.
+                pct = _held_run_binding_pct(repo_root, held, refresh=True)
+                if resource_hold.refill_condition_met(hold_meta, pct):
+                    _apply_resource_hold_resume(
+                        runs_dir, target.inbox_dir, held, target.event, by="refill",
+                    )
+                    print(
+                        f"[brnrd] starved seat thawed on a correspondent "
+                        f"message — binding quota {pct:.1f}%: {held.id}"
+                    )
+                    survivors.append(target)
+                    continue
+                _refuse_starved_wake(runs_dir, held, target, pct)
+                continue
             _apply_resource_hold_resume(
                 runs_dir, target.inbox_dir, held, target.event,
             )
             survivors.append(target)
     return survivors
+
+
+def _held_run_binding_pct(
+    repo_root: Path, held: Run, *, refresh: bool,
+) -> float | None:
+    """The binding remaining-percent for a held seat's own runner and Core.
+
+    Reads the same bucket that starved it (``resource_hold.quota.runner`` /
+    ``.model``, falling back to the run's own runner meta) through
+    :func:`_collect_levels`; ``None`` when nothing numeric can be proven.
+    """
+    meta = held.meta.get("resource_hold") or {}
+    quota = meta.get("quota") if isinstance(meta.get("quota"), dict) else {}
+    runner_name = (
+        str(quota.get("runner") or held.meta.get("runner_name") or "").strip() or None
+    )
+    model = str(quota.get("model") or held.meta.get("runner_core") or "").strip() or None
+    brr_dir = gitops.shared_brr_dir(repo_root)
+    try:
+        levels, _slots = _collect_levels(
+            runner_name, None, repo_root, refresh=refresh, shared_dir=brr_dir,
+        )
+    except Exception as exc:  # noqa: BLE001 — a probe failure is "unproven", never a thaw
+        print(f"[brnrd] starved seat {held.id}: quota read failed ({exc})")
+        return None
+    return runner_quota.binding_quota_remaining_pct(levels, model=model)
+
+
+def _refuse_starved_wake(
+    runs_dir: Path, held: Run, target: "_DispatchTarget", pct: float | None,
+) -> None:
+    """Keep a correspondent message for the thaw and tell them why now.
+
+    The message is accumulated exactly like a system event (deferred, on
+    the hold's ``accumulated_event_ids``) so the refill dispatches it; the
+    partial response rides the gate's ``processing`` lane, so the event
+    stays open for the reply the resumed seat will write.
+    """
+    event_id = str(target.event.get("id") or "")
+    meta = held.meta.get("resource_hold") or {}
+    try:
+        protocol.update_event_meta(
+            target.event,
+            defer_until=_format_utc_after(_HOLD_DEFER_SECONDS),
+            deferred_by_run=held.id,
+            defer_reason="resource_hold",
+        )
+    except OSError:
+        return
+    _accumulate_held_event(runs_dir, held, event_id)
+    reading = f"{pct:.1f}%" if isinstance(pct, (int, float)) else "unreadable"
+    body = (
+        f"Still hibernating — binding quota reads {reading}. "
+        + _refill_terms(meta)
+    )
+    try:
+        protocol.write_partial(target.responses_dir, event_id, body)
+    except OSError as exc:
+        print(f"[brnrd] starved seat {held.id}: could not answer {event_id}: {exc}")
+    print(
+        f"[brnrd] starved seat {held.id} kept {event_id}: binding quota {reading}"
+    )
 
 
 def _set_event_status_if_present(event: dict, status: str) -> bool:
