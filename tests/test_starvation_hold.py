@@ -183,7 +183,7 @@ class TestRefusedWake:
         assert hold["released"] is False
         assert "evt-human" in hold["accumulated_event_ids"]
         partial = _partials(target.responses_dir, "evt-human")
-        assert "1.7%" in partial and "release the seat, or respawn" in partial
+        assert "1.7%" in partial and "`respawn <core>`" in partial and "`force`" in partial
 
     def test_refilled_thaws_on_the_message_itself(self, tmp_path, monkeypatch):
         held = self._starved_run(tmp_path)
@@ -240,3 +240,99 @@ def test_hold_verb_parses_refill():
     from brr import hold_verb
     spec, err = hold_verb.parse_hold({"hold": "true", "resume": "refill"})
     assert err is None and spec["resume_condition"] == resource_hold.RESUME_REFILL
+
+
+# ── the words a person can say to a starved seat ─────────────────────
+
+
+class TestBounceVerbs:
+    def test_parse(self):
+        assert daemon._bounce_verb("force") == ("force", "")
+        assert daemon._bounce_verb("  FORCE ") == ("force", "")
+        assert daemon._bounce_verb("force it") == (None, "")
+        assert daemon._bounce_verb("please force") == (None, "")
+        assert daemon._bounce_verb("stop") == ("stop", "")
+        assert daemon._bounce_verb("release") == ("stop", "")
+        assert daemon._bounce_verb("wait") == ("wait", "")
+        assert daemon._bounce_verb("respawn claude-opus") == ("respawn", "claude-opus")
+        assert daemon._bounce_verb("respawn claude opus") == ("respawn", "claude opus")
+        assert daemon._bounce_verb("hello?") == (None, "")
+        assert daemon._bounce_verb("") == (None, "")
+
+    def test_force_wakes_the_seat_under_the_floor_and_the_facet_honours_it(
+        self, tmp_path, monkeypatch,
+    ):
+        held = TestRefusedWake._starved_run(TestRefusedWake(), tmp_path)
+        target = TestRefusedWake._target(TestRefusedWake(), tmp_path, "evt-force")
+        (target.inbox_dir / "evt-force.md").write_text(
+            "---\nid: evt-force\nsource: telegram\nstatus: pending\n---\nforce\n",
+            encoding="utf-8",
+        )
+        target.event["body"] = "force"
+        monkeypatch.setattr(daemon, "_held_run_binding_pct", lambda *a, **k: 0.8)
+
+        survivors = daemon._handle_resource_held_events([target], None)
+
+        assert survivors == [target]
+        assert target.event["starvation_forced"] is True
+        persisted = Run.from_file(tmp_path / ".brr" / "runs" / held.id / "run.md")
+        assert persisted.meta["resource_hold"]["released_by"] == "force"
+        # the resumed seat's boundary reads under the floor and does not re-park
+        task = Run.from_event(dict(target.event, id="evt-force"))
+        _state, facet = daemon._starvation_facet(
+            task, None, {}, {"binding_remaining_pct": 0.8}, None,
+        )
+        assert facet["forced"] is True and facet["starved"] is True
+        assert "pending_resource_hold" not in task.meta
+
+    def test_stop_ends_the_seat_and_answers(self, tmp_path, monkeypatch):
+        held = TestRefusedWake._starved_run(TestRefusedWake(), tmp_path)
+        target = TestRefusedWake._target(TestRefusedWake(), tmp_path, "evt-stop")
+        target.event["body"] = "stop"
+        monkeypatch.setattr(daemon, "_held_run_binding_pct", lambda *a, **k: 0.8)
+        replies: list[str] = []
+        monkeypatch.setattr(daemon, "_write_control_response", lambda t, b: replies.append(b))
+
+        assert daemon._handle_resource_held_events([target], None) == []
+        persisted = Run.from_file(tmp_path / ".brr" / "runs" / held.id / "run.md")
+        assert persisted.meta["resource_hold"]["released_by"] == "dashboard"
+        assert persisted.status == "done"
+        assert replies and "Stopped" in replies[0]
+
+    def test_respawn_on_a_catalog_core_mints_the_handoff(self, tmp_path, monkeypatch):
+        held = TestRefusedWake._starved_run(TestRefusedWake(), tmp_path)
+        target = TestRefusedWake._target(TestRefusedWake(), tmp_path, "evt-respawn")
+        target.event["body"] = "respawn claude-opus"
+        monkeypatch.setattr(daemon, "_held_run_binding_pct", lambda *a, **k: 0.8)
+        monkeypatch.setattr(
+            daemon.runner, "available_runner_catalog",
+            lambda *a, **k: [{"name": "claude-opus", "shell": "claude", "core": "opus"}],
+        )
+        replies: list[str] = []
+        monkeypatch.setattr(daemon, "_write_control_response", lambda t, b: replies.append(b))
+
+        assert daemon._handle_resource_held_events([target], None) == []
+        persisted = Run.from_file(tmp_path / ".brr" / "runs" / held.id / "run.md")
+        assert persisted.meta["resource_hold"]["released_by"] == "respawn"
+        minted = [
+            p for p in target.inbox_dir.glob("*.md")
+            if "Respawned from the dashboard on claude / opus" in p.read_text()
+        ]
+        assert len(minted) == 1
+        assert replies and "Respawning on claude / opus" in replies[0]
+
+    def test_respawn_on_an_unknown_core_refuses_with_the_names(self, tmp_path, monkeypatch):
+        TestRefusedWake._starved_run(TestRefusedWake(), tmp_path)
+        target = TestRefusedWake._target(TestRefusedWake(), tmp_path, "evt-bad")
+        target.event["body"] = "respawn gpt-9"
+        monkeypatch.setattr(daemon, "_held_run_binding_pct", lambda *a, **k: 0.8)
+        monkeypatch.setattr(
+            daemon.runner, "available_runner_catalog",
+            lambda *a, **k: [{"name": "claude-opus", "shell": "claude", "core": "opus"}],
+        )
+        replies: list[str] = []
+        monkeypatch.setattr(daemon, "_write_control_response", lambda t, b: replies.append(b))
+        assert daemon._handle_resource_held_events([target], None) == []
+        assert replies and "claude-opus" in replies[0] and "nothing respawned" in replies[0]
+        persisted = Run.from_file(tmp_path / ".brr" / "runs" / "run-starved" / "run.md")
+        assert persisted.meta["resource_hold"]["released"] is False
