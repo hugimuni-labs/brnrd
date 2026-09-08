@@ -13827,12 +13827,27 @@ class TestHoldRatioFacet:
         assert state["resolved"] is False
         assert "pending_resource_hold" not in task.meta
 
-    def test_parks_past_the_threshold(self, tmp_path):
+    def test_default_ratio_holds_a_night_not_forty_minutes(self, tmp_path):
+        """2026-09-08: await is the resting state — a blocked wait is free and
+        keeps the context; a park is a cold boot later. 1.4 boots of idle
+        hold must *not* park under the default any more."""
         outbox = _boot_cost_outbox(tmp_path, 1_000_000)
         task = _hold_seat(hold_idle_baseline_spent=0)
         task.meta["await"] = {"resolved": False}
         state, hold = daemon._hold_ratio_facet(
             task, _armed_state(), {}, outbox,
+            {"spent": 1_400_000, "scope": "resident"},
+        )
+        assert hold == {"ratio": pytest.approx(1.4), "known": True}
+        assert state.get("outcome") != "park"
+        assert "pending_resource_hold" not in task.meta
+
+    def test_parks_past_the_threshold(self, tmp_path):
+        outbox = _boot_cost_outbox(tmp_path, 1_000_000)
+        task = _hold_seat(hold_idle_baseline_spent=0)
+        task.meta["await"] = {"resolved": False}
+        state, hold = daemon._hold_ratio_facet(
+            task, _armed_state(), {"seat.park_after_boot_ratio": 1.0}, outbox,
             {"spent": 1_400_000, "scope": "resident"},
         )
         assert hold == {"ratio": pytest.approx(1.4), "known": True}
@@ -13879,7 +13894,7 @@ class TestHoldRatioFacet:
             hold_correspondent_at=time.time() - (31 * 60),
         )
         state, _hold = daemon._hold_ratio_facet(
-            task, _armed_state(), {}, outbox,
+            task, _armed_state(), {"seat.park_after_boot_ratio": 1.0}, outbox,
             {"spent": 1_400_000, "scope": "resident"},
         )
         assert state["resolved"] is True
@@ -13970,16 +13985,16 @@ def test_write_live_portal_state_parks_an_idling_await_past_boot_cost(
     assert task.meta.get("hold_idle_baseline_spent") == 0
     assert task.meta["await"]["resolved"] is False
 
-    # Second heartbeat: 1.4x the boot cost's worth of new spend.
-    spent["value"] = 1_400_000
+    # Second heartbeat: 13x the boot cost's worth of new spend (default ratio 12).
+    spent["value"] = 13_000_000
     path = daemon._write_live_portal_state(
         outbox_dir, inbox_dir, "evt-1", task, phase="running",
     )
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["await"]["outcome"] == "park"
-    assert payload["await"]["ratio"] == pytest.approx(1.4)
+    assert payload["await"]["ratio"] == pytest.approx(13.0)
     assert payload["resources"]["quota"]["hold"] == {
-        "ratio": pytest.approx(1.4), "known": True,
+        "ratio": pytest.approx(13.0), "known": True,
     }
 
 
