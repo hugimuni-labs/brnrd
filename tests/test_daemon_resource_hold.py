@@ -619,3 +619,128 @@ class TestHandleResourceHeldEvents:
         released = daemon._release_reset_holds_due(None, tmp_path)
 
         assert released == 0
+
+
+class TestApplyRunReleaseAndRespawn:
+    """the-parked-seat-has-two-buttons — the dashboard-triggered release and
+    respawn-on-another-core, one level below the HTTP/publish plumbing.
+
+    Same fixture shape as ``TestHeldRunsForRepo``/``TestHandleResourceHeldEvents``
+    above: a held run manifest in a tmp runs dir, an accumulated event in a
+    tmp inbox dir.
+    """
+
+    def _held_run(self, runs_dir: Path, run_id: str, **hold_overrides) -> Run:
+        meta = resource_hold.build(
+            reason=resource_hold.REASON_QUOTA_EXHAUSTED, provider="claude",
+            conversation_key="cloud:telegram:1:",
+        )
+        meta.update(hold_overrides)
+        task = Run(
+            id=run_id, event_id="evt-lead", body="carry me forward",
+            status=resource_hold.RUN_STATUS, source="telegram",
+            conversation_key="cloud:telegram:1:",
+        )
+        task.meta["resource_hold"] = meta
+        task.meta["repo_label"] = "Gurio/brr"
+        task.save(runs_dir)
+        return task
+
+    def _accumulated_event(self, inbox_dir: Path, eid: str) -> None:
+        inbox_dir.mkdir(parents=True, exist_ok=True)
+        (inbox_dir / f"{eid}.md").write_text(
+            f"---\nid: {eid}\nsource: telegram\nstatus: pending\n"
+            f"defer_until: 9999999999\ndeferred_by_run: run-held-1\n---\nsome message\n",
+            encoding="utf-8",
+        )
+
+    def test_release_ends_the_run_and_undefers_accumulated_events(self, tmp_path):
+        runs_dir = tmp_path / ".brr" / "runs"
+        inbox_dir = tmp_path / ".brr" / "inbox"
+        held = self._held_run(runs_dir, "run-held-1", accumulated_event_ids=["evt-side-1"])
+        self._accumulated_event(inbox_dir, "evt-side-1")
+
+        daemon._apply_run_release(runs_dir, inbox_dir, held)
+
+        persisted = Run.from_file(runs_dir / held.id / "run.md")
+        assert persisted.status == "done"
+        assert persisted.meta["resource_hold"]["released"] is True
+        assert persisted.meta["resource_hold"]["released_by"] == "dashboard"
+        reread = protocol._read_event(inbox_dir / "evt-side-1.md")
+        assert reread.get("defer_until") is None
+        # A release never fabricates a native-session resume hint — this is
+        # a cold start, deliberately, so it must not carry one forward.
+        assert reread.get("resume_native_session_id") is None
+
+    def test_release_is_a_no_op_on_an_already_released_hold(self, tmp_path):
+        runs_dir = tmp_path / ".brr" / "runs"
+        held = self._held_run(runs_dir, "run-held-2")
+        held.meta["resource_hold"] = resource_hold.mark_released(
+            held.meta["resource_hold"], by="operator",
+        )
+        held.save(runs_dir)
+
+        daemon._apply_run_release(runs_dir, None, held)
+
+        persisted = Run.from_file(runs_dir / held.id / "run.md")
+        # Still the first releaser's attribution — a second release must not
+        # overwrite an already-consumed hold's receipt.
+        assert persisted.meta["resource_hold"]["released_by"] == "operator"
+        assert persisted.status == resource_hold.RUN_STATUS
+
+    def test_respawn_releases_the_hold_and_mints_an_event_on_the_same_thread(self, tmp_path):
+        runs_dir = tmp_path / ".brr" / "runs"
+        inbox_dir = tmp_path / ".brr" / "inbox"
+        held = self._held_run(runs_dir, "run-held-3", accumulated_event_ids=["evt-side-2"])
+        self._accumulated_event(inbox_dir, "evt-side-2")
+
+        new_path = daemon._apply_run_respawn(
+            runs_dir, inbox_dir, held, shell="claude", core="opus",
+        )
+
+        assert new_path is not None
+        persisted = Run.from_file(runs_dir / held.id / "run.md")
+        assert persisted.meta["resource_hold"]["released"] is True
+        assert persisted.meta["resource_hold"]["released_by"] == "respawn"
+        # The seat itself does not resume — only a fresh event does.
+        assert persisted.status == resource_hold.RUN_STATUS
+
+        minted = protocol._read_event(new_path)
+        assert minted["respawned_from_event"] == "evt-lead"
+        assert minted["respawned_by_run"] == "run-held-3"
+        assert minted["shell"] == "claude"
+        assert minted["core"] == "opus"
+        assert minted["conversation_key"] == "cloud:telegram:1:"
+        assert minted["body"] == "carry me forward"
+
+        reread = protocol._read_event(inbox_dir / "evt-side-2.md")
+        assert reread.get("defer_until") is None
+
+    def test_respawn_returns_none_without_an_inbox(self, tmp_path):
+        runs_dir = tmp_path / ".brr" / "runs"
+        held = self._held_run(runs_dir, "run-held-4")
+
+        assert daemon._apply_run_respawn(runs_dir, None, held) is None
+        persisted = Run.from_file(runs_dir / held.id / "run.md")
+        # Nothing touched — the hold is still active, not silently consumed
+        # by a call that could not actually mint a successor.
+        assert persisted.meta["resource_hold"]["released"] is False
+
+
+class TestFindHeldRun:
+    def test_finds_by_id(self, tmp_path):
+        runs_dir = tmp_path / ".brr" / "runs"
+        meta = resource_hold.build(reason="x", provider="codex")
+        task = Run(id="run-x", event_id="evt-1", body="", status=resource_hold.RUN_STATUS)
+        task.meta["resource_hold"] = meta
+        task.save(runs_dir)
+
+        found = daemon._find_held_run(runs_dir, "run-x")
+        assert found is not None
+        assert found.id == "run-x"
+
+    def test_none_when_absent_or_blank(self, tmp_path):
+        runs_dir = tmp_path / ".brr" / "runs"
+        runs_dir.mkdir(parents=True)
+        assert daemon._find_held_run(runs_dir, "run-nope") is None
+        assert daemon._find_held_run(runs_dir, "") is None

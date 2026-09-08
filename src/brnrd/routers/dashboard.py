@@ -1621,7 +1621,12 @@ async def dashboard_run_respawn(run_id: str, request: Request, db: Session = Dep
     repos = _repos(db, account_id)
     if shell or core:
         profiles = _runners_views(db, repos)["profiles"]
-        matches = any(
+        # An empty catalog means no daemon has published one yet — refusing
+        # every respawn until then would strand the one case a fresh pairing
+        # most needs this affordance for. Only refuse a *known* catalog that
+        # genuinely doesn't offer the pair; the daemon's own respawn path
+        # (`_queue_respawn_request`) is no stricter than this either.
+        matches = not profiles or any(
             (not shell or str(p.get("shell") or "") == shell)
             and (not core or str(p.get("core") or "") == core)
             for p in profiles

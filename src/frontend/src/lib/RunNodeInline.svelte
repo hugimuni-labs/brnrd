@@ -15,11 +15,15 @@
 		edgeLine,
 		lifecycleNotice,
 		moodFace,
+		requestRunRelease,
+		requestRunRespawn,
 		requestRunStop,
 		roomLine,
 		runCourse,
 		type HeartbeatLevel,
-		type LiveRun
+		type LiveRun,
+		type RunReleaseRequest,
+		type RunRespawnRequest
 	} from './liveRuns';
 	import { actColor } from './residentField';
 	import type { RunWarpAttachment } from './warpGraph';
@@ -73,6 +77,13 @@
 		 * affordance that must be readable to be safe.
 		 */
 		stopRun?: (runId: string) => Promise<unknown>;
+		/** Same test/injection seam as `stopRun`, for a held seat's two
+		 * controls (the-parked-seat-has-two-buttons). */
+		releaseRun?: (runId: string) => Promise<RunReleaseRequest>;
+		respawnRun?: (
+			runId: string,
+			runner: { shell?: string; core?: string }
+		) => Promise<RunRespawnRequest>;
 		/**
 		 * The run's card-grammar identity (name, spawn chip, repo · kind,
 		 * runner, age, status word) — the LiveRuns card's visual language,
@@ -114,6 +125,8 @@
 		vitals = [],
 		liveLevel = null,
 		stopRun = requestRunStop,
+		releaseRun = requestRunRelease,
+		respawnRun = requestRunRespawn,
 		identity = null,
 		crossingIndex = new Map(),
 		topicFaces = new Map(),
@@ -151,6 +164,62 @@
 						: 'stop request failed';
 		} finally {
 			stopPending = false;
+		}
+	}
+
+	// A held seat (the-parked-seat-has-two-buttons): no process, so `liveLevel`
+	// is never set for it — the parked block below gates on the row's own
+	// `status` instead, same as the daemon publishes it.
+	let held = $derived(liveRun?.status === 'held');
+	let hold = $derived(liveRun?.resource_hold ?? null);
+
+	let confirmingRelease = $state(false);
+	let releasePending = $state(false);
+	let released = $state(false);
+	let releaseNote = $state<string | null>(null);
+
+	async function commitRelease() {
+		confirmingRelease = false;
+		releasePending = true;
+		try {
+			await releaseRun(runId);
+			released = true;
+			releaseNote = 'releasing — ends on the next daemon sync; the next message starts fresh';
+		} catch (e) {
+			releaseNote =
+				e instanceof LiveRunsAuthError
+					? 'session expired — sign in again, then retry'
+					: e instanceof Error
+						? e.message
+						: 'release request failed';
+		} finally {
+			releasePending = false;
+		}
+	}
+
+	let respawning = $state(false);
+	let respawnShell = $state('');
+	let respawnCore = $state('');
+	let respawnPending = $state(false);
+	let respawned = $state(false);
+	let respawnNote = $state<string | null>(null);
+
+	async function commitRespawn() {
+		respawnPending = true;
+		try {
+			await respawnRun(runId, { shell: respawnShell.trim(), core: respawnCore.trim() });
+			respawned = true;
+			respawning = false;
+			respawnNote = 'respawning — a fresh run starts on the next daemon sync, same thread';
+		} catch (e) {
+			respawnNote =
+				e instanceof LiveRunsAuthError
+					? 'session expired — sign in again, then retry'
+					: e instanceof Error
+						? e.message
+						: 'respawn request failed';
+		} finally {
+			respawnPending = false;
 		}
 	}
 
@@ -546,7 +615,109 @@
 						/>
 					</div>
 				{/if}
-				{#if liveLevel}
+				{#if held}
+					<!-- A parked seat: no process, so it renders past the same
+					     border-t rule the stop block uses below, but with its own
+					     two controls (release, respawn on another core) — a stop
+					     button has nothing to stop here, and offering one would
+					     lie about what a held row is (the-parked-seat-has-two-buttons). -->
+					<div class="flex flex-col gap-2 border-t border-stone-800/70 pt-3 font-mono text-[10px]">
+						<div class="flex flex-wrap items-center gap-2">
+							<span class="tracking-wide text-amber-400 uppercase">parked</span>
+							{#if hold?.reason}
+								<span class="text-ink-quiet">{hold.reason.replaceAll('_', ' ')}</span>
+							{/if}
+							{#if hold?.provider}
+								<span class="text-ink-mute">· {hold.provider}</span>
+							{/if}
+							{#if hold?.resume_condition}
+								<span class="text-ink-mute">· wakes on: {hold.resume_condition}</span>
+							{/if}
+						</div>
+						{#if hold?.binding_remaining_pct != null || hold?.starve_floor_pct != null || hold?.refill_floor_pct != null}
+							<!-- The starvation-hold's own fields, when the parallel branch
+							     that adds them is in play — rendered because present, never
+							     required (design decision, see the report). -->
+							<div class="text-ink-mute">
+								{#if hold?.binding_remaining_pct != null}
+									<span>quota remaining: {hold.binding_remaining_pct}%</span>
+								{/if}
+								{#if hold?.refill_floor_pct != null}
+									<span>· refills past {hold.refill_floor_pct}%</span>
+								{/if}
+							</div>
+						{/if}
+						<div class="flex flex-wrap items-center gap-2">
+							{#if released}
+								<span class="tracking-wide text-amber-500 uppercase">releasing</span>
+							{:else if confirmingRelease}
+								<button
+									type="button"
+									class="cursor-pointer border border-red-900/60 bg-stone-950/70 px-2 py-1 tracking-wide text-red-300 uppercase hover:bg-red-950/40 disabled:cursor-wait disabled:opacity-50"
+									disabled={releasePending}
+									onclick={commitRelease}>{releasePending ? 'releasing' : 'confirm release'}</button
+								>
+								<button
+									type="button"
+									class="cursor-pointer border border-stone-800 px-2 py-1 tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+									disabled={releasePending}
+									onclick={() => (confirmingRelease = false)}>cancel</button
+								>
+								<span class="text-ink-mute">ends the seat; the next message starts fresh</span>
+							{:else}
+								<button
+									type="button"
+									class="cursor-pointer border border-stone-800 px-2 py-1 tracking-wide text-ink-quiet uppercase hover:text-red-300"
+									onclick={() => (confirmingRelease = true)}>release</button
+								>
+							{/if}
+							{#if respawned}
+								<span class="tracking-wide text-amber-500 uppercase">respawning</span>
+							{:else if respawning}
+								<input
+									type="text"
+									placeholder="shell (blank = current)"
+									class="w-36 border border-stone-800 bg-stone-950/70 px-2 py-1 text-ink-quiet"
+									bind:value={respawnShell}
+									disabled={respawnPending}
+								/>
+								<input
+									type="text"
+									placeholder="core (blank = current)"
+									class="w-36 border border-stone-800 bg-stone-950/70 px-2 py-1 text-ink-quiet"
+									bind:value={respawnCore}
+									disabled={respawnPending}
+								/>
+								<button
+									type="button"
+									class="cursor-pointer border border-amber-900/60 bg-stone-950/70 px-2 py-1 tracking-wide text-amber-300 uppercase hover:bg-amber-950/40 disabled:cursor-wait disabled:opacity-50"
+									disabled={respawnPending}
+									onclick={commitRespawn}
+									>{respawnPending ? 'respawning' : 'confirm respawn'}</button
+								>
+								<button
+									type="button"
+									class="cursor-pointer border border-stone-800 px-2 py-1 tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+									disabled={respawnPending}
+									onclick={() => (respawning = false)}>cancel</button
+								>
+							{:else}
+								<button
+									type="button"
+									class="cursor-pointer border border-stone-800 px-2 py-1 tracking-wide text-ink-quiet uppercase hover:text-amber-300"
+									onclick={() => (respawning = true)}>respawn on…</button
+								>
+							{/if}
+						</div>
+						{#if releaseNote}
+							<span class="text-amber-400/90">{releaseNote}</span>
+						{/if}
+						{#if respawnNote}
+							<span class="text-amber-400/90">{respawnNote}</span>
+						{/if}
+					</div>
+				{/if}
+				{#if liveLevel && !held}
 					<!-- The stop, at the bottom of the expand: destructive, so it sits
 					     past everything a reader came here to read, and only exists
 					     while the run is actually live. A closed run has nothing to
