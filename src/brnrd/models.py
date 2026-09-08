@@ -454,22 +454,11 @@ class ChannelRoute(Base):
     # re-fetches this later, so a chat later renamed keeps the name it had
     # when it paired.
     chat_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    # Presence, the relay half (design-the-continuous-seat.md §Presence).
-    # `/afk <until>` · `/hush` · `/urgent-only` · `/back` write here — the
-    # "thread/conversation store the relay already keeps" the design points
-    # at, since a route already keys one row per paired chat/topic. `None`
-    # = normal delivery (`/back`'s resting state, and every route that has
-    # never seen a presence command). `presence_mode` never carries the
-    # human-facing hint text, only the bare mode word (`afk`/`hush`/
-    # `urgent-only`), so a future renderer decides its own copy.
-    presence_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    presence_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    presence_set_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Read status where the platform has it (WhatsApp delivered/read status
     # webhooks; Telegram never — bots receive no read receipts at all). The
     # *last* read receipt for a message the relay sent on this thread —
     # `None` until the first one lands. Deliberately on the same thread
-    # record as presence above: design-the-continuous-seat.md §Presence
+    # record: design-the-continuous-seat.md §Presence
     # names both as facets of the one "correspondent" picture, and this
     # route row is the only per-thread store the relay keeps.
     last_read_message_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
