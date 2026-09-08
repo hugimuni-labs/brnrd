@@ -398,6 +398,30 @@ def test_wake_request_claim_refuses_a_profile_missing_from_the_published_rack():
         assert db.get(RunnerWakeRequest, wake["request_id"]).status == "pending"
 
 
+@pytest.mark.parametrize("current_profiles,applied", [
+    (["codex"], True),
+    (["claude-fable"], False),
+    ([], False),
+])
+def test_claim_uses_dispatch_catalog_when_published_rack_disagrees(current_profiles, applied):
+    client = _client()
+    _, daemon_headers, _repo_id = _repo_and_daemon(client)
+    wake = _park(client, daemon_headers)
+    # Publish the opposite observation, as when discovery changes between
+    # the background publish tick and the user's message.
+    catalog = dict(_CATALOG_PAYLOAD)
+    if applied:
+        catalog["profiles"] = [p for p in catalog["profiles"] if p["name"] != "codex"]
+    client.put("/v1/daemons/runners", json=catalog, headers=daemon_headers)
+    response = client.post(_CLAIM, json={
+        "request_id": wake["request_id"], "source": "telegram",
+        "known_profiles": current_profiles,
+    }, headers=daemon_headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["apply"] is applied
+    assert response.json()["status"] == ("consumed" if applied else "pending")
+
+
 def test_wake_request_claim_judges_the_tap_against_when_the_event_existed():
     """#577's one surviving rule. The mirror lags its source by up to a
     publish tick, so a tap minted seconds ago may not be on the daemon's
@@ -686,3 +710,23 @@ def test_sticky_release_without_a_sticky_is_a_named_404():
     ).status_code == 200
     _login_cookie(client)
     assert client.post("/v1/dashboard/runners/sticky-release").status_code == 404
+
+
+def test_claim_ignores_current_catalog_when_publication_is_denied():
+    from brnrd.models import Repo
+
+    client = _client()
+    _, daemon_headers, repo_id = _repo_and_daemon(client)
+    wake = _park(client, daemon_headers)
+    with client.app.state.SessionLocal() as db:
+        repo = db.get(Repo, repo_id)
+        repo.publish_layers = "none"
+        db.commit()
+    response = client.post(_CLAIM, json={
+        "request_id": wake["request_id"], "source": "telegram",
+        "known_profiles": [],
+    }, headers=daemon_headers)
+    assert response.status_code == 200, response.text
+    # The existing published catalog has codex. Denied incoming names
+    # cannot override it, and inbound runner selection still works.
+    assert response.json()["apply"] is True

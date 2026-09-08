@@ -216,9 +216,13 @@ def _claim_stub(captured: dict, result: dict):
 
 def test_claim_posts_the_whole_question_once(tmp_path, monkeypatch):
     from brr.gates import cloud
+    from brr import runner
 
     brr_dir = _brr(tmp_path)
     captured: dict = {}
+    monkeypatch.setattr(runner, "available_runner_catalog", lambda root: [
+        {"name": "codex-newly-discovered"}, {"name": "claude-fable"},
+    ])
     monkeypatch.setattr(cloud, "_load_state", lambda _d: {"token": "t", "brnrd_url": "https://x"})
     monkeypatch.setattr(
         cloud, "_request",
@@ -245,6 +249,7 @@ def test_claim_posts_the_whole_question_once(tmp_path, monkeypatch):
         "event_id": "evt-1",
         "source": "telegram",
         "event_created": "2026-07-25T10:00:00+00:00",
+        "known_profiles": ["codex-newly-discovered", "claude-fable"],
     }
 
 
@@ -364,3 +369,19 @@ def test_release_sticky_drops_only_records_claimed_at_or_before_the_ask(tmp_path
     _bind(brr_dir)
     assert wake_request.release_sticky(brr_dir, "garbage") is False
     assert wake_request.sticky_record(brr_dir) is not None
+
+
+def test_claim_with_runners_publication_disabled_omits_catalog(tmp_path, monkeypatch):
+    from brr import runner
+    from brr.gates import cloud, cloud_publisher
+
+    brr_dir = _brr(tmp_path)
+    captured = {}
+    monkeypatch.setattr(cloud, "_load_state", lambda _d: {"token": "t", "brnrd_url": "https://x"})
+    monkeypatch.setattr(cloud_publisher, "_publish_config", lambda _d: {"publish.layers": "none"})
+    monkeypatch.setattr(cloud, "_request", _claim_stub(captured, {"apply": True}))
+    def forbidden(_root):
+        raise AssertionError("a denied catalog must not be collected")
+    monkeypatch.setattr(runner, "available_runner_catalog", forbidden)
+    assert cloud.claim_wake_request(brr_dir, request_id="w1")["apply"]
+    assert "known_profiles" not in captured["json"]

@@ -666,9 +666,9 @@ def claim_wake_request(payload: schemas.WakeRequestClaim, principal: Principal =
 
     Same daemon-principal auth as `put_runners` above, and for the same
     reason: the rack this claim is judged against is the one *this* daemon
-    published. The availability rung asks whether the tapped profile is
-    still in that rack — the rack the dashboard offered the tapper — rather
-    than whatever a particular execution root can probe today.
+    published. Current daemons send the same catalog's names with the claim,
+    so an older published snapshot cannot veto newly discovered profiles.
+    Older daemons continue to use their last published rack.
     """
     daemon = _current_daemon(db, principal)
     if daemon is None:
@@ -684,7 +684,13 @@ def claim_wake_request(payload: schemas.WakeRequestClaim, principal: Principal =
         source=payload.source,
         event_created=payload.event_created,
         daemon_now=payload.daemon_now,
-        known_profiles=_published_profile_names(daemon),
+        known_profiles=(
+            set(payload.known_profiles)
+            if payload.known_profiles is not None and publish_scope.lane_permitted(
+                db, repo_id=principal.repo_id, lane="runners",
+            )
+            else _published_profile_names(daemon)
+        ),
     )
     return schemas.WakeRequestClaimOut(**result)
 
