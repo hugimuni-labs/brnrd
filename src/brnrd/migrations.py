@@ -308,9 +308,6 @@ def _migrate_channel_routes(conn: Connection) -> None:
     # WhatsApp read receipt for a message this thread's route sent. NULL on
     # every existing row — no route has ever seen a presence command or a
     # read receipt before this migration runs.
-    conn.execute(text("ALTER TABLE channel_routes ADD COLUMN IF NOT EXISTS presence_mode VARCHAR(32)"))
-    conn.execute(text("ALTER TABLE channel_routes ADD COLUMN IF NOT EXISTS presence_until TIMESTAMP"))
-    conn.execute(text("ALTER TABLE channel_routes ADD COLUMN IF NOT EXISTS presence_set_at TIMESTAMP"))
     conn.execute(text("ALTER TABLE channel_routes ADD COLUMN IF NOT EXISTS last_read_message_id VARCHAR(64)"))
     conn.execute(text("ALTER TABLE channel_routes ADD COLUMN IF NOT EXISTS last_read_at TIMESTAMP"))
 
