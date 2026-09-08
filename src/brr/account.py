@@ -663,15 +663,35 @@ def _connected_account_id(repo_root: Path) -> str | None:
     # linked worktrees git names *repo_root* itself, so the retry no-ops
     # there; it only does work when `repo_root` is genuinely linked.
     main_root = gitops.main_worktree_root(repo_root)
-    if main_root is None:
+    if main_root is not None:
+        try:
+            resolved_main = main_root.resolve()
+        except OSError:
+            resolved_main = main_root.absolute()
+        if resolved_main != resolved_repo:
+            found = _reverse_lookup_account_id(candidates, resolved_main)
+            if found is not None:
+                return found
+
+    # A `git clone --shared` strand (#746) is its *own* main worktree, so
+    # the retry above names the clone again and no-ops. The clone carries
+    # the host's path in its git dir; ask for that and retry once more.
+    # Without this a strand resolves a `project` home: no account
+    # knowledge (its wake read "no kb is wired up for this repo yet" on a
+    # repo with 200 pages, 2026-09-08), no dominion, and the security
+    # config looked for where nobody writes it — the same fail-open
+    # `test_security_config_resolves_the_same_from_a_linked_worktree`
+    # closed for linked worktrees.
+    host_root = gitops.clone_host_root(repo_root)
+    if host_root is None:
         return None
     try:
-        resolved_main = main_root.resolve()
+        resolved_host = host_root.resolve()
     except OSError:
-        resolved_main = main_root.absolute()
-    if resolved_main == resolved_repo:
+        resolved_host = host_root.absolute()
+    if resolved_host == resolved_repo:
         return None
-    return _reverse_lookup_account_id(candidates, resolved_main)
+    return _reverse_lookup_account_id(candidates, resolved_host)
 
 
 def _reverse_lookup_account_id(candidates: list[Path], target: Path) -> str | None:
