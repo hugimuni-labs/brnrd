@@ -15,13 +15,19 @@ Grammar, everything but the marker optional:
 
     hold: true
     reason: quota running low        # free text; default "resident_requested"
-    resume: operator | reset | strands | any   # default "operator"; strands =
+    resume: operator | reset | strands | any | refill   # default "operator"; strands =
                                       # wake when one of this run's own
                                       # children submits/completes/asks
                                       # (a correspondent message wakes any
                                       # hold); refused when no strand is live;
                                       # any = the seat's resting state: a
-                                      # message, an own strand, or a tick
+                                      # message, an own strand, or a tick;
+                                      # refill = the starvation park: only a
+                                      # measured quota refill (the binding
+                                      # bucket back above
+                                      # seat.refill_floor_pct) thaws it — a
+                                      # message while starved is kept and
+                                      # answered with the reading
     reset: 2026-09-12T00:00:00Z      # only meaningful with resume: reset —
                                       # an explicit deadline the resident
                                       # already has reason to believe (told
@@ -57,6 +63,8 @@ _RESUME_ALIASES = {
     "spawn": resource_hold.RESUME_STRANDS,
     "any": resource_hold.RESUME_ANY,
     "anything": resource_hold.RESUME_ANY,
+    "refill": resource_hold.RESUME_REFILL,
+    "quota_refill": resource_hold.RESUME_REFILL,
 }
 
 

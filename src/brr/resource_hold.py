@@ -75,9 +75,23 @@ REASON_RESIDENT_REQUESTED = "resident_requested"
 #: await is still armed, the moment the daemon's own heartbeat measures
 #: holding as the dearer of the two.
 REASON_HOLD_COSTLIER_THAN_BOOT = "hold_costlier_than_boot"
+#: The starvation park (2026-09-08, his ask: "let you park safely … until a
+#: refill, so that a user cannot wake you up when there is <2% of either
+#: quota available"). Armed when the seat's binding quota (session, week,
+#: or its own Core's bucket — whichever is lowest) reads below
+#: ``seat.starve_floor_pct``; released only by :data:`RESUME_REFILL`.
+REASON_QUOTA_STARVED = "quota_starved"
 
 RESUME_OPERATOR = "operator"
 RESUME_RESET = "reset"
+#: Released only by a *measured* refill: the daemon reads the provider's
+#: quota again and the binding bucket is back at or above
+#: ``seat.refill_floor_pct`` (a window reset, or a manual reset the daemon
+#: can see). The one condition a correspondent message does **not**
+#: release — a message arriving while starved is accumulated and answered
+#: with the reading; the user's ways out are a refill, or release/respawn
+#: on another Core from the dashboard.
+RESUME_REFILL = "refill"
 #: Released by one of this run's own strands reporting back — the hold a
 #: parent takes while its children are still working (2026-09-06: a seat
 #: closed on three live strands because the only park verb slept through
@@ -91,7 +105,9 @@ RESUME_STRANDS = "strands"
 #: own when a turn ends with nothing armed (``seat.park_on_turn_end``), so
 #: "the run ended" stops being a thing that happens to a user-woken seat.
 RESUME_ANY = "any"
-RESUME_CONDITIONS = frozenset({RESUME_OPERATOR, RESUME_RESET, RESUME_STRANDS, RESUME_ANY})
+RESUME_CONDITIONS = frozenset({
+    RESUME_OPERATOR, RESUME_RESET, RESUME_STRANDS, RESUME_ANY, RESUME_REFILL,
+})
 
 REASON_WAITING_ON_STRANDS = "waiting_on_strands"
 REASON_TURN_ENDED = "turn_ended"
@@ -129,8 +145,15 @@ def build(
     conversation_key: str = "",
     generation: int = 1,
     now: float | None = None,
+    quota: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """A fresh ``resource_hold`` record for ``Run.meta``.
+
+    *quota* rides only on a :data:`RESUME_REFILL` hold: the reading that
+    armed it (``binding_remaining_pct``), the two floors it was judged
+    against (``starve_floor_pct`` / ``refill_floor_pct``), and the
+    ``runner`` / ``model`` whose bucket binds — so the refill check reads
+    the same bucket that starved.
 
     ``resume_condition`` outside :data:`RESUME_CONDITIONS` is folded to
     :data:`RESUME_OPERATOR` — an unrecognised condition must degrade to the
@@ -139,8 +162,10 @@ def build(
     """
     if resume_condition not in RESUME_CONDITIONS:
         resume_condition = RESUME_OPERATOR
-    if resume_condition != RESUME_RESET:
+    if resume_condition not in (RESUME_RESET, RESUME_REFILL):
         reset_deadline = None
+    if resume_condition != RESUME_REFILL:
+        quota = None
     return {
         "reason": reason,
         "provider": provider,
@@ -156,6 +181,7 @@ def build(
         "released_at": None,
         "released_by": None,
         "accumulated_event_ids": [],
+        "quota": dict(quota) if quota else None,
     }
 
 
@@ -215,6 +241,48 @@ def reset_condition_met(meta: dict[str, Any] | None, *, now: float | None = None
         return False
     timestamp = time.time() if now is None else now
     return timestamp >= deadline
+
+
+def refill_floor_pct(meta: dict[str, Any] | None) -> float | None:
+    """The remaining-percent a :data:`RESUME_REFILL` hold thaws at, or ``None``."""
+    quota = (meta or {}).get("quota")
+    if not isinstance(quota, dict):
+        return None
+    try:
+        return float(quota.get("refill_floor_pct"))
+    except (TypeError, ValueError):
+        return None
+
+
+def refill_condition_met(
+    meta: dict[str, Any] | None, remaining_pct: float | None,
+) -> bool:
+    """Whether a fresh *remaining_pct* reading thaws a ``refill``-condition hold.
+
+    ``False`` for any other condition, for an inactive hold, for a reading
+    the daemon could not prove (``None`` — "no evidence of a refill" is not
+    a refill), and below the floor the record was armed with.
+    """
+    if not is_active(meta):
+        return False
+    if (meta or {}).get("resume_condition") != RESUME_REFILL:
+        return False
+    floor = refill_floor_pct(meta)
+    if floor is None or remaining_pct is None:
+        return False
+    try:
+        return float(remaining_pct) >= floor
+    except (TypeError, ValueError):
+        return False
+
+
+def refuses_correspondent(meta: dict[str, Any] | None) -> bool:
+    """Whether a correspondent message alone leaves this hold armed.
+
+    Only a :data:`RESUME_REFILL` hold — every other condition treats the
+    operator's word as the release that outranks the wait.
+    """
+    return is_active(meta) and (meta or {}).get("resume_condition") == RESUME_REFILL
 
 
 def schedule_event_releases(meta: dict[str, Any] | None, event: dict[str, Any] | None) -> bool:
