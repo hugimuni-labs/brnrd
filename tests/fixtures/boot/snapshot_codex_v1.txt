@@ -122,7 +122,7 @@ outcome ⇒ `portal-state.json` → `await`:
 `"event"` the daemon has something pending for you
 `"condition"` the optional `--file` path appeared · `which` names it · pending events outrank it deliberately — when both would fire, the correspondent is the answer
 `"timeout"` the deadline passed with nothing else firing — an open-ended wait has none
-`"park"` holding has cost more than a boot (design-the-seat-that-never-quits.md §machinery slice 3) — `hold_so_far` (this run's own weighted spend since the wait last had nothing pending) ÷ `spend.json → boot.weighted` ≥ `seat.park_after_boot_ratio` (config, default `12` — a night of idle boundaries, not forty minutes); rides its own `ratio` field. refused while a pending event exists (caught by `"event"` first), while a correspondent reached the seat within `seat.live_window_minutes` (config, default `30`), or while the run owns a live strand (`resume: strands`'s job) — never for a strand. `brnrd await` prints `parking — holding has cost N·boot; end the turn and the seat parks (anything addressed to it resumes it)`; ending the turn lands the park the daemon already does for `resume: any` (`_finalize_resource_hold`, unchanged since #1815/#1817). the ratio also rides the woven bar while armed: `hold N·boot`, or `hold ?·boot` before a boot cost has landed — never a guess
+`"park"` holding has cost more than a boot (design-the-seat-that-never-quits.md §machinery slice 3) — `hold_so_far` (this run's own weighted spend since the wait last had nothing pending) ÷ `spend.json → boot.weighted` ≥ `seat.park_after_boot_ratio` (config, default `12` — a night of idle boundaries, not forty minutes). **Opt-in, off by default** (`seat.park_on_hold_cost`, 2026-09-08): the process stays open until the user releases it or execution is forced to stop — quota, provider, process failure — never on a cost heuristic alone; the ratio still computes and rides the woven bar every heartbeat while armed (`hold N·boot`, or `hold ?·boot` before a boot cost has landed — never a guess), but nothing parks on it unless the opt-in is set. When it is: refused while a pending event exists (caught by `"event"` first), while a correspondent reached the seat within `seat.live_window_minutes` (config, default `30`), or while the run owns a live strand (`resume: strands`'s job) — never for a strand. `brnrd await` prints `parking — holding has cost N·boot; end the turn and the seat parks (anything addressed to it resumes it)`; ending the turn lands the park the daemon already does for `resume: any` (`_finalize_resource_hold`, unchanged since #1815/#1817).
 `"park"` also lands when the binding quota reads under `seat.starve_floor_pct` (config, default `2`) — the **starvation park**: the hold is `quota_starved` / `resume: refill`, and nothing but a measured refill (binding quota at or above `seat.refill_floor_pct`, default `10`, read live on the sweep and on every correspondent message) thaws it; a message while starved is accumulated and answered with the reading. the same reading rides `resources.quota.pacing.starvation` every boundary (`binding_remaining_pct`, both floors, `starved`). a resident may choose it: `hold: true` + `resume: refill`.
 
 a call reaching its own ceiling first ⇒ `{"outcome": "pending"}` · call again is the entire instruction · that ceiling ≠ a brnrd contract ≠ a number to reason about — what bounds one call is the Shell's per-tool-call cap (claude's Bash ends at 10 minutes; codex differs) and the CLI sits under it · the old 15s bound is gone with the argument that justified it — the only things that would want to interrupt this run are the very things that resolve the wait ⇒ a blocking call returns the moment one arrives
@@ -143,7 +143,7 @@ the mantel is bare — no pages beyond the README yet.
 
 ## Work surface
 
-No authored surface yet. Start at `surface/index.md`; pages placed under `surface/` are discovered by the next wake and dashboard.
+authored surface = ∅ · start at `surface/index.md` · pages under `surface/` ⇒ discovered by the next wake + dashboard
 
 ---
 ## Run Context Bundle
@@ -222,12 +222,12 @@ source manifest:
   ✓ Working register (weave.md)                                     product      contract     [bytes]  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Working register, worked example (register.md)                  product      contract     [bytes]  {PACKAGE_ROOT}/prompts/register.md  [mtime]
   ✓ Daemon mechanics (daemon-substrate.md)                          product      substrate    [bytes]  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
-  ✓ Portal verb grammar (`brnrd await` / `brnrd do`, docs portals)  product      substrate     10,912  {PACKAGE_ROOT}/docs/portals.md  [mtime]
+  ✓ Portal verb grammar (`brnrd await` / `brnrd do`, docs portals)  product      substrate     11,199  {PACKAGE_ROOT}/docs/portals.md  [mtime]
   ✓ Resident identity core                                          product      identity     [bytes]  {PACKAGE_ROOT}/prompts/identity-core.md  [mtime]
   · Stranded-memory warning (repo moved)                            daemon-live  health             0  computed
   · Dominion digest (self-inject)                                   resident     memory             0  computed
   ✓ The hearth (personal space, index-shaped)                       resident     hearth           352  computed
-  ✓ Discovered work surface                                         resident     surface          147  computed
+  ✓ Discovered work surface                                         resident     surface          140  computed
   · Stored runner policy (CS6)                                      resident     policy             0  computed
   · Task-matched pitfalls                                           resident     memory             0  computed
   · Knowledge sources (home+repo+docs)                              project      knowledge          0  computed
