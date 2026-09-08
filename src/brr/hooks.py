@@ -1344,6 +1344,21 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         klass=VITAL,
     ),
     _BarSegment(
+        "correspondent", "☏",
+        "the person on the other end (design-the-continuous-seat.md "
+        "§Presence): `correspondent: quiet 12m` — how long since they last "
+        "spoke, read off this run's own inbox, never a platform call — and "
+        "the mode they declared through the relay's chat commands "
+        "(`correspondent: afk until 09:00 · urgent-only`), plus a read "
+        "receipt where the platform gives a bot one (`read m4 21:58`; "
+        "Telegram never does). Silent while they are simply *here*: a "
+        "declared mode always renders, a bare quiet only past "
+        "`_CORRESPONDENT_QUIET_FLOOR_S`, because \"they answered a minute "
+        "ago\" is not news.",
+        # a reading of someone else; there is no act that turns it off.
+        klass=VITAL,
+    ),
+    _BarSegment(
         "delivery", "⇡",
         "delivery this run — current-thread replies + everything else "
         "(other threads, outbound messages) (`⇡2+3`). Renders only once "
@@ -1845,6 +1860,55 @@ def _hold_chip(resources: dict[str, Any]) -> str | None:
     if ratio is None:
         return "hold ?·boot"
     return f"hold {ratio:.1f}·boot"
+
+
+#: Below this, a quiet reading is not news — the correspondent answered
+#: moments ago and the chip would only be measuring the boundary interval.
+#: A *declared* mode ignores this floor entirely: `/hush` is a fact from the
+#: first second it is true.
+_CORRESPONDENT_QUIET_FLOOR_S = 300.0
+
+
+def _correspondent_chip(resources: dict[str, Any]) -> str | None:
+    """The ``correspondent: …`` chip, off ``resources["correspondent"]``.
+
+    ``None`` while the correspondent is present and recently heard from —
+    the common case for a live thread, and the one where this chip would be
+    a meter of nothing. It speaks when they declared a mode (`afk`, `hush`,
+    `urgent-only` — the modes that change what the run may send), when they
+    have been quiet long enough for the silence to mean something, or when
+    a read receipt has landed.
+    """
+    facet = resources.get("correspondent") if isinstance(resources, dict) else None
+    facet = facet if isinstance(facet, dict) else {}
+    if facet.get("status") != "known":
+        return None
+    mode = str(facet.get("mode") or "live").strip() or "live"
+    quiet = facet.get("quiet_seconds")
+    has_read = isinstance(facet.get("read"), dict) and facet.get("read")
+    long_quiet = quiet is not None and float(quiet) >= _CORRESPONDENT_QUIET_FLOOR_S
+    if mode == "live" and not long_quiet and not has_read:
+        return None
+    summary = str(facet.get("summary") or "").strip()
+    if not summary or summary == "live":
+        return None
+    return f"correspondent: {summary}"
+
+
+def _correspondent_hushed(resources: dict[str, Any]) -> str | None:
+    """The declared mode when it is one that asked for quiet, else ``None``.
+
+    ``quiet`` and ``urgent-only`` are the two that change what the detail
+    rows below the bar may cost the reader. ``afk`` deliberately is not:
+    stepping away is not the same as asking not to be told, and an `afk`
+    correspondent still wants the full picture when they come back.
+    """
+    facet = resources.get("correspondent") if isinstance(resources, dict) else None
+    facet = facet if isinstance(facet, dict) else {}
+    if facet.get("status") != "known":
+        return None
+    mode = str(facet.get("mode") or "").strip()
+    return mode if mode in ("quiet", "urgent-only") else None
 
 
 def _siblings_chip(resources: dict[str, Any]) -> str | None:
@@ -2979,6 +3043,11 @@ def _render_bar(
     siblings_chip = _siblings_chip(resources)
     if siblings_chip:
         segments.append(("siblings", siblings_chip))
+    # Beside the siblings count, because both answer "who else is in this
+    # room" — one for the runs, one for the person.
+    correspondent_chip = _correspondent_chip(resources)
+    if correspondent_chip:
+        segments.append(("correspondent", correspondent_chip))
     delivery_chip = _delivery_chip(outbound)
     if delivery_chip:
         segments.append(("delivery", delivery_chip))
@@ -3087,6 +3156,20 @@ def _render_bar(
         event_rows = _render_event_rows(
             events, event_seen, inbox_pointer, skip_seen=True
         )
+        hushed = _correspondent_hushed(resources)
+        if hushed and event_rows:
+            # The correspondent asked for quiet. The *count* still stands —
+            # the obligation does not evaporate because someone stepped
+            # back, and burying it would be the failure this whole
+            # vocabulary exists to avoid (#513) — but the per-event chrome
+            # (bodies, sources, ages) collapses to one row. The letters are
+            # still addressable; `portal-state.json` → `inbound.events`
+            # carries every field this line drops.
+            event_rows = [
+                f"- ✉{len(event_rows)} · correspondent {hushed} — rows "
+                "collapsed; ids and bodies at `portal-state.json` → "
+                "`inbound.events`"
+            ]
         if event_rows or pending_set_changed:
             # Something new to say: either a new/changed event row or the
             # first-render instruction sentence. Show the sentence only on the
