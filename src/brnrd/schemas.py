@@ -1011,6 +1011,21 @@ class LiveRunIn(BaseModel):
     # model above; `None` for an ad-hoc session or a daemon predating the
     # field — absent stays absent.
     portals: LiveRunPortalsIn | None = None
+    # the-parked-seat-has-two-buttons: a held row's own status rides here
+    # rather than overloading `lifecycle` (starting|weaving|awaiting|closing
+    # — all describe a *live* process; `held` has none). `None` for every
+    # ordinary live/ad-hoc row — a daemon that has never held a seat never
+    # sends this field, and an older daemon's rows are unaffected.
+    status: str | None = Field(default=None, max_length=16)
+    # The `resource_hold` record's portal-safe projection
+    # (`resource_hold.portal_projection`), `dict[str, Any]` rather than a
+    # named model on purpose: the starvation-hold branch (parallel, same
+    # day) adds fields to that record (`starve_floor_pct`,
+    # `refill_floor_pct`, `binding_remaining_pct`) this schema must render
+    # when present without needing a matching release here — a strict model
+    # would 422 the whole row the first time the daemon sends a field this
+    # API doesn't know about yet. `None` for a live/ad-hoc row.
+    resource_hold: dict[str, Any] | None = None
 
     @classmethod
     def string_bounds(cls) -> dict[str, int]:
@@ -1139,6 +1154,13 @@ class LiveRunsReport(BaseModel):
     # its last publish (#476 wyrd §3) — same ack economics as
     # `RunnersReport.consumed_wake_request_ids`.
     consumed_run_stop_request_ids: list[str] = Field(default_factory=list)
+    # Same ack economics, for the two held-seat affordances
+    # (the-parked-seat-has-two-buttons): release ends the seat, respawn
+    # mints a fresh event on the same thread. Both ride this tick rather
+    # than a new endpoint — see `RunReleaseRequestOut`/`RunRespawnRequestOut`
+    # below for the served-row shape.
+    consumed_run_release_request_ids: list[str] = Field(default_factory=list)
+    consumed_run_respawn_request_ids: list[str] = Field(default_factory=list)
     # Configured `spawn:` pool width (`spawn.max_concurrent`), piggybacked
     # here rather than a new endpoint — loom-envelope Phase 1's one piece of
     # data the live-runs publish didn't already carry (the active count is
@@ -1190,6 +1212,26 @@ class RunStopRequestOut(BaseModel):
 
     request_id: str
     run_id: str
+    requested_at: datetime | None = None
+    status: str
+
+
+class RunReleaseRequestOut(BaseModel):
+    """A user-issued "release that held seat" (the-parked-seat-has-two-buttons)."""
+
+    request_id: str
+    run_id: str
+    requested_at: datetime | None = None
+    status: str
+
+
+class RunRespawnRequestOut(BaseModel):
+    """A user-issued "respawn this held seat on another core"."""
+
+    request_id: str
+    run_id: str
+    shell: str | None = None
+    core: str | None = None
     requested_at: datetime | None = None
     status: str
 
@@ -1277,6 +1319,9 @@ class LiveRunsOut(BaseModel):
     # daemon's own live-runs publish tick, so a tap reaches the kill path
     # within one tick without a new polling loop.
     pending_run_stop_requests: list[RunStopRequestOut] = Field(default_factory=list)
+    # Same piggyback, for a held seat's release / respawn-on-another-core.
+    pending_run_release_requests: list[RunReleaseRequestOut] = Field(default_factory=list)
+    pending_run_respawn_requests: list[RunRespawnRequestOut] = Field(default_factory=list)
 
 
 class PRReviewItemIn(BaseModel):

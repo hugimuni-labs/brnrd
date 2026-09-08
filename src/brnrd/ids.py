@@ -55,6 +55,14 @@ def run_stop_request_id() -> str:
     return _rid("stopreq")
 
 
+def run_release_request_id() -> str:
+    return _rid("relreq")
+
+
+def run_respawn_request_id() -> str:
+    return _rid("respreq")
+
+
 def terms_acceptance_id() -> str:
     return _rid("ta")
 
