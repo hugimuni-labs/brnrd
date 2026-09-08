@@ -197,8 +197,9 @@ def claim(
       a director tick or an ``every:`` firing isn't that wake, so it must
       not spend the tap — and must not burn it either.
     - **unknown profile** — refused, row **stays pending**. A drop is not a
-      spend: the rack this daemon published no longer carries the profile
-      that was tapped, and the 24 h TTL (or a chip tap) reclaims the row.
+      spend: the daemon's dispatch-time catalog (or its published rack for
+      older daemons) does not carry the profile that was tapped, and the
+      24 h TTL (or a chip tap) reclaims the row.
     - **parked after the event existed** (#577's one surviving rule) — the
       daemon's mirror lags its source by up to a publish tick, so a tap
       minted seconds ago may not be on the daemon's disk yet. A tap parked
@@ -269,7 +270,7 @@ def claim(
         return _defer("a schedule-source wake never spends a dashboard tap")
     if known_profiles is not None and row.profile not in known_profiles:
         return _defer(
-            f"profile '{row.profile}' is not in this daemon's published rack"
+            f"profile '{row.profile}' is not in this daemon's reported catalog"
         )
     created = _aware(row.created_at)
     event_at = _aware(event_created)

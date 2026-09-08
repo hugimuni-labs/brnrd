@@ -646,6 +646,10 @@ class WakeRequestClaim(BaseModel):
     # clock a few seconds behind the server made every tap look parked after
     # the event it was parked for, every time, not once.
     daemon_now: datetime | None = None
+    # Dispatch-time discovery outranks the asynchronously published mirror.
+    # None preserves compatibility with daemons that only publish catalogs;
+    # an empty list is an explicit observation, not missing information.
+    known_profiles: list[str] | None = None
 
 
 class WakeRequestClaimOut(BaseModel):

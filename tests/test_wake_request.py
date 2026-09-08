@@ -216,9 +216,13 @@ def _claim_stub(captured: dict, result: dict):
 
 def test_claim_posts_the_whole_question_once(tmp_path, monkeypatch):
     from brr.gates import cloud
+    from brr import runner
 
     brr_dir = _brr(tmp_path)
     captured: dict = {}
+    monkeypatch.setattr(runner, "available_runner_catalog", lambda root: [
+        {"name": "codex-newly-discovered"}, {"name": "claude-fable"},
+    ])
     monkeypatch.setattr(cloud, "_load_state", lambda _d: {"token": "t", "brnrd_url": "https://x"})
     monkeypatch.setattr(
         cloud, "_request",
@@ -245,6 +249,7 @@ def test_claim_posts_the_whole_question_once(tmp_path, monkeypatch):
         "event_id": "evt-1",
         "source": "telegram",
         "event_created": "2026-07-25T10:00:00+00:00",
+        "known_profiles": ["codex-newly-discovered", "claude-fable"],
     }
 
 
