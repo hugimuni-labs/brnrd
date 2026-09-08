@@ -105,9 +105,10 @@ def _pair_telegram(client, headers, repo_id, chat_id=555):
 
 @pytest.mark.parametrize("text,expected", [
     ("/afk 9", ("afk", "9")),
-    ("afk 9", ("afk", "9")),
+    ("afk 9", None),   # a bare word is a word to the resident (evt-…-g6hj)
     ("/hush", ("hush", "")),
-    ("hush", ("hush", "")),
+    ("hush", None),
+    ("back", None),
     ("/urgent-only", ("urgent-only", "")),
     ("/back", ("back", "")),
     ("hello there", None),

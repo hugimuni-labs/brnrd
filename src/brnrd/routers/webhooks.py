@@ -276,14 +276,20 @@ _UNTIL_HOUR_RE = re.compile(r"^([0-2]?\d)$")
 
 
 def _presence_command(text: str) -> tuple[str, str] | None:
-    """One of the four presence words (with or without a leading `/`), or
-    `None` for anything else — an ordinary message is never mistaken for a
-    presence command unless it opens with exactly one of these words."""
+    """One of the four presence commands **with** a leading `/`, or `None`.
+
+    A bare `afk` / `back` is a *word to the resident*, never a command (his
+    steer, 2026-09-09 evt-…-g6hj: "use a native people's flow: afk / back —
+    and you decide what to do with it"). The slash forms stay for whoever
+    wants the relay to hold the state for them; everything else flows to
+    the seat, which reads presence the way a person would and sets its own
+    `correspondent` mode from the daemon side.
+    """
     stripped = (text or "").strip()
-    if not stripped:
+    if not stripped.startswith("/"):
         return None
     head, _, rest = stripped.partition(" ")
-    name = (head[1:] if head.startswith("/") else head).strip().casefold()
+    name = head[1:].strip().casefold()
     if name not in _PRESENCE_COMMANDS:
         return None
     return name, rest.strip()
