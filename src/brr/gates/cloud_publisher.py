@@ -1434,7 +1434,18 @@ def claim_wake_request(
     state = _context().load_state(brr_dir)
     if not (state.get("token") and state.get("brnrd_url")):
         return None
-    body = {"request_id": request_id}
+    body: dict[str, Any] = {"request_id": request_id}
+    # The server's published rack can lag local discovery. Carry the same
+    # catalog's current names in this one claim instead of letting a stale
+    # mirror send an explicit selection to the conversation's old runner.
+    from .. import runner
+
+    try:
+        body["known_profiles"] = [
+            row["name"] for row in runner.available_runner_catalog(brr_dir.parent)
+        ]
+    except Exception as e:
+        print(f"[brnrd:cloud] claim catalog read failed; using published rack: {e}")
     if event_id:
         body["event_id"] = str(event_id)
     if source:
