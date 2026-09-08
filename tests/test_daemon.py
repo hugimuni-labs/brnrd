@@ -13820,7 +13820,7 @@ class TestHoldRatioFacet:
         outbox = _boot_cost_outbox(tmp_path, 1_000_000)
         task = _hold_seat(hold_idle_baseline_spent=0)
         state, hold = daemon._hold_ratio_facet(
-            task, _armed_state(), {}, outbox,
+            task, _armed_state(), {daemon.SEAT_PARK_ON_HOLD_COST_KEY: True}, outbox,
             {"spent": 400_000, "scope": "resident"},
         )
         assert hold == {"ratio": pytest.approx(0.4), "known": True}
@@ -13830,24 +13830,48 @@ class TestHoldRatioFacet:
     def test_default_ratio_holds_a_night_not_forty_minutes(self, tmp_path):
         """2026-09-08: await is the resting state — a blocked wait is free and
         keeps the context; a park is a cold boot later. 1.4 boots of idle
-        hold must *not* park under the default any more."""
+        hold must *not* park under the default ratio, even opted in."""
         outbox = _boot_cost_outbox(tmp_path, 1_000_000)
         task = _hold_seat(hold_idle_baseline_spent=0)
         task.meta["await"] = {"resolved": False}
         state, hold = daemon._hold_ratio_facet(
-            task, _armed_state(), {}, outbox,
+            task, _armed_state(), {daemon.SEAT_PARK_ON_HOLD_COST_KEY: True}, outbox,
             {"spent": 1_400_000, "scope": "resident"},
         )
         assert hold == {"ratio": pytest.approx(1.4), "known": True}
         assert state.get("outcome") != "park"
         assert "pending_resource_hold" not in task.meta
 
-    def test_parks_past_the_threshold(self, tmp_path):
+    def test_default_config_never_parks_even_past_the_old_threshold(self, tmp_path):
+        """2026-09-08, his repeated instruction (evt-…-gaoy): the process
+        stays open until the user releases it or execution is forced to stop
+        — never on a cost heuristic alone. `seat.park_on_hold_cost` unset
+        (ordinary default config) must not park even at 20x boot cost, well
+        past `seat.park_after_boot_ratio`'s own default — only the opt-in
+        flag decides whether the ratio can park anything. The ratio still
+        reports honestly for the chip either way."""
         outbox = _boot_cost_outbox(tmp_path, 1_000_000)
         task = _hold_seat(hold_idle_baseline_spent=0)
         task.meta["await"] = {"resolved": False}
         state, hold = daemon._hold_ratio_facet(
-            task, _armed_state(), {"seat.park_after_boot_ratio": 1.0}, outbox,
+            task, _armed_state(), {}, outbox,
+            {"spent": 20_000_000, "scope": "resident"},
+        )
+        assert hold == {"ratio": pytest.approx(20.0), "known": True}
+        assert state.get("outcome") != "park"
+        assert "pending_resource_hold" not in task.meta
+
+    def test_parks_past_the_threshold_when_opted_in(self, tmp_path):
+        outbox = _boot_cost_outbox(tmp_path, 1_000_000)
+        task = _hold_seat(hold_idle_baseline_spent=0)
+        task.meta["await"] = {"resolved": False}
+        state, hold = daemon._hold_ratio_facet(
+            task, _armed_state(),
+            {
+                daemon.SEAT_PARK_ON_HOLD_COST_KEY: True,
+                daemon.SEAT_PARK_AFTER_BOOT_RATIO_KEY: 1.0,
+            },
+            outbox,
             {"spent": 1_400_000, "scope": "resident"},
         )
         assert hold == {"ratio": pytest.approx(1.4), "known": True}
@@ -13866,7 +13890,11 @@ class TestHoldRatioFacet:
         task = _hold_seat(hold_idle_baseline_spent=0)
         state, _hold = daemon._hold_ratio_facet(
             task, _armed_state(),
-            {daemon.SEAT_PARK_AFTER_BOOT_RATIO_KEY: 2.0}, outbox,
+            {
+                daemon.SEAT_PARK_ON_HOLD_COST_KEY: True,
+                daemon.SEAT_PARK_AFTER_BOOT_RATIO_KEY: 2.0,
+            },
+            outbox,
             {"spent": 1_400_000, "scope": "resident"},
         )
         assert state["resolved"] is False
@@ -13874,13 +13902,20 @@ class TestHoldRatioFacet:
 
     def test_refuses_while_a_correspondent_is_live(self, tmp_path):
         """"a person at the keyboard is worth every boundary" — the ratio is
-        still reported honestly; only the park itself is refused."""
+        still reported honestly; only the park itself is refused. Opted in
+        and the ratio threshold lowered so the correspondent check is the
+        thing actually under test, not the opt-in gate above it."""
         outbox = _boot_cost_outbox(tmp_path, 1_000_000)
         task = _hold_seat(
             hold_idle_baseline_spent=0, hold_correspondent_at=time.time() - 60,
         )
         state, hold = daemon._hold_ratio_facet(
-            task, _armed_state(), {}, outbox,
+            task, _armed_state(),
+            {
+                daemon.SEAT_PARK_ON_HOLD_COST_KEY: True,
+                daemon.SEAT_PARK_AFTER_BOOT_RATIO_KEY: 1.0,
+            },
+            outbox,
             {"spent": 1_400_000, "scope": "resident"},
         )
         assert state["resolved"] is False
@@ -13894,7 +13929,12 @@ class TestHoldRatioFacet:
             hold_correspondent_at=time.time() - (31 * 60),
         )
         state, _hold = daemon._hold_ratio_facet(
-            task, _armed_state(), {"seat.park_after_boot_ratio": 1.0}, outbox,
+            task, _armed_state(),
+            {
+                daemon.SEAT_PARK_ON_HOLD_COST_KEY: True,
+                daemon.SEAT_PARK_AFTER_BOOT_RATIO_KEY: 1.0,
+            },
+            outbox,
             {"spent": 1_400_000, "scope": "resident"},
         )
         assert state["resolved"] is True
@@ -13908,7 +13948,12 @@ class TestHoldRatioFacet:
         )
         state, _hold = daemon._hold_ratio_facet(
             task, _armed_state(),
-            {daemon.SEAT_LIVE_WINDOW_MINUTES_KEY: 60}, outbox,
+            {
+                daemon.SEAT_PARK_ON_HOLD_COST_KEY: True,
+                daemon.SEAT_PARK_AFTER_BOOT_RATIO_KEY: 1.0,
+                daemon.SEAT_LIVE_WINDOW_MINUTES_KEY: 60,
+            },
+            outbox,
             {"spent": 1_400_000, "scope": "resident"},
         )
         assert state["resolved"] is False
@@ -13919,7 +13964,12 @@ class TestHoldRatioFacet:
         task = _hold_seat(hold_idle_baseline_spent=0)
         daemon._register_run_control("evt-child", task.id)
         state, _hold = daemon._hold_ratio_facet(
-            task, _armed_state(), {}, outbox,
+            task, _armed_state(),
+            {
+                daemon.SEAT_PARK_ON_HOLD_COST_KEY: True,
+                daemon.SEAT_PARK_AFTER_BOOT_RATIO_KEY: 1.0,
+            },
+            outbox,
             {"spent": 1_400_000, "scope": "resident"},
         )
         assert state["resolved"] is False
@@ -13960,7 +14010,8 @@ def test_write_live_portal_state_parks_an_idling_await_past_boot_cost(
     """End to end through the real caller chain: heartbeat
     (`_write_live_portal_state`) -> allowance metering + boot-cost read ->
     `_hold_ratio_facet` -> await resolution -> portal-state's `await` and
-    `resources.quota.hold`."""
+    `resources.quota.hold`. `seat.park_on_hold_cost` opted in explicitly —
+    the default is covered by the sibling test below."""
     brr_dir = tmp_path / ".brr"
     outbox_dir = brr_dir / "outbox" / "evt-1"
     inbox_dir = brr_dir / "inbox"
@@ -13976,11 +14027,12 @@ def test_write_live_portal_state_parks_an_idling_await_past_boot_cost(
     )
     spent = {"value": 0}
     monkeypatch.setattr(daemon.allowance, "collect_spent", lambda *a, **k: spent["value"])
+    cfg = {daemon.SEAT_PARK_ON_HOLD_COST_KEY: True}
 
     # First heartbeat: the resident allowance window baselines to zero, and
     # so does the hold's own idle baseline — nothing to park against yet.
     daemon._write_live_portal_state(
-        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        outbox_dir, inbox_dir, "evt-1", task, phase="running", cfg=cfg,
     )
     assert task.meta.get("hold_idle_baseline_spent") == 0
     assert task.meta["await"]["resolved"] is False
@@ -13988,11 +14040,50 @@ def test_write_live_portal_state_parks_an_idling_await_past_boot_cost(
     # Second heartbeat: 13x the boot cost's worth of new spend (default ratio 12).
     spent["value"] = 13_000_000
     path = daemon._write_live_portal_state(
-        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        outbox_dir, inbox_dir, "evt-1", task, phase="running", cfg=cfg,
     )
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["await"]["outcome"] == "park"
     assert payload["await"]["ratio"] == pytest.approx(13.0)
+    assert payload["resources"]["quota"]["hold"] == {
+        "ratio": pytest.approx(13.0), "known": True,
+    }
+
+
+def test_write_live_portal_state_never_parks_on_default_config(
+    tmp_path, monkeypatch,
+):
+    """2026-09-08, his repeated instruction: with no config at all (the
+    ordinary daemon default), the same 13x-boot-cost idle stretch that used
+    to park on its own must instead leave the process open — the ratio
+    still lands on the chip, honestly, for a human or a future opt-in to
+    read."""
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    task.meta["await"] = _armed(timeout_seconds=None, armed_pending_ids=[])
+    task.meta["hold_correspondent_at"] = time.time() - 3600
+
+    claude_status.write_snapshot(
+        outbox_dir, {"boot": {"weighted": 1_000_000, "at": "2026-09-06T00:00:00Z"}},
+    )
+    spent = {"value": 0}
+    monkeypatch.setattr(daemon.allowance, "collect_spent", lambda *a, **k: spent["value"])
+
+    daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+    assert task.meta.get("hold_idle_baseline_spent") == 0
+
+    spent["value"] = 13_000_000
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["await"].get("outcome") != "park"
+    assert payload["await"]["resolved"] is False
     assert payload["resources"]["quota"]["hold"] == {
         "ratio": pytest.approx(13.0), "known": True,
     }

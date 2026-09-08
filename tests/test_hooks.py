@@ -6795,12 +6795,21 @@ def _portal_seat_parks(tmp_path):
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def test_linger_has_nothing_to_ask_when_the_seat_parks(tmp_path):
+def test_linger_still_asks_even_when_the_seat_parks(tmp_path):
+    """2026-09-08, his repeated instruction (evt-…-gaoy): a parked seat is
+    the daemon's own safety net for an *unexpected* turn end, never a
+    deliberate substitute for holding a live conversation open with
+    `brnrd await`. The process stays open until the user releases it or
+    execution is forced to stop — so the linger clause keeps asking, exactly
+    as it would with no park configured at all (was
+    `test_linger_has_nothing_to_ask_when_the_seat_parks` before the
+    parked-state exemption was removed)."""
     env = _armed_vigil(tmp_path)
     env["BRR_CLOSEOUT_OBLIGATIONS"] = "linger"
     _portal_seat_parks(tmp_path)
     out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
-    assert out.get("decision") != "block", out
+    assert out["decision"] == "block"
+    assert "lingers by default" in out["reason"]
 
 
 def test_vigil_has_nothing_to_ask_when_the_seat_parks(tmp_path):

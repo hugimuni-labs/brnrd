@@ -9891,16 +9891,26 @@ def _park_seat_on_turn_end(task: Run, cfg: "dict | None") -> dict[str, object] |
     }
 
 
+#: Config key: whether an idling ``await:`` may park itself at all once it
+#: crosses ``seat.park_after_boot_ratio``. **Opt-in, default off**
+#: (2026-09-08, his repeated instruction, evt-…-gaoy: the process stays open
+#: until the user releases it or execution is forced to stop — quota,
+#: provider, process failure — never a cost heuristic on its own). The ratio
+#: below is still computed and published every heartbeat either way — "the
+#: number stays informative" — only the *parking* is gated on this flag. A
+#: seat that wants the old always-on behaviour opts back in explicitly.
+SEAT_PARK_ON_HOLD_COST_KEY = "seat.park_on_hold_cost"
+SEAT_PARK_ON_HOLD_COST_DEFAULT = False
+
 #: Config key: the ratio of hold-so-far to this run's own recorded boot cost
-#: (both weighted tokens) past which an idling ``await:`` parks itself
+#: (both weighted tokens) past which an idling ``await:`` parks itself, when
+#: ``seat.park_on_hold_cost`` opts the behaviour on at all
 #: (design-the-seat-that-never-quits.md §"The machinery, in slices" #3 — "a
 #: seat idling on `brnrd await` parks itself once holding has cost more than
-#: a boot"). ``12.0`` (was ``1.0`` until 2026-09-08): the maintainer's call
-#: that a blocked await is "parking for free" — the harness keeps the
-#: context cached, while a park is a cold boot on the next message. At the
-#: measured idle cost (≤0.3 session points per boundary at ~170 KB) one
-#: boot ≈ 3–4 boundaries ≈ 40 min; twelve boots ≈ a night. The park is the
-#: fallback for a *forced* end, never the resting state.
+#: a boot"). ``12.0``: at the measured idle cost (≤0.3 session points per
+#: boundary at ~170 KB) one boot ≈ 3–4 boundaries ≈ 40 min; twelve boots ≈ a
+#: night. The park is the fallback for a *forced* end, never the resting
+#: state.
 SEAT_PARK_AFTER_BOOT_RATIO_KEY = "seat.park_after_boot_ratio"
 _SEAT_PARK_AFTER_BOOT_RATIO_DEFAULT = 12.0
 
@@ -9912,6 +9922,14 @@ _SEAT_PARK_AFTER_BOOT_RATIO_DEFAULT = 12.0
 #: reason a genuinely abandoned seat keeps burning.
 SEAT_LIVE_WINDOW_MINUTES_KEY = "seat.live_window_minutes"
 _SEAT_LIVE_WINDOW_MINUTES_DEFAULT = 30.0
+
+
+def _seat_park_on_hold_cost_enabled(cfg: "dict | None") -> bool:
+    """The opt-in flag, defaulting off; an explicit truthy value turns it on."""
+    raw = (cfg or {}).get(SEAT_PARK_ON_HOLD_COST_KEY)
+    if raw is None:
+        return SEAT_PARK_ON_HOLD_COST_DEFAULT
+    return _truthy(raw)
 
 
 def _seat_park_after_boot_ratio(cfg: "dict | None") -> float:
@@ -9966,13 +9984,18 @@ def _hold_ratio_facet(
       transcript's first assistant turn lands (never on Codex yet) — an
       absent boot cost means no ratio and no park, not a guessed one.
 
-    Three refusals, all checked *after* the ratio clears the threshold —
-    cheapest-check-first would save nothing here and this order is the one
-    the design doc lists: a pending event already means ``await_state`` is
-    ``resolved`` before this function is even called (the caller only
-    invokes it while still armed and unresolved); a live correspondent
-    (``seat.live_window_minutes``); an owned live strand (``resume:
-    strands``'s own job, never this ratio's). Never for a strand run.
+    The ratio always computes and always publishes on the chip — informative
+    regardless of anything below. Parking on it is opt-in
+    (``seat.park_on_hold_cost``, default off, 2026-09-08): the process stays
+    open until the user releases it or execution is forced to stop, never on
+    a cost heuristic alone. When the opt-in is on, three further refusals
+    are checked *after* the ratio clears the threshold — cheapest-check-first
+    would save nothing here and this order is the one the design doc lists:
+    a pending event already means ``await_state`` is ``resolved`` before
+    this function is even called (the caller only invokes it while still
+    armed and unresolved); a live correspondent (``seat.live_window_minutes``);
+    an owned live strand (``resume: strands``'s own job, never this ratio's).
+    Never for a strand run.
 
     Returns ``(possibly-updated await_state, hold_facet | None)``.
     *hold_facet* is ``None`` only when no await is armed at all; otherwise
@@ -10005,6 +10028,11 @@ def _hold_ratio_facet(
     boot_cost = boot.get("weighted") if isinstance(boot, dict) else None
     ratio = resource_hold.hold_boot_ratio(hold_so_far, boot_cost)
     hold_facet = {"ratio": ratio, "known": ratio is not None}
+    if not _seat_park_on_hold_cost_enabled(cfg):
+        # Informative only by default (2026-09-08): the ratio still renders
+        # on the chip, but nothing here ends the process on its own — only
+        # the user's release or a forced stop does.
+        return await_state, hold_facet
     if ratio is None or ratio < _seat_park_after_boot_ratio(cfg):
         return await_state, hold_facet
     now = time.time()
