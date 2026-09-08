@@ -29,6 +29,7 @@ from .. import (
     dominion,
     emotes,
     gitops,
+    portals,
     presence,
     protocol,
     resource_hold,
@@ -2065,6 +2066,66 @@ def _portals_payload(brr_dir: Path, manifest: Mapping[str, Any]) -> dict[str, An
     return {"pending": len(events), "oldest_at": oldest}
 
 
+#: How long after an outbox write a run still counts as composing. The
+#: relay turns this into `sendChatAction`, whose own typing indicator
+#: expires after ~5s, so the window has to outlast one publish tick without
+#: outlasting the writing itself.
+_COMPOSING_WINDOW_S = 10.0
+
+
+def _composing(
+    brr_dir: Path, manifest: Mapping[str, Any], *, now: float | None = None
+) -> bool:
+    """Is this run *writing to the person* right now?
+
+    The one presence primitive that flows outward (design-the-continuous-
+    seat.md §Presence): a Telegram bot can never receive typing, but it can
+    send it, and this is the fact the relay turns into ``sendChatAction``.
+    **The daemon never calls a platform** — it publishes the observation and
+    the relay owns the wire.
+
+    Two observations, both from the run's own outbox drop zone:
+
+    - a ``*.tmp`` staging file exists — the resident is mid-write, using the
+      atomic-write name the drain deliberately skips
+      (``portals.is_staging_name``). This is the truest form of the signal.
+    - a deliverable outbox file was written within
+      :data:`_COMPOSING_WINDOW_S`, including one already retired under
+      ``.processed`` by a drain that beat this tick. A resident that just
+      sent one line is, far more often than not, still writing.
+
+    False on any read failure and for a run with no outbox at all: a typing
+    indicator nobody is behind is worse than none.
+    """
+    event_id = str(manifest.get("event_id") or "").strip()
+    if not event_id:
+        return False
+    outbox = brr_dir / "outbox" / event_id
+    cutoff = (now if now is not None else time.time()) - _COMPOSING_WINDOW_S
+    for directory, staging_counts in ((outbox, True), (outbox / ".processed", False)):
+        try:
+            entries = list(directory.iterdir())
+        except OSError:
+            continue
+        for path in entries:
+            if not path.is_file():
+                continue
+            if path.name in portals.CONTROL_NAMES:
+                continue
+            if portals.is_staging_name(path.name):
+                if staging_counts:
+                    return True
+                continue
+            if path.name.startswith("."):
+                continue
+            try:
+                if path.stat().st_mtime >= cutoff:
+                    return True
+            except OSError:
+                continue
+    return False
+
+
 def _lifecycle_payload(
     brr_dir: Path,
     manifest: Mapping[str, Any],
@@ -2248,6 +2309,11 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
                 # *resting, put to read* until the boundary that folds it
                 # in attests the read. Counts only, never bodies.
                 "portals": _portals_payload(source_brr_dir, manifest) if manifest else None,
+                # design-the-continuous-seat.md §Presence, the outbound
+                # half: the relay renders this as the platform's own typing
+                # indicator. Published as an observation, never as a call —
+                # the daemon does not talk to Telegram.
+                "composing": _composing(source_brr_dir, manifest) if manifest else False,
                 })
             )
         # the-parked-seat-has-two-buttons: a held seat has no process, so it
@@ -2308,6 +2374,8 @@ def _held_run_row(held: Run) -> dict[str, Any]:
         "edge": None,
         "crossings": [],
         "portals": None,
+        # A held seat has no process; nothing is being written.
+        "composing": False,
         "status": "held",
         "resource_hold": resource_hold.portal_projection(meta.get("resource_hold")),
     }

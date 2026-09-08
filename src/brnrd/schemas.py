@@ -1015,6 +1015,16 @@ class LiveRunIn(BaseModel):
     # model above; `None` for an ad-hoc session or a daemon predating the
     # field — absent stays absent.
     portals: LiveRunPortalsIn | None = None
+    # design-the-continuous-seat.md §Presence: this run is writing to the
+    # correspondent right now (a `*.tmp` draft in its outbox, or an outbox
+    # file written in the last ~10s), observed daemon-side by
+    # `cloud_publisher._composing`. The relay turns it into the platform's
+    # own typing indicator — Telegram's `sendChatAction`, which a bot may
+    # *send* even though it can never *receive* typing or read status.
+    # Defaulted so a daemon predating the field still validates: absent
+    # reads as "not composing", which is the safe direction — a typing
+    # indicator nobody is behind is worse than none.
+    composing: bool = False
     # the-parked-seat-has-two-buttons: a held row's own status rides here
     # rather than overloading `lifecycle` (starting|weaving|awaiting|closing
     # — all describe a *live* process; `held` has none). `None` for every
