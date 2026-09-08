@@ -4636,6 +4636,16 @@ def _run_worker(
         emit("attempt_started", run_id=task.id, event_id=eid, attempt=attempt)
 
         attempt_started_monotonic = time.monotonic()
+        # Proof-of-auth for this attempt's runner domain: a live tool
+        # boundary means the Shell authenticated, which is a stronger fact
+        # than a clean process exit (`_record_runner_auth_health` below,
+        # which only sees the *end* of the attempt). Reset every attempt so
+        # a fallback runner earns its own proof rather than inheriting the
+        # previous runner's. `_emit_flush` clears on the first boundary it
+        # sees; a runner with no native hooks (Tier-0/1) or one that dies
+        # before its first tool call never flips this, and the post-attempt
+        # clear in `_record_runner_auth_health` still covers it.
+        auth_health_cleared = False
         _write_live_portal_state(
             outbox_dir,
             inbox_dir,
@@ -4749,6 +4759,17 @@ def _run_worker(
             _emit_new_containers(emit, task.id, env_ctx, seen_containers)
 
         def _emit_flush() -> None:
+            nonlocal auth_health_cleared
+            if not auth_health_cleared:
+                # This attempt's Shell just proved it authenticated (it
+                # reached a live tool boundary) — clear a stale auth-error
+                # mark for its domain now rather than waiting for the
+                # process to exit. A long-lived seat (`await` / `hold:`)
+                # can run for hours after a relogin while the catalog still
+                # read the domain dead for the whole span (the defect this
+                # closes).
+                runner_auth_health.clear_success(repo_root, runner_choice)
+                auth_health_cleared = True
             _refresh_codex_thread_id(task, codex_events_path)
             # Event-driven drain fired by the boundary back channel's .flush signal
             # (chunk 3 of the back channel): push the just-written outbox
