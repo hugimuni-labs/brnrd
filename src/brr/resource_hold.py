@@ -66,10 +66,14 @@ REASON_QUOTA_EXHAUSTED = "quota_exhausted"
 REASON_RESIDENT_REQUESTED = "resident_requested"
 #: design-the-seat-that-never-quits.md §"The machinery, in slices" #3: an
 #: `await:` idling with nothing pending, past `seat.park_after_boot_ratio`
-#: (default 1.0) of this run's own recorded boot cost. Distinct from
-#: `REASON_TURN_ENDED` — that one fires on an *ordinary* clean turn end with
-#: nothing armed; this one fires while an await is still armed, the moment
-#: the daemon's own heartbeat measures holding as the dearer of the two.
+#: (default 12.0) of this run's own recorded boot cost — **only when
+#: `seat.park_on_hold_cost` opts the behaviour on** (default off, 2026-09-08:
+#: the process stays open until the user releases it or execution is forced
+#: to stop, never on a cost heuristic alone; the ratio still renders on the
+#: chip either way). Distinct from `REASON_TURN_ENDED` — that one fires on
+#: an *ordinary* clean turn end with nothing armed; this one fires while an
+#: await is still armed, the moment the daemon's own heartbeat measures
+#: holding as the dearer of the two.
 REASON_HOLD_COSTLIER_THAN_BOOT = "hold_costlier_than_boot"
 
 RESUME_OPERATOR = "operator"

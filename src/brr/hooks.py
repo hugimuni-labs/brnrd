@@ -4130,8 +4130,13 @@ def _seat_parks_on_turn_end(portal: dict[str, Any] | None) -> bool:
     """Whether the daemon will park this seat when the turn ends (portal `seat`).
 
     design-the-seat-that-never-quits.md: with ``seat.park_on_turn_end`` on,
-    a turn end is a park, not a close — so every Stop-phase clause whose
-    only purpose was "do not leave" has nothing to ask for. Read from
+    an *unexpected* turn end (nothing armed, no bolt, no release) still
+    becomes a park rather than a silent close — the safety net for a run
+    that ends its turn some other way. It is not a substitute for an armed
+    wait on a live conversation (2026-09-08): the vigil clause still treats
+    it as a true continuation mechanism, but the linger clause no longer
+    exempts a live thread from being told to hold it open with
+    ``brnrd await`` just because this fallback exists. Read from
     portal-state, never inferred: the hook says the seat parks only when
     the daemon published that it will.
     """
@@ -4166,13 +4171,20 @@ def _strand_hold_clause(payload: dict[str, Any], portal: dict[str, Any]) -> str 
 
 
 def _linger_closeout_clause(ctx: "HookContext") -> str | None:
-    """Require a completed linger, or an explicit reason for skipping it."""
+    """Require a completed linger, or an explicit reason for skipping it.
+
+    2026-09-08: a parked seat is *not* treated as satisfying this on its
+    own — a turn ending with nothing armed still costs a cold restart on
+    whatever wakes it next, and the user's own repeated instruction is that
+    the process stays open until released, not that the daemon's own
+    turn-end safety net stands in for an armed wait. That fallback still
+    exists (unexpected-turn-end parking is preserved as a safety net, never
+    a deliberate substitute for `brnrd await`) — it just no longer excuses
+    a live conversation from being told to hold it open.
+    """
     if ctx.outbox_dir is None or _linger_opted_out(ctx):
         return None
     portal = _read_json(ctx.portal_state_path)
-    if _seat_parks_on_turn_end(portal):
-        # A parked seat *is* the continuation — nothing to justify.
-        return None
     await_state = portal.get("await") if isinstance(portal.get("await"), dict) else {}
     if await_state.get("armed") and await_state.get("resolved"):
         return None
