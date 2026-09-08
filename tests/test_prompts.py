@@ -2517,6 +2517,46 @@ def test_kb_link_contract_uses_portal_url_with_basename_fallback():
     assert _says(substrate, "when none is available, use its basename only")
 
 
+def test_seat_prompt_authorizes_end_only_by_release_or_forced_stop():
+    """2026-09-08, his repeated instruction (evt-…-gaoy): the process stays
+    open until the user explicitly releases it, or execution is forced to
+    stop (quota exhausted, a provider limit, a process failure) — never a
+    voluntary choice dressed up as "a known long absence" or a convenient
+    reload. `hold:` names the forced walls it is for; the daemon's own
+    turn-end park stays a safety net for an unexpected end, not license to
+    end one on purpose."""
+    substrate = _read_bundled_daemon_substrate()
+
+    assert _says(
+        substrate,
+        "the process stays open until the user releases it or execution "
+        "is forced to stop",
+    )
+    assert _says(
+        substrate,
+        "`hold:` is for exactly those forced walls — a genuine resource "
+        "limit, never a voluntary choice to stop because staying got long "
+        "or a reload sounded convenient",
+    )
+    assert _says(
+        substrate,
+        "a safety net for a turn that ends some other way, never license "
+        "to end one on purpose",
+    )
+    assert "known long absence" not in substrate
+
+
+def test_seat_prompt_marks_the_hold_cost_ratio_informative_only():
+    """The idle-cost ratio still renders on the chip every heartbeat — only
+    the automatic park on it is gated behind an opt-in the default leaves
+    off (`seat.park_on_hold_cost`)."""
+    substrate = _read_bundled_daemon_substrate()
+
+    assert "seat.park_on_hold_cost" in substrate
+    assert _says(substrate, "the hold-cost ratio renders on the chip either way")
+    assert _says(substrate, "informative only, off by default")
+
+
 def test_recent_conversation_renders_dedup_provenance():
     """Issue #338: a woven turn deduped across mirrored gates must still
 
