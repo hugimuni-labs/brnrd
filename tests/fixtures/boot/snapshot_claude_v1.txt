@@ -142,7 +142,7 @@ the mantel is bare — no pages beyond the README yet.
 
 ## Work surface
 
-No authored surface yet. Start at `surface/index.md`; pages placed under `surface/` are discovered by the next wake and dashboard.
+authored surface = ∅ · start at `surface/index.md` · pages under `surface/` ⇒ discovered by the next wake + dashboard
 
 ---
 ## Run Context Bundle
@@ -225,7 +225,7 @@ source manifest:
   · Stranded-memory warning (repo moved)                            daemon-live  health             0  computed
   · Dominion digest (self-inject)                                   resident     memory             0  computed
   ✓ The hearth (personal space, index-shaped)                       resident     hearth           352  computed
-  ✓ Discovered work surface                                         resident     surface          147  computed
+  ✓ Discovered work surface                                         resident     surface          140  computed
   · Stored runner policy (CS6)                                      resident     policy             0  computed
   · Task-matched pitfalls                                           resident     memory             0  computed
   · Knowledge sources (home+repo+docs)                              project      knowledge          0  computed

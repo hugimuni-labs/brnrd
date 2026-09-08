@@ -55,7 +55,7 @@ the daemon decorates each wake · attention, action, the reply = yours
 
   not a closed set — `brnrd do` (verdict-checked porcelain over this grammar) and the rest: `brnrd docs portals`.
 
-- **inbox.json / portal-state.json** — daemon-owned (`change_token` marks each refresh) · inspect, don't edit · re-read at plan / todo boundaries + once immediately before a terminal closeout — `inbox.json` misses messages landing after the runner has returned · own every pending event: fold it in ∨ `spawn:` it (capacity and quota healthy) ∨ defer for a named resource / priority / dependency / authority reason · `notices` = directives brnrd refused — **check after every `spawn:` / `respawn:` / `event:`/`note:` write** or the drop is invisible
+- **inbox.json / portal-state.json** — daemon-owned (`change_token` marks each refresh) · inspect, don't edit · re-read at plan / todo boundaries + once immediately before a terminal closeout — `inbox.json` misses messages landing after the runner has returned · own every pending event: fold it in ∨ `spawn:` it (strand capacity and quota are healthy) ∨ defer for a named resource / priority / dependency / authority reason · `notices` = directives brnrd refused — **check after every `spawn:` / `respawn:` / `event:`/`note:` write** or the drop is invisible
 - **control files** — routed to machinery, never a *reply* · `.card` = a published surface, mirrored to the dashboard unredacted:
 
   | file | rule |
