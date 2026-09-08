@@ -17203,8 +17203,21 @@ def _apply_run_respawn(
         event_meta["conversation_key"] = held.conversation_key
     if held.meta.get("repo_label"):
         event_meta["repo_label"] = held.meta["repo_label"]
+    # The body is a handoff, never a replay: the held run's original ask
+    # was already worked (its card/node is the successor's memory, and its
+    # accumulated messages were just undeferred to dispatch alongside);
+    # re-sending the old event text would set the new seat to work on a
+    # request from hours ago as if it were fresh.
+    hold_reason = str(meta.get("reason") or "a resource hold").replace("_", " ")
+    target = " / ".join(part for part in (shell, core) if part) or "the same runner"
+    handoff = (
+        f"Respawned from the dashboard on {target}: seat {held.id} was parked "
+        f"({hold_reason}) and the user chose a new Core over waiting. Pick up "
+        "from the parked seat's card and the pending messages beside this one; "
+        "the original ask is history, not this event's task."
+    )
     new_path = protocol.create_event(
-        inbox_dir, held.source or "respawn", held.body, **event_meta,
+        inbox_dir, held.source or "respawn", handoff, **event_meta,
     )
     print(
         f"[brnrd] resource hold released by dashboard (respawn): "

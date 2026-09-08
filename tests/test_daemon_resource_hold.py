@@ -711,7 +711,10 @@ class TestApplyRunReleaseAndRespawn:
         assert minted["shell"] == "claude"
         assert minted["core"] == "opus"
         assert minted["conversation_key"] == "cloud:telegram:1:"
-        assert minted["body"] == "carry me forward"
+        # A handoff, never a replay of the parked seat's original ask.
+        assert "carry me forward" not in minted["body"]
+        assert "Respawned from the dashboard on claude / opus" in minted["body"]
+        assert "run-held-3" in minted["body"]
 
         reread = protocol._read_event(inbox_dir / "evt-side-2.md")
         assert reread.get("defer_until") is None
