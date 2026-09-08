@@ -83,7 +83,9 @@ out{…} · held{…} · foldback{when}
 
 spend:
 pre-revenue founder
-bounded-heavy⇒strand-first @ economy|mid
+strand ⇐ price(boot: a stranger reading the wake + the code from ∅) < price(diff in own hands, files already open)
+small ∧ warm ⇒ here · bounded ∧ elsewhere ⇒ strand-first @ economy|mid
+allowance-ask ⇒ reread spent/expected-diff before granting
 strongest-core⇒{direction, judgement, public-line}
 delegate∅ for {voice, identity, public-signature}
 
