@@ -452,6 +452,8 @@ GATE_RECEIPT_NAME = gate_receipt.RECEIPT_NAME
 # dotfile beside `.card`, same idiom as `.keepalive`/`.pr`: never delivered,
 # read fresh at every boundary. First line only — see `_read_mood`.
 MOOD_NAME = ".mood"
+ROOM_NAME = ".room"
+_ROOM_READ_CAP_CHARS = 200
 # The resident's own topic claim (the-run-that-claims-its-thread). Same
 # idiom as `.mood` above — read fresh at every boundary rather than through
 # `run_ledger.read_run_topics_control` (which the daemon side uses for the
@@ -656,6 +658,29 @@ def _read_mood(ctx: HookContext) -> str | None:
     try:
         with path.open("r", encoding="utf-8", errors="replace") as handle:
             first_line = handle.readline(_MOOD_READ_CAP_CHARS)
+    except OSError:
+        return None
+    text = first_line.strip()
+    return text or None
+
+
+def _read_room(ctx: HookContext) -> str | None:
+    """The resident's own note on how to talk *now* — `.room`, first line.
+
+    His shape (2026-09-09 evt-…-dfxc): tempo states are not parsed by the
+    daemon or the relay; the seat writes what it concluded about the room
+    ("he's afk till 9 — hold interim lines, one digest on return" ·
+    "live, fast, one-liners") and the line re-injects it every boundary so
+    the reading survives the scroll sinking. Free text, the resident's
+    words, capped; absent ⇒ no segment. Same read-the-artifact doctrine as
+    :func:`_read_mood`.
+    """
+    if ctx.outbox_dir is None:
+        return None
+    path = ctx.outbox_dir / ROOM_NAME
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            first_line = handle.readline(_ROOM_READ_CAP_CHARS)
     except OSError:
         return None
     text = first_line.strip()
@@ -2864,6 +2889,7 @@ def _render_bar(
     armed: list[Any] | None = None,
     gate_receipt_data: dict[str, Any] | None = None,
     context_prior: dict[str, Any] | None = None,
+    room: str | None = None,
     plan: "promises.Blueprint | None" = None,
     plan_edge: bool = False,
     ambient_emit: bool = True,
@@ -2956,6 +2982,10 @@ def _render_bar(
         delta_chip = _context_delta_chip(resources, context_prior)
         if delta_chip:
             segments.append(("context_delta", delta_chip))
+    if room:
+        # The room pin (`.room`): the resident's own reading of how to talk
+        # now, re-injected each boundary — never parsed, only echoed.
+        segments.append(("room", f"room: {room}"))
     # Attribution of the chip just above (brnrd#1810): who is drawing on
     # that shared gauge this boundary — this run's own weighted spend plus
     # every owned strand's, summed. Independent of whether the quota chip
@@ -3324,6 +3354,7 @@ def format_delta(
     route_prompt: bool = False,
     bolt_asks_total: int | None = None,
     context_prior: dict[str, Any] | None = None,
+    room: str | None = None,
     bolt_edge: bool = False,
     repeat_streaks: dict[str, int] | None = None,
     pending_set_changed: bool = True,
@@ -3477,6 +3508,7 @@ def format_delta(
             budget=budget, outbound=outbound, produce=produce, card=card,
             card_stale=card_stale, resources=resources, run_name=run_name,
             context_prior=context_prior,
+            room=room,
             mood=mood, surprise=surprise,
             census=census,
             notices=notices, finished_spawns=finished_spawns,
@@ -4979,6 +5011,7 @@ def compute_neutral(
     # between hook fires, and the whole point is that the face rendered here
     # is the face the resident actually just set.
     mood = _read_mood(ctx)
+    room = _read_room(ctx)
     if mood is not None:
         state[MOOD_EVER_WRITTEN_KEY] = True
     # Same fresh-read discipline, for the topic-discoverability chip's own
@@ -5141,7 +5174,7 @@ def compute_neutral(
         inject = format_delta(
             portal, seed=True, mood=mood,
             event_seen=event_decisions, inbox_pointer=inbox_pointer,
-            plan=plan, context_prior=context_prior,
+            plan=plan, context_prior=context_prior, room=room,
         )
         state["last_token"] = portal.get("change_token")
     elif phase == PHASE_STOP:
@@ -5188,7 +5221,7 @@ def compute_neutral(
                 plan=plan, route=route,
                 no_reply_streak=no_reply_streak,
                 no_reply_capped=no_reply_capped,
-                context_prior=context_prior,
+                context_prior=context_prior, room=room,
             )
             # Latch on the render, not on the decision: a Stop whose token
             # did not move injects nothing, and burning the one statement on
@@ -5344,7 +5377,7 @@ def compute_neutral(
                 route=route, route_edge=route_edge, route_prompt=route_prompt,
                 bolt_asks_total=bolt_asks_total, bolt_edge=bolt_edge,
                 repeat_streaks=repeat_streaks,
-                context_prior=context_prior,
+                context_prior=context_prior, room=room,
                 pending_set_changed=pending_set_changed,
                 last_chips=last_chips, rendered_chips=rendered_chips,
                 route_drift=route_drift, route_stall=route_stall,
