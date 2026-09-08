@@ -108,12 +108,12 @@ FACETS: tuple[FacetSpec, ...] = (
     ),
     FacetSpec(
         "correspondent", "correspondent", STATE, False,
-        "the person on the other end of this thread — how long since they "
-        "last spoke (`quiet_seconds`, derived from our own inbox), the "
-        "presence mode they declared (`live`/`afk`/`quiet`/`urgent-only`, "
-        "with `until`), and a read receipt for our last message where the "
+        "the person on the other end of this thread: how long since they "
+        "last spoke (`quiet_seconds`, measured off our own inbox — never a "
+        "platform call) and a read receipt for our last message where the "
         "platform gives a bot one (Telegram never does); absent on a run "
-        "with no chat thread (design-the-continuous-seat.md §Presence)",
+        "with no chat thread, or with nothing measured yet "
+        "(design-the-continuous-seat.md §Presence)",
     ),
     FacetSpec(
         "allowance", "allowance", LEVEL, False,
@@ -313,30 +313,16 @@ def format_quiet(seconds: float | None) -> str | None:
 
 
 def correspondent_summary(
-    quiet_seconds: float | None,
-    mode: str,
-    until: object = None,
-    read: object = None,
+    quiet_seconds: float | None, read: object = None
 ) -> str:
-    """The one-line reading: the declared mode, then quiet, then a receipt.
+    """The one-line reading: how long they have been quiet, and a receipt.
 
-    ``quiet 12m`` · ``afk until 09:00 · urgent-only`` · ``quiet 3h ·
-    read m4 21:58``. Each part drops out when it has nothing to say, and a
-    mode of ``live`` says nothing — it is the *absence* of a declaration,
-    not a declaration of presence, so it never takes a slot from the
-    reading that was actually measured.
+    ``quiet 12m`` · ``quiet 3h · read m4 21:58``. Empty when there is
+    nothing measured — a correspondent heard from seconds ago, on a
+    platform that gives a bot no read status, has produced no reading, and
+    an empty string is what that honestly looks like.
     """
     parts: list[str] = []
-    mode = str(mode or "live").strip() or "live"
-    if mode in ("afk", "quiet", "urgent-only"):
-        # `/hush` sets the mode `quiet`, and the *derived* reading beside it
-        # is also called quiet. Two different facts sharing one word on one
-        # line is how a reader learns to read neither, so the declared one
-        # renders as `hushed` — the wire value is untouched.
-        text = "hushed" if mode == "quiet" else mode
-        if until:
-            text += f" until {until}"
-        parts.append(text)
     quiet = format_quiet(quiet_seconds)
     if quiet:
         parts.append(quiet)
@@ -345,7 +331,7 @@ def correspondent_summary(
         at = str(read.get("at") or "").strip()
         if handle or at:
             parts.append(" ".join(x for x in ("read", handle, at) if x))
-    return " · ".join(parts) if parts else "live"
+    return " · ".join(parts)
 
 
 def build(
@@ -458,14 +444,12 @@ def build(
       show; ``{"ratio": None, "known": False}`` while armed but no boot
       cost has landed yet (never a guessed ratio).
     - ``correspondent`` (design-the-continuous-seat.md §Presence) —
-      ``{"quiet_seconds": float | None, "mode": str, "until": str | None,
-      "read": dict | None}`` from :func:`brr.correspondent.facet_input`,
-      or ``None`` at a call site with no chat thread, which reads
-      ``absent``: the run genuinely has no correspondent, as opposed to
-      having no collector. ``quiet_seconds`` may itself be ``None`` — the
-      thread exists but nobody has spoken into this inbox yet — and that
-      is still ``known``, because ``mode`` is the fact the delivery rules
-      act on.
+      ``{"quiet_seconds": float | None, "read": dict | None}`` from
+      :func:`brr.correspondent.facet_input`, or ``None`` at a call site
+      with no chat thread. ``None`` and "the thread exists but nothing has
+      been measured on it yet" both read ``absent`` with their own note:
+      there is no *mode* here to be known independently of a measurement
+      (his call, 2026-09-09 — no parsed presence modes anywhere).
     """
     levels = levels or {}
     if isinstance(levels_collector, bool):
@@ -549,21 +533,19 @@ def build(
             "status": ABSENT, "kind": spec_corr.kind,
             "required": spec_corr.required, "summary": None,
             "note": "no chat thread on this run",
-            "quiet_seconds": None, "mode": "live", "until": None, "read": None,
+            "quiet_seconds": None, "read": None,
         }
     else:
         quiet = correspondent.get("quiet_seconds")
-        mode = str(correspondent.get("mode") or "live").strip() or "live"
-        until = correspondent.get("until") or None
         read = correspondent.get("read") or None
+        summary = correspondent_summary(quiet, read)
         correspondent_facet = {
-            "status": KNOWN, "kind": spec_corr.kind,
+            "status": KNOWN if summary else ABSENT,
+            "kind": spec_corr.kind,
             "required": spec_corr.required,
-            "summary": correspondent_summary(quiet, mode, until, read),
-            "note": None,
+            "summary": summary or None,
+            "note": None if summary else "nothing measured on this thread yet",
             "quiet_seconds": quiet,
-            "mode": mode,
-            "until": until,
             "read": read,
         }
 

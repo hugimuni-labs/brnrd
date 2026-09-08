@@ -6910,96 +6910,47 @@ def _correspondent_resources(**fields):
     return facets.build(correspondent=dict(fields) if fields else None)
 
 
-def test_correspondent_chip_renders_the_declared_modes():
-    afk = hooks._correspondent_chip(
-        _correspondent_resources(
-            quiet_seconds=740, mode="afk", until="09:00", read=None
-        )
-    )
-    assert afk == "correspondent: afk until 09:00 · quiet 12m"
-
-    urgent = hooks._correspondent_chip(
-        _correspondent_resources(
-            quiet_seconds=30, mode="urgent-only", until=None, read=None
-        )
-    )
-    # The mode renders from its first second; the sub-minute quiet does not
-    # (a floor on the *quiet* reading, never on a declaration).
-    assert urgent == "correspondent: urgent-only"
-
-    hush = hooks._correspondent_chip(
-        _correspondent_resources(
-            quiet_seconds=11000, mode="quiet", until=None, read=None
-        )
-    )
-    assert hush == "correspondent: hushed · quiet 3h"
+def test_correspondent_chip_renders_the_quiet_reading():
+    assert hooks._correspondent_chip(
+        _correspondent_resources(quiet_seconds=740, read=None)
+    ) == "him: quiet 12m"
+    assert hooks._correspondent_chip(
+        _correspondent_resources(quiet_seconds=11000, read=None)
+    ) == "him: quiet 3h"
 
 
 def test_correspondent_chip_silent_while_the_person_is_simply_here():
-    # `live` + recently heard from = nothing to say. The chip must not
-    # become a meter of the boundary interval.
+    # Heard from moments ago = nothing to say. The chip must not become a
+    # meter of the boundary interval.
     assert hooks._correspondent_chip(
-        _correspondent_resources(
-            quiet_seconds=42, mode="live", until=None, read=None
-        )
+        _correspondent_resources(quiet_seconds=42, read=None)
     ) is None
     # No chat thread at all -> the facet is `absent`, and absent is not a
     # value to render.
     assert hooks._correspondent_chip(_correspondent_resources()) is None
-
-
-def test_correspondent_chip_speaks_on_a_long_quiet_alone():
-    chip = hooks._correspondent_chip(
-        _correspondent_resources(
-            quiet_seconds=1500, mode="live", until=None, read=None
-        )
-    )
-    assert chip == "correspondent: quiet 25m"
+    # A thread with nothing measured on it yet is `absent` too — never a
+    # chip with an empty reading after the colon.
+    assert hooks._correspondent_chip(
+        _correspondent_resources(quiet_seconds=None, read=None)
+    ) is None
 
 
 def test_correspondent_chip_carries_a_read_receipt_when_the_platform_gives_one():
     chip = hooks._correspondent_chip(
         _correspondent_resources(
-            quiet_seconds=30, mode="live", until=None,
-            read={"message": "m4", "at": "21:58"},
+            quiet_seconds=30, read={"message": "m4", "at": "21:58"},
         )
     )
     # Telegram never produces this; WhatsApp does. The renderer is ready
     # for the lane that has it without inventing one for the lane that
-    # does not.
-    assert chip == "correspondent: read m4 21:58"
+    # does not — and a read receipt is news on its own, under the quiet
+    # floor.
+    assert chip == "him: read m4 21:58"
 
 
-def test_correspondent_quiet_collapses_the_pending_event_rows():
+def test_correspondent_chip_rides_the_bar_beside_the_siblings_count():
     payload = _bar_payload(
-        attention={"pending_event_count": 2, "pending_outbox_file_count": 0},
-        inbound={"events": [
-            {"id": "evt-9", "source": "telegram", "summary": "ping"},
-            {"id": "evt-8", "source": "telegram", "summary": "pong"},
-        ]},
-        resources=_correspondent_resources(
-            quiet_seconds=900, mode="quiet", until=None, read=None
-        ),
+        resources=_correspondent_resources(quiet_seconds=1500, read=None),
     )
-    line = hooks.format_delta(payload, pending_set_changed=True)
-    # The count still stands — a declared quiet does not retire an
-    # obligation — but the per-event chrome collapses to one row.
-    assert "2 pending event(s)" in line
-    assert "correspondent quiet — rows collapsed" in line
-    assert "evt-9" not in line
-    assert "evt-8" not in line
-
-
-def test_pending_event_rows_stay_whole_while_the_correspondent_is_live():
-    payload = _bar_payload(
-        attention={"pending_event_count": 1, "pending_outbox_file_count": 0},
-        inbound={"events": [
-            {"id": "evt-9", "source": "telegram", "summary": "ping"},
-        ]},
-        resources=_correspondent_resources(
-            quiet_seconds=10, mode="live", until=None, read=None
-        ),
-    )
-    line = hooks.format_delta(payload, pending_set_changed=True)
-    assert "evt-9" in line
-    assert "rows collapsed" not in line
+    line = hooks.format_delta(payload)
+    assert "him: quiet 25m" in line

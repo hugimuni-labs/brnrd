@@ -12,6 +12,7 @@ import pytest
 
 from brr import claude_status, daemon, envs, news_lane, presence, promises, protocol
 from brr import release_availability, resource_hold
+from brr import portals
 from brr import runner_failures
 from brr import schedule as schedule_mod
 from brr import worktree
@@ -15404,9 +15405,7 @@ def test_correspondent_quiet_seconds_ignores_events_nobody_sent(tmp_path):
     # it may reset the quiet — that is exactly the reading the seat needs
     # when it asks "have they stepped away".
     protocol.create_event(inbox, "schedule", "self-wake")
-    protocol.create_event(
-        inbox, "spawn", "child finished", spawn_status="done",
-    )
+    protocol.create_event(inbox, "spawn", "child finished", spawn_status="done")
     protocol.create_event(inbox, "dispatch_message", "parent steer")
 
     quiet = correspondent.quiet_seconds(inbox, "telegram:user-id:7")
@@ -15425,74 +15424,50 @@ def test_correspondent_quiet_seconds_absent_when_they_never_spoke(tmp_path):
     assert correspondent.quiet_seconds(inbox, "telegram:user-id:7") is None
 
 
-def test_correspondent_presence_record_carries_mode_and_until(tmp_path):
+def test_correspondent_quiet_seconds_reads_the_newest_thing_they_said(tmp_path):
     from brr import correspondent
 
-    correspondent.write_record(tmp_path, "telegram:42:", "afk", until="09:00")
-    assert correspondent.read_record(tmp_path, "telegram:42:") == {
-        "mode": "afk", "until": "09:00",
-    }
-    # A thread with no record is live — the absence of a declaration, which
-    # is what `live` means.
-    assert correspondent.read_record(tmp_path, "telegram:99:") == {
-        "mode": "live", "until": None,
-    }
-
-
-def test_correspondent_presence_record_expires_with_its_own_until(tmp_path):
-    from brr import correspondent
-
-    past = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 60))
-    correspondent.write_record(tmp_path, "telegram:42:", "quiet", until=past)
-    # The declaration carried its own end; honouring it past that would be
-    # the daemon holding someone to something they already un-said.
-    assert correspondent.read_record(tmp_path, "telegram:42:")["mode"] == "live"
-
-    future = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 600))
-    correspondent.write_record(tmp_path, "telegram:42:", "quiet", until=future)
-    assert correspondent.read_record(tmp_path, "telegram:42:")["mode"] == "quiet"
-
-
-def test_correspondent_presence_record_survives_the_run_registry_sweep(tmp_path):
-    """The reason the record is not at the path the design slice named.
-
-    ``presence.list_active`` prunes on read: any ``*.json`` in the presence
-    directory that does not parse as a live run entry is unlinked. A
-    correspondent record written there is deleted by the next dashboard
-    publish tick, which is why it lives one level down.
-    """
-    from brr import correspondent
-
-    correspondent.write_record(tmp_path, "telegram:42:", "quiet")
-    presence.register(tmp_path, kind="thought", run_id="run-x")
-    presence.list_active(tmp_path)
-    assert correspondent.read_record(tmp_path, "telegram:42:")["mode"] == "quiet"
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    _age_event(
+        protocol.create_event(
+            inbox, "telegram", "first", chat_id="42", telegram_user_id="7",
+        ),
+        4000,
+    )
+    _age_event(
+        protocol.create_event(
+            inbox, "telegram", "second", chat_id="42", telegram_user_id="7",
+        ),
+        120,
+    )
+    quiet = correspondent.quiet_seconds(inbox, "telegram:user-id:7")
+    assert 100 <= quiet <= 180
 
 
 def test_correspondent_facet_is_absent_without_a_chat_thread(tmp_path):
     from brr import correspondent
 
     assert correspondent.facet_input(
-        tmp_path, tmp_path / "inbox", thread_key=None, correspondent_key=None,
+        tmp_path / "inbox", thread_key=None, correspondent_key=None,
     ) is None
 
 
-def test_correspondent_facet_input_joins_the_record_and_the_quiet(tmp_path):
+def test_correspondent_facet_input_measures_and_never_infers_a_receipt(tmp_path):
     from brr import correspondent
 
     inbox = tmp_path / "inbox"
     inbox.mkdir()
-    spoken = protocol.create_event(
-        inbox, "telegram", "ping", chat_id="42", telegram_user_id="7",
+    _age_event(
+        protocol.create_event(
+            inbox, "telegram", "ping", chat_id="42", telegram_user_id="7",
+        ),
+        600,
     )
-    _age_event(spoken, 600)
-    correspondent.write_record(tmp_path, "telegram:42:", "urgent-only")
-
     facet = correspondent.facet_input(
-        tmp_path, inbox,
-        thread_key="telegram:42:", correspondent_key="telegram:user-id:7",
+        inbox, thread_key="telegram:42:",
+        correspondent_key="telegram:user-id:7",
     )
-    assert facet["mode"] == "urgent-only"
     assert 580 <= facet["quiet_seconds"] <= 660
     # A Telegram bot is never given a read receipt. The field exists for
     # the lanes that have one; it is never inferred.
@@ -15532,212 +15507,20 @@ def test_composing_holds_briefly_after_a_line_is_written(tmp_path):
     assert cloud_publisher._composing(brr_dir, manifest) is False
 
 
+def test_composing_ignores_the_daemon_owned_control_files(tmp_path):
+    from brr.gates import cloud_publisher
+
+    brr_dir = tmp_path / ".brr"
+    outbox = brr_dir / "outbox" / "evt-1"
+    outbox.mkdir(parents=True)
+    # The daemon rewrites these every heartbeat. If they counted, every run
+    # would read as composing forever.
+    for name in portals.CONTROL_NAMES:
+        (outbox / name).write_text("{}", encoding="utf-8")
+    assert cloud_publisher._composing(brr_dir, {"event_id": "evt-1"}) is False
+
+
 def test_composing_is_false_for_a_run_with_no_portal(tmp_path):
     from brr.gates import cloud_publisher
 
     assert cloud_publisher._composing(tmp_path / ".brr", {}) is False
-
-
-def _quiet_drain_fixture(tmp_path, mode, body, *, filename="note.md"):
-    """Stage one interim line and drain it under a declared *mode*."""
-    from brr import correspondent
-
-    brr_dir = tmp_path / ".brr"
-    inbox = brr_dir / "inbox"
-    outbox = brr_dir / "outbox" / "evt-1"
-    responses = brr_dir / "responses"
-    for d in (inbox, outbox, responses):
-        d.mkdir(parents=True, exist_ok=True)
-    path = protocol.create_event(
-        inbox, "telegram", "the task", status="processing",
-        conversation_key="telegram:42:", chat_id="42", telegram_user_id="7",
-    )
-    event_id = path.stem
-    if mode != "live":
-        correspondent.write_record(brr_dir, "telegram:42:", mode)
-    (outbox / filename).write_text(body, encoding="utf-8")
-    task = Run(
-        id="run-quiet", event_id=event_id, body="the task",
-        source="telegram", conversation_key="telegram:42:",
-    )
-    stats: dict[str, int] = {}
-    promoted = daemon._drain_outbox(
-        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
-        task, responses, event_id, outbox, inbox, stats=stats,
-    )
-    return brr_dir, outbox, promoted, stats
-
-
-def test_drain_holds_an_interim_line_while_the_correspondent_is_hushed(tmp_path):
-    from brr import correspondent
-
-    brr_dir, outbox, promoted, _ = _quiet_drain_fixture(
-        tmp_path, "quiet", "a thought halfway through the work\n",
-    )
-    assert promoted == 0
-    held = correspondent.held_files(outbox)
-    assert [p.name for p in held] == ["note.md"]
-    assert not (outbox / "note.md").exists()
-
-
-def test_drain_releases_held_lines_when_the_correspondent_comes_back(tmp_path):
-    from brr import correspondent
-
-    brr_dir, outbox, _, _ = _quiet_drain_fixture(
-        tmp_path, "quiet", "held while they were away\n",
-    )
-    assert len(correspondent.held_files(outbox)) == 1
-
-    # `/back` — the relay rewrites the record. Nothing in the drain needs to
-    # know *which* release condition fired; the mode simply no longer holds.
-    correspondent.write_record(brr_dir, "telegram:42:", "live")
-    event = protocol.list_pending(brr_dir / "inbox")[0]
-    task = Run(
-        id="run-quiet", event_id=event["id"], body="the task",
-        source="telegram", conversation_key="telegram:42:",
-    )
-    promoted = daemon._drain_outbox(
-        daemon._WorkerEmit(brr_dir, "telegram:42:", event["id"]),
-        task, brr_dir / "responses", event["id"], outbox, brr_dir / "inbox",
-    )
-    assert promoted == 1
-    assert correspondent.held_files(outbox) == []
-
-
-def test_drain_passes_an_urgent_line_under_urgent_only(tmp_path):
-    from brr import correspondent
-
-    _, outbox, promoted, _ = _quiet_drain_fixture(
-        tmp_path, "urgent-only", "urgent: the deploy is rolling back\n",
-    )
-    assert promoted == 1
-    assert correspondent.held_files(outbox) == []
-
-
-def test_drain_holds_an_ordinary_line_under_urgent_only(tmp_path):
-    from brr import correspondent
-
-    _, outbox, promoted, _ = _quiet_drain_fixture(
-        tmp_path, "urgent-only", "just checking in\n",
-    )
-    assert promoted == 0
-    assert [p.name for p in correspondent.held_files(outbox)] == ["note.md"]
-
-
-def test_drain_never_holds_a_gate_escalation(tmp_path):
-    from brr import correspondent
-
-    _, outbox, promoted, stats = _quiet_drain_fixture(
-        tmp_path, "quiet",
-        "---\ngate: telegram\n---\nthe credential in the diff is live\n",
-    )
-    # An escalation exists precisely for the moment someone must be
-    # interrupted. A declared quiet does not out-rank it.
-    assert correspondent.held_files(outbox) == []
-    assert promoted == 1
-
-
-def test_presence_control_file_sets_the_mode_the_facet_reads(tmp_path):
-    """The resident's own hand on the same dial the relay writes.
-
-    `/afk` from the person and a `presence:` control from the run write one
-    record — so the assertion that matters is not "a file was written" but
-    "the facet reads it on the next boundary".
-    """
-    from brr import correspondent
-
-    brr_dir = tmp_path / ".brr"
-    inbox = brr_dir / "inbox"
-    outbox = brr_dir / "outbox" / "evt-1"
-    responses = brr_dir / "responses"
-    for d in (inbox, outbox, responses):
-        d.mkdir(parents=True, exist_ok=True)
-    path = protocol.create_event(
-        inbox, "telegram", "the task", status="processing",
-        conversation_key="telegram:42:", chat_id="42", telegram_user_id="7",
-    )
-    event_id = path.stem
-    (outbox / "presence.md").write_text(
-        "---\npresence: afk\nuntil: 09:00\n---\n", encoding="utf-8",
-    )
-    task = Run(
-        id="run-presence", event_id=event_id, body="the task",
-        source="telegram", conversation_key="telegram:42:",
-    )
-    stats: dict[str, int] = {}
-    daemon._drain_outbox(
-        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
-        task, responses, event_id, outbox, inbox, stats=stats,
-    )
-
-    assert stats.get("presence") == 1
-    assert not (outbox / "presence.md").exists()
-    facet = correspondent.facet_input(
-        brr_dir, inbox,
-        thread_key="telegram:42:", correspondent_key="telegram:user-id:7",
-    )
-    assert facet["mode"] == "afk"
-    assert facet["until"] == "09:00"
-
-
-def test_presence_control_refuses_a_mode_that_is_not_one(tmp_path):
-    from brr import correspondent
-
-    brr_dir = tmp_path / ".brr"
-    inbox = brr_dir / "inbox"
-    outbox = brr_dir / "outbox" / "evt-1"
-    responses = brr_dir / "responses"
-    for d in (inbox, outbox, responses):
-        d.mkdir(parents=True, exist_ok=True)
-    path = protocol.create_event(
-        inbox, "telegram", "the task", status="processing",
-        conversation_key="telegram:42:", chat_id="42", telegram_user_id="7",
-    )
-    (outbox / "presence.md").write_text(
-        "---\npresence: asleep\n---\n", encoding="utf-8",
-    )
-    task = Run(
-        id="run-presence", event_id=path.stem, body="the task",
-        source="telegram", conversation_key="telegram:42:",
-    )
-    daemon._drain_outbox(
-        daemon._WorkerEmit(brr_dir, "telegram:42:", path.stem),
-        task, responses, path.stem, outbox, inbox,
-    )
-    # Refused, named in notices, and the thread stays live — never a
-    # silently-swallowed directive.
-    assert correspondent.read_record(brr_dir, "telegram:42:")["mode"] == "live"
-    notices = (outbox / daemon.NOTICES_FILE).read_text(encoding="utf-8")
-    assert "presence refused" in notices
-    assert "asleep" in notices
-
-
-def test_presence_control_then_an_interim_line_holds_in_the_same_drain(tmp_path):
-    from brr import correspondent
-
-    brr_dir = tmp_path / ".brr"
-    inbox = brr_dir / "inbox"
-    outbox = brr_dir / "outbox" / "evt-1"
-    responses = brr_dir / "responses"
-    for d in (inbox, outbox, responses):
-        d.mkdir(parents=True, exist_ok=True)
-    path = protocol.create_event(
-        inbox, "telegram", "the task", status="processing",
-        conversation_key="telegram:42:", chat_id="42", telegram_user_id="7",
-    )
-    (outbox / "1-presence.md").write_text(
-        "---\npresence: quiet\n---\n", encoding="utf-8",
-    )
-    time.sleep(0.01)
-    (outbox / "2-note.md").write_text("a line after the hush\n", encoding="utf-8")
-    task = Run(
-        id="run-presence", event_id=path.stem, body="the task",
-        source="telegram", conversation_key="telegram:42:",
-    )
-    daemon._drain_outbox(
-        daemon._WorkerEmit(brr_dir, "telegram:42:", path.stem),
-        task, responses, path.stem, outbox, inbox,
-    )
-    # The mode is effective from the file that declared it, not from the
-    # next drain — otherwise one line always escapes the quiet.
-    assert [p.name for p in correspondent.held_files(outbox)] == ["2-note.md"]
