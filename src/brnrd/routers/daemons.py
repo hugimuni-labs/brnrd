@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import mimetypes
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
 from typing import Any, Callable
@@ -31,6 +33,83 @@ from ..models import Account, ActivityRecord, Daemon, DaemonRepo, Event, GitHubI
 from ..platforms import github_app as github_app_client
 
 router = APIRouter(prefix="/v1/daemons", tags=["daemons"])
+logger = logging.getLogger(__name__)
+
+# Presence, the relay half (design-the-continuous-seat.md §Presence): at
+# most one `sendChatAction` per chat per this window, even though the
+# publish tick that carries `composing` can arrive far more often
+# (`src/brr/gates/cloud.py`'s ~3s live-runs publish loop). Telegram's own
+# indicator already decays after ~5s, so 4s keeps it visibly alive without
+# hammering the API once per publish tick.
+_TYPING_MIN_INTERVAL_S = 4.0
+# Process-local and unbounded-by-TTL on purpose: a chat's key is retired
+# implicitly (a stale entry is a few bytes; the process recycles on deploy),
+# and this is a rate limiter, not a durable record — nothing here is read
+# back except "how long ago did we last send".
+_last_typing_sent: dict[tuple[str, str], float] = {}
+
+
+def _should_send_typing(platform: str, chat_id: str, *, now: float | None = None) -> bool:
+    """True at most once per ``(platform, chat_id)`` per
+    ``_TYPING_MIN_INTERVAL_S`` — records the attempt as spent the moment it
+    answers True, so a caller that goes on to fail the actual send still
+    doesn't retry inside the same window (a failed send is not evidence the
+    correspondent needs *another* one sooner)."""
+    now = now if now is not None else time.monotonic()
+    key = (platform, chat_id)
+    last = _last_typing_sent.get(key)
+    if last is not None and now - last < _TYPING_MIN_INTERVAL_S:
+        return False
+    _last_typing_sent[key] = now
+    return True
+
+
+def _cloud_chat_target(stream: str) -> tuple[str, str, int | None] | None:
+    """Parse a live-run row's ``stream`` into ``(platform, chat_id,
+    topic_id)``, or ``None`` when it names no reachable chat.
+
+    ``stream`` is the run's gate-thread key (``presence.register``'s
+    ``stream=``, straight off ``brr.conversations.gate_thread_key``). A
+    hosted daemon's cloud-relayed conversations render as
+    ``cloud:<platform>:<chat_id>:<topic_id-or-empty>``
+    (``brr.channels.registry``'s ``cloud`` ``ThreadRule``) — the one shape
+    this relay can resolve back to a chat it can message. Anything else (a
+    self-hosted ``telegram:...`` key with no cloud carrier, a strand's
+    ``spawn:default``, an unset stream) has no chat identity *this* server
+    can reach, so it answers ``None`` rather than guess — "never on a
+    thread with no chat identity" (presence, the relay half).
+    """
+    parts = (stream or "").split(":")
+    if len(parts) < 3 or parts[0] != "cloud" or not parts[1] or not parts[2]:
+        return None
+    platform, chat_id = parts[1], parts[2]
+    topic_id: int | None = None
+    if len(parts) > 3 and parts[3]:
+        try:
+            topic_id = int(parts[3])
+        except ValueError:
+            topic_id = None
+    return platform, chat_id, topic_id
+
+
+def _send_typing_indicator(settings, platform: str, chat_id: str, topic_id: int | None) -> None:
+    """Best-effort chat action — a failure here must never break the daemon's
+    ``PUT /live-runs`` (the same "never let a side signal fail the report"
+    stance ``post_card``/``_reply`` already take for ordinary replies)."""
+    if platform == "telegram":
+        if not settings.telegram_bot_token:
+            return
+        from ..platforms import telegram as tg
+
+        try:
+            tg.send_chat_action(settings.telegram_bot_token, chat_id, topic_id=topic_id)
+        except Exception as e:
+            logger.warning("telegram typing indicator failed chat=%s: %s", chat_id, e)
+        return
+    # WhatsApp: no typing-out method exists in `platforms/whatsapp.py` today
+    # (task 1's "else name it as not done") — Meta's Cloud API can mark a
+    # message read with a typing indicator attached, but that is a distinct,
+    # unbuilt send shape, not a gap in this dispatch.
 
 
 def _touch_daemon(db: Session, principal: Principal) -> None:
@@ -696,7 +775,7 @@ def claim_wake_request(payload: schemas.WakeRequestClaim, principal: Principal =
 
 
 @router.put("/live-runs", response_model=schemas.LiveRunsOut)
-def put_live_runs(payload: schemas.LiveRunsReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+def put_live_runs(request: Request, payload: schemas.LiveRunsReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
     """Replace this daemon's live/coexisting-runs snapshot (#258).
 
     Same last-write-wins shape as `put_quota` above: the daemon owns the
@@ -746,6 +825,22 @@ def put_live_runs(payload: schemas.LiveRunsReport, principal: Principal = Depend
     daemon.online = True
     daemon.last_seen_at = now
     db.commit()
+    # Presence, the relay half (design-the-continuous-seat.md §Presence,
+    # task 1): a row reporting `composing` gets one platform chat action,
+    # rate-limited per chat — over the *permitted* rows, so a repo whose
+    # consent excludes "live_runs" never has its correspondent typed at
+    # either.
+    settings = request.app.state.settings
+    for run in runs:
+        if not run.composing:
+            continue
+        target = _cloud_chat_target(run.stream)
+        if target is None:
+            continue
+        platform, chat_id, topic_id = target
+        if not _should_send_typing(platform, chat_id):
+            continue
+        _send_typing_indicator(settings, platform, chat_id, topic_id)
     # #476 wyrd §3 stop piggyback, mirroring the #328 wake-request handshake
     # on `put_runners`: retire the stops this daemon just dispatched into the
     # kill path, then hand back the account's still-pending ones so a user's
