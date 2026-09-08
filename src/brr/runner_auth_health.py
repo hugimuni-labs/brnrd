@@ -1,8 +1,16 @@
 """Persist dispatch-proven runner authentication failures.
 
 The daemon writes ``.brr/runner-auth-health.json`` after attempts and the
-runner catalog reads it.  A manual relogin is deliberately not observable;
-the mark remains until the next successful attempt in the same auth domain.
+runner catalog reads it. A manual relogin is deliberately not observable on
+its own; the mark clears only on the next dispatch-proven auth in the same
+domain — either a clean attempt exit (``daemon._record_runner_auth_health``,
+post-attempt) or, sooner, this attempt's first *live* tool boundary
+(``daemon._run_worker``'s ``_emit_flush``, which calls
+:func:`clear_success` the moment a boundary flush proves the Shell
+authenticated). The boundary clear exists because a long-lived seat
+(``await`` / ``hold:``) can sit *inside* an attempt for hours after a
+relogin — the exit-only clear left the catalog and dashboard reading the
+whole domain dead for that entire span even while the run was working.
 Both marking and clearing replace the file atomically, so daemon restarts
 preserve the latest verdict rather than resurrecting a cleared failure.
 """

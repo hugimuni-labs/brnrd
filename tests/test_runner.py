@@ -2119,6 +2119,45 @@ class TestFailureDetailRedaction:
             exit_code=1, detail="deny: api.openai.com:443 not on allowlist",
         ) == runner_failures.EGRESS_BLOCKED
 
+    def test_claude_expired_oauth_session_is_an_auth_failure(self):
+        """The wording ``run-260908-1929-qzje`` actually died on:
+
+        ``Failed to authenticate: OAuth session expired and could not be
+        refreshed`` — claude CLI's real phrasing, reversed from
+        ``auth(?:entication)? failed\\b`` (which needs "auth" then
+        "failed", not "failed to authenticate") and never matched by any
+        other pattern. Pre-fix this fell through to ``RUNNER_ERROR``, so a
+        genuine auth death neither marked the domain nor triggered the
+        auth-kind fallback.
+        """
+        from brr import runner_failures
+
+        assert runner_failures.classify_failure(
+            exit_code=1,
+            detail=(
+                "Failed to authenticate: OAuth session expired and could "
+                "not be refreshed"
+            ),
+        ) == runner_failures.AUTH_ERROR
+        assert runner_failures.classify_failure(
+            exit_code=1, detail="oauth session expired",
+        ) == runner_failures.AUTH_ERROR
+
+    def test_expired_oauth_session_still_yields_to_an_egress_denial(self):
+        """The egress-before-auth ordering (#1118) must survive the new
+        patterns too: a CONNECT-403 the proxy names as its own must not
+        become AUTH_ERROR just because the auth list grew.
+        """
+        from brr import runner_failures
+
+        verbatim = (
+            "stream disconnected before completion: URL error: Proxy "
+            "connection failed: HTTP CONNECT failed with status 403"
+        )
+        assert runner_failures.classify_failure(
+            exit_code=1, detail=verbatim,
+        ) == runner_failures.EGRESS_BLOCKED
+
     def test_a_bare_403_is_still_an_auth_failure(self):
         """The disambiguation is the word *proxy*, and only that.
 
