@@ -1549,11 +1549,11 @@ class TestPromptBuilding:
         assert "change_token" in prompt
         assert "plan / todo boundaries" in prompt
         assert "immediately before a terminal closeout" in prompt
-        assert _says(prompt, "after the runner has already returned")
-        assert _says(prompt, "statically dispatched by the daemon")
+        assert _says(prompt, "after the runner has returned")
+        assert _says(prompt, "dispatched by the daemon at turn end")
         assert "nobody re-runs you to extract a sentence" in prompt
-        assert "`gate: forge` is the explicit PR handoff" in prompt
-        assert "does not own PR creation" in prompt
+        assert "`gate: forge` = the explicit PR handoff" in prompt
+        assert "never owns PR creation" in prompt
 
     def test_daemon_prompt_carries_kb_url_portal_fact(self, tmp_path):
         base = "https://github.test/knowledge/blob/main/repos/Gurio__brr/"
@@ -1674,7 +1674,7 @@ class TestPromptBuilding:
         assert "Every listed event is yours" in prompt
         # The fold-in contract names the frontmatter handle.
         assert "event: <id>" in prompt
-        assert "Own every" in prompt
+        assert "own every pending event" in prompt.lower()
         assert _says(prompt, "strand capacity and quota are healthy")
         assert "spawn:" in prompt
         assert "portal-state.json" in prompt
@@ -2414,9 +2414,9 @@ class TestPromptBuilding:
         )
         # Pending-event ownership is single-sourced in daemon-substrate's
         # portals block since the P2 dedup (run.md Delivery is a pointer now).
-        assert "Own every pending event" in prompt
+        assert "own every pending event" in prompt.lower()
         assert "card + mid-thought replies" in prompt
-        assert "waiting in the dark" in prompt
+        assert "nobody waits in the dark" in prompt
 
     def test_delivery_contract_carries_portal_model_summary(self, tmp_path):
         # The portal-grammar summary (inbound/outbound/parked) now rides in
