@@ -6957,3 +6957,22 @@ def test_correspondent_chip_rides_the_bar_beside_the_siblings_count():
     )
     line = hooks.format_delta(payload)
     assert "him: quiet 25m" in line
+
+
+def test_room_pin_is_echoed_each_boundary_never_parsed(tmp_path):
+    """`.room` (evt-…-dfxc): the resident's own note on how to talk now
+    rides the bar verbatim; absent or blank ⇒ no segment."""
+    payload = _portal_payload()
+    line = hooks.format_delta(payload, rendered_chips={}, room="he's afk till 9 — hold interim lines, one digest on return")
+    assert line is not None and "room: he's afk till 9 — hold interim lines, one digest on return" in line
+    quiet = hooks.format_delta(payload, rendered_chips={})
+    assert quiet is None or "room:" not in quiet
+
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    ctx = hooks.HookContext({"BRR_PORTAL_STATE": str(outbox / "portal-state.json")})
+    assert hooks._read_room(ctx) is None
+    (outbox / ".room").write_text("live, fast, one-liners\nsecond line ignored\n", encoding="utf-8")
+    assert hooks._read_room(ctx) == "live, fast, one-liners"
+    (outbox / ".room").write_text("\n", encoding="utf-8")
+    assert hooks._read_room(ctx) is None
