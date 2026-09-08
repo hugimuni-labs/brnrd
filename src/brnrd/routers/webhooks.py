@@ -258,6 +258,151 @@ def _enqueue_telegram_event(db: Session, parsed: tg.ParsedMessage, *, repo_id: s
     inbox_service.enqueue(db, repo_id=repo_id, body=body, source="telegram", reply_to={"platform": "telegram", "chat_id": parsed.chat_id, "topic_id": parsed.topic_id, "message_id": parsed.message_id, "user": parsed.user, "user_id": parsed.user_id, "username": parsed.username}, attachments=parsed.attachments or None, media_group_id=parsed.media_group_id)
 
 
+# ── Presence, the relay half (design-the-continuous-seat.md §Presence) ──
+#
+# The four presence commands: `/afk <until>` · `/hush` · `/urgent-only` ·
+# `/back`, slash optional on both platforms (the design's own table, task 2).
+# Channel-agnostic — Telegram and WhatsApp share the same parser, the same
+# `ChannelRoute` fields, and the same mirror-to-daemon event; only the reply
+# transport (`_reply` vs `_wa_reply`) differs per caller.
+
+_PRESENCE_COMMANDS = {"afk", "hush", "urgent-only", "back"}
+_PRESENCE_UNTIL_HINT = (
+    "a number of hours from now (e.g. `2h`), an hour (`9`), or `HH:MM` (`09:00`, `21:30`)"
+)
+_UNTIL_DURATION_RE = re.compile(r"^(\d+)h$", re.IGNORECASE)
+_UNTIL_HHMM_RE = re.compile(r"^([0-2]?\d):([0-5]\d)$")
+_UNTIL_HOUR_RE = re.compile(r"^([0-2]?\d)$")
+
+
+def _presence_command(text: str) -> tuple[str, str] | None:
+    """One of the four presence commands **with** a leading `/`, or `None`.
+
+    A bare `afk` / `back` is a *word to the resident*, never a command (his
+    steer, 2026-09-09 evt-…-g6hj: "use a native people's flow: afk / back —
+    and you decide what to do with it"). The slash forms stay for whoever
+    wants the relay to hold the state for them; everything else flows to
+    the seat, which reads presence the way a person would and sets its own
+    `correspondent` mode from the daemon side.
+    """
+    stripped = (text or "").strip()
+    if not stripped.startswith("/"):
+        return None
+    head, _, rest = stripped.partition(" ")
+    name = head[1:].strip().casefold()
+    if name not in _PRESENCE_COMMANDS:
+        return None
+    return name, rest.strip()
+
+
+def _parse_presence_until(text: str, *, now: datetime) -> datetime | None:
+    """`<n>h` (relative), a bare hour, or `HH:MM` (time-of-day, rolled to
+    tomorrow if that time has already passed today) — the three shapes
+    `/afk <until>` accepts. `None` on anything else, including an
+    out-of-range hour/minute, so the caller can answer with the accepted-
+    forms hint instead of guessing at a fourth shape.
+
+    Account timezones are not modeled yet (no such column exists on
+    `Account`); *now* is the caller's clock, UTC by default — a future
+    per-account timezone can thread through this same parameter without
+    changing the parser's contract.
+    """
+    text = text.strip()
+    match = _UNTIL_DURATION_RE.match(text)
+    if match:
+        hours = int(match.group(1))
+        return now + timedelta(hours=hours) if hours > 0 else None
+    match = _UNTIL_HHMM_RE.match(text)
+    if match:
+        hour, minute = int(match.group(1)), int(match.group(2))
+    else:
+        match = _UNTIL_HOUR_RE.match(text)
+        if not match:
+            return None
+        hour, minute = int(match.group(1)), 0
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate <= now:
+        candidate += timedelta(days=1)
+    return candidate
+
+
+def _apply_presence_command(
+    db: Session, route: ChannelRoute, command: str, args: str, *, now: datetime | None = None,
+) -> tuple[str, bool]:
+    """Mutate *route*'s presence fields for one command; return ``(reply,
+    changed)``. A bad `/afk <until>` stores nothing — ``changed`` is
+    ``False`` and *reply* is the accepted-forms hint rather than a
+    confirmation, so the caller knows not to mirror a no-op to the daemon."""
+    now = now or datetime.now(timezone.utc)
+    if command == "afk":
+        until = _parse_presence_until(args, now=now)
+        if until is None:
+            return f"Not a time I recognize — use {_PRESENCE_UNTIL_HINT}.", False
+        route.presence_mode = "afk"
+        route.presence_until = until
+        route.presence_set_at = now
+        db.commit()
+        return (
+            f"afk until {until.strftime('%H:%M')} — interim lines held, "
+            "replies to you still land."
+        ), True
+    if command == "hush":
+        route.presence_mode = "hush"
+        route.presence_until = None
+        route.presence_set_at = now
+        db.commit()
+        return "hush — interim lines held, replies to you still land.", True
+    if command == "urgent-only":
+        route.presence_mode = "urgent-only"
+        route.presence_until = None
+        route.presence_set_at = now
+        db.commit()
+        return "urgent-only — only what can't wait reaches you until /back.", True
+    # command == "back"
+    route.presence_mode = None
+    route.presence_until = None
+    route.presence_set_at = now
+    db.commit()
+    return "back — delivery is normal again.", True
+
+
+def _enqueue_presence_event(db: Session, route: ChannelRoute, *, platform: str) -> None:
+    """Mirror *route*'s presence fields to the daemon as a `presence`-kind
+    event (design-the-continuous-seat.md §Presence, task 2): "emit it as a
+    presence event kind the daemon can write [its local presence file]
+    from." Rides the same `/v1/daemons/inbox` stream every ordinary task
+    does, tagged via `reply_to["kind"]` — the same discriminator convention
+    `_handle_github_summons` already uses for `pr-comment`/`issue-comment` —
+    so a daemon that recognizes `kind == "presence"` can special-case it
+    (never spawn a resident run for it) without a new endpoint. Consuming
+    this event is the daemon half's job, not this relay's; skipped quietly
+    when the account has no repo to route it through yet (the presence
+    record on `route` is already the durable fact either way).
+    """
+    repo = _route_target_repo(db, route)
+    if repo is None:
+        return
+    payload = {
+        "mode": route.presence_mode,
+        "until": route.presence_until.isoformat() if route.presence_until else None,
+        "set_at": route.presence_set_at.isoformat() if route.presence_set_at else None,
+    }
+    inbox_service.enqueue(
+        db,
+        repo_id=repo.id,
+        body=json.dumps(payload),
+        source=platform,
+        reply_to={
+            "platform": platform,
+            "chat_id": route.channel_id,
+            "topic_id": route.topic_id,
+            "kind": "presence",
+        },
+    )
+
+
 # #1282 — matches `capabilities._DAEMON_ONLINE_AFTER`. Duplicated rather
 # than imported: pulling in `capabilities.py` here for one threshold would
 # also pull its `_Context` account-wide query shape, built for the
@@ -1070,6 +1215,27 @@ async def whatsapp_webhook(request: Request, x_hub_signature_256: str | None = H
     if not isinstance(payload, dict):
         _wa_audit(trace, "ignored", "reason=non_object_payload")
         return {"ok": True}
+    # Task 3: a delivery/read status for one of *our own* outbound sends
+    # never carries an inbound ``messages`` entry — Meta puts the two in
+    # disjoint payloads — so this check has to run before, not after,
+    # ``parse_update`` returns its honest ``None`` for it.
+    status_update = wa.parse_status_update(payload)
+    if status_update is not None:
+        _wa_audit(trace, "status_received", f"status={status_update.status}")
+        if status_update.status == "read":
+            with request.app.state.SessionLocal() as db:
+                route = db.execute(
+                    select(ChannelRoute).where(
+                        ChannelRoute.platform == "whatsapp",
+                        ChannelRoute.channel_id == status_update.recipient_id,
+                    )
+                ).scalar_one_or_none()
+                if route is not None:
+                    route.last_read_message_id = status_update.message_id
+                    route.last_read_at = status_update.timestamp or datetime.now(timezone.utc)
+                    db.commit()
+                    _wa_audit(trace, "read_recorded")
+        return {"ok": True}
     # ``statuses`` deliveries (sent/delivered/read receipts for our own
     # outbound sends) and any payload with no inbound message parse to
     # None here — never a trigger, same as a captionless-and-textless
@@ -1088,6 +1254,21 @@ async def whatsapp_webhook(request: Request, x_hub_signature_256: str | None = H
         route = _wa_channel_route(db, parsed)
         if route is not None and _message_precedes_route(parsed, route):
             _wa_audit(trace, "ignored", "reason=predates_route")
+            return {"ok": True}
+        presence_cmd = _presence_command(parsed.text)
+        if presence_cmd is not None:
+            if route is None:
+                _wa_audit(trace, "unpaired")
+                _wa_reply(settings, parsed, _WA_UNPAIRED_TEXT)
+                return {"ok": True}
+            # No `_authorized` equivalent on WhatsApp (module note above):
+            # the route match against the sender's own wa_id already proves
+            # authorization the same way it does for an ordinary message.
+            ack, changed = _apply_presence_command(db, route, presence_cmd[0], presence_cmd[1])
+            if changed:
+                _enqueue_presence_event(db, route, platform="whatsapp")
+                _wa_audit(trace, "presence_set", f"mode={presence_cmd[0]}")
+            _wa_reply(settings, parsed, ack)
             return {"ok": True}
         if route is None:
             _wa_audit(trace, "unpaired")
@@ -1166,6 +1347,25 @@ def telegram_webhook(request: Request, payload: dict, x_telegram_bot_api_secret_
             return {"ok": True}
         route = _channel_route(db, parsed)
         if route is not None and _message_precedes_route(parsed, route):
+            return {"ok": True}
+        presence_cmd = _presence_command(parsed.text)
+        if presence_cmd is not None:
+            # Task 2: a presence command is never a message for the
+            # resident — it never falls through to `_handle_command` or the
+            # ordinary enqueue path below, paired or not.
+            if route is None:
+                _reply(settings, parsed, _UNPAIRED_TEXT)
+                return {"ok": True}
+            if not _authorized(settings, parsed, route):
+                # Same default-closed bar (#409) as an ordinary task: only
+                # the paired principal (or an open-room member, or the
+                # allowlist) may change this thread's delivery mode.
+                _audit_reject(parsed, reason="not_authorized")
+                return {"ok": True}
+            ack, changed = _apply_presence_command(db, route, presence_cmd[0], presence_cmd[1])
+            if changed:
+                _enqueue_presence_event(db, route, platform="telegram")
+            _reply(settings, parsed, ack)
             return {"ok": True}
         command = _slash_command(parsed.text)
         if command is not None and _handle_command(db, settings, parsed, command[0], command[1], route):

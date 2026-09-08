@@ -1040,6 +1040,13 @@ class LiveRunIn(BaseModel):
     # would 422 the whole row the first time the daemon sends a field this
     # API doesn't know about yet. `None` for a live/ad-hoc row.
     resource_hold: dict[str, Any] | None = None
+    # Presence, the relay half (design-the-continuous-seat.md §Presence):
+    # true while this run has an outbox draft (`*.tmp`) in flight or is
+    # otherwise mid-reply. The relay turns it into one platform typing
+    # indicator per chat per rate window (`routers/daemons.py::put_live_runs`).
+    # Default `False` reads identically to "not composing" for a daemon that
+    # predates this field, so no version gate is needed on either side.
+    composing: bool = False
 
     @classmethod
     def string_bounds(cls) -> dict[str, int]:

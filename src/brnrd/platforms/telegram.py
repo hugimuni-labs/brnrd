@@ -170,6 +170,28 @@ def send_fresh_message(
     return None if message_id is None else str(message_id)
 
 
+def send_chat_action(
+    token: str,
+    chat_id: str | int,
+    action: str = "typing",
+    *,
+    topic_id: int | None = None,
+    timeout: float = 10.0,
+) -> None:
+    """``sendChatAction`` — the one typing primitive Telegram gives a bot.
+
+    Outbound only: a bot can *signal* typing, never observe it (presence,
+    the relay half — a Telegram bot receives no typing and no read receipts
+    at all, verified 2026-09-09). Telegram clears the indicator after ~5s on
+    its own, so a caller wanting a sustained indicator loops this call
+    itself; this function sends exactly one action and nothing more.
+    """
+    params: dict = {"chat_id": chat_id, "action": action}
+    if topic_id is not None:
+        params["message_thread_id"] = topic_id
+    _post_json(token, "sendChatAction", params, timeout)
+
+
 def get_me(token: str, *, timeout: float = 10.0) -> dict:
     """Fetch the bot's own identity via `getMe` — read-only, no side effects.
 
