@@ -238,7 +238,7 @@ def test_whatsapp_presence_command_does_not_enqueue_a_task(env, monkeypatch):
     body2 = {"entry": [{"changes": [{"value": {
         "contacts": [{"profile": {"name": "Bo"}}],
         "messages": [{"from": "15551230000", "id": "wamid.2", "type": "text",
-                      "timestamp": str(int(time.time())), "text": {"body": "hush"}}],
+                      "timestamp": str(int(time.time())), "text": {"body": "/hush"}}],
     }}]}]}
     r = client.post("/v1/webhooks/whatsapp", json=body2, headers={"X-Hub-Signature-256": "sha256=x"})
     assert r.status_code == 200
