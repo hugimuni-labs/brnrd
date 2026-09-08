@@ -7,7 +7,7 @@ def test_schema_is_wall_derived_and_ordered():
     keys = [f.key for f in facets.FACETS]
     assert keys == [
         "quota", "spend", "context_window", "coexisting_runs", "remote_scm",
-        "allowance",
+        "correspondent", "allowance",
     ]
     # Level facets are the walls; state facets are actionable posture.
     by_key = facets.FACETS_BY_KEY
@@ -16,12 +16,17 @@ def test_schema_is_wall_derived_and_ordered():
     assert by_key["context_window"].kind == facets.LEVEL
     assert by_key["coexisting_runs"].kind == facets.STATE
     assert by_key["remote_scm"].kind == facets.STATE
+    # The correspondent is posture, not a wall: a long quiet changes what a
+    # run does next without being anything it can run out of.
+    assert by_key["correspondent"].kind == facets.STATE
     assert by_key["allowance"].kind == facets.LEVEL
-    # coexisting_runs (single-flight someday-nicety) and allowance (a
+    # coexisting_runs (single-flight someday-nicety), allowance (a
     # strand's `spawn:` ceiling, or the resident seat's own standing
-    # allowance — design-the-allowance.md slices 1-2) are the two optional
-    # facets — everything else is required of every renderer.
-    optional = {"coexisting_runs", "allowance"}
+    # allowance — design-the-allowance.md slices 1-2) and correspondent
+    # (a chat thread's own fact; a schedule-woken run has no correspondent
+    # to read) are the optional facets — everything else is required of
+    # every renderer.
+    optional = {"coexisting_runs", "allowance", "correspondent"}
     assert {s.key for s in facets.FACETS if not s.required} == optional
     assert all(s.required for s in facets.FACETS if s.key not in optional)
 
