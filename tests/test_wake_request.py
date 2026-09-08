@@ -369,3 +369,19 @@ def test_release_sticky_drops_only_records_claimed_at_or_before_the_ask(tmp_path
     _bind(brr_dir)
     assert wake_request.release_sticky(brr_dir, "garbage") is False
     assert wake_request.sticky_record(brr_dir) is not None
+
+
+def test_claim_with_runners_publication_disabled_omits_catalog(tmp_path, monkeypatch):
+    from brr import runner
+    from brr.gates import cloud, cloud_publisher
+
+    brr_dir = _brr(tmp_path)
+    captured = {}
+    monkeypatch.setattr(cloud, "_load_state", lambda _d: {"token": "t", "brnrd_url": "https://x"})
+    monkeypatch.setattr(cloud_publisher, "_publish_config", lambda _d: {"publish.layers": "none"})
+    monkeypatch.setattr(cloud, "_request", _claim_stub(captured, {"apply": True}))
+    def forbidden(_root):
+        raise AssertionError("a denied catalog must not be collected")
+    monkeypatch.setattr(runner, "available_runner_catalog", forbidden)
+    assert cloud.claim_wake_request(brr_dir, request_id="w1")["apply"]
+    assert "known_profiles" not in captured["json"]
