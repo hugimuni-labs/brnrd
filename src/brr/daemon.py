@@ -7048,15 +7048,12 @@ def _write_live_portal_state(
         # new "park" outcome and stamp `pending_resource_hold` for the
         # ordinary worker-tail routing (`_finalize_resource_hold`) to pick up
         # once this turn actually ends.
-        # design-the-continuous-seat.md §Presence: who is on the other end,
-        # and are they there. Both halves are local — `quiet_seconds` is
-        # this inbox read back, `mode` is the record the relay writes from
-        # the person's own /afk //hush //urgent-only //back — so this costs
-        # a directory scan and one small JSON read per heartbeat and never
-        # a platform call. `None` thread key (a schedule-woken run in a repo
-        # nobody has messaged) renders the facet `absent`, not fabricated.
+        # design-the-continuous-seat.md §Presence: how long the person on
+        # the other end has been quiet. Measured off this run's own inbox,
+        # so it costs one directory scan per heartbeat and never a platform
+        # call. A `None` thread key (a schedule-woken run in a repo nobody
+        # has messaged) renders the facet `absent`, not fabricated.
         correspondent_facet_input = correspondent_mod.facet_input(
-            brr_dir,
             inbox_dir,
             thread_key=_task_thread_key(task),
             correspondent_key=_task_correspondent_key(task),
@@ -7141,18 +7138,6 @@ def _write_live_portal_state(
                     or stats.get("outbound")
                 ),
                 "pending_outbox_files": pending_files,
-                # design-the-continuous-seat.md §Presence: interim chat
-                # lines the correspondent's declared quiet is holding back.
-                # Named here (dir + count) rather than left invisible — a
-                # line that was written and never sent must be something
-                # the resident can *see*, not something it infers from
-                # silence on the other side.
-                "held": {
-                    "dir": str(
-                        correspondent_mod.held_dir(outbox_dir)
-                    ) if outbox_dir is not None else None,
-                    "count": len(correspondent_mod.held_files(outbox_dir)),
-                },
                 "oldest_pending_age_seconds": (
                     round(oldest_pending_age_seconds, 1)
                     if oldest_pending_age_seconds is not None else None
@@ -10555,17 +10540,6 @@ def _drain_outbox(
     """
     if not outbox_dir or not outbox_dir.exists():
         return 0
-    # design-the-continuous-seat.md §Presence. The correspondent's declared
-    # mode, read once per drain and applied twice below: release first (the
-    # mode no longer holds — /back rewrote the record, or the `until`
-    # passed and `read_record` now reads `live`), then hold as the loop
-    # meets each interim line. Release before listing, so a line freed this
-    # tick goes out on this tick rather than waiting for the next one.
-    correspondent_mode = correspondent_mod.read_record(
-        emit.brr_dir, _task_thread_key(task)
-    )["mode"]
-    if correspondent_mode == "live":
-        correspondent_mod.release_held(outbox_dir)
     try:
         entries = sorted(
             (p for p in outbox_dir.iterdir() if p.is_file()),
@@ -10656,47 +10630,6 @@ def _drain_outbox(
                     if stats is not None:
                         stats["current"] = stats.get("current", 0) + 1
                         stats["config_change"] = stats.get("config_change", 0) + 1
-                _retire_outbox_staging(fpath)
-            continue
-        presence_mode = str(fm.get("presence") or "").strip().lower()
-        if presence_mode:
-            # design-the-continuous-seat.md §Presence, the resident's own
-            # hand on the same dial. The mode is a fact about the *thread*,
-            # not about who declared it: `/afk` from the person and this
-            # control write one record, which the facet then reads back on
-            # the next boundary. Consumed like `note:` — a directive, never
-            # a message.
-            with _OutboxEntryGuard(outbox_dir, fpath):
-                thread_key = _task_thread_key(task)
-                if presence_mode not in correspondent_mod.MODES:
-                    _record_outbox_notice(
-                        outbox_dir,
-                        f"presence refused: {presence_mode!r} is not a mode — "
-                        f"one of {', '.join(correspondent_mod.MODES)}",
-                        kind="refused", lifetime="run", source_file=fpath.name,
-                    )
-                elif not thread_key:
-                    _record_outbox_notice(
-                        outbox_dir,
-                        "presence refused: this run has no chat thread, so "
-                        "there is no correspondent whose presence it could "
-                        "declare",
-                        kind="refused", lifetime="run", source_file=fpath.name,
-                    )
-                else:
-                    until = str(fm.get("until") or "").strip() or None
-                    correspondent_mod.write_record(
-                        emit.brr_dir, thread_key, presence_mode, until,
-                    )
-                    # Effective from this pass, not the next one: a run that
-                    # writes `presence: quiet` and then an interim line in
-                    # the same drain means the second to be held.
-                    correspondent_mode = correspondent_mod.read_record(
-                        emit.brr_dir, thread_key,
-                    )["mode"]
-                    promoted += 1
-                    if stats is not None:
-                        stats["presence"] = stats.get("presence", 0) + 1
                 _retire_outbox_staging(fpath)
             continue
         if _truthy(fm.get("respawn")):
@@ -11267,38 +11200,6 @@ def _drain_outbox(
                 _retire_outbox_staging(fpath)
             continue
         raw_target = str(fm.get("event") or "").strip()
-        # The quiet the correspondent asked for (design-the-continuous-seat
-        # §Presence). Only *interim chat lines* are held: no `event:` target
-        # (a reply to a waiting letter is owed to a person who asked for it,
-        # and always goes through), no `gate:` (handled above — an
-        # escalation exists precisely for the moment someone must be
-        # interrupted), and never a `cut:`, whose body IS the reply this run
-        # closes on. `urgent-only` keeps one door open: a first line that
-        # starts `urgent:`.
-        if (
-            not raw_target
-            and "cut" not in fm
-            and correspondent_mod.delivery_verdict(
-                correspondent_mode, body
-            ) == "hold"
-        ):
-            if correspondent_mod.hold_file(outbox_dir, fpath) is not None:
-                _record_outbox_notice(
-                    outbox_dir,
-                    f"interim held: the correspondent is {correspondent_mode} — "
-                    f"{fpath.name} waits in "
-                    f"{correspondent_mod.HELD_DIRNAME}/ and drains on /back or "
-                    "the declared `until`. A reply to a pending event or a "
-                    "`gate:` escalation still goes through"
-                    + (
-                        "; an interim line whose first line starts `urgent:` "
-                        "goes through too"
-                        if correspondent_mode == "urgent-only" else ""
-                    )
-                    + ".",
-                    kind="advisory", lifetime="run", source_file=fpath.name,
-                )
-            continue
         raw_target = raw_target or event_id
         # The unconditional `event:` reply tail (#1379) — no explicit
         # `continue` needed after the `with`: this is the last thing the
