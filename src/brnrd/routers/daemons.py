@@ -677,7 +677,9 @@ def claim_wake_request(payload: schemas.WakeRequestClaim, principal: Principal =
         daemon_now=payload.daemon_now,
         known_profiles=(
             set(payload.known_profiles)
-            if payload.known_profiles is not None
+            if payload.known_profiles is not None and publish_scope.lane_permitted(
+                db, repo_id=principal.repo_id, lane="runners",
+            )
             else _published_profile_names(daemon)
         ),
     )

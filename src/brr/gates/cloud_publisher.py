@@ -1440,12 +1440,14 @@ def claim_wake_request(
     # mirror send an explicit selection to the conversation's old runner.
     from .. import runner
 
-    try:
-        body["known_profiles"] = [
-            row["name"] for row in runner.available_runner_catalog(brr_dir.parent)
-        ]
-    except Exception as e:
-        print(f"[brnrd:cloud] claim catalog read failed; using published rack: {e}")
+    lanes, _slices = _resolve_publish_scopes(_publish_config(brr_dir))
+    if "runners" in lanes:
+        try:
+            body["known_profiles"] = [
+                row["name"] for row in runner.available_runner_catalog(brr_dir.parent)
+            ]
+        except Exception as e:
+            print(f"[brnrd:cloud] claim catalog read failed; using published rack: {e}")
     if event_id:
         body["event_id"] = str(event_id)
     if source:
