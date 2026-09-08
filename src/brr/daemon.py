@@ -7138,6 +7138,18 @@ def _write_live_portal_state(
                     or stats.get("outbound")
                 ),
                 "pending_outbox_files": pending_files,
+                # design-the-continuous-seat.md §Presence: interim chat
+                # lines the correspondent's declared quiet is holding back.
+                # Named here (dir + count) rather than left invisible — a
+                # line that was written and never sent must be something
+                # the resident can *see*, not something it infers from
+                # silence on the other side.
+                "held": {
+                    "dir": str(
+                        correspondent_mod.held_dir(outbox_dir)
+                    ) if outbox_dir is not None else None,
+                    "count": len(correspondent_mod.held_files(outbox_dir)),
+                },
                 "oldest_pending_age_seconds": (
                     round(oldest_pending_age_seconds, 1)
                     if oldest_pending_age_seconds is not None else None
@@ -10540,6 +10552,17 @@ def _drain_outbox(
     """
     if not outbox_dir or not outbox_dir.exists():
         return 0
+    # design-the-continuous-seat.md §Presence. The correspondent's declared
+    # mode, read once per drain and applied twice below: release first (the
+    # mode no longer holds — /back rewrote the record, or the `until`
+    # passed and `read_record` now reads `live`), then hold as the loop
+    # meets each interim line. Release before listing, so a line freed this
+    # tick goes out on this tick rather than waiting for the next one.
+    correspondent_mode = correspondent_mod.read_record(
+        emit.brr_dir, _task_thread_key(task)
+    )["mode"]
+    if correspondent_mode == "live":
+        correspondent_mod.release_held(outbox_dir)
     try:
         entries = sorted(
             (p for p in outbox_dir.iterdir() if p.is_file()),
@@ -11200,6 +11223,38 @@ def _drain_outbox(
                 _retire_outbox_staging(fpath)
             continue
         raw_target = str(fm.get("event") or "").strip()
+        # The quiet the correspondent asked for (design-the-continuous-seat
+        # §Presence). Only *interim chat lines* are held: no `event:` target
+        # (a reply to a waiting letter is owed to a person who asked for it,
+        # and always goes through), no `gate:` (handled above — an
+        # escalation exists precisely for the moment someone must be
+        # interrupted), and never a `cut:`, whose body IS the reply this run
+        # closes on. `urgent-only` keeps one door open: a first line that
+        # starts `urgent:`.
+        if (
+            not raw_target
+            and "cut" not in fm
+            and correspondent_mod.delivery_verdict(
+                correspondent_mode, body
+            ) == "hold"
+        ):
+            if correspondent_mod.hold_file(outbox_dir, fpath) is not None:
+                _record_outbox_notice(
+                    outbox_dir,
+                    f"interim held: the correspondent is {correspondent_mode} — "
+                    f"{fpath.name} waits in "
+                    f"{correspondent_mod.HELD_DIRNAME}/ and drains on /back or "
+                    "the declared `until`. A reply to a pending event or a "
+                    "`gate:` escalation still goes through"
+                    + (
+                        "; an interim line whose first line starts `urgent:` "
+                        "goes through too"
+                        if correspondent_mode == "urgent-only" else ""
+                    )
+                    + ".",
+                    kind="advisory", lifetime="run", source_file=fpath.name,
+                )
+            continue
         raw_target = raw_target or event_id
         # The unconditional `event:` reply tail (#1379) — no explicit
         # `continue` needed after the `with`: this is the last thing the
