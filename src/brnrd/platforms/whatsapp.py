@@ -390,6 +390,65 @@ def parse_update(payload: dict) -> ParsedMessage | None:
     return None
 
 
+@dataclass
+class StatusUpdate:
+    """One delivery/read status for a message *this* number sent — the half
+    of presence WhatsApp actually gives a bot (Telegram gives none at all;
+    see ``platforms.telegram.send_chat_action``'s docstring). ``status`` is
+    Meta's own word (``sent`` / ``delivered`` / ``read`` / ``failed``); only
+    ``read`` is acted on today (presence, the relay half, task 3) — the
+    others are parsed so a future caller doesn't need a second parser, not
+    because this module stores them yet."""
+
+    message_id: str
+    status: str
+    recipient_id: str
+    timestamp: datetime | None
+
+
+def parse_status_update(payload: dict) -> StatusUpdate | None:
+    """Normalize one Cloud API delivery/read status webhook, or ``None``.
+
+    Mirrors :func:`parse_update`'s ``entry[].changes[].value`` walk, reading
+    ``statuses`` instead of ``messages`` — Meta never puts both in the same
+    ``value`` object, so this and :func:`parse_update` are never both
+    non-``None`` for the same payload. Only the first status is returned,
+    same one-per-call contract as the message parser.
+    """
+    for entry in payload.get("entry") or []:
+        if not isinstance(entry, dict):
+            continue
+        for change in entry.get("changes") or []:
+            if not isinstance(change, dict):
+                continue
+            value = change.get("value") or {}
+            if not isinstance(value, dict):
+                continue
+            statuses = value.get("statuses")
+            if not isinstance(statuses, list) or not statuses:
+                continue
+            status = statuses[0]
+            if not isinstance(status, dict):
+                continue
+            message_id = status.get("id")
+            recipient_id = status.get("recipient_id")
+            status_kind = str(status.get("status") or "")
+            if not message_id or not recipient_id or not status_kind:
+                continue
+            raw_ts = status.get("timestamp")
+            try:
+                timestamp = datetime.fromtimestamp(int(raw_ts), timezone.utc)
+            except (TypeError, ValueError, OSError):
+                timestamp = None
+            return StatusUpdate(
+                message_id=str(message_id),
+                status=status_kind,
+                recipient_id=str(recipient_id),
+                timestamp=timestamp,
+            )
+    return None
+
+
 def verify_subscription(
     *,
     mode: str | None,
