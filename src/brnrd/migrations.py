@@ -303,6 +303,16 @@ def _migrate_channel_routes(conn: Connection) -> None:
     # before this shipped) — harmless, since both are rendering-only.
     conn.execute(text("ALTER TABLE channel_routes ADD COLUMN IF NOT EXISTS paired_user_display VARCHAR(255)"))
     conn.execute(text("ALTER TABLE channel_routes ADD COLUMN IF NOT EXISTS chat_title VARCHAR(255)"))
+    # Presence, the relay half (design-the-continuous-seat.md §Presence):
+    # `/afk` · `/hush` · `/urgent-only` · `/back` state, plus the last
+    # WhatsApp read receipt for a message this thread's route sent. NULL on
+    # every existing row — no route has ever seen a presence command or a
+    # read receipt before this migration runs.
+    conn.execute(text("ALTER TABLE channel_routes ADD COLUMN IF NOT EXISTS presence_mode VARCHAR(32)"))
+    conn.execute(text("ALTER TABLE channel_routes ADD COLUMN IF NOT EXISTS presence_until TIMESTAMP"))
+    conn.execute(text("ALTER TABLE channel_routes ADD COLUMN IF NOT EXISTS presence_set_at TIMESTAMP"))
+    conn.execute(text("ALTER TABLE channel_routes ADD COLUMN IF NOT EXISTS last_read_message_id VARCHAR(64)"))
+    conn.execute(text("ALTER TABLE channel_routes ADD COLUMN IF NOT EXISTS last_read_at TIMESTAMP"))
 
 
 def _migrate_tg_pair_codes(conn: Connection) -> None:
