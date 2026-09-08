@@ -355,8 +355,8 @@ def owed_line(plan: Blueprint) -> str | None:
         parts.append(piece)
     return (
         "- still owed: " + " · ".join(parts)
-        + " — promised by this run and not yet in its manifest. Ship it, or "
-        "release it with a reason (`brnrd promise <what> --release --why …`)."
+        + " — promised by this run, manifest ∅ "
+        "(release: `brnrd promise <what> --release --why …`)."
     )
 
 
