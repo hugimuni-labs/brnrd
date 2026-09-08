@@ -7048,6 +7048,7 @@ def _write_live_portal_state(
         # new "park" outcome and stamp `pending_resource_hold` for the
         # ordinary worker-tail routing (`_finalize_resource_hold`) to pick up
         # once this turn actually ends.
+
         # design-the-continuous-seat.md §Presence: how long the person on
         # the other end has been quiet. Measured off this run's own inbox,
         # so it costs one directory scan per heartbeat and never a platform

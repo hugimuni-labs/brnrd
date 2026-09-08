@@ -708,6 +708,8 @@ def test_seed_surfaces_resources_with_known_quota_and_gaps(tmp_path):
             "remote_scm": {"status": "absent", "pr_state": "none",
                            "branch": "brr/x",
                            "note": "no PR recorded for this branch yet"},
+            "correspondent": {"status": "absent",
+                              "note": "no chat thread on this run"},
             "allowance": {"status": "unimplemented",
                           "note": "not a strand-stack run"},
         },
@@ -720,6 +722,7 @@ def test_seed_surfaces_resources_with_known_quota_and_gaps(tmp_path):
     assert "spend=unimplemented (no spend collector for this medium yet)" in ctx
     assert "coexisting-runs=unimplemented" in ctx
     assert "remote-scm=absent (no PR recorded for this branch yet)" in ctx
+    assert "correspondent=absent (no chat thread on this run)" in ctx
     assert "allowance=unimplemented (not a strand-stack run)" in ctx
     assert "unavailable" not in ctx
 
