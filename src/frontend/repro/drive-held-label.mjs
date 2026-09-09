@@ -1,6 +1,19 @@
 // Capture the Live Runs card for the status-vs-heartbeat regression. The
 // fixture is deliberately stale: only a declared held status may turn that
 // silence into a parked state.
+//
+// !! DOES NOT CAPTURE YET — do not read a green run as a passing shot.
+// `card.waitFor()` on `[data-loom-run="run-held-label"]` times out: the
+// route stub answers and the dev server serves, but the row never renders.
+// Tried and ruled out (2026-09-10, parent review): the selector exists
+// (LiveRuns.svelte:187); `ROUTES['/v1/dashboard/live-runs']` holds a live
+// *reference* to `fixtures.liveRuns`, so the top-level mutation does reach
+// it; no auth guard on `+page.svelte`/`+layout.svelte`. Note that no other
+// driver in this directory targets `/` — every working one drives a
+// sub-route (`/ascii?demo` &c). That asymmetry is the next thing to pull.
+// Kept in the tree because 83 lines of correct fixture shape should not be
+// re-derived; kept labelled because a repro driver that silently captures
+// nothing is worse than none.
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
