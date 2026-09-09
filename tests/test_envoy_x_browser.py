@@ -105,6 +105,27 @@ class _FakeDriver:
         return self._click_send_return
 
 
+class _FakeClock:
+    def __init__(self, now=1_000_000.0):
+        self.now = now
+        self.sleeps = []
+
+    def __call__(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+class _FakePage:
+    def __init__(self):
+        self.urls = []
+
+    def goto(self, url, *, wait_until):
+        self.urls.append((url, wait_until))
+
+
 def _factory_for(driver: _FakeDriver):
     def factory(paths, *, headless):  # noqa: ARG001
         driver.headless = headless
@@ -115,6 +136,55 @@ def _factory_for(driver: _FakeDriver):
 
 def _armed_env(monkeypatch):
     monkeypatch.setenv("BRR_X_BROWSER_SEND", "1")
+
+
+def _budget_driver(paths, clock):
+    driver = envoy_x_browser._PlaywrightDriver(
+        paths, headless=True, sync_playwright=lambda: None,
+    )
+    driver._page = _FakePage()
+    driver._navigation_budget = envoy_x_browser._NavigationBudget(
+        paths, clock=clock, sleep=clock.sleep, jitter=lambda _a, _b: 0.0,
+    )
+    return driver
+
+
+def test_navigation_budget_is_persistent_and_paces_real_driver_gotos(tmp_path):
+    paths = _paths(tmp_path)
+    paths.config.write_text(json.dumps({"navigation_budget": {
+        "max_loads": 3, "window_seconds": 100, "min_delay_seconds": 10,
+        "jitter_seconds": 0,
+    }}), encoding="utf-8")
+    clock = _FakeClock()
+    first = _budget_driver(paths, clock)
+    first._goto("https://x.com/home")
+    second = _budget_driver(paths, clock)
+    second._goto("https://x.com/search?q=private")
+    assert clock.sleeps == [10.0]
+    assert second._page.urls == [("https://x.com/search?q=private", "domcontentloaded")]
+    assert "private" not in paths.load_ledger.read_text(encoding="utf-8")
+
+
+def test_navigation_budget_denies_before_page_load(tmp_path):
+    paths = _paths(tmp_path)
+    paths.config.write_text(json.dumps({"navigation_budget": {"max_loads": 1}}), encoding="utf-8")
+    clock = _FakeClock()
+    driver = _budget_driver(paths, clock)
+    driver._goto("https://x.com/home")
+    with pytest.raises(envoy_x_browser.NavigationBudgetExceeded):
+        _budget_driver(paths, clock)._goto("https://x.com/again")
+    assert len(driver._page.urls) == 1
+
+
+@pytest.mark.parametrize("bad", [
+    {"max_loads": -1}, {"window_seconds": float("nan")},
+    {"min_delay_seconds": -4}, {"jitter_seconds": float("inf")},
+])
+def test_navigation_budget_bad_config_uses_bounded_defaults(tmp_path, bad):
+    paths = _paths(tmp_path)
+    paths.config.write_text(json.dumps({"navigation_budget": bad}, allow_nan=True), encoding="utf-8")
+    config = envoy_x_browser._load_navigation_config(paths)
+    assert config == envoy_x_browser.NavigationBudgetConfig()
 
 
 # ── argv guards: -h/--help before any driver ─────────────────────────
