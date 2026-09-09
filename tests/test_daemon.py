@@ -16,7 +16,7 @@ from brr import portals
 from brr import runner_failures
 from brr import schedule as schedule_mod
 from brr import worktree
-from brr.run import Run
+from brr.run import Run, run_manifest_path
 from brr.runner import RunnerResult
 
 from _helpers import (
@@ -15531,3 +15531,71 @@ def test_composing_is_false_for_a_run_with_no_portal(tmp_path):
     from brr.gates import cloud_publisher
 
     assert cloud_publisher._composing(tmp_path / ".brr", {}) is False
+
+
+def test_interrupted_marker_parks_a_bolted_seat_instead_of_retrying(tmp_path):
+    """THE STALE SUMMONS (2026-09-09): a seat whose ``cut:`` was accepted has
+    answered its event; the daemon died under it only while it held the seat
+    in ``await``. Retrying the event woke a resident on a 5h-old, already-
+    answered ask. The sweep now parks such a seat (``held``, ``resume: any``)
+    and marks the event ``done`` — no retry, no provenance stamp, the next
+    message boots the seat from its node."""
+    event, task = _frozen_run(tmp_path, conv_key="telegram:101:")
+    runs_dir = tmp_path / ".brr" / "runs"
+    task.meta["bolt"] = {"accepted_at": "2026-09-09T15:39:30Z"}
+    task.save(runs_dir)
+    inbox = tmp_path / ".brr" / "inbox"
+    ctx = daemon.account.resolve_context(tmp_path, {})
+    # the module-wide autouse fixture turns the daemon's own parks off so
+    # older closeout tests keep their ``done``; this park is exactly what
+    # is under test, so it is turned on explicitly, as production has it
+    cfg = {daemon.SEAT_PARK_ON_TURN_END_KEY: True}
+
+    assert daemon._mark_interrupted_runs(ctx, tmp_path, cfg) == 1
+
+    fm = protocol.parse_frontmatter(
+        Path(event["_path"]).read_text(encoding="utf-8"))
+    assert fm.get("status") == "done"
+    assert "retry_of" not in fm
+    assert event["id"] not in {e["id"] for e in protocol.list_dispatchable(inbox)}
+    reloaded = Run.from_file(run_manifest_path(runs_dir, task.id))
+    assert reloaded.status == daemon.resource_hold.RUN_STATUS
+    hold = reloaded.meta["resource_hold"]
+    assert hold["reason"] == daemon.resource_hold.REASON_DAEMON_RESTARTED
+    assert hold["resume_condition"] == daemon.resource_hold.RESUME_ANY
+    assert reloaded.meta.get("failure_kind") is None
+    # idempotent: ``held`` is outside the unfinished-status filter
+    assert daemon._mark_interrupted_runs(ctx, tmp_path, cfg) == 0
+
+
+def test_interrupted_marker_still_retries_a_seat_without_a_bolt(tmp_path):
+    """The park is gated on the bolt: a seat interrupted mid-work (no
+    accepted ``cut:``) keeps the retry path — its ask is genuinely
+    unanswered and the event must re-dispatch."""
+    event, task = _frozen_run(tmp_path, conv_key="telegram:101:")
+    ctx = daemon.account.resolve_context(tmp_path, {})
+
+    assert daemon._mark_interrupted_runs(ctx, tmp_path, {}) == 1
+
+    fm = protocol.parse_frontmatter(
+        Path(event["_path"]).read_text(encoding="utf-8"))
+    assert fm.get("status") == "pending"
+    assert fm.get("retry_of") == task.id
+
+
+def test_interrupted_marker_park_respects_seat_park_opt_out(tmp_path):
+    """``seat.park_on_turn_end=false`` turns the daemon's own parks off —
+    this one included: a bolted seat then falls back to the retry path."""
+    event, task = _frozen_run(tmp_path, conv_key="telegram:101:")
+    runs_dir = tmp_path / ".brr" / "runs"
+    task.meta["bolt"] = {"accepted_at": "2026-09-09T15:39:30Z"}
+    task.save(runs_dir)
+    ctx = daemon.account.resolve_context(tmp_path, {})
+
+    assert daemon._mark_interrupted_runs(
+        ctx, tmp_path, {daemon.SEAT_PARK_ON_TURN_END_KEY: False}) == 1
+
+    fm = protocol.parse_frontmatter(
+        Path(event["_path"]).read_text(encoding="utf-8"))
+    assert fm.get("status") == "pending"
+    assert Run.from_file(run_manifest_path(runs_dir, task.id)).status == "error"
