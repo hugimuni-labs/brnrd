@@ -50,7 +50,7 @@ import types
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, NamedTuple
+from typing import Callable, NamedTuple, Sequence
 
 from . import account
 from . import allowance
@@ -13403,6 +13403,7 @@ def _retire_internal_event(
     *,
     inbox_dir: Path | None = None,
     run_id: str = "",
+    parked: bool = False,
 ) -> bool:
     """Retire a gateless (``schedule`` / ``spawn_completed``) event after it completes.
 
@@ -13430,7 +13431,20 @@ def _retire_internal_event(
     """
     # Retire every spawn_completed event this run actually rendered as the
     # parent. Best-effort: a failed write on one event must not abort the rest.
-    if inbox_dir is not None and run_id:
+    #
+    # **Never when the run parked** (*parked*). The stamp this retirement
+    # trusts means "rendered into a surface the resident could have read" —
+    # sound for a run that ran to its end, false for one that froze. A park
+    # is the middle of a thought, not the end of one: the seat saw the row
+    # and had no boundary left to act on it, and ``_finalize_resource_hold``
+    # has *already* accumulated that same event into the hold so the resume
+    # can deliver it. Retiring it here closed mail the hold was holding —
+    # measured 2026-09-09, `evt-…-jq6y`: a strand's completion (PR #1885,
+    # 1.38M tokens) observed at 18:51:13Z, park armed 18:52:37Z, event
+    # `delivered` and never dispatched again. The ledger said held, the
+    # letter said over, and the successor woke on the *failed* sibling
+    # instead — the one that arrived after the park and so survived.
+    if inbox_dir is not None and run_id and not parked:
         for ev in protocol.list_pending(inbox_dir):
             if (
                 ev.get("source") == "spawn_completed"
@@ -17514,8 +17528,56 @@ def _accumulate_held_event(runs_dir: Path, held: Run, event_id: str) -> None:
     held.save(runs_dir)
 
 
+def _hold_undefer_inboxes(
+    account_context: "account.AccountContext | None",
+    primary: Path | None,
+) -> tuple[Path, ...]:
+    """Every drawer a held run's accumulated mail can actually be sitting in.
+
+    A hold accumulates whatever was pending, and "pending" spans two
+    buildings: repo-local events (``schedule`` / ``spawn`` /
+    ``spawn_completed``) live in ``<repo>/.brr/inbox``, while every
+    ``cloud`` message and dispatch-edge notice lives in the *account*
+    ``dispatch/inbox``. Each release path only ever knew one address — the
+    refill sweep passed ``_repo_inbox(root)``, the operator path passed
+    whichever drawer the *triggering* event happened to come from — so the
+    un-defer silently skipped every sibling in the other building.
+
+    Same lesson, same file: :func:`_dispatchable_inbox_sources` exists
+    because dispatch and outbox addressing had drifted onto different
+    drawer sets (#936). Reading it here keeps the release path on that one
+    source of truth instead of minting a third opinion.
+    """
+    dirs: list[Path] = []
+    seen: set[Path] = set()
+
+    def add(candidate: Path | None) -> None:
+        if candidate is None:
+            return
+        try:
+            key = candidate.resolve()
+        except OSError:
+            key = candidate
+        if key in seen:
+            return
+        seen.add(key)
+        dirs.append(candidate)
+
+    add(primary)
+    if account_context is not None and account_context.enabled:
+        try:
+            sources = _dispatchable_inbox_sources(
+                account_context, account_context.default_repo.root,
+            )
+        except Exception:  # noqa: BLE001 - a release must never wedge on discovery
+            sources = []
+        for inbox_dir, _responses, _root, _label in sources:
+            add(inbox_dir)
+    return tuple(dirs)
+
+
 def _undefer_held_event(
-    inbox_dir: Path,
+    inbox_dir: Path | Sequence[Path] | None,
     event_id: str,
     *,
     resume_native_session_id: str | None = None,
@@ -17523,8 +17585,14 @@ def _undefer_held_event(
 ) -> None:
     """Release one accumulated event back to ordinary pending eligibility.
 
-    Reads the event fresh off disk by id (the same ``inbox_dir /
-    f"{id}.md"`` lookup ``daemon.py`` already uses elsewhere) rather than
+    Accepts one drawer or several (:func:`_hold_undefer_inboxes`) and takes
+    the first that actually holds the letter. An id that resolves in *no*
+    drawer is printed, never swallowed: an un-defer that silently no-ops is
+    indistinguishable from one that worked, which is how a whole class of
+    accumulated mail can read "released" in the ledger and stay closed on
+    disk.
+
+    Reads the event fresh off disk by id rather than
     trusting any cached copy — the accumulated id is the receipt
     ``resource_hold.accumulate_event`` recorded; the event's *current*
     on-disk state (still present, not yet delivered/noted by some other
@@ -17536,8 +17604,23 @@ def _undefer_held_event(
     """
     if not event_id:
         return
-    ev = protocol._read_event(inbox_dir / f"{event_id}.md")
+    if inbox_dir is None:
+        candidates: tuple[Path, ...] = ()
+    elif isinstance(inbox_dir, Path):
+        candidates = (inbox_dir,)
+    else:
+        candidates = tuple(inbox_dir)
+    ev = None
+    for candidate in candidates:
+        ev = protocol._read_event(candidate / f"{event_id}.md")
+        if ev:
+            break
     if not ev:
+        print(
+            "[brnrd] resource hold: accumulated event "
+            f"{event_id} resolved in none of "
+            f"{len(candidates)} inbox(es) — not un-deferred"
+        )
         return
     updates: dict[str, object] = {
         "defer_until": None, "deferred_by_run": None, "defer_reason": None,
@@ -17554,6 +17637,7 @@ def _undefer_held_event(
 
 def _apply_resource_hold_resume(
     runs_dir: Path, inbox_dir: Path, held: Run, event: dict, *, by: str = "operator",
+    account_context: "account.AccountContext | None" = None,
 ) -> None:
     """Release *held* and enrich *event* so its fresh dispatch can resume natively.
 
@@ -17582,9 +17666,10 @@ def _apply_resource_hold_resume(
     ):
         event["resume_native_session_id"] = released["native_session_id"]
         event["resume_native_provider"] = released.get("provider")
+    drawers = _hold_undefer_inboxes(account_context, inbox_dir)
     for accumulated_id in released.get("accumulated_event_ids") or []:
         _undefer_held_event(
-            inbox_dir, accumulated_id,
+            drawers, accumulated_id,
             resume_native_session_id=event.get("resume_native_session_id"),
             resume_native_provider=event.get("resume_native_provider"),
         )
@@ -17642,7 +17727,7 @@ def _release_reset_holds_due(
             held.save(runs_dir)
             for accumulated_id in released_meta.get("accumulated_event_ids") or []:
                 _undefer_held_event(
-                    inbox_dir, accumulated_id,
+                    _hold_undefer_inboxes(account_context, inbox_dir), accumulated_id,
                     resume_native_session_id=released_meta.get("native_session_id"),
                     resume_native_provider=released_meta.get("provider"),
                 )
@@ -17665,7 +17750,10 @@ def _find_held_run(runs_dir: Path, run_id: str) -> Run | None:
     return None
 
 
-def _apply_run_release(runs_dir: Path, inbox_dir: Path | None, held: Run) -> None:
+def _apply_run_release(
+    runs_dir: Path, inbox_dir: Path | None, held: Run,
+    *, account_context: "account.AccountContext | None" = None,
+) -> None:
     """User-issued release: end the seat outright (the dashboard "release" tap).
 
     Distinct from every other release in this module — those all resume the
@@ -17686,8 +17774,9 @@ def _apply_run_release(runs_dir: Path, inbox_dir: Path | None, held: Run) -> Non
     held.status = "done"
     held.save(runs_dir)
     if inbox_dir is not None:
+        drawers = _hold_undefer_inboxes(account_context, inbox_dir)
         for accumulated_id in released.get("accumulated_event_ids") or []:
-            _undefer_held_event(inbox_dir, accumulated_id)
+            _undefer_held_event(drawers, accumulated_id)
     print(f"[brnrd] resource hold released by dashboard (ended): {held.id}")
 
 
@@ -17721,6 +17810,7 @@ def _respawn_event_meta(
 
 def _apply_run_respawn(
     runs_dir: Path, inbox_dir: Path | None, held: Run, *, shell: str = "", core: str = "",
+    account_context: "account.AccountContext | None" = None,
 ) -> Path | None:
     """User-issued respawn: release *held* and mint a fresh event on its thread.
 
@@ -17743,8 +17833,9 @@ def _apply_run_respawn(
     released = resource_hold.mark_released(meta, by="respawn")
     held.meta["resource_hold"] = released
     held.save(runs_dir)
+    drawers = _hold_undefer_inboxes(account_context, inbox_dir)
     for accumulated_id in released.get("accumulated_event_ids") or []:
-        _undefer_held_event(inbox_dir, accumulated_id)
+        _undefer_held_event(drawers, accumulated_id)
     event_meta = _respawn_event_meta(held, held.event_id, shell=shell, core=core)
     if held.conversation_key:
         event_meta["conversation_key"] = held.conversation_key
@@ -17843,6 +17934,7 @@ def _handle_resource_held_events(
             if resource_hold.schedule_event_releases(hold_meta, target.event):
                 _apply_resource_hold_resume(
                     runs_dir, target.inbox_dir, held, target.event, by="schedule",
+                    account_context=account_context,
                 )
                 print(
                     f"[brnrd] parked seat resumed by schedule "
@@ -17860,6 +17952,7 @@ def _handle_resource_held_events(
                 # event becomes the resuming dispatch's lead.
                 _apply_resource_hold_resume(
                     runs_dir, target.inbox_dir, held, target.event, by="strand",
+                    account_context=account_context,
                 )
                 print(
                     f"[brnrd] resource hold released by strand event "
@@ -17916,6 +18009,7 @@ def _handle_resource_held_events(
                 if resource_hold.refill_condition_met(hold_meta, pct):
                     _apply_resource_hold_resume(
                         runs_dir, target.inbox_dir, held, target.event, by="refill",
+                        account_context=account_context,
                     )
                     print(
                         f"[brnrd] starved seat thawed on a correspondent "
@@ -17927,6 +18021,7 @@ def _handle_resource_held_events(
                 if verb == "force":
                     _apply_resource_hold_resume(
                         runs_dir, target.inbox_dir, held, target.event, by="force",
+                        account_context=account_context,
                     )
                     try:
                         protocol.update_event_meta(target.event, starvation_forced=True)
@@ -17940,7 +18035,10 @@ def _handle_resource_held_events(
                     survivors.append(target)
                     continue
                 if verb == "stop":
-                    _apply_run_release(runs_dir, target.inbox_dir, held)
+                    _apply_run_release(
+                        runs_dir, target.inbox_dir, held,
+                        account_context=account_context,
+                    )
                     _write_control_response(
                         target,
                         f"Stopped — seat {held.id} released; your next message "
@@ -17954,6 +18052,7 @@ def _handle_resource_held_events(
                         continue
                     _apply_run_respawn(
                         runs_dir, target.inbox_dir, held, shell=shell, core=core,
+                        account_context=account_context,
                     )
                     _write_control_response(
                         target,
@@ -17965,6 +18064,7 @@ def _handle_resource_held_events(
                 continue
             _apply_resource_hold_resume(
                 runs_dir, target.inbox_dir, held, target.event,
+                account_context=account_context,
             )
             survivors.append(target)
     return survivors
@@ -18331,6 +18431,10 @@ def _run_worker_and_finalize(
             event, responses_dir,
             inbox_dir=inbox_dir,
             run_id=task.id if task is not None else "",
+            parked=bool(
+                task is not None
+                and getattr(task, "status", "") == resource_hold.RUN_STATUS
+            ),
         )
         return task
     finally:
