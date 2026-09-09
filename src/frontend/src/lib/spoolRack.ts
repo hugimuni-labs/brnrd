@@ -51,7 +51,45 @@ export type Offerability = 'offerable' | 'off';
  */
 export function offerabilityOf(profile: RunnerProfile, reportStale: boolean): Offerability {
 	if (reportStale || profile.daemon_stale === true) return 'off';
+	if (isLocked(profile)) return 'offerable';
 	return availabilityOf(profile) === 'available' ? 'offerable' : 'off';
+}
+
+/**
+ * A *locked* row: the shell is installed and its subscription exists, but
+ * the daemon's last dispatch on this credential failed to authenticate and
+ * the credential has not changed since. Distinct from every other
+ * unavailable reason on purpose: the user holds the key (sign in again),
+ * and a tap is legal — the attempt is the probe that clears the mark. The
+ * 2026-09-08/09 deadlock was this state rendered as *absent*: no shell row,
+ * no tap, no run, no clear, three manual deletions of the mark file.
+ */
+export function isLocked(profile: RunnerProfile): boolean {
+	return profile.availability === 'auth-error';
+}
+
+/** The locked row's own line: when it failed, on which core, what to do. */
+export function lockedText(profile: RunnerProfile): string {
+	const mark = profile.auth_error ?? null;
+	const when = mark?.since ? ` ${shortStamp(mark.since)}` : '';
+	const on = mark?.seen_on ? ` on ${mark.seen_on}` : '';
+	const agreed = mark?.probe === 'signed-out' ? ' · the shell agrees: signed out' : '';
+	return `auth failed${when}${on}${agreed} — sign in again, then tap`;
+}
+
+/** The same fact at ledger width: `auth failed 05:06Z — sign in, then tap`. */
+export function lockedShort(profile: RunnerProfile): string {
+	const since = profile.auth_error?.since;
+	const when = since ? ` ${shortStamp(since)}` : '';
+	return `auth failed${when} · sign in`;
+}
+
+function shortStamp(iso: string): string {
+	const d = new Date(iso);
+	if (Number.isNaN(d.getTime())) return iso;
+	const hh = String(d.getUTCHours()).padStart(2, '0');
+	const mm = String(d.getUTCMinutes()).padStart(2, '0');
+	return `${hh}:${mm}Z`;
 }
 
 /** Can this row's tap actually park a wake request? Exactly `offerabilityOf
@@ -80,6 +118,9 @@ export function offReasonOf(
 	profile: RunnerProfile,
 	reportStale: boolean
 ): { known: boolean; text: string } {
+	if (isLocked(profile)) {
+		return { known: true, text: lockedText(profile) };
+	}
 	if (availabilityOf(profile) === 'unavailable') {
 		return { known: true, text: reasonText(profile.availability ?? null) };
 	}
@@ -92,7 +133,7 @@ export function offReasonOf(
 function reasonText(availability: string | null): string {
 	if (availability === 'shell-not-found') return 'not installed on this daemon';
 	if (availability === 'auth-env-missing') return 'auth not configured on this daemon';
-	if (availability === 'auth-error') return 'authentication failed; log in again';
+	if (availability === 'auth-error') return 'auth failed — sign in again, then tap';
 	if (availability === 'subscription-unavailable') return 'subscription is not available';
 	return 'unavailable on this daemon';
 }
@@ -107,6 +148,9 @@ export interface ShellGroup {
 	/** A representative reason for the tab's own off state, straight off
 	 *  the first row that carries one. */
 	reason: string | null;
+	/** Every row in the group is locked (`auth-error`) — one credential, one
+	 *  line above the rows, instead of the same sentence on each of them. */
+	allLocked: boolean;
 }
 
 /**
@@ -137,11 +181,14 @@ export function groupByShell(profiles: RunnerProfile[]): ShellGroup[] {
 	}
 	const groups = order.map((shell) => {
 		const rows = byShell.get(shell) ?? [];
-		const usable = rows.filter((row) => availabilityOf(row) !== 'unavailable');
-		const dead = rows.filter((row) => availabilityOf(row) === 'unavailable');
+		// A locked row (auth failed, key in the user's hand) is usable: it
+		// keeps its place and its tap; only *dead* rows sink to the bottom.
+		const usable = rows.filter((row) => isLocked(row) || availabilityOf(row) !== 'unavailable');
+		const dead = rows.filter((row) => !isLocked(row) && availabilityOf(row) === 'unavailable');
 		const allUnavailable = rows.length > 0 && dead.length === rows.length;
 		const reason = rows.find((row) => row.availability)?.availability ?? null;
-		return { shell, profiles: [...usable, ...dead], allUnavailable, reason };
+		const allLocked = rows.length > 0 && rows.every(isLocked);
+		return { shell, profiles: [...usable, ...dead], allUnavailable, reason, allLocked };
 	});
 	const live = groups.filter((group) => !group.allUnavailable);
 	const dead = groups.filter((group) => group.allUnavailable);
