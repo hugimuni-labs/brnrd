@@ -528,6 +528,16 @@ class NewsOut(BaseModel):
     news_updated_at: datetime | None = None
 
 
+class RunnerAuthErrorIn(BaseModel):
+    """#1867: the auth mark on a core, as the daemon reports it — the row
+    stays tappable, the ledger line says `auth failed <since> · sign in`."""
+
+    since: str | None = Field(default=None, max_length=64)
+    seen_on: str | None = Field(default=None, max_length=64)
+    probe: str | None = Field(default=None, max_length=255)
+    hint: str | None = Field(default=None, max_length=255)
+
+
 class RunnerProfileIn(BaseModel):
     """One selectable Shell+Core profile from a daemon's local catalog (#328).
 
@@ -555,6 +565,28 @@ class RunnerProfileIn(BaseModel):
     stale: bool | None = None
     pin: str | None = Field(default=None, max_length=128)
     selected: bool | None = None
+    # The rows below are what the daemon has learned to *say* about a core
+    # since this schema was cut, and what the shared frontend reads
+    # (`src/frontend/src/lib/runners.ts`). Pydantic drops unknown keys on
+    # the way into `runners_json`, so until they were named here the hosted
+    # dashboard rendered #1867's locked-shell state, #1868's observed core
+    # id and #1876's vendor display name as if none had shipped — the
+    # local dashboard showed them, the hosted one could not (2026-09-09,
+    # THE SCHEMA THAT DROPPED THE NEWS: "the cores selector is still not
+    # what we discussed"). A field the frontend reads is a field this
+    # schema must carry; add both or neither.
+    shell_version: str | None = Field(default=None, max_length=64)
+    display_name: str | None = Field(default=None, max_length=128)
+    observed_model: str | None = Field(default=None, max_length=128)
+    observed_at: str | None = Field(default=None, max_length=64)
+    alias_tracked: bool | None = None
+    freshness_date: str | None = Field(default=None, max_length=64)
+    freshness_source: str | None = Field(default=None, max_length=64)
+    auth_error: RunnerAuthErrorIn | None = None
+    retired: bool | None = None
+    retirement_at: str | None = Field(default=None, max_length=64)
+    successor: str | None = Field(default=None, max_length=64)
+    migration_markdown: str | None = Field(default=None, max_length=4000)
 
     model_config = {"populate_by_name": True}
 
