@@ -1644,6 +1644,13 @@ def _catalog_record(
 
     pin = str(profile.get("pin") or "").strip() or None
     shell_version = _rc.shell_version(shell) if shell else None
+    # The vendor's own id for this alias, as the Shell last attested it on
+    # the run ledger (`fable` → `claude-fable-5-1`). Absent when no run has
+    # attested one, or when the alias already *is* the vendor id (codex).
+    observed = (
+        _rc.observed_model_ids(repo_root).get((str(shell or "").lower(), runner_profile.model))
+        if runner_profile.model else None
+    )
 
     record: dict[str, Any] = {
         "name": name,
@@ -1669,6 +1676,8 @@ def _catalog_record(
         "freshness_date": freshness_date,
         "freshness_source": freshness.get("source"),
         "selected": name == selected or runner_profile.profile == selected,
+        "observed_model": observed["model"] if observed else None,
+        "observed_at": observed["at"] if observed else None,
     }
     if pin:
         record["pin"] = pin

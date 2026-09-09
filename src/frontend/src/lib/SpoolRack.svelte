@@ -2,7 +2,13 @@
 	import { SvelteSet } from 'svelte/reactivity';
 	import { liveSticky, type RunnerProfile, type RunnerSticky, type WakeRequest } from './runners';
 	import { stickyCountdown, stickyObservedModel } from './railGauge';
-	import { deadShellReason, isTappable, offReasonOf, groupByShell } from './spoolRack';
+	import {
+		availabilityOf,
+		deadShellReason,
+		isTappable,
+		offReasonOf,
+		groupByShell
+	} from './spoolRack';
 	import { quotaLevel } from './quota';
 	import type { FuelMeter } from './fuelProviders';
 	import type { LiveRun } from './liveRuns';
@@ -151,6 +157,30 @@
 		return 'unpinned';
 	}
 
+	/** The vendor's own id for the core, as the Shell last attested it on
+	 *  the run ledger (`fable` → `claude-fable-5-1`). Absent when no run has
+	 *  attested one, or when the alias already is the vendor id (codex) —
+	 *  the alias then stands alone, which is the honest reading. */
+	function observedLabel(profile: RunnerProfile): string | null {
+		const observed = profile.observed_model ?? null;
+		if (!observed || observed === profile.model) return null;
+		return observed;
+	}
+
+	function observedTitle(profile: RunnerProfile): string {
+		const at = profile.observed_at ? ` · last attested ${profile.observed_at}` : '';
+		return `alias ${profile.model} — what the shell actually ran${at}`;
+	}
+
+	/** Dead rows are counted, not listed (the 2026-09-08 roast, cut 6: "the
+	 *  dead take full rows"). One line, `N off ▸`, opens them. Locked rows
+	 *  are not dead — they keep their place and their tap. */
+	let showOff = $state(false);
+	function isDead(profile: RunnerProfile): boolean {
+		// `auth-error` is locked, not dead — #1867 gives it a tap and a line.
+		return profile.availability !== 'auth-error' && availabilityOf(profile) === 'unavailable';
+	}
+
 	function handleTap(profile: RunnerProfile) {
 		if (!isTappable(profile, stale)) return;
 		if (onTap) onTap(profile.name);
@@ -216,13 +246,17 @@
 		     sit above this was the second place a provider could be picked;
 		     the fuel row is the only one now. -->
 		{#if activeGroup}
+			{@const liveRows = activeGroup.allUnavailable
+				? activeGroup.profiles
+				: activeGroup.profiles.filter((profile) => !isDead(profile))}
+			{@const deadRows = activeGroup.allUnavailable ? [] : activeGroup.profiles.filter(isDead)}
 			{#if activeGroup.allUnavailable}
 				<p class="mb-2 font-mono text-[10px] text-ink-mute">
 					{OFF_MARK}{activeGroup.shell} — {deadShellReason(activeGroup)}
 				</p>
 			{/if}
 			<div class="space-y-1.5">
-				{#each activeGroup.profiles as profile (profile.name)}
+				{#each showOff ? [...liveRows, ...deadRows] : liveRows as profile (profile.name)}
 					{@const pinned = isPinned(profile)}
 					{@const requested = isRequested(profile)}
 					{@const nextWake = isNextWake(profile)}
@@ -251,12 +285,22 @@
 							class="flex min-w-0 items-baseline gap-3 px-2 py-1.5 text-left"
 						>
 							<span
-								class="font-mono text-xs font-medium tracking-wide {rowLabelClasses(
+								class="font-mono text-xs font-medium tracking-wide whitespace-nowrap {rowLabelClasses(
 									nextWake,
 									tappable
 								)}">{tappable ? '' : OFF_MARK}{profile.name}</span
 							>
-							<span class="font-mono text-[11px] text-ink-quiet">{coreLabel(profile)}</span>
+							{#if observedLabel(profile)}
+								<!-- The vendor's id stands in for the alias (the alias is
+								     already the row's name): one core, one name, versioned. -->
+								<span
+									class="font-mono text-[11px] text-ink-quiet"
+									data-role="rack-row-observed"
+									title={observedTitle(profile)}>{observedLabel(profile)}</span
+								>
+							{:else}
+								<span class="font-mono text-[11px] text-ink-quiet">{coreLabel(profile)}</span>
+							{/if}
 							{#if profile.class}
 								<span class="font-mono text-[10px] tracking-wide text-stone-400 uppercase"
 									>{profile.class}</span
@@ -390,6 +434,16 @@
 						{/if}
 					</div>
 				{/each}
+				{#if deadRows.length > 0}
+					<button
+						type="button"
+						data-role="rack-off-count"
+						aria-expanded={showOff}
+						onclick={() => (showOff = !showOff)}
+						class="w-full px-2 py-1 text-left font-mono text-[10px] text-ink-mute"
+						>{deadRows.length} off {showOff ? '▾' : '▸'}</button
+					>
+				{/if}
 			</div>
 		{/if}
 	{/if}
