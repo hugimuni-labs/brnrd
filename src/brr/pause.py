@@ -138,7 +138,18 @@ def list_all_processes() -> list[ProcInfo]:
 
 
 def _looks_like_brnrd(command: str) -> bool:
-    return _NEVER_PAUSE_MARKER in command.lower()
+    """Whether *command* is a brnrd helper invocation, not merely a path.
+
+    This repository itself is named ``brnrd``. Substring matching therefore
+    classified ordinary tool calls whose shell command mentioned the checkout
+    path as daemon helpers and made pause-on-message silently inert. Match an
+    executable followed by a subcommand (or ``python -m brr``) instead.
+    """
+    lowered = command.lower()
+    return bool(
+        re.search(r"(?:^|\s)(?:\S*/)?brnrd\s+[a-z][\w-]*", lowered)
+        or re.search(r"(?:^|\s)(?:\S*/)?python(?:3(?:\.\d+)?)?\s+-m\s+brr(?:\s|$)", lowered)
+    )
 
 
 def descendants(root_pid: int, snapshot: list[ProcInfo] | None = None) -> list[ProcInfo]:
@@ -184,13 +195,24 @@ def pausable_children(
     provably after the boundary" and skipped — the pausable set is a
     positive claim, not a default.
     """
-    kids = descendants(runner_pid, snapshot=snapshot)
-    return [
-        proc for proc in kids
-        if proc.started_at is not None
-        and proc.started_at > since_ts
-        and not _looks_like_brnrd(proc.command)
-    ]
+    procs = snapshot if snapshot is not None else list_all_processes()
+    roots = [proc for proc in procs if proc.ppid == runner_pid]
+    result: list[ProcInfo] = []
+    for root in roots:
+        subtree = _subtree_deepest_first(root, descendants(root.pid, procs))
+        # The root is the unit we can later resume safely. If any ancestor
+        # predates the boundary, the subtree may belong to a long-lived MCP
+        # server; if any descendant is a brnrd helper, stopping its wrapper
+        # still deadlocks the boundary. Both claims therefore gate the whole
+        # root instead of filtering individual descendants out of it.
+        if all(
+            proc.started_at is not None
+            and proc.started_at > since_ts
+            and not _looks_like_brnrd(proc.command)
+            for proc in subtree
+        ):
+            result.append(root)
+    return result
 
 
 def _subtree_deepest_first(root: ProcInfo, all_descendants: list[ProcInfo]) -> list[ProcInfo]:
@@ -260,6 +282,7 @@ def pause_run_children(
             {
                 "pid": child.pid,
                 "argv": child.command,
+                "started_at": child.started_at,
                 "stopped_at": now,
                 "resumes_at": now + cap_seconds,
             }
@@ -316,7 +339,24 @@ def pid_permission_error(pid: int) -> bool:
     return True
 
 
-def _signal_with_subtree(pid: int, sig: int) -> None:
+def _record_process(
+    record: dict[str, Any], snapshot: list[ProcInfo],
+) -> ProcInfo | None:
+    """Resolve a pause record to the same process, refusing PID reuse."""
+    try:
+        pid = int(record.get("pid", -1))
+        started_at = float(record["started_at"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    for proc in snapshot:
+        if proc.pid != pid or proc.started_at is None:
+            continue
+        if abs(proc.started_at - started_at) <= 1.0:
+            return proc
+    return None
+
+
+def _signal_with_subtree(pid: int, sig: int, snapshot: list[ProcInfo]) -> None:
     """Signal *pid* and every process currently under it.
 
     `pause_run_children` stops a whole subtree under each recorded pid
@@ -326,7 +366,7 @@ def _signal_with_subtree(pid: int, sig: int) -> None:
     named anywhere on disk and would sit frozen forever once its parent
     pid is the only one anybody signals.
     """
-    targets = [pid] + [proc.pid for proc in descendants(pid)]
+    targets = [pid] + [proc.pid for proc in descendants(pid, snapshot)]
     for target in targets:
         try:
             os.kill(target, sig)
@@ -353,12 +393,15 @@ def resume_pids(
         return []
     resumed: list[dict[str, Any]] = []
     remaining: list[dict[str, Any]] = []
+    snapshot = list_all_processes()
     for record in records:
         pid = int(record.get("pid", -1))
         if only_pid is not None and pid != only_pid:
             remaining.append(record)
             continue
-        _signal_with_subtree(pid, signal.SIGCONT)
+        if _record_process(record, snapshot) is None:
+            continue
+        _signal_with_subtree(pid, signal.SIGCONT, snapshot)
         resumed.append(record)
     if remaining:
         write_paused_record(outbox_dir, remaining)
@@ -384,14 +427,17 @@ def drop_pids(
     dropped: list[dict[str, Any]] = []
     remaining: list[dict[str, Any]] = []
     targets: set[int] = set()
+    snapshot = list_all_processes()
     for record in records:
         pid = int(record.get("pid", -1))
         if only_pid is not None and pid != only_pid:
             remaining.append(record)
             continue
+        if _record_process(record, snapshot) is None:
+            continue
         dropped.append(record)
         targets.add(pid)
-        targets.update(proc.pid for proc in descendants(pid))
+        targets.update(proc.pid for proc in descendants(pid, snapshot))
     for pid in targets:
         for sig in (signal.SIGCONT, signal.SIGTERM):
             try:

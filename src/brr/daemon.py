@@ -4907,15 +4907,14 @@ def _run_worker(
             if pause.read_paused_record(outbox_dir):
                 return  # a pause is already in effect; wait for its release
             try:
-                current_ids = {
-                    str(ev.get("id"))
-                    for ev in _pending_events_for_agent(
+                current_ids = _correspondent_event_ids(
+                    _pending_events_for_agent(
                         inbox_dir, eid, strand=is_strand_run,
                         account_context=account_context,
                         repo_label=repo_label, observer_run_id=task.id,
-                    )
-                    if ev.get("id")
-                }
+                    ),
+                    _task_correspondent_key(task),
+                )
             except Exception:
                 return
             if _pause_seen_ids is None:
@@ -6590,6 +6589,25 @@ def _task_correspondent_key(task: Run) -> str | None:
     if not isinstance(meta, dict):
         return None
     return conversations.correspondent_key_for_event(meta)
+
+
+def _correspondent_event_ids(
+    events: list[dict], correspondent_key: str | None,
+) -> set[str]:
+    """Ids of actual messages from this seat's person.
+
+    ``_pending_events_for_agent`` deliberately mixes correspondence with
+    daemon-minted spawn/schedule events. Pause-on-message must not freeze a
+    tool call merely because one of the seat's own children reported back.
+    """
+    if not correspondent_key:
+        return set()
+    return {
+        str(event["id"])
+        for event in events
+        if event.get("id")
+        and conversations.correspondent_key_for_event(event) == correspondent_key
+    }
 
 
 def _scm_facet(
@@ -15667,7 +15685,7 @@ def _persist_run_topics(
 # listing its members meets the member nobody listed).
 _CONTROL_FILE_MODULES = (
     relics, gate_receipt, claude_status, codex_usage, claude_usage,
-    statusline, run_ledger, hooks_mod, portals, menus,
+    statusline, run_ledger, hooks_mod, portals, menus, pause,
 )
 # Matches a public (no leading underscore) module-level constant ending in
 # ``NAME`` — ``SNAPSHOT_NAME``, ``CONTROL_NAME``, ``RECEIPT_NAME``,
@@ -15803,6 +15821,12 @@ _MAX_PRESERVED_BYTES = 1_000_000
 
 
 NOT_PRESERVED: dict[str, str] = {
+    pause.PAUSED_CONTROL_NAME: (
+        "live process identity and signal state, invalid after the run"
+    ),
+    hooks_mod.ROOM_NAME: (
+        "live conversation-tempo note, already spent once the run ends"
+    ),
     portals.LINGER_OPT_OUT_NAME: (
         "transient closeout control, meaningless after the run"
     ),
