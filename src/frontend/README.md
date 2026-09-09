@@ -18,6 +18,10 @@ from the live dashboard nav. The first real screen (the window-track
 live-quota view, dual time+%-remaining axis) lands as its own reviewable
 PR on top of this.
 
+## Repro screenshots
+
+The drivers in `repro/` remain runnable locally (`node repro/drive-fuel.mjs --out /tmp/shots --port 5197`), while their generated pixels stay out of git. On frontend PRs, `.github/workflows/ui-shots.yml` captures the manifest in `repro/ci-shots.json` on the merge-base and PR head, uploads the pairs, and updates the PR's `<!-- ui-shots -->` comment with hosted before/after/diff images.
+
 ---
 
 Everything below is the unmodified `sv create` scaffold boilerplate.

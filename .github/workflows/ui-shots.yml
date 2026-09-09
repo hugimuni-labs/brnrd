@@ -1,0 +1,102 @@
+name: UI screenshots
+
+on:
+  pull_request:
+    paths:
+      - 'src/frontend/**'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  screenshots:
+    # Fork tokens cannot publish the protected image branch or PR comments.
+    if: github.event.pull_request.head.repo.fork == false
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/frontend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: src/frontend/package-lock.json
+      - name: Install browser and PR dependencies
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Find and prepare merge-base
+        id: base
+        env:
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git fetch origin main
+          BASE_SHA=$(git merge-base "$PR_SHA" origin/main)
+          BASE_DIR="$RUNNER_TEMP/ui-shots-base"
+          git worktree add --detach "$BASE_DIR" "$BASE_SHA"
+          npm ci --prefix "$BASE_DIR/src/frontend"
+          echo "sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "dir=$BASE_DIR" >> "$GITHUB_OUTPUT"
+      - name: Capture before and after
+        env:
+          BASE_DIR: ${{ steps.base.outputs.dir }}
+        run: |
+          node repro/ci-shots.mjs capture --out "$RUNNER_TEMP/ui-shots/after" --port-start 5197
+          node repro/ci-shots.mjs capture --root "$BASE_DIR/src/frontend" --out "$RUNNER_TEMP/ui-shots/before" --port-start 5297
+      - name: Diff pairs and render comment
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ steps.base.outputs.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          node repro/ci-shots.mjs diff --before "$RUNNER_TEMP/ui-shots/before" --after "$RUNNER_TEMP/ui-shots/after" --out "$RUNNER_TEMP/ui-shots/diff" --output "$RUNNER_TEMP/ui-shots/summary.json"
+          node repro/ci-shots.mjs comment --summary "$RUNNER_TEMP/ui-shots/summary.json" --base "$BASE_SHA" --sha "$PR_SHA" --url-base "https://raw.githubusercontent.com/$REPOSITORY/shots/pr-$PR_NUMBER/$PR_SHA" --output "$RUNNER_TEMP/ui-shots/comment.md"
+      - name: Upload screenshot artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-shots-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/ui-shots
+      - name: Publish images to shots branch
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git fetch origin shots || true
+          SHOTS_DIR="$RUNNER_TEMP/ui-shots-branch"
+          if git show-ref --verify --quiet refs/remotes/origin/shots; then
+            git worktree add -b shots "$SHOTS_DIR" origin/shots
+          else
+            git worktree add --detach "$SHOTS_DIR" HEAD
+            git -C "$SHOTS_DIR" switch --orphan shots
+            git -C "$SHOTS_DIR" rm -rf .
+          fi
+          # Closed PR folders are disposable; an API failure must not block a review.
+          for number in $(gh api --paginate 'repos/'"$GITHUB_REPOSITORY"'/pulls?state=closed&per_page=100' --jq '.[].number' 2>/dev/null || true); do
+            rm -rf "$SHOTS_DIR/pr-$number"
+          done
+          mkdir -p "$SHOTS_DIR/pr-$PR_NUMBER/$PR_SHA"
+          cp -R "$RUNNER_TEMP/ui-shots/before" "$SHOTS_DIR/pr-$PR_NUMBER/$PR_SHA/before"
+          cp -R "$RUNNER_TEMP/ui-shots/after" "$SHOTS_DIR/pr-$PR_NUMBER/$PR_SHA/after"
+          cp -R "$RUNNER_TEMP/ui-shots/diff" "$SHOTS_DIR/pr-$PR_NUMBER/$PR_SHA/diff"
+          git -C "$SHOTS_DIR" add -A
+          git -C "$SHOTS_DIR" diff --cached --quiet || git -C "$SHOTS_DIR" -c user.name=github-actions[bot] -c user.email=41898282+github-actions[bot] commit -m "chore: publish UI shots for PR #$PR_NUMBER"
+          git -C "$SHOTS_DIR" push origin shots
+      - name: Upsert PR comment
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test -s "$RUNNER_TEMP/ui-shots/comment.md" || exit 0
+          COMMENT_ID=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --jq '.[] | select(.body | contains("<!-- ui-shots -->")) | .id' | head -1)
+          if [ -n "$COMMENT_ID" ]; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID" --raw-field body="$(< "$RUNNER_TEMP/ui-shots/comment.md")"
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --raw-field body="$(< "$RUNNER_TEMP/ui-shots/comment.md")"
+          fi

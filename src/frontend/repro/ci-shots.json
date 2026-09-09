@@ -1,0 +1,14 @@
+[
+	{
+		"driver": "drive-fuel.mjs",
+		"shots": ["phone-1-deck.png", "desktop-1-deck.png"]
+	},
+	{
+		"driver": "drive-locked-shell.mjs",
+		"shots": ["phone-2-open-claude.png"]
+	},
+	{
+		"driver": "drive-observed-cores.mjs",
+		"shots": ["phone-2-claude-cores.png", "phone-3-codex-cores.png"]
+	}
+]
