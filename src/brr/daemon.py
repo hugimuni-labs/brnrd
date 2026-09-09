@@ -7590,6 +7590,121 @@ def _note_event_closed(
     return noted_id
 
 
+def _resolve_also_targets(
+    task: Run,
+    address_sources: list[tuple[Path, Path]],
+    fm: dict[str, Any],
+    *,
+    target: str,
+    target_event: dict[str, Any] | None,
+    current_event_id: str,
+    outbox_dir: Path | None,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Resolve an ``event:`` reply's ``also:`` frontmatter — a burst is one turn.
+
+    ``also: <id>, <id>`` names further pending events this same reply also
+    answers — the #128 shape ("closely-spaced fragments race separate
+    wakes") folded into one delivery instead of one ``event:`` reply plus a
+    ``note:`` per sibling (which itself hits "byte-identical bodies may not
+    target several events in one call"). Every listed id must resolve to a
+    *pending* event on the *same thread*, from the *same correspondent*, as
+    the ``event:`` target — a burst is one person on one thread, never a
+    back door to close an unrelated letter piggybacking on this reply. Any
+    failure refuses the **whole** directive (a notices row, nothing sent)
+    rather than delivering to some also-targets and silently dropping
+    others — a partial "also handled" claim would be a lie for whichever
+    id failed.
+
+    Returns ``(also_events, refused)``. ``refused`` true means a notice is
+    already recorded and the caller must retire the staging file untouched
+    — the primary ``event:`` reply is not delivered either.
+    """
+    raw = str(fm.get("also") or "").strip()
+    if not raw:
+        return [], False
+    also_ids: list[str] = []
+    seen_raw: set[str] = set()
+    for piece in raw.split(","):
+        token = piece.strip()
+        if token and token not in seen_raw:
+            seen_raw.add(token)
+            also_ids.append(token)
+    if not also_ids:
+        return [], False
+    primary_event = target_event
+    if primary_event is None:
+        primary_event, _inbox = _locate_event_any_status(address_sources, target)
+    primary_conversation = (
+        conversations.conversation_key_for_event(primary_event)
+        if primary_event else str(getattr(task, "conversation_key", "") or "")
+    ) or ""
+    primary_correspondent = (
+        conversations.correspondent_key_for_event(primary_event)
+        if primary_event else str(
+            (getattr(task, "meta", None) or {}).get("correspondent_key") or ""
+        )
+    ) or ""
+    resolved: list[dict[str, Any]] = []
+    seen_ids = {target}
+    for raw_id in also_ids:
+        if raw_id in seen_ids:
+            continue
+        also_event, _resp, ambiguous = _resolve_event_target(address_sources, raw_id)
+        if ambiguous:
+            candidates = ", ".join(
+                hooks_mod._short_event_id(ev.get("id")) for ev in ambiguous
+            )
+            _record_outbox_notice(
+                outbox_dir,
+                f"also dropped: event {raw_id} is ambiguous — matches "
+                f"{len(ambiguous)} pending events ({candidates}); address the "
+                "full id — nothing was delivered",
+                kind="refused", lifetime="run",
+            )
+            return [], True
+        if also_event is None:
+            cause = _event_refusal_cause(address_sources, raw_id, raw_id)
+            _record_outbox_notice(
+                outbox_dir,
+                f"also dropped: {cause} — nothing was delivered",
+                kind="refused", lifetime="run",
+            )
+            return [], True
+        if _is_strand(getattr(task, "meta", None)) and not _strand_may_address(
+            also_event, current_event_id,
+        ):
+            short = hooks_mod._short_event_id(also_event.get("id"))
+            _record_outbox_notice(
+                outbox_dir,
+                f"also refused: event {short} belongs to another thread — a "
+                "strand-stack run may only close its own waking event or a "
+                "parent's `to:` steer this way. Nothing was delivered.",
+                kind="refused", lifetime="run",
+            )
+            return [], True
+        also_conversation = conversations.conversation_key_for_event(also_event) or ""
+        also_correspondent = conversations.correspondent_key_for_event(also_event) or ""
+        if (
+            not primary_correspondent
+            or not also_correspondent
+            or also_correspondent != primary_correspondent
+            or also_conversation != primary_conversation
+        ):
+            short = hooks_mod._short_event_id(also_event.get("id"))
+            _record_outbox_notice(
+                outbox_dir,
+                f"also dropped: event {short} is not the same thread/"
+                "correspondent as the event: target — a burst is one person "
+                "on one thread; nothing was delivered",
+                kind="refused", lifetime="run",
+            )
+            return [], True
+        also_id = str(also_event.get("id") or "")
+        seen_ids.add(also_id)
+        resolved.append(also_event)
+    return resolved, False
+
+
 def _truthy(value: object) -> bool:
     if isinstance(value, bool):
         return value
@@ -11390,6 +11505,14 @@ def _drain_outbox(
                 target_responses_dir = responses_dir
                 target_source = own_source
                 redirected = True
+            also_events, also_refused = _resolve_also_targets(
+                task, address_sources, fm,
+                target=target, target_event=target_event,
+                current_event_id=event_id, outbox_dir=outbox_dir,
+            )
+            if also_refused:
+                _retire_outbox_staging(fpath)
+                continue
             # Interim replies ride the target event's own gate. Dispatch-tree
             # sources (spawn, spawn_completed, dispatch_message) have no gate and
             # no collector for interims — only a strand's *terminal* report is
@@ -11518,6 +11641,40 @@ def _drain_outbox(
                     event_id=artifact_event_id,
                     label=(f"reply:{target}" if cross else f"interim:{event_id}"),
                     body=body,
+                )
+            for also_event in also_events:
+                # Same reply, one more retired letter: a burst is one turn,
+                # so every `also:` id shares this delivery rather than
+                # minting its own partial (kb design-multi-response's
+                # "one complete reply per event" — this is that reply,
+                # attached twice).
+                also_id = str(also_event.get("id") or "")
+                if not also_id:
+                    continue
+                try:
+                    protocol.update_event_meta(
+                        also_event, also_of=target, also_at=_utc_now(),
+                    )
+                except OSError:
+                    pass
+                _set_event_status_if_present(also_event, "done")
+                also_key = conversations.conversation_key_for_event(also_event) or ""
+                if also_key:
+                    conversations.append_event(emit.brr_dir, also_key, also_event)
+                    conversations.append_artifact(
+                        emit.brr_dir, also_key,
+                        kind="interim_response",
+                        path=str(ppath),
+                        run_id=task.id,
+                        event_id=also_id,
+                        label=f"also:{also_id}",
+                        body=body,
+                    )
+                emit(
+                    "event_also_handled",
+                    run_id=task.id,
+                    event_id=event_id,
+                    target_event=also_id,
                 )
             emit(
                 "interim_response",

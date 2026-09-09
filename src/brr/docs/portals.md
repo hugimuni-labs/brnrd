@@ -114,7 +114,7 @@ brnrd do [--outbox DIR] [--timeout SECONDS] \
 any `--reply` requires exactly one of `--promise <what>` / `--no-follow-up` (evt-1787161641746642000-s0vo, 2026-08-19)
 neither ⇒ refused client-side before anything is staged, naming both flags · both ⇒ argparse refuses (mutually exclusive), same nothing-staged guarantee
 per call ≠ per `--reply` — several replies staged together share one promise-or-none choice ⇒ `--promise` writes ≤ one blueprint row per call
-byte-identical bodies may not target several events in one call — reply once, `--note` the siblings, or the chat receives one duplicate per target
+byte-identical bodies may not target several events in one call — reply once and fold a same-thread, same-correspondent burst in with the outbox grammar's `also: <id>, <id>` (daemon-substrate.md's frontmatter table), or `--note` the siblings; a `--also` flag on this porcelain, mirroring `--item`, is not wired yet (tracked, not done) — either way, without one of these the chat receives one duplicate per target
 `--promise <what>` vocabulary = `brnrd promise`'s (`commit` · `branch` · `pr` · `merge` · `kb` · `issue` · `comment` · `message` · `file`) · appended through `promises.append`, the exact writer `brnrd promise` calls · `--promise-count N` sets the count (default 1)
 the row is written only after every staged reply's own drain verdict comes back `✓` — a refused reply must not leave a debt row for a message nobody got ⇒ a failed reply renders its own `✗` and no `promise …` segment follows
 `--no-follow-up` = the correspondent's event carries no follow-up to derive: nothing owed beyond this reply · replies staged, nothing appended

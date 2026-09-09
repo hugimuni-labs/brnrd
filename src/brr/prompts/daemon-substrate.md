@@ -40,6 +40,7 @@ the daemon decorates each wake · attention, action, the reply = yours
   | key | does |
   | --- | --- |
   | `event: <id>` | answer a *different* pending event, mark it handled · one complete reply per event; only a reply or a deliberate `note:` clears one |
+  | `also: <id>, <id>` | rides an `event:` reply — a burst is one turn: every listed id, same thread + same correspondent as `event:`, is marked handled by this same delivery, no second message. Any id not pending, on a different thread, or from a different correspondent refuses the *whole* directive — nothing sent, one notice |
   | `note: <id>` | retire a pending event, no message out · a decision, never a default; body ignored |
   | `gate: <name>` | send with no waiting event · `gate: forge` = the explicit PR handoff (`head`/`base`/`title`; body = PR body); diffense may supply title/body, never owns PR creation · a close keyword closes from a PR body as from a commit message; hand-opened PRs ⇒ `brnrd close-check <body-file>` first |
   | `respawn: true` | park a handoff to another run — `shell:`/`core:`, or `quality: escalate` |
