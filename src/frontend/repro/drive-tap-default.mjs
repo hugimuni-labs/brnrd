@@ -27,7 +27,9 @@ async function waitForServer() {
 	for (let i = 0; i < 90; i++) {
 		try {
 			if ((await fetch(ROOT)).ok) return;
-		} catch {}
+		} catch {
+			// Server is still starting.
+		}
 		await delay(500);
 	}
 	throw new Error('vite did not start');
