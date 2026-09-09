@@ -11,6 +11,7 @@ import {
 	offReasonOf,
 	headline,
 	orderRows,
+	shortVendorId,
 	tierLabel
 } from './spoolRack.ts';
 import type { RunnerProfile } from './runners.ts';
@@ -255,4 +256,15 @@ test('orderRows: shell default first, then economy · balanced · strong · uncl
 		'claude-fable-5-1'
 	);
 	assert.equal(tierLabel(rows[0]), 'unclassed');
+	// a build-date suffix is a snapshot stamp, not a version: off the row
+	assert.equal(
+		headline({
+			name: 'claude-haiku',
+			shell: 'claude',
+			model: 'haiku',
+			observed_model: 'claude-haiku-4-5-20251001'
+		}),
+		'claude-haiku-4-5'
+	);
+	assert.equal(shortVendorId('gpt-5.6-sol'), 'gpt-5.6-sol');
 });
