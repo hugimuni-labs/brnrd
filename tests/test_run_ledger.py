@@ -711,6 +711,20 @@ def test_window_reset_mid_run_yields_null_not_a_negative_cost(monkeypatch, tmp_p
     assert row["tokens_input"] == 100
 
 
+def test_closeout_uses_the_last_boundary_tokens_when_the_terminal_read_lacks_them():
+    """A held seat's known heartbeat reading must survive a sparse closeout."""
+    task = _task()
+    run_ledger.record_boundary_levels(
+        task,
+        _levels(tokens={"input_tokens": 123, "output_tokens": 45}),
+    )
+
+    row = run_ledger.build_closed_run_row(task, {}, after_levels=_levels(tokens={}))
+
+    assert row["tokens_input"] == 123
+    assert row["tokens_output"] == 45
+
+
 def test_a_flat_window_still_reports_a_real_zero(monkeypatch, tmp_path):
     """Guarding resets must not swallow the honest "cost below resolution" row.
 

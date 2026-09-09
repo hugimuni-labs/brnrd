@@ -47,6 +47,7 @@ _TOPIC_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _BEFORE_WEEKLY_KEY = "run_ledger_weekly_used_before"
 _BEFORE_FIVE_HOUR_KEY = "run_ledger_five_hour_used_before"
 _BASELINE_RUNNER_KEY = "run_ledger_baseline_runner"
+_LAST_LEVELS_KEY = "run_ledger_last_levels"
 
 _ROW_FIELDS = (
     "run_id",
@@ -120,6 +121,21 @@ def mark_run_started(
         task.meta.pop(_BEFORE_FIVE_HOUR_KEY, None)
 
 
+def record_boundary_levels(task: Run, levels: Mapping[str, Any] | None) -> None:
+    """Keep the latest observed quota/token reading for closeout.
+
+    A held or awaited seat can end before its Shell emits a final envelope.
+    The heartbeat already read this data; retain its compact, JSON-shaped
+    snapshot on the run so closeout can use it rather than turning a known
+    token reading into a null merely because the final read is absent.
+    """
+    if not isinstance(levels, Mapping):
+        return
+    snapshot = _level_snapshot(levels)
+    if snapshot:
+        task.meta[_LAST_LEVELS_KEY] = snapshot
+
+
 def append_closed_run(
     repo_root: Path,
     task: Run,
@@ -169,6 +185,9 @@ def build_closed_run_row(
             work_dir,
             force_claude_refresh=True,
         )
+    after_levels = _prefer_last_boundary_levels(
+        after_levels, task.meta.get(_LAST_LEVELS_KEY)
+    )
 
     # Prefer the model id(s) actually observed in this run's own result JSON
     # (`modelUsage.keys()`) over the static runner-catalog placeholder
@@ -405,6 +424,45 @@ def quota_used_percentages(
             quota.get("primary_used_percent")
         )
     return weekly, five_hour
+
+
+def _level_snapshot(levels: Mapping[str, Any]) -> dict[str, Any]:
+    """Retain only the measured parts closeout consumes, never opaque payloads."""
+    snapshot: dict[str, Any] = {}
+    for key in ("quota", "tokens", "updated_at", "model_ids", "spend"):
+        value = levels.get(key)
+        if isinstance(value, Mapping):
+            snapshot[key] = dict(value)
+        elif isinstance(value, (str, int, float, list)) and not isinstance(value, bool):
+            snapshot[key] = value
+    return snapshot
+
+
+def _prefer_last_boundary_levels(
+    current: Mapping[str, Any] | None,
+    last: Any,
+) -> dict[str, Any] | None:
+    """Use a boundary reading only to fill terminal gaps, never overwrite it."""
+    if not isinstance(current, Mapping):
+        return dict(last) if isinstance(last, Mapping) else None
+    merged = dict(current)
+    if not isinstance(last, Mapping):
+        return merged
+    for key in ("quota", "tokens", "spend"):
+        now_value = merged.get(key)
+        prior_value = last.get(key)
+        if not isinstance(prior_value, Mapping):
+            continue
+        if not isinstance(now_value, Mapping):
+            merged[key] = dict(prior_value)
+            continue
+        combined = dict(prior_value)
+        combined.update(now_value)
+        merged[key] = combined
+    for key in ("updated_at", "model_ids"):
+        if merged.get(key) is None and last.get(key) is not None:
+            merged[key] = last[key]
+    return merged
 
 
 def token_fields(levels: Mapping[str, Any] | None) -> dict[str, int | float | None]:

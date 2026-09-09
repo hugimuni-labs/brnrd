@@ -7188,6 +7188,9 @@ def _write_live_portal_state(
                 if hasattr(task, "meta") else None
             ),
         )
+        # The closeout collector can have less evidence than this heartbeat
+        # after a seat holds or awaits. Retain this already-observed reading.
+        run_ledger.record_boundary_levels(task, run_levels)
         allowance_facet_input = _collect_allowance_facet(
             task, runner_name, work_dir, cfg=cfg, levels=run_levels,
         )
@@ -7219,6 +7222,10 @@ def _write_live_portal_state(
         # bucket for a *different* Core doesn't bind this run's pacing (#561).
         binding_model = str((runner_meta or {}).get("model") or "").strip() or None
         pacing_status = _quota_pacing_status(cfg or {}, run_levels, model=binding_model)
+        pace = _quota_window_pace(run_levels, model=binding_model)
+        if pace is not None:
+            pacing_status = dict(pacing_status or {})
+            pacing_status["pace"] = pace
         # The starvation park: same reading the pacing facet just proved,
         # judged against `seat.starve_floor_pct` — stamps the hold the
         # worker tail finalizes, resolves an idle await with `park`.
@@ -16971,6 +16978,38 @@ def _quota_pacing_status(
     if thin:
         status["excluded_thin"] = thin
     return status
+
+
+def _quota_window_pace(
+    levels: dict | None, *, model: str | None = None, now: float | None = None,
+) -> dict[str, object] | None:
+    """Compare used quota share with elapsed share of that exact window.
+
+    This is deliberately a signal, not a score: without a fully identified
+    binding bucket (remaining %, duration, reset instant), it returns absent.
+    """
+    window = runner_quota.binding_quota_window(levels, model=model)
+    if window is None:
+        return None
+    wall = time.time() if now is None else now
+    duration_seconds = window["window_minutes"] * 60.0
+    started_at = window["resets_at"] - duration_seconds
+    elapsed_pct = max(0.0, min(100.0, 100.0 * (wall - started_at) / duration_seconds))
+    consumed_pct = 100.0 - window["remaining_pct"]
+    if consumed_pct > elapsed_pct:
+        recommendation = "slow_down"
+    elif consumed_pct < elapsed_pct:
+        recommendation = "schedule_or_spawn"
+    else:
+        recommendation = "hold_pace"
+    return {
+        "consumed_share_pct": round(consumed_pct, 1),
+        "elapsed_share_pct": round(elapsed_pct, 1),
+        "ratio": round(consumed_pct / elapsed_pct, 3) if elapsed_pct else None,
+        "recommendation": recommendation,
+        "window_minutes": window["window_minutes"],
+        "resets_at": window["resets_at"],
+    }
 
 
 def _spawn_admission_floor(
