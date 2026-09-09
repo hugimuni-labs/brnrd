@@ -183,8 +183,11 @@
 	 *  are not dead — they keep their place and their tap. */
 	let showOff = $state(false);
 	function isDead(profile: RunnerProfile): boolean {
-		// Locked (#1867) is not dead: it keeps its tap and its line.
-		return !isLocked(profile) && availabilityOf(profile) === 'unavailable';
+		// Locked (#1867) is not dead: it keeps its tap and its line. A row whose
+		// own daemon report is old is off (`offerabilityOf`) and folds with the
+		// dead — his 2026-09-09 read: two stale codex rows sat mid-list, disabled.
+		if (isLocked(profile)) return false;
+		return availabilityOf(profile) === 'unavailable' || profile.daemon_stale === true;
 	}
 
 	function handleTap(profile: RunnerProfile) {
@@ -254,12 +257,12 @@
 		     sit above this was the second place a provider could be picked;
 		     the fuel row is the only one now. -->
 		{#if activeGroup}
+			{@const allOff =
+				activeGroup.allUnavailable || activeGroup.profiles.every((profile) => isDead(profile))}
 			{@const liveRows = orderRows(
-				activeGroup.allUnavailable
-					? activeGroup.profiles
-					: activeGroup.profiles.filter((profile) => !isDead(profile))
+				allOff ? activeGroup.profiles : activeGroup.profiles.filter((profile) => !isDead(profile))
 			)}
-			{@const deadRows = activeGroup.allUnavailable ? [] : activeGroup.profiles.filter(isDead)}
+			{@const deadRows = allOff ? [] : activeGroup.profiles.filter(isDead)}
 			{#if activeGroup.allUnavailable}
 				<p class="mb-2 font-mono text-[10px] text-ink-mute">
 					{OFF_MARK}{activeGroup.shell} — {deadShellReason(activeGroup)}
