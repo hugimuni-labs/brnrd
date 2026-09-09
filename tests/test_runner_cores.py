@@ -336,6 +336,42 @@ def test_probe_shell_models_sees_a_disk_feed_rewrite_without_cache_clear(
     assert calls["n"] == calls_after_first
 
 
+def test_codex_feed_omission_keeps_last_known_core_during_grace(tmp_path, monkeypatch):
+    """One valid feed omission is not a negative availability probe."""
+    import json as _json
+
+    cache_path = tmp_path / "models_cache.json"
+    cache_path.write_text(_json.dumps({"models": [{"slug": "gpt-9.9-nova"}]}))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.setattr(runner_cores.time, "time", lambda: 1_000.0)
+
+    first = runner_cores._codex_feed_entries()
+    assert first["gpt-9.9-nova"]["feed_state"] == "working"
+
+    cache_path.write_text(_json.dumps({"models": []}))
+    retained = runner_cores._codex_feed_entries()
+    assert retained["gpt-9.9-nova"]["feed_state"] == "last-known"
+    assert retained["gpt-9.9-nova"]["feed_age_seconds"] == 0
+
+
+def test_codex_feed_removal_expires_last_known_core(tmp_path, monkeypatch):
+    """Sustained removal expires the row instead of claiming it still works."""
+    import json as _json
+
+    cache_path = tmp_path / "models_cache.json"
+    cache_path.write_text(_json.dumps({"models": [{"slug": "gpt-9.9-nova"}]}))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    clock = {"now": 1_000.0}
+    monkeypatch.setattr(runner_cores.time, "time", lambda: clock["now"])
+    runner_cores._codex_feed_entries()
+
+    clock["now"] += runner_cores.CODEX_FEED_GRACE_SECONDS + 1
+    cache_path.write_text(_json.dumps({"models": []}))
+    expired = runner_cores._codex_feed_entries()
+    assert expired["gpt-9.9-nova"]["feed_state"] == "expired"
+    assert expired["gpt-9.9-nova"]["feed_age_seconds"] > runner_cores.CODEX_FEED_GRACE_SECONDS
+
+
 def test_generated_profile_entries_derive_class_when_missing(monkeypatch):
     monkeypatch.setattr(
         runner_cores,

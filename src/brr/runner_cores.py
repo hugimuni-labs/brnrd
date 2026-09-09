@@ -53,9 +53,10 @@ import re
 import shlex
 import shutil
 import subprocess
+import time
 from typing import Any
 
-from . import runner_capabilities, runner_select
+from . import account, runner_capabilities, runner_select
 
 # Shells brnrd ships first-class knowledge for. No single prior definition
 # existed in code (closest anchors: the `_BUNDLED_CORES` shells below, the
@@ -80,6 +81,12 @@ _BARE_FAMILY_WORD = re.compile(r"^[a-z]+$")
 
 _PROBE_TIMEOUT_S = 2.0
 _VERSION_PROBE_TIMEOUT_S = 2.0
+# A vendor feed omission is not evidence that a previously listed core died.
+# Keep the last observation usable for one day, then keep the row only as an
+# explicit unavailable pin/role instead of silently deleting it.
+CODEX_FEED_GRACE_SECONDS = 24 * 60 * 60
+_CODEX_FEED_CACHE_SCHEMA = 1
+_CODEX_FEED_CACHE_NAME = "codex-model-catalog.json"
 _VERSION_RE = re.compile(r"\b\d+(?:\.\d+){1,3}\b")
 _MODEL_TOKEN_RE = re.compile(
     r"\b(?:claude|gpt|o\d|llama|mistral|qwen|deepseek|devstral|grok)"
@@ -626,6 +633,11 @@ def _codex_cache_path() -> Path:
     return Path(home) / "models_cache.json"
 
 
+def _codex_feed_cache_path() -> Path:
+    """Machine-scoped last-known Codex feed, separate from vendor state."""
+    return account.state_root() / _CODEX_FEED_CACHE_NAME
+
+
 def _codex_cache_payload() -> dict[str, Any]:
     """The full parsed ``models_cache.json``, or ``{}`` when absent/malformed.
 
@@ -653,10 +665,75 @@ def _codex_disk_entries() -> dict[str, dict[str, Any]]:
     entries (``visibility: "hide"``) are internal models, not selectable
     Cores, same exclusion as before.
     """
-    payload = _codex_cache_payload()
+    return _codex_feed_entries()
+
+
+def _codex_feed_fetched_at() -> str | None:
+    """The live codex feed's own ``fetched_at`` — the measured freshness signal.
+
+    Codex refreshes ``models_cache.json`` from its own network calls; this
+    timestamp records when that last happened, independent of any hand-typed
+    ``freshness_date`` in brnrd's own registry.
+    """
+    return _str(_codex_cache_payload().get("fetched_at"))
+
+
+def _feed_epoch(value: Any) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    text = _str(value)
+    if not text:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _feed_iso(epoch: float | None) -> str | None:
+    if epoch is None:
+        return None
+    return datetime.datetime.fromtimestamp(
+        epoch, tz=datetime.timezone.utc
+    ).isoformat().replace("+00:00", "Z")
+
+
+def _codex_feed_cache_key() -> str:
+    try:
+        return str(_codex_cache_path().resolve())
+    except OSError:
+        return str(_codex_cache_path())
+
+
+def _load_codex_feed_cache() -> dict[str, Any]:
+    try:
+        payload = json.loads(
+            _codex_feed_cache_path().read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _save_codex_feed_cache(payload: dict[str, Any]) -> None:
+    path = _codex_feed_cache_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+        temporary.replace(path)
+    except OSError:
+        # Discovery remains fail-open if the state directory is read-only.
+        pass
+
+
+def _parse_codex_models(payload: dict[str, Any]) -> dict[str, dict[str, Any]] | None:
+    """Parse a valid vendor model list; ``None`` means no measured feed."""
+    entries = payload.get("models")
+    if not isinstance(entries, list):
+        return None
     out: dict[str, dict[str, Any]] = {}
-    entries = payload.get("models") if isinstance(payload, dict) else None
-    for entry in entries or []:
+    for entry in entries:
         if not isinstance(entry, dict):
             continue
         if str(entry.get("visibility") or "").strip().lower() == "hide":
@@ -668,8 +745,6 @@ def _codex_disk_entries() -> dict[str, dict[str, Any]]:
         priority = entry.get("priority")
         if isinstance(priority, (int, float)) and not isinstance(priority, bool):
             row["priority"] = priority
-        # The vendor's own words — the only tier signal a feed core has
-        # (`class_from_feed_words`); kept short, never the whole row.
         for key in ("display_name", "description"):
             text = _str(entry.get(key))
             if text:
@@ -687,14 +762,85 @@ def _codex_disk_entries() -> dict[str, dict[str, Any]]:
     return out
 
 
-def _codex_feed_fetched_at() -> str | None:
-    """The live codex feed's own ``fetched_at`` — the measured freshness signal.
+def _codex_feed_entries() -> dict[str, dict[str, Any]]:
+    """Merge the current Codex feed with a bounded last-known-good cache.
 
-    Codex refreshes ``models_cache.json`` from its own network calls; this
-    timestamp records when that last happened, independent of any hand-typed
-    ``freshness_date`` in brnrd's own registry.
+    A valid feed refresh updates the per-model observation time. A model that
+    disappears is retained as ``last-known`` through the grace window and as
+    ``expired`` afterwards. An invalid/missing feed never refreshes age.
     """
-    return _str(_codex_cache_payload().get("fetched_at"))
+    payload = _codex_cache_payload()
+    current = _parse_codex_models(payload)
+    now = time.time()
+    cache = _load_codex_feed_cache()
+    feeds = cache.get("feeds")
+    if not isinstance(feeds, dict):
+        feeds = {}
+    key = _codex_feed_cache_key()
+    prior = feeds.get(key)
+    if not isinstance(prior, dict):
+        prior = {}
+    remembered = prior.get("models")
+    if not isinstance(remembered, dict):
+        remembered = {}
+
+    observed_at = _feed_epoch(payload.get("fetched_at")) if current is not None else None
+    if observed_at is None and current is not None:
+        observed_at = now
+    if current is not None:
+        for model, row in current.items():
+            remembered[model] = {
+                "row": row,
+                "last_seen_at": observed_at,
+            }
+        feeds[key] = {
+            "models": remembered,
+            "updated_at": now,
+        }
+        cache = {"schema": _CODEX_FEED_CACHE_SCHEMA, "feeds": feeds}
+        _save_codex_feed_cache(cache)
+
+    result: dict[str, dict[str, Any]] = {}
+    current_models = set(current or {})
+    for model, saved in remembered.items():
+        if not isinstance(saved, dict) or not isinstance(saved.get("row"), dict):
+            continue
+        last_seen = _feed_epoch(saved.get("last_seen_at"))
+        age = None if last_seen is None else max(0.0, now - last_seen)
+        state = "working" if model in current_models else (
+            "last-known" if age is not None and age <= CODEX_FEED_GRACE_SECONDS else "expired"
+        )
+        row = dict(saved["row"])
+        row.update({
+            "feed_state": state,
+            "feed_last_seen_at": _feed_iso(last_seen),
+            "feed_age_seconds": int(age) if age is not None else None,
+        })
+        result[model] = {key: value for key, value in row.items() if value is not None}
+    return result
+
+
+def codex_feed_status(
+    model: str, *, now: float | None = None,
+) -> dict[str, Any]:
+    """Return measured feed truth for one Codex model, without probing it."""
+    model = model.strip()
+    entries = _codex_feed_entries()
+    if model in entries:
+        status = dict(entries[model])
+        if now is not None and status.get("feed_last_seen_at"):
+            last_seen = _feed_epoch(status["feed_last_seen_at"])
+            if last_seen is not None:
+                age = max(0.0, now - last_seen)
+                status["feed_age_seconds"] = int(age)
+                if status.get("feed_state") != "working":
+                    status["feed_state"] = (
+                        "last-known" if age <= CODEX_FEED_GRACE_SECONDS else "expired"
+                    )
+        return status
+    if _parse_codex_models(_codex_cache_payload()) is not None:
+        return {"feed_state": "not-listed"}
+    return {"feed_state": "unmeasured"}
 
 
 def _models_from_disk(shell: str) -> list[str]:
@@ -707,7 +853,7 @@ def _models_from_disk(shell: str) -> list[str]:
     """
     if shell != "codex":
         return []
-    return list(_codex_disk_entries().keys())
+    return list(_codex_feed_entries().keys())
 
 
 def retirement_status(
@@ -815,9 +961,28 @@ def catalog_freshness(
 
     shell = (_str(entry.get("shell")) or "").lower()
     model = effective_model(entry)
-    if shell == "codex" and model and model.strip() in _codex_disk_entries():
+    if shell == "codex" and model:
+        feed_status = codex_feed_status(model)
+        feed_state = feed_status.get("feed_state")
+        if feed_state == "expired":
+            return {
+                "stale": True,
+                "source": "codex-feed-expired",
+                "measured_at": feed_status.get("feed_last_seen_at"),
+            }
+        if feed_state == "last-known":
+            return {
+                "stale": True,
+                "source": "codex-feed-last-known",
+                "measured_at": feed_status.get("feed_last_seen_at"),
+            }
         fetched_at = _codex_feed_fetched_at()
-        if fetched_at:
+        if feed_state == "working":
+            # A currently listed model is live feed evidence even when the
+            # vendor's fetched_at is absent; the measured timestamp, when
+            # present, still supplies the honest age.
+            if not fetched_at:
+                return {"stale": False, "source": "codex-feed", "measured_at": None}
             try:
                 fetched_date = datetime.datetime.fromisoformat(
                     fetched_at.replace("Z", "+00:00")
@@ -830,7 +995,7 @@ def catalog_freshness(
                     "source": "codex-feed",
                     "measured_at": fetched_at,
                 }
-        return {"stale": False, "source": "codex-feed", "measured_at": None}
+            return {"stale": False, "source": "codex-feed", "measured_at": None}
 
     if is_alias_tracked(entry):
         return {"stale": False, "source": "alias-tracked", "measured_at": None}
@@ -964,6 +1129,9 @@ def _probed_core_entries(
             disk_meta = disk.get(model.strip())
             if disk_meta:
                 entry["freshness_source"] = "codex-cache"
+                for key in ("feed_state", "feed_last_seen_at", "feed_age_seconds"):
+                    if disk_meta.get(key) is not None:
+                        entry[key] = disk_meta[key]
                 if not entry["class"]:
                     entry["class"] = class_from_feed_words(disk_meta)
                 if disk_meta.get("display_name"):

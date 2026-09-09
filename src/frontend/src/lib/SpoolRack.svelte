@@ -234,6 +234,15 @@
 		if (openRows.has(name)) openRows.delete(name);
 		else openRows.add(name);
 	}
+	function feedTruth(profile: RunnerProfile): string | null {
+		if (profile.feed_state === 'last-known') {
+			const age = profile.feed_age_seconds;
+			return age == null ? 'last known feed entry' : `last known feed entry · ${Math.floor(age / 3600)}h old`;
+		}
+		if (profile.feed_state === 'expired') return 'feed entry expired · pinned role remains explicit';
+		if (profile.feed_state === 'not-listed') return 'not listed in the measured feed';
+		return null;
+	}
 </script>
 
 <div data-measure="spool-rack" class="panel p-4">
@@ -439,7 +448,7 @@
 								     touches whatever is running right now. -->
 								<span class="text-ink-quiet normal-case">tap → default (next wake here)</span>
 							{/if}
-							{#if profile.class || profile.cost_rank !== null || profile.quota_source || profile.capability_score !== null}
+							{#if profile.class || profile.cost_rank !== null || profile.quota_source || profile.capability_score !== null || profile.feed_state}
 								<button
 									type="button"
 									onclick={(e) => {
@@ -449,7 +458,14 @@
 									title={open ? 'hide detail' : 'why this row — rank, quota source, capability'}
 									class="text-ink-quiet hover:text-ink-mute">{open ? '▾' : '▸'} detail</button
 								>
-							{/if}
+									{/if}
+									{#if feedTruth(profile)}
+										<span
+											class={profile.feed_state === 'last-known' ? 'text-amber-500' : 'text-ink-mute'}
+											title={profile.feed_last_seen_at ? `last feed observation ${profile.feed_last_seen_at}` : undefined}
+											>{feedTruth(profile)}</span
+										>
+									{/if}
 						</div>
 						{#if open}
 							<div

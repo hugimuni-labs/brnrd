@@ -582,6 +582,11 @@ class RunnerProfileIn(BaseModel):
     alias_tracked: bool | None = None
     freshness_date: str | None = Field(default=None, max_length=64)
     freshness_source: str | None = Field(default=None, max_length=64)
+    # Codex feed truth is separate from shell invocability: a grace-retained
+    # row can still resolve while its vendor listing is only last-known.
+    feed_state: str | None = Field(default=None, max_length=32)
+    feed_last_seen_at: str | None = Field(default=None, max_length=64)
+    feed_age_seconds: int | None = None
     auth_error: RunnerAuthErrorIn | None = None
     retired: bool | None = None
     retirement_at: str | None = Field(default=None, max_length=64)
