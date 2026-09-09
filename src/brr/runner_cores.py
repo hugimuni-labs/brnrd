@@ -155,7 +155,7 @@ _BUNDLED_CORES: dict[str, dict[str, Any]] = {
     # 2026-07-11 (codex-cli 0.144.1); gpt-5-codex no longer exists.
     # Older families (5.5, 5.4, 5.4-mini) still resolve and are surfaced
     # by the models-cache probe rather than pinned here.
-    "codex-mini": {
+    "codex-gpt-5.6-luna": {
         "shell": "codex",
         "model": "gpt-5.6-luna",
         "provider": "openai",
@@ -163,7 +163,7 @@ _BUNDLED_CORES: dict[str, dict[str, Any]] = {
         "cost_rank": 20,
         "freshness_date": "2026-07-11",
     },
-    "codex-terra": {
+    "codex-gpt-5.6-terra": {
         "shell": "codex",
         "model": "gpt-5.6-terra",
         "provider": "openai",
@@ -171,7 +171,7 @@ _BUNDLED_CORES: dict[str, dict[str, Any]] = {
         "cost_rank": 30,
         "freshness_date": "2026-07-11",
     },
-    "codex-full": {
+    "codex-gpt-5.6-sol": {
         "shell": "codex",
         "model": "gpt-5.6-sol",
         "provider": "openai",

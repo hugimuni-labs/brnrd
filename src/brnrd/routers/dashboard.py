@@ -601,6 +601,25 @@ def _runners_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
     }
 
 
+def _daemon_config_view(db: Session, repos: list[Repo]) -> list[dict[str, Any]]:
+    """Newest daemon-owned config mirror for this account."""
+    repo_ids = {repo.id for repo in repos}
+    if not repo_ids:
+        return []
+    daemons = list(
+        db.execute(select(Daemon).where(Daemon.repo_id.in_(repo_ids))).scalars()
+    )
+    daemons.sort(key=lambda row: _dt(row.runners_updated_at) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    for daemon in daemons:
+        try:
+            rows = json.loads(daemon.daemon_config_json or "[]")
+        except ValueError:
+            continue
+        if isinstance(rows, list):
+            return [row for row in rows if isinstance(row, dict)]
+    return []
+
+
 def _live_sticky(raw: str | None, now: datetime) -> dict[str, Any] | None:
     """Parse a mirrored #932 sticky, dropping one already past its expiry.
 
@@ -1378,6 +1397,16 @@ def dashboard_runners_api(request: Request, db: Session = Depends(get_db)) -> JS
             **_withheld_lane(repos, "runners"),
         }
     )
+
+
+@router.get("/v1/dashboard/config")
+def dashboard_config_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """Read the daemon-owned account settings mirrored by the live daemon."""
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    repos = _repos(db, account_id)
+    return JSONResponse({"config": _daemon_config_view(db, repos)})
 
 
 @router.post("/v1/dashboard/runners/wake-request")

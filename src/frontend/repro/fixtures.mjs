@@ -148,6 +148,13 @@ export const surface = {
 export const ROUTES = {
 	'/v1/dashboard/quota': quota,
 	'/v1/dashboard/runners': runners,
+	'/v1/dashboard/config': {
+		config: [
+			{ key: 'runner.default', value: 'codex', source: 'daemon.config' },
+			{ key: 'runner_policy', value: 'cost-aware', source: 'daemon.config' },
+			{ key: 'seat.park_on_turn_end', value: true, source: 'daemon.config' }
+		]
+	},
 	'/v1/dashboard/repos': repos,
 	'/v1/dashboard/paired-chats': pairedChats,
 	'/v1/dashboard/live-runs': liveRuns,
