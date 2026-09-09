@@ -28,6 +28,19 @@ export interface RunnerProfile {
 	 *  a reading. */
 	observed_model?: string | null;
 	observed_at?: string | null;
+	/** Present with `availability === 'auth-error'`: the daemon's last
+	 *  dispatch on this shell's credential failed to authenticate, and that
+	 *  credential has not changed since (`runner_auth_health.py`). A locked
+	 *  door, not a missing one — the row stays tappable, because the attempt
+	 *  is the probe that clears the mark, and the reader gets the facts
+	 *  instead of a hidden shell (2026-09-09: the operator deleted the mark
+	 *  file by hand three times to reach the tap). */
+	auth_error?: {
+		since?: string | null;
+		seen_on?: string | null;
+		probe?: string | null;
+		hint?: string | null;
+	} | null;
 	/** Tri-state, and the type says so: `true` (verified live), `false`
 	 *  (verified dead), and — the state a row missing this field used to
 	 *  render as `true` (2026-08-19, the rack of dead spools) — `null` /
