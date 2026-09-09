@@ -65,6 +65,9 @@ def _login_cookie(client: TestClient) -> None:
 
 _CATALOG_PAYLOAD = {
     "default": "claude-fable",
+    "config": [
+        {"key": "runner.default", "value": "claude-fable", "source": "daemon.config"},
+    ],
     "environment_default": "worktree",
     "environments": [
         {"name": "worktree", "available": True},
@@ -161,6 +164,13 @@ def test_dashboard_runners_api_serves_merged_catalog():
     assert body["profiles"][1]["selected"] is True
     # No tap parked yet (#328 tap-to-request).
     assert body["wake_request"] is None
+    config = client.get("/v1/dashboard/config")
+    assert config.status_code == 200
+    assert config.json() == {
+        "config": [
+            {"key": "runner.default", "value": "claude-fable", "source": "daemon.config"}
+        ]
+    }
 
 
 # ── #328 tap-to-request ──────────────────────────────────────────────────

@@ -1,0 +1,33 @@
+[profiles.claude]
+cmd = "claude --print --output-format json --dangerously-skip-permissions --setting-sources local --system-prompt-file {protonucleus}"
+hooks = "claude"
+provider = "anthropic"
+owner = "user"
+class = "balanced"
+cost_rank = 30
+quota_source = "claude-local"
+
+[profiles.claude-bare-api-only]
+binary = "claude"
+shell = "claude"
+cmd = "claude --print --output-format json --dangerously-skip-permissions --bare --system-prompt-file {protonucleus}"
+provider = "anthropic"
+owner = "user"
+class = "balanced"
+cost_rank = 30
+auth_variant = "anthropic-api-key"
+auth_env = "ANTHROPIC_API_KEY"
+
+[profiles.codex]
+cmd = "codex exec --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -c base_instructions={protonucleus_text} -c include_permissions_instructions=false -c include_apps_instructions=false -c include_collaboration_mode_instructions=false -c include_skill_instructions=false"
+hooks = "codex"
+provider = "openai"
+owner = "user"
+class = "balanced"
+cost_rank = 25
+quota_source = "codex-local"
+
+[aliases]
+codex-mini = "codex-gpt-5.6-luna"
+codex-terra = "codex-gpt-5.6-terra"
+codex-full = "codex-gpt-5.6-sol"

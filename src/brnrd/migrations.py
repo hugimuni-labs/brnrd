@@ -224,6 +224,7 @@ def _migrate_daemons(conn: Connection) -> None:
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS runners_json TEXT DEFAULT '[]'"))
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS runners_default VARCHAR(64)"))
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS runners_updated_at TIMESTAMP"))
+    conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS daemon_config_json TEXT DEFAULT '[]'"))
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS environment_default VARCHAR(32)"))
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS environments_json TEXT DEFAULT '[]'"))
     # #932 conversation-sticky mirror + release ask — see models.Daemon.

@@ -2346,7 +2346,7 @@ def test_runners_list_text_output(monkeypatch, capsys):
     # Claude cores appear (available ✓)
     assert "claude-haiku" in out or "claude-sonnet" in out
     # Unavailable profiles also shown (with ✗)
-    assert "codex-mini" in out
+    assert "codex-gpt-5.6-luna" in out
     assert "✗" in out
 
 
@@ -2387,7 +2387,7 @@ def test_runners_list_json_output(monkeypatch, capsys):
     # All bundled cores visible when all Shells are on PATH
     names = [r["name"] for r in payload["profiles"]]
     assert "claude-haiku" in names
-    assert "codex-mini" in names
+    assert "codex-gpt-5.6-luna" in names
 
 
 def test_runners_list_marks_current_runner(monkeypatch, capsys, tmp_path):

@@ -2,7 +2,7 @@
 
 brr doesn't do AI work itself. It delegates to whatever runner CLI the
 user has installed (claude, codex, or any command on PATH).
-Profiles are **daemon-owned** data (``<account home>/runners.md``, beside
+Profiles are **daemon-owned** data (``<account home>/runners.toml``, beside
 ``security.config``), with bundled defaults kept for first-run
 convenience — a profile carries ``cmd:``, so a repo-writable catalog is
 ``runner_cmd`` under another name (#693). Prompt assembly lives in
@@ -27,6 +27,7 @@ import string
 import json
 import os
 import tempfile
+import tomllib
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -38,6 +39,7 @@ from .cli import brnrd_cmd
 
 _profiles_cache: dict[str, dict[str, Any]] | None = None
 _profiles_cache_key: str | None = None
+_profile_aliases: dict[str, str] = {}
 
 _CLAUDE_ACCOUNT_CACHE_MAX_AGE_MS = 48 * 60 * 60 * 1000
 
@@ -1007,8 +1009,56 @@ class RunnerResult:
         )
 
 
-def _profiles_source(repo_root: Path | None = None) -> tuple[str, str]:
-    """Return ``(cache_key, frontmatter)`` from the *daemon-owned* catalog.
+def _parse_legacy_profiles(text: str) -> dict[str, dict[str, Any]]:
+    """Parse the one-release Markdown/frontmatter profile shim."""
+    from . import protocol
+
+    return protocol.parse_frontmatter(text) if text else {}
+
+
+def _toml_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_value(item) for item in value) + "]"
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def write_profiles_toml(path: Path, profiles: dict[str, dict[str, Any]]) -> None:
+    """Write the small profile catalog without adding a TOML dependency."""
+    lines: list[str] = []
+    for name, fields in profiles.items():
+        lines.append(f"[profiles.{json.dumps(name)}]")
+        lines.extend(f"{key} = {_toml_value(value)}" for key, value in fields.items())
+        lines.append("")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text("\n".join(lines), encoding="utf-8")
+    tmp.replace(path)
+    os.chmod(path, 0o600)
+
+
+def _parse_profiles_toml(text: str) -> dict[str, dict[str, Any]]:
+    parsed = tomllib.loads(text) if text else {}
+    profiles = parsed.get("profiles", {})
+    if not isinstance(profiles, dict) or any(
+        not isinstance(body, dict) for body in profiles.values()
+    ):
+        raise ValueError("runners.toml must contain [profiles.<name>] tables")
+    return {str(name): dict(body) for name, body in profiles.items()}
+
+
+def _parse_profile_aliases(text: str) -> dict[str, str]:
+    aliases = (tomllib.loads(text) if text else {}).get("aliases", {})
+    if not isinstance(aliases, dict):
+        raise ValueError("runners.toml [aliases] must be a key/value table")
+    return {str(old): str(new) for old, new in aliases.items()}
+
+
+def _profiles_source(repo_root: Path | None = None) -> tuple[str, str, str]:
+    """Return ``(cache_key, format, text)`` from the daemon-owned catalog.
 
     Two sources, in order: the account home's ``runners.md``
     (``config.home_profiles_path`` — the same daemon-owned directory
@@ -1042,27 +1092,39 @@ def _profiles_source(repo_root: Path | None = None) -> tuple[str, str]:
         except Exception:  # noqa: BLE001 - unresolvable home ⇒ bundled defaults
             home_profiles = None
         if home_profiles is not None and home_profiles.exists():
-            return (
-                f"home:{home_profiles.resolve()}",
-                home_profiles.read_text(encoding="utf-8"),
-            )
-    return ("bundled:runners.md", prompts.read_prompt("runners.md", None))
+            text = home_profiles.read_text(encoding="utf-8")
+            digest = hashlib.sha256(text.encode()).hexdigest()
+            return (f"home:{home_profiles.resolve()}:{digest}", "toml", text)
+        try:
+            legacy = conf.legacy_home_profiles_path(repo_root)
+        except Exception:
+            legacy = None
+        if legacy is not None and legacy.exists():
+            text = legacy.read_text(encoding="utf-8")
+            digest = hashlib.sha256(text.encode()).hexdigest()
+            return (f"legacy-home:{legacy.resolve()}:{digest}", "legacy", text)
+    bundled = Path(__file__).resolve().parent / "runners.toml"
+    text = bundled.read_text(encoding="utf-8")
+    return ("bundled:runners.toml", "toml", text)
 
 
 def _load_profiles(repo_root: Path | None = None) -> dict[str, dict[str, Any]]:
     """Load runner profiles from the daemon-owned home or bundled defaults."""
-    global _profiles_cache, _profiles_cache_key
-    key, text = _profiles_source(repo_root)
+    global _profiles_cache, _profiles_cache_key, _profile_aliases
+    key, format_name, text = _profiles_source(repo_root)
     if _profiles_cache is not None and (
         _profiles_cache_key is None or _profiles_cache_key == key
     ):
         return _profiles_cache
-    from . import protocol
-
-    if text:
-        _profiles_cache = protocol.parse_frontmatter(text)
-    else:
-        _profiles_cache = {}
+    _profiles_cache = (
+        _parse_profiles_toml(text)
+        if format_name == "toml"
+        else _parse_legacy_profiles(text)
+    )
+    bundled_text = (Path(__file__).resolve().parent / "runners.toml").read_text(encoding="utf-8")
+    _profile_aliases = _parse_profile_aliases(bundled_text)
+    if format_name == "toml":
+        _profile_aliases.update(_parse_profile_aliases(text))
     _profiles_cache_key = key
     return _profiles_cache
 
@@ -1104,7 +1166,19 @@ def _selection_profiles(
         record.pop("generated_core", None)
         record.update(profile)
         merged[name] = record
+    for alias, canonical in _profile_aliases.items():
+        if alias in merged or canonical not in merged:
+            continue
+        record = dict(merged[canonical])
+        record["alias_for"] = canonical
+        merged[alias] = record
     return merged
+
+
+def canonical_profile_name(name: str, repo_root: Path | None = None) -> str:
+    """Resolve a compatibility alias to the canonical shell-model slug."""
+    _load_profiles(repo_root)
+    return _profile_aliases.get(name, name)
 
 
 def profile_metadata(
@@ -1477,6 +1551,8 @@ def available_selection_runners(repo_root: Path | None = None) -> list["RunnerPr
     profiles = _selection_profiles(repo_root)
     out: list[runner_select.RunnerProfile] = []
     for name, profile in profiles.items():
+        if profile.get("alias_for"):
+            continue
         if _runner_available(name, profiles):
             out.append(runner_select.runner_from_profile(name, profile))
     return out
@@ -1525,6 +1601,8 @@ def available_runner_catalog(
     selected_name = str(selected or "").strip()
     rows: list[dict[str, Any]] = []
     for name, profile in profiles.items():
+        if profile.get("alias_for"):
+            continue
         record = _catalog_record(
             name, profile, selected_name, profiles, repo_root=repo_root,
         )
@@ -1839,6 +1917,8 @@ def resolve_runner_profile(
             if value not in (None, ""):
                 cfg[key] = value
                 override_keys.add(key)
+        if override_keys & {"shell", "core", "runner"}:
+            cfg.pop("runner.default", None)
     # An event/tap-level override outranks a *config-file* pin. Without
     # this, a consumed spool-rack tap (daemon sets ``runner``) or a spawn
     # ``core:`` override loses silently to ``shell=`` in .brr/config —
@@ -1853,7 +1933,11 @@ def resolve_runner_profile(
             cfg["runner"] = "auto"
     profiles = _selection_profiles(repo_root)
 
-    # shell= is the new explicit pin. When set it is treated as an exact
+    # runner.default is the daemon-owned account default. The old repo-side
+    # shell/core/runner fields remain readable only until daemon boot migrates
+    # them; event overrides above still outrank either source.
+    account_default = str(cfg.get("runner.default", "")).strip() or None
+    # shell= is the one-release explicit-pin shim.
     # profile override — no cost-aware movement, no dispatcher hop.
     shell_pin = str(cfg.get("shell", "")).strip() or None
     # core= filters the candidate set to profiles whose model matches.
@@ -1862,7 +1946,9 @@ def resolve_runner_profile(
     runner_cfg = str(cfg.get("runner", "auto")).strip()
 
     # Exact-pin path: shell= or a non-"auto" runner= wins outright.
-    explicit_pin = shell_pin or (runner_cfg if runner_cfg != "auto" else None)
+    explicit_pin = account_default or shell_pin or (
+        runner_cfg if runner_cfg != "auto" else None
+    )
     if explicit_pin:
         if _runner_available(explicit_pin, profiles):
             if core_pin and shell_pin:
@@ -1871,9 +1957,23 @@ def resolve_runner_profile(
                     return runner_profile(composed, repo_root)
                 _warn_if_shell_shadows_core(shell_pin, core_pin, profiles)
             return runner_profile(explicit_pin, repo_root)
+        # A migrated legacy core= may be a model alias rather than a profile
+        # name. Preserve that selection shape for the compatibility release.
+        alias = explicit_pin.lower()
+        alias_matches = [
+            name for name, profile in profiles.items()
+            if (
+                str(profile.get("model") or "").lower() == alias
+                or str(profile.get("model") or "").lower().startswith(alias)
+                or name.lower().endswith(f"-{alias}")
+            )
+            and _runner_available(name, profiles)
+        ]
+        if account_default and alias_matches:
+            return runner_profile(alias_matches[0], repo_root)
         raise RuntimeError(
             f"Runner '{explicit_pin}' not found on PATH. "
-            "Check shell= (or runner=) in .brr/config."
+            "Check runner.default in daemon.config."
         )
 
     # Cost-aware selection: build the available-profile set, optionally
@@ -1944,14 +2044,16 @@ def resolve_runner_profile(
     chosen = runner_select.select_runner(
         candidates,
         policy=policy,
-        default_class=str(cfg.get("default_class", "")).strip().lower() or None,
+        default_class=str(
+            cfg.get("runner.default_class", cfg.get("default_class", ""))
+        ).strip().lower() or None,
     )
     if chosen:
         return chosen
 
     raise RuntimeError(
         "No AI runner found. Install claude or codex, "
-        "or set shell= (or core=) in .brr/config."
+        "or set runner.default in daemon.config."
     )
 
 
