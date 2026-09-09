@@ -740,3 +740,61 @@ def test_claim_ignores_current_catalog_when_publication_is_denied():
     # The existing published catalog has codex. Denied incoming names
     # cannot override it, and inbound runner selection still works.
     assert response.json()["apply"] is True
+
+
+def test_daemon_runners_snapshot_keeps_what_the_frontend_reads():
+    """THE SCHEMA THAT DROPPED THE NEWS (2026-09-09): the daemon reported
+    #1867's auth mark, #1868's observed core id and #1876's vendor display
+    name; `RunnerProfileIn` had no field for any of them, pydantic dropped
+    them into `runners_json`, and the hosted dashboard rendered the rack as
+    if none had shipped. Every key `src/frontend/src/lib/runners.ts` reads
+    must survive the publish → dashboard round-trip."""
+    client = _client()
+    _, daemon_headers, _repo_id = _repo_and_daemon(client)
+    assert client.post(
+        "/v1/daemons/register", json={"daemon_name": "laptop"}, headers=daemon_headers,
+    ).status_code == 200
+    payload = {
+        "default": "claude-fable",
+        "profiles": [
+            {
+                "name": "claude-fable", "shell": "claude", "model": "fable",
+                "class": "strong", "cost_rank": 55, "availability": "available",
+                "shell_version": "2.1.0", "observed_model": "claude-fable-5-1",
+                "observed_at": "2026-09-09T03:36:33Z", "alias_tracked": True,
+                "freshness_date": "2026-09-09", "freshness_source": "alias-tracked",
+            },
+            {
+                "name": "claude-sonnet", "shell": "claude", "model": "sonnet",
+                "class": "balanced", "availability": "auth-error",
+                "auth_error": {
+                    "since": "2026-09-09T05:06:00Z", "seen_on": "claude-sonnet",
+                    "probe": "run-260909-0505-e37x",
+                    "hint": "sign in to the Shell again; the mark clears when the credential changes",
+                },
+            },
+            {
+                "name": "codex-gpt-6-astra", "shell": "codex", "model": "gpt-6-astra",
+                "class": "strong", "display_name": "GPT-6-Astra",
+                "retired": True, "retirement_at": "2026-10-01", "successor": "gpt-6-luna",
+                "migration_markdown": "use luna",
+            },
+        ],
+    }
+    posted = client.put("/v1/daemons/runners", json=payload, headers=daemon_headers)
+    assert posted.status_code == 200, posted.text
+
+    _login_cookie(client)
+    rows = {r["name"]: r for r in client.get("/v1/dashboard/runners").json()["profiles"]}
+    fable, sonnet, astra = rows["claude-fable"], rows["claude-sonnet"], rows["codex-gpt-6-astra"]
+    assert fable["observed_model"] == "claude-fable-5-1"
+    assert fable["observed_at"] == "2026-09-09T03:36:33Z"
+    assert fable["shell_version"] == "2.1.0"
+    assert fable["alias_tracked"] is True
+    assert fable["freshness_source"] == "alias-tracked"
+    assert sonnet["auth_error"]["since"] == "2026-09-09T05:06:00Z"
+    assert sonnet["auth_error"]["seen_on"] == "claude-sonnet"
+    assert astra["display_name"] == "GPT-6-Astra"
+    assert astra["retired"] is True
+    assert astra["successor"] == "gpt-6-luna"
+    assert astra["migration_markdown"] == "use luna"
