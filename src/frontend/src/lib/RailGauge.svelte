@@ -2,6 +2,7 @@
 	import {
 		DIAL_WEDGE_RADIUS,
 		availableQuotaShells,
+		providerLock,
 		dialDasharray,
 		runnerBlocks,
 		slotChip
@@ -149,6 +150,7 @@
 				{@const primary = group.primary}
 				{@const level = quotaLevel(primary?.percent ?? null)}
 				{@const open = openProvider === group.provider}
+				{@const lock = providerLock(group.provider, runners?.profiles)}
 				<button
 					type="button"
 					class="fuel-provider-row"
@@ -218,6 +220,11 @@
 						{/if}
 						{#if primary?.resetShort}<span class="fuel-reset-clock">↻{primary.resetShort}</span
 							>{/if}
+						{#if lock}
+							<!-- The shell is here and its windows are real; the door is
+							     locked. Said on the ledger line, never by removing the row. -->
+							<span class="fuel-lock" title={lock.full}>{lock.short}</span>
+						{/if}
 						<!-- THE LEDGER: every window this provider reports that is not
 						     the binding one, named and numbered. This is what the ghost
 						     stack was trying to say in overlapping fills, and it says it
@@ -407,6 +414,10 @@
 		gap: 6px;
 		min-width: 0;
 		overflow: hidden;
+		/* Above the bar's glow: the fill's 7px box-shadow bled over the first
+		   words of the ledger line (his read of #1867's after-shot). */
+		position: relative;
+		z-index: 1;
 		font-size: 8px;
 		font-variant-numeric: tabular-nums;
 		white-space: nowrap;
@@ -435,6 +446,11 @@
 		align-self: center;
 		font-size: 10px;
 		color: rgb(120 113 108);
+	}
+	.fuel-lock {
+		font-size: 9px;
+		color: rgb(217 119 6);
+		white-space: nowrap;
 	}
 	.gauge-footline {
 		height: 25px;

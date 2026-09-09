@@ -6,6 +6,7 @@ import {
 	availableQuotaShells,
 	dialDasharray,
 	fuelRows,
+	providerLock,
 	quotaWindowCountLabel,
 	runnerBlocks,
 	slotChip,
@@ -388,6 +389,33 @@ test('quota disappears when every current profile for its shell is explicitly un
 	];
 
 	assert.deepEqual(availableQuotaShells(shells, catalog), [shells[1]]);
+});
+
+test("quota stays when the shell is merely locked — auth failed, key in the reader's hand", () => {
+	// 2026-09-08/09: every claude core read `auth-error`, the panel dropped
+	// the shell whole, and with it the only tap that could have dispatched
+	// the run that clears the mark. The bar stays, and says why.
+	const claude: QuotaShell = { shell: 'claude', status: 'known', windows: [] };
+	const catalog: RunnerProfile[] = [
+		{
+			name: 'claude-sonnet',
+			shell: 'claude',
+			available: false,
+			availability: 'auth-error',
+			auth_error: { since: '2026-09-09T05:06:28+00:00', seen_on: 'claude-sonnet' }
+		},
+		{ name: 'claude-fable', shell: 'claude', available: false, availability: 'auth-error' }
+	];
+	assert.deepEqual(availableQuotaShells([claude], catalog), [claude]);
+	assert.deepEqual(providerLock('claude', catalog), {
+		short: 'auth failed 05:06Z · sign in',
+		full: 'auth failed 05:06Z on claude-sonnet — sign in again, then tap'
+	});
+	assert.equal(providerLock('codex', catalog), null);
+	assert.equal(
+		providerLock('claude', [...catalog, { name: 'claude-opus', shell: 'claude', available: true }]),
+		null
+	);
 });
 
 test('quota stays visible when availability is unknown, mixed, or only reported by a stale daemon', () => {
