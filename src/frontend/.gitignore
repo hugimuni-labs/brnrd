@@ -1,5 +1,9 @@
 node_modules
 
+# Repro pixels are CI artifacts / the shots branch, never source history.
+/repro/shots/*
+!/repro/shots/README.md
+
 # Output
 .output
 .vercel
