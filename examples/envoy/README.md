@@ -56,3 +56,11 @@ here is its installed shim, same shape as the two above.
 5. `send` stays inert until *both* `--confirm` (per call) and
    `BRR_X_BROWSER_SEND=1` (environment) are set — nothing posts by
    installing this.
+
+The same persistent profile also owns a read/navigation budget. With no
+configuration, it allows 12 page loads per hour and spaces later loads by at
+least 30 seconds plus up to 10 seconds of jitter. Override those bounded
+defaults in `x-browser.json` with a `navigation_budget` object containing
+`max_loads`, `window_seconds`, `min_delay_seconds`, and `jitter_seconds`.
+The ledger stores timestamps only, so separate CLI invocations share the
+budget without recording URLs, searches, cookies, or secrets.

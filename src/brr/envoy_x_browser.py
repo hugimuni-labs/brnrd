@@ -44,6 +44,10 @@ token discipline.
 - Every verb that renders a page runs **headed** (``headless=False``);
   the only headless-eligible verbs are the read-only ones (``check``,
   ``read``, ``search``) that write nothing back to X.
+- Page loads are metered per persistent profile: by default 12 loads per
+  hour, with 30 seconds plus up to 10 seconds of jitter between loads.
+  Settings live under ``navigation_budget`` in ``x-browser.json``;
+  malformed, negative, non-finite, and unsafe values fall back safely.
 
 **The browser seam.** Every verb takes an optional ``driver_factory`` —
 ``(paths, *, headless) -> driver`` returning a context-managed object
@@ -106,13 +110,19 @@ not a rename. Three new keys, unambiguous in both lanes:
 from __future__ import annotations
 
 import json
+import hashlib
+import math
 import os
+import random
 import sys
+import tempfile
 import time
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
+
+from . import gitops, protocol
 
 #: Conservative by design — the whole point of this envoy is a lane that
 #: currently earns real engagement (unlike the API reply lane, ranked to
@@ -311,6 +321,8 @@ class Paths:
       or malformed forms list disables vocabulary warnings.
     - ``state`` — send timestamps in the trailing hour, for the cap
       arithmetic. Not secret, just runtime bookkeeping.
+    - ``load_ledger`` — navigation reservation timestamps for the
+      profile-scoped budget; it contains no URLs, queries, or secrets.
     - ``kill_switch`` — presence alone (any content, or none) refuses
       every verb but ``check``.
     - ``shots_dir`` — where ``draft`` screenshots land.
@@ -320,6 +332,7 @@ class Paths:
     profile_dir: Path
     config: Path
     state: Path
+    load_ledger: Path
     kill_switch: Path
     shots_dir: Path
 
@@ -332,6 +345,7 @@ class Paths:
             profile_dir=d / "x-browser-profile",
             config=d / "x-browser.json",
             state=d / "x-browser-state.json",
+            load_ledger=d / "x-browser-loads.json",
             kill_switch=d / "x-browser.disabled",
             shots_dir=d / "x-browser-shots",
         )
@@ -342,6 +356,124 @@ class Paths:
 #: the two never drift apart without duplicating the full relative path
 #: in two files.
 PROFILE_DIRNAME = "x-browser-profile"
+
+DEFAULT_NAVIGATION_MAX_LOADS = 12
+DEFAULT_NAVIGATION_WINDOW_SECONDS = 3600.0
+DEFAULT_NAVIGATION_MIN_DELAY_SECONDS = 30.0
+DEFAULT_NAVIGATION_JITTER_SECONDS = 10.0
+MAX_NAVIGATION_WINDOW_SECONDS = 86400.0
+MAX_NAVIGATION_DELAY_SECONDS = 300.0
+
+
+@dataclass(frozen=True)
+class NavigationBudgetConfig:
+    max_loads: int = DEFAULT_NAVIGATION_MAX_LOADS
+    window_seconds: float = DEFAULT_NAVIGATION_WINDOW_SECONDS
+    min_delay_seconds: float = DEFAULT_NAVIGATION_MIN_DELAY_SECONDS
+    jitter_seconds: float = DEFAULT_NAVIGATION_JITTER_SECONDS
+
+
+class NavigationBudgetExceeded(RuntimeError):
+    """Navigation was denied before Playwright loaded a page."""
+
+
+def _number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    value = float(value)
+    return value if math.isfinite(value) else None
+
+
+def _load_navigation_config(paths: Paths) -> NavigationBudgetConfig:
+    defaults = NavigationBudgetConfig()
+    try:
+        data = json.loads(paths.config.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return defaults
+    raw = data.get("navigation_budget") if isinstance(data, dict) else None
+    if not isinstance(raw, dict):
+        return defaults
+    maximum = raw.get("max_loads", defaults.max_loads)
+    if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum < 1:
+        maximum = defaults.max_loads
+    window = _number(raw.get("window_seconds", defaults.window_seconds))
+    delay = _number(raw.get("min_delay_seconds", defaults.min_delay_seconds))
+    jitter = _number(raw.get("jitter_seconds", defaults.jitter_seconds))
+    if window is None or window <= 0:
+        window = defaults.window_seconds
+    if delay is None or delay < 0:
+        delay = defaults.min_delay_seconds
+    if jitter is None or jitter < 0:
+        jitter = defaults.jitter_seconds
+    return NavigationBudgetConfig(
+        min(maximum, 10_000),
+        min(window, MAX_NAVIGATION_WINDOW_SECONDS),
+        min(delay, MAX_NAVIGATION_DELAY_SECONDS),
+        min(jitter, MAX_NAVIGATION_DELAY_SECONDS),
+    )
+
+
+def _navigation_lock_path(paths: Paths) -> Path:
+    key = hashlib.sha256(str(paths.load_ledger).encode()).hexdigest()[:24]
+    return Path(tempfile.gettempdir()) / f"brnrd-x-browser-loads-{key}.lock"
+
+
+class _NavigationBudget:
+    def __init__(self, paths: Paths, *, clock=time.time, sleep=time.sleep,
+                 jitter=random.uniform) -> None:
+        self._paths, self._clock, self._sleep, self._jitter = paths, clock, sleep, jitter
+
+    def _now(self) -> float:
+        try:
+            value = float(self._clock())
+        except (TypeError, ValueError, OverflowError):
+            value = time.time()
+        return value if math.isfinite(value) else 0.0
+
+    def _loads(self, now: float, config: NavigationBudgetConfig) -> list[float]:
+        try:
+            raw = json.loads(self._paths.load_ledger.read_text(encoding="utf-8"))
+            raw = raw.get("loads") if isinstance(raw, dict) else None
+        except (OSError, ValueError):
+            return []
+        if not isinstance(raw, list):
+            return []
+        horizon = now + MAX_NAVIGATION_DELAY_SECONDS
+        return [
+            float(stamp) for stamp in raw
+            if isinstance(stamp, (int, float)) and not isinstance(stamp, bool)
+            and math.isfinite(float(stamp)) and stamp <= horizon
+            and now - stamp < config.window_seconds
+        ]
+
+    def reserve(self) -> float:
+        config, now = _load_navigation_config(self._paths), self._now()
+        self._paths.load_ledger.parent.mkdir(parents=True, exist_ok=True)
+        with gitops.file_lock(
+            _navigation_lock_path(self._paths), timeout=5.0
+        ) as acquired:
+            if not acquired:
+                raise NavigationBudgetExceeded("refusing navigation: load ledger is locked")
+            loads = self._loads(now, config)
+            if len(loads) >= config.max_loads:
+                raise NavigationBudgetExceeded(
+                    "refusing navigation: profile load budget reached "
+                    f"({len(loads)}/{config.max_loads} in {config.window_seconds:g}s)"
+                )
+            latest = max(loads, default=now)
+            spacing = config.min_delay_seconds if loads else 0.0
+            if loads:
+                spacing += min(max(0.0, self._jitter(0.0, config.jitter_seconds)),
+                               MAX_NAVIGATION_DELAY_SECONDS)
+            delay = min(max(0.0, latest + spacing - now), MAX_NAVIGATION_DELAY_SECONDS)
+            loads.append(now + delay)
+            protocol._atomic_write(
+                self._paths.load_ledger,
+                json.dumps({"loads": loads}, separators=(",", ":")) + "\n",
+            )
+        if delay:
+            self._sleep(delay)
+        return delay
 
 
 # ── guardrails: kill switch, hourly cap, the disarmed-send arming ──────
@@ -623,6 +755,11 @@ class _PlaywrightDriver:
         # `.first` on a send button.
         self._composer_scope: Any = None
         self._send_testid: str | None = None
+        self._navigation_budget = _NavigationBudget(paths)
+
+    def _goto(self, url: str) -> None:
+        self._navigation_budget.reserve()
+        self._page.goto(url, wait_until="domcontentloaded")
 
     def __enter__(self) -> "_PlaywrightDriver":
         self._paths.profile_dir.mkdir(parents=True, exist_ok=True)
@@ -654,7 +791,7 @@ class _PlaywrightDriver:
             return None
 
     def whoami(self) -> str | None:
-        self._page.goto(HOME_URL, wait_until="domcontentloaded")
+        self._goto(HOME_URL)
         if "/login" in self._page.url or "/flow/login" in self._page.url:
             return None
         try:
@@ -671,7 +808,7 @@ class _PlaywrightDriver:
         input("Press Enter once you've logged in in the opened browser window... ")
 
     def read_url(self, url: str) -> dict[str, Any]:
-        self._page.goto(url, wait_until="domcontentloaded")
+        self._goto(url)
         article = self._page.locator('article[data-testid="tweet"]').first
         timestamp = None
         try:
@@ -747,7 +884,7 @@ class _PlaywrightDriver:
     def search(self, query: str, *, tab: str = "live") -> list[dict[str, Any]]:
         params = {"q": query, "src": "typed_query", "f": SEARCH_TABS[tab]}
         url = f"{SEARCH_URL}?{urllib.parse.urlencode(params)}"
-        self._page.goto(url, wait_until="domcontentloaded")
+        self._goto(url)
         articles = self._page.locator('article[data-testid="tweet"]')
         # X renders search results client-side, so at `domcontentloaded` there
         # are zero articles on the page and `count()` — which does NOT
@@ -798,7 +935,7 @@ class _PlaywrightDriver:
         `kind` field is guessed at here — the task named it a bonus, not a
         requirement, and an invented kind is worse than an absent one.
         """
-        self._page.goto(NOTIFICATIONS_MENTIONS_URL, wait_until="domcontentloaded")
+        self._goto(NOTIFICATIONS_MENTIONS_URL)
         articles = self._page.locator('article[data-testid="tweet"]')
         try:
             articles.first.wait_for(state="visible", timeout=MENTIONS_RESULT_TIMEOUT_MS)
@@ -852,7 +989,7 @@ class _PlaywrightDriver:
         a single door is a structural property. A third lane either comes
         through here or is not a composer.
         """
-        self._page.goto(url, wait_until="domcontentloaded")
+        self._goto(url)
         self._dismiss_consent()
         box = self._page.locator('[data-testid="tweetTextarea_0"]').first
         box.wait_for(state="visible", timeout=COMPOSER_TIMEOUT_MS)
