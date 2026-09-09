@@ -819,3 +819,102 @@ def test_spawn_completed_still_pending_until_parent_retires(tmp_path):
         e.get("id") == note["id"]
         for e in protocol.list_dispatchable(inbox)
     )
+
+
+def test_retire_internal_event_spares_observed_spawn_completeds_when_parked(tmp_path):
+    """A run that **parked** never retires the completions it merely rendered.
+
+    THE MAIL A PARK CLOSED (2026-09-09, `evt-…-jq6y`). The `observed_by`
+    stamp means "rendered into a surface the resident could have read" —
+    honest for a run that reached its end, false for one that froze
+    mid-thought. A starved seat had a strand's completion (PR #1885, 1.38M
+    tokens) rendered at 18:51:13Z and armed its park at 18:52:37Z; the
+    teardown retired the event anyway, `_finalize_resource_hold` had
+    already accumulated the same id into the hold, and the successor —
+    a different Core, no scroll — woke on the *failed* sibling instead,
+    which had arrived after the park and so survived.
+
+    Drive red: drop `and not parked` from `_retire_internal_event`'s
+    observed-sibling guard and confirm c1/c2 go `delivered`; restore to keep.
+    """
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+
+    c1 = protocol.create_event(
+        inbox, "spawn_completed", "child-1 done",
+        spawn_parent_run_id="run-parked-A",
+    )
+    c2 = protocol.create_event(
+        inbox, "spawn_completed", "child-2 done",
+        spawn_parent_run_id="run-parked-A",
+    )
+    gate_path = protocol.create_event(inbox, "telegram", "hello", chat_id="42")
+    gate_event = {"source": "telegram", "id": gate_path.stem, "_path": gate_path}
+
+    # The seat rendered both rows at a boundary — the stamp the old rule
+    # retired on — and then parked without a boundary left to act on them.
+    daemon._pending_events_for_agent(
+        inbox, gate_event["id"], observer_run_id="run-parked-A",
+    )
+    assert protocol._read_event(c1).get("observed_by") == "run-parked-A"
+
+    daemon._retire_internal_event(
+        gate_event, responses, inbox_dir=inbox, run_id="run-parked-A", parked=True,
+    )
+
+    assert protocol._read_event(c1)["status"] == "pending"
+    assert protocol._read_event(c2)["status"] == "pending"
+
+    # …and the same call on a run that actually *finished* still retires
+    # them: the park is the carve-out, not a repeal.
+    daemon._retire_internal_event(
+        gate_event, responses, inbox_dir=inbox, run_id="run-parked-A", parked=False,
+    )
+    assert protocol._read_event(c1)["status"] == "delivered"
+    assert protocol._read_event(c2)["status"] == "delivered"
+
+
+def test_undefer_held_event_finds_the_letter_in_a_sibling_drawer(tmp_path, capsys):
+    """The un-defer reads every drawer dispatch scans, not just one.
+
+    A hold accumulates whatever was pending, and pending spans two
+    buildings: repo-local `schedule`/`spawn`/`spawn_completed` events live
+    in `<repo>/.brr/inbox`, every `cloud` message in the account's
+    `dispatch/inbox`. Each release path knew one address — the refill sweep
+    passed `_repo_inbox(root)`, the operator path passed whichever drawer
+    the *trigger* came from — so the sibling in the other building was
+    skipped in silence.
+
+    Drive red: pass only `repo_inbox` and confirm the cloud letter keeps its
+    `defer_until`; restore to keep.
+    """
+    repo_inbox = tmp_path / ".brr" / "inbox"
+    account_inbox = tmp_path / "home" / "dispatch" / "inbox"
+
+    repo_letter = protocol.create_event(
+        repo_inbox, "schedule", "tick", schedule_id="upkeep",
+    )
+    cloud_letter = protocol.create_event(
+        account_inbox, "cloud", "are you there?", cloud_chat_id="42",
+    )
+    for path in (repo_letter, cloud_letter):
+        protocol.update_event_meta(
+            protocol._read_event(path),
+            defer_until="2031-09-08T20:21:42Z",
+            deferred_by_run="run-held",
+            defer_reason="resource_hold",
+        )
+
+    drawers = (repo_inbox, account_inbox)
+    for path in (repo_letter, cloud_letter):
+        daemon._undefer_held_event(drawers, path.stem)
+
+    for path in (repo_letter, cloud_letter):
+        assert protocol._read_event(path).get("defer_until") in (None, "")
+        assert protocol._read_event(path).get("defer_reason") in (None, "")
+
+    # An id in no drawer at all is reported, never swallowed: a silent
+    # no-op reads exactly like a successful release.
+    daemon._undefer_held_event(drawers, "evt-does-not-exist")
+    assert "resolved in none of" in capsys.readouterr().out
