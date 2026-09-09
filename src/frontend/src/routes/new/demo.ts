@@ -148,3 +148,84 @@ export function demoFrames(): LiveRun[][] {
 		[]
 	];
 }
+
+// A shorter recording-friendly story for `/new?demo=load-balance`.
+// The Claude resident deliberately sends an implementation pass to Codex, then
+// reviews the return itself. This demonstrates cross-runner orchestration — not
+// silent quota failover: choosing another subscription remains an authored act.
+const loadBalanceResident = (over: Partial<LiveRun> = {}) =>
+	liveRun({
+		run_id: 'run-260909-1915-lb01',
+		name: 'the-scheduler-above-the-models',
+		started_at: '2026-09-09T19:15:00Z',
+		last_seen: '2026-09-09T19:24:00Z',
+		runner: { name: 'claude-fable', shell: 'claude', core: 'fable', class: 'strong' },
+		mood: 'primed',
+		mood_glyph: 'b·_·d',
+		mood_rest: 'b·_·d',
+		mood_frames: [['b·_·d', 'bo_od', 'b·_·d']],
+		mood_pitch: 0.55,
+		card_text:
+			'## Plan\n- [x] inspect both subscriptions\n- [x] keep planning on Claude\n- [ ] send implementation to Codex\n- [ ] verify the return\n- [ ] ship',
+		room: { env: 'host', branch: 'brr/load-balance-demo', dir: null },
+		...over
+	});
+
+const codexPass = (over: Partial<LiveRun> = {}) =>
+	liveRun({
+		run_id: 'run-260909-1917-cdx1',
+		name: 'codex-implementation-pass',
+		parent_run_id: 'run-260909-1915-lb01',
+		is_subspawn: true,
+		started_at: '2026-09-09T19:17:00Z',
+		last_seen: '2026-09-09T19:21:00Z',
+		runner: { name: 'codex-sol', shell: 'codex', core: 'gpt-5.6-sol', class: 'strong' },
+		room: { env: 'worktree', branch: 'brr/codex-implementation-pass', dir: 'brr-wt-cdx1' },
+		edge: edge('mutate', 'Codex · implement the mechanical pass', '2026-09-09T19:17:30Z'),
+		...over
+	});
+
+/** Claude plans and reviews; Codex gets the implementation lane. */
+export function loadBalanceDemoFrames(): LiveRun[][] {
+	return [
+		[
+			loadBalanceResident({
+				edge: edge('probe', 'inspect Claude + Codex quota posture', '2026-09-09T19:15:20Z')
+			})
+		],
+		[
+			loadBalanceResident({
+				card_text:
+					'## Plan\n- [x] inspect both subscriptions\n- [x] keep planning on Claude\n- [x] send implementation to Codex\n- [ ] verify the return\n- [ ] ship',
+				edge: edge('dispatch', 'route implementation → Codex', '2026-09-09T19:17:00Z')
+			}),
+			codexPass()
+		],
+		[
+			loadBalanceResident({
+				edge: edge('orient', 'Claude · keep architecture + acceptance', '2026-09-09T19:18:10Z')
+			}),
+			codexPass({ edge: edge('mutate', 'Codex · edit + run focused tests', '2026-09-09T19:18:20Z') })
+		],
+		[
+			loadBalanceResident({ edge: edge('probe', 'Claude · review Codex diff', '2026-09-09T19:20:30Z') }),
+			codexPass({ edge: edge('publish', 'Codex · commit implementation', '2026-09-09T19:20:10Z') })
+		],
+		[
+			loadBalanceResident({
+				card_text:
+					'## Plan\n- [x] inspect both subscriptions\n- [x] keep planning on Claude\n- [x] send implementation to Codex\n- [x] verify the return\n- [ ] ship',
+				edge: edge('probe', 'git diff --check · tests green', '2026-09-09T19:22:00Z')
+			})
+		],
+		[
+			loadBalanceResident({
+				lifecycle: 'closing',
+				card_text:
+					'## Plan\n- [x] inspect both subscriptions\n- [x] keep planning on Claude\n- [x] send implementation to Codex\n- [x] verify the return\n- [x] ship',
+				edge: edge('publish', 'one resident · two subscriptions · PR ready', '2026-09-09T19:24:00Z')
+			})
+		],
+		[]
+	];
+}
