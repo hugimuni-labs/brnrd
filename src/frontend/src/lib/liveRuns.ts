@@ -596,6 +596,33 @@ export const STALL_AFTER_MS = 90_000;
 
 export type HeartbeatLevel = 'running' | 'stalling' | 'unknown';
 
+const TERMINAL_RUN_STATUSES = new Set(['done', 'error', 'conflict', 'stopped']);
+
+/** A run's own final/parked state is stronger evidence than the absence of a
+ * heartbeat. Freshness only describes a run that still claims to be working. */
+export function hasDeclaredStoppedStatus(status: string | null | undefined): boolean {
+	return status === 'held' || TERMINAL_RUN_STATUSES.has(status ?? '');
+}
+
+/** The Live Runs card's status word. Kept beside heartbeatLevel so the
+ * ranking is unit-testable without compiling the Svelte template. */
+export function liveRunStatusLabel(
+	run: Pick<LiveRun, 'status' | 'resource_hold' | 'lifecycle' | 'await_until' | 'phase'>,
+	lvl: HeartbeatLevel
+): string {
+	if (run.status === 'held') {
+		const resume = run.resource_hold?.resume_condition;
+		return resume ? 'parked · ' + resume : 'parked';
+	}
+	if (TERMINAL_RUN_STATUSES.has(run.status ?? '')) return run.status as string;
+	if (lvl === 'running') {
+		const notice = lifecycleNotice(run);
+		if (notice) return notice.word;
+		if (run.phase) return run.phase;
+	}
+	return lvl;
+}
+
 export function heartbeatLevel(
 	lastSeen: string | null,
 	now: number,
