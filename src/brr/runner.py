@@ -171,6 +171,25 @@ def _kill_procs(procs: list[subprocess.Popen]) -> bool:
     return killed
 
 
+def live_pid_for_label(label_prefix: str) -> int | None:
+    """The pid of the live subprocess whose label starts with *label_prefix*,
+    or ``None``.
+
+    Read-only sibling of :func:`kill_matching`'s lookup — the pause
+    machinery needs the runner subprocess's pid to walk its descendants
+    from, without touching it. ``proc.poll() is None`` excludes an entry
+    whose process has already exited but not yet been reaped out of the
+    registry (the same race :func:`_kill_procs` guards against).
+    """
+    if not label_prefix:
+        return None
+    with _proc_lock:
+        for label, proc in _active_procs.items():
+            if label.startswith(label_prefix) and proc.poll() is None:
+                return proc.pid
+    return None
+
+
 def kill_matching(label_prefix: str) -> bool:
     """Terminate live runner subprocess(es) whose label starts with *prefix*.
 
