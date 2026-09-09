@@ -21,6 +21,13 @@ export interface RunnerProfile {
 	capability_freshness?: string | null;
 	generated_core?: boolean | null;
 	availability?: string | null;
+	/** The vendor's own id for this alias as the Shell last attested it on
+	 *  the run ledger (`fable` → `claude-fable-5-1`; `runner_cores.py`
+	 *  `observed_model_ids`). Absent when nothing attested one, or when the
+	 *  alias already is the vendor id. Never typed by hand — the version is
+	 *  a reading. */
+	observed_model?: string | null;
+	observed_at?: string | null;
 	/** Tri-state, and the type says so: `true` (verified live), `false`
 	 *  (verified dead), and — the state a row missing this field used to
 	 *  render as `true` (2026-08-19, the rack of dead spools) — `null` /

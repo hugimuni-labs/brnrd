@@ -1051,3 +1051,94 @@ def _cmd_with_model(shell: str, base_cmd: str, model: str) -> str:
     if shell == "codex" and len(parts) > 1 and parts[1] == "exec":
         insert_at = 2
     return shlex.join([*parts[:insert_at], "--model", model, *parts[insert_at:]])
+
+
+# ---------------------------------------------------------------------------
+# Observed model ids — the vendor's own name for a core alias, as the Shell
+# actually reported it. ``fable`` is brnrd's alias; ``claude-fable-5-1`` is
+# what ran. The maintainer's 2026-09-08 steer (evt-…-403h): "vendor named
+# (codex), ideally explicitly versioned (claude) … sonnet instead of
+# sonnet-5, fable instead of fable-5.1, opus instead of opus-4.8 (or maybe
+# 5.0, i'm honestly not sure, and that's a sign as well)". The version is
+# not typed here — it is read off the run ledger, where every closed run
+# records ``runner_core`` as the Shell attested it (run_ledger.py, #255).
+
+_OBSERVED_CACHE: dict[str, tuple[int, dict[tuple[str, str], dict[str, str]]]] = {}
+_OBSERVED_TAIL_BYTES = 512 * 1024
+
+
+def _alias_tokens(alias: str) -> set[str]:
+    return {t for t in re.split(r"[-_.\s]+", alias.lower()) if t}
+
+
+def _primary_segment(observed: str, alias: str) -> str | None:
+    """Pick the segment of a ``a+b+c`` attestation that names *this* alias.
+
+    A run that spawned Shell subagents attests every model it drove, joined
+    by ``+`` — and the order is arrival order, not rank: a sonnet run with
+    a haiku subagent reads ``claude-haiku-4-5-20251001+claude-sonnet-5``.
+    So the segment is chosen by the alias's own tokens, never by position.
+    """
+    wanted = _alias_tokens(alias)
+    if not wanted:
+        return None
+    for raw in observed.split("+"):
+        segment = re.sub(r"\[[^\]]*\]$", "", raw.strip())
+        if not segment or segment.lower() == alias.lower():
+            continue
+        if wanted <= _alias_tokens(segment):
+            return segment
+    return None
+
+
+def observed_model_ids(repo_root: Path | None) -> dict[tuple[str, str], dict[str, str]]:
+    """``(shell, alias) → {"model": <vendor id>, "at": <iso>}`` from the ledger tail.
+
+    Latest wins. Reads the last ~512 KB of ``.brr/run-ledger.jsonl`` and
+    caches on the file's size, so a catalog render costs one ``stat`` when
+    nothing closed since. Empty when there is no ledger — the catalog then
+    shows the alias alone, which is the honest reading, not a guess.
+    """
+    if repo_root is None:
+        return {}
+    from . import run_ledger
+
+    try:
+        path = run_ledger.ledger_path(repo_root)
+        size = path.stat().st_size
+    except OSError:
+        return {}
+    key = str(path)
+    cached = _OBSERVED_CACHE.get(key)
+    if cached and cached[0] == size:
+        return cached[1]
+    out: dict[tuple[str, str], dict[str, str]] = {}
+    try:
+        with path.open("rb") as fh:
+            if size > _OBSERVED_TAIL_BYTES:
+                fh.seek(size - _OBSERVED_TAIL_BYTES)
+                fh.readline()  # drop the partial line
+            raw_lines = fh.read().decode("utf-8", errors="replace").splitlines()
+    except OSError:
+        return {}
+    for raw in raw_lines:
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        shell = str(row.get("runner_shell") or "").strip().lower()
+        alias = str(row.get("core_expected") or "").strip()
+        observed = str(row.get("runner_core") or "").strip()
+        if not (shell and alias and observed):
+            continue
+        model = _primary_segment(observed, alias)
+        if not model:
+            continue
+        stamp = str(row.get("ended_at") or row.get("started_at") or "")
+        prev = out.get((shell, alias))
+        if prev is None or stamp >= prev["at"]:
+            out[(shell, alias)] = {"model": model, "at": stamp}
+    _OBSERVED_CACHE[key] = (size, out)
+    return out

@@ -68,7 +68,7 @@ export function isTappable(profile: RunnerProfile, reportStale: boolean): boolea
  * catalog's own `availability` string — shell not installed, auth not
  * configured — and that is the *only* case this returns a specific claim.
  * Every other off path (unverified, or available-but-stale) returns the
- * generic reading: not confirmed available right now, no invented
+ * generic reading: not confirmed — and why not, no invented
  * specifics. This is the answer to the maintainer's question of whether
  * "verified unavailable" survives to the client distinguishably from "we
  * don't know" — it does, one layer up in `availabilityOf` — but a row's own
@@ -84,9 +84,9 @@ export function offReasonOf(
 		return { known: true, text: reasonText(profile.availability ?? null) };
 	}
 	if (reportStale || profile.daemon_stale === true) {
-		return { known: false, text: 'not confirmed available right now' };
+		return { known: false, text: 'not confirmed — daemon report is old' };
 	}
-	return { known: false, text: 'not confirmed available yet' };
+	return { known: false, text: 'not confirmed — no daemon report yet' };
 }
 
 function reasonText(availability: string | null): string {

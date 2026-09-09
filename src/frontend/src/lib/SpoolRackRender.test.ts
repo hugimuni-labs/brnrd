@@ -247,3 +247,57 @@ test('a core-scope allowance renders on the row where that core is picked', () =
 	ok(/coreAllowances\.get\(model\)/u.test(source), 'matched by pinned model, not by name');
 	ok(/allowance\.percent\)\}% allowance`/u.test(source), 'and rendered on the row');
 });
+
+// The 2026-09-08 steer: "vendor named (codex), ideally explicitly versioned
+// (claude) … sonnet instead of sonnet-5, fable instead of fable-5.1". The
+// version is what the shell attested on the ledger, never a typed string.
+test('a row names the core as the shell observed it, beside the alias', async () => {
+	const body = await renderRack({
+		shell: 'claude',
+		profiles: [
+			{
+				name: 'claude-fable',
+				shell: 'claude',
+				model: 'fable',
+				available: true,
+				observed_model: 'claude-fable-5-1',
+				observed_at: '2026-09-09T03:36:33Z'
+			},
+			{ name: 'claude-opus', shell: 'claude', model: 'opus', available: true }
+		]
+	});
+	ok(body.includes('claude-fable-5-1'), 'the observed vendor id renders');
+	ok(body.includes('data-role="rack-row-observed"'), 'as its own labelled span');
+	ok(body.includes('last attested 2026-09-09T03:36:33Z'), 'with when it was attested');
+	// No attestation ⇒ the alias stands alone; nothing invented.
+	const observedSpans = body.match(/data-role="rack-row-observed"/gu) ?? [];
+	equal(observedSpans.length, 1);
+});
+
+// The roast, cut 6: "the dead take full rows". Counted, not listed.
+test('dead cores fold to a count; locked and live rows keep their place', async () => {
+	const body = await renderRack({
+		shell: 'codex',
+		profiles: [
+			{ name: 'codex-full', shell: 'codex', model: 'gpt-5.6-sol', available: true },
+			{
+				name: 'codex-gpt-5.4',
+				shell: 'codex',
+				model: 'gpt-5.4',
+				available: false,
+				availability: 'shell-not-found'
+			},
+			{
+				name: 'codex-gpt-5.4-mini',
+				shell: 'codex',
+				model: 'gpt-5.4-mini',
+				available: false,
+				availability: 'shell-not-found'
+			}
+		]
+	});
+	ok(body.includes('codex-full'), 'the live row renders');
+	ok(!body.includes('codex-gpt-5.4-mini'), 'a dead row is not listed by default');
+	ok(body.includes('2 off'), 'the dead are counted');
+	ok(body.includes('data-role="rack-off-count"'), 'as a control that opens them');
+});
