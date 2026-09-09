@@ -1,4 +1,4 @@
-import { ok, equal } from 'node:assert/strict';
+import { ok, equal, deepEqual } from 'node:assert/strict';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -266,12 +266,53 @@ test('a row names the core as the shell observed it, beside the alias', async ()
 			{ name: 'claude-opus', shell: 'claude', model: 'opus', available: true }
 		]
 	});
-	ok(body.includes('claude-fable-5-1'), 'the observed vendor id renders');
-	ok(body.includes('data-role="rack-row-observed"'), 'as its own labelled span');
+	ok(body.includes('claude-fable-5-1'), 'the observed vendor id is the headline');
 	ok(body.includes('last attested 2026-09-09T03:36:33Z'), 'with when it was attested');
-	// No attestation ⇒ the alias stands alone; nothing invented.
-	const observedSpans = body.match(/data-role="rack-row-observed"/gu) ?? [];
-	equal(observedSpans.length, 1);
+	// No attestation ⇒ the alias is the headline; nothing invented.
+	const headlines = body.match(/data-role="rack-row-headline"[^>]*>([^<]*)</gu) ?? [];
+	equal(headlines.length, 2);
+	ok(headlines[1].includes('opus'), 'the alias stands alone');
+	ok(body.includes('data-role="rack-row-handle"'), 'our handle rides the sub-line');
+});
+
+// The grammar a stranger can read: fixed tier order, the shell's default
+// first, "unclassed" said rather than blank (his 2026-09-09 read).
+test('rows sit in tier order with the shell default first, and a missing tier says so', async () => {
+	const body = await renderRack({
+		shell: 'codex',
+		profiles: [
+			{
+				name: 'codex-gpt-6-astra',
+				shell: 'codex',
+				model: 'gpt-6-astra',
+				available: true,
+				cost_rank: 1
+			},
+			{
+				name: 'codex-full',
+				shell: 'codex',
+				model: 'gpt-5.6-sol',
+				class: 'strong',
+				available: true,
+				cost_rank: 45
+			},
+			{ name: 'codex', shell: 'codex', class: 'balanced', available: true, cost_rank: 25 },
+			{
+				name: 'codex-mini',
+				shell: 'codex',
+				model: 'gpt-5.6-luna',
+				class: 'economy',
+				available: true,
+				cost_rank: 20
+			}
+		]
+	});
+	const headlines = [...body.matchAll(/data-role="rack-row-headline"[^>]*>([^<]*)</gu)].map((m) =>
+		m[1].trim()
+	);
+	deepEqual(headlines, ['codex', 'gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-6-astra']);
+	ok(body.includes('picks its own core'), 'the shell-decides row says what it is');
+	ok(body.includes('unclassed'), 'a tier the catalog cannot place is said, not blank');
 });
 
 // The roast, cut 6: "the dead take full rows". Counted, not listed.

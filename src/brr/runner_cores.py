@@ -514,6 +514,8 @@ def generated_profile_entries(
             }
             if pin:
                 generated["pin"] = pin
+            if _int(entry.get("vendor_priority")) is not None:
+                generated["vendor_priority"] = _int(entry.get("vendor_priority"))
             upgrade = entry.get("upgrade")
             if isinstance(upgrade, dict):
                 generated["upgrade"] = upgrade
@@ -659,6 +661,12 @@ def _codex_disk_entries() -> dict[str, dict[str, Any]]:
         priority = entry.get("priority")
         if isinstance(priority, (int, float)) and not isinstance(priority, bool):
             row["priority"] = priority
+        # The vendor's own words — the only tier signal a feed core has
+        # (`class_from_feed_words`); kept short, never the whole row.
+        for key in ("display_name", "description"):
+            text = _str(entry.get(key))
+            if text:
+                row[key] = text[:200]
         upgrade = entry.get("upgrade")
         if isinstance(upgrade, dict):
             trimmed = {
@@ -949,15 +957,63 @@ def _probed_core_entries(
             disk_meta = disk.get(model.strip())
             if disk_meta:
                 entry["freshness_source"] = "codex-cache"
+                if not entry["class"]:
+                    entry["class"] = class_from_feed_words(disk_meta)
                 priority = disk_meta.get("priority")
                 if isinstance(priority, (int, float)):
-                    entry["cost_rank"] = int(priority)
+                    # The feed's `priority` is the vendor's *display order*
+                    # (1 = the flagship it wants seen first) — not a price.
+                    # Read as a cost it sorted GPT-6-Astra to the top of the
+                    # rack as the bargain (2026-09-09, his "the order feels
+                    # random"). Rank = the tier's band + where the vendor
+                    # places it within the tier, flagship most expensive.
+                    entry["cost_rank"] = feed_cost_rank(entry["class"], int(priority))
+                    entry["vendor_priority"] = int(priority)
                 upgrade = disk_meta.get("upgrade")
                 if isinstance(upgrade, dict):
                     entry["upgrade"] = upgrade
             out[name] = entry
             known.add(key)
     return out
+
+
+_FEED_STRONG_WORDS = ("most capable", "most powerful", "most intelligent", "frontier", "demanding")
+_FEED_ECONOMY_WORDS = ("fast", "light", "mini", "small", "cheap", "quick", "efficient")
+# One band per tier, matching the hand-authored registry's own spread
+# (haiku 10 · mini 20 · codex 25 · sonnet/terra 30 · full 45 · opus 50 ·
+# fable 55). A feed core lands inside its tier's band, never above/below it.
+_TIER_BAND: dict[str | None, int] = {
+    runner_select.ECONOMY: 12,
+    runner_select.BALANCED: 26,
+    runner_select.STRONG: 46,
+}
+
+
+def class_from_feed_words(meta: dict[str, Any]) -> str | None:
+    """The tier a vendor's own sentence names — `"Our most capable model for
+    complex, demanding work."` → strong; `"fast, lightweight"` → economy;
+    a described model that says neither → balanced; no words → ``None``
+    (rendered *unclassed*, never blank)."""
+    text = " ".join(
+        str(meta.get(key) or "") for key in ("description", "display_name")
+    ).lower()
+    if not text.strip():
+        return None
+    if any(word in text for word in _FEED_STRONG_WORDS):
+        return runner_select.STRONG
+    if any(word in text for word in _FEED_ECONOMY_WORDS):
+        return runner_select.ECONOMY
+    return runner_select.BALANCED
+
+
+def feed_cost_rank(cost_class: str | None, priority: int) -> int | None:
+    """Tier band + the vendor's placement within it: priority 1 (the
+    flagship) is the tier's most expensive seat, later ones cheaper.
+    ``None`` when the tier is unknown — last place, never a guess."""
+    band = _TIER_BAND.get(cost_class)
+    if band is None:
+        return None
+    return band + max(0, 9 - min(priority, 9))
 
 
 def _provider_for_shell(shell: str) -> str | None:

@@ -5,9 +5,13 @@
 	import {
 		availabilityOf,
 		deadShellReason,
+		headline,
 		isLocked,
+		isShellDefault,
 		isTappable,
 		lockedText,
+		orderRows,
+		tierLabel,
 		offReasonOf,
 		groupByShell
 	} from './spoolRack';
@@ -250,9 +254,11 @@
 		     sit above this was the second place a provider could be picked;
 		     the fuel row is the only one now. -->
 		{#if activeGroup}
-			{@const liveRows = activeGroup.allUnavailable
-				? activeGroup.profiles
-				: activeGroup.profiles.filter((profile) => !isDead(profile))}
+			{@const liveRows = orderRows(
+				activeGroup.allUnavailable
+					? activeGroup.profiles
+					: activeGroup.profiles.filter((profile) => !isDead(profile))
+			)}
 			{@const deadRows = activeGroup.allUnavailable ? [] : activeGroup.profiles.filter(isDead)}
 			{#if activeGroup.allUnavailable}
 				<p class="mb-2 font-mono text-[10px] text-ink-mute">
@@ -297,26 +303,33 @@
 							title={rowTitle(profile)}
 							class="flex min-w-0 items-baseline gap-3 px-2 py-1.5 text-left"
 						>
+							<!-- Headline = the vendor's own id for the core (versioned where
+							     the shell attested one; `codex default` when the shell
+							     decides). Sub = tier · our handle. One grammar, both vendors. -->
 							<span
-								class="font-mono text-xs font-medium tracking-wide whitespace-nowrap {rowLabelClasses(
+								class="font-mono text-xs font-medium tracking-wide {rowLabelClasses(
 									nextWake,
 									tappable
-								)}">{tappable ? '' : OFF_MARK}{profile.name}</span
+								)}"
+								data-role="rack-row-headline"
+								title={observedLabel(profile) ? observedTitle(profile) : undefined}
+								>{tappable ? '' : OFF_MARK}{headline(profile)}</span
 							>
-							{#if observedLabel(profile)}
-								<!-- The vendor's id stands in for the alias (the alias is
-								     already the row's name): one core, one name, versioned. -->
+							{#if isShellDefault(profile)}
 								<span
 									class="font-mono text-[11px] text-ink-quiet"
-									data-role="rack-row-observed"
-									title={observedTitle(profile)}>{observedLabel(profile)}</span
+									title="no core pinned — {profile.shell} picks its own">picks its own core</span
 								>
-							{:else}
-								<span class="font-mono text-[11px] text-ink-quiet">{coreLabel(profile)}</span>
 							{/if}
-							{#if profile.class}
-								<span class="font-mono text-[10px] tracking-wide text-stone-400 uppercase"
-									>{profile.class}</span
+							<span
+								class="font-mono text-[10px] tracking-wide uppercase {profile.class
+									? 'text-stone-400'
+									: 'text-ink-mute'}"
+								data-role="rack-row-tier">{tierLabel(profile)}</span
+							>
+							{#if profile.name !== profile.shell}
+								<span class="font-mono text-[10px] text-ink-mute" data-role="rack-row-handle"
+									>{profile.name}</span
 								>
 							{/if}
 							{#if coreAllowance(profile)}

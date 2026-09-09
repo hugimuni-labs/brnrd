@@ -214,3 +214,57 @@ export function defaultShell(groups: ShellGroup[], nextWakeProfile: string | nul
 	}
 	return (groups.find((group) => !group.allUnavailable) ?? groups[0])?.shell ?? '';
 }
+
+// ---------------------------------------------------------------------------
+// The row a stranger can read (his 2026-09-09 read of the after-shots: "the
+// order feels random … imagine you are a new user"). One grammar for both
+// vendors: headline = the vendor's model id, versioned · sub = tier · our
+// handle · rows in a fixed tier order with the shell's own default first.
+
+const TIER_ORDER: Record<string, number> = { economy: 0, balanced: 1, strong: 2 };
+
+/** The shell's own default row: no core pinned, the shell decides. */
+export function isShellDefault(profile: RunnerProfile): boolean {
+	return !profile.model || profile.model === profile.shell;
+}
+
+/** The tier as the reader sees it — never blank: a core the catalog could
+ *  not place says so. */
+export function tierLabel(profile: RunnerProfile): string {
+	return profile.class ? profile.class : 'unclassed';
+}
+
+/** What the row is called: the vendor's own id for the core, versioned
+ *  where the shell attested one; the shell-decides row says so in words. */
+export function headline(profile: RunnerProfile): string {
+	// Not "default": that word is the DEFAULT badge's (who wakes next) — the
+	// module doc's two-meanings rule. The shell's own name, and the sub-line
+	// says the shell picks the core.
+	if (isShellDefault(profile)) return profile.shell ?? profile.name;
+	return profile.observed_model ?? profile.model ?? profile.name;
+}
+
+/** Fixed order: the shell's default first, then economy · balanced ·
+ *  strong · unclassed; cost sorts only inside a tier; name breaks ties. The
+ *  raw `cost_rank` used to be the whole order, and a feed core's rank was
+ *  the vendor's *display* priority — GPT-6-Astra at 1, sorted as the
+ *  bargain. Stable for equal keys, so the daemon's order survives within a
+ *  tier. */
+export function orderRows(rows: RunnerProfile[]): RunnerProfile[] {
+	const key = (row: RunnerProfile): [number, number, number, string] => [
+		isShellDefault(row) ? 0 : 1,
+		row.class && row.class in TIER_ORDER ? TIER_ORDER[row.class] : 3,
+		row.cost_rank ?? Number.MAX_SAFE_INTEGER,
+		row.name
+	];
+	return rows
+		.map((row, index) => ({ row, index, k: key(row) }))
+		.sort((a, b) => {
+			for (let i = 0; i < 4; i++) {
+				if (a.k[i] < b.k[i]) return -1;
+				if (a.k[i] > b.k[i]) return 1;
+			}
+			return a.index - b.index;
+		})
+		.map((entry) => entry.row);
+}
