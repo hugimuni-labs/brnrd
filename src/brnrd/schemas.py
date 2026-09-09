@@ -587,6 +587,12 @@ class RunnerStickyIn(BaseModel):
     request_id: str | None = Field(default=None, max_length=64)
 
 
+class DaemonConfigEntry(BaseModel):
+    key: str = Field(min_length=1, max_length=128)
+    value: str | int | float | bool
+    source: str = Field(min_length=1, max_length=64)
+
+
 class RunnersReport(BaseModel):
     """Runner-catalog snapshot a daemon pushes for itself (#328 spool rack).
 
@@ -602,6 +608,7 @@ class RunnersReport(BaseModel):
     environments: list[EnvironmentOptionIn] = Field(default_factory=list)
     # #932: the live conversation-sticky, or None when none is in force.
     sticky: RunnerStickyIn | None = None
+    config: list[DaemonConfigEntry] = Field(default_factory=list)
     # No `consumed_wake_request_ids` here any more (#733). Retiring a tap was
     # a piggybacked *ack* — the daemon deciding locally that a row was spent
     # and telling the server one publish tick later. The claim endpoint

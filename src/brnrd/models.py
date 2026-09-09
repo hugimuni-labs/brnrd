@@ -283,6 +283,11 @@ class Daemon(Base):
         info=_publish_store("runners", "repo"),
     )
     runners_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    daemon_config_json: Mapped[str] = mapped_column(
+        Text,
+        default="[]",
+        info=_publish_store("runners", "repo"),
+    )
     environment_default: Mapped[str | None] = mapped_column(
         String(32),
         nullable=True,
