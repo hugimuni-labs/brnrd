@@ -266,7 +266,8 @@ test('a row names the core as the shell observed it, beside the alias', async ()
 			{ name: 'claude-opus', shell: 'claude', model: 'opus', available: true }
 		]
 	});
-	ok(body.includes('claude-fable-5-1'), 'the observed vendor id is the headline');
+	ok(body.includes('Fable 5.1'), 'the model name derived from the attested id is the headline');
+	ok(body.includes('claude-fable-5-1'), 'the raw id stays in the title');
 	ok(body.includes('last attested 2026-09-09T03:36:33Z'), 'with when it was attested');
 	// No attestation ⇒ the alias is the headline; nothing invented.
 	const headlines = body.match(/data-role="rack-row-headline"[^>]*>([^<]*)</gu) ?? [];
