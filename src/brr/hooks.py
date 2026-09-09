@@ -45,6 +45,7 @@ from typing import Any
 
 from . import allowance
 from . import card as card_rule
+from . import conversations
 from . import course
 from . import facets
 from . import gate_receipt
@@ -2623,6 +2624,47 @@ def _event_seen_line(ev: dict[str, Any], shown: int) -> str:
 _PENDING_EVENT_ROWS_MAX = 40
 
 
+def _render_burst_row(
+    group: list[dict[str, Any]], inbox_pointer: str | None
+) -> list[str]:
+    """One collapsed row for a burst *group* (≥2 events, same correspondent,
+    same thread, within :data:`conversations.BURST_WINDOW_SECONDS` of each
+    other) plus their bodies concatenated beneath it, oldest first (#128:
+    "closely-spaced fragments race separate wakes" — a person's rapid-fire
+    fragments read as one turn, not N tickets to `event:`/`note:` one by
+    one). *group* is assumed already oldest-first, matching the pending
+    list's own order (:func:`protocol.list_pending`).
+
+    The header names the actual ids for the ``event:``/``also:`` reply
+    (#1864's grammar) rather than the placeholder wording design docs used
+    while sketching this — "reply the newest" would leave the resident to
+    guess which id that is.
+    """
+    oldest, newest = group[0], group[-1]
+    source = str(oldest.get("source") or "-").strip() or "-"
+    who = _event_correspondent(oldest) or "someone"
+    bodies: list[tuple[str, int]] = []
+    total_size = 0
+    for ev in group:
+        body = _event_body(ev)
+        size = len(body.encode("utf-8", "replace"))
+        bodies.append((body, size))
+        total_size += size
+    age_new = _fmt_age(_event_age_seconds(newest.get("created"))) or "?"
+    age_old = _fmt_age(_event_age_seconds(oldest.get("created"))) or "?"
+    age_range = age_new if age_new == age_old else f"{age_new}–{age_old}"
+    also_ids = ", ".join(_full_event_id(ev.get("id")) for ev in group[:-1])
+    header = (
+        f"{_event_glyph(source)} {len(group)} from {who} · {age_range} · "
+        f"{_fmt_body_size(total_size)} — one turn; reply "
+        f"{_full_event_id(newest.get('id'))} with also: {also_ids}"
+    )
+    rows = [f"- {header}"]
+    for body, size in bodies:
+        rows.extend(_event_body_block(body, size, inbox_pointer))
+    return rows
+
+
 def _render_event_rows(
     events: list[Any],
     event_seen: dict[str, dict[str, Any]] | None,
@@ -2644,6 +2686,14 @@ def _render_event_rows(
     (Stop, direct ``format_delta`` calls) leave this ``False`` to preserve
     the existing seen-row behaviour.
 
+    Consecutive new/changed events that share a correspondent and a thread
+    within :data:`conversations.BURST_WINDOW_SECONDS` of each other (#128)
+    collapse into one :func:`_render_burst_row` instead of one chrome row
+    per fragment — the banner counting a burst as N tickets rather than one
+    turn. A ``seen`` row (or a gap past the window, a different
+    correspondent, a different thread) always breaks the chain; grouping
+    never reaches across one.
+
     Capped at :data:`_PENDING_EVENT_ROWS_MAX` — existing order is preserved
     (never re-sorted), just truncated, and a fitting list gets no elision
     line at all.
@@ -2652,15 +2702,36 @@ def _render_event_rows(
     rendered_events = events[:_PENDING_EVENT_ROWS_MAX]
     # Counted from what the loop *kept* — non-dict entries are skipped below,
     # and an omitted count taken from the slice would under-report. A
-    # collapsed `seen ×N · unchanged` row is still a rendered row (the event
-    # is accounted for on screen, just compactly) — it must bump this
-    # counter exactly like a full row, or the elision line below double-
-    # counts it: emitted *and* claimed omitted (#1116 residue's own bug).
+    # collapsed `seen ×N · unchanged` row (or a collapsed burst row) is still
+    # a rendered row for every event it accounts for — it must bump this
+    # counter by that many, or the elision line below double-counts them:
+    # emitted *and* claimed omitted (#1116 residue's own bug).
     # When skip_seen=True, seen rows are NOT rendered and NOT counted here —
     # they are accounted for by the chip, not these detail rows.
     rendered = 0
     seen_skipped = 0  # seen events suppressed via skip_seen — accounted for by chip
     rows: list[str] = []
+    burst_buffer: list[dict[str, Any]] = []
+
+    def flush_burst() -> None:
+        nonlocal rendered
+        if not burst_buffer:
+            return
+        if len(burst_buffer) == 1:
+            ev = burst_buffer[0]
+            decision = (event_seen or {}).get(str(ev.get("id") or ""))
+            status = (decision or {}).get("status") or "new"
+            body = _event_body(ev)
+            size = len(body.encode("utf-8", "replace"))
+            rows.append(
+                f"- {_event_header(ev, size=size, changed=status == 'changed')}"
+            )
+            rows.extend(_event_body_block(body, size, inbox_pointer))
+        else:
+            rows.extend(_render_burst_row(list(burst_buffer), inbox_pointer))
+        rendered += len(burst_buffer)
+        burst_buffer.clear()
+
     for ev in rendered_events:
         if not isinstance(ev, dict):
             continue
@@ -2668,17 +2739,19 @@ def _render_event_rows(
         status = (decision or {}).get("status") or "new"
         shown = int((decision or {}).get("shown") or 0)
         if status == "seen":
+            flush_burst()
             if skip_seen:
                 seen_skipped += 1
                 continue
             rendered += 1
             rows.append(f"- {_event_seen_line(ev, shown)}")
             continue
-        body = _event_body(ev)
-        size = len(body.encode("utf-8", "replace"))
-        rendered += 1
-        rows.append(f"- {_event_header(ev, size=size, changed=status == 'changed')}")
-        rows.extend(_event_body_block(body, size, inbox_pointer))
+        if burst_buffer and not conversations.events_continue_burst(
+            burst_buffer[-1], ev
+        ):
+            flush_burst()
+        burst_buffer.append(ev)
+    flush_burst()
     omitted = total - rendered - seen_skipped
     if omitted > 0:
         rows.append(
