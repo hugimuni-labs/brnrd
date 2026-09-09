@@ -315,6 +315,104 @@ def binding_quota_reset_epoch(levels: Mapping[str, Any] | None) -> float | None:
     return min(found) if found else None
 
 
+def binding_quota_window(
+    levels: Mapping[str, Any] | None,
+    model: str | None = None,
+) -> dict[str, float] | None:
+    """The binding quota bucket with enough clock data to pace against it.
+
+    A remaining percentage alone says how much quota is left, not whether the
+    account is consuming it faster than its reset clock.  Return a single
+    comparable bucket only when its remaining percentage, reset epoch, and
+    duration are all observed.  Per-model Claude buckets intentionally make
+    this return ``None`` when they bind: they currently have no reset clock,
+    and substituting the account-wide week would create a confident but wrong
+    pace reading.
+    """
+    if not isinstance(levels, Mapping):
+        return None
+    quota = levels.get("quota")
+    if not isinstance(quota, Mapping):
+        return None
+
+    def number(value: Any) -> float | None:
+        if isinstance(value, bool):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    candidates: list[dict[str, float]] = []
+
+    def add(remaining: Any, resets_at: Any, window_minutes: Any) -> None:
+        remaining_num = number(remaining)
+        reset_num = number(resets_at)
+        minutes_num = number(window_minutes)
+        if (
+            remaining_num is None or reset_num is None or minutes_num is None
+            or minutes_num <= 0
+        ):
+            return
+        candidates.append({
+            "remaining_pct": max(0.0, min(100.0, remaining_num)),
+            "resets_at": reset_num,
+            "window_minutes": minutes_num,
+        })
+
+    buckets = quota.get("buckets")
+    model_key = _slug(model) if model else None
+    if isinstance(buckets, Mapping) and isinstance(
+        buckets.get("week_models"), Mapping
+    ):
+        matched_model_remaining: float | None = None
+        if model_key is not None:
+            for label, bucket in buckets["week_models"].items():
+                if _slug(str(label)) == model_key and isinstance(bucket, Mapping):
+                    matched_model_remaining = number(bucket.get("remaining_percentage"))
+                    break
+        # A per-model bucket can be the binding one, but the collector does
+        # not give it a reset instant.  Refuse a pace verdict instead of
+        # pretending the account-wide week is its clock.
+        if matched_model_remaining is not None:
+            account_remaining = (
+                number(bucket.get("remaining_percentage"))
+                for name, bucket in buckets.items()
+                if name != "week_models" and isinstance(bucket, Mapping)
+            )
+            known_account_remaining = [
+                item for item in account_remaining if item is not None
+            ]
+            if (
+                not known_account_remaining
+                or matched_model_remaining < min(known_account_remaining)
+            ):
+                return None
+
+    # Claude publishes the duration by bucket name, while Codex publishes it
+    # on each provider-labelled slot.  These records may coexist in tests;
+    # choosing the lowest remaining value mirrors binding_quota_remaining_pct.
+    session_used = number(levels.get("session_used_percentage"))
+    week_used = number(levels.get("week_used_percentage"))
+    add(
+        100.0 - session_used if session_used is not None else None,
+        levels.get("session_resets_at") or quota.get("session_resets_at"), 300.0,
+    )
+    add(
+        100.0 - week_used if week_used is not None else None,
+        levels.get("week_resets_at") or quota.get("week_resets_at"), 10080.0,
+    )
+    for slot in ("primary", "secondary"):
+        add(
+            quota.get(f"{slot}_remaining_percent"),
+            quota.get(f"{slot}_resets_at"),
+            quota.get(f"{slot}_window_minutes"),
+        )
+    if not candidates:
+        return None
+    return min(candidates, key=lambda item: item["remaining_pct"])
+
+
 def excluded_week_model_buckets(
     levels: Mapping[str, Any] | None,
     model: str | None,
