@@ -175,7 +175,7 @@
 
 	function observedTitle(profile: RunnerProfile): string {
 		const at = profile.observed_at ? ` · last attested ${profile.observed_at}` : '';
-		return `alias ${profile.model} — what the shell actually ran${at}`;
+		return `${profile.observed_model} — what the shell actually ran for alias ${profile.model}${at}`;
 	}
 
 	/** Dead rows are counted, not listed (the 2026-09-08 roast, cut 6: "the

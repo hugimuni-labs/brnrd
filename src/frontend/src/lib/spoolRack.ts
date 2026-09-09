@@ -241,7 +241,14 @@ export function headline(profile: RunnerProfile): string {
 	// module doc's two-meanings rule. The shell's own name, and the sub-line
 	// says the shell picks the core.
 	if (isShellDefault(profile)) return profile.shell ?? profile.name;
-	return profile.observed_model ?? profile.model ?? profile.name;
+	return shortVendorId(profile.observed_model ?? profile.model ?? profile.name);
+}
+
+/** A vendor id at row width: a trailing 8-digit build date
+ *  (`claude-haiku-4-5-20251001`) is a snapshot stamp, not the version a
+ *  reader picks by — dropped on the row, kept whole in the title. */
+export function shortVendorId(id: string): string {
+	return id.replace(/-(\d{8})$/u, '');
 }
 
 /** Fixed order: the shell's default first, then economy · balanced ·
