@@ -688,6 +688,29 @@ def _read_room(ctx: HookContext) -> str | None:
     return text or None
 
 
+def _read_paused(ctx: HookContext) -> str | None:
+    """`describe_paused` of whatever `.paused.json` currently holds, or
+    `None` when nothing is paused right now.
+
+    Same read-the-artifact-fresh doctrine as `.mood`/`.room`: the daemon
+    (SIGSTOP) and `brnrd resume`/`brnrd drop` (SIGCONT, clearing the file)
+    both write this control file from outside this process, and the whole
+    point of the feature is that the boundary line reflects the current
+    truth, not a cached one. Absent/empty/unreadable/malformed all read as
+    "nothing paused" — the same conservative default every other optional
+    control file in this module uses.
+    """
+    if ctx.outbox_dir is None:
+        return None
+    from . import pause as pause_mod
+
+    records = pause_mod.read_paused_record(ctx.outbox_dir)
+    if not records:
+        return None
+    described = pause_mod.describe_paused(records)
+    return described or None
+
+
 def _read_topics(ctx: HookContext) -> list[str] | None:
     """Read the resident's `.topics` claim fresh, lenient, slug-filtered.
 
@@ -3011,6 +3034,7 @@ def _render_bar(
     gate_receipt_data: dict[str, Any] | None = None,
     context_prior: dict[str, Any] | None = None,
     room: str | None = None,
+    paused: str | None = None,
     plan: "promises.Blueprint | None" = None,
     plan_edge: bool = False,
     ambient_emit: bool = True,
@@ -3107,6 +3131,13 @@ def _render_bar(
         # The room pin (`.room`): the resident's own reading of how to talk
         # now, re-injected each boundary — never parsed, only echoed.
         segments.append(("room", f"room: {room}"))
+    if paused:
+        # A live tool child the daemon SIGSTOPped for a correspondent
+        # message (`.paused.json`, non-empty) — surfaces on *every* boundary
+        # while the record stands, not just the one that changed, since the
+        # whole point is the resident may not act on the very next line it
+        # reads (`edge_due["paused"]` below forces that).
+        segments.append(("paused", f"paused: {paused} · brnrd resume | brnrd drop"))
     # Attribution of the chip just above (brnrd#1810): who is drawing on
     # that shared gauge this boundary — this run's own weighted spend plus
     # every owned strand's, summed. Independent of whether the quota chip
@@ -3383,6 +3414,10 @@ def _render_bar(
         # numbers happen not to have moved.
         "course": route_edge or route_prompt or route_drift or route_stall,
         "owed": plan_edge,
+        # Stands until the record clears (resume/drop/cap-sweep/run-end) —
+        # never change-gated away like `room`, because the resident reading
+        # a repeated line and acting once is exactly the intended outcome.
+        "paused": bool(paused),
     }
 
     def _due(key: str, text: str) -> bool:
@@ -3481,6 +3516,7 @@ def format_delta(
     bolt_asks_total: int | None = None,
     context_prior: dict[str, Any] | None = None,
     room: str | None = None,
+    paused: str | None = None,
     bolt_edge: bool = False,
     repeat_streaks: dict[str, int] | None = None,
     pending_set_changed: bool = True,
@@ -3635,6 +3671,7 @@ def format_delta(
             card_stale=card_stale, resources=resources, run_name=run_name,
             context_prior=context_prior,
             room=room,
+            paused=paused,
             mood=mood, surprise=surprise,
             census=census,
             notices=notices, finished_spawns=finished_spawns,
@@ -5138,6 +5175,7 @@ def compute_neutral(
     # is the face the resident actually just set.
     mood = _read_mood(ctx)
     room = _read_room(ctx)
+    paused = _read_paused(ctx)
     if mood is not None:
         state[MOOD_EVER_WRITTEN_KEY] = True
     # Same fresh-read discipline, for the topic-discoverability chip's own
@@ -5491,7 +5529,7 @@ def compute_neutral(
         if (
             has_obligations or ambient_emit or edge or plan_edge
             or route_edge or bolt_edge or route_drift or route_stall
-            or mood_drift or token_moved
+            or mood_drift or token_moved or paused
         ):
             inject = format_delta(
                 portal, mood=mood, surprise=edge,
@@ -5503,7 +5541,7 @@ def compute_neutral(
                 route=route, route_edge=route_edge, route_prompt=route_prompt,
                 bolt_asks_total=bolt_asks_total, bolt_edge=bolt_edge,
                 repeat_streaks=repeat_streaks,
-                context_prior=context_prior, room=room,
+                context_prior=context_prior, room=room, paused=paused,
                 pending_set_changed=pending_set_changed,
                 last_chips=last_chips, rendered_chips=rendered_chips,
                 route_drift=route_drift, route_stall=route_stall,
@@ -6516,6 +6554,43 @@ def record_boundary(
     except OSError:
         return None
     return path
+
+
+def last_boundary_epoch(run_dir: Path | None) -> float | None:
+    """The wall-clock time (epoch seconds) of the most recent boundary
+    recorded in *run_dir*'s `boundaries.jsonl`, or `None`.
+
+    The pause machinery's "since" fence (`pause.pausable_children`): a
+    process that predates this run's last boundary is machinery the
+    boundary already accounted for (an MCP server, a long-lived helper),
+    not a call made *since* — so a missing or unparseable transcript
+    conservatively answers `None`, which callers treat as "nothing is
+    provably safe to pause" rather than guessing a time.
+    """
+    if run_dir is None:
+        return None
+    path = run_dir / BOUNDARIES_NAME
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for raw_line in reversed(text.splitlines()):
+        raw_line = raw_line.strip()
+        if not raw_line:
+            continue
+        try:
+            record = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        at = record.get("at") if isinstance(record, dict) else None
+        if not isinstance(at, str):
+            continue
+        try:
+            parsed = datetime.datetime.strptime(at, "%Y-%m-%dT%H:%M:%SZ")
+        except ValueError:
+            continue
+        return parsed.replace(tzinfo=datetime.timezone.utc).timestamp()
+    return None
 
 
 # ── Boundary summary (the run node's `boundaries.json`) ──────────────────
