@@ -68,6 +68,7 @@ import shutil
 import time
 from datetime import datetime, timedelta, timezone
 
+from . import protocol
 from .channels import registry as channel_registry
 from pathlib import Path
 from typing import Any, Iterator, TypedDict
@@ -266,6 +267,75 @@ def conversation_key_for_event(event: dict[str, Any]) -> str | None:
     if isinstance(explicit, str) and explicit.strip():
         return explicit.strip()
     return gate_thread_key(event)
+
+
+# ── Burst identity (#128: "closely-spaced fragments race separate wakes") ──
+
+#: Two same-thread, same-correspondent events land in one burst when they
+#: arrive within this many seconds of each other — the render-time twin of
+#: ``daemon.py``'s own dispatch-time burst window
+#: (``dispatch.burst_window_seconds``, ``_weave_burst_siblings_into_body``):
+#: that one holds dispatch (or weaves already-pending siblings into the lead
+#: event's body) to coalesce a burst *before* a wake exists. This constant
+#: backs a second, render-only recognition of a burst that formed anyway — a
+#: fragment landing while a run was already mid-thought, so no dispatch-time
+#: hold ever saw it — applied where the daemon already has the events in
+#: hand, with no hold and no added latency.
+BURST_WINDOW_SECONDS = 120.0
+
+
+def event_burst_identity(event: dict[str, Any]) -> tuple[str, str] | None:
+    """(correspondent, thread) pair used to recognise a burst, or ``None``.
+
+    Both halves must resolve — a schedule firing, a spawn completion, or any
+    event with no gate-thread fingerprint never joins a burst; grouping those
+    would merge unrelated internal traffic and misdescribe it as "one person,
+    one turn" (the same ground ``daemon.py``'s ``_resolve_also_targets``
+    guards for the ``also:`` reply grammar).
+    """
+    correspondent = correspondent_key_for_event(event)
+    thread = conversation_key_for_event(event)
+    if not correspondent or not thread:
+        return None
+    return (correspondent, thread)
+
+
+def events_continue_burst(prev: dict[str, Any], cur: dict[str, Any]) -> bool:
+    """True when *cur* continues the same burst as *prev*.
+
+    Same :func:`event_burst_identity` on both sides, landing within
+    :data:`BURST_WINDOW_SECONDS` of each other. Order-independent (the gap
+    is measured with ``abs()``) — a caller walking a list oldest-first never
+    needs that, but one merging two independently-sorted lists might hand
+    this a pair either way.
+    """
+    identity = event_burst_identity(prev)
+    if identity is None or identity != event_burst_identity(cur):
+        return False
+    prev_epoch = protocol.parse_iso_epoch(prev.get("created"))
+    cur_epoch = protocol.parse_iso_epoch(cur.get("created"))
+    if prev_epoch is None or cur_epoch is None:
+        return False
+    return abs(cur_epoch - prev_epoch) <= BURST_WINDOW_SECONDS
+
+
+def group_bursts(events: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """Partition *events* (oldest first) into consecutive burst groups.
+
+    Two neighbours merge exactly when :func:`events_continue_burst` holds
+    between them; anything else — a different correspondent, a different
+    thread, a gap past the window, or an event with no thread identity at
+    all — starts a new (possibly singleton) group. Shared by the hooks.py
+    boundary banner and the wake-bundle burst listing so the two surfaces
+    cannot disagree about what counts as "one turn".
+    """
+    groups: list[list[dict[str, Any]]] = []
+    for ev in events:
+        if groups and events_continue_burst(groups[-1][-1], ev):
+            groups[-1].append(ev)
+        else:
+            groups.append([ev])
+    return groups
 
 
 # ── Filesystem layout ────────────────────────────────────────────────
