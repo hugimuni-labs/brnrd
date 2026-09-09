@@ -67,6 +67,7 @@ _DAEMON_EXACT_KEYS = frozenset({
     "response_retries",
     "runner.default",
     "runner.default_class",
+    "runner_timeout_seconds",
     "runner_policy",
 })
 _DAEMON_PREFIXES = ("dispatch.", "runner.", "seat.", "spawn.", "wake_request.")
@@ -703,6 +704,15 @@ def migrate_legacy_daemon_config(repo_root: Path) -> list[str]:
             default = core
             source_keys = ["core"]
         if default:
+            from . import runner
+
+            canonical = runner.canonical_profile_name(default, repo_root)
+            if canonical != default:
+                logs.append(
+                    f"[brnrd] runner profile alias {default} resolved to {canonical} "
+                    "during daemon.config migration"
+                )
+                default = canonical
             additions["runner.default"] = default
             logs.append(
                 "[brnrd] .brr/config " + "/".join(f"{key}=" for key in source_keys)
