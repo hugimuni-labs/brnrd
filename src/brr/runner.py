@@ -1610,6 +1610,7 @@ def _catalog_record(
     ).strip() or None
 
     retirement = _rc.retirement_status(profile)
+    auth_mark: dict[str, Any] | None = None
 
     # Availability
     on_path = shutil.which(str(shell or "").strip()) is not None
@@ -1620,7 +1621,7 @@ def _catalog_record(
         availability = "auth-env-missing"
     elif _claude_subscription_unavailable(shell, auth_variant):
         availability = "subscription-unavailable"
-    elif runner_auth_health.is_auth_failed(repo_root or Path.cwd(), runner_profile):
+    elif (auth_mark := runner_auth_health.auth_mark(repo_root or Path.cwd(), runner_profile)):
         availability = "auth-error"
     elif retirement and retirement.get("retired"):
         # The vendor's retirement date has passed. Shown, not hidden — a
@@ -1681,6 +1682,18 @@ def _catalog_record(
     }
     if pin:
         record["pin"] = pin
+    if auth_mark:
+        # The mark is a fact about the *domain's* credential, seen on one
+        # profile: say when and where, so a panel can render "auth failed
+        # 05:06Z on sonnet — relogin, then tap" instead of hiding the shell.
+        # The tap stays legal on purpose: an attempt is the probe that
+        # clears the mark (`daemon._run_worker`'s first-boundary clear).
+        record["auth_error"] = {
+            "since": auth_mark.get("recorded_at"),
+            "seen_on": auth_mark.get("profile"),
+            "probe": auth_mark.get("probe"),
+            "hint": "sign in to the Shell again; the mark clears when the credential changes",
+        }
     if retirement:
         record["retired"] = bool(retirement.get("retired"))
         if retirement.get("retirement_at"):
@@ -1882,7 +1895,10 @@ def resolve_runner_profile(
         for profile in profiles.values()
         if isinstance(profile, dict) and profile.get("generated_core")
     }
+    from . import runner_auth_health
+
     all_profiles = []
+    auth_marked = []
     for name, profile in profiles.items():
         if not _runner_available(name, profiles):
             continue
@@ -1893,7 +1909,18 @@ def resolve_runner_profile(
             and not str(profile.get("model") or "").strip()
         ):
             continue
-        all_profiles.append(runner_select.runner_from_profile(name, profile))
+        candidate = runner_select.runner_from_profile(name, profile)
+        if runner_auth_health.is_auth_failed(repo_root, candidate):
+            # The domain's credential failed and has not changed since: an
+            # automatic pick lands on a known-dead door (2026-09-09 05:06Z,
+            # a schedule wake spent 20 minutes proving it). Kept aside and
+            # used only when nothing else is available — an explicit pin
+            # (above) still dispatches, as the user's choice and the probe.
+            auth_marked.append(candidate)
+            continue
+        all_profiles.append(candidate)
+    if not all_profiles and auth_marked:
+        all_profiles = auth_marked
     if core_pin:
         # Filter to profiles whose declared model matches core_pin (exact
         # or prefix, case-insensitive), plus short profile aliases like

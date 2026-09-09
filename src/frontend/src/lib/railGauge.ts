@@ -6,6 +6,7 @@ import {
 	type QuotaWindow
 } from './quota.ts';
 import { liveSticky, type RunnerProfile, type RunnerSticky, type WakeRequest } from './runners.ts';
+import { lockedShort, lockedText } from './spoolRack.ts';
 import type { LiveRun } from './liveRuns.ts';
 
 export type RunnerBlockKind = 'requested' | 'sticky' | 'default';
@@ -124,10 +125,15 @@ export function quotaWindowCountLabel(shells: QuotaShell[]): string {
 
 /**
  * Quota is historical evidence; the runner catalog is current capability.
- * Keep a shell when capability is unknown, but drop its old fuel once every
- * current profile for that shell is explicitly unavailable. This prevents a
- * disconnected subscription from leaving healthy-looking bars behind while
- * preserving quota for older daemons that did not publish availability yet.
+ * Keep a shell when capability is unknown, and drop its old fuel only when
+ * every current profile for that shell is *gone* — binary not installed,
+ * subscription ended. A shell whose every core is merely **locked**
+ * (`auth-error`: the last dispatch on this credential failed and the
+ * credential is unchanged) or unconfigured (`auth-env-missing`) stays: the
+ * subscription and its windows are real, the door is closed, and the
+ * reader holds the key. Hiding that shell is how the 2026-09-08/09 deadlock
+ * happened — no row, no tap, no run, no clear — so the rule names the gone
+ * states rather than "everything unavailable".
  */
 export function availableQuotaShells(
 	shells: QuotaShell[],
@@ -139,8 +145,30 @@ export function availableQuotaShells(
 			(profile) => profile.shell === quota.shell && profile.daemon_stale !== true
 		);
 		if (current.length === 0) return true;
+		if (current.some((profile) => LOCKED_STATES.has(profile.availability ?? ''))) return true;
 		return !current.every((profile) => profile.available === false);
 	});
+}
+
+/** Availability states in which the shell is here and the reader holds the
+ *  key — never grounds for hiding its fuel. */
+const LOCKED_STATES = new Set(['auth-error', 'auth-env-missing']);
+
+/** The lock line for a fuel provider row, or null when its cores are not
+ *  all locked. One shell, one sentence — the FUEL row is where a reader
+ *  looks for a missing bar, so the state stands where the bar does. */
+export function providerLock(
+	provider: string,
+	profiles: RunnerProfile[] | null | undefined
+): { short: string; full: string } | null {
+	if (!profiles) return null;
+	const current = profiles.filter(
+		(profile) => profile.shell === provider && profile.daemon_stale !== true
+	);
+	if (current.length === 0) return null;
+	const locked = current.filter((profile) => profile.availability === 'auth-error');
+	if (locked.length !== current.length) return null;
+	return { short: lockedShort(locked[0]), full: lockedText(locked[0]) };
 }
 
 function shortDelta(seconds: number): string {
