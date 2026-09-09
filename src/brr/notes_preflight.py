@@ -137,7 +137,13 @@ _UNANNOUNCED_RE = re.compile(
 #: ``surface/What survives on purpose``, none of which name a file, in every
 #: wake for weeks. The backticks are the real delimiter and they cannot occur
 #: inside a path — read those instead of trusting the separator.
-_UNANNOUNCED_PAGE_RE = re.compile(r"`([^`]+)`")
+#: Anchored to an entry boundary — the start of the list, or a " · "
+#: separator — so a backtick *inside* a gist can never open a page. The
+#: producer also strips backticks from heading text
+#: (``prompts._page_heading_gist``); this is the same invariant enforced
+#: from the reading side, because a parser that fabricates on unexpected
+#: input is how the first version of this shipped for weeks.
+_UNANNOUNCED_PAGE_RE = re.compile(r"(?:^|·\s)`([^`]+)`")
 
 
 # ── 0. The scan's own scope ──────────────────────────────────────────

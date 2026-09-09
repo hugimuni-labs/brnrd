@@ -377,3 +377,47 @@ def test_eviction_preview_names_files_not_heading_fragments(monkeypatch, tmp_pat
     # The exact fragments that shipped, named so a regression is recognisable.
     for fragment in ("+1 more", "§Results", "What survives on purpose", "4 headings"):
         assert not any(fragment in t for t in targets)
+
+
+def test_eviction_preview_survives_a_heading_that_carries_inline_code(monkeypatch, tmp_path):
+    """The delimiter fix is only sound if the gist cannot contain the delimiter.
+
+    Caught reviewing the first fix, before it shipped. Reading the
+    backtick-delimited entries instead of splitting on " · " is right, but the
+    gist is built from raw heading text and `_heading_title` did not strip
+    backticks — so a page whose heading carries inline code put a second
+    delimiter *pair* inside a field, and `findall` returned a fabricated page.
+    Not hypothetical: this account's `operator-checklist.md` has
+    `## 5. Link `arseni…` to a GitHub account` today.
+
+    `_page_heading_gist` now strips backticks, which is what a one-line gist
+    wants anyway.
+
+    Drive red: remove `.replace("`", "")` from `_page_heading_gist` and confirm
+    `surface/refs:` comes back; restore to keep.
+    """
+    from brr import notes_preflight
+
+    rendered = (
+        "## Work surface\n\n"
+        "_(2 further surface pages omitted — the surface budget was exhausted: "
+        "`plans/x/active.md` (§The `refs:` row · §Another) · "
+        "`operator-checklist.md` (§5. Link `arseni@example.com` to a GitHub account) · "
+        "read them under `/s`)_"
+    )
+
+    class _Trim:
+        text = rendered
+
+    import brr.prompts as prompts_mod
+    monkeypatch.setattr(
+        prompts_mod, "_build_work_surface_block_scored",
+        lambda _root: (_Trim(), None), raising=False,
+    )
+
+    targets = [f.target for f in notes_preflight.check_work_surface_eviction(tmp_path)]
+
+    # The count is the assertion the original tests never made: a parse that
+    # emits the right pages *plus* fabricated ones passed every presence check.
+    assert len(targets) == 2, targets
+    assert targets == ["surface/plans/x/active.md", "surface/operator-checklist.md"]
