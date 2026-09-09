@@ -42,7 +42,9 @@ from . import gitops
 
 
 FILENAME = "runner-auth-health.json"
+ROTATIONS_FILENAME = "credential-rotations.jsonl"
 _lock = threading.Lock()
+_last_seen: dict[str, str | None] = {}
 
 _KEYCHAIN_SERVICE = "Claude Code-credentials"
 _MDAT_RE = re.compile(r'"mdat"<timedate>=0x[0-9A-Fa-f]+\s+"([^"]+)"')
@@ -266,3 +268,76 @@ def sweep(repo_root: Path) -> list[str]:
         if changed:
             _write(repo_root, state)
     return cleared
+
+
+# ---------------------------------------------------------------------------
+# The rotation ledger — who changed the credential, and when.
+#
+# Claude's login on this account started failing daily on 2026-09-07 with
+# ``OAuth session expired and could not be refreshed`` from ``--print`` runs
+# while interactive sessions kept working (claude-code #79685 / #81937, both
+# unanswered). The refresh token lives 30 days; the access token 8 h; the
+# failures are the *first* headless start after an 8 h gap — so something
+# rotates the refresh token first, and the daemon's process holds the old
+# one. Which something? This ledger answers it: every change of the
+# credential fingerprint (Keychain ``mdat`` / file mtime, never the secret)
+# is appended with what brnrd was doing at that moment — an attempt starting,
+# a VM being seeded from the host login, or nothing at all (⇒ another
+# session: an interactive claude, another machine). Read it after the next
+# logout; the row before the failure names the rotator, or its absence does.
+
+
+def _rotations_path(repo_root: Path) -> Path:
+    return gitops.shared_brr_dir(repo_root) / ROTATIONS_FILENAME
+
+
+def record_credential_reading(
+    repo_root: Path, shell: str, *, event: str, detail: str | None = None,
+) -> bool:
+    """Append a row when *shell*'s credential fingerprint differs from the
+    last one this process saw; ``event`` names what brnrd was doing
+    (``sweep`` · ``attempt`` · ``vm-seed`` · ``auth-error``). The first
+    reading after boot is always written (``first`` in the row) so the
+    ledger has a baseline. Returns whether a row was written. Never raises."""
+    shell = (shell or "").strip().lower()
+    if shell not in ("claude", "codex"):
+        return False
+    fingerprint = credential_fingerprint(shell)
+    with _lock:
+        seen = shell in _last_seen
+        previous = _last_seen.get(shell)
+        if seen and previous == fingerprint:
+            return False
+        _last_seen[shell] = fingerprint
+    row = {
+        "at": datetime.now(timezone.utc).isoformat(),
+        "shell": shell,
+        "fingerprint": fingerprint,
+        "previous": previous if seen else None,
+        "first": not seen,
+        "event": event,
+        "detail": detail,
+        "claude_processes": _claude_process_count() if shell == "claude" else None,
+    }
+    try:
+        path = _rotations_path(repo_root)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+    except OSError:
+        return False
+    return True
+
+
+def _claude_process_count() -> int | None:
+    """How many ``claude`` CLIs are running right now — the concurrency a
+    refresh race needs. ``None`` when ``pgrep`` is unavailable."""
+    try:
+        proc = subprocess.run(
+            ["pgrep", "-x", "claude"], capture_output=True, text=True, timeout=5, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode not in (0, 1):
+        return None
+    return len([line for line in proc.stdout.splitlines() if line.strip()])

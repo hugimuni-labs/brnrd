@@ -1428,7 +1428,9 @@ def _sandbox_login_hint(sandbox_name: str, shell: str) -> str:
     )
 
 
-def _seed_sandbox_login(sandbox_name: str, shell: str) -> str | None:
+def _seed_sandbox_login(
+    sandbox_name: str, shell: str, repo_root: Path | None = None,
+) -> str | None:
     """Copy the host's login into the VM when the VM has none.
 
     Returns a one-line receipt for the daemon log (``None`` when the VM was
@@ -1462,6 +1464,18 @@ def _seed_sandbox_login(sandbox_name: str, shell: str) -> str | None:
     if seeded.returncode != 0:
         detail = seeded.stderr.decode("utf-8", "replace").strip() or "unknown error"
         return f"sandbox {sandbox_name}: seeding {shell} login failed: {detail}"
+    # A seeded VM holds a *copy* of the host's OAuth session; if it refreshes,
+    # the host's refresh token may be the one that dies. Written to the
+    # rotation ledger so a logout that follows can be attributed.
+    try:
+        from .. import runner_auth_health
+
+        runner_auth_health.record_credential_reading(
+            repo_root or Path.cwd(), shell, event="vm-seed",
+            detail=f"seeded {sandbox_name} from host login",
+        )
+    except Exception:  # noqa: BLE001 — a ledger row must never fail a seed
+        pass
     return (
         f"sandbox {sandbox_name}: {shell} was not logged in; "
         f"seeded from host ~/{spec['file']}"
@@ -1505,7 +1519,7 @@ def _ensure_sandbox(sandbox_name: str, shell: str, repo_root: Path) -> None:
             timeout=300,
         )
 
-    receipt = _seed_sandbox_login(sandbox_name, shell)
+    receipt = _seed_sandbox_login(sandbox_name, shell, repo_root)
     if receipt:
         print(f"[brnrd] {receipt}")
 
