@@ -2,7 +2,14 @@
 	import { SvelteSet } from 'svelte/reactivity';
 	import { liveSticky, type RunnerProfile, type RunnerSticky, type WakeRequest } from './runners';
 	import { stickyCountdown, stickyObservedModel } from './railGauge';
-	import { deadShellReason, isTappable, offReasonOf, groupByShell } from './spoolRack';
+	import {
+		deadShellReason,
+		isLocked,
+		isTappable,
+		lockedText,
+		offReasonOf,
+		groupByShell
+	} from './spoolRack';
 	import { quotaLevel } from './quota';
 	import type { FuelMeter } from './fuelProviders';
 	import type { LiveRun } from './liveRuns';
@@ -159,6 +166,8 @@
 	function rowTitle(profile: RunnerProfile): string {
 		const offerable = isTappable(profile, stale);
 		if (!offerable) return `${profile.name}: ${offReasonOf(profile, stale).text}`;
+		if (isLocked(profile))
+			return `${profile.name}: ${lockedText(profile)} — the wake re-checks the credential`;
 		if (isRequested(profile)) return 'already requested — tap the default row to cancel';
 		if (wakeRequest && isPinned(profile))
 			return `back to ${profile.name} — cancels the parked request`;
@@ -220,6 +229,12 @@
 				<p class="mb-2 font-mono text-[10px] text-ink-mute">
 					{OFF_MARK}{activeGroup.shell} — {deadShellReason(activeGroup)}
 				</p>
+			{:else if activeGroup.allLocked}
+				<!-- One credential, one line: the rows below stay tappable and
+				     say nothing more, because a tap is the probe. -->
+				<p class="mb-2 font-mono text-[10px] text-amber-600">
+					{activeGroup.shell} — {lockedText(activeGroup.profiles[0])}
+				</p>
 			{/if}
 			<div class="space-y-1.5">
 				{#each activeGroup.profiles as profile (profile.name)}
@@ -227,7 +242,10 @@
 					{@const requested = isRequested(profile)}
 					{@const nextWake = isNextWake(profile)}
 					{@const tappable = isTappable(profile, stale)}
-					{@const reason = tappable ? null : offReasonOf(profile, stale)}
+					{@const reason =
+						tappable && (!isLocked(profile) || activeGroup.allLocked)
+							? null
+							: offReasonOf(profile, stale)}
 					{@const open = openRows.has(profile.name)}
 					<div
 						class="flex w-full flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5 border {rowClasses(
@@ -348,6 +366,11 @@
 								>
 							{:else if !tappable}
 								<span class="text-ink-mute normal-case">{reason?.text}</span>
+							{:else if reason}
+								<!-- Locked, and still tappable: the reason rides the live
+								     row in the lock's own colour, because the fix is the
+								     reader's (sign in) and the tap is the probe. -->
+								<span class="normal-case text-amber-600">{reason.text}</span>
 							{:else}
 								<!-- THIS session vs NEXT wake, on screen — not only in a
 								     hover `title`. A badged row (default/requested/sticky)

@@ -58,6 +58,15 @@ test('offerabilityOf collapses availability plus every staleness signal to a bin
 		'"we don\'t know" is off, not a third state'
 	);
 	assert.equal(offerabilityOf({ name: 'x', available: false }, false), 'off');
+	// Locked ≠ dead: the tap is the probe that clears the mark.
+	assert.equal(
+		offerabilityOf({ name: 'x', available: false, availability: 'auth-error' }, false),
+		'offerable'
+	);
+	assert.equal(
+		offerabilityOf({ name: 'x', available: false, availability: 'auth-error' }, true),
+		'off'
+	);
 });
 
 test('offReasonOf gives a concrete reason only for verified-unavailable rows', () => {
@@ -71,7 +80,23 @@ test('offReasonOf gives a concrete reason only for verified-unavailable rows', (
 		{ name: 'codex', available: false, availability: 'auth-error' },
 		false
 	);
-	assert.equal(authError.text, 'authentication failed; log in again');
+	assert.equal(authError.known, true);
+	assert.equal(authError.text, 'auth failed — sign in again, then tap');
+	// With the daemon's facts on the row: when, on which core, and whether
+	// the Shell's own status verb agreed.
+	const locked = offReasonOf(
+		{
+			name: 'claude-fable',
+			available: false,
+			availability: 'auth-error',
+			auth_error: { since: '2026-09-09T03:36:30Z', seen_on: 'claude-sonnet', probe: 'signed-out' }
+		},
+		false
+	);
+	assert.equal(
+		locked.text,
+		'auth failed 03:36Z on claude-sonnet · the shell agrees: signed out — sign in again, then tap'
+	);
 
 	// Unverified: no invented specifics — the daemon never said why.
 	const unverified = offReasonOf({ name: 'ghost' }, false);
