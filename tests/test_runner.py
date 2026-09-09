@@ -3763,3 +3763,40 @@ def test_auto_selection_skips_an_auth_marked_domain_when_another_door_exists(tmp
     claude = runner_mod.resolve_runner_profile(tmp_path, {"runner": "claude-sonnet"})
     runner_auth_health.record_auth_error(tmp_path, claude)
     assert runner_mod.resolve_runner_profile(tmp_path, {}).name in {"codex-terra", "claude-sonnet"}
+
+
+def test_credential_rotation_ledger_writes_only_on_change(tmp_path, monkeypatch):
+    """Who rotated the token? The ledger answers: a row per fingerprint
+    change, tagged with what brnrd was doing (sweep / attempt / vm-seed /
+    auth-error). The baseline row is written once; an unchanged reading
+    writes nothing."""
+    import json as _json
+
+    from brr import runner_auth_health
+
+    (tmp_path / ".brr").mkdir()
+    stamps = {"claude": "keychain:20260909102355Z"}
+    monkeypatch.setattr(runner_auth_health, "credential_fingerprint", lambda shell: stamps.get(shell))
+    monkeypatch.setattr(runner_auth_health, "_claude_process_count", lambda: 3)
+    runner_auth_health._last_seen.clear()
+    assert runner_auth_health.record_credential_reading(tmp_path, "claude", event="sweep")
+    assert not runner_auth_health.record_credential_reading(tmp_path, "claude", event="sweep")
+    assert not runner_auth_health.record_credential_reading(
+        tmp_path, "claude", event="attempt", detail="run-x attempt 1")
+    stamps["claude"] = "keychain:20260909182401Z"
+    assert runner_auth_health.record_credential_reading(
+        tmp_path, "claude", event="attempt", detail="run-y attempt 1 on claude-fable")
+    rows = [
+        _json.loads(line)
+        for line in (tmp_path / ".brr" / "credential-rotations.jsonl").read_text().splitlines()
+    ]
+    assert [r["event"] for r in rows] == ["sweep", "attempt"]
+    assert rows[0]["first"] is True and rows[0]["previous"] is None
+    assert rows[1]["previous"] == "keychain:20260909102355Z"
+    assert rows[1]["fingerprint"] == "keychain:20260909182401Z"
+    assert rows[1]["claude_processes"] == 3
+    assert rows[1]["detail"].startswith("run-y")
+    # never the secret: only stamps
+    assert "accessToken" not in (tmp_path / ".brr" / "credential-rotations.jsonl").read_text()
+    # other shells are not this ledger's
+    assert not runner_auth_health.record_credential_reading(tmp_path, "gemini", event="sweep")

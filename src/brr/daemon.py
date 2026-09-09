@@ -4647,6 +4647,13 @@ def _run_worker(
 
         print(f"[brnrd] worker {eid}: attempt {attempt}")
         emit("attempt_started", run_id=task.id, event_id=eid, attempt=attempt)
+        try:
+            runner_auth_health.record_credential_reading(
+                repo_root, getattr(runner_choice, "shell", "") or "",
+                event="attempt", detail=f"{task.id} attempt {attempt} on {runner_name}",
+            )
+        except Exception:  # noqa: BLE001 — an instrument must never block a dispatch
+            pass
 
         attempt_started_monotonic = time.monotonic()
         # Proof-of-auth for this attempt's runner domain: a live tool
@@ -16866,6 +16873,10 @@ def _record_runner_auth_health(
     """Persist the dispatch attempt's authentication verdict."""
     if failure_kind == runner_failures.AUTH_ERROR:
         runner_auth_health.record_auth_error(repo_root, profile)
+        runner_auth_health.record_credential_reading(
+            repo_root, getattr(profile, "shell", "") or "",
+            event="auth-error", detail=str(getattr(profile, "name", "") or ""),
+        )
     elif failure_kind is None:
         runner_auth_health.clear_success(repo_root, profile)
 
@@ -18793,6 +18804,13 @@ def start(
                 try:
                     for domain in runner_auth_health.sweep(repo_root):
                         print(f"[brnrd] runner auth-health: {domain} cleared — credential changed")
+                    # The rotation ledger: a credential that changed with no
+                    # brnrd act behind it is another session's doing.
+                    for shell_name in ("claude", "codex"):
+                        if runner_auth_health.record_credential_reading(
+                            repo_root, shell_name, event="sweep",
+                        ):
+                            print(f"[brnrd] credential rotated: {shell_name} (no brnrd attempt in flight — see credential-rotations.jsonl)")
                 except Exception as exc:  # noqa: BLE001 — a janitor must never sink the loop
                     print(f"[brnrd] runner auth-health sweep skipped: {exc}")
             if time.monotonic() >= next_retention_sweep:
