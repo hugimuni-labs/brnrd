@@ -516,6 +516,13 @@ def generated_profile_entries(
                 generated["pin"] = pin
             if _int(entry.get("vendor_priority")) is not None:
                 generated["vendor_priority"] = _int(entry.get("vendor_priority"))
+            display = _str(entry.get("display_name"))
+            if not display and shell == "codex":
+                # Hand-authored registry rows never met the feed; the feed
+                # still knows their display name by slug.
+                display = _str((_codex_disk_entries().get(model) or {}).get("display_name"))
+            if display:
+                generated["display_name"] = display
             upgrade = entry.get("upgrade")
             if isinstance(upgrade, dict):
                 generated["upgrade"] = upgrade
@@ -959,6 +966,10 @@ def _probed_core_entries(
                 entry["freshness_source"] = "codex-cache"
                 if not entry["class"]:
                     entry["class"] = class_from_feed_words(disk_meta)
+                if disk_meta.get("display_name"):
+                    # The vendor's own display name (`GPT-6-Astra`) — the one
+                    # uniform "what is this model called" field a feed has.
+                    entry["display_name"] = str(disk_meta["display_name"])
                 priority = disk_meta.get("priority")
                 if isinstance(priority, (int, float)):
                     # The feed's `priority` is the vendor's *display order*

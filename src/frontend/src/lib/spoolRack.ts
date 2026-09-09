@@ -241,12 +241,38 @@ export function headline(profile: RunnerProfile): string {
 	// module doc's two-meanings rule. The shell's own name, and the sub-line
 	// says the shell picks the core.
 	if (isShellDefault(profile)) return profile.shell ?? profile.name;
-	return shortVendorId(profile.observed_model ?? profile.model ?? profile.name);
+	return modelName(profile);
 }
 
-/** A vendor id at row width: a trailing 8-digit build date
- *  (`claude-haiku-4-5-20251001`) is a snapshot stamp, not the version a
- *  reader picks by — dropped on the row, kept whole in the title. */
+/**
+ * What the model is called, one shape for both vendors: the vendor's own
+ * display name where its feed gives one (`GPT-6-Astra`, `GPT-5.6-Sol` — the
+ * codex feed's `display_name`); where the shell exposes none (claude's CLI
+ * has no model list), a name *derived* from the attested id — family word
+ * capitalised, version dotted, the 8-digit build stamp dropped:
+ * `claude-haiku-4-5-20251001` → `Haiku 4.5`, `claude-fable-5-1` → `Fable 5.1`.
+ * A derivation, said so in the row's title; the raw id stays there whole.
+ * His 2026-09-09 read: "claude-haiku-4-5-20251001 looks out of place …
+ * maybe there is a more uniform field in the shell's interface" — there is
+ * not; this is the uniform field, made.
+ */
+export function modelName(profile: RunnerProfile): string {
+	if (profile.display_name) return profile.display_name;
+	const id = profile.observed_model ?? profile.model ?? profile.name;
+	return derivedModelName(id);
+}
+
+export function derivedModelName(id: string): string {
+	const bare = id.replace(/-(\d{8})$/u, '');
+	const m = /^(?:claude-)?([a-z]+)((?:-\d+)+)?$/iu.exec(bare);
+	if (!m) return bare;
+	const family = m[1][0].toUpperCase() + m[1].slice(1);
+	const version = m[2] ? m[2].slice(1).split('-').join('.') : '';
+	return version ? `${family} ${version}` : family;
+}
+
+/** The raw id at row width — a trailing 8-digit build date is a snapshot
+ *  stamp, not a version a reader picks by. */
 export function shortVendorId(id: string): string {
 	return id.replace(/-(\d{8})$/u, '');
 }
