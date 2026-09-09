@@ -935,6 +935,36 @@ def build_parser() -> argparse.ArgumentParser:
              "BRR_OUTBOX_DIR / BRR_PORTAL_STATE)")
     await_p.set_defaults(func=cmd_await)
 
+    # Not hidden: an operator-facing pair, read by a person watching a run's
+    # `.card` show `paused: … · brnrd resume | brnrd drop` (pause-not-kill,
+    # #see hooks._read_paused) and deciding what to do about a live tool
+    # call the daemon SIGSTOPped for a correspondent message. No daemon
+    # round-trip — `.paused.json` already names the real OS pid, and
+    # `src/brr/pause.py`'s signal primitives are shared with the daemon.
+    resume_p = sub.add_parser(
+        "resume", help="resume a paused live tool child (SIGCONT)")
+    resume_p.add_argument(
+        "pid", nargs="?", type=int, default=None,
+        help="resume only this pid (default: every paused pid)")
+    resume_p.add_argument(
+        "--outbox", default=None, metavar="DIR",
+        help="outbox dir to act on (default: this run's own, via "
+             "BRR_OUTBOX_DIR / BRR_PORTAL_STATE)")
+    resume_p.set_defaults(func=cmd_resume)
+
+    drop_p = sub.add_parser(
+        "drop",
+        help="give up on a paused live tool child: SIGCONT, SIGTERM, "
+             "then SIGKILL any survivor after 5s")
+    drop_p.add_argument(
+        "pid", nargs="?", type=int, default=None,
+        help="drop only this pid (default: every paused pid)")
+    drop_p.add_argument(
+        "--outbox", default=None, metavar="DIR",
+        help="outbox dir to act on (default: this run's own, via "
+             "BRR_OUTBOX_DIR / BRR_PORTAL_STATE)")
+    drop_p.set_defaults(func=cmd_drop)
+
     # Hidden per HIDDEN_COMMANDS, same shape as `do`/`await`: the resident's
     # own front door onto the bolt (design-the-bolt.md), not an operator's
     # terminal. Positional FILE is the resident-authored declaration —
@@ -4708,6 +4738,86 @@ def _await_parse_timeout(raw: str) -> float | None:
         return float(raw)
     except (TypeError, ValueError):
         return None
+
+
+def _paused_outbox_dir(args, verb: str) -> "tuple[Path | None, int | None]":
+    """Shared ``--outbox``/wake-env resolution for ``resume``/``drop``.
+
+    Returns ``(outbox_dir, None)`` on success or ``(None, exit_code)`` after
+    printing the same error shape :func:`cmd_await` uses.
+    """
+    import sys
+
+    explicit_outbox = str(getattr(args, "outbox", "") or "").strip()
+    if explicit_outbox:
+        outbox_dir, outbox_error = _resolve_explicit_outbox(explicit_outbox)
+        if outbox_error:
+            print(f"[brnrd {verb}] {outbox_error}", file=sys.stderr)
+            return None, 1
+    else:
+        outbox_dir = _wake_outbox_dir()
+    if outbox_dir is None:
+        print(
+            f"[brnrd {verb}] no run outbox in this environment — pass "
+            "--outbox, or run inside a daemon wake.",
+            file=sys.stderr,
+        )
+        return None, 1
+    return outbox_dir, None
+
+
+def cmd_resume(args):
+    """``brnrd resume [pid]`` — SIGCONT a paused live tool child, or all of them.
+
+    Reads ``.paused.json`` from this run's own outbox (or ``--outbox``) and
+    resumes the matching pid(s), clearing them from the record. No daemon
+    round-trip: the record already names the real OS pid, and
+    :mod:`brr.pause` (the daemon's own signal primitives) is what this calls
+    directly.
+    """
+    from . import pause as pause_mod
+
+    outbox_dir, err = _paused_outbox_dir(args, "resume")
+    if err is not None:
+        return err
+    resumed = pause_mod.resume_pids(outbox_dir, only_pid=args.pid)
+    if not resumed:
+        if args.pid is not None:
+            print(f"[brnrd resume] pid {args.pid} is not in the paused record")
+        else:
+            print("[brnrd resume] nothing paused")
+        return 0
+    print(
+        f"[brnrd resume] resumed {len(resumed)} process(es): "
+        f"{pause_mod.describe_paused(resumed)}"
+    )
+    return 0
+
+
+def cmd_drop(args):
+    """``brnrd drop [pid]`` — give up on a paused call.
+
+    SIGCONT then SIGTERM immediately, SIGKILL any survivor after a 5s
+    grace. Same record semantics as :func:`cmd_resume` — the operator's
+    "stop waiting on this one" word.
+    """
+    from . import pause as pause_mod
+
+    outbox_dir, err = _paused_outbox_dir(args, "drop")
+    if err is not None:
+        return err
+    dropped = pause_mod.drop_pids(outbox_dir, only_pid=args.pid)
+    if not dropped:
+        if args.pid is not None:
+            print(f"[brnrd drop] pid {args.pid} is not in the paused record")
+        else:
+            print("[brnrd drop] nothing paused")
+        return 0
+    print(
+        f"[brnrd drop] dropped {len(dropped)} process(es): "
+        f"{pause_mod.describe_paused(dropped)}"
+    )
+    return 0
 
 
 def cmd_await(args):
