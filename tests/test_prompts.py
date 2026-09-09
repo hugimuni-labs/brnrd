@@ -2560,7 +2560,7 @@ class TestPromptBuilding:
             "blocked — what's needed",
         ):
             assert state in prompt
-        assert "Manufactured options are the failure mode" in prompt
+        assert "manufactured options are the failure mode" in prompt.lower()
         assert "linger" in prompt
         assert "await:" in prompt
         assert "brnrd await" in prompt
