@@ -3,10 +3,15 @@
 	import { liveSticky, type RunnerProfile, type RunnerSticky, type WakeRequest } from './runners';
 	import { stickyCountdown, stickyObservedModel } from './railGauge';
 	import {
+		availabilityOf,
 		deadShellReason,
+		headline,
 		isLocked,
+		isShellDefault,
 		isTappable,
 		lockedText,
+		orderRows,
+		tierLabel,
 		offReasonOf,
 		groupByShell
 	} from './spoolRack';
@@ -158,6 +163,30 @@
 		return 'unpinned';
 	}
 
+	/** The vendor's own id for the core, as the Shell last attested it on
+	 *  the run ledger (`fable` → `claude-fable-5-1`). Absent when no run has
+	 *  attested one, or when the alias already is the vendor id (codex) —
+	 *  the alias then stands alone, which is the honest reading. */
+	function observedLabel(profile: RunnerProfile): string | null {
+		const observed = profile.observed_model ?? null;
+		if (!observed || observed === profile.model) return null;
+		return observed;
+	}
+
+	function observedTitle(profile: RunnerProfile): string {
+		const at = profile.observed_at ? ` · last attested ${profile.observed_at}` : '';
+		return `${profile.observed_model} — what the shell actually ran for alias ${profile.model}${at}`;
+	}
+
+	/** Dead rows are counted, not listed (the 2026-09-08 roast, cut 6: "the
+	 *  dead take full rows"). One line, `N off ▸`, opens them. Locked rows
+	 *  are not dead — they keep their place and their tap. */
+	let showOff = $state(false);
+	function isDead(profile: RunnerProfile): boolean {
+		// Locked (#1867) is not dead: it keeps its tap and its line.
+		return !isLocked(profile) && availabilityOf(profile) === 'unavailable';
+	}
+
 	function handleTap(profile: RunnerProfile) {
 		if (!isTappable(profile, stale)) return;
 		if (onTap) onTap(profile.name);
@@ -225,6 +254,12 @@
 		     sit above this was the second place a provider could be picked;
 		     the fuel row is the only one now. -->
 		{#if activeGroup}
+			{@const liveRows = orderRows(
+				activeGroup.allUnavailable
+					? activeGroup.profiles
+					: activeGroup.profiles.filter((profile) => !isDead(profile))
+			)}
+			{@const deadRows = activeGroup.allUnavailable ? [] : activeGroup.profiles.filter(isDead)}
 			{#if activeGroup.allUnavailable}
 				<p class="mb-2 font-mono text-[10px] text-ink-mute">
 					{OFF_MARK}{activeGroup.shell} — {deadShellReason(activeGroup)}
@@ -237,7 +272,7 @@
 				</p>
 			{/if}
 			<div class="space-y-1.5">
-				{#each activeGroup.profiles as profile (profile.name)}
+				{#each showOff ? [...liveRows, ...deadRows] : liveRows as profile (profile.name)}
 					{@const pinned = isPinned(profile)}
 					{@const requested = isRequested(profile)}
 					{@const nextWake = isNextWake(profile)}
@@ -268,16 +303,33 @@
 							title={rowTitle(profile)}
 							class="flex min-w-0 items-baseline gap-3 px-2 py-1.5 text-left"
 						>
+							<!-- Headline = the vendor's own id for the core (versioned where
+							     the shell attested one; `codex default` when the shell
+							     decides). Sub = tier · our handle. One grammar, both vendors. -->
 							<span
 								class="font-mono text-xs font-medium tracking-wide {rowLabelClasses(
 									nextWake,
 									tappable
-								)}">{tappable ? '' : OFF_MARK}{profile.name}</span
+								)}"
+								data-role="rack-row-headline"
+								title={observedLabel(profile) ? observedTitle(profile) : undefined}
+								>{tappable ? '' : OFF_MARK}{headline(profile)}</span
 							>
-							<span class="font-mono text-[11px] text-ink-quiet">{coreLabel(profile)}</span>
-							{#if profile.class}
-								<span class="font-mono text-[10px] tracking-wide text-stone-400 uppercase"
-									>{profile.class}</span
+							{#if isShellDefault(profile)}
+								<span
+									class="font-mono text-[11px] text-ink-quiet"
+									title="no core pinned — {profile.shell} picks its own">picks its own core</span
+								>
+							{/if}
+							<span
+								class="font-mono text-[10px] tracking-wide uppercase {profile.class
+									? 'text-stone-400'
+									: 'text-ink-mute'}"
+								data-role="rack-row-tier">{tierLabel(profile)}</span
+							>
+							{#if profile.name !== profile.shell}
+								<span class="font-mono text-[10px] text-ink-mute" data-role="rack-row-handle"
+									>{profile.name}</span
 								>
 							{/if}
 							{#if coreAllowance(profile)}
@@ -413,6 +465,16 @@
 						{/if}
 					</div>
 				{/each}
+				{#if deadRows.length > 0}
+					<button
+						type="button"
+						data-role="rack-off-count"
+						aria-expanded={showOff}
+						onclick={() => (showOff = !showOff)}
+						class="w-full px-2 py-1 text-left font-mono text-[10px] text-ink-mute"
+						>{deadRows.length} off {showOff ? '▾' : '▸'}</button
+					>
+				{/if}
 			</div>
 		{/if}
 	{/if}

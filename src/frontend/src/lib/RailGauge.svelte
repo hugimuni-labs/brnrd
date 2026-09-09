@@ -414,6 +414,10 @@
 		gap: 6px;
 		min-width: 0;
 		overflow: hidden;
+		/* Above the bar's glow: the fill's 7px box-shadow bled over the first
+		   words of the ledger line (his read of #1867's after-shot). */
+		position: relative;
+		z-index: 1;
 		font-size: 8px;
 		font-variant-numeric: tabular-nums;
 		white-space: nowrap;
