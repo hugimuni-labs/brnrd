@@ -4505,6 +4505,14 @@ def _run_worker(
             event_created=event.get("created"),
             event_retry_of=event.get("retry_of"),
             event_retry_failure_kind=event.get("retry_failure_kind"),
+            # The waking event's own raw record (correspondent/thread
+            # fields) — #128 step 3: lets the bundle recognise still-pending
+            # burst siblings in `pending_events_snapshot` and list them
+            # oldest-first under "Original event body" instead of only this
+            # run's own body. Render-only: no new dispatch delay, and a
+            # strand's isolated view (no correspondent's own pending events
+            # ever reach it) naturally never finds a sibling here.
+            event_meta=event,
             runner_medium=(
                 f"{runner_name} ({runner_wake_note})"
                 if runner_wake_note
