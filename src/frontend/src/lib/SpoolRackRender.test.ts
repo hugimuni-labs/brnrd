@@ -340,5 +340,21 @@ test('dead cores fold to a count; locked and live rows keep their place', async 
 	ok(body.includes('codex-full'), 'the live row renders');
 	ok(!body.includes('codex-gpt-5.4-mini'), 'a dead row is not listed by default');
 	ok(body.includes('2 off'), 'the dead are counted');
+	// a row whose own daemon report is old is off, and folds with the dead
+	const stale = await renderRack({
+		shell: 'codex',
+		profiles: [
+			{ name: 'codex-full', shell: 'codex', model: 'gpt-5.6-sol', available: true },
+			{
+				name: 'codex-gpt-5.4',
+				shell: 'codex',
+				model: 'gpt-5.4',
+				available: true,
+				daemon_stale: true
+			}
+		]
+	});
+	ok(!stale.includes('gpt-5.4'), 'a stale row is not listed by default');
+	ok(stale.includes('1 off'), 'and is counted with the dead');
 	ok(body.includes('data-role="rack-off-count"'), 'as a control that opens them');
 });
