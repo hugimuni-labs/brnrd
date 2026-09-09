@@ -3713,3 +3713,95 @@ def test_catalog_row_names_the_core_as_the_shell_observed_it(tmp_path, monkeypat
     assert rows_out["claude-fable"]["observed_model"] == "claude-fable-5-1"
     assert rows_out["claude-fable"]["observed_at"] == "2026-09-09T03:36:33Z"
     assert "observed_model" not in rows_out["codex-full"]
+def test_runner_auth_mark_is_stale_once_the_credential_changes(tmp_path, monkeypatch):
+    """A mark is a claim about one credential; a relogin retires it on read
+    — no dispatch needed (the operator deleted the file by hand three times
+    on 2026-09-08/09 because nothing else could)."""
+    from brr import runner_auth_health, runner_select
+
+    (tmp_path / ".brr").mkdir()
+    claude = runner_select.RunnerProfile(
+        name="claude-sonnet", profile="claude-sonnet", shell="claude",
+        quota_source="claude-local",
+    )
+    stamps = {"claude": "keychain:20260909050600Z"}
+    monkeypatch.setattr(
+        runner_auth_health, "credential_fingerprint", lambda shell: stamps.get(shell))
+    runner_auth_health.record_auth_error(tmp_path, claude)
+    mark = runner_auth_health.auth_mark(tmp_path, claude)
+    assert mark and mark["credential_fingerprint"] == "keychain:20260909050600Z"
+    assert mark["shell"] == "claude" and mark["profile"] == "claude-sonnet"
+    assert runner_auth_health.is_auth_failed(tmp_path, claude)
+    # The relogin: Keychain item modified.
+    stamps["claude"] = "keychain:20260909102355Z"
+    assert not runner_auth_health.is_auth_failed(tmp_path, claude)
+    state_path = tmp_path / ".brr" / "runner-auth-health.json"
+    assert "claude-local" not in state_path.read_text(encoding="utf-8")
+
+
+def test_runner_auth_mark_without_fingerprint_still_needs_dispatch_proof(tmp_path, monkeypatch):
+    from brr import runner_auth_health, runner_select
+
+    (tmp_path / ".brr").mkdir()
+    codex = runner_select.RunnerProfile(
+        name="codex", profile="codex", shell="codex", quota_source="codex-local")
+    monkeypatch.setattr(runner_auth_health, "credential_fingerprint", lambda shell: None)
+    runner_auth_health.record_auth_error(tmp_path, codex)
+    assert runner_auth_health.is_auth_failed(tmp_path, codex)
+    # sweep: no fingerprint anywhere ⇒ the Shell's own status verb decides.
+    monkeypatch.setattr(runner_auth_health, "probe_logged_in", lambda shell: False)
+    assert runner_auth_health.sweep(tmp_path) == []
+    mark = runner_auth_health.auth_mark(tmp_path, codex)
+    assert mark and mark["probe"] == "signed-out"
+    monkeypatch.setattr(runner_auth_health, "probe_logged_in", lambda shell: True)
+    assert runner_auth_health.sweep(tmp_path) == ["codex-local"]
+    assert not runner_auth_health.is_auth_failed(tmp_path, codex)
+
+
+def test_catalog_row_carries_the_auth_mark_facts(tmp_path, monkeypatch):
+    """The panel must be able to *say* the state instead of hiding the shell."""
+    from brr import runner_auth_health
+
+    (tmp_path / ".brr").mkdir()
+    monkeypatch.setattr(runner_mod, "_profiles_cache", {
+        "claude-sonnet": {"cmd": "claude", "shell": "claude", "model": "sonnet",
+                          "provider": "anthropic", "quota_source": "claude-local"},
+    })
+    monkeypatch.setattr(runner_mod.shutil, "which", lambda _name: "/usr/bin/claude")
+    monkeypatch.setattr(runner_auth_health, "credential_fingerprint", lambda shell: "k:1")
+    profile = runner_mod.resolve_runner_profile(tmp_path, {"runner": "claude-sonnet"})
+    runner_auth_health.record_auth_error(tmp_path, profile)
+    row = runner_mod.available_runner_catalog(tmp_path)[0]
+    assert row["availability"] == "auth-error"
+    assert row["auth_error"]["seen_on"] == "claude-sonnet"
+    assert row["auth_error"]["since"]
+    assert "sign in" in row["auth_error"]["hint"]
+
+
+def test_auto_selection_skips_an_auth_marked_domain_when_another_door_exists(tmp_path, monkeypatch):
+    """2026-09-09 05:06Z: a schedule wake auto-picked claude while claude's
+    credential was marked dead and unchanged, and spent 20 minutes proving
+    it before falling back to codex."""
+    from brr import runner_auth_health
+
+    (tmp_path / ".brr").mkdir()
+    monkeypatch.setattr(runner_mod, "_profiles_cache", {
+        "claude-sonnet": {"cmd": "claude", "shell": "claude", "model": "sonnet",
+                          "provider": "anthropic", "quota_source": "claude-local",
+                          "class": "balanced", "cost_rank": 30},
+        "codex-terra": {"cmd": "codex exec", "shell": "codex", "model": "gpt-5.6-terra",
+                        "provider": "openai", "quota_source": "codex-local",
+                        "class": "balanced", "cost_rank": 25},
+    })
+    monkeypatch.setattr(runner_mod.shutil, "which", lambda _name: "/usr/bin/x")
+    monkeypatch.setattr(runner_auth_health, "credential_fingerprint", lambda shell: "k:1")
+    assert runner_mod.resolve_runner_profile(tmp_path, {}).name == "codex-terra"
+    codex = runner_mod.resolve_runner_profile(tmp_path, {"runner": "codex-terra"})
+    runner_auth_health.record_auth_error(tmp_path, codex)
+    assert runner_mod.resolve_runner_profile(tmp_path, {}).name == "claude-sonnet"
+    # An explicit pin still dispatches: the user's choice, and the probe.
+    assert runner_mod.resolve_runner_profile(tmp_path, {"runner": "codex-terra"}).name == "codex-terra"
+    # Nothing else available ⇒ the marked door is still the only door.
+    claude = runner_mod.resolve_runner_profile(tmp_path, {"runner": "claude-sonnet"})
+    runner_auth_health.record_auth_error(tmp_path, claude)
+    assert runner_mod.resolve_runner_profile(tmp_path, {}).name in {"codex-terra", "claude-sonnet"}

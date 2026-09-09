@@ -5,7 +5,13 @@
 	import {
 		availabilityOf,
 		deadShellReason,
+		headline,
+		isLocked,
+		isShellDefault,
 		isTappable,
+		lockedText,
+		orderRows,
+		tierLabel,
 		offReasonOf,
 		groupByShell
 	} from './spoolRack';
@@ -177,8 +183,8 @@
 	 *  are not dead — they keep their place and their tap. */
 	let showOff = $state(false);
 	function isDead(profile: RunnerProfile): boolean {
-		// `auth-error` is locked, not dead — #1867 gives it a tap and a line.
-		return profile.availability !== 'auth-error' && availabilityOf(profile) === 'unavailable';
+		// Locked (#1867) is not dead: it keeps its tap and its line.
+		return !isLocked(profile) && availabilityOf(profile) === 'unavailable';
 	}
 
 	function handleTap(profile: RunnerProfile) {
@@ -189,6 +195,8 @@
 	function rowTitle(profile: RunnerProfile): string {
 		const offerable = isTappable(profile, stale);
 		if (!offerable) return `${profile.name}: ${offReasonOf(profile, stale).text}`;
+		if (isLocked(profile))
+			return `${profile.name}: ${lockedText(profile)} — the wake re-checks the credential`;
 		if (isRequested(profile)) return 'already requested — tap the default row to cancel';
 		if (wakeRequest && isPinned(profile))
 			return `back to ${profile.name} — cancels the parked request`;
@@ -246,13 +254,21 @@
 		     sit above this was the second place a provider could be picked;
 		     the fuel row is the only one now. -->
 		{#if activeGroup}
-			{@const liveRows = activeGroup.allUnavailable
-				? activeGroup.profiles
-				: activeGroup.profiles.filter((profile) => !isDead(profile))}
+			{@const liveRows = orderRows(
+				activeGroup.allUnavailable
+					? activeGroup.profiles
+					: activeGroup.profiles.filter((profile) => !isDead(profile))
+			)}
 			{@const deadRows = activeGroup.allUnavailable ? [] : activeGroup.profiles.filter(isDead)}
 			{#if activeGroup.allUnavailable}
 				<p class="mb-2 font-mono text-[10px] text-ink-mute">
 					{OFF_MARK}{activeGroup.shell} — {deadShellReason(activeGroup)}
+				</p>
+			{:else if activeGroup.allLocked}
+				<!-- One credential, one line: the rows below stay tappable and
+				     say nothing more, because a tap is the probe. -->
+				<p class="mb-2 font-mono text-[10px] text-amber-600">
+					{activeGroup.shell} — {lockedText(activeGroup.profiles[0])}
 				</p>
 			{/if}
 			<div class="space-y-1.5">
@@ -261,7 +277,10 @@
 					{@const requested = isRequested(profile)}
 					{@const nextWake = isNextWake(profile)}
 					{@const tappable = isTappable(profile, stale)}
-					{@const reason = tappable ? null : offReasonOf(profile, stale)}
+					{@const reason =
+						tappable && (!isLocked(profile) || activeGroup.allLocked)
+							? null
+							: offReasonOf(profile, stale)}
 					{@const open = openRows.has(profile.name)}
 					<div
 						class="flex w-full flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5 border {rowClasses(
@@ -284,26 +303,33 @@
 							title={rowTitle(profile)}
 							class="flex min-w-0 items-baseline gap-3 px-2 py-1.5 text-left"
 						>
+							<!-- Headline = the vendor's own id for the core (versioned where
+							     the shell attested one; `codex default` when the shell
+							     decides). Sub = tier · our handle. One grammar, both vendors. -->
 							<span
-								class="font-mono text-xs font-medium tracking-wide whitespace-nowrap {rowLabelClasses(
+								class="font-mono text-xs font-medium tracking-wide {rowLabelClasses(
 									nextWake,
 									tappable
-								)}">{tappable ? '' : OFF_MARK}{profile.name}</span
+								)}"
+								data-role="rack-row-headline"
+								title={observedLabel(profile) ? observedTitle(profile) : undefined}
+								>{tappable ? '' : OFF_MARK}{headline(profile)}</span
 							>
-							{#if observedLabel(profile)}
-								<!-- The vendor's id stands in for the alias (the alias is
-								     already the row's name): one core, one name, versioned. -->
+							{#if isShellDefault(profile)}
 								<span
 									class="font-mono text-[11px] text-ink-quiet"
-									data-role="rack-row-observed"
-									title={observedTitle(profile)}>{observedLabel(profile)}</span
+									title="no core pinned — {profile.shell} picks its own">picks its own core</span
 								>
-							{:else}
-								<span class="font-mono text-[11px] text-ink-quiet">{coreLabel(profile)}</span>
 							{/if}
-							{#if profile.class}
-								<span class="font-mono text-[10px] tracking-wide text-stone-400 uppercase"
-									>{profile.class}</span
+							<span
+								class="font-mono text-[10px] tracking-wide uppercase {profile.class
+									? 'text-stone-400'
+									: 'text-ink-mute'}"
+								data-role="rack-row-tier">{tierLabel(profile)}</span
+							>
+							{#if profile.name !== profile.shell}
+								<span class="font-mono text-[10px] text-ink-mute" data-role="rack-row-handle"
+									>{profile.name}</span
 								>
 							{/if}
 							{#if coreAllowance(profile)}
@@ -392,6 +418,11 @@
 								>
 							{:else if !tappable}
 								<span class="text-ink-mute normal-case">{reason?.text}</span>
+							{:else if reason}
+								<!-- Locked, and still tappable: the reason rides the live
+								     row in the lock's own colour, because the fix is the
+								     reader's (sign in) and the tap is the probe. -->
+								<span class="normal-case text-amber-600">{reason.text}</span>
 							{:else}
 								<!-- THIS session vs NEXT wake, on screen — not only in a
 								     hover `title`. A badged row (default/requested/sticky)

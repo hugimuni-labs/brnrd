@@ -1,9 +1,13 @@
-// Drives the cores rack with the live account's shape: claude cores with
-// the vendor id the Shell attested on the ledger, codex with two dead
-// (`shell-not-found`) 5.4 rows. Before: the operator's photo (the dead take
-// full rows, `fable` without a version). After: the shots here.
+// Drives the fuel deck with the live account's 2026-09-09 morning shape:
+// every claude core `auth-error` (the Shell's credential expired at 03:36Z,
+// a schedule wake re-proved it on sonnet at 05:06Z), codex healthy.
 //
-// Usage: node repro/drive-observed-cores.mjs [--out DIR] [--port N]
+// Before this change the panel dropped the claude shell whole — no row, no
+// windows, no tap — which is the deadlock the operator broke by deleting
+// `.brr/runner-auth-health.json` by hand. The shots here are the *after*;
+// the before is the operator's own photo (evt-1788949906019838000-qrwb).
+//
+// Usage: node repro/drive-locked-shell.mjs [--out DIR] [--port N]
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -15,8 +19,8 @@ const arg = (f) => {
 	const i = args.indexOf(f);
 	return i === -1 || i + 1 >= args.length ? null : args[i + 1];
 };
-const OUT = arg('--out') ?? '/tmp/observed-drive';
-const PORT = Number(arg('--port') ?? 5199);
+const OUT = arg('--out') ?? '/tmp/locked-shell-drive';
+const PORT = Number(arg('--port') ?? 5198);
 
 const ROUTES = fixtures.buildRoutes(fixtures.DEFAULT_SCALE);
 ROUTES['/v1/dashboard/quota'] = {
@@ -77,11 +81,11 @@ ROUTES['/v1/dashboard/quota'] = {
 	]
 };
 
-const OBSERVED = {
-	haiku: 'claude-haiku-4-5-20251001',
-	sonnet: 'claude-sonnet-5',
-	opus: 'claude-opus-5',
-	fable: 'claude-fable-5-1'
+const LOCK = {
+	since: '2026-09-09T05:06:28+00:00',
+	seen_on: 'claude-sonnet',
+	probe: null,
+	hint: 'sign in to the Shell again; the mark clears when the credential changes'
 };
 const claude = (name, model, cls, rank) => ({
 	name,
@@ -91,10 +95,9 @@ const claude = (name, model, cls, rank) => ({
 	class: cls,
 	cost_rank: rank,
 	quota_source: 'claude-local',
-	availability: 'available',
-	available: true,
-	observed_model: model ? OBSERVED[model] : null,
-	observed_at: model ? '2026-09-09T03:36:33Z' : null
+	availability: 'auth-error',
+	available: false,
+	auth_error: LOCK
 });
 const codex = (name, model, cls, rank) => ({
 	name,
@@ -114,20 +117,10 @@ runners.profiles = [
 	claude('claude-sonnet', 'sonnet', 'balanced', 30),
 	claude('claude-opus', 'opus', 'strong', 50),
 	claude('claude-fable', 'fable', 'strong', 55),
-	{ ...codex('codex-gpt-6-astra', 'gpt-6-astra', 'strong', 54), vendor_priority: 1 },
+	codex('codex-gpt-6-astra', 'gpt-6-astra', null, 1),
 	codex('codex-mini', 'gpt-5.6-luna', 'economy', 20),
 	codex('codex', null, 'balanced', 25),
-	codex('codex-full', 'gpt-5.6-sol', 'strong', 45),
-	{
-		...codex('codex-gpt-5.4', 'gpt-5.4', 'balanced', 30),
-		availability: 'shell-not-found',
-		available: false
-	},
-	{
-		...codex('codex-gpt-5.4-mini', 'gpt-5.4-mini', 'balanced', 28),
-		availability: 'shell-not-found',
-		available: false
-	}
+	codex('codex-full', 'gpt-5.6-sol', 'strong', 45)
 ];
 runners.default = 'claude-sonnet';
 
@@ -185,17 +178,7 @@ async function main() {
 			await page.locator('.fuel-provider-row').first().click();
 			await page.waitForSelector('[data-measure="provider-bay"]', { timeout: 15000 });
 			await delay(600);
-			await page
-				.locator('[data-measure="provider-bay"]')
-				.screenshot({ path: `${OUT}/${vp.name}-2-claude-cores.png` });
-			await page.locator('.fuel-provider-row').nth(1).click();
-			await delay(600);
-			await page
-				.locator('[data-measure="provider-bay"]')
-				.screenshot({ path: `${OUT}/${vp.name}-3-codex-cores.png` });
-			report.offCount = await page.evaluate(
-				() => document.querySelector('[data-role="rack-off-count"]')?.innerText ?? null
-			);
+			await page.screenshot({ path: `${OUT}/${vp.name}-2-open-claude.png`, fullPage: false });
 			report.rackRows = await page.evaluate(() =>
 				[...document.querySelectorAll('[data-role="rack-row-tap"]')].map((b) => ({
 					text: b.innerText.replace(/\n/g, ' '),

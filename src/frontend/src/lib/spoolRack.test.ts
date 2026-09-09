@@ -8,7 +8,10 @@ import {
 	groupByShell,
 	isTappable,
 	offerabilityOf,
-	offReasonOf
+	offReasonOf,
+	headline,
+	orderRows,
+	tierLabel
 } from './spoolRack.ts';
 import type { RunnerProfile } from './runners.ts';
 
@@ -58,6 +61,15 @@ test('offerabilityOf collapses availability plus every staleness signal to a bin
 		'"we don\'t know" is off, not a third state'
 	);
 	assert.equal(offerabilityOf({ name: 'x', available: false }, false), 'off');
+	// Locked ≠ dead: the tap is the probe that clears the mark.
+	assert.equal(
+		offerabilityOf({ name: 'x', available: false, availability: 'auth-error' }, false),
+		'offerable'
+	);
+	assert.equal(
+		offerabilityOf({ name: 'x', available: false, availability: 'auth-error' }, true),
+		'off'
+	);
 });
 
 test('offReasonOf gives a concrete reason only for verified-unavailable rows', () => {
@@ -71,7 +83,23 @@ test('offReasonOf gives a concrete reason only for verified-unavailable rows', (
 		{ name: 'codex', available: false, availability: 'auth-error' },
 		false
 	);
-	assert.equal(authError.text, 'authentication failed; log in again');
+	assert.equal(authError.known, true);
+	assert.equal(authError.text, 'auth failed — sign in again, then tap');
+	// With the daemon's facts on the row: when, on which core, and whether
+	// the Shell's own status verb agreed.
+	const locked = offReasonOf(
+		{
+			name: 'claude-fable',
+			available: false,
+			availability: 'auth-error',
+			auth_error: { since: '2026-09-09T03:36:30Z', seen_on: 'claude-sonnet', probe: 'signed-out' }
+		},
+		false
+	);
+	assert.equal(
+		locked.text,
+		'auth failed 03:36Z on claude-sonnet · the shell agrees: signed out — sign in again, then tap'
+	);
 
 	// Unverified: no invented specifics — the daemon never said why.
 	const unverified = offReasonOf({ name: 'ghost' }, false);
@@ -195,4 +223,36 @@ test('defaultShell opens on whoever answers the next wake, never a dead tab by d
 		'codex',
 		'no live shell at all falls back to whatever sorts first'
 	);
+});
+
+test('orderRows: shell default first, then economy · balanced · strong · unclassed; cost only inside a tier', () => {
+	const rows: RunnerProfile[] = [
+		{ name: 'codex-gpt-6-astra', shell: 'codex', model: 'gpt-6-astra', cost_rank: 1 },
+		{ name: 'codex-full', shell: 'codex', model: 'gpt-5.6-sol', class: 'strong', cost_rank: 45 },
+		{
+			name: 'codex-terra',
+			shell: 'codex',
+			model: 'gpt-5.6-terra',
+			class: 'balanced',
+			cost_rank: 30
+		},
+		{ name: 'codex', shell: 'codex', class: 'balanced', cost_rank: 25 },
+		{ name: 'codex-mini', shell: 'codex', model: 'gpt-5.6-luna', class: 'economy', cost_rank: 20 }
+	];
+	assert.deepEqual(
+		orderRows(rows).map((row) => row.name),
+		['codex', 'codex-mini', 'codex-terra', 'codex-full', 'codex-gpt-6-astra']
+	);
+	assert.equal(headline(rows[3]), 'codex');
+	assert.equal(headline(rows[0]), 'gpt-6-astra');
+	assert.equal(
+		headline({
+			name: 'claude-fable',
+			shell: 'claude',
+			model: 'fable',
+			observed_model: 'claude-fable-5-1'
+		}),
+		'claude-fable-5-1'
+	);
+	assert.equal(tierLabel(rows[0]), 'unclassed');
 });

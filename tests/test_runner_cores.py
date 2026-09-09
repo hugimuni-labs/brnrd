@@ -673,3 +673,53 @@ def test_declared_gemini_profile_remains_custom_without_implicit_probing(monkeyp
     )
 
     assert not any(name.startswith("gemini") for name in profiles)
+
+
+def test_feed_priority_is_placement_not_price(tmp_path, monkeypatch):
+    """The codex feed's `priority` (1 = the flagship it shows first) used to
+    be copied straight into `cost_rank`, so GPT-6-Astra sorted to the top of
+    the rack as the cheapest core with no tier at all (2026-09-09, "the
+    order feels random"). The tier comes from the vendor's own sentence; the
+    rank lands inside that tier's band, flagship most expensive."""
+    import json as _json
+
+    cache = {
+        "models": [
+            {"slug": "gpt-9-astra", "visibility": "list", "priority": 1,
+             "display_name": "GPT-9-Astra",
+             "description": "Our most capable model for complex, demanding work."},
+            {"slug": "gpt-8.6-luna", "visibility": "list", "priority": 8,
+             "description": "Fast, lightweight responses."},
+            {"slug": "gpt-8.6-terra", "visibility": "list", "priority": 7,
+             "description": "A solid everyday model."},
+            {"slug": "gpt-8.5", "visibility": "list", "priority": 12},
+        ]
+    }
+    (tmp_path / "models_cache.json").write_text(_json.dumps(cache))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.setattr(runner_cores.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    class _Proc:
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(runner_cores.subprocess, "run", lambda *a, **k: _Proc())
+    monkeypatch.setattr(runner_cores.runner_capabilities, "derived_cost_class", lambda model: None)
+    runner_cores.probe_shell_models.cache_clear()
+    for fn in ("_codex_cache_payload", "_codex_disk_entries", "_codex_cache_path"):
+        cached = getattr(runner_cores, fn, None)
+        if hasattr(cached, "cache_clear"):
+            cached.cache_clear()
+
+    profiles = runner_cores.generated_profile_entries({"codex": {"cmd": "codex exec", "hooks": "codex"}})
+    astra = profiles["codex-gpt-9-astra"]
+    luna = profiles["codex-gpt-8.6-luna"]
+    terra = profiles["codex-gpt-8.6-terra"]
+    bare = profiles["codex-gpt-8.5"]
+    assert (astra["class"], luna["class"], terra["class"]) == ("strong", "economy", "balanced")
+    assert astra["vendor_priority"] == 1
+    # bands: economy < balanced < strong; the flagship is the dearest seat
+    assert luna["cost_rank"] < terra["cost_rank"] < astra["cost_rank"]
+    assert astra["cost_rank"] > 45  # dearer than a hand-ranked `full` (45)
+    # no words ⇒ no tier, no rank: last place, never a guess
+    assert bare["class"] is None and bare["cost_rank"] is None
