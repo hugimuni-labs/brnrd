@@ -97,6 +97,13 @@ const strandB = (over: Partial<LiveRun> = {}) =>
 
 /** The replay, in order. Frame cadence belongs to the page. */
 export function demoFrames(): LiveRun[][] {
+	if (
+		typeof window !== 'undefined' &&
+		new URLSearchParams(window.location.search).get('demo') === 'load-balance'
+	) {
+		return loadBalanceDemoFrames();
+	}
+
 	return [
 		// wake — the resident alone, orienting
 		[resident({ edge: edge('orient', 'Read design-resident-field.md', '2026-08-26T10:49:20Z') })],
