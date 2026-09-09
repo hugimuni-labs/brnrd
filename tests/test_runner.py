@@ -807,6 +807,39 @@ def test_available_runner_catalog_sees_a_disk_feed_rewrite_without_cache_clear(
     assert calls["n"] == calls_after_before
 
 
+def test_catalog_marks_a_truly_unlisted_codex_core_unavailable_but_keeps_pin_resolvable(
+    tmp_path, monkeypatch
+):
+    """A measured negative is explicit; it does not erase the configured role."""
+    from brr import runner_cores
+
+    (tmp_path / ".brr").mkdir()
+    (tmp_path / "models_cache.json").write_text(
+        json.dumps({"models": [{"slug": "gpt-9.9-other"}]})
+    )
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {"codex": {"cmd": "codex exec", "hooks": "codex"}},
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil, "which", lambda name: "/usr/bin/codex" if name == "codex" else None
+    )
+    monkeypatch.setattr(
+        runner_cores.shutil, "which", lambda name: "/usr/bin/codex" if name == "codex" else None
+    )
+
+    rows = {row["name"]: row for row in runner_mod.available_runner_catalog(tmp_path)}
+    row = rows["codex-gpt-5.6-luna"]
+    assert row["feed_state"] == "not-listed"
+    assert row["available"] is False
+    assert row["availability"] == "core-not-listed"
+
+    (tmp_path / ".brr" / "config").write_text("runner=codex-gpt-5.6-luna\n")
+    assert runner_mod.resolve_runner(tmp_path) == "codex-gpt-5.6-luna"
+
+
 def test_available_runner_catalog_excludes_auth_variant_profiles(
     tmp_path, monkeypatch,
 ):

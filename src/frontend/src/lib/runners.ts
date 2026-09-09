@@ -65,6 +65,10 @@ export interface RunnerProfile {
 	 *  server-computed (`dashboard.py`), same threshold as the account-wide
 	 *  `stale` flag but scored per row instead of per account. */
 	daemon_stale?: boolean | null;
+	/** Codex discovery truth; absent means no feed was measured. */
+	feed_state?: 'working' | 'last-known' | 'expired' | 'not-listed' | 'unmeasured' | null;
+	feed_last_seen_at?: string | null;
+	feed_age_seconds?: number | null;
 }
 
 /** A pending spool-rack tap (#328 tap-to-request): "next wake on this

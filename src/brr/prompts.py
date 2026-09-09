@@ -5387,6 +5387,8 @@ def _render_runner_catalog(
             bits.append(f"auth={item['auth_variant']}")
         if availability != "available":
             bits.append(f"availability={availability}")
+        if item.get("feed_state") in {"last-known", "expired", "not-listed"}:
+            bits.append(f"feed={item['feed_state']}")
         # No positive `alias-tracked` label. The wake renders what a resident
         # may have to act on; "this row is fine, by construction" is not that,
         # and five such labels every wake is the noise the maintainer asked to
