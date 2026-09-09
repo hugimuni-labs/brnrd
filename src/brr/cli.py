@@ -4345,6 +4345,8 @@ def cmd_runners_list(args):
             extras.append(f"quota={row['quota_source']}")
         if row.get("availability") not in (None, "available"):
             extras.append(row["availability"])
+        if row.get("feed_state") in {"last-known", "expired", "not-listed"}:
+            extras.append(f"feed={row['feed_state']}")
         if extras:
             parts.append(f"  [{', '.join(extras)}]")
         print("  " + "  ".join(parts))
