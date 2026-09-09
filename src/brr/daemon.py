@@ -158,6 +158,10 @@ _RUN_STATE_REAP_AFTER_SECONDS = 24 * 3600.0
 # ``_sweep_zombie_runs``: boot-only made a data repair the user had to
 # schedule by restarting.
 _ZOMBIE_SWEEP_INTERVAL_SECONDS = 30 * 60.0
+# How often a standing auth-error mark is re-checked against the credential
+# it was recorded on (`runner_auth_health.sweep`). Cheap: one file read when
+# no mark stands; a Keychain metadata read / `auth status` only while one does.
+_AUTH_HEALTH_SWEEP_INTERVAL_SECONDS = 60
 # First retention sweep after boot waits this long, so a daemon restarted in
 # a tight loop never GCs on every boot; steady-state cadence comes from
 # ``retention.sweep_interval_hours`` (default daily, 0 disables).
@@ -18762,6 +18766,7 @@ def start(
     # Config is re-read at each sweep so window edits apply without a
     # restart; with no windows configured the sweep is a cheap no-op.
     next_retention_sweep = time.monotonic() + _RETENTION_FIRST_SWEEP_DELAY_SECONDS
+    next_auth_health_sweep = time.monotonic() + _AUTH_HEALTH_SWEEP_INTERVAL_SECONDS
 
     wake = protocol.inbox_wake()
     # Process-lifetime latch for the parked-branch note's failure path (see
@@ -18777,6 +18782,19 @@ def start(
                     _release_reset_holds_due(account_context, repo_root)
                 except Exception as exc:  # noqa: BLE001 — a janitor must never sink the loop
                     print(f"[brnrd] resource-hold reset sweep skipped: {exc}")
+            if time.monotonic() >= next_auth_health_sweep:
+                next_auth_health_sweep = (
+                    time.monotonic() + _AUTH_HEALTH_SWEEP_INTERVAL_SECONDS)
+                # A relogin must be observable without a dispatch: the mark
+                # records the credential it failed on, and this sweep drops
+                # it the moment that credential changes (or the Shell's own
+                # status verb says signed-in where no fingerprint exists).
+                # One file read when nothing is marked.
+                try:
+                    for domain in runner_auth_health.sweep(repo_root):
+                        print(f"[brnrd] runner auth-health: {domain} cleared — credential changed")
+                except Exception as exc:  # noqa: BLE001 — a janitor must never sink the loop
+                    print(f"[brnrd] runner auth-health sweep skipped: {exc}")
             if time.monotonic() >= next_retention_sweep:
                 interval_s = _retention_sweep(repo_root, account_context)
                 next_retention_sweep = time.monotonic() + max(
