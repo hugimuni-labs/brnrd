@@ -451,6 +451,18 @@ def build_parser() -> argparse.ArgumentParser:
                         "from .brr/config's, instead of refusing")
     p.set_defaults(func=cmd_config_promote)
 
+    p = config_sub.add_parser("show", help="show effective config values and their source files")
+    p.set_defaults(func=cmd_config_show)
+
+    p = config_sub.add_parser("set", help="set an account-level daemon knob")
+    p.add_argument("key")
+    p.add_argument("value")
+    p.set_defaults(func=cmd_config_set)
+
+    p = config_sub.add_parser("unset", help="remove an account-level daemon knob")
+    p.add_argument("key")
+    p.set_defaults(func=cmd_config_unset)
+
     # `up` / `down` are blessed shortcuts — the muscle-memory verbs every doc
     # uses — but they are *thin aliases*, not a second implementation. Before
     # #49 the top-level pair called `daemon.start`/`stop` directly and silently
@@ -5529,6 +5541,55 @@ def cmd_config_promote(args):
         f"[brnrd config promote] done — {plan.security_path.parent} holds "
         f"{' and '.join(done)}, mode 0600"
     )
+    return 0
+
+
+def cmd_config_show(args):
+    """Show the one merged config view, including source provenance."""
+    from . import config as conf
+
+    rows = conf.load_config_table(_repo_root())
+    if not rows:
+        print("key\tvalue\tsource")
+        return 0
+    print("key\tvalue\tsource")
+    for row in rows:
+        print(f"{row['key']}\t{row['value']}\t{row['source']}")
+    return 0
+
+
+def cmd_config_set(args):
+    """Set one daemon-owned account value."""
+    from . import config as conf
+
+    if not conf.is_daemon_key(args.key) or args.key in conf._LEGACY_RUNNER_KEYS:
+        print(
+            f"[brnrd config set] {args.key!r} is not a daemon.config key; "
+            "runner selection uses runner.default / runner.default_class"
+        )
+        return 2
+    path = conf.write_daemon_config(
+        _repo_root(), {args.key: conf._parse_value(args.value)},
+    )
+    if path is None:
+        print("[brnrd config set] could not resolve the account daemon.config")
+        return 2
+    print(f"[brnrd config set] {args.key}={conf._parse_value(args.value)} ({path})")
+    return 0
+
+
+def cmd_config_unset(args):
+    """Unset one daemon-owned account value."""
+    from . import config as conf
+
+    if not conf.is_daemon_key(args.key) or args.key in conf._LEGACY_RUNNER_KEYS:
+        print(f"[brnrd config unset] {args.key!r} is not a daemon.config key")
+        return 2
+    path = conf.unset_daemon_config(_repo_root(), args.key)
+    if path is None:
+        print("[brnrd config unset] could not resolve the account daemon.config")
+        return 2
+    print(f"[brnrd config unset] {args.key} ({path})")
     return 0
 
 

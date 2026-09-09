@@ -55,6 +55,31 @@ from pathlib import Path
 from typing import Any, Literal
 
 SECURITY_CONFIG_FILENAME = "security.config"
+DAEMON_CONFIG_FILENAME = "daemon.config"
+PROFILES_FILENAME = "runners.toml"
+LEGACY_PROFILES_FILENAME = "runners.md"
+
+# Settings that govern the daemon process rather than one repository.  Prefix
+# families are deliberate: a new dispatch/seat/spawn knob must not quietly
+# fall back into a repo-writable file just because this list was not updated.
+_DAEMON_EXACT_KEYS = frozenset({
+    "dev_reload",
+    "response_retries",
+    "runner.default",
+    "runner.default_class",
+    "runner_policy",
+})
+_DAEMON_PREFIXES = ("dispatch.", "runner.", "seat.", "spawn.", "wake_request.")
+_LEGACY_RUNNER_KEYS = frozenset({"shell", "runner", "core", "default_class"})
+
+
+def is_daemon_key(key: str) -> bool:
+    """Return whether *key* belongs to the account's daemon process."""
+    return (
+        key in _DAEMON_EXACT_KEYS
+        or key in _LEGACY_RUNNER_KEYS
+        or key.startswith(_DAEMON_PREFIXES)
+    )
 
 #: Runner profiles (``runners.md``) live in the security domain too, beside
 #: ``security.config`` and read from the same daemon-owned home (#693). A
@@ -64,8 +89,6 @@ SECURITY_CONFIG_FILENAME = "security.config"
 #: passes through ``_read_flat``/``is_security_key``; what it shares with
 #: ``security.config`` is the trust domain and the promote path, which is
 #: why its filename is pinned here rather than in ``runner.py``.
-PROFILES_FILENAME = "runners.md"
-
 #: Repo-side locations a ``runners.md`` used to be honoured from, newest
 #: first, relative to the shared ``.brr`` dir. Kept as a list because both
 #: must be *ignored and reported*: a user who is on the legacy path is the
@@ -242,7 +265,7 @@ def security_config_path(
 
 
 def home_profiles_path(repo_root: Path) -> Path | None:
-    """Return the daemon-owned ``<home root>/runners.md`` path, or ``None``.
+    """Return the daemon-owned ``<home root>/runners.toml`` path, or ``None``.
 
     Same resolution, same cache, same fail-closed direction as
     :func:`security_config_path` — deliberately derived from it rather than
@@ -256,6 +279,23 @@ def home_profiles_path(repo_root: Path) -> Path | None:
     """
     sec_path = security_config_path(repo_root, _read_flat(repo_config_path(repo_root)))
     return None if sec_path is None else sec_path.parent / PROFILES_FILENAME
+
+
+def legacy_home_profiles_path(repo_root: Path) -> Path | None:
+    """Return the one-release ``<home root>/runners.md`` shim path."""
+    sec_path = security_config_path(repo_root, _read_flat(repo_config_path(repo_root)))
+    return None if sec_path is None else sec_path.parent / LEGACY_PROFILES_FILENAME
+
+
+def daemon_config_path(
+    repo_root: Path, repo_cfg: dict[str, Any] | None = None,
+) -> Path | None:
+    """Return the account-owned daemon config beside ``security.config``."""
+    sec_path = security_config_path(
+        repo_root,
+        repo_cfg if repo_cfg is not None else _read_flat(repo_config_path(repo_root)),
+    )
+    return None if sec_path is None else sec_path.parent / DAEMON_CONFIG_FILENAME
 
 
 @dataclass(frozen=True)
@@ -333,8 +373,7 @@ def ignored_repo_profile_files(repo_root: Path) -> list[IgnoredRepoProfileFile]:
     try:
         from . import runner
 
-        _source, active_text = runner._profiles_source(repo_root)
-        active = _parsed_profile_semantics(active_text)
+        active = runner._load_profiles(repo_root)
     except Exception:  # noqa: BLE001 - comparison failure is a first-class result
         reason = "active profile catalog could not be read or parsed"
         return [
@@ -474,13 +513,55 @@ def load_config_report(repo_root: Path) -> tuple[dict[str, Any], list[str]]:
     repo_cfg = _read_flat(repo_config_path(repo_root))
     ignored = sorted(key for key in repo_cfg if is_security_key(key))
     ignored_set = set(ignored)
-    merged = {k: v for k, v in repo_cfg.items() if k not in ignored_set}
+    daemon_path = daemon_config_path(repo_root, repo_cfg)
+    daemon_cfg = _read_flat(daemon_path) if daemon_path is not None else {}
+    daemon_has_default = "runner.default" in daemon_cfg
+    merged = {
+        k: v for k, v in repo_cfg.items()
+        if k not in ignored_set
+        and (
+            not is_daemon_key(k)
+            or (
+                k in {"shell", "runner", "core"}
+                and not daemon_has_default
+            )
+            or (
+                k == "default_class"
+                and "runner.default_class" not in daemon_cfg
+            )
+            or (k not in _LEGACY_RUNNER_KEYS and k not in daemon_cfg)
+        )
+    }
+
+    # The daemon-owned file wins over every repo-side compatibility value.
+    merged.update(daemon_cfg)
 
     sec_path = security_config_path(repo_root, repo_cfg)
     if sec_path is not None:
         merged.update(_read_flat(sec_path))
 
     return merged, ignored
+
+
+def load_config_table(repo_root: Path) -> list[dict[str, Any]]:
+    """Return the effective merged config as key/value/source rows."""
+    repo_path = repo_config_path(repo_root)
+    repo_cfg = _read_flat(repo_path)
+    daemon_path = daemon_config_path(repo_root, repo_cfg)
+    security_path = security_config_path(repo_root, repo_cfg)
+    daemon_cfg = _read_flat(daemon_path) if daemon_path is not None else {}
+    security_cfg = _read_flat(security_path) if security_path is not None else {}
+    effective = load_config(repo_root)
+    rows: list[dict[str, Any]] = []
+    for key in sorted(effective):
+        if key in security_cfg:
+            source = security_path
+        elif key in daemon_cfg:
+            source = daemon_path
+        else:
+            source = repo_path
+        rows.append({"key": key, "value": effective[key], "source": str(source)})
+    return rows
 
 
 def load_config(repo_root: Path) -> dict[str, Any]:
@@ -561,6 +642,108 @@ def write_security_config(
     return sec_path
 
 
+def write_daemon_config(
+    repo_root: Path, cfg: dict[str, Any], *, merge: bool = True,
+) -> Path | None:
+    """Write account-level daemon settings, rejecting repo-only keys."""
+    invalid = sorted(key for key in cfg if not is_daemon_key(key))
+    if invalid:
+        raise ValueError("not daemon config key(s): " + ", ".join(invalid))
+    path = daemon_config_path(repo_root)
+    if path is None:
+        return None
+    values = _read_flat(path) if merge else {}
+    values.update(cfg)
+    _write_flat(path, values, mode=0o600)
+    return path
+
+
+def unset_daemon_config(repo_root: Path, key: str) -> Path | None:
+    """Remove one daemon-owned setting; absence is idempotent."""
+    if not is_daemon_key(key):
+        raise ValueError(f"not a daemon config key: {key}")
+    path = daemon_config_path(repo_root)
+    if path is None:
+        return None
+    values = _read_flat(path)
+    values.pop(key, None)
+    _write_flat(path, values, mode=0o600)
+    return path
+
+
+def migrate_legacy_daemon_config(repo_root: Path) -> list[str]:
+    """Copy repo-side daemon knobs and ``runners.md`` into account data.
+
+    The old files remain untouched for one release.  Returning log lines makes
+    the compatibility path visible exactly once: after the copy, the account
+    value wins and there is nothing left to migrate.
+    """
+    repo_cfg = _read_flat(repo_config_path(repo_root))
+    path = daemon_config_path(repo_root, repo_cfg)
+    if path is None:
+        return []
+    existing = _read_flat(path)
+    additions: dict[str, Any] = {}
+    logs: list[str] = []
+
+    # Canonicalize the old three-part runner pin into one profile/default.
+    if "runner.default" not in existing:
+        shell = str(repo_cfg.get("shell") or "").strip()
+        core = str(repo_cfg.get("core") or "").strip()
+        legacy_runner = str(repo_cfg.get("runner") or "").strip()
+        default = ""
+        source_keys: list[str] = []
+        if shell:
+            default = f"{shell}-{core}" if core and core not in {"auto", "default"} else shell
+            source_keys = ["shell"] + (["core"] if core else [])
+        elif legacy_runner and legacy_runner != "auto":
+            default = legacy_runner
+            source_keys = ["runner"]
+        elif core:
+            default = core
+            source_keys = ["core"]
+        if default:
+            additions["runner.default"] = default
+            logs.append(
+                "[brnrd] .brr/config " + "/".join(f"{key}=" for key in source_keys)
+                + " is now daemon.config runner.default — migrated "
+                "(repo key left in place, ignored)"
+            )
+    if "runner.default_class" not in existing and "default_class" in repo_cfg:
+        additions["runner.default_class"] = repo_cfg["default_class"]
+        logs.append(
+            "[brnrd] .brr/config default_class= is now daemon.config "
+            "runner.default_class — migrated (repo key left in place, ignored)"
+        )
+
+    for key, value in repo_cfg.items():
+        if key in _LEGACY_RUNNER_KEYS or not is_daemon_key(key) or key in existing:
+            continue
+        additions[key] = value
+        logs.append(
+            f"[brnrd] .brr/config {key}= is now daemon.config {key} — migrated "
+            "(repo key left in place, ignored)"
+        )
+    if additions:
+        write_daemon_config(repo_root, additions)
+
+    new_profiles = home_profiles_path(repo_root)
+    old_profiles = legacy_home_profiles_path(repo_root)
+    if (
+        new_profiles is not None and old_profiles is not None
+        and not new_profiles.exists() and old_profiles.exists()
+    ):
+        from . import runner
+
+        profiles = runner._parse_legacy_profiles(old_profiles.read_text(encoding="utf-8"))
+        runner.write_profiles_toml(new_profiles, profiles)
+        logs.append(
+            "[brnrd] runners.md is now runners.toml — migrated "
+            "(runners.md left in place, ignored)"
+        )
+    return logs
+
+
 # ── ``brnrd config promote`` — the one-time repo→security migration ────
 
 
@@ -628,9 +811,9 @@ def plan_promote(repo_root: Path) -> PromotePlan:
             brr_dir = gitops.shared_brr_dir(repo_root)
         except Exception:  # noqa: BLE001 - non-repo invocations have nothing to move
             brr_dir = repo_root / ".brr"
-        repo_profiles = brr_dir / PROFILES_FILENAME
+        repo_profiles = brr_dir / LEGACY_PROFILES_FILENAME
         if repo_profiles.exists():
-            dest = sec_path.parent / PROFILES_FILENAME
+            dest = sec_path.parent / LEGACY_PROFILES_FILENAME
             profiles_move = (repo_profiles, dest)
             profiles_conflict = dest.exists()
 
@@ -677,7 +860,7 @@ def apply_promote(repo_root: Path, plan: PromotePlan, *, force: bool = False) ->
         )
     if plan.profiles_conflict and not force:
         raise ConfigPromoteError(
-            f"{plan.security_path.parent / PROFILES_FILENAME} already exists — "
+            f"{plan.security_path.parent / LEGACY_PROFILES_FILENAME} already exists — "
             "merge the two profile catalogs by hand, or re-run with --force to "
             "replace the home copy with the repo one"
         )

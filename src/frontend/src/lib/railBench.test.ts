@@ -8,8 +8,8 @@ import type { ConnectedRepo } from './repos.ts';
 const source = readFileSync(new URL('./RailBench.svelte', import.meta.url), 'utf8');
 const repo = { environment_default: 'host · default' } as ConnectedRepo;
 
-// RailBench is the settings block now: project · environment, and nothing
-// else. It held four things under one heading — project, environment, a
+// RailBench is the settings block now: project · environment · daemon knobs.
+// It once held four things under one heading — project, environment, a
 // provider's Resources, and a CLAUDE|CODEX core picker — two of which
 // belonged to a provider and two of which did not, which is why the panel
 // never read as one object. The provider half moved to `ProviderBay`,
@@ -17,10 +17,12 @@ const repo = { environment_default: 'host · default' } as ConnectedRepo;
 const bayPath = new URL('./ProviderBay.svelte', import.meta.url);
 const bay = readFileSync(bayPath, 'utf8');
 
-test('settings holds where the work happens, and nothing about which body runs it', () => {
+test('settings holds placement and the daemon-owned knob table, not the core picker', () => {
 	assert.ok(source.includes('data-measure="settings"'), 'the block names itself for what it is');
 	assert.ok(source.includes('data-measure="project"'));
 	assert.ok(source.includes('data-measure="environment"'));
+	assert.ok(source.includes('data-measure="daemon-settings"'));
+	assert.ok(source.includes('daemonConfig'));
 	assert.ok(!source.includes('SpoolRack'), 'the core picker is not here');
 	assert.ok(!source.includes('data-measure="resources"'), 'and neither are a provider’s windows');
 	assert.ok(!/focusProvider|onProviderSelect/u.test(source), 'no provider cursor passes through');
