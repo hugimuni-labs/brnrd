@@ -729,9 +729,9 @@ def test_available_runner_catalog_marks_selected_generated_core(tmp_path, monkey
     )
 
     catalog = runner_mod.available_runner_catalog(
-        tmp_path, selected="codex-mini",
+        tmp_path, selected="codex-gpt-5.6-luna",
     )
-    mini = next(item for item in catalog if item["name"] == "codex-mini")
+    mini = next(item for item in catalog if item["name"] == "codex-gpt-5.6-luna")
 
     assert mini["selected"] is True
     assert mini["shell"] == "codex"
@@ -740,6 +740,16 @@ def test_available_runner_catalog_marks_selected_generated_core(tmp_path, monkey
     assert mini["quota_source"] == "codex-local"
     assert mini["availability"] == "available"
     assert "cmd" not in mini
+
+
+def test_legacy_codex_alias_resolves_without_duplicate_catalog_row(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner_mod.shutil, "which", lambda _name: "/usr/bin/mock")
+    profiles = runner_mod._selection_profiles(tmp_path, probe=False)
+    assert profiles["codex-mini"]["alias_for"] == "codex-gpt-5.6-luna"
+    assert runner_mod.runner_profile("codex-mini", tmp_path).model == "gpt-5.6-luna"
+    names = {row["name"] for row in runner_mod.available_runner_catalog(tmp_path)}
+    assert "codex-gpt-5.6-luna" in names
+    assert "codex-mini" not in names
 
 
 def test_available_runner_catalog_sees_a_disk_feed_rewrite_without_cache_clear(
@@ -1297,13 +1307,9 @@ def test_home_runners_file_overrides_bundled_profiles(tmp_path, monkeypatch):
     (tmp_path / ".brr" / "config").write_text(
         f"runner=local-agent\nhome.path={home}\n"
     )
-    (home / conf.PROFILES_FILENAME).write_text(
-        "---\n"
-        "local-agent:\n"
-        "  binary: local-agent\n"
-        "  cmd: 'local-agent run --yes'\n"
-        "---\n",
-        encoding="utf-8",
+    runner_mod.write_profiles_toml(
+        home / conf.PROFILES_FILENAME,
+        {"local-agent": {"binary": "local-agent", "cmd": "local-agent run --yes"}},
     )
     # Simulate an earlier bundled-profile read in the same daemon
     # process. A home-owned profile must still get its own cache key.
@@ -2649,9 +2655,9 @@ class TestDeclaredCmdOnlyRunnerEndToEnd:
         home.mkdir(exist_ok=True)
         conf.write_config(repo_root, {"home.path": str(home)})
         quoted = " ".join(_shlex.quote(part) for part in cmd)
-        (home / conf.PROFILES_FILENAME).write_text(
-            f"---\nscript-runner:\n  cmd: '{quoted}'\n---\n",
-            encoding="utf-8",
+        runner_mod.write_profiles_toml(
+            home / conf.PROFILES_FILENAME,
+            {"script-runner": {"cmd": quoted}},
         )
         # Force a reload from that file (monkeypatch restores the original
         # cache afterwards).
@@ -3805,3 +3811,40 @@ def test_auto_selection_skips_an_auth_marked_domain_when_another_door_exists(tmp
     claude = runner_mod.resolve_runner_profile(tmp_path, {"runner": "claude-sonnet"})
     runner_auth_health.record_auth_error(tmp_path, claude)
     assert runner_mod.resolve_runner_profile(tmp_path, {}).name in {"codex-terra", "claude-sonnet"}
+
+
+def test_credential_rotation_ledger_writes_only_on_change(tmp_path, monkeypatch):
+    """Who rotated the token? The ledger answers: a row per fingerprint
+    change, tagged with what brnrd was doing (sweep / attempt / vm-seed /
+    auth-error). The baseline row is written once; an unchanged reading
+    writes nothing."""
+    import json as _json
+
+    from brr import runner_auth_health
+
+    (tmp_path / ".brr").mkdir()
+    stamps = {"claude": "keychain:20260909102355Z"}
+    monkeypatch.setattr(runner_auth_health, "credential_fingerprint", lambda shell: stamps.get(shell))
+    monkeypatch.setattr(runner_auth_health, "_claude_process_count", lambda: 3)
+    runner_auth_health._last_seen.clear()
+    assert runner_auth_health.record_credential_reading(tmp_path, "claude", event="sweep")
+    assert not runner_auth_health.record_credential_reading(tmp_path, "claude", event="sweep")
+    assert not runner_auth_health.record_credential_reading(
+        tmp_path, "claude", event="attempt", detail="run-x attempt 1")
+    stamps["claude"] = "keychain:20260909182401Z"
+    assert runner_auth_health.record_credential_reading(
+        tmp_path, "claude", event="attempt", detail="run-y attempt 1 on claude-fable")
+    rows = [
+        _json.loads(line)
+        for line in (tmp_path / ".brr" / "credential-rotations.jsonl").read_text().splitlines()
+    ]
+    assert [r["event"] for r in rows] == ["sweep", "attempt"]
+    assert rows[0]["first"] is True and rows[0]["previous"] is None
+    assert rows[1]["previous"] == "keychain:20260909102355Z"
+    assert rows[1]["fingerprint"] == "keychain:20260909182401Z"
+    assert rows[1]["claude_processes"] == 3
+    assert rows[1]["detail"].startswith("run-y")
+    # never the secret: only stamps
+    assert "accessToken" not in (tmp_path / ".brr" / "credential-rotations.jsonl").read_text()
+    # other shells are not this ledger's
+    assert not runner_auth_health.record_credential_reading(tmp_path, "gemini", event="sweep")

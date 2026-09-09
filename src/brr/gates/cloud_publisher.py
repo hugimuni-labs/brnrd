@@ -1329,6 +1329,17 @@ def _runners_snapshot(brr_dir: Path) -> dict[str, Any]:
         print(f"[brnrd:cloud] runner catalog read failed: {e}")
         profiles = []
     cfg = _config.load_config(repo_root)
+    config_rows = []
+    for row in _config.load_config_table(repo_root):
+        key = str(row.get("key") or "")
+        if not _config.is_daemon_key(key) or key in _config._LEGACY_RUNNER_KEYS:
+            continue
+        source_name = Path(str(row.get("source") or "")).name
+        config_rows.append({
+            "key": key,
+            "value": row.get("value"),
+            "source": source_name if source_name != "config" else ".brr/config",
+        })
     policy = _cfg_environment_policy(cfg)
     try:
         environment_default = resolve_env(policy, cfg)
@@ -1363,6 +1374,7 @@ def _runners_snapshot(brr_dir: Path) -> dict[str, Any]:
         "environment_default": environment_default,
         "environments": environments,
         "sticky": sticky,
+        "config": config_rows,
     }
 
 

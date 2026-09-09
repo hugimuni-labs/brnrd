@@ -662,6 +662,10 @@ def put_runners(payload: schemas.RunnersReport, principal: Principal = Depends(r
         separators=(",", ":"),
     )
     daemon.runners_default = payload.default if permitted else None
+    daemon.daemon_config_json = json.dumps(
+        [entry.model_dump() for entry in payload.config] if permitted else [],
+        separators=(",", ":"),
+    )
     daemon.environment_default = payload.environment_default if permitted else None
     daemon.environments_json = json.dumps(
         [option.model_dump(exclude_none=True) for option in environments],

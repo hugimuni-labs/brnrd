@@ -430,7 +430,7 @@
 								     until hovered, and a touch screen never hovers. A tap
 								     here only ever parks a one-shot next wake — it never
 								     touches whatever is running right now. -->
-								<span class="text-ink-quiet normal-case">tap → next wake</span>
+								<span class="text-ink-quiet normal-case">tap → default (next wake here)</span>
 							{/if}
 							{#if profile.class || profile.cost_rank !== null || profile.quota_source || profile.capability_score !== null}
 								<button
