@@ -1572,6 +1572,8 @@ def available_selection_runners(repo_root: Path | None = None) -> list["RunnerPr
     for name, profile in profiles.items():
         if profile.get("alias_for"):
             continue
+        if profile.get("feed_state") in {"expired", "not-listed"}:
+            continue
         if _runner_available(name, profiles):
             out.append(runner_select.runner_from_profile(name, profile))
     return out
@@ -1730,6 +1732,19 @@ def _catalog_record(
         availability = "retired"
     else:
         availability = "available"
+
+    # A valid Codex feed can distinguish a working row from a row retained
+    # from the last good observation. Grace keeps the latter invokable; an
+    # expired or never-listed core remains visible as an unavailable pin so a
+    # configured role is not silently erased.
+    feed_status: dict[str, Any] = {}
+    if str(shell or "").lower() == "codex" and runner_profile.model:
+        feed_status = _rc.codex_feed_status(runner_profile.model)
+        feed_state = feed_status.get("feed_state")
+        if feed_state == "expired":
+            availability = "core-feed-expired"
+        elif feed_state == "not-listed":
+            availability = "core-not-listed"
     is_available = availability == "available"
 
     # Staleness: re-derived from a measured signal, not a hand-typed date —
@@ -1773,6 +1788,9 @@ def _catalog_record(
         "alias_tracked": alias_tracked,
         "freshness_date": freshness_date,
         "freshness_source": freshness.get("source"),
+        "feed_state": feed_status.get("feed_state"),
+        "feed_last_seen_at": feed_status.get("feed_last_seen_at"),
+        "feed_age_seconds": feed_status.get("feed_age_seconds"),
         "selected": name == selected or runner_profile.profile == selected,
         "observed_model": observed["model"] if observed else None,
         "observed_at": observed["at"] if observed else None,
@@ -2021,6 +2039,10 @@ def resolve_runner_profile(
     auth_marked = []
     for name, profile in profiles.items():
         if not _runner_available(name, profiles):
+            continue
+        if profile.get("feed_state") in {"expired", "not-listed"}:
+            # Explicit pins are handled above and remain resolvable; automatic
+            # selection must not choose a core the current feed says is gone.
             continue
         shell = str(profile.get("binary") or profile.get("shell") or name).strip()
         if (
