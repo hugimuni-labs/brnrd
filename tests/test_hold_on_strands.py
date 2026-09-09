@@ -393,13 +393,17 @@ class TestResumeAny:
         hold = Run.from_file(runs_dir / "run-seat" / "run.md").meta["resource_hold"]
         assert hold["released"] is True and hold["released_by"] == "schedule"
 
-    def test_park_on_turn_end_is_on_by_default_and_off_on_request(self):
+    def test_park_on_turn_end_cannot_be_disabled_by_config(self):
         seat = Run(id="run-seat", event_id="evt-p", body="", source="cloud")
         seat.meta["runner_shell"] = "claude"
         assert daemon._park_seat_on_turn_end(seat, {}) is not None
         assert daemon._park_seat_on_turn_end(seat, None) is not None
-        assert daemon._park_seat_on_turn_end(seat, {daemon.SEAT_PARK_ON_TURN_END_KEY: "false"}) is None
-        assert daemon._park_seat_on_turn_end(seat, {daemon.SEAT_PARK_ON_TURN_END_KEY: False}) is None
+        assert daemon._park_seat_on_turn_end(
+            seat, {daemon.SEAT_PARK_ON_TURN_END_KEY: "false"}
+        ) is not None
+        assert daemon._park_seat_on_turn_end(
+            seat, {daemon.SEAT_PARK_ON_TURN_END_KEY: False}
+        ) is not None
 
     def test_park_on_turn_end_parks_a_seat_when_on(self):
         seat = Run(id="run-seat", event_id="evt-p", body="", source="cloud")

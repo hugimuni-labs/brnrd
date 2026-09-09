@@ -111,6 +111,7 @@ RESUME_CONDITIONS = frozenset({
 
 REASON_WAITING_ON_STRANDS = "waiting_on_strands"
 REASON_TURN_ENDED = "turn_ended"
+REASON_DAEMON_RESTARTED = "daemon_restarted"
 
 #: The child-event sources that release a ``strands``-condition hold. Not
 #: ``spawn_queued`` (admission, nothing to read yet) and never

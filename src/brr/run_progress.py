@@ -33,6 +33,7 @@ PHASES = (
     "finalizing",
     "delivering",
     "delivered",
+    "held",
     "failed",
     "conflict",
     "stopped",
@@ -57,6 +58,7 @@ _PHASE_BY_PACKET: dict[str, str] = {
     "push_started": "delivering",
     "push_done": "delivered",
     "done": "delivered",
+    "held": "held",
     "failed": "failed",
     "conflict": "conflict",
     "stopped": "stopped",
@@ -281,7 +283,7 @@ def _latest_run_id(records: list[dict[str, Any]]) -> str | None:
     return None
 
 
-_TERMINAL_PHASE_NAMES = {"delivered", "failed", "conflict", "stopped"}
+_TERMINAL_PHASE_NAMES = {"delivered", "held", "failed", "conflict", "stopped"}
 
 
 def _open_phase(view: RunProgressView, name: str, ts: str | None,
@@ -687,6 +689,14 @@ def _project(
             view.phase_history.append(PhaseEntry(
                 name="delivered", started_at=ts,
             ))
+        elif ptype == "held":
+            reason = str(record.get("reason") or "resource hold").replace("_", " ")
+            condition = str(record.get("resume_condition") or "operator")
+            view.detail = f"parked: {reason} (resumes on {condition})"
+            _close_open_phase(view, ts)
+            view.phase_history.append(PhaseEntry(
+                name="held", started_at=ts, detail=view.detail,
+            ))
 
         new_phase = _PHASE_BY_PACKET.get(ptype)
         if new_phase is not None:
@@ -842,7 +852,7 @@ def _render_compact(
             if extra:
                 line += f" · {extra}"
             lines.append(line)
-            if entry.detail and entry.name in {"failed", "conflict"}:
+            if entry.detail and entry.name in {"held", "failed", "conflict"}:
                 lines.append(entry.detail)
             if entry.name == "delivered" and view.view_url:
                 # The forge URL goes on its own line so the terminal

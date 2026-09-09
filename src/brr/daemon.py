@@ -10086,29 +10086,31 @@ def _cut_mismatches(
     return mismatches
 
 
-#: Config key: a user-woken seat whose turn ends cleanly with nothing armed
-#: is **parked** (``held``, ``resume: any``) instead of closed
-#: (design-the-seat-that-never-quits.md §The machinery, slice 1). **On by
-#: default** since the maintainer signed the direction (2026-09-06, evt-…-8ss7:
-#: "why default off?"); ``seat.park_on_turn_end=false`` in ``.brr/config``
-#: restores the close.
+#: Compatibility name for the test seam which makes legacy close-path tests
+#: exercise their historical tail. A resident's liveness is no longer an
+#: operator-configurable policy: production always parks a clean turn end.
 SEAT_PARK_ON_TURN_END_KEY = "seat.park_on_turn_end"
 SEAT_PARK_ON_TURN_END_DEFAULT = True
 
 
 def _seat_park_enabled(cfg: "dict | None") -> bool:
-    """The flag, defaulting on; an explicit falsy value turns it off."""
-    raw = (cfg or {}).get(SEAT_PARK_ON_TURN_END_KEY)
-    if raw is None:
-        return SEAT_PARK_ON_TURN_END_DEFAULT
-    return _truthy(raw)
+    """Whether the compatibility test seam leaves the automatic park on.
+
+    ``seat.park_on_turn_end=false`` used to make a resident silently close
+    after an ordinary answer. That made the next message buy a new seat,
+    contrary to the residency invariant, so configuration cannot restore
+    that daemon policy. Keeping the mutable default lets old unit tests pin
+    their unrelated historical ``done`` tails without exposing a production
+    escape hatch.
+    """
+    return SEAT_PARK_ON_TURN_END_DEFAULT
 
 
 def _park_seat_on_turn_end(task: Run, cfg: "dict | None") -> dict[str, object] | None:
     """The daemon's own park: a clean turn end becomes ``held`` on ``resume: any``.
 
     Only for a seat — never a strand (a strand is a thought; the seat is a
-    life) — and only when ``seat.park_on_turn_end`` is on. Returns the
+    life). Returns the
     ``pending_resource_hold`` shape the worker tail already routes through
     :func:`_finalize_resource_hold`, or ``None`` for the ordinary ``done``.
     The user's release stays the user's: a dashboard stop never reaches
@@ -10126,6 +10128,35 @@ def _park_seat_on_turn_end(task: Run, cfg: "dict | None") -> dict[str, object] |
             task.meta.get("runner_shell") or task.meta.get("runner_name")
         ),
         "detail": "turn ended with nothing armed — the seat parks; anything addressed to it resumes it",
+        "native_session_id": native_session_id,
+        "resume_kind": (
+            resource_hold.RESUME_NATIVE if native_session_id
+            else resource_hold.RESUME_UNSUPPORTED
+        ),
+        "resume_condition": resource_hold.RESUME_ANY,
+        "reset_deadline": None,
+    }
+
+
+def _park_seat_on_daemon_restart(task: Run) -> dict[str, object] | None:
+    """Preserve an interrupted resident as a held seat, never a retry.
+
+    The runner process is already gone after a daemon crash, reload, or
+    shutdown; that loss is unavoidable. Re-dispatching the old waking event
+    is not: it cold-boots the resident on work it may already have completed.
+    A held ``resume: any`` record retains the seat's card and lets the next
+    addressed event resume it deliberately. Strands remain crash-finalized
+    through their parent-facing reconciliation path.
+    """
+    if not hasattr(task, "meta") or _is_strand(task.meta):
+        return None
+    native_session_id = _native_session_id_for(task)
+    return {
+        "reason": resource_hold.REASON_DAEMON_RESTARTED,
+        "provider": _resource_hold_provider_for_runner(
+            task.meta.get("runner_shell") or task.meta.get("runner_name")
+        ),
+        "detail": "the daemon process ended — the resident parks until something addresses it",
         "native_session_id": native_session_id,
         "resume_kind": (
             resource_hold.RESUME_NATIVE if native_session_id
@@ -16368,6 +16399,39 @@ def _mark_interrupted_runs(
                     "safety horizon"
                 )
             retry_event = retry_eligible.get(task.event_id or "")
+            restart_hold = _park_seat_on_daemon_restart(task)
+            if restart_hold is not None:
+                # The host already ended this process; retrying its waking
+                # event would be a new daemon decision, and can summon a
+                # resident onto an ask it had answered before the restart.
+                # Preserve the seat instead. A future user message,
+                # scheduled wake, or own strand return is the continuation
+                # edge for ``resume: any``.
+                task.meta["failure_kind"] = runner_failures.HOST_INTERRUPTED
+                task.meta["interrupted_at"] = marked_at
+                task.meta["interrupt_reason"] = f"daemon restart park: {proof}"
+                hold = _arm_resource_hold(
+                    task, runs_dir,
+                    conversation_key=task.conversation_key,
+                    **restart_hold,
+                )
+                if retry_event is not None:
+                    _set_event_run_outcome(retry_event, resource_hold.RUN_STATUS)
+                _WorkerEmit(brr_dir, task.conversation_key, task.event_id)(
+                    "held",
+                    run_id=task.id,
+                    event_id=task.event_id,
+                    reason=hold["reason"],
+                    provider=hold["provider"],
+                    resume_condition=hold["resume_condition"],
+                    resume_kind=hold["resume_kind"],
+                )
+                marked += 1
+                print(
+                    f"[brnrd] interrupted-run marker: parked resident "
+                    f"{task.id} after daemon restart ({proof})"
+                )
+                continue
             will_retry = bool(retry_event)
             if will_retry:
                 # #1491: the retry path already recovers the *work* (the

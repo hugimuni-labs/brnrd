@@ -44,6 +44,7 @@ PACKET_TYPES = (
     "push_started",
     "push_done",
     "done",
+    "held",
     "failed",
     "conflict",
     # Wyrd §3 (dispatch-edge verbs): a parent stopping or messaging its
