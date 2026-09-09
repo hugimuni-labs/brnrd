@@ -28,6 +28,10 @@ export interface RunnerProfile {
 	 *  a reading. */
 	observed_model?: string | null;
 	observed_at?: string | null;
+	/** The vendor's own display name where its feed gives one (`GPT-6-Astra`
+	 *  off the codex feed). Claude's CLI exposes none — `modelName` derives
+	 *  one from the id and says so in the title. */
+	display_name?: string | null;
 	/** Present with `availability === 'auth-error'`: the daemon's last
 	 *  dispatch on this shell's credential failed to authenticate, and that
 	 *  credential has not changed since (`runner_auth_health.py`). A locked

@@ -96,10 +96,19 @@ const claude = (name, model, cls, rank) => ({
 	observed_model: model ? OBSERVED[model] : null,
 	observed_at: model ? '2026-09-09T03:36:33Z' : null
 });
+const DISPLAY = {
+	'gpt-6-astra': 'GPT-6-Astra',
+	'gpt-5.6-luna': 'GPT-5.6-Luna',
+	'gpt-5.6-terra': 'GPT-5.6-Terra',
+	'gpt-5.6-sol': 'GPT-5.6-Sol',
+	'gpt-5.4': 'GPT-5.4',
+	'gpt-5.4-mini': 'GPT-5.4-Mini'
+};
 const codex = (name, model, cls, rank) => ({
 	name,
 	shell: 'codex',
 	model,
+	display_name: model ? DISPLAY[model] : null,
 	provider: 'openai',
 	class: cls,
 	cost_rank: rank,

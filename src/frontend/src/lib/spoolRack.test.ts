@@ -10,6 +10,8 @@ import {
 	offerabilityOf,
 	offReasonOf,
 	headline,
+	derivedModelName,
+	modelName,
 	orderRows,
 	shortVendorId,
 	tierLabel
@@ -253,7 +255,7 @@ test('orderRows: shell default first, then economy · balanced · strong · uncl
 			model: 'fable',
 			observed_model: 'claude-fable-5-1'
 		}),
-		'claude-fable-5-1'
+		'Fable 5.1'
 	);
 	assert.equal(tierLabel(rows[0]), 'unclassed');
 	// a build-date suffix is a snapshot stamp, not a version: off the row
@@ -264,7 +266,21 @@ test('orderRows: shell default first, then economy · balanced · strong · uncl
 			model: 'haiku',
 			observed_model: 'claude-haiku-4-5-20251001'
 		}),
-		'claude-haiku-4-5'
+		'Haiku 4.5'
+	);
+	assert.equal(derivedModelName('claude-fable-5-1'), 'Fable 5.1');
+	assert.equal(derivedModelName('claude-sonnet-5'), 'Sonnet 5');
+	assert.equal(derivedModelName('fable'), 'Fable');
+	assert.equal(derivedModelName('gpt-5.6-sol'), 'gpt-5.6-sol');
+	// the vendor's own name wins where the feed gives one
+	assert.equal(
+		modelName({
+			name: 'codex-gpt-6-astra',
+			shell: 'codex',
+			model: 'gpt-6-astra',
+			display_name: 'GPT-6-Astra'
+		}),
+		'GPT-6-Astra'
 	);
 	assert.equal(shortVendorId('gpt-5.6-sol'), 'gpt-5.6-sol');
 });

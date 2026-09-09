@@ -1757,6 +1757,7 @@ def _catalog_record(
         "selected": name == selected or runner_profile.profile == selected,
         "observed_model": observed["model"] if observed else None,
         "observed_at": observed["at"] if observed else None,
+        "display_name": str(profile.get("display_name") or "").strip() or None,
     }
     if pin:
         record["pin"] = pin
