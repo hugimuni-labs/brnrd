@@ -2403,3 +2403,48 @@ def test_put_live_runs_carries_room_edge_and_lifecycle():
     assert bare["edge"] is None
     assert bare["lifecycle"] is None
     assert bare["portals"] is None
+
+
+def test_runners_rack_drops_ghost_rows_from_a_retired_daemon_when_a_fresh_one_speaks():
+    """2026-09-09: a daemon that reported on 08-14 and never again still
+    listed `codex-gpt-5.4`; the live daemon's report no longer did, and the
+    merge-by-name kept the ghost beside the fresh rows. A stale report is
+    evidence only where nothing fresher speaks."""
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd.models import Daemon
+
+    client = _client()
+    token = _login(client)
+    repo_id = _create_repo(client, token, repo="Gurio/brr")
+    now = datetime.now(timezone.utc)
+    with client.app.state.SessionLocal() as db:
+        db.add(Daemon(
+            id="dmn-runners-fresh", repo_id=repo_id, token_id="tok-runners-fresh",
+            daemon_name="laptop", runners_updated_at=now - timedelta(seconds=5),
+            runners_json=json.dumps([
+                {"name": "codex-gpt-6-astra", "shell": "codex", "available": True},
+                {"name": "codex-full", "shell": "codex", "available": True},
+            ]),
+        ))
+        db.add(Daemon(
+            id="dmn-runners-old", repo_id=repo_id, token_id="tok-runners-old",
+            daemon_name="old-machine", runners_updated_at=now - timedelta(days=26),
+            runners_json=json.dumps([
+                {"name": "codex-gpt-5.4", "shell": "codex", "available": True},
+                {"name": "codex-gpt-5.4-mini", "shell": "codex", "available": True},
+                {"name": "gemini", "shell": "gemini", "available": True},
+            ]),
+        ))
+        db.commit()
+
+    body = client.get(
+        "/v1/dashboard/runners", headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    names = {row["name"] for row in body["profiles"]}
+    assert "codex-gpt-5.4" not in names and "codex-gpt-5.4-mini" not in names
+    assert {"codex-gpt-6-astra", "codex-full"} <= names
+    # a shell only the old daemon knows keeps its rows, marked stale
+    gemini = next(row for row in body["profiles"] if row["name"] == "gemini")
+    assert gemini["daemon_stale"] is True
