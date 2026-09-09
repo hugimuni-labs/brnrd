@@ -578,6 +578,23 @@ def _runners_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
             entry["_reported_at"] = reported_at
             profiles[name] = entry
     out = list(profiles.values())
+    # A ghost row: a daemon that reported on 08-14 and never again still
+    # listed `codex-gpt-5.4`; the live daemon's report no longer does, and the
+    # merge-by-name above keeps the old row beside the fresh ones (2026-09-09,
+    # his "the gpt-5.4 and mini is still rendered there"). A stale report is
+    # evidence only where nothing fresher speaks: drop its rows for every
+    # shell a fresh report covers; keep them when every report is old.
+    fresh_shells = {
+        str(row.get("shell") or "")
+        for row in out
+        if (now - row["_reported_at"]).total_seconds() <= _RUNNERS_STALE_SECONDS
+    }
+    if fresh_shells:
+        out = [
+            row for row in out
+            if (now - row["_reported_at"]).total_seconds() <= _RUNNERS_STALE_SECONDS
+            or str(row.get("shell") or "") not in fresh_shells
+        ]
     # `daemon_stale` here is distinct from the daemon's own per-row `stale`
     # (`runner.py`'s freshness_date/benchmark staleness, a different fact
     # entirely — `_stamp_row_freshness` writes `daemon_stale`, never `stale`,
