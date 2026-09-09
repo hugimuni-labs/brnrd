@@ -3677,6 +3677,48 @@ def test_process_runner_stdout_reports_api_error_only_when_the_envelope_says_so(
     assert api_error is False
 
 
+def test_catalog_row_names_the_core_as_the_shell_observed_it(tmp_path, monkeypatch):
+    """`fable` is brnrd's alias; `claude-fable-5-1` is what ran. The version
+    is read off the ledger, never typed (his 2026-09-08 steer: "sonnet instead
+    of sonnet-5, fable instead of fable-5.1")."""
+    import json as _json
+
+    from brr import runner_cores
+
+    (tmp_path / ".brr").mkdir()
+    rows = [
+        # a sonnet run that drove a haiku subagent first: order ≠ rank
+        {"runner_shell": "claude", "core_expected": "sonnet",
+         "runner_core": "claude-haiku-4-5-20251001+claude-sonnet-5",
+         "ended_at": "2026-09-08T22:18:27Z"},
+        {"runner_shell": "claude", "core_expected": "fable",
+         "runner_core": "claude-fable-5-1+claude-opus-5[1m]",
+         "ended_at": "2026-09-09T03:36:33Z"},
+        {"runner_shell": "claude", "core_expected": "fable",
+         "runner_core": "claude-fable-5-0", "ended_at": "2026-08-30T00:00:00Z"},
+        # codex already names the vendor id: nothing to add
+        {"runner_shell": "codex", "core_expected": "gpt-5.6-sol",
+         "runner_core": "gpt-5.6-sol", "ended_at": "2026-09-09T05:00:00Z"},
+    ]
+    (tmp_path / ".brr" / "run-ledger.jsonl").write_text(
+        "\n".join(_json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    runner_cores._OBSERVED_CACHE.clear()
+    observed = runner_cores.observed_model_ids(tmp_path)
+    assert observed[("claude", "sonnet")]["model"] == "claude-sonnet-5"
+    assert observed[("claude", "fable")] == {"model": "claude-fable-5-1", "at": "2026-09-09T03:36:33Z"}
+    assert ("codex", "gpt-5.6-sol") not in observed
+
+    monkeypatch.setattr(runner_mod, "_profiles_cache", {
+        "claude-fable": {"cmd": "claude", "shell": "claude", "model": "fable",
+                         "provider": "anthropic", "quota_source": "claude-local"},
+        "codex-full": {"cmd": "codex exec", "shell": "codex", "model": "gpt-5.6-sol",
+                       "provider": "openai", "quota_source": "codex-local"},
+    })
+    monkeypatch.setattr(runner_mod.shutil, "which", lambda _name: "/usr/bin/x")
+    rows_out = {r["name"]: r for r in runner_mod.available_runner_catalog(tmp_path)}
+    assert rows_out["claude-fable"]["observed_model"] == "claude-fable-5-1"
+    assert rows_out["claude-fable"]["observed_at"] == "2026-09-09T03:36:33Z"
+    assert "observed_model" not in rows_out["codex-full"]
 def test_runner_auth_mark_is_stale_once_the_credential_changes(tmp_path, monkeypatch):
     """A mark is a claim about one credential; a relogin retires it on read
     — no dispatch needed (the operator deleted the file by hand three times

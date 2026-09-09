@@ -514,6 +514,8 @@ def generated_profile_entries(
             }
             if pin:
                 generated["pin"] = pin
+            if _int(entry.get("vendor_priority")) is not None:
+                generated["vendor_priority"] = _int(entry.get("vendor_priority"))
             upgrade = entry.get("upgrade")
             if isinstance(upgrade, dict):
                 generated["upgrade"] = upgrade
@@ -659,6 +661,12 @@ def _codex_disk_entries() -> dict[str, dict[str, Any]]:
         priority = entry.get("priority")
         if isinstance(priority, (int, float)) and not isinstance(priority, bool):
             row["priority"] = priority
+        # The vendor's own words — the only tier signal a feed core has
+        # (`class_from_feed_words`); kept short, never the whole row.
+        for key in ("display_name", "description"):
+            text = _str(entry.get(key))
+            if text:
+                row[key] = text[:200]
         upgrade = entry.get("upgrade")
         if isinstance(upgrade, dict):
             trimmed = {
@@ -949,15 +957,63 @@ def _probed_core_entries(
             disk_meta = disk.get(model.strip())
             if disk_meta:
                 entry["freshness_source"] = "codex-cache"
+                if not entry["class"]:
+                    entry["class"] = class_from_feed_words(disk_meta)
                 priority = disk_meta.get("priority")
                 if isinstance(priority, (int, float)):
-                    entry["cost_rank"] = int(priority)
+                    # The feed's `priority` is the vendor's *display order*
+                    # (1 = the flagship it wants seen first) — not a price.
+                    # Read as a cost it sorted GPT-6-Astra to the top of the
+                    # rack as the bargain (2026-09-09, his "the order feels
+                    # random"). Rank = the tier's band + where the vendor
+                    # places it within the tier, flagship most expensive.
+                    entry["cost_rank"] = feed_cost_rank(entry["class"], int(priority))
+                    entry["vendor_priority"] = int(priority)
                 upgrade = disk_meta.get("upgrade")
                 if isinstance(upgrade, dict):
                     entry["upgrade"] = upgrade
             out[name] = entry
             known.add(key)
     return out
+
+
+_FEED_STRONG_WORDS = ("most capable", "most powerful", "most intelligent", "frontier", "demanding")
+_FEED_ECONOMY_WORDS = ("fast", "light", "mini", "small", "cheap", "quick", "efficient")
+# One band per tier, matching the hand-authored registry's own spread
+# (haiku 10 · mini 20 · codex 25 · sonnet/terra 30 · full 45 · opus 50 ·
+# fable 55). A feed core lands inside its tier's band, never above/below it.
+_TIER_BAND: dict[str | None, int] = {
+    runner_select.ECONOMY: 12,
+    runner_select.BALANCED: 26,
+    runner_select.STRONG: 46,
+}
+
+
+def class_from_feed_words(meta: dict[str, Any]) -> str | None:
+    """The tier a vendor's own sentence names — `"Our most capable model for
+    complex, demanding work."` → strong; `"fast, lightweight"` → economy;
+    a described model that says neither → balanced; no words → ``None``
+    (rendered *unclassed*, never blank)."""
+    text = " ".join(
+        str(meta.get(key) or "") for key in ("description", "display_name")
+    ).lower()
+    if not text.strip():
+        return None
+    if any(word in text for word in _FEED_STRONG_WORDS):
+        return runner_select.STRONG
+    if any(word in text for word in _FEED_ECONOMY_WORDS):
+        return runner_select.ECONOMY
+    return runner_select.BALANCED
+
+
+def feed_cost_rank(cost_class: str | None, priority: int) -> int | None:
+    """Tier band + the vendor's placement within it: priority 1 (the
+    flagship) is the tier's most expensive seat, later ones cheaper.
+    ``None`` when the tier is unknown — last place, never a guess."""
+    band = _TIER_BAND.get(cost_class)
+    if band is None:
+        return None
+    return band + max(0, 9 - min(priority, 9))
 
 
 def _provider_for_shell(shell: str) -> str | None:
@@ -1051,3 +1107,94 @@ def _cmd_with_model(shell: str, base_cmd: str, model: str) -> str:
     if shell == "codex" and len(parts) > 1 and parts[1] == "exec":
         insert_at = 2
     return shlex.join([*parts[:insert_at], "--model", model, *parts[insert_at:]])
+
+
+# ---------------------------------------------------------------------------
+# Observed model ids — the vendor's own name for a core alias, as the Shell
+# actually reported it. ``fable`` is brnrd's alias; ``claude-fable-5-1`` is
+# what ran. The maintainer's 2026-09-08 steer (evt-…-403h): "vendor named
+# (codex), ideally explicitly versioned (claude) … sonnet instead of
+# sonnet-5, fable instead of fable-5.1, opus instead of opus-4.8 (or maybe
+# 5.0, i'm honestly not sure, and that's a sign as well)". The version is
+# not typed here — it is read off the run ledger, where every closed run
+# records ``runner_core`` as the Shell attested it (run_ledger.py, #255).
+
+_OBSERVED_CACHE: dict[str, tuple[int, dict[tuple[str, str], dict[str, str]]]] = {}
+_OBSERVED_TAIL_BYTES = 512 * 1024
+
+
+def _alias_tokens(alias: str) -> set[str]:
+    return {t for t in re.split(r"[-_.\s]+", alias.lower()) if t}
+
+
+def _primary_segment(observed: str, alias: str) -> str | None:
+    """Pick the segment of a ``a+b+c`` attestation that names *this* alias.
+
+    A run that spawned Shell subagents attests every model it drove, joined
+    by ``+`` — and the order is arrival order, not rank: a sonnet run with
+    a haiku subagent reads ``claude-haiku-4-5-20251001+claude-sonnet-5``.
+    So the segment is chosen by the alias's own tokens, never by position.
+    """
+    wanted = _alias_tokens(alias)
+    if not wanted:
+        return None
+    for raw in observed.split("+"):
+        segment = re.sub(r"\[[^\]]*\]$", "", raw.strip())
+        if not segment or segment.lower() == alias.lower():
+            continue
+        if wanted <= _alias_tokens(segment):
+            return segment
+    return None
+
+
+def observed_model_ids(repo_root: Path | None) -> dict[tuple[str, str], dict[str, str]]:
+    """``(shell, alias) → {"model": <vendor id>, "at": <iso>}`` from the ledger tail.
+
+    Latest wins. Reads the last ~512 KB of ``.brr/run-ledger.jsonl`` and
+    caches on the file's size, so a catalog render costs one ``stat`` when
+    nothing closed since. Empty when there is no ledger — the catalog then
+    shows the alias alone, which is the honest reading, not a guess.
+    """
+    if repo_root is None:
+        return {}
+    from . import run_ledger
+
+    try:
+        path = run_ledger.ledger_path(repo_root)
+        size = path.stat().st_size
+    except OSError:
+        return {}
+    key = str(path)
+    cached = _OBSERVED_CACHE.get(key)
+    if cached and cached[0] == size:
+        return cached[1]
+    out: dict[tuple[str, str], dict[str, str]] = {}
+    try:
+        with path.open("rb") as fh:
+            if size > _OBSERVED_TAIL_BYTES:
+                fh.seek(size - _OBSERVED_TAIL_BYTES)
+                fh.readline()  # drop the partial line
+            raw_lines = fh.read().decode("utf-8", errors="replace").splitlines()
+    except OSError:
+        return {}
+    for raw in raw_lines:
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        shell = str(row.get("runner_shell") or "").strip().lower()
+        alias = str(row.get("core_expected") or "").strip()
+        observed = str(row.get("runner_core") or "").strip()
+        if not (shell and alias and observed):
+            continue
+        model = _primary_segment(observed, alias)
+        if not model:
+            continue
+        stamp = str(row.get("ended_at") or row.get("started_at") or "")
+        prev = out.get((shell, alias))
+        if prev is None or stamp >= prev["at"]:
+            out[(shell, alias)] = {"model": model, "at": stamp}
+    _OBSERVED_CACHE[key] = (size, out)
+    return out

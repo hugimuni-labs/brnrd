@@ -8,7 +8,11 @@ import {
 	groupByShell,
 	isTappable,
 	offerabilityOf,
-	offReasonOf
+	offReasonOf,
+	headline,
+	orderRows,
+	shortVendorId,
+	tierLabel
 } from './spoolRack.ts';
 import type { RunnerProfile } from './runners.ts';
 
@@ -220,4 +224,47 @@ test('defaultShell opens on whoever answers the next wake, never a dead tab by d
 		'codex',
 		'no live shell at all falls back to whatever sorts first'
 	);
+});
+
+test('orderRows: shell default first, then economy · balanced · strong · unclassed; cost only inside a tier', () => {
+	const rows: RunnerProfile[] = [
+		{ name: 'codex-gpt-6-astra', shell: 'codex', model: 'gpt-6-astra', cost_rank: 1 },
+		{ name: 'codex-full', shell: 'codex', model: 'gpt-5.6-sol', class: 'strong', cost_rank: 45 },
+		{
+			name: 'codex-terra',
+			shell: 'codex',
+			model: 'gpt-5.6-terra',
+			class: 'balanced',
+			cost_rank: 30
+		},
+		{ name: 'codex', shell: 'codex', class: 'balanced', cost_rank: 25 },
+		{ name: 'codex-mini', shell: 'codex', model: 'gpt-5.6-luna', class: 'economy', cost_rank: 20 }
+	];
+	assert.deepEqual(
+		orderRows(rows).map((row) => row.name),
+		['codex', 'codex-mini', 'codex-terra', 'codex-full', 'codex-gpt-6-astra']
+	);
+	assert.equal(headline(rows[3]), 'codex');
+	assert.equal(headline(rows[0]), 'gpt-6-astra');
+	assert.equal(
+		headline({
+			name: 'claude-fable',
+			shell: 'claude',
+			model: 'fable',
+			observed_model: 'claude-fable-5-1'
+		}),
+		'claude-fable-5-1'
+	);
+	assert.equal(tierLabel(rows[0]), 'unclassed');
+	// a build-date suffix is a snapshot stamp, not a version: off the row
+	assert.equal(
+		headline({
+			name: 'claude-haiku',
+			shell: 'claude',
+			model: 'haiku',
+			observed_model: 'claude-haiku-4-5-20251001'
+		}),
+		'claude-haiku-4-5'
+	);
+	assert.equal(shortVendorId('gpt-5.6-sol'), 'gpt-5.6-sol');
 });
