@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from brr import claude_status, daemon, envs, news_lane, presence, promises, protocol
+from brr import claude_status, conversations, daemon, envs, news_lane, presence, promises, protocol
 from brr import release_availability, resource_hold
 from brr import portals
 from brr import runner_failures
@@ -5134,29 +5134,32 @@ def test_interrupted_run_marked_and_card_updated_on_boot(tmp_path, monkeypatch):
 
     event, task = _frozen_run(tmp_path)
 
-    dispatched = _boot_daemon_recording_dispatches(tmp_path, monkeypatch)
+    ctx = daemon.account.resolve_context(tmp_path, {})
+    assert daemon._mark_interrupted_runs(ctx, tmp_path, {}) == 1
 
     brr_dir = tmp_path / ".brr"
     refreshed = Run.from_file(brr_dir / "runs" / task.id / "run.md")
     assert refreshed is not None
-    assert refreshed.status == "error"
+    assert refreshed.status == "held"
     assert refreshed.meta.get("failure_kind") == "host_interrupted"
-    assert "dispatching daemon" in str(refreshed.meta.get("interrupt_reason"))
+    assert refreshed.meta["resource_hold"]["reason"] == "daemon_restarted"
     # The terminal packet the dead daemon never sent reached the card's
     # conversation log exactly once …
-    records = _host_interrupted_records(brr_dir, "telegram:95:")
-    assert len(records) == 1
-    assert records[0].get("run_id") == task.id
+    records = conversations.read_records(brr_dir, "telegram:95:")
+    held = [r for r in records if r.get("type") == "held"]
+    assert len(held) == 1
+    assert held[0].get("run_id") == task.id
     # … and the rendered card now tells the truthful story.
     view = run_progress.project_run(brr_dir, "telegram:95:", task.id)
     assert view is not None
-    assert view.state == "failed"
-    assert view.failure_kind == "host_interrupted"
+    assert view.state == "active"
+    assert view.phase == "held"
     card = run_progress.render_text(view)
-    assert "interrupted" in card
-    assert "retrying" in card
-    # The existing retry mechanism dispatched the same event untouched.
-    assert dispatched == [str(event["id"])]
+    assert "held" in card
+    assert "daemon restarted" in card
+    fm = protocol.parse_frontmatter(Path(event["_path"]).read_text(encoding="utf-8"))
+    assert fm.get("status") == "done"
+    assert fm.get("run_outcome") == "held"
 
 
 def test_interrupted_marker_leaves_live_run_untouched(tmp_path):
@@ -5215,18 +5218,17 @@ def test_interrupted_marker_idempotent_across_double_boot(tmp_path, monkeypatch)
     ``error`` transition is the guard, no extra bookkeeping."""
     _event, task = _frozen_run(tmp_path, conv_key="telegram:98:")
 
-    first = _boot_daemon_recording_dispatches(tmp_path, monkeypatch)
-    second = _boot_daemon_recording_dispatches(tmp_path, monkeypatch)
+    ctx = daemon.account.resolve_context(tmp_path, {})
+    first = daemon._mark_interrupted_runs(ctx, tmp_path, {})
+    second = daemon._mark_interrupted_runs(ctx, tmp_path, {})
 
     brr_dir = tmp_path / ".brr"
-    records = _host_interrupted_records(brr_dir, "telegram:98:")
-    assert len(records) == 1
-    assert records[0].get("run_id") == task.id
-    # First boot retried the event; the fake worker's crash retired it
-    # (the real crashed-before-a-Run backstop), so the second boot had
-    # nothing to dispatch — and nothing to re-mark.
-    assert len(first) == 1
-    assert second == []
+    records = conversations.read_records(brr_dir, "telegram:98:")
+    held = [r for r in records if r.get("type") == "held"]
+    assert len(held) == 1
+    assert held[0].get("run_id") == task.id
+    assert first == 1
+    assert second == 0
 
 
 def test_interrupted_marker_waits_out_fresh_pidless_manifests(tmp_path):
@@ -5247,11 +5249,11 @@ def test_interrupted_marker_waits_out_fresh_pidless_manifests(tmp_path):
     _age_path(runs_dir / task.id / "run.md", 25 * 3600)
     assert daemon._mark_interrupted_runs(ctx, tmp_path, {}) == 1
     refreshed = Run.from_file(runs_dir / task.id / "run.md")
-    assert refreshed.status == "error"
+    assert refreshed.status == "held"
     assert refreshed.meta.get("failure_kind") == "host_interrupted"
     assert "safety horizon" in str(refreshed.meta.get("interrupt_reason"))
     view = run_progress.project_run(brr_dir, "telegram:99:", task.id)
-    assert view.failure_kind == "host_interrupted"
+    assert view.phase == "held"
 
 
 def test_interrupted_marker_retry_tail_follows_event_state(tmp_path):
@@ -5269,8 +5271,8 @@ def test_interrupted_marker_retry_tail_follows_event_state(tmp_path):
     brr_dir = tmp_path / ".brr"
     view = run_progress.project_run(brr_dir, "telegram:100:", task.id)
     card = run_progress.render_text(view)
-    assert "interrupted" in card
-    assert "retrying" not in card
+    assert "held" in card
+    assert "daemon restarted" in card
     # The sweep never touches event state — retired stays retired.
     fm = protocol.parse_frontmatter(
         Path(event["_path"]).read_text(encoding="utf-8"))
@@ -5293,10 +5295,10 @@ def test_interrupted_marker_resets_retry_eligible_event_to_pending(tmp_path):
 
     fm = protocol.parse_frontmatter(
         Path(event["_path"]).read_text(encoding="utf-8"))
-    assert fm.get("status") == "pending"
-    assert event["id"] in {e["id"] for e in protocol.list_dispatchable(inbox)}
+    assert fm.get("status") == "done"
+    assert event["id"] not in {e["id"] for e in protocol.list_dispatchable(inbox)}
     visible = daemon._pending_events_for_agent(inbox, "evt-someone-elses-wake")
-    assert event["id"] in {e["id"] for e in visible}
+    assert event["id"] not in {e["id"] for e in visible}
 
 
 def test_interrupted_marker_stamps_retry_provenance_on_the_event(tmp_path):
@@ -5311,8 +5313,8 @@ def test_interrupted_marker_stamps_retry_provenance_on_the_event(tmp_path):
 
     fm = protocol.parse_frontmatter(
         Path(event["_path"]).read_text(encoding="utf-8"))
-    assert fm.get("retry_of") == task.id
-    assert fm.get("retry_failure_kind") == "host_interrupted"
+    assert "retry_of" not in fm
+    assert "retry_failure_kind" not in fm
 
 
 def test_interrupted_marker_leaves_orphaned_spawn_dispatch_processing(tmp_path):
