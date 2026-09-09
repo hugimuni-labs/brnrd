@@ -14,7 +14,7 @@ import time
 
 import pytest
 
-from brr import hooks, pause
+from brr import daemon, hooks, pause
 from brr.cli import main
 
 
@@ -113,15 +113,41 @@ class TestPausableChildren:
         result = pause.pausable_children(100, now, snapshot=snapshot)
         assert [p.pid for p in result] == [5]
 
-    def test_deep_descendant_of_a_skipped_process_is_not_dropped_by_ancestry_alone(self):
-        # pausable_children only ever consults each process's own start time
-        # and argv — a process is not exempted merely because its parent
-        # would have been.
+    def test_fresh_descendant_of_an_old_process_is_protected_with_its_ancestor(self):
+        # A long-lived direct child may be an MCP server. Its fresh children
+        # belong to that server, not to the tool call after the boundary.
         now = time.time()
         old_parent = pause.ProcInfo(pid=10, ppid=1, started_at=now - 100, command="sleep 9999")
         fresh_child = pause.ProcInfo(pid=11, ppid=10, started_at=now + 1, command="sleep 30")
         result = pause.pausable_children(1, now, snapshot=[old_parent, fresh_child])
-        assert [p.pid for p in result] == [11]
+        assert result == []
+
+    def test_helper_anywhere_in_a_fresh_subtree_protects_its_wrapper(self):
+        now = time.time()
+        wrapper = pause.ProcInfo(
+            pid=10, ppid=1, started_at=now + 1, command="zsh -lc worker")
+        hook = pause.ProcInfo(
+            pid=11, ppid=10, started_at=now + 1,
+            command="/usr/local/bin/brnrd hook post-tool")
+        assert pause.pausable_children(1, now, snapshot=[wrapper, hook]) == []
+
+    def test_checkout_path_is_not_mistaken_for_a_helper(self):
+        now = time.time()
+        tool = pause.ProcInfo(
+            pid=10, ppid=1, started_at=now + 1,
+            command="zsh -lc 'cd /work/brnrd && pytest'")
+        assert pause.pausable_children(1, now, snapshot=[tool]) == [tool]
+
+
+def test_pause_trigger_counts_correspondent_messages_not_daemon_events():
+    events = [
+        {"id": "evt-message", "correspondent_key": "telegram:user:1"},
+        {"id": "evt-other", "correspondent_key": "telegram:user:2"},
+        {"id": "evt-spawn", "source": "spawn_completed"},
+    ]
+    assert daemon._correspondent_event_ids(events, "telegram:user:1") == {
+        "evt-message"
+    }
 
 
 def test_pause_stops_child_and_grandchild_deepest_first(chain, tmp_path):
@@ -211,6 +237,40 @@ def test_release_all_clears_the_record(chain, tmp_path):
     assert _wait_until(lambda: _ps_state(child.pid) in ("S", "R"))
 
 
+def test_resume_refuses_a_reused_pid_record(tmp_path):
+    proc = subprocess.Popen(["sleep", "30"])
+    try:
+        live = next(item for item in pause.list_all_processes() if item.pid == proc.pid)
+        pause.write_paused_record(tmp_path, [{
+            "pid": proc.pid, "argv": "sleep 30",
+            "started_at": (live.started_at or 0) - 60,
+            "stopped_at": time.time(), "resumes_at": time.time() + 600,
+        }])
+        assert pause.resume_pids(tmp_path) == []
+        assert proc.poll() is None
+        assert pause.read_paused_record(tmp_path) == []
+    finally:
+        proc.kill()
+        proc.wait(timeout=5)
+
+
+def test_drop_refuses_a_reused_pid_record(tmp_path):
+    proc = subprocess.Popen(["sleep", "30"])
+    try:
+        live = next(item for item in pause.list_all_processes() if item.pid == proc.pid)
+        pause.write_paused_record(tmp_path, [{
+            "pid": proc.pid, "argv": "sleep 30",
+            "started_at": (live.started_at or 0) - 60,
+            "stopped_at": time.time(), "resumes_at": time.time() + 600,
+        }])
+        assert pause.drop_pids(tmp_path, grace_seconds=0) == []
+        assert proc.poll() is None
+        assert pause.read_paused_record(tmp_path) == []
+    finally:
+        proc.kill()
+        proc.wait(timeout=5)
+
+
 def test_overdue_records_names_only_records_past_their_cap(tmp_path):
     now = time.time()
     fresh = {"pid": 1, "argv": "sleep 30", "stopped_at": now, "resumes_at": now + 600}
@@ -255,6 +315,10 @@ class TestCLI:
             tmp_path,
             [{
                 "pid": proc.pid, "argv": "sleep 30",
+                "started_at": next(
+                    item.started_at for item in pause.list_all_processes()
+                    if item.pid == proc.pid
+                ),
                 "stopped_at": time.time(), "resumes_at": time.time() + 600,
             }],
         )
