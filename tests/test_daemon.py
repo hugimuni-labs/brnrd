@@ -10769,6 +10769,12 @@ def test_dashboard_dispatch_header_stamps_event_before_repo_routing(
     repo_a, ctx, target = _wake_ctx(tmp_path, extra_repo=repo_b)
     wake_request_mod.store_pending(repo_a / ".brr", {"request_id": "wake_dispatch"})
     calls: list[dict] = []
+    defaults: list[tuple[Path, dict]] = []
+    monkeypatch.setattr(
+        daemon.conf,
+        "write_daemon_config",
+        lambda root, values: defaults.append((root, values)) or tmp_path / "daemon.config",
+    )
     _stub_claim(monkeypatch, {
         "apply": True, "reason": None, "request_id": "wake_dispatch",
         "status": "consumed", "profile": "codex-mini",
@@ -10792,6 +10798,7 @@ def test_dashboard_dispatch_header_stamps_event_before_repo_routing(
     assert applied.event["environment"] == "solitary"
     assert applied.event["dashboard_wake_request_id"] == "wake_dispatch"
     assert applied.event["dashboard_wake_request_profile"] == "codex-mini"
+    assert defaults == [(repo_a, {"runner.default": "codex-mini"})]
     assert "dashboard_wake_request_reason" not in applied.event
     # The server said the row is retired; don't keep offering it.
     assert wake_request_mod.pending_id(repo_a / ".brr") is None
