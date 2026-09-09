@@ -3368,3 +3368,197 @@ def test_strand_gate_message_stays_unguarded(tmp_path, monkeypatch):
     assert len(done) == 1
     assert "blocked" in protocol.read_response(responses, done[0]["id"])
     assert daemon._read_outbox_notices(outbox) == []
+
+
+# ── `also:` — a burst is one turn ──────────────────────────────────────────
+#
+# design: a person's three closely-spaced fragments used to mint three
+# pending events, forcing the resident to `event:` one and `note:` the
+# other two (or duplicate the chat message — "byte-identical bodies may
+# not target several events in one call"). `event: <id>` + `also: <id>,
+# <id>` folds every listed id into the same delivery: one reply, every
+# id marked handled. Any `also:` id that is not pending, not on the same
+# thread, or not from the same correspondent as `event:` refuses the
+# *whole* directive — nothing delivered, one notice.
+
+
+def _burst_fixture(tmp_path):
+    """(brr_dir, inbox, responses, outbox, own_event_id) for a resident run."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    inbox.mkdir(parents=True)
+    own = protocol.create_event(
+        inbox, "telegram", "do the thing", status="processing",
+        telegram_user_id="42", telegram_chat_id="42",
+    )
+    outbox = brr_dir / "outbox" / own.stem
+    outbox.mkdir(parents=True)
+    return brr_dir, inbox, responses, outbox, own.stem
+
+
+def _burst_event(inbox, body, *, user_id="42", chat_id="42"):
+    return protocol.create_event(
+        inbox, "telegram", body,
+        telegram_user_id=user_id, telegram_chat_id=chat_id,
+    )
+
+
+def test_also_marks_every_listed_event_handled_with_one_reply(tmp_path, monkeypatch):
+    brr_dir, inbox, responses, outbox, own_id = _burst_fixture(tmp_path)
+    lead = _burst_event(inbox, "one")
+    second = _burst_event(inbox, "two")
+    third = _burst_event(inbox, "three")
+    (outbox / "reply.md").write_text(
+        f"---\nevent: {lead.stem}\nalso: {second.stem}, {third.stem}\n---\n"
+        "got all three — on it\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+    emit = daemon._WorkerEmit(brr_dir=brr_dir, conversation_key="", event_id=own_id)
+    task = Run(id="run-1", event_id=own_id, body="do the thing", source="telegram")
+
+    promoted = daemon._drain_outbox(emit, task, responses, own_id, outbox, inbox)
+
+    assert promoted == 1
+    pending_ids = {ev["id"] for ev in protocol.list_pending(inbox)}
+    assert lead.stem not in pending_ids
+    assert second.stem not in pending_ids
+    assert third.stem not in pending_ids
+    done_ids = {ev["id"] for ev in protocol.list_done(inbox, "telegram")}
+    assert {lead.stem, second.stem, third.stem} <= done_ids
+    # One reply, delivered once — the also-targets are marked handled, not
+    # each handed their own partial.
+    lead_partials = protocol.list_partials(responses, lead.stem)
+    assert len(lead_partials) == 1
+    assert lead_partials[0].read_text(encoding="utf-8").strip() == (
+        "got all three — on it"
+    )
+    assert protocol.list_partials(responses, second.stem) == []
+    assert protocol.list_partials(responses, third.stem) == []
+    assert daemon._read_outbox_notices(outbox) == []
+
+
+def test_also_refuses_whole_directive_on_unknown_id(tmp_path, monkeypatch):
+    brr_dir, inbox, responses, outbox, own_id = _burst_fixture(tmp_path)
+    lead = _burst_event(inbox, "one")
+    (outbox / "reply.md").write_text(
+        f"---\nevent: {lead.stem}\nalso: evt-does-not-exist\n---\nack\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+    emit = daemon._WorkerEmit(brr_dir=brr_dir, conversation_key="", event_id=own_id)
+    task = Run(id="run-1", event_id=own_id, body="do the thing", source="telegram")
+
+    promoted = daemon._drain_outbox(emit, task, responses, own_id, outbox, inbox)
+
+    assert promoted == 0
+    # Nothing was delivered — not even to the `event:` target.
+    assert lead.stem in {ev["id"] for ev in protocol.list_pending(inbox)}
+    assert protocol.list_partials(responses, lead.stem) == []
+    notices = daemon._read_outbox_notices(outbox)
+    assert len(notices) == 1
+    assert notices[0]["kind"] == "refused"
+    assert notices[0]["text"].startswith("also dropped:")
+
+
+def test_also_refuses_when_correspondent_differs(tmp_path, monkeypatch):
+    brr_dir, inbox, responses, outbox, own_id = _burst_fixture(tmp_path)
+    lead = _burst_event(inbox, "one")
+    stranger = _burst_event(inbox, "unrelated", user_id="99", chat_id="99")
+    (outbox / "reply.md").write_text(
+        f"---\nevent: {lead.stem}\nalso: {stranger.stem}\n---\nack\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+    emit = daemon._WorkerEmit(brr_dir=brr_dir, conversation_key="", event_id=own_id)
+    task = Run(id="run-1", event_id=own_id, body="do the thing", source="telegram")
+
+    promoted = daemon._drain_outbox(emit, task, responses, own_id, outbox, inbox)
+
+    assert promoted == 0
+    pending_ids = {ev["id"] for ev in protocol.list_pending(inbox)}
+    assert lead.stem in pending_ids
+    assert stranger.stem in pending_ids
+    notices = daemon._read_outbox_notices(outbox)
+    assert len(notices) == 1
+    assert notices[0]["kind"] == "refused"
+    assert "same thread/correspondent" in notices[0]["text"]
+
+
+def test_also_refuses_when_thread_differs_same_correspondent(tmp_path, monkeypatch):
+    """Same person, a different chat — still not one burst, one thread."""
+    brr_dir, inbox, responses, outbox, own_id = _burst_fixture(tmp_path)
+    lead = _burst_event(inbox, "one")
+    other_chat = _burst_event(inbox, "elsewhere", user_id="42", chat_id="7")
+    (outbox / "reply.md").write_text(
+        f"---\nevent: {lead.stem}\nalso: {other_chat.stem}\n---\nack\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+    emit = daemon._WorkerEmit(brr_dir=brr_dir, conversation_key="", event_id=own_id)
+    task = Run(id="run-1", event_id=own_id, body="do the thing", source="telegram")
+
+    promoted = daemon._drain_outbox(emit, task, responses, own_id, outbox, inbox)
+
+    assert promoted == 0
+    pending_ids = {ev["id"] for ev in protocol.list_pending(inbox)}
+    assert lead.stem in pending_ids
+    assert other_chat.stem in pending_ids
+    notices = daemon._read_outbox_notices(outbox)
+    assert len(notices) == 1
+    assert notices[0]["kind"] == "refused"
+
+
+def test_also_refuses_when_id_is_not_pending(tmp_path, monkeypatch):
+    brr_dir, inbox, responses, outbox, own_id = _burst_fixture(tmp_path)
+    lead = _burst_event(inbox, "one")
+    already = _burst_event(inbox, "handled earlier")
+    protocol.update_event_meta(
+        next(e for e in protocol.list_pending(inbox) if e["id"] == already.stem),
+        status="done",
+    )
+    (outbox / "reply.md").write_text(
+        f"---\nevent: {lead.stem}\nalso: {already.stem}\n---\nack\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+    emit = daemon._WorkerEmit(brr_dir=brr_dir, conversation_key="", event_id=own_id)
+    task = Run(id="run-1", event_id=own_id, body="do the thing", source="telegram")
+
+    promoted = daemon._drain_outbox(emit, task, responses, own_id, outbox, inbox)
+
+    assert promoted == 0
+    assert lead.stem in {ev["id"] for ev in protocol.list_pending(inbox)}
+    notices = daemon._read_outbox_notices(outbox)
+    assert len(notices) == 1
+    assert notices[0]["kind"] == "refused"
+    assert notices[0]["text"].startswith("also dropped:")
+
+
+def test_strand_also_target_on_a_foreign_thread_is_refused(tmp_path, monkeypatch):
+    """`also:` is bound by the same strand-isolation wall as `event:` — a
+    strand may not fold a correspondent's other pending letter into its
+    own reply just because it happens to share the id in a spec."""
+    brr_dir, inbox, responses, outbox, own_id = _strand_drain_fixture(tmp_path)
+    theirs = protocol.create_event(
+        inbox, "telegram", "and this too",
+        telegram_user_id="42", telegram_chat_id="42",
+    )
+    (outbox / "reply.md").write_text(
+        f"---\nevent: {own_id}\nalso: {theirs.stem}\n---\ndone\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+    emit = daemon._WorkerEmit(brr_dir=brr_dir, conversation_key="", event_id=own_id)
+    task = Run(id="run-strand", event_id=own_id, body="do the thing",
+               source="spawn", meta={"strand": True})
+
+    promoted = daemon._drain_outbox(emit, task, responses, own_id, outbox, inbox)
+
+    assert promoted == 0
+    assert theirs.stem in {ev["id"] for ev in protocol.list_pending(inbox)}
+    notices = daemon._read_outbox_notices(outbox)
+    assert len(notices) == 1
+    assert notices[0]["kind"] == "refused"
+    assert "strand-stack run" in notices[0]["text"]
