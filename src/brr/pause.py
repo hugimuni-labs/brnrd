@@ -316,10 +316,29 @@ def pid_permission_error(pid: int) -> bool:
     return True
 
 
+def _signal_with_subtree(pid: int, sig: int) -> None:
+    """Signal *pid* and every process currently under it.
+
+    `pause_run_children` stops a whole subtree under each recorded pid
+    (spec step 2) but records only the top-level pid — walking the subtree
+    again here, fresh, is what makes resume/drop symmetric with the stop:
+    without it a grandchild stopped alongside its parent would never be
+    named anywhere on disk and would sit frozen forever once its parent
+    pid is the only one anybody signals.
+    """
+    targets = [pid] + [proc.pid for proc in descendants(pid)]
+    for target in targets:
+        try:
+            os.kill(target, sig)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
 def resume_pids(
     outbox_dir: Path, *, only_pid: int | None = None,
 ) -> list[dict[str, Any]]:
-    """SIGCONT every recorded pid (or just *only_pid*), clear what's resumed.
+    """SIGCONT every recorded pid (or just *only_pid*) and its subtree,
+    clear what's resumed.
 
     Returns the records actually resumed. A pid no longer alive is dropped
     from the record without complaint — it exited or was reaped while
@@ -339,12 +358,7 @@ def resume_pids(
         if only_pid is not None and pid != only_pid:
             remaining.append(record)
             continue
-        try:
-            os.kill(pid, signal.SIGCONT)
-        except ProcessLookupError:
-            pass
-        except PermissionError:
-            pass
+        _signal_with_subtree(pid, signal.SIGCONT)
         resumed.append(record)
     if remaining:
         write_paused_record(outbox_dir, remaining)
@@ -358,8 +372,9 @@ def drop_pids(
     grace_seconds: float = _DROP_GRACE_SECONDS,
 ) -> list[dict[str, Any]]:
     """SIGCONT, then SIGTERM, then (after *grace_seconds*) SIGKILL any
-    survivor — the "give up on this call" verb. Same record semantics as
-    `resume_pids`: only the matched records are dropped and cleared.
+    survivor — for each recorded pid and its whole subtree. The "give up on
+    this call" verb. Same record semantics as `resume_pids`: only the
+    matched records are dropped and cleared.
     """
     if not _POSIX_CAPABLE:
         return []
@@ -368,14 +383,15 @@ def drop_pids(
         return []
     dropped: list[dict[str, Any]] = []
     remaining: list[dict[str, Any]] = []
-    targets: list[int] = []
+    targets: set[int] = set()
     for record in records:
         pid = int(record.get("pid", -1))
         if only_pid is not None and pid != only_pid:
             remaining.append(record)
             continue
         dropped.append(record)
-        targets.append(pid)
+        targets.add(pid)
+        targets.update(proc.pid for proc in descendants(pid))
     for pid in targets:
         for sig in (signal.SIGCONT, signal.SIGTERM):
             try:
