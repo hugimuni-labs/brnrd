@@ -1731,6 +1731,91 @@ class TestPromptBuilding:
         assert "orphaned" in prompt
         assert "survivor" in prompt
 
+    def test_daemon_prompt_lists_burst_siblings_under_original_event_body(
+        self, tmp_path,
+    ):
+        # #128 step 3: a still-pending sibling sharing this wake's
+        # correspondent and thread, arriving within the burst window, is
+        # listed here (oldest first) instead of only surfacing as an
+        # unrelated-looking bullet under "Inbox — other pending events".
+        prompt = build_daemon_prompt(
+            "found it, never mind", "evt-newest", "/tmp/resp.md", tmp_path,
+            run_id="task-A",
+            event_body="found it, never mind",
+            event_created="2026-09-09T01:42:00Z",
+            event_meta={
+                "id": "evt-newest", "source": "telegram",
+                "telegram_chat_id": "555", "telegram_user": "Gurio",
+                "telegram_username": "StasisRush",
+                "created": "2026-09-09T01:42:00Z",
+            },
+            pending_events=[
+                {
+                    "id": "evt-oldest", "source": "telegram",
+                    "telegram_chat_id": "555", "telegram_user": "Gurio",
+                    "telegram_username": "StasisRush",
+                    "created": "2026-09-09T01:40:30Z",
+                    "body": "hey are you there",
+                },
+            ],
+        )
+        assert "Original event body" in prompt
+        assert "2 messages arrived close together on this thread" in prompt
+        oldest_at = prompt.index("evt-oldest")
+        newest_at = prompt.index("evt-newest — waking event")
+        assert oldest_at < newest_at, "listed oldest first"
+        assert "hey are you there" in prompt
+        assert "found it, never mind" in prompt
+        assert "also:" in prompt
+
+    def test_daemon_prompt_burst_listing_requires_a_resolvable_identity(
+        self, tmp_path,
+    ):
+        # No `event_meta` (a schedule-originated wake, a caller with no raw
+        # event record) must fall back to the plain single-body render, same
+        # as before this feature existed.
+        prompt = build_daemon_prompt(
+            "fix it", "evt-1", "/tmp/resp.md", tmp_path,
+            event_body="please fix the login flow",
+            pending_events=[
+                {
+                    "id": "evt-2", "source": "telegram",
+                    "telegram_chat_id": "555", "telegram_user": "Gurio",
+                    "telegram_username": "StasisRush",
+                    "created": "2026-09-09T01:40:30Z",
+                    "body": "a sibling that cannot be recognised as one",
+                },
+            ],
+        )
+        assert "Original event body" in prompt
+        assert "please fix the login flow" in prompt
+        assert "arrived close together" not in prompt
+
+    def test_daemon_prompt_burst_listing_breaks_past_the_window(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "fix it", "evt-newest", "/tmp/resp.md", tmp_path,
+            event_body="fix it",
+            event_created="2026-09-09T01:42:00Z",
+            event_meta={
+                "id": "evt-newest", "source": "telegram",
+                "telegram_chat_id": "555", "telegram_user": "Gurio",
+                "telegram_username": "StasisRush",
+                "created": "2026-09-09T01:42:00Z",
+            },
+            pending_events=[
+                {
+                    "id": "evt-far", "source": "telegram",
+                    "telegram_chat_id": "555", "telegram_user": "Gurio",
+                    "telegram_username": "StasisRush",
+                    "created": "2026-09-09T01:30:00Z",
+                    "body": "a much older, unrelated fragment",
+                },
+            ],
+        )
+        assert "Original event body" in prompt
+        assert "fix it" in prompt
+        assert "arrived close together" not in prompt
+
     def test_format_pending_events_caps_at_40_with_honest_elision_line(self):
         # 1,203 pending events once rendered 165.9 KB into a 252.7 KB wake —
         # the replay ate the thought that was supposed to handle it. 100

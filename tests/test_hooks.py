@@ -1726,6 +1726,110 @@ def test_render_event_rows_omitted_count_counts_what_it_rendered():
     assert f"+{len(events) - 39:,} more pending events" in rows[-1]
 
 
+# ── Burst collapse (#128: "closely-spaced fragments race separate wakes") ──
+#
+# A person who types three lines in twenty seconds used to produce three
+# separate chrome rows — three tickets the resident had to `event:`-reply
+# one and `note:` the other two. Consecutive pending events sharing a
+# correspondent and a thread within `conversations.BURST_WINDOW_SECONDS`
+# now collapse into one row instead.
+
+
+def _burst_event(eid, *, body, aged_seconds, chat="555", user="Gurio",
+                  username="StasisRush"):
+    return {
+        "id": eid, "source": "telegram",
+        "telegram_chat_id": chat, "telegram_user": user,
+        "telegram_username": username,
+        "body": body, "created": _aged_iso(aged_seconds),
+    }
+
+
+def test_render_event_rows_collapses_a_burst_into_one_turn():
+    burst = [
+        _burst_event(
+            "evt-1785520000000000010-aaaa", body="first fragment",
+            aged_seconds=140,
+        ),
+        _burst_event(
+            "evt-1785520000000000020-bbbb", body="second fragment",
+            aged_seconds=90,
+        ),
+        _burst_event(
+            "evt-1785520000000000030-cccc", body="third fragment",
+            aged_seconds=20,
+        ),
+    ]
+    outsider = _burst_event(
+        "evt-1785520000000000040-dddd", body="unrelated", aged_seconds=15,
+        chat="999", user="Someone Else", username="otherperson",
+    )
+    rows = hooks._render_event_rows(burst + [outsider], None, None)
+    joined = "\n".join(rows)
+
+    # One collapsed row, not three chrome rows — the count, both endpoints
+    # of the age span, and the actual ids for the `event:`/`also:` reply.
+    assert "✉ 3 from Gurio (@StasisRush) · 20s–2m ·" in joined
+    assert (
+        "— one turn; reply evt-1785520000000000030-cccc with also: "
+        "evt-1785520000000000010-aaaa, evt-1785520000000000020-bbbb"
+    ) in joined
+    assert joined.count("evt-1785520000000000010-aaaa") == 1
+    assert joined.count("evt-1785520000000000020-bbbb") == 1
+
+    # Bodies concatenated beneath it, oldest first.
+    first_at = joined.index("first fragment")
+    second_at = joined.index("second fragment")
+    third_at = joined.index("third fragment")
+    assert first_at < second_at < third_at
+
+    # A different person on a different thread never joins the burst.
+    assert (
+        "- ✉ evt-1785520000000000040-dddd · telegram · "
+        "Someone Else (@otherperson)"
+    ) in joined
+    assert "unrelated" in joined
+
+
+def test_render_event_rows_burst_requires_correspondent_and_thread():
+    # Events with no resolvable correspondent/thread identity (the existing
+    # cap/elision tests' bare `{"id": ..., "source": "telegram", ...}` shape,
+    # with no telegram_chat_id/telegram_user) must never merge just because
+    # they arrived close in time — regression guard for the tests above this
+    # one in the file, which rely on exactly this staying true.
+    events = [
+        {"id": "evt-a", "source": "telegram", "body": "one", "created": _aged_iso(10)},
+        {"id": "evt-b", "source": "telegram", "body": "two", "created": _aged_iso(5)},
+    ]
+    rows = hooks._render_event_rows(events, None, None)
+    assert sum(1 for r in rows if r.startswith("- ✉ evt-")) == 2
+    assert not any("from" in r and "one turn" in r for r in rows)
+
+
+def test_render_event_rows_burst_breaks_past_the_window():
+    far_apart = [
+        _burst_event("evt-far-1", body="old one", aged_seconds=1000),
+        _burst_event("evt-far-2", body="new one", aged_seconds=10),
+    ]
+    rows = hooks._render_event_rows(far_apart, None, None)
+    joined = "\n".join(rows)
+    assert "one turn" not in joined
+    assert sum(1 for r in rows if r.startswith("- ✉ evt-far-")) == 2
+
+
+def test_post_tool_bar_collapses_a_burst_row(tmp_path):
+    burst = [
+        _burst_event("evt-burst-1", body="hey", aged_seconds=60),
+        _burst_event("evt-burst-2", body="are you there", aged_seconds=30),
+        _burst_event("evt-burst-3", body="never mind, found it", aged_seconds=5),
+    ]
+    _portal(tmp_path, token="t1", pending=3, events=burst)
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    ctx = _inject_text(out)
+    assert "3 from Gurio (@StasisRush)" in ctx
+    assert "one turn; reply evt-burst-3 with also: evt-burst-1, evt-burst-2" in ctx
+
+
 def test_session_start_seed_caps_pending_events_at_40(tmp_path):
     # The integration path for the same bug: the SessionStart portal-seed
     # renderer must carry the cap too, not just the unit-level helper.

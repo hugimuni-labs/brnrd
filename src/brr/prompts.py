@@ -4995,6 +4995,7 @@ def build_daemon_prompt(
     event_created: str | None = None,
     event_retry_of: str | None = None,
     event_retry_failure_kind: str | None = None,
+    event_meta: dict[str, Any] | None = None,
     budget_seconds: int | None = None,
     runner_medium: str | None = None,
     runner_quota: str | None = None,
@@ -5124,6 +5125,7 @@ def build_daemon_prompt(
         event_created=event_created,
         event_retry_of=event_retry_of,
         event_retry_failure_kind=event_retry_failure_kind,
+        event_meta=event_meta,
         diffense=diffense,
     )
     trailer = bundle.rstrip()
@@ -5399,6 +5401,64 @@ def _render_runner_catalog(
     return lines
 
 
+def _bundle_burst_group(
+    *,
+    event_id: str,
+    event_body: str | None,
+    event_created: str | None,
+    event_meta: dict[str, Any] | None,
+    pending_events: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Other still-pending events sharing this wake's burst, oldest first,
+    the waking event included — or ``[]`` when there is none (#128, step 3
+    of "a burst is one turn": the wake-bundle half of the render-only fix
+    the hooks.py boundary banner carries too).
+
+    *event_meta* is the waking event's own raw record (``daemon.py``'s
+    ``event`` dict — correspondent/thread fields, not just the body already
+    carried separately as *event_body*/*event_created*); absent for callers
+    with no such record (``brnrd run``, tests, a schedule-originated wake
+    with no gate identity) ⇒ always ``[]``, same as an unresolvable
+    correspondent/thread pair.
+
+    Render-only, no dispatch delay: this only looks at *pending_events* as
+    handed to this call — a sibling arriving after this bundle was already
+    assembled is simply not in it, picked up by the next boundary's own read
+    or the next wake, never waited for here. A sibling the daemon already
+    wove into *event_body* at dispatch time
+    (``daemon._weave_burst_siblings_into_body``) is excluded from
+    *pending_events* upstream, so it is never listed twice.
+    """
+    if not event_meta or not pending_events:
+        return []
+    from . import conversations
+
+    identity = conversations.event_burst_identity(event_meta)
+    if identity is None:
+        return []
+    candidates = [
+        ev for ev in pending_events
+        if conversations.event_burst_identity(ev) == identity
+    ]
+    if not candidates:
+        return []
+    waking_record = dict(event_meta)
+    waking_record["id"] = event_id
+    waking_record["body"] = event_body or ""
+    if event_created:
+        waking_record["created"] = event_created
+    combined = candidates + [waking_record]
+    combined.sort(
+        key=lambda ev: protocol.parse_iso_epoch(ev.get("created")) or 0.0
+    )
+    for group in conversations.group_bursts(combined):
+        if len(group) > 1 and any(
+            str(ev.get("id") or "") == event_id for ev in group
+        ):
+            return group
+    return []
+
+
 def _build_run_context_bundle(
     *,
     event_id: str,
@@ -5433,6 +5493,7 @@ def _build_run_context_bundle(
     event_created: str | None = None,
     event_retry_of: str | None = None,
     event_retry_failure_kind: str | None = None,
+    event_meta: dict[str, Any] | None = None,
     diffense: bool = False,
 ) -> str:
     """Assemble the human-readable Run Context Bundle for the daemon prompt.
@@ -5714,7 +5775,47 @@ def _build_run_context_bundle(
         sections.append(thread_record_block)
 
     body = event_body.strip() if event_body is not None else ""
-    if body or event_attachments:
+    burst_group = _bundle_burst_group(
+        event_id=event_id,
+        event_body=event_body,
+        event_created=event_created,
+        event_meta=event_meta,
+        pending_events=pending_events,
+    )
+    if burst_group:
+        # #128: other pending events sharing this one's correspondent and
+        # thread, still unanswered, landed within the burst window — render
+        # every one of them here, oldest first, rather than only this run's
+        # own waking event and leaving the rest to surface as unrelated-
+        # looking bullets under "Inbox — other pending events". Render-only:
+        # nothing here waited for a sibling to arrive, and one that lands
+        # after this bundle was assembled is simply not in it yet.
+        sections.append("")
+        sections.append("### Original event body")
+        sections.append("")
+        sections.append(
+            f"{len(burst_group)} messages arrived close together on this "
+            "thread (#128 — a burst is one turn); listed oldest first, "
+            "this run's own waking event marked below. A sibling still "
+            "pending here is answerable in the same reply via the outbox "
+            "`also:` frontmatter (#1864) rather than a separate `event:`/"
+            "`note:` per message."
+        )
+        for ev in burst_group:
+            eid = str(ev.get("id") or "")
+            marker = " — waking event" if eid == event_id else " — still pending"
+            sections.append("")
+            sections.append(f"— {eid}{marker}")
+            ev_body = str(ev.get("body") or "").strip()
+            if ev_body:
+                sections.append(ev_body)
+        if event_attachments:
+            sections.append("")
+            sections.append(
+                "Attachments (local image files — open them with Read):"
+            )
+            sections.extend(f"- {p}" for p in event_attachments)
+    elif body or event_attachments:
         sections.append("")
         sections.append("### Original event body")
         sections.append("")
